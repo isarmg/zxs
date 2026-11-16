@@ -2,7 +2,7 @@
 use crate::{Error, ErrorCode, Result};
 use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BranchName {
     display: String,
     key: String,

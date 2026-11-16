@@ -20,7 +20,9 @@ fn idle_inventory_releases_target_root_and_writer_without_releasing_system_lock(
     let system = temp.path().join("system");
     let primary = temp.path().join("primary");
     let mut engine =
-        Engine::initialize(&system, Config::development([primary.clone()]).unwrap()).unwrap();
+        Engine::initialize(&system, Config::development(crate::test_disks(
+            [primary.clone()],
+        )).unwrap()).unwrap();
     let repo = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("inventory fencing").unwrap(),

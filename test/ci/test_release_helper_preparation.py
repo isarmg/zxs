@@ -59,7 +59,11 @@ class HelperPreparation(unittest.TestCase):
             self.assertEqual((admin['password'], admin['repeat_password']), ('one-test-secret', 'one-test-secret'))
             self.assertEqual(admin['confirmation'], 'initialize-first-management-administrator')
             directories = sent['/api/initialization/storage-directories-prepare']
-            self.assertEqual(directories['input']['roots'], ['/zxs/data/disks/acceptance-primary'])
+            expected_disks = [
+                {'name': 'Acceptance', 'root_path': '/zxs/data/disks/acceptance-primary'},
+            ]
+            self.assertEqual(directories['input']['disks'], expected_disks)
+            self.assertEqual(sent['/api/initialization/storage-preview']['disks'], expected_disks)
             self.assertEqual(directories['confirmation'], 'prepare-first-storage-directories-only')
             storage = sent['/api/initialization/storage-create']
             self.assertIs(storage['plan'], helper.plan)

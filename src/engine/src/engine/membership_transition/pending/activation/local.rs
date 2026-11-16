@@ -35,7 +35,7 @@ pub(crate) fn read_local_disk_configuration(
     read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
 ) -> Result<ValidatedConfig> {
     let saved = ValidatedConfig::try_from(decode_strict::<Config>(&read(
-        &root.join("metadata/pool-membership/config.json"),
+        &root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
     )?)?)?;
     let config = match &seal.format {
         DiskSealFormat::ManagedDirectory => saved,
@@ -71,7 +71,7 @@ pub(crate) fn verify_local_membership(
 ) -> Result<ValidatedConfig> {
     let saved = (|| {
         ValidatedConfig::try_from(decode_strict::<Config>(&read(
-            &root.join("metadata/pool-membership/config.json"),
+            &root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
         )?)?)
     })();
     match &seal.format {

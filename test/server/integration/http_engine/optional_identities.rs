@@ -16,7 +16,7 @@ fn invalid_identities() -> Vec<Value> {
 fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
-    let mut config = Config::development([root.path().join("disk")]).unwrap();
+    let mut config = Config::development(crate::test_disks([root.path().join("disk")])).unwrap();
     config.max_workspaces = 1;
     let mut engine = Engine::initialize(&system, config).unwrap();
     let repository = engine
@@ -384,7 +384,7 @@ async fn typed_write_session_keeps_strict_admission_and_exact_lease_wire() {
         .unwrap()
         .parse::<u64>()
         .unwrap();
-    let ttl = Config::development([root.path().join("disk")])
+    let ttl = Config::development(crate::test_disks([root.path().join("disk")]))
         .unwrap()
         .workspace_ttl_seconds;
     assert_eq!(
@@ -480,7 +480,7 @@ async fn typed_capabilities_are_public_and_keep_the_engine_upload_limit() {
     let (root, app, _, _, _) = fixture();
     let (status, capabilities) = send(&app, None, "GET", "/api/capabilities", None).await;
     assert_eq!(status, StatusCode::OK);
-    let core_limit = Config::development([root.path().join("disk")])
+    let core_limit = Config::development(crate::test_disks([root.path().join("disk")]))
         .unwrap()
         .max_file_bytes;
     let server_limit = ServerConfig::new(root.path()).max_upload_bytes;

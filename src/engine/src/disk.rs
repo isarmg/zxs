@@ -19,8 +19,12 @@ pub(crate) use admission::{
 pub use admission::{
     DiskFile, DiskObservationAccess, DiskObservationDirectory, DiskObservationMount,
 };
+mod version_material;
+pub(crate) use version_material::VersionMaterial;
 mod owned;
-pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
+pub(crate) use owned::{
+    DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot, InitializationDisks,
+};
 pub(crate) use owned::{
     FileMoveError, FileMoveFault, FileStamp, FrozenFileMove, HeldRegular, InstallExchange,
     NewEntryCopyError,
@@ -85,9 +89,9 @@ pub(crate) struct DiskSeal {
 /// The current identity contract binds a managed directory, not its hardware topology.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum DiskSealFormat {
-    #[serialization(rename = "container-current-name-managed-directory")]
+    #[serialization(rename = "unified-working-tree-managed-directory-v1")]
     ManagedDirectory,
-    #[serialization(rename = "container-current-name-membership-generation")]
+    #[serialization(rename = "unified-working-tree-membership-generation-v1")]
     MembershipGeneration { authority_hash: String },
 }
 
@@ -1020,6 +1024,24 @@ impl<'a> VerifiedExisting<'a> {
             file,
         })
     }
+    /// Verify bytes through the caller's already admitted container occurrence.
+    /// Metadata and BODY have separate held domains; this proof grants neither
+    /// a directory location nor a publication and cannot search another root.
+    pub(crate) fn read_container(
+        metadata: &DiskRoot,
+        directory: &Path,
+        version: &'a FileVersion,
+        container: &DiskRoot,
+        name: &name_policy::LookupName,
+    ) -> Result<Self> {
+        let checks = read_authenticated_checksums_at(metadata, directory, version)?;
+        let manifest = decode_authenticated_checksums(&checks, version)?;
+        let path = crate::container_storage::ordinary_body_path(container.path(), version, name)?;
+        let file = container.open_read_regular(&path)?;
+        let file = verify_open_payload(file, manifest, version, usize::MAX, &mut |_| Ok(()))?;
+        Ok(Self { version, directory: directory.to_owned(), path, file })
+    }
+
     pub(crate) fn version(&self) -> &'a FileVersion {
         self.version
     }
@@ -1053,7 +1075,7 @@ impl<'a> VerifiedExisting<'a> {
 }
 
 pub(crate) fn version_dir(disk: &DiskConfig, history: &str, version: &str) -> PathBuf {
-    layout::histories(&disk.root)
+    layout::version_metadata(&disk.root)
         .join(history)
         .join("versions")
         .join(version)
@@ -1162,109 +1184,18 @@ pub(crate) fn offline_check_in_context(
         Some(metadata) => metadata.seal(loaded)?,
         None => loaded?,
     };
-    let mut report = CheckReport {
-        checked_versions: 0,
-        healthy_replicas: 0,
-        tombstoned_versions: 0,
-        issues: Vec::new(),
-    };
-    let histories = layout::histories(root);
-    let histories = match fs::read_dir(&histories) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(report),
-        Err(error) => return Err(error.into()),
-    };
-    for h in histories {
-        let h = h?;
-        if !h.file_type()?.is_dir() {
-            continue;
-        }
-        let versions = h.path().join("versions");
-        let versions = match fs::read_dir(&versions) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error.into()),
-        };
-        for v in versions {
-            let v = v?;
-            if !v.file_type()?.is_dir() {
-                continue;
-            }
-            report.checked_versions += 1;
-            let check: Result<bool> = (|| {
-                let directory = v.path();
-                let version: FileVersion = read_json(&directory.join("version.json"))?;
-                if let Some(file) = open_optional_regular(&directory.join("purged.json"))? {
-                    let tombstone =
-                        crate::journal::decode_proof(&read_file_bytes(file, MAX_METADATA)?)?;
-                    crate::journal::verify_tombstone_content_in_context(
-                        &directory, &version, &tombstone, metadata,
-                    )?;
-                    return Ok(true);
-                }
-                validate_id(&version.version_id, "ver")?;
-                name_policy::validate_name(&version.creation_name)?;
-                crate::journal::verify_local_publication_in_context(
-                    &directory, &version, metadata,
-                )?;
-                verify_payload(&directory, &version)?;
-                Ok(false)
-            })();
-            match check {
-                Ok(true) => report.tombstoned_versions += 1,
-                Ok(false) => report.healthy_replicas += 1,
-                Err(e) => report
-                    .issues
-                    .push(format!("{}: {}", v.file_name().to_string_lossy(), e)),
-            }
-        }
-    }
-    Ok(report)
+    // Disk identity alone cannot locate a source/lifecycle version. Disk/FILE
+    // inspection remains separate; online proof reads require VersionMaterial.
+    Err(crate::engine::FreshLayoutError::VersionSource.into())
 }
 pub fn offline_export(root: &Path, version_id: &str, destination: &Path) -> Result<()> {
     validate_id(version_id, "ver")?;
     let _seal = decode_seal(&read_bytes(
-        &root.join(layout::DISK_IDENTITY.as_path()),
-        MAX_METADATA,
+        &root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA,
     )?)?;
-    for h in fs::read_dir(layout::histories(root))? {
-        let h = h?;
-        if !h.file_type()?.is_dir() {
-            continue;
-        }
-        let directory = h.path().join("versions").join(version_id);
-        match OpenAt2Root::open(&directory, MountPolicy::SameMount) {
-            Ok(_) => (),
-            Err(platform_io::fs_safety::Error::Io(error))
-                if error.kind() == std::io::ErrorKind::NotFound =>
-            {
-                continue;
-            }
-            Err(error) => return Err(fs_error(error)),
-        }
-        let version: FileVersion = read_json(&directory.join("version.json"))?;
-        name_policy::validate_name(&version.creation_name)?;
-        crate::journal::verify_local_publication(&directory, &version)?;
-        let source = verify_payload_held(&directory, &version)?;
-        return verified_full_copy(source, destination, &version, version.logical_size)
-            .map(|_| ())
-            .map_err(CopyFailure::into_error)
-            .map_err(|error| match error {
-                Error::Contract(storage_contract::Error::Io { ref source, .. })
-                    if source.kind() == std::io::ErrorKind::AlreadyExists =>
-                {
-                    error.context(
-                        storage_contract::ErrorCode::DestinationExists,
-                        "export does not overwrite existing files",
-                    )
-                }
-                error => error,
-            });
-    }
-    Err(Error::new(
-        storage_contract::ErrorCode::VersionNotFound,
-        "version is not present on this disk",
-    ))
+    let _ = destination;
+    // No destination file or guessed source metadata address is opened.
+    Err(crate::engine::FreshLayoutError::VersionSource.into())
 }
 
 #[cfg(test)]

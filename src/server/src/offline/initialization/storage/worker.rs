@@ -1,6 +1,6 @@
 //! Executes only after the independent process has dropped root privileges.
 use super::{
-    Action, Format, Plan, WorkerOutput, WorkerRequest,
+    Action, Format, Plan, RequestedDisk, WorkerOutput, WorkerRequest,
     layout::{self, Layout},
 };
 use crate::offline::Result;
@@ -8,8 +8,8 @@ use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
 use platform_io::service_lease::ServiceLease;
 use std::{collections::BTreeMap, path::PathBuf};
-use storage_engine::storage_directories::{CandidateSelection, InspectRequest};
-use storage_engine::{Config, Engine, IndexHealth, Mode, OperationId, ValidatedConfig};
+use storage_engine::storage_directories::{InspectRequest, NamedStorageSelection};
+use storage_engine::{Engine, IndexHealth, Mode, OperationId};
 use storage_server::{
     ApiError,
     auth::AuthStore,
@@ -83,15 +83,17 @@ impl Target {
         }
         Ok(())
     }
-    fn initial_selections(&self, roots: &[String]) -> Result<Vec<CandidateSelection>> {
+    fn initial_selections(&self, disks: &[RequestedDisk]) -> Result<Vec<NamedStorageSelection>> {
         self.fresh()?;
-        self.layout.inventory(roots)?;
+        let roots: Vec<_> = disks.iter().map(|disk| disk.root_path.clone()).collect();
+        self.layout.inventory(&roots)?;
         let mut excluded = vec![
             PathBuf::from(layout::STATE),
             PathBuf::from(layout::MANAGEMENT),
         ];
         let mut selections = Vec::with_capacity(roots.len());
-        for root in roots {
+        for disk in disks {
+            let root = &disk.root_path;
             let location = storage_directories::browse(root)?;
             let selection = storage_directories::inspect_within(
                 layout::DISKS,
@@ -102,18 +104,20 @@ impl Target {
                 &excluded,
             )?;
             excluded.push(PathBuf::from(root));
-            selections.push(selection);
+            selections.push(NamedStorageSelection {
+                selection,
+                name: disk.name.clone(),
+            });
         }
         // Preview the actual production contract; no silent development fallback.
-        let config = Config::independent_roots(Mode::Production, roots.iter().map(PathBuf::from))?;
-        let _validated = ValidatedConfig::try_from(config)?;
+        super::verify_configuration(disks)?;
         self.recheck()?;
         Ok(selections)
     }
     fn original(&self, plan: &Plan) -> Result<bool> {
         self.plan(plan)?;
         let started = self.setup.initial_activation_matches(&plan.activation())?;
-        if !started && self.initial_selections(&plan.roots())? != plan.selections {
+        if !started && self.initial_selections(&plan.requested_disks())? != plan.selections {
             return Err("unstarted original storage selection changed; it cannot be silently re-previewed or reinitialized".into());
         }
         Ok(started)
@@ -122,8 +126,8 @@ impl Target {
 pub(super) fn execute(request: WorkerRequest) -> Result<WorkerOutput> {
     let target = Target::open(&request)?;
     match request.action {
-        Action::Preview { roots } => {
-            let selections = target.initial_selections(&roots)?;
+        Action::Preview { disks } => {
+            let selections = target.initial_selections(&disks)?;
             let plan = Plan {
                 format: Format::FirstStorage,
                 context: request.context,
@@ -202,16 +206,16 @@ fn materialize(mut engine: Engine, target: &Target, plan: &Plan) -> Result<Mater
     {
         return Err("first-storage completion refuses read-only or later-used storage; this is not a general repair/reset operation".into());
     }
-    let expected = plan.roots();
     if engine.config().mode != Mode::Production
-        || engine.config().disks.len() != expected.len()
+        || engine.config().disks.len() != plan.selections.len()
         || engine
             .config()
             .disks
             .iter()
-            .zip(&expected)
-            .any(|(disk, path)| {
-                disk.root != std::path::Path::new(path)
+            .zip(&plan.selections)
+            .any(|(disk, selected)| {
+                disk.root != std::path::Path::new(&selected.selection.root_path)
+                    || disk.name != selected.name
                     || disk.level != 1
                     || disk.upstream_slot_id.is_some()
             })

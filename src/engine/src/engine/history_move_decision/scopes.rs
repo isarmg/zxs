@@ -86,6 +86,7 @@ impl Engine {
                 "move scoped databases exceed configured participant capacity",
             )?;
         }
+        crate::engine::fresh_layout::require_whole_container_lifecycle()?;
         let prepare = || -> Result<()> {
             checkpoint(cancellation)?;
             store::Store::system(self, &materials, store::Mode::Read)?

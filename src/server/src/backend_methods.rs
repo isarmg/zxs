@@ -465,6 +465,71 @@ macro_rules! methods {
                 ) -> Result<storage_contract::StagedFile, $crate::ApiError>;
             }
             optional {
+                fn file_working(
+                    &self, identity: &$crate::Identity,
+                    target: storage_contract::file_draft::DraftLocation,
+                ) -> Result<$crate::FileWorkingSnapshot, $crate::ApiError> {
+                    let _ = (identity, target);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn authorize_file_draft_write(
+                    &self, identity: &$crate::Identity,
+                    target: &storage_contract::file_draft::DraftLocation, logical_size: u64,
+                ) -> Result<(), $crate::ApiError> {
+                    let _ = (identity, target, logical_size);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn change_file_working(
+                    &self, identity: &$crate::Identity, request: $crate::ChangeFileWorking,
+                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn write_file_draft(
+                    &self, identity: &$crate::Identity, request: $crate::ChangeFileWorking,
+                    source: &$crate::UploadSource,
+                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
+                    let _ = (identity, request, source);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn file_draft_content(
+                    &self, identity: &$crate::Identity, request: $crate::ReadFileDraft,
+                ) -> Result<$crate::Content, $crate::ApiError> {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn snapshot_root_context(
+                    &self,
+                    identity: &$crate::Identity,
+                    repository: storage_contract::RepositoryId,
+                ) -> Result<storage_contract::snapshot_worktree::SnapshotRootContext, $crate::ApiError> {
+                    let _ = (identity, repository);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn initialize_directory_snapshot(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: storage_contract::snapshot_worktree::InitializeSnapshot,
+                ) -> Result<storage_contract::snapshot_worktree::SnapshotHandle, $crate::ApiError> {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn create_directory_worktree(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: storage_contract::snapshot_worktree::CreateWorktree,
+                ) -> Result<storage_contract::snapshot_worktree::WorktreeHandle, $crate::ApiError> {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn directory_worktree_status(
+                    &self,
+                    identity: &$crate::Identity,
+                    target: storage_contract::snapshot_worktree::WorktreeHandle,
+                ) -> Result<storage_contract::snapshot_worktree::WorktreeStatus, $crate::ApiError> {
+                    let _ = (identity, target);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn file_container_tags(
                     &self,
                     identity: &$crate::Identity,

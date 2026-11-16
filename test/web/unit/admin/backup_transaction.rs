@@ -11,6 +11,7 @@ fn pending() -> wire::Snapshot {
             source_slot_id: "P01".into(),
             expected_sequence: 17,
             targets: vec![wire::OriginalTarget {
+                name: name_policy::Name::parse("Near archive").unwrap(),
                 root_path: "/fresh/a".into(),
                 disk_id: "disk_new".into(),
                 slot_id: "B01".into(),
@@ -105,6 +106,9 @@ fn response_cannot_replace_original_targets_or_operation() {
     assert!(model.accept(changed).is_err());
     let mut changed = pending();
     changed.request.operation_id = "op_22222222222222222222222222222222".parse().unwrap();
+    assert!(model.accept(changed).is_err());
+    let mut changed = pending();
+    changed.request.targets[0].name = name_policy::Name::parse("Replacement name").unwrap();
     assert!(model.accept(changed).is_err());
     assert_eq!(model.snapshot.unwrap(), pending());
 }

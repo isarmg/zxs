@@ -92,7 +92,9 @@ def initialize_storage(helper, evidence, record):
                "initialize-first-management-administrator", extra={
                    "external_writers_stopped": True, "password": password, "repeat_password": password,
                })
-    original = {"service_user": SERVICE_USER, "roots": ["/zxs/data/disks/acceptance-primary"]}
+    original = {"service_user": SERVICE_USER, "disks": [
+        {"name": "Acceptance", "root_path": "/zxs/data/disks/acceptance-primary"},
+    ]}
     transition("storage-directories", original, "prepare-first-storage-directories-only",
                extra={"external_writers_stopped": True})
     preview = helper.request("/api/initialization/storage-preview", original)

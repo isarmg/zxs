@@ -1,5 +1,6 @@
 //! Explicit loss acknowledgement for an already decided, unpublished candidate.
 //! This path never authorizes a new business write with fewer required copies.
+use crate::container_storage::PreparedContainerEntities;
 use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
 use data_serialization::{Deserialize, Serialize};
@@ -77,22 +78,21 @@ fn classifiable_payload_damage(error: &Error) -> bool {
         _ => false,
     }
 }
-fn observe(engine: &Engine, candidate: &Candidate) -> Result<Vec<Value>> {
+fn observe(
+    engine: &Engine, candidate: &Candidate,
+    sources: &crate::container_storage::PreparedContainerEntities,
+) -> Result<Vec<Value>> {
     let mut out = Vec::new();
     for evidence in &candidate.versions {
         let mut slots = Vec::new();
         for slot in &evidence.placement.route_slot_ids {
             let disk = engine.disk(slot)?;
-            let handle = engine.disk_resources.get(disk)?;
             if evidence.placement.binding_generations.get(slot) != Some(&disk.binding_generation) {
                 return Err(required("candidate payload binding generation differs"));
             }
-            let dir = version_dir(
-                disk,
-                &evidence.version.history_tree_id,
-                &evidence.version.version_id,
-            );
-            let state = match handle.verify_payload(&dir, &evidence.version) {
+            let scope = sources.scope(evidence.version.file_id.parse()?, disk.disk_id.parse()?)?;
+            let material = VersionMaterial::current(scope, &evidence.version)?;
+            let state = match material.verify_payload() {
                 Ok(_) => "COMPLETE_VERIFIED",
                 Err(error) if !classifiable_payload_damage(&error) => {
                     return Err(error.context(
@@ -102,13 +102,8 @@ fn observe(engine: &Engine, candidate: &Candidate) -> Result<Vec<Value>> {
                 }
                 Err(error) => {
                     // An inaccessible device or an arbitrary I/O failure is not permanent loss.
-                    let content = crate::container_storage::content_path_at(
-                        &handle.root,
-                        &dir,
-                        &evidence.version,
-                        &mut |_| Ok(()),
-                    )?;
-                    match handle.root.open_read_regular(&content) {
+                    let content = scope.body_path(&evidence.version)?;
+                    match scope.container()?.open_read_regular(&content) {
                         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(io)))
                         | Err(Error::Contract(storage_contract::Error::Io {
                             source: io, ..
@@ -149,6 +144,9 @@ pub(crate) fn discover_publication(
     engine: &Engine,
     candidate: &Candidate,
     hash: &str,
+    previous: &State,
+    previous_snapshot: &Option<String>,
+    original: &crate::publication_evidence::AdmittedSnapshot,
 ) -> Result<Option<Publication>> {
     let mut found: Option<Publication> = None;
     for disk in engine.members() {
@@ -174,18 +172,26 @@ pub(crate) fn discover_publication(
             }
         }
     }
+    if candidate.versions.is_empty() {
+        return Ok(found);
+    }
+    // Local evidence is not a global object lookup. Admit the exact original
+    // candidate and scanner prefix before opening its staged/final source area.
+    let sources =
+        PreparedContainerEntities::observe_available_candidate_from_prefix(
+            &engine.config, &engine.disk_resources, previous, previous_snapshot,
+            candidate, original,
+        )?;
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
             let disk = engine.disk(slot)?;
-            let Some(handle) = engine.disk_resources.available(disk) else {
+            let Some(_) = engine.disk_resources.available(disk) else {
                 continue;
             };
-            let root = &handle.root;
-            let directory = version_dir(
-                disk,
-                &evidence.version.history_tree_id,
-                &evidence.version.version_id,
-            );
+            let scope = sources.scope(evidence.version.file_id.parse()?, disk.disk_id.parse()?)?;
+            let material = VersionMaterial::current(scope, &evidence.version)?;
+            let root = material.root()?;
+            let directory = material.directory()?;
             let path =
                 local_proof_directory_at(root, &directory, hash)?.join("publication-proof.json");
             {
@@ -222,15 +228,23 @@ pub(crate) fn discover_publication(
     }
     Ok(found)
 }
-fn exclude_publication(engine: &Engine, candidate: &Candidate, hash: &str) -> Result<()> {
-    if discover_publication(engine, candidate, hash)?.is_some() {
+fn exclude_publication(
+    engine: &Engine, candidate: &Candidate, hash: &str,
+    original: &crate::publication_evidence::AdmittedSnapshot,
+) -> Result<()> {
+    if discover_publication(
+        engine, candidate, hash, &engine.state, &engine.snapshot, original,
+    )?.is_some() {
         return Err(required(
             "original publication evidence exists; replay that result",
         ));
     }
     Ok(())
 }
-fn require_permanent_loss(engine: &Engine, candidate: &Candidate, health: &[Value]) -> Result<()> {
+fn require_permanent_loss(
+    engine: &Engine, candidate: &Candidate, health: &[Value],
+    sources: &crate::container_storage::PreparedContainerEntities,
+) -> Result<()> {
     let mut unavailable = false;
     for version in &candidate.versions {
         let state = health
@@ -246,7 +260,7 @@ fn require_permanent_loss(engine: &Engine, candidate: &Candidate, health: &[Valu
         // Use exactly the same source search as normal repair, including old
         // workspace generations and registered repair quarantine directories.
         if engine
-            .pending_payload_source(&version.version, &version.placement)?
+            .pending_payload_source(&version.version, &version.placement, sources)?
             .is_some()
         {
             return Err(required(
@@ -446,7 +460,7 @@ impl Engine {
         resume: Option<&RecoveryPlan>,
     ) -> Result<(
         Candidate,
-        crate::history_package::AdmittedState,
+        crate::publication_evidence::AdmittedSnapshot,
         Vec<MemberWitness>,
         Vec<Receipt>,
     )> {
@@ -592,23 +606,24 @@ impl Engine {
         }
         let candidate = candidate.ok_or_else(|| required("candidate missing"))?;
         let hash = object_hash("candidate", &candidate)?;
-        let state = crate::publication_evidence::verified_snapshot_at(
+        let original = crate::publication_evidence::verified_recovery_snapshot_at(
             &self.disk_resources,
             &self.members(),
             &candidate.snapshot_hash,
         )?;
+        let state = original.for_candidate(&candidate)?;
         crate::history_package::bound_history_objects_at(
             &self.disk_resources,
             &self.members(),
             &candidate,
-            Some(&state),
+            Some(state),
         )?;
         self.verify_current_recovery_candidate(&candidate, state.state())?;
         crate::engine::CurrentNamespaces::reject_degraded_backup(&candidate, state.state())?;
         crate::engine::CurrentNamespaces::reject_degraded_history_copy(&candidate, state.state())?;
         crate::engine::CurrentNamespaces::reject_degraded_history_move(&candidate, state.state())?;
-        exclude_publication(self, &candidate, &hash)?;
-        Ok((candidate, state, witnesses, accepts))
+        exclude_publication(self, &candidate, &hash, &original)?;
+        Ok((candidate, original, witnesses, accepts))
     }
     pub fn prepare_degraded_recovery(
         &mut self,
@@ -623,7 +638,7 @@ impl Engine {
                 "recovery requires a principal and a bounded explicit permanent-loss reason",
             ));
         }
-        let (candidate, _, members, original_accepts) =
+        let (candidate, admitted, members, original_accepts) =
             self.pending_recovery_candidate(operation, None)?;
         // A preview can reuse an existing plan, but not an earlier seal read.
         // Admit mutable seal bytes after loading the candidate closure and
@@ -667,8 +682,11 @@ impl Engine {
             write_json(&plan_path(&self.root, &plan.recovery_id), &plan, false)?;
             return Ok(plan);
         }
-        let observed = observe(self, &candidate)?;
-        require_permanent_loss(self, &candidate, &observed)?;
+        let sources = crate::container_storage::PreparedContainerEntities::observe_candidate(
+            &self.planning_context(), &candidate, &admitted,
+        )?;
+        let observed = observe(self, &candidate, &sources)?;
+        require_permanent_loss(self, &candidate, &observed, &sources)?;
         let (version_protection, loss_details) = freeze_observation(observed);
         if !version_protection.iter().any(|v| {
             v["slots"]
@@ -799,7 +817,10 @@ impl Engine {
             &candidate,
             &self.metadata_integrity,
         )?;
-        let (observed, loss_details) = freeze_observation(observe(self, &candidate)?);
+        let sources = crate::container_storage::PreparedContainerEntities::observe_candidate(
+            &self.planning_context(), &candidate, &admitted,
+        )?;
+        let (observed, loss_details) = freeze_observation(observe(self, &candidate, &sources)?);
         if canonical_json(&members)? != canonical_json(&plan.members)?
             || canonical_json(&accepts)? != canonical_json(&plan.original_accepts)?
             || canonical_json(&observed)? != canonical_json(&plan.version_protection)?
@@ -810,15 +831,15 @@ impl Engine {
                 "recovery evidence changed after preview",
             ));
         }
-        require_permanent_loss(self, &candidate, &plan.version_protection)?;
+        require_permanent_loss(self, &candidate, &plan.version_protection, &sources)?;
         let member_disks = self.members();
         let (history_objects, roots) = crate::history_package::bound_history_objects_with_roots_at(
             &self.disk_resources,
             &member_disks,
             &candidate,
-            Some(&admitted),
+            Some(admitted.for_candidate(&candidate)?),
         )?;
-        let mut next = admitted.into_state();
+        let mut next = admitted.into_visible_state(candidate.operation_id, None);
         let mut result = next
             .operations
             .get(&candidate.operation_id)
@@ -918,13 +939,13 @@ impl Engine {
                     continue;
                 }
                 let disk = self.disk(slot)?;
-                let dir = version_dir(
-                    disk,
-                    &evidence.version.history_tree_id,
-                    &evidence.version.version_id,
-                );
-                let handle = self.disk_resources.get(disk)?;
-                handle.verify_payload(&dir, &evidence.version)?;
+                let scope = sources.scope(
+                    evidence.version.file_id.parse()?, disk.disk_id.parse()?,
+                )?;
+                let material = VersionMaterial::current(scope, &evidence.version)?;
+                let dir = material.directory()?;
+                let root = material.root()?;
+                material.verify_payload()?;
                 let proof = CommitProof {
                     candidate_hash: plan.candidate_hash.clone(),
                     finalize: finalize.clone(),
@@ -933,10 +954,8 @@ impl Engine {
                     slot_id: slot.clone(),
                     route_slot_ids: evidence.placement.route_slot_ids.clone(),
                 };
-                let proof_dir = local_proof_directory_at(&handle.root, &dir, &plan.candidate_hash)?;
-                handle
-                    .root
-                    .write_json(&proof_dir.join("commit-proof.json"), &proof, true)?;
+                let proof_dir = local_proof_directory_at(root, &dir, &plan.candidate_hash)?;
+                root.write_json(&proof_dir.join("commit-proof.json"), &proof, true)?;
                 payload_receipts.push(PayloadReceipt {
                     version_id: evidence.version.version_id.clone(),
                     disk_id: disk.disk_id.clone(),

@@ -5,7 +5,7 @@ use std::fs;
 #[test]
 fn membership_control_probe_closed_binding_rejects_before_unsafe_named_root() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("member")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("member")])).unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     let handle = engine.disk_resources.get(&config.disks[0]).unwrap();
     let binding = handle.root.io_binding().unwrap();
@@ -32,7 +32,7 @@ fn membership_control_probe_closed_binding_rejects_before_unsafe_named_root() {
 #[test]
 fn membership_control_probe_active_moved_root_retains_exact_identity_failure() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("member")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("member")])).unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     let handle = engine.disk_resources.get(&config.disks[0]).unwrap();
     let before = verify_named_root(&handle.root).unwrap();

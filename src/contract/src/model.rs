@@ -45,6 +45,8 @@ strict_string_deserialize!(Mode { Production => "production", Development => "de
 pub struct DiskConfig {
     pub slot_id: String,
     pub disk_id: String,
+    /// Explicit user-owned display name. Never inferred from the mount or slot.
+    pub name: name_policy::Name,
     pub root: PathBuf,
     pub level: u32,
     pub upstream_slot_id: Option<String>,
@@ -60,6 +62,9 @@ pub struct DiskConfig {
 #[serialization(deny_unknown_fields)]
 pub struct Config {
     pub pool_id: String,
+    /// Empty only in an initialization request. Persisted genesis requires the
+    /// complete, same-lock observed physical roots; no old-format default.
+    pub storage_roots: BTreeMap<crate::DiskId, crate::working_tree::RootBinding>,
     pub mode: Mode,
     pub disks: Vec<DiskConfig>,
     pub checksum_chunk_bytes: u32,
@@ -108,7 +113,7 @@ impl Config {
     /// existing pool protocol; this does not create independent commit domains.
     pub fn independent_roots(
         mode: Mode,
-        disks: impl IntoIterator<Item = PathBuf>,
+        disks: impl IntoIterator<Item = (name_policy::Name, PathBuf)>,
     ) -> crate::Result<Self> {
         let mut config = Self::development(disks)?;
         config.mode = mode;
@@ -122,7 +127,9 @@ impl Config {
 
     /// Build a development draft with one primary and optional ordered backup tiers.
     /// Validate the draft before use; an empty iterator is not a valid pool.
-    pub fn development(disks: impl IntoIterator<Item = PathBuf>) -> crate::Result<Self> {
+    pub fn development(
+        disks: impl IntoIterator<Item = (name_policy::Name, PathBuf)>,
+    ) -> crate::Result<Self> {
         fn slot(index: usize) -> String {
             match index {
                 0 => "P01".into(),
@@ -133,14 +140,16 @@ impl Config {
         }
         Ok(Self {
             pool_id: crate::new_id("pool")?,
+            storage_roots: BTreeMap::new(),
             mode: Mode::Development,
             disks: disks
                 .into_iter()
                 .enumerate()
-                .map(|(i, root)| {
+                .map(|(i, (name, root))| {
                     Ok(DiskConfig {
                         slot_id: slot(i),
                         disk_id: crate::new_id("disk")?,
+                        name,
                         root,
                         level: i as u32 + 1,
                         upstream_slot_id: i.checked_sub(1).map(slot),
@@ -1010,6 +1019,7 @@ pub struct ProtectionPolicy {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct State {
+    pub file_containers: crate::TrackedFiles<crate::file_container::FileContainerRecord>,
     pub container_tags: crate::TrackedFiles<crate::file_container_tags::ContainerTags>,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
@@ -1112,6 +1122,7 @@ impl State {
             };
         }
         track!(
+            file_containers,
             container_tags,
             events,
             repositories,

@@ -250,7 +250,7 @@ impl Engine {
         // this slot against its exact admitted predecessor before that search;
         // receipt labels alone cannot grant permission to inspect payloads.
         let mut next_namespaces = None;
-        let snapshot =
+        let mut snapshot =
             if candidate.registry().is_some() || self.is_backup_first_candidate(&candidate)? {
                 let admitted = verified_recovery_snapshot_at(
                     &self.disk_resources,
@@ -303,7 +303,19 @@ impl Engine {
                 "publication",
                 &receipt.record.object_hash,
             )?),
-            None => crate::degraded_recovery::discover_publication(self, &candidate, hash)?,
+            None => {
+                let original = match snapshot.take() {
+                    Some(shared) => shared.into_admitted(),
+                    None => verified_recovery_snapshot_at(
+                        &self.disk_resources, online, &candidate.snapshot_hash,
+                    )?,
+                };
+                let publication = crate::degraded_recovery::discover_publication(
+                    self, &candidate, hash, prefix.state, prefix.snapshot, &original,
+                )?;
+                snapshot = Some(original.into_shared());
+                publication
+            },
         };
         if publication
             .as_ref()
@@ -387,6 +399,12 @@ impl Engine {
         candidate: &Candidate,
         next: &State,
     ) -> Result<()> {
+        let containers = super::super::fresh_layout::containers::verify_transition(
+            &self.config, &self.state, next, candidate,
+        )?;
+        crate::protection::verify_automatic_backup_candidate(
+            &self.planning_context(), next, candidate, &containers,
+        )?;
         if let Some(view) = self.admitted_current_namespaces()? {
             verify_current_candidate_transition(view, &self.state, next, candidate)?;
         } else {

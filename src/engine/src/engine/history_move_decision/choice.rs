@@ -471,6 +471,7 @@ impl Engine {
             )?;
         }
         checkpoint(cancellation)?;
+        crate::engine::fresh_layout::require_whole_container_lifecycle()?;
         // Fence first, even if the first fsync fails. A partially durable choice
         // can only tighten denial on restart; it is never a voting authority.
         self.history_move_choice = Some(choice.clone());

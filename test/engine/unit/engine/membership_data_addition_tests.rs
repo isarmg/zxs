@@ -5,7 +5,9 @@ fn initialize() -> (tempfile::TempDir, Engine, String, String) {
         .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()
         .unwrap();
-    let config = Config::development((0..2).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+    let config = Config::development(crate::test_disks(
+        (0..2).map(|n| temp.path().join(format!("old-{n}"))),
+    )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repository = engine
         .create_repository(
@@ -30,7 +32,9 @@ fn begin_additions(
     let mut target = (*engine.config).clone();
     let previous = target.disks.len();
     let generated =
-        Config::development((0..previous + roles.len()).map(|n| root.join(format!("{label}-{n}"))))
+        Config::development(crate::test_disks(
+            (0..previous + roles.len()).map(|n| root.join(format!("{label}-{n}"))),
+        ))
             .unwrap();
     let added = generated
         .disks
@@ -98,7 +102,9 @@ fn relocated_addition_preserves_retained_anchors_and_creates_only_new_anchors() 
     let temp = tempfile::tempdir().unwrap();
     let system = temp.path().join("system");
     let mut draft =
-        Config::development((0..3).map(|n| temp.path().join(format!("original-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("original-{n}"))),
+        )).unwrap();
     draft.disks[2].metadata_member = false;
     let engine = Engine::initialize(&system, draft).unwrap();
     let original = engine.config.clone();
@@ -816,7 +822,9 @@ fn membership_activation_data_backup_addition_claims_only_new_body_replicas() {
     let (temp, mut engine, _, original) = initialize();
     let original_version = engine.state.versions[&original].clone();
     let mut target = (*engine.config).clone();
-    let mut backup = Config::development((0..3).map(|n| temp.path().join(format!("backup-{n}"))))
+    let mut backup = Config::development(crate::test_disks(
+        (0..3).map(|n| temp.path().join(format!("backup-{n}"))),
+    ))
         .unwrap()
         .disks
         .pop()

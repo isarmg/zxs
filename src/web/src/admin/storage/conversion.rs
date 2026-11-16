@@ -14,6 +14,7 @@ pub(super) use view::{form, view};
 #[derive(Clone)]
 pub(super) struct Model {
     target: Option<String>,
+    name: String,
     slot: String,
     metadata: bool,
     preview: Option<OrdinaryDiskConversionPreview>,
@@ -33,6 +34,7 @@ impl Default for Model {
     fn default() -> Self {
         Self {
             target: None,
+            name: String::new(),
             slot: "N01".into(),
             metadata: false,
             preview: None,
@@ -116,6 +118,7 @@ fn make_request(
         operation_id,
         source,
         target,
+        name: disk_name(&model.conversion.name)?,
         slot_id: model.conversion.slot.clone(),
         metadata_member: model.conversion.metadata,
     })
@@ -156,6 +159,7 @@ fn read_preview(
     if preview.operation_id != expected.operation_id
         || preview.source != expected.source
         || target.selection != expected.target
+        || target.name != expected.name
         || target.slot_id != expected.slot_id
         || target.metadata_member != expected.metadata_member
     {

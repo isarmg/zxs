@@ -53,7 +53,7 @@ async fn directory_layout_http_moves_real_container_once_and_cold_reads_saved_ma
     let root = tempfile::tempdir().unwrap();
     let app = configured_application(
         root.path(),
-        Config::development([root.path().join("d1")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("d1")])).unwrap(),
     );
     let token = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &token, "docs/a.txt", b"saved before initialization").await;
@@ -119,7 +119,7 @@ async fn directory_layout_http_rejects_stale_unknown_and_unauthorized_before_mov
     let root = tempfile::tempdir().unwrap();
     let app = configured_application(
         root.path(),
-        Config::development([root.path().join("d1")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("d1")])).unwrap(),
     );
     let token = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &token, "docs/a.txt", b"first").await;
@@ -171,7 +171,7 @@ async fn directory_layout_http_does_not_initialize_an_ordinary_directory() {
     let root = tempfile::tempdir().unwrap();
     let app = configured_application(
         root.path(),
-        Config::development([root.path().join("d1")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("d1")])).unwrap(),
     );
     let token = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &token, "docs/a.txt", b"ordinary").await;

@@ -10,7 +10,9 @@ fn disk() -> (tempfile::TempDir, Arc<DiskHandle>, DiskWriter) {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([temp.path().to_path_buf()]).unwrap())
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [temp.path().to_path_buf()],
+        )).unwrap())
             .unwrap();
     let handle = Arc::new(DiskHandle::open(&config, &config.disks[0], false).unwrap());
     let lock = handle.root.lock_file().unwrap();

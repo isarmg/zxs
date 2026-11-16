@@ -28,11 +28,13 @@ fn entropy_fault_preserves_unpublished_state_and_workspace() {
     // the successful shell driver removes this tree.
     let directory = marker.parent().unwrap();
     let root = directory.join("state");
-    let config = Config::development([
-        directory.join("primary"),
-        directory.join("backup"),
-        directory.join("tertiary"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            directory.join("primary"),
+            directory.join("backup"),
+            directory.join("tertiary"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&root, config).unwrap();
     let operation = OperationId::generate().unwrap();

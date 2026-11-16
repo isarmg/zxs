@@ -28,7 +28,9 @@ impl Fixture {
     fn new(action: MembershipExitAction, data_only: usize) -> Self {
         let temporary = tempfile::tempdir().unwrap();
         let mut original =
-            Config::development((0..=data_only).map(|n| temporary.path().join(format!("old-{n}"))))
+            Config::development(crate::test_disks(
+                (0..=data_only).map(|n| temporary.path().join(format!("old-{n}"))),
+            ))
                 .unwrap();
         for disk in original.disks.iter_mut().skip(1) {
             disk.metadata_member = false;
@@ -88,9 +90,9 @@ impl Fixture {
     }
     fn target(&self, count: usize) -> Config {
         let old = self.original.disks.len();
-        let additions = Config::development(
+        let additions = Config::development(crate::test_disks(
             (0..old + count).map(|n| self.temporary.path().join(format!("new-{n}"))),
-        )
+        ))
         .unwrap();
         let mut target = self.original.clone();
         for disk in &mut target.disks {

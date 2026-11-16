@@ -28,6 +28,19 @@ pub(crate) struct Binding {
     ledger_entity: LocalEntityIdentity,
     genesis: MaterialCommitment,
 }
+impl Binding {
+    pub(crate) fn worktree(self) -> WorktreeId {
+        self.worktree
+    }
+
+    pub(crate) fn source(self) -> SnapshotReference {
+        self.source
+    }
+
+    pub(crate) fn initial_checkpoint(self) -> Checkpoint {
+        Checkpoint { sequence: Sequence::new(0), commitment: self.genesis }
+    }
+}
 
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum LedgerPreparationError {

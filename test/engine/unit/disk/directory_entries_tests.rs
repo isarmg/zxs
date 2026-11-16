@@ -5,7 +5,9 @@ fn disk() -> (tempfile::TempDir, Arc<DiskHandle>, PathBuf) {
     let directory = tempfile::tempdir().unwrap();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([directory.path().to_path_buf()]).unwrap())
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [directory.path().to_path_buf()],
+        )).unwrap())
             .unwrap();
     let handle = Arc::new(DiskHandle::open(&config, &config.disks[0], false).unwrap());
     let child = directory.path().join("entries");

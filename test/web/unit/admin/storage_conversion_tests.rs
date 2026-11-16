@@ -24,6 +24,7 @@ fn preview() -> OrdinaryDiskConversionPreview {
                 operation_id: "op_00000000000000000000000000000003".parse().unwrap(),
                 additions: vec![DirectoryAddition {
                     selection,
+                    name: name_policy::Name::parse("Imported documents").unwrap(),
                     slot_id: "N01".into(),
                     level: 1,
                     upstream_slot_id: None,
@@ -91,6 +92,7 @@ fn request() -> OrdinaryDiskConversionRequest {
         operation_id: preview.operation_id,
         source: preview.source,
         target: target.selection,
+        name: target.name,
         slot_id: target.slot_id,
         metadata_member: target.metadata_member,
     }
@@ -99,6 +101,9 @@ fn request() -> OrdinaryDiskConversionRequest {
 fn ordinary_conversion_binds_exact_new_primary_and_preserves_large_byte_counts() {
     let preview = preview();
     assert_eq!(read_preview(json!(preview), &request()).unwrap(), preview);
+    let mut renamed = preview.clone();
+    renamed.target.request.additions[0].name = name_policy::Name::parse("Other name").unwrap();
+    assert!(read_preview(json!(renamed), &request()).is_err());
     for change in 0..8 {
         let mut changed = preview.clone();
         match change {

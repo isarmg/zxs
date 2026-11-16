@@ -20,7 +20,9 @@ impl RetainedFixture {
     fn with_voters(voters: usize) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let original =
-            Config::development((0..voters).map(|n| temp.path().join(format!("disk-{n}"))))
+            Config::development(crate::test_disks(
+                (0..voters).map(|n| temp.path().join(format!("disk-{n}"))),
+            ))
                 .unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
         let repository = engine

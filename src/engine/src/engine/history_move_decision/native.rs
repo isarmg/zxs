@@ -58,6 +58,7 @@ impl Engine {
         cancellation: &HistoryWindowCancellation,
     ) -> Result<FileHistoryMoveNativePreparation> {
         let (materials, native) = self.native_move_inputs(projection, recovery, cancellation)?;
+        crate::engine::fresh_layout::require_whole_container_lifecycle()?;
         let prepare = || -> Result<()> {
             checkpoint(cancellation)?;
             store::Store::system(self, &materials, store::Mode::Read)?

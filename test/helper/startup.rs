@@ -1,4 +1,6 @@
 use std::process::Command;
+#[path = "../engine/support/configured_disks.rs"]
+mod configured_disks;
 #[path = "../server/service_namespace.rs"]
 mod service_namespace;
 const HOST_NAMESPACE_SCRIPT: &str = concat!(
@@ -113,8 +115,11 @@ fn recovery_commands_report_returned_engine_seal_failure_once_before_command_rej
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("system");
     let disks = ["a", "b", "c"].map(|name| directory.path().join(name));
-    let mut engine =
-        Engine::initialize(&root, Config::development(disks.clone()).unwrap()).unwrap();
+    let mut engine = Engine::initialize(
+        &root,
+        Config::development(configured_disks::disks(disks.clone())).unwrap(),
+    )
+    .unwrap();
     let operation = OperationId::generate().unwrap();
     engine
         .create_repository(
@@ -230,7 +235,7 @@ fn rescue_restores_from_two_old_members_without_management_commands() {
     let disks = ["a", "b", "c"].map(|slot| directory.path().join(slot));
     let mut engine = storage_engine::Engine::initialize(
         &original,
-        storage_engine::Config::development(disks.clone()).unwrap(),
+        storage_engine::Config::development(configured_disks::disks(disks.clone())).unwrap(),
     )
     .unwrap();
     let baseline = engine.config().clone();
@@ -316,7 +321,11 @@ fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
     let target = directory.path().join("target");
     let initialize = |root: &std::path::Path, prefix: &str| {
         let disks = ["a", "b", "c"].map(|slot| directory.path().join(format!("{prefix}-{slot}")));
-        Engine::initialize(root, Config::development(disks).unwrap()).unwrap()
+        Engine::initialize(
+            root,
+            Config::development(configured_disks::disks(disks)).unwrap(),
+        )
+        .unwrap()
     };
     let mut engine = initialize(&source, "source");
     let repository = engine
@@ -439,10 +448,10 @@ fn configuration_commands_edit_only_an_uninitialized_draft() {
     let directory = temporary.path();
     let output = directory.join("custom.json");
     let disks = [
-        directory.join("p"),
-        directory.join("b"),
-        directory.join("c"),
-    ];
+        ("Primary", directory.join("p")),
+        ("Near archive", directory.join("b")),
+        ("Far archive", directory.join("c")),
+    ].map(|(name, root)| json_codec::json!({"name":name,"root":root}).to_string());
     let binary = env!("CARGO_BIN_EXE_zxs-helper");
     let result = Command::new(binary)
         .args(["configuration", "template", "--disks"])
@@ -461,7 +470,7 @@ fn configuration_commands_edit_only_an_uninitialized_draft() {
     let result = Command::new(binary)
         .args(["configuration", "register-disk", "--config"])
         .arg(&output)
-        .args(["--slot", "P02", "--disk-id"])
+        .args(["--name", "Additional primary", "--slot", "P02", "--disk-id"])
         .arg(storage_engine::new_id("disk").unwrap())
         .arg("--path")
         .arg(&additional)
@@ -504,7 +513,7 @@ fn template_cli_accepts_one_disk_and_rejects_no_disks() {
     let disk = directory.path().join("only");
     let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .args(["configuration", "template", "--disks"])
-        .arg(&disk)
+        .arg(json_codec::json!({"name":"Only archive","root":disk}).to_string())
         .output()
         .unwrap();
     assert!(
@@ -515,6 +524,7 @@ fn template_cli_accepts_one_disk_and_rejects_no_disks() {
     let config: storage_engine::Config = storage_engine::decode_strict(&output.stdout).unwrap();
     assert_eq!(config.disks.len(), 1);
     assert_eq!(config.disks[0].level, 1);
+    assert_eq!(config.disks[0].name.as_str(), "Only archive");
     assert!(!disk.exists());
     let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .args(["configuration", "template", "--disks"])
@@ -599,8 +609,11 @@ fn scrub_is_a_real_exclusive_offline_consumer_with_explicit_partial_failure() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("system");
     let disks = ["a", "b", "c"].map(|name| directory.path().join(name));
-    let mut engine =
-        Engine::initialize(&root, Config::development(disks.clone()).unwrap()).unwrap();
+    let mut engine = Engine::initialize(
+        &root,
+        Config::development(configured_disks::disks(disks.clone())).unwrap(),
+    )
+    .unwrap();
     engine
         .create_repository(
             &RepositoryName::parse("scrub-fixture").unwrap(),
@@ -726,7 +739,7 @@ fn offline_export_receipt_paths_are_admitted_before_publishing_verified_bytes() 
     let disk = directory.path().join("disk");
     let mut engine = Engine::initialize(
         &directory.path().join("system"),
-        Config::development(vec![disk.clone()]).unwrap(),
+        Config::development(configured_disks::disks(vec![disk.clone()])).unwrap(),
     )
     .unwrap();
     let repository = engine

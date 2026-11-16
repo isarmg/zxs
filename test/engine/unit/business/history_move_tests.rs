@@ -5,7 +5,9 @@ use super::*;
 fn a_shared_file_cannot_be_captured_as_a_single_path_move() {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development([temp.path().join("source"), temp.path().join("target")]).unwrap();
+        Config::development(crate::test_disks(
+            [temp.path().join("source"), temp.path().join("target")],
+        )).unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();

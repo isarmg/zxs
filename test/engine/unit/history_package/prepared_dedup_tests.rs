@@ -52,11 +52,13 @@ fn install_and_check_roots(objects: &[PreparedMetadataObject], members: &[DiskCo
 #[test]
 fn real_histories_share_one_empty_page_and_rebuild_exact_roots() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     for name in ["first", "second", "third"] {
@@ -91,11 +93,13 @@ fn real_histories_share_one_empty_page_and_rebuild_exact_roots() {
             .len(),
         objects.len()
     );
-    let targets = Config::development([
-        temp.path().join("fresh-one"),
-        temp.path().join("fresh-two"),
-        temp.path().join("fresh-three"),
-    ])
+    let targets = Config::development(crate::test_disks(
+        [
+            temp.path().join("fresh-one"),
+            temp.path().join("fresh-two"),
+            temp.path().join("fresh-three"),
+        ],
+    ))
     .unwrap();
     install_and_check_roots(&objects, &targets.disks);
     let (reused_roots, reused) =
@@ -128,11 +132,13 @@ fn real_histories_share_one_empty_page_and_rebuild_exact_roots() {
 #[test]
 fn failed_member_and_later_invocations_do_not_cache_installation() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("one"),
-        temp.path().join("two"),
-        temp.path().join("three"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("one"),
+            temp.path().join("two"),
+            temp.path().join("three"),
+        ],
+    ))
     .unwrap();
     let plan = || {
         unique_prepared_objects(vec![
@@ -179,7 +185,9 @@ fn existing_object_syncs_in_isolated_child() {
         .parse()
         .unwrap();
     let config =
-        Config::development([root.join("one"), root.join("two"), root.join("three")]).unwrap();
+        Config::development(crate::test_disks(
+            [root.join("one"), root.join("two"), root.join("three")],
+        )).unwrap();
     let plan = || {
         unique_prepared_objects(vec![
             object("state-page", json!({})),

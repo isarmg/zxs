@@ -1,5 +1,6 @@
 //! Working-directory structure and complete immutable snapshot material.
-//! No current production initializer, scanner or recovery path uses this module.
+//! Fresh initialization consumes only the complete root structural validator;
+//! directory/container authority still requires its own actual publication.
 pub(crate) mod records;
 pub(crate) mod snapshot;
 

@@ -9,14 +9,52 @@ use std::{io::Read, path::PathBuf, sync::Arc};
 /// existing read-proof path below. Callers may retain it but cannot substitute
 /// another file path or manufacture this capability from a disk seal.
 pub(crate) struct VerifiedReplicaSource {
-    owner: Arc<DiskHandle>,
+    scope: Arc<crate::container_storage::ObservedContainerReplica>,
     path: PathBuf,
     version: FileVersion,
 }
 impl VerifiedReplicaSource {
-    pub(super) fn owner(&self) -> &Arc<DiskHandle> {
-        &self.owner
+    /// Re-protection may reuse only a fully read original managed version from
+    /// its actual prior route and this planning occurrence's same held disk.
+    pub(crate) fn require_backup_source(
+        &self,
+        context: &super::PlanningContext<'_>,
+        version: &FileVersion,
+    ) -> Result<()> {
+        let invalid = crate::protection::invalid_automatic_backup;
+        let placement = context.state.placements.get(&version.version_id)
+            .ok_or_else(invalid)?;
+        let disk = context.disk(&self.scope.disk().seal.slot_id)?;
+        if &self.version != version
+            || context.state.versions.get(&version.version_id) != Some(version)
+            || !placement.route_slot_ids.contains(&disk.slot_id)
+            || placement.binding_generations.get(&disk.slot_id) != Some(&disk.binding_generation)
+            || !Arc::ptr_eq(context.disk_resources.get(disk)?, self.scope.disk())
+        {
+            return Err(invalid());
+        }
+        self.scope.verify()?;
+        self.scope.container()?.admit_io()?.check_running()
     }
+
+    pub(super) fn owner(&self) -> &Arc<DiskHandle> {
+        self.scope.disk()
+    }
+    pub(super) fn open(&self) -> Result<ReadFile> {
+        let container = self.scope.container()?;
+        let expected = self.scope.body_path(&self.version)?;
+        if self.path != expected {
+            return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
+        }
+        let file = container.open_leased_regular(&self.path)?;
+        self.scope.verify()?;
+        Ok(ReadFile::in_container(file, Arc::clone(&self.scope)))
+    }
+
+    pub(super) fn with_path(&self, path: PathBuf) -> Self {
+        Self { scope: Arc::clone(&self.scope), path, version: self.version.clone() }
+    }
+
     pub(super) fn path(&self) -> &Path {
         &self.path
     }
@@ -31,10 +69,8 @@ impl Engine {
     }
     pub(crate) fn valid_replica(&self, version_id: &str) -> Result<(ReadSource, FileVersion)> {
         let source = self.validated_replica_source(version_id)?;
-        Ok((
-            ReadSource::on_disk(&source.owner, source.path),
-            source.version,
-        ))
+        let version = source.version.clone();
+        Ok((ReadSource::VerifiedReplica(Arc::new(source)), version))
     }
 
     pub(crate) fn valid_backup_replica(&self, version_id: &str) -> Result<ReadSource> {
@@ -43,34 +79,34 @@ impl Engine {
     }
 
     fn validated_replica_source(&self, version_id: &str) -> Result<VerifiedReplicaSource> {
-        self.with_replica(version_id, |disk, directory, version, lease| {
-            verify_read_payload(disk, directory, version, lease)?;
-            let content = crate::container_storage::content_path_at(
-                &disk.root,
-                directory,
-                version,
-                &mut |_| lease.check_running(),
-            )?;
+        self.with_replica(version_id, |scope, material, version, lease| {
+            verify_read_payload(material, version, lease)?;
+            let content = scope.body_path(version)?;
             Ok(VerifiedReplicaSource {
-                owner: Arc::clone(disk),
-                path: content,
-                version: version.clone(),
+                scope: Arc::clone(scope), path: content, version: version.clone(),
             })
         })
     }
-    fn verified_replica(&self, version_id: &str) -> Result<(DiskFile, FileVersion, PathBuf)> {
-        self.with_replica(version_id, |disk, directory, version, lease| {
-            let mut file = verify_read_payload(disk, directory, version, lease)?;
+    fn verified_replica(&self, version_id: &str) -> Result<(ReadFile, FileVersion, PathBuf)> {
+        self.with_replica(version_id, |scope, material, version, lease| {
+            let mut file = verify_read_payload(material, version, lease)?;
             use std::io::{Seek, SeekFrom};
             file.seek(SeekFrom::Start(0))?;
-            Ok((file, version.clone(), directory.to_path_buf()))
+            Ok((
+                ReadFile::in_container(file, Arc::clone(scope)),
+                version.clone(),
+                material.directory()?,
+            ))
         })
     }
 
     fn with_replica<T>(
         &self,
         version_id: &str,
-        mut read: impl FnMut(&Arc<DiskHandle>, &Path, &FileVersion, &DiskIoLease) -> Result<T>,
+        mut read: impl FnMut(
+            &Arc<crate::container_storage::ObservedContainerReplica>,
+            &VersionMaterial<'_>, &FileVersion, &DiskIoLease,
+        ) -> Result<T>,
     ) -> Result<T> {
         if self
             .state
@@ -101,21 +137,22 @@ impl Engine {
             let candidate = (|| {
                 let disk = self.disk_resources.get(d)?;
                 let lease = disk.root.admit_io()?;
-                let dir = version_dir(d, &version.history_tree_id, version_id);
+                let scope = Arc::new(super::fresh_layout::containers::observe_replica(
+                    &self.config, &self.disk_resources, &self.state,
+                    version.file_id.parse()?, d,
+                )?);
+                let material = VersionMaterial::current(&scope, version)?;
                 let metadata = MetadataReadContext::for_disk(
                     &self.config,
                     &disk.seal,
-                    d.metadata_member
-                        .then_some(self.metadata_integrity.as_ref()),
+                    d.metadata_member.then_some(self.metadata_integrity.as_ref()),
                 );
-                crate::journal::verify_local_publication_at(
-                    &disk.root,
-                    &dir,
-                    version,
-                    &mut |_| lease.check_running(),
-                    Some(&metadata),
+                crate::journal::verify_source_publication(
+                    &material, &mut |_| lease.check_running(), Some(&metadata),
                 )?;
-                read(disk, &dir, version, &lease)
+                let result = read(&scope, &material, version, &lease)?;
+                scope.verify()?;
+                Ok(result)
             })();
             match candidate {
                 Ok(replica) => return Ok(replica),
@@ -206,15 +243,15 @@ impl Engine {
             .open()
     }
     pub fn read_checksums(&self, version: &str) -> Result<Vec<u8>> {
-        self.with_replica(version, |disk, directory, version, lease| {
-            let (file, checks, manifest) = open_read_payload(disk, directory, version, lease)?;
+        self.with_replica(version, |_scope, material, version, lease| {
+            let (file, checks, manifest) = open_read_payload(material, version, lease)?;
             verify_read_file(file, manifest, version)?;
             Ok(checks)
         })
     }
     pub fn export_version(&self, version_id: &str, destination: &Path) -> Result<()> {
-        self.with_replica(version_id, |disk, directory, version, lease| {
-            let (file, _, _) = open_read_payload(disk, directory, version, lease)?;
+        self.with_replica(version_id, |_scope, material, version, lease| {
+            let (file, _, _) = open_read_payload(material, version, lease)?;
             match verified_full_copy(file, destination, version, version.logical_size) {
                 Ok(_) => Ok(Ok(())),
                 Err(CopyFailure::Source(error)) => Err(error),
@@ -261,15 +298,12 @@ impl Engine {
 /// The named proof is itself a managed resource, not a side read authorized by
 /// the payload's lease. Cancellation is observed between 64 KiB reads even for
 /// a maximum-sized manifest.
-fn read_checksums_leased(
-    disk: &DiskHandle,
-    directory: &Path,
-    version: &FileVersion,
-) -> Result<Vec<u8>> {
+fn read_checksums_leased(material: &VersionMaterial<'_>) -> Result<Vec<u8>> {
+    let version = material.version();
     let length = checksum_manifest_length(version)?;
-    let mut file = disk
-        .root
-        .open_leased_regular(&directory.join("checksums.bin"))?;
+    let mut file = material.root()?.open_leased_regular(
+        &material.directory()?.join(crate::persist::layout::VERSION_CHECKSUMS.as_path()),
+    )?;
     if file.metadata()?.len() != length as u64 {
         return Err(Error::new(
             ErrorCode::ChecksumMismatch,
@@ -292,16 +326,13 @@ fn read_checksums_leased(
 }
 
 fn open_read_payload_file(
-    disk: &DiskHandle,
-    directory: &Path,
+    material: &VersionMaterial<'_>,
     version: &FileVersion,
     lease: &DiskIoLease,
 ) -> Result<DiskFile> {
-    let path =
-        crate::container_storage::content_path_at(&disk.root, directory, version, &mut |_| {
-            lease.check_running()
-        })?;
-    let file = disk.root.open_leased_regular(&path)?;
+    lease.check_running()?;
+    let path = material.body_path()?;
+    let file = material.container()?.open_leased_regular(&path)?;
     if file.metadata()?.len() != version.logical_size {
         return Err(Error::new(
             ErrorCode::ChecksumMismatch,
@@ -312,12 +343,11 @@ fn open_read_payload_file(
 }
 
 fn open_read_payload(
-    disk: &DiskHandle,
-    directory: &Path,
+    material: &VersionMaterial<'_>,
     version: &FileVersion,
     lease: &DiskIoLease,
 ) -> Result<(DiskFile, Vec<u8>, ChecksumManifest)> {
-    let checks = read_checksums_leased(disk, directory, version)?;
+    let checks = read_checksums_leased(material)?;
     let manifest = ChecksumManifest::decode(&checks)?;
     if manifest.logical_size != version.logical_size
         || manifest.chunk_bytes != version.checksum_chunk_bytes
@@ -327,17 +357,16 @@ fn open_read_payload(
             "checksum header differs from version",
         ));
     }
-    let file = open_read_payload_file(disk, directory, version, lease)?;
+    let file = open_read_payload_file(material, version, lease)?;
     Ok((file, checks, manifest))
 }
 
 fn verify_read_payload(
-    disk: &DiskHandle,
-    directory: &Path,
+    material: &VersionMaterial<'_>,
     version: &FileVersion,
     lease: &DiskIoLease,
 ) -> Result<DiskFile> {
-    let (file, _, manifest) = open_read_payload(disk, directory, version, lease)?;
+    let (file, _, manifest) = open_read_payload(material, version, lease)?;
     verify_read_file(file, manifest, version)
 }
 
@@ -382,6 +411,7 @@ fn verify_read_file(
 /// The lease is acquired before releasing that lock, so purge cannot remove the
 /// selected version while publication evidence and payload handles are opened.
 pub struct ContentReadPlan {
+    state: Arc<State>,
     config: ValidatedConfig,
     disk_resources: Arc<DiskResources>,
     disks: Vec<DiskConfig>,
@@ -391,8 +421,8 @@ pub struct ContentReadPlan {
 }
 
 pub struct RangeContent {
-    pub fallback_files: Vec<DiskFile>,
-    pub file: DiskFile,
+    pub fallback_files: Vec<ReadFile>,
+    pub file: ReadFile,
     pub size: u64,
     pub content_hash: crate::ContentHash,
     pub manifest: ChecksumManifest,
@@ -440,6 +470,7 @@ impl Engine {
             .expect("invariant: read lease lock poisoned")
             .acquire(version_id.into())?;
         Ok(ContentReadPlan {
+            state: Arc::clone(&self.state),
             metadata_integrity: Arc::clone(&self.metadata_integrity),
             config: self.config.clone(),
             disk_resources: Arc::clone(&self.disk_resources),
@@ -487,8 +518,12 @@ impl ContentReadPlan {
         lease.check_running()?;
         // Named identity observation must not turn later proof/body reads into
         // raw pathname opens. Both verifiers retain the same managed binding.
-        let (handle, directory, proof_lease) = self.authenticate_replica(disk)?;
-        drop(handle.verify_payload(&directory, &self.version)?);
+        let (scope, proof_lease) = self.authenticate_replica(disk)?;
+        let material = VersionMaterial::current(&scope, &self.version)?;
+        drop(verify_read_payload(
+            &material, &self.version, &proof_lease,
+        )?);
+        scope.verify()?;
         proof_lease.check_running()?;
         lease.check_running()
     }
@@ -502,28 +537,21 @@ impl ContentReadPlan {
     fn authenticate_replica(
         &self,
         disk: &DiskConfig,
-    ) -> Result<(&DiskHandle, PathBuf, DiskIoLease)> {
+    ) -> Result<(Arc<crate::container_storage::ObservedContainerReplica>, DiskIoLease)> {
         let handle = self.disk_resources.get(disk)?;
         let lease = handle.root.admit_io()?;
-        let dir = version_dir(
-            disk,
-            &self.version.history_tree_id,
-            &self.version.version_id,
-        );
+        let scope = Arc::new(super::fresh_layout::containers::observe_replica(
+            &self.config, &self.disk_resources, &self.state, self.version.file_id.parse()?, disk,
+        )?);
+        let material = VersionMaterial::current(&scope, &self.version)?;
         let metadata = MetadataReadContext::for_disk(
-            &self.config,
-            &handle.seal,
-            disk.metadata_member
-                .then_some(self.metadata_integrity.as_ref()),
+            &self.config, &handle.seal,
+            disk.metadata_member.then_some(self.metadata_integrity.as_ref()),
         );
-        crate::journal::verify_local_publication_at(
-            &handle.root,
-            &dir,
-            &self.version,
-            &mut |_| lease.check_running(),
-            Some(&metadata),
+        crate::journal::verify_source_publication(
+            &material, &mut |_| lease.check_running(), Some(&metadata),
         )?;
-        Ok((handle, dir, lease))
+        Ok((scope, lease))
     }
 
     /// One decoded proof for all exact-version replicas; each member's local
@@ -535,18 +563,21 @@ impl ContentReadPlan {
         let mut first_error: Option<Error> = None;
         for disk in &self.disks {
             let candidate = (|| {
-                let (handle, dir, lease) = self.authenticate_replica(disk)?;
+                let (scope, lease) = self.authenticate_replica(disk)?;
+                let material = VersionMaterial::current(&scope, &self.version)?;
                 if selected.is_some() {
                     // Digest equality binds these bytes to the same descriptor;
                     // decoding the identical hash array again adds no proof.
-                    drop(read_checksums_leased(handle, &dir, &self.version)?);
-                    let file = open_read_payload_file(handle, &dir, &self.version, &lease)?;
-                    fallback_files.push(file);
+                    drop(read_checksums_leased(&material)?);
+                    let file = open_read_payload_file(&material, &self.version, &lease)?;
+                    scope.verify()?;
+                    fallback_files.push(ReadFile::in_container(file, Arc::clone(&scope)));
                 } else {
                     let (file, checks, manifest) =
-                        open_read_payload(handle, &dir, &self.version, &lease)?;
+                        open_read_payload(&material, &self.version, &lease)?;
                     drop(checks);
-                    selected = Some((file, manifest));
+                    scope.verify()?;
+                    selected = Some((ReadFile::in_container(file, Arc::clone(&scope)), manifest));
                 }
                 Ok(())
             })();
@@ -581,8 +612,13 @@ impl ContentReadPlan {
         for disk in &self.disks {
             match self
                 .authenticate_replica(disk)
-                .and_then(|(handle, dir, lease)| {
-                    open_read_payload(handle, &dir, &self.version, &lease)
+                .and_then(|(scope, lease)| {
+                    let material = VersionMaterial::current(&scope, &self.version)?;
+                    let payload = open_read_payload(
+                        &material, &self.version, &lease,
+                    )?;
+                    scope.verify()?;
+                    Ok(payload)
                 }) {
                 Ok((_, checks, _)) => return Ok(checks),
                 Err(error) => {

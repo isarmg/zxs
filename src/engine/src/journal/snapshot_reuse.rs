@@ -6,6 +6,15 @@ impl SnapshotReuse {
     }
 }
 impl PreparedSnapshot {
+    /// Pure encoding shape, not hashes or source authority. Fixed-width native
+    /// entity feedback may change bytes but cannot exceed the pre-I/O budget.
+    pub(crate) fn encoding_shape(&self) -> Vec<(&'static str, usize)> {
+        let mut shape = self.objects.iter()
+            .map(|object| (object.kind(), object.bytes().len())).collect::<Vec<_>>();
+        shape.sort_unstable();
+        shape
+    }
+
     /// Visit exactly this encoder invocation's immutable objects. This is an
     /// export of preparation bytes, never a publication or State admission.
     /// Incremental encodings may still refer to unvisited predecessor objects.

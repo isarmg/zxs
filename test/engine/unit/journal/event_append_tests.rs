@@ -25,7 +25,9 @@ fn append(before: &State, count: usize) -> State {
     after
 }
 fn config(temp: &std::path::Path) -> Config {
-    Config::development([temp.join("one"), temp.join("two"), temp.join("three")]).unwrap()
+    Config::development(crate::test_disks(
+        [temp.join("one"), temp.join("two"), temp.join("three")],
+    )).unwrap()
 }
 fn assert_exact_encoding(actual: &PreparedSnapshot, state: &State) {
     let expected = prepare_snapshot_reference(state, MAX_METADATA).unwrap();

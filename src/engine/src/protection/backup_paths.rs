@@ -8,6 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) mod directory_namespaces;
 mod recursive;
+pub(super) mod initial;
+pub(crate) mod automatic;
+pub use automatic::{AutomaticBackupConfigurationRequest, AutomaticBackupError};
 pub use directory_namespaces::PublishedBackupDirectory;
 pub(crate) use recursive::RecursiveBackupMode;
 pub use recursive::{RecursiveBackupCapture, RecursiveBackupConfigurationRequest};
@@ -373,27 +376,29 @@ fn retain_initial_inherited_files(
 
 fn backup_primaries(engine: &Engine, repository: &str, scope: &Scope) -> Result<BTreeSet<String>> {
     let current = engine.namespace_tree(&engine.state.repositories[repository].main_branch_id)?;
-    let mut primaries = BTreeSet::from([engine
-        .file_placement_settings(repository, None, &scope.path)?
-        .0]);
+    backup_primaries_in(&engine.state, current.entries(), repository, scope, |file, path| {
+        engine.file_placement_settings(repository, file, path).map(|settings| settings.0)
+    })
+}
+
+fn backup_primaries_in(
+    state: &State,
+    entries: &[Entry],
+    repository: &str,
+    scope: &Scope,
+    mut primary: impl FnMut(Option<&str>, &str) -> Result<String>,
+) -> Result<BTreeSet<String>> {
+    let mut primaries = BTreeSet::from([primary(None, &scope.path)?]);
     // Empty and future descendants also inherit this directory's settings.
     // Independent child backup policies do not constrain the parent's routes.
     if scope.kind == NamespaceEntryKind::Directory {
-        let previous = exact_policy(&engine.state, repository, scope);
-        for rule in engine.state.placement_rules.values().filter(|rule| {
+        let previous = exact_policy(state, repository, scope);
+        for rule in state.placement_rules.values().filter(|rule| {
             rule.repository_id == repository && within(&scope.path, &rule.path_prefix)
         }) {
             if inherited_by_scope(
-                current.entries(),
-                &scope.path,
-                previous,
-                effective_policy_in(
-                    &engine.state,
-                    current.entries(),
-                    repository,
-                    None,
-                    &rule.path_prefix,
-                ),
+                entries, &scope.path, previous,
+                effective_policy_in(state, entries, repository, None, &rule.path_prefix),
             ) {
                 primaries.insert(rule.primary_slot_id.clone());
             }
@@ -402,30 +407,17 @@ fn backup_primaries(engine: &Engine, repository: &str, scope: &Scope) -> Result<
     // Existing files may have a more specific future placement rule than the
     // directory itself, even before their first version on that primary.
     for (file, entry) in &scope.files {
-        primaries.insert(
-            engine
-                .file_placement_settings(repository, Some(file), entry.path())?
-                .0,
-        );
+        primaries.insert(primary(Some(file), entry.path())?);
     }
-    for version in engine.state.versions.values().filter(|version| {
+    for version in state.versions.values().filter(|version| {
         scope.files.contains_key(&version.file_id)
-            && engine
-                .state
-                .content_states
-                .get(&version.version_id)
+            && state.content_states.get(&version.version_id)
                 .is_none_or(|state| *state == storage_contract::ContentState::Available)
     }) {
-        let placement = engine
-            .state
-            .placements
-            .get(&version.version_id)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::PlacementNotFound,
-                    "backup source placement missing",
-                )
-            })?;
+        let placement = state.placements.get(&version.version_id).ok_or_else(|| {
+            Error::new(storage_contract::ErrorCode::PlacementNotFound,
+                "backup source placement missing")
+        })?;
         primaries.insert(placement.primary_slot_id.clone());
     }
     Ok(primaries)
@@ -709,18 +701,7 @@ impl Engine {
                 let repo = state.repositories.get(repository).cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::RepositoryNotFound, "backup repository missing"))?;
 
-                let mut scope = source_scope(state, None, repository, path)?;
-                if expected_scope_id.is_some_and(|expected| expected != scope.id) {
-                    return Err(Error::new(storage_contract::ErrorCode::ScopeChanged, "backup path now describes a different file or directory"));
-                }
-                let previous = exact_policy(state, repository, &scope).cloned();
-                let generation = previous.as_ref().map_or(0, |policy| policy.generation);
-                if generation != expected_generation {
-                    return Err(Error::new(storage_contract::ErrorCode::GenerationMismatch, "backup configuration changed; reread before updating"));
-                }
-                // An ancestor cannot silently replace independent child rules
-                // or the binding of a file moved from another protected scope.
-                retain_initial_inherited_files(state, repository, &mut scope, previous.as_ref());
+                let (scope, previous) = initial::select(state, request)?;
                 let mut normalized = BTreeMap::new();
                 for (slot, prefix) in prefixes {
                     let disk = engine.disk(slot)?;
@@ -736,61 +717,22 @@ impl Engine {
                 for primary in backup_primaries(engine, repository, &scope)? {
                     required.extend(engine.route(&primary, copies)?.into_iter().skip(1));
                 }
-                let versions = state.versions.values().filter(|version| {
-                    scope.files.contains_key(&version.file_id)
-                        && state.content_states.get(&version.version_id).is_none_or(|state| *state == storage_contract::ContentState::Available)
-                }).cloned().collect::<Vec<_>>();
                 for slot in required {
                     if !normalized.contains_key(&slot) {
                         return Err(Error::new(storage_contract::ErrorCode::BackupPrefixRequired, format!("backup slot {slot} requires a user-chosen prefix")));
                     }
                 }
-                let policy = ProtectionPolicy {
-                    policy_id: match previous.as_ref() { Some(policy) => policy.policy_id.clone(), None => new_id("policy")? },
-                    repository_id: repository.into(), path_prefix: scope.path.clone(), target_copies: copies,
-                    inheritable: true,
-                    scope_directory_id: (scope.kind == NamespaceEntryKind::Directory).then_some(scope.id.clone()),
-                    scope_file_id: (scope.kind == NamespaceEntryKind::File).then_some(scope.id.clone()),
-                    backup_prefixes: normalized.clone(),
-                    generation: generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "backup policy generation exhausted"))?,
-                };
-                if let Some(previous) = previous {
-                    let detached = state.file_backup_policies.iter()
-                        .filter(|(file, id)| *id == &previous.policy_id && !scope.files.contains_key(*file))
-                        .map(|(file, _)| file.clone()).collect::<Vec<_>>();
-                    if !detached.is_empty() {
-                        let mut retained = previous;
-                        retained.policy_id = new_id("policy")?;
-                        retained.inheritable = false;
-                        for file in detached {
-                            state.file_backup_policies.insert(file, retained.policy_id.clone());
-                        }
-                        state.protection_policies.insert(retained.policy_id.clone(), retained);
-                    }
-                }
-                for (file, entry) in &scope.files {
-                    let relative = relative_path(&scope.path, entry.path(), scope.kind == NamespaceEntryKind::File);
-                    for (slot, prefix) in &normalized {
-                        state.file_backup_paths.entry(file.clone()).or_default()
-                            .insert(slot.clone(), backup_path(prefix, &relative)?);
-                    }
-                    state.file_backup_policies.insert(file.clone(), policy.policy_id.clone());
-                }
-                state.protection_policies.insert(policy.policy_id.clone(), policy.clone());
-                prune_retained_policies(state, repository);
-                for version in &versions {
-                    let previous = state.placements[&version.version_id].clone();
-                    let route = engine.route(&previous.primary_slot_id, copies)?;
-                    let placement = Placement {
-                        version_id: version.version_id.clone(), primary_slot_id: previous.primary_slot_id,
-                        target_copies: copies, route_slot_ids: route.clone(), topology_generation: state.topology_generation,
-                        binding_generations: route.iter().map(|slot| Ok((slot.clone(), engine.disk(slot)?.binding_generation))).collect::<Result<_>>()?,
-                    };
-                    let (source, _) = engine.valid_replica(&version.version_id)?;
-                    state.placements.insert(version.version_id.clone(), placement.clone());
-                    pending.push(Prepared { version: version.clone(), placement, source });
-                }
-                Ok(json!({"history_tree_id":repo.history_tree_id,"policy":policy,"scope":{"id":scope.id,"kind":scope.kind,"path":scope.path},"file_count":scope.files.len().to_string(),"version_count":versions.len().to_string(),"target_copies":copies,"backup_prefixes":normalized,"configured_at":now()?.to_string()}))
+                let configured = initial::apply(
+                    &engine.planning_context(), state, request, scope, previous, normalized,
+                    || Ok(new_id("policy")?), pending,
+                    |version, placement| {
+                        let (source, _) = engine.valid_replica(&version.version_id)?;
+                        Ok(Prepared { version: version.clone(), placement: placement.clone(), source })
+                    },
+                )?;
+                Ok(crate::persist::automatic_backup::configuration(
+                    &repo.history_tree_id, &configured, now()?,
+                ))
             },
         )
     }

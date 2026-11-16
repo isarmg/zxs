@@ -86,6 +86,12 @@ impl Engine {
         let (outcome, next_namespaces) = projection.into_current(self, &candidate)?;
         scopes::require_resources(self, &candidate)?;
         scopes::verify_full(self, &retained_versions, &candidate)?;
+        // A valid retained/accepted candidate is not a source-area MOVE permit.
+        // Do not stage FILEs, repair journals or clear its original fences here.
+        crate::engine::fresh_layout::require_whole_container_lifecycle().map_err(|error| {
+            error.context(ErrorCode::RecoveryRequired,
+                "selected move remains unresolved; physical lifecycle completion is unavailable")
+        })?;
         let mut databases = scopes::Databases::prepare(self, &candidate, &hash, decided)?;
         let transition =
             crate::state_projection::ProjectionTransition::new(&self.state, outcome.state(), None)?;

@@ -130,7 +130,9 @@ impl BackupChoiceContext {
             let source = &self.sources[&disk.disk_id];
             source.lease.check_running()?;
             let path = match name.to_str() {
-                Some("config.json") => disk.root.join("metadata/pool-membership/config.json"),
+                Some("config.json") => {
+                    disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path())
+                }
                 Some(_) if name == layout::DISK_IDENTITY.as_path() => {
                     disk.root.join(layout::DISK_IDENTITY.as_path())
                 }

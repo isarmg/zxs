@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct FileRow {
+    pub working: storage_contract::file_draft::FileWorkingState,
     pub container_tags: storage_contract::file_container_tags::ContainerTags,
     pub file_id: String,
     pub note: Option<String>,

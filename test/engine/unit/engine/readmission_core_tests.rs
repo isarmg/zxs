@@ -8,7 +8,9 @@ fn admitted_core() -> (tempfile::TempDir, ReadmissionCore) {
         .tempdir()
         .unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     engine
         .create_repository(

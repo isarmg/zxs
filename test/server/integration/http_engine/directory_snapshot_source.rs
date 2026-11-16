@@ -9,11 +9,11 @@ static PREVIEWS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 fn fixture() -> (tempfile::TempDir, Router, Arc<EngineBackend>, Identity) {
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
-    let config = Config::development([
+    let config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     let backend = Arc::new(EngineBackend::new(Engine::initialize(&system, config).unwrap()));
     let auth = backend

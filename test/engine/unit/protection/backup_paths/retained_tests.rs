@@ -186,11 +186,13 @@ fn retained_settings_replay_once_and_restore_without_becoming_inherited() {
     let destination = temp.path().join("restored");
     let mut restored = Engine::initialize(
         &destination.join("state"),
-        Config::development([
-            destination.join("p"),
-            destination.join("b"),
-            destination.join("c"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                destination.join("p"),
+                destination.join("b"),
+                destination.join("c"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();

@@ -512,9 +512,9 @@ fn terminal_mixed_resume_data_dependency_survives_a_real_add_successor() {
     let ready_bytes = fs::read(&readiness).unwrap();
     let mut next = engine.config().clone();
     let previous = next.disks.len();
-    let mut added = Config::development(
+    let mut added = Config::development(crate::test_disks(
         (0..previous + 1).map(|n| fixture.temporary.path().join(format!("later-{n}"))),
-    )
+    ))
     .unwrap()
     .disks
     .pop()

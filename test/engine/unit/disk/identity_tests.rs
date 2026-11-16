@@ -78,7 +78,7 @@ fn assert_identity_json_error(error: &Error) {
 #[test]
 fn invalid_identity_bytes_keep_json_sources_at_disk_read_boundaries() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([temporary.path().join("member")]).unwrap();
+    let config = Config::development(crate::test_disks([temporary.path().join("member")])).unwrap();
     let system = temporary.path().join("system");
     drop(Engine::initialize(&system, config.clone()).unwrap());
     let config = ValidatedConfig::try_from(config).unwrap();
@@ -116,7 +116,7 @@ fn invalid_identity_bytes_keep_json_sources_at_disk_read_boundaries() {
 #[test]
 fn invalid_identity_bytes_cannot_publish_state_or_append_journals() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([temporary.path().join("member")]).unwrap();
+    let config = Config::development(crate::test_disks([temporary.path().join("member")])).unwrap();
     let system = temporary.path().join("system");
     let mut engine = Engine::initialize(&system, config.clone()).unwrap();
     engine
@@ -182,7 +182,7 @@ fn invalid_identity_bytes_cannot_publish_state_or_append_journals() {
 #[test]
 fn identity_reads_preserve_open_errors_and_metadata_limits() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([temporary.path().join("member")]).unwrap();
+    let config = Config::development(crate::test_disks([temporary.path().join("member")])).unwrap();
     let system = temporary.path().join("system");
     drop(Engine::initialize(&system, config.clone()).unwrap());
     let config = ValidatedConfig::try_from(config).unwrap();
@@ -219,7 +219,9 @@ fn identity_reads_preserve_open_errors_and_metadata_limits() {
 #[test]
 fn production_directory_seal_rejects_changed_device_inode_and_root_without_rewriting() {
     let temporary = tempfile::tempdir().unwrap();
-    let mut config = Config::development([temporary.path().join("member")]).unwrap();
+    let mut config = Config::development(crate::test_disks(
+        [temporary.path().join("member")],
+    )).unwrap();
     config.mode = Mode::Production;
     let system = temporary.path().join("system");
     drop(Engine::initialize(&system, config.clone()).unwrap());
@@ -281,7 +283,9 @@ fn format_tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
 fn old_pool_and_mixed_seals_reject_without_rewriting_members() {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}"))))
+        Config::development(crate::test_disks(
+            (0..3).map(|index| temp.path().join(format!("disk-{index}"))),
+        ))
             .unwrap();
     let system = temp.path().join("system");
     let mut engine = Engine::initialize(&system, config.clone()).unwrap();

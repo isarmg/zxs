@@ -588,6 +588,14 @@ impl Engine {
                 }
                 continue;
             }
+            // PreservePending and the independently selected move consumers
+            // above do not borrow ordinary future-body/install authority.
+            let mut pending_containers = None;
+            if publication.is_some() {
+                crate::engine::fresh_layout::containers::verify_available(
+                    &self.config, &self.disk_resources, next,
+                )?;
+            }
             if publication.is_none() && mode == RecoveryMode::CompletePending && can_repair {
                 let result = next
                     .operations
@@ -606,7 +614,10 @@ impl Engine {
                     None,
                     MAX_METADATA,
                 )?;
-                self.repair_pending_payloads(&candidate)?;
+                // Metadata admission remains before BODY observation. Only this
+                // exact original preparation may reach the decided installer;
+                // there is no matching-byte search or unbound repair fallback.
+                pending_containers = Some(self.observe_ordinary_pending(&candidate, &admitted)?);
             }
             if can_repair {
                 // Repair only replicas of the exact hash-bound snapshot. Never
@@ -684,7 +695,14 @@ impl Engine {
                         },
                     )?;
                 } else {
-                    self.complete_candidate(&candidate, &hash, next, None)?;
+                    match pending_containers {
+                        Some(observed) => self.complete_observed_ordinary_candidate(
+                            &candidate, &hash, next, observed,
+                        )?,
+                        None => return Err(
+                            super::fresh_layout::FreshLayoutError::ContainerScope.into(),
+                        ),
+                    }
                 }
                 self.install_recovered_namespace_state(
                     admitted.into_visible_state(candidate.operation_id, recovered_result),

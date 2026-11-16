@@ -19,11 +19,13 @@ fn path(disk: &DiskConfig) -> std::path::PathBuf {
 fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     for n in 0..6 {

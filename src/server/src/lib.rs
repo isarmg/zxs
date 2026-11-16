@@ -112,6 +112,9 @@ mod http_file_history_merge;
 mod http_file_merge;
 pub use backend_file_merge::{MergeFileBranches, MergeFileHistory};
 mod backend_file_tags;
+mod backend_file_draft;
+mod http_file_draft;
+pub use backend_file_draft::{ChangeFileWorking, FileWorkingSnapshot, ReadFileDraft};
 mod http_file_metadata;
 mod http_file_tags;
 pub use backend_file_tags::ReplaceContainerTags;
@@ -233,6 +236,7 @@ pub use backend_workspace::{
     WorkspaceWriteSession,
 };
 mod http_workspace;
+mod http_snapshot_worktree;
 pub use backend_read::{
     DirectoryReadSnapshot, DirectorySelection, DirectorySnapshot, DownloadContext, ReadContent,
     ReadDirectory, ReadTree, ResolveEntry, ResolvedEntry, TreeSnapshot, VersionSnapshot,

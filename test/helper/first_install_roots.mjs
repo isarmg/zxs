@@ -8,9 +8,9 @@ const directoryKey = key + ":directories";
 const digest = "a".repeat(64);
 const html = readFileSync("helper/web/index.html", "utf8");
 const source = readFileSync("helper/web/first_install.js", "utf8");
-const initial = () => ({format:"zxs-helper-first-install-tab", revision:1, input:{
+const initial = () => ({format:"zxs-helper-first-install-tab", revision:2, input:{
   deployment:{service_user:"zxs", service_group:"zxs", listen:"0.0.0.0:7400", smb:null},
-  administrator:"admin", roots:["/zxs/data/disks/CON"], enable_on_boot:false,
+  administrator:"admin", disks:[{name:"Main", root_path:"/zxs/data/disks/CON"}], enable_on_boot:false,
 }, steps:Array.from({length:6}, () => ({request_digest:digest, plan:null, issued:true, completed:true}))});
 
 function harness(record = initial(), original = null) {
@@ -50,6 +50,22 @@ function harness(record = initial(), original = null) {
   };
 }
 
+// Old unnamed records and missing names remain preserved, not inferred or migrated.
+const legacy = initial();
+legacy.revision = 1;
+legacy.input.roots = legacy.input.disks.map(disk => disk.root_path);
+delete legacy.input.disks;
+const legacyFlow = harness(legacy);
+assert.equal(legacyFlow.storage.get(key), JSON.stringify(legacy));
+assert.match(legacyFlow.errors.at(-1), /不支持这个首装原请求格式/);
+assert.equal(legacyFlow.calls.length, 0);
+const unnamed = initial();
+delete unnamed.input.disks[0].name;
+const unnamedFlow = harness(unnamed);
+assert.equal(unnamedFlow.storage.get(key), JSON.stringify(unnamed));
+assert.match(unnamedFlow.errors.at(-1), /格式不符/);
+assert.equal(unnamedFlow.calls.length, 0);
+
 // A rejected native preview must not strand already completed installation.
 const flow = harness();
 const original = flow.record();
@@ -60,28 +76,36 @@ flow.respond(() => { throw new Error("invalid portable basename"); });
 await flow.click("inspect");
 assert.equal(flow.storage.has(directoryKey), false);
 assert.match(flow.errors.at(-1), /invalid portable basename/);
-flow.element("first-install-roots").value = "/zxs/data/disks/资料\n/zxs/data/disks/Archive";
+const namedDisks = [{name:"资料盘", root_path:"/zxs/data/disks/资料"},
+  {name:"Archive", root_path:"/zxs/data/disks/secondary"}];
+flow.element("first-install-roots").value = JSON.stringify(namedDisks);
 const callsBeforeCorrection = flow.calls.length;
 await flow.click("roots-correct");
 assert.equal(flow.calls.length, callsBeforeCorrection);
 assert.equal(flow.confirmations.length, 1);
 assert.deepEqual(flow.record(), {...original, input:{...original.input,
-  roots:["/zxs/data/disks/资料", "/zxs/data/disks/Archive"]}});
+  disks:namedDisks}});
 
 let prepared = false;
 flow.respond((path, body) => {
   switch (path) {
     case "/api/initialization/storage-directories-preview":
-      assert.deepEqual(body.roots, flow.record().input.roots);
+      assert.deepEqual(body.disks, flow.record().input.disks);
       return {input:body, request_digest:digest,
-        directories:body.roots.map(() => ({state:prepared ? "empty_prepared" : "missing"}))};
+        directories:body.disks.map(() => ({state:prepared ? "empty_prepared" : "missing"}))};
     case "/api/initialization/storage-directories-prepare":
-      assert.deepEqual(body.input.roots, flow.record().input.roots);
+      assert.deepEqual(body.input.disks, flow.record().input.disks);
       prepared = true;
       return {request_digest:digest, state:"original_empty_storage_directories_durably_prepared"};
     case "/api/initialization/storage-preview":
-      return {request_digest:digest, plan:{roots:body.roots}};
+      assert.deepEqual(body.disks, flow.record().input.disks);
+      return {request_digest:digest, plan:{selections:body.disks.map(disk => ({
+        name:disk.name, selection:{root_path:disk.root_path},
+      }))}};
     case "/api/initialization/storage-create":
+      assert.deepEqual(body.plan.selections.map(item => ({
+        name:item.name, root_path:item.selection.root_path,
+      })), namedDisks);
       return {request_digest:digest, format:"zxs-helper-first-storage-batch-complete",
         storage_activation_completed:true};
     default: throw new Error(`unexpected endpoint: ${path}`);
@@ -92,7 +116,7 @@ assert.equal(flow.element("first-install-roots-correct").hidden, true);
 assert.equal(flow.element("first-install-roots").disabled, true);
 assert.equal(flow.element("first-install-commit").hidden, false);
 const frozen = flow.storage.get(key);
-flow.element("first-install-roots").value = "/zxs/data/disks/replacement";
+flow.element("first-install-roots").value = JSON.stringify([{name:"Replacement", root_path:"/zxs/data/disks/replacement"}]);
 await flow.click("roots-correct");
 assert.equal(flow.storage.get(key), frozen);
 assert.match(flow.errors.at(-1), /原请求已经保留/);
@@ -107,13 +131,20 @@ assert.equal(flow.record().steps[6].completed, true);
 assert.match(flow.element("first-install-progress").textContent, /8\/8/);
 
 // Reload and imported storage plans never reopen directory selection.
-const directoryOriginal = {input:{service_user:"zxs", roots:original.input.roots}, request_digest:digest};
+const directoryOriginal = {input:{service_user:"zxs", disks:original.input.disks}, request_digest:digest};
 const restored = harness(original, directoryOriginal);
 assert.equal(restored.element("first-install-roots-correct").hidden, true);
 assert.equal(restored.element("first-install-roots").disabled, true);
 assert.equal(restored.calls.length, 0);
+const renamed = structuredClone(original);
+renamed.input.disks[0].name = "A different explicit name";
+const renamedFlow = harness(renamed, directoryOriginal);
+assert.match(renamedFlow.errors.at(-1), /原请求与首装完整输入不符/);
+assert.equal(renamedFlow.storage.get(key), JSON.stringify(renamed));
+assert.equal(renamedFlow.storage.get(directoryKey), JSON.stringify(directoryOriginal));
+assert.equal(renamedFlow.calls.length, 0);
 const selected = structuredClone(original);
-selected.steps.push({request_digest:digest, plan:{roots:original.input.roots}, issued:false, completed:false});
+selected.steps.push({request_digest:digest, plan:{disks:original.input.disks}, issued:false, completed:false});
 const selectedFlow = harness(selected);
 await selectedFlow.click("roots-correct");
 assert.deepEqual(selectedFlow.record(), selected);
@@ -122,7 +153,7 @@ assert.equal(selectedFlow.confirmations.length, 0);
 // Storage changes between rendering and clicking are not overwritten.
 const stale = harness();
 stale.storage.set(directoryKey, JSON.stringify(directoryOriginal));
-stale.element("first-install-roots").value = "/zxs/data/disks/replacement";
+stale.element("first-install-roots").value = JSON.stringify([{name:"Replacement", root_path:"/zxs/data/disks/replacement"}]);
 await stale.click("roots-correct");
 assert.deepEqual(stale.record(), original);
 assert.equal(stale.confirmations.length, 0);
@@ -143,7 +174,7 @@ assert.deepEqual(earlierFlow.record(), earlier);
 for (const [field, value] of [["busy", true], ["stopping", true], ["csrf", ""]]) {
   const locked = harness();
   locked.context[field] = value;
-  locked.element("first-install-roots").value = "/zxs/data/disks/replacement";
+  locked.element("first-install-roots").value = JSON.stringify([{name:"Replacement", root_path:"/zxs/data/disks/replacement"}]);
   await locked.click("roots-correct");
   assert.deepEqual(locked.record(), original);
   assert.equal(locked.confirmations.length, 0);
@@ -207,7 +238,7 @@ const handoffFunction = activationSource.slice(activationSource.indexOf("functio
   activationSource.indexOf("function showActivationResult("));
 const handoffRecord = () => {
   const record = initial();
-  record.steps.push({request_digest:digest, plan:{roots:record.input.roots}, issued:true, completed:true});
+  record.steps.push({request_digest:digest, plan:{disks:record.input.disks}, issued:true, completed:true});
   return record;
 };
 const handoffResponse = () => ({state:"helper_exit_then_service_start", request_digest:digest,

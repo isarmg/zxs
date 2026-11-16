@@ -14,6 +14,10 @@ use storage_server::{
     auth::{AuthStore, Identity},
     engine_backend::EngineBackend,
 };
+#[path = "../../engine/support/configured_disks.rs"]
+mod configured_disks;
+use configured_disks::disks as test_disks;
+
 #[path = "http_engine/backup_namespace.rs"]
 mod backup_namespace;
 #[path = "http_engine/branch_preview.rs"]
@@ -140,7 +144,12 @@ async fn success(
     value
 }
 fn application(root: &Path) -> Router {
-    let config = Config::development([root.join("d1"), root.join("d2"), root.join("d3")]).unwrap();
+    let config = Config::development(crate::test_disks([
+        root.join("d1"),
+        root.join("d2"),
+        root.join("d3"),
+    ]))
+    .unwrap();
     configured_application(root, config)
 }
 fn configured_application(root: &Path, config: Config) -> Router {
@@ -180,11 +189,11 @@ async fn reopen_after_router_drop(system: &Path) -> Engine {
 #[tokio::test]
 async fn pool_upload_limit_is_checked_before_creating_spooled_bytes() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
+    let mut config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     config.max_file_bytes = 16;
     let app = configured_application(root.path(), config);
@@ -378,11 +387,11 @@ async fn self_password_change_is_csrf_protected_and_restored_from_pool_control_s
 async fn maximum_password_login_and_change_accept_escaped_json_without_losing_body_bounds() {
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
-    let config = Config::development([
+    let config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     let current_password = "\\".repeat(1024);
     let new_password = "\"".repeat(1024);
@@ -2843,11 +2852,11 @@ async fn operation_over_http(
 async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavailable_slots() {
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
-    let config = Config::development([
+    let config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     let mut engine = Engine::initialize(&system, config).unwrap();
     seed_engine_authority(&mut engine, &system);
@@ -2978,11 +2987,11 @@ async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavail
 #[tokio::test]
 async fn damage_after_normal_publication_keeps_original_target_met_in_save_wire() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     seed_engine_authority(&mut engine, &root.path().join("system"));
@@ -4931,11 +4940,11 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
 #[tokio::test]
 async fn engine_upload_generation_conflicts_reach_http_as_conflicts() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     let backend = Arc::new(EngineBackend::new(
         Engine::initialize(&root.path().join("system"), config).unwrap(),
@@ -5246,11 +5255,11 @@ async fn directory_git_initialization_accepts_root_but_requires_a_string_path() 
 #[tokio::test]
 async fn workspace_capacity_is_live_for_the_single_administrator() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
+    let mut config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     config.max_retained_workspaces = 1;
     config.max_retained_workspaces_per_principal = 1;
@@ -5896,11 +5905,11 @@ async fn disk_mkdir_rejects_raw_mutations_before_any_lazy_root_or_disk_write() {
 #[tokio::test]
 async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
+    let mut config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     config.max_entries = 1;
     let app = configured_application(root.path(), config);
@@ -6390,11 +6399,11 @@ async fn purge_prepare_preserves_history_priority_pins_and_sorted_fresh_plans() 
     let system = root.path().join("system");
     let mut engine = Engine::initialize(
         &system,
-        Config::development([
+        Config::development(crate::test_disks([
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ])
+        ]))
         .unwrap(),
     )
     .unwrap();
@@ -6579,11 +6588,11 @@ async fn split_prepare_preserves_admission_cut_rules_workspace_pins_and_plan_wir
     let system = root.path().join("system");
     let mut engine = Engine::initialize(
         &system,
-        Config::development([
+        Config::development(crate::test_disks([
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ])
+        ]))
         .unwrap(),
     )
     .unwrap();

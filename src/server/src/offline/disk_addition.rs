@@ -15,6 +15,7 @@ const MAX_RECORD_BYTES: usize = 64 * 1024;
 #[serialization(deny_unknown_fields)]
 pub(crate) struct NewDirectory {
     root_path: String,
+    name: name_policy::Name,
     slot_id: String,
     level: u32,
     upstream_slot_id: Option<String>,

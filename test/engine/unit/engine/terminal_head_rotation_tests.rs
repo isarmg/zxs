@@ -34,9 +34,9 @@ fn next_target(engine: &Config, root: &Path, label: &str) -> Config {
     for disk in &mut target.disks {
         disk.metadata_member = false;
     }
-    let mut added = Config::development(
+    let mut added = Config::development(crate::test_disks(
         (0..=target.disks.len()).map(|index| root.join(format!("{label}-{index}"))),
-    )
+    ))
     .unwrap()
     .disks
     .pop()

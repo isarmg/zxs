@@ -39,7 +39,9 @@ fn fixture() -> Fixture {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut config =
-        Config::development((0..4).map(|index| temp.path().join(format!("disk-{index}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..4).map(|index| temp.path().join(format!("disk-{index}"))),
+        )).unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     config.disks[2].level = 2;
@@ -86,7 +88,9 @@ fn target() -> (tempfile::TempDir, Engine, PortablePath) {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let config =
-        Config::independent_roots(Mode::Development, [temp.path().join("primary")]).unwrap();
+        Config::independent_roots(Mode::Development, crate::test_disks(
+            [temp.path().join("primary")],
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repository = engine
         .create_disk_root("D01", "admin", OperationId::generate().unwrap())

@@ -4,22 +4,15 @@ use super::*;
 fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
-    .unwrap();
+    let config = Config::independent_roots(
+        storage_contract::Mode::Development,
+        [(name_policy::Name::parse("Primary").unwrap(), temp.path().join("a"))],
+    ).unwrap();
+    let slot = config.disks[0].slot_id.clone();
     let mut engine = Engine::initialize(&root, config).unwrap();
-    let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("cache").unwrap(),
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    let repo = engine.create_disk_root(
+        &slot, "alice", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "alice")
         .unwrap();
@@ -37,6 +30,15 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
             request_digest: None,
         })
         .unwrap();
+    let mut unobserved = engine.state().clone();
+    let file = *unobserved.file_containers.keys().next().unwrap();
+    let mut record = unobserved.file_containers[&file].clone();
+    let disk = *record.replicas.keys().next().unwrap();
+    record.replicas.get_mut(&disk).unwrap().entity =
+        storage_contract::file_container::ContainerEntity::new(0, 0);
+    unobserved.file_containers.insert(file, record);
+    assert_eq!(crate::engine::fresh_layout::containers::validate_state(&unobserved)
+        .unwrap_err().code(), storage_contract::ErrorCode::StateInvalid);
     let before = canonical_json(engine.state()).unwrap();
     let file = engine.state().versions.values().next().unwrap().file_id.clone();
     // Use the actual metadata planner, including its permanent request, actor,
@@ -104,8 +106,52 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     let detached = engine
         .planning_context()
-        .prepare_publication_bounded(next, Vec::new(), result.clone(), MAX_METADATA, MAX_METADATA)
-        .unwrap();
+        .prepare_publication_bounded(
+            next.clone(), Vec::new(), result.clone(), MAX_METADATA, MAX_METADATA,
+        ).unwrap();
+    assert!(detached.candidate.versions.is_empty());
+    // Equal contents/snapshot/sequence cannot replace the actual source
+    // occurrence between the shared planner and the first decision write.
+    let source = std::sync::Arc::clone(&engine.state);
+    engine.state = std::sync::Arc::new((*source).clone());
+    assert_eq!(engine.require_detached_publication(&detached).unwrap_err().code(),
+        storage_contract::ErrorCode::PreparationStale);
+    assert_eq!(engine.members().iter()
+        .map(|disk| std::fs::read(log_path(disk)).unwrap()).collect::<Vec<_>>(), logs);
+    engine.state = source;
+    engine.require_detached_publication(&detached).unwrap();
+    // FILE-only preparation must retain its container even with no BODY cursor.
+    // Matching cache/body bytes on a new inode cannot cross first PREPARE.
+    fn copy_tree(source: &std::path::Path, target: &std::path::Path) {
+        std::fs::create_dir(target).unwrap();
+        std::fs::set_permissions(target, std::fs::metadata(source).unwrap().permissions()).unwrap();
+        for entry in std::fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let destination = target.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &destination);
+            } else {
+                std::fs::copy(entry.path(), destination).unwrap();
+            }
+        }
+    }
+    let container = engine.config.disks[0].root.join("common-data/file.txt");
+    let parked = temp.path().join("parked-metadata-container");
+    std::fs::rename(&container, &parked).unwrap();
+    copy_tree(&parked, &container);
+    assert_eq!(std::fs::read(container.join(".zxs-file.sqlite")).unwrap(),
+        std::fs::read(parked.join(".zxs-file.sqlite")).unwrap());
+    assert_eq!(engine.decide_publication(detached).unwrap_err().code(),
+        storage_contract::ErrorCode::PreparationStale);
+    assert!(!engine.blocked);
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert_eq!(engine.members().iter()
+        .map(|disk| std::fs::read(log_path(disk)).unwrap()).collect::<Vec<_>>(), logs);
+    std::fs::remove_dir_all(&container).unwrap();
+    std::fs::rename(&parked, &container).unwrap();
+    let detached = engine.planning_context().prepare_publication_bounded(
+        next, Vec::new(), result.clone(), MAX_METADATA, MAX_METADATA,
+    ).unwrap();
     engine.inject_fault_once("after_accept_1");
     assert_eq!(
         engine.decide_publication(detached).unwrap_err().code(),
@@ -124,9 +170,9 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
     let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
+        (name_policy::Name::parse("Primary").unwrap(), temp.path().join("a")),
+        (name_policy::Name::parse("Backup").unwrap(), temp.path().join("b")),
+        (name_policy::Name::parse("Archive").unwrap(), temp.path().join("c")),
     ])
     .unwrap();
     let mut engine = Engine::initialize(&root, config).unwrap();

@@ -14,7 +14,9 @@ impl Fixture {
     fn new(old: usize, added: usize, added_first: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut original =
-            Config::development((0..old).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..old).map(|n| temp.path().join(format!("old-{n}"))),
+            )).unwrap();
         for (n, disk) in original.disks.iter_mut().enumerate() {
             disk.disk_id = format!("disk_{:032x}", n + if added_first { added + 1 } else { 1 });
         }
@@ -30,7 +32,9 @@ impl Fixture {
             .unwrap();
         let mut target = original.clone();
         let additional =
-            Config::development((0..old + added).map(|n| temp.path().join(format!("new-{n}"))))
+            Config::development(crate::test_disks(
+                (0..old + added).map(|n| temp.path().join(format!("new-{n}"))),
+            ))
                 .unwrap();
         for (n, mut disk) in additional.disks.into_iter().skip(old).enumerate() {
             disk.disk_id = format!("disk_{:032x}", n + if added_first { 1 } else { old + 1 });
@@ -69,7 +73,9 @@ impl Fixture {
     fn reopen(&mut self, lose_system: bool) {
         let placeholder = Engine::initialize(
             &self.temp.path().join("placeholder-system"),
-            Config::development([self.temp.path().join("placeholder-disk")]).unwrap(),
+            Config::development(crate::test_disks(
+                [self.temp.path().join("placeholder-disk")],
+            )).unwrap(),
         )
         .unwrap();
         drop(std::mem::replace(&mut self.engine, placeholder));

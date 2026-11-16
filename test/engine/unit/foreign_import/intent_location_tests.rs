@@ -38,7 +38,7 @@ fn different_mount_observations_fail_closed_without_simulating_mount_success() {
 #[test]
 fn held_ancestry_keeps_real_managed_io_active_until_its_descriptors_drop() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("primary")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("primary")])).unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let root = &engine
         .disk_resources

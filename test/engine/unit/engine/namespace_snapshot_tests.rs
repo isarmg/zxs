@@ -6,7 +6,7 @@ fn membership_registry_namespace_snapshot_is_thin_and_rechecks_the_current_head(
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repository = engine

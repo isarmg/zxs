@@ -18,9 +18,9 @@ fn actual_with_path(
     path: &str,
 ) -> (tempfile::TempDir, Engine, HistoryFileId, HistoryVersionId) {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = crate::Config::development(
+    let mut config = crate::Config::development(crate::test_disks(
         (0..disks).map(|index| temp.path().join(format!("disk-{index}"))),
-    ).unwrap();
+    )).unwrap();
     // Extra roots in the history-copy fixture are independent destinations,
     // not the fourth tier of the source's P01/B01/C01 backup chain.
     for disk in config.disks.iter_mut().skip(3) {

@@ -139,7 +139,8 @@ pub(super) fn add_target(state: RwSignal<State>, selection: CandidateSelection) 
         {
             return;
         }
-        model.targets.push(wire::Target {
+        model.targets.push(SelectedTarget {
+            name: String::new(),
             selection,
             disk_id: id,
             slot_id: String::new(),
@@ -180,9 +181,9 @@ pub(super) fn start(state: RwSignal<State>) {
             return;
         }
     };
-    let original = state.with_untracked(|s| {
+    let original: Result<wire::StartRequest, api::Error> = state.with_untracked(|s| {
         let model = &s.admin_console.backup;
-        wire::StartRequest {
+        Ok(wire::StartRequest {
             operation_id: operation,
             source_slot_id: model.source.clone(),
             expected_sequence: model
@@ -190,10 +191,19 @@ pub(super) fn start(state: RwSignal<State>) {
                 .as_ref()
                 .expect("invariant: start admitted a context")
                 .sequence,
-            targets: model.targets.clone(),
+            targets: model.targets.iter()
+                .map(SelectedTarget::request)
+                .collect::<Result<_, _>>()?,
             confirmation: wire::PreparationConfirmation::PrepareIndependentCompleteCopies,
-        }
+        })
     });
+    let original: wire::StartRequest = match original {
+        Ok(original) => original,
+        Err(error) => {
+            state.update(|s| s.admin_console.backup.error = Some(error));
+            return;
+        }
+    };
     state.update(|s| {
         s.admin_console.backup.operation_text = operation.to_string();
         s.admin_console.backup.original_start = Some(original.clone());

@@ -87,7 +87,7 @@ fn engine_with_state(state: State) -> (tempfile::TempDir, Engine) {
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     engine.state = std::sync::Arc::new(state);

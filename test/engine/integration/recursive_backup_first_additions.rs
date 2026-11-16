@@ -411,7 +411,9 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
         .unwrap();
     let system = temp.path().join("system");
     let topology = Config::development(
-        ["primary", "secondary", "tertiary"].map(|name| temp.path().join(name)),
+        ["primary", "secondary", "tertiary"].map(|name| {
+            (name_policy::Name::parse(name).unwrap(), temp.path().join(name))
+        }),
     )
     .unwrap();
     for path in std::iter::once(&system).chain(topology.disks.iter().map(|disk| &disk.root)) {

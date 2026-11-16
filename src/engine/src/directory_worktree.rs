@@ -10,3 +10,4 @@ pub(crate) mod projection;
 
 pub(crate) mod ledger;
 pub(crate) mod io;
+pub(crate) mod session;

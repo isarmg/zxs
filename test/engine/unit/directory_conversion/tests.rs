@@ -25,7 +25,7 @@ fn engine(root: &Path) -> Engine {
     fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
     Engine::initialize(
         &root.join("system"),
-        Config::development([root.join("primary")]).unwrap(),
+        Config::development(crate::test_disks([root.join("primary")])).unwrap(),
     )
     .unwrap()
 }
@@ -187,7 +187,9 @@ fn existing_destination_and_backup_targets_are_rejected() {
     let source = make_source(temp.path());
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("primary"), temp.path().join("backup")]).unwrap(),
+        Config::development(crate::test_disks(
+            [temp.path().join("primary"), temp.path().join("backup")],
+        )).unwrap(),
     )
     .unwrap();
     assert!(
@@ -381,7 +383,7 @@ fn ordinary_disk_json_and_limits_are_handled_without_target_mutation() {
     let source = make_source(temp.path());
     fs::write(source.join("disk.json"), br#"{"ordinary":"document"}"#).unwrap();
     let source_plan = inspect(&source);
-    let mut config = Config::development([temp.path().join("primary")]).unwrap();
+    let mut config = Config::development(crate::test_disks([temp.path().join("primary")])).unwrap();
     config.max_entries = 2;
     let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     assert!(source_plan.prepare_new_disk_import(&engine, "P01").is_err());
@@ -807,7 +809,9 @@ fn registered_target_inventory_cannot_bind_another_registration() {
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let source = make_source(temp.path());
     let mut config =
-        Config::development([temp.path().join("first"), temp.path().join("second")]).unwrap();
+        Config::development(crate::test_disks(
+            [temp.path().join("first"), temp.path().join("second")],
+        )).unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();

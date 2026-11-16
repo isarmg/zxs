@@ -293,6 +293,19 @@ fn initial_review(state: RwSignal<State>) -> impl IntoView {
     view! {
         <Show when=move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().is_some_and(|snapshot|snapshot.state==StorageState::Pending)&&!s.admin_console.storage.selections.is_empty())>
             <h3 class="zxs-row">{t("3. 核对并加入", "3. Review and admit")}</h3>
+            <For
+                each=move || state.with(|s| s.admin_console.storage.selections.clone())
+                key=|selection| selection.selection_id.clone()
+                children=move |selection| {
+                    let id = StoredValue::new(selection.selection_id);
+                    view! {
+                        <section class="zxs-stack">
+                            <p class="zxs-row">{selection.root_path}</p>
+                            {addition::name_field(state, id)}
+                        </section>
+                    }
+                }
+            />
             <p class="zxs-row">{t("每个目录将登记为独立的第 1 层主盘（D01、D02…），不会按选择顺序创建备份关系。全部作为元数据成员，正常写入需要所有成员在线。同一设备上的多个目录不提供磁盘故障冗余。", "Each directory becomes an independent tier-1 primary (D01, D02…). Selection order does not create backup relationships. All are metadata members and must be online for normal writes. Directories on one device do not protect against disk failure.")}</p>
             <p class="zxs-row">{move ||state.with(|s|{let count=s.admin_console.storage.selections.len();format!("{}: {count} · {}: {}",t("元数据成员", "Metadata members"),t("恢复所需一致原成员", "Consistent original members required for recovery"),count/2+1)})}</p>
             <Show when=move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().is_some_and(|snapshot|snapshot.allow_development))>

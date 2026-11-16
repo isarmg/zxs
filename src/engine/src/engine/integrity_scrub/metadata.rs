@@ -588,7 +588,7 @@ fn verify_saved_membership(
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<()> {
     let saved = ValidatedConfig::try_from(root.read_json_observed::<Config>(
-        &disk.root.join("metadata/pool-membership/config.json"),
+        &disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
         observe,
     )?)?;
     match plan.config.generation() {

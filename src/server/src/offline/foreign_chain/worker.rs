@@ -28,6 +28,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
         Action::Preview {
             operation_id,
             source_root,
+            source_name,
             source_slot_id,
             source_upstream_slot_id,
             source_metadata_member,
@@ -85,6 +86,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
                 registered_roots,
                 operation_id,
                 source: source_record(&source_root, &source),
+                source_name,
                 source_slot_id,
                 source_upstream_slot_id,
                 source_metadata_member,

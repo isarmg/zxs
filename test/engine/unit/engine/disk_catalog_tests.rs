@@ -3,7 +3,9 @@ use super::*;
 fn fixture() -> (tempfile::TempDir, Engine) {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development([temp.path().join("one"), temp.path().join("two")]).unwrap();
+        Config::development(crate::test_disks(
+            [temp.path().join("one"), temp.path().join("two")],
+        )).unwrap();
     config.disks[1].slot_id = "P02".into();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;

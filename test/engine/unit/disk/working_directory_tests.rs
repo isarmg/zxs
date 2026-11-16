@@ -14,7 +14,7 @@ use std::{
 use storage_contract::{Generation, OperationId};
 use storage_contract::working_tree::{
     BindingLifecycle, DirectoryBinding, DirectoryRelativePath, LocalDirectoryBinding,
-    RootBinding, RootId, StorageLayout, ThreeRootBinding, WorkingTreeCatalog,
+    RootBinding, RootId, StorageLayout, ThreeRootBinding, WorkingTreeCatalog, ZxsLifecycleBindings,
 };
 
 struct Fixture {
@@ -36,13 +36,21 @@ impl Fixture {
         fs::create_dir_all(root).unwrap();
         fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
         let config = ValidatedConfig::try_from(
-            Config::development([root.to_path_buf()]).unwrap(),
+            Config::development(crate::test_disks([root.to_path_buf()])).unwrap(),
         ).unwrap();
         let disk = DiskHandle::open(&config, &config.disks[0], false).unwrap();
+        let management = local(&disk.root, &layout::ZXS_DATA_ROOT, 4);
+        let management_root = disk.root.private_entry_matching(
+            &layout::ZXS_DATA_ROOT, file_identity(management.entity),
+        ).unwrap();
         let roots = ThreeRootBinding {
             common_data: local(&disk.root, &layout::COMMON_DATA_ROOT, 2),
             deleted_data: local(&disk.root, &layout::DELETED_DATA_ROOT, 3),
-            zxs_data: local(&disk.root, &layout::ZXS_DATA_ROOT, 4),
+            zxs_data: management,
+            zxs_lifecycles: ZxsLifecycleBindings {
+                common_data: local(&management_root, &layout::COMMON_DATA_ROOT, 6),
+                deleted_data: local(&management_root, &layout::DELETED_DATA_ROOT, 7),
+            },
         };
         let binding = RootBinding {
             layout: StorageLayout::UnifiedWorkingTreeV1,

@@ -112,11 +112,13 @@ fn decoder_error_chain(error: &Error) -> (storage_contract::ErrorCode, Vec<Strin
 #[test]
 fn index_borrowed_decode_matches_owned_admission_on_real_objects() {
     let temp = tempfile::tempdir().unwrap();
-    let config = crate::Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ]).unwrap();
+    let config = crate::Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    )).unwrap();
     let disk = &config.disks[0];
     let values = (0..140)
         .map(|index| (format!("entry-{index}"), Value::String("payload".into())))

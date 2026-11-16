@@ -28,14 +28,15 @@ done
 for stage in rename-before rename-after; do
   root="$temporary/cli-$stage"
   mkdir "$root"
-  "$cli" configuration template --disks "$root/disk" --output "$root/draft.json" > "$temporary/template"
+  selected="$(python3 -c 'import json,sys; print(json.dumps({"name":"Primary","root":sys.argv[1]}))' "$root/disk")"
+  "$cli" configuration template --disks "$selected" --output "$root/draft.json" > "$temporary/template"
   cp "$root/draft.json" "$temporary/original"
   touch "$root/.inject"
   if env LD_PRELOAD="$temporary/publication.so" ZXS_ATOMIC_ROOT="$root" \
     ZXS_ATOMIC_LOG="$temporary/events" ZXS_ATOMIC_MODE=create ZXS_ATOMIC_STAGE="$stage" \
     ZXS_ATOMIC_DESTINATION=draft.json.before-registration \
     "$cli" configuration register-disk --config "$root/draft.json" --slot P02 \
-    --disk-id disk_00000000000000000000000000000001 --path "$root/second" --level 1 \
+    --name "Additional primary" --disk-id disk_00000000000000000000000000000001 --path "$root/second" --level 1 \
     > "$temporary/stdout" 2> "$temporary/stderr"; then
     echo "injected backup failure returned success" >&2; exit 1
   fi

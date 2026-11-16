@@ -28,7 +28,9 @@ fn history_copy_admission_rejects_incomplete_vectors_or_foreign_state_and_source
     for retained in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let mut config =
-            Config::development((0..5).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..5).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         for disk in config.disks.iter_mut().skip(3) {
             disk.level = 1;
             disk.upstream_slot_id = None;

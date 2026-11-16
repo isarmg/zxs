@@ -5,11 +5,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("system"),
-        Config::development([
-            temporary.path().join("p"),
-            temporary.path().join("b"),
-            temporary.path().join("c"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temporary.path().join("p"),
+                temporary.path().join("b"),
+                temporary.path().join("c"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();
@@ -294,7 +296,7 @@ fn absent_plan_is_not_found_below_an_existing_system_root() {
     let root = temporary.path().join("system");
     let engine = Engine::initialize(
         &root,
-        Config::development([temporary.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temporary.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let id = new_id("plan").unwrap();
@@ -332,7 +334,7 @@ fn plan_lookup_preserves_io_corruption_limits_and_link_rejections() {
         let root = temporary.path().join("system");
         let engine = Engine::initialize(
             &root,
-            Config::development([temporary.path().join("disk")]).unwrap(),
+            Config::development(crate::test_disks([temporary.path().join("disk")])).unwrap(),
         )
         .unwrap();
         let id = new_id("plan").unwrap();
@@ -413,7 +415,7 @@ fn plan_lookup_keeps_persisted_identity_and_digest_validation() {
     let root = temporary.path().join("system");
     let mut engine = Engine::initialize(
         &root,
-        Config::development([temporary.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temporary.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let expected = engine

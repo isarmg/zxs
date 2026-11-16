@@ -163,7 +163,9 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut config =
-            Config::development((0..4).map(|index| temp.path().join(format!("disk-{index}"))))
+            Config::development(crate::test_disks(
+                (0..4).map(|index| temp.path().join(format!("disk-{index}"))),
+            ))
                 .unwrap();
         config.disks[3].level = 1;
         config.disks[3].upstream_slot_id = None;

@@ -14,14 +14,15 @@ fn private(path: &Path) {
 }
 
 #[test]
-fn initialization_and_recovery_use_the_existing_disk_paths_and_bytes() {
+fn initialization_and_recovery_bind_the_fresh_roots_and_preserve_their_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let system = temp.path().join("system");
     let disk = temp.path().join("disk");
-    let config = Config::development([disk.clone()]).unwrap();
+    let config = Config::development(crate::test_disks([disk.clone()])).unwrap();
     let engine = Engine::initialize(&system, config).unwrap();
     let histories = layout::histories(&disk);
-    assert_eq!(histories, disk.join("histories"));
+    assert_eq!(histories, disk.join("common-data"));
+    assert!(!disk.join("histories").exists());
     let history_root = fs::metadata(&histories).unwrap();
     assert!(history_root.is_dir());
     let history_identity = (history_root.dev(), history_root.ino());
@@ -47,6 +48,18 @@ fn initialization_and_recovery_use_the_existing_disk_paths_and_bytes() {
         fs::read(disk.join("metadata/application-log/journal.bin")).unwrap(),
         journal,
     );
+    drop(_reopened);
+    let mut old_seal: json_codec::Value = crate::decode_strict(&seal).unwrap();
+    old_seal["format"] = json_codec::Value::String(
+        "container-current-name-managed-directory".into(),
+    );
+    let old_bytes = crate::canonical_json(&old_seal).unwrap();
+    fs::write(disk.join("disk.json"), &old_bytes).unwrap();
+    assert_eq!(Engine::open(&system).err().unwrap().code(), crate::ErrorCode::DiskIdentityMismatch);
+    assert_eq!(fs::read(disk.join("disk.json")).unwrap(), old_bytes);
+    fs::write(disk.join("disk.json"), &seal).unwrap();
+    let restored = Engine::open(&system).unwrap();
+    assert!(!restored.is_read_only());
 }
 
 #[test]

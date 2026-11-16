@@ -6,11 +6,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([
-            temp.path().join("a"),
-            temp.path().join("b"),
-            temp.path().join("c"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temp.path().join("a"),
+                temp.path().join("b"),
+                temp.path().join("c"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();
@@ -1419,7 +1421,7 @@ fn empty_admitted_journal_frontier_still_probes_unexplained_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let run = || {

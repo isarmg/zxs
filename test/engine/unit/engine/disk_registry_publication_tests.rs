@@ -32,7 +32,9 @@ fn verify(prepared: &PreparedDiskRegistry) -> VerifiedDiskRegistry {
 fn fixture() -> (tempfile::TempDir, Engine, VerifiedDiskRegistry) {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development((0..3).map(|n| temp.path().join(format!("data-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("data-{n}"))),
+        )).unwrap();
     config.pool_id = "pool_00000000000000000000000000000001".into();
     for (n, disk) in config.disks.iter_mut().enumerate() {
         disk.disk_id = format!("disk_{:032x}", n + 1);

@@ -272,7 +272,7 @@ impl State {
         Ok(())
     }
 }
-fn revision_commitment(
+pub(crate) fn revision_commitment(
     source: &AdmittedSnapshotManifest,
     edits: &[EditRecord],
     namespace: &[Vec<NamespaceChange>],

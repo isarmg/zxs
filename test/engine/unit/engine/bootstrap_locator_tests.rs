@@ -26,7 +26,7 @@ impl Fixture {
         for path in &paths {
             private_dir(path);
         }
-        let config = Config::development(paths).unwrap();
+        let config = Config::development(crate::test_disks(paths)).unwrap();
         let roots = observe(&config);
         let mut store =
             BootstrapStore::hold(File::open(&control).unwrap(), control.clone()).unwrap();
@@ -616,9 +616,9 @@ fn bootstrap_locator_control_identity_alias_is_rejected_even_at_another_address(
 fn bootstrap_root_expansion_keeps_all_previous_stops_and_never_rebinds() {
     let mut fixture = Fixture::new();
     let stopped = fixture.stop();
-    let additions = Config::development(
+    let additions = Config::development(crate::test_disks(
         (0..4).map(|index| fixture._temporary.path().join(format!("new-{index}"))),
-    )
+    ))
     .unwrap();
     let mut expanded = fixture.config.clone();
     let added = additions.disks[3].clone();

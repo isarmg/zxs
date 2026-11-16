@@ -33,8 +33,10 @@ impl Fixture {
             .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
             .tempdir()
             .unwrap();
-        let mut config =
-            Config::development((0..count).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        let mut config = Config::development((0..count).map(|n| (
+            name_policy::Name::parse(&format!("Fixture archive {n}")).unwrap(),
+            temp.path().join(format!("disk-{n}")),
+        ))).unwrap();
         for disk in config.disks.iter_mut().skip(3) {
             disk.level = 1;
             disk.upstream_slot_id = None;
@@ -394,7 +396,10 @@ fn recursive_mixed_primaries_keep_each_direct_source_chain_after_cold_open() {
     let names = [
         "磁盘a", "a二级", "a三级", "磁盘b", "b二级", "b三级", "spare",
     ];
-    let mut config = Config::development(names.iter().map(|name| temp.path().join(name))).unwrap();
+    let mut config = Config::development(names.iter().enumerate().map(|(index, basename)| (
+        name_policy::Name::parse(&format!("Named archive {index}")).unwrap(),
+        temp.path().join(basename),
+    ))).unwrap();
     for (index, level, upstream) in [
         (3, 1, None),
         (4, 2, Some("D04")),

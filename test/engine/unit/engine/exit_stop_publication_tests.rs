@@ -28,7 +28,9 @@ impl Fixture {
             .unwrap();
         let count = if prior_stop { 4 } else { 3 };
         let config =
-            Config::development((0..count).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..count).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         let system = temp.path().join("system");
         let mut engine = Engine::initialize(&system, config.clone()).unwrap();
         let old_operation = OperationId::generate().unwrap();

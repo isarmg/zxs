@@ -38,7 +38,7 @@ fn location_lookup_preserves_case_identity_kind_and_repository_boundaries() {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("system"),
-        crate::Config::development([temporary.path().join("primary")]).unwrap(),
+        crate::Config::development(crate::test_disks([temporary.path().join("primary")])).unwrap(),
     )
     .unwrap();
     let repo = engine

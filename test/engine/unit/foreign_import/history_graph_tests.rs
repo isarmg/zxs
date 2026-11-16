@@ -193,7 +193,9 @@ fn restored_path_audit_is_not_treated_as_an_empty_foreign_graph() {
     fixture.engine.export_history_package(&repository.history_tree_id, &package).unwrap();
     let mut restored = Engine::initialize(
         &fixture._temp.path().join("restored-system"),
-        Config::development([fixture._temp.path().join("restored-disk")]).unwrap(),
+        Config::development(crate::test_disks(
+            [fixture._temp.path().join("restored-disk")],
+        )).unwrap(),
     ).unwrap();
     restored.restore_history_package(
         &package, "P01", 1, "restorer", OperationId::generate().unwrap(),

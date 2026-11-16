@@ -27,20 +27,54 @@ fn candidate(state: RwSignal<State>, selection: CandidateSelection) -> impl Into
 
 #[derive(Clone, Copy)]
 enum Field {
+    Name,
     Slot,
     Upstream,
 }
 fn target_field(state: RwSignal<State>, id: String, field: Field) -> impl IntoView {
     let value_id = id.clone();
-    view! {<label class="zxs-form-field"><span>{match field{Field::Slot=>t("新目标槽位","New target slot"),Field::Upstream=>t("该目标的直接上游槽位","This target's direct upstream slot")}}</span>
-        <input type="text" class="zxs-input" autocomplete="off" disabled=move ||state.with(|s|!editable(s))
-            prop:value=move ||state.with(|s|s.admin_console.backup.targets.iter().find(|target|target.disk_id==value_id).map(|target|match field{Field::Slot=>target.slot_id.clone(),Field::Upstream=>target.upstream_slot_id.clone()}).unwrap_or_default())
-            on:input=move |event|{let value=event_target_value(&event);state.update(|s|{
-                if !editable(s){return;}
-                if let Some(target)=s.admin_console.backup.targets.iter_mut().find(|target|target.disk_id==id){match field{Field::Slot=>target.slot_id=value,Field::Upstream=>target.upstream_slot_id=value};}
-                s.admin_console.backup.approval=None;
-            });}/>
-    </label>}
+    let label = match field {
+        Field::Name => t("新目标盘名", "New target disk name"),
+        Field::Slot => t("新目标槽位", "New target slot"),
+        Field::Upstream => t("该目标的直接上游槽位", "This target's direct upstream slot"),
+    };
+    let value = move || state.with(|s| {
+        s.admin_console.backup.targets.iter().find(|target| target.disk_id == value_id)
+            .map(|target| match field {
+                Field::Name => target.name.clone(),
+                Field::Slot => target.slot_id.clone(),
+                Field::Upstream => target.upstream_slot_id.clone(),
+            })
+            .unwrap_or_default()
+    });
+    let update = move |event| {
+        let value = event_target_value(&event);
+        state.update(|s| {
+            if !editable(s) {
+                return;
+            }
+            if let Some(target) = s.admin_console.backup.targets.iter_mut()
+                .find(|target| target.disk_id == id)
+            {
+                match field {
+                    Field::Name => target.name = value,
+                    Field::Slot => target.slot_id = value,
+                    Field::Upstream => target.upstream_slot_id = value,
+                }
+            }
+            s.admin_console.backup.approval = None;
+        });
+    };
+    view! {
+        <label class="zxs-form-field">
+            <span>{label}</span>
+            <input type="text" class="zxs-input" autocomplete="off"
+                disabled=move || state.with(|s| !editable(s))
+                prop:value=value
+                on:input=update
+            />
+        </label>
+    }
 }
 
 fn target(state: RwSignal<State>, id: String) -> impl IntoView {
@@ -49,6 +83,7 @@ fn target(state: RwSignal<State>, id: String) -> impl IntoView {
     view! {<section class="zxs-frame zxs-stack">
         <p class="zxs-row">{move ||state.with(|s|s.admin_console.backup.targets.iter().find(|target|target.disk_id==path_id).map(|target|target.selection.root_path.clone()))}</p>
         <p class="zxs-row">{id.clone()}</p>
+        {target_field(state,id.clone(),Field::Name)}
         {target_field(state,id.clone(),Field::Slot)}
         {target_field(state,id,Field::Upstream)}
         <button type="button" class="zxs-button" disabled=move ||state.with(|s|!editable(s)) on:click=move |_|state.update(|s|{

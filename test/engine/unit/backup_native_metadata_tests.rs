@@ -58,7 +58,7 @@ fn selected_native_stage_cannot_adopt_a_runtime_seal() {
 #[test]
 fn ordinary_native_verify_does_not_repair_a_missing_immutable_object() {
     let (_temp, root) = target();
-    let config = Config::development([root.path().to_owned()]).unwrap();
+    let config = Config::development(crate::test_disks([root.path().to_owned()])).unwrap();
     let disk = &config.disks[0];
     let object = PreparedMetadataObject::new(
         "state-page",

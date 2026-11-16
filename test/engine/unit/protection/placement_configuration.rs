@@ -4,11 +4,14 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let mut config =
-        Config::development([root.join("primary"), root.join("backup"), root.join("cold")])
+        Config::development(crate::test_disks(
+            [root.join("primary"), root.join("backup"), root.join("cold")],
+        ))
             .unwrap();
     for (slot, level, upstream) in [("P02", 1, None), ("B02", 2, Some("P02"))] {
         config.disks.push(DiskConfig {
             slot_id: slot.into(),
+            name: name_policy::Name::parse(&format!("Additional disk {slot}")).unwrap(),
             disk_id: new_id("disk").unwrap(),
             root: root.join(slot),
             level,

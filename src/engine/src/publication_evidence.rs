@@ -4,7 +4,7 @@
 //! hashes. A replica is never selected by voting, and reads never repair data.
 use crate::{disk::*, journal::*, *};
 mod recovery_snapshot;
-pub(crate) use recovery_snapshot::{SharedAdmittedSnapshot, verified_recovery_snapshot_at};
+pub(crate) use recovery_snapshot::{AdmittedSnapshot, SharedAdmittedSnapshot, verified_recovery_snapshot_at};
 
 // The journal supplies the authoritative digest. A replica is usable only if
 // its decoded object matches that exact digest, never by majority agreement.

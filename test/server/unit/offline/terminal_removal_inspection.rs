@@ -6,8 +6,14 @@ fn fixture() -> (
     Vec<RegistrationEntry>,
 ) {
     let config = storage_engine::Config::development([
-        Path::new("/zxs/data/disks/first").to_owned(),
-        Path::new("/zxs/data/disks/second").to_owned(),
+        (
+            name_policy::Name::parse("First archive").unwrap(),
+            Path::new("/zxs/data/disks/first").to_owned(),
+        ),
+        (
+            name_policy::Name::parse("Second archive").unwrap(),
+            Path::new("/zxs/data/disks/second").to_owned(),
+        ),
     ])
     .unwrap();
     let registrations = config

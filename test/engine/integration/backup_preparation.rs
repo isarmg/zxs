@@ -36,8 +36,12 @@ fn setup() -> (tempfile::TempDir, Engine, Repository) {
         .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
         .tempdir()
         .unwrap();
-    let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+    let config = Config::development(
+        ["Primary", "Near archive", "Old far archive"].into_iter().enumerate().map(|(index, name)| {
+            (name_policy::Name::parse(name).unwrap(), temp.path().join(format!("disk-{index}")))
+        }),
+    )
+    .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repository = engine.create_disk_root("P01", "admin", op()).unwrap();
     (temp, engine, repository)

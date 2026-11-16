@@ -396,8 +396,13 @@ fn empty_follow_overlapping_receipts_use_distinct_listing_and_projection_budgets
         .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
         .tempdir()
         .unwrap();
-    let mut config =
-        Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+    let mut config = Config::development((0..4).map(|n| {
+        (
+            name_policy::Name::parse(&format!("disk-{n}")).unwrap(),
+            temp.path().join(format!("disk-{n}")),
+        )
+    }))
+    .unwrap();
     config.max_entries = 8;
     config.disks[3].level = 1;
     config.disks[3].upstream_slot_id = None;

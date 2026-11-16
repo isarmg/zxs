@@ -3,6 +3,16 @@ use crate::State;
 use std::collections::BTreeSet;
 use storage_contract::MapChanges;
 
+/// Physical preparation and its FILE/name consumers must select the same
+/// material, including metadata-only changes with no Prepared BODY. These
+/// candidates select existing occurrences; their roots and entities still pass
+/// the ordinary held-container admission before any publication can use them.
+pub(crate) fn affected_file_material(previous: &State, next: &State) -> BTreeSet<String> {
+    let mut files = changed_files(previous, next);
+    files.extend(super::file_database::changes::affected(previous, next));
+    files
+}
+
 fn visit_changes<'a>(
     changes: MapChanges,
     all: impl Iterator<Item = &'a String>,

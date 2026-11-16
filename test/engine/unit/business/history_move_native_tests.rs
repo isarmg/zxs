@@ -21,7 +21,9 @@ fn receipt(kind: &str) -> OperationResult {
 fn no_result_or_state_template_can_enter_the_general_publication_pipeline() {
     let root = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| root.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| root.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let before = engine.state().clone();
     let operation = receipt(KIND);

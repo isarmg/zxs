@@ -666,8 +666,12 @@ impl Engine {
                     .disk_resources
                     .available(d)
                     .expect("invariant: an admitted cleanup slot retains its disk handle");
-                let root = &handle.root;
-                let dir = version_dir(d, &v.history_tree_id, id);
+                let scope = crate::engine::fresh_layout::containers::observe_replica(
+                    &self.config, &self.disk_resources, &self.state, v.file_id.parse()?, d,
+                )?;
+                let material = VersionMaterial::current(&scope, v)?;
+                let root = material.root()?;
+                let dir = material.directory()?;
                 match root.directory_identity(&dir) {
                     Ok(_) => {}
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
@@ -693,10 +697,26 @@ impl Engine {
                         d.metadata_member
                             .then_some(self.metadata_integrity.as_ref()),
                     );
-                    verify_retained_version_publication_at(root, &dir, v, Some(&metadata))?;
+                    verify_source_version_publication(&material, &mut |_| Ok(()), Some(&metadata))?;
                 }
                 root.write_json(&dir.join("purged.json"), &tombstone, true)?;
-                crate::container_storage::cleanup_version_content_at(root, &dir, v)?;
+                // Version availability is independent of whole-container
+                // lifecycle. Keep both removals under their already admitted
+                // Current source domains; neither path can select an owner.
+                let body = scope.body_path(v)?;
+                let container = scope.container()?;
+                container.directory_identity(body.parent().ok_or(
+                    crate::engine::FreshLayoutError::ContainerScope,
+                )?)?;
+                container.open_optional_read_regular(&body)?;
+                let prepared = dir.join(crate::persist::layout::PREPARED_CONTENT.as_path())
+                    .join(&v.creation_name);
+                let prepared_present = root.open_optional_read_regular(&prepared)?.is_some();
+                container.remove_file_if_present_synced(&body)?;
+                if prepared_present {
+                    root.remove_file_if_present_synced(&prepared)?;
+                }
+                material.verify()?;
             }
         }
         Ok(())

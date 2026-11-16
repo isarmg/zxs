@@ -89,7 +89,9 @@ fn checkpoint_scope_restricted_io_is_not_a_smaller_metadata_membership() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
     let mut config =
-        Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|index| temp.path().join(format!("disk-{index}"))),
+        )).unwrap();
     config.disks[2].metadata_member = false;
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     engine
@@ -148,7 +150,9 @@ fn checkpoint_scope_generation_cannot_be_recreated_from_the_same_config_json() {
     let mut engine = reopen(&root).0;
     let mut target = config.clone();
     let additions =
-        Config::development((0..4).map(|index| temp.path().join(format!("added-{index}"))))
+        Config::development(crate::test_disks(
+            (0..4).map(|index| temp.path().join(format!("added-{index}"))),
+        ))
             .unwrap();
     let disk = additions.disks.into_iter().nth(3).unwrap();
     private_dir(&disk.root).unwrap();
@@ -260,7 +264,9 @@ fn checkpoint_scope_exit_never_skips_d3_or_reopens_the_stopped_directory() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
         let mut config =
-            Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}"))))
+            Config::development(crate::test_disks(
+                (0..3).map(|index| temp.path().join(format!("disk-{index}"))),
+            ))
                 .unwrap();
         for disk in &mut config.disks {
             disk.level = 1;
@@ -447,11 +453,13 @@ fn directory_layout_marker_disables_checkpoint_before_recovered_state_is_loaded(
 fn directory_layout_marker_on_a_payload_only_io_disk_also_disables_checkpoint() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("system");
-    let mut config = Config::development([
-        temporary.path().join("a"),
-        temporary.path().join("b"),
-        temporary.path().join("c"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            temporary.path().join("a"),
+            temporary.path().join("b"),
+            temporary.path().join("c"),
+        ],
+    ))
     .unwrap();
     config.disks[2].metadata_member = false;
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();

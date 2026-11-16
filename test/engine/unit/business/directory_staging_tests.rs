@@ -7,11 +7,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([
-            temp.path().join("p"),
-            temp.path().join("b"),
-            temp.path().join("c"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temp.path().join("p"),
+                temp.path().join("b"),
+                temp.path().join("c"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();

@@ -9,6 +9,7 @@ use storage_contract::{DiskId, PoolId};
 
 mod layout;
 mod plan;
+pub(crate) mod configuration;
 
 const MAX_DISKS: usize = 256;
 const MAX_SLICES: usize = 4096;

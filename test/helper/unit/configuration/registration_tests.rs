@@ -4,11 +4,12 @@ use std::{fs, path::PathBuf};
 use storage_engine::Engine;
 
 fn draft(root: &Path) -> Config {
-    Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap()
+    Config::development(super::tests::named_roots(root)).unwrap()
 }
 
 fn registration(root: &Path, config: PathBuf) -> Command {
     Command::RegisterDisk {
+        name: name_policy::Name::parse("Additional primary").unwrap(),
         config,
         slot: "P02".into(),
         disk_id: storage_engine::new_id("disk").unwrap(),
@@ -70,6 +71,7 @@ fn invalid_registration_candidates_preserve_the_draft_and_backup_namespace() {
     for kind in [
         "slot",
         "slot_case",
+        "duplicate_name",
         "disk_id",
         "relative",
         "overlap",
@@ -84,6 +86,7 @@ fn invalid_registration_candidates_preserve_the_draft_and_backup_namespace() {
         let mut args = registration(root.path(), path.clone());
         let Command::RegisterDisk {
             slot,
+            name,
             disk_id,
             path: disk,
             level,
@@ -97,6 +100,7 @@ fn invalid_registration_candidates_preserve_the_draft_and_backup_namespace() {
         match kind {
             "slot" => *slot = "bad/slot".into(),
             "slot_case" => *slot = "p01".into(),
+            "duplicate_name" => *name = name_policy::Name::parse("PRIMARY").unwrap(),
             "disk_id" => *disk_id = "not-a-disk-id".into(),
             "relative" => *disk = PathBuf::from("relative-root"),
             "overlap" => *disk = config.disks[0].root.join("nested"),
@@ -259,7 +263,8 @@ fn registration_process_contender() {
     let path = PathBuf::from(path);
     let root = path.parent().unwrap();
     let mut args = registration(root, path.clone());
-    if let Command::RegisterDisk { slot, path, .. } = &mut args {
+    if let Command::RegisterDisk { slot, path, name, .. } = &mut args {
+        *name = name_policy::Name::parse("Concurrent primary").unwrap();
         *slot = "P03".into();
         *path = root.join("concurrent-disk");
     }
@@ -302,6 +307,7 @@ fn registration_process(path: &Path, conflict: bool) {
 
 fn additional_disk(root: &Path) -> storage_engine::DiskConfig {
     storage_engine::DiskConfig {
+        name: name_policy::Name::parse("Additional primary").unwrap(),
         slot_id: "P02".into(),
         disk_id: storage_engine::new_id("disk").unwrap(),
         root: root.join("additional"),

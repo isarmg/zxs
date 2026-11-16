@@ -12,6 +12,7 @@ pub struct OrdinaryDiskConversionRequest {
     pub operation_id: OperationId,
     pub source: DirectorySource,
     pub target: CandidateSelection,
+    pub name: name_policy::Name,
     pub slot_id: String,
     pub metadata_member: bool,
 }

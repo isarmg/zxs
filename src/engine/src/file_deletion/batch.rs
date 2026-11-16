@@ -100,6 +100,7 @@ impl Engine {
                     ));
                 }
                 // Capture and admit the entire set before changing even the draft.
+                crate::engine::fresh_layout::require_whole_container_lifecycle()?;
                 for node in nodes {
                     state.file_deletions.insert(node.file_id.clone(), node);
                 }

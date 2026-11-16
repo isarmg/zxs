@@ -2,11 +2,13 @@ use super::*;
 
 fn fixture_disk() -> (tempfile::TempDir, Config) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     (temp, config)
 }

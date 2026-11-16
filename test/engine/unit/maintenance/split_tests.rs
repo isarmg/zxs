@@ -3,11 +3,13 @@ use std::{io::Read, os::unix::fs::PermissionsExt};
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
@@ -355,11 +357,13 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
         let destination = temp.path().join("restored");
         let mut restored = Engine::initialize(
             &destination.join("state"),
-            Config::development([
-                destination.join("p"),
-                destination.join("b"),
-                destination.join("c"),
-            ])
+            Config::development(crate::test_disks(
+                [
+                    destination.join("p"),
+                    destination.join("b"),
+                    destination.join("c"),
+                ],
+            ))
             .unwrap(),
         )
         .unwrap();

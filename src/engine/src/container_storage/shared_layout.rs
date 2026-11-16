@@ -85,7 +85,7 @@ impl PrivatePreparation {
     }
 
     fn create(&mut self, path: &Path) -> Result<platform_io::fs_safety::linux::FileIdentity> {
-        let identity = self.disk.root.create_private_directory_synced(path)?;
+        let identity = self.disk.content_root()?.create_private_directory_synced(path)?;
         self.directories.push((path.to_owned(), identity));
         Ok(identity)
     }
@@ -97,8 +97,7 @@ impl PrivatePreparation {
     ) -> Result<()> {
         // REMOVEDIR refuses a nonempty directory. Never recurse or delete an
         // unknown entry; the held writer fence remains owned through cleanup.
-        self.disk
-            .root
+        self.disk.content_root()?
             .remove_owned_empty_directory_synced(path, identity)
     }
 
@@ -202,16 +201,17 @@ pub(super) fn active_outer_ids(
             continue;
         };
         for (history_id, outer) in &histories {
+            let root = held.content_root()?;
             let history = crate::persist::layout::histories(&disk.root).join(history_id);
-            if !super::path_directory_exists_at(&held.root, held.root.path(), &history)? {
+            if !super::path_directory_exists_at(root, root.path(), &history)? {
                 continue;
             }
-            let records = !record_names(&held.root, &history, "directories")?.is_empty()
-                || !record_names(&held.root, &history, "files")?.is_empty();
+            let records = !record_names(root, &history, "directories")?.is_empty()
+                || !record_names(root, &history, "files")?.is_empty();
             let namespace = history.join("directory-repositories");
-            let populated = if present(&held.root, &history, &namespace)? {
-                held.root.directory_identity(&namespace)?;
-                held.root.entries(&namespace)?.next().transpose()?.is_some()
+            let populated = if present(root, &history, &namespace)? {
+                root.directory_identity(&namespace)?;
+                root.entries(&namespace)?.next().transpose()?.is_some()
             } else {
                 false
             };
@@ -402,7 +402,7 @@ impl PreparedLayouts {
             ..Default::default()
         };
         for mut history in self.histories {
-            let root = &history.disk.root;
+            let root = history.disk.content_root()?;
             // Durable before the first new-format locator or visible move. This
             // disables old optional checkpoints with incomplete path coverage.
             write_mode(root)?;
@@ -511,6 +511,7 @@ pub(super) fn prepare(
     repair: bool,
     admission: crate::database_install::InstallAdmission,
 ) -> Result<PreparedLayouts> {
+    crate::engine::fresh_layout::verify_available(config, resources)?;
     let selected = match explicit {
         Some(selected) => selected.clone(),
         None => active_outer_ids(config, resources, &[previous, next])?,
@@ -559,11 +560,12 @@ pub(super) fn prepare(
                 let Some(held) = resources.available(disk) else {
                     continue;
                 };
+                let root = held.content_root()?;
                 let path =
                     crate::persist::layout::histories(&disk.root).join(&history.history_tree_id);
-                if super::path_directory_exists_at(&held.root, held.root.path(), &path)?
-                    && (!record_names(&held.root, &path, "directories")?.is_empty()
-                        || !record_names(&held.root, &path, "files")?.is_empty())
+                if super::path_directory_exists_at(root, root.path(), &path)?
+                    && (!record_names(root, &path, "directories")?.is_empty()
+                        || !record_names(root, &path, "files")?.is_empty())
                 {
                     groups
                         .entry((disk.slot_id.clone(), history.history_tree_id.clone()))
@@ -598,7 +600,8 @@ pub(super) fn prepare(
             }
             None => resources.get(disk)?,
         };
-        if held.root.available()? < config.metadata_reserve_bytes {
+        let root = held.content_root()?;
+        if root.available()? < config.metadata_reserve_bytes {
             return Err(Error::new(
                 ErrorCode::NoSpace,
                 "directory layout preparation requires its metadata reserve",
@@ -607,12 +610,12 @@ pub(super) fn prepare(
         let history = crate::persist::layout::histories(&disk.root).join(&history_id);
         // History roots and private preparation parents are data-root metadata,
         // not the user namespace. State supplies their exact authorized IDs.
-        held.root.private_dir(&history)?;
-        let anchor = HistoryAnchor::new(&held.root, &history, &history_id)?;
+        root.private_dir(&history)?;
+        let anchor = HistoryAnchor::new(root, &history, &history_id)?;
         let mut old = BTreeMap::new();
         let mut sources = BTreeMap::new();
         let mut source_ids = BTreeMap::new();
-        for name in record_names(&held.root, &history, "directories")? {
+        for name in record_names(root, &history, "directories")? {
             let id = DirectoryId::parse(&name)?;
             if !authority.contains(&id) {
                 return Err(invalid(
@@ -638,7 +641,7 @@ pub(super) fn prepare(
                     previous.inode()
                 } else {
                     if preparation.directories.is_empty() {
-                        held.root.private_dir(
+                        root.private_dir(
                             private
                                 .parent()
                                 .expect("invariant: private preparation has a parent"),
@@ -647,7 +650,7 @@ pub(super) fn prepare(
                     }
                     let source = private.join(id.as_str());
                     let created = preparation.create(&source)?;
-                    let inode = EntityInode::capture(&held.root, &source)?;
+                    let inode = EntityInode::capture(root, &source)?;
                     if inode.identity() != created {
                         return Err(invalid("exclusive prepared directory identity changed"));
                     }
@@ -713,7 +716,7 @@ pub(super) fn prepare(
         let mut future = Vec::new();
         let mut missing = Vec::new();
         let mut known = BTreeSet::new();
-        for name in record_names(&held.root, &history, "files")? {
+        for name in record_names(root, &history, "files")? {
             validate_id(&name, "file")?;
             // A removed old route can still leave an owned retained body on an
             // admitted root. Maintenance may preserve/place it, but this is not
@@ -775,7 +778,7 @@ pub(super) fn prepare(
                 }
                 // Missing/purged replicas are not materialized by a name change.
                 let Some(source) = super::container_at(
-                    &held.root,
+                    root,
                     &history,
                     Some(&history_id),
                     &file.file_id,
@@ -785,10 +788,10 @@ pub(super) fn prepare(
                     missing.push(file.file_id.clone());
                     continue;
                 };
-                if !super::directory_exists_at(&held.root, &source.join("versions"))? {
+                if !super::directory_exists_at(root, &source.join("versions"))? {
                     return Err(invalid("legacy source container has no version directory"));
                 }
-                let inode = EntityInode::capture(&held.root, &source)?;
+                let inode = EntityInode::capture(root, &source)?;
                 let from = stable_source(&anchor, &file.file_id, &source)?;
                 future.push(FutureFile {
                     file_id: file.file_id.clone(),
@@ -810,12 +813,12 @@ pub(super) fn prepare(
                 let stable = history
                     .join("file-containers")
                     .join(change.intent.file_id());
-                held.root.private_dir(&stable)?;
+                root.private_dir(&stable)?;
                 if relative_path.as_str().starts_with("namespace/") {
                     let namespace = stable.join("namespace");
-                    if present(&held.root, &history, &namespace)? {
+                    if present(root, &history, &namespace)? {
                         if !super::marker_matches_at(
-                            &held.root,
+                            root,
                             &namespace.join(super::NAMESPACE_MARKER),
                             change.intent.file_id(),
                             &mut |_| Ok(()),
@@ -825,8 +828,8 @@ pub(super) fn prepare(
                             ));
                         }
                     } else {
-                        held.root.create_private_directory_synced(&namespace)?;
-                        held.root.write_json(
+                        root.create_private_directory_synced(&namespace)?;
+                        root.write_json(
                             &namespace.join(super::NAMESPACE_MARKER),
                             &change.intent.file_id(),
                             false,
@@ -834,7 +837,7 @@ pub(super) fn prepare(
                     }
                 }
                 let target = stable.join(relative_path.as_str());
-                held.root
+                root
                     .private_dir(target.parent().expect("outside target parent"))?;
             }
         }
@@ -874,7 +877,7 @@ pub(super) fn prepare(
                     id.as_str(),
                 )?;
                 let install = crate::database_install::PreparedInstall::capture(
-                    &held.root,
+                    root,
                     &history,
                     (&sources[id], change.intent.inode().identity()),
                     (scope, admission),
@@ -899,7 +902,7 @@ pub(super) fn prepare(
                             .ok_or_else(|| invalid("database retention entry budget overflow"))?,
                     ))
                 })?;
-        admission.check(&held.root, &history, reserved_bytes, reserved_entries)?;
+        admission.check(root, &history, reserved_bytes, reserved_entries)?;
         let batch = Batch {
             directories,
             files,
@@ -913,7 +916,7 @@ pub(super) fn prepare(
         if let Some(goal) = goal {
             for id in &goal.root_directory_ids {
                 let target = history.join(goal.directories[id].to.as_path());
-                held.root.private_dir(
+                root.private_dir(
                     target
                         .parent()
                         .expect("invariant: root forest has a metadata parent"),
@@ -921,9 +924,9 @@ pub(super) fn prepare(
             }
         }
         // Stage parents are metadata only; needed by the zero-rename preflight.
-        held.root
+        root
             .private_dir(&history.join(".zxs-layout/staging"))?;
-        held.root
+        root
             .private_dir(&history.join("directory-repositories"))?;
         layout_batch::preflight(&anchor, &batch, &future, &mut |_| Ok(()))?;
         prepared.histories.push(PreparedHistory {

@@ -3,13 +3,9 @@ use name_policy::LookupName;
 use storage_contract::working_tree::{
     DirectoryId, MaterialCommitment, SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId,
 };
-use storage_contract::{Generation, GenerationExhausted, Id, IdKind, OperationId};
-
-pub(crate) enum WorktreeKind {}
-impl IdKind for WorktreeKind {
-    const PREFIX: &'static str = "worktree";
-}
-pub(crate) type WorktreeId = Id<WorktreeKind>;
+use storage_contract::{Generation, GenerationExhausted, OperationId};
+pub(crate) use storage_contract::snapshot_worktree::WorktreeId;
+pub(crate) use storage_contract::snapshot_worktree::WorktreeRevision as Revision;
 
 /// Identifies original immutable material, never a previous worktree's contents.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -26,13 +22,6 @@ pub(crate) struct SnapshotSource {
 pub(crate) struct Mount {
     pub(crate) parent: DirectoryId,
     pub(crate) name: LookupName,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub(crate) struct Revision {
-    pub(crate) generation: Generation,
-    pub(crate) manifest: MaterialCommitment,
 }
 
 /// Directory commits MOVE modified files and COPY unchanged original files.

@@ -238,7 +238,9 @@ impl Fixture {
             .tempdir()
             .unwrap();
         let mut original =
-            Config::development((0..3).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("old-{n}"))),
+            )).unwrap();
         original.disks[0].metadata_member = false;
         let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
         let repository = engine
@@ -259,7 +261,9 @@ impl Fixture {
             .unwrap();
         let mut target = original.clone();
         let additions =
-            Config::development((0..4).map(|n| temp.path().join(format!("new-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..4).map(|n| temp.path().join(format!("new-{n}"))),
+            )).unwrap();
         let disk = additions.disks.into_iter().nth(3).unwrap();
         private_dir(&disk.root).unwrap();
         target.disks.push(disk);
@@ -486,7 +490,7 @@ fn membership_activation_data_only_old_new_proofs_and_packages_are_independent()
         ("new-package", new_version, b"after membership".as_slice()),
     ] {
         let destination = temp.path().join(format!("restore-{package}"));
-        let config = Config::development([destination.join("disk")]).unwrap();
+        let config = Config::development(crate::test_disks([destination.join("disk")])).unwrap();
         let mut restored = Engine::initialize(&destination.join("system"), config).unwrap();
         restored
             .restore_history_package(
@@ -858,10 +862,14 @@ fn membership_activation_empty_genesis_prescribes_first_publication() {
         .tempdir()
         .unwrap();
     let original =
-        Config::development((0..2).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..2).map(|n| temp.path().join(format!("old-{n}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
     let mut target = original;
-    let addition = Config::development((0..3).map(|n| temp.path().join(format!("new-{n}"))))
+    let addition = Config::development(crate::test_disks(
+        (0..3).map(|n| temp.path().join(format!("new-{n}"))),
+    ))
         .unwrap()
         .disks
         .pop()
@@ -951,10 +959,14 @@ fn membership_activation_reserved_target_does_not_block_old_fence_reopen() {
         .tempdir()
         .unwrap();
     let original =
-        Config::development((0..2).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..2).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
     let mut target = original;
-    let new = Config::development((0..3).map(|n| temp.path().join(format!("new-{n}"))))
+    let new = Config::development(crate::test_disks(
+        (0..3).map(|n| temp.path().join(format!("new-{n}"))),
+    ))
         .unwrap()
         .disks
         .pop()
@@ -1217,7 +1229,9 @@ fn membership_activation_reconciles_old_and_new_workspace_completion_contexts() 
 fn prepare_successor(engine: &mut Engine, root: &Path, label: &str) -> (Config, OperationId) {
     let mut target = (*engine.config).clone();
     let count = target.disks.len() + 1;
-    let added = Config::development((0..count).map(|n| root.join(format!("{label}-new-{n}"))))
+    let added = Config::development(crate::test_disks(
+        (0..count).map(|n| root.join(format!("{label}-new-{n}"))),
+    ))
         .unwrap()
         .disks
         .pop()
@@ -1379,7 +1393,7 @@ fn membership_activation_successive_additions_keep_each_epoch_and_standalone_pro
         .unwrap();
     let mut imported = Engine::initialize(
         &temp.path().join("imported-system"),
-        Config::development([temp.path().join("imported-disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("imported-disk")])).unwrap(),
     )
     .unwrap();
     imported
@@ -1535,7 +1549,9 @@ fn membership_activation_successor_fence_reopens_read_only_before_enrollment() {
     let mut fixture = Fixture::new();
     fixture.engine.activate_pending_membership().unwrap();
     let mut target = (*fixture.engine.config).clone();
-    let added = Config::development((0..5).map(|n| fixture.temp.path().join(format!("later-{n}"))))
+    let added = Config::development(crate::test_disks(
+        (0..5).map(|n| fixture.temp.path().join(format!("later-{n}"))),
+    ))
         .unwrap()
         .disks
         .pop()

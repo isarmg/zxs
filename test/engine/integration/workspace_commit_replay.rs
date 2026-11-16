@@ -4,14 +4,20 @@ use storage_engine::{CommitRequest, Config, Engine, new_id};
 #[path = "workspace_commit_replay/fresh_pool.rs"]
 mod fresh_pool;
 
+#[path = "workspace_commit_replay/automatic_backfill.rs"]
+mod automatic_backfill;
+
+fn fixture_config(root: &std::path::Path) -> Config {
+    Config::development([
+        (name_policy::Name::parse("Primary").unwrap(), root.join("primary")),
+        (name_policy::Name::parse("Near archive").unwrap(), root.join("backup")),
+        (name_policy::Name::parse("Far archive").unwrap(), root.join("tertiary")),
+    ]).unwrap()
+}
+
 fn saved() -> (tempfile::TempDir, Engine, String, CommitRequest) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("primary"),
-        temp.path().join("backup"),
-        temp.path().join("tertiary"),
-    ])
-    .unwrap();
+    let config = fixture_config(temp.path());
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -648,12 +654,7 @@ fn degraded_committed_workspace_requires_authoritative_receipt_binding() {
 fn historical_workspace_mirror_recovery_uses_published_plan() {
     for damaged in [0, 1] {
         let temp = tempfile::tempdir().unwrap();
-        let config = Config::development([
-            temp.path().join("primary"),
-            temp.path().join("backup"),
-            temp.path().join("tertiary"),
-        ])
-        .unwrap();
+        let config = fixture_config(temp.path());
         let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
         let repo = engine
             .create_repository(

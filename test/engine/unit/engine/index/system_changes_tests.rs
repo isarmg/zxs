@@ -6,7 +6,7 @@ fn op() -> OperationId {
 }
 fn fixture() -> (tempfile::TempDir, Engine) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("primary")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("primary")])).unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     (temp, engine)
 }

@@ -1,5 +1,9 @@
 //! Public-engine regressions for branch-scoped aliases and namespace batches.
 //! All storage, physical-container and restart checks use disposable pools.
+#[path = "../support/configured_disks.rs"]
+mod configured_disks;
+use configured_disks::disks as test_disks;
+
 use std::{io::Read, path::PathBuf};
 use storage_engine::{
     CommitRequest, Config, DirectoryBranch, DirectoryCommitRequest, DirectoryNamespaceBatch,
@@ -66,11 +70,11 @@ impl Pool {
     fn with_disk_root(file_manager_root: bool) -> Self {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("system");
-        let config = Config::development([
+        let config = Config::development(crate::test_disks([
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ])
+        ]))
         .unwrap();
         let mut engine = Engine::initialize(&root, config).unwrap();
         let operation = storage_contract::OperationId::generate().unwrap();

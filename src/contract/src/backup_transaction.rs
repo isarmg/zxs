@@ -8,6 +8,7 @@ pub const MAX_REQUEST_BYTES: usize = 128 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct Target {
+    pub name: name_policy::Name,
     pub selection: CandidateSelection,
     pub disk_id: String,
     pub slot_id: String,
@@ -97,6 +98,7 @@ pub struct OriginalRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct OriginalTarget {
+    pub name: name_policy::Name,
     pub root_path: String,
     pub disk_id: String,
     pub slot_id: String,

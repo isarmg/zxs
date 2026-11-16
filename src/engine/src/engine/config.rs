@@ -20,7 +20,8 @@ use io_authority::GenesisIoAuthority;
 ///
 /// ```compile_fail
 /// use storage_engine::{Config, ValidatedConfig};
-/// let mut config = ValidatedConfig::try_from(Config::development(["/disk".into()]).unwrap()).unwrap();
+/// let roots = [(name_policy::Name::parse("Archive").unwrap(), "/disk".into())];
+/// let mut config = ValidatedConfig::try_from(Config::development(roots).unwrap()).unwrap();
 /// config.disks.clear();
 /// ```
 #[derive(Clone, Debug, Deserialize)]
@@ -86,6 +87,18 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    pub(super) fn with_created_layout(
+        &self,
+        created: &super::fresh_layout::CreatedRoots,
+    ) -> Result<Self> {
+        let roots = created.for_configuration(self)?;
+        let mut config = self.admitted.config.clone();
+        config.storage_roots = roots.clone();
+        let mut next = Self::try_from(config)?;
+        Arc::make_mut(&mut next.admitted).workspace_limits = self.admitted.workspace_limits.clone();
+        Ok(next)
+    }
+
     /// A deterministic configuration projection of the exact admitted Backup
     /// choice, not a Genesis admission of the new targets. Only the native
     /// Backup verifier supplies this closed projection. Original I/O and voter
@@ -382,7 +395,7 @@ impl ValidatedConfig {
 /// configured majority and later checks every input seal against that winner.
 pub(super) fn read_recovery_anchor(path: &Path, seal: &DiskSeal) -> Result<ValidatedConfig> {
     let original = ValidatedConfig::try_from(read_json::<Config>(
-        &path.join("metadata/pool-membership/config.json"),
+        &path.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
     )?)?;
     let config =
         super::membership_transition::pending::activation::restore_anchor(path, seal, original)?;
@@ -441,6 +454,54 @@ pub(super) fn acquire_locks_selected(
         );
     }
     Ok(locks)
+}
+
+pub(super) fn acquire_initialization_locks(
+    root: &Path,
+    disks: &DiskResources,
+    selection: crate::authority_selection::SelectionGuard,
+) -> Result<InitializationLocks> {
+    selection.require_legacy()?;
+    let system = File::from(
+        rustix::fs::open(
+            root.join(layout::CONTROL_WRITER_LOCK.as_path()),
+            rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::RDWR
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .map_err(std::io::Error::from)?,
+    );
+    acquire_writer(&system)?;
+    selection.require_legacy()?;
+    let system = WriterLocks::new(system, selection);
+    let mut owners = Vec::new();
+    for disk in disks.handles() {
+        let file = disk.root.lock_file()?;
+        acquire_writer(&file)?;
+        let owner = FenceOwner::new(file, None);
+        owners.push((disk.seal.disk_id.clone(), owner));
+    }
+    Ok(InitializationLocks { system, owners })
+}
+
+/// Same acquired files survive physical root creation and the first I/O bind.
+/// No generic rebind is offered for an existing disk resource generation.
+pub(super) struct InitializationLocks {
+    system: WriterLocks,
+    owners: Vec<(String, Arc<FenceOwner>)>,
+}
+impl InitializationLocks {
+    pub(super) fn bind(mut self, disks: &DiskResources) -> Result<WriterLocks> {
+        for (id, owner) in self.owners {
+            let disk = disks.handles().find(|disk| disk.seal.disk_id == id)
+                .ok_or(super::FreshLayoutError::Registration)?;
+            self.system.insert(id, DiskWriter::adopt(&disk.root, owner)?);
+        }
+        Ok(self.system)
+    }
 }
 
 fn acquire_writer(f: &File) -> Result<()> {
@@ -539,7 +600,11 @@ fn validate_config_shape(c: &Config, native_backup: bool) -> Result<()> {
             }
         }
     }
-    validate_disk_roots(c.disks.iter().map(|disk| disk.root.as_path()))
+    validate_disk_roots(c.disks.iter().map(|disk| disk.root.as_path()))?;
+    super::fresh_layout::validate_roots(c)?;
+    crate::disk_names::configuration::ConfiguredDiskNames::new(c)
+        .map_err(Error::ConfiguredDiskName)?;
+    Ok(())
 }
 
 fn validate_disk_roots<'a>(roots: impl IntoIterator<Item = &'a Path>) -> Result<()> {

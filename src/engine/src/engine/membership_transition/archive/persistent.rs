@@ -349,7 +349,7 @@ impl ArchiveStore {
             .map(|_| transition.hash.as_str());
         let directory = self.member_directory(disk, namespace);
         let config = handle.root.read_bytes(
-            &disk.root.join("metadata/pool-membership/config.json"),
+            &disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
             MAX_METADATA,
         )?;
         let saved: ValidatedConfig = decode_strict(&config)?;

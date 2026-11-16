@@ -12,10 +12,14 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let original =
-            Config::development((0..2).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..2).map(|n| temp.path().join(format!("old-{n}"))),
+            )).unwrap();
         let engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
         let mut target = original.clone();
-        for disk in Config::development((0..4).map(|n| temp.path().join(format!("new-{n}"))))
+        for disk in Config::development(crate::test_disks(
+            (0..4).map(|n| temp.path().join(format!("new-{n}"))),
+        ))
             .unwrap()
             .disks
             .into_iter()
@@ -39,7 +43,7 @@ impl Fixture {
     fn reopen(&mut self) {
         let placeholder = Engine::initialize(
             &self.temp.path().join("placeholder-system"),
-            Config::development([self.temp.path().join("placeholder")]).unwrap(),
+            Config::development(crate::test_disks([self.temp.path().join("placeholder")])).unwrap(),
         )
         .unwrap();
         drop(std::mem::replace(&mut self.engine, placeholder));
@@ -248,7 +252,7 @@ fn membership_preparation_reserved_root_is_not_available_to_initialization_or_an
     assert!(f.begin().is_err());
     let disk = &f.target.disks[2];
     let before = files(&disk.root);
-    let other = Config::development([disk.root.clone()]).unwrap();
+    let other = Config::development(crate::test_disks([disk.root.clone()])).unwrap();
     assert!(Engine::initialize(&f.temp.path().join("other-system"), other).is_err());
     assert_eq!(files(&disk.root), before);
     let lockfile = File::open(disk.root.join(".writer.lock")).unwrap();
@@ -298,7 +302,7 @@ fn membership_preparation_directory_lock_excludes_initializer_before_writer_crea
         let begin = scope.spawn(|| f.begin());
         barrier.wait();
         let before = files(&new_root);
-        let other = Config::development([new_root.clone()]).unwrap();
+        let other = Config::development(crate::test_disks([new_root.clone()])).unwrap();
         let error = Engine::initialize(&other_system, other).err().unwrap();
         assert_eq!(error.code(), ErrorCode::WriterAlreadyActive);
         assert_eq!(files(&new_root), before);
@@ -341,7 +345,9 @@ fn membership_preparation_cannot_mutate_roots_or_source_while_initializer_holds_
     let mut f = Fixture::new();
     let new_root = f.target.disks[2].root.clone();
     let config =
-        ValidatedConfig::try_from(Config::development([new_root.clone()]).unwrap()).unwrap();
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [new_root.clone()],
+        )).unwrap()).unwrap();
     let resources = DiskResources::open(&config, false).unwrap();
     // This is the exact lock set acquired at initialize_resources entry and
     // retained by that function until all initialization writes finish.

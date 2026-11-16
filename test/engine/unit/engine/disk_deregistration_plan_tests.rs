@@ -21,7 +21,9 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let mut config =
-            Config::development((0..4).map(|n| format!("/unopened-preview/disabled-{n}").into()))
+            Config::development(crate::test_disks(
+                (0..4).map(|n| format!("/unopened-preview/disabled-{n}").into()),
+            ))
                 .unwrap();
         // Two independent primary roots, one with two backup tiers. The fourth
         // registration has no metadata vote, but still owns visible content.

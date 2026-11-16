@@ -4,6 +4,7 @@ use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
 use json_codec::json;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 #[path = "verified_payloads.rs"]
 mod verified_payloads;
 use verified_payloads::{PayloadPreparation, VerifiedPayloadSet};
@@ -24,63 +25,74 @@ struct RetainedExisting<'a> {
 /// version list between budget admission and physical preparation.
 struct BudgetedPhysicalPreparation<'context, 'source, 'payload> {
     context: &'context crate::engine::PlanningContext<'source>,
-    decision: CandidatePreparation,
+    decision: CandidateData,
     payloads: &'payload [Prepared],
     existing: Vec<std::sync::Mutex<Option<ExistingCopies<'payload>>>>,
-    projection: crate::state_projection::ProjectionTransition<'payload>,
+    containers: super::fresh_layout::containers::ContainerPreparation,
+    draft: Option<super::file_draft::DraftPublicationInput>,
 }
 
 struct PreparedPhysicalPublication {
-    decision: CandidatePreparation,
+    decision: CandidateData,
     verified: VerifiedPayloadSet,
     names: crate::container_storage::PreparedNames,
     history_owners: crate::state_projection::DerivedOwners,
+    containers: std::sync::Arc<crate::container_storage::PreparedContainerEntities>,
+    next: State,
 }
 
 impl<'context, 'source> BudgetedPhysicalPreparation<'context, 'source, '_> {
     fn prepare(
-        self,
+        mut self,
         maximum: usize,
     ) -> Result<PreparedPhysicalPublication> {
         let preparation = PayloadPreparation::new(
             self.context.config,
             self.context.disk_resources,
-            self.decision.versions(),
+            &self.decision.versions,
             std::sync::Arc::clone(self.context.metadata_integrity),
         )?;
-        self.context.prepare_payloads(self.payloads, self.existing)?;
-        let verified = preparation.verify(self.context.config)?;
-        let names = crate::container_storage::prepare_names(
+        let containers = std::sync::Arc::new(
+            crate::container_storage::PreparedContainerEntities::prepare_with_draft(
+                self.context, &self.containers, self.draft.as_mut(),
+            )?,
+        );
+        let next = self.containers.finish(&containers)?;
+        let projection = crate::state_projection::ProjectionTransition::new(
+            self.context.state, &next, None,
+        )?;
+        self.context.prepare_payloads(self.payloads, self.existing, &containers)?;
+        let verified = preparation.verify_with_containers(
+            self.context.config, std::sync::Arc::clone(&containers),
+        )?;
+        let names = crate::container_storage::prepare_ordinary_names(
             self.context.config,
             self.context.disk_resources,
-            &self.projection,
+            &projection,
             maximum,
+            std::sync::Arc::clone(&containers),
         )?;
         Ok(PreparedPhysicalPublication {
             decision: self.decision,
             verified,
             names,
-            history_owners: self.projection.into_owners(),
+            history_owners: projection.into_owners(),
+            containers,
+            next,
         })
     }
 }
 
 impl PreparedPhysicalPublication {
-    /// No Candidate escapes the physical phase. Its envelope is formed only
-    /// after complete payload verification and FILE preparation have succeeded.
-    /// The preflight fields are moved unchanged, never filled in after sealing.
-    fn into_candidate(self) -> (
-        Candidate,
+    fn into_parts(self) -> (
+        CandidateData,
         VerifiedPayloadSet,
         crate::container_storage::PreparedNames,
         crate::state_projection::DerivedOwners,
+        std::sync::Arc<crate::container_storage::PreparedContainerEntities>,
+        State,
     ) {
-        (
-            self.decision.finish(),
-            self.verified,
-            self.names,
-            self.history_owners,
-        )
+        (self.decision, self.verified, self.names, self.history_owners, self.containers, self.next)
     }
 }
 
@@ -181,6 +193,8 @@ pub(crate) struct DetachedPublication {
     disk_resources: std::sync::Arc<DiskResources>,
     base_root: std::path::PathBuf,
     base_snapshot: Option<String>,
+    base_state: std::sync::Weak<State>,
+    base_current: Option<std::sync::Weak<super::CurrentNamespaces>>,
     base_sequence: u64,
     base_next_slot: u64,
     config_hash: String,
@@ -386,12 +400,30 @@ impl super::move_execution::MoveSelection<ObjectMoveOutcome> for ObjectMoveSelec
     fn clear(self, _: &mut Engine) {}
 }
 
+/// Full BODY/metadata readback on the original snapshot's exact stage/final
+/// entities. It carries no mutable State or general repair permission.
+pub(super) struct RecoveredOrdinaryPayloads<'original> {
+    candidate: Candidate,
+    original: &'original State,
+    previous: std::sync::Weak<State>,
+    current: Option<std::sync::Arc<super::CurrentNamespaces>>,
+    config: super::ValidatedConfig,
+    resources: std::sync::Arc<DiskResources>,
+    snapshot: Option<String>,
+    verified: VerifiedPayloadSet,
+    containers: std::sync::Arc<crate::container_storage::PreparedContainerEntities>,
+}
+
 enum Completion<'a> {
     Move {
         names: crate::container_storage::PreparedNames,
         recovered: bool,
     },
     Prepared {
+        payloads: &'a VerifiedPayloadSet,
+        names: crate::container_storage::PreparedNames,
+    },
+    RecoveredPrepared {
         payloads: &'a VerifiedPayloadSet,
         names: crate::container_storage::PreparedNames,
     },
@@ -407,6 +439,18 @@ impl Engine {
     ) -> Result<()> {
         self.persist_with_metadata_limit(next, prepared, result, MAX_METADATA)
     }
+    pub(crate) fn persist_draft_publication(
+        &mut self,
+        next: State,
+        result: OperationResult,
+        input: super::file_draft::DraftPublicationInput,
+    ) -> Result<()> {
+        let detached = self.planning_context().prepare_publication_with_draft(
+            next, Vec::new(), result, MAX_METADATA, MAX_METADATA, Some(input),
+        )?;
+        self.decide_publication(detached).map(|_| ())
+    }
+
     pub(crate) fn persist_with_metadata_limit(
         &mut self,
         next: State,
@@ -428,7 +472,16 @@ impl Engine {
             .prepare_publication(next, prepared, result, maximum)
     }
     fn require_detached_publication(&self, detached: &DetachedPublication) -> Result<()> {
+        let same_current = match (&detached.base_current, &self.current_namespaces) {
+            (None, None) => true,
+            (Some(before), Some(current)) => {
+                before.ptr_eq(&std::sync::Arc::downgrade(current))
+            }
+            (None, Some(_)) | (Some(_), None) => false,
+        };
         if self.blocked
+            || !detached.base_state.ptr_eq(&std::sync::Arc::downgrade(&self.state))
+            || !same_current
             || self.move_is_retained()
             || !detached.prepared_epoch.matches(&self.metadata_integrity)
             || detached.reused_dependencies.as_ref().is_some_and(|reuse| {
@@ -606,7 +659,8 @@ impl Engine {
                 || candidate
                     .versions
                     .iter()
-                    .any(|evidence| evidence.placement.route_slot_ids.contains(&disk.slot_id)))
+                    .any(|evidence| evidence.placement.route_slot_ids.contains(&disk.slot_id))
+                || verified.retains_draft_on(disk.disk_id.parse::<storage_contract::DiskId>()?))
                 && self.disk_resources.get(disk)?.root.available()?
                     < self.config.metadata_reserve_bytes
             {
@@ -662,6 +716,15 @@ impl Engine {
             error
                 .context(ErrorCode::PreparationStale, message)
                 .retryable()
+        })?;
+        // The candidate can change FILE rows without introducing a BODY.
+        // Recheck the actual retained entities after PREPARE in that case too,
+        // before the decision fence, not only in the later names installer.
+        verified.validate_containers().map_err(|error| {
+            error.context(
+                ErrorCode::PreparationStale,
+                "prepared container identity changed before decision",
+            ).retryable()
         })?;
         if let Some(reuse) = reused_dependencies {
             reuse.admit(&self.planning_context(), &config_hash)?;
@@ -784,6 +847,64 @@ impl Engine {
     ) -> Result<()> {
         self.complete_candidate_verified(c, hash, next, existing, Completion::Recovery)
     }
+    pub(super) fn observe_ordinary_pending<'original>(
+        &self,
+        candidate: &Candidate,
+        original: &'original crate::publication_evidence::AdmittedSnapshot,
+    ) -> Result<RecoveredOrdinaryPayloads<'original>> {
+        let containers = std::sync::Arc::new(
+            crate::container_storage::PreparedContainerEntities::observe_candidate(
+                &self.planning_context(), candidate, original,
+            )?,
+        );
+        let verified = PayloadPreparation::new(
+            &self.config, &self.disk_resources, &candidate.versions,
+            std::sync::Arc::clone(&self.metadata_integrity),
+        )?.verify_with_containers(&self.config, std::sync::Arc::clone(&containers))?;
+        Ok(RecoveredOrdinaryPayloads {
+            candidate: candidate.clone(), original: original.for_candidate(candidate)?.state(),
+            previous: std::sync::Arc::downgrade(&self.state),
+            current: self.current_namespaces.clone(), config: self.config.clone(),
+            resources: std::sync::Arc::clone(&self.disk_resources), snapshot: self.snapshot.clone(),
+            verified, containers,
+        })
+    }
+
+    pub(super) fn complete_observed_ordinary_candidate(
+        &mut self,
+        candidate: &Candidate,
+        hash: &str,
+        next: &State,
+        observed: RecoveredOrdinaryPayloads<'_>,
+    ) -> Result<()> {
+        let same_current = match (&observed.current, &self.current_namespaces) {
+            (None, None) => true,
+            (Some(before), Some(current)) => std::sync::Arc::ptr_eq(before, current),
+            (None, Some(_)) | (Some(_), None) => false,
+        };
+        if !std::ptr::eq(observed.original, next)
+            || !observed.previous.ptr_eq(&std::sync::Arc::downgrade(&self.state))
+            || !same_current || !observed.config.same_admission(&self.config)
+            || !std::sync::Arc::ptr_eq(&observed.resources, &self.disk_resources)
+            || observed.snapshot != self.snapshot
+            || object_hash("candidate", &observed.candidate)? != hash
+            || object_hash("candidate", candidate)? != hash
+        {
+            return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
+        }
+        let projection = crate::state_projection::ProjectionTransition::new(
+            &self.state, next, None,
+        )?;
+        let names = crate::container_storage::prepare_recovered_ordinary_names(
+            &self.config, &self.disk_resources, &projection, MAX_METADATA, observed.containers,
+        )?;
+        observed.verified.validate_containers()?;
+        self.complete_candidate_verified(
+            candidate, hash, next, None,
+            Completion::RecoveredPrepared { payloads: &observed.verified, names },
+        )
+    }
+
     fn require_bound_publication(
         &self,
         c: &Candidate,
@@ -854,15 +975,17 @@ impl Engine {
         for evidence in &c.versions {
             for slot in &evidence.placement.route_slot_ids {
                 let d = self.disk(slot)?;
-                let Some(handle) = self.disk_resources.available(d) else {
+                let Some(_) = self.disk_resources.available(d) else {
                     continue;
                 };
-                let dir = version_dir(
-                    d,
-                    &evidence.version.history_tree_id,
-                    &evidence.version.version_id,
-                );
-                match handle.root.directory_identity(&dir) {
+                let scope = super::fresh_layout::containers::observe_replica(
+                    &self.config, &self.disk_resources, next,
+                    evidence.version.file_id.parse()?, d,
+                )?;
+                let material = VersionMaterial::current(&scope, &evidence.version)?;
+                let root = material.root()?;
+                let dir = material.directory()?;
+                match root.directory_identity(&dir) {
                     Ok(_) => {}
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                     | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
@@ -910,11 +1033,15 @@ impl Engine {
                 let proof_dir = if first_on_slot {
                     dir
                 } else {
-                    local_proof_directory_at(&handle.root, &dir, hash)?
+                    local_proof_directory_at(root, &dir, hash)?
                 };
-                repair_local_proof(&handle.root, &proof_dir.join("commit-proof.json"), &proof)?;
                 repair_local_proof(
-                    &handle.root,
+                    root,
+                    &proof_dir.join("commit-proof.json"),
+                    &proof,
+                )?;
+                repair_local_proof(
+                    root,
                     &proof_dir.join("publication-proof.json"),
                     &LocalPublicationRef {
                         candidate: c,
@@ -950,6 +1077,11 @@ impl Engine {
                 Some(payloads),
                 Some(names),
                 Engine::append_journal
+                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
+            ),
+            Completion::RecoveredPrepared { payloads, names } => (
+                Some(payloads), Some(names),
+                Engine::append_recovered_journal
                     as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
             ),
             Completion::Recovery => (
@@ -1049,17 +1181,16 @@ impl Engine {
         )?;
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_container_names")?;
+        if let Some(verified) = verified {
+            // Draft-only decisions have no version cursor. The same held draft
+            // body must survive FILE installation before publication can start.
+            verified.validate_containers()?;
+        }
         let mut payload_receipts = Vec::new();
         let mut payload_cursor = verified.map(VerifiedPayloadSet::cursor);
         for evidence in &c.versions {
             for slot in &evidence.placement.route_slot_ids {
                 let d = self.disk(slot)?;
-                let handle = self.disk_resources.get(d)?;
-                let directory = version_dir(
-                    d,
-                    &evidence.version.history_tree_id,
-                    &evidence.version.version_id,
-                );
                 if let Some(cursor) = &mut payload_cursor {
                     cursor.validate_payload_after_names(
                         &self.config,
@@ -1067,28 +1198,50 @@ impl Engine {
                         slot,
                         Some(&renamed_payloads),
                     )?;
-                } else {
-                    // Recovery has no live held-inode proof and must re-read all bytes.
-                    handle.verify_payload(&directory, &evidence.version)?;
                 }
-                let proof = CommitProof {
-                    candidate_hash: hash.into(),
-                    finalize: finalize.clone(),
-                    version_hash: object_hash("version", &evidence.version)?,
-                    disk_id: d.disk_id.clone(),
-                    slot_id: d.slot_id.clone(),
-                    route_slot_ids: evidence.placement.route_slot_ids.clone(),
-                };
-                let proof_dir = local_proof_directory_at(&handle.root, &directory, hash)?;
-                handle
-                    .root
-                    .write_json(&proof_dir.join("commit-proof.json"), &proof, false)?;
-                payload_receipts.push(PayloadReceipt {
-                    version_id: evidence.version.version_id.clone(),
-                    disk_id: d.disk_id.clone(),
-                    slot_id: d.slot_id.clone(),
-                    proof_hash: object_hash("commit-proof", &proof)?,
-                });
+                let mut write_proof =
+                    |scope: &crate::container_storage::ObservedContainerReplica| {
+                        let material = VersionMaterial::current(scope, &evidence.version)?;
+                        let root = material.root()?;
+                        let directory = material.directory()?;
+                        if verified.is_none() {
+                            // Recovery keeps the original full-byte gate under
+                            // this exact source area and actual container.
+                            VerifiedExisting::read_container(
+                                root, &directory, &evidence.version,
+                                scope.container()?, scope.name(),
+                            )?;
+                        }
+                        let proof = CommitProof {
+                            candidate_hash: hash.into(),
+                            finalize: finalize.clone(),
+                            version_hash: object_hash("version", &evidence.version)?,
+                            disk_id: d.disk_id.clone(),
+                            slot_id: d.slot_id.clone(),
+                            route_slot_ids: evidence.placement.route_slot_ids.clone(),
+                        };
+                        let proof_dir = local_proof_directory_at(root, &directory, hash)?;
+                        root.write_json(&proof_dir.join("commit-proof.json"), &proof, false)?;
+                        payload_receipts.push(PayloadReceipt {
+                            version_id: evidence.version.version_id.clone(),
+                            disk_id: d.disk_id.clone(),
+                            slot_id: d.slot_id.clone(),
+                            proof_hash: object_hash("commit-proof", &proof)?,
+                        });
+                        material.verify()
+                    };
+                match verified {
+                    Some(verified) => verified.with_replica(
+                        &self.config, &evidence.version, d, &mut write_proof,
+                    )?,
+                    None => {
+                        let scope = super::fresh_layout::containers::observe_replica(
+                            &self.config, &self.disk_resources, next,
+                            evidence.version.file_id.parse()?, d,
+                        )?;
+                        write_proof(&scope)?;
+                    }
+                }
             }
         }
         if let Some(cursor) = payload_cursor {
@@ -1148,26 +1301,39 @@ impl Engine {
         for evidence in &c.versions {
             for slot in &evidence.placement.route_slot_ids {
                 let d = self.disk(slot)?;
-                let directory = version_dir(
-                    d,
-                    &evidence.version.history_tree_id,
-                    &evidence.version.version_id,
-                );
-                let root = &self.disk_resources.get(d)?.root;
-                let proof_dir = local_proof_directory_at(root, &directory, hash)?;
-                let proof = decode_proof(
-                    &root.read_bytes(&proof_dir.join("commit-proof.json"), MAX_METADATA)?,
-                )?;
-                root.write_json(
-                    &proof_dir.join("publication-proof.json"),
-                    &LocalPublicationRef {
-                        candidate: c,
-                        publication: &publication,
-                        commit_proof: &proof,
-                        publication_receipts: &publication_receipts,
-                    },
-                    false,
-                )?;
+                let write_publication =
+                    |scope: &crate::container_storage::ObservedContainerReplica| {
+                        let material = VersionMaterial::current(scope, &evidence.version)?;
+                        let root = material.root()?;
+                        let directory = material.directory()?;
+                        let proof_dir = local_proof_directory_at(root, &directory, hash)?;
+                        let proof = decode_proof(
+                            &root.read_bytes(&proof_dir.join("commit-proof.json"), MAX_METADATA)?,
+                        )?;
+                        root.write_json(
+                            &proof_dir.join("publication-proof.json"),
+                            &LocalPublicationRef {
+                                candidate: c,
+                                publication: &publication,
+                                commit_proof: &proof,
+                                publication_receipts: &publication_receipts,
+                            },
+                            false,
+                        )?;
+                        material.verify()
+                    };
+                match verified {
+                    Some(verified) => verified.with_replica(
+                        &self.config, &evidence.version, d, write_publication,
+                    )?,
+                    None => {
+                        let scope = super::fresh_layout::containers::observe_replica(
+                            &self.config, &self.disk_resources, next,
+                            evidence.version.file_id.parse()?, d,
+                        )?;
+                        write_publication(&scope)?;
+                    }
+                }
             }
         }
         #[cfg(feature = "fault-injection")]
@@ -1366,6 +1532,51 @@ impl crate::engine::PlanningContext<'_> {
         maximum: usize,
         cache_maximum: usize,
     ) -> Result<DetachedPublication> {
+        self.prepare_publication_with_draft(next, prepared, result, maximum, cache_maximum, None)
+    }
+
+    fn prepare_publication_with_draft(
+        &self,
+        next: State,
+        prepared: Vec<Prepared>,
+        result: OperationResult,
+        maximum: usize,
+        cache_maximum: usize,
+        draft: Option<super::file_draft::DraftPublicationInput>,
+    ) -> Result<DetachedPublication> {
+        let mut introduced_draft = None;
+        let mut inspect_draft = |file: &storage_contract::FileId| -> Result<()> {
+            let after = next.file_containers.get(file)
+                .and_then(|record| record.working.draft()).map(|(_, payload)| payload);
+            let before = self.state.file_containers.get(file)
+                .and_then(|record| record.working.draft()).map(|(_, payload)| payload);
+            if after.is_some() && before != after
+                && introduced_draft.replace(*file).is_some()
+            {
+                return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
+            }
+            Ok(())
+        };
+        match next.file_containers.changes_since(&self.state.file_containers) {
+            storage_contract::MapChanges::Keys(keys) => {
+                for file in keys.iter() { inspect_draft(file)?; }
+            }
+            storage_contract::MapChanges::All => {
+                for file in next.file_containers.keys() { inspect_draft(file)?; }
+            }
+        }
+        if introduced_draft != draft.as_ref().map(|input| input.file()) {
+            return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
+        }
+        if let Some(input) = &draft {
+            input.require_context(self)?;
+            input.require_next(&next, &result)?;
+            if !prepared.is_empty() || self.current_namespaces.is_some()
+                || self.config.generation().is_some()
+            {
+                return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
+            }
+        }
         crate::business::reject_unclosed_file_history_move(self.state, &next, &result)?;
         let next_current_namespaces = match self.current_namespaces {
             Some(view) => Some(std::sync::Arc::new(view.advance(self.state, &next)?)),
@@ -1384,6 +1595,11 @@ impl crate::engine::PlanningContext<'_> {
             view.verify_backup_prepared(self.state, &next, &result, &prepared)?;
             view.verify_history_copy_prepared(self.state, &next, &result, &prepared)?;
         }
+        let containers = super::fresh_layout::containers::ContainerPreparation::new(
+            self, next, &prepared, &result,
+        )?;
+        let needs_entity_feedback = !containers.additions().is_empty();
+        let next = containers.budget_state();
         let metadata_epoch = self.metadata_integrity.capture();
         let members = self.members();
         let mut required = BTreeMap::<String, u64>::new();
@@ -1394,12 +1610,35 @@ impl crate::engine::PlanningContext<'_> {
             let mut copies = Vec::with_capacity(p.placement.route_slot_ids.len());
             for slot in &p.placement.route_slot_ids {
                 let disk = self.disk(slot)?;
-                let directory =
-                    version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
-                let handle = self.disk_resources.get(disk)?;
                 let reservation = proof_budget.reserve(1);
-                match VerifiedExisting::read_at(&handle.root, &directory, &p.version) {
-                    Ok(proof) => {
+                let disk_id = disk.disk_id.parse::<storage_contract::DiskId>()?;
+                let published = self.state.file_containers
+                    .get(&p.version.file_id.parse::<storage_contract::FileId>()?)
+                    .filter(|record| record.replicas.contains_key(&disk_id));
+                let observed = match published {
+                    Some(record) => {
+                        let scope = super::fresh_layout::containers::observe_replica(
+                            self.config, self.disk_resources, self.state,
+                            p.version.file_id.parse()?, disk,
+                        )?;
+                        let material = VersionMaterial::current(&scope, &p.version)?;
+                        // Only a missing version leaf permits a full new copy.
+                        // A failed source/container identity observation above
+                        // is not converted to missing content.
+                        VerifiedExisting::read_container(
+                            material.root()?, &material.directory()?, &p.version,
+                            scope.container()?, &record.namespace.name,
+                        ).map(Some)
+                    }
+                    None => {
+                        // No source area exists yet for this replica. Charge
+                        // the complete payload before exclusive preparation;
+                        // do not probe an unrelated disk-global directory.
+                        Ok(None)
+                    }
+                };
+                match observed {
+                    Ok(Some(proof)) => {
                         if let Some(reservation) = reservation {
                             copies.push(Some(RetainedExisting { proof, reservation }));
                         } else {
@@ -1408,6 +1647,7 @@ impl crate::engine::PlanningContext<'_> {
                         }
                         continue;
                     }
+                    Ok(None) => copies.push(None),
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                     | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
                         if error.kind() == std::io::ErrorKind::NotFound =>
@@ -1431,6 +1671,20 @@ impl crate::engine::PlanningContext<'_> {
                     })?;
             }
             existing.push(std::sync::Mutex::new(Some(copies)));
+        }
+        if let Some(input) = &draft {
+            let record = next.file_containers.get(&input.file())
+                .ok_or(super::fresh_layout::FreshLayoutError::ContainerScope)?;
+            if record.replicas.len() != 1 {
+                return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
+            }
+            let disk = self.config.disks.iter()
+                .find(|disk| disk.disk_id == record.owner_disk.to_string())
+                .ok_or(super::fresh_layout::FreshLayoutError::Registration)?;
+            if input.payload().logical_size() > self.config.max_file_bytes {
+                return Err(super::fresh_layout::FreshLayoutError::DraftTooLarge.into());
+            }
+            required.insert(disk.slot_id.clone(), input.payload().logical_size());
         }
         for (slot, bytes) in &required {
             let d = self.disk(slot)?;
@@ -1553,7 +1807,7 @@ impl crate::engine::PlanningContext<'_> {
         // The budget encoder needs the exact envelope shape, not a physical
         // publication. Discard this encode-only envelope before entering I/O;
         // its unchanged fields travel with the actual preparation inputs.
-        let budget_candidate = bind_candidate(self, candidate_data);
+        let budget_candidate = bind_candidate(self, candidate_data.clone());
         crate::metadata_budget::preflight_publication_prepared(
             self,
             &budget_candidate,
@@ -1563,17 +1817,44 @@ impl crate::engine::PlanningContext<'_> {
             maximum,
             Some((&snapshot, &history_basis)),
         )?;
-        let candidate_plan = budget_candidate.into_preparation();
+        let metadata_shape = snapshot.encoding_shape();
+        drop(budget_candidate);
         crate::container_storage::validate_new_projection_paths(&projection)?;
         crate::protection::preflight_backup_directories(self, &result)?;
+        // Container identity is excluded from history material. End this budget
+        // projection before the owning plan accepts physical observations.
+        drop(projection);
         let physical = BudgetedPhysicalPreparation {
             context: self,
-            decision: candidate_plan,
+            decision: candidate_data,
             payloads: &prepared,
             existing,
-            projection,
+            containers,
+            draft,
         }.prepare(cache_maximum)?;
-        let (candidate, verified, names, history_owners) = physical.into_candidate();
+        let (mut data, verified, names, history_owners, entities, next) = physical.into_parts();
+        // Only actual mkdir/open observations fill the native entity field. The
+        // exact width of that field was budgeted before mkdir; no sealed Candidate
+        // is modified. Re-encode metadata, not BODY or FILE material.
+        if needs_entity_feedback {
+            snapshot = match baseline {
+                Some(base) => prepare_snapshot_incremental(
+                    self.state, &next, &base.snapshot_basis, maximum,
+                )?,
+                None => prepare_snapshot(&next, maximum)?,
+            };
+            if snapshot.encoding_shape() != metadata_shape {
+                return Err(super::fresh_layout::FreshLayoutError::ContainerBudget.into());
+            }
+        }
+        snapshot.metadata_integrity = Some(std::sync::Arc::clone(self.metadata_integrity));
+        data.snapshot_hash = snapshot.hash.clone();
+        let candidate = bind_candidate(self, data);
+        crate::metadata_budget::preflight_publication_prepared(
+            self, &candidate, &result, &next, None, maximum, Some((&snapshot, &history_basis)),
+        )?;
+        entities.verify()?;
+        verified.validate(self.config, &candidate)?;
         if let Some(reuse) = &reused_dependencies {
             if !reuse.matches(self, &config_hash) {
                 return Err(Error::new(
@@ -1619,6 +1900,8 @@ impl crate::engine::PlanningContext<'_> {
             disk_resources: std::sync::Arc::clone(self.disk_resources),
             base_root: self.root.to_path_buf(),
             base_snapshot: self.snapshot.clone(),
+            base_state: std::sync::Arc::downgrade(self.state),
+            base_current: self.current_namespaces.map(std::sync::Arc::downgrade),
             base_sequence: self.state.sequence,
             base_next_slot: self.next_slot,
             config_hash,
@@ -1634,6 +1917,7 @@ impl crate::engine::PlanningContext<'_> {
         &self,
         prepared: &'a [Prepared],
         existing: Vec<std::sync::Mutex<Option<ExistingCopies<'a>>>>,
+        containers: &crate::container_storage::PreparedContainerEntities,
     ) -> Result<()> {
         // Versions of the same file can share a named container. Preserve their
         // order, and each version's route chain, while independent files copy
@@ -1658,20 +1942,21 @@ impl crate::engine::PlanningContext<'_> {
                 .expect("invariant: payload admission ownership poisoned")
                 .take()
                 .expect("invariant: payload group is claimed once");
-            self.prepare_payload_with_existing(payload, Some(copies))
+            self.prepare_payload_with_existing(payload, Some(copies), Some(containers))
         })
     }
 }
 
 impl crate::engine::PlanningContext<'_> {
     pub(crate) fn prepare_payload(&self, p: &Prepared) -> Result<()> {
-        self.prepare_payload_with_existing(p, None)
+        self.prepare_payload_with_existing(p, None, None)
     }
 
     fn prepare_payload_with_existing<'a>(
         &self,
         p: &'a Prepared,
         mut existing: Option<ExistingCopies<'a>>,
+        containers: Option<&crate::container_storage::PreparedContainerEntities>,
     ) -> Result<()> {
         if let Some(copies) = &existing {
             assert_eq!(
@@ -1680,12 +1965,27 @@ impl crate::engine::PlanningContext<'_> {
                 "invariant: each routed replica has an admission result"
             );
         }
-        let mut source = None;
+        let mut source: Option<(storage_contract::DiskId, ReadFile)> = None;
         for (index, slot) in p.placement.route_slot_ids.iter().enumerate() {
             let disk = self.disk(slot)?;
-            let handle = self.disk_resources.get(disk)?;
-            let root = &handle.root;
-            let directory = version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
+            let disk_id = disk.disk_id.parse::<storage_contract::DiskId>()?;
+            if let Some(containers) = containers {
+                containers.require_direct_source(
+                    p.version.file_id.parse()?, disk.disk_id.parse()?,
+                    source.as_ref().map(|(disk, _)| *disk),
+                )?;
+            }
+            let scope = match containers {
+                Some(containers) => containers.retain_scope(p.version.file_id.parse()?, disk_id)?,
+                None => Arc::new(super::fresh_layout::containers::observe_replica(
+                    self.config, self.disk_resources, self.state,
+                    p.version.file_id.parse()?, disk,
+                )?),
+            };
+            let material = VersionMaterial::current(&scope, &p.version)?;
+            let root = material.root()?;
+            let directory = material.directory()?;
+            let name = scope.name();
             // Keep the lease outside the consuming install call, including its
             // error/unwind paths. That call drops the body FD before returning.
             let mut reservation = None;
@@ -1693,6 +1993,12 @@ impl crate::engine::PlanningContext<'_> {
                 .read_json_observed::<FileVersion>(&directory.join("version.json"), &mut |_| Ok(()))
             {
                 Ok(recorded) => {
+                    let already_published = self.state.file_containers
+                        .get(&p.version.file_id.parse::<storage_contract::FileId>()?)
+                        .is_some_and(|record| record.replicas.contains_key(&disk_id));
+                    if !already_published {
+                        return Err(super::fresh_layout::FreshLayoutError::ContainerIdentity.into());
+                    }
                     if object_hash("version", &recorded)? != object_hash("version", &p.version)? {
                         return Err(Error::new(
                             storage_contract::ErrorCode::ObjectCollision,
@@ -1704,7 +2010,9 @@ impl crate::engine::PlanningContext<'_> {
                             reservation = Some(retained.reservation);
                             retained.proof
                         }
-                        None => VerifiedExisting::read_at(root, &directory, &p.version)?,
+                        None => VerifiedExisting::read_container(
+                            root, &directory, &p.version, scope.container()?, name,
+                        )?,
                     };
                     verified.assert_binding(&directory, &p.version);
                     crate::container_storage::PreparedContent::Verified(verified)
@@ -1713,17 +2021,18 @@ impl crate::engine::PlanningContext<'_> {
                 | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
                     if error.kind() == std::io::ErrorKind::NotFound =>
                 {
-                    let staging = disk
-                        .root
-                        .join("staging")
-                        .join(OperationId::generate()?.to_string());
+                    let staging = material.preparation(OperationId::generate()?)?;
                     root.private_dir(&staging.join("content"))?;
                     let target = staging.join("content").join(&p.version.creation_name);
                     let copied = verified_full_copy_at(
                         root,
                         match source.take() {
-                            Some(file) => file,
-                            None => p.source.open()?,
+                            Some((_, file)) => file,
+                            None if index == 0 => p.source.open()?,
+                            None => {
+                                return Err(super::fresh_layout::FreshLayoutError::ContainerScope
+                                    .into());
+                            }
                         },
                         &target,
                         &p.version,
@@ -1752,11 +2061,17 @@ impl crate::engine::PlanningContext<'_> {
             };
             // Install a real version file in this file's named container before
             // any protection receipt is issued. The next level reads this copy.
-            let path =
-                crate::container_storage::install_version_content_at(root, &directory, content)?;
+            let target = scope.container()?;
+            let path = crate::container_storage::install_version_content_in(
+                root, &directory, content, target, name,
+            )?;
             drop(reservation);
+            scope.verify()?;
             if index + 1 < p.placement.route_slot_ids.len() {
-                source = Some(ReadFile::from(root.open_leased_regular(&path)?));
+                source = Some((
+                    disk_id,
+                    ReadFile::in_container(target.open_leased_regular(&path)?, Arc::clone(&scope)),
+                ));
             }
         }
         Ok(())

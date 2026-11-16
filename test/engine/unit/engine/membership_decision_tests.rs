@@ -481,7 +481,7 @@ fn membership_decision_legacy_singleton_cannot_become_a_second_voting_route() {
         let mut journal =
             PendingJournal::open_joint_at(&root, &legacy, 1, &"2".repeat(64), &"3".repeat(64))
                 .unwrap();
-        let disk = Config::development([fixture.root.path().to_path_buf()])
+        let disk = Config::development(crate::test_disks([fixture.root.path().to_path_buf()]))
             .unwrap()
             .disks
             .remove(0);

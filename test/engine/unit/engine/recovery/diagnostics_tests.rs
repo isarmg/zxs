@@ -18,7 +18,9 @@ fn member_seal_failures_keep_each_identity_and_reset_on_the_next_recovery() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
     let config =
-        Config::development((0..5).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..5).map(|i| temp.path().join(format!("disk-{i}"))),
+        )).unwrap();
     drop(Engine::initialize(&root, config.clone()).unwrap());
     let (mut engine, warnings) =
         Engine::prepare_workspace_recovery(root, config.clone().try_into().unwrap()).unwrap();
@@ -83,7 +85,9 @@ fn missing_publication_seal_keeps_the_verified_prefix_and_candidate_cause() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
         let config =
-            Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|i| temp.path().join(format!("disk-{i}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&root, config.clone()).unwrap();
         let first = OperationId::generate().unwrap();
         engine
@@ -180,7 +184,7 @@ fn warning_aggregate_keeps_permission_source_alongside_both_checkpoint_causes() 
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let disk = &engine.config.disks[0];

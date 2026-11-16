@@ -17,7 +17,9 @@ impl Fixture {
     fn with_relocation(metadata: bool, relocate: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut config =
-            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         config.disks[0].metadata_member = metadata;
         Self::with_config(temp, config, relocate)
     }
@@ -389,7 +391,9 @@ fn readmission_preserves_detached_masks_and_cannot_restore_a_deleted_registratio
     let temp = tempfile::tempdir().unwrap();
     let config = Config::independent_roots(
         storage_contract::Mode::Development,
-        (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        ),
     )
     .unwrap();
     let mut fixture = Fixture::with_config(temp, config, false);

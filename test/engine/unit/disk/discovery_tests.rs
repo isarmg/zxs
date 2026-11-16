@@ -9,7 +9,7 @@ fn recognize(path: &Path) -> Result<RecognizedDisk> {
 fn current_disk_recognition_binds_physical_identity_without_scanning_contents() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("disk");
-    let config = Config::development([root.clone()]).unwrap();
+    let config = Config::development(crate::test_disks([root.clone()])).unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     let before = std::fs::read(root.join("disk.json")).unwrap();
     let metadata = std::fs::metadata(root.join("disk.json")).unwrap();
@@ -43,7 +43,9 @@ fn current_disk_recognition_binds_physical_identity_without_scanning_contents() 
 fn recorded_roles_are_not_inferred_from_names_and_never_open_other_roots() {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|index| temp.path().join(format!("root-{index}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|index| temp.path().join(format!("root-{index}"))),
+        )).unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     drop(engine);
     // The source anchor's foreign locators may be absent. Recognition reads
@@ -73,7 +75,7 @@ fn missing_or_mismatched_role_evidence_is_rejected_without_repair() {
         let root = temp.path().join("disk");
         let engine = Engine::initialize(
             &temp.path().join("system"),
-            Config::development([root.clone()]).unwrap(),
+            Config::development(crate::test_disks([root.clone()])).unwrap(),
         )
         .unwrap();
         drop(engine);
@@ -111,7 +113,7 @@ fn initial_seal_never_hides_an_unpromoted_generation() {
     let root = temp.path().join("disk");
     let engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([root.clone()]).unwrap(),
+        Config::development(crate::test_disks([root.clone()])).unwrap(),
     )
     .unwrap();
     let marker = root.join("metadata/pool-membership/generation.json");
@@ -127,7 +129,7 @@ fn initial_seal_never_hides_an_unpromoted_generation() {
 #[test]
 fn generation_role_requires_its_seal_hash_and_local_data_enrollment() {
     let temp = tempfile::tempdir().unwrap();
-    let original = Config::development([temp.path().join("original")]).unwrap();
+    let original = Config::development(crate::test_disks([temp.path().join("original")])).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
     engine
         .create_repository(
@@ -140,7 +142,9 @@ fn generation_role_requires_its_seal_hash_and_local_data_enrollment() {
         .unwrap();
     let root = temp.path().join("new-backup");
     private_dir(&root).unwrap();
-    let mut addition = Config::development([root.clone()]).unwrap().disks.remove(0);
+    let mut addition = Config::development(crate::test_disks(
+        [root.clone()],
+    )).unwrap().disks.remove(0);
     addition.slot_id = "B01".into();
     addition.level = 2;
     addition.upstream_slot_id = Some("P01".into());
@@ -206,7 +210,7 @@ fn ordinary_unknown_and_rebound_roots_are_rejected_without_changes() {
     let root = temp.path().join("disk");
     let engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([root.clone()]).unwrap(),
+        Config::development(crate::test_disks([root.clone()])).unwrap(),
     )
     .unwrap();
     let seal = std::fs::read(root.join("disk.json")).unwrap();

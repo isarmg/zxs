@@ -3,11 +3,13 @@ use std::fs;
 
 fn fixture() -> (tempfile::TempDir, Engine, Workspace) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("t"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("t"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine

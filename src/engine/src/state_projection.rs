@@ -111,7 +111,7 @@ macro_rules! define_fields {
                 let State {
                     sequence: _, business_generation: _, topology_generation: _,
                     control_auth: _, events: _, operations: _, operation_principals: _, plans: _,
-                    histories: _, repositories: _, $($field: _,)*
+                    histories: _, repositories: _, file_containers: _, $($field: _,)*
                 } = after;
                 let mut writes = Self {
                     histories: exact_keys(after.histories.changes_since(&before.histories))?,

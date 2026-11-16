@@ -281,6 +281,9 @@ fn compare(before: &State, after: &State) {
         changed_files(before, after),
         full_changed_files(before, after)
     );
+    let mut material = full_changed_files(before, after);
+    material.extend(super::super::file_database::changes::affected(before, after));
+    assert_eq!(affected_file_material(before, after), material);
 }
 
 #[test]
@@ -563,8 +566,12 @@ fn typed_container_tag_writes_select_only_the_changed_file() {
         storage_contract::Generation::new(1),
     ));
     assert_eq!(changed_files(&before, &next), BTreeSet::from([file.to_string()]));
+    assert_eq!(affected_file_material(&before, &next), BTreeSet::from([file.to_string()]));
+    let cold: State = json_codec::from_value(json_codec::to_value(&next).unwrap()).unwrap();
+    assert_eq!(affected_file_material(&before, &cold), BTreeSet::from([file.to_string()]));
     let mut same = before.clone();
     same.begin_tracking();
     same.container_tags.insert(file, ContainerTags::empty());
     assert!(changed_files(&before, &same).is_empty());
+    assert!(affected_file_material(&before, &same).is_empty());
 }

@@ -51,6 +51,7 @@ const COMPLETE: &str = "cutover-inputs-prepared.json";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct BackupTopologyTarget {
+    pub name: name_policy::Name,
     pub disk_id: String,
     pub slot_id: String,
     pub upstream_slot_id: String,
@@ -72,7 +73,7 @@ pub struct BackupPreparedTopologyNode {
     pub identity: DiskRegistrationIdentity,
     pub upstream_slot_id: String,
     pub level: u32,
-    pub name: String,
+    pub name: name_policy::Name,
     pub source_prefix: Vec<String>,
 }
 

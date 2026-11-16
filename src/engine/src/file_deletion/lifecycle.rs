@@ -93,6 +93,7 @@ impl Engine {
                 }
                 let capture = engine.file_deletion_preflight(target, &HistoryWindowCancellation::default())?;
                 require_writable(engine, capture.repository())?;
+                crate::engine::fresh_layout::require_whole_container_lifecycle()?;
                 let node = deletion_node(
                     &capture,
                     target.path,
@@ -139,24 +140,30 @@ impl Engine {
                 directory::require_individual_undo(engine.state(), file_id.as_str())?;
                 let repository = engine.repository_for_history(&deletion.history_tree_id)?;
                 require_writable(engine, repository)?;
-                if let Some(evidence) = occurrence::original(engine.state(), &deletion)? {
-                    occurrence::restore(
+                let evidence = occurrence::original(engine.state(), &deletion)?;
+                let restoration = if let Some(evidence) = evidence.as_ref() {
+                    Some(occurrence::prepare_restore(
                         engine.state(),
-                        state,
+                        state.sequence,
                         engine.admitted_current_namespaces()?,
                         &deletion,
-                        &evidence,
+                        evidence,
                         occurrence::RestorePublication {
                             operation_id,
                             principal,
                         },
-                    )?;
+                    )?)
                 } else {
                     preflight::require_undo_scope(
                         engine.state(),
                         engine.admitted_current_namespaces()?,
                         &deletion,
                     )?;
+                    None
+                };
+                crate::engine::fresh_layout::require_whole_container_lifecycle()?;
+                if let Some(restoration) = restoration {
+                    restoration.apply(state)?;
                 }
                 let node = state
                     .file_deletions

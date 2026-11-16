@@ -475,7 +475,7 @@ fn verify_held_generation_from(
             // The authenticated member supplies identity/role, never its address.
             let mut disk = member.clone();
             disk.root = held.disk.root.clone();
-            let saved_path = disk.root.join("metadata/pool-membership/config.json");
+            let saved_path = disk.root.join(layout::GENESIS_CONFIGURATION.as_path());
             let saved = match source {
                 GenerationEvidenceSource::Markers | GenerationEvidenceSource::CertifiedAbort => {
                     Some(held.root.open_read_regular(&saved_path)?)
@@ -483,7 +483,9 @@ fn verify_held_generation_from(
                 GenerationEvidenceSource::PreparedRootExtension => {
                     if held
                         .root
-                        .optional_metadata(&disk.root.join("metadata/pool-membership"))?
+                        .optional_metadata(saved_path.parent().expect(
+                            "invariant: the fixed genesis configuration has a parent",
+                        ))?
                         .is_some()
                     {
                         held.root.open_optional_read_regular(&saved_path)?
@@ -732,8 +734,18 @@ fn verify_held_genesis(
     let mut verified_members = Vec::new();
     for held in held {
         let result = (|| {
-            let saved: ValidatedConfig = held.root.read_json_observed(
-                &held.disk.root.join("metadata/pool-membership/config.json"),
+            // Projection supplies only a deny-only expected physical binding.
+            // Do not read a replacement management root to discover authority.
+            // The fixed saved configuration is still authenticated below.
+            crate::engine::fresh_layout::verify_root(projected, &held.disk, &held.root)?;
+            let binding = projected.storage_roots.get(&held.disk.disk_id.parse()?)
+                .ok_or(crate::engine::FreshLayoutError::Registration)?;
+            let management = held.root.private_entry_matching(
+                &layout::ZXS_DATA_ROOT,
+                crate::working_tree::records::file_identity(binding.roots.zxs_data.entity),
+            ).map_err(crate::engine::fresh_layout::directory_error)?;
+            let saved: ValidatedConfig = management.read_json_observed(
+                &held.disk.root.join(layout::GENESIS_CONFIGURATION.as_path()),
                 &mut |_| Ok(()),
             )?;
             if !saved.permits_genesis_recovery_projection(projected)
@@ -765,6 +777,7 @@ fn verify_held_genesis(
                     )?,
             )?;
             validate_stored_seal(&stored, &expected)?;
+            crate::engine::fresh_layout::verify_root(&saved, disk, &held.root)?;
             if selected.is_none() {
                 selected = Some(saved);
             }

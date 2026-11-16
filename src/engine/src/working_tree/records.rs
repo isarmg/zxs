@@ -10,6 +10,7 @@ pub(crate) use storage_contract::working_tree::{
     LocalEntityIdentity, MaterialCommitment, ReplicaBinding, ReplicaId, ReplicaObject,
     ReplicaPurpose, RootBinding, RootId, SnapshotRepositoryBinding, SnapshotRepositoryId,
     SnapshotRepositoryLocation, StorageLayout, ThreeRootBinding, WorkingTreeCatalog,
+    ZxsLifecycleBindings,
 };
 
 pub(crate) fn local_entity(identity: FileIdentity) -> LocalEntityIdentity {

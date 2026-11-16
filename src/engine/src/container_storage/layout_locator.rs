@@ -140,6 +140,14 @@ pub(super) struct HistoryAnchor<'a> {
     inode: EntityInode,
 }
 impl<'a> HistoryAnchor<'a> {
+    pub(super) fn from_content_root(
+        root: &'a DiskRoot,
+        history: storage_contract::HistoryTreeId,
+    ) -> Result<Self> {
+        let history = history.to_string();
+        Self::new(root, &root.path().join(&history), &history)
+    }
+
     pub(super) fn new(root: &'a DiskRoot, history_path: &Path, history_id: &str) -> Result<Self> {
         storage_contract::validate_id(history_id, "history")?;
         let relative = history_path

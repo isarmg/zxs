@@ -597,7 +597,9 @@ fn routed_follow_replay_rejects_missing_required_paths_extra_paths_and_old_kind(
         .tempdir()
         .unwrap();
     let mut config =
-        Config::development((0..7).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..7).map(|i| temp.path().join(format!("disk-{i}"))),
+        )).unwrap();
     for (index, level, upstream) in [
         (3, 1, None),
         (4, 2, Some("D04")),

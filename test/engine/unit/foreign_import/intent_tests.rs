@@ -6,7 +6,7 @@ use std::fs;
 fn target(f: &Fixture) -> Engine {
     Engine::initialize(
         &f._temp.path().join("target-system"),
-        Config::development([f._temp.path().join("target-primary")]).unwrap(),
+        Config::development(crate::test_disks([f._temp.path().join("target-primary")])).unwrap(),
     )
     .unwrap()
 }
@@ -414,10 +414,12 @@ fn a_replaced_verified_intent_file_or_directory_cannot_be_synchronized_as_the_or
 #[test]
 fn intent_ids_are_target_local_and_do_not_reserve_future_business_operation_ids() {
     let f = fixture();
-    let mut config = Config::development([
-        f._temp.path().join("target-one"),
-        f._temp.path().join("target-two"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            f._temp.path().join("target-one"),
+            f._temp.path().join("target-two"),
+        ],
+    ))
     .unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;

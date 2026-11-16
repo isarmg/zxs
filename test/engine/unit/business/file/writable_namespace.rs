@@ -53,7 +53,9 @@ fn reference(
 fn fixture(current: bool) -> (tempfile::TempDir, Engine, Repository) {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development((0..4).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..4).map(|i| temp.path().join(format!("disk-{i}"))),
+        )).unwrap();
     config.disks[3].level = 1;
     config.disks[3].upstream_slot_id = None;
     config.disks[3].metadata_member = false;

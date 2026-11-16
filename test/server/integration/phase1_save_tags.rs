@@ -1,5 +1,7 @@
 //! Phase-one body saves and container tags through the real authenticated HTTP
 //! router. Temporary level-one roots do not require a Samba daemon or a browser.
+#[path = "phase1_save_tags/fresh_working.rs"]
+mod fresh_working;
 #[path = "phase1_save_tags/content_matches.rs"]
 mod content_matches;
 #[path = "phase1_save_tags/directory_git.rs"]
@@ -43,7 +45,10 @@ impl Fixture {
         let system = root.path().join("system");
         let config = Config::independent_roots(
             Mode::Development,
-            disks.iter().map(|name| root.path().join(name)),
+            disks.iter().enumerate().map(|(index, path)| (
+                name_policy::Name::parse(&format!("HTTP test disk {}", index + 1)).unwrap(),
+                root.path().join(path),
+            )),
         )
         .unwrap();
         let engine = Engine::initialize(&system, config).unwrap();

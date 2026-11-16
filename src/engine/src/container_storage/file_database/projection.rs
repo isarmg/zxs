@@ -79,6 +79,9 @@ fn with_events(
         "file",
         file,
         &FileRow {
+            working: state.file_containers.get(&file.parse::<storage_contract::FileId>()?)
+                .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerShape)?
+                .working.clone(),
             file_id: file.to_owned(),
             container_tags: state.container_tags
                 .get(&file.parse::<storage_contract::FileId>()?)

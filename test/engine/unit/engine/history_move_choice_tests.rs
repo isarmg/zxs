@@ -36,7 +36,9 @@ fn selected(engine: &Engine) -> Choice {
 fn engine() -> (tempfile::TempDir, Engine) {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     engine
         .create_disk_root("P01", "admin", OperationId::generate().unwrap())

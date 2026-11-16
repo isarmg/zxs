@@ -4,7 +4,11 @@ use std::sync::Arc;
 
 fn configuration() -> Config {
     let mut config = Config::development(
-        ["/genesis-primary", "/genesis-data", "/genesis-backup"].map(Into::into),
+        [
+            ("Source", "/genesis-primary"),
+            ("Working", "/genesis-data"),
+            ("Archive", "/genesis-backup"),
+        ].map(|(name, root)| (name_policy::Name::parse(name).unwrap(), root.into())),
     )
     .unwrap();
     config.disks[1].metadata_member = false;
@@ -53,6 +57,9 @@ fn every_persisted_control_field_participates_in_genesis_context_equality() {
         ("data-only slot", |config| {
             config.disks[2].slot_id = "D01".into()
         }),
+        ("data-only explicit name", |config| {
+            config.disks[2].name = name_policy::Name::parse("Renamed Archive").unwrap()
+        }),
         ("data-only binding", |config| {
             config.disks[2].binding_generation += 1
         }),
@@ -76,6 +83,7 @@ fn every_persisted_control_field_participates_in_genesis_context_equality() {
             let mut disk = config.disks[1].clone();
             disk.disk_id = crate::new_id("disk").unwrap();
             disk.slot_id = "D01".into();
+            disk.name = name_policy::Name::parse("New working disk").unwrap();
             disk.root = "/genesis-added-data".into();
             config.disks.push(disk);
         }),

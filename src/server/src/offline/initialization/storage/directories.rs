@@ -12,12 +12,7 @@ const PLAN_DIRECTORY: &str = ".zxs-helper-first-storage-directories";
 const COMPLETION_DIRECTORY: &str = ".zxs-helper-first-storage-directories-complete";
 const MAX_RECORD_BYTES: usize = 64 * 1024;
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub(crate) struct Input {
-    pub service_user: String,
-    pub roots: Vec<String>,
-}
+pub(crate) use super::Input;
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Prepare {
@@ -115,7 +110,11 @@ impl Prepared {
                 "first-storage directory preparation requires the manually run root helper".into(),
             );
         }
-        layout::first_storage_names(&input.roots)?;
+        let roots = input.roots();
+        layout::first_storage_names(&roots)?;
+        // Reject unusable display names before retaining a directory batch.
+        // This draft check grants no root, genesis or recovery authority.
+        super::verify_configuration(&input.disks)?;
         let root = Root::open(input.service_user.clone())?;
         let (parent, owner) = root.layout.first_storage_directory_parent()?;
         let retained = root
@@ -127,18 +126,18 @@ impl Prepared {
                 format: Format::Directories,
                 revision: 1,
                 context: root.context.clone(),
-                targets: entries::capture(parent, owner, &input.roots)?,
+                targets: entries::capture(parent, owner, &roots)?,
                 input: input.clone(),
             },
         };
         if plan.revision != 1
             || plan.input != input
             || plan.context != root.context
-            || plan.targets.len() != input.roots.len()
+            || plan.targets.len() != roots.len()
             || plan
                 .targets
                 .iter()
-                .zip(&input.roots)
+                .zip(&roots)
                 .any(|(target, path)| &target.path != path)
         {
             return Err("first-storage directory request or native layout differs from the original; no new batch was substituted".into());

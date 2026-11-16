@@ -88,6 +88,7 @@ fn transaction(engine: &Engine, paths: Vec<PathBuf>) -> BackupTransactionRequest
             .iter()
             .enumerate()
             .map(|(index, _)| BackupTopologyTarget {
+                name: name_policy::Name::parse(&format!("New archive {}", index + 1)).unwrap(),
                 disk_id: storage_engine::new_id("disk").unwrap(),
                 slot_id: format!("C{:02}", index + 2),
                 upstream_slot_id: "B01".into(),
@@ -347,6 +348,11 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
     let mut engine = Engine::open(&system).unwrap();
     diagnostic(started, "main: cold engine opened");
     assert_eq!(engine.operation(operation).unwrap(), result);
+    for target in &request.targets {
+        let disk = engine.config().disks.iter()
+            .find(|disk| disk.disk_id == target.disk_id).unwrap();
+        assert_eq!(disk.name, target.name);
+    }
     assert_eq!(
         engine.backup_preparation_status().unwrap().phase,
         BackupPreparationPhase::GenerationServingActive
@@ -370,6 +376,13 @@ fn a_changed_original_request_or_principal_never_reselects_targets() {
     let (temp, mut engine, repository) = full_route();
     save(&mut engine, &repository, "file", b"original");
     let request = transaction(&engine, vec![target(temp.path(), "exact-target")]);
+    let mut duplicate = request.clone();
+    duplicate.targets[0].name = engine.config().disks[0].name.clone();
+    assert_eq!(
+        engine.start_backup_transaction(duplicate, Vec::new()).unwrap_err().code(),
+        ErrorCode::NameConflict
+    );
+    assert!(engine.current_backup_transaction_request("admin").unwrap().is_none());
     engine
         .start_backup_transaction(
             request.clone(),
@@ -382,6 +395,12 @@ fn a_changed_original_request_or_principal_never_reselects_targets() {
             .join("system/backup-preparation/transaction.json"),
     )
     .unwrap();
+    let mut renamed = request.clone();
+    renamed.targets[0].name = name_policy::Name::parse("Changed after retention").unwrap();
+    assert_eq!(
+        engine.start_backup_transaction(renamed, Vec::new()).unwrap_err().code(),
+        ErrorCode::IdempotencyKeyReused
+    );
     let mut changed = request.clone();
     changed.targets[0].slot_id = "D99".into();
     assert_eq!(

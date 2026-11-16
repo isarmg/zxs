@@ -82,11 +82,13 @@ fn encoded(
     maximum: usize,
 ) -> (String, Value, BTreeMap<(String, String), Value>) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let disk = &config.disks[0];
     let (hash, prepared) = prepare(manifest, maximum).unwrap();
@@ -259,11 +261,13 @@ fn distributed_history_larger_than_real_reader_limit_roundtrips() {
     );
 
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let disk = &config.disks[0];
     let (root_hash, prepared) = prepare(&manifest, MAX_METADATA).unwrap();
@@ -698,7 +702,7 @@ fn content_state_manifest_graph_preserves_string_bytes_and_rejects_unknown_value
 #[test]
 fn markerless_and_previous_domain_history_roots_are_rejected_without_rewriting() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("disk")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("disk")])).unwrap();
     let disk = &config.disks[0];
     let (_, current, _) = encoded(&manifest(), MAX_METADATA);
     for mutation in ["missing_marker", "unknown_marker", "previous_index_domain"] {
@@ -895,11 +899,13 @@ fn history_root_borrowed_decode_matches_owned_admission_on_real_objects() {
         cases.push(value);
     }
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ]).unwrap();
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    )).unwrap();
     let disk = &config.disks[0];
     for value in cases {
         let prepared =

@@ -3,11 +3,13 @@ use std::fs;
 
 fn fixture(count: usize) -> (tempfile::TempDir, Config, State, PreparedSnapshot) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let state = State {
         sequence: 7,

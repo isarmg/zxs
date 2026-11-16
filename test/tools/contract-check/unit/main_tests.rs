@@ -1217,7 +1217,7 @@ fn configuration_fixture() -> (Value, Value) {
 #[test]
 fn resource_projection_keeps_current_fields_and_rejects_obsolete_limits() {
     let (schema, base) = configuration_fixture();
-    let draft = storage_contract::Config::development(std::iter::empty::<PathBuf>()).unwrap();
+    let draft = storage_contract::Config::development(std::iter::empty()).unwrap();
     assert_eq!(
         base["resource_limits"]["max_workspaces"],
         json!(draft.max_workspaces)

@@ -636,6 +636,31 @@ impl DiskRoot {
             .rename_noreplace_synced(from, to, RenameSyncOrder::SourceFirst)
     }
 
+    /// Move to an already-retained destination entity, never resolving its old
+    /// pathname again. Both leases span the rename and complete durability tail.
+    pub(crate) fn rename_to_held_synced(
+        &self,
+        from: &Path,
+        target: &DiskRoot,
+        to: &Path,
+    ) -> Result<()> {
+        Self::same_domain(self.io_binding()?, target.io_binding()?)?;
+        let source_operation = self.operation()?;
+        let target_operation = target.operation()?;
+        let (source, from_name) = source_operation.private_parent(from)?;
+        let (destination, to_name) = target_operation.private_parent(to)?;
+        source_operation.check_running()?;
+        target_operation.check_running()?;
+        rustix::fs::renameat_with(
+            &source, from_name.as_os_str(), &destination, to_name.as_os_str(),
+            rustix::fs::RenameFlags::NOREPLACE,
+        ).map_err(std::io::Error::from)?;
+        destination.sync_all()?;
+        source.sync_all()?;
+        target_operation.check_running()?;
+        source_operation.check_running()
+    }
+
     /// Synchronize the destination before the source-name removal. Publication
     /// and proof quarantine retain this order if cancellation follows rename.
     pub(crate) fn rename_noreplace_destination_first_synced(
@@ -1202,6 +1227,16 @@ impl RootControl<'_> {
 pub(crate) struct DiskHandle {
     pub(crate) root: DiskRoot,
     pub(crate) seal: DiskSeal,
+    // None exists only for explicit bootstrap resources. Content access never
+    // falls back to the top root when this observed child is absent.
+    layout: Option<RetainedLayoutRoots>,
+}
+struct RetainedLayoutRoots {
+    common: DiskRoot,
+    deleted: DiskRoot,
+    management: DiskRoot,
+    current_management: DiskRoot,
+    retained_management: DiskRoot,
 }
 
 impl DiskHandle {
@@ -1211,7 +1246,34 @@ impl DiskHandle {
         config: &ValidatedConfig,
     ) -> Result<Self> {
         root.bind_io(&seal, config)?;
-        Ok(Self { root, seal })
+        let layout = match config.storage_roots.get(
+            &seal.disk_id.parse::<storage_contract::DiskId>()?,
+        ) {
+            Some(binding) => {
+                let retain = |name, entity| root.private_entry_matching(
+                    name, crate::working_tree::records::file_identity(entity),
+                ).map_err(crate::engine::fresh_layout::directory_error);
+                let common = retain(&layout::COMMON_DATA_ROOT, binding.roots.common_data.entity)?;
+                let deleted = retain(
+                    &layout::DELETED_DATA_ROOT, binding.roots.deleted_data.entity,
+                )?;
+                let management = retain(&layout::ZXS_DATA_ROOT, binding.roots.zxs_data.entity)?;
+                let partitions = &binding.roots.zxs_lifecycles;
+                let current_management = management.private_entry_matching(
+                    &layout::COMMON_DATA_ROOT,
+                    crate::working_tree::records::file_identity(partitions.common_data.entity),
+                ).map_err(crate::engine::fresh_layout::directory_error)?;
+                let retained_management = management.private_entry_matching(
+                    &layout::DELETED_DATA_ROOT,
+                    crate::working_tree::records::file_identity(partitions.deleted_data.entity),
+                ).map_err(crate::engine::fresh_layout::directory_error)?;
+                Some(RetainedLayoutRoots {
+                    common, deleted, management, current_management, retained_management,
+                })
+            }
+            None => None,
+        };
+        Ok(Self { root, seal, layout })
     }
 
     pub(crate) fn open(config: &ValidatedConfig, disk: &DiskConfig, sealed: bool) -> Result<Self> {
@@ -1223,8 +1285,68 @@ impl DiskHandle {
                 MAX_METADATA,
             )?;
             validate_stored_seal(&decode_seal(&bytes)?, &seal)?;
+            crate::engine::fresh_layout::verify_root(config, disk, &root)?;
         }
         Self::new(root, seal, config)
+    }
+
+    /// Ordinary data stays on the same child descriptor captured while this
+    /// disk generation was admitted. A renamed child is never reopened as a
+    /// replacement write/read destination, even if its bytes happen to match.
+    pub(crate) fn content_root(&self) -> Result<&DiskRoot> {
+        let layout = self.layout.as_ref()
+            .ok_or(crate::engine::FreshLayoutError::Registration)?;
+        self.retained_child(&layout::COMMON_DATA_ROOT, &layout.common)
+    }
+
+    pub(crate) fn management_root(&self) -> Result<&DiskRoot> {
+        let layout = self.layout.as_ref()
+            .ok_or(crate::engine::FreshLayoutError::Registration)?;
+        self.retained_child(&layout::ZXS_DATA_ROOT, &layout.management)
+    }
+
+    /// Current-object management only. Retained-object operations need their
+    /// own lifecycle transaction; this method cannot issue a deleted-area root.
+    pub(crate) fn current_management_root(&self) -> Result<&DiskRoot> {
+        let roots = self.layout.as_ref()
+            .ok_or(crate::engine::FreshLayoutError::Registration)?;
+        let management = self.management_root()?;
+        for (name, child) in [
+            (&*layout::COMMON_DATA_ROOT, &roots.current_management),
+            (&*layout::DELETED_DATA_ROOT, &roots.retained_management),
+        ] {
+            management.private_entry_matching(name, child.directory_identity(child.path())?)
+                .map_err(crate::engine::fresh_layout::directory_error)?;
+        }
+        Ok(&roots.current_management)
+    }
+
+    fn retained_child<'a>(&self, name: &EntryName, child: &'a DiskRoot) -> Result<&'a DiskRoot> {
+        self.root.private_entry_matching(name, child.directory_identity(child.path())?)
+            .map_err(crate::engine::fresh_layout::directory_error)?;
+        Ok(child)
+    }
+
+    /// The path selects a domain within this already admitted resource. It
+    /// supplies no new root authority and cannot activate an unbound child.
+    pub(crate) fn root_for(&self, path: &Path) -> Result<&DiskRoot> {
+        let name = if path.starts_with(layout::histories(self.root.path())) {
+            return self.content_root();
+        } else if path.starts_with(self.root.path().join(layout::ZXS_DATA_ROOT.as_path())) {
+            &*layout::ZXS_DATA_ROOT
+        } else if path.starts_with(self.root.path().join(layout::DELETED_DATA_ROOT.as_path())) {
+            &*layout::DELETED_DATA_ROOT
+        } else {
+            return Ok(&self.root);
+        };
+        let layout = self.layout.as_ref()
+            .ok_or(crate::engine::FreshLayoutError::Registration)?;
+        let child = if name == &*layout::ZXS_DATA_ROOT {
+            &layout.management
+        } else {
+            &layout.deleted
+        };
+        self.retained_child(name, child)
     }
 
     pub(crate) fn open_payload(
@@ -1232,7 +1354,7 @@ impl DiskHandle {
         directory: &Path,
         version: &FileVersion,
     ) -> Result<(ReadFile, Vec<u8>, ChecksumManifest)> {
-        open_payload_at(&self.root, directory, version)
+        open_payload_at(self.content_root()?, directory, version)
     }
 
     pub(crate) fn verify_payload(
@@ -1248,6 +1370,62 @@ impl DiskHandle {
 /// One admission generation. Missing members stay absent until an explicit reopen.
 pub(crate) struct DiskResources {
     disks: BTreeMap<String, Arc<DiskHandle>>,
+}
+
+/// Unbound selected roots exist only across the initializer's directory/writer
+/// fences. They cannot be used as a runtime resource generation.
+pub(crate) struct InitializationDisks {
+    resources: DiskResources,
+}
+impl InitializationDisks {
+    pub(crate) fn open(config: &ValidatedConfig) -> Result<Self> {
+        let directories = config.disks.iter().map(|disk| {
+            Ok(OpenAt2Root::from_private_directory(
+                existing_private_dir(&disk.root)?, MountPolicy::SameMount,
+            ).map_err(fs_error)?.into_directory())
+        }).collect::<Result<Vec<_>>>()?;
+        Self::held(config, directories)
+    }
+
+    pub(crate) fn held(config: &ValidatedConfig, directories: Vec<File>) -> Result<Self> {
+        if directories.len() != config.disks.len() || !config.storage_roots.is_empty() {
+            return Err(crate::engine::FreshLayoutError::InitializationInput.into());
+        }
+        let mut disks = BTreeMap::new();
+        let mut identities = BTreeSet::new();
+        for (disk, directory) in config.disks.iter().zip(directories) {
+            let root = DiskRoot::from_directory(disk.root.clone(), directory)?;
+            let identity = root.directory_identity(root.path())?;
+            if !identities.insert((identity.device, identity.inode)) {
+                return Err(crate::engine::FreshLayoutError::RootIdentity.into());
+            }
+            let seal = identity_at(config, disk, &root.directory(root.path())?)?;
+            disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle { root, seal, layout: None }));
+        }
+        Ok(Self { resources: DiskResources { disks } })
+    }
+
+    pub(crate) fn resources(&self) -> &DiskResources {
+        &self.resources
+    }
+
+    pub(crate) fn bind(self, config: &ValidatedConfig) -> Result<DiskResources> {
+        let mut disks = BTreeMap::new();
+        for disk in &config.disks {
+            let previous = self.resources.get(disk)?;
+            crate::engine::fresh_layout::verify_root(config, disk, &previous.root)?;
+            // Share the exact original descriptor. Installing its first binding
+            // also binds every earlier unbound alias; none can escape the gate.
+            let root = DiskRoot {
+                path: previous.root.path.clone(),
+                directory: Arc::clone(&previous.root.directory),
+                io: None,
+            };
+            let seal = identity_at(config, disk, &root.directory(root.path())?)?;
+            disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle::new(root, seal, config)?));
+        }
+        Ok(DiskResources { disks })
+    }
 }
 
 impl DiskResources {

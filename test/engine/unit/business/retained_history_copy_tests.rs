@@ -44,9 +44,9 @@ fn path_fact_prefix_survives_graph_copy_recopy_and_cold_open_without_source_reta
     for current in [false, true] {
         let temporary = tempfile::tempdir().unwrap();
         let system = temporary.path().join("system");
-        let mut config = Config::development(
+        let mut config = Config::development(crate::test_disks(
             (0..6).map(|index| temporary.path().join(format!("disk-{index}"))),
-        ).unwrap();
+        )).unwrap();
         for disk in config.disks.iter_mut().skip(3) {
             disk.level = 1;
             disk.upstream_slot_id = None;

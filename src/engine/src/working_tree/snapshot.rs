@@ -9,6 +9,7 @@ mod store;
 pub(crate) use manifest::{
     AdmittedSnapshotManifest, SnapshotEntry, SnapshotEntryContent, SnapshotFile,
     SnapshotFileSource, SnapshotManifestError, SnapshotPayload, SnapshotReference,
+    MAX_ENTRIES,
 };
 pub(crate) use store::{
     HeldSnapshotNode, SnapshotNodeBinding, SnapshotPreparationError, SnapshotStoreError,

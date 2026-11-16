@@ -275,11 +275,13 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
         for bytes in [b"".as_slice(), b"preserve old bytes".as_slice()] {
             let temporary = tempfile::tempdir().unwrap();
             let config = ValidatedConfig::try_from(
-                Config::development([
-                    temporary.path().join("p"),
-                    temporary.path().join("b"),
-                    temporary.path().join("c"),
-                ])
+                Config::development(crate::test_disks(
+                    [
+                        temporary.path().join("p"),
+                        temporary.path().join("b"),
+                        temporary.path().join("c"),
+                    ],
+                ))
                 .unwrap(),
             )
             .unwrap();
@@ -335,11 +337,13 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
 fn inherited_references_update_cache_without_creating_files_and_follow_rename() {
     let temporary = tempfile::tempdir().unwrap();
     let config = ValidatedConfig::try_from(
-        Config::development([
-            temporary.path().join("p"),
-            temporary.path().join("b"),
-            temporary.path().join("c"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temporary.path().join("p"),
+                temporary.path().join("b"),
+                temporary.path().join("c"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();
@@ -411,11 +415,13 @@ fn inherited_references_update_cache_without_creating_files_and_follow_rename() 
 fn physical_move_preserves_one_body_and_old_version_identity_across_replay() {
     let temporary = tempfile::tempdir().unwrap();
     let config = ValidatedConfig::try_from(
-        Config::development([
-            temporary.path().join("p"),
-            temporary.path().join("b"),
-            temporary.path().join("c"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temporary.path().join("p"),
+                temporary.path().join("b"),
+                temporary.path().join("c"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();
@@ -476,11 +482,13 @@ mod cross_directory_recovery;
 fn canonical_location_handles_reserved_looking_user_names_and_prefix_moves() {
     let temporary = tempfile::tempdir().unwrap();
     let config = ValidatedConfig::try_from(
-        Config::development([
-            temporary.path().join("p"),
-            temporary.path().join("b"),
-            temporary.path().join("c"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temporary.path().join("p"),
+                temporary.path().join("b"),
+                temporary.path().join("c"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();
@@ -521,11 +529,13 @@ fn canonical_location_handles_reserved_looking_user_names_and_prefix_moves() {
 fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     let temporary = tempfile::tempdir().unwrap();
     let config = ValidatedConfig::try_from(
-        Config::development([
-            temporary.path().join("p"),
-            temporary.path().join("b"),
-            temporary.path().join("c"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temporary.path().join("p"),
+                temporary.path().join("b"),
+                temporary.path().join("c"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();
@@ -689,11 +699,13 @@ fn installation_moves_one_ordinary_inode_and_missing_paths_remain_classifiable()
 fn rename_and_note_projection_replays_without_changing_body_identity() {
     let temporary = tempfile::tempdir().unwrap();
     let config = ValidatedConfig::try_from(
-        Config::development([
-            temporary.path().join("primary"),
-            temporary.path().join("backup"),
-            temporary.path().join("tertiary"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temporary.path().join("primary"),
+                temporary.path().join("backup"),
+                temporary.path().join("tertiary"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();
@@ -787,11 +799,13 @@ fn rename_and_note_projection_replays_without_changing_body_identity() {
 fn empty_name_projection_has_no_staging_file() {
     let temporary = tempfile::tempdir().unwrap();
     let config = ValidatedConfig::try_from(
-        Config::development([
-            temporary.path().join("p"),
-            temporary.path().join("b"),
-            temporary.path().join("c"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temporary.path().join("p"),
+                temporary.path().join("b"),
+                temporary.path().join("c"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();
@@ -817,6 +831,7 @@ fn empty_name_projection_has_no_staging_file() {
                     )
                 },
                 shared_layout::PreparedLayouts::default(),
+                None, // No FILE/version target exists in this empty-projection test.
             )
             .unwrap();
             assert!(
@@ -835,7 +850,7 @@ fn capture_fixture() -> (State, String, String) {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("system"),
-        Config::development([temporary.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temporary.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -1016,7 +1031,9 @@ fn resumed_installation_verifies_external_prepared_body() {
 fn verified_existing_fixture() -> (tempfile::TempDir, DiskConfig, FileVersion, PathBuf) {
     let temporary = tempfile::tempdir().unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([temporary.path().join("disk")]).unwrap())
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [temporary.path().join("disk")],
+        )).unwrap())
             .unwrap();
     let disk = config.disks[0].clone();
     let history = disk.root.join("histories").join(new_id("history").unwrap());
@@ -1289,7 +1306,9 @@ fn rooted_installation_moves_the_verified_inode_without_touching_replacement_roo
 fn prepared_names_apply_to_the_resource_captured_before_root_replacement() {
     let temporary = tempfile::tempdir().unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([temporary.path().join("disk")]).unwrap())
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [temporary.path().join("disk")],
+        )).unwrap())
             .unwrap();
     drop(Engine::initialize_validated(&temporary.path().join("system"), config.clone()).unwrap());
     let resources = Arc::new(DiskResources::open(&config, true).unwrap());

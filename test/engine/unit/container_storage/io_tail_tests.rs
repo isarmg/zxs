@@ -15,7 +15,9 @@ fn fixture(bytes: &[u8]) -> (tempfile::TempDir, Arc<DiskHandle>, FileVersion, Pa
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("disk");
     private_dir(&path).unwrap();
-    let config = ValidatedConfig::try_from(Config::development([path]).unwrap()).unwrap();
+    let config = ValidatedConfig::try_from(Config::development(crate::test_disks(
+        [path],
+    )).unwrap()).unwrap();
     let handle = Arc::new(DiskHandle::open(&config, &config.disks[0], false).unwrap());
     let item = version(
         &State::default(),

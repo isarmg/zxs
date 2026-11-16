@@ -22,6 +22,13 @@ pub(crate) enum EditLeafError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct EditLeaf(EntryName);
 impl EditLeaf {
+    pub(crate) fn for_version(
+        version: storage_contract::VersionId,
+        path: &name_policy::PortablePath,
+    ) -> Self {
+        Self(crate::persist::layout::worktree::edited_file(version, path))
+    }
+
     pub(crate) fn parse(spelling: &str) -> Result<Self, EditLeafError> {
         let (prefix, name) = spelling.split_once('-').ok_or(EditLeafError::Shape)?;
         prefix.parse::<VersionStorageId>().map_err(EditLeafError::Prefix)?;

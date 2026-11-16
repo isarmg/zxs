@@ -53,9 +53,12 @@ fn fixture() -> (tempfile::TempDir, Engine, BackupTransactionRequest) {
         .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
         .tempdir()
         .unwrap();
-    let config =
-        Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}"))))
-            .unwrap();
+    let config = Config::development(
+        ["Primary", "Near archive", "Old far archive"].into_iter().enumerate().map(|(index, name)| {
+            (name_policy::Name::parse(name).unwrap(), temp.path().join(format!("disk-{index}")))
+        }),
+    )
+    .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     engine
         .create_disk_root("P01", "admin", operation())
@@ -100,6 +103,7 @@ fn fixture() -> (tempfile::TempDir, Engine, BackupTransactionRequest) {
             .iter()
             .enumerate()
             .map(|(index, _)| BackupTopologyTarget {
+                name: name_policy::Name::parse(&format!("New archive {}", index + 1)).unwrap(),
                 disk_id: crate::new_id("disk").unwrap(),
                 slot_id: format!("C{:02}", index + 2),
                 upstream_slot_id: "B01".into(),

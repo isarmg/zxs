@@ -492,7 +492,7 @@ impl ValidatedConfig {
 
     pub(crate) fn verify_root_membership(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<()> {
         let saved: ValidatedConfig = root.read_json_observed(
-            &disk.root.join("metadata/pool-membership/config.json"),
+            &disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
             &mut |_| Ok(()),
         )?;
         match self.generation() {

@@ -21,7 +21,9 @@ impl Fixture {
             .tempdir()
             .unwrap();
         let config =
-            Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}"))))
+            Config::development(crate::test_disks(
+                (0..3).map(|index| temp.path().join(format!("disk-{index}"))),
+            ))
                 .unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
         engine.create_disk_root("P01", "admin", operation()).unwrap();

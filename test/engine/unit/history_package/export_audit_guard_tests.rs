@@ -131,9 +131,9 @@ fn native_rename_audit_and_audit_free_packages_both_roundtrip() {
 fn retained_copy_path_audit_is_not_mistaken_for_an_audit_free_history() {
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let mut config = Config::development(
+    let mut config = Config::development(crate::test_disks(
         (0..6).map(|index| temporary.path().join(format!("disk-{index}"))),
-    ).unwrap();
+    )).unwrap();
     for disk in config.disks.iter_mut().skip(3) {
         disk.level = 1;
         disk.upstream_slot_id = None;
@@ -183,9 +183,9 @@ fn retained_copy_path_audit_is_not_mistaken_for_an_audit_free_history() {
 fn copied_subset_of_directory_rename_batch_refuses_without_output_or_source_writes() {
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let mut config = Config::development(
+    let mut config = Config::development(crate::test_disks(
         (0..4).map(|index| temporary.path().join(format!("disk-{index}"))),
-    ).unwrap();
+    )).unwrap();
     config.disks[3].level = 1;
     config.disks[3].upstream_slot_id = None;
     config.disks[3].metadata_member = false;
@@ -226,9 +226,9 @@ fn repeated_mixed_source_object_move_refuses_without_state_or_disk_writes() {
 
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let mut config = Config::development(
+    let mut config = Config::development(crate::test_disks(
         (0..5).map(|index| temporary.path().join(format!("disk-{index}"))),
-    ).unwrap();
+    )).unwrap();
     for disk in config.disks.iter_mut().skip(3) {
         disk.level = 1;
         disk.upstream_slot_id = None;

@@ -51,7 +51,9 @@ fn fixture() -> (tempfile::TempDir, Vec<Arc<DiskHandle>>, WriterLocks) {
         fs::create_dir(path).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let config = ValidatedConfig::try_from(Config::development(paths).unwrap()).unwrap();
+    let config = ValidatedConfig::try_from(Config::development(crate::test_disks(
+        paths,
+    )).unwrap()).unwrap();
     let mut locks = WriterLocks::new(
         locked(&temp.path().join("writer.lock")),
         crate::authority_selection::SelectionGuard::legacy(temp.path()).unwrap(),
@@ -73,7 +75,9 @@ fn directory_reserved_writer() -> (tempfile::TempDir, DiskHandle, DiskWriter) {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([temp.path().to_owned()]).unwrap()).unwrap();
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [temp.path().to_owned()],
+        )).unwrap()).unwrap();
     let handle = DiskHandle::open(&config, &config.disks[0], false).unwrap();
     let directory = Arc::new(
         platform_io::fs_safety::linux::AdvisoryLock::directory(

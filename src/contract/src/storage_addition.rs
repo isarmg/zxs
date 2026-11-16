@@ -6,6 +6,7 @@ use data_serialization::{Deserialize, Serialize};
 #[serialization(deny_unknown_fields)]
 pub struct DirectoryAddition {
     pub selection: CandidateSelection,
+    pub name: name_policy::Name,
     pub slot_id: String,
     pub level: u32,
     pub upstream_slot_id: Option<String>,

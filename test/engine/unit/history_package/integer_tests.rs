@@ -8,7 +8,9 @@ fn manifest_storage_identity_admission_rejects_invalid_wire_without_rewriting_by
     let root = temp.path();
     let mut engine = Engine::initialize(
         &root.join("state"),
-        Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap(),
+        Config::development(crate::test_disks(
+            [root.join("p"), root.join("b"), root.join("c")],
+        )).unwrap(),
     )
     .unwrap();
     let repo = engine

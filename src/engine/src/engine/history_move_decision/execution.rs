@@ -295,6 +295,14 @@ impl Engine {
         self.require_native_move_authority()?;
         let cancellation = HistoryWindowCancellation::default();
         let retained = self.original_move_path_intent(request, replacement, principal, operation)?;
+        crate::engine::fresh_layout::require_whole_container_lifecycle().map_err(|error| {
+            if retained.is_some() {
+                error.context(ErrorCode::RecoveryRequired,
+                    "original move remains retained; physical lifecycle completion is unavailable")
+            } else {
+                error
+            }
+        })?;
         let retained_identity = retained.is_some();
         let projection = if let Some(original) = retained {
             self.resume_file_history_move_recovery(

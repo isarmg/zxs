@@ -13,6 +13,16 @@ pub use published::{
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
     #[error(transparent)]
+    FreshLayout(#[from] crate::engine::FreshLayoutError),
+    #[error(transparent)]
+    AutomaticBackup(crate::AutomaticBackupError),
+    #[error(transparent)]
+    ConfiguredDiskName(crate::ConfiguredDiskNameError),
+    #[error(transparent)]
+    SnapshotSource(Box<crate::snapshot_worktree::SnapshotSourceError>),
+    #[error(transparent)]
+    FileDraft(crate::DraftError),
+    #[error(transparent)]
     FileMetadata(FileMetadataError),
     #[error(transparent)]
     ContainerTags(ContainerTagsError),
@@ -115,6 +125,11 @@ impl Error {
                 source,
             },
             source @ (Self::HistoricalBranch(_)
+            | Self::FreshLayout(_)
+            | Self::AutomaticBackup(_)
+            | Self::ConfiguredDiskName(_)
+            | Self::SnapshotSource(_)
+            | Self::FileDraft(_)
             | Self::FileMetadata(_)
             | Self::ContainerTags(_)
             | Self::PathChange(_)
@@ -151,6 +166,11 @@ impl Error {
             Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
             Self::HistoricalBranch(_)
+            | Self::FreshLayout(_)
+            | Self::AutomaticBackup(_)
+            | Self::ConfiguredDiskName(_)
+            | Self::SnapshotSource(_)
+            | Self::FileDraft(_)
             | Self::FileMetadata(_)
             | Self::ContainerTags(_)
             | Self::PathChange(_)
@@ -182,6 +202,11 @@ impl Error {
         match self {
             Self::HistoricalBranch(error) => error.code(),
             Self::ContainerTags(error) => error.code(),
+            Self::FreshLayout(error) => error.code(),
+            Self::AutomaticBackup(error) => error.code(),
+            Self::ConfiguredDiskName(error) => error.code(),
+            Self::SnapshotSource(error) => error.code(),
+            Self::FileDraft(error) => error.code(),
             Self::FileMetadata(error) => error.code(),
             Self::PathChange(error) => error.code(),
             Self::VersionNames(error) => error.code(),
@@ -239,6 +264,11 @@ impl Error {
         match self {
             Self::HistoricalBranch(error) => error.to_string().into(),
             Self::ContainerTags(error) => error.to_string().into(),
+            Self::FreshLayout(error) => error.to_string().into(),
+            Self::AutomaticBackup(error) => error.to_string().into(),
+            Self::ConfiguredDiskName(error) => error.to_string().into(),
+            Self::SnapshotSource(error) => error.to_string().into(),
+            Self::FileDraft(error) => error.to_string().into(),
             Self::FileMetadata(error) => error.to_string().into(),
             Self::PathChange(error) => error.to_string().into(),
             Self::VersionNames(error) => error.to_string().into(),
@@ -298,6 +328,11 @@ impl Error {
             Self::Context { source, .. } => source.published_result(),
             Self::Cleanup { operation, .. } => operation.published_result(),
             Self::HistoricalBranch(_)
+            | Self::FreshLayout(_)
+            | Self::AutomaticBackup(_)
+            | Self::ConfiguredDiskName(_)
+            | Self::SnapshotSource(_)
+            | Self::FileDraft(_)
             | Self::FileMetadata(_)
             | Self::ContainerTags(_)
             | Self::PathChange(_)

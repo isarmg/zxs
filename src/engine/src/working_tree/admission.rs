@@ -107,11 +107,13 @@ fn root_structure(binding: &RootBinding) -> Result<(), AdmissionError> {
         &binding.roots.common_data,
         &binding.roots.deleted_data,
         &binding.roots.zxs_data,
+        &binding.roots.zxs_lifecycles.common_data,
+        &binding.roots.zxs_lifecycles.deleted_data,
     ] {
         if !ids.insert(local.directory_id) {
             return Err(AdmissionError::DuplicateIdentity);
         }
-        if local.entity.device() != binding.root_entity.device()
+        if local.entity.inode() == 0 || local.entity.device() != binding.root_entity.device()
             || !entities.insert(local.entity)
         {
             return Err(AdmissionError::PhysicalIdentity);
@@ -174,6 +176,8 @@ pub(crate) fn validate_catalog_structure(
             root.roots.common_data.entity,
             root.roots.deleted_data.entity,
             root.roots.zxs_data.entity,
+            root.roots.zxs_lifecycles.common_data.entity,
+            root.roots.zxs_lifecycles.deleted_data.entity,
         ] {
             if !entities.insert(entity) {
                 return Err(AdmissionError::PhysicalIdentity);
@@ -183,6 +187,8 @@ pub(crate) fn validate_catalog_structure(
             root.roots.common_data.directory_id,
             root.roots.deleted_data.directory_id,
             root.roots.zxs_data.directory_id,
+            root.roots.zxs_lifecycles.common_data.directory_id,
+            root.roots.zxs_lifecycles.deleted_data.directory_id,
         ] {
             if !directory_ids.insert(id) || view.directories.contains_key(&id) {
                 return Err(AdmissionError::DuplicateIdentity);
@@ -544,6 +550,8 @@ fn historical_host_root(
     for root in &view.catalog.roots {
         if host == root.roots.deleted_data.directory_id
             || host == root.roots.zxs_data.directory_id
+            || host == root.roots.zxs_lifecycles.common_data.directory_id
+            || host == root.roots.zxs_lifecycles.deleted_data.directory_id
             || (host == root.roots.common_data.directory_id && root.root_id != root_id)
         {
             return Err(AdmissionError::Parent);

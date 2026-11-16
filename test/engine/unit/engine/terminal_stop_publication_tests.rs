@@ -17,7 +17,9 @@ impl Fixture {
             .tempdir()
             .unwrap();
         let mut config =
-            crate::Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}"))))
+            crate::Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+            ))
                 .unwrap();
         for disk in config.disks.iter_mut().skip(1) {
             disk.metadata_member = false;

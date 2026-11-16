@@ -7,14 +7,35 @@ mod worker;
 use crate::offline::Result;
 use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
-use storage_engine::storage_directories::CandidateSelection;
+use storage_engine::storage_directories::NamedStorageSelection;
 use storage_server::auth::CredentialRevision;
 const MAX_RECORD_BYTES: usize = 64 * 1024;
-#[derive(Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct RequestedDisk {
+    pub name: name_policy::Name,
+    pub root_path: String,
+}
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Input {
     pub service_user: String,
-    pub roots: Vec<String>,
+    pub disks: Vec<RequestedDisk>,
+}
+impl Input {
+    fn roots(&self) -> Vec<String> {
+        self.disks.iter().map(|disk| disk.root_path.clone()).collect()
+    }
+}
+fn verify_configuration(disks: &[RequestedDisk]) -> Result<()> {
+    let config = storage_engine::Config::independent_roots(
+        storage_engine::Mode::Production,
+        disks
+            .iter()
+            .map(|disk| (disk.name.clone(), disk.root_path.clone().into())),
+    )?;
+    let _validated = storage_engine::ValidatedConfig::try_from(config)?;
+    Ok(())
 }
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -41,13 +62,22 @@ pub(crate) struct Plan {
     format: Format,
     context: layout::Context,
     credential: CredentialRevision,
-    selections: Vec<CandidateSelection>,
+    selections: Vec<NamedStorageSelection>,
 }
 impl Plan {
     fn roots(&self) -> Vec<String> {
         self.selections
             .iter()
-            .map(|item| item.root_path.clone())
+            .map(|item| item.selection.root_path.clone())
+            .collect()
+    }
+    fn requested_disks(&self) -> Vec<RequestedDisk> {
+        self.selections
+            .iter()
+            .map(|item| RequestedDisk {
+                name: item.name.clone(),
+                root_path: item.selection.root_path.clone(),
+            })
             .collect()
     }
     fn activation(&self) -> storage_server::setup_recovery::StorageActivationRequest {
@@ -71,7 +101,7 @@ type WorkerRequest = crate::offline::service_worker::Envelope<Action>;
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
-    Preview { roots: Vec<String> },
+    Preview { disks: Vec<RequestedDisk> },
     InspectOriginal { plan: Plan },
     Execute { plan: Plan },
 }
@@ -129,11 +159,11 @@ fn preview_response(plan: Plan, request_digest: String, recovery: bool) -> Previ
 }
 pub(crate) fn preview(input: Input) -> Result<Preview> {
     let root = Root::open(input.service_user.clone())?;
-    root.layout.inventory(&input.roots)?;
+    root.layout.inventory(&input.roots())?;
     let context = root.into_context(); // Worker acquires its own lease and revalidates the exact context.
     let WorkerOutput::Preview { plan } = crate::offline::service_worker::run(WorkerRequest {
         context,
-        action: Action::Preview { roots: input.roots },
+        action: Action::Preview { disks: input.disks },
     })?
     else {
         return Err("unexpected first-storage preview worker result".into());

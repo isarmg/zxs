@@ -12,7 +12,9 @@ fn namespace_timestamp_admission_preserves_causes_order_and_bytes() {
     let root = temp.path();
     let mut engine = Engine::initialize(
         &root.join("state"),
-        Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap(),
+        Config::development(crate::test_disks(
+            [root.join("p"), root.join("b"), root.join("c")],
+        )).unwrap(),
     )
     .unwrap();
     let repo = engine

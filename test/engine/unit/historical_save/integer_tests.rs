@@ -7,7 +7,7 @@ fn oversized_historical_copy_count_retains_source_and_leaves_plan_unpublished() 
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("primary")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("primary")])).unwrap(),
     )
     .unwrap();
     let repository = engine

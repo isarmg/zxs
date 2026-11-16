@@ -5,7 +5,7 @@ fn unique_object_budget_is_an_explicit_incomplete_scan_not_an_empty_success() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let cancellation = IntegrityScrubCancellation::new();
@@ -39,7 +39,7 @@ fn one_page_is_read_once_even_if_multiple_closures_share_it() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let cancellation = IntegrityScrubCancellation::new();
@@ -72,7 +72,7 @@ fn page_role_classification_never_reloads_a_catalog_leaf() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let cancellation = IntegrityScrubCancellation::new();

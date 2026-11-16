@@ -10,11 +10,13 @@ fn fixture() -> (tempfile::TempDir, Engine) {
 }
 fn fixture_with_members(metadata_members: [bool; 3], copies: u32) -> (tempfile::TempDir, Engine) {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
         disk.metadata_member = member;

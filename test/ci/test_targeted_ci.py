@@ -2595,7 +2595,15 @@ class ContainerTagsSelection(unittest.TestCase):
         ]
         for path in paths:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                if path == 'src/engine/src/container_storage.rs':
+                    plan = assert_path_group_extension(
+                        self, self.policy, [path],
+                        ['container-tags-storage', 'engine-date-errors',
+                         'engine-integer-errors', 'file-material-copy-reuse'],
+                        ['fresh-managed-core'],
+                    )
+                else:
+                    plan = CI.select_plan(self.policy, [path])
                 self.assertIn('file-material-copy-reuse', plan['groups'])
                 self.assertCountEqual(
                     origin_selections(plan, 'file-material-copy-reuse'),

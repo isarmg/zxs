@@ -41,11 +41,13 @@ fn fixture_with_payload_and_members(
     metadata_members: [bool; 3],
 ) -> (tempfile::TempDir, Engine, Candidate) {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("t"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("t"),
+        ],
+    ))
     .unwrap();
     for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
         disk.metadata_member = member;
@@ -390,7 +392,7 @@ fn preparation_pins_disk_identity_before_payload_work() {
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
-    match preparation.verify(&engine.config) {
+    match preparation.verify_published(&engine.config, Arc::clone(&engine.state)) {
         Err(error) => assert_eq!(error.code(), storage_contract::ErrorCode::PreparationStale),
         Ok(_) => panic!("replaced disk seal was accepted"),
     }
@@ -414,15 +416,19 @@ fn reference_prepare(engine: &Engine, candidate: &Candidate) -> Result<VerifiedP
     let reservation = payload_proof_budget().reserve(replicas * 4);
     let full_revalidation = reservation.is_none();
     let mut entries = Vec::new();
+    let sources = PayloadSources::Published(Arc::clone(&engine.state));
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
-            let entry = verify_replica(config, &engine.disk_resources, &evidence.version, slot)?;
+            let entry = verify_replica(
+                config, &engine.disk_resources, &evidence.version, slot, &sources,
+            )?;
             if !full_revalidation {
                 entries.push(entry);
             }
         }
     }
     let proof = VerifiedPayloadSet {
+        sources,
         metadata_integrity: preparation.metadata_integrity,
         entries,
         _reservation: reservation,
@@ -547,7 +553,7 @@ fn large_preparation_rechecks_disk_identity_after_last_replica() {
         }));
     });
     let error = preparation
-        .verify(&engine.config)
+        .verify_published(&engine.config, Arc::clone(&engine.state))
         .err()
         .unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::PreparationStale);
@@ -570,7 +576,9 @@ fn large_preparation_rejects_disk_change_before_hashing() {
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
-    let (result, cost) = verification_cost(|| preparation.verify(&engine.config));
+    let (result, cost) = verification_cost(|| {
+        preparation.verify_published(&engine.config, Arc::clone(&engine.state))
+    });
     assert_eq!(
         result.err().unwrap().code(),
         storage_contract::ErrorCode::PreparationStale
@@ -694,7 +702,7 @@ fn existing_install_token_does_not_replace_decision_byte_verification() {
             Arc::clone(&engine.metadata_integrity)
         )
         .unwrap()
-        .verify(&engine.config)
+        .verify_published(&engine.config, Arc::clone(&engine.state))
         .err()
         .unwrap()
         .code(),
@@ -1072,7 +1080,7 @@ fn existing_copy_reservations_follow_installation_success_and_error() {
         assert_eq!(budget.held(), 1);
         let result = engine
             .planning_context()
-            .prepare_payload_with_existing(p, Some(copies));
+            .prepare_payload_with_existing(p, Some(copies), None);
         if replace_body {
             assert_eq!(result.unwrap_err().code(), ErrorCode::PreparationStale);
         } else {
@@ -1161,7 +1169,7 @@ fn incomplete_private_admission_is_not_an_uncached_request() {
     let prepared = existing_prepared(&engine, &candidate);
     engine
         .planning_context()
-        .prepare_payload_with_existing(&prepared[0], Some(Vec::new()))
+        .prepare_payload_with_existing(&prepared[0], Some(Vec::new()), None)
         .unwrap();
 }
 
@@ -1171,10 +1179,20 @@ fn incomplete_private_version_admission_cannot_be_truncated_by_zip() {
     let _budget = test_budget(LEGACY_DESCRIPTOR_BUDGET);
     let (_temp, engine, candidate) = fixture();
     let prepared = existing_prepared(&engine, &candidate);
-    engine
-        .planning_context()
-        .prepare_payloads(&prepared, Vec::new())
+    let context = engine.planning_context();
+    // Observe the exact already-published containers, with no new entity or name.
+    // The malformed private admission must panic before it consumes this scope.
+    let plan = crate::engine::fresh_layout::containers::ContainerPreparation::new(
+        &context,
+        engine.state().clone(),
+        &prepared,
+        &engine.state().operations[&candidate.operation_id],
+    )
+    .unwrap();
+    assert!(plan.additions().is_empty());
+    let containers = crate::container_storage::PreparedContainerEntities::prepare(&context, &plan)
         .unwrap();
+    context.prepare_payloads(&prepared, Vec::new(), &containers).unwrap();
 }
 
 #[path = "guarded_proof_tests.rs"]

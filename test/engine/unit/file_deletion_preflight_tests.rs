@@ -491,7 +491,7 @@ fn real_engine_preflight_preserves_prepared_other_file_write_and_reopens() {
     let root = temp.path().join("system");
     let mut engine = Engine::initialize(
         &root,
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -760,7 +760,7 @@ fn real_engine_preflight_keeps_all_node_kinds_and_merged_alias_heads_distinct_fr
     let root = temp.path().join("system");
     let mut engine = Engine::initialize(
         &root,
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repository = engine

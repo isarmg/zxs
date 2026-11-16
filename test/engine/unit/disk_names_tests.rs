@@ -215,7 +215,9 @@ fn complete_preview_rejects_registration_or_ancestry_budget_exhaustion() {
 fn engine_fixture() -> (tempfile::TempDir, Engine) {
     let temporary = tempfile::tempdir().unwrap();
     let config =
-        crate::Config::development(["A", "B", "C"].map(|name| temporary.path().join(name)))
+        crate::Config::development(crate::test_disks(
+            ["A", "B", "C"].map(|name| temporary.path().join(name)),
+        ))
             .unwrap();
     let engine = Engine::initialize(&temporary.path().join("system"), config).unwrap();
     (temporary, engine)

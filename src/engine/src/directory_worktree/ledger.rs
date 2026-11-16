@@ -13,6 +13,7 @@ mod storage;
 
 pub(crate) use leaf::EditLeaf;
 pub(crate) use record::{Checkpoint, EditRecord, Event};
+pub(crate) use state::revision_commitment;
 pub(crate) use storage::{
     Binding, HeldWorktreeLedger, LedgerPreparationError, PendingPublication, RecoveredLedger,
 };

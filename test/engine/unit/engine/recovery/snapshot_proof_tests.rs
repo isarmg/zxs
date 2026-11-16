@@ -7,10 +7,12 @@ fn retained_snapshot_mismatch_rejects_before_repair_or_visible_state_change() {
         let root = temporary.path().join("system");
         let mut engine = Engine::initialize(
             &root,
-            Config::development([
-                temporary.path().join("member-a"),
-                temporary.path().join("member-b"),
-            ])
+            Config::development(crate::test_disks(
+                [
+                    temporary.path().join("member-a"),
+                    temporary.path().join("member-b"),
+                ],
+            ))
             .unwrap(),
         )
         .unwrap();

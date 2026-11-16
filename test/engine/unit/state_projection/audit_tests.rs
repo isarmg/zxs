@@ -8,11 +8,13 @@ fn fixture() -> (State, State, String, OperationId) {
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("state"),
-        Config::development([
-            root.path().join("p"),
-            root.path().join("b"),
-            root.path().join("c"),
-        ]).unwrap(),
+        Config::development(crate::test_disks(
+            [
+                root.path().join("p"),
+                root.path().join("b"),
+                root.path().join("c"),
+            ],
+        )).unwrap(),
     ).unwrap();
     let repo = engine.create_disk_root("P01", "alice", OperationId::generate().unwrap()).unwrap();
     let workspace = engine.create_workspace(&repo.main_branch_id, "alice").unwrap();

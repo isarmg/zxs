@@ -56,6 +56,8 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid configured disk name: {0}")]
+    DiskNameInput(#[source] name_policy::Error),
     #[error("invalid foreign plan input: {0}")]
     ForeignPlanInput(#[source] name_policy::Error),
     #[error("invalid authentication response: {0}")]

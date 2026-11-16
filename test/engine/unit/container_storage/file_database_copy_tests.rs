@@ -18,9 +18,9 @@ impl Fixture {
     fn with_copies(copies: u32, primary_metadata: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut config = Config::development([
-            temp.path().join("primary"),
-            temp.path().join("backup"),
-            temp.path().join("third"),
+            (name_policy::Name::parse("Primary").unwrap(), temp.path().join("primary")),
+            (name_policy::Name::parse("Near archive").unwrap(), temp.path().join("backup")),
+            (name_policy::Name::parse("Far archive").unwrap(), temp.path().join("third")),
         ])
         .unwrap();
         config.disks[0].metadata_member = primary_metadata;

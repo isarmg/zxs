@@ -47,7 +47,7 @@ fn proof_digest_does_not_hash_the_omitted_optional_field_projection() {
 fn fixture() -> (tempfile::TempDir, Engine, FileVersion, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let config = Config::development([temp.path().join("disk")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("disk")])).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(

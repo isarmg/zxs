@@ -173,7 +173,7 @@ pub(super) fn require_selector(
         }
     }
     let saved: ValidatedConfig = decode_strict(&root.read_bytes(
-        &root.path().join("metadata/pool-membership/config.json"),
+        &root.path().join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
         MAX_METADATA,
     )?)?;
     original.verify_saved_metadata_membership(&saved)?;
