@@ -185,7 +185,7 @@ fn with_original(
     match choices.recover_decision_if_present(&prepared, &stop)? {
         Some(_) => {}
         None => {
-            registration::require_capacity_before_choice(&prepared, &stop)?;
+            registration::serving::require_capacity_before_choice(&prepared, &stop)?;
             sources.require_capacity_before_choice(&system)?;
             choices.decide(&prepared, &stop)?;
         }
