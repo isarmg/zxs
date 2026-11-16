@@ -389,6 +389,19 @@ impl PortableAuthority {
         }
     }
 
+    pub(super) fn is_initial_addition_chain(&self) -> bool {
+        let initial_add = |node: &AuthorityCore| match node {
+            AuthorityCore::Add(node) => node.registry.is_none(),
+            AuthorityCore::Foreign(_)
+            | AuthorityCore::Abort(_)
+            | AuthorityCore::Exit(_)
+            | AuthorityCore::TerminalResume(_)
+            | AuthorityCore::Readmission(_)
+            | AuthorityCore::Backup(_) => false,
+        };
+        initial_add(&self.data.head) && self.data.predecessors.values().all(initial_add)
+    }
+
     pub(in crate::engine) fn is_foreign(&self) -> bool {
         matches!(self.data.head, AuthorityCore::Foreign(_))
     }

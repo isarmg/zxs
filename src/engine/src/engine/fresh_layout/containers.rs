@@ -114,9 +114,10 @@ impl ContainerPreparation {
         result: &OperationResult,
     ) -> Result<Self> {
         validate_state(context.state)?;
-        let directory_backup = crate::protection::verify_automatic_backup_prepared(
+        let automatic_backup = crate::protection::verify_automatic_backup_prepared(
             context, &next, result, prepared,
         )?;
+        let directory_backup = automatic_backup.as_ref().and_then(|proof| proof.directories());
         let working = crate::engine::file_draft::verify_working_transition(
             context.state, &next, result,
         )?;
@@ -251,7 +252,7 @@ impl ContainerPreparation {
         directory_additions.extend(super::directories::project_replicas(
             context.config, &next, result, &mut directories, None,
         )?);
-        if let Some(selected) = &directory_backup {
+        if let Some(selected) = directory_backup {
             directory_additions.extend(super::directories::project_directory_backups(
                 context.config, &next, result, &mut directories, selected, None,
                 |record, disk| prefixes::plan_source(context, record.repository, record.branch,
@@ -259,13 +260,14 @@ impl ContainerPreparation {
             )?);
         }
         if !directory_additions.is_empty()
-            && (context.current_namespaces.is_some() || context.config.generation().is_some())
+            && (context.current_namespaces.is_some()
+                || (context.config.generation().is_some() && automatic_backup.is_none()))
         {
             return Err(Failure::NamespaceUnmapped.into());
         }
         next.namespace_directories = directories;
         let mut directory_targets = directory_additions.clone();
-        if let Some(selected) = &directory_backup {
+        if let Some(selected) = directory_backup {
             for disk in selected.route() {
                 directory_targets.extend(selected.entries().map(|entry| (entry, *disk)));
             }
@@ -683,7 +685,7 @@ impl VerifiedContainerTransition<'_> {
 /// Cold ordinary transition check. Candidate evidence supplies the exact first
 /// prepared order; serialized owner/root fields cannot choose a different target.
 pub(crate) fn verify_transition<'a>(
-    config: &Config,
+    config: &crate::ValidatedConfig,
     previous: &'a State,
     next: &'a State,
     candidate: &'a crate::journal::Candidate,
@@ -798,10 +800,13 @@ pub(crate) fn verify_transition<'a>(
             },
         )?);
     }
-    if directories != next.namespace_directories
-        || (!additions.is_empty() && candidate.generation().is_some())
-    {
+    if directories != next.namespace_directories {
         return Err(Failure::NamespaceSource.into());
+    }
+    if !additions.is_empty() && candidate.generation().is_some() {
+        crate::protection::verify_automatic_addition_candidate_source(
+            config, previous, result, candidate,
+        )?;
     }
     Ok(VerifiedContainerTransition { previous, next, candidate, renames })
 }

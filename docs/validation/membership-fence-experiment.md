@@ -163,3 +163,33 @@ B 顶根或 common-data 拒绝；真实锁后、未记录 stage、反馈后、�
 使用初始化前无根表的多盘目标及旧准备 cuts，尚未迁为本段的当前一盘协议证据；不声称
 它们已在新格式通过。每次准备仍需扫描保留的源反馈，空间/读成本随保留操作数增长，
 本片没有回收策略、性能基准或永久 inode 重用承诺。
+
+## 普通 Add 发表后的自动 B/C 回填（源码，待定向 CI）
+
+五区安装与 Joint 本身不授权文件备份。新的只读源门仅接实际 `Generation` 保留的
+完整普通 Add-only 链：每个真实 authority 节点均为无 registry 的 Add，当前源 State
+包含同一 Generation 精确重建的 Published activation 结果及原主体，当前配置仍与
+该真实 target 相同。它不把 generation 存在、请求 kind、空 payload 或 RootBinding
+单独当作权限。尚未发表、真实 Current registry、Exit、Abort、Foreign、Readmission、
+Terminal/Backup authority 均不能经此门继续；普通新目录/容器改名的原限制不变。
+
+热路径仍先真实 require_write，再由原唯一 automatic request 核重放完整逻辑 State、
+逐项匹配本次 Prepared 及 held source。该完整结果保留为私有产物，才允许既有父目录
+在新目标上的 occurrence 反馈。冷路径以实际 ValidatedConfig、完整 Candidate 与
+前态核同一 Add 来源，保留完整容器 pair 证明后重放同一业务核；不从自由 Config 或
+序列号补权威。schema、Candidate、snapshot 和永久请求摘要编码未变。
+
+原 `first_additions::empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy`
+现在从实际 `create_disk_root` 和正式 `Mkdir docs` 建立 A，继续真正 FILE branch 创建、
+选择和标签。空 B、空 C 分别经原根准备/enroll/Joint/activation；activation 前的
+自动备份请求必须零状态/目标字节变动地拒绝。发表之后只提交 typed automatic 请求，
+不再把手给 prefix 当路径来源。实体地址分别核 B/A--UUID/common-data 与
+C/B--UUID/A--UUID/common-data，保留两个 BODY、父链、FILE 分支/标签、冷开、同请求
+重试以及实际上级盘不可读取时的下级 held BODY 回退。FI 使用 B 回填的实际
+`after_accept_1`，先核 InDoubt 和精确 InjectedFailure，再冷恢复同一请求。
+
+默认/FI 各一个 exact 测试，900 秒不改；原 terminal-switch exact 与空目录/普通父
+测试独立保留。这里仍不声称单独备份盘启动可认证 BODY，也不声称普通 Add 已生成
+完整 DISK 事件史。离线证据仍分为 DISK Current 身份与 FILE 版本历史/分支/标签；
+自动名称几何由实际物理实体和 State 绑定验，不从旧 owner_path 文本推断。尚未本地
+编译、执行或声明这些新门已通过。

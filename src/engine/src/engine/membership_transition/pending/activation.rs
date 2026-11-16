@@ -13,6 +13,7 @@ const GENERATION_FILE: &str = "metadata/pool-membership/generation.json";
 type WorkspaceRootAliases = BTreeMap<(String, String, u64), BTreeSet<PathBuf>>;
 
 mod authority;
+mod ordinary_backup;
 pub(in crate::engine) mod backup;
 mod foreign;
 mod plan_store;

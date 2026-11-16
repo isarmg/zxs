@@ -198,8 +198,8 @@ impl PlanningContext<'_> {
         target: DiskId,
     ) -> Result<PreparedBackupSourcePath<'_>> {
         self.require_write()?;
-        if self.current_namespaces.is_none() && self.config.generation().is_some() {
-            return Err(Failure::NamespaceSource.into());
+        if self.current_namespaces.is_none() {
+            self.config.require_initial_backup_source(self.state)?;
         }
         let names = ConfiguredDiskNames::new(self.config).map_err(Error::ConfiguredDiskName)?;
         let path = names.source_path(target).map_err(Error::ConfiguredDiskName)?;

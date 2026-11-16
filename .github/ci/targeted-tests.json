@@ -348,9 +348,23 @@
       ]
     },
     "first-backup-additions": {
-      "reason": "Start with one held empty primary, enroll empty B then C through actual ordinary membership, publish real retained and successor BODY copies, verify exact cold Engine replica fallback, and separately inspect offline DISK/FILE history and tags. Does not claim independent backup-only authenticated BODY startup.",
+      "reason": "Actual registered ordinary namespace on A, five-area RootBinding Add of empty B then C, exact published Add-only source, automatic source-first retained BODY backfill and successor writes. Default plus a real after_accept_1 cold retry; preserve FILE branch/history/tags and separate offline DISK Current inspection. Not Current-registry/terminal authority, independent authenticated backup BODY startup, or DISK event history.",
       "python_tests": [],
       "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "features": [],
+          "exact": [
+            "first_additions::empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900,
+          "default_features": true,
+          "isolate": true
+        },
         {
           "package": "storage-engine",
           "manifest": "src/engine/Cargo.toml",
@@ -363,7 +377,9 @@
             "first_additions::empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy"
           ],
           "max_tests": 1,
-          "timeout_seconds": 900
+          "timeout_seconds": 900,
+          "default_features": true,
+          "isolate": true
         },
         {
           "package": "storage-engine",
@@ -13760,6 +13776,60 @@
       "path": "docs/design/source-prefix-address-continuity.md",
       "groups": [
         "source-prefix-address-continuity"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/namespace/backup.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/authority.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/ordinary_backup.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/container_locations.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths/automatic.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "docs/validation/membership-fence-experiment.md",
+      "groups": [
+        "first-backup-additions"
       ]
     }
   ],

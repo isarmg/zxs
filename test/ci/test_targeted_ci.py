@@ -66,6 +66,41 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_post_add_automatic_backfill_keeps_exact_source_and_cold_cut(self):
+        name = 'first-backup-additions'
+        paths = [
+            'src/engine/src/engine/fresh_layout/containers.rs',
+            'src/engine/src/engine/fresh_layout/namespace/backup.rs',
+            'src/engine/src/engine/membership_transition/pending/activation.rs',
+            'src/engine/src/engine/membership_transition/pending/activation/authority.rs',
+            'src/engine/src/engine/membership_transition/pending/activation/ordinary_backup.rs',
+            'src/engine/src/engine/recovery/container_locations.rs',
+            'src/engine/src/protection.rs',
+            'src/engine/src/protection/backup_paths/automatic.rs',
+            'test/engine/integration/recursive_backup_first_additions.rs',
+            'docs/validation/membership-fence-experiment.md',
+        ]
+        group = self.policy['groups'][name]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(name, plan['groups'])
+                self.assertCountEqual(origin_selections(plan, name), group['rust_targets'])
+        assert_path_group_extension(self, self.policy, paths, None, [name])
+        default, faults, product, lean = group['rust_targets']
+        exact = ['first_additions::empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy']
+        for target in (default, faults):
+            self.assertEqual(target['exact'], exact)
+            self.assertEqual((target['max_tests'], target['timeout_seconds']), (1, 900))
+            self.assertIs(target.get('default_features'), True)
+            self.assertIs(target.get('isolate'), True)
+            self.assertFalse(target.get('whole', False))
+            self.assertEqual(target.get('prefixes', []), [])
+        self.assertEqual(default['features'], [])
+        self.assertEqual(faults['features'], ['fault-injection'])
+        self.assertEqual([product['mode'], lean['mode']], ['check', 'check'])
+        self.assertFalse(lean['default_features'])
+
     def test_first_add_root_feedback_has_its_own_exact_cuts_and_products(self):
         name = 'fresh-first-add-root-binding'
         paths = [
@@ -2509,6 +2544,7 @@ class ContainerTagsSelection(unittest.TestCase):
         ordinary_targets = []
         empty_targets = []
         addition_targets = []
+        first_addition_targets = []
         for group, spec in self.policy['groups'].items():
             for target in spec['rust_targets']:
                 if (target.get('package') != 'storage-engine'
@@ -2516,6 +2552,12 @@ class ContainerTagsSelection(unittest.TestCase):
                         or target.get('mode', 'test') != 'test'):
                     continue
                 if target.get('exact') == first_addition:
+                    self.assertEqual(group, 'first-backup-additions')
+                    self.assertEqual(target['max_tests'], 1)
+                    self.assertEqual(target['timeout_seconds'], 900)
+                    self.assertIs(target.get('isolate'), True)
+                    self.assertIs(target.get('default_features'), True)
+                    first_addition_targets.append(target.get('features'))
                     continue
                 self.assertIs(target.get('isolate'), True)
                 self.assertEqual(target['timeout_seconds'], 900)
@@ -2541,6 +2583,7 @@ class ContainerTagsSelection(unittest.TestCase):
         self.assertCountEqual(ordinary_targets, [[], ['fault-injection']])
         self.assertCountEqual(empty_targets, [[], ['fault-injection']])
         self.assertCountEqual(addition_targets, [[], ['fault-injection']])
+        self.assertCountEqual(first_addition_targets, [[], ['fault-injection']])
 
     def test_http_identity_is_isolated_with_every_original_selection_and_budget(self):
         def is_http(target):

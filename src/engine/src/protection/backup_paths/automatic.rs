@@ -155,9 +155,10 @@ impl Engine {
 }
 
 fn source(context: &PlanningContext<'_>, input: &Input, scope: &Scope) -> Result<Source> {
-    if context.current_namespaces.is_some() || context.config.generation().is_some() {
+    if context.current_namespaces.is_some() {
         return Err(Error::AutomaticBackup(AutomaticBackupError::InitialOnly));
     }
+    context.config.require_initial_backup_source(context.state)?;
     let repository = input.repository_id.to_string();
     let repo = context.state.repositories.get(&repository).ok_or_else(wrong_source)?;
     let origin = context.namespace_host_root(input.repository_id, repo.main_branch_id.parse()?)?;
@@ -366,12 +367,41 @@ fn reconstruct(
     Ok((expected, facts, directories))
 }
 
+/// Issued only after the one complete logical replay and exact Prepared facts.
+/// It permits the same caller to attach physical feedback, not to install it.
+pub(crate) struct VerifiedAutomaticBackup {
+    directories: Option<DirectoryBackupSelection>,
+}
+impl VerifiedAutomaticBackup {
+    pub(crate) fn directories(&self) -> Option<&DirectoryBackupSelection> {
+        self.directories.as_ref()
+    }
+}
+
+/// A new generation's physical feedback must belong to this exact ordinary
+/// automatic request. Full business replay follows the container pair proof;
+/// this check alone grants neither an image nor a writer.
+pub(crate) fn verify_addition_candidate_source(
+    config: &crate::ValidatedConfig,
+    previous: &State,
+    result: &OperationResult,
+    candidate: &crate::journal::Candidate,
+) -> Result<()> {
+    if !codec::recognizes(result)? || candidate.registry().is_some()
+        || candidate.generation() != config.generation_hash()
+    {
+        return Err(wrong_source());
+    }
+    config.verify_candidate_membership(candidate)?;
+    config.require_initial_backup_source(previous)
+}
+
 pub(crate) fn verify_prepared(
     context: &PlanningContext<'_>,
     next: &State,
     result: &OperationResult,
     prepared: &[Prepared],
-) -> Result<Option<DirectoryBackupSelection>> {
+) -> Result<Option<VerifiedAutomaticBackup>> {
     if !codec::recognizes(result)? { return Ok(None); }
     context.require_write()?;
     let (expected, facts, directories) = reconstruct(context, next, result)?;
@@ -389,7 +419,7 @@ pub(crate) fn verify_prepared(
         };
         source.require_backup_source(context, version)?;
     }
-    Ok(directories)
+    Ok(Some(VerifiedAutomaticBackup { directories }))
 }
 
 pub(crate) fn verify_candidate(

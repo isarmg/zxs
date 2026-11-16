@@ -3,7 +3,7 @@
 //! deliberately claims only the existing DISK/FILE inspection capabilities.
 use super::{files, operation};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs,
     io::Read,
     os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt},
@@ -11,11 +11,12 @@ use std::{
 };
 use storage_contract::file_container_tags::{Context, ReadRequest, ReplaceCommand, Tag, TagSet};
 use storage_engine::{
-    BackupConfigurationRequest, BranchKind, BranchName, BranchState, CommitRequest, CommitState,
+    AutomaticBackupConfigurationRequest, BranchKind, BranchName, BranchState, CommitRequest,
+    CommitState,
     Config, DiskCatalogRole, DiskConfig,
     DiskDatabaseReadScope, DiskRegistrationIdentity, Engine, Entry, ErrorCode, FileVersion,
     ObjectDatabaseScope, OperationId, OperationResult, PendingMemberDirectory, ProtectionAtPublish,
-    Repository, RepositoryName, ValidatedConfig, inspect_disk_database_material,
+    NamespaceOperation, Repository, ValidatedConfig, inspect_disk_database_material,
     inspect_object_database_material, recognize_disk,
 };
 
@@ -62,9 +63,10 @@ fn tags(repository: &Repository, file: &str) -> ReadRequest {
     }
 }
 
-fn add_empty_tier(engine: &mut Engine, disk: &DiskConfig) {
+fn add_empty_tier(engine: &mut Engine, repository: &Repository, disk: &DiskConfig) {
     assert_eq!(fs::read_dir(&disk.root).unwrap().count(), 0);
     let mut target = engine.config().clone();
+    let old_roots = target.storage_roots.clone();
     assert_eq!(target.disks.len() + 1, disk.level as usize);
     assert_eq!(
         disk.upstream_slot_id.as_ref(),
@@ -99,61 +101,80 @@ fn add_empty_tier(engine: &mut Engine, disk: &DiskConfig) {
             .unwrap()
             .all_certificates_synchronized()
     );
+    let pending_state = storage_engine::canonical_json(engine.state()).unwrap();
+    let pending_roots = target.disks.iter().map(|disk| files(&disk.root)).collect::<Vec<_>>();
+    assert!(configure_result(engine, repository, disk.level, disk.level as u64 - 2,
+        operation()).is_err());
+    assert_eq!(storage_engine::canonical_json(engine.state()).unwrap(), pending_state);
+    assert_eq!(target.disks.iter().map(|disk| files(&disk.root)).collect::<Vec<_>>(),
+        pending_roots);
     let receipt = engine.activate_pending_membership().unwrap();
     assert_eq!(receipt.commit_state, CommitState::Published);
-    assert_eq!(
-        storage_engine::canonical_json(engine.config()).unwrap(),
-        storage_engine::canonical_json(&target).unwrap()
-    );
+    for (id, root) in &old_roots {
+        assert_eq!(engine.config().storage_roots.get(id), Some(root));
+    }
+    let added = disk.disk_id.parse::<storage_contract::DiskId>().unwrap();
+    let root = &engine.config().storage_roots[&added];
+    assert_eq!(root.operation_id, receipt.operation_id);
+    assert_eq!(root.registration, identity(engine.config(), disk));
+    assert_eq!(root.source_chain.iter().map(|entry| entry.disk_id.as_str()).collect::<Vec<_>>(),
+        target.disks[..target.disks.len() - 1].iter().rev()
+            .map(|entry| entry.disk_id.as_str()).collect::<Vec<_>>());
+    let actual = fs::metadata(&disk.root).unwrap();
+    assert_eq!((root.root_entity.device(), root.root_entity.inode()),
+        (actual.dev(), actual.ino()));
+    target.storage_roots = engine.config().storage_roots.clone();
+    assert_eq!(storage_engine::canonical_json(engine.config()).unwrap(),
+        storage_engine::canonical_json(&target).unwrap());
     assert!(!engine.is_read_only());
+}
+
+fn configure_result(
+    engine: &mut Engine,
+    repository: &Repository,
+    copies: u32,
+    generation: u64,
+    operation_id: OperationId,
+) -> storage_engine::Result<OperationResult> {
+    let path = name_policy::PortablePath::parse(PATH).unwrap();
+    let principal = "admin".parse().unwrap();
+    engine.configure_automatic_backups(AutomaticBackupConfigurationRequest {
+        repository_id: repository.repository_id.parse().unwrap(),
+        path: Some(&path), target_copies: copies,
+        expected_generation: storage_contract::Generation::new(generation),
+        principal: &principal, operation_id,
+    })
 }
 
 fn configure(
     engine: &mut Engine,
     repository: &Repository,
-    prefixes: &BTreeMap<String, String>,
+    copies: u32,
     generation: u64,
     operation_id: OperationId,
 ) -> OperationResult {
-    let receipt = engine
-        .configure_backups(BackupConfigurationRequest {
-            repository_id: &repository.repository_id,
-            path: PATH,
-            target_copies: prefixes.len() as u32 + 1,
-            backup_prefixes: prefixes,
-            expected_generation: generation,
-            principal: "admin",
-            operation_id,
-        })
-        .unwrap();
-    assert_eq!(receipt.kind, "backup.configure");
+    let receipt = configure_result(engine, repository, copies, generation, operation_id).unwrap();
+    assert_eq!(receipt.kind, "backup.configure-automatic");
     assert_eq!(receipt.commit_state, CommitState::Published);
     assert_eq!(receipt.protection_at_publish, ProtectionAtPublish::TargetMet);
     receipt
 }
 
-fn relative(index: usize) -> &'static str {
-    [
-        PATH,
-        "primary/Files/docs/report",
-        "secondary/primary/Files/docs/report",
-    ][index]
+fn source_area(config: &Config, index: usize) -> PathBuf {
+    let mut path = config.disks[index].root.clone();
+    for disk in config.disks[..index].iter().rev() {
+        let uuid = disk.disk_id.strip_prefix("disk_").unwrap();
+        path.push(format!("{}--{uuid}", disk.name));
+    }
+    path
 }
 
-fn container(disk: &DiskConfig, version: &FileVersion, index: usize) -> PathBuf {
-    disk.root
-        .join("histories")
-        .join(&version.history_tree_id)
-        .join("file-containers")
-        .join(&version.file_id)
-        .join("namespace")
-        .join(relative(index))
+fn container(config: &Config, index: usize) -> PathBuf {
+    source_area(config, index).join("common-data").join(PATH)
 }
 
-fn body_path(disk: &DiskConfig, version: &FileVersion, index: usize) -> PathBuf {
-    container(disk, version, index)
-        .join("versions")
-        .join(format!("{}-report", version.storage_id))
+fn body_path(config: &Config, version: &FileVersion, index: usize) -> PathBuf {
+    container(config, index).join("versions").join(format!("{}-report", version.storage_id))
 }
 
 fn assert_copies(engine: &Engine, versions: &[FileVersion], copies: usize) {
@@ -167,19 +188,23 @@ fn assert_copies(engine: &Engine, versions: &[FileVersion], copies: usize) {
             ["P01", "B01", "C01"][..copies]
         );
         for (index, disk) in engine.config().disks.iter().enumerate() {
-            if index != 0 {
-                assert_eq!(
-                    engine.state().file_backup_paths[&version.file_id][&disk.slot_id],
-                    relative(index)
-                );
-            }
+            let id = disk.disk_id.parse::<storage_contract::DiskId>().unwrap();
+            let file = version.file_id.parse::<storage_contract::FileId>().unwrap();
+            let replica = &engine.state().file_containers[&file].replicas[&id];
+            assert_eq!(replica.root_id, engine.config().storage_roots[&id].root_id);
+            assert_eq!(replica.prefixes.iter().map(|entry| entry.source_disk.to_string())
+                .collect::<Vec<_>>(), engine.config().disks[..index].iter().rev()
+                    .map(|source| source.disk_id.clone()).collect::<Vec<_>>());
+            let actual = fs::metadata(container(engine.config(), index)).unwrap();
+            assert_eq!((replica.entity.device(), replica.entity.inode()),
+                (actual.dev(), actual.ino()));
             let expected = if version.version_id == versions[0].version_id {
                 FIRST
             } else {
                 SECOND
             };
-            assert_eq!(fs::read(body_path(disk, version, index)).unwrap(), expected);
-            assert!(container(disk, version, index).join(".zxs-file.sqlite").is_file());
+            assert_eq!(fs::read(body_path(engine.config(), version, index)).unwrap(), expected);
+            assert!(container(engine.config(), index).join(".zxs-file.sqlite").is_file());
         }
     }
 }
@@ -236,9 +261,9 @@ fn assert_engine_reads_only_surviving_tier(
     // Remove all earlier BODY candidates, not their roots: a renamed root could
     // still be read through an already-held descriptor and prove no fallback.
     let mut parked = Vec::new();
-    for (index, disk) in engine.config().disks.iter().enumerate().take(target) {
+    for index in 0..target {
         for version in versions {
-            let original = body_path(disk, version, index);
+            let original = body_path(engine.config(), version, index);
             let saved = temporary.join(format!("body-{target}-{index}-{}", version.version_id));
             fs::rename(&original, &saved).unwrap();
             parked.push((original, saved));
@@ -251,7 +276,7 @@ fn assert_engine_reads_only_surviving_tier(
         .map(|disk| files(&disk.root))
         .collect::<Vec<_>>();
     for (index, version) in versions.iter().enumerate() {
-        let selected = body_path(&engine.config().disks[target], version, target);
+        let selected = body_path(engine.config(), version, target);
         let expected = fs::metadata(&selected).unwrap();
         let mut opened = engine.open_content(&version.version_id).unwrap();
         let actual = opened.file.metadata().unwrap();
@@ -290,6 +315,7 @@ fn inspect_offline_tier(
     target: usize,
 ) -> Engine {
     let config = engine.config().clone();
+    let logical_paths = engine.state().file_backup_paths.clone();
     drop(engine);
     // The public inspections below have no Engine, no SYSTEM and no upstream
     // path to consult. They do not authenticate BODY or authorize pool startup.
@@ -331,7 +357,11 @@ fn inspect_offline_tier(
             .unwrap();
         assert_eq!(&row.version, version);
         assert_eq!(row.role, DiskCatalogRole::Backup);
-        assert_eq!(row.owner_path.as_deref(), Some(relative(target)));
+        // This row's optional owner_path is the older explicit namespace
+        // projection, not authority for an automatic source-prefix path.
+        // Root/ordered source/real container identity is checked by assert_copies.
+        assert_eq!(row.owner_path.as_ref(), logical_paths.get(&version.file_id)
+            .and_then(|paths| paths.get(&disk.slot_id)));
     }
     assert_eq!(
         inspect_disk_database_material(
@@ -345,7 +375,7 @@ fn inspect_offline_tier(
         .code(),
         ErrorCode::DiskIdentityMismatch
     );
-    let parent = container(disk, &versions[0], target);
+    let parent = container(&config, target);
     let scope = ObjectDatabaseScope::File {
         file_id: versions[0].file_id.clone(),
         history_tree_id: versions[0].history_tree_id.clone(),
@@ -427,15 +457,10 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
         vec![fs::File::open(&topology.disks[0].root).unwrap()],
     )
     .unwrap();
-    let repository = engine
-        .create_repository(
-            &RepositoryName::parse("Files").unwrap(),
-            "P01",
-            1,
-            "admin",
-            operation(),
-        )
-        .unwrap();
+    let repository = engine.create_disk_root("P01", "admin", operation()).unwrap();
+    engine.file_namespace(&repository.repository_id, NamespaceOperation::Mkdir {
+        path: name_policy::PortablePath::parse("docs").unwrap(),
+    }, "admin", operation()).unwrap();
     let first = save(&mut engine, &repository, FIRST);
     // A directory main branch is not a FILE branch. Create and select one
     // through the public mutation path before either backup is added.
@@ -477,10 +502,24 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
         )
         .unwrap();
     let first_version = engine.state().versions[&first.version_id].clone();
-    add_empty_tier(&mut engine, &topology.disks[1]);
-    assert!(!body_path(&topology.disks[1], &first_version, 1).exists());
-    let mut prefixes = BTreeMap::from([("B01".into(), "primary/Files/docs".into())]);
-    let first_configuration = configure(&mut engine, &repository, &prefixes, 0, operation());
+    add_empty_tier(&mut engine, &repository, &topology.disks[1]);
+    assert!(!body_path(engine.config(), &first_version, 1).exists());
+    let first_operation = operation();
+    #[cfg(feature = "fault-injection")]
+    {
+        engine.inject_fault_once("after_accept_1");
+        let error = configure_result(&mut engine, &repository, 2, 0, first_operation).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InDoubt);
+        let mut source = &error;
+        while let storage_engine::Error::Context { source: inner, .. } = source {
+            source = inner;
+        }
+        assert_eq!(source.code(), ErrorCode::InjectedFailure, "{error}");
+        assert_eq!(source.message().as_ref(), "interrupted at after_accept_1");
+        drop(engine);
+        engine = Engine::open(&system).unwrap();
+    }
+    let first_configuration = configure(&mut engine, &repository, 2, 0, first_operation);
     let second = save(&mut engine, &repository, SECOND);
     assert_eq!(first.file_id, second.file_id);
     assert_ne!(first.version_id, second.version_id);
@@ -493,24 +532,23 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
     assert_cold_state(&engine, &repository, &versions, &branch_id);
     assert_copies(&engine, &versions, 2);
     assert_eq!(
-        configure(&mut engine, &repository, &prefixes, 0, first_configuration.operation_id),
+        configure(&mut engine, &repository, 2, 0, first_configuration.operation_id),
         first_configuration
     );
     assert_engine_reads_only_surviving_tier(&engine, &versions, temp.path(), 1);
     engine = inspect_offline_tier(engine, &system, &versions, &branch_id, 1);
 
-    add_empty_tier(&mut engine, &topology.disks[2]);
+    add_empty_tier(&mut engine, &repository, &topology.disks[2]);
     for version in &versions {
-        assert!(!body_path(&topology.disks[2], version, 2).exists());
+        assert!(!body_path(engine.config(), version, 2).exists());
     }
-    prefixes.insert("C01".into(), "secondary/primary/Files/docs".into());
-    let second_configuration = configure(&mut engine, &repository, &prefixes, 1, operation());
+    let second_configuration = configure(&mut engine, &repository, 3, 1, operation());
     drop(engine);
     engine = Engine::open(&system).unwrap();
     assert_cold_state(&engine, &repository, &versions, &branch_id);
     assert_copies(&engine, &versions, 3);
     assert_eq!(
-        configure(&mut engine, &repository, &prefixes, 1, second_configuration.operation_id),
+        configure(&mut engine, &repository, 3, 1, second_configuration.operation_id),
         second_configuration
     );
     assert_engine_reads_only_surviving_tier(&engine, &versions, temp.path(), 2);

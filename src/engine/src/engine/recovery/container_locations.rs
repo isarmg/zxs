@@ -75,7 +75,7 @@ impl ReplayContainerLocations {
     /// permission to select a different predecessor or to install material.
     pub(super) fn admit_published(
         &mut self,
-        config: &crate::Config,
+        config: &crate::ValidatedConfig,
         previous: &State,
         original: &AdmittedSnapshot,
         candidate: &Candidate,
