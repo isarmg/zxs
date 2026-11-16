@@ -27,7 +27,7 @@ pub use object_database::{
     reconstruct_object_database_material,
 };
 pub(crate) mod file_database;
-pub(crate) use file_database::changes::affected as affected_file_material;
+pub(crate) use changes::affected_file_material;
 mod layout_batch;
 mod layout_goals;
 mod layout_locator;
@@ -1632,10 +1632,11 @@ fn prepare_names_inner(
     layouts.reserve_databases(&mut reservations)?;
     let mut database_bytes = 0usize;
     let mut database_scopes = BTreeSet::new();
-    let mut files = changed_files(previous.state(), next);
-    if !skip_shared {
-        files.extend(file_database::changes::affected(previous.state(), next));
-    }
+    let mut files = if skip_shared {
+        changed_files(previous.state(), next)
+    } else {
+        affected_file_material(previous.state(), next)
+    };
     files.extend(layouts.files().cloned());
     for file in files {
         let locations = projection_locations(previous, view, &file);
