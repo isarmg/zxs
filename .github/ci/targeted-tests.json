@@ -1,5 +1,34 @@
 {
   "groups": {
+    "named-disk-verification-tools": {
+      "reason": "Compile the three named-layout verification tool binaries with the explicit configured disk identity contract. Also check exact CI admission for these tool consumers. This does not run a benchmark or a live browser.",
+      "python_tests": [
+        "test_named_disk_verification_tools"
+      ],
+      "rust_targets": [
+        {
+          "package": "browser-smoke",
+          "manifest": "tools/browser-smoke/Cargo.toml",
+          "kind": "bin",
+          "mode": "check",
+          "name": "browser-smoke"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "kind": "bin",
+          "mode": "check",
+          "name": "perf-check"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "kind": "bin",
+          "mode": "check",
+          "name": "recovery-startup"
+        }
+      ]
+    },
     "ordinary-namespace-parents": {
       "reason": "Bind ordinary Mkdir parents and FILE-triggered B/C parent occurrences to the same decided snapshot, original EntryIds, target roots, complete source registration chains and physical entities. Run both exact real nested-directory flows with and without fault injection, mandatory-map and strict mirrored schema/vector tests, and both product modes. Preserve the separately isolated original terminal-switch transaction and its 900-second limit; this does not claim terminal backup-switch, standalone empty-directory replication or unknown layout modes are supported.",
       "python_tests": [],
@@ -4496,6 +4525,48 @@
     }
   },
   "rules": [
+    {
+      "path": ".github/architecture-policy.json",
+      "groups": [
+        "named-disk-verification-tools"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/foreign_review/fixture.rs",
+      "groups": [
+        "named-disk-verification-tools"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/management.rs",
+      "groups": [
+        "named-disk-verification-tools"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/placement_configuration/fixture.rs",
+      "groups": [
+        "named-disk-verification-tools"
+      ]
+    },
+    {
+      "path": "tools/browser-smoke/Cargo.toml",
+      "groups": [
+        "named-disk-verification-tools"
+      ]
+    },
+    {
+      "path": "tools/perf-check/Cargo.toml",
+      "groups": [
+        "named-disk-verification-tools"
+      ]
+    },
+    {
+      "path": "test/ci/test_named_disk_verification_tools.py",
+      "groups": [
+        "named-disk-verification-tools"
+      ]
+    },
     {
       "path": "test/engine/unit/directory_worktree/session.rs",
       "groups": [
