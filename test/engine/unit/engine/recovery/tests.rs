@@ -1378,9 +1378,9 @@ fn transient_seal_read_failure_requires_reopening_missing_journal_admission() {
         )
         .unwrap();
     drop(engine);
+    let (startup_root, startup_config) = Engine::recovery_projection(&root, None).unwrap();
     let (mut engine, warnings, bootstrap) =
-        Engine::prepare_workspace_recovery(root.clone(), config.clone().try_into().unwrap())
-            .unwrap();
+        Engine::prepare_workspace_recovery(startup_root, startup_config).unwrap();
     assert!(warnings.is_empty());
     assert!(engine.config.generation().is_none());
     drop(bootstrap);
