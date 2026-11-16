@@ -170,12 +170,51 @@ impl Prepared {
         history: &str,
         target_name: &Name,
     ) -> Result<Option<Self>> {
+        Self::capture_at(root, container, state, file, history, target_name, None)
+    }
+
+    pub(super) fn capture_ordinary(
+        scope: &crate::container_storage::ObservedContainerReplica,
+        state: &State,
+        file: &str,
+        history: &str,
+        target_name: &Name,
+    ) -> Result<Option<Self>> {
+        scope.require_rename_start()?;
+        let root = scope.container()?;
+        Self::capture_at(root, root.path(), state, file, history, target_name, Some(scope))
+    }
+
+    fn capture_at(
+        root: &DiskRoot,
+        container: &Path,
+        state: &State,
+        file: &str,
+        history: &str,
+        target_name: &Name,
+        ordinary: Option<&crate::container_storage::ObservedContainerReplica>,
+    ) -> Result<Option<Self>> {
+        let required = |version: &FileVersion| {
+            ordinary.is_some_and(|scope| {
+                state.content_states.get(&version.version_id)
+                    == Some(&crate::ContentState::Available)
+                    && state.placements.get(&version.version_id).is_some_and(|place| {
+                        place.route_slot_ids.iter()
+                            .any(|slot| slot.eq_ignore_ascii_case(&scope.disk().seal.slot_id))
+                    })
+            })
+        };
         let file_id: FileId = file.parse()?;
         let history_id: HistoryTreeId = history.parse()?;
         let source = container.file_name().and_then(|name| name.to_str()).ok_or_else(invalid)?;
         let source_name = Name::parse(source)?;
         let existing = read(root, container)?;
         if let Some((intent, _)) = &existing {
+            if let Some(scope) = ordinary {
+                scope.require_rename_binding(
+                    &intent.source_name, &intent.target_name, intent.sequence,
+                )?;
+            }
             if intent.file != file_id || intent.history != history_id
                 || intent.sequence.get() != state.sequence
                 || &intent.target_name != target_name
@@ -193,7 +232,9 @@ impl Prepared {
                 let target = installed_version_leaf(version.storage_id, &intent.target_name)?;
                 let present = root.optional_metadata(&versions.join(source.as_path()))?.is_some()
                     || root.optional_metadata(&versions.join(target.as_path()))?.is_some();
-                if present && !listed.contains(&version.storage_id) {
+                if (present && !listed.contains(&version.storage_id))
+                    || (!present && required(version))
+                {
                     return Err(invalid());
                 }
             }
@@ -219,6 +260,23 @@ impl Prepared {
             }
         }
         if &source_name == target_name {
+            // Outer rename and intent cleanup may have completed before the
+            // first Publication frame. No leaf action remains, but this pending
+            // decision still owes readback of its required, already named BODYs.
+            if existing.is_none() && let Some(scope) = ordinary {
+                for version in state.versions.values().filter(|version| {
+                    version.file_id == file && version.history_tree_id == history
+                }) {
+                    let path = crate::container_storage::ordinary_body_path(
+                        container, version, scope.name(),
+                    )?;
+                    if required(version) || root.optional_metadata(&path)?.is_some() {
+                        let body = hold_body(root, &path, version)?;
+                        drop(body);
+                    }
+                }
+                scope.verify()?;
+            }
             return Ok(None);
         }
         let identity = root.directory_identity(container)?;
@@ -250,7 +308,10 @@ impl Prepared {
                 return Err(invalid());
             }
             if root.optional_metadata(&source)?.is_none() {
-                // A missing copy or a cleared body is not manufactured by a name change.
+                if required(version) {
+                    return Err(invalid());
+                }
+                // A cleared or non-required body is not manufactured by a name change.
                 continue;
             }
             let original = hold_body(root, &source, version)?;
@@ -327,17 +388,46 @@ pub(super) fn interrupted_path(
     version: &FileVersion,
 ) -> Result<Option<PathBuf>> {
     let Some((intent, _)) = read(root, container)? else { return Ok(None); };
+    locate(root, container, version, &intent)
+}
+
+/// Recovery supplies both names and the exact original decision sequence. Disk
+/// intent bytes may locate that pair's held BODY, never choose another rename.
+pub(super) fn interrupted_path_bound(
+    root: &DiskRoot,
+    container: &Path,
+    version: &FileVersion,
+    source: &name_policy::LookupName,
+    expected: &CompletionBinding,
+) -> Result<Option<PathBuf>> {
+    let Some((intent, _)) = read(root, container)? else { return Ok(None); };
+    if intent.file != expected.file || intent.history != expected.history
+        || intent.sequence != expected.sequence || intent.target_name != expected.target_name
+        || intent.source_name.as_str() != source.as_str()
+    {
+        return Err(invalid());
+    }
+    locate(root, container, version, &intent)
+}
+
+fn locate(
+    root: &DiskRoot,
+    container: &Path,
+    version: &FileVersion,
+    intent: &Intent,
+) -> Result<Option<PathBuf>> {
     if intent.file.to_string() != version.file_id
         || intent.history.to_string() != version.history_tree_id
     {
         return Err(invalid());
     }
-    let Some(body) = intent.bodies.iter().find(|body| body.version.to_string() == version.version_id)
+    let Some(body) = intent.bodies.iter()
+        .find(|body| body.version.to_string() == version.version_id)
     else { return Ok(None); };
     if body.storage != version.storage_id {
         return Err(invalid());
     }
-    position(root, container, &intent, body).map(|(path, _)| Some(path))
+    position(root, container, intent, body).map(|(path, _)| Some(path))
 }
 
 /// Expected publication facts retained by the caller's prepared candidate,
@@ -356,11 +446,36 @@ pub(super) fn finish(
     container: &Path,
     expected: &CompletionBinding,
 ) -> Result<()> {
-    let Some((intent, bytes)) = read(root, container)? else { return Ok(()); };
+    let Some(observed) = read(root, container)? else { return Ok(()); };
+    if container.file_name().and_then(|name| name.to_str()) != Some(expected.target_name.as_str()) {
+        return Err(invalid());
+    }
+    finish_matching(root, container, expected, observed)
+}
+
+/// A renamed held FD retains its old display path. The actual installed scope
+/// proves the new parent/name, while cleanup stays on that same held entity.
+pub(super) fn finish_ordinary(
+    scope: &crate::container_storage::ObservedContainerReplica,
+    expected: &CompletionBinding,
+) -> Result<()> {
+    let current = scope.current_path()?;
+    if current.file_name().and_then(|name| name.to_str()) != Some(expected.target_name.as_str()) {
+        return Err(invalid());
+    }
+    let root = scope.container()?;
+    if let Some(observed) = read(root, root.path())? {
+        finish_matching(root, root.path(), expected, observed)?;
+    }
+    scope.verify()
+}
+
+fn finish_matching(
+    root: &DiskRoot, container: &Path, expected: &CompletionBinding, observed: (Intent, Vec<u8>),
+) -> Result<()> {
+    let (intent, bytes) = observed;
     if intent.file != expected.file || intent.history != expected.history
         || intent.sequence != expected.sequence || intent.target_name != expected.target_name
-        || container.file_name().and_then(|name| name.to_str())
-            != Some(expected.target_name.as_str())
     {
         return Err(invalid());
     }

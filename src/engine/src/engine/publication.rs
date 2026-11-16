@@ -851,10 +851,14 @@ impl Engine {
         &self,
         candidate: &Candidate,
         original: &'original crate::publication_evidence::AdmittedSnapshot,
+        locations: &super::recovery::container_locations::ReplayContainerLocations,
     ) -> Result<RecoveredOrdinaryPayloads<'original>> {
+        let locations = super::fresh_layout::containers::recovery_rename_locations(
+            &self.state, original.for_candidate(candidate)?.state(), candidate, locations,
+        );
         let containers = std::sync::Arc::new(
-            crate::container_storage::PreparedContainerEntities::observe_candidate(
-                &self.planning_context(), candidate, original,
+            crate::container_storage::PreparedContainerEntities::observe_candidate_with_locations(
+                &self.planning_context(), candidate, original, &locations,
             )?,
         );
         let verified = PayloadPreparation::new(
@@ -932,6 +936,30 @@ impl Engine {
         hash: &str,
         next: &State,
         publication: Publication,
+        append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
+    ) -> Result<()> {
+        self.complete_published_at(c, hash, next, publication, None, append_receipt)
+    }
+
+    pub(super) fn complete_historical_candidate(
+        &mut self,
+        c: &Candidate,
+        hash: &str,
+        next: &State,
+        publication: Publication,
+        locations: &super::recovery::container_locations::ReplayContainerLocations,
+        append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
+    ) -> Result<()> {
+        self.complete_published_at(c, hash, next, publication, Some(locations), append_receipt)
+    }
+
+    fn complete_published_at(
+        &mut self,
+        c: &Candidate,
+        hash: &str,
+        next: &State,
+        publication: Publication,
+        locations: Option<&super::recovery::container_locations::ReplayContainerLocations>,
         mut append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
     ) -> Result<()> {
         self.require_bound_publication(c, hash, &publication)?;
@@ -978,10 +1006,16 @@ impl Engine {
                 let Some(_) = self.disk_resources.available(d) else {
                     continue;
                 };
-                let scope = super::fresh_layout::containers::observe_replica(
-                    &self.config, &self.disk_resources, next,
-                    evidence.version.file_id.parse()?, d,
-                )?;
+                let scope = match locations {
+                    Some(locations) => super::fresh_layout::containers::observe_historical_replica(
+                        &self.config, &self.disk_resources, next,
+                        evidence.version.file_id.parse()?, d, locations,
+                    )?,
+                    None => super::fresh_layout::containers::observe_replica(
+                        &self.config, &self.disk_resources, next,
+                        evidence.version.file_id.parse()?, d,
+                    )?,
+                };
                 let material = VersionMaterial::current(&scope, &evidence.version)?;
                 let root = material.root()?;
                 let dir = material.directory()?;

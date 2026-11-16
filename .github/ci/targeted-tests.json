@@ -4597,6 +4597,55 @@
           "features": []
         }
       ]
+    },
+    "ordinary-container-rename": {
+      "reason": "Ordinary Initial same-parent FILE container rename: exact namespace/path facts plus unchanged content graph, all held A/B/C inode-bound BODY names, no collision overwrite, original receipts and finalized cold replay. Keep Current/cross-parent/mixed content transactions unsupported, all existing selections and the separate 900-second backup switch unchanged.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [],
+          "exact": [
+            "engine::fresh_layout::containers::rename_tests::same_parent_rename_preserves_full_history_and_each_replica",
+            "engine::fresh_layout::containers::rename_tests::same_parent_rename_refuses_collisions_before_decision_without_overwrite"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "engine::fresh_layout::containers::rename_tests::same_parent_rename_preserves_full_history_and_each_replica",
+            "engine::fresh_layout::containers::rename_tests::same_parent_rename_refuses_collisions_before_decision_without_overwrite",
+            "engine::fresh_layout::containers::rename_tests::same_parent_rename_replays_exact_finalized_cut_without_new_content"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -9901,13 +9950,13 @@
       ]
     },
     {
-      "path": "禁止防御性编程.md",
+      "path": "\u7981\u6b62\u9632\u5fa1\u6027\u7f16\u7a0b.md",
       "groups": [
         "engineering-guidance"
       ]
     },
     {
-      "path": "工程规范.md",
+      "path": "\u5de5\u7a0b\u89c4\u8303.md",
       "groups": [
         "engineering-guidance"
       ]
@@ -13332,6 +13381,84 @@
       "groups": [
         "ordinary-namespace-parents",
         "ordinary-empty-directory-backup"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers/rename.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/rename.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/version_rename.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/workspace_receipts.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/container_locations.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/container_locations/finalized.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/publication.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/ordinary_container_rename_tests.rs",
+      "groups": [
+        "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "docs/design/ordinary-container-rename.md",
+      "groups": [
+        "ordinary-container-rename"
       ]
     }
   ],

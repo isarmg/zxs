@@ -1098,14 +1098,15 @@ impl PreparedName {
 
     fn root(&self) -> Result<&DiskRoot> {
         match &self.container {
-            Some(_) => Ok(&self.disk.root),
+            Some(container) => Ok(container),
             None => self.disk.content_root(),
         }
     }
     fn current(&self) -> Result<PathBuf> {
         match &self.container {
-            Some(_) => self.published_path.clone()
-                .ok_or_else(|| invalid("ordinary prepared name lost its publication target")),
+            Some(_) => self.ordinary_scope.as_ref()
+                .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerScope)?
+                .current_path(),
             None => container_at(
                 self.disk.content_root()?, &self.history, Some(&self.history_id),
                 &self.file, &mut |_| Ok(()),
@@ -1254,9 +1255,6 @@ impl PreparedNames {
         crate::engine::fresh_layout::verify_available(
             &self.layout_config, &self.layout_resources,
         )?;
-        if let Some(containers) = &self.containers {
-            containers.install_decided()?;
-        }
         let mut renamed = AppliedPayloadRenames::default();
         if let Some(cache) = &mut self.cache {
             for item in &mut cache.items {
@@ -1267,6 +1265,11 @@ impl PreparedNames {
                         .extend(names.apply(item.root()?, &current, observe)?);
                 }
             }
+        }
+        // The retained intent is durable before the outer name changes. A cold
+        // accepted tail can therefore distinguish each old/new BODY position.
+        if let Some(containers) = &self.containers {
+            containers.install_decided(observe)?;
         }
         let receipt = self.layouts.apply(observe)?;
         let Some(mut cache) = self.cache else {
@@ -1293,6 +1296,11 @@ impl PreparedNames {
                 continue;
             }
             let current = item.current()?;
+            if let Some(expected) = &item.published_path
+                && &current != expected
+            {
+                return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerIdentity.into());
+            }
             if let Some(database) = &item.database {
                 database.check_entity(root, &current)?;
             }
@@ -1360,7 +1368,10 @@ impl PreparedNames {
                 }
             }
             if let Some(expected) = &item.finish_version_names {
-                version_rename::finish(root, &named, expected)?;
+                match &item.ordinary_scope {
+                    Some(scope) => version_rename::finish_ordinary(scope, expected)?,
+                    None => version_rename::finish(root, &named, expected)?,
+                }
             }
         }
         if let Some(containers) = &self.containers {
@@ -1640,6 +1651,13 @@ fn prepare_names_inner(
     };
     files.extend(layouts.files().cloned());
     for file in files {
+        if skip_shared
+            && next.file_containers.contains_key(&file.parse::<storage_contract::FileId>()?)
+        {
+            // Only final-state repair may update a current ordinary cache.
+            // Historical records must not reconstruct an obsolete user name.
+            continue;
+        }
         let locations = projection_locations(previous, view, &file);
         let mut description = None;
         let mut encoded_histories = BTreeMap::new();
@@ -1840,16 +1858,27 @@ fn prepare_names_inner(
             };
             let offset = staged.file.stream_position()?;
             staged.file.write_all(&bytes)?;
-            let version_names = if skip_shared || container.is_some() {
+            let ordinary_rename = ordinary_scope.as_ref().is_some_and(|scope| scope.has_rename());
+            let version_names = if skip_shared || (container.is_some() && !ordinary_rename) {
                 None
             } else {
-                version_rename::Prepared::capture(
-                    root, &current, next, &file, &history_id,
-                    &name_policy::Name::parse(name)?,
-                )?
+                let target = name_policy::Name::parse(name)?;
+                match &ordinary_scope {
+                    Some(scope) => version_rename::Prepared::capture_ordinary(
+                        scope, next, &file, &history_id, &target,
+                    )?,
+                    None => version_rename::Prepared::capture(
+                        root, &current, next, &file, &history_id, &target,
+                    )?,
+                }
             };
             if let Some(names) = &version_names {
-                reservations.add(held, &history, names.reservation()?)?;
+                match &ordinary_scope {
+                    Some(scope) => {
+                        reservations.add_container(scope, &history, names.reservation()?)?;
+                    }
+                    None => reservations.add(held, &history, names.reservation()?)?,
+                }
             }
             let ordinary = container.is_some();
             let published_path = containers.as_ref().map(|scope| {
@@ -1869,7 +1898,7 @@ fn prepare_names_inner(
                 length: bytes.len(),
                 database,
                 version_names,
-                finish_version_names: if skip_shared || ordinary {
+                finish_version_names: if skip_shared || (ordinary && !ordinary_rename) {
                     None
                 } else {
                     Some(version_rename::CompletionBinding {

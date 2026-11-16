@@ -9,6 +9,8 @@ use storage_contract::file_container::{ContainerEntity, ContainerReplica, FileCo
 use storage_contract::file_draft::{FileWorkingState, WorkingRevision};
 
 pub(super) mod prefixes;
+mod rename;
+pub(crate) use rename::ContainerNameChange;
 
 fn inventory(state: &State) -> Result<BTreeMap<FileId, HistoryTreeId>> {
     let mut files = BTreeMap::new();
@@ -102,6 +104,7 @@ pub(crate) struct ContainerPreparation {
     targets: BTreeSet<(FileId, DiskId)>,
     directory_additions: BTreeSet<(storage_contract::EntryId, DiskId)>,
     directory_targets: BTreeSet<(storage_contract::EntryId, DiskId)>,
+    renames: BTreeMap<FileId, ContainerNameChange>,
 }
 impl ContainerPreparation {
     pub(crate) fn new(
@@ -127,6 +130,17 @@ impl ContainerPreparation {
         }
         if next.namespace_directories != context.state.namespace_directories {
             return Err(Failure::ContainerScope.into());
+        }
+        let renames = rename::project(context.state, &next, result)?;
+        if !renames.is_empty()
+            && (context.current_namespaces.is_some() || context.config.generation().is_some()
+                || !prepared.is_empty())
+        {
+            return Err(Failure::WholeContainerLifecycleUnsupported.into());
+        }
+        for (file, change) in &renames {
+            next.file_containers.get_mut(file).ok_or(Failure::ContainerScope)?
+                .namespace = change.target().clone();
         }
         let (directories, directory_additions) = super::directories::project(
             context.config, context.state, &next, result, None,
@@ -265,7 +279,11 @@ impl ContainerPreparation {
         if after.len() != next.file_containers.len() {
             return Err(Failure::ContainerScope.into());
         }
-        Ok(Self { next, additions, targets, directory_additions, directory_targets })
+        Ok(Self { next, additions, targets, directory_additions, directory_targets, renames })
+    }
+
+    pub(crate) fn rename(&self, file: FileId) -> Option<&ContainerNameChange> {
+        self.renames.get(&file)
     }
 
     pub(crate) fn needs_entity_feedback(&self) -> bool {
@@ -346,17 +364,31 @@ impl ContainerPreparation {
 pub(crate) struct PublishedReplicaSource<'a> {
     file: FileId,
     record: &'a FileContainerRecord,
+    location: ReplicaReadLocation<'a>,
     handle: &'a std::sync::Arc<crate::disk::DiskHandle>,
     namespace: ReplicaNamespace<'a>,
     state: &'a State,
     config: &'a Config,
     resources: &'a DiskResources,
 }
+#[derive(Clone, Copy)]
+pub(crate) enum ReplicaReadLocation<'a> {
+    Published(&'a name_policy::LookupName),
+    Finalized {
+        source: &'a name_policy::LookupName,
+        target: &'a name_policy::LookupName,
+        sequence: storage_contract::Sequence,
+    },
+}
 pub(crate) enum ReplicaNamespace<'a> {
     Owner(super::namespace::RegisteredNamespaceRoot<'a>),
     Backup(super::namespace::PreparedBackupSourcePath<'a>),
 }
 impl<'a> PublishedReplicaSource<'a> {
+    pub(crate) fn location(&self) -> ReplicaReadLocation<'a> {
+        self.location
+    }
+
     pub(crate) fn config(&self) -> &'a Config {
         self.config
     }
@@ -430,8 +462,70 @@ pub(crate) fn published_source<'a>(
         )?)
     };
     Ok(PublishedReplicaSource {
-        file, record, handle: resources.get(disk)?, namespace, state, config, resources,
+        file, record, location: ReplicaReadLocation::Published(&record.namespace.name),
+        handle: resources.get(disk)?, namespace, state, config, resources,
     })
+}
+
+/// Only the verified recovery cursor may displace an original historical name.
+/// The record, namespace owner, parent and source registrations remain original.
+pub(in crate::engine) fn observe_historical_replica(
+    config: &Config,
+    resources: &DiskResources,
+    state: &State,
+    file: FileId,
+    disk: &DiskConfig,
+    locations: &crate::engine::recovery::container_locations::ReplayContainerLocations,
+) -> Result<crate::container_storage::ObservedContainerReplica> {
+    let mut source = published_source(config, resources, state, file, disk)?;
+    use crate::engine::recovery::container_locations::ReplayName;
+    if let Some(location) = locations.historical_location(state, file, disk.disk_id.parse()?)? {
+        source.location = match location {
+            ReplayName::Published(name) => ReplicaReadLocation::Published(name),
+            ReplayName::Finalized { source, target, sequence } => {
+                ReplicaReadLocation::Finalized { source, target, sequence }
+            }
+        };
+    }
+    crate::container_storage::ObservedContainerReplica::observe(source)
+}
+
+/// A loan of this invocation's admitted replay stream, never a caller supplied
+/// flag. It selects two names only for a pair with actual all-member FINALIZE.
+pub(crate) struct RecoveryRenameLocations<'a> {
+    previous: &'a State,
+    next: &'a State,
+    candidate: &'a crate::journal::Candidate,
+    locations: &'a crate::engine::recovery::container_locations::ReplayContainerLocations,
+}
+
+pub(in crate::engine) fn recovery_rename_locations<'a>(
+    previous: &'a State,
+    next: &'a State,
+    candidate: &'a crate::journal::Candidate,
+    locations: &'a crate::engine::recovery::container_locations::ReplayContainerLocations,
+) -> RecoveryRenameLocations<'a> {
+    RecoveryRenameLocations { previous, next, candidate, locations }
+}
+
+impl RecoveryRenameLocations<'_> {
+    pub(crate) fn permits_target(
+        &self, previous: &State, next: &State, candidate: &crate::journal::Candidate,
+        file: FileId, disk: DiskId,
+    ) -> Result<bool> {
+        if !std::ptr::eq(previous, self.previous) || !std::ptr::eq(next, self.next)
+            || !std::ptr::eq(candidate, self.candidate)
+        {
+            return Err(Failure::ContainerScope.into());
+        }
+        let old = previous.file_containers.get(&file).ok_or(Failure::ContainerScope)?;
+        let new = next.file_containers.get(&file).ok_or(Failure::ContainerScope)?;
+        use crate::engine::recovery::container_locations::ReplayName;
+        Ok(matches!(self.locations.historical_location(next, file, disk)?,
+            Some(ReplayName::Finalized { source, target, sequence })
+                if source == &old.namespace.name && target == &new.namespace.name
+                    && sequence.get() == candidate.sequence))
+    }
 }
 
 pub(crate) fn verify_replica(
@@ -485,6 +579,24 @@ pub(crate) fn verify_available(
     resources: &DiskResources,
     state: &State,
 ) -> Result<()> {
+    verify_available_at(config, resources, state, None)
+}
+
+pub(in crate::engine) fn verify_historical_available(
+    config: &Config,
+    resources: &DiskResources,
+    state: &State,
+    locations: &crate::engine::recovery::container_locations::ReplayContainerLocations,
+) -> Result<()> {
+    verify_available_at(config, resources, state, Some(locations))
+}
+
+fn verify_available_at(
+    config: &Config,
+    resources: &DiskResources,
+    state: &State,
+    locations: Option<&crate::engine::recovery::container_locations::ReplayContainerLocations>,
+) -> Result<()> {
     validate_state(state)?;
     for record in state.namespace_directories.values() {
         for id in record.replicas.keys() {
@@ -502,7 +614,29 @@ pub(crate) fn verify_available(
             let disk = config.disks.iter().find(|disk| disk.disk_id == id.to_string())
                 .ok_or(Failure::Registration)?;
             if resources.available(disk).is_some() {
-                verify_replica(config, resources, state, *file, disk)?;
+                match locations {
+                    Some(locations) => {
+                        let scope = observe_historical_replica(
+                            config, resources, state, *file, disk, locations,
+                        )?;
+                        if locations.requires_complete_history(state, *file) {
+                            for version in state.versions.values().filter(|version| {
+                                version.file_id == file.to_string()
+                                    && state.content_states.get(&version.version_id)
+                                        == Some(&crate::ContentState::Available)
+                                    && state.placements.get(&version.version_id)
+                                        .is_some_and(|place| {
+                                            place.route_slot_ids.iter().any(|slot| {
+                                                slot.eq_ignore_ascii_case(&disk.slot_id)
+                                            })
+                                        })
+                            }) {
+                                scope.verify_version_body(version)?;
+                            }
+                        }
+                    }
+                    None => verify_replica(config, resources, state, *file, disk)?,
+                }
             }
         }
     }
@@ -516,8 +650,13 @@ pub(crate) struct VerifiedContainerTransition<'a> {
     previous: &'a State,
     next: &'a State,
     candidate: &'a crate::journal::Candidate,
+    renames: BTreeMap<FileId, ContainerNameChange>,
 }
 impl VerifiedContainerTransition<'_> {
+    pub(in crate::engine) fn renames(&self) -> &BTreeMap<FileId, ContainerNameChange> {
+        &self.renames
+    }
+
     pub(crate) fn require_pair(
         &self, previous: &State, next: &State, candidate: &crate::journal::Candidate,
     ) -> Result<()> {
@@ -563,6 +702,14 @@ pub(crate) fn verify_transition<'a>(
     if let Some(file) = working {
         let after = next.file_containers.get(&file).ok_or(Failure::ContainerScope)?;
         expected.get_mut(&file).ok_or(Failure::ContainerScope)?.working = after.working.clone();
+    }
+    let renames = rename::project(previous, next, result)?;
+    if !renames.is_empty() && (candidate.generation().is_some() || !candidate.versions.is_empty()) {
+        return Err(Failure::WholeContainerLifecycleUnsupported.into());
+    }
+    for (file, change) in &renames {
+        expected.get_mut(file).ok_or(Failure::ContainerScope)?
+            .namespace = change.target().clone();
     }
     let mut known_prefixes = prefixes::collect(previous)?;
     for evidence in &candidate.versions {
@@ -668,5 +815,9 @@ pub(crate) fn verify_transition<'a>(
     {
         return Err(Failure::NamespaceSource.into());
     }
-    Ok(VerifiedContainerTransition { previous, next, candidate })
+    Ok(VerifiedContainerTransition { previous, next, candidate, renames })
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/ordinary_container_rename_tests.rs"]
+mod rename_tests;

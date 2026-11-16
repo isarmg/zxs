@@ -77,6 +77,18 @@ impl Engine {
                     publication,
                 ),
                 None => {
+                    let admitted = match candidate.snapshot.take() {
+                        Some(snapshot) => snapshot.into_admitted(),
+                        None => verified_recovery_snapshot_at(
+                            &self.disk_resources, &prepared.online,
+                            &candidate.candidate.snapshot_hash,
+                        )?,
+                    };
+                    prepared.container_locations.admit_finalized(
+                        self, &prepared.online, receipts, &previous_state,
+                        &admitted, &candidate.candidate, candidate.publication.as_ref(),
+                    )?;
+                    candidate.snapshot = Some(admitted.into_shared());
                     prepared.candidates.insert(*sequence, candidate);
                     break;
                 }
@@ -86,6 +98,18 @@ impl Engine {
                 Err(source) => {
                     // This slot may still be repairable by apply. It cannot grant
                     // cold admission. Keep the concrete failure for diagnostics.
+                    let admitted = match candidate.snapshot.take() {
+                        Some(snapshot) => snapshot.into_admitted(),
+                        None => verified_recovery_snapshot_at(
+                            &self.disk_resources, &prepared.online,
+                            &candidate.candidate.snapshot_hash,
+                        )?,
+                    };
+                    prepared.container_locations.admit_finalized(
+                        self, &prepared.online, receipts, &previous_state,
+                        &admitted, &candidate.candidate, candidate.publication.as_ref(),
+                    )?;
+                    candidate.snapshot = Some(admitted.into_shared());
                     candidate.barrier_failure = Some(source);
                     prepared.candidates.insert(*sequence, candidate);
                     break;
@@ -152,6 +176,10 @@ impl Engine {
                     )?,
                 });
             }
+            prepared.container_locations.admit_published(
+                &self.config, &previous_state, &admitted, &candidate.candidate,
+                candidate.publication.as_ref().expect("invariant: published barrier"), &seal,
+            )?;
             let shared = admitted.into_shared();
             previous_state = shared.share_state();
             // The original proof remains unmodified for this candidate.

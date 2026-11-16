@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod payload_admission;
 mod workspace_receipts;
+pub(in crate::engine) mod container_locations;
 
 /// Read-only journal admission, retained with its held descriptors until apply.
 pub(super) struct PreparedRecovery {
@@ -20,6 +21,7 @@ pub(super) struct PreparedRecovery {
     records: super::recovery_checkpoint::Records,
     torn_tail: bool,
     candidates: BTreeMap<u64, workspace_receipts::PreparedCandidate>,
+    container_locations: container_locations::ReplayContainerLocations,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -286,6 +288,7 @@ impl Engine {
             records,
             torn_tail,
             candidates: BTreeMap::new(),
+            container_locations: container_locations::ReplayContainerLocations::default(),
         })
     }
 
@@ -334,6 +337,7 @@ impl Engine {
             records,
             torn_tail,
             mut candidates,
+            container_locations,
         } = prepared;
         let fenced = self.membership_fence.is_some();
         let members_ready = online.len() == members.len() && !fenced;
@@ -592,8 +596,8 @@ impl Engine {
             // above do not borrow ordinary future-body/install authority.
             let mut pending_containers = None;
             if publication.is_some() {
-                crate::engine::fresh_layout::containers::verify_available(
-                    &self.config, &self.disk_resources, next,
+                crate::engine::fresh_layout::containers::verify_historical_available(
+                    &self.config, &self.disk_resources, next, &container_locations,
                 )?;
             }
             if publication.is_none() && mode == RecoveryMode::CompletePending && can_repair {
@@ -617,7 +621,9 @@ impl Engine {
                 // Metadata admission remains before BODY observation. Only this
                 // exact original preparation may reach the decided installer;
                 // there is no matching-byte search or unbound repair fallback.
-                pending_containers = Some(self.observe_ordinary_pending(&candidate, &admitted)?);
+                pending_containers = Some(self.observe_ordinary_pending(
+                    &candidate, &admitted, &container_locations,
+                )?);
             }
             if can_repair {
                 // Repair only replicas of the exact hash-bound snapshot. Never
@@ -660,11 +666,12 @@ impl Engine {
                     .filter(|p| p.recovery.is_some())
                     .map(|p| p.result.clone());
                 if let Some(publication) = publication {
-                    self.complete_published_candidate(
+                    self.complete_historical_candidate(
                         &candidate,
                         &hash,
                         next,
                         publication,
+                        &container_locations,
                         |engine, d, pub_hash| {
                             if let Some(receipt) = rs.iter().find(|receipt| {
                                 receipt.disk_id == d.disk_id

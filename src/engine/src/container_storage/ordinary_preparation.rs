@@ -12,6 +12,7 @@ mod prefix;
 mod areas;
 mod draft;
 mod directories;
+mod rename;
 use directories::HeldDirectories;
 use storage_contract::file_container::NamespaceDirectoryParent;
 use prefix::{HeldParent, HeldPrefixes, Observation};
@@ -20,10 +21,12 @@ pub(crate) struct ObservedContainerReplica {
     file: FileId,
     disk: Arc<DiskHandle>,
     record: FileContainerRecord,
+    observed_name: name_policy::LookupName,
     parent: HeldParent,
     held: Arc<DiskRoot>,
     entity: ContainerEntity,
     draft: Option<draft::HeldDraft>,
+    rename: Option<rename::Rename>,
     // Initial publication and actual recovery may observe the same inode at
     // either end of the one decided rename. A published-only reader cannot.
     installed: OnceLock<()>,
@@ -36,6 +39,7 @@ impl ObservedContainerReplica {
         source: crate::engine::fresh_layout::containers::PublishedReplicaSource<'_>,
     ) -> Result<Self> {
         use crate::engine::fresh_layout::containers::ReplicaNamespace;
+        let location = source.location();
         let config = source.config();
         let resources = source.resources();
         let (file, record, disk, namespace, state) = source.into_parts();
@@ -69,15 +73,29 @@ impl ObservedContainerReplica {
             config, resources, state, record, id, parent, Observation::Published,
             &reservation, &mut HeldDirectories::new(),
         )?;
-        let held = open_published_container(
-            parent.root()?, &record.namespace.name, replica.entity,
-        )?;
         let installed = OnceLock::new();
-        let _ = installed.set(());
+        let (held, observed_name, rename) = match location {
+            crate::engine::fresh_layout::containers::ReplicaReadLocation::Published(name) => {
+                let held = open_published_container(parent.root()?, name, replica.entity)?;
+                let _ = installed.set(());
+                (held, name.clone(), None)
+            }
+            crate::engine::fresh_layout::containers::ReplicaReadLocation::Finalized {
+                source, target, sequence,
+            } => {
+                let (held, binding, complete) = rename::recover_names(
+                    parent.root()?, source, target, replica.entity, sequence,
+                )?;
+                if complete {
+                    let _ = installed.set(());
+                }
+                (held, target.clone(), Some(binding))
+            }
+        };
         let mut result = Self {
             file, _reservation: reservation,
-            disk: Arc::clone(disk), record: record.clone(), parent,
-            held: Arc::new(held), entity: replica.entity, draft: None, installed,
+            disk: Arc::clone(disk), record: record.clone(), observed_name, parent,
+            held: Arc::new(held), entity: replica.entity, draft: None, rename, installed,
         };
         if let Some((_, payload)) = record.working.draft() {
             result.draft = Some(draft::HeldDraft::capture(&result, *payload)?);
@@ -111,12 +129,70 @@ impl ObservedContainerReplica {
     }
 
     pub(crate) fn name(&self) -> &name_policy::LookupName {
-        &self.record.namespace.name
+        &self.observed_name
+    }
+
+    pub(super) fn require_rename_start(&self) -> Result<()> {
+        self.verify()?;
+        self.check_rename_start()
+    }
+
+    fn check_rename_start(&self) -> Result<()> {
+        if self.rename.as_ref().is_some_and(|rename| !rename.finalized)
+            && self.installed.get().is_none()
+            && self.held.optional_metadata(
+                &self.held.path().join(layout::VERSION_NAMES_INTENT.as_path()),
+            )?.is_some()
+        {
+            return Err(Failure::ContainerIdentity.into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn require_rename_binding(
+        &self, source: &name_policy::Name, target: &name_policy::Name,
+        sequence: storage_contract::Sequence,
+    ) -> Result<()> {
+        let rename = self.rename.as_ref().ok_or(Failure::ContainerScope)?;
+        if source.as_str() != rename.source.as_str() || target.as_str() != self.name().as_str()
+            || sequence != rename.sequence
+        {
+            return Err(Failure::ContainerScope.into());
+        }
+        Ok(())
     }
 
     pub(crate) fn body_path(&self, version: &FileVersion) -> Result<PathBuf> {
         self.require_version(version)?;
+        self.check_rename_start()?;
+        if let Some(rename) = &self.rename {
+            let expected = version_rename::CompletionBinding {
+                file: self.file,
+                history: self.record.history_tree_id,
+                sequence: rename.sequence,
+                target_name: name_policy::Name::parse(self.name().as_str())?,
+            };
+            if let Some(path) = version_rename::interrupted_path_bound(
+                &self.held, self.held.path(), version, &rename.source, &expected,
+            )? {
+                return Ok(path);
+            }
+            if self.installed.get().is_none() {
+                return ordinary_body_path(self.held.path(), version, &rename.source);
+            }
+        }
         ordinary_body_path(self.held.path(), version, self.name())
+    }
+
+    pub(crate) fn verify_version_body(&self, version: &FileVersion) -> Result<()> {
+        let reservation = crate::engine::payload_proof_budget().reserve(1)
+            .ok_or(Failure::ContainerBudget)?;
+        let path = self.body_path(version)?;
+        let body = verify_body(&self.held, &path, version)?;
+        self.verify()?;
+        drop(body);
+        drop(reservation);
+        Ok(())
     }
 
     fn identity(&self) -> FileIdentity {
@@ -125,21 +201,45 @@ impl ObservedContainerReplica {
 
     fn named_path(&self) -> Result<PathBuf> {
         Ok(self.parent.root()?.path()
-            .join(layout::namespace::directory(&self.record.namespace.name).as_path()))
+            .join(layout::namespace::directory(&self.observed_name).as_path()))
     }
 
     fn preparation_path(&self) -> Result<PathBuf> {
+        if let Some(rename) = &self.rename {
+            return Ok(self.parent.root()?.path()
+                .join(layout::namespace::directory(&rename.source).as_path()));
+        }
         let id = self.disk.seal.disk_id.parse::<DiskId>()?;
         let replica = self.record.replicas.get(&id).ok_or(Failure::ContainerScope)?;
         Ok(self.disk.management_root()?.path()
             .join(layout::container::preparation(replica.preparation).as_path()))
     }
 
+    fn origin_root(&self) -> Result<&DiskRoot> {
+        match &self.rename {
+            Some(_) => self.parent.root(),
+            None => self.disk.management_root(),
+        }
+    }
+
+    pub(super) fn current_path(&self) -> Result<PathBuf> {
+        self.verify()?;
+        if self.installed.get().is_some() {
+            self.named_path()
+        } else {
+            self.preparation_path()
+        }
+    }
+
+    pub(super) fn has_rename(&self) -> bool {
+        self.rename.is_some()
+    }
+
     fn verify_entity(&self) -> Result<()> {
         let (root, path) = if self.installed.get().is_some() {
             (self.parent.root()?, self.named_path()?)
         } else {
-            (self.disk.management_root()?, self.preparation_path()?)
+            (self.origin_root()?, self.preparation_path()?)
         };
         let current = root.private_child_matching(&path, self.identity())?;
         if current.directory_identity(current.path())?
@@ -161,7 +261,7 @@ impl ObservedContainerReplica {
     }
 
     /// Only PreparedNames consumes this after the real Accept/Finalize gate.
-    fn install(&self) -> Result<()> {
+    fn install(&self, observe: &mut impl FnMut(&'static str) -> Result<()>) -> Result<()> {
         self.verify()?;
         self.parent.install()?;
         if self.installed.get().is_some() {
@@ -169,11 +269,13 @@ impl ObservedContainerReplica {
             // The actual decision installer must complete both durability tails.
             let target = self.parent.root()?;
             target.sync_dir(target.path())?;
-            let source = self.disk.management_root()?;
-            source.sync_dir(source.path())?;
+            if self.rename.is_none() {
+                let source = self.disk.management_root()?;
+                source.sync_dir(source.path())?;
+            }
             return Ok(());
         }
-        let source = self.disk.management_root()?;
+        let source = self.origin_root()?;
         let target = self.parent.root()?;
         let from = self.preparation_path()?;
         let to = self.named_path()?;
@@ -181,10 +283,19 @@ impl ObservedContainerReplica {
         if target.optional_metadata(&to)?.is_some() {
             return Err(Failure::ContainerIdentity.into());
         }
-        source.rename_to_held_synced(&from, target, &to)?;
+        if self.rename.is_some() {
+            // One parent FD: preserve the primitive's same-inode sync de-duplication.
+            target.rename_noreplace_synced(&from, &to)?;
+        } else {
+            source.rename_to_held_synced(&from, target, &to)?;
+        }
         target.private_child_matching(&to, self.identity())?;
         self.installed.set(()).map_err(|_| Failure::ContainerIdentity)?;
-        self.verify()
+        self.verify()?;
+        if self.rename.is_some() {
+            observe("ordinary-container-renamed")?;
+        }
+        Ok(())
     }
 }
 
@@ -313,7 +424,15 @@ impl PreparedContainerEntities {
             let target = parent.root()?;
             let replica = record.replicas.get(id).ok_or(Failure::ContainerScope)?;
             let installed = OnceLock::new();
-            let (directory, entity) = if plan.additions().contains_key(&(*file, *id)) {
+            let mut rename = None;
+            let (directory, entity) = if let Some(change) = plan.rename(*file) {
+                let (directory, binding) = rename::prepare(
+                    target, change, replica.entity,
+                    storage_contract::Sequence::new(plan.budget_state().sequence),
+                )?;
+                rename = Some(binding);
+                (directory, replica.entity)
+            } else if plan.additions().contains_key(&(*file, *id)) {
                 let named = target.path()
                     .join(layout::namespace::directory(&record.namespace.name).as_path());
                 if target.optional_metadata(&named)?.is_some() {
@@ -332,8 +451,9 @@ impl PreparedContainerEntities {
             };
             held.insert((*file, *id), ObservedContainerReplica {
                 file: *file, _reservation: Arc::clone(&reservation),
-                disk: Arc::clone(handle), record: record.clone(), parent,
-                held: Arc::new(directory), entity, draft: None, installed,
+                disk: Arc::clone(handle), record: record.clone(),
+                    observed_name: record.namespace.name.clone(), parent,
+                held: Arc::new(directory), entity, draft: None, rename, installed,
             });
         }
         draft::populate(&mut held, input, context.config.max_file_bytes)?;
@@ -360,6 +480,18 @@ impl PreparedContainerEntities {
         )
     }
 
+    pub(crate) fn observe_candidate_with_locations(
+        context: &crate::engine::PlanningContext<'_>,
+        candidate: &crate::journal::Candidate,
+        original: &crate::publication_evidence::AdmittedSnapshot,
+        locations: &crate::engine::fresh_layout::containers::RecoveryRenameLocations<'_>,
+    ) -> Result<Self> {
+        Self::observe_candidate_inner(
+            context.config, context.disk_resources, context.state, context.snapshot,
+            candidate, original, CandidateAvailability::Required, Some(locations),
+        )
+    }
+
     /// Actual recovery prefix, not a synthesized PlanningContext or an inferred
     /// directory source. This remains read-only and cannot expose preparations.
     pub(crate) fn observe_candidate_from_prefix(
@@ -372,7 +504,7 @@ impl PreparedContainerEntities {
     ) -> Result<Self> {
         Self::observe_candidate_inner(
             config, resources, previous, previous_snapshot, candidate, original,
-            CandidateAvailability::Required,
+            CandidateAvailability::Required, None,
         )
     }
 
@@ -388,7 +520,7 @@ impl PreparedContainerEntities {
     ) -> Result<AvailableCandidateContainers> {
         let observed = Self::observe_candidate_inner(
             config, resources, previous, previous_snapshot, candidate, original,
-            CandidateAvailability::Available,
+            CandidateAvailability::Available, None,
         )?;
         Ok(AvailableCandidateContainers { observed })
     }
@@ -401,6 +533,7 @@ impl PreparedContainerEntities {
         candidate: &crate::journal::Candidate,
         original: &crate::publication_evidence::AdmittedSnapshot,
         availability: CandidateAvailability,
+        locations: Option<&crate::engine::fresh_layout::containers::RecoveryRenameLocations<'_>>,
     ) -> Result<Self> {
         let next = original.for_candidate(candidate)?.state();
         if &candidate.previous_snapshot != previous_snapshot
@@ -469,7 +602,27 @@ impl PreparedContainerEntities {
                     device: replica.entity.device(), inode: replica.entity.inode(),
                 };
                 let installed = OnceLock::new();
-                let directory = if previous.file_containers.get(file)
+                let mut rename = None;
+                let old = previous.file_containers.get(file);
+                let directory = if let Some(old) = old.filter(|old| {
+                    old.namespace.name != record.namespace.name
+                }) {
+                    if !parent.installed() {
+                        return Err(Failure::ContainerIdentity.into());
+                    }
+                    let permit_target = locations.map(|locations| {
+                        locations.permits_target(previous, next, candidate, *file, *id)
+                    }).transpose()?.unwrap_or(false);
+                    let (directory, binding, at_target) = rename::recover(
+                        common, old, record, replica.entity,
+                        storage_contract::Sequence::new(candidate.sequence), permit_target,
+                    )?;
+                    rename = Some(binding);
+                    if at_target {
+                        let _ = installed.set(());
+                    }
+                    directory
+                } else if previous.file_containers.get(file)
                     .is_some_and(|old| old.replicas.contains_key(id))
                 {
                     if !parent.installed() {
@@ -494,8 +647,10 @@ impl PreparedContainerEntities {
                 };
                 held.insert((*file, *id), ObservedContainerReplica {
                     file: *file, _reservation: Arc::clone(&reservation),
-                    disk: Arc::clone(handle), record: record.clone(), parent,
-                    held: Arc::new(directory), entity: replica.entity, draft: None, installed,
+                    disk: Arc::clone(handle), record: record.clone(),
+                    observed_name: record.namespace.name.clone(), parent,
+                    held: Arc::new(directory), entity: replica.entity,
+                    draft: None, rename, installed,
                 });
             }
         }
@@ -570,8 +725,10 @@ impl PreparedContainerEntities {
                 let _ = installed.set(());
                 held.insert((*file, *id), ObservedContainerReplica {
                     file: *file, _reservation: Arc::clone(&reservation),
-                    disk: Arc::clone(handle), record: record.clone(), parent,
-                    held: Arc::new(directory), entity: replica.entity, draft: None, installed,
+                    disk: Arc::clone(handle), record: record.clone(),
+                    observed_name: record.namespace.name.clone(), parent,
+                    held: Arc::new(directory), entity: replica.entity,
+                    draft: None, rename: None, installed,
                 });
             }
         }
@@ -718,13 +875,15 @@ impl PreparedContainerEntities {
         Ok(Arc::clone(&container.held))
     }
 
-    pub(super) fn install_decided(&self) -> Result<()> {
+    pub(super) fn install_decided(
+        &self, observe: &mut impl FnMut(&'static str) -> Result<()>,
+    ) -> Result<()> {
         self.verify()?;
         for directory in self.directories.values() {
             directory.install()?;
         }
         for container in self.held.values() {
-            container.install()?;
+            container.install(observe)?;
         }
         self.verify()
     }
