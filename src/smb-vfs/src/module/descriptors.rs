@@ -18,6 +18,32 @@ pub(super) struct Snapshot {
     pub(super) writable: bool,
     pub(super) io: Arc<Mutex<WriteSequence>>,
 }
+
+/// Storage promised by this successful Open, distinct from write permission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DescriptorRole {
+    PrivateWork,
+    VerifiedContent,
+    Directory,
+}
+
+impl DescriptorRole {
+    pub(super) fn for_open(info: &OpenResult, writable: bool) -> Self {
+        match info.kind {
+            storage_contract::NamespaceEntryKind::Directory => Self::Directory,
+            // Manual opens own a real private FD without a WorkspaceId. The
+            // workspace case also preserves O_RDONLY | O_CREAT private files;
+            // neither classification grants data-write permission.
+            storage_contract::NamespaceEntryKind::File
+                if writable || info.workspace_id.is_some() =>
+            {
+                Self::PrivateWork
+            }
+            storage_contract::NamespaceEntryKind::File => Self::VerifiedContent,
+        }
+    }
+}
+
 /// # Safety
 /// handle obeys the module host contract and its Context is exclusively accessed
 /// for this call. fsp is only used as an opaque lookup key, never dereferenced.

@@ -2,6 +2,7 @@ use super::descriptors::close_opened;
 use super::*;
 mod mtime_tests;
 mod seek_tests;
+mod manual_fd_tests;
 
 #[test]
 fn sync_and_async_immutable_reads_use_verified_rpc_bytes_with_a_directory_placeholder() {

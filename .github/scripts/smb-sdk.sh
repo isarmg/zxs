@@ -4,8 +4,10 @@ set -euo pipefail
 mode=full
 if [[ $# -eq 1 && "$1" == --build-only ]]; then
   mode=build-only
+elif [[ $# -eq 1 && "$1" == --manual-fd-tests ]]; then
+  mode=manual-fd-tests
 elif [[ $# -ne 0 ]]; then
-  printf 'usage: %s [--build-only]\n' "$0" >&2
+  printf 'usage: %s [--build-only|--manual-fd-tests]\n' "$0" >&2
   exit 2
 fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -53,6 +55,10 @@ export ZXS_SMB_SDK_SOURCE="$source"
 export ZXS_SMB_SDK_BUILD="$source/bin/default"
 export ZXS_SMB_SDK_CACHE="$cache"
 export LD_LIBRARY_PATH="$source/bin/shared:$source/bin/shared/private"
+if [[ "$mode" == manual-fd-tests ]]; then
+  bash .github/scripts/smb-vfs-check.sh --manual-fd-tests
+  exit 0
+fi
 if [[ "$mode" == build-only ]]; then
   bash .github/scripts/smb-vfs-check.sh --build-only
 else

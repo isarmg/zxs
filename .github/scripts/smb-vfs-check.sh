@@ -5,10 +5,12 @@ mode=full
 capture_args=()
 if [[ $# -eq 1 && "$1" == --build-only ]]; then
   mode=build-only
+elif [[ $# -eq 1 && "$1" == --manual-fd-tests ]]; then
+  mode=manual-fd-tests
 elif [[ $# -eq 1 && "$1" == --capture-clippy-baseline ]]; then
   capture_args=(--capture-clippy-baseline)
 elif [[ $# -ne 0 ]]; then
-  printf 'usage: %s [--build-only|--capture-clippy-baseline]\n' "$0" >&2
+  printf 'usage: %s [--build-only|--manual-fd-tests|--capture-clippy-baseline]\n' "$0" >&2
   exit 2
 fi
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -16,6 +18,10 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 : "${ZXS_SMB_SDK_BUILD:?}"
 cache="${ZXS_SMB_SDK_CACHE:-$PWD/target/smb-debian13}"
 mkdir -p "$cache"
+if [[ "$mode" == manual-fd-tests ]]; then
+  python3 .github/scripts/check-smb-manual-descriptors.py
+  exit 0
+fi
 if [[ "$mode" == full ]]; then
 python3 .github/scripts/check-rust-diagnostics.py \
   --clippy-scope smb-sdk --clippy-report "$cache/product/clippy-warnings.json" \

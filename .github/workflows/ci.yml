@@ -427,6 +427,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      smb_manual_fd: ${{ steps.sdk.outputs.smb_manual_fd }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -435,6 +436,19 @@ jobs:
       - name: Partition the complete same-commit selection
         id: plan
         run: python3 .github/scripts/check-targeted-ci.py matrix
+      - name: Route selected real-SDK descriptor tests
+        id: sdk
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          summary = json.loads(Path('target/targeted-ci/summary.json').read_text())
+          if summary['head'] != os.environ['GITHUB_SHA'] or summary['status'] != 'planned':
+              raise ValueError('SDK selection lacks the current admitted plan')
+          selected = 'smb-vfs-manual-fd' in summary['plan']['groups']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('smb_manual_fd=' + str(selected).lower() + '\n')
+          PY
       - name: Retain complete selected scope
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -443,6 +457,14 @@ jobs:
           path: target/targeted-ci/summary.json
           if-no-files-found: error
           retention-days: 7
+
+  targeted-smb-sdk:
+    name: Selected real-SDK descriptor tests
+    needs: targeted-plan
+    if: needs.targeted-plan.outputs.smb_manual_fd == 'true'
+    uses: ./.github/workflows/smb-sdk.yml
+    with:
+      suite: manual-fd
 
   targeted:
     name: Selected change tests (${{ matrix.index }})
@@ -486,7 +508,7 @@ jobs:
 
   targeted-coverage:
     name: Complete same-commit targeted coverage
-    needs: [targeted-plan, targeted]
+    needs: [targeted-plan, targeted, targeted-smb-sdk]
     if: always() && needs.targeted-plan.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -500,6 +522,11 @@ jobs:
         env:
           ZXS_TARGETED_JOB_RESULT: ${{ needs.targeted.result }}
         run: test "$ZXS_TARGETED_JOB_RESULT" = success
+      - name: Require the selected real-SDK descriptor job
+        if: always() && needs.targeted-plan.outputs.smb_manual_fd == 'true'
+        env:
+          ZXS_TARGETED_SDK_RESULT: ${{ needs.targeted-smb-sdk.result }}
+        run: test "$ZXS_TARGETED_SDK_RESULT" = success
       - name: Fetch every targeted shard from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

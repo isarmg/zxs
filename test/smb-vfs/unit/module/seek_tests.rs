@@ -8,6 +8,7 @@ use std::{
 
 fn with_seek_host(
     writable: bool,
+    workspace: bool,
     authorization: Vec<Option<storage_contract::ErrorCode>>,
     witness: impl FnOnce(
         &mut sdk::vfs_handle_struct,
@@ -95,7 +96,7 @@ fn with_seek_host(
             size: if writable { 6 } else { 1 << 34 },
             max_file_bytes: 1 << 35,
             version_id: Some("version".into()),
-            workspace_id: writable.then(|| "workspace".into()),
+            workspace_id: workspace.then(|| "workspace".into()),
             mtime: smb_protocol::protocol::FileMtime::Unpublished {},
         }),
         fd: file.try_clone().unwrap().into(),
@@ -143,7 +144,7 @@ fn with_seek_host(
 fn registered_readonly_seek_rejects_placeholder_geometry_and_rechecks_admission() {
     let mut authorization = vec![None; 5];
     authorization.push(Some(storage_contract::ErrorCode::SmbRebindRequired));
-    with_seek_host(false, authorization, |host, fsp, authenticated, _| {
+    with_seek_host(false, false, authorization, |host, fsp, authenticated, _| {
         let seek = FUNCTIONS.get().unwrap().lseek_fn.unwrap();
         // SAFETY: the helper retains the authenticated real SDK objects and
         // directory placeholder until this registered callback returns.
@@ -170,38 +171,40 @@ fn registered_readonly_seek_rejects_placeholder_geometry_and_rechecks_admission(
 
 #[test]
 fn registered_writable_seek_preserves_work_fd_position_length_and_kernel_errors() {
-    let mut authorization = vec![None; 8];
-    authorization.push(Some(storage_contract::ErrorCode::Forbidden));
-    with_seek_host(true, authorization, |host, fsp, _, file| {
-        let seek = FUNCTIONS.get().unwrap().lseek_fn.unwrap();
-        // SAFETY: the helper owns the work FD and live real SDK objects; each
-        // call is serialized on the same event thread and awaits live admission.
-        unsafe {
-            assert_eq!(seek(host, fsp, 0, libc::SEEK_END), 6);
-            file.set_len(11).unwrap();
-            assert_eq!(seek(host, fsp, 0, libc::SEEK_END), 11);
-            assert_eq!(seek(host, fsp, 2, libc::SEEK_SET), 2);
-            assert_eq!(seek(host, fsp, 3, libc::SEEK_CUR), 5);
-            assert_eq!(seek(host, fsp, -1, libc::SEEK_END), 10);
-            assert_eq!(seek(host, fsp, -1, libc::SEEK_SET), -1);
-            assert_eq!(*libc::__errno_location(), libc::EINVAL);
-            for whence in [libc::SEEK_DATA, libc::SEEK_HOLE] {
-                let expected = libc::lseek(file.as_raw_fd(), 0, whence);
-                let error = if expected < 0 {
-                    *libc::__errno_location()
-                } else {
-                    0
-                };
-                assert_eq!(seek(host, fsp, 0, whence), expected);
-                if expected < 0 {
-                    assert_eq!(*libc::__errno_location(), error);
+    for workspace in [true, false] {
+        let mut authorization = vec![None; 8];
+        authorization.push(Some(storage_contract::ErrorCode::Forbidden));
+        with_seek_host(true, workspace, authorization, |host, fsp, _, file| {
+            let seek = FUNCTIONS.get().unwrap().lseek_fn.unwrap();
+            // SAFETY: the helper owns the work FD and live real SDK objects; each
+            // call is serialized on the same event thread and awaits live admission.
+            unsafe {
+                assert_eq!(seek(host, fsp, 0, libc::SEEK_END), 6);
+                file.set_len(11).unwrap();
+                assert_eq!(seek(host, fsp, 0, libc::SEEK_END), 11);
+                assert_eq!(seek(host, fsp, 2, libc::SEEK_SET), 2);
+                assert_eq!(seek(host, fsp, 3, libc::SEEK_CUR), 5);
+                assert_eq!(seek(host, fsp, -1, libc::SEEK_END), 10);
+                assert_eq!(seek(host, fsp, -1, libc::SEEK_SET), -1);
+                assert_eq!(*libc::__errno_location(), libc::EINVAL);
+                for whence in [libc::SEEK_DATA, libc::SEEK_HOLE] {
+                    let expected = libc::lseek(file.as_raw_fd(), 0, whence);
+                    let error = if expected < 0 {
+                        *libc::__errno_location()
+                    } else {
+                        0
+                    };
+                    assert_eq!(seek(host, fsp, 0, whence), expected);
+                    if expected < 0 {
+                        assert_eq!(*libc::__errno_location(), error);
+                    }
                 }
+                let position = libc::lseek(file.as_raw_fd(), 0, libc::SEEK_CUR);
+                assert!(position >= 0);
+                assert_eq!(seek(host, fsp, 99, libc::SEEK_SET), -1);
+                assert_eq!(*libc::__errno_location(), libc::EACCES);
+                assert_eq!(libc::lseek(file.as_raw_fd(), 0, libc::SEEK_CUR), position);
             }
-            let position = libc::lseek(file.as_raw_fd(), 0, libc::SEEK_CUR);
-            assert!(position >= 0);
-            assert_eq!(seek(host, fsp, 99, libc::SEEK_SET), -1);
-            assert_eq!(*libc::__errno_location(), libc::EACCES);
-            assert_eq!(libc::lseek(file.as_raw_fd(), 0, libc::SEEK_CUR), position);
-        }
-    });
+        });
+    }
 }

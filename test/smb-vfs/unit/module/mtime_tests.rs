@@ -19,7 +19,7 @@ fn saved(seconds: u64) -> FileMtime {
 
 #[test]
 fn mtime_registered_sdk_callbacks_project_save_time_and_keep_read_handles_fixed() {
-    for writable in [false, true] {
+    for (writable, workspace) in [(false, false), (true, true), (true, false)] {
         let stem = format!(
             "zxs-vfs-mtime-{}-{}",
             std::process::id(),
@@ -124,7 +124,7 @@ fn mtime_registered_sdk_callbacks_project_save_time_and_keep_read_handles_fixed(
                 size: 3,
                 max_file_bytes: 4096,
                 version_id: Some("version".into()),
-                workspace_id: writable.then(|| "workspace".into()),
+                workspace_id: workspace.then(|| "workspace".into()),
                 mtime: saved(1_500_000_000),
             }),
             fd: file.try_clone().unwrap().into(),

@@ -5146,6 +5146,13 @@
         }
       ]
     },
+    "smb-vfs-manual-fd": {
+      "reason": "Real writable Manual FDs have no WorkspaceId. Preserve authorized local read/stat/seek, old immutable placeholder RPCs and terminal detach. Generic runners execute routing regressions only; the same admitted group also requires the separate exact Debian 13 SDK job and seven actual current-build VFS tests. No Server or incremental storage acceptance claim.",
+      "python_tests": [
+        "test_smb_vfs_manual_ci"
+      ],
+      "rust_targets": []
+    },
     "ordinary-smb-manual-draft": {
       "reason": "Actual authenticated SMB Manual FILE handles publish only file.draft.write, retain frozen uncertain requests and local bytes/quota, and cold-read the published shared draft. The genuine HTTP management endpoint alone creates a FILE version. Include lost-response/later-FD-byte refusal and the unchanged Automatic path. No new pool format, RPC wire, unflushed-orphan adoption, or Samba-network acceptance claim.",
       "python_tests": [
@@ -15218,6 +15225,72 @@
       "path": "test/server/integration/phase1_smb_rpc.rs",
       "groups": [
         "automatic-smb-working-clone"
+      ]
+    },
+    {
+      "path": "src/smb-vfs/src/module.rs",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "src/smb-vfs/src/module/descriptors.rs",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb-vfs/unit/module/tests.rs",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb-vfs/unit/module/manual_fd_tests.rs",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb-vfs/unit/module/seek_tests.rs",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb-vfs/unit/module/mtime_tests.rs",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": ".github/scripts/check-smb-manual-descriptors.py",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": ".github/scripts/smb-vfs-check.sh",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": ".github/scripts/smb-sdk.sh",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": ".github/workflows/smb-sdk.yml",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/ci/test_smb_vfs_manual_ci.py",
+      "groups": [
+        "smb-vfs-manual-fd"
       ]
     }
   ],

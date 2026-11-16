@@ -51,7 +51,7 @@ mod authentication;
 mod descriptors;
 mod directory_ownership;
 mod paths;
-use descriptors::{error_errno, finish_open, snapshot};
+use descriptors::{DescriptorRole, error_errno, finish_open, snapshot};
 use paths::{at_name, name, text};
 
 struct Open {
@@ -315,7 +315,8 @@ unsafe extern "C" fn pread(
                 return Err(bad());
             }
             let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-            let private_work = opened.info.workspace_id.is_some();
+            let private_work = DescriptorRole::for_open(&opened.info, opened.writable)
+                == DescriptorRole::PrivateWork;
             let count = opened.info.read_count(private_work, offset as u64, count);
             if !private_work {
                 let output = if count == 0 {
@@ -366,7 +367,9 @@ unsafe extern "C" fn lseek(
             let opened = context.files.get(&(fsp as usize)).ok_or_else(bad)?;
             let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
             context.client.authorize_read(opened.info.handle)?;
-            if opened.info.workspace_id.is_none() {
+            if DescriptorRole::for_open(&opened.info, opened.writable)
+                != DescriptorRole::PrivateWork
+            {
                 // SMB2/3 tracks file position independently of VFS lseek.
                 // The non-content FD proves neither position nor allocation;
                 // reject raw seeks rather than query its directory geometry.
@@ -534,7 +537,8 @@ unsafe extern "C" fn pread_send(
         // SAFETY: The host handle is live on its owning event loop; snapshot duplicates the FD and
         // returns no host pointers to workers.
         let opened = unsafe { snapshot(handle, fsp) }?;
-        let private_work = opened.info.workspace_id.is_some();
+        let private_work = DescriptorRole::for_open(&opened.info, opened.writable)
+            == DescriptorRole::PrivateWork;
         let count = opened.info.read_count(private_work, offset as u64, count);
         let mut bytes = Vec::new();
         bytes
@@ -554,7 +558,9 @@ unsafe extern "C" fn pread_send(
             prepare,
             move |(opened, mut bytes)| {
                 let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-                let result = if opened.info.workspace_id.is_some() {
+                let result = if DescriptorRole::for_open(&opened.info, opened.writable)
+                    == DescriptorRole::PrivateWork
+                {
                     opened.client.authorize_read(opened.info.handle)?;
                     let result = libc::pread(
                         opened.fd.as_raw_fd(),
@@ -827,18 +833,14 @@ unsafe fn authorized_fstat(
     if unsafe { libc::fstat(opened.fd.as_raw_fd(), &mut physical) } < 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // Read-only creation still owns a private empty work file until save.
-    // Descriptor storage and the client's data-write access are distinct.
-    let private_work = opened.info.workspace_id.is_some();
-    let size = if opened.info.kind == NamespaceEntryKind::Directory {
-        0
-    } else if private_work {
-        physical.st_size
-    } else {
-        i64::try_from(opened.info.size)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?
+    let role = DescriptorRole::for_open(&opened.info, opened.writable);
+    let size = match role {
+        DescriptorRole::Directory => 0,
+        DescriptorRole::PrivateWork => physical.st_size,
+        DescriptorRole::VerifiedContent => i64::try_from(opened.info.size)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?,
     };
-    let mtime = if private_work {
+    let mtime = if role == DescriptorRole::PrivateWork {
         metadata.mtime
     } else {
         opened.info.mtime
