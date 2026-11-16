@@ -103,7 +103,7 @@ fn remote_code(error: &io::Error) -> ErrorCode {
 
 fn version_bytes(engine: &Engine, version: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
-    engine.open_content(version).unwrap().read_to_end(&mut bytes).unwrap();
+    engine.open_content(version).unwrap().file.read_to_end(&mut bytes).unwrap();
     bytes
 }
 

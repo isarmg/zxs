@@ -22,16 +22,18 @@ fn lost_manual_reply_reuses_the_frozen_request_and_never_acknowledges_later_fd_b
     }).unwrap();
     let entry = engine.namespace_tree(&repository.main_branch_id).unwrap()
         .get("report.txt").unwrap().clone();
-    let branch = engine.create_file_branch(
-        &entry.file_id, &entry.version_id,
-        &storage_contract::BranchName::parse("manual FILE branch").unwrap(),
-        "alice", OperationId::generate().unwrap(),
-    ).unwrap();
     let path = name_policy::PortablePath::parse("report.txt").unwrap();
-    engine.select_file_branch_at(
-        &repository.repository_id, &path, &entry.file_id,
-        branch.result["branch_id"].as_str().unwrap(), "alice", OperationId::generate().unwrap(),
-    ).unwrap();
+    // The actual file-manager save already materialized its selected FILE branch.
+    // Creating another branch here selects unwritten inheritance, not a draft base.
+    let context = engine.file_context(&repository.repository_id, path.as_str()).unwrap();
+    let branch = &engine.state().branches[&context.branch_id];
+    assert_eq!(branch.branch_kind, storage_contract::BranchKind::File);
+    assert_eq!(branch.file_id.as_deref(), Some(entry.file_id.as_str()));
+    assert_eq!(branch.history_tree_id, repository.history_tree_id);
+    assert_ne!(branch.branch_id, repository.main_branch_id);
+    assert!(branch.pending_file_versions.is_empty());
+    assert!(context.inherited_from.is_none());
+    assert_eq!(engine.file_branch_head(&branch.branch_id).unwrap(), entry.version_id);
     let target = DraftLocation {
         repository: repository.repository_id.parse().unwrap(), path,
         entry: entry.entry_id.parse().unwrap(), file: entry.file_id.parse().unwrap(),
