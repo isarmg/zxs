@@ -25,6 +25,9 @@ impl Fixture {
     }
     fn with_config(temp: tempfile::TempDir, mut config: Config, relocate: bool) -> Self {
         let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
+        // Initialization publishes the captured five-area identities. Later
+        // requests must retain that actual configuration, not its empty input.
+        config = (*engine.config).clone();
         if relocate {
             // Move before creating a workspace: Genesis has no historical
             // generation aliases for already persisted absolute staging paths.
@@ -46,10 +49,8 @@ impl Fixture {
             engine = Engine::open(&temp.path().join("system")).unwrap();
         }
         let repository = engine
-            .create_repository(
-                &RepositoryName::parse("readmit-source").unwrap(),
+            .create_disk_root(
                 &config.disks[0].slot_id,
-                1,
                 "admin",
                 OperationId::generate().unwrap(),
             )
@@ -155,8 +156,9 @@ fn relocated_genesis_anchors_survive_exit_readmission_and_cold_restart() {
             .disks
             .iter()
             .map(|disk| {
-                let bytes =
-                    fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap();
+                let bytes = fs::read(
+                    disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
+                ).unwrap();
                 let saved: Config = decode_strict(&bytes).unwrap();
                 assert_ne!(saved.disks[0].root, fixture.config.disks[0].root);
                 bytes
@@ -167,7 +169,7 @@ fn relocated_genesis_anchors_survive_exit_readmission_and_cold_restart() {
         let operation = OperationId::generate().unwrap();
         let archive = fixture.begin(operation);
         let disk = fixture.config.disks[0].clone();
-        let anchor = disk.root.join("metadata/pool-membership/config.json");
+        let anchor = disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path());
         let parked = fixture.temp.path().join("retained-anchor.json");
         fs::rename(&anchor, &parked).unwrap();
         assert!(
@@ -200,7 +202,9 @@ fn relocated_genesis_anchors_survive_exit_readmission_and_cold_restart() {
         );
         for (disk, bytes) in fixture.config.disks.iter().zip(&anchors) {
             assert_eq!(
-                fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap(),
+                fs::read(
+                    disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
+                ).unwrap(),
                 *bytes
             );
         }
@@ -222,7 +226,9 @@ fn relocated_genesis_anchors_survive_exit_readmission_and_cold_restart() {
         assert_eq!(body, b"retained bytes");
         for (disk, bytes) in fixture.config.disks.iter().zip(&anchors) {
             assert_eq!(
-                fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap(),
+                fs::read(
+                    disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
+                ).unwrap(),
                 *bytes
             );
         }
@@ -246,9 +252,25 @@ fn disabled_metadata_and_data_only_readmit_into_new_io_lifetime_and_cold_restart
             .engine
             .create_workspace(&fixture.branch, "admin")
             .unwrap();
-        let version = &fixture.engine.state.versions[&fixture.version];
-        let payload_directory = version_dir(&disk, &version.history_tree_id, &fixture.version);
-        let payload = files(&payload_directory);
+        let payload_directories = {
+            let version = &fixture.engine.state.versions[&fixture.version];
+            let source = crate::engine::fresh_layout::containers::observe_replica(
+                &fixture.engine.config,
+                &fixture.engine.disk_resources,
+                &fixture.engine.state,
+                version.file_id.parse().unwrap(),
+                &disk,
+            ).unwrap();
+            let material = crate::disk::VersionMaterial::current(&source, version).unwrap();
+            [
+                material.directory().unwrap(),
+                material.container().unwrap().path().to_owned(),
+            ]
+        };
+        // Preserve both the actual authenticated version metadata and its
+        // independently held BODY container across the I/O lifetime change.
+        let payload = payload_directories.iter()
+            .flat_map(|path| files(path)).collect::<BTreeMap<_, _>>();
         let history = canonical_json(&fixture.engine.state.commits).unwrap();
         let offline = fixture.disable();
         let old_locator_records = files(&fixture.temp.path().join("system/bootstrap-discovery"))
@@ -316,7 +338,11 @@ fn disabled_metadata_and_data_only_readmit_into_new_io_lifetime_and_cold_restart
             canonical_json(&fixture.engine.state.commits).unwrap(),
             history
         );
-        assert_eq!(files(&payload_directory), payload);
+        assert_eq!(
+            payload_directories.iter()
+                .flat_map(|path| files(path)).collect::<BTreeMap<_, _>>(),
+            payload,
+        );
         assert!(old_binding.admit().is_err());
         assert!(old.root.directory(&disk.root).is_err());
         assert!(old_observer.metadata().is_err());
@@ -400,10 +426,8 @@ fn readmission_preserves_detached_masks_and_cannot_restore_a_deleted_registratio
     let other = fixture.config.disks[1].clone();
     let repository = fixture
         .engine
-        .create_repository(
-            &RepositoryName::parse("detached-history").unwrap(),
+        .create_disk_root(
             &other.slot_id,
-            1,
             "admin",
             OperationId::generate().unwrap(),
         )
