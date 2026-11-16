@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
-use storage_contract::{DiskId, FileId, OperationId, VersionId};
+use storage_contract::{ContentHash, DiskId, FileId, OperationId, VersionId};
 
 #[derive(Debug, Eq, PartialEq)]
 struct BodyIdentity {
@@ -103,7 +103,7 @@ fn observe(
             let metadata = body.metadata().unwrap();
             let mut bytes = Vec::new();
             body.read_to_end(&mut bytes).unwrap();
-            assert_eq!(blake3::hash(&bytes).to_hex().to_string(), version.content_hash);
+            assert_eq!(ContentHash::from_digest(blake3::hash(&bytes)), version.content_hash);
             found.insert((disk.disk_id.parse().unwrap(), version.version_id.parse().unwrap()),
                 BodyIdentity {
                     container: (entity.device, entity.inode),
@@ -187,7 +187,7 @@ fn same_parent_rename_preserves_full_history_and_each_replica() {
         let mut body = engine.open_content(&version.version_id).unwrap();
         let mut bytes = Vec::new();
         body.file.read_to_end(&mut bytes).unwrap();
-        assert_eq!(blake3::hash(&bytes).to_hex().to_string(), version.content_hash);
+        assert_eq!(ContentHash::from_digest(blake3::hash(&bytes)), version.content_hash);
     }
 }
 

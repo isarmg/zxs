@@ -2764,7 +2764,8 @@ class ContainerTagsSelection(unittest.TestCase):
                         self, self.policy, [path],
                         ['container-tags-storage', 'engine-date-errors',
                          'engine-integer-errors', 'file-material-copy-reuse'],
-                        ['fresh-managed-core', 'ordinary-namespace-parents'],
+                        ['fresh-managed-core', 'ordinary-namespace-parents',
+                         'ordinary-container-rename'],
                     )
                 else:
                     plan = CI.select_plan(self.policy, [path])
