@@ -1,6 +1,7 @@
-//! Clean-path explicit publication from one registered, durably sealed edit.
-//! Pending is retained on every uncertain cross-domain outcome; local files do
-//! not manufacture a continuation. This is not a manager or SMB route.
+//! Explicit publication from one registered, durably sealed edit. Only an
+//! independently published FILE child and directory node may finish their exact
+//! ledger/SYSTEM tail on retry. Earlier uncertain preparations remain Pending.
+mod recovery;
 mod version;
 pub(crate) use version::ReservedFileVersion;
 
@@ -10,7 +11,7 @@ use crate::directory_worktree::store::HeldSparseWorktree;
 use crate::persist::snapshot_worktree::{
     CommitCompletion, CommitNode, CommitReservation, FileRequestCommitment, Record,
 };
-use crate::snapshot_worktree::registry::ReceiptIndex;
+use crate::snapshot_worktree::registry::{CommitRetry, ReceiptIndex};
 use crate::snapshot_worktree::{RegistrationError, Result, publication, with_worktree};
 use crate::working_tree::snapshot::{
     AdmittedSnapshotManifest, HeldSnapshotNode, SnapshotFile, SnapshotFileSource,
@@ -25,11 +26,17 @@ use storage_contract::{OperationId, Principal, Sequence};
 pub(crate) fn commit_worktree(
     engine: &mut Engine, request: &CommitWorktree, principal: &Principal,
 ) -> Result<SnapshotHandle> {
-    let index = ReceiptIndex::capture(engine.state())?;
-    if let Some(handle) = index.retry_commit(request, principal)? {
-        index.reopen_node(engine, handle)?;
-        with_worktree(engine, request.target, |_| Ok(()))?;
-        return Ok(handle);
+    let source = Arc::clone(&engine.state);
+    let index = ReceiptIndex::capture(&source)?;
+    if let Some(retry) = index.retry_commit(request, principal)? {
+        return match retry {
+            CommitRetry::Complete(handle) => {
+                index.reopen_node(engine, handle)?;
+                with_worktree(engine, request.target, |_| Ok(()))?;
+                Ok(handle)
+            }
+            CommitRetry::Published(tail) => recovery::resume(engine, &index, tail, principal),
+        };
     }
     if engine.admitted_current_namespaces().map_err(RegistrationError::Publication)?.is_some()
         || engine.config.generation().is_some()
@@ -197,6 +204,8 @@ fn complete(
         &Record::PublishCommitNode(CommitNode {
             reserve: plan.request.operation_id, reservation: commitment, binding: node.binding(),
         }))?;
+    #[cfg(feature = "fault-injection")]
+    engine.failpoint("after_worktree_node_publication").map_err(RegistrationError::Publication)?;
     let index = ReceiptIndex::capture(engine.state())?;
     let files = vec![plan.file_result()?];
     let checkpoint = ledger.append(Event::Completed {
@@ -204,6 +213,15 @@ fn complete(
     }, |publication, files| {
         index.require_committed_publication(plan.request.operation_id, publication, files)
     }).map_err(RegistrationError::Ledger)?;
+    publish_completion(engine, principal, &plan, commitment, checkpoint)
+}
+
+fn publish_completion(
+    engine: &mut Engine, principal: &Principal, plan: &CommitReservation,
+    commitment: MaterialCommitment, checkpoint: crate::directory_worktree::ledger::Checkpoint,
+) -> Result<SnapshotHandle> {
+    #[cfg(feature = "fault-injection")]
+    engine.failpoint("after_worktree_ledger_completion").map_err(RegistrationError::Publication)?;
     publication::publish_new(engine, plan.completion, principal,
         &Record::CompleteCommit(CommitCompletion {
             reserve: plan.request.operation_id, reservation: commitment, checkpoint,

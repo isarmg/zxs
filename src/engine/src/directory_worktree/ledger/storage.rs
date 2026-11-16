@@ -1,3 +1,5 @@
+mod published;
+
 use crate::directory_worktree::projection::{FileResult, SparseProjection};
 use crate::directory_worktree::projection::namespace::NamespaceChange;
 use crate::name_budget::NameBudget;
@@ -313,17 +315,8 @@ impl<'a> HeldWorktreeLedger<'a> {
         if self.state.prior(&event)?.is_some() {
             return Ok(self.checkpoint);
         }
-        let sequence = self.checkpoint.sequence.next().map_err(LedgerError::Sequence)?;
-        if sequence.get() >= MAX_FRAMES {
-            return Err(LedgerError::Budget);
-        }
-        let frame = Frame {
-            format: Format::WorktreeTransitions, sequence,
-            previous: Some(self.checkpoint.commitment), body: Body::Event(event.clone()),
-        };
-        let bytes = frame.bytes()?;
+        let (bytes, checkpoint) = event_frame(self.checkpoint, &event)?;
         let total = bounded_total(self.bytes, bytes.len())?;
-        let checkpoint = frame.checkpoint(&bytes);
         let mut next = self.state.clone();
         next.apply(self.source.manifest(), &event, checkpoint, &mut verify)?;
         match &event {
@@ -452,6 +445,20 @@ fn open_bound_directory(parent: &DiskRoot, binding: Binding) -> Result<DiskRoot,
 fn bounded_total(before: usize, additional: usize) -> Result<usize, LedgerError> {
     before.checked_add(additional).filter(|total| *total <= MAX_LEDGER_BYTES)
         .ok_or(LedgerError::Budget)
+}
+
+fn event_frame(before: Checkpoint, event: &Event) -> Result<(Vec<u8>, Checkpoint), LedgerError> {
+    let sequence = before.sequence.next().map_err(LedgerError::Sequence)?;
+    if sequence.get() >= MAX_FRAMES {
+        return Err(LedgerError::Budget);
+    }
+    let frame = Frame {
+        format: Format::WorktreeTransitions, sequence,
+        previous: Some(before.commitment), body: Body::Event(event.clone()),
+    };
+    let bytes = frame.bytes()?;
+    let checkpoint = frame.checkpoint(&bytes);
+    Ok((bytes, checkpoint))
 }
 fn write_frame(directory: &DiskRoot, bytes: &[u8], checkpoint: Checkpoint)
     -> Result<(), LedgerError>

@@ -23,7 +23,8 @@ use storage_contract::{BranchName, EntryId, OperationId, Principal, RepositoryId
 mod edits;
 mod commits;
 use commits::CommitRecord;
-pub(super) use commits::verify_file_publication;
+pub(super) use commits::{CommitRetry, verify_file_publication};
+pub(crate) use commits::PublishedCommitTail;
 use edits::{EditRecordEntry, LedgerHead};
 
 /// This is a relation among independently admitted SYSTEM receipts. It holds

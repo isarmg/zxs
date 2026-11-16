@@ -15,7 +15,9 @@ mod source;
 mod edit;
 mod commit;
 pub use source::SnapshotSourceError;
-pub(crate) use registry::{DirectoryRegistration, RegisteredNamespaceDirectories};
+pub(crate) use registry::{
+    DirectoryRegistration, PublishedCommitTail, RegisteredNamespaceDirectories,
+};
 pub(crate) use prepare::prepare_namespace_host;
 pub(crate) use initialize::initialize_root;
 pub(crate) use instance::{create_worktree, with_worktree};

@@ -1,5 +1,5 @@
 //! A directory result is selected by its SYSTEM publication, never local HEAD.
-use crate::directory_worktree::ledger::LedgerError;
+use crate::directory_worktree::ledger::{Binding, Checkpoint, Event, LedgerError};
 use crate::directory_worktree::lifecycle::{
     DirectoryDestination, Publication as LedgerPublication, PublicationIntent, PublicationMode,
     PublicationScope, SnapshotSource,
@@ -12,7 +12,7 @@ use crate::snapshot_worktree::registry::{
 };
 use crate::snapshot_worktree::{RegistrationError, Result};
 use crate::working_tree::snapshot::{
-    AdmittedSnapshotManifest, SnapshotEntryContent, SnapshotFileSource,
+    AdmittedSnapshotManifest, HeldSnapshotNode, SnapshotEntryContent, SnapshotFileSource,
 };
 use crate::{CommitState, State};
 use storage_contract::snapshot_worktree::{CommitWorktree, SnapshotHandle, WorktreeHandle};
@@ -29,6 +29,78 @@ pub(super) struct CommitRecord<'a> {
     pub(super) commitment: MaterialCommitment,
     pub(super) node: Publication<CommitNode>,
     pub(super) completion: Publication<CommitCompletion>,
+}
+
+pub(in crate::snapshot_worktree) enum CommitRetry<'a> {
+    Complete(SnapshotHandle),
+    Published(PublishedCommitTail<'a>),
+}
+
+/// Only the admitted index can issue this after the exact FILE child and node
+/// publication. It selects two deterministic ledger frames, not a local tail
+/// or permission to construct a FILE version or adopt an unregistered node.
+pub(crate) struct PublishedCommitTail<'a> {
+    entry: &'a CommitRecord<'a>,
+    node: crate::working_tree::snapshot::SnapshotNodeBinding,
+}
+
+impl PublishedCommitTail<'_> {
+    pub(in crate::snapshot_worktree) fn plan(&self) -> &CommitReservation {
+        &self.entry.plan
+    }
+
+    pub(in crate::snapshot_worktree) fn commitment(&self) -> MaterialCommitment {
+        self.entry.commitment
+    }
+
+    pub(crate) fn binding(&self) -> Binding {
+        self.entry.plan.binding
+    }
+
+    pub(crate) fn before(&self) -> Checkpoint {
+        self.entry.plan.before
+    }
+
+    pub(crate) fn transitions(&self) -> [Event; 2] {
+        let plan = &self.entry.plan;
+        [Event::Commit {
+            operation: plan.request.operation_id,
+            expected: plan.request.expected,
+            current_head: plan.source.node_id,
+            fork_branch: plan.source.branch_id,
+        }, Event::Completed {
+            publication: plan.publication(), files: vec![self.entry.file_result.clone()],
+        }]
+    }
+
+    pub(crate) fn require_nodes(&self, source: &HeldSnapshotNode, node: &HeldSnapshotNode)
+        -> std::result::Result<(), LedgerError>
+    {
+        if source.binding() != self.entry.source_binding || node.binding() != self.node {
+            return Err(LedgerError::Binding);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn require_publication(&self, publication: &LedgerPublication, files: &[FileResult])
+        -> std::result::Result<(), LedgerError>
+    {
+        self.entry.require_publication(publication, files)
+    }
+}
+
+impl CommitRecord<'_> {
+    fn require_publication(&self, publication: &LedgerPublication, files: &[FileResult])
+        -> std::result::Result<(), LedgerError>
+    {
+        if !matches!(self.node, Publication::Complete(_))
+            || *publication != self.plan.publication()
+            || files != std::slice::from_ref(&self.file_result)
+        {
+            return Err(LedgerError::FileResults);
+        }
+        Ok(())
+    }
 }
 
 impl CommitReservation {
@@ -89,18 +161,12 @@ impl<'a> ReceiptIndex<'a> {
         &self, reserve: OperationId, publication: &LedgerPublication, files: &[FileResult],
     ) -> std::result::Result<(), LedgerError> {
         let entry = self.commits.get(&reserve).ok_or(LedgerError::PublicationPending)?;
-        if !matches!(entry.node, Publication::Complete(_))
-            || *publication != entry.plan.publication()
-            || files != std::slice::from_ref(&entry.file_result)
-        {
-            return Err(LedgerError::FileResults);
-        }
-        Ok(())
+        entry.require_publication(publication, files)
     }
 
     pub(in crate::snapshot_worktree) fn retry_commit(
         &self, request: &CommitWorktree, principal: &Principal,
-    ) -> Result<Option<SnapshotHandle>> {
+    ) -> Result<Option<CommitRetry<'_>>> {
         if !self.source.operations.contains_key(&request.operation_id) {
             return Ok(None);
         }
@@ -109,10 +175,15 @@ impl<'a> ReceiptIndex<'a> {
         if &entry.plan.request != request || &entry.receipt.principal != principal {
             return Err(RegistrationError::Digest(request.operation_id));
         }
-        if !matches!(entry.completion, Publication::Complete(_)) {
-            return Err(RegistrationError::Pending(request.operation_id));
+        if matches!(entry.completion, Publication::Complete(_)) {
+            return Ok(Some(CommitRetry::Complete(entry.plan.handle())));
         }
-        Ok(Some(entry.plan.handle()))
+        if let Publication::Complete(node) = &entry.node {
+            return Ok(Some(CommitRetry::Published(PublishedCommitTail {
+                entry, node: node.binding,
+            })));
+        }
+        Err(RegistrationError::Pending(request.operation_id))
     }
 
     pub(in crate::snapshot_worktree) fn completed_edit(

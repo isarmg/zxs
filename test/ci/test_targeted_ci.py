@@ -66,6 +66,39 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_published_worktree_tail_keeps_real_cold_flow_and_ledger_regressions(self):
+        paths = [
+            'src/engine/src/snapshot_worktree.rs',
+            'src/engine/src/snapshot_worktree/registry.rs',
+            'src/engine/src/snapshot_worktree/registry/commits.rs',
+            'src/engine/src/snapshot_worktree/commit.rs',
+            'src/engine/src/snapshot_worktree/commit/recovery.rs',
+            'src/engine/src/directory_worktree/ledger/storage.rs',
+            'src/engine/src/directory_worktree/ledger/storage/published.rs',
+            'test/engine/unit/snapshot_worktree_tests.rs',
+            'test/engine/unit/snapshot_worktree/published_commit_tail.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn('fresh-managed-core', plan['groups'])
+                self.assertCountEqual(origin_selections(plan, 'fresh-managed-core'),
+                                      self.policy['groups']['fresh-managed-core']['rust_targets'])
+                if '/directory_worktree/' in path:
+                    self.assertIn('directory-history-worktree', plan['groups'])
+                    self.assertCountEqual(origin_selections(plan, 'directory-history-worktree'),
+                                          self.policy['groups']['directory-history-worktree']
+                                          ['rust_targets'])
+        selected = [target for target in self.policy['groups']['fresh-managed-core']['rust_targets']
+                    if target['package'] == 'storage-engine' and target.get('kind') == 'lib']
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]['features'], ['fault-injection'])
+        self.assertIn('snapshot_worktree::tests::'
+                      'actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node',
+                      selected[0]['exact'])
+        self.assertEqual(selected[0]['max_tests'], 3)
+        self.assertEqual(len(selected[0]['exact']), 3)
+
     def test_ordinary_smb_manual_draft_keeps_actual_rpc_http_and_old_consumers(self):
         name = 'ordinary-smb-manual-draft'
         paths = [

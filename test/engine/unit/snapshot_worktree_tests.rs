@@ -34,6 +34,10 @@ use storage_contract::{
 
 const BODY: &[u8] = b"complete source, never a copied worktree";
 
+#[cfg(feature = "fault-injection")]
+#[path = "snapshot_worktree/published_commit_tail.rs"]
+mod published_commit_tail;
+
 #[test]
 fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     use std::collections::BTreeMap;
@@ -475,6 +479,12 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     }
     // The same explicit request now publishes exactly one FILE successor and
     // one directory node, retaining the original source and worktree identity.
+    #[cfg(feature = "fault-injection")]
+    {
+        engine = published_commit_tail::interrupt_and_resume(
+            engine, &system, &disks, &directory_commit, &principal(),
+        );
+    }
     let updated = commit_worktree(&mut engine, &directory_commit, &principal()).unwrap();
     assert_eq!(updated.repository_id, handle.repository_id);
     assert_eq!(updated.branch_id, handle.branch_id);
