@@ -66,6 +66,62 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_startup_exit_preflight_keeps_exact_recovery_and_old_consumers(self):
+        name = 'startup-exit-preflight'
+        cases = [
+            ('src/engine/src/engine.rs', [
+                'fresh-managed-core', 'held-directory-layout', 'historical-directory-runtime',
+            ]),
+            ('src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs', []),
+            ('src/engine/src/engine/membership_transition/pending/activation/exit/verify.rs', []),
+            ('test/engine/unit/engine/recovery/tests.rs', ['fresh-managed-core']),
+            ('test/engine/unit/engine/recovery/diagnostics_tests.rs', ['fresh-managed-core']),
+            ('test/engine/unit/engine/startup_exit_preflight_tests.rs', []),
+        ]
+        group = self.policy['groups'][name]
+        for path, retained in cases:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertEqual(plan['groups'], sorted(retained + [name]))
+                self.assertIn('test_targeted_ci', plan['python_tests'])
+                self.assertCountEqual(origin_selections(plan, name), group['rust_targets'])
+                if retained:
+                    assert_path_group_extension(self, self.policy, [path], retained, [name])
+        # Validate the real complete atomic diff as well as each path. The
+        # projection helper retains every old selection and its own budget.
+        assert_path_group_extension(self, self.policy, [path for path, _ in cases] + [
+            '.github/ci/targeted-tests.json', 'test/ci/test_targeted_ci.py',
+        ], None, [name])
+        runtime, product, lean = group['rust_targets']
+        self.assertEqual(runtime['exact'], [
+            'engine::startup_exit_preflight_tests::'
+            'current_exit_holds_discovery_until_read_only_workspace_admission',
+            'engine::recovery::tests::'
+            'transient_seal_read_failure_requires_reopening_missing_journal_admission',
+            'engine::recovery::diagnostics_tests::'
+            'member_seal_failures_keep_each_identity_and_reset_on_the_next_recovery',
+            'engine::recovery::diagnostics_tests::'
+            'missing_publication_seal_keeps_the_verified_prefix_and_candidate_cause',
+        ])
+        self.assertEqual((runtime['max_tests'], runtime['timeout_seconds']), (4, 900))
+        self.assertEqual(runtime['kind'], 'lib')
+        self.assertEqual(runtime['features'], [])
+        self.assertIs(runtime['default_features'], True)
+        self.assertIs(runtime['isolate'], True)
+        self.assertFalse(runtime.get('whole', False))
+        self.assertEqual(runtime.get('prefixes', []), [])
+        for target, default in [(product, True), (lean, False)]:
+            self.assertEqual(target['mode'], 'check')
+            self.assertEqual(target['package'], 'storage-engine')
+            self.assertEqual(target['manifest'], 'src/engine/Cargo.toml')
+            self.assertEqual(target['features'], [])
+            self.assertIs(target['default_features'], default)
+        unrelated = CI.select_plan(self.policy, [
+            'src/engine/src/business/workspace/version_build.rs',
+        ], shardable=True)
+        self.assertNotIn(name, unrelated['groups'])
+        self.assertIn('workspace-version-construction', unrelated['groups'])
+
     def test_post_add_automatic_backfill_keeps_exact_source_and_cold_cut(self):
         name = 'first-backup-additions'
         paths = [

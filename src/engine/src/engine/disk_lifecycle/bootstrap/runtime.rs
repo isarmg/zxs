@@ -173,8 +173,7 @@ impl Engine {
             let resources = Arc::new(DiskResources::recover_held(&config, directories)?);
             Self::prepare_recovery_resources(root, config, resources)
         })();
-        drop(admission);
-        Self::finish_held_recovery(prepared?)
+        Self::finish_held_recovery(prepared?, admission.store)
     }
 }
 
@@ -202,6 +201,12 @@ impl RecoveredDiskStop {
     }
 }
 impl DurableDiskStop {
+    /// Continue startup with the same discovery lock, including when a
+    /// generation authenticates more than one historical stop.
+    pub(in crate::engine) fn into_store(self) -> BootstrapStore {
+        self._store
+    }
+
     pub(crate) fn matches(
         &self,
         binding: &DiskRegistrationIdentity,
@@ -223,7 +228,7 @@ impl Engine {
         operation_id: OperationId,
         intent_hash: &str,
     ) -> crate::Result<DurableDiskStop> {
-        self.disk_exit_stop(binding, operation_id, intent_hash, true)
+        self.disk_exit_stop(binding, operation_id, intent_hash, true, || open_store(&self.root))
     }
 
     /// A startup exclusion plus exact authenticated Exit, not an absent-file
@@ -289,7 +294,19 @@ impl Engine {
         operation_id: OperationId,
         intent_hash: &str,
     ) -> crate::Result<DurableDiskStop> {
-        self.disk_exit_stop(binding, operation_id, intent_hash, false)
+        self.disk_exit_stop(binding, operation_id, intent_hash, false, || open_store(&self.root))
+    }
+
+    /// Startup has already retained this locator across read-only preflight.
+    /// Reuse the same stop admission, without releasing/reacquiring its lock.
+    pub(in crate::engine) fn recover_disk_exit_stop_held(
+        &self,
+        binding: &DiskRegistrationIdentity,
+        operation_id: OperationId,
+        intent_hash: &str,
+        store: BootstrapStore,
+    ) -> crate::Result<DurableDiskStop> {
+        self.disk_exit_stop(binding, operation_id, intent_hash, false, || Ok(store))
     }
 
     fn disk_exit_stop(
@@ -298,6 +315,7 @@ impl Engine {
         operation_id: OperationId,
         intent_hash: &str,
         append: bool,
+        acquire: impl FnOnce() -> crate::Result<BootstrapStore>,
     ) -> crate::Result<DurableDiskStop> {
         if binding.pool_id != self.config.pool_id
             || !self.config.disks.iter().any(|disk| {
@@ -312,7 +330,7 @@ impl Engine {
             ));
         }
         let intent_digest = IntentDigest::parse(intent_hash).map_err(management_error)?;
-        let mut store = open_store(&self.root)?;
+        let mut store = acquire()?;
         let prepared = crate::engine::membership_transition::pending::activation::exit::stop_plan::synchronize(
             self, &mut store, binding, operation_id, intent_digest, append,
         )?;

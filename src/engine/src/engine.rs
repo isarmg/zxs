@@ -62,6 +62,7 @@ pub use disk_registry::{
 };
 mod disk_lifecycle;
 pub(crate) use disk_lifecycle::bootstrap::RecoveredDiskStop;
+use disk_lifecycle::bootstrap::store::BootstrapStore;
 pub use disk_lifecycle::bootstrap::runtime::InitialActivationProbeGuard;
 pub(crate) use disk_lifecycle::terminal::VerifiedTerminalStop;
 pub use disk_lifecycle::{
@@ -773,15 +774,12 @@ impl Engine {
             membership_transition::pending::activation::discover_startup(&root, config)?;
         let resources = Arc::new(DiskResources::recover_held(&config, directories)?);
         let engine = Self::prepare_recovery_resources(root, config, resources)?;
-        drop(bootstrap);
-        Self::finish_held_recovery(engine)
+        Self::finish_held_recovery(engine, bootstrap)
     }
 
-    fn finish_held_recovery(mut engine: Self) -> Result<Self> {
-        engine.admit_disk_exit_io_exclusion()?;
+    fn finish_held_recovery(mut engine: Self, bootstrap: BootstrapStore) -> Result<Self> {
         let warnings = engine.prepare_generation_resources()?;
-        let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
-        engine.preflight_workspace_receipts(&mut prepared)?;
+        let prepared = engine.preflight_startup_recovery(warnings, bootstrap)?;
         engine.recover_prepared(RecoveryMode::PreservePending, prepared)?;
         if engine.config.generation().is_some() && !engine.generation_activation_published() {
             engine.blocked = true;
@@ -818,9 +816,8 @@ impl Engine {
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
         let (root, config) = Self::recovery_projection(root, workspace_limits)?;
-        let (mut engine, warnings) = Self::prepare_workspace_recovery(root, config)?;
-        let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
-        engine.preflight_workspace_receipts(&mut prepared)?;
+        let (mut engine, warnings, bootstrap) = Self::prepare_workspace_recovery(root, config)?;
+        let prepared = engine.preflight_startup_recovery(warnings, bootstrap)?;
         engine.recover_prepared(mode, prepared)?;
         if engine.config.generation().is_some() {
             if mode == RecoveryMode::CompletePending {
@@ -849,13 +846,26 @@ impl Engine {
     fn prepare_workspace_recovery(
         root: PathBuf,
         config: ValidatedConfig,
-    ) -> Result<(Self, Vec<RecoverySealFailure>)> {
+    ) -> Result<(Self, Vec<RecoverySealFailure>, BootstrapStore)> {
         let (config, bootstrap) =
             membership_transition::pending::activation::discover_startup(&root, config)?;
-        let (mut engine, warnings) = Self::prepare_retained_workspace_recovery(root, config)?;
-        drop(bootstrap);
-        engine.admit_disk_exit_io_exclusion()?;
-        Ok((engine, warnings))
+        let (engine, warnings) = Self::prepare_retained_workspace_recovery(root, config)?;
+        Ok((engine, warnings, bootstrap))
+    }
+
+    /// Retain discovery's same lock through read-only receipt/workspace
+    /// admission. Only then may Exit synchronize its existing Stop plan/locator;
+    /// its logical I/O exclusion still precedes every replay writer. Ordinary
+    /// lock acquisition retains its existing creation and sync semantics.
+    fn preflight_startup_recovery(
+        &mut self,
+        warnings: Vec<RecoverySealFailure>,
+        bootstrap: BootstrapStore,
+    ) -> Result<recovery::PreparedRecovery> {
+        let mut prepared = self.prepare_recovery_with_warnings(warnings)?;
+        self.preflight_workspace_receipts(&mut prepared)?;
+        self.admit_disk_exit_io_exclusion_held(bootstrap)?;
+        Ok(prepared)
     }
 
     /// Only already authenticated startup probes or explicit retained-root
@@ -1688,3 +1698,7 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../test/engine/unit/engine/payload_measurement.rs"]
 mod payload_measurement;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/engine/startup_exit_preflight_tests.rs"]
+mod startup_exit_preflight_tests;

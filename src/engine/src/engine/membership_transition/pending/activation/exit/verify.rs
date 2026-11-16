@@ -2,6 +2,7 @@
 //! own journals. Neither a portable certificate nor an in-memory result suffices.
 use super::runtime::ExitIoOwner;
 use super::*;
+use crate::engine::disk_lifecycle::bootstrap::{runtime::DurableDiskStop, store::BootstrapStore};
 use crate::engine::disk_registry::current::PreparedCurrentNamespaces;
 use crate::publication_evidence::verified_recovery_snapshot_at;
 
@@ -85,6 +86,20 @@ impl Engine {
     /// receipt. Restricted bootstrap excludes names; this separately proves no
     /// older live logical I/O domain remains in this process.
     pub(in crate::engine) fn admit_disk_exit_io_exclusion(&mut self) -> Result<()> {
+        self.admit_disk_exit_io_exclusion_with_store(None)
+    }
+
+    pub(in crate::engine) fn admit_disk_exit_io_exclusion_held(
+        &mut self,
+        bootstrap: BootstrapStore,
+    ) -> Result<()> {
+        self.admit_disk_exit_io_exclusion_with_store(Some(bootstrap))
+    }
+
+    fn admit_disk_exit_io_exclusion_with_store(
+        &mut self,
+        mut bootstrap: Option<BootstrapStore>,
+    ) -> Result<()> {
         let Some(generation) = self.config.generation().cloned() else {
             return Ok(());
         };
@@ -100,45 +115,67 @@ impl Engine {
                     "historical exit target remains in runtime resources",
                 ));
             }
-            let stop = self.recover_disk_exit_stop(&target, operation, &transition)?;
-            if let Some(owner) = self
-                .pending_disk_exit
-                .as_ref()
-                .and_then(|pending| pending.ownership.get(&target.disk_id))
-            {
-                match owner {
-                    ExitIoOwner::Live(binding) => {
-                        binding.closed_proof()?;
-                    }
-                    ExitIoOwner::Recovered(guard) if guard.identity() == &target => continue,
-                    ExitIoOwner::Recovered(_) => {
-                        return Err(Error::new(
-                            ErrorCode::DiskIdentityMismatch,
-                            "recovered logical exclusion differs from authenticated history",
-                        ));
-                    }
-                    ExitIoOwner::Unopened => {
-                        return Err(Error::new(
-                            ErrorCode::RecoveryRequired,
-                            "unopened exit target lacks its logical I/O exclusion",
-                        ));
-                    }
+            bootstrap = match bootstrap {
+                Some(store) => {
+                    let stop = self.recover_disk_exit_stop_held(
+                        &target, operation, &transition, store,
+                    )?;
+                    self.admit_recovered_exit_stop(&generation, &target, &stop)?;
+                    Some(stop.into_store())
+                }
+                None => {
+                    let stop = self.recover_disk_exit_stop(&target, operation, &transition)?;
+                    self.admit_recovered_exit_stop(&generation, &target, &stop)?;
+                    None
+                }
+            };
+        }
+        Ok(())
+    }
+
+    fn admit_recovered_exit_stop(
+        &mut self,
+        generation: &Arc<Generation>,
+        target: &DiskRegistrationIdentity,
+        stop: &DurableDiskStop,
+    ) -> Result<()> {
+        if let Some(owner) = self
+            .pending_disk_exit
+            .as_ref()
+            .and_then(|pending| pending.ownership.get(&target.disk_id))
+        {
+            match owner {
+                ExitIoOwner::Live(binding) => {
+                    binding.closed_proof()?;
+                }
+                ExitIoOwner::Recovered(guard) if guard.identity() == target => return Ok(()),
+                ExitIoOwner::Recovered(_) => {
+                    return Err(Error::new(
+                        ErrorCode::DiskIdentityMismatch,
+                        "recovered logical exclusion differs from authenticated history",
+                    ));
+                }
+                ExitIoOwner::Unopened => {
+                    return Err(Error::new(
+                        ErrorCode::RecoveryRequired,
+                        "unopened exit target lacks its logical I/O exclusion",
+                    ));
                 }
             }
-            // Keep the old closed physical binding and every earlier guard held
-            // until the process-wide logical exclusion has actually succeeded.
-            let recovered = self.recover_disk_exit_io(&stop, &target)?;
-            let owner = crate::disk::RecoveredDiskIo::admit(&recovered)?;
-            let pending = self
-                .pending_disk_exit
-                .get_or_insert_with(|| PendingDiskExit {
-                    generation: Arc::clone(&generation),
-                    ownership: BTreeMap::new(),
-                });
-            pending
-                .ownership
-                .insert(target.disk_id, ExitIoOwner::Recovered(owner));
         }
+        // Keep the old closed physical binding and every earlier guard held
+        // until the process-wide logical exclusion has actually succeeded.
+        let recovered = self.recover_disk_exit_io(stop, target)?;
+        let owner = crate::disk::RecoveredDiskIo::admit(&recovered)?;
+        let pending = self
+            .pending_disk_exit
+            .get_or_insert_with(|| PendingDiskExit {
+                generation: Arc::clone(generation),
+                ownership: BTreeMap::new(),
+            });
+        pending
+            .ownership
+            .insert(target.disk_id.clone(), ExitIoOwner::Recovered(owner));
         Ok(())
     }
 

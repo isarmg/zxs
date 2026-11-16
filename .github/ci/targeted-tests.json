@@ -4768,6 +4768,44 @@
           "features": []
         }
       ]
+    },
+    "startup-exit-preflight": {
+      "reason": "Current-format startup retains its actual bootstrap lock through read-only receipt and workspace admission before Exit Stop synchronization. Exercise real Initial and Current idle missing-lock recovery, D3 and retained quota failure/retry; retain the three affected recovery diagnostics and both product feature modes. No format or migration gate is introduced.",
+      "python_tests": [
+        "test_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [],
+          "exact": [
+            "engine::startup_exit_preflight_tests::current_exit_holds_discovery_until_read_only_workspace_admission",
+            "engine::recovery::tests::transient_seal_read_failure_requires_reopening_missing_journal_admission",
+            "engine::recovery::diagnostics_tests::member_seal_failures_keep_each_identity_and_reset_on_the_next_recovery",
+            "engine::recovery::diagnostics_tests::missing_publication_seal_keeps_the_verified_prefix_and_candidate_cause"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900,
+          "isolate": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -13830,6 +13868,42 @@
       "path": "docs/validation/membership-fence-experiment.md",
       "groups": [
         "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "startup-exit-preflight"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs",
+      "groups": [
+        "startup-exit-preflight"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/exit/verify.rs",
+      "groups": [
+        "startup-exit-preflight"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery/tests.rs",
+      "groups": [
+        "startup-exit-preflight"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery/diagnostics_tests.rs",
+      "groups": [
+        "startup-exit-preflight"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/startup_exit_preflight_tests.rs",
+      "groups": [
+        "startup-exit-preflight"
       ]
     }
   ],

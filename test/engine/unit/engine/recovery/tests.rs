@@ -1378,10 +1378,12 @@ fn transient_seal_read_failure_requires_reopening_missing_journal_admission() {
         )
         .unwrap();
     drop(engine);
-    let (mut engine, warnings) =
+    let (mut engine, warnings, bootstrap) =
         Engine::prepare_workspace_recovery(root.clone(), config.clone().try_into().unwrap())
             .unwrap();
     assert!(warnings.is_empty());
+    assert!(engine.config.generation().is_none());
+    drop(bootstrap);
     let seal = config.disks[0].root.join("disk.json");
     let unavailable = seal.with_extension("unavailable");
     std::fs::rename(&seal, &unavailable).unwrap();
