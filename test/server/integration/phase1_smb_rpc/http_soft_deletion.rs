@@ -9,7 +9,10 @@ fn seed() -> (tempfile::TempDir, Engine, Repository, Entry, Entry) {
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("state"),
-        Config::development([root.path().join("p")]).unwrap(),
+        Config::development([(
+            name_policy::Name::parse("Primary fixture").unwrap(),
+            root.path().join("p"),
+        )]).unwrap(),
     )
     .unwrap();
     let repo = engine

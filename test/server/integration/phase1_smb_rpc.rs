@@ -71,7 +71,10 @@ impl Fixture {
         let system = root.path().join("state");
         let engine = Engine::initialize(
             &system,
-            Config::development([root.path().join("p")]).unwrap(),
+            Config::development([(
+                name_policy::Name::parse("Primary fixture").unwrap(),
+                root.path().join("p"),
+            )]).unwrap(),
         )
         .unwrap();
         let backend = Arc::new(EngineBackend::new(engine));

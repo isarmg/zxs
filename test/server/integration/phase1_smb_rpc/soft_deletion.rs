@@ -195,7 +195,10 @@ fn public_http_deletion_is_discoverable_and_undo_is_exact_authenticated_and_dura
     let system = root.path().join("state");
     let mut engine = Engine::initialize(
         &system,
-        Config::development([root.path().join("p")]).unwrap(),
+        Config::development([(
+            name_policy::Name::parse("Primary fixture").unwrap(),
+            root.path().join("p"),
+        )]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -386,7 +389,10 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
     let system = root.path().join("state");
     let mut engine = Engine::initialize(
         &system,
-        Config::development([root.path().join("p")]).unwrap(),
+        Config::development([(
+            name_policy::Name::parse("Primary fixture").unwrap(),
+            root.path().join("p"),
+        )]).unwrap(),
     )
     .unwrap();
     let repo = engine
