@@ -440,7 +440,8 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
         diagnostic(started, "main: resume unfinished exact switch cold");
         engine = Engine::resume_backup_transaction_at_with_workspace_limits(
             &system, operation, "admin", None,
-        ).unwrap();
+        ).unwrap_or_else(|error| panic!("restore exact first Backup Current before successors: {error:?}"));
+        diagnostic(started, "main: cold resume returned the first Backup Current");
         assert!(extension.join("complete.json").is_file());
         assert_eq!(fs::read(extension.join("selected.json")).unwrap(), selected);
         assert_eq!(fs::read(extension.join("plan.json")).unwrap(), plan);

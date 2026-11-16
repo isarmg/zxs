@@ -565,13 +565,39 @@ impl Engine {
             } else {
                 None
             };
-            match (&publication, &readonly_seal) {
-                (Some(p), Some(seal)) => self.verify_readonly_published_namespace_candidate(
-                    &candidate, original, p, seal,
-                )?,
-                _ => self.verify_replay_namespace_candidate(
-                    &candidate, original, publication.as_ref(),
-                )?,
+            if self.current_namespaces.is_none() && self.is_backup_first_candidate(&candidate)? {
+                // A cold selected Backup has the completed native first
+                // barrier, but Current cannot be installed before this exact
+                // first publication is replayed. Do not ask ordinary Current to
+                // authorize the operation that establishes it.
+                let generation = self.config.generation()
+                    .ok_or_else(super::disk_registry::current::pending_publication)?;
+                if self.snapshot != generation.snapshot()
+                    || self.state.as_ref() != generation.base.as_ref()
+                {
+                    return Err(super::disk_registry::current::pending_publication());
+                }
+                generation.verify_activation_candidate(&candidate)?;
+                let published = publication.as_ref().ok_or_else(|| {
+                    Error::new(ErrorCode::RecoveryRequired,
+                        "selected Backup first replay lacks its verified publication")
+                })?;
+                let seal = match readonly_seal {
+                    Some(seal) => seal,
+                    None => verified_publication_seal_at(
+                        &self.disk_resources, &online, &candidate, published,
+                    )?,
+                };
+                self.preflight_backup_first_current(&candidate, original, published, &seal)?;
+            } else {
+                match (&publication, &readonly_seal) {
+                    (Some(p), Some(seal)) => self.verify_readonly_published_namespace_candidate(
+                        &candidate, original, p, seal,
+                    )?,
+                    _ => self.verify_replay_namespace_candidate(
+                        &candidate, original, publication.as_ref(),
+                    )?,
+                }
             }
             if self.move_completion.as_ref().is_some_and(|selected| {
                 selected.sequence() == candidate.sequence && selected.candidate_hash() == hash
