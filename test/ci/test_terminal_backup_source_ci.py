@@ -10,6 +10,12 @@ GROUP = 'terminal-backup-source-layout'
 EXACT = ('backup_preparation::transaction_serving::'
          'same_backup_switch_serves_and_replays_normal_successor_publications')
 PATHS = [
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_publication.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/configuration.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving/reads.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_scopes.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/common_databases.rs',
     'src/engine/src/container_storage.rs',
     'src/engine/src/container_storage/file_database/install.rs',
     'src/engine/src/container_storage/ordinary_preparation.rs',

@@ -217,6 +217,18 @@ pub(super) fn observe(
     expected: &BackupFirstPublicationHash,
     stop: &AtomicBool,
 ) -> Result<BackupTargetPublicationReport> {
+    observe_with_candidate(prepared, decision, expected, stop).map(|(report, _)| report)
+}
+
+/// Keep the exact candidate already verified for this complete Publication
+/// observation. A following pure configuration projection must not discard it
+/// and repeat the whole source admission to recover the same value.
+pub(super) fn observe_with_candidate(
+    prepared: &PreparedBackupRegistry,
+    decision: &AdmittedBackupDecision,
+    expected: &BackupFirstPublicationHash,
+    stop: &AtomicBool,
+) -> Result<(BackupTargetPublicationReport, PreparedBackupFirstCandidate)> {
     let (_, candidate) = first_candidate::read_verified(prepared, decision, stop)?;
     let first = Plan::load(prepared, &candidate, expected, &prepared.targets[0].root)?;
     for target in &prepared.targets {
@@ -226,7 +238,7 @@ pub(super) fn observe(
     first.evidence.verify_targets(prepared, &candidate, stop)?;
     decision.verify_targets(prepared, stop)?;
     recovery::require_isolated(&prepared.targets)?;
-    Ok(first.report)
+    Ok((first.report, candidate))
 }
 
 /// Copy ONLY the already retained exact original publication evidence. There

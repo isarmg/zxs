@@ -115,7 +115,7 @@ pub(in super::super) fn read_entry(
         })?;
     let stop = AtomicBool::new(false);
     let plan = Plan::capture(prepared, decision, expected, &stop)?;
-    plan.observe(prepared, decision, expected, &stop)?;
+    plan.observe(&stop)?;
     let result = plan
         .registry
         .with_namespaces(prepared, index, expected, &stop, |admitted| {
@@ -158,6 +158,6 @@ pub(in super::super) fn read_entry(
                 })
             })
         })?;
-    plan.observe(prepared, decision, expected, &stop)?;
+    plan.observe(&stop)?;
     Ok(result)
 }

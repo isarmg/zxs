@@ -451,6 +451,90 @@ fn measure_original_verification(
 }
 
 
+// Same real selected transaction, not a raw expected-byte or successful-report cache.
+fn verify_retained_plan_readback(
+    temporary: &Path,
+    context: &common_databases::Context<'_>,
+    prepared: &PreparedBackupRegistry,
+    decision: &AdmittedBackupDecision,
+    expected: &BackupFirstPublicationHash,
+    stop: &AtomicBool,
+) -> Result<()> {
+    let installed = published_scopes::install(prepared, decision, expected, stop)?;
+    let common = common_databases::install(context, prepared, decision, expected, stop)?;
+    assert_eq!(installed.targets, common.published.targets);
+    let rebuilt = common_databases::observe(context, prepared, decision, expected, stop)?;
+    assert_eq!(rebuilt.common_manifest_hash, common.common_manifest_hash);
+    assert_eq!(rebuilt.system_database_hash, common.system_database_hash);
+    assert_eq!(
+        canonical_json(&rebuilt.original_disks)?,
+        canonical_json(&common.original_disks)?,
+    );
+    let scoped = published_scopes::Plan::capture(prepared, decision, expected, stop)?;
+    assert_eq!(scoped.observe(stop)?.targets, installed.targets);
+    let target = &prepared.targets[1];
+    let sqlite = target.root.path().join(crate::database_install::DISK_DATABASE_NAME);
+    let original = fs::read(&sqlite).unwrap();
+    let mut damaged = original.clone();
+    damaged[0] ^= 1;
+    fs::write(&sqlite, &damaged).unwrap();
+    let retained_error = scoped.observe(stop).unwrap_err();
+    let rebuilt_error = published_scopes::observe(prepared, decision, expected, stop).unwrap_err();
+    assert_eq!(fs::read(&sqlite).unwrap(), damaged);
+    fs::write(&sqlite, &original).unwrap();
+    assert_eq!(retained_error.code(), rebuilt_error.code());
+    assert_eq!(retained_error.code(), ErrorCode::ConfigConflict);
+    assert_eq!(scoped.observe(stop)?.targets, installed.targets);
+
+    // The reused serving recipe still constructs and verifies this target's
+    // real published image, including its BODY, on every observation.
+    let serving = Plan::capture(prepared, decision, expected, stop)?;
+    let body = serving.with_image(prepared, 1, stop, |image, state| {
+        let version = state.versions.values().next().unwrap();
+        let home = image.file_home(
+            &version.history_tree_id,
+            &version.file_id,
+            &version.version_id,
+        )?;
+        Ok(target.root.path().join(home)
+            .join(".zxs-versions")
+            .join(&version.version_id)
+            .join("content")
+            .join(&version.creation_name))
+    })?;
+    let original = fs::read(&body).unwrap();
+    let mut damaged = original.clone();
+    damaged[0] ^= 1;
+    fs::write(&body, &damaged).unwrap();
+    let retained_error = serving.observe(stop).unwrap_err();
+    let rebuilt_error = observe(prepared, decision, expected, stop).unwrap_err();
+    assert_eq!(fs::read(&body).unwrap(), damaged);
+    fs::write(&body, &original).unwrap();
+    assert_eq!(retained_error.code(), rebuilt_error.code());
+    assert_eq!(serving.observe(stop)?.targets, installed.serving.targets);
+
+    let physical = PhysicalBinding::of(&target.root)?;
+    let parked = temporary.join("retained-plan-target");
+    fs::rename(target.root.path(), &parked).unwrap();
+    fs::DirBuilder::new().mode(0o700).create(target.root.path()).unwrap();
+    let retained_error = scoped.observe(stop).unwrap_err();
+    let rebuilt_error = published_scopes::observe(prepared, decision, expected, stop).unwrap_err();
+    assert!(fs::read_dir(target.root.path()).unwrap().next().is_none());
+    fs::remove_dir(target.root.path()).unwrap();
+    fs::rename(&parked, target.root.path()).unwrap();
+    assert_eq!(retained_error.code(), rebuilt_error.code());
+    assert_eq!(retained_error.code(), ErrorCode::DiskIdentityMismatch);
+    assert_eq!(PhysicalBinding::of(&target.root)?, physical);
+    assert_eq!(scoped.observe(stop)?.targets, installed.targets);
+
+    let cancelled = AtomicBool::new(true);
+    assert_eq!(scoped.observe(&cancelled).unwrap_err().code(), ErrorCode::OperationAborted);
+    let rebuilt = common_databases::observe(context, prepared, decision, expected, stop)?;
+    assert_eq!(rebuilt.common_manifest_hash, common.common_manifest_hash);
+    assert_eq!(rebuilt.published.targets, installed.targets);
+    Ok(())
+}
+
 #[test]
 fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Result<()> {
     let (_temp, mut engine, request) = fixture();
@@ -545,15 +629,31 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     generation_control::encoding_probe::verify_generation_encoding_reuse(
         _temp.path(), &mut prepared, &decision, &stop,
     )?;
+    verify_retained_plan_readback(
+        _temp.path(),
+        &common_databases::Context {
+            system: &system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        &stop,
+    )?;
     let mut previous_completion = None;
     let mut previous_databases = BTreeMap::new();
     for iteration in 0..2 {
         measure_upstream(&prepared, &decision, &candidate, iteration, &stop)?;
         measure_original_scope_components(&prepared, iteration, &stop)?;
         measure_original_verification(&prepared, iteration, &stop)?;
-        let publication = measured("first_publication_observe", iteration, 0, || {
-            first_publication::observe(&prepared, &decision, &expected, &stop)
-        })?;
+        let (publication, observed_candidate) =
+            measured("first_publication_observe", iteration, 0, || {
+                first_publication::observe_with_candidate(&prepared, &decision, &expected, &stop)
+            })?;
+        assert_eq!(observed_candidate.hash(), candidate.hash());
+        assert_eq!(observed_candidate.snapshot_hash(), candidate.snapshot_hash());
+        assert_eq!(observed_candidate.members(), candidate.members());
         assert_eq!(publication.targets, retained.targets);
         assert_eq!(
             publication.publication.publication_hash,
@@ -707,7 +807,7 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
             assert_eq!(observed, installed.targets[target_index]);
             plan.require_completion(target)?;
         }
-        let observed = plan.observe(&prepared, &decision, &expected, &stop)?;
+        let observed = plan.observe(&stop)?;
         assert_eq!(observed.targets, installed.targets);
         choices.observe_first_publication(&prepared, &candidate, &stop)?;
         sources.recheck(&system)?;

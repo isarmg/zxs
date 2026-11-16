@@ -10,6 +10,10 @@ from test_targeted_ci import CI, assert_path_group_extension
 
 ROOT = Path(__file__).resolve().parents[2]
 PATHS = [
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_publication.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/configuration.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving/reads.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/common_databases.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/generation_control.rs',
     'test/engine/unit/backup_generation_encoding_probe.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_registry.rs',

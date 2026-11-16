@@ -5110,6 +5110,12 @@
     }
   },
   "rules": [
+    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_publication.rs", "groups": ["backup-scoped-encoding-memo", "terminal-backup-source-layout"]},
+    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/configuration.rs", "groups": ["backup-scoped-encoding-memo", "terminal-backup-source-layout"]},
+    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving.rs", "groups": ["terminal-backup-source-layout"]},
+    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving/reads.rs", "groups": ["backup-scoped-encoding-memo", "terminal-backup-source-layout"]},
+    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_scopes.rs", "groups": ["terminal-backup-source-layout"]},
+    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/common_databases.rs", "groups": ["backup-scoped-encoding-memo", "terminal-backup-source-layout"]},
     {
       "path": "src/server/src/smb_rpc/default_share.rs",
       "groups": [

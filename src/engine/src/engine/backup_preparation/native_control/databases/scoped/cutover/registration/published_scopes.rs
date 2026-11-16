@@ -45,36 +45,38 @@ struct Completion<'a> {
     entities: &'a [BackupServingTargetReport],
     targets: &'a [BackupPublishedScopeTargetReport],
 }
-struct Plan {
-    registry: published_registry::Plan,
+pub(super) struct Plan<'a> {
+    prepared: &'a PreparedBackupRegistry,
+    serving: serving::Plan<'a>,
     report: BackupPublishedScopesReport,
     completion: Vec<u8>,
 }
-impl Plan {
-    fn capture(
-        prepared: &PreparedBackupRegistry,
-        decision: &AdmittedBackupDecision,
-        expected: &BackupFirstPublicationHash,
+impl<'a> Plan<'a> {
+    pub(super) fn capture(
+        prepared: &'a PreparedBackupRegistry,
+        decision: &'a AdmittedBackupDecision,
+        expected: &'a BackupFirstPublicationHash,
         stop: &AtomicBool,
     ) -> Result<Self> {
         recovery::require_isolated(&prepared.targets)?;
-        let serving = serving::observe(prepared, decision, expected, stop)?;
-        let registry = published_registry::Plan::capture(prepared, decision, expected, stop)?;
+        let serving = serving::Plan::capture(prepared, decision, expected, stop)?;
+        let observed = serving.observe(stop)?;
         let mut plan = Self {
-            registry,
+            prepared,
+            serving,
             report: BackupPublishedScopesReport {
-                serving,
+                serving: observed,
                 targets: Vec::with_capacity(prepared.targets.len()),
             },
             completion: Vec::new(),
         };
         for index in 0..prepared.targets.len() {
-            let scopes = Scopes::capture(prepared, &plan.registry, index, stop)?;
+            let scopes = Scopes::capture(prepared, plan.registry(), index, stop)?;
             plan.report
                 .targets
                 .push(scopes.report(&prepared.projection.targets[index].node.identity));
         }
-        let configuration = plan.registry.configuration();
+        let configuration = plan.registry().configuration();
         let publication = &configuration.publication.publication;
         plan.completion = encode_metadata(
             &Completion {
@@ -89,6 +91,12 @@ impl Plan {
         )?;
         Ok(plan)
     }
+    /// Retain the same bounded recipe, never a successful disk observation.
+    /// `observe` below re-reads every target before returning a result.
+    pub(super) fn registry(&self) -> &published_registry::Plan {
+        self.serving.registry()
+    }
+
     fn with_scopes<T>(
         &self,
         prepared: &PreparedBackupRegistry,
@@ -97,7 +105,7 @@ impl Plan {
         action: impl FnOnce(&DiskRoot, &Scopes) -> Result<T>,
     ) -> Result<T> {
         // Reconstruct from this target, never a peer or an old source database.
-        let scopes = Scopes::capture(prepared, &self.registry, index, stop)?;
+        let scopes = Scopes::capture(prepared, self.registry(), index, stop)?;
         if scopes.report(&prepared.projection.targets[index].node.identity)
             != self.report.targets[index]
         {
@@ -119,13 +127,8 @@ impl Plan {
             maximum: MAX_COMPLETION,
         }
     }
-    fn observe(
-        &self,
-        prepared: &PreparedBackupRegistry,
-        decision: &AdmittedBackupDecision,
-        expected: &BackupFirstPublicationHash,
-        stop: &AtomicBool,
-    ) -> Result<BackupPublishedScopesReport> {
+    pub(super) fn observe(&self, stop: &AtomicBool) -> Result<BackupPublishedScopesReport> {
+        let prepared = self.prepared;
         recovery::require_isolated(&prepared.targets)?;
         for index in 0..prepared.targets.len() {
             self.with_scopes(prepared, index, stop, |root, scopes| {
@@ -133,7 +136,7 @@ impl Plan {
                 self.completion().require(root)
             })?;
         }
-        serving::observe(prepared, decision, expected, stop)?;
+        self.serving.observe(stop)?;
         prepared.recheck_names()?;
         Ok(self.report.clone())
     }
@@ -225,7 +228,7 @@ pub(super) fn install(
     }
     serving::observe(prepared, decision, expected, stop)?;
     prepared.write_completions(&plan.completion(), stop)?;
-    plan.observe(prepared, decision, expected, stop)
+    plan.observe(stop)
 }
 pub(super) fn observe(
     prepared: &PreparedBackupRegistry,
@@ -233,5 +236,5 @@ pub(super) fn observe(
     expected: &BackupFirstPublicationHash,
     stop: &AtomicBool,
 ) -> Result<BackupPublishedScopesReport> {
-    Plan::capture(prepared, decision, expected, stop)?.observe(prepared, decision, expected, stop)
+    Plan::capture(prepared, decision, expected, stop)?.observe(stop)
 }

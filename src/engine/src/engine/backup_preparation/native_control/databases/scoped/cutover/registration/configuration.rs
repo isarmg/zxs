@@ -47,8 +47,8 @@ pub(super) fn resolve(
     // Actual common Publication and every target's own native proofs/body are
     // required BEFORE returning a newly selected topology or registry digest.
     // No source or SYSTEM root is read by this detached path.
-    let publication = first_publication::observe(prepared, decision, expected, stop)?;
-    let (_, candidate) = first_candidate::read_verified(prepared, decision, stop)?;
+    let (publication, candidate) =
+        first_publication::observe_with_candidate(prepared, decision, expected, stop)?;
     let first = &prepared.targets[0];
     let job = prepared.task.selection().first();
     let source = snapshot::read(&first.root, job, stop)?;

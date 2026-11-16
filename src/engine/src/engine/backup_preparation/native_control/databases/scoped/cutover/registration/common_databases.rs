@@ -78,31 +78,32 @@ pub(super) struct Context<'a> {
     pub(super) sources: &'a Sources,
     pub(super) choices: &'a BackupChoiceContext,
 }
-struct Plan {
-    registry: published_registry::Plan,
+struct Plan<'source> {
+    published: published_scopes::Plan<'source>,
     scopes: Scopes,
     common: Vec<u8>,
     report: BackupCommonDatabasesReport,
 }
-impl Plan {
+impl<'source> Plan<'source> {
     fn capture(
         context: &Context<'_>,
-        prepared: &PreparedBackupRegistry,
-        decision: &AdmittedBackupDecision,
-        expected: &BackupFirstPublicationHash,
+        prepared: &'source PreparedBackupRegistry,
+        decision: &'source AdmittedBackupDecision,
+        expected: &'source BackupFirstPublicationHash,
         stop: &AtomicBool,
     ) -> Result<Self> {
         context.sources.require_task(prepared)?;
         context.sources.recheck(context.system)?;
-        let published = published_scopes::observe(prepared, decision, expected, stop)?;
-        let registry = published_registry::Plan::capture(prepared, decision, expected, stop)?;
+        let published = published_scopes::Plan::capture(prepared, decision, expected, stop)?;
+        let observed = published.observe(stop)?;
+        let registry = published.registry();
         context
             .choices
             .observe_first_publication(prepared, registry.candidate(), stop)?;
         // All targets have been independently verified above. The fixed first
         // target supplies the common source projection; there is no peer retry
         // or source-SQLite fallback if this particular native input is lost.
-        let scopes = Scopes::capture(prepared, &registry, 0, stop)?;
+        let scopes = Scopes::capture(prepared, registry, 0, stop)?;
         let pool_id = &prepared.task.selection().first().pool_id;
         let bindings = context.sources.bindings(pool_id);
         let originals = bindings
@@ -132,19 +133,19 @@ impl Plan {
                 system_database_hash: blake3::hash(scopes.system()).to_hex().to_string(),
                 original_bindings: bindings,
                 original_databases: &originals,
-                targets: &published.targets,
+                targets: &observed.targets,
             },
             MAX_DESCRIPTOR,
         )?;
         let report = BackupCommonDatabasesReport {
-            published,
+            published: observed,
             common_manifest_hash: blake3::hash(&common).to_hex().to_string(),
             system_database_bytes: scopes.system().len() as u64,
             system_database_hash: blake3::hash(scopes.system()).to_hex().to_string(),
             original_disks: originals,
         };
         Ok(Self {
-            registry,
+            published,
             scopes,
             common,
             report,
@@ -222,8 +223,6 @@ impl Plan {
         &self,
         context: &Context<'_>,
         prepared: &PreparedBackupRegistry,
-        decision: &AdmittedBackupDecision,
-        expected: &BackupFirstPublicationHash,
         stop: &AtomicBool,
     ) -> Result<()> {
         context.sources.recheck(context.system)?;
@@ -233,10 +232,10 @@ impl Plan {
             |root, identity| materials::verify(root, &self.disk_files(identity)?, stop),
             &prepared.task.selection().first().pool_id,
         )?;
-        published_scopes::observe(prepared, decision, expected, stop)?;
+        self.published.observe(stop)?;
         context
             .choices
-            .observe_first_publication(prepared, self.registry.candidate(), stop)?;
+            .observe_first_publication(prepared, self.published.registry().candidate(), stop)?;
         context.sources.recheck(context.system)?;
         prepared.recheck_names()
     }
@@ -244,8 +243,6 @@ impl Plan {
         &self,
         context: &Context<'_>,
         prepared: &PreparedBackupRegistry,
-        decision: &AdmittedBackupDecision,
-        expected: &BackupFirstPublicationHash,
         stop: &AtomicBool,
     ) -> Result<()> {
         let mut complete = false;
@@ -263,7 +260,7 @@ impl Plan {
         // Any completed participant proves that ALL data was already read back.
         // Missing data is then damage, not permission to downgrade and refill it.
         if complete {
-            self.verify_data(context, prepared, decision, expected, stop)?;
+            self.verify_data(context, prepared, stop)?;
         }
         materials::require_capacity(context.system, &self.system_files(prepared)?, stop)?;
         context.sources.for_each(
@@ -285,12 +282,10 @@ impl Plan {
         &self,
         context: &Context<'_>,
         prepared: &PreparedBackupRegistry,
-        decision: &AdmittedBackupDecision,
-        expected: &BackupFirstPublicationHash,
         stop: &AtomicBool,
     ) -> Result<BackupCommonDatabasesReport> {
         self.record(INTENT).require(context.system)?;
-        self.verify_data(context, prepared, decision, expected, stop)?;
+        self.verify_data(context, prepared, stop)?;
         self.visit_roots(context, prepared, stop, |root| {
             self.record(COMPLETE).require(root)
         })?;
@@ -306,7 +301,7 @@ pub(super) fn install(
     stop: &AtomicBool,
 ) -> Result<BackupCommonDatabasesReport> {
     let plan = Plan::capture(context, prepared, decision, expected, stop)?;
-    plan.preflight(context, prepared, decision, expected, stop)?;
+    plan.preflight(context, prepared, stop)?;
     context.sources.recheck(context.system)?;
     plan.record(INTENT).install(context.system)?;
     // These names are deliberately NOT the active index or disk-root aliases.
@@ -318,12 +313,12 @@ pub(super) fn install(
         |root, identity| materials::install(root, &plan.disk_files(identity)?, stop),
         &prepared.task.selection().first().pool_id,
     )?;
-    plan.verify_data(context, prepared, decision, expected, stop)?;
+    plan.verify_data(context, prepared, stop)?;
     plan.visit_roots(context, prepared, stop, |root| {
         plan.record(COMPLETE).install(root)?;
         plan.record(COMPLETE).require(root)
     })?;
-    plan.observe(context, prepared, decision, expected, stop)
+    plan.observe(context, prepared, stop)
 }
 pub(super) fn observe(
     context: &Context<'_>,
@@ -333,5 +328,5 @@ pub(super) fn observe(
     stop: &AtomicBool,
 ) -> Result<BackupCommonDatabasesReport> {
     Plan::capture(context, prepared, decision, expected, stop)?
-        .observe(context, prepared, decision, expected, stop)
+        .observe(context, prepared, stop)
 }

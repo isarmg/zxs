@@ -40,21 +40,27 @@ struct Completion<'a> {
     targets: &'a [BackupServingTargetReport],
 }
 
-struct Plan {
+pub(super) struct Plan<'a> {
+    prepared: &'a PreparedBackupRegistry,
+    decision: &'a AdmittedBackupDecision,
+    expected: &'a BackupFirstPublicationHash,
     registry: published_registry::Plan,
     report: BackupServingImagesReport,
     completion: Vec<u8>,
 }
-impl Plan {
-    fn capture(
-        prepared: &PreparedBackupRegistry,
-        decision: &AdmittedBackupDecision,
-        expected: &BackupFirstPublicationHash,
+impl<'a> Plan<'a> {
+    pub(super) fn capture(
+        prepared: &'a PreparedBackupRegistry,
+        decision: &'a AdmittedBackupDecision,
+        expected: &'a BackupFirstPublicationHash,
         stop: &AtomicBool,
     ) -> Result<Self> {
         let registry = published_registry::Plan::capture(prepared, decision, expected, stop)?;
         let report = published_registry::observe_with_plan(prepared, decision, &registry, stop)?;
         let mut plan = Self {
+            prepared,
+            decision,
+            expected,
             registry,
             report: BackupServingImagesReport {
                 registry: report,
@@ -83,6 +89,12 @@ impl Plan {
             ));
         }
         Ok(plan)
+    }
+
+    /// Immutable recipe only. Every consumer still reads its own target's
+    /// registry, snapshot, native archive and physical material at observation.
+    pub(super) fn registry(&self) -> &published_registry::Plan {
+        &self.registry
     }
 
     fn with_image<T>(
@@ -192,19 +204,14 @@ impl Plan {
         })
     }
 
-    fn observe(
-        &self,
-        prepared: &PreparedBackupRegistry,
-        decision: &AdmittedBackupDecision,
-        expected: &BackupFirstPublicationHash,
-        stop: &AtomicBool,
-    ) -> Result<BackupServingImagesReport> {
+    pub(super) fn observe(&self, stop: &AtomicBool) -> Result<BackupServingImagesReport> {
+        let prepared = self.prepared;
         for (index, target) in prepared.targets.iter().enumerate() {
             self.verify_target(prepared, index, stop)?;
             self.require_completion(target)?;
         }
-        first_publication::observe(prepared, decision, expected, stop)?;
-        published_registry::observe_with_plan(prepared, decision, &self.registry, stop)?;
+        first_publication::observe(prepared, self.decision, self.expected, stop)?;
+        published_registry::observe_with_plan(prepared, self.decision, &self.registry, stop)?;
         Ok(self.report.clone())
     }
 }
@@ -279,7 +286,7 @@ pub(super) fn install(
         )?;
         plan.require_completion(target)
     })?;
-    plan.observe(prepared, decision, expected, stop)
+    plan.observe(stop)
 }
 
 pub(super) fn observe(
@@ -288,7 +295,7 @@ pub(super) fn observe(
     expected: &BackupFirstPublicationHash,
     stop: &AtomicBool,
 ) -> Result<BackupServingImagesReport> {
-    Plan::capture(prepared, decision, expected, stop)?.observe(prepared, decision, expected, stop)
+    Plan::capture(prepared, decision, expected, stop)?.observe(stop)
 }
 
 #[cfg(test)]
