@@ -36,6 +36,8 @@ impl From<storage_engine::DiskFile> for ContentFile {
 }
 
 impl ContentFile {
+    /// Work-file optimization only; it does not export the source descriptor
+    /// or supply the checksum/protection required for version publication.
     pub(crate) fn try_clone_working_file(&self, target: &File, bytes: u64) -> io::Result<bool> {
         match &self.0 {
             Source::Local(file) => {

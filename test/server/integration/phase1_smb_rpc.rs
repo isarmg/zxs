@@ -621,6 +621,36 @@ fn public_smb_bridge_read_only_create_existing_keeps_pinned_content_without_a_wr
     );
 }
 
+#[test]
+fn public_smb_bridge_writable_open_keeps_the_original_body_and_scopes_byte_range_changes() {
+    let mut fixture = Fixture::new();
+    let client = fixture.connect();
+    save(&client, "p/existing.txt", b"before-original", true);
+    let repo = fixture.repository();
+    let before = fixture.entry(&repo.main_branch_id, "existing.txt");
+
+    let (writer, fd) = open(&client, "p/existing.txt", true, false, false);
+    let mut observed = [0; 15];
+    fd.read_exact_at(&mut observed, 0).unwrap();
+    assert_eq!(&observed, b"before-original");
+    client.call(Request::PrepareWrite { handle: writer.handle, end: 7, bytes: 1 }).unwrap();
+    fd.write_all_at(b"+", 6).unwrap();
+    client.call(Request::Dirty { handle: writer.handle }).unwrap();
+    assert_eq!(read(&client, "p/existing.txt").1, b"before-original");
+    client.call(Request::Flush { handle: writer.handle }).unwrap();
+    close(&client, writer.handle);
+    drop(fd);
+    assert_eq!(read(&client, "p/existing.txt").1, b"before+original");
+    let after = fixture.entry(&repo.main_branch_id, "existing.txt");
+    assert_eq!(before.file_id, after.file_id);
+    assert_ne!(before.version_id, after.version_id);
+    drop(client);
+    let (root, engine) = fixture.cold_open();
+    assert_eq!(engine.file_history(&before.file_id).unwrap().len(), 2);
+    assert_eq!(exported(&engine, root.path(), &before.version_id), b"before-original");
+    assert_eq!(exported(&engine, root.path(), &after.version_id), b"before+original");
+}
+
 #[path = "phase1_smb_rpc/http_soft_deletion.rs"]
 mod http_soft_deletion;
 #[path = "phase1_smb_rpc/soft_deletion.rs"]

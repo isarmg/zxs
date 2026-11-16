@@ -1099,10 +1099,14 @@ impl<T: Send + 'static> DiskIoResource<T> {
 
 impl DiskIoResource<File> {
     pub(crate) fn try_clone_working_file(&self, target: &File, bytes: u64) -> io::Result<bool> {
-        let mut access = self.access()?;
-        let cloned = platform_io::fs_safety::linux::try_clone_working_file(
-            &access.value().resource, target, bytes,
-        )?;
+        let cloned = {
+            let mut access = self.access()?;
+            platform_io::fs_safety::linux::try_clone_working_file(
+                &access.value().resource, target, bytes,
+            )?
+        };
+        // Recheck admission after the syscall, without holding the resource
+        // lock. A cancelled source may not produce an admitted open.
         self.check_io()?;
         Ok(cloned)
     }

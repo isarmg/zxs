@@ -5115,6 +5115,37 @@
         }
       ]
     },
+    "automatic-smb-working-clone": {
+      "reason": "Actual held optional Linux working-file clone and local SMB RPC writable open with a range write, unchanged original, independent published body and cold read. The kernel clone can be unsupported on the CI filesystem; fallback must keep the destination empty. No incremental publication, Samba network or performance claim.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "platform-io",
+          "manifest": "src/platform/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "fs_safety::tests::private_working_clone_never_overwrites_or_changes_the_source"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "phase1_smb_rpc",
+          "isolate": true,
+          "timeout_seconds": 900,
+          "exact": [
+            "public_smb_bridge_writable_open_keeps_the_original_body_and_scopes_byte_range_changes"
+          ],
+          "max_tests": 1
+        }
+      ]
+    },
     "ordinary-smb-manual-draft": {
       "reason": "Actual authenticated SMB Manual FILE handles publish only file.draft.write, retain frozen uncertain requests and local bytes/quota, and cold-read the published shared draft. The genuine HTTP management endpoint alone creates a FILE version. Include lost-response/later-FD-byte refusal and the unchanged Automatic path. No new pool format, RPC wire, unflushed-orphan adoption, or Samba-network acceptance claim.",
       "python_tests": [
@@ -15166,6 +15197,27 @@
       "groups": [
         "backup-scoped-encoding-memo",
         "terminal-backup-source-layout"
+      ]
+    }
+,
+    {
+      "path": "src/engine/src/disk/admission.rs",
+      "groups": [
+        "automatic-smb-working-clone",
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/content_file.rs",
+      "groups": [
+        "automatic-smb-working-clone",
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_smb_rpc.rs",
+      "groups": [
+        "automatic-smb-working-clone"
       ]
     }
   ],
