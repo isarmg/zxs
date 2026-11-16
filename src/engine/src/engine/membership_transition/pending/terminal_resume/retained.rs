@@ -131,6 +131,7 @@ impl TerminalManagement {
         )?;
         let member = PendingDisk {
             root: Arc::new(root),
+            layout: None,
             seal: PendingDiskSeal {
                 format: PendingFormat::MembershipPending,
                 identity,
@@ -174,7 +175,8 @@ impl TerminalMetadataResume {
                 validate_stored_seal(&seal, &request.original_seal)
             }
             None => {
-                admission::inspect_new_root(&member.root, &member.seal, &member.reservation_name)?;
+                admission::inspect_new_root(&member.root, &member.seal, &member.reservation_name,
+        member.layout.as_ref())?;
                 member
                     .root
                     .write_json(

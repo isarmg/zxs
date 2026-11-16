@@ -139,11 +139,16 @@ impl Engine {
                 target_config_hash: target_hash.clone(),
                 control_archive_root: archive_root.to_owned(),
             };
-            inspect_new_root(&root, &seal, &reservation_name)?;
-            roots.push((disk, root, seal, reservation_name));
+            let layout = if fence.intent.foreign.is_none() && fence.intent.effect.is_none() {
+                Some(self.observe_pending_added_layout(&disk, &root)?)
+            } else {
+                None
+            };
+            inspect_new_root(&root, &seal, &reservation_name, layout.as_ref())?;
+            roots.push((disk, root, seal, reservation_name, layout));
         }
         let mut resources = BTreeMap::new();
-        for (disk, root, seal, reservation_name) in roots {
+        for (disk, root, seal, reservation_name, layout) in roots {
             let (root, lock) = match fence.prepared_roots.get(&disk.disk_id) {
                 Some(prepared) => {
                     // The caller's FD only confirms its selection. All writes keep
@@ -163,11 +168,12 @@ impl Engine {
                 }
             };
             verify_named_root(&root)?;
-            inspect_new_root(&root, &seal, &reservation_name)?;
+            inspect_new_root(&root, &seal, &reservation_name, layout.as_ref())?;
             resources.insert(
                 disk.disk_id,
                 MemberResource::Added(Box::new(PendingDisk {
                     root,
+                    layout,
                     seal,
                     reservation_name,
                     _lock: lock,
@@ -286,7 +292,8 @@ impl Engine {
             }
             MemberResource::Added(handle) => {
                 reservation::verify_writer(&handle.root, &handle._lock)?;
-                inspect_new_root(&handle.root, &handle.seal, &handle.reservation_name).map(|_| ())
+                inspect_new_root(&handle.root, &handle.seal, &handle.reservation_name,
+                    handle.layout.as_ref()).map(|_| ())
             }
         }
     }
@@ -296,6 +303,7 @@ pub(super) fn inspect_new_root(
     root: &DiskRoot,
     expected: &PendingDiskSeal,
     reservation_name: &str,
+    physical_layout: Option<&reservation::fresh_addition::PendingRootLayout>,
 ) -> Result<bool> {
     reservation::verify_marker(root, reservation_name)?;
     let names = root
@@ -316,6 +324,9 @@ pub(super) fn inspect_new_root(
             true
         }
     };
+    if let Some(layout) = physical_layout {
+        layout.verify(root, expected)?;
+    }
     let expected_bytes = encode_metadata(expected, MAX_METADATA)?;
     for name in names {
         if platform_io::fs_safety::AtomicFile::is_temporary_name(&name) {
@@ -343,6 +354,8 @@ pub(super) fn inspect_new_root(
                         ));
                     }
                 }
+                Some(_) if physical_layout.is_some() && (name == *layout::COMMON_DATA_ROOT
+                    || name == *layout::DELETED_DATA_ROOT || name == *layout::ZXS_DATA_ROOT) => (),
                 Some(_) if name == *layout::DISK_IDENTITY && bound => (),
                 Some("metadata") if bound => (),
                 _ => {
@@ -419,7 +432,7 @@ pub(in crate::engine) fn verify_named_root(
     Ok(held)
 }
 pub(in crate::engine::membership_transition) fn member_identity(
-    config: &ValidatedConfig,
+    config: &Config,
     disk: &DiskConfig,
     physical: FileIdentity,
 ) -> MemberIdentity {
@@ -440,7 +453,18 @@ pub(in crate::engine::membership_transition) fn validate_pure_add_target(
     target: &ValidatedConfig,
     control_root: &Path,
 ) -> Result<Vec<DiskConfig>> {
-    if !same_settings(original, target) {
+    if !same_addition_settings(original, target) {
+        return Err(unsupported());
+    }
+    validate_addition_members(original, target, control_root)
+}
+
+/// The shared logical Add check can also inspect the raw request before any
+/// missing physical binding exists. It does not admit that Config for I/O.
+pub(in crate::engine::membership_transition) fn validate_addition_members(
+    original: &Config, target: &Config, control_root: &Path,
+) -> Result<Vec<DiskConfig>> {
+    if !same_pool_settings(original, target) {
         return Err(unsupported());
     }
     let old = original
@@ -522,9 +546,23 @@ pub(in crate::engine::membership_transition) fn same_disk(
         && *capacity_bytes == new.capacity_bytes
 }
 pub(in crate::engine::membership_transition) fn same_settings(old: &Config, new: &Config) -> bool {
+    old.storage_roots == new.storage_roots && same_pool_settings(old, new)
+}
+
+/// Only a pure Add may extend the root table. Existing entries cannot be
+/// changed or omitted, and full Config admission closes the new key domain.
+pub(in crate::engine::membership_transition) fn same_addition_settings(
+    old: &Config, new: &Config,
+) -> bool {
+    same_pool_settings(old, new) && old.storage_roots.iter().all(|(id, root)| {
+        new.storage_roots.get(id) == Some(root)
+    })
+}
+
+fn same_pool_settings(old: &Config, new: &Config) -> bool {
     let Config {
         pool_id,
-        storage_roots,
+        storage_roots: _,
         mode,
         disks: _,
         checksum_chunk_bytes,
@@ -540,7 +578,6 @@ pub(in crate::engine::membership_transition) fn same_settings(old: &Config, new:
         workspace_ttl_seconds,
     } = old;
     pool_id == &new.pool_id
-        && storage_roots == &new.storage_roots
         && mode == &new.mode
         && *checksum_chunk_bytes == new.checksum_chunk_bytes
         && *max_file_bytes == new.max_file_bytes

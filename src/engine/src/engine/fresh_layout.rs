@@ -2,7 +2,7 @@
 //! Creation runs under the initializer's existing directory and writer fences;
 //! the resulting bindings enter the fixed genesis configuration before I/O binds.
 use crate::{Config, DiskConfig, ErrorCode, Result, ValidatedConfig};
-use crate::disk::{DirectoryCreateOutcome, DiskResources, DiskRoot};
+use crate::disk::{DiskResources, DiskRoot};
 use crate::persist::layout;
 use crate::working_tree::{
     admission,
@@ -11,10 +11,11 @@ use crate::working_tree::{
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{DiskId, Generation, OperationId};
 use storage_contract::working_tree::{
-    DirectoryId, DiskRegistrationIdentity, LocalDirectoryBinding, RootBinding, RootId,
-    StorageLayout, ThreeRootBinding, WorkingTreeCatalog, ZxsLifecycleBindings,
+    DirectoryId, DiskRegistrationIdentity, RootBinding, RootId,
+    StorageLayout, WorkingTreeCatalog,
 };
 
+pub(in crate::engine) mod root_areas;
 pub(crate) mod containers;
 pub(crate) mod directories;
 pub(crate) mod draft_source;
@@ -26,6 +27,26 @@ pub enum FreshLayoutError {
     InitializationInput,
     #[error("fresh layout belongs to a different initialization occurrence")]
     InitializationSource,
+    #[error("the fresh Add request must preserve its exact admitted original configuration")]
+    AdditionRequest,
+    #[error("fresh root preparation admits one new device per Add")]
+    AdditionCount,
+    #[error("the Add operation, source epoch, actor or exact request differs")]
+    AdditionConflict,
+    #[error("original members disagree on the immutable Add layout preparation")]
+    AdditionFork,
+    #[error("fresh root preparation requires clean original journals")]
+    AdditionJournals,
+    #[error("membership fence sequence exhausted: {0}")]
+    AdditionSequence(#[source] storage_contract::SequenceExhausted),
+    #[error("the Add actor is empty: {0}")]
+    AdditionPrincipal(#[source] storage_contract::EmptyPrincipal),
+    #[error("an unrecorded Add preparation exists; its directory cannot be adopted")]
+    AdditionUnrecorded,
+    #[error("the Add layout feedback differs from its request or held physical roots")]
+    AdditionEvidence,
+    #[error("decoding the immutable Add layout preparation: {0}")]
+    AdditionRecord(#[source] json_codec::Error),
     #[error("the persisted layout does not cover the exact registered disk set")]
     Registration,
     #[error("the registered physical root or one of its three roots changed")]
@@ -68,6 +89,15 @@ pub enum FreshLayoutError {
 impl FreshLayoutError {
     pub(crate) fn code(&self) -> ErrorCode {
         match self {
+            Self::AdditionRequest => ErrorCode::ConfigConflict,
+            Self::AdditionCount => ErrorCode::UnsupportedOperation,
+            Self::AdditionConflict => ErrorCode::IdempotencyKeyReused,
+            Self::AdditionFork => ErrorCode::LogFork,
+            Self::AdditionJournals | Self::AdditionSequence(_) => ErrorCode::RecoveryRequired,
+            Self::AdditionPrincipal(_) => ErrorCode::Unauthenticated,
+            Self::AdditionUnrecorded => ErrorCode::RecoveryRequired,
+            Self::AdditionEvidence => ErrorCode::DiskIdentityMismatch,
+            Self::AdditionRecord(_) => ErrorCode::ObjectCorrupt,
             Self::DraftChanged => ErrorCode::PreparationStale,
             Self::DraftTooLarge => ErrorCode::FileTooLarge,
             Self::InitializationInput | Self::InitializationSource => ErrorCode::ConfigInvalid,
@@ -118,71 +148,14 @@ impl CreatedRoots {
         for (disk, (disk_id, root_id, directory_ids)) in config.disks.iter().zip(identities) {
             let held = &resources.get(disk)?.root;
             let root_entity = local_entity(held.directory_identity(held.path())?);
-            let names = [
-                &*layout::COMMON_DATA_ROOT, &*layout::DELETED_DATA_ROOT, &*layout::ZXS_DATA_ROOT,
-            ];
-            let mut created = Vec::with_capacity(3);
-            for (name, directory_id) in names.into_iter().zip(directory_ids) {
-                let entity = match held.create_private_entry(name) {
-                    DirectoryCreateOutcome::Created { directory, identity, durability } => {
-                        durability.map_err(directory_error)?;
-                        // Keep the returned exact descriptor through readback;
-                        // creation success is not inferred from the name alone.
-                        if directory.directory_identity(directory.path())? != identity {
-                            return Err(FreshLayoutError::RootIdentity.into());
-                        }
-                        held.sync_private_entry_matching(name, identity).map_err(directory_error)?;
-                        local_entity(identity)
-                    }
-                    DirectoryCreateOutcome::Rejected(error)
-                    | DirectoryCreateOutcome::Uncertain { source: error, .. } => {
-                        return Err(directory_error(error));
-                    }
-                };
-                created.push(LocalDirectoryBinding { directory_id, entity });
-            }
-            let management = held.private_entry_matching(
-                &layout::ZXS_DATA_ROOT, file_identity(created[2].entity),
-            ).map_err(directory_error)?;
-            let lifecycle = [&*layout::COMMON_DATA_ROOT, &*layout::DELETED_DATA_ROOT]
-                .into_iter().zip(directory_ids.into_iter().skip(3))
-                .map(|(name, directory_id)| {
-                    let (directory, identity) = match management.create_private_entry(name) {
-                        DirectoryCreateOutcome::Created { directory, identity, durability } => {
-                            durability.map_err(directory_error)?;
-                            (directory, identity)
-                        }
-                        DirectoryCreateOutcome::Rejected(error)
-                        | DirectoryCreateOutcome::Uncertain { source: error, .. } => {
-                            return Err(directory_error(error));
-                        }
-                    };
-                    if directory.directory_identity(directory.path())? != identity {
-                        return Err(FreshLayoutError::RootIdentity.into());
-                    }
-                    management.sync_private_entry_matching(name, identity)
-                        .map_err(directory_error)?;
-                    Ok(LocalDirectoryBinding { directory_id, entity: local_entity(identity) })
-                }).collect::<Result<Vec<_>>>()?;
-            management.sync_dir(management.path())?;
-            held.sync_dir(held.path())?;
-            let mut lifecycle = lifecycle.into_iter();
-            let mut created = created.into_iter();
+            let areas = root_areas::HeldRootAreas::create(held, directory_ids)?;
             let binding = RootBinding {
                 layout: StorageLayout::UnifiedWorkingTreeV1,
                 root_id,
                 registration: registration(config, disk),
                 source_chain: source_chain(config, disk)?,
                 root_entity,
-                roots: ThreeRootBinding {
-                    common_data: created.next().expect("invariant: three created roots"),
-                    deleted_data: created.next().expect("invariant: three created roots"),
-                    zxs_data: created.next().expect("invariant: three created roots"),
-                    zxs_lifecycles: ZxsLifecycleBindings {
-                        common_data: lifecycle.next().expect("invariant: two created partitions"),
-                        deleted_data: lifecycle.next().expect("invariant: two created partitions"),
-                    },
-                },
+                roots: areas.binding().clone(),
                 operation_id: operation,
                 generation: Generation::new(1),
             };
@@ -228,7 +201,9 @@ pub(crate) fn directory_error(source: crate::disk::DirectoryIoError) -> crate::E
         }
     }
 }
-fn registration(config: &Config, disk: &DiskConfig) -> DiskRegistrationIdentity {
+pub(in crate::engine) fn registration(
+    config: &Config, disk: &DiskConfig,
+) -> DiskRegistrationIdentity {
     DiskRegistrationIdentity {
         pool_id: config.pool_id.clone(),
         disk_id: disk.disk_id.clone(),
@@ -236,7 +211,9 @@ fn registration(config: &Config, disk: &DiskConfig) -> DiskRegistrationIdentity 
         binding_generation: disk.binding_generation,
     }
 }
-fn source_chain(config: &Config, disk: &DiskConfig) -> Result<Vec<DiskRegistrationIdentity>> {
+pub(in crate::engine) fn source_chain(
+    config: &Config, disk: &DiskConfig,
+) -> Result<Vec<DiskRegistrationIdentity>> {
     let mut source = disk.upstream_slot_id.as_deref();
     let mut seen = BTreeSet::from([disk.slot_id.as_str()]);
     let mut chain = Vec::new();

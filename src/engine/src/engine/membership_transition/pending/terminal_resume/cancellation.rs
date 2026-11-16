@@ -274,7 +274,8 @@ impl TerminalMetadataResume {
     fn cancellation_observations(&self) -> Result<BTreeMap<String, TerminalResumeChoice>> {
         for member in self.members.values() {
             reservation::verify_writer(&member.root, &member._lock)?;
-            admission::inspect_new_root(&member.root, &member.seal, &member.reservation_name)?;
+            admission::inspect_new_root(&member.root, &member.seal, &member.reservation_name,
+        member.layout.as_ref())?;
         }
         let transition = object_hash(INTENT_KIND, &self.proposal.intent)?;
         let mut decisions = BTreeMap::new();

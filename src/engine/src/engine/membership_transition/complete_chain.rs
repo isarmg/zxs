@@ -5,10 +5,11 @@ use super::{Engine, TransitionIntent, ValidatedConfig, pending};
 use crate::engine::disk_registry::{
     DiskRegistrationIdentity, RegistrationMode, VerifiedDiskRegistry,
 };
-use crate::{DiskConfig, Error, ErrorCode, Result};
+use crate::{Config, DiskConfig, Error, ErrorCode, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// ValidatedConfig already proves adjacent levels, unique slots and no cycle.
+/// Config admission or the private Add input gate has proved adjacent levels,
+/// unique slots and no cycle; this traversal does not mint a target authority.
 /// This traversal adds no single-successor assumption. It visits each selected
 /// ancestor once, even when several future routes share that ancestor.
 struct AdditionChain<'a> {
@@ -17,7 +18,7 @@ struct AdditionChain<'a> {
 }
 
 impl<'a> AdditionChain<'a> {
-    fn new(original: &'a ValidatedConfig, target: &'a ValidatedConfig) -> Self {
+    fn new(original: &'a ValidatedConfig, target: &'a Config) -> Self {
         let originals = original
             .disks
             .iter()
@@ -96,7 +97,7 @@ impl<'a> AdditionChain<'a> {
 }
 
 impl Engine {
-    pub(super) fn require_addition_chain(&self, target: &ValidatedConfig) -> Result<()> {
+    pub(super) fn require_addition_chain(&self, target: &Config) -> Result<()> {
         let chain = AdditionChain::new(&self.config, target);
         chain.require_current_registry(self)?;
         chain.require_held_roots(self)

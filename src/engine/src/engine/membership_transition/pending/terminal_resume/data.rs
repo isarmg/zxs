@@ -43,6 +43,7 @@ impl TerminalMetadataResume {
                 &resource.root,
                 &resource.seal,
                 &resource.reservation_name,
+                resource.layout.as_ref(),
             )?;
             resource
                 .root

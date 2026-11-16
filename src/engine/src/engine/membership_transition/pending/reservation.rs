@@ -2,6 +2,7 @@
 //! hash of the exact preparation, not a partially written JSON marker. Therefore
 //! a crash before the writer lock or pending seal never leaves anonymous debris.
 pub(in crate::engine::membership_transition) mod terminal_resume;
+pub(in crate::engine::membership_transition) mod fresh_addition;
 
 use super::*;
 use crate::persist::layout;
@@ -151,12 +152,41 @@ pub(in crate::engine::membership_transition) struct ReservedRoot {
     pub(in crate::engine::membership_transition) identity: MemberIdentity,
     pub(super) name: String,
     pub(super) writer: Arc<crate::disk::FenceOwner>,
+    // Only the actual fresh-area producer supplies this admitted target.
+    // Other reservation protocols retain their original control-only check.
+    pub(super) layout: Option<ValidatedConfig>,
 }
 impl ReservedRoot {
     pub(in crate::engine::membership_transition) fn verify_unsealed(&self) -> Result<()> {
         admission::verify_named_root(&self.root)?;
         verify_writer(&self.root, &self.writer)?;
-        inspect_unsealed(&self.root, &self.name, false)
+        let Some(target) = &self.layout else {
+            return inspect_unsealed(&self.root, &self.name, false);
+        };
+        let disk = target.disks.iter().find(|disk| disk.disk_id == self.identity.disk_id)
+            .ok_or(crate::engine::fresh_layout::FreshLayoutError::AdditionEvidence)?;
+        if admission::member_identity(target, disk, admission::verify_named_root(&self.root)?)
+            != self.identity
+        {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::AdditionEvidence.into());
+        }
+        crate::engine::fresh_layout::verify_root(target, disk, &self.root)?;
+        let binding = &target.storage_roots[&disk.disk_id.parse::<DiskId>()?];
+        crate::engine::fresh_layout::root_areas::HeldRootAreas::observe(
+            &self.root, &binding.roots)?.require_empty()?;
+        verify_marker(&self.root, &self.name)?;
+        for entry in self.root.entries(self.root.path())? {
+            let entry = entry.map_err(fs_error)?;
+            if entry.as_os_str() != self.name
+                && entry != *layout::DISK_WRITER_LOCK
+                && entry != *layout::COMMON_DATA_ROOT
+                && entry != *layout::DELETED_DATA_ROOT
+                && entry != *layout::ZXS_DATA_ROOT
+            {
+                return Err(crate::engine::fresh_layout::FreshLayoutError::AdditionEvidence.into());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -350,12 +380,13 @@ impl Engine {
             ));
         }
         self.persist_source_preparation(&source)?;
-        self.reserve_target_roots(roots)
+        self.reserve_target_roots(roots, target)
     }
 
     fn reserve_target_roots(
         &mut self,
         roots: Vec<InspectedRoot>,
+        target: &ValidatedConfig,
     ) -> Result<BTreeMap<String, ReservedRoot>> {
         // All source preparations are durable before the first target mutation.
         // Directory locks serialize preparation peers; the ordinary writer lock
@@ -416,6 +447,7 @@ impl Engine {
                 identity,
                 name,
                 writer: crate::disk::FenceOwner::new(writer, Some(directory_lock)),
+                layout: None,
             };
             reserved.verify_unsealed()?;
             prepared.insert(disk_id, reserved);
@@ -518,6 +550,18 @@ pub(in crate::engine::membership_transition) fn verify_intent_roots(
                 "transition omits an added root identity",
             )
         })?;
+        if intent.effect.is_none() && intent.foreign.is_none()
+            && matches!(&intent.origin, Origin::Genesis { .. } | Origin::Successor { .. })
+        {
+            let binding = intent.target.storage_roots.get(&disk.disk_id.parse::<DiskId>()?)
+                .ok_or(crate::engine::fresh_layout::FreshLayoutError::AdditionEvidence)?;
+            if binding.operation_id != intent.operation_id
+                || binding.root_entity.device() != identity.device
+                || binding.root_entity.inode() != identity.inode
+            {
+                return Err(crate::engine::fresh_layout::FreshLayoutError::AdditionEvidence.into());
+            }
+        }
         if identity.pool_id != intent.target.pool_id
             || identity.disk_id != disk.disk_id
             || identity.slot_id != disk.slot_id

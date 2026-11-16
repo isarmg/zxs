@@ -66,6 +66,60 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_first_add_root_feedback_has_its_own_exact_cuts_and_products(self):
+        name = 'fresh-first-add-root-binding'
+        paths = [
+            'src/engine/src/engine/config.rs',
+            'src/engine/src/engine/fresh_layout.rs',
+            'src/engine/src/engine/fresh_layout/root_areas.rs',
+            'src/engine/src/engine/membership_transition.rs',
+            'src/engine/src/engine/membership_transition/abort.rs',
+            'src/engine/src/engine/membership_transition/complete_chain.rs',
+            'src/engine/src/engine/membership_transition/pending.rs',
+            'src/engine/src/engine/membership_transition/pending/activation/authority.rs',
+            'src/engine/src/engine/membership_transition/pending/activation/terminal_resume.rs',
+            'src/engine/src/engine/membership_transition/pending/admission.rs',
+            'src/engine/src/engine/membership_transition/pending/data.rs',
+            'src/engine/src/engine/membership_transition/pending/reservation.rs',
+            'src/engine/src/engine/membership_transition/pending/reservation/fresh_addition.rs',
+            'src/engine/src/engine/membership_transition/pending/reservation/fresh_addition/physical.rs',
+            'src/engine/src/engine/membership_transition/pending/reservation/terminal_resume.rs',
+            'src/engine/src/engine/membership_transition/pending/terminal_resume.rs',
+            'src/engine/src/engine/membership_transition/pending/terminal_resume/cancellation.rs',
+            'src/engine/src/engine/membership_transition/pending/terminal_resume/data.rs',
+            'src/engine/src/engine/membership_transition/pending/terminal_resume/retained.rs',
+            'src/engine/src/persist/layout.rs',
+            'test/engine/integration/recursive_backup_first_add_roots.rs',
+            'test/engine/integration/recursive_backup_paths.rs',
+            'docs/validation/membership-fence-experiment.md',
+            'docs/08-full-storage-and-disk-format.md',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(name, plan['groups'])
+                self.assertCountEqual(origin_selections(plan, name),
+                                      self.policy['groups'][name]['rust_targets'])
+        assert_path_group_extension(self, self.policy, paths, None, [name])
+        ordinary, faults, product, lean = self.policy['groups'][name]['rust_targets']
+        exact = [
+            'first_add_roots::'
+            'fresh_first_add_binds_five_areas_through_joint_cold_and_rejects_replacement',
+            'first_add_roots::fresh_first_add_resumes_only_recorded_preparation_occurrences',
+        ]
+        for target in (ordinary, faults):
+            self.assertEqual(target['exact'], exact)
+            self.assertEqual((target['name'], target['max_tests'], target['timeout_seconds']),
+                             ('recursive_backup_paths', 2, 900))
+            self.assertIs(target['isolate'], True)
+            self.assertIs(target['default_features'], True)
+            self.assertFalse(target.get('whole', False))
+            self.assertEqual(target.get('prefixes', []), [])
+        self.assertEqual(ordinary['features'], [])
+        self.assertEqual(faults['features'], ['fault-injection'])
+        self.assertEqual([product['mode'], lean['mode']], ['check', 'check'])
+        self.assertEqual([product['default_features'], lean['default_features']], [True, False])
+
     def test_empty_directory_backup_keeps_real_parent_and_terminal_scopes(self):
         name = 'ordinary-empty-directory-backup'
         paths = [
@@ -475,7 +529,10 @@ class TargetedSelection(unittest.TestCase):
             'test/engine/unit/engine/provenance_publication_tests.rs',
             CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
         ]
-        plan = CI.select_plan(self.policy, paths)
+        plan = assert_path_group_extension(self, self.policy, paths, [
+            'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
+            'held-directory-layout', 'projection-cache-layout', 'version-publication-location',
+        ], ['fresh-first-add-root-binding'])
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout',
@@ -662,7 +719,7 @@ class TargetedSelection(unittest.TestCase):
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-lifecycle-contract', 'container-lifecycle-http',
             'container-lifecycle-web', 'container-path-facts-schema', 'file-metadata-plan',
-            'ordinary-empty-directory-backup',
+            'ordinary-empty-directory-backup', 'fresh-first-add-root-binding',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -782,8 +839,13 @@ class TargetedSelection(unittest.TestCase):
                                     for target in plan['rust_targets']))
 
     def test_layout_and_ci_changes_union_groups_once(self):
-        plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs',
-                            'src/engine/src/journal.rs', '.github/workflows/ci.yml'])
+        plan = assert_path_group_extension(self, self.policy, [
+            'src/engine/src/persist/layout.rs', 'src/engine/src/journal.rs',
+            '.github/workflows/ci.yml',
+        ], [
+            'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
+            'held-directory-layout', 'projection-cache-layout', 'version-publication-location',
+        ], ['fresh-first-add-root-binding'])
         self.assertEqual(len(plan['rust_targets']), 5)
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
@@ -2438,9 +2500,15 @@ class ContainerTagsSelection(unittest.TestCase):
         empty = ['ordinary_namespace_parents::'
                  'empty_directory_backup_decides_b_then_c_without_a_file_'
                  'and_reuses_the_same_parents']
+        additions = [
+            'first_add_roots::'
+            'fresh_first_add_binds_five_areas_through_joint_cold_and_rejects_replacement',
+            'first_add_roots::fresh_first_add_resumes_only_recorded_preparation_occurrences',
+        ]
         retained_targets = []
         ordinary_targets = []
         empty_targets = []
+        addition_targets = []
         for group, spec in self.policy['groups'].items():
             for target in spec['rust_targets']:
                 if (target.get('package') != 'storage-engine'
@@ -2461,12 +2529,18 @@ class ContainerTagsSelection(unittest.TestCase):
                     self.assertIs(target.get('default_features'), True)
                     empty_targets.append(target.get('features'))
                     continue
+                if group == 'fresh-first-add-root-binding' and target.get('exact') == additions:
+                    self.assertEqual(target['max_tests'], 2)
+                    self.assertIs(target.get('default_features'), True)
+                    addition_targets.append(target.get('features'))
+                    continue
                 self.assertEqual(target['max_tests'], 1)
                 self.assertEqual(target['exact'], retained)
                 retained_targets.append(group)
         self.assertIn('ordinary-namespace-parents', retained_targets)
         self.assertCountEqual(ordinary_targets, [[], ['fault-injection']])
         self.assertCountEqual(empty_targets, [[], ['fault-injection']])
+        self.assertCountEqual(addition_targets, [[], ['fault-injection']])
 
     def test_http_identity_is_isolated_with_every_original_selection_and_budget(self):
         def is_http(target):

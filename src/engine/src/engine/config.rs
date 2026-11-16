@@ -526,6 +526,24 @@ fn validate_config(c: &Config) -> Result<()> {
 // Fanout is admitted only through the exact native Backup projection above.
 // Public Config/TryFrom/initialization keeps its legacy linear restriction.
 fn validate_config_shape(c: &Config, native_backup: bool) -> Result<()> {
+    validate_registration_shape(c, native_backup)?;
+    super::fresh_layout::validate_roots(c)?;
+    crate::disk_names::configuration::ConfiguredDiskNames::new(c)
+        .map_err(Error::ConfiguredDiskName)?;
+    Ok(())
+}
+
+/// Input shape only. This does not construct a ValidatedConfig, a Genesis
+/// authority or a root permission. The Add producer must bind its missing roots
+/// from exclusive creation before the ordinary Config admission can succeed.
+pub(in crate::engine) fn validate_addition_input(c: &Config) -> Result<()> {
+    validate_registration_shape(c, false)?;
+    crate::disk_names::configuration::ConfiguredDiskNames::new(c)
+        .map_err(Error::ConfiguredDiskName)?;
+    Ok(())
+}
+
+fn validate_registration_shape(c: &Config, native_backup: bool) -> Result<()> {
     validate_id(&c.pool_id, "pool")?;
     if !c.disks.iter().any(|d| d.metadata_member)
         || c.max_file_bytes == 0
@@ -601,9 +619,6 @@ fn validate_config_shape(c: &Config, native_backup: bool) -> Result<()> {
         }
     }
     validate_disk_roots(c.disks.iter().map(|disk| disk.root.as_path()))?;
-    super::fresh_layout::validate_roots(c)?;
-    crate::disk_names::configuration::ConfiguredDiskNames::new(c)
-        .map_err(Error::ConfiguredDiskName)?;
     Ok(())
 }
 

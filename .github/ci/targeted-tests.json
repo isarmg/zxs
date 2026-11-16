@@ -1,5 +1,57 @@
 {
   "groups": {
+    "fresh-first-add-root-binding": {
+      "reason": "Fresh ordinary one-device Add records actual five-area identities on the original members before install, then preserves the same roots through enrollment, Joint and cold activation. Genuine root-lock/unrecorded-stage/recorded-feedback/partial-install cuts, strict feedback and same-bytes inode replacement refusal. No claim of Current backup backfill or terminal cutover; preserve their separate exact targets and original 900s.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "default_features": true,
+          "isolate": true,
+          "exact": [
+            "first_add_roots::fresh_first_add_binds_five_areas_through_joint_cold_and_rejects_replacement",
+            "first_add_roots::fresh_first_add_resumes_only_recorded_preparation_occurrences"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "default_features": true,
+          "isolate": true,
+          "exact": [
+            "first_add_roots::fresh_first_add_binds_five_areas_through_joint_cold_and_rejects_replacement",
+            "first_add_roots::fresh_first_add_resumes_only_recorded_preparation_occurrences"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900,
+          "features": [
+            "fault-injection"
+          ]
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
+    },
     "named-backup-root-admission": {
       "reason": "Keep observed named-root replacement tests and real empty-directory backup independently selected. Test the held-root boundary without claiming raw descriptor invalidation.",
       "python_tests": [
@@ -4703,6 +4755,150 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/engine/config.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/root_areas.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/abort.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/complete_chain.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/authority.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/terminal_resume.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/admission.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/data.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/reservation.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/reservation/fresh_addition.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/reservation/fresh_addition/physical.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/reservation/terminal_resume.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/terminal_resume.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/terminal_resume/cancellation.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/terminal_resume/data.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/terminal_resume/retained.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "test/engine/integration/recursive_backup_first_add_roots.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "test/engine/integration/recursive_backup_paths.rs",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "docs/validation/membership-fence-experiment.md",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
+    {
+      "path": "docs/08-full-storage-and-disk-format.md",
+      "groups": [
+        "fresh-first-add-root-binding"
+      ]
+    },
     {
       "path": "src/engine/src/engine/membership_transition.rs",
       "groups": [

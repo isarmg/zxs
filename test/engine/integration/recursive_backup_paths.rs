@@ -607,5 +607,8 @@ mod backup_preparation;
 #[path = "recursive_backup_first_additions.rs"]
 mod first_additions;
 
+#[path = "recursive_backup_first_add_roots.rs"]
+mod first_add_roots;
+
 #[path = "ordinary_namespace_parents.rs"]
 mod ordinary_namespace_parents;

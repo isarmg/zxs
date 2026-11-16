@@ -145,6 +145,9 @@ struct ControlBootstrap {
 
 struct PendingDisk {
     root: Arc<DiskRoot>,
+    // Only the actual Add fence supplies five-area readiness. Other pending
+    // control protocols retain their original, non-layout inspection.
+    layout: Option<reservation::fresh_addition::PendingRootLayout>,
     seal: PendingDiskSeal,
     reservation_name: String,
     // Same .writer.lock as ordinary Engine initialization. Never reacquire an

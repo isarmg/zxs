@@ -140,6 +140,7 @@ impl TerminalManagement {
                 disk_id,
                 PendingDisk {
                     root: reserved.root,
+                    layout: None,
                     seal,
                     reservation_name: reserved.name,
                     _lock: reserved.writer,

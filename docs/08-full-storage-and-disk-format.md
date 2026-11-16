@@ -251,3 +251,16 @@ Snapshot 必须携带 `format: "radix-map-roots"`、十进制 UInt64 字符串 `
 ---
 
 [文档目录](README.md) · [上一章：数据模型、身份与索引](07-data-model.md) · [下一章：用户指定的分层备份拓扑](09-backup-topology.md)
+
+
+### 新布局普通 Add 的根准备证据
+
+现有池第一块普通新增盘不沿用初始化前的空根表，也不接受调用方提供的新物理身份。
+输入保留全部已登记根的完整 RootBinding，仅新增显式具名的 generation-one 登记；
+实际目录/writer 锁下在私有 stage EXCL 创建五区，原元数据成员保存并读回同步严格
+`membership-fresh-root-preparation` 记录后，才将记录的同 inode 区目录安装到最终地址。
+补齐的唯一 RootBinding 随原 target hash、fence、Joint 和激活代际持久化；冷开及
+pending 重试继续核同顶根/五区，不能从同名同内容重建身份。阶段、必需字段和未完成
+边界见[普通 Add 五区准备](validation/membership-fence-experiment.md#fresh-add-root-preparation)。
+该私有准备记录不是新的成员票或业务发布格式；当前一次新增一盘，不包含多级 BODY
+回填、盘改名、终端切换或未知 stage 的自动采纳/清理。新增回归仍待 CI，本文不声明已跑。

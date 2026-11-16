@@ -210,7 +210,7 @@ impl AbortContext {
         let config = intent.origin.config();
         if matches!(&intent.origin, Origin::BackupCutover { .. }) {
             backup::verify_intent(intent)?;
-        } else if !pending::admission::same_settings(config, &intent.target)
+        } else if !pending::admission::same_addition_settings(config, &intent.target)
             || config.disks.iter().any(|old| {
                 !intent
                     .target

@@ -342,10 +342,7 @@ impl Engine {
         principal: &str,
         operation_id: OperationId,
     ) -> Result<MembershipFenceStatus> {
-        let target = ValidatedConfig::try_from(target)?;
-        pending::admission::validate_pure_add_target(&self.config, &target, &self.root)?;
-        self.require_addition_chain(&target)?;
-        self.begin_membership_handoff_with_effect(target, None, principal, operation_id)
+        self.begin_fresh_membership_add(target, principal, operation_id, None)
     }
 
     /// Bind an authorized caller's exact directory handles before any source
@@ -358,17 +355,7 @@ impl Engine {
         operation_id: OperationId,
         directories: Vec<PendingMemberDirectory>,
     ) -> Result<MembershipFenceStatus> {
-        let target = ValidatedConfig::try_from(target)?;
-        pending::admission::validate_pure_add_target(&self.config, &target, &self.root)?;
-        self.require_addition_chain(&target)?;
-        self.begin_membership_handoff_prepared(
-            target,
-            None,
-            None,
-            principal,
-            operation_id,
-            Some(directories),
-        )
+        self.begin_fresh_membership_add(target, principal, operation_id, Some(directories))
     }
 
     /// Begin one foreign-chain operation from its admitted native source, not
@@ -406,6 +393,7 @@ impl Engine {
             principal,
             operation,
             Some(directories),
+            None,
         )
     }
 
@@ -416,19 +404,11 @@ impl Engine {
         principal: &str,
         operation_id: OperationId,
     ) -> Result<MembershipFenceStatus> {
-        self.begin_membership_handoff_prepared(target, effect, None, principal, operation_id, None)
+        self.begin_membership_handoff_prepared(
+            target, effect, None, principal, operation_id, None, None)
     }
 
-    fn begin_membership_handoff_prepared(
-        &mut self,
-        target: ValidatedConfig,
-        effect: Option<ExitEffect>,
-        foreign: Option<crate::foreign_import::ForeignAdmissionRecipe>,
-        principal: &str,
-        operation_id: OperationId,
-        directories: Option<Vec<PendingMemberDirectory>>,
-    ) -> Result<MembershipFenceStatus> {
-        Self::require_actor(principal)?;
+    fn require_handoff_source(&self) -> Result<()> {
         self.require_no_commit_preparation()?;
         if let Some(generation) = self.config.generation()
             && let Some(registry) = generation.registry()
@@ -445,6 +425,21 @@ impl Engine {
                 "a registry successor requires the admitted current namespace source",
             ));
         }
+        Ok(())
+    }
+
+    fn begin_membership_handoff_prepared(
+        &mut self,
+        target: ValidatedConfig,
+        effect: Option<ExitEffect>,
+        foreign: Option<crate::foreign_import::ForeignAdmissionRecipe>,
+        principal: &str,
+        operation_id: OperationId,
+        directories: Option<Vec<PendingMemberDirectory>>,
+        prepared: Option<pending::reservation::fresh_addition::PreparedAddition>,
+    ) -> Result<MembershipFenceStatus> {
+        Self::require_actor(principal)?;
+        self.require_handoff_source()?;
         validate_transition_target(&self.config, &target, effect.as_ref())?;
         if let Some(recipe) = &foreign {
             recipe.verify_contract(&self.config, &target, operation_id)?;
@@ -544,8 +539,17 @@ impl Engine {
                     "a new membership fence requires clean original journals",
                 ));
             }
-            let prepared_roots =
-                self.prepare_added_roots(&origin, &target, principal, operation_id, held)?;
+            let prepared_roots = match prepared {
+                Some(prepared) => {
+                    if held.is_some() {
+                        return Err(
+                            crate::engine::fresh_layout::FreshLayoutError::AdditionEvidence.into(),
+                        );
+                    }
+                    prepared.into_roots(self, &target)?
+                }
+                None => self.prepare_added_roots(&origin, &target, principal, operation_id, held)?,
+            };
             let boundary = self.handoff_boundary(&members)?;
             let intent = TransitionIntent {
                 operation_id,

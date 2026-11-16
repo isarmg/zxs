@@ -258,7 +258,7 @@ impl AuthorityNode {
         }
         let original = verified.intent.origin.config();
         let target = &verified.intent.target;
-        if !admission::same_settings(original, target)
+        if !admission::same_addition_settings(original, target)
             || original.disks.iter().any(|old| {
                 !target
                     .disks

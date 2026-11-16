@@ -118,3 +118,48 @@
 源准备记录当前保留并参与同根冲突检查。本片不包含退出后重新登记或 inode 重用的生命周期，不能把这一实验性保留策略宣称为永久产品规则；未来支持这些路径须明确结束原 reservation，不能靠忽略记录或删除未知文件实现。
 
 反向初始化竞态补充：普通初始化也在任何 writer 文件创建或身份写入前持有全部数据根的目录 flock，再按相同顺序取得普通 writer 锁，目录锁持续到 seal/config/journal/index 初始化结束。这样初始化已获准时，准备者在源准备记录和目标 mkdir 之前即失败；准备者先持目录锁时，初始化不能在目标新增 writer 文件。新增反向锁集测试及更新正向并发测试源码，均未本地运行；不只依赖锁后一次 reservation 扫描证明双向互斥。
+
+
+<a id="fresh-add-root-preparation"></a>
+
+## 新布局第一块普通 Add 的五区准备（源码，待定向 CI）
+
+本段取代上文普通 Add 的“先源准备、再 marker、再 writer”的旧目录准备顺序，
+不改 terminal/foreign 的独立控制协议。当前窄生产入口一次接纳一个新设备。
+调用方提交实际旧 Config 的全部原根表及一个具名新登记，不能自填新根 inode；
+原登记、名称、拓扑、全池设置和每个原 RootBinding 必须不变。空根必须由实际
+`begin_membership_handoff[_with_directories]` 锁住后创建，尚未加入成员或提供业务 I/O。
+
+| 相位 | 持有/持久材料 | 可做与不可做 |
+| --- | --- | --- |
+| 输入/锁 | 同实际源 epoch、完整请求、Principal、OperationId；所选根的目录 flock 与 writer 锁 | 原配置/根名/拓扑、别名和准备冲突先核；不凭 Config 发行 RootBinding |
+| 私有准备 | `membership-layout-<DirectoryId>` 内 EXCL 创建 common-data、deleted-data、zxs-data 及 zxs-data 下两个生命周期根 | 复用初始化的创建/readback/fsync 核；五区均为空，持真实 FD 和 entity |
+| 反馈 | 所有原元数据成员 `metadata/membership-fresh-root-preparations/<OperationId>.json` | 完整严格记录写回核验及同步成功后才可移动区目录；不是成员票、ACCEPT 或 readiness |
+| 安装 | 同一记录每个区的 stage/final 恰一处，完整 inode 相等；NOREPLACE 到最终三根 | 同名、同字节新 inode 和缺失反馈一律拒；不得认领已有目录 |
+| 原控制链 | 原 `membership-preparations`、reservation、fence、enroll、Joint、activation | target hash 包含实际完整 RootBinding；Pending 只读验证同五区，再走原 seal/归档/联合门 |
+
+私有反馈格式固定 `format = "membership-fresh-root-preparation"`，必需字段为
+`origin`、`request`、`principal`、`operation_id`、`disk_id`、`stage` 和 `root`。
+`origin` 保存实际 Genesis 或 Successor 源，后者包含前代权威；`request` 是原用户
+确切请求而非补齐后的 target。`stage` 是目录 ID 和实际 entity，`root` 使用现有
+严格 RootBinding（完整登记/有序源链/顶根及五区 entity、op、generation）。记录
+按原 `object_hash` 域 `membership-fresh-root-preparation` 比较，不引入另一份
+成员状态表，不把旧记录缺字段解释为默认值，也不修改旧 Candidate 或 seal 编码。
+
+未持久反馈的 stage 不能自动清理或恢复为可用根：同 operation 重试保持原字节并返回
+RecoveryRequired。已有完整反馈时，重复同 operation/主体/源/请求才可恢复；各原成员
+重新同步完整反馈后才继续剩余 rename。已安装区、尚未安装区及其内层生命周期根都必须
+仍是记录的同一 occurrence。任一不匹配不开始 fence/enroll/Joint。失败不删除未知材料。
+
+新的外置验收为
+[recursive_backup_first_add_roots.rs](../../test/engine/integration/recursive_backup_first_add_roots.rs)：
+实际 A 上普通根、父目录和 BODY，新增空 B、完整 Joint/activation、冷开；同字节替换
+B 顶根或 common-data 拒绝；真实锁后、未记录 stage、反馈后、首区安装后、安装后未 fence
+切点；缺字段/未知字段反馈和同 op 不同具名请求拒绝；恢复原 inode 后同请求续作。
+默认与 fault-injection 两配置各选两函数，独立 900 秒上限未调整。尚未编译或执行。
+
+原 `first_additions` 的 B/C 正文历史回填与独立观测、批量 Add、原 terminal 切换仍是
+各自真实生产/验收边界，不能以本段根准备通过代替。旧 `membership_reservation_tests`
+使用初始化前无根表的多盘目标及旧准备 cuts，尚未迁为本段的当前一盘协议证据；不声称
+它们已在新格式通过。每次准备仍需扫描保留的源反馈，空间/读成本随保留操作数增长，
+本片没有回收策略、性能基准或永久 inode 重用承诺。

@@ -55,7 +55,7 @@ impl ResumeRoot {
         {
             return Ok(());
         }
-        super::super::admission::inspect_new_root(&self.root, &seal, &name).map(|_| ())
+        super::super::admission::inspect_new_root(&self.root, &seal, &name, None).map(|_| ())
     }
 
     /// Call only after the protected system resume binding has reached both
@@ -95,6 +95,7 @@ impl ResumeRoot {
             identity: self.identity,
             name,
             writer: crate::disk::FenceOwner::new(writer, Some(self.directory_lock)),
+            layout: None,
         };
         verify_writer(&result.root, &result.writer)?;
         Ok(result)

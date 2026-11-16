@@ -420,6 +420,7 @@ pub(in crate::engine::membership_transition) fn reopen_held(
             disk.disk_id.clone(),
             PendingDisk {
                 root: Arc::new(root),
+                layout: None,
                 seal: PendingDiskSeal {
                     format: PendingFormat::MembershipPending,
                     identity: identity.clone(),

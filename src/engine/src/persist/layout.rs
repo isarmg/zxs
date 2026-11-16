@@ -155,3 +155,21 @@ pub(crate) static VERSION_NAMES_INTENT: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new(".zxs-version-names.json")
         .expect("invariant: version rename intent uses one canonical entry")
 });
+
+/// Private Add feedback stays on original members, not the unenrolled target.
+pub(crate) static MEMBERSHIP_ROOT_PREPARATIONS: LazyLock<RelativePath> = LazyLock::new(|| {
+    RelativePath::new("metadata/membership-fresh-root-preparations")
+        .expect("invariant: root preparation feedback has one disk-relative address")
+});
+
+pub(crate) fn membership_root_preparation(operation: storage_contract::OperationId) -> EntryName {
+    EntryName::new(format!("{operation}.json"))
+        .expect("invariant: a typed operation forms one preparation entry")
+}
+
+pub(crate) fn membership_layout_stage(
+    id: storage_contract::working_tree::DirectoryId,
+) -> EntryName {
+    EntryName::new(format!("membership-layout-{id}"))
+        .expect("invariant: a typed DirectoryId forms one private preparation entry")
+}

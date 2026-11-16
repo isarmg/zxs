@@ -136,7 +136,8 @@ impl PendingDataDisk {
 fn validate_resource(resource: &PendingDisk) -> Result<()> {
     admission::verify_named_root(&resource.root)?;
     reservation::verify_writer(&resource.root, &resource._lock)?;
-    admission::inspect_new_root(&resource.root, &resource.seal, &resource.reservation_name)?;
+    admission::inspect_new_root(&resource.root, &resource.seal, &resource.reservation_name,
+        resource.layout.as_ref())?;
     Ok(())
 }
 
