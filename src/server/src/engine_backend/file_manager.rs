@@ -825,7 +825,21 @@ pub(super) fn mkdir(
     if needs_root && path.as_str().split('/').count() > engine.config().max_entries {
         return Err(ApiError::limit("directory entry limit exceeded"));
     }
-    let repo = resolve_write_path(engine, identity, &slot_id, &path, DiskAccess::Create)?;
+    let repo = if let Some(shared) = &identity.smb_binding {
+        // The SMB path was already resolved and pinned before recording intent.
+        // Revalidate that same owner under the Engine lock and never allocate
+        // another root or redirect the operation on a stale binding.
+        match resolve_existing(engine, &slot_id, path.as_str(), DiskAccess::Create)? {
+            Some((repo, _)) if repo.file_manager_root && repo.repository_id == shared.repository_id
+                && repo.main_branch_id == shared.branch_id => repo,
+            _ => return Err(ApiError::conflict(
+                storage_contract::ErrorCode::SmbRebindRequired,
+                "SMB directory target changed; reconnect before starting another operation",
+            )),
+        }
+    } else {
+        resolve_write_path(engine, identity, &slot_id, &path, DiskAccess::Create)?
+    };
     let path = if repo.file_manager_root {
         path
     } else {

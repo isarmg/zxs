@@ -1,5 +1,53 @@
 {
   "groups": {
+    "ordinary-smb-native-mkdir": {
+      "reason": "Run ordinary default SMB RPC Mkdir through the exact native publication, retain replay/budget gates, and verify independent file histories after an authenticated local bridge round trip. These are RPC tests, not a Samba or Windows run.",
+      "python_tests": [
+        "test_native_smb_mkdir_selection"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "max_tests": 3,
+          "exact": [
+            "smb_rpc::tests::default_share_tests::default_mkdir_replay_admission_precedes_any_internal_root_creation",
+            "smb_rpc::tests::default_share_tests::default_mkdir_exhausted_budget_never_creates_a_root_and_releases_operation",
+            "smb_rpc::tests::default_share_tests::phase1_new_file_tests::phase1_primary_source_read_to_new_target_keeps_independent_history"
+          ],
+          "timeout_seconds": 900,
+          "isolate": true
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_smb_rpc",
+          "features": [
+            "core"
+          ],
+          "max_tests": 1,
+          "exact": [
+            "public_smb_bridge_read_to_new_file_keeps_independent_history_after_restart"
+          ],
+          "timeout_seconds": 900,
+          "isolate": true
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "features": [
+            "core"
+          ],
+          "default_features": true
+        }
+      ]
+    },
     "server-named-disk-fixtures": {
       "reason": "Compile the actual Server core unit-test target after its fixtures adopt typed configured disk names. Run only the two disk-name oracles here; original overlapping runtime checks and limits remain.",
       "python_tests": [
@@ -4847,6 +4895,18 @@
     }
   },
   "rules": [
+    {
+      "path": "src/server/src/smb_rpc/default_share.rs",
+      "groups": [
+        "ordinary-smb-native-mkdir"
+      ]
+    },
+    {
+      "path": "test/ci/test_native_smb_mkdir_selection.py",
+      "groups": [
+        "ordinary-smb-native-mkdir"
+      ]
+    },
     {
       "path": "test/server/support/foreign_disk_fixture.rs",
       "groups": [

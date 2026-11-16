@@ -17,6 +17,18 @@ struct SessionKey {
     generation: u64,
 }
 
+#[derive(data_serialization::Serialize)]
+struct NativeDirectoryIntent<'a> {
+    format: &'static str,
+    principal: &'a str,
+    repository_id: &'a str,
+    branch_id: &'a str,
+    binding_generation: u64,
+    slot_id: &'a str,
+    path: &'a name_policy::PortablePath,
+    operation_id: OperationId,
+}
+
 impl From<&SessionKey> for crate::auth::SmbBinding {
     fn from(key: &SessionKey) -> Self {
         Self {
@@ -411,12 +423,16 @@ impl DefaultShare {
                     "only rename accepts a destination or replacement",
                 ));
             }
-            if kind == NamespaceOperation::Mkdir {
-                let Location::Path { path, .. } = self.locate(&path)? else {
+            let mkdir = if kind == NamespaceOperation::Mkdir {
+                let Location::Path { slot, path } = self.locate(&path)? else {
                     return Err(directory_only());
                 };
-                name_policy::PortablePath::try_from(path).map_err(ApiError::invalid_source)?;
-            }
+                let path = name_policy::PortablePath::try_from(path)
+                    .map_err(ApiError::invalid_source)?;
+                Some((slot, path))
+            } else {
+                None
+            };
             if kind == NamespaceOperation::Rename
                 && let Some(reply) = self.resume_object_move(
                     &path,
@@ -439,7 +455,38 @@ impl DefaultShare {
             } else {
                 SmbPathIntent::Lookup
             };
-            let source = self.resolve(&path, intent)?;
+            let source = match &mkdir {
+                Some((slot, path)) => self.resolve_at(slot, path.clone().into(), intent)?,
+                None => self.resolve(&path, intent)?,
+            };
+            if let Some((slot, path)) = mkdir
+                && source.repository.file_manager_root
+            {
+                // The ordinary layout admits the exact native file.namespace
+                // Mkdir receipt, not an implicit directory delta in workspace.commit.
+                let key = self.pin_binding(source.repository)?;
+                let _paths = super::path_reservation::PathReservation::acquire(
+                    &self.shared, std::iter::once((key.branch.as_str(), path.key())),
+                )?;
+                let identity = self.bound_identity(&key);
+                admission.record_intent(&NativeDirectoryIntent {
+                    format: "smb-native-directory-mkdir",
+                    principal: &identity.principal,
+                    repository_id: &key.repository,
+                    branch_id: &key.branch,
+                    binding_generation: key.generation,
+                    slot_id: &slot.slot_id,
+                    path: &path,
+                    operation_id,
+                })?;
+                let result = self.shared.backend.create_disk_directory(
+                    &identity,
+                    crate::CreateDiskDirectory { slot_id: slot.slot_id, path, operation_id },
+                )?;
+                let result = crate::operation_wire::operation_wire(result.into())?;
+                admission.finish_published();
+                return Ok(Reply::Json(result));
+            }
             // Root namespaces cannot be renamed/deleted through the contents API.
             if let Some(path) = destination {
                 let reply = self.move_object(source, &path, admission, replace)?;
