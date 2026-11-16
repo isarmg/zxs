@@ -116,7 +116,10 @@ pub(super) fn read(
             .iter()
             .any(|item| item.placement.route_slot_ids.contains(&disk.slot_id))
     {
-        publication.verify_initial_ordinary_payloads(root, disk, &first, stop)?;
+        let scope = crate::engine::membership_transition::PublishedBackupPayload::observe(
+            root, disk, writer.config(), &first, &publication, &published, stop,
+        )?;
+        publication.verify_initial_ordinary_payloads(&scope, &first, stop)?;
     }
     checkpoint(stop)?;
     Ok(Native {

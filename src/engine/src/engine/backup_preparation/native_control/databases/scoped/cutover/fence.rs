@@ -93,6 +93,44 @@ impl BackupSourceFenceEvidence {
         }
         Ok(())
     }
+    /// Pure selected registrations. These values do not admit target I/O or
+    /// supply physical roots; the original-member root feedback does that.
+    pub(in crate::engine) fn target_layout_configuration(&self) -> storage_contract::Config {
+        let mut config = self.task.original.clone();
+        for (node, job) in self.task.topology.nodes.iter().zip(self.task.selection().jobs()) {
+            config.disks.push(DiskConfig {
+                name: node.name.clone(),
+                slot_id: node.identity.slot_id.clone(),
+                disk_id: node.identity.disk_id.clone(),
+                root: job.request.target_paths[0].clone(),
+                level: node.level,
+                upstream_slot_id: Some(node.upstream_slot_id.clone()),
+                metadata_member: false,
+                binding_generation: node.identity.binding_generation,
+                capacity_bytes: None,
+            });
+        }
+        config
+    }
+
+    pub(in crate::engine) fn root_target_count(&self) -> usize {
+        self.task.selection().jobs().len()
+    }
+
+    pub(in crate::engine) fn require_root_target(
+        &self, index: usize, root: &DiskRoot,
+    ) -> Result<storage_contract::DiskId> {
+        let failure = crate::engine::fresh_layout::FreshLayoutError::BackupRootEvidence;
+        let job = self.task.selection().jobs().get(index).ok_or(failure)?;
+        if root.path() != job.request.target_paths[0]
+            || PhysicalBinding::of(root)? != job.target
+        {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::BackupRootEvidence.into());
+        }
+        named_target(root, job)?;
+        Ok(self.task.topology.nodes[index].identity.disk_id.parse()?)
+    }
+
     pub(in crate::engine) fn state_hash(&self) -> &str {
         &self.task.scoped.objects.state_hash
     }

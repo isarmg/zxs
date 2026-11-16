@@ -10,10 +10,17 @@ mod abort;
 mod archive;
 pub(in crate::engine) use archive::PreparedBackupControl;
 mod backup;
-pub(crate) use backup::PreparedBackupFirstCandidate;
+pub(crate) use backup::{
+    BackupLayoutPreparation,
+    BackupLayoutSource,
+    PublishedBackupLayout,
+    PublishedBackupOriginal,
+    PublishedBackupPayload,
+    PreparedBackupFirstCandidate,
+};
 pub(in crate::engine) use backup::{
     AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl, PreparedBackupAuthority,
-    PreparedBackupFirstPublication,
+    PreparedBackupFirstPublication, PreparedBackupLayouts, PreparedBackupRoots,
 };
 pub use backup::{
     BackupFirstFinalizeReport, BackupFirstPublicationHash, BackupFirstPublicationReport,

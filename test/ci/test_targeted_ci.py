@@ -701,7 +701,7 @@ class TargetedSelection(unittest.TestCase):
         plan = assert_path_group_extension(self, self.policy, paths, [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout', 'projection-cache-layout', 'version-publication-location',
-        ], ['fresh-first-add-root-binding'])
+        ], ['fresh-first-add-root-binding', 'terminal-backup-source-layout'])
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout',
@@ -745,13 +745,22 @@ class TargetedSelection(unittest.TestCase):
         ]
         for path in paths:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                plan = (assert_path_group_extension(
+                    self, self.policy, [path], ['version-publication-location'],
+                    ['terminal-backup-source-layout'],
+                ) if path == 'src/engine/src/journal/version_publication.rs'
+                    else CI.select_plan(self.policy, [path]))
                 self.assertEqual(plan['groups'], ['version-publication-location'])
                 self.assertEqual(len(plan['rust_targets']), 2)
                 self.assertEqual(plan['python_tests'], [])
         for path in ['src/engine/src/journal.rs', 'src/engine/src/engine/provenance.rs']:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                plan = (assert_path_group_extension(
+                    self, self.policy, [path],
+                    ['backup-scoped-encoding-memo', 'held-directory-layout',
+                     'version-publication-location'], ['terminal-backup-source-layout'],
+                ) if path == 'src/engine/src/journal.rs'
+                    else CI.select_plan(self.policy, [path]))
                 required = ['held-directory-layout', 'version-publication-location']
                 if path == 'src/engine/src/journal.rs':
                     required.insert(0, 'backup-scoped-encoding-memo')
@@ -888,7 +897,7 @@ class TargetedSelection(unittest.TestCase):
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-lifecycle-contract', 'container-lifecycle-http',
             'container-lifecycle-web', 'container-path-facts-schema', 'file-metadata-plan',
-            'ordinary-empty-directory-backup', 'fresh-first-add-root-binding',
+            'ordinary-empty-directory-backup', 'fresh-first-add-root-binding', 'terminal-backup-source-layout',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -1014,7 +1023,7 @@ class TargetedSelection(unittest.TestCase):
         ], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout', 'projection-cache-layout', 'version-publication-location',
-        ], ['fresh-first-add-root-binding'])
+        ], ['fresh-first-add-root-binding', 'terminal-backup-source-layout'])
         self.assertEqual(len(plan['rust_targets']), 5)
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
@@ -3016,7 +3025,7 @@ class ContainerTagsSelection(unittest.TestCase):
                         ['container-tags-storage', 'engine-date-errors',
                          'engine-integer-errors', 'file-material-copy-reuse'],
                         ['fresh-managed-core', 'ordinary-namespace-parents',
-                         'ordinary-container-rename'],
+                         'ordinary-container-rename', 'terminal-backup-source-layout'],
                     )
                 else:
                     plan = CI.select_plan(self.policy, [path])

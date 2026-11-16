@@ -2,7 +2,7 @@
 //! locator readback under the retained real target writers. No source selector,
 //! Current, next publication or fence release is installed by this stage.
 use super::*;
-use crate::container_storage::backup_ordinary::Image;
+use crate::container_storage::BackupServingImage as Image;
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupFirstPublicationHash};
 
 const INTENT: &str = "backup-preparation/ordinary-serving.json";
@@ -45,7 +45,9 @@ struct TargetRecipe {
     #[serialization(with = "storage_contract::u64_string")]
     content_bytes: u64,
 }
-struct Plan {
+struct Plan<'a> {
+    decision: &'a AdmittedBackupDecision,
+    publication: &'a BackupFirstPublicationHash,
     original: BackupOriginalControlReport,
     registry: published_registry::Plan,
     targets: Vec<TargetRecipe>,
@@ -53,18 +55,18 @@ struct Plan {
     hash: String,
 }
 
-impl Plan {
+impl<'a> Plan<'a> {
     fn capture(
         context: &common_databases::Context<'_>,
         prepared: &PreparedBackupRegistry,
-        decision: &AdmittedBackupDecision,
-        expected: &BackupFirstPublicationHash,
+        decision: &'a AdmittedBackupDecision,
+        expected: &'a BackupFirstPublicationHash,
         stop: &AtomicBool,
     ) -> Result<Self> {
         let original = original_control::observe(context, prepared, decision, expected, stop)?;
         let registry = published_registry::Plan::capture(prepared, decision, expected, stop)?;
         let mut plan = Self {
-            original,
+            decision, publication: expected, original,
             registry,
             targets: Vec::new(),
             bytes: Vec::new(),
@@ -127,49 +129,48 @@ impl Plan {
                 ));
             }
             let state = self.registry.state_at(target, stop)?;
-            let image = Image::capture(
-                &state,
-                &node.identity.slot_id,
-                &node.source_prefix,
-                &self
-                    .registry
-                    .configuration()
-                    .publication
-                    .publication
-                    .publication_hash,
-                stop,
+            let publication = first_publication::read_at(
+                prepared, self.registry.candidate(), self.publication, target, stop,
             )?;
             let job = &prepared.task.selection().jobs()[index];
-            if image.whole_files()
-                != prepared
-                    .task
-                    .installation
-                    .evidence
-                    .report
-                    .whole_file_units_per_target
-                || image.directory_repositories
-                    != prepared
-                        .task
-                        .installation
-                        .evidence
-                        .report
-                        .directory_repositories_per_target
-                || image.bodies != job.total_files
-                || image.body_bytes != job.total_bytes
-            {
-                return Err(invalid(
-                    "ordinary Backup target omits part of an original whole unit",
-                ));
-            }
-            if let Some(expected) = self.targets.get(index)
-                && (image.hash() != expected.recipe_hash
-                    || PhysicalBinding::of(root)? != expected.physical)
-            {
-                return Err(invalid(
-                    "ordinary Backup target changed its exact recipe or physical root",
-                ));
-            }
-            action(&image, root)
+            let original = snapshot::read(root, job, stop)?;
+            prepared.roots.with_published_layout(
+                self.decision, &prepared.layouts, &prepared.targets, index, &original, &state,
+                self.registry.candidate(), &publication, stop, |scope| {
+                    let image = Image::capture(scope, stop)?;
+                    let job = &prepared.task.selection().jobs()[index];
+                    if image.whole_files()
+                        != prepared
+                            .task
+                            .installation
+                            .evidence
+                            .report
+                            .whole_file_units_per_target
+                        || image.directory_repositories
+                            != prepared
+                                .task
+                                .installation
+                                .evidence
+                                .report
+                                .directory_repositories_per_target
+                        || image.bodies != job.total_files
+                        || image.body_bytes != job.total_bytes
+                    {
+                        return Err(invalid(
+                            "ordinary Backup target omits part of an original whole unit",
+                        ));
+                    }
+                    if let Some(expected) = self.targets.get(index)
+                        && (image.hash() != expected.recipe_hash
+                            || PhysicalBinding::of(root)? != expected.physical)
+                    {
+                        return Err(invalid(
+                            "ordinary Backup target changed its exact recipe or physical root",
+                        ));
+                    }
+                    action(&image, root)
+                },
+            )
         })
     }
     fn selection(&self, index: usize) -> Result<Vec<u8>> {

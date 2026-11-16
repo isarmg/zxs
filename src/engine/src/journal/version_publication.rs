@@ -86,6 +86,56 @@ impl<O: FnMut(usize) -> Result<()>> VersionPublicationRead
     }
 }
 
+/// Target serving starts only after the genuine native first Publication.
+/// Its source-chain entities were bound by that decision, but it is not an
+/// Engine Current and must not be converted to an ordinary DiskHandle scope.
+struct BackupServingProofReader<'a, 'image, O> {
+    material: &'a crate::container_storage::BackupServingVersion<'image>,
+    observe: O,
+}
+impl<O: FnMut(usize) -> Result<()>> VersionPublicationRead
+    for BackupServingProofReader<'_, '_, O>
+{
+    fn read(&mut self, material: VersionProofMaterial) -> Result<Vec<u8>> {
+        match material {
+            VersionProofMaterial::Publication => self.material.root()?.read_bytes_observed(
+                &self.material.directory()?.join(layout::VERSION_PUBLICATION_PROOF.as_path()),
+                MAX_METADATA, &mut self.observe,
+            ),
+            VersionProofMaterial::Commit => self.material.root()?.read_bytes_observed(
+                &self.material.directory()?.join(layout::VERSION_COMMIT_PROOF.as_path()),
+                MAX_METADATA, &mut self.observe,
+            ),
+            VersionProofMaterial::DiskIdentity => {
+                let root = self.material.global()?;
+                root.read_bytes_observed(&root.path().join(layout::DISK_IDENTITY.as_path()),
+                    MAX_METADATA, &mut self.observe)
+            }
+        }
+    }
+    fn verify_membership(
+        &mut self, candidate: &Candidate, seal: &DiskSeal,
+        metadata: Option<&MetadataReadContext<'_>>,
+    ) -> Result<()> {
+        let root = self.material.global()?;
+        verify_local_membership(root.path(), candidate, seal,
+            &mut |path| root.read_bytes_observed(path, MAX_METADATA, &mut self.observe), metadata)
+    }
+}
+
+pub(crate) fn verify_backup_serving_publication(
+    material: &crate::container_storage::BackupServingVersion<'_>,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<()> {
+    material.verify()?;
+    verify_local_publication_with(material.version(),
+        &mut BackupServingProofReader { material, observe },
+        &mut || material.root()?.open_optional_read_regular(
+            &material.directory()?.join(layout::VERSION_TOMBSTONE.as_path()),
+        ).map(|file| file.is_some()), None)?;
+    material.verify()
+}
+
 pub(crate) fn verify_source_publication(
     material: &crate::disk::VersionMaterial<'_>,
     observe: &mut impl FnMut(usize) -> Result<()>,

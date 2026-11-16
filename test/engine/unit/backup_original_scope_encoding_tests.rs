@@ -8,7 +8,7 @@ use crate::engine::index::preparation::SystemEncodingInput;
 use crate::{
     BackupPreparationPhase, BackupPreparationRequest, BackupTopologyTarget,
     BackupTransactionRequest, CommitRequest, Config, Entry, NamespaceOperation,
-    NamespaceOperationKind, OperationId, Repository, RepositoryName,
+    NamespaceOperationKind, OperationId, Repository,
 };
 use std::{cell::Cell, fs, os::unix::fs::DirBuilderExt, path::Path};
 
@@ -60,18 +60,22 @@ fn fixture() -> (tempfile::TempDir, Engine, BackupTransactionRequest) {
     )
     .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
-    engine
-        .create_disk_root("P01", "admin", operation())
-        .unwrap();
-    let repository = engine
-        .create_repository(
-            &RepositoryName::parse("WholeRoute").unwrap(),
-            "P01",
-            3,
-            "admin",
-            operation(),
-        )
-        .unwrap();
+    let repository = engine.create_disk_root("P01", "admin", operation()).unwrap();
+    let policy = crate::new_id("policy").unwrap();
+    engine.update_protection_policy(crate::ProtectionPolicyUpdate {
+        policy_id: &policy,
+        repository_id: &repository.repository_id,
+        path_prefix: "",
+        target_copies: 3,
+        expected_generation: 0,
+        principal: "admin",
+        operation_id: operation(),
+    }).unwrap();
+    engine.file_namespace(
+        &repository.repository_id,
+        NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "nested", None).unwrap(),
+        "admin", operation(),
+    ).unwrap();
     let old = save(&mut engine, &repository, b"retained first body");
     let latest = save(&mut engine, &repository, b"retained current body");
     assert_eq!(old.file_id, latest.file_id);
@@ -185,9 +189,9 @@ impl RegistryFixture {
                 &engine, request.preparation.operation_id, "admin",
             ).unwrap(),
         };
-        let (targets, _choices) = runtime::acquire(&engine, &task).unwrap();
-        let prepared = PreparedBackupRegistry::capture(
-            task, targets, &AtomicBool::new(false),
+        let (targets, choices) = runtime::acquire(&engine, &task).unwrap();
+        let prepared = PreparedBackupRegistry::prepare(
+            task, targets, &choices, &AtomicBool::new(false),
         ).unwrap();
         Self { temp, engine, prepared }
     }

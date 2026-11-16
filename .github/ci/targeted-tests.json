@@ -4983,6 +4983,58 @@
           "features": []
         }
       ]
+    },
+    "terminal-backup-source-layout": {
+      "reason": "Bind terminal Backup target roots, source-first five-area occurrences, empty parents and FILE material to the actual all-original-member choice and first Publication. Preserve the original exact 900-second serving/successor/cold-replay test in default and fault-injection configurations, unchanged old groups, and both Engine product modes. Fanout children copy their actual direct source held BODY, not the prior sibling. No legacy-root adoption or relaxed Current admission. Runtime results, not this selection, determine readiness.",
+      "python_tests": [
+        "test_terminal_backup_source_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "default_features": true,
+          "features": [],
+          "isolate": true,
+          "exact": [
+            "backup_preparation::transaction_serving::same_backup_switch_serves_and_replays_normal_successor_publications"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "default_features": true,
+          "features": [
+            "fault-injection"
+          ],
+          "isolate": true,
+          "exact": [
+            "backup_preparation::transaction_serving::same_backup_switch_serves_and_replays_normal_successor_publications"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -14399,6 +14451,246 @@
       "path": "test/engine/unit/engine/startup_exit_preflight_tests.rs",
       "groups": [
         "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/install.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/backup.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/backup/originals.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/backup/serving.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/fence.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/ordinary_serving.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/recovery.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/runtime.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving_activation.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving_activation/original_objects.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving_activation/recovery.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/target_resources.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/generation/first_candidate.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/registry.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/registry/first_publication/evidence.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/registry/payloads.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/registry/recovery.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/registry/roots.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/registry/roots/layout_source.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/registry/roots/layouts.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/backup.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/backup/startup/native.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/publication.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal/version_publication.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "test/engine/integration/backup_transaction_serving.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_original_scope_encoding_tests.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_serving_cost_tests.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "docs/validation/terminal-backup-source-layout.md",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "test/ci/test_terminal_backup_source_ci.py",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/backup/startup.rs",
+      "groups": [
+        "terminal-backup-source-layout"
       ]
     }
   ],

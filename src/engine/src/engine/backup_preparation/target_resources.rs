@@ -12,7 +12,7 @@ struct WriterIo {
     writer: DiskWriter,
 }
 
-pub(super) struct Target {
+pub(in crate::engine) struct Target {
     io: Arc<Mutex<Option<WriterIo>>>,
     writer: Arc<Mutex<Option<Arc<FenceOwner>>>>,
     // Taken exactly once into FenceOwner. Idle Target aliases must not keep an
@@ -29,6 +29,28 @@ impl Target {
             directory: Arc::new(Mutex::new(Some(Arc::new(lock)))),
             root,
         }
+    }
+
+    /// The layout preparer borrows the actual selected owner, not a root path.
+    /// The directory lock can move into FenceOwner, but cannot disappear while
+    /// this target is used to create or observe preparation feedback.
+    pub(in crate::engine) fn layout_root(&self) -> Result<&DiskRoot> {
+        let failure = || crate::engine::fresh_layout::FreshLayoutError::BackupRootEvidence;
+        let has_directory = self.directory.lock().map_err(|error| {
+            crate::engine::fresh_layout::FreshLayoutError::BackupRootOwnership(
+                std::io::Error::other(error.to_string()),
+            )
+        })?.is_some();
+        let has_writer = self.writer.lock().map_err(|error| {
+            crate::engine::fresh_layout::FreshLayoutError::BackupRootOwnership(
+                std::io::Error::other(error.to_string()),
+            )
+        })?.is_some();
+        if !has_directory && !has_writer {
+            return Err(failure().into());
+        }
+        self.recheck_writer()?;
+        Ok(&self.root)
     }
 
     /// Retain the same held root and open-file-description locks. Do not reopen

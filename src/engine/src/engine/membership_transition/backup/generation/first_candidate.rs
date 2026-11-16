@@ -30,10 +30,16 @@ pub(crate) struct PreparedBackupFirstCandidate {
     original: ValidatedConfig,
     decision_hash: BackupRegistryDecisionHash,
     targets: Vec<crate::engine::backup_preparation::BackupPreparedTopologyNode>,
+    // Same admitted decision's bounded descriptive feedback. Retaining it here
+    // avoids re-decoding the entire native authority for each target on resume.
+    layouts: BTreeMap<storage_contract::DiskId, crate::container_storage::BackupTargetLayout>,
     authority: PreparedMetadataObject,
     bytes: usize,
     state_hash: String,
+    source_hash: BackupOriginalStateHash,
 }
+
+struct BackupOriginalStateHash(String);
 
 struct NativeBytes {
     kind: &'static str,
@@ -98,6 +104,9 @@ impl BackupCore {
         next.operations.insert(intent.operation_id, result);
         next.operation_principals
             .insert(intent.operation_id, intent.principal.clone());
+        // Every new physical occurrence belongs to this actual first result,
+        // not to the older Mkdir or an unpublished routing-only snapshot.
+        decision.projection().attach_target_layouts(source, &mut next, intent.operation_id)?;
         Ok(next)
     }
 
@@ -180,9 +189,11 @@ impl BackupCore {
             original: intent.origin.config().clone(),
             decision_hash: decision.hash(),
             targets: decision.projection().selected_nodes(),
+            layouts: decision.projection().layout_bindings()?,
             authority: authority.clone(),
             bytes: 0,
             state_hash: object_hash("backup-first-candidate-state", &next)?,
+            source_hash: BackupOriginalStateHash(object_hash("backup-prepared-state", source)?),
         };
         snapshot.visit_prepared_objects(&mut |kind, hash, bytes| {
             preparation_checkpoint(stop)?;
@@ -218,6 +229,14 @@ impl PreparedBackupFirstCandidate {
         &self.targets
     }
 
+    pub(in crate::engine) fn target_layout(
+        &self, disk: storage_contract::DiskId,
+    ) -> Result<&crate::container_storage::BackupTargetLayout> {
+        self.layouts.get(&disk).ok_or_else(|| {
+            crate::engine::fresh_layout::FreshLayoutError::BackupLayoutEvidence.into()
+        })
+    }
+
     pub(in crate::engine) fn writer_configuration(
         &self,
         publication: &crate::engine::membership_transition::PreparedBackupFirstPublication,
@@ -233,6 +252,23 @@ impl PreparedBackupFirstCandidate {
             &self.candidate,
             stop,
         )
+    }
+
+    pub(in crate::engine) fn require_published_configuration(
+        &self, config: &ValidatedConfig,
+    ) -> Result<()> {
+        let portable: PortableAuthority = crate::journal::decode_proof(self.authority.bytes())?;
+        if canonical_json(&portable.effective_config()?)? != canonical_json(config)? {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::BackupLayoutEvidence.into());
+        }
+        Ok(())
+    }
+
+    pub(in crate::engine) fn require_original_state(&self, original: &AdmittedState) -> Result<()> {
+        if object_hash("backup-prepared-state", original.state())? != self.source_hash.0 {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::BackupLayoutEvidence.into());
+        }
+        Ok(())
     }
 
     pub(crate) fn candidate(&self) -> &Candidate {
@@ -384,7 +420,11 @@ impl PreparedBackupFirstCandidate {
         &self,
         state: &crate::history_package::AdmittedState,
     ) -> Result<()> {
-        if object_hash("backup-first-candidate-state", state.state())? != self.state_hash {
+        self.require_state_projection(state.state())
+    }
+
+    pub(in crate::engine) fn require_state_projection(&self, state: &State) -> Result<()> {
+        if object_hash("backup-first-candidate-state", state)? != self.state_hash {
             return Err(invalid(
                 "saved first candidate does not preserve the exact prescribed complete State",
             ));

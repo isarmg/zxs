@@ -177,3 +177,35 @@ pub(crate) fn membership_layout_stage(
     EntryName::new(format!("membership-layout-{id}"))
         .expect("invariant: a typed DirectoryId forms one private preparation entry")
 }
+
+/// Backup target feedback is retained by every original fenced metadata member.
+pub(crate) static BACKUP_ROOT_PREPARATIONS: LazyLock<RelativePath> = LazyLock::new(|| {
+    RelativePath::new("metadata/backup-root-preparations")
+        .expect("invariant: Backup root feedback has one disk-relative address")
+});
+
+pub(crate) fn backup_root_preparation(operation: storage_contract::OperationId) -> EntryName {
+    EntryName::new(format!("{operation}.json"))
+        .expect("invariant: a typed operation forms one Backup preparation entry")
+}
+
+/// The complete prefix/parent/FILE feedback shares the original fixed fence.
+pub(crate) static BACKUP_LAYOUT_PREPARATIONS: LazyLock<RelativePath> = LazyLock::new(|| {
+    RelativePath::new("metadata/backup-layout-preparations")
+        .expect("invariant: Backup layout feedback has one disk-relative address")
+});
+
+/// The retained native Backup package is not the ordinary source namespace.
+/// Its consumer must already hold the selected package admission.
+pub(crate) fn backup_package_version(
+    history: storage_contract::HistoryTreeId, version: storage_contract::VersionId,
+) -> PathBuf {
+    PathBuf::from("histories").join(history.to_string())
+        .join(VERSIONS.as_path()).join(version.to_string())
+}
+
+
+/// Global native Backup metadata remains outside every source lifecycle slice.
+pub(crate) static BACKUP_NATIVE_METADATA: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("metadata").expect("invariant: native Backup metadata is one entry")
+});

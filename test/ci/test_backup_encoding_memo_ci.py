@@ -6,7 +6,7 @@ from unittest import mock
 from pathlib import Path
 import unittest
 
-from test_targeted_ci import CI
+from test_targeted_ci import CI, assert_path_group_extension
 
 ROOT = Path(__file__).resolve().parents[2]
 PATHS = [
@@ -51,13 +51,21 @@ class BackupEncodingMemoSelection(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
+    def retained_plan(self, paths):
+        complete = CI.select_plan(self.policy, paths, shardable=True)
+        extension = 'terminal-backup-source-layout'
+        if extension in complete['groups']:
+            return assert_path_group_extension(self, self.policy, paths, None, [extension])
+        self.assertEqual(CI.select_plan(self.policy, paths), complete)
+        return complete
+
     def test_each_encoder_cache_and_fixture_selects_the_closed_regression_group(self):
         for path in PATHS + [
             'docs/validation/backup-scoped-encoding-memo.md',
             'test/ci/test_backup_encoding_memo_ci.py',
         ]:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                plan = self.retained_plan([path])
                 self.assertIn('backup-scoped-encoding-memo', plan['groups'])
                 self.assertIn('test_backup_encoding_memo_ci', plan['python_tests'])
 
@@ -69,12 +77,12 @@ class BackupEncodingMemoSelection(unittest.TestCase):
             'test/engine/unit/history_package/graph/tests.rs',
         ]:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                plan = self.retained_plan([path])
                 self.assertIn('backup-scoped-encoding-memo', plan['groups'])
         group = self.policy['groups']['backup-scoped-encoding-memo']
         self.assertIn('metadata_map::read_owned_tests::',
                       group['rust_targets'][0]['prefixes'])
-        journal = CI.select_plan(self.policy, ['src/engine/src/journal.rs'])
+        journal = self.retained_plan(['src/engine/src/journal.rs'])
         self.assertIn('version-publication-location', journal['groups'])
         self.assertIn('held-directory-layout', journal['groups'])
         metadata = CI.select_plan(self.policy, ['src/engine/src/metadata_map.rs'])
@@ -83,13 +91,14 @@ class BackupEncodingMemoSelection(unittest.TestCase):
         self.assertIn('container-tags-storage', graph['groups'])
 
     def test_complete_slice_keeps_product_check_before_original_900_second_transaction(self):
-        plan = CI.select_plan(self.policy, PATHS + [
+        plan = assert_path_group_extension(self, self.policy, PATHS + [
             'docs/validation/backup-scoped-encoding-memo.md',
             'test/ci/test_backup_encoding_memo_ci.py',
             '.github/ci/targeted-tests.json',
             '.github/scripts/check-targeted-ci.py',
             'TASKS.md',
-        ])
+        ], ['backup-scoped-encoding-memo', 'ci-selection'],
+            ['terminal-backup-source-layout'])
         self.assertEqual(plan['groups'], ['backup-scoped-encoding-memo', 'ci-selection'])
         self.assertEqual(len(plan['rust_targets']), 3)
         self.assertEqual(len(plan['python_tests']), 8)
@@ -132,7 +141,7 @@ class BackupEncodingMemoSelection(unittest.TestCase):
         prefix = 'engine::backup_preparation::native_control::archive::decode_tests::'
         for path in (archive, fixture):
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                plan = self.retained_plan([path])
                 self.assertIn('backup-scoped-encoding-memo', plan['groups'])
                 self.assertIn('test_backup_encoding_memo_ci', plan['python_tests'])
         plan = CI.select_plan(self.policy, [archive, fixture])

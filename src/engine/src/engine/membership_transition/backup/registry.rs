@@ -14,6 +14,16 @@ use decision::{DecisionReceipt, DecisionStore};
 use pending::{MemberIdentity, admission};
 use std::{io::Read, sync::atomic::AtomicBool};
 
+mod roots;
+pub(crate) use roots::{
+    BackupLayoutPreparation,
+    BackupLayoutSource,
+    PublishedBackupLayout,
+    PublishedBackupOriginal,
+    PublishedBackupPayload,
+};
+pub(in crate::engine) use roots::{PreparedBackupLayouts, PreparedBackupRoots};
+
 mod first_finalize;
 pub use first_finalize::BackupFirstFinalizeReport;
 mod first_publication;

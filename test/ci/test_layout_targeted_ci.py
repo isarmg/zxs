@@ -126,7 +126,7 @@ class ProjectionCacheTargetedCi(unittest.TestCase):
         plan = assert_path_group_extension(self, self.policy,
             ['src/engine/src/persist/layout.rs'],
             ['checkpoint-layout', 'held-directory-layout', 'projection-cache-layout'],
-            ['fresh-first-add-root-binding'])
+            ['fresh-first-add-root-binding', 'terminal-backup-source-layout'])
         self.assertEqual(plan['groups'],
                          ['checkpoint-layout', 'held-directory-layout', 'projection-cache-layout'])
         engine = next(target for target in plan['rust_targets']
@@ -199,7 +199,7 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
         plan = assert_path_group_extension(self, self.policy, paths,
             ['checkpoint-layout', 'ci-selection', 'held-directory-layout',
              'ordinary-conversion-name-budget', 'projection-cache-layout'],
-            ['fresh-first-add-root-binding'])
+            ['fresh-first-add-root-binding', 'terminal-backup-source-layout'])
         self.assertEqual(plan['groups'],
                          ['checkpoint-layout', 'ci-selection', 'held-directory-layout',
                           'ordinary-conversion-name-budget', 'projection-cache-layout'])

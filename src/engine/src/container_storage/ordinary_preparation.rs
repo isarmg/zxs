@@ -9,6 +9,15 @@ use storage_contract::file_container::{ContainerEntity, FileContainerRecord};
 use std::sync::OnceLock;
 
 mod prefix;
+mod backup;
+pub(crate) use backup::{
+    BackupLayoutPlan,
+    BackupOriginalImage,
+    BackupPayloadVersion,
+    BackupServingImage,
+    BackupServingVersion,
+    BackupTargetLayout,
+};
 mod areas;
 mod draft;
 mod directories;
@@ -824,8 +833,18 @@ impl PreparedContainerEntities {
             .join(layout::namespace::directory(&container.record.namespace.name).as_path()))
     }
 
-    /// The producer supplies the identity attached to the preceding installed
-    /// BODY descriptor, not an inferred source parsed from a prefix string.
+    /// The actual target occurrence names its direct source, which need not
+    /// be the preceding target in a fanout's deterministic publication order.
+    pub(crate) fn direct_source(&self, file: FileId, target: DiskId) -> Result<Option<DiskId>> {
+        let container = self.held.get(&(file, target)).ok_or(Failure::ContainerScope)?;
+        let source = container.record.replicas.get(&target)
+            .ok_or(Failure::ContainerScope)?.prefixes.first().map(|prefix| prefix.source_disk);
+        self.require_direct_source(file, target, source)?;
+        Ok(source)
+    }
+
+    /// The producer supplies the identity attached to an actually installed
+    /// direct-source BODY descriptor, not a route-neighbor or prefix string.
     pub(crate) fn require_direct_source(
         &self,
         file: FileId,

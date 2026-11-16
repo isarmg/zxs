@@ -5,7 +5,7 @@ use crate::engine::backup_preparation::native_control::databases::scoped::cutove
 use crate::{
     BackupPreparationPhase, BackupPreparationRequest, BackupTopologyTarget,
     BackupTransactionRequest, CommitRequest, Config, Entry, NamespaceOperation,
-    NamespaceOperationKind, OperationId, Repository, RepositoryName,
+    NamespaceOperationKind, OperationId, Repository,
     container_storage::backup_databases::PreparedDatabases,
 };
 use std::{fs, io::Write, os::unix::fs::DirBuilderExt, path::Path, time::Instant};
@@ -58,18 +58,22 @@ fn fixture() -> (tempfile::TempDir, Engine, BackupTransactionRequest) {
     )
     .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
-    engine
-        .create_disk_root("P01", "admin", operation())
-        .unwrap();
-    let repository = engine
-        .create_repository(
-            &RepositoryName::parse("WholeRoute").unwrap(),
-            "P01",
-            3,
-            "admin",
-            operation(),
-        )
-        .unwrap();
+    let repository = engine.create_disk_root("P01", "admin", operation()).unwrap();
+    let policy = crate::new_id("policy").unwrap();
+    engine.update_protection_policy(crate::ProtectionPolicyUpdate {
+        policy_id: &policy,
+        repository_id: &repository.repository_id,
+        path_prefix: "",
+        target_copies: 3,
+        expected_generation: 0,
+        principal: "admin",
+        operation_id: operation(),
+    }).unwrap();
+    engine.file_namespace(
+        &repository.repository_id,
+        NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "nested", None).unwrap(),
+        "admin", operation(),
+    ).unwrap();
     let old = save(&mut engine, &repository, b"retained first body");
     let latest = save(&mut engine, &repository, b"retained current body");
     assert_eq!(old.file_id, latest.file_id);
@@ -482,7 +486,7 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     let sources = common_databases::Sources::capture(&engine, &system)?;
     let index = engine.quiesce_backup_system_index()?;
     let stop = AtomicBool::new(false);
-    let mut prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+    let mut prepared = PreparedBackupRegistry::prepare(task, targets, &choices, &stop)?;
     prepared.scope_encoding = Some(published_scopes::encoding_memo::ScopeEncodingMemo::new());
     assert_eq!(prepared.targets.len(), 2);
     assert_eq!(prepared.task.selection().first().total_files, 2);

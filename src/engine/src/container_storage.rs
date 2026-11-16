@@ -8,7 +8,9 @@ mod changes;
 mod ordinary_preparation;
 pub(crate) use ordinary_preparation::verify_namespace_directory as verify_ordinary_directory;
 pub(crate) use ordinary_preparation::{
-    ObservedContainerReplica, PreparedContainerEntities, open_published_container,
+    BackupLayoutPlan, BackupOriginalImage, BackupPayloadVersion, BackupServingImage,
+    BackupServingVersion, BackupTargetLayout, ObservedContainerReplica, PreparedContainerEntities,
+    open_published_container,
     ordinary_body_path,
 };
 mod version_names;

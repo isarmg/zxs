@@ -103,6 +103,21 @@ impl AdmittedBackupDecision {
         }
         Ok(admitted)
     }
+    pub(in crate::engine) fn observe_target_roots(
+        &self,
+        targets: &[crate::engine::backup_preparation::RetainedBackupTarget],
+        stop: &AtomicBool,
+    ) -> Result<PreparedBackupRoots> {
+        let core = &self.stored.core;
+        let Origin::BackupCutover { evidence, .. } = &core.transition.origin else {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::BackupRootEvidence.into());
+        };
+        roots::PreparedBackupRoots::observe_decided(
+            &core.registry_placement, evidence, &core.transition_hash,
+            core.transition.operation_id, targets, stop,
+        )
+    }
+
     pub(in crate::engine) fn hash(&self) -> BackupRegistryDecisionHash {
         BackupRegistryDecisionHash(self.certificate.hash.clone())
     }

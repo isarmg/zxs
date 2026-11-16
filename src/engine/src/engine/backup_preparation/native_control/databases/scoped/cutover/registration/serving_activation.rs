@@ -262,7 +262,7 @@ fn prepare_switch(
 ) -> Result<()> {
     let (targets, choices) = runtime::acquire(engine, &task)?;
     let sources = common_databases::Sources::capture(engine, system)?;
-    let prepared = PreparedBackupRegistry::capture(task, targets, stop)?;
+    let prepared = PreparedBackupRegistry::capture(task, targets, &choices, stop)?;
     let decision = choices.observe_decision(&prepared, stop)?;
     let (_, first) = first_candidate::read_verified(&prepared, &decision, stop)?;
     let expected = BackupFirstPublicationHash::parse(
@@ -278,7 +278,9 @@ fn prepare_switch(
         choices: &choices,
     };
     let native = Native::capture(&context, &prepared, &decision, &expected, stop)?;
-    let objects = original_objects::Objects::capture(&prepared, &native.registry, &sources, stop)?;
+    let objects = original_objects::Objects::capture(
+        &prepared, &native.registry, &native.publication, &sources, stop,
+    )?;
     let io_hash = &native.ordinary.original.targets.seals.io.admission_hash;
     let mut target_handles = Vec::with_capacity(prepared.targets.len());
     let mut writers = Vec::with_capacity(prepared.targets.len());
@@ -368,6 +370,7 @@ fn prepare_switch(
     require_bytes(system, INTENT, &selection, MAX_PLAN)?;
     roots.visit(|root| require_bytes(root, SELECTED, &selection, MAX_PLAN))?;
     let completed_objects = objects.install(&native.registry, &sources, pool, &selection, stop)?;
+    drop(objects);
     choices.observe_first_publication(&prepared, native.registry.candidate(), stop)?;
     sources.for_each_disk(
         stop,
@@ -378,11 +381,12 @@ fn prepare_switch(
                 .iter()
                 .find(|disk| disk.disk_id == identity.disk_id)
                 .expect("invariant: original Sources retain exactly the fenced Engine disks");
+            let scope = crate::engine::membership_transition::PublishedBackupPayload::observe(
+                root, disk, native.writer.config(), native.registry.candidate(),
+                &native.publication, &native.published, stop,
+            )?;
             native.publication.verify_initial_ordinary_payloads(
-                root,
-                disk,
-                native.registry.candidate(),
-                stop,
+                &scope, native.registry.candidate(), stop,
             )
         },
         pool,

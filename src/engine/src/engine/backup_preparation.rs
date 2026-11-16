@@ -51,6 +51,7 @@ pub(in crate::engine) use native_control::{
 };
 mod snapshot;
 mod target_resources;
+pub(in crate::engine) use target_resources::Target as RetainedBackupTarget;
 mod transaction;
 mod worker;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};

@@ -113,24 +113,18 @@ fn require_initial_targets(
         .zip(&selection.target_writers)
     {
         preparation_checkpoint(stop)?;
-        let (_, root) = admitted
+        let (disk, root) = admitted
             .held_roots()
             .iter()
             .find(|(disk, _)| disk.disk_id == node.identity.disk_id)
             .expect("invariant: selected() checked every native target binding");
-        let image = crate::container_storage::backup_ordinary::Image::capture(
-            admitted.published(),
-            &node.identity.slot_id,
-            &node.source_prefix,
-            &admitted.publication().report().publication_hash,
-            stop,
+        let source = crate::engine::membership_transition::PublishedBackupPayload::observe(
+            root, disk, admitted.config(), admitted.first(), admitted.publication(),
+            admitted.published(), stop,
         )?;
-        if image.hash() != expected.ordinary_recipe {
-            return Err(invalid(
-                "Backup resume target recipe differs from its native first State",
-            ));
-        }
-        let actual = image.verify(root, stop)?;
+        let actual = source.verify_initial_serving(
+            admitted.source(), &expected.ordinary_recipe, stop,
+        )?;
         if blake3::hash(&actual).to_hex().as_str() != expected.ordinary_entities {
             return Err(invalid(
                 "unfinished Backup target changed its selected ordinary entity inodes",
@@ -214,6 +208,7 @@ pub(super) fn verify_live_selection(
     let actual = original_objects::verify_recovered(
         admitted.held_roots(),
         admitted.first(),
+        admitted.publication(),
         admitted.source(),
         &selection.original_objects,
         stop,
@@ -332,6 +327,7 @@ impl Engine {
         let objects = original_objects::verify_recovered(
             admitted.held_roots(),
             admitted.first(),
+            admitted.publication(),
             admitted.source(),
             &selection.original_objects,
             &AtomicBool::new(false),

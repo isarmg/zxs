@@ -4,13 +4,20 @@
 use super::*;
 mod generation;
 mod registry;
+pub(crate) use registry::{
+    BackupLayoutPreparation,
+    BackupLayoutSource,
+    PublishedBackupLayout,
+    PublishedBackupOriginal,
+    PublishedBackupPayload,
+};
 use crate::engine::backup_preparation::BackupSourceFenceEvidence;
 pub(in crate::engine::membership_transition) use generation::BackupCore;
 pub(in crate::engine) use generation::PreparedBackupAuthority;
 pub(crate) use generation::PreparedBackupFirstCandidate;
 pub(in crate::engine) use registry::{
     AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl,
-    PreparedBackupFirstPublication,
+    PreparedBackupFirstPublication, PreparedBackupLayouts, PreparedBackupRoots,
 };
 pub use registry::{
     BackupFirstFinalizeReport, BackupFirstPublicationHash, BackupFirstPublicationReport,

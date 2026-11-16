@@ -85,3 +85,54 @@ impl Generation {
         Ok(())
     }
 }
+
+/// The first complete Backup recipe is a distinct logical transition. Its
+/// physical feedback comes from the original common decision, not the generic
+/// automatic Add receipt. This loan has no filesystem or publication methods.
+pub(crate) struct VerifiedBackupFirstLayout<'a> {
+    previous: &'a State,
+    next: &'a State,
+    candidate: &'a Candidate,
+}
+
+impl VerifiedBackupFirstLayout<'_> {
+    pub(crate) fn require_pair(
+        &self, previous: &State, next: &State, candidate: &Candidate,
+    ) -> Result<()> {
+        if !std::ptr::eq(self.previous, previous) || !std::ptr::eq(self.next, next)
+            || !std::ptr::eq(self.candidate, candidate)
+        {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::BackupLayoutEvidence.into());
+        }
+        Ok(())
+    }
+}
+
+impl ValidatedConfig {
+    pub(crate) fn verify_backup_first_layout<'a>(
+        &self, previous: &'a State, next: &'a State, candidate: &'a Candidate,
+    ) -> Result<Option<VerifiedBackupFirstLayout<'a>>> {
+        let Some(generation) = self.generation() else {
+            return Ok(None);
+        };
+        let Some(core) = generation.portable.backup_core() else {
+            return Ok(None);
+        };
+        if candidate.sequence != generation.first_sequence()? {
+            return Ok(None);
+        }
+        // Preserve envelope rejection before the full original recipe. The
+        // source must be the actual frozen prefix, not a self-consistent next.
+        generation.verify_candidate(candidate)?;
+        core.verify_source(previous)?;
+        let authority = PreparedMetadataObject::new(
+            AUTHORITY_KIND, &generation.portable, MAX_METADATA,
+        )?;
+        let expected = core.first_candidate(&authority, previous, &AtomicBool::new(false))?;
+        if object_hash("candidate", candidate)? != expected.hash() {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::BackupLayoutEvidence.into());
+        }
+        expected.require_state_projection(next)?;
+        Ok(Some(VerifiedBackupFirstLayout { previous, next, candidate }))
+    }
+}

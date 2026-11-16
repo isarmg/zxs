@@ -5,7 +5,8 @@ use super::*;
 use crate::engine::membership_transition::PreparedBackupFirstCandidate;
 use crate::file_stamp::FileStamp;
 use crate::persist::layout;
-use std::path::PathBuf;
+use std::{path::{Path, PathBuf}, sync::Arc};
+use crate::engine::fresh_layout::{containers, FreshLayoutError as Failure};
 
 const MAX_RECEIPTS: usize = 65_536;
 
@@ -15,6 +16,9 @@ pub(super) struct PayloadSource {
     identity: MemberIdentity,
     seal: Vec<u8>,
     lease: DiskIoLease,
+    config: ValidatedConfig,
+    resources: Arc<DiskResources>,
+    state: Arc<State>,
 }
 impl PayloadSource {
     pub(super) fn capture(engine: &Engine, disk: &DiskConfig) -> Result<Self> {
@@ -32,8 +36,34 @@ impl PayloadSource {
             identity,
             seal,
             lease,
+            config: engine.config.clone(),
+            resources: Arc::clone(&engine.disk_resources),
+            state: Arc::clone(&engine.state),
         })
     }
+    fn observe_version(
+        &self, version: &FileVersion,
+    ) -> Result<crate::container_storage::ObservedContainerReplica> {
+        self.recheck()?;
+        if self.state.versions.get(&version.version_id) != Some(version) {
+            return Err(Failure::ContainerScope.into());
+        }
+        let placement = self.state.placements.get(&version.version_id)
+            .ok_or(Failure::ContainerScope)?;
+        if !placement.route_slot_ids.contains(&self.disk.slot_id)
+            || placement.binding_generations.get(&self.disk.slot_id)
+                != Some(&self.disk.binding_generation)
+        {
+            return Err(Failure::ContainerScope.into());
+        }
+        let source = containers::observe_replica(
+            &self.config, &self.resources, &self.state, version.file_id.parse()?, &self.disk,
+        )?;
+        source.require_version(version)?;
+        self.recheck()?;
+        Ok(source)
+    }
+
     fn recheck(&self) -> Result<()> {
         self.lease.check_running()?;
         self.identity.verify_physical_root(&self.root)?;
@@ -51,13 +81,15 @@ impl PayloadSource {
     }
 }
 
+enum LocationOrigin<'a> {
+    Retained(&'a PayloadSource),
+    Package { root: &'a DiskRoot, directory: PathBuf },
+}
 struct Location<'a> {
-    root: &'a DiskRoot,
-    source: Option<&'a PayloadSource>,
+    origin: LocationOrigin<'a>,
     disk_id: &'a str,
     slot_id: &'a str,
     evidence: &'a VersionEvidence,
-    directory: PathBuf,
 }
 impl Location<'_> {
     fn proof(
@@ -82,91 +114,117 @@ impl Location<'_> {
             proof_hash: object_hash("commit-proof", proof)?,
         })
     }
-    fn proof_directory(&self, candidate: &str) -> Result<PathBuf> {
-        local_proof_directory_at(self.root, &self.directory, candidate)
+    fn capacity_root(&self) -> &DiskRoot {
+        match &self.origin {
+            LocationOrigin::Retained(source) => &source.root,
+            LocationOrigin::Package { root, .. } => root,
+        }
     }
+
+    /// The retained side observes the actual frozen source occurrence each
+    /// time. Its version metadata and BODY have different held roots. The
+    /// selected side remains an independently verified native package, not a
+    /// Current container or a target I/O lease.
+    fn with_material<T>(
+        &self,
+        action: impl FnOnce(&DiskRoot, &Path, &DiskRoot, &Path) -> Result<T>,
+    ) -> Result<T> {
+        match &self.origin {
+            LocationOrigin::Retained(source) => {
+                let scope = source.observe_version(&self.evidence.version)?;
+                let material = crate::disk::VersionMaterial::current(
+                    &scope, &self.evidence.version,
+                )?;
+                let result = action(material.root()?, &material.directory()?,
+                    material.container()?, &material.body_path()?)?;
+                material.verify()?;
+                source.recheck()?;
+                Ok(result)
+            }
+            LocationOrigin::Package { root, directory } => {
+                let body = directory.join(layout::PREPARED_CONTENT.as_path())
+                    .join(&self.evidence.version.creation_name);
+                action(root, directory, root, &body)
+            }
+        }
+    }
+
+    fn with_proof<T>(
+        &self, candidate: &str, action: impl FnOnce(&DiskRoot, &Path) -> Result<T>,
+    ) -> Result<T> {
+        self.with_material(|root, directory, _, _| {
+            let directory = local_proof_directory_at(root, directory, candidate)?;
+            action(root, &directory)
+        })
+    }
+
     /// The descriptor, checksum manifest and whole payload are read under the
     /// original held root. Reopen-by-name comparisons cannot stand in for this
     /// actual streaming verification. No completed progress is trusted.
     fn verify_body(&self, durable: bool, stop: &AtomicBool) -> Result<()> {
         preparation_checkpoint(stop)?;
-        if let Some(source) = self.source {
-            source.recheck()?;
-        }
-        let version = &self.evidence.version;
-        let descriptor_path = self.directory.join("version.json");
-        let mut descriptor = self.root.open_read_regular(&descriptor_path)?;
-        let descriptor_stamp = FileStamp::from_metadata(&descriptor.metadata()?);
-        let saved: FileVersion = decode_proof(&read_held(&mut descriptor, MAX_METADATA, stop)?)?;
-        if object_hash("version", &saved)? != object_hash("version", version)? {
-            return Err(Error::new(
-                ErrorCode::ContentCorrupt,
-                "first Backup payload descriptor differs from its exact candidate",
-            ));
-        }
-        let checks_path = self.directory.join("checksums.bin");
-        let mut checks = self.root.open_read_regular(&checks_path)?;
-        let checks_stamp = FileStamp::from_metadata(&checks.metadata()?);
-        let length = checksum_manifest_length(version)?;
-        let checks_bytes = read_held(&mut checks, length, stop)?;
-        if checks_bytes.len() != length
-            || blake3::hash(&checks_bytes).to_hex().as_str() != version.checksum_manifest_hash
-        {
-            return Err(Error::new(
-                ErrorCode::ChecksumMismatch,
-                "Backup checksum bytes differ from the exact version",
-            ));
-        }
-        let manifest = ChecksumManifest::decode(&checks_bytes)?;
-        drop(checks_bytes);
-        if manifest.logical_size != version.logical_size
-            || manifest.chunk_bytes != version.checksum_chunk_bytes
-        {
-            return Err(Error::new(
-                ErrorCode::ChecksumMismatch,
-                "Backup checksum header differs from the exact version",
-            ));
-        }
-        let body_path = match self.source {
-            Some(_) => crate::container_storage::content_path_at(
-                self.root,
-                &self.directory,
-                version,
-                &mut |_| preparation_checkpoint(stop),
-            )?,
-            // A prepared target has no serving seal/locator. Do not resolve an
-            // arbitrary newly appeared container or fall back to another copy.
-            None => self.directory.join("content").join(&version.creation_name),
-        };
-        let body = self.root.open_read_regular(&body_path)?;
-        let body_stamp = FileStamp::from_metadata(&body.metadata()?);
-        let body = verify_open_payload_observed(body, manifest, version, &mut |_| {
-            preparation_checkpoint(stop)
-        })?;
-        for (path, file, stamp) in [
-            (&descriptor_path, &descriptor, &descriptor_stamp),
-            (&checks_path, &checks, &checks_stamp),
-            (&body_path, &body, &body_stamp),
-        ] {
-            if &FileStamp::from_metadata(&file.metadata()?) != stamp
-                || &FileStamp::from_metadata(&self.root.open_read_regular(path)?.metadata()?)
-                    != stamp
-            {
+        self.with_material(|root, directory, body_root, body_path| {
+            let version = &self.evidence.version;
+            let descriptor_path = directory.join(layout::VERSION_DESCRIPTOR.as_path());
+            let mut descriptor = root.open_read_regular(&descriptor_path)?;
+            let descriptor_stamp = FileStamp::from_metadata(&descriptor.metadata()?);
+            let saved: FileVersion =
+                decode_proof(&read_held(&mut descriptor, MAX_METADATA, stop)?)?;
+            if object_hash("version", &saved)? != object_hash("version", version)? {
                 return Err(Error::new(
                     ErrorCode::ContentCorrupt,
-                    "Backup payload inode or bound metadata changed during verification",
+                    "first Backup payload descriptor differs from its exact candidate",
                 ));
             }
-            if durable {
-                file.sync_all()?;
-                self.root
-                    .sync_dir(path.parent().expect("invariant: version file has a parent"))?;
+            let checks_path = directory.join(layout::VERSION_CHECKSUMS.as_path());
+            let mut checks = root.open_read_regular(&checks_path)?;
+            let checks_stamp = FileStamp::from_metadata(&checks.metadata()?);
+            let length = checksum_manifest_length(version)?;
+            let checks_bytes = read_held(&mut checks, length, stop)?;
+            if checks_bytes.len() != length
+                || blake3::hash(&checks_bytes).to_hex().as_str() != version.checksum_manifest_hash
+            {
+                return Err(Error::new(
+                    ErrorCode::ChecksumMismatch,
+                    "Backup checksum bytes differ from the exact version",
+                ));
             }
-        }
-        if let Some(source) = self.source {
-            source.recheck()?;
-        }
-        preparation_checkpoint(stop)
+            let manifest = ChecksumManifest::decode(&checks_bytes)?;
+            drop(checks_bytes);
+            if manifest.logical_size != version.logical_size
+                || manifest.chunk_bytes != version.checksum_chunk_bytes
+            {
+                return Err(Error::new(
+                    ErrorCode::ChecksumMismatch,
+                    "Backup checksum header differs from the exact version",
+                ));
+            }
+            let body = body_root.open_read_regular(body_path)?;
+            let body_stamp = FileStamp::from_metadata(&body.metadata()?);
+            let body = verify_open_payload_observed(body, manifest, version, &mut |_| {
+                preparation_checkpoint(stop)
+            })?;
+            for (root, path, file, stamp) in [
+                (root, descriptor_path.as_path(), &descriptor, &descriptor_stamp),
+                (root, checks_path.as_path(), &checks, &checks_stamp),
+                (body_root, body_path, &body, &body_stamp),
+            ] {
+                if &FileStamp::from_metadata(&file.metadata()?) != stamp
+                    || &FileStamp::from_metadata(&root.open_read_regular(path)?.metadata()?)
+                        != stamp
+                {
+                    return Err(Error::new(
+                        ErrorCode::ContentCorrupt,
+                        "Backup payload inode or bound metadata changed during verification",
+                    ));
+                }
+                if durable {
+                    file.sync_all()?;
+                    root.sync_dir(path.parent().expect("invariant: version file has a parent"))?;
+                }
+            }
+            preparation_checkpoint(stop)
+        })
     }
 }
 
@@ -226,7 +284,7 @@ impl<'a> PayloadPlan<'a> {
                             "Backup payload route lacks its exact binding",
                         )
                     })?;
-                let (root, source, disk_id) = match choices.payload_sources.get(slot) {
+                let (origin, disk_id) = match choices.payload_sources.get(slot) {
                     Some(source) => {
                         if source.disk.binding_generation != *generation {
                             return Err(Error::new(
@@ -235,7 +293,7 @@ impl<'a> PayloadPlan<'a> {
                             ));
                         }
                         source.recheck()?;
-                        (&source.root, Some(source), source.disk.disk_id.as_str())
+                        (LocationOrigin::Retained(source), source.disk.disk_id.as_str())
                     }
                     None => {
                         let (root, identity) =
@@ -245,23 +303,13 @@ impl<'a> PayloadPlan<'a> {
                                     "Backup payload has no admitted source or selected target",
                                 )
                             })?;
-                        (root, None, identity.disk_id.as_str())
+                        let directory = root.path().join("histories")
+                            .join(&evidence.version.history_tree_id).join("versions")
+                            .join(&evidence.version.version_id);
+                        (LocationOrigin::Package { root, directory }, identity.disk_id.as_str())
                     }
                 };
-                let directory = root
-                    .path()
-                    .join("histories")
-                    .join(&evidence.version.history_tree_id)
-                    .join("versions")
-                    .join(&evidence.version.version_id);
-                locations.push(Location {
-                    root,
-                    source,
-                    disk_id,
-                    slot_id: slot,
-                    evidence,
-                    directory,
-                });
+                locations.push(Location { origin, disk_id, slot_id: slot, evidence });
             }
         }
         Ok(Self {
@@ -310,7 +358,7 @@ impl<'a> PayloadPlan<'a> {
                 .filter(|bytes| *bytes <= MAX_METADATA)
                 .ok_or_else(budget)?;
             let charge = (proof_bytes as u64 + local_bound as u64) * 2 + 16_384;
-            charge_root(&mut by_root, location.root, charge)?;
+            charge_root(&mut by_root, location.capacity_root(), charge)?;
         }
         for source in choices.sources.values() {
             charge_root(
@@ -335,17 +383,18 @@ impl<'a> PayloadPlan<'a> {
             self.prepared.recheck_names()?;
             location.verify_body(true, stop)?;
             let proof = location.proof(self.candidate, self.finalize)?;
-            let path = location
-                .proof_directory(self.candidate.hash())?
-                .join("commit-proof.json");
             let bytes = encode_metadata(&proof, MAX_METADATA)?;
-            install_preparation_bytes(location.root, &path, &bytes)?;
-            if location.root.read_bytes(&path, MAX_METADATA)? != bytes {
-                return Err(Error::new(
-                    ErrorCode::PublicationInvalid,
-                    "durable Backup CommitProof differs on readback",
-                ));
-            }
+            location.with_proof(self.candidate.hash(), |root, directory| {
+                let path = directory.join(layout::VERSION_COMMIT_PROOF.as_path());
+                install_preparation_bytes(root, &path, &bytes)?;
+                if root.read_bytes(&path, MAX_METADATA)? != bytes {
+                    return Err(Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "durable Backup CommitProof differs on readback",
+                    ));
+                }
+                Ok(())
+            })?;
             receipts.push(location.receipt(&proof)?);
         }
         self.prepared.recheck_names()?;
@@ -358,17 +407,19 @@ impl<'a> PayloadPlan<'a> {
             self.prepared.recheck_names()?;
             location.verify_body(false, stop)?;
             let proof = location.proof(self.candidate, self.finalize)?;
-            let path = location
-                .proof_directory(self.candidate.hash())?
-                .join("commit-proof.json");
-            if location.root.read_bytes(&path, MAX_METADATA)?
-                != encode_metadata(&proof, MAX_METADATA)?
-            {
-                return Err(Error::new(
-                    ErrorCode::PublicationInvalid,
-                    "actual Backup CommitProof does not cover this complete route",
-                ));
-            }
+            location.with_proof(self.candidate.hash(), |root, directory| {
+                if root.read_bytes(
+                    &directory.join(layout::VERSION_COMMIT_PROOF.as_path()), MAX_METADATA,
+                )?
+                    != encode_metadata(&proof, MAX_METADATA)?
+                {
+                    return Err(Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "actual Backup CommitProof does not cover this complete route",
+                    ));
+                }
+                Ok(())
+            })?;
             receipts.push(location.receipt(&proof)?);
         }
         self.prepared.recheck_names()?;
@@ -394,27 +445,29 @@ impl<'a> PayloadPlan<'a> {
                 publication_receipts: &seal.receipts,
             };
             let bytes = encode_metadata(&local, MAX_METADATA)?;
-            let directory = location.proof_directory(self.candidate.hash())?;
-            if location
-                .root
-                .read_bytes(&directory.join("commit-proof.json"), MAX_METADATA)?
-                != encode_metadata(&proof, MAX_METADATA)?
-            {
-                return Err(Error::new(
-                    ErrorCode::PublicationInvalid,
-                    "Backup local publication lost its actual CommitProof",
-                ));
-            }
-            let path = directory.join("publication-proof.json");
-            if write {
-                install_preparation_bytes(location.root, &path, &bytes)?;
-            }
-            if location.root.read_bytes(&path, MAX_METADATA)? != bytes {
-                return Err(Error::new(
-                    ErrorCode::PublicationInvalid,
-                    "Backup local publication differs from actual original-member receipts",
-                ));
-            }
+            location.with_proof(self.candidate.hash(), |root, directory| {
+                if root.read_bytes(
+                    &directory.join(layout::VERSION_COMMIT_PROOF.as_path()), MAX_METADATA,
+                )?
+                    != encode_metadata(&proof, MAX_METADATA)?
+                {
+                    return Err(Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "Backup local publication lost its actual CommitProof",
+                    ));
+                }
+                let path = directory.join(layout::VERSION_PUBLICATION_PROOF.as_path());
+                if write {
+                    install_preparation_bytes(root, &path, &bytes)?;
+                }
+                if root.read_bytes(&path, MAX_METADATA)? != bytes {
+                    return Err(Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "Backup local publication differs from actual original-member receipts",
+                    ));
+                }
+                Ok(())
+            })?;
         }
         self.prepared.recheck_names()
     }
@@ -456,32 +509,36 @@ pub(super) fn observe_selected(
                 .join("versions")
                 .join(&evidence.version.version_id);
             let location = Location {
-                root,
-                source: None,
+                origin: LocationOrigin::Package { root, directory },
                 disk_id: &identity.disk_id,
                 slot_id: &identity.slot_id,
                 evidence,
-                directory,
             };
             location.verify_body(false, stop)?;
             let proof = location.proof(candidate, &publication.finalize)?;
-            let directory = location.proof_directory(candidate.hash())?;
-            let local = LocalPublicationRef {
-                candidate: candidate.candidate(),
-                publication,
-                commit_proof: &proof,
-                publication_receipts: &seal.receipts,
-            };
-            if root.read_bytes(&directory.join("commit-proof.json"), MAX_METADATA)?
-                != encode_metadata(&proof, MAX_METADATA)?
-                || root.read_bytes(&directory.join("publication-proof.json"), MAX_METADATA)?
-                    != encode_metadata(&local, MAX_METADATA)?
-            {
-                return Err(Error::new(
-                    ErrorCode::PublicationInvalid,
-                    "selected Backup target lost its original local publication proof",
-                ));
-            }
+            location.with_proof(candidate.hash(), |root, directory| {
+                let local = LocalPublicationRef {
+                    candidate: candidate.candidate(),
+                    publication,
+                    commit_proof: &proof,
+                    publication_receipts: &seal.receipts,
+                };
+                if root.read_bytes(
+                    &directory.join(layout::VERSION_COMMIT_PROOF.as_path()), MAX_METADATA,
+                )?
+                    != encode_metadata(&proof, MAX_METADATA)?
+                    || root.read_bytes(
+                        &directory.join(layout::VERSION_PUBLICATION_PROOF.as_path()), MAX_METADATA,
+                    )?
+                        != encode_metadata(&local, MAX_METADATA)?
+                {
+                    return Err(Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "selected Backup target lost its original local publication proof",
+                    ));
+                }
+                Ok(())
+            })?;
         }
     }
     prepared.recheck_names()

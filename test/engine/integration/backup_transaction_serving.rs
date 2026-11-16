@@ -68,16 +68,17 @@ impl Drop for ProgressDiagnostic {
 }
 
 fn full_route() -> (tempfile::TempDir, Engine, Repository) {
-    let (temp, mut engine, _) = setup();
-    let repository = engine
-        .create_repository(
-            &RepositoryName::parse("WholeRoute").unwrap(),
-            "P01",
-            3,
-            "admin",
-            op(),
-        )
-        .unwrap();
+    let (temp, mut engine, repository) = setup();
+    let policy = storage_engine::new_id("policy").unwrap();
+    engine.update_protection_policy(storage_engine::ProtectionPolicyUpdate {
+        policy_id: &policy,
+        repository_id: &repository.repository_id,
+        path_prefix: "",
+        target_copies: 3,
+        expected_generation: 0,
+        principal: "admin",
+        operation_id: op(),
+    }).unwrap();
     (temp, engine, repository)
 }
 
@@ -202,6 +203,66 @@ fn body(engine: &Engine, version: &str) -> Vec<u8> {
     bytes
 }
 
+// Assertions derive expected addresses only. Production admission still consumes
+// the exact decided five-area and parent occurrences, never these test strings.
+fn target_occurrences(engine: &Engine, request: &BackupTransactionRequest, file: &Entry) {
+    use std::os::unix::fs::MetadataExt;
+    let owner = engine.config().disks.iter().find(|disk| disk.slot_id == "P01").unwrap();
+    let direct = engine.config().disks.iter().find(|disk| disk.slot_id == "B01").unwrap();
+    let record = &engine.state().file_containers[&file.file_id.parse().unwrap()];
+    let nested = engine.state().namespace_directories.values()
+        .find(|record| record.name.as_str() == "nested").unwrap();
+    let empty = engine.state().namespace_directories.values()
+        .find(|record| record.name.as_str() == "empty").unwrap();
+    use storage_contract::file_container::ContainerEntity;
+    let require_entity = |path: &Path, expected: ContainerEntity| {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        assert!(metadata.is_dir());
+        assert!(!metadata.file_type().is_symlink());
+        assert_eq!((metadata.dev(), metadata.ino()), (expected.device(), expected.inode()));
+    };
+    for target in &request.targets {
+        let disk = engine.config().disks.iter()
+            .find(|disk| disk.disk_id == target.disk_id).unwrap();
+        let id = disk.disk_id.parse().unwrap();
+        let replica = &record.replicas[&id];
+        assert_eq!(replica.prefixes.len(), 2);
+        assert_eq!(replica.prefixes[0].source_disk.to_string(), direct.disk_id);
+        assert_eq!(replica.prefixes[1].source_disk.to_string(), owner.disk_id);
+        let mut path = disk.root.clone();
+        for (prefix, source) in replica.prefixes.iter().zip([direct, owner]) {
+            let uuid = source.disk_id.strip_prefix("disk_").unwrap();
+            path.push(format!("{}--{uuid}", source.name));
+            require_entity(&path, prefix.entity);
+            for (relative, entity) in [
+                ("common-data", prefix.areas.common_data),
+                ("deleted-data", prefix.areas.deleted_data),
+                ("zxs-data", prefix.areas.zxs_data.root),
+                ("zxs-data/common-data", prefix.areas.zxs_data.common_data),
+                ("zxs-data/deleted-data", prefix.areas.zxs_data.deleted_data),
+            ] {
+                require_entity(&path.join(relative), entity);
+            }
+        }
+        let common = path.join("common-data");
+        require_entity(&common.join("nested"), nested.replicas[&id].entity);
+        require_entity(&common.join("nested/empty"), empty.replicas[&id].entity);
+        assert_eq!(fs::read_dir(common.join("nested/empty")).unwrap().count(), 0);
+        let container = common.join("nested/file");
+        require_entity(&container, replica.entity);
+        assert!(container.join(".zxs-file.sqlite").is_file());
+        let mut bodies = fs::read_dir(container.join("versions")).unwrap()
+            .map(|entry| fs::read(entry.unwrap().path()).unwrap()).collect::<Vec<_>>();
+        bodies.sort();
+        let mut expected = vec![b"retained first body".to_vec(), b"retained current body".to_vec()];
+        expected.sort();
+        assert_eq!(bodies, expected);
+        let metadata = path.join("zxs-data/common-data").join(record.history_tree_id.to_string());
+        assert!(metadata.join("versions").is_dir());
+        assert!(!disk.root.join("common-data/nested/file").exists());
+    }
+}
+
 #[test]
 fn same_backup_switch_serves_and_replays_normal_successor_publications() {
     let started = std::time::Instant::now();
@@ -209,6 +270,14 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
     let (temp, mut engine, repository) = full_route();
     let _progress = ProgressDiagnostic::start(temp.path().join("system"), started);
     diagnostic(started, "main: create original publications");
+    engine.file_namespace(
+        &repository.repository_id,
+        storage_engine::NamespaceOperation::parse(
+            storage_engine::NamespaceOperationKind::Mkdir, "nested", None,
+        ).unwrap(),
+        "admin",
+        op(),
+    ).unwrap();
     let old = save(
         &mut engine,
         &repository,
@@ -260,6 +329,95 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
         json_codec::to_value(&originals).unwrap()
     );
     assert!(engine.is_read_only());
+    // The native first Publication has decided the target parent inodes, but
+    // no common serving selector has been installed. Equal empty bytes cannot
+    // stand in for the recorded ordinary directory occurrence.
+    let owner = engine.config().disks.iter().find(|disk| disk.slot_id == "P01").unwrap();
+    let direct = engine.config().disks.iter().find(|disk| disk.slot_id == "B01").unwrap();
+    let empty = request.preparation.target_paths[0]
+        .join(format!("{}--{}", direct.name, direct.disk_id.strip_prefix("disk_").unwrap()))
+        .join(format!("{}--{}", owner.name, owner.disk_id.strip_prefix("disk_").unwrap()))
+        .join("common-data/nested/empty");
+    let parked = temp.path().join("parked-terminal-empty");
+    let selectors = originals.iter().map(|disk| {
+        let path = disk.root.join("disk.json");
+        let bytes = fs::read(&path).unwrap();
+        (path, bytes)
+    }).collect::<Vec<_>>();
+    assert_eq!(fs::read_dir(&empty).unwrap().count(), 0);
+    fs::rename(&empty, &parked).unwrap();
+    fs::create_dir(&empty).unwrap();
+    let error = engine
+        .complete_backup_registry_placement_decision(operation, "admin")
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid, "{error:?}");
+    assert!(engine.is_read_only());
+    assert!(!engine.state().operations.contains_key(&operation));
+    assert_eq!(engine.state().operations, before);
+    for (path, bytes) in selectors {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    assert_eq!(
+        fs::read(temp.path().join("system/config.json")).unwrap(),
+        discovery
+    );
+    fs::remove_dir(&empty).unwrap();
+    fs::rename(&parked, &empty).unwrap();
+    #[cfg(feature = "fault-injection")]
+    {
+        // Reuse this one real native Publication and serving installation. Cut
+        // after the exact bootstrap extension is selected, before its first
+        // common selector exchange; completed-cold replay cannot cover this.
+        let point = "after_backup_bootstrap_selected";
+        engine.inject_fault_once(point);
+        let error = engine
+            .complete_backup_registry_placement_decision(operation, "admin")
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InjectedFailure, "{error:?}");
+        assert!(error.to_string().contains(&format!("interrupted at {point}")));
+        assert!(engine.is_read_only());
+        assert!(!engine.state().operations.contains_key(&operation));
+        let system = temp.path().join("system");
+        let extension = system.join("backup-root-extension");
+        assert!(extension.join("selected.json").is_file());
+        assert!(!extension.join("complete.json").exists());
+        assert!(!system.join("backup-serving-installed.json").exists());
+        let selected = fs::read(extension.join("selected.json")).unwrap();
+        let plan = fs::read(extension.join("plan.json")).unwrap();
+        let seals = originals.iter().map(|disk| {
+            let path = disk.root.join("disk.json");
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        }).collect::<Vec<_>>();
+        drop(engine);
+        assert!(Engine::open(&system).is_err());
+
+        // The unfinished cold branch must verify the same target occurrence,
+        // not infer an empty directory or fall back to a legacy layout recipe.
+        fs::rename(&empty, &parked).unwrap();
+        fs::create_dir(&empty).unwrap();
+        let error = Engine::resume_backup_transaction_at_with_workspace_limits(
+            &system, operation, "admin", None,
+        ).err().expect("a replaced selected target parent cannot resume");
+        assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid, "{error:?}");
+        assert!(!extension.join("complete.json").exists());
+        assert!(!system.join("backup-serving-installed.json").exists());
+        assert_eq!(fs::read(extension.join("selected.json")).unwrap(), selected);
+        assert_eq!(fs::read(extension.join("plan.json")).unwrap(), plan);
+        for (path, bytes) in seals {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+        fs::remove_dir(&empty).unwrap();
+        fs::rename(&parked, &empty).unwrap();
+        diagnostic(started, "main: resume unfinished exact switch cold");
+        engine = Engine::resume_backup_transaction_at_with_workspace_limits(
+            &system, operation, "admin", None,
+        ).unwrap();
+        assert!(extension.join("complete.json").is_file());
+        assert_eq!(fs::read(extension.join("selected.json")).unwrap(), selected);
+        assert_eq!(fs::read(extension.join("plan.json")).unwrap(), plan);
+        assert_eq!(engine.operation(operation).unwrap().operation_id, operation);
+    }
     diagnostic(started, "main: complete registry placement decision");
     let result = engine
         .complete_backup_registry_placement_decision(operation, "admin")
@@ -303,6 +461,7 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
         BackupPreparationPhase::GenerationServingActive
     );
     diagnostic(started, "main: read retained bodies and receipts");
+    target_occurrences(&engine, &request, &old);
     assert_eq!(body(&engine, &old.version_id), b"retained first body");
     assert_eq!(body(&engine, &latest.version_id), b"retained current body");
     for (id, receipt) in before.iter() {
@@ -347,6 +506,7 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
     diagnostic(started, "main: open cold engine");
     let mut engine = Engine::open(&system).unwrap();
     diagnostic(started, "main: cold engine opened");
+    target_occurrences(&engine, &request, &old);
     assert_eq!(engine.operation(operation).unwrap(), result);
     for target in &request.targets {
         let disk = engine.config().disks.iter()

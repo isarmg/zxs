@@ -47,6 +47,26 @@ pub enum FreshLayoutError {
     AdditionEvidence,
     #[error("decoding the immutable Add layout preparation: {0}")]
     AdditionRecord(#[source] storage_contract::Error),
+    #[error("the Backup root feedback differs from its exact frozen source or target set")]
+    BackupRootEvidence,
+    #[error("the retained Backup target ownership cannot be observed: {0}")]
+    BackupRootOwnership(#[source] std::io::Error),
+    #[error("original members disagree on the immutable Backup root preparation")]
+    BackupRootFork,
+    #[error("the Backup root preparation is missing or incomplete on original members")]
+    BackupRootMissing,
+    #[error("unrecorded Backup lifecycle roots cannot be adopted")]
+    BackupRootUnrecorded,
+    #[error("decoding the immutable Backup root preparation: {0}")]
+    BackupRootRecord(#[source] storage_contract::Error),
+    #[error("Backup root feedback exceeds its bounded metadata reservation")]
+    BackupRootBudget,
+    #[error("a selected Backup target or original member cannot retain root feedback")]
+    BackupRootSpace,
+    #[error("Backup target namespace feedback differs from its complete source")]
+    BackupLayoutEvidence,
+    #[error("Backup target layout requires ordinary current automatic file-manager units")]
+    BackupLayoutUnsupported,
     #[error("the persisted layout does not cover the exact registered disk set")]
     Registration,
     #[error("the registered physical root or one of its three roots changed")]
@@ -98,6 +118,16 @@ impl FreshLayoutError {
             Self::AdditionUnrecorded => ErrorCode::RecoveryRequired,
             Self::AdditionEvidence => ErrorCode::DiskIdentityMismatch,
             Self::AdditionRecord(_) => ErrorCode::ObjectCorrupt,
+            Self::BackupRootEvidence => ErrorCode::DiskIdentityMismatch,
+            Self::BackupLayoutEvidence => ErrorCode::ContainerLayoutInvalid,
+            Self::BackupLayoutUnsupported => ErrorCode::UnsupportedOperation,
+            Self::BackupRootFork => ErrorCode::LogFork,
+            Self::BackupRootMissing | Self::BackupRootUnrecorded | Self::BackupRootOwnership(_) => {
+                ErrorCode::RecoveryRequired
+            }
+            Self::BackupRootRecord(_) => ErrorCode::ObjectCorrupt,
+            Self::BackupRootBudget => ErrorCode::ResourceLimit,
+            Self::BackupRootSpace => ErrorCode::NoSpace,
             Self::DraftChanged => ErrorCode::PreparationStale,
             Self::DraftTooLarge => ErrorCode::FileTooLarge,
             Self::InitializationInput | Self::InitializationSource => ErrorCode::ConfigInvalid,

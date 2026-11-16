@@ -322,6 +322,17 @@ fn capture_entity(
     Ok(held)
 }
 
+/// A source-specific caller already pinned the exact current occurrence. Keep
+/// ordinary owner/BODY/unsupported checks in the same FILE admission kernel.
+pub(in crate::container_storage) fn verify_held_container(
+    held: &DiskRoot, file: &str, view: StateProjection<'_>,
+) -> Result<()> {
+    let record = view.state().file_containers.get(&file.parse::<storage_contract::FileId>()?)
+        .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerShape)?;
+    validate_owner(view, file, &record.history_tree_id.to_string())?;
+    verify_entity_contents(held, file, view, false, Some(&record.namespace.name))
+}
+
 fn verify_entity_contents(
     held: &DiskRoot,
     file: &str,

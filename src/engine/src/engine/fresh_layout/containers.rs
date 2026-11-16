@@ -692,6 +692,12 @@ pub(crate) fn verify_transition<'a>(
 ) -> Result<VerifiedContainerTransition<'a>> {
     validate_state(previous)?;
     validate_state(next)?;
+    if let Some(proof) = config.verify_backup_first_layout(previous, next, candidate)? {
+        proof.require_pair(previous, next, candidate)?;
+        return Ok(VerifiedContainerTransition {
+            previous, next, candidate, renames: BTreeMap::new(),
+        });
+    }
     let result = next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
     let (mut directories, additions) = super::directories::project(
         config, previous, next, result, Some(&next.namespace_directories),
@@ -761,7 +767,7 @@ pub(crate) fn verify_transition<'a>(
         if first.disk_id.parse::<DiskId>()? != record.owner_disk {
             return Err(Failure::ContainerScope.into());
         }
-        let mut predecessor = None;
+        let mut installed_sources = BTreeSet::new();
         for slot in &placement.route_slot_ids {
             let disk = config.disks.iter().find(|disk| disk.slot_id.eq_ignore_ascii_case(slot))
                 .ok_or(Failure::Registration)?;
@@ -772,10 +778,17 @@ pub(crate) fn verify_transition<'a>(
                 return Err(Failure::ContainerIdentity.into());
             }
             prefixes::require_geometry(config, actual, id)?;
-            if replica.prefixes.first().map(|prefix| prefix.source_disk) != predecessor {
-                return Err(Failure::ContainerScope.into());
+            match replica.prefixes.first().map(|prefix| prefix.source_disk) {
+                None if installed_sources.is_empty() && id == actual.owner_disk => (),
+                Some(source) if installed_sources.contains(&source) => {
+                    let parent = actual.replicas.get(&source).ok_or(Failure::ContainerScope)?;
+                    if replica.prefixes.iter().skip(1).map(|prefix| prefix.source_disk)
+                        .ne(parent.prefixes.iter().map(|prefix| prefix.source_disk))
+                    { return Err(Failure::ContainerScope.into()); }
+                }
+                _ => return Err(Failure::ContainerScope.into()),
             }
-            predecessor = Some(id);
+            if !installed_sources.insert(id) { return Err(Failure::ContainerScope.into()); }
             known_prefixes.extend_chain(id, &replica.prefixes)?;
             // Existing complete records never retarget, even for identical bytes.
             record.replicas.entry(id).or_insert_with(|| replica.clone());
@@ -814,3 +827,22 @@ pub(crate) fn verify_transition<'a>(
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/engine/ordinary_container_rename_tests.rs"]
 mod rename_tests;
+
+/// Native Backup's already authenticated original Config/State uses this same
+/// geometry kernel before opening its exact original held occurrence.
+pub(crate) fn require_backup_original_geometry(
+    config: &Config, state: &State, file: FileId, target: DiskId,
+) -> Result<()> {
+    let record = state.file_containers.get(&file).ok_or(Failure::ContainerShape)?;
+    require_current_container(state, file)?;
+    if super::namespace::file_target(state, file, record.history_tree_id)? != record.namespace {
+        return Err(Failure::NamespaceSource.into());
+    }
+    let origin = super::namespace::root_origin(
+        state, record.namespace.repository, record.namespace.branch,
+    )?;
+    if config.storage_roots.get(&record.owner_disk) != Some(&origin.genesis) {
+        return Err(Failure::RootIdentity.into());
+    }
+    prefixes::require_geometry(config, record, target)
+}

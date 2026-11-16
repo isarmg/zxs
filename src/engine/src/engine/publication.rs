@@ -1999,15 +1999,46 @@ impl crate::engine::PlanningContext<'_> {
                 "invariant: each routed replica has an admission result"
             );
         }
-        let mut source: Option<(storage_contract::DiskId, ReadFile)> = None;
+        let file_id = p.version.file_id.parse::<storage_contract::FileId>()?;
+        let mut preceding = None;
+        let mut seen = std::collections::BTreeSet::new();
+        let mut direct = Vec::with_capacity(p.placement.route_slot_ids.len());
+        let mut needed = BTreeMap::<storage_contract::DiskId, usize>::new();
+        for slot in &p.placement.route_slot_ids {
+            let id = self.disk(slot)?.disk_id.parse::<storage_contract::DiskId>()?;
+            let parent = match containers {
+                Some(containers) => containers.direct_source(file_id, id)?,
+                // Preserve the existing non-container call contract. It cannot
+                // gain a fanout source merely from the current Config.
+                None => preceding,
+            };
+            if parent.is_some_and(|parent| !seen.contains(&parent))
+                || (parent.is_none() && !seen.is_empty()) || !seen.insert(id)
+            {
+                return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
+            }
+            if let Some(parent) = parent {
+                *needed.entry(parent).or_insert(0) += 1;
+            }
+            direct.push(parent);
+            preceding = Some(id);
+        }
+        // Retained donor FDs and the consumed clone are charged before any
+        // BODY copy. This does not increase the common descriptor limit.
+        let _donor_budget = payload_proof_budget().reserve(needed.len().saturating_add(1))
+            .ok_or(super::fresh_layout::FreshLayoutError::ContainerBudget)?;
+        let mut sources = BTreeMap::<storage_contract::DiskId, ReadFile>::new();
         for (index, slot) in p.placement.route_slot_ids.iter().enumerate() {
             let disk = self.disk(slot)?;
             let disk_id = disk.disk_id.parse::<storage_contract::DiskId>()?;
+            let direct_source = direct[index];
+            if direct_source.is_some_and(|id| !sources.contains_key(&id))
+                || (direct_source.is_none() && index != 0)
+            {
+                return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
+            }
             if let Some(containers) = containers {
-                containers.require_direct_source(
-                    p.version.file_id.parse()?, disk.disk_id.parse()?,
-                    source.as_ref().map(|(disk, _)| *disk),
-                )?;
+                containers.require_direct_source(file_id, disk_id, direct_source)?;
             }
             let scope = match containers {
                 Some(containers) => containers.retain_scope(p.version.file_id.parse()?, disk_id)?,
@@ -2060,8 +2091,10 @@ impl crate::engine::PlanningContext<'_> {
                     let target = staging.join("content").join(&p.version.creation_name);
                     let copied = verified_full_copy_at(
                         root,
-                        match source.take() {
-                            Some((_, file)) => file,
+                        match direct_source {
+                            Some(id) => sources.get(&id)
+                                .ok_or(super::fresh_layout::FreshLayoutError::ContainerScope)?
+                                .try_clone()?,
                             None if index == 0 => p.source.open()?,
                             None => {
                                 return Err(super::fresh_layout::FreshLayoutError::ContainerScope
@@ -2101,10 +2134,18 @@ impl crate::engine::PlanningContext<'_> {
             )?;
             drop(reservation);
             scope.verify()?;
-            if index + 1 < p.placement.route_slot_ids.len() {
-                source = Some((
-                    disk_id,
-                    ReadFile::in_container(target.open_leased_regular(&path)?, Arc::clone(&scope)),
+            if let Some(parent) = direct_source {
+                let count = needed.get_mut(&parent)
+                    .ok_or(super::fresh_layout::FreshLayoutError::ContainerScope)?;
+                *count -= 1;
+                if *count == 0 {
+                    needed.remove(&parent);
+                    sources.remove(&parent);
+                }
+            }
+            if needed.contains_key(&disk_id) {
+                sources.insert(disk_id, ReadFile::in_container(
+                    target.open_leased_regular(&path)?, Arc::clone(&scope),
                 ));
             }
         }

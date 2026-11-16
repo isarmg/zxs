@@ -4,7 +4,11 @@ use super::*;
 use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo;
 use crate::container_storage::backup_entities::EntityPlacement;
 use crate::engine::backup_preparation::native_control::databases::materials;
-use crate::engine::membership_transition::BackupChoiceContext;
+use crate::engine::membership_transition::{
+    AdmittedBackupDecision, BackupChoiceContext, PreparedBackupLayouts, PreparedBackupRoots,
+};
+use storage_contract::{DiskId, Generation};
+use storage_contract::working_tree::{LocalEntityIdentity, RootBinding};
 use installation::{Target, Task as InstallationTask};
 
 mod common_databases;
@@ -157,7 +161,15 @@ impl BackupRegistryProjection {
                 // verification. No unrequested logical capacity is invented.
                 capacity_bytes: None,
             });
+            if config.storage_roots.insert(
+                identity.disk_id.parse::<DiskId>()?, target.root_binding.clone(),
+            ).is_some() {
+                return Err(
+                    crate::engine::fresh_layout::FreshLayoutError::BackupRootEvidence.into(),
+                );
+            }
         }
+        crate::engine::fresh_layout::validate_roots(&config)?;
         Ok(config)
     }
 
@@ -219,6 +231,17 @@ impl BackupRegistryProjection {
                     "Backup authority substitutes a selected target or entity image",
                 ));
             }
+            if target.root_binding.registration != node.identity
+                || target.root_binding.root_entity
+                    != LocalEntityIdentity::new(job.target.device, job.target.inode)
+                || target.root_binding.operation_id != frozen.request.operation_id
+                || target.root_binding.generation != Generation::new(1)
+            {
+                return Err(
+                    crate::engine::fresh_layout::FreshLayoutError::BackupRootEvidence.into(),
+                );
+            }
+            target.layout.require_binding(&target.root_binding, frozen.request.operation_id)?;
             let relative = target.entities.relative_to(&node.source_prefix)?;
             if units.as_ref().is_some_and(|first| first != &relative) {
                 return Err(invalid(
@@ -227,7 +250,37 @@ impl BackupRegistryProjection {
             }
             units = Some(relative);
         }
+        self.configuration(&crate::ValidatedConfig::try_from(frozen.original.clone())?)?;
         Ok(())
+    }
+
+    pub(in crate::engine) fn layout_bindings(
+        &self,
+    ) -> Result<BTreeMap<DiskId, crate::container_storage::BackupTargetLayout>> {
+        self.targets.iter().map(|target| {
+            Ok((target.node.identity.disk_id.parse()?, target.layout.clone()))
+        }).collect()
+    }
+
+    pub(in crate::engine) fn attach_target_layouts(
+        &self, source: &State, next: &mut State, operation: OperationId,
+    ) -> Result<()> {
+        if next.file_containers != source.file_containers
+            || next.namespace_directories != source.namespace_directories
+        {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::BackupLayoutEvidence.into());
+        }
+        for target in &self.targets {
+            target.layout.attach(&target.root_binding, source, next, operation)?;
+        }
+        crate::engine::fresh_layout::containers::validate_state(next)?;
+        crate::engine::fresh_layout::directories::validate_state(next)
+    }
+
+    pub(in crate::engine) fn root_bindings(&self) -> Result<BTreeMap<DiskId, RootBinding>> {
+        self.targets.iter().map(|target| {
+            Ok((target.node.identity.disk_id.parse()?, target.root_binding.clone()))
+        }).collect()
     }
 }
 
@@ -237,6 +290,8 @@ struct TargetProjection {
     node: BackupPreparedTopologyNode,
     physical: PhysicalBinding,
     root: PathBuf,
+    root_binding: RootBinding,
+    layout: crate::container_storage::BackupTargetLayout,
     image_manifest_hash: String,
     entities: EntityPlacement,
 }
@@ -247,20 +302,53 @@ pub(in crate::engine) struct PreparedBackupRegistry {
     task: Task,
     targets: Vec<Target>,
     projection: BackupRegistryProjection,
+    roots: PreparedBackupRoots,
+    layouts: PreparedBackupLayouts,
     // Disabled for all general/retained readers. Only runtime::run enables it.
     scope_encoding: Option<published_scopes::encoding_memo::ScopeEncodingMemo>,
 }
 impl PreparedBackupRegistry {
-    fn capture(task: Task, targets: Vec<Target>, stop: &AtomicBool) -> Result<Self> {
+    fn prepare(
+        task: Task, targets: Vec<Target>, choices: &BackupChoiceContext, stop: &AtomicBool,
+    ) -> Result<Self> {
         installation::verify_installed(&task.installation, &targets, stop)?;
-        let projection = project(&task, &targets, stop)?;
+        let roots = choices.prepare_target_roots(&targets, stop)?;
+        let original = snapshot::read(&targets[0].root, task.selection().first(), stop)?;
+        let layouts = PreparedBackupLayouts::prepare(&roots, choices, &targets, &original, stop)?;
+        Self::from_roots(task, targets, roots, layouts, stop)
+    }
+
+    fn capture(
+        task: Task, targets: Vec<Target>, choices: &BackupChoiceContext, stop: &AtomicBool,
+    ) -> Result<Self> {
+        installation::verify_installed(&task.installation, &targets, stop)?;
+        let roots = choices.observe_target_roots(&targets, stop)?;
+        let original = snapshot::read(&targets[0].root, task.selection().first(), stop)?;
+        let layouts = PreparedBackupLayouts::capture(&roots, choices, &targets, &original, stop)?;
+        Self::from_roots(task, targets, roots, layouts, stop)
+    }
+
+    fn capture_decided(
+        task: Task, targets: Vec<Target>, decision: &AdmittedBackupDecision, stop: &AtomicBool,
+    ) -> Result<Self> {
+        installation::verify_installed(&task.installation, &targets, stop)?;
+        let roots = decision.observe_target_roots(&targets, stop)?;
+        let original = snapshot::read(&targets[0].root, task.selection().first(), stop)?;
+        let layouts = PreparedBackupLayouts::capture_decided(
+            &roots, decision, &targets, &original, stop,
+        )?;
+        Self::from_roots(task, targets, roots, layouts, stop)
+    }
+
+    fn from_roots(
+        task: Task, targets: Vec<Target>, roots: PreparedBackupRoots,
+        layouts: PreparedBackupLayouts, stop: &AtomicBool,
+    ) -> Result<Self> {
+        roots.verify(&task.installation.evidence, &task.installation.source_fence_hash,
+            &targets, stop)?;
+        let projection = project(&task, &targets, &roots, &layouts, stop)?;
         encode(&projection)?;
-        Ok(Self {
-            task,
-            targets,
-            projection,
-            scope_encoding: None,
-        })
+        Ok(Self { task, targets, projection, roots, layouts, scope_encoding: None })
     }
     pub(in crate::engine) fn source_evidence(&self) -> &BackupSourceFenceEvidence {
         &self.task.installation.evidence
@@ -373,7 +461,13 @@ impl PreparedBackupRegistry {
             stop,
             &mut encodings,
         )?;
-        if encode(&project(&self.task, &self.targets, stop)?)? != encode(&self.projection)? {
+        self.roots.verify(self.source_evidence(), self.source_fence_hash(), &self.targets, stop)?;
+        let original = snapshot::read(&self.targets[0].root, self.task.selection().first(), stop)?;
+        self.layouts.verify(&self.roots, self.source_evidence(), self.source_fence_hash(),
+            &self.targets, &original, stop)?;
+        if encode(&project(&self.task, &self.targets, &self.roots, &self.layouts, stop)?)?
+            != encode(&self.projection)?
+        {
             return Err(invalid(
                 "complete registry or placement changed after target admission",
             ));
@@ -446,7 +540,10 @@ impl PreparedBackupRegistry {
         self.recheck_names()
     }
 }
-fn project(task: &Task, targets: &[Target], stop: &AtomicBool) -> Result<BackupRegistryProjection> {
+fn project(
+    task: &Task, targets: &[Target], roots: &PreparedBackupRoots,
+    layouts: &PreparedBackupLayouts, stop: &AtomicBool,
+) -> Result<BackupRegistryProjection> {
     let installation = &task.installation;
     let frozen = &installation.evidence.task;
     let mut entries = Vec::with_capacity(targets.len());
@@ -462,6 +559,12 @@ fn project(task: &Task, targets: &[Target], stop: &AtomicBool) -> Result<BackupR
                     node: frozen.topology.nodes[index].clone(),
                     physical: job.target.clone(),
                     root: job.request.target_paths[0].clone(),
+                    root_binding: roots.binding(
+                        frozen.topology.nodes[index].identity.disk_id.parse()?,
+                    )?.clone(),
+                    layout: layouts.layout(
+                        frozen.topology.nodes[index].identity.disk_id.parse()?,
+                    )?.clone(),
                     image_manifest_hash: image.manifest_hash(),
                     entities: image.placement().clone(),
                 })

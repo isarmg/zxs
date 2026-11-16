@@ -445,12 +445,13 @@ pub fn open_decided_backup_targets(
     target_writers::resume_existing(&targets)?;
     require_isolated(&targets)?;
     let stop = AtomicBool::new(false);
-    let prepared = PreparedBackupRegistry::capture(
+    let prepared = PreparedBackupRegistry::capture_decided(
         Task {
             format: FORMAT.into(),
             installation,
         },
         targets,
+        &decision,
         &stop,
     )?;
     decision.verify_targets(&prepared, &stop)?;
@@ -507,7 +508,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         Ok(report(&decision, &prepared))
     }
@@ -532,7 +533,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         choices.observe_first_publication(&prepared, &candidate, &stop)
@@ -556,7 +557,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
@@ -581,7 +582,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
@@ -606,7 +607,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
@@ -633,7 +634,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
@@ -660,7 +661,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
@@ -688,7 +689,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
@@ -727,7 +728,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
@@ -985,7 +986,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         let actual = choices.observe_first_publication(&prepared, &candidate, &stop)?;
@@ -1023,7 +1024,7 @@ impl Engine {
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
-        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let prepared = PreparedBackupRegistry::capture(task, targets, &choices, &stop)?;
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         choices.observe_first_finalize(&prepared, &candidate, &stop)

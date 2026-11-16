@@ -317,45 +317,59 @@ impl PreparedBackupFirstPublication {
     /// normal Publication may legitimately retire or purge an initial version.
     pub(in crate::engine) fn verify_initial_ordinary_payloads(
         &self,
-        root: &DiskRoot,
-        disk: &DiskConfig,
+        source: &crate::engine::membership_transition::PublishedBackupPayload<'_>,
         first: &PreparedBackupFirstCandidate,
         stop: &AtomicBool,
     ) -> Result<()> {
-        self.require_namespace_candidate(first)?;
+        use crate::engine::fresh_layout::FreshLayoutError as Failure;
+        use crate::persist::layout;
+        use std::os::unix::fs::MetadataExt;
+
+        source.require_publication(first, self)?;
+        source.require(stop)?;
+        let disk = source.disk();
         for evidence in &first.candidate().versions {
             preparation_checkpoint(stop)?;
             if !evidence.placement.route_slot_ids.contains(&disk.slot_id) {
                 continue;
             }
-            if evidence.placement.binding_generations.get(&disk.slot_id)
-                != Some(&disk.binding_generation)
-            {
-                return Err(invalid(
-                    "Backup ordinary proof changed its exact payload binding",
-                ));
-            }
             let version = &evidence.version;
-            let directory = root
-                .path()
-                .join("histories")
-                .join(&version.history_tree_id)
-                .join("versions")
-                .join(&version.version_id);
-            let path =
-                crate::container_storage::content_path_at(root, &directory, version, &mut |_| {
-                    preparation_checkpoint(stop)
-                })?;
-            if path.starts_with(&directory) {
-                return Err(invalid(
-                    "Backup activation requires actual ordinary payloads, not an isolated package fallback",
-                ));
+            let material = crate::container_storage::BackupPayloadVersion::observe(
+                source, version, stop,
+            )?;
+            let root = material.root();
+            let directory = material.directory()?;
+            let descriptor: FileVersion = crate::journal::decode_proof(
+                &root.read_bytes_observed(
+                    &directory.join(layout::VERSION_DESCRIPTOR.as_path()),
+                    crate::disk::MAX_METADATA,
+                    &mut |_| preparation_checkpoint(stop),
+                )?,
+            )?;
+            if descriptor != *version {
+                return Err(Failure::BackupLayoutEvidence.into());
             }
-            let (file, _, manifest) = crate::disk::open_payload_at(root, &directory, version)?;
-            crate::disk::verify_open_payload_observed(file, manifest, version, &mut |_| {
-                preparation_checkpoint(stop)
-            })?
-            .check_running()?;
+            let manifest = crate::disk::read_checksum_manifest_at(
+                root, &directory, version, &mut |_| preparation_checkpoint(stop),
+            )?;
+            let path = material.body_path()?;
+            let body = material.container().open_read_regular(&path)?;
+            let metadata = body.metadata()?;
+            if metadata.nlink() != 1 {
+                return Err(Failure::BackupLayoutEvidence.into());
+            }
+            let stamp = crate::file_stamp::FileStamp::from_metadata(&metadata);
+            let body = crate::disk::verify_open_payload_observed(
+                body, manifest, version, &mut |_| preparation_checkpoint(stop),
+            )?;
+            if crate::file_stamp::FileStamp::from_metadata(&body.metadata()?) != stamp
+                || crate::file_stamp::FileStamp::from_metadata(
+                    &material.container().open_read_regular(&path)?.metadata()?,
+                ) != stamp
+            {
+                return Err(Failure::BackupLayoutEvidence.into());
+            }
+            body.check_running()?;
             let local = crate::journal::local_proof_directory_at(root, &directory, first.hash())?;
             let proof = CommitProof {
                 candidate_hash: first.hash().into(),
@@ -371,17 +385,20 @@ impl PreparedBackupFirstPublication {
                 commit_proof: &proof,
                 publication_receipts: &self.seal.receipts,
             };
-            if root.read_bytes(&local.join("commit-proof.json"), MAX_METADATA)?
-                != encode_metadata(&proof, MAX_METADATA)?
-                || root.read_bytes(&local.join("publication-proof.json"), MAX_METADATA)?
-                    != encode_metadata(&publication, MAX_METADATA)?
+            if root.read_bytes_observed(
+                &local.join(layout::VERSION_COMMIT_PROOF.as_path()), MAX_METADATA,
+                &mut |_| preparation_checkpoint(stop),
+            )? != encode_metadata(&proof, MAX_METADATA)?
+                || root.read_bytes_observed(
+                    &local.join(layout::VERSION_PUBLICATION_PROOF.as_path()), MAX_METADATA,
+                    &mut |_| preparation_checkpoint(stop),
+                )? != encode_metadata(&publication, MAX_METADATA)?
             {
-                return Err(invalid(
-                    "Backup ordinary root lost its exact original payload Publication proof",
-                ));
+                return Err(Failure::BackupLayoutEvidence.into());
             }
+            material.verify(stop)?;
         }
-        Ok(())
+        source.require(stop)
     }
 
     pub(in crate::engine) fn report(&self) -> &BackupFirstPublicationReport {

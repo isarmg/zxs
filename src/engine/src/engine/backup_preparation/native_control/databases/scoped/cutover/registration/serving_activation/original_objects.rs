@@ -1,7 +1,8 @@
 //! Per-original object stores, inside the single final native switch. A local
 //! completion is only an exact comparison target, never permission to repair.
 use super::*;
-use crate::{container_storage::backup_original_objects, database_install::InstallAdmission};
+use crate::{container_storage::BackupOriginalImage, database_install::InstallAdmission};
+use crate::engine::membership_transition::PublishedBackupOriginal;
 
 const COMPLETE: &str = "backup-serving-original-objects.json";
 const MAX_COMPLETE: usize = 4 * 1024 * 1024;
@@ -14,15 +15,17 @@ pub(super) struct Recipe {
     recipe_hash: String,
 }
 
-pub(super) struct Objects {
+pub(super) struct Objects<'a> {
+    publication: &'a PreparedBackupFirstPublication,
     source: crate::history_package::AdmittedState,
     pub(super) recipes: Vec<Recipe>,
 }
 
-impl Objects {
+impl<'a> Objects<'a> {
     pub(super) fn capture(
         prepared: &PreparedBackupRegistry,
         registry: &published_registry::Plan,
+        publication: &'a PreparedBackupFirstPublication,
         sources: &common_databases::Sources,
         stop: &AtomicBool,
     ) -> Result<Self> {
@@ -42,16 +45,14 @@ impl Objects {
         sources.for_each_disk(
             stop,
             |root, identity| {
-                let published = registry
-                    .candidate()
-                    .read_state_at(&root.private_child(&root.path().join("metadata"))?, stop)?;
-                let plan = backup_original_objects::Plan::capture(
-                    root,
-                    &identity.slot_id,
-                    &source,
-                    &published,
-                    stop,
+                let metadata = root.private_child(&root.path().join(
+                    crate::persist::layout::BACKUP_NATIVE_METADATA.as_path(),
+                ))?;
+                let published = registry.candidate().read_state_at(&metadata, stop)?;
+                let scope = PublishedBackupOriginal::observe(
+                    root, identity, registry.candidate(), publication, &source, &published, stop,
                 )?;
+                let plan = BackupOriginalImage::capture(&scope, stop)?;
                 recipes.push(Recipe {
                     identity: identity.clone(),
                     root: PhysicalBinding::of(root)?,
@@ -61,16 +62,17 @@ impl Objects {
             },
             &prepared.task.selection().first().pool_id,
         )?;
-        Ok(Self { source, recipes })
+        Ok(Self { publication, source, recipes })
     }
 
-    fn plan(
+    fn with_plan<T>(
         &self,
         registry: &published_registry::Plan,
         root: &DiskRoot,
         identity: &DiskRegistrationIdentity,
         stop: &AtomicBool,
-    ) -> Result<backup_original_objects::Plan> {
+        action: impl FnOnce(BackupOriginalImage<'_>) -> Result<T>,
+    ) -> Result<T> {
         let expected = self
             .recipes
             .iter()
@@ -83,22 +85,20 @@ impl Objects {
                 "original Backup object store changed its actual held root",
             ));
         }
-        let published = registry
-            .candidate()
-            .read_state_at(&root.private_child(&root.path().join("metadata"))?, stop)?;
-        let plan = backup_original_objects::Plan::capture(
-            root,
-            &identity.slot_id,
-            &self.source,
-            &published,
-            stop,
+        let metadata = root.private_child(&root.path().join(
+            crate::persist::layout::BACKUP_NATIVE_METADATA.as_path(),
+        ))?;
+        let published = registry.candidate().read_state_at(&metadata, stop)?;
+        let scope = PublishedBackupOriginal::observe(
+            root, identity, registry.candidate(), self.publication, &self.source, &published, stop,
         )?;
+        let plan = BackupOriginalImage::capture(&scope, stop)?;
         if plan.recipe_hash() != expected.recipe_hash {
             return Err(invalid(
                 "original Backup object recipe changed after common selection",
             ));
         }
-        Ok(plan)
+        action(plan)
     }
 
     pub(super) fn require_capacity(
@@ -112,10 +112,11 @@ impl Objects {
         sources.for_each_disk(
             stop,
             |root, identity| {
-                let plan = self.plan(registry, root, identity, stop)?;
-                // This always follows the actual native first Publication. Its
-                // retained recovery budget must not be counted as a new operation.
-                plan.require_capacity(InstallAdmission::DecidedRecovery, reserve, stop)
+                // This follows the actual native first Publication. The
+                // retained recovery budget is not a fresh operation budget.
+                self.with_plan(registry, root, identity, stop, |plan| {
+                    plan.require_capacity(InstallAdmission::DecidedRecovery, reserve, stop)
+                })
             },
             pool,
         )
@@ -132,25 +133,32 @@ impl Objects {
         let mut completed = Vec::with_capacity(self.recipes.len());
         sources.for_each_disk(stop, |root, identity| {
             require_bytes(root, SELECTED, common, MAX_PLAN)?;
-            let plan = self.plan(registry, root, identity, stop)?;
-            let record = root.open_optional_read_regular(&root.path().join(COMPLETE))?;
-            let actual = match record {
-                Some(record) => {
-                    let saved = read_file_bytes(record, MAX_COMPLETE)?;
-                    let actual = plan.verify(stop)?;
-                    if saved != actual.bytes() {
-                        return Err(invalid("completed original Backup objects lost their exact inodes or bytes; no repair"));
+            let actual = self.with_plan(registry, root, identity, stop, |plan| {
+                let record = root.open_optional_read_regular(&root.path().join(COMPLETE))?;
+                match record {
+                    Some(record) => {
+                        let saved = read_file_bytes(record, MAX_COMPLETE)?;
+                        let actual = plan.verify(stop)?;
+                        if saved != actual.bytes() {
+                            return Err(invalid(
+                                "completed original Backup objects changed bytes or inodes",
+                            ));
+                        }
+                        Ok(actual)
                     }
-                    actual
+                    None => {
+                        let actual = plan.apply_preserving(stop)?;
+                        install_preparation_bytes(
+                            root, &root.path().join(COMPLETE), actual.bytes(),
+                        )?;
+                        let check = self.with_plan(registry, root, identity, stop, |plan| {
+                            plan.verify(stop)
+                        })?;
+                        require_bytes(root, COMPLETE, check.bytes(), MAX_COMPLETE)?;
+                        Ok(check)
+                    }
                 }
-                None => {
-                    let actual = plan.apply_preserving(stop)?;
-                    install_preparation_bytes(root, &root.path().join(COMPLETE), actual.bytes())?;
-                    let check = self.plan(registry, root, identity, stop)?.verify(stop)?;
-                    require_bytes(root, COMPLETE, check.bytes(), MAX_COMPLETE)?;
-                    check
-                }
-            };
+            })?;
             completed.push(blake3::hash(actual.bytes()).to_hex().to_string());
             Ok(())
         }, pool)?;
@@ -161,6 +169,7 @@ impl Objects {
 pub(super) fn verify_recovered(
     roots: &[(DiskConfig, DiskRoot)],
     first: &crate::engine::membership_transition::PreparedBackupFirstCandidate,
+    publication: &PreparedBackupFirstPublication,
     source: &crate::history_package::AdmittedState,
     recipes: &[Recipe],
     stop: &AtomicBool,
@@ -189,10 +198,14 @@ pub(super) fn verify_recovered(
                 "Backup resume object recipe changes its native original root",
             ));
         }
-        let published =
-            first.read_state_at(&root.private_child(&root.path().join("metadata"))?, stop)?;
-        let plan =
-            backup_original_objects::Plan::capture(root, &disk.slot_id, source, &published, stop)?;
+        let metadata = root.private_child(&root.path().join(
+            crate::persist::layout::BACKUP_NATIVE_METADATA.as_path(),
+        ))?;
+        let published = first.read_state_at(&metadata, stop)?;
+        let scope = PublishedBackupOriginal::observe(
+            root, &recipe.identity, first, publication, source, &published, stop,
+        )?;
+        let plan = BackupOriginalImage::capture(&scope, stop)?;
         if plan.recipe_hash() != recipe.recipe_hash {
             return Err(invalid(
                 "Backup resume original object recipe changed after its selection",

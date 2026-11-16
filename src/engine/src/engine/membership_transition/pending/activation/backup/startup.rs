@@ -221,7 +221,7 @@ pub(in crate::engine) struct PreparedBackupBootstrap<'a> {
 }
 impl<'a> PreparedBackupBootstrap<'a> {
     pub(in crate::engine) fn select(
-        engine: &'a Engine,
+        engine: &'a mut Engine,
         admitted: &BackupWriterIoConfig,
         first: &'a PreparedBackupFirstCandidate,
         publication: &'a PreparedBackupFirstPublication,
@@ -346,6 +346,10 @@ impl<'a> PreparedBackupBootstrap<'a> {
         for (disk, root) in &roots {
             native::require_selector(&plan, root, disk, config, completed)?;
         }
+        // The complete exact root-extension plan is durable, while no common
+        // selector or bootstrap completion has been installed by this stage.
+        #[cfg(feature = "fault-injection")]
+        engine.failpoint("after_backup_bootstrap_selected")?;
         Ok(Self {
             engine,
             first,
