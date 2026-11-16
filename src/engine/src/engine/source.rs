@@ -137,6 +137,19 @@ impl From<DiskFile> for ReadFile {
 }
 
 impl ReadFile {
+    /// Clone only into private scratch. The admitted disk keeps its I/O lease
+    /// and the caller remains responsible for synchronization and publication.
+    pub fn try_clone_working_file(&self, target: &File, bytes: u64) -> io::Result<bool> {
+        match &self.0 {
+            ReadFileSource::Local(file) => {
+                platform_io::fs_safety::linux::try_clone_working_file(file, target, bytes)
+            }
+            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. } => {
+                file.try_clone_working_file(target, bytes)
+            }
+        }
+    }
+
     /// Keep the admitted source chain alive as long as its returned BODY FD.
     pub(crate) fn in_container(
         file: DiskFile,

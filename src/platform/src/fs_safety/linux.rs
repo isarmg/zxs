@@ -40,6 +40,50 @@ pub enum MountPolicy {
     AllowNestedMounts,
 }
 
+/// Try a same-filesystem copy-on-write clone into an empty private work file.
+/// This is not an independent copy and must not be used as protection evidence.
+/// An unsupported filesystem leaves the caller free to stream the full source.
+pub fn try_clone_working_file(source: &File, target: &File, bytes: u64) -> io::Result<bool> {
+    let input = source.metadata()?;
+    let output = target.metadata()?;
+    if !input.is_file() || input.len() != bytes
+        || !output.is_file() || output.nlink() != 1 || output.len() != 0
+        || FileIdentity::from_metadata(&input) == FileIdentity::from_metadata(&output)
+    {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid private working clone"));
+    }
+    // Reflink is optional for streamable anonymous or multiply-linked
+    // sources. Do not strengthen the old streaming source contract.
+    if input.nlink() != 1 || input.dev() != output.dev() {
+        return Ok(false);
+    }
+    match rustix::fs::ioctl_ficlone(target, source) {
+        Ok(()) => {
+            let current = source.metadata()?;
+            let cloned = target.metadata()?;
+            if current.len() != bytes || current.nlink() != 1
+                || current.ctime() != input.ctime() || current.ctime_nsec() != input.ctime_nsec()
+                || current.mtime() != input.mtime() || current.mtime_nsec() != input.mtime_nsec()
+                || cloned.len() != bytes || cloned.nlink() != 1
+            {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "working clone changed"));
+            }
+            Ok(true)
+        }
+        Err(rustix::io::Errno::OPNOTSUPP | rustix::io::Errno::NOTTY
+            | rustix::io::Errno::XDEV | rustix::io::Errno::INVAL) => {
+            // Both endpoints were already checked as distinct regular files
+            // and the target is empty. Some filesystem extent layouts still
+            // cannot be shared and may report EINVAL instead of EOPNOTSUPP.
+            if target.metadata()?.len() != 0 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "failed working clone changed its target"));
+            }
+            Ok(false)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Open a private regular child on its held parent's mount, refusing all links.
 /// The returned descriptor owns the bytes to read and synchronize; this does not
 /// reopen the directory's diagnostic path or recheck the leaf by name.

@@ -1,5 +1,44 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn private_working_clone_never_overwrites_or_changes_the_source() {
+    use std::{io::Write, os::unix::fs::FileExt};
+
+    let mut source_name = tempfile::NamedTempFile::new().unwrap();
+    let source = source_name.as_file_mut();
+    source.write_all(b"original immutable bytes").unwrap();
+    let size = source.metadata().unwrap().len();
+    let mut target_name = tempfile::NamedTempFile::new().unwrap();
+    let target = target_name.as_file_mut();
+
+    let invalid = linux::try_clone_working_file(source, source, size).unwrap_err();
+    assert_eq!(invalid.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(linux::try_clone_working_file(source, target, size + 1).unwrap_err().kind(),
+        io::ErrorKind::InvalidInput);
+    assert_eq!(target.metadata().unwrap().len(), 0);
+
+    // Exercise the actual kernel operation where it is available, otherwise
+    // verify the streaming caller still owns a fresh empty destination.
+    if linux::try_clone_working_file(source, target, size).unwrap() {
+        assert_eq!(target.metadata().unwrap().len(), size);
+        let mut cloned = [0; 24];
+        let count = target.read_at(&mut cloned, 0).unwrap();
+        assert_eq!(&cloned[..count], b"original immutable bytes");
+        target.write_at(b"EDIT", 5).unwrap();
+        let mut original = [0; 24];
+        let count = source.read_at(&mut original, 0).unwrap();
+        assert_eq!(&original[..count], b"original immutable bytes");
+    } else {
+        assert_eq!(target.metadata().unwrap().len(), 0);
+        target.write_all(b"sentinel").unwrap();
+    }
+    let length = target.metadata().unwrap().len();
+    let invalid = linux::try_clone_working_file(source, target, size).unwrap_err();
+    assert_eq!(invalid.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(target.metadata().unwrap().len(), length);
+}
+
 #[test]
 fn admitted_relative_paths_split_into_typed_parents_and_entries() {
     for (input, parent, name) in [

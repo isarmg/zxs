@@ -1098,6 +1098,15 @@ impl<T: Send + 'static> DiskIoResource<T> {
 }
 
 impl DiskIoResource<File> {
+    pub(crate) fn try_clone_working_file(&self, target: &File, bytes: u64) -> io::Result<bool> {
+        let mut access = self.access()?;
+        let cloned = platform_io::fs_safety::linux::try_clone_working_file(
+            &access.value().resource, target, bytes,
+        )?;
+        self.check_io()?;
+        Ok(cloned)
+    }
+
     /// Never expose the inner File: verification holds its real resource guard
     /// through identity, reads and cleanup, with cancellation between chunks.
     pub(crate) fn verify_full(

@@ -246,19 +246,27 @@ impl Session {
                 )?);
                 let reservation = pending_reservation.as_mut().unwrap();
                 if let Some(mut content) = content {
-                    let mut copied = 0u64;
-                    let mut buffer = [0u8; 65536];
-                    loop {
-                        let length = content.file.read(&mut buffer).map_err(ApiError::io)?;
-                        if length == 0 {
-                            break;
+                    directory.verify_payload(&name, &file).map_err(crate::upload_fs_error)?;
+                    // The reservation is still charged for the logical size;
+                    // a mutable clone may later allocate every data extent.
+                    let cloned = content.file.try_clone_working_file(&file, content.size)
+                        .map_err(ApiError::io)?;
+                    if !cloned {
+                        let mut copied = 0u64;
+                        let mut buffer = [0u8; 65536];
+                        loop {
+                            let length = content.file.read(&mut buffer).map_err(ApiError::io)?;
+                            if length == 0 {
+                                break;
+                            }
+                            copied = copied
+                                .checked_add(length as u64)
+                                .ok_or_else(|| ApiError::limit("SMB byte count overflow"))?;
+                            reservation.before_write(copied, length as u64)?;
+                            file.write_all(&buffer[..length]).map_err(ApiError::io)?;
                         }
-                        copied = copied
-                            .checked_add(length as u64)
-                            .ok_or_else(|| ApiError::limit("SMB byte count overflow"))?;
-                        reservation.before_write(copied, length as u64)?;
-                        file.write_all(&buffer[..length]).map_err(ApiError::io)?;
                     }
+                    directory.verify_payload(&name, &file).map_err(crate::upload_fs_error)?;
                 }
                 let size = file.metadata().map_err(ApiError::io)?.len();
                 if size > self.max_file_bytes {

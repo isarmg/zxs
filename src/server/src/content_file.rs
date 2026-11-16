@@ -36,6 +36,16 @@ impl From<storage_engine::DiskFile> for ContentFile {
 }
 
 impl ContentFile {
+    pub(crate) fn try_clone_working_file(&self, target: &File, bytes: u64) -> io::Result<bool> {
+        match &self.0 {
+            Source::Local(file) => {
+                platform_io::fs_safety::linux::try_clone_working_file(file, target, bytes)
+            }
+            #[cfg(feature = "core")]
+            Source::Engine(file) => file.try_clone_working_file(target, bytes),
+        }
+    }
+
     /// Checks cancellation without touching the managed disk. This also applies
     /// to cached SMB chunks, which must not revive a fully cancelled handle.
     pub(crate) fn check_running(&self) -> io::Result<()> {
