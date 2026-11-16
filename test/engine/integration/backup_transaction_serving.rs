@@ -548,6 +548,12 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
     );
     assert_eq!(body(&engine, &old.version_id), b"retained first body");
     assert_eq!(body(&engine, &after.version_id), b"ordinary successor body");
+    {
+        // The separately prepared range path must consume the same admitted
+        // writer continuation, not quietly fall back to the first-slot proof.
+        let ranged = engine.prepare_content(&after.version_id).unwrap().open().unwrap();
+        assert_eq!(ranged.size, b"ordinary successor body".len() as u64);
+    }
     diagnostic(started, "main: save successor after cold replay");
     save(
         &mut engine,

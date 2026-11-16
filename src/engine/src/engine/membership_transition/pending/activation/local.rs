@@ -96,6 +96,15 @@ pub(crate) fn verify_local_membership(
             };
             match candidate.generation() {
                 Some(hash) if hash == authority_hash => {
+                    if portable.is_backup() && let Some(metadata) = metadata {
+                        // Portable Backup authority alone admits only the first
+                        // slot. The same admitted generation may verify a later
+                        // slot only through its installed writer continuation.
+                        // The local portable bytes, seal and dependency were
+                        // verified above; never grant this to standalone roots.
+                        metadata.generation_candidate(authority_hash, candidate)?;
+                        return Ok(effective);
+                    }
                     portable.verify_candidate(candidate)?;
                 }
                 _ => {
