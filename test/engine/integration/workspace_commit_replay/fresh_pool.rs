@@ -500,18 +500,21 @@ fn fresh_container_preparation_survives_exact_decision_cuts_without_adopting_nam
         let before = storage_engine::canonical_json(engine.state()).unwrap();
         engine.inject_fault_once(point);
         let error = engine.commit_workspace(request.clone()).unwrap_err();
-        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
-        let mut exact_fault = false;
-        while let Some(current) = source {
-            if let Some(injected) = current.downcast_ref::<storage_engine::Error>() {
-                if injected.code() == ErrorCode::InjectedFailure {
-                    exact_fault = injected.message().as_ref() == format!("interrupted at {point}").as_str();
-                    break;
-                }
-            }
-            source = current.source();
-        }
-        assert!(exact_fault, "missing actual injected cause at {point}: {error}");
+        let injected = if point == "after_payloads" {
+            assert_eq!(error.code(), ErrorCode::InjectedFailure, "{point}: {error}");
+            &error
+        } else {
+            assert_eq!(error.code(), ErrorCode::InDoubt, "{point}: {error}");
+            let storage_engine::Error::Context { source, .. } = &error else {
+                panic!("missing decided error context at {point}: {error}");
+            };
+            source.as_ref()
+        };
+        assert_eq!(injected.code(), ErrorCode::InjectedFailure, "{point}: {error}");
+        assert_eq!(
+            injected.message().as_ref(), format!("interrupted at {point}").as_str(),
+            "wrong injected cause at {point}: {error}",
+        );
         assert_eq!(storage_engine::canonical_json(engine.state()).unwrap(), before);
         let named = disk.join("common-data/ordinary.txt");
         let pending_stage = if matches!(

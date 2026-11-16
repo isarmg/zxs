@@ -62,6 +62,23 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         out
     }
 
+    fn file_material(
+        bytes: &[u8],
+        scope: &crate::container_storage::ObjectDatabaseScope,
+    ) -> crate::container_storage::ObjectDatabaseMaterial {
+        // Inspect a detached copy of these exact captured bytes, not an active
+        // container while the Engine retains its writer lease.
+        let detached = tempfile::tempdir().unwrap();
+        let path = detached.path().join(crate::container_storage::file_database::NAME);
+        fs::write(&path, bytes).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        crate::container_storage::inspect_object_database_material(
+            fs::File::open(detached.path()).unwrap(),
+            detached.path().to_path_buf(),
+            scope,
+        ).unwrap()
+    }
+
     fn original_request(engine: &Engine, repository: &crate::Repository) -> InitializeSnapshot {
         let root = engine.namespace_host_root(
             repository.repository_id.parse().unwrap(),
@@ -157,16 +174,38 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     }
     let first_material = inventory(&disks[0].join("common-data"));
     assert!(!first_material.is_empty());
+    let container = engine.state().file_containers
+        .get(&entry.file_id.parse::<FileId>().unwrap()).unwrap();
+    let database = PathBuf::from(container.namespace.name.as_str())
+        .join(crate::container_storage::file_database::NAME);
+    let file_scope = crate::container_storage::ObjectDatabaseScope::File {
+        file_id: entry.file_id.clone(),
+        history_tree_id: container.history_tree_id.to_string(),
+    };
+    let before_file = file_material(first_material[&database].as_ref().unwrap(), &file_scope);
     drop(engine);
 
     engine = Engine::open(&system).unwrap();
     assert!(!engine.is_read_only());
+    // Cold repair may rematerialize FILE at the final admitted SYSTEM sequence.
+    // It must not change its scope or any record, nor any other source bytes.
+    let cold_material = inventory(&disks[0].join("common-data"));
+    let cold_file = file_material(cold_material[&database].as_ref().unwrap(), &file_scope);
+    assert_eq!(cold_file.scope(), before_file.scope());
+    assert_eq!(cold_file.records_hash(), before_file.records_hash());
+    assert_eq!(cold_file.records(), before_file.records());
+    assert!(before_file.source_sequence() <= cold_file.source_sequence());
+    assert_eq!(cold_file.source_sequence(), engine.state().sequence);
+    assert_eq!(cold_file.source_sequence(), complete.sequence);
+    let mut expected_material = first_material;
+    *expected_material.get_mut(&database).unwrap() = cold_material[&database].clone();
+    assert_eq!(cold_material, expected_material);
     let before = Arc::clone(&engine.state);
     assert_eq!(initialize_root(&mut engine, &request, &principal()).unwrap(), handle);
     assert!(Arc::ptr_eq(&before, &engine.state));
     assert_eq!(engine.operation(request.operation_id).unwrap(), reserve);
     assert_eq!(engine.operation(handle.publication).unwrap(), complete);
-    assert_eq!(inventory(&disks[0].join("common-data")), first_material);
+    assert_eq!(inventory(&disks[0].join("common-data")), cold_material);
 
     // Extend the same genuine flow: reserve an independent named instance,
     // create its sparse directory and ledger, then independently complete it.

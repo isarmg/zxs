@@ -148,7 +148,19 @@ async fn fresh_authenticated_draft_and_worktree_survive_cold_exact_retries() {
     let committed_history = fixture.history(&file).await;
     let node = current_node(&committed_history);
     assert_eq!(node["version_id"], selected["version_id"]);
-    assert_eq!(node["parent_node_ids"], json!([original_node["node_id"]]));
+    assert_eq!(node["parents"], json!({"state": "complete"}));
+    let parents = committed_history["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|edge| edge["node_id"] == node["node_id"])
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(parents, vec![json!({
+        "node_id": node["node_id"],
+        "parent_node_id": original_node["node_id"],
+        "endpoint": "in_window",
+    })]);
     let mut retained_node = original_node.clone();
     retained_node["current"] = json!(false);
     assert!(committed_history["nodes"].as_array().unwrap().contains(&retained_node));

@@ -1,4 +1,8 @@
 //! A workspace acts on the stable entries it opened, not later namesakes.
+#[path = "../support/configured_disks.rs"]
+mod configured_disks;
+use configured_disks::disks as test_disks;
+
 use storage_engine::{CommitRequest, Config, Engine, NamespaceOperation};
 
 #[test]
@@ -6,11 +10,11 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
     for kind in ["delete", "delete_tree", "rename"] {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("system");
-        let config = Config::development([
+        let config = Config::development(test_disks([
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ])
+        ]))
         .unwrap();
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
@@ -102,11 +106,11 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("system"),
-        Config::development([
+        Config::development(test_disks([
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ])
+        ]))
         .unwrap(),
     )
     .unwrap();
@@ -185,11 +189,11 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
     let root = temporary.path().join("system");
     let mut engine = Engine::initialize(
         &root,
-        Config::development([
+        Config::development(test_disks([
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ])
+        ]))
         .unwrap(),
     )
     .unwrap();
