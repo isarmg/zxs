@@ -54,6 +54,22 @@ pub(crate) fn plan_change(
     Ok(change.into_next())
 }
 
+/// Explicit commit compares only the immutable, already admitted draft and
+/// its exact base. No history scan and no version allocation are needed.
+pub(crate) fn draft_matches_base(previous: &State, request: &DraftCommand) -> Result<bool> {
+    let DraftCommand::Commit { target, base, .. } = request else {
+        return Err(invalid());
+    };
+    let working = &previous.file_containers.get(&target.file).ok_or_else(invalid)?.working;
+    let (draft_base, payload) = working.draft().ok_or(Error::FileDraft(Failure::DraftRequired))?;
+    if draft_base != base {
+        return Err(Error::FileDraft(Failure::BaseChanged));
+    }
+    let version = previous.versions.get(&base.version_id().to_string()).ok_or_else(invalid)?;
+    Ok(version.logical_size == payload.logical_size()
+        && version.content_hash == payload.content_hash())
+}
+
 pub(crate) fn apply(next: &mut State, file: FileId, working: FileWorkingState) -> Result<()> {
     next.file_containers.get_mut(&file).ok_or_else(invalid)?.working = working;
     Ok(())
@@ -129,6 +145,11 @@ pub(crate) fn verify_working_transition(
                 previous, &mut expected, target, &selection, *payload, content, message,
                 principal, result.operation_id,
             )?;
+        }
+        (DraftCommand::Commit { .. }, None) => {
+            if !draft_matches_base(previous, &outcome.request)? {
+                return Err(invalid());
+            }
         }
         (DraftCommand::SetMode { .. } | DraftCommand::Write { .. }
         | DraftCommand::Discard { .. }, None) => {}

@@ -169,26 +169,28 @@ impl ManualWriter {
         let source = UploadSource::from_file(
             self.file.try_clone().map_err(ApiError::io)?, maximum,
         )?;
-        if !self.dirty {
-            if source.hash == self.confirmed_hash && source.size == self.confirmed_size {
+        if matches!(self.publication, Publication::Published { .. }) {
+            // This is custody of an already-published operation, not comparison
+            // against a historical version. A lost Dirty RPC must not discard
+            // later descriptor bytes on a repeat Flush or terminal Close.
+            if !self.dirty && source.hash == self.confirmed_hash && source.size == self.confirmed_size {
                 return Ok(json!({"saved":true,"changed":false}));
             }
-            // A writable FD can change before (or without) a Dirty RPC. Never
-            // acknowledge or clean up bytes merely because that RPC was lost.
             self.dirty = true;
             self.record(&identity.principal, false)?;
-        }
-        if matches!(self.publication, Publication::Published { .. }) {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::FileBranchConflict,
                 "saved draft differs from later FD bytes; authorize a new dirty generation",
             ));
         }
+        // The writable descriptor may have changed without a Dirty notice.
+        // Persist its first save as a draft without looking at the initial bytes.
         if let Publication::Open { operation_id } = self.publication {
             // Retain the original revision, selection and full byte commitment
             // before invoking any durable writer. No later retry re-hashes it
             // into a different request under this operation id.
             self.next_revision()?;
+            self.dirty = true;
             self.publication = Publication::Pending {
                 request: ChangeFileWorking {
                     operation_id,

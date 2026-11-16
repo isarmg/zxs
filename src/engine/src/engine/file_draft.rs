@@ -172,14 +172,20 @@ impl Engine {
                 require_initial(&context, command.target())?;
                 let working = business::plan_change(engine.state(), command, None)?;
                 let content = match command {
-                    DraftCommand::Commit { .. } => Some(business::build_content(
-                        &context, next, prepared, command, principal.as_str(), operation,
-                    )?),
+                    DraftCommand::Commit { .. } => {
+                        if business::draft_matches_base(engine.state(), command)? {
+                            None
+                        } else {
+                            Some(business::build_content(
+                                &context, next, prepared, command, principal.as_str(), operation,
+                            )?)
+                        }
+                    }
                     DraftCommand::SetMode { .. } | DraftCommand::Discard { .. } => None,
                     DraftCommand::Write { .. } => return Err(business::invalid()),
                 };
-                // The actual content constructor succeeded before dirty state
-                // is cleared. Failure above leaves the published draft intact.
+                // Clear the draft only after the equal-base check or the content
+                // constructor succeeds. Errors leave the published draft intact.
                 business::apply(next, command.target().file, working.clone())?;
                 codec::encode(Outcome { request: command.clone(), working, content })
             },

@@ -10,7 +10,9 @@ pub(crate) use content::{PublishedContent, build as build_content, trace_limit};
 mod selection;
 pub(crate) use selection::{resolve, validate as validate_working_record};
 mod publication;
-pub(crate) use publication::{Outcome, apply, plan_change, verify_working_transition};
+pub(crate) use publication::{
+    Outcome, apply, draft_matches_base, plan_change, verify_working_transition,
+};
 use storage_contract::file_draft::{
     CommitMode, DraftBase, DraftPayload, FileWorkingState, WorkingRevision,
 };

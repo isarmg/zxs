@@ -337,4 +337,48 @@ fn public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_c
     assert_eq!(engine.file_history(&entry.file_id).unwrap().len(), 2);
     assert_eq!(version_bytes(&engine, &entry.version_id), original);
     assert_eq!(version_bytes(&engine, &version), final_bytes);
+
+    let mut fixture = Fixture::resume(root, engine);
+    let client = fixture.connect();
+    let (writer, fd) = open(&client, "p/manual.txt", true, false, false);
+    // A writable Flush accepts the complete draft without asking whether it
+    // equals the published base. A repeated Flush is the same saved operation.
+    let flushed = client.call(Request::Flush { handle: writer.handle }).unwrap();
+    assert_eq!(flushed["operation_kind"], "file.draft.write");
+    let equal = fixture.backend.file_working(&fixture.identity(), target.clone()).unwrap();
+    assert!(equal.working.draft().is_some());
+    assert_eq!(equal.base.version_id().to_string(), version);
+    let repeat = client.call(Request::Flush { handle: writer.handle }).unwrap();
+    assert_eq!(repeat["changed"], false);
+    assert_eq!(
+        fixture.backend.file_working(&fixture.identity(), target.clone()).unwrap().working,
+        equal.working,
+    );
+    close(&client, writer.handle);
+    drop(fd);
+    drop(client);
+    let (root, engine) = fixture.cold_open();
+    assert_eq!(engine.file_history(&entry.file_id).unwrap().len(), 2);
+    let web = Management::open(root, engine, &credentials);
+    let draft = web.json("GET", &read_working, None);
+    let submit_equal = json!({
+        "operation_id": OperationId::generate().unwrap(),
+        "command": { "action": "commit", "target": target,
+            "expected": draft["working"]["revision"], "base": draft["base"],
+            "message": "explicit commit of unchanged draft" },
+    });
+    let unchanged = web.json("POST", &working_route, Some(submit_equal.clone()));
+    assert_eq!(unchanged["operation_kind"], "file.draft.commit");
+    assert_eq!(unchanged["commit_state"], "PUBLISHED");
+    assert!(unchanged["result"]["content"].is_null());
+    assert_eq!(unchanged["result"]["version_protection"], json!([]));
+    let after = web.json("GET", &read_working, None);
+    assert_eq!(after["working"]["state"], "manual_clean");
+    assert_eq!(after["base"], draft["base"]);
+    let (root, engine) = web.cold_open();
+    assert_eq!(engine.file_history(&entry.file_id).unwrap().len(), 2);
+    assert_eq!(version_bytes(&engine, &version), final_bytes);
+    let web = Management::open(root, engine, &credentials);
+    assert_eq!(web.json("POST", &working_route, Some(submit_equal)), unchanged);
+    assert_eq!(web.json("GET", &read_working, None), after);
 }

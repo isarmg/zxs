@@ -143,11 +143,11 @@ pub(crate) fn decode(previous: &State, receipt: &OperationResult) -> Result<Deco
     let request: DraftCommand = json_codec::from_value(object["request"].clone()).map_err(codec)?;
     if request.kind() != receipt.kind { return Err(invalid()); }
     let content = &object["content"];
-    let commits = matches!(&request, DraftCommand::Commit { .. });
-    if commits == content.is_null() { return Err(invalid()); }
+    let has_content = !content.is_null();
+    if has_content && !matches!(&request, DraftCommand::Commit { .. }) { return Err(invalid()); }
     let protection = object["version_protection"].as_array().ok_or_else(invalid)?;
-    if protection.len() != usize::from(commits) { return Err(invalid()); }
-    if commits {
+    if protection.len() != usize::from(has_content) { return Err(invalid()); }
+    if has_content {
         // This first scope has one source version and exactly one owner slot.
         // Bound every nested list before allocating the typed receipt mirror.
         let version = content.get("version").ok_or_else(invalid)?;
