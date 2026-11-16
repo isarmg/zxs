@@ -10,31 +10,27 @@ mod object_move_tests;
 mod phase1_new_file_tests;
 
 fn empty_fixture(two_primaries: bool) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
-    let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::development(crate::test_disks(
-        [temp.path().join("p"), temp.path().join("b")],
-    )).unwrap();
-    if two_primaries {
-        config.disks[1].level = 1;
-        config.disks[1].slot_id = "P02".into();
-        config.disks[1].upstream_slot_id = None;
-    }
-    let engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
-    fixture_backend(temp, engine)
+    empty_fixture_with_mounts(two_primaries, ["p", "b"])
 }
 
-// These admission regressions address the configured public name "p", not
-// the mount basename. Keep the unrelated fixtures unchanged.
 fn mkdir_admission_fixture(two_primaries: bool) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
+    // The share addresses the configured name, not the mount basename.
+    empty_fixture_with_mounts(two_primaries, ["mounted-primary", "mounted-secondary"])
+}
+
+fn empty_fixture_with_mounts(
+    two_primaries: bool,
+    mounts: [&str; 2],
+) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
     let temp = tempfile::tempdir().unwrap();
     let mut config = Config::development([
         (
             name_policy::Name::parse("p").unwrap(),
-            temp.path().join("mounted-primary"),
+            temp.path().join(mounts[0]),
         ),
         (
             name_policy::Name::parse("b").unwrap(),
-            temp.path().join("mounted-secondary"),
+            temp.path().join(mounts[1]),
         ),
     ])
     .unwrap();
