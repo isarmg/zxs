@@ -1,5 +1,57 @@
 {
   "groups": {
+    "backup-snapshot-scope": {
+      "reason": "Deny whole Backup before task/target writes when the actual permanent snapshot index contains immutable .zxs nodes that its transfer does not yet copy. Distinguish reserved from completed nodes; preserve invalid-registration causes and all original no-snapshot backup gates. Genuine registered BODY, exact snapshot replay and cold negative coverage; no new transfer authority.",
+      "python_tests": [
+        "test_backup_snapshot_scope_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [],
+          "isolate": true,
+          "exact": [
+            "snapshot_worktree::registry::backup::tests::published_snapshot_blocks_whole_backup_before_intent_or_target_writes",
+            "snapshot_worktree::registry::backup::tests::reserved_snapshot_is_pending_not_a_published_snapshot"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [
+            "fault-injection"
+          ],
+          "isolate": true,
+          "exact": [
+            "snapshot_worktree::registry::backup::tests::published_snapshot_blocks_whole_backup_before_intent_or_target_writes",
+            "snapshot_worktree::registry::backup::tests::reserved_snapshot_is_pending_not_a_published_snapshot"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
+    },
     "backup-target-locator-address": {
       "reason": "Keep the sole generated Genesis configuration address inside the sealed terminal locator inventory and its no-adoption/readback boundary. These eight local inventory fixtures are not native authority; the separate unchanged default/FI original 900-second transaction proves the actual producer and cold path.",
       "python_tests": [
@@ -5187,6 +5239,60 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/engine/backup_preparation.rs",
+      "groups": [
+        "backup-snapshot-scope"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/snapshot.rs",
+      "groups": [
+        "backup-snapshot-scope"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree.rs",
+      "groups": [
+        "backup-snapshot-scope"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/source.rs",
+      "groups": [
+        "backup-snapshot-scope"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry.rs",
+      "groups": [
+        "backup-snapshot-scope"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/backup.rs",
+      "groups": [
+        "backup-snapshot-scope"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_snapshot_scope_tests.rs",
+      "groups": [
+        "backup-snapshot-scope"
+      ]
+    },
+    {
+      "path": "test/ci/test_backup_snapshot_scope_ci.py",
+      "groups": [
+        "backup-snapshot-scope"
+      ]
+    },
+    {
+      "path": "docs/validation/backup-snapshot-scope.md",
+      "groups": [
+        "backup-snapshot-scope"
+      ]
+    },
     {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_publication.rs", "groups": ["backup-scoped-encoding-memo", "terminal-backup-source-layout"]},
     {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/configuration.rs", "groups": ["backup-scoped-encoding-memo", "terminal-backup-source-layout"]},
     {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving.rs", "groups": ["terminal-backup-source-layout"]},

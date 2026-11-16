@@ -883,9 +883,11 @@ impl Engine {
                 "backup history closure is empty or exceeds the admitted entry budget",
             ));
         }
-        // Whole-pool history selection keeps every directory repository and its
-        // nested repositories together. There is no per-file target allocator.
-        Ok(())
+        // FILE histories do not include independently published .zxs snapshot
+        // bodies. Their actual permanent index must pass before any task or
+        // target write; neither a directory name nor an allocated node is proof
+        // of a completed snapshot. The target-bound transfer is not implemented.
+        crate::snapshot_worktree::require_backup_snapshot_scope(self.state())
     }
 
     fn backup_history_plans(&self) -> Result<Vec<PreparedHistoryPackage>> {

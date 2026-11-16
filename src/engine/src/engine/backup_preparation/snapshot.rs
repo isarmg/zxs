@@ -201,6 +201,7 @@ impl PreparedSnapshot {
                 "published snapshot differs from the complete current State",
             ));
         }
+        crate::snapshot_worktree::require_backup_snapshot_scope(admitted.state())?;
         Ok(prepared)
     }
 
@@ -282,5 +283,10 @@ pub(super) fn read(root: &DiskRoot, job: &Job, stop: &AtomicBool) -> Result<Admi
     if snapshot.sequence != job.request.expected_sequence {
         return Err(invalid("snapshot sequence differs from its publication"));
     }
-    resolve_admitted_snapshot(snapshot, load)
+    let admitted = resolve_admitted_snapshot(snapshot, load)?;
+    // Preserve the complete publication/object authentication above. A retained
+    // task or an offline completion report cannot turn absent immutable .zxs
+    // payloads into a complete whole-pool copy merely by retaining their receipts.
+    crate::snapshot_worktree::require_backup_snapshot_scope(admitted.state())?;
+    Ok(admitted)
 }
