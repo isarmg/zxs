@@ -10,6 +10,10 @@ use std::{
 
 pub(crate) mod snapshot;
 
+pub(crate) static SYSTEM_CONFIGURATION: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("config.json").expect("invariant: system configuration is one entry")
+});
+
 /// Physical roots of the unified working-tree layout. These names do not by
 /// themselves admit a directory or authorize adoption of existing material.
 pub(crate) static COMMON_DATA_ROOT: LazyLock<EntryName> = LazyLock::new(|| {

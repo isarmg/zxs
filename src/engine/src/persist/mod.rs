@@ -11,3 +11,5 @@ pub(crate) mod namespace_root;
 pub(crate) mod automatic_backup;
 
 pub(crate) mod namespace_directory;
+
+pub(crate) mod initial_storage;

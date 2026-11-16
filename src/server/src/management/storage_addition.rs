@@ -81,6 +81,13 @@ pub(super) fn read_record(
     directory: &PrivateDirectory,
     operation: OperationId,
 ) -> Result<Option<StoredAddition>, ApiError> {
+    Ok(read_record_with_source(directory, operation)?.map(|(record, _)| record))
+}
+
+fn read_record_with_source(
+    directory: &PrivateDirectory,
+    operation: OperationId,
+) -> Result<Option<(StoredAddition, Config)>, ApiError> {
     let Some(record) = read::<StoredAddition>(directory, &name(operation))? else {
         return Ok(None);
     };
@@ -175,7 +182,7 @@ pub(super) fn read_record(
     {
         return Err(corrupt());
     }
-    Ok(Some(record))
+    Ok(Some((record, original)))
 }
 
 fn running_state(continuation: AdditionContinuation) -> AdditionState {
@@ -937,16 +944,21 @@ pub(super) fn configuration_edges(
     root: &Path,
     chain: &mut super::storage_configuration::ConfigurationChain,
 ) -> Result<(), ApiError> {
-    super::storage_configuration::records(&root.join(DIRECTORY), read_record, |record, latest| {
-        let original = record.status.preview.configuration_digest;
-        let target = configuration_digest(&record.target);
-        if latest {
-            chain.tip(original.clone());
-            chain.tip(target.clone());
-        }
-        chain.edge(original, target);
-        Ok(())
-    })
+    super::storage_configuration::records(
+        &root.join(DIRECTORY),
+        read_record_with_source,
+        |(record, source), latest| {
+            chain.observe_initialization_source(&source);
+            let original = record.status.preview.configuration_digest;
+            let target = configuration_digest(&record.target);
+            if latest {
+                chain.tip(original.clone());
+                chain.tip(target.clone());
+            }
+            chain.edge(original, target);
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]

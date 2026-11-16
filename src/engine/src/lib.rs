@@ -153,7 +153,8 @@ pub use engine::{
     VersionImpactScan,
 };
 pub use engine::{
-    DirectoryHistoryRead, InitialActivationProbeGuard, PreparedWorkspaceCommit,
+    DirectoryHistoryRead, InitialActivationProbeGuard, InitialSealDigest, InitialStorageDisk,
+    InitialStorageObservation, PreparedWorkspaceCommit,
     WorkspaceCommitPreparation,
 };
 mod history_package;

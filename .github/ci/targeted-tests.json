@@ -4892,6 +4892,97 @@
           "features": []
         }
       ]
+    },
+    "initial-storage-result-admission": {
+      "reason": "Authenticate the actual initializer result against the immutable request, retained five-area entities, all original seals and fixed Genesis before cold completion. Preserve the original activation intent/Ready/Complete wire and current session revalidation. Exercise genuine cookie/CSRF blank-pool activation, lost last receipt/cold completion, exact controls, foreign five-area/Genesis refusal, successor Exit refusal, and held Initial probe handoff. No migration, new pool format, physical browser deployment or blanket startup zero-write claim.",
+      "python_tests": [
+        "test_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "timeout_seconds": 900,
+          "exact": [
+            "setup_recovery::activation::tests::first_pair_genesis_retains_fixed_quorum_and_reopens",
+            "setup_recovery::activation::tests::complete_genesis_without_ready_receipt_is_checked_and_completed_not_reinitialized",
+            "setup_recovery::activation::tests::initial_probe_guard_survives_until_real_held_resources_and_writer_lock_take_over",
+            "setup_recovery::activation::tests::failed_initial_probe_transfer_releases_raw_directories_and_the_guard",
+            "setup_recovery::activation::tests::lifecycle_exit_cannot_replay_original_activation_selections_with_stale_or_equal_config",
+            "setup_recovery::activation::tests::changed_config_or_seal_blocks_completion_without_resetting_data",
+            "setup_recovery::activation::tests::activation_completion_replays_published_auth_without_recreating_account_or_whitelist",
+            "setup_recovery::activation::tests::exact_offline_activation_rejects_another_original_selection_or_mode",
+            "setup_recovery::activation::tests::exact_completed_activation_still_runs_the_offline_materialization_callback",
+            "setup_recovery::activation::tests::exact_completed_activation_preserves_receipt_when_callback_or_authority_fails"
+          ],
+          "max_tests": 10
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "timeout_seconds": 900,
+          "exact": [
+            "discovery::cookie_discovery_inspection_and_activation_produce_browsable_primary_roots"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [],
+          "isolate": true,
+          "timeout_seconds": 900,
+          "exact": [
+            "engine::startup_exit_preflight_tests::current_exit_holds_discovery_until_read_only_workspace_admission"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -14236,6 +14327,72 @@
       "path": "test/engine/unit/engine/startup_exit_preflight_tests.rs",
       "groups": [
         "startup-exit-preflight"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/initial_storage.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/initial_storage.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/activation.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "src/server/src/management/storage_configuration.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "src/server/src/management/storage_addition.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "src/server/src/management/storage_lifecycle.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "src/server/src/management/storage_readmission.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery/activation_tests.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/discovery.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/startup_exit_preflight_tests.rs",
+      "groups": [
+        "initial-storage-result-admission"
       ]
     }
   ],

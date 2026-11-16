@@ -553,6 +553,7 @@ pub(super) fn configuration_edges(
     chain: &mut super::storage_configuration::ConfigurationChain,
 ) -> Result<(), ApiError> {
     super::storage_configuration::records(&root.join(DIRECTORY), read_record, |record, latest| {
+        chain.observe_initialization_source(&record.original);
         let original = configuration_digest(&record.original);
         let target = configuration_digest(&record.target_config());
         if latest {

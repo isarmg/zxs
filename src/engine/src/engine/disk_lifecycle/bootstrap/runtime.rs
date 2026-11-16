@@ -2,8 +2,10 @@
 use super::{store::BootstrapStore, *};
 use crate::{
     Engine, Error, ErrorCode, ValidatedConfig,
+    authority_selection::SelectionGuard,
     disk::{DiskHandle, DiskResources, existing_private_dir},
     engine::membership_transition::pending::activation::discover_startup_in_store,
+    persist::layout,
 };
 use platform_io::fs_safety::{
     EntryName,
@@ -89,11 +91,56 @@ pub(crate) fn initialize(
 /// A held restriction for inspecting the original activation directories. It
 /// does not authenticate storage authority or permit ordinary pool admission.
 /// Keep it alive until all unregistered probe handles have been dropped, or
-/// consume it through `Engine::open_initial_activation_for_recovery_held`.
+/// consume it through the corresponding held activation/completion method.
 pub struct InitialActivationProbeGuard {
     root: PathBuf,
     config: ValidatedConfig,
     store: BootstrapStore,
+    selection: SelectionGuard,
+    source: InitialProbeSource,
+}
+
+enum InitialProbeSource {
+    Configuration,
+    Initialization(ValidatedConfig),
+}
+
+#[derive(Clone, Copy)]
+enum InitialProjection {
+    Exact,
+    CreatedRoots,
+}
+
+fn initial_configuration(
+    selection: &SelectionGuard,
+    expected: &ValidatedConfig,
+    workspace_limits: Option<crate::RetainedWorkspaceLimits>,
+    relation: InitialProjection,
+) -> crate::Result<ValidatedConfig> {
+    selection.require_legacy()?;
+    let bytes = selection
+        .read_system_entry(&layout::SYSTEM_CONFIGURATION, crate::disk::MAX_METADATA)
+        .map_err(|source| {
+            management_error(BootstrapError::fs("read initial system configuration", source))
+        })?;
+    let config: crate::Config = storage_contract::decode_strict(&bytes).map_err(|source| {
+        management_error(BootstrapError::encoding(
+            "decode initial system configuration",
+            source,
+        ))
+    })?;
+    let projected = ValidatedConfig::try_from(config)?.with_workspace_limits(workspace_limits)?;
+    let matches = match relation {
+        InitialProjection::Exact => storage_contract::canonical_json(&projected)?
+            == storage_contract::canonical_json(expected)?,
+        InitialProjection::CreatedRoots => projected.is_initialization_result_of(expected),
+    };
+    if !matches {
+        return Err(management_error(BootstrapError::ManagementOnly(
+            "initial activation configuration changed during probe admission",
+        )));
+    }
+    Ok(projected)
 }
 
 impl Engine {
@@ -101,13 +148,43 @@ impl Engine {
     /// caller's first storage-directory stat/open. No storage root is touched.
     ///
     /// # Errors
-    /// Rejects a missing, damaged, locked or successor locator, or an initial
-    /// root set that differs from the supplied first-activation configuration.
+    /// Rejects an unreadable or changed saved configuration before touching the
+    /// bootstrap store. Also rejects a missing, damaged, locked or successor
+    /// locator, or a root set differing from the supplied initial configuration.
     pub fn begin_initial_activation_probe(
         root: &Path,
         config: &ValidatedConfig,
     ) -> crate::Result<InitialActivationProbeGuard> {
+        Self::begin_initial_probe(root, config, InitialProjection::Exact)
+    }
+
+    /// Correlate the original unbound initialization request with the saved
+    /// created-root projection, before the first selected disk is inspected.
+    /// This guard restricts discovery; completion still requires the actual
+    /// held-root and fixed-Genesis readback in `open_initial_storage_completion`.
+    ///
+    /// # Errors
+    /// Rejects any change other than the initializer's root-binding feedback,
+    /// or any stopped, successor, damaged or competing discovery state.
+    pub fn begin_initial_storage_completion(
+        root: &Path,
+        input: &ValidatedConfig,
+    ) -> crate::Result<InitialActivationProbeGuard> {
+        Self::begin_initial_probe(root, input, InitialProjection::CreatedRoots)
+    }
+
+    fn begin_initial_probe(
+        root: &Path,
+        config: &ValidatedConfig,
+        relation: InitialProjection,
+    ) -> crate::Result<InitialActivationProbeGuard> {
         let root = existing_private_dir(root)?.path().to_path_buf();
+        // The first bootstrap constructor may recreate its idle lock. Reject
+        // unreadable, unsupported or changed persisted configuration before it,
+        // and retain this same SYSTEM selection until the actual writer takes it.
+        let selection = SelectionGuard::legacy(&root)?;
+        crate::engine::disk_lifecycle::terminal::require_active_startup(&root)?;
+        let projected = initial_configuration(&selection, config, None, relation)?;
         let store = open_store(&root)?;
         crate::engine::membership_transition::pending::activation::exit::stop_plan::require_no_pending_stop(&root, &store)?;
         let locator = store.reload(&config.pool_id).map_err(management_error)?;
@@ -132,8 +209,15 @@ impl Engine {
         }
         Ok(InitialActivationProbeGuard {
             root,
-            config: config.clone(),
+            config: projected,
             store,
+            selection,
+            source: match relation {
+                InitialProjection::Exact => InitialProbeSource::Configuration,
+                InitialProjection::CreatedRoots => {
+                    InitialProbeSource::Initialization(config.clone())
+                }
+            },
         })
     }
 
@@ -150,30 +234,70 @@ impl Engine {
         workspace_limits: Option<crate::RetainedWorkspaceLimits>,
         directories: Vec<std::fs::File>,
     ) -> crate::Result<Self> {
-        // The closure owns every raw directory. Its error paths drop them before
-        // admission is released; success has transferred them to registered
-        // resources and acquired the Engine's actual system/disk writer locks.
-        let prepared = (|| {
-            let (root, projected) = Self::recovery_projection(&admission.root, workspace_limits)?;
-            if storage_contract::canonical_json(&projected)?
-                != storage_contract::canonical_json(&admission.config)?
-            {
-                return Err(Error::new(
-                    ErrorCode::RecoveryRequired,
-                    "initial activation configuration changed during probe admission",
-                ));
+        if !matches!(&admission.source, InitialProbeSource::Configuration) {
+            return Err(management_error(BootstrapError::ManagementOnly(
+                "an initialization result requires its fixed-genesis completion readback",
+            )));
+        }
+        Self::open_initial_probe(admission, workspace_limits, directories, |_, _| Ok(()))
+            .map(|(engine, ())| engine)
+    }
+
+    /// Transfer the same probe, SYSTEM selection and original directory handles
+    /// into recovery, retaining actual initialization-result evidence. The full
+    /// fixed-Genesis/five-area readback precedes writer creation and recovery.
+    ///
+    /// # Errors
+    /// Rejects a non-initialization probe or any changed original request,
+    /// physical source, fixed Genesis, successor, lock or recovery failure.
+    pub fn open_initial_storage_completion(
+        admission: InitialActivationProbeGuard,
+        workspace_limits: Option<crate::RetainedWorkspaceLimits>,
+        directories: Vec<std::fs::File>,
+    ) -> crate::Result<(Self, crate::InitialStorageObservation)> {
+        let input = match &admission.source {
+            InitialProbeSource::Initialization(input) => input.clone(),
+            InitialProbeSource::Configuration => {
+                return Err(management_error(BootstrapError::ManagementOnly(
+                    "storage completion requires its original initialization request",
+                )));
             }
-            let config = discover_startup_in_store(&admission.store, projected)?;
+        };
+        Self::open_initial_probe(admission, workspace_limits, directories, |config, resources| {
+            crate::engine::initial_storage::observe(&input, config, resources)
+        })
+    }
+
+    fn open_initial_probe<T>(
+        admission: InitialActivationProbeGuard,
+        workspace_limits: Option<crate::RetainedWorkspaceLimits>,
+        directories: Vec<std::fs::File>,
+        observe: impl FnOnce(&ValidatedConfig, &DiskResources) -> crate::Result<T>,
+    ) -> crate::Result<(Self, T)> {
+        let InitialActivationProbeGuard { root, config, store, selection, source: _ } = admission;
+        // Every raw directory is consumed on failure. The same SYSTEM selection
+        // and bootstrap lock survive physical admission into the actual writer.
+        let prepared: crate::Result<(Self, T)> = (|| {
+            crate::engine::disk_lifecycle::terminal::require_active_startup(&root)?;
+            let projected = initial_configuration(
+                &selection, &config, workspace_limits, InitialProjection::Exact,
+            )?;
+            let config = discover_startup_in_store(&store, projected)?;
             if config.generation().is_some() {
-                return Err(Error::new(
-                    ErrorCode::RecoveryRequired,
+                return Err(management_error(BootstrapError::ManagementOnly(
                     "a discovered successor cannot complete initial storage activation",
-                ));
+                )));
             }
             let resources = Arc::new(DiskResources::recover_held(&config, directories)?);
-            Self::prepare_recovery_resources(root, config, resources)
+            let observation = observe(&config, &resources)?;
+            let locks = crate::engine::config::acquire_locks_selected(
+                &root, &resources, selection,
+            )?;
+            let engine = Self::recovery_resources_with_locks(root, config, resources, locks)?;
+            Ok((engine, observation))
         })();
-        Self::finish_held_recovery(prepared?, admission.store)
+        let (engine, observation) = prepared?;
+        Ok((Self::finish_held_recovery(engine, store)?, observation))
     }
 }
 

@@ -39,6 +39,19 @@ impl SelectionGuard {
     pub(crate) fn require_legacy(&self) -> Result<()> {
         require_legacy_directory(&self.directory)
     }
+
+    /// Read through the same SYSTEM directory whose selection lock is held.
+    /// A successful read does not admit the entry's contents or any storage root.
+    pub(crate) fn read_system_entry(
+        &self,
+        name: &EntryName,
+        maximum: usize,
+    ) -> std::result::Result<Vec<u8>, platform_io::fs_safety::Error> {
+        self.directory.verify_identity()?;
+        let bytes = self.directory.read_bounded(name, maximum)?;
+        self.directory.verify_identity()?;
+        Ok(bytes)
+    }
 }
 
 pub(crate) fn require_legacy(path: &Path) -> Result<()> {

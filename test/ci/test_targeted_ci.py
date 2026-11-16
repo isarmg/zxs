@@ -66,6 +66,77 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_initial_storage_result_keeps_exact_web_completion_and_old_consumers(self):
+        name = 'initial-storage-result-admission'
+        paths = [
+            'src/engine/src/engine/initial_storage.rs',
+            'src/engine/src/persist/initial_storage.rs',
+            'src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs',
+            'src/server/src/setup_recovery/activation.rs',
+            'src/server/src/management/storage_configuration.rs',
+            'src/server/src/management/storage_addition.rs',
+            'src/server/src/management/storage_lifecycle.rs',
+            'src/server/src/management/storage_readmission.rs',
+            'test/server/unit/setup_recovery/activation_tests.rs',
+            'test/server/integration/phase1_save_tags/discovery.rs',
+            'test/engine/unit/engine/startup_exit_preflight_tests.rs',
+        ]
+        group = self.policy['groups'][name]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(name, plan['groups'])
+                self.assertIn('test_targeted_ci', plan['python_tests'])
+                self.assertCountEqual(origin_selections(plan, name), group['rust_targets'])
+        assert_path_group_extension(self, self.policy, paths, None, [name])
+        unit, web, probe, *checks = group['rust_targets']
+        self.assertEqual(unit['exact'], [
+            'setup_recovery::activation::tests::' + case for case in [
+                'first_pair_genesis_retains_fixed_quorum_and_reopens',
+                'complete_genesis_without_ready_receipt_is_checked_and_completed_not_reinitialized',
+                'initial_probe_guard_survives_until_real_held_resources_and_writer_lock_take_over',
+                'failed_initial_probe_transfer_releases_raw_directories_and_the_guard',
+                'lifecycle_exit_cannot_replay_original_activation_selections_with_stale_or_equal_config',
+                'changed_config_or_seal_blocks_completion_without_resetting_data',
+                'activation_completion_replays_published_auth_without_recreating_account_or_whitelist',
+                'exact_offline_activation_rejects_another_original_selection_or_mode',
+                'exact_completed_activation_still_runs_the_offline_materialization_callback',
+                'exact_completed_activation_preserves_receipt_when_callback_or_authority_fails',
+            ]
+        ])
+        self.assertEqual((unit['kind'], unit['max_tests'], unit['features']),
+                         ('lib', 10, ['core']))
+        self.assertEqual((web['kind'], web['name'], web['max_tests'], web['features']),
+                         ('test', 'phase1_save_tags', 1, ['core']))
+        self.assertEqual(web['exact'], [
+            'discovery::cookie_discovery_inspection_and_activation_produce_browsable_primary_roots',
+        ])
+        self.assertEqual(probe['exact'], [
+            'engine::startup_exit_preflight_tests::'
+            'current_exit_holds_discovery_until_read_only_workspace_admission',
+        ])
+        self.assertEqual((probe['kind'], probe['max_tests']), ('lib', 1))
+        for runtime in (unit, web, probe):
+            self.assertEqual(runtime['timeout_seconds'], 900)
+            self.assertIs(runtime['isolate'], True)
+            self.assertIs(runtime['default_features'], True)
+            self.assertFalse(runtime.get('whole', False))
+            self.assertEqual(runtime.get('prefixes', []), [])
+        self.assertCountEqual([
+            (target['package'], target['mode'], target['default_features'], target['features'])
+            for target in checks
+        ], [
+            ('storage-engine', 'check', True, []),
+            ('storage-engine', 'check', False, []),
+            ('storage-server', 'check', True, ['core']),
+            ('storage-server', 'check', False, []),
+        ])
+        unrelated = CI.select_plan(self.policy, [
+            'src/engine/src/business/workspace/version_build.rs',
+        ], shardable=True)
+        self.assertNotIn(name, unrelated['groups'])
+        self.assertIn('workspace-version-construction', unrelated['groups'])
+
     def test_startup_exit_preflight_keeps_exact_recovery_and_old_consumers(self):
         name = 'startup-exit-preflight'
         cases = [
@@ -82,11 +153,17 @@ class TargetedSelection(unittest.TestCase):
         for path, retained in cases:
             with self.subTest(path=path):
                 plan = CI.select_plan(self.policy, [path], shardable=True)
-                self.assertEqual(plan['groups'], sorted(retained + [name]))
+                extensions = [name]
+                if path in {
+                    'src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs',
+                    'test/engine/unit/engine/startup_exit_preflight_tests.rs',
+                }:
+                    extensions.append('initial-storage-result-admission')
+                self.assertEqual(plan['groups'], sorted(retained + extensions))
                 self.assertIn('test_targeted_ci', plan['python_tests'])
                 self.assertCountEqual(origin_selections(plan, name), group['rust_targets'])
                 if retained:
-                    assert_path_group_extension(self, self.policy, [path], retained, [name])
+                    assert_path_group_extension(self, self.policy, [path], retained, extensions)
         # Validate the real complete atomic diff as well as each path. The
         # projection helper retains every old selection and its own budget.
         assert_path_group_extension(self, self.policy, [path for path, _ in cases] + [

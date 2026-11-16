@@ -90,7 +90,34 @@ fn current_exit_holds_discovery_until_read_only_workspace_admission() {
     let initialized = engine.config.clone();
     drop(engine);
     let locator = remove_idle_control_lock(&system);
+    let configuration = system.join(layout::SYSTEM_CONFIGURATION.as_path());
+    let saved = fs::read(&configuration).unwrap();
+    let mut unsupported: json_codec::Value = json_codec::from_slice(&saved).unwrap();
+    unsupported["pool_format"] = json_codec::json!("unsupported-format");
+    let mut changed: Config = json_codec::from_slice(&saved).unwrap();
+    changed.max_workspaces += 1;
+    // A probe must not recreate even the missing idle lock for an unreadable,
+    // unsupported or changed saved configuration. These are real bytes from
+    // initialization, not a new storage/source authority minted by the test.
+    for bytes in [
+        b"{".to_vec(),
+        json_codec::to_vec(&unsupported).unwrap(),
+        json_codec::to_vec(&changed).unwrap(),
+    ] {
+        fs::write(&configuration, bytes).unwrap();
+        let before = images(temp.path());
+        let error = Engine::begin_initial_activation_probe(&system, &initialized)
+            .err()
+            .unwrap();
+        assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        assert_eq!(images(temp.path()), before);
+    }
+    fs::write(&configuration, saved).unwrap();
     let probe = Engine::begin_initial_activation_probe(&system, &initialized).unwrap();
+    let error = crate::authority_selection::SelectionGuard::legacy(&system)
+        .err()
+        .unwrap();
+    assert_eq!(error.code(), ErrorCode::WriterAlreadyActive);
     let directories = initialized
         .io_disks()
         .map(|disk| File::open(&disk.root).unwrap())

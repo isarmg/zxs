@@ -40,7 +40,7 @@ pub enum Mode {
 }
 strict_string_deserialize!(Mode { Production => "production", Development => "development" });
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DiskConfig {
     pub slot_id: String,
@@ -108,6 +108,46 @@ fn default_max_retained_workspace_metadata_bytes_per_principal() -> u64 {
     64 << 20
 }
 impl Config {
+    /// Structural correlation of an initialization request with its resulting
+    /// configuration. This does not authenticate the created roots or grant I/O;
+    /// Engine initialization admission must read the fixed Genesis and entities.
+    pub fn is_initialization_result_of(&self, input: &Self) -> bool {
+        let Self {
+            pool_id,
+            storage_roots,
+            mode,
+            disks,
+            checksum_chunk_bytes,
+            max_file_bytes,
+            max_workspace_bytes,
+            max_workspaces,
+            max_retained_workspaces,
+            max_retained_workspaces_per_principal,
+            max_retained_workspace_metadata_bytes,
+            max_retained_workspace_metadata_bytes_per_principal,
+            max_entries,
+            metadata_reserve_bytes,
+            workspace_ttl_seconds,
+        } = self;
+        input.storage_roots.is_empty()
+            && !storage_roots.is_empty()
+            && *pool_id == input.pool_id
+            && *mode == input.mode
+            && *disks == input.disks
+            && *checksum_chunk_bytes == input.checksum_chunk_bytes
+            && *max_file_bytes == input.max_file_bytes
+            && *max_workspace_bytes == input.max_workspace_bytes
+            && *max_workspaces == input.max_workspaces
+            && *max_retained_workspaces == input.max_retained_workspaces
+            && *max_retained_workspaces_per_principal == input.max_retained_workspaces_per_principal
+            && *max_retained_workspace_metadata_bytes == input.max_retained_workspace_metadata_bytes
+            && *max_retained_workspace_metadata_bytes_per_principal
+                == input.max_retained_workspace_metadata_bytes_per_principal
+            && *max_entries == input.max_entries
+            && *metadata_reserve_bytes == input.metadata_reserve_bytes
+            && *workspace_ttl_seconds == input.workspace_ttl_seconds
+    }
+
     /// Draft fresh storage as independent level-one roots. No backup relationship
     /// is inferred from directory order. Metadata membership still follows the
     /// existing pool protocol; this does not create independent commit domains.

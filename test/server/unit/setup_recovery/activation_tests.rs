@@ -546,24 +546,126 @@ fn changed_config_or_seal_blocks_completion_without_resetting_data() {
 
 #[test]
 fn complete_genesis_without_ready_receipt_is_checked_and_completed_not_reinitialized() {
+    fn inventory(root: &Path) -> BTreeMap<PathBuf, (u64, u64, u32, Option<Vec<u8>>)> {
+        fn walk(
+            root: &Path,
+            path: &Path,
+            rows: &mut BTreeMap<PathBuf, (u64, u64, u32, Option<Vec<u8>>)>,
+        ) {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            assert!(metadata.is_dir() || metadata.is_file());
+            let bytes = metadata.is_file().then(|| fs::read(path).unwrap());
+            rows.insert(path.strip_prefix(root).unwrap().to_owned(),
+                (metadata.dev(), metadata.ino(), metadata.mode(), bytes));
+            if metadata.is_dir() {
+                for child in fs::read_dir(path).unwrap() {
+                    walk(root, &child.unwrap().path(), rows);
+                }
+            }
+        }
+        let mut rows = BTreeMap::new();
+        walk(root, root, &mut rows);
+        rows
+    }
     let f = fixture();
     initialize(&f.service);
-    let _ = f.service.activate(
-        &admin(),
-        request(&f.service, &["one"]),
-        |_| Ok(()),
-        |_| Err(ApiError::unauthorized()),
-    );
+    let original_request = request(&f.service, &["one", "two"]);
+    let error = f.service.activate(
+        &admin(), original_request.clone(), |_| Ok(()), |_| Err(ApiError::unauthorized()),
+    ).unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
+    let intent_path = f.service.data_root.join(ACTIVATION_INTENT);
+    let intent_bytes = fs::read(&intent_path).unwrap();
+    let intent: StorageActivationIntent = read_control(&intent_path).unwrap();
+    assert!(intent.config.storage_roots.is_empty());
+    let actual: Config = read_control(&f.service.data_root.join("config.json")).unwrap();
+    assert_eq!(actual.storage_roots.len(), 2);
+    assert!(actual.is_initialization_result_of(&intent.config));
     fs::remove_file(f.service.data_root.join(ACTIVATION_READY)).unwrap();
     let seal_before = fs::read(f.service.disks["one"].join("disk.json")).unwrap();
-    f.service
-        .complete_activation(&admin(), |_| Ok(()), |_| Ok(()))
-        .unwrap();
+
+    // Matching request/Config bytes cannot adopt any of another real disk's
+    // five area entities. Keep both intact and restore the original inodes.
+    for area in ["common-data", "deleted-data", "zxs-data",
+        "zxs-data/common-data", "zxs-data/deleted-data"]
+    {
+        let one = f.service.disks["one"].join(area);
+        let two = f.service.disks["two"].join(area);
+        let parked = f._temp.path().join("parked-area");
+        fs::rename(&one, &parked).unwrap();
+        fs::rename(&two, &one).unwrap();
+        fs::rename(&parked, &two).unwrap();
+        let before = inventory(f._temp.path());
+        let error = f.service.complete_activation_exact(
+            &admin(), &original_request, |_| Ok(()), |_| panic!("foreign area adopted"),
+        ).unwrap_err();
+        assert_eq!(error.code, storage_contract::ErrorCode::DiskIdentityMismatch);
+        assert_eq!(inventory(f._temp.path()), before);
+        fs::rename(&one, &parked).unwrap();
+        fs::rename(&two, &one).unwrap();
+        fs::rename(&parked, &two).unwrap();
+    }
+    // Matching the original request and making the saved feedback describe
+    // those foreign entities is still insufficient: fixed Genesis must agree.
+    let configuration_path = f.service.data_root.join("config.json");
+    let configuration_bytes = fs::read(&configuration_path).unwrap();
+    let one_id = actual.disks[0].disk_id.parse::<storage_contract::DiskId>().unwrap();
+    let two_id = actual.disks[1].disk_id.parse::<storage_contract::DiskId>().unwrap();
+    let mut changed = actual.clone();
+    changed.storage_roots.get_mut(&one_id).unwrap().roots.common_data =
+        actual.storage_roots[&two_id].roots.common_data.clone();
+    changed.storage_roots.get_mut(&two_id).unwrap().roots.common_data =
+        actual.storage_roots[&one_id].roots.common_data.clone();
+    assert!(changed.is_initialization_result_of(&intent.config));
+    ValidatedConfig::try_from(changed.clone()).unwrap();
+    let one = f.service.disks["one"].join("common-data");
+    let two = f.service.disks["two"].join("common-data");
+    let parked = f._temp.path().join("parked-area");
+    fs::rename(&one, &parked).unwrap();
+    fs::rename(&two, &one).unwrap();
+    fs::rename(&parked, &two).unwrap();
+    fs::write(&configuration_path, json_codec::to_vec(&changed).unwrap()).unwrap();
+    let before = inventory(f._temp.path());
+    let error = f.service.complete_activation_exact(
+        &admin(), &original_request, |_| Ok(()), |_| panic!("foreign root feedback adopted"),
+    ).unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::RecoveryRequired);
+    assert_eq!(inventory(f._temp.path()), before);
+    fs::write(&configuration_path, configuration_bytes).unwrap();
+    fs::rename(&one, &parked).unwrap();
+    fs::rename(&two, &one).unwrap();
+    fs::rename(&parked, &two).unwrap();
+    // Even intact area identities plus a valid Config cannot replace the fixed
+    // Genesis anchor. This is an actual initialized peer, not a fabricated cap.
+    let other = fixture();
+    initialize(&other.service);
+    other.service.activate(
+        &admin(), request(&other.service, &["one"]), |_| Ok(()), |_| Ok(()),
+    ).unwrap();
+    let genesis = f.service.disks["one"].join("zxs-data/pool-membership/config.json");
+    let original_genesis = fs::read(&genesis).unwrap();
+    fs::write(&genesis, fs::read(
+        other.service.disks["one"].join("zxs-data/pool-membership/config.json"),
+    ).unwrap()).unwrap();
+    let before = inventory(f._temp.path());
+    let error = f.service.complete_activation_exact(
+        &admin(), &original_request, |_| Ok(()), |_| panic!("foreign Genesis adopted"),
+    ).unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::RecoveryRequired);
+    assert_eq!(inventory(f._temp.path()), before);
+    fs::write(&genesis, original_genesis).unwrap();
+    f.service.complete_activation_exact(
+        &admin(), &original_request, |_| Ok(()), |_| Ok(()),
+    ).unwrap();
     assert!(f.service.activation_admitted().is_ok());
-    assert_eq!(
-        fs::read(f.service.disks["one"].join("disk.json")).unwrap(),
-        seal_before
-    );
+    assert_eq!(fs::read(intent_path).unwrap(), intent_bytes);
+    assert_eq!(fs::read(f.service.disks["one"].join("disk.json")).unwrap(), seal_before);
+    let complete: StorageActivationComplete = f.service.read_durable_control(ACTIVATION_COMPLETE)
+        .unwrap();
+    assert_eq!(complete.intent_digest, value_digest(&intent).unwrap());
+    let ready: StorageActivationReady = f.service.read_durable_control(ACTIVATION_READY).unwrap();
+    assert_eq!(ready.intent_digest, complete.intent_digest);
+    assert_eq!(ready.disk_seals, f.service.activation_seals(&intent).unwrap());
 }
 
 fn activated_engine(service: &SetupRecovery, data_only_target: bool) -> Engine {
@@ -586,8 +688,12 @@ fn activated_engine(service: &SetupRecovery, data_only_target: bool) -> Engine {
     let directories = service.activation_directories(&intent).unwrap();
     let engine =
         Engine::initialize_held(&service.data_root, intent.config.clone(), directories).unwrap();
+    let observation = engine.initial_storage_observation(&intent.config).unwrap();
     service
-        .write_activation_ready(&intent, service.activation_seals(&intent).unwrap())
+        .write_activation_ready(
+            &intent,
+            service.observed_activation_seals(&intent, &observation).unwrap(),
+        )
         .unwrap();
     service
         .write_control(
@@ -701,6 +807,9 @@ fn lifecycle_exit_cannot_replay_original_activation_selections_with_stale_or_equ
             let mut engine = activated_engine(&f.service, data_only);
             let original = fs::read(f.service.data_root.join("config.json")).unwrap();
             exit_activation_target(&mut engine, action);
+            let intent: StorageActivationIntent = f.service.read_durable_control(ACTIVATION_INTENT)
+                .unwrap();
+            assert!(engine.initial_storage_observation(&intent.config).is_err());
             if data_only {
                 let initial: Config = json_codec::from_slice(&original).unwrap();
                 assert_eq!(
@@ -739,11 +848,14 @@ fn initial_probe_guard_survives_until_real_held_resources_and_writer_lock_take_o
     lose_activation_completion(&f.service, "missing");
     let proof = f.service.activation_proof().unwrap();
     assert!(
-        Engine::begin_initial_activation_probe(&f.service.data_root, &proof.intent.config).is_err()
+        Engine::begin_initial_storage_completion(
+            &f.service.data_root, &proof.intent.config,
+        ).is_err()
     );
     let directories = f.service.activation_directories(&proof.intent).unwrap();
-    let engine =
-        Engine::open_initial_activation_for_recovery_held(proof.probe, None, directories).unwrap();
+    let (engine, observation) =
+        Engine::open_initial_storage_completion(proof.probe, None, directories).unwrap();
+    assert_eq!(observation.disks().len(), 3);
     assert!(Engine::open(&f.service.data_root).is_err());
     drop(engine);
     f.service
@@ -779,13 +891,16 @@ fn failed_initial_probe_transfer_releases_raw_directories_and_the_guard() {
     changed.max_workspaces += 1;
     fs::write(&path, json_codec::to_vec(&changed).unwrap()).unwrap();
     assert!(
-        Engine::open_initial_activation_for_recovery_held(proof.probe, None, directories).is_err()
+        Engine::open_initial_storage_completion(proof.probe, None, directories).is_err()
     );
     assert_eq!(target_directory_handles(&f.service.disks["one"]), 0);
-    let guard =
-        Engine::begin_initial_activation_probe(&f.service.data_root, &proof.intent.config).unwrap();
+    // Reacquisition still proves that both guards were released. A changed
+    // saved projection is now rejected before creating the bootstrap lock.
+    fs::write(&path, original).unwrap();
+    let guard = Engine::begin_initial_storage_completion(
+        &f.service.data_root, &proof.intent.config,
+    ).unwrap();
     drop(guard);
-    fs::write(path, original).unwrap();
     f.service
         .complete_activation(&admin(), |_| Ok(()), |_| Ok(()))
         .unwrap();

@@ -44,6 +44,8 @@ pub use membership_transition::{
     BackupRegistryDecisionHash,
 };
 mod config;
+mod initial_storage;
+pub use initial_storage::{InitialSealDigest, InitialStorageDisk, InitialStorageObservation};
 pub(crate) mod file_draft;
 pub(crate) mod fresh_layout;
 pub use fresh_layout::FreshLayoutError;

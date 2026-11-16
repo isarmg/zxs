@@ -439,6 +439,7 @@ pub(super) fn configuration_edges(
         if record.status.preview.authority == ExitAuthority::TerminalManagement {
             return Ok(());
         }
+        chain.observe_initialization_source(&record.original);
         let original = configuration_digest(&record.original);
         let target = configuration_digest(&record.target_config());
         if latest {

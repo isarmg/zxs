@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from test_targeted_ci import assert_path_group_extension
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -23,7 +24,12 @@ class ServerNamedDiskFixtureSelection(unittest.TestCase):
         self.assertIn('test/server/support/foreign_disk_fixture.rs', paths)
         for path in paths:
             with self.subTest(path=path):
-                plan = CI.select_plan(policy, [path])
+                if path == 'test/server/unit/setup_recovery/activation_tests.rs':
+                    plan = assert_path_group_extension(
+                        self, policy, [path], [group], ['initial-storage-result-admission'],
+                    )
+                else:
+                    plan = CI.select_plan(policy, [path])
                 self.assertEqual(plan['groups'], [group])
                 self.assertEqual(plan['python_tests'], [
                     'test_server_named_disk_fixture_selection',

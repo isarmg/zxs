@@ -17,8 +17,24 @@ use storage_contract::{Config, ErrorCode, OperationId};
 pub(super) struct ConfigurationChain {
     predecessors: BTreeMap<String, BTreeSet<String>>,
     tips: BTreeSet<String>,
+    initialization: Option<Config>,
+    initialization_origins: BTreeSet<String>,
 }
 impl ConfigurationChain {
+    fn for_initialization(input: &Config) -> Self {
+        Self { initialization: Some(input.clone()), ..Self::default() }
+    }
+
+    /// The existing record verifier supplied this exact original configuration.
+    /// Remember only a correlated graph origin; it grants no disk/root access.
+    pub(super) fn observe_initialization_source(&mut self, original: &Config) {
+        if let Some(input) = &self.initialization
+            && original.is_initialization_result_of(input)
+        {
+            self.initialization_origins.insert(configuration_digest(original));
+        }
+    }
+
     pub(super) fn edge(&mut self, original: String, target: String) {
         if original != target {
             self.predecessors
@@ -37,7 +53,7 @@ impl ConfigurationChain {
         let mut pending = vec![current];
         let mut visited = BTreeSet::new();
         while let Some(next) = pending.pop() {
-            if next == initial {
+            if next == initial || self.initialization_origins.contains(next) {
                 return true;
             }
             if visited.insert(next)
@@ -113,7 +129,7 @@ pub(crate) fn admits_configuration(
     current: &Config,
     initial: &Config,
 ) -> Result<bool, ApiError> {
-    let mut chain = ConfigurationChain::default();
+    let mut chain = ConfigurationChain::for_initialization(initial);
     super::storage_addition::configuration_edges(root, &mut chain)?;
     super::storage_lifecycle::configuration_edges(root, &mut chain)?;
     super::storage_readmission::configuration_edges(root, &mut chain)?;

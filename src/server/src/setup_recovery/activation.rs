@@ -87,7 +87,6 @@ struct StorageActivationComplete {
 
 struct InitialActivationProof {
     intent: StorageActivationIntent,
-    disk_seals: BTreeMap<String, String>,
     probe: storage_engine::InitialActivationProbeGuard,
 }
 
@@ -334,7 +333,9 @@ impl SetupRecovery {
         self.write_control(ACTIVATION_INTENT, &intent)?;
         let engine =
             Engine::initialize_held(&self.data_root, config, directories).map_err(engine_error)?;
-        self.write_activation_ready(&intent, self.activation_seals(&intent)?)?;
+        let observation = engine.initial_storage_observation(&intent.config).map_err(engine_error)?;
+        let seals = self.observed_activation_seals(&intent, &observation)?;
+        self.write_activation_ready(&intent, seals)?;
         revalidate(identity)?;
         install(engine)?;
         self.write_control(
@@ -416,10 +417,10 @@ impl SetupRecovery {
                 return Ok(());
             }
         }
-        let proof = self.activation_proof()?;
-        let directories = self.activation_directories(&proof.intent)?;
-        let mut engine = Engine::open_initial_activation_for_recovery_held(
-            proof.probe,
+        let InitialActivationProof { intent, probe } = self.activation_proof()?;
+        let directories = self.activation_directories(&intent)?;
+        let (mut engine, observation) = Engine::open_initial_storage_completion(
+            probe,
             self.retained_workspace_limits,
             directories,
         )
@@ -431,12 +432,15 @@ impl SetupRecovery {
                 "pending storage decisions require recovery before activation completion",
             ));
         }
-        let proof = self.activation_proof()?;
+        // Use the result admitted before recovery through the same held roots.
+        // A second probe here would compete with this Engine's writer/selection
+        // lock and would discard the actual initialization-result evidence.
+        let seals = self.observed_activation_seals(&intent, &observation)?;
+        self.verify_activation_ready(&intent, &seals)?;
         if !present(&self.data_root.join(ACTIVATION_READY))? {
-            self.write_activation_ready(&proof.intent, proof.disk_seals)?;
+            self.write_activation_ready(&intent, seals)?;
         }
-        let intent_digest = value_digest(&proof.intent)?;
-        drop(proof.probe);
+        let intent_digest = value_digest(&intent)?;
         revalidate(identity)?;
         install(engine)?;
         if completed {
@@ -454,7 +458,7 @@ impl SetupRecovery {
         intent: &StorageActivationIntent,
     ) -> Result<(), ApiError> {
         let config: Config = read_control(&self.data_root.join("config.json"))?;
-        if value_digest(&config)? != value_digest(&intent.config)?
+        if !config.is_initialization_result_of(&intent.config)
             && !crate::management::storage_configuration::admits_configuration(
                 &self.management_root,
                 &config,
@@ -474,16 +478,17 @@ impl SetupRecovery {
         intent: &StorageActivationIntent,
     ) -> Result<storage_engine::InitialActivationProbeGuard, ApiError> {
         let config: Config = read_control(&self.data_root.join("config.json"))?;
-        // Successor management intents admit ordinary startup, never a replay
-        // of original selections. Equal Config bytes do not exclude a data-only
-        // Exit or a stale projection, so the held locator check is mandatory.
-        if value_digest(&config)? != value_digest(&intent.config)? {
+        // This is structural correlation only. The original request did not
+        // contain physical roots. Created-root feedback must be proven against
+        // all fixed Genesis anchors and held entities before completion.
+        // Successor intents never authorize replay of the original selections.
+        if !config.is_initialization_result_of(&intent.config) {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::SetupProofInvalid,
                 "initial activation configuration differs from its retained intent",
             ));
         }
-        Engine::begin_initial_activation_probe(&self.data_root, &intent.config)
+        Engine::begin_initial_storage_completion(&self.data_root, &intent.config)
             .map_err(engine_error)
     }
 
@@ -555,6 +560,47 @@ impl SetupRecovery {
             .collect()
     }
 
+    fn observed_activation_seals(
+        &self,
+        intent: &StorageActivationIntent,
+        observation: &storage_engine::InitialStorageObservation,
+    ) -> Result<BTreeMap<String, String>, ApiError> {
+        if intent.selections.len() != intent.config.disks.len()
+            || observation.disks().len() != intent.config.disks.len()
+        {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::SetupProofInvalid,
+                "initial storage observation does not cover the original selections",
+            ));
+        }
+        intent.selections.iter().zip(&intent.config.disks).map(|(named, disk)| {
+            let id = disk.disk_id.parse::<storage_contract::DiskId>()
+                .map_err(ApiError::invalid_source)?;
+            let observed = observation.disks().get(&id).ok_or_else(|| {
+                ApiError::conflict(
+                    storage_contract::ErrorCode::SetupProofInvalid,
+                    "initial storage observation names a different original disk",
+                )
+            })?;
+            let selection = &named.selection;
+            let path = Path::new(&selection.root_path);
+            if named.name != disk.name
+                || path != disk.root
+                || !path.starts_with(&selection.mount_path)
+                || observed.root().device() != selection.root_identity.device
+                || observed.root().inode() != selection.root_identity.inode
+            {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::DiskChanged,
+                    "initial storage observation differs from its selected directory",
+                ));
+            }
+            // Preserve the existing control receipt wire, including its digest
+            // over the original request, not the created Config or an epoch tip.
+            Ok((id.to_string(), observed.seal().to_string()))
+        }).collect()
+    }
+
     fn write_activation_ready(
         &self,
         intent: &StorageActivationIntent,
@@ -577,20 +623,25 @@ impl SetupRecovery {
         let intent: StorageActivationIntent = self.read_durable_control(ACTIVATION_INTENT)?;
         let probe = self.initial_activation_probe(&intent)?;
         let seals = self.activation_seals(&intent)?;
+        self.verify_activation_ready(&intent, &seals)?;
+        Ok(InitialActivationProof { intent, probe })
+    }
+
+    fn verify_activation_ready(
+        &self,
+        intent: &StorageActivationIntent,
+        seals: &BTreeMap<String, String>,
+    ) -> Result<(), ApiError> {
         if present(&self.data_root.join(ACTIVATION_READY))? {
             let ready: StorageActivationReady = self.read_durable_control(ACTIVATION_READY)?;
-            if ready.intent_digest != value_digest(&intent)? || ready.disk_seals != seals {
+            if ready.intent_digest != value_digest(intent)? || &ready.disk_seals != seals {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::SetupProofInvalid,
                     "storage activation evidence or selected directory identity changed",
                 ));
             }
         }
-        Ok(InitialActivationProof {
-            intent,
-            disk_seals: seals,
-            probe,
-        })
+        Ok(())
     }
 }
 

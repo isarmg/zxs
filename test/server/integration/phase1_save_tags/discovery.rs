@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 use storage_contract::storage_directories::{
-    CandidateSelection, DiscoveredDiskState, DiscoveredDisks,
+    CandidateSelection, DiscoveredDiskState, DiscoveredDisks, NamedStorageSelection,
 };
 use storage_server::{
     Backend, ServerConfig, StorageState,
@@ -36,6 +36,7 @@ struct Fixture {
     app: Option<Router>,
     session: Option<Session>,
     data: PathBuf,
+    management: PathBuf,
     discovery: PathBuf,
     drained: bool,
     _root: tempfile::TempDir,
@@ -70,6 +71,7 @@ impl Fixture {
             app: Some(app),
             session: None,
             data,
+            management,
             discovery,
             drained: false,
             _root: root,
@@ -139,7 +141,7 @@ impl Fixture {
         found
     }
 
-    async fn selections(&self, names: &[&str]) -> Vec<CandidateSelection> {
+    async fn selections(&self, names: &[&str]) -> Vec<NamedStorageSelection> {
         let found = self.discovered().await;
         let mut selections = Vec::new();
         for name in names {
@@ -164,12 +166,17 @@ impl Fixture {
             )
             .unwrap();
             assert_eq!(&inspected, selection);
-            selections.push(inspected);
+            selections.push(NamedStorageSelection {
+                selection: inspected,
+                // This is the explicit name supplied by this test's user,
+                // not a production fallback from a mount or directory name.
+                name: name_policy::Name::parse(name).unwrap(),
+            });
         }
         selections
     }
 
-    async fn activate(&self, selections: &[CandidateSelection]) -> (StatusCode, Value) {
+    async fn activate(&self, selections: &[NamedStorageSelection]) -> (StatusCode, Value) {
         self.send(
             self.browser_request("POST", ACTIVATE),
             Some(activation(selections)),
@@ -213,6 +220,40 @@ impl Fixture {
                 "unexpected {name}"
             );
         }
+    }
+
+    async fn stop(&mut self) {
+        drop(self.app.take());
+        let backend = Arc::clone(&self.backend);
+        tokio::task::spawn_blocking(move || backend.drain_management())
+            .await.unwrap().unwrap();
+        self.drained = true;
+    }
+
+    async fn reopen(&mut self) {
+        assert!(self.drained);
+        let (backend, auth) = open_service_with_options(
+            &self.data, &self.management,
+            ManagementOptions {
+                discovery_root: self.discovery.to_str().unwrap().parse().unwrap(),
+                allow_development_setup: true,
+                ..Default::default()
+            },
+        ).unwrap();
+        self.app = Some(storage_server::router(
+            backend.clone(), auth, ServerConfig::new(&self.management),
+        ).unwrap());
+        self.backend = backend;
+        self.drained = false;
+        self.wait_idle().await;
+        let login = self.send(request("POST", "/api/auth/login"), Some(json!({
+            "username":"admin", "password":"phase-one-test-password"
+        }))).await;
+        assert_eq!(login.0, StatusCode::OK, "{:?}", login.1);
+        self.session = Some(Session {
+            token: login.1["token"].as_str().unwrap().to_owned(),
+            csrf: login.1["csrf_token"].as_str().unwrap().to_owned(),
+        });
     }
 
     async fn finish(mut self) {
@@ -259,13 +300,30 @@ fn empty_identity(path: &Path) -> (u64, u64, u32) {
     (metadata.dev(), metadata.ino(), metadata.mode())
 }
 
-fn activation(selections: &[CandidateSelection]) -> Value {
+fn assert_created_roots(config: &storage_contract::Config) {
+    for disk in &config.disks {
+        let id = disk.disk_id.parse::<storage_contract::DiskId>().unwrap();
+        let binding = &config.storage_roots[&id];
+        for (relative, entity) in [
+            ("common-data", binding.roots.common_data.entity),
+            ("deleted-data", binding.roots.deleted_data.entity),
+            ("zxs-data", binding.roots.zxs_data.entity),
+            ("zxs-data/common-data", binding.roots.zxs_lifecycles.common_data.entity),
+            ("zxs-data/deleted-data", binding.roots.zxs_lifecycles.deleted_data.entity),
+        ] {
+            let metadata = fs::metadata(disk.root.join(relative)).unwrap();
+            assert_eq!((metadata.dev(), metadata.ino()), (entity.device(), entity.inode()));
+        }
+    }
+}
+
+fn activation(selections: &[NamedStorageSelection]) -> Value {
     json!({"selections":selections,"mode":"development"})
 }
 
 #[tokio::test]
 async fn cookie_discovery_inspection_and_activation_produce_browsable_primary_roots() {
-    let f = Fixture::new(&["资料盘", "Archive", "ordinary"]).await;
+    let mut f = Fixture::new(&["资料盘", "Archive", "ordinary"]).await;
     let retained = f.discovery.join("ordinary/keep");
     fs::write(&retained, b"ordinary content stays unchanged").unwrap();
     let before = empty_identity(&f.discovery.join("资料盘"));
@@ -306,6 +364,63 @@ async fn cookie_discovery_inspection_and_activation_produce_browsable_primary_ro
     assert_eq!(result["recovering"], true);
     f.wait_ready().await;
     assert_eq!(f.backend.management_status().state(), StorageState::Ready);
+    let intent_path = f.data.join("storage-activation-intent.json");
+    let ready_path = f.data.join("storage-activation-ready.json");
+    let complete_path = f.data.join("storage-activation-complete.json");
+    let intent = fs::read(&intent_path).unwrap();
+    let ready = fs::read(&ready_path).unwrap();
+    let original: Value = json_codec::from_slice(&intent).unwrap();
+    assert!(original["config"]["storage_roots"].as_object().unwrap().is_empty());
+    let config: storage_contract::Config = json_codec::from_slice(
+        &fs::read(f.data.join("config.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(config.storage_roots.len(), 2);
+    assert_created_roots(&config);
+
+    // Simulate loss of the last SYSTEM receipt after real Web initialization
+    // and credential publication. Cold completion must keep the original intent
+    // and all actual roots, not rewrite the intent with today's Config.
+    f.stop().await;
+    fs::remove_file(&complete_path).unwrap();
+    f.reopen().await;
+    assert_eq!(f.backend.management_status().state(), StorageState::RecoveryRequired);
+    let status = f.json("GET", "/api/admin/storage/status", None).await;
+    assert_eq!(status["completion_available"], true);
+    let completed = f.json(
+        "POST", "/api/admin/storage/complete-activation", Some(json!({})),
+    ).await;
+    assert_eq!(completed["activated"], true);
+    f.wait_ready().await;
+    assert_eq!(fs::read(&intent_path).unwrap(), intent);
+    assert_eq!(fs::read(&ready_path).unwrap(), ready);
+    let completion = fs::read(&complete_path).unwrap();
+    let complete_entity = fs::metadata(&complete_path).unwrap();
+    let complete: Value = json_codec::from_slice(&completion).unwrap();
+    let ready_record: Value = json_codec::from_slice(&ready).unwrap();
+    assert_eq!(complete["intent_digest"], ready_record["intent_digest"]);
+    f.stop().await;
+    f.reopen().await;
+    f.wait_ready().await;
+    assert_eq!(fs::read(&intent_path).unwrap(), intent);
+    assert_eq!(fs::read(&ready_path).unwrap(), ready);
+    assert_eq!(fs::read(&complete_path).unwrap(), completion);
+    let reopened = fs::metadata(&complete_path).unwrap();
+    assert_eq!(
+        (reopened.dev(), reopened.ino()),
+        (complete_entity.dev(), complete_entity.ino()),
+    );
+    // An active backend does not expose offline completion as a reset route.
+    let repeated = f.send(
+        f.browser_request("POST", "/api/admin/storage/complete-activation"), Some(json!({})),
+    ).await;
+    assert_eq!(repeated.0, StatusCode::CONFLICT, "{:?}", repeated.1);
+    assert_eq!(repeated.1["error"]["code"], "STORAGE_ACTIVE");
+    assert_eq!(fs::read(&complete_path).unwrap(), completion);
+    let reopened_config: storage_contract::Config = json_codec::from_slice(
+        &fs::read(f.data.join("config.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(reopened_config.storage_roots, config.storage_roots);
+    assert_created_roots(&reopened_config);
     let disks = f.json("GET", "/api/file-manager/disks", None).await;
     let disks = disks["disks"].as_array().unwrap();
     assert_eq!(disks.len(), 2);
@@ -387,8 +502,29 @@ async fn cookie_activation_rejects_missing_csrf_and_cross_origin_without_writes(
 async fn cookie_activation_rejects_unbrowseable_names_before_intent_and_can_retry() {
     let f = Fixture::new(&["CON"]).await;
     let before = empty_identity(&f.discovery.join("CON"));
-    let selected = f.selections(&["CON"]).await;
-    let (status, error) = f.activate(&selected).await;
+    let found = f.discovered().await;
+    let candidate = found.candidates.iter().find(|row| row.name == "CON").unwrap();
+    let DiscoveredDiskState::Empty { selection } = &candidate.state else {
+        panic!("expected an empty candidate: {:?}", candidate.state);
+    };
+    let inspected: CandidateSelection = json_codec::from_value(f.json(
+        "POST",
+        "/api/admin/storage/directories/inspect",
+        Some(json!({
+            "mount_path":selection.mount_path,
+            "root_path":selection.root_path
+        })),
+    ).await).unwrap();
+    assert_eq!(&inspected, selection);
+    // Invalid user names must reach the actual HTTP decoder, not fail while
+    // constructing a typed Name in the test before sending the request.
+    let (status, error) = f.send(
+        f.browser_request("POST", ACTIVATE),
+        Some(json!({
+            "selections":[{"selection":inspected,"name":"CON"}],
+            "mode":"development"
+        })),
+    ).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{error:?}");
     assert_eq!(error["error"]["code"], "INVALID_REQUEST");
     f.assert_unactivated();
