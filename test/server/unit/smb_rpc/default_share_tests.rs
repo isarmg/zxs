@@ -23,6 +23,30 @@ fn empty_fixture(two_primaries: bool) -> (Fixture, Arc<Shared>, Arc<LostCommitRe
     fixture_backend(temp, engine)
 }
 
+// These admission regressions address the configured public name "p", not
+// the mount basename. Keep the unrelated fixtures unchanged.
+fn mkdir_admission_fixture(two_primaries: bool) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = Config::development([
+        (
+            name_policy::Name::parse("p").unwrap(),
+            temp.path().join("mounted-primary"),
+        ),
+        (
+            name_policy::Name::parse("b").unwrap(),
+            temp.path().join("mounted-secondary"),
+        ),
+    ])
+    .unwrap();
+    if two_primaries {
+        config.disks[1].level = 1;
+        config.disks[1].slot_id = "P02".into();
+        config.disks[1].upstream_slot_id = None;
+    }
+    let engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
+    fixture_backend(temp, engine)
+}
+
 fn wire(
     shared: Arc<Shared>,
     username: &str,
@@ -958,7 +982,7 @@ fn default_named_directory_identity_and_canonical_paths_match_enumeration_stat_a
 #[test]
 fn default_mkdir_replay_admission_precedes_any_internal_root_creation() {
     for cause in ["published", "record", "active"] {
-        let (_temp, shared, _backend) = empty_fixture(true);
+        let (_temp, shared, _backend) = mkdir_admission_fixture(true);
         let operation_id = storage_contract::OperationId::generate().unwrap();
         if cause == "published" {
             shared
@@ -1093,7 +1117,7 @@ fn read_only_truncate_never_creates_a_default_root() {
 
 #[test]
 fn default_mkdir_exhausted_budget_never_creates_a_root_and_releases_operation() {
-    let (_temp, shared, _backend) = empty_fixture(false);
+    let (_temp, shared, _backend) = mkdir_admission_fixture(false);
     let identity = identity(&shared);
     // Fill the fixture's 16 MiB account budget, including its 64 KiB record
     // overhead, without allocating a physical file of that size.
