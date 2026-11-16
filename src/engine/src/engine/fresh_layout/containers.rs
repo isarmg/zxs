@@ -384,7 +384,7 @@ pub(crate) enum ReplicaReadLocation<'a> {
 }
 pub(crate) enum ReplicaNamespace<'a> {
     Owner(super::namespace::RegisteredNamespaceRoot<'a>),
-    Backup(super::namespace::PreparedBackupSourcePath<'a>),
+    Backup(super::namespace::PublishedBackupSourcePath<'a>),
 }
 impl<'a> PublishedReplicaSource<'a> {
     pub(crate) fn location(&self) -> ReplicaReadLocation<'a> {
@@ -449,19 +449,18 @@ pub(crate) fn published_source<'a>(
         return Err(Failure::NamespaceSource.into());
     }
     require_current_container(state, file)?;
-    let source = super::namespace::registered_root(
-        state, config, resources, record.namespace.repository, record.namespace.branch,
-    )?;
-    if source.disk().disk_id.parse::<DiskId>()? != record.owner_disk {
-        return Err(Failure::NamespaceSource.into());
-    }
-    prefixes::require_geometry(config, record, id)?;
     let namespace = if id == record.owner_disk {
+        let source = super::namespace::registered_root(
+            state, config, resources, record.namespace.repository, record.namespace.branch,
+        )?;
+        if source.disk().disk_id.parse::<DiskId>()? != record.owner_disk {
+            return Err(Failure::NamespaceSource.into());
+        }
+        prefixes::require_geometry(config, record, id)?;
         ReplicaNamespace::Owner(source)
     } else {
-        ReplicaNamespace::Backup(super::namespace::read_backup_source_path(
-            state, config, resources, record.namespace.repository, record.namespace.branch, id,
-        )?)
+        let source = published_backup_source(config, resources, state, record, id)?;
+        ReplicaNamespace::Backup(source)
     };
     Ok(PublishedReplicaSource {
         file, record, location: ReplicaReadLocation::Published(&record.namespace.name),
@@ -573,6 +572,24 @@ pub(crate) fn read_backup_source<'a>(
     if source.destination().source_ids().last() != Some(record.owner_disk) {
         return Err(Failure::NamespaceSource.into());
     }
+    Ok(source)
+}
+
+/// Published-only physical read. The admitted State still fixes the owner,
+/// route and every source registration; no ancestor disk is reopened as proof
+/// of an already complete destination. Candidate/prepare use read_backup_source.
+pub(crate) fn published_backup_source<'a>(
+    config: &'a Config, resources: &'a DiskResources, state: &'a State,
+    record: &FileContainerRecord, target: DiskId,
+) -> Result<super::namespace::PublishedBackupSourcePath<'a>> {
+    prefixes::require_geometry(config, record, target)?;
+    let source = super::namespace::published_backup_source_path(
+        state, config, resources, record.namespace.repository, record.namespace.branch, target,
+    )?;
+    if source.owner() != record.owner_disk {
+        return Err(Failure::NamespaceSource.into());
+    }
+    source.require_source(state, config, resources)?;
     Ok(source)
 }
 

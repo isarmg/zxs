@@ -726,8 +726,9 @@ impl PreparedContainerEntities {
                         HeldParent::Common(Arc::clone(handle))
                     }
                     crate::engine::fresh_layout::containers::ReplicaNamespace::Backup(source) => {
-                        prefix::bind_chain(&source, handle, &replica.prefixes,
-                            Observation::Published, &mut prefixes)?
+                        prefix::bind_published_chain(
+                            &source, handle, &replica.prefixes, &mut prefixes,
+                        )?
                     }
                 };
                 let parent = attach_directory_parent(config, resources, state,
@@ -996,6 +997,12 @@ fn bind_read_parent(
     let replica = record.replicas.get(&id).ok_or(Failure::ContainerScope)?;
     let disk = configured_disk(config, id)?;
     let handle = resources.get(disk)?;
+    if matches!(mode, Observation::Published) && id != record.owner_disk {
+        let source = crate::engine::fresh_layout::containers::published_backup_source(
+            config, resources, previous, record, id,
+        )?;
+        return prefix::bind_published_chain(&source, handle, &replica.prefixes, held);
+    }
     let owner = crate::engine::fresh_layout::containers::read_container_owner(
         config, resources, previous, record,
     )?;

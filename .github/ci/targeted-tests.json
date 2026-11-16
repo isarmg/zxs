@@ -434,7 +434,7 @@
       ]
     },
     "first-backup-additions": {
-      "reason": "Actual registered ordinary namespace on A, five-area RootBinding Add of empty B then C, exact published Add-only source, automatic source-first retained BODY backfill and successor writes. Default plus a real after_accept_1 cold retry; preserve FILE branch/history/tags and separate offline DISK Current inspection. Not Current-registry/terminal authority, independent authenticated backup BODY startup, or DISK event history.",
+      "reason": "Actual registered ordinary namespace on A, five-area RootBinding Add of empty B then C, exact published Add-only source, automatic source-first retained BODY backfill and successor writes. Default plus a real after_accept_1 cold retry; preserve FILE branch/history/tags and separate offline DISK Current inspection. Also cold-admit the unchanged fixed quorum with A absent, read both histories through registered B and retained admitted C, reject replaced target areas or damaged local publication, and refuse C-only cold startup and new writes. Not a Current-registry or terminal writer, source promotion, reduced-quorum startup, or DISK event-history claim.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -14381,6 +14381,54 @@
     },
     {
       "path": "src/engine/src/engine/fresh_layout/containers.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/directories.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/prefix.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/directories.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/namespace.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/workspace_receipts.rs",
       "groups": [
         "first-backup-additions"
       ]

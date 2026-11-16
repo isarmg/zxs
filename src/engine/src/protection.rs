@@ -9,6 +9,7 @@ pub(crate) use backup_paths::automatic::{
     verify_addition_candidate_source as verify_automatic_addition_candidate_source,
     invalid as invalid_automatic_backup,
     verify_candidate as verify_automatic_backup_candidate,
+    verify_readonly_candidate as verify_readonly_automatic_backup_candidate,
     verify_prepared as verify_automatic_backup_prepared,
 };
 pub(crate) use backup_paths::directory_namespaces::{

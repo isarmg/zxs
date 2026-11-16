@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod payload_admission;
 mod workspace_receipts;
+pub(crate) use workspace_receipts::ReadOnlyPublishedCandidate;
 pub(in crate::engine) mod container_locations;
 
 /// Read-only journal admission, retained with its held descriptors until apply.
@@ -531,11 +532,47 @@ impl Engine {
             // Prove the authenticated transition before repairing any of this
             // candidate's replicas, payloads, names or publication receipts.
             // advance is pure: install the new view only after completion below.
-            self.verify_replay_namespace_candidate(
-                &candidate,
-                original,
-                publication.as_ref(),
-            )?;
+            // An already Published read-only prefix may outlive an upstream
+            // device. Authenticate the unchanged complete barrier before using
+            // its logical registration, not merely a Publication object/frame.
+            // Pending and can_repair paths retain their original source gates.
+            let readonly_seal = if !can_repair && let Some(p) = &publication {
+                if p.candidate_hash != hash || p.result.operation_id != candidate.operation_id {
+                    return Err(Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "publication differs from candidate",
+                    ));
+                }
+                let barrier = match barrier_failure.take() {
+                    Some(source) => Err(source),
+                    None => verified_publication_seal_at(
+                        &self.disk_resources, &online, &candidate, p,
+                    ),
+                };
+                match barrier {
+                    Ok(seal) => Some(seal),
+                    Err(source) => {
+                        self.recovery_warnings.seals.push(super::RecoverySealFailure {
+                            context: super::RecoverySealContext::Publication {
+                                candidate_hash: hash,
+                            },
+                            source,
+                        });
+                        self.blocked = true;
+                        break;
+                    }
+                }
+            } else {
+                None
+            };
+            match (&publication, &readonly_seal) {
+                (Some(p), Some(seal)) => self.verify_readonly_published_namespace_candidate(
+                    &candidate, original, p, seal,
+                )?,
+                _ => self.verify_replay_namespace_candidate(
+                    &candidate, original, publication.as_ref(),
+                )?,
+            }
             if self.move_completion.as_ref().is_some_and(|selected| {
                 selected.sequence() == candidate.sequence && selected.candidate_hash() == hash
             }) && next
@@ -718,33 +755,9 @@ impl Engine {
                 self.bind_recovered_history_roots(roots);
                 self.snapshot = Some(candidate.snapshot_hash.clone());
             } else if let Some(p) = publication {
-                if p.candidate_hash != hash || p.result.operation_id != candidate.operation_id {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::PublicationInvalid,
-                        "publication differs from candidate",
-                    ));
-                }
-                // A PUBLICATION object or a single frame is not the complete
-                // barrier. Preserve the old visible state until all configured
-                // synchronized receipts can be checked after restart.
-                let barrier = match barrier_failure {
-                    Some(source) => Err(source),
-                    None => {
-                        verified_publication_seal_at(&self.disk_resources, &online, &candidate, &p)
-                    }
-                };
-                if let Err(source) = barrier {
-                    self.recovery_warnings
-                        .seals
-                        .push(super::RecoverySealFailure {
-                            context: super::RecoverySealContext::Publication {
-                                candidate_hash: hash,
-                            },
-                            source,
-                        });
-                    self.blocked = true;
-                    break;
-                }
+                // This is the same no-repair branch whose complete actual
+                // barrier and exact Candidate were required above. A failed
+                // observation breaks the replay loop before visible installation.
                 let recovered_result = p.recovery.as_ref().map(|_| p.result.clone());
                 self.install_recovered_namespace_state(
                     admitted.into_visible_state(candidate.operation_id, recovered_result),

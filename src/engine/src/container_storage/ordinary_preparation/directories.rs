@@ -218,6 +218,13 @@ pub(super) fn bind(
             return Err(Failure::NamespaceSource.into());
         }
         HeldParent::Common(Arc::clone(handle))
+    } else if matches!(mode, Observation::Published) {
+        let source = crate::engine::fresh_layout::directories::read_published_backup(
+            config, resources, source_state, first, disk,
+        )?;
+        prefix::bind_published_chain(
+            &source, handle, &first.replicas[&disk].source_prefixes, prefixes,
+        )?
     } else {
         let source = crate::engine::fresh_layout::directories::read_backup(
             config, resources, source_state, first, disk,

@@ -184,6 +184,7 @@ pub use membership_transition::{
     TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,
 };
 mod recovery;
+pub(crate) use recovery::ReadOnlyPublishedCandidate;
 use recovery::RecoveryMode;
 mod recovery_checkpoint;
 mod workspace_budget;

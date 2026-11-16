@@ -1,7 +1,9 @@
 //! Held automatic source directories. Geometry never adopts an existing entry:
 //! only a published entity or this decision's exact preparation can be opened.
 use super::*;
-use crate::engine::fresh_layout::namespace::PreparedBackupSourcePath;
+use crate::engine::fresh_layout::namespace::{
+    PreparedBackupSourcePath, PublishedBackupSourcePath,
+};
 use platform_io::fs_safety::EntryName;
 use storage_contract::file_container::ContainerPrefix;
 use crate::container_storage::ordinary_preparation::areas::HeldAreas;
@@ -163,6 +165,36 @@ fn previously_published(state: &State, disk: DiskId, expected: &ContainerPrefix)
     })
 }
 
+// Only these two same-namespace products can enter the common entity kernel.
+// The read-only product has a separate wrapper fixed to Published: it cannot
+// select a private preparation, create an area, or install a missing prefix.
+enum ChainSource<'a, 's> {
+    Prepared(&'a PreparedBackupSourcePath<'s>),
+    Published(&'a PublishedBackupSourcePath<'s>),
+}
+impl<'s> ChainSource<'_, 's> {
+    fn target_registration(&self)
+        -> &storage_contract::working_tree::DiskRegistrationIdentity
+    {
+        match self {
+            Self::Prepared(source) => source.target_registration(),
+            Self::Published(source) => source.target_registration(),
+        }
+    }
+    fn destination(&self) -> &crate::disk_names::configuration::ConfiguredSourcePath<'s> {
+        match self {
+            Self::Prepared(source) => source.destination(),
+            Self::Published(source) => source.destination(),
+        }
+    }
+    fn target_root(&self) -> Result<&DiskRoot> {
+        match self {
+            Self::Prepared(source) => source.target_root(),
+            Self::Published(source) => source.target_root(),
+        }
+    }
+}
+
 /// Called only after the owning publication has budgeted the complete metadata
 /// shape and the shared descriptor reservation. All constructors stay here.
 pub(super) fn bind_chain(
@@ -171,6 +203,20 @@ pub(super) fn bind_chain(
     records: &[ContainerPrefix],
     mode: Observation<'_>,
     held: &mut HeldPrefixes,
+) -> Result<HeldParent> {
+    bind_source_chain(ChainSource::Prepared(source), disk, records, mode, held)
+}
+
+pub(super) fn bind_published_chain(
+    source: &PublishedBackupSourcePath<'_>, disk: &Arc<DiskHandle>,
+    records: &[ContainerPrefix], held: &mut HeldPrefixes,
+) -> Result<HeldParent> {
+    bind_source_chain(ChainSource::Published(source), disk, records, Observation::Published, held)
+}
+
+fn bind_source_chain(
+    source: ChainSource<'_, '_>, disk: &Arc<DiskHandle>, records: &[ContainerPrefix],
+    mode: Observation<'_>, held: &mut HeldPrefixes,
 ) -> Result<HeldParent> {
     let id = disk.seal.disk_id.parse::<DiskId>()?;
     if source.target_registration().disk_id != disk.seal.disk_id
@@ -307,9 +353,9 @@ pub(super) fn create_exclusive(root: &DiskRoot, leaf: &EntryName)
 /// Published observation shares the same entity/area verifier as recovery,
 /// but has no preparation fallback and cannot install anything.
 pub(super) fn published_parent(
-    source: &PreparedBackupSourcePath<'_>,
+    source: &PublishedBackupSourcePath<'_>,
     disk: &Arc<DiskHandle>,
     records: &[ContainerPrefix],
 ) -> Result<HeldParent> {
-    bind_chain(source, disk, records, Observation::Published, &mut HeldPrefixes::new())
+    bind_published_chain(source, disk, records, &mut HeldPrefixes::new())
 }

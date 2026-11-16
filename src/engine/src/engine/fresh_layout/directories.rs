@@ -477,6 +477,24 @@ pub(crate) fn read_owner<'a>(
     Ok(root)
 }
 
+pub(crate) fn read_published_backup<'a>(
+    config: &'a Config, resources: &'a crate::disk::DiskResources, state: &'a State,
+    record: &Record, target: DiskId,
+) -> Result<super::namespace::PublishedBackupSourcePath<'a>> {
+    if target == record.owner_disk {
+        return Err(Failure::NamespaceSource.into());
+    }
+    let source = super::namespace::published_backup_source_path(
+        state, config, resources, record.repository, record.branch, target,
+    )?;
+    if source.owner() != record.owner_disk {
+        return Err(Failure::NamespaceSource.into());
+    }
+    require_backup_geometry(config, record, target, source.target_binding(), source.destination())?;
+    source.require_source(state, config, resources)?;
+    Ok(source)
+}
+
 pub(crate) fn read_backup<'a>(
     config: &'a Config, resources: &'a crate::disk::DiskResources, source: &'a State,
     record: &Record, target: DiskId,
@@ -487,14 +505,23 @@ pub(crate) fn read_backup<'a>(
     let source = super::namespace::read_backup_source_path(
         source, config, resources, record.repository, record.branch, target,
     )?;
+    require_backup_geometry(config, record, target, source.target_binding(), source.destination())?;
+    Ok(source)
+}
+
+fn require_backup_geometry(
+    config: &Config, record: &Record, target: DiskId,
+    binding: &storage_contract::working_tree::RootBinding,
+    path: &crate::disk_names::configuration::ConfiguredSourcePath<'_>,
+) -> Result<()> {
     let replica = record.replicas.get(&target).ok_or(Failure::NamespaceUnmapped)?;
     super::containers::prefixes::require_source_geometry(
         config, record.owner_disk, target, replica.root_id, &replica.source_prefixes,
     )?;
-    if replica.root_id != source.target_binding().root_id
-        || replica.source_chain != source.destination().source_registrations().collect::<Vec<_>>()
+    if replica.root_id != binding.root_id
+        || replica.source_chain != path.source_registrations().collect::<Vec<_>>()
     {
         return Err(Failure::NamespaceSource.into());
     }
-    Ok(source)
+    Ok(())
 }

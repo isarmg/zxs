@@ -155,13 +155,30 @@ impl Engine {
 }
 
 fn source(context: &PlanningContext<'_>, input: &Input, scope: &Scope) -> Result<Source> {
+    source_for_replay(context, input, scope, None)
+}
+
+fn source_for_replay(
+    context: &PlanningContext<'_>, input: &Input, scope: &Scope,
+    readonly: Option<&crate::engine::ReadOnlyPublishedCandidate<'_>>,
+) -> Result<Source> {
     if context.current_namespaces.is_some() {
         return Err(Error::AutomaticBackup(AutomaticBackupError::InitialOnly));
     }
     context.config.require_initial_backup_source(context.state)?;
     let repository = input.repository_id.to_string();
     let repo = context.state.repositories.get(&repository).ok_or_else(wrong_source)?;
-    let origin = context.namespace_host_root(input.repository_id, repo.main_branch_id.parse()?)?;
+    let published = readonly.map(|proof| context.published_namespace_metadata(
+        proof, input.repository_id, repo.main_branch_id.parse()?,
+    )).transpose()?;
+    let origin = if published.is_none() {
+        Some(context.namespace_host_root(input.repository_id, repo.main_branch_id.parse()?)?)
+    } else { None };
+    let (binding, disk) = match (&published, &origin) {
+        (Some(source), None) => (source.binding(), source.disk()),
+        (None, Some(source)) => (source.binding(), source.disk()),
+        _ => return Err(wrong_source()),
+    };
     let primaries = backup_primaries_in(context.state,
         &namespace(context.state, &repository)?.entries, &repository, scope,
         |file, path| context.file_placement_settings(&repository, file, path)
@@ -173,7 +190,7 @@ fn source(context: &PlanningContext<'_>, input: &Input, scope: &Scope) -> Result
     {
         return Err(wrong_source());
     }
-    let owner = origin.disk().disk_id.parse::<DiskId>()?;
+    let owner = disk.disk_id.parse::<DiskId>()?;
     let mut route = None;
     for primary in primaries {
         if context.disk(&primary)?.disk_id.parse::<DiskId>()? != owner {
@@ -191,15 +208,19 @@ fn source(context: &PlanningContext<'_>, input: &Input, scope: &Scope) -> Result
         let disk = context.disk(slot)?;
         let id = disk.disk_id.parse::<DiskId>()?;
         if id != owner {
-            // Read-only source admission works during blocked cold replay too.
-            // New writes separately pass PlanningContext::require_write, and
-            // ContainerPreparation retains the same full geometry/entity gate.
-            context.observe_backup_source_path(input.repository_id,
-                repo.main_branch_id.parse()?, id)?.require_context(context)?;
+            match &published {
+                Some(source) => source.require_backup_target(id)?,
+                None => {
+                    // New/Accepted preparation still requires every original
+                    // held source. A Published read loan cannot reach this gate.
+                    context.observe_backup_source_path(input.repository_id,
+                        repo.main_branch_id.parse()?, id)?.require_context(context)?;
+                }
+            }
         }
         disks.push(NamedDisk::from_config(context.config, disk)?);
     }
-    Ok(Source { root: origin.binding().clone(), disks })
+    Ok(Source { root: binding.clone(), disks })
 }
 
 fn directory_selection(
@@ -302,6 +323,7 @@ fn reconstruct(
     context: &PlanningContext<'_>,
     next: &State,
     result: &OperationResult,
+    readonly: Option<&crate::engine::ReadOnlyPublishedCandidate<'_>>,
 ) -> Result<(State, Vec<(FileVersion, Placement)>, Option<DirectoryBackupSelection>)> {
     if next.operations.get(&result.operation_id) != Some(result)
         || context.state.operations.contains_key(&result.operation_id)
@@ -325,7 +347,7 @@ fn reconstruct(
     expected.business_generation = expected.business_generation.checked_add(1)
         .ok_or(Error::AutomaticBackup(AutomaticBackupError::Generation))?;
     let (scope, previous) = initial::select(&expected, scoped)?;
-    if source(context, &decoded.input, &scope)? != decoded.source {
+    if source_for_replay(context, &decoded.input, &scope, readonly)? != decoded.source {
         return Err(wrong_source());
     }
     let directories = directory_selection(context.config, context.state, &decoded.input,
@@ -404,7 +426,7 @@ pub(crate) fn verify_prepared(
 ) -> Result<Option<VerifiedAutomaticBackup>> {
     if !codec::recognizes(result)? { return Ok(None); }
     context.require_write()?;
-    let (expected, facts, directories) = reconstruct(context, next, result)?;
+    let (expected, facts, directories) = reconstruct(context, next, result, None)?;
     if !crate::publication_shape::same_transition(context.state, &expected, next)
         || prepared.len() != facts.len()
     {
@@ -428,6 +450,23 @@ pub(crate) fn verify_candidate(
     candidate: &crate::journal::Candidate,
     containers: &VerifiedContainerTransition<'_>,
 ) -> Result<()> {
+    verify_candidate_source(context, next, candidate, containers, None)
+}
+
+pub(crate) fn verify_readonly_candidate(
+    context: &PlanningContext<'_>, next: &State, candidate: &crate::journal::Candidate,
+    containers: &VerifiedContainerTransition<'_>,
+    source: &crate::engine::ReadOnlyPublishedCandidate<'_>,
+) -> Result<()> {
+    source.require_pair(context, next, candidate)?;
+    verify_candidate_source(context, next, candidate, containers, Some(source))
+}
+
+fn verify_candidate_source(
+    context: &PlanningContext<'_>, next: &State, candidate: &crate::journal::Candidate,
+    containers: &VerifiedContainerTransition<'_>,
+    readonly: Option<&crate::engine::ReadOnlyPublishedCandidate<'_>>,
+) -> Result<()> {
     let result = next.operations.get(&candidate.operation_id).ok_or_else(invalid)?;
     if !codec::recognizes(result)? { return Ok(()); }
     containers.require_pair(context.state, next, candidate)?;
@@ -438,7 +477,7 @@ pub(crate) fn verify_candidate(
     {
         return Err(invalid());
     }
-    let (mut expected, facts, _) = reconstruct(context, next, result)?;
+    let (mut expected, facts, _) = reconstruct(context, next, result, readonly)?;
     // The exact same container verifier proved these physical rows. Neither an
     // automatic receipt nor a reconstructed logical plan can supply them.
     containers.attach_feedback(&mut expected)?;

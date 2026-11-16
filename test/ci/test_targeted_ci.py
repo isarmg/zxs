@@ -315,6 +315,14 @@ class TargetedSelection(unittest.TestCase):
     def test_post_add_automatic_backfill_keeps_exact_source_and_cold_cut(self):
         name = 'first-backup-additions'
         paths = [
+            'src/engine/src/container_storage/ordinary_preparation.rs',
+            'src/engine/src/container_storage/ordinary_preparation/directories.rs',
+            'src/engine/src/container_storage/ordinary_preparation/prefix.rs',
+            'src/engine/src/engine.rs',
+            'src/engine/src/engine/fresh_layout/directories.rs',
+            'src/engine/src/engine/fresh_layout/namespace.rs',
+            'src/engine/src/engine/recovery.rs',
+            'src/engine/src/engine/recovery/workspace_receipts.rs',
             'src/engine/src/engine/fresh_layout/containers.rs',
             'src/engine/src/engine/fresh_layout/namespace/backup.rs',
             'src/engine/src/engine/membership_transition/pending/activation.rs',

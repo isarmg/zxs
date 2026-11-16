@@ -3,6 +3,52 @@ use super::*;
 use crate::engine::disk_registry::current::CurrentNamespaces;
 use std::sync::Arc;
 
+/// A loan of the actual no-repair replay branch's original snapshot and complete
+/// Publication barrier. It has no constructor, writer, installer or Current
+/// conversion outside this module. It only permits logical source reconstruction
+/// without reopening an unavailable upstream device.
+pub(crate) struct ReadOnlyPublishedCandidate<'a> {
+    previous: &'a State,
+    next: &'a State,
+    candidate: &'a Candidate,
+    config: &'a ValidatedConfig,
+    resources: &'a DiskResources,
+    snapshot: &'a Option<String>,
+    _publication: &'a Publication,
+    _seal: &'a PublicationSeal,
+}
+impl ReadOnlyPublishedCandidate<'_> {
+    pub(crate) fn require_context(
+        &self,
+        context: &crate::engine::PlanningContext<'_>,
+    ) -> Result<()> {
+        if !std::ptr::eq(self.previous, context.state.as_ref())
+            || !std::ptr::eq(self.config, context.config)
+            || !std::ptr::eq(self.resources, context.disk_resources.as_ref())
+            || self.snapshot != context.snapshot
+            || self.candidate.previous_snapshot != *self.snapshot
+        {
+            return Err(Error::AutomaticBackup(crate::protection::AutomaticBackupError::Source));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn require_pair(
+        &self,
+        context: &crate::engine::PlanningContext<'_>,
+        next: &State,
+        candidate: &Candidate,
+    ) -> Result<()> {
+        self.require_context(context)?;
+        if !std::ptr::eq(self.next, next) || !std::ptr::eq(self.candidate, candidate) {
+            return Err(Error::AutomaticBackup(
+                crate::protection::AutomaticBackupError::Publication,
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub(super) struct PreparedCandidate {
     pub candidate: Candidate,
     pub publication: Option<Publication>,
@@ -408,13 +454,62 @@ impl Engine {
         original: &crate::history_package::AdmittedState,
         publication: Option<&Publication>,
     ) -> Result<()> {
+        self.verify_replay_namespace_source(candidate, original, publication, None)
+    }
+
+    /// Called only from recover's !can_repair branch after the same actual seal
+    /// observation that otherwise guarded read-only visible installation below.
+    pub(super) fn verify_readonly_published_namespace_candidate(
+        &self,
+        candidate: &Candidate,
+        original: &crate::history_package::AdmittedState,
+        publication: &Publication,
+        seal: &PublicationSeal,
+    ) -> Result<()> {
+        // The caller retains PreparedRecovery's unchanged fixed-member quorum;
+        // this source cannot enter the pending or can_repair branches. A
+        // degraded recovery keeps its original strict source path: only normal
+        // all-member ACCEPT/FINALIZE/Publication evidence issues this loan.
+        if publication.recovery.is_some() {
+            return self.verify_replay_namespace_candidate(
+                candidate, original, Some(publication),
+            );
+        }
+        self.verify_candidate_membership(candidate)?;
+        // The one seal kernel also verifies this Candidate's complete original
+        // ACCEPT/FINALIZE set; a local Publication object is not enough.
+        verify_publication_seal(candidate, publication, seal)?;
+        verify_current_candidate_receipt(candidate, original.state())?;
+        let source = ReadOnlyPublishedCandidate {
+            previous: self.state.as_ref(),
+            next: original.state(),
+            candidate,
+            config: &self.config,
+            resources: self.disk_resources.as_ref(),
+            snapshot: &self.snapshot,
+            _publication: publication,
+            _seal: seal,
+        };
+        source.require_pair(&self.planning_context(), original.state(), candidate)?;
+        self.verify_replay_namespace_source(candidate, original, Some(publication), Some(&source))
+    }
+
+    fn verify_replay_namespace_source(
+        &self,
+        candidate: &Candidate,
+        original: &crate::history_package::AdmittedState,
+        publication: Option<&Publication>,
+        readonly: Option<&ReadOnlyPublishedCandidate<'_>>,
+    ) -> Result<()> {
         let activation = self.config.generation().filter(|generation| {
             self.current_namespaces.is_none()
                 && generation.registry().is_some()
                 && !generation.portable.is_backup()
         });
         let Some(generation) = activation else {
-            return self.verify_current_recovery_candidate(candidate, original.state());
+            return self.verify_current_recovery_candidate_source(
+                candidate, original.state(), readonly,
+            );
         };
         if self.snapshot != generation.snapshot()
             || self.state.as_ref() != generation.base.as_ref()
@@ -436,12 +531,26 @@ impl Engine {
         candidate: &Candidate,
         next: &State,
     ) -> Result<()> {
+        self.verify_current_recovery_candidate_source(candidate, next, None)
+    }
+
+    fn verify_current_recovery_candidate_source(
+        &self,
+        candidate: &Candidate,
+        next: &State,
+        readonly: Option<&ReadOnlyPublishedCandidate<'_>>,
+    ) -> Result<()> {
         let containers = super::super::fresh_layout::containers::verify_transition(
             &self.config, &self.state, next, candidate,
         )?;
-        crate::protection::verify_automatic_backup_candidate(
-            &self.planning_context(), next, candidate, &containers,
-        )?;
+        match readonly {
+            Some(source) => crate::protection::verify_readonly_automatic_backup_candidate(
+                &self.planning_context(), next, candidate, &containers, source,
+            )?,
+            None => crate::protection::verify_automatic_backup_candidate(
+                &self.planning_context(), next, candidate, &containers,
+            )?,
+        }
         if let Some(view) = self.admitted_current_namespaces()? {
             verify_current_candidate_transition(view, &self.state, next, candidate)?;
         } else {

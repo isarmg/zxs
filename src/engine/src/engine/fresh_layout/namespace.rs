@@ -9,8 +9,8 @@ use storage_contract::working_tree::RootBinding;
 use crate::persist::namespace_root::{self, RootOrigin};
 
 mod backup;
-pub(crate) use backup::PreparedBackupSourcePath;
-pub(super) use backup::read_backup_source_path;
+pub(crate) use backup::{PreparedBackupSourcePath, PublishedBackupSourcePath};
+pub(super) use backup::{read_backup_source_path, published_backup_source_path};
 
 impl PlanningContext<'_> {
     /// Only the actual new file-manager root producer calls this, while its
@@ -152,6 +152,48 @@ pub(super) fn registered_root<'a>(
     repository: RepositoryId,
     branch: BranchId,
 ) -> Result<RegisteredNamespaceRoot<'a>> {
+    let NamespaceRegistration { state, config, disk, origin } =
+        registered_namespace(state, config, repository, branch)?;
+    let source = RegisteredNamespaceRoot { _state: state, config, resources, disk, origin };
+    source.common()?;
+    Ok(source)
+}
+
+/// Logical ownership from the admitted publication and its exact configured
+/// registration. It grants no root access: owner writers still require common(),
+/// while an existing backup read separately observes only its actual target.
+struct NamespaceRegistration<'a> {
+    state: &'a State,
+    config: &'a Config,
+    disk: &'a DiskConfig,
+    origin: RootOrigin,
+}
+
+/// Descriptive source from an actual already-published replay loan. Unlike
+/// RegisteredNamespaceRoot it cannot open the owner's common area.
+pub(crate) struct PublishedNamespaceMetadata<'a>(NamespaceRegistration<'a>);
+impl PublishedNamespaceMetadata<'_> {
+    pub(crate) fn binding(&self) -> &RootBinding { &self.0.origin.genesis }
+    pub(crate) fn disk(&self) -> &DiskConfig { self.0.disk }
+    pub(crate) fn require_backup_target(&self, target: DiskId) -> Result<()> {
+        backup::require_registered_path(&self.0, target)
+    }
+}
+impl PlanningContext<'_> {
+    pub(crate) fn published_namespace_metadata(
+        &self, proof: &crate::engine::ReadOnlyPublishedCandidate<'_>,
+        repository: RepositoryId, branch: BranchId,
+    ) -> Result<PublishedNamespaceMetadata<'_>> {
+        proof.require_context(self)?;
+        Ok(PublishedNamespaceMetadata(registered_namespace(
+            self.state, self.config, repository, branch,
+        )?))
+    }
+}
+
+fn registered_namespace<'a>(
+    state: &'a State, config: &'a Config, repository: RepositoryId, branch: BranchId,
+) -> Result<NamespaceRegistration<'a>> {
     let origin = root_origin(state, repository, branch)?;
     let disk = config.disks.iter().find(|disk| {
         disk.disk_id == origin.genesis.registration.disk_id
@@ -160,9 +202,7 @@ pub(super) fn registered_root<'a>(
     if config.storage_roots.get(&id) != Some(&origin.genesis) {
         return Err(Failure::RootIdentity.into());
     }
-    let source = RegisteredNamespaceRoot { _state: state, config, resources, disk, origin };
-    source.common()?;
-    Ok(source)
+    Ok(NamespaceRegistration { state, config, disk, origin })
 }
 
 pub(super) fn root_origin(

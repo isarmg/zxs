@@ -216,6 +216,15 @@ fn assert_cold_state(
     branch_id: &str,
 ) {
     assert!(!engine.is_read_only());
+    assert_history_state(engine, repository, versions, branch_id);
+}
+
+fn assert_history_state(
+    engine: &Engine,
+    repository: &Repository,
+    versions: &[FileVersion],
+    branch_id: &str,
+) {
     let file = versions[0].file_id.as_str();
     assert_eq!(engine.state().file_selections[file], branch_id);
     let branch = &engine.state().branches[branch_id];
@@ -296,6 +305,149 @@ fn assert_engine_reads_only_surviving_tier(
         assert!(!original.exists());
         fs::rename(saved, original).unwrap();
     }
+}
+
+// Both public content APIs retain the actual registered backup FD. A matching
+// copy outside this target cannot make this inode assertion pass.
+fn assert_registered_history_reads(
+    engine: &Engine,
+    system: &Path,
+    versions: &[FileVersion],
+    target: usize,
+) {
+    let roots = std::iter::once(system.to_owned())
+        .chain(engine.config().disks.iter()
+            .filter(|disk| disk.root.exists()).map(|disk| disk.root.clone()))
+        .collect::<Vec<_>>();
+    let before = roots.iter().map(|root| files(root)).collect::<Vec<_>>();
+    let state = storage_engine::canonical_json(engine.state()).unwrap();
+    for (index, version) in versions.iter().enumerate() {
+        let expected = fs::metadata(body_path(engine.config(), version, target)).unwrap();
+        let bytes = if index == 0 { FIRST } else { SECOND };
+        let mut full = engine.open_content(&version.version_id).unwrap();
+        let actual = full.file.metadata().unwrap();
+        assert_eq!((actual.dev(), actual.ino()), (expected.dev(), expected.ino()));
+        assert_eq!(full.content_hash, version.content_hash);
+        let mut body = Vec::new();
+        full.file.read_to_end(&mut body).unwrap();
+        assert_eq!(body, bytes);
+        drop(full);
+
+        // This is the plan consumed by the authenticated server content route,
+        // not inspection/export and not a raw pathname reader.
+        let mut planned = engine.prepare_content(&version.version_id).unwrap().open().unwrap();
+        let actual = planned.file.metadata().unwrap();
+        assert_eq!((actual.dev(), actual.ino()), (expected.dev(), expected.ino()));
+        assert_eq!(planned.content_hash, version.content_hash);
+        let mut body = Vec::new();
+        planned.file.read_to_end(&mut body).unwrap();
+        assert_eq!(body, bytes);
+    }
+    assert_eq!(storage_engine::canonical_json(engine.state()).unwrap(), state);
+    assert_eq!(roots.iter().map(|root| files(root)).collect::<Vec<_>>(), before);
+}
+
+fn assert_content_refused(engine: &Engine, version: &FileVersion) {
+    assert_eq!(engine.open_content(&version.version_id).err().unwrap().code(),
+        ErrorCode::ContentUnavailable);
+    assert_eq!(engine.prepare_content(&version.version_id).unwrap().open()
+        .err().unwrap().code(), ErrorCode::ContentUnavailable);
+}
+
+fn assert_primary_offline_authenticated_history(
+    engine: Engine,
+    system: &Path,
+    temporary: &Path,
+    repository: &Repository,
+    versions: &[FileVersion],
+    branch_id: &str,
+) {
+    let config = engine.config().clone();
+    let a = &config.disks[0].root;
+    let b = &config.disks[1].root;
+    let c = &config.disks[2].root;
+    let parked_a = temporary.join("unavailable-primary");
+    let parked_b = temporary.join("unavailable-secondary");
+    let a_identity = fs::metadata(a).unwrap();
+    // Drop every live descriptor first. Cold open must actually admit B+C with
+    // the unchanged metadata quorum; it cannot keep reading the renamed A FD.
+    drop(engine);
+    let a_bytes = files(a);
+    fs::rename(a, &parked_a).unwrap();
+    let mut engine = Engine::open(system).unwrap();
+    assert!(engine.is_read_only());
+    assert_history_state(&engine, repository, versions, branch_id);
+    assert_registered_history_reads(&engine, system, versions, 1);
+    let before = [files(system), files(b), files(c)];
+    let state = storage_engine::canonical_json(engine.state()).unwrap();
+    assert_eq!(configure_result(&mut engine, repository, 3, 2, operation())
+        .err().unwrap().code(), ErrorCode::RecoveryRequired);
+    assert_eq!(storage_engine::canonical_json(engine.state()).unwrap(), state);
+    assert_eq!([files(system), files(b), files(c)], before);
+    assert!(!a.exists());
+
+    // Once State is genuinely admitted, C can serve its independent local
+    // Publication/UUID-chain/BODY evidence even after B also disappears. A new
+    // process with C alone must still fail the original quorum below.
+    fs::rename(b, &parked_b).unwrap();
+    assert_registered_history_reads(&engine, system, versions, 2);
+    assert!(!a.exists());
+    assert!(!b.exists());
+
+    let common = source_area(&config, 2).join("common-data");
+    let parked_common = temporary.join("original-c-source-common");
+    let common_identity = fs::metadata(&common).unwrap();
+    let common_bytes = files(&common);
+    fs::rename(&common, &parked_common).unwrap();
+    fs::DirBuilder::new().mode(0o700).create(&common).unwrap();
+    for (relative, bytes) in &common_bytes {
+        let path = common.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+    assert_eq!(files(&common), common_bytes);
+    assert_ne!(fs::metadata(&common).unwrap().ino(), common_identity.ino());
+    let damaged = [files(system), files(c), files(&parked_common)];
+    for version in versions {
+        assert_content_refused(&engine, version);
+    }
+    assert_eq!([files(system), files(c), files(&parked_common)], damaged);
+    fs::remove_dir_all(&common).unwrap();
+    fs::rename(&parked_common, &common).unwrap();
+    assert_eq!(fs::metadata(&common).unwrap().ino(), common_identity.ino());
+    assert_registered_history_reads(&engine, system, versions, 2);
+
+    // Break a genuine local immutable publication record, not its State row.
+    // A valid BODY alone cannot authorize either public content reader.
+    let proof = source_area(&config, 2).join("zxs-data/common-data")
+        .join(&versions[0].history_tree_id).join("versions")
+        .join(&versions[0].version_id).join("publication-proof.json");
+    let saved = fs::read(&proof).unwrap();
+    assert!(!saved.is_empty());
+    fs::write(&proof, b"not a publication record").unwrap();
+    let damaged = [files(system), files(c)];
+    assert_content_refused(&engine, &versions[0]);
+    assert_eq!([files(system), files(c)], damaged);
+    fs::write(&proof, &saved).unwrap();
+    assert_registered_history_reads(&engine, system, versions, 2);
+
+    drop(engine);
+    assert_eq!(Engine::open(system).err().unwrap().code(),
+        ErrorCode::MetadataQuorumUnavailable);
+    assert!(!a.exists());
+    assert!(!b.exists());
+    fs::rename(&parked_b, b).unwrap();
+    let engine = Engine::open(system).unwrap();
+    assert!(engine.is_read_only());
+    assert_history_state(&engine, repository, versions, branch_id);
+    assert_registered_history_reads(&engine, system, versions, 1);
+    drop(engine);
+    assert_eq!(files(&parked_a), a_bytes);
+    assert_eq!(fs::metadata(&parked_a).unwrap().ino(), a_identity.ino());
+    fs::rename(&parked_a, a).unwrap();
+    let engine = Engine::open(system).unwrap();
+    assert_cold_state(&engine, repository, versions, branch_id);
+    assert_copies(&engine, versions, 3);
 }
 
 fn identity(config: &Config, disk: &DiskConfig) -> DiskRegistrationIdentity {
@@ -555,4 +707,7 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
     engine = inspect_offline_tier(engine, &system, &versions, &branch_id, 2);
     assert_cold_state(&engine, &repository, &versions, &branch_id);
     assert_copies(&engine, &versions, 3);
+    assert_primary_offline_authenticated_history(
+        engine, &system, temp.path(), &repository, &versions, &branch_id,
+    );
 }
