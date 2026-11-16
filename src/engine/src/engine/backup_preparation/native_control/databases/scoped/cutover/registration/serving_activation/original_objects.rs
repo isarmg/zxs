@@ -219,3 +219,7 @@ pub(super) fn verify_recovered(
     }
     Ok(completed)
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../../../../../test/engine/unit/backup_original_published_tests.rs"]
+mod tests;

@@ -12,6 +12,30 @@ use std::sync::Arc;
 
 const MAX_COMPLETE: usize = 4 * 1024 * 1024;
 const COMPLETION_RESERVE: u64 = 2 * MAX_COMPLETE as u64 + 1024 * 1024;
+const MAX_CONTAINER_ENTRIES: usize = 65_536;
+
+fn require_database_names(root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    for (count, entry) in root.entries(root.path())?.enumerate() {
+        preparation_checkpoint(stop)?;
+        if count == MAX_CONTAINER_ENTRIES {
+            return Err(Failure::ContainerBudget.into());
+        }
+        let name = entry.map_err(crate::disk::fs_error)?;
+        let bytes = name.as_os_str().as_bytes();
+        // SQLite companions may contain uncheckpointed state. The preserving
+        // installer owns only NAME; it must neither ignore nor clean siblings.
+        // Its private retention/stage is outside this held FILE container.
+        if bytes.starts_with(b".zxs-")
+            && bytes.windows(b".sqlite".len()).any(|part| part == b".sqlite")
+            && bytes != file_database::NAME.as_bytes()
+        {
+            return Err(Failure::BackupLayoutEvidence.into());
+        }
+    }
+    Ok(())
+}
 
 struct File {
     file: FileId,
@@ -223,6 +247,7 @@ impl<'a> BackupOriginalImage<'a> {
             }
             let held = File::capture(source, id)?;
             file_database::install::verify_held_container(&held.root, &file, projection.view())?;
+            require_database_names(&held.root, stop)?;
             let length = bytes.len() as u64;
             let digest = blake3::hash(&bytes).to_hex().to_string();
             let install = PreparedInstall::capture_held(
@@ -309,6 +334,7 @@ impl<'a> BackupOriginalImage<'a> {
         file_database::install::verify_held_container(
             &object.file.root, &object.file.file.to_string(), self.projection.view(),
         )?;
+        require_database_names(&object.file.root, stop)?;
         let root = &object.file.root;
         let path = root.path().join(file_database::NAME);
         let before = crate::file_stamp::FileStamp::from_metadata(
@@ -345,6 +371,7 @@ impl<'a> BackupOriginalImage<'a> {
         for (object, install) in self.objects.iter().zip(std::mem::take(&mut self.installs)) {
             self.source.require(stop)?;
             object.file.verify(self.source.root())?;
+            require_database_names(&object.file.root, stop)?;
             install.apply(&object.file.current, &mut |_| preparation_checkpoint(stop))?;
             self.read(object, stop)?;
         }

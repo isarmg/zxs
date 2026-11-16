@@ -5107,6 +5107,56 @@
           "features": []
         }
       ]
+    },
+    "backup-published-original-files": {
+      "reason": "Exercise original FILE database preservation only from the actual registered Genesis source roots and real all-original-member first Backup Publication. Reject SQLite sidecars before any exchange and on completed readback; keep the same durable recipe on partial retry, real old inode retention and unchanged BODY. No manufactured source State, directory Git fallback, target replacement, relaxed admission, disabled legacy test or larger timeout.",
+      "python_tests": [
+        "test_backup_published_original_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [],
+          "isolate": true,
+          "exact": [
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::serving_activation::original_objects::tests::published_original_files_keep_no_clobber_readback_and_same_decision_retry"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [
+            "fault-injection"
+          ],
+          "isolate": true,
+          "exact": [
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::serving_activation::original_objects::tests::published_original_files_keep_no_clobber_readback_and_same_decision_retry"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -14616,7 +14666,8 @@
     {
       "path": "src/engine/src/container_storage/ordinary_preparation/backup/originals.rs",
       "groups": [
-        "terminal-backup-source-layout"
+        "terminal-backup-source-layout",
+        "backup-published-original-files"
       ]
     },
     {
@@ -14670,7 +14721,8 @@
     {
       "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving_activation/original_objects.rs",
       "groups": [
-        "terminal-backup-source-layout"
+        "terminal-backup-source-layout",
+        "backup-published-original-files"
       ]
     },
     {
@@ -14929,6 +14981,18 @@
       "path": "test/engine/unit/snapshot_worktree/published_commit_tail.rs",
       "groups": [
         "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_original_published_tests.rs",
+      "groups": [
+        "backup-published-original-files"
+      ]
+    },
+    {
+      "path": "test/ci/test_backup_published_original_ci.py",
+      "groups": [
+        "backup-published-original-files"
       ]
     }
   ],
