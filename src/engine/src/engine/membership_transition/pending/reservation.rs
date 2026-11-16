@@ -177,7 +177,7 @@ impl ReservedRoot {
         verify_marker(&self.root, &self.name)?;
         for entry in self.root.entries(self.root.path())? {
             let entry = entry.map_err(fs_error)?;
-            if entry.as_os_str() != self.name
+            if entry.as_os_str() != std::ffi::OsStr::new(&self.name)
                 && entry != *layout::DISK_WRITER_LOCK
                 && entry != *layout::COMMON_DATA_ROOT
                 && entry != *layout::DELETED_DATA_ROOT

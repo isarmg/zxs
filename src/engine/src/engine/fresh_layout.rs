@@ -46,7 +46,7 @@ pub enum FreshLayoutError {
     #[error("the Add layout feedback differs from its request or held physical roots")]
     AdditionEvidence,
     #[error("decoding the immutable Add layout preparation: {0}")]
-    AdditionRecord(#[source] json_codec::Error),
+    AdditionRecord(#[source] storage_contract::Error),
     #[error("the persisted layout does not cover the exact registered disk set")]
     Registration,
     #[error("the registered physical root or one of its three roots changed")]
