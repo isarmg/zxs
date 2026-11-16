@@ -69,6 +69,7 @@ class TargetedSelection(unittest.TestCase):
     def test_initial_storage_result_keeps_exact_web_completion_and_old_consumers(self):
         name = 'initial-storage-result-admission'
         paths = [
+            'src/engine/src/authority_selection.rs',
             'src/engine/src/engine/initial_storage.rs',
             'src/engine/src/persist/initial_storage.rs',
             'src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs',

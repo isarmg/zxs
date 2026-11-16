@@ -41,7 +41,8 @@ impl SelectionGuard {
     }
 
     /// Read through the same SYSTEM directory whose selection lock is held.
-    /// A successful read does not admit the entry's contents or any storage root.
+    /// The caller must verify the read contents against its own admission proof;
+    /// the guard establishes SYSTEM directory identity, not storage authority.
     pub(crate) fn read_system_entry(
         &self,
         name: &EntryName,

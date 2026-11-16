@@ -14330,6 +14330,12 @@
       ]
     },
     {
+      "path": "src/engine/src/authority_selection.rs",
+      "groups": [
+        "initial-storage-result-admission"
+      ]
+    },
+    {
       "path": "src/engine/src/engine/initial_storage.rs",
       "groups": [
         "initial-storage-result-admission"
