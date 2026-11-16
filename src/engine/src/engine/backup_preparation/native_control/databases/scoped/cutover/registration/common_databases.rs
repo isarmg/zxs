@@ -330,3 +330,24 @@ pub(super) fn observe(
     Plan::capture(context, prepared, decision, expected, stop)?
         .observe(context, prepared, stop)
 }
+
+/// One read-only namespace observation borrows one immutable expected recipe.
+/// The callback cannot retain its borrowed registry. Both sides independently
+/// read the original members, every target BODY/database and named root again;
+/// no successful observation is reused and no Plan survives this call.
+pub(super) fn observe_with_namespaces<T>(
+    context: &Context<'_>,
+    prepared: &PreparedBackupRegistry,
+    decision: &AdmittedBackupDecision,
+    expected: &BackupFirstPublicationHash,
+    stop: &AtomicBool,
+    action: impl FnOnce(&published_registry::Plan) -> Result<T>,
+) -> Result<(BackupCommonDatabasesReport, T)> {
+    let plan = Plan::capture(context, prepared, decision, expected, stop)?;
+    plan.observe(context, prepared, stop)?;
+    let value = action(plan.published.registry())?;
+    // The same immutable recipe is checked against fresh physical bytes, not
+    // compared with a second clone of its own manifest hash.
+    let observed = plan.observe(context, prepared, stop)?;
+    Ok((observed, value))
+}

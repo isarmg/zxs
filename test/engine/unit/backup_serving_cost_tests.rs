@@ -178,7 +178,8 @@ fn measured<T>(
     let _ = writeln!(
         std::io::stderr(),
         "[backup-component-us inclusive] stage={stage} iteration={iteration} target={target} \
-         elapsed_us={} ok={} targets=2 files=1 versions=2 body_bytes=40 directory_scopes=0",
+         elapsed_us={} ok={} targets=2 files=1 versions=2 body_bytes=40 \
+         namespace_directory_scopes=2 directory_git_objects=0",
         start.elapsed().as_micros(),
         result.is_ok(),
     );
@@ -502,6 +503,9 @@ fn verify_retained_plan_readback(
             .join("content")
             .join(&version.creation_name))
     })?;
+    current_read::reuse_tests::verify_same_invocation_readback(
+        temporary, context, prepared, decision, expected, &body, stop,
+    )?;
     let original = fs::read(&body).unwrap();
     let mut damaged = original.clone();
     damaged[0] ^= 1;
@@ -614,8 +618,14 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     assert_eq!(configured.retained_replaced_terminal.slot_id, "C01");
     let registry = published_registry::install(&prepared, &decision, &expected, &stop)?;
     choices.observe_first_publication(&prepared, &candidate, &stop)?;
+    assert_eq!(registry.branch_scopes, engine.state().branches.len());
     assert_eq!(registry.branch_scopes, 2);
-    assert_eq!(registry.directory_scopes, 0);
+    // Ordinary registered namespace branches are not initialized DirectoryGit
+    // repositories. Both genuine Mkdir paths remain in the native registry.
+    assert_eq!(registry.directory_scopes, engine.state().directory_branches.len());
+    assert_eq!(registry.directory_scopes, 2);
+    assert_eq!(engine.state().namespace_directories.len(), 2);
+    assert!(engine.state().directory_git_repositories.is_empty());
     // Real install, never a forged manifest or manually synthesized target tree.
     let installed = install(&prepared, &decision, &expected, &stop)?;
     choices.observe_first_publication(&prepared, &candidate, &stop)?;

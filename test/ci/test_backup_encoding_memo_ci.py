@@ -14,6 +14,8 @@ PATHS = [
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/configuration.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving/reads.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/common_databases.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/current_read.rs',
+    'test/engine/unit/backup_current_read_plan_tests.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/generation_control.rs',
     'test/engine/unit/backup_generation_encoding_probe.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_registry.rs',
@@ -72,6 +74,34 @@ class BackupEncodingMemoSelection(unittest.TestCase):
                 plan = self.retained_plan([path])
                 self.assertIn('backup-scoped-encoding-memo', plan['groups'])
                 self.assertIn('test_backup_encoding_memo_ci', plan['python_tests'])
+
+    def test_current_read_plan_keeps_existing_cost_and_both_original_transactions(self):
+        paths = [
+            'src/engine/src/engine/backup_preparation/native_control/databases/scoped/'
+            'cutover/registration/current_read.rs',
+            'test/engine/unit/backup_current_read_plan_tests.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertEqual(plan['groups'], [
+                    'backup-scoped-encoding-memo', 'terminal-backup-source-layout'])
+        unit = self.policy['groups']['backup-scoped-encoding-memo']['rust_targets'][0]
+        self.assertIn(
+            'engine::backup_preparation::native_control::databases::scoped::cutover::'
+            'registration::serving::cost_tests::', unit['prefixes'])
+        self.assertEqual(unit['max_tests'], 96)
+        self.assertEqual(unit['timeout_seconds'], 900)
+        targets = self.policy['groups']['terminal-backup-source-layout']['rust_targets']
+        for target, features in zip(targets[:2], [[], ['fault-injection']]):
+            self.assertEqual(target['features'], features)
+            self.assertTrue(target['default_features'])
+            self.assertTrue(target['isolate'])
+            self.assertEqual(target['exact'], [
+                'backup_preparation::transaction_serving::'
+                'same_backup_switch_serves_and_replays_normal_successor_publications'])
+            self.assertEqual(target['max_tests'], 1)
+            self.assertEqual(target['timeout_seconds'], 900)
 
     def test_graph_decoder_consumers_keep_backup_and_existing_shared_coverage(self):
         for path in [

@@ -995,3 +995,38 @@ None／cold／原 registry verify 预热后，逐目标比较完整 prefix objec
 当前切片待准确后继 GitHub 定向验证；原 exact/max1/900、
 memo 单元静态预计 89 项，保留 96 上限及全部旧选择；实际执行数以新 SHA 工件为准。
 不宣称完整事务已闭环。
+
+
+## 单次 Current 只读观察的同源 Plan 复用（待验证）
+
+以 `13a1972ac19e427cf0182633a7b9bd4c1e13107c` 为前像，此片只消除一次
+`current_read::observe` 中两个 common recipe 与独立 namespace recipe 的重复构造。
+唯一 `common_databases::Plan` 的同一 published registry 借给原 namespace reader；
+借用不能逃出回调，Plan 不存入 Engine、worker 或全局缓存，也不跨安装、写入或重试。
+
+回调之前和之后仍各自执行真实 `Plan::observe`：原成员 root/锁/seal、SYSTEM 与
+每个原成员的完整 common SQLite 字节、全部目标的完整 source image/BODY、
+current/history 数据库、原选择的 FirstPublication 及 completion 均重新读取。
+namespace reader 仍逐真实目标重读 registry/State/Publication、完成原 archive replay
+并核 exact State，保原 budget、取消和 named-root 尾门。不缓存成功观察或把报告当权限。
+已有 recipe 的全部限额保持；同次回调期间保留一个有界 common recipe，未新增第二份
+聚合镜像。该片不改安装、Current 激活、写栅栏、故障恢复或原始源选择。
+
+官方 `5312e0f` / run `43882818728` 的两个原事务仍在 900 秒超时，已到后继 writer
+fence / target-only writer I/O；阶段推进不是完整成功，也不是配对性能结论。
+同轮 component cost 测试在 `registry.directory_scopes` 的旧 `0` 断言处失败，尚未到
+retained-plan adversarial helper。实际 fixture 有两个 registered namespace branch scope
+和两个 Mkdir row，但没有 initialized DirectoryGit object。本片分别对实际 State 与
+registry 断言这些事实，保后续 image 的 DirectoryGit object 数为零；不把 0 盲改为 2。
+
+同一真实 cost fixture 的 cfg(test) helper 对照改前完整组合，比较完整报告。
+仅在第一次真实 common + namespace 校验之后，分别改坏实际目标 SQLite、实际 BODY、
+替换目标根名字下的实体以及触发取消。保留的 expected recipe 必须在第二次观察拒绝，
+与独立重建的错误码一致，且实际所有文件字节与目录/文件 inode 不再变化；随后仅恢复
+测试自己破坏的材料，再次完整观察成功。不制造 authority 或直接返回已保存的成功结果。
+该 helper 没有独立测试函数，沿原 serving cost test 执行。
+
+只增加 `current_read.rs` 和新 helper 的两条精确 CI 规则；全部旧组和规则、默认/FI
+原事务 exact/max1/900、cost 组 max96/900 及两种 Engine 产品检查保持不变。
+未本地编译、测试或执行 selector；以上为源码和测试设计，须由后继准确 SHA 的
+GitHub 结果确认，不宣称 900 秒瓶颈或终态服务闭环已解决。

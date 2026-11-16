@@ -79,15 +79,12 @@ fn count(view: &BackupNamespaceAdmission<'_>, stop: &AtomicBool) -> Result<Count
     Ok(result)
 }
 
-pub(super) fn observe(
-    context: &common_databases::Context<'_>,
+fn namespace_counts(
+    plan: &published_registry::Plan,
     prepared: &PreparedBackupRegistry,
-    decision: &AdmittedBackupDecision,
     expected: &BackupFirstPublicationHash,
     stop: &AtomicBool,
-) -> Result<BackupCurrentReadReport> {
-    let before = common_databases::observe(context, prepared, decision, expected, stop)?;
-    let plan = published_registry::Plan::capture(prepared, decision, expected, stop)?;
+) -> Result<Counts> {
     let mut counts = None;
     for index in 0..prepared.targets.len() {
         preparation_checkpoint(stop)?;
@@ -100,15 +97,20 @@ pub(super) fn observe(
         }
         counts = Some(current);
     }
-    // Old member journals, all source bindings and every real database/body
-    // are reobserved before returning a common result. No online subset wins.
-    let common = common_databases::observe(context, prepared, decision, expected, stop)?;
-    if common.common_manifest_hash != before.common_manifest_hash {
-        return Err(invalid(
-            "Backup common database binding changed during namespace admission",
-        ));
-    }
-    let counts = counts.expect("invariant: original Backup selection has at least one target");
+    Ok(counts.expect("invariant: original Backup selection has at least one target"))
+}
+
+pub(super) fn observe(
+    context: &common_databases::Context<'_>,
+    prepared: &PreparedBackupRegistry,
+    decision: &AdmittedBackupDecision,
+    expected: &BackupFirstPublicationHash,
+    stop: &AtomicBool,
+) -> Result<BackupCurrentReadReport> {
+    let (common, counts) = common_databases::observe_with_namespaces(
+        context, prepared, decision, expected, stop,
+        |plan| namespace_counts(plan, prepared, expected, stop),
+    )?;
     Ok(BackupCurrentReadReport {
         common,
         targets: prepared.targets.len(),
@@ -120,3 +122,7 @@ pub(super) fn observe(
         unavailable_versions: counts.unavailable,
     })
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../../../../test/engine/unit/backup_current_read_plan_tests.rs"]
+pub(super) mod reuse_tests;
