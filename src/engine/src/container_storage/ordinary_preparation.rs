@@ -225,7 +225,11 @@ impl ObservedContainerReplica {
     pub(super) fn current_path(&self) -> Result<PathBuf> {
         self.verify()?;
         if self.installed.get().is_some() {
-            self.named_path()
+            // The held parent still carries its original preparation spelling
+            // after its inode is installed. Export the decided address only
+            // after verify() has checked that same held entity at its real name.
+            Ok(self.parent.published_path()?
+                .join(layout::namespace::directory(&self.observed_name).as_path()))
         } else {
             self.preparation_path()
         }
