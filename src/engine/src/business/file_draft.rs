@@ -42,6 +42,8 @@ pub enum DraftError {
     },
     #[error("manual commit mode is required for a shared draft write")]
     ManualRequired,
+    #[error("automatic mode ended; the old automatic handle cannot save a history node")]
+    AutomaticRequired,
     #[error("the shared draft has no uncommitted body")]
     DraftRequired,
     #[error("commit or discard the shared draft before changing mode or selection")]
@@ -64,8 +66,12 @@ impl DraftError {
                 ErrorCode::ResourceLimit
             }
             Self::Body => ErrorCode::ChecksumMismatch,
-            Self::RevisionChanged { .. } | Self::ManualRequired | Self::DraftRequired
-            | Self::Dirty | Self::BaseChanged => ErrorCode::FileBranchConflict,
+            Self::RevisionChanged { .. }
+            | Self::ManualRequired
+            | Self::AutomaticRequired
+            | Self::DraftRequired
+            | Self::Dirty
+            | Self::BaseChanged => ErrorCode::FileBranchConflict,
         }
     }
 }

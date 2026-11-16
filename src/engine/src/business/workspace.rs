@@ -323,6 +323,35 @@ impl Engine {
         workspace: &Workspace,
         path: &name_policy::PortablePath,
     ) -> Result<()> {
+        self.workspace_selected_file(workspace, path).map(|_| ())
+    }
+
+    /// Admit another automatic descriptor mutation against its captured FILE,
+    /// not whichever occurrence happens to be visible at the path today. This
+    /// shares selection resolution with the read-only validator. The caller
+    /// holds its current credential admission and the same Engine lock.
+    pub fn validate_workspace_automatic_write(
+        &self,
+        workspace: &Workspace,
+        path: &name_policy::PortablePath,
+    ) -> Result<()> {
+        if let Some(file) = self.workspace_selected_file(workspace, path)?
+            && self.state.file_containers.get(&file).is_some_and(|record| {
+                record.working.mode() == storage_contract::file_draft::CommitMode::Manual
+            })
+        {
+            return Err(Error::FileDraft(
+                crate::business::file_draft::DraftError::AutomaticRequired,
+            ));
+        }
+        Ok(())
+    }
+
+    fn workspace_selected_file(
+        &self,
+        workspace: &Workspace,
+        path: &name_policy::PortablePath,
+    ) -> Result<Option<storage_contract::FileId>> {
         let key = path.key();
         validate_directory_selection_key(&self.state, workspace, key)?;
         if self.state.branches.get(&workspace.branch_id)
@@ -349,7 +378,8 @@ impl Engine {
             let entry = projected.binary_search_by(|entry| entry.lookup_key().cmp(key))
                 .ok().map(|index| &projected[index])
                 .ok_or(Error::PathChange(crate::PathChangeError::WorkspaceLocation))?;
-            return validate_file_context(&self.state, workspace, &entry.file_id, key);
+            validate_file_context(&self.state, workspace, &entry.file_id, key)?;
+            return Ok(Some(entry.file_id.parse()?));
         }
         let baseline = self.workspace_namespace_entries(workspace)?;
         let tree = crate::NamespaceTree::from_published_entries(baseline.entries());
@@ -377,8 +407,9 @@ impl Engine {
         }
         if let Some(entry) = entry {
             validate_file_context(&self.state, workspace, &entry.file_id, key)?;
+            return Ok(Some(entry.file_id.parse()?));
         }
-        Ok(())
+        Ok(None)
     }
     pub fn create_workspace(&mut self, branch_id: &str, principal: &str) -> Result<Workspace> {
         self.create_workspace_with_intent(branch_id, principal, |_| Ok(()))

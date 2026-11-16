@@ -5154,7 +5154,7 @@
       "rust_targets": []
     },
     "ordinary-smb-manual-draft": {
-      "reason": "Actual authenticated SMB Manual FILE handles publish only file.draft.write, retain frozen uncertain requests and local bytes/quota, and cold-read the published shared draft. The genuine HTTP management endpoint alone creates a FILE version. Include lost-response/later-FD-byte refusal and the unchanged Automatic path. No new pool format, RPC wire, unflushed-orphan adoption, or Samba-network acceptance claim.",
+      "reason": "Actual authenticated SMB Manual FILE handles publish only file.draft.write, retain frozen uncertain requests and local bytes/quota, and cold-read the published shared draft. The genuine HTTP management endpoint alone creates a FILE version. Include lost-response/later-FD-byte refusal and the unchanged Automatic path. No new pool format, RPC wire, unflushed-orphan adoption, or Samba-network acceptance claim. Real HTTP Auto-to-Manual switching also fences old undecided Automatic handles before upload while preserving same-inode custody/quota, the existing preparation lock, original ACCEPT cold completion and permanent exact retries.",
       "python_tests": [
         "test_targeted_ci"
       ],
@@ -5170,9 +5170,11 @@
           "timeout_seconds": 900,
           "kind": "lib",
           "exact": [
-            "smb_rpc::tests::manual_draft_tests::lost_manual_reply_reuses_the_frozen_request_and_never_acknowledges_later_fd_bytes"
+            "smb_rpc::tests::manual_draft_tests::lost_manual_reply_reuses_the_frozen_request_and_never_acknowledges_later_fd_bytes",
+            "engine_backend::automatic_mode_tests::real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_cold",
+            "engine_backend::automatic_mode_tests::accepted_auto_rpc_save_cold_completes_before_mode_switch_and_replays_only_original_request"
           ],
-          "max_tests": 1
+          "max_tests": 3
         },
         {
           "package": "storage-server",
@@ -15291,6 +15293,30 @@
       "path": "test/ci/test_smb_vfs_manual_ci.py",
       "groups": [
         "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/automatic_mode_tests.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "docs/validation/automatic-manual-handle-fence.md",
+      "groups": [
+        "ordinary-smb-manual-draft"
       ]
     }
   ],

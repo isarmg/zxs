@@ -102,6 +102,10 @@ class TargetedSelection(unittest.TestCase):
     def test_ordinary_smb_manual_draft_keeps_actual_rpc_http_and_old_consumers(self):
         name = 'ordinary-smb-manual-draft'
         paths = [
+            'src/engine/src/business/workspace.rs',
+            'src/engine/src/business/file_draft.rs',
+            'test/server/unit/engine_backend/automatic_mode_tests.rs',
+            'docs/validation/automatic-manual-handle-fence.md',
             'src/server/src/backend_methods.rs',
             'src/server/src/backend_smb_draft.rs',
             'src/server/src/engine_backend/file_draft.rs',
@@ -145,6 +149,10 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(unit['exact'], [
             'smb_rpc::tests::manual_draft_tests::'
             'lost_manual_reply_reuses_the_frozen_request_and_never_acknowledges_later_fd_bytes',
+            'engine_backend::automatic_mode_tests::'
+            'real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_cold',
+            'engine_backend::automatic_mode_tests::'
+            'accepted_auto_rpc_save_cold_completes_before_mode_switch_and_replays_only_original_request',
         ])
         self.assertEqual(rpc['exact'], [
             'manual_draft::'
@@ -154,7 +162,7 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(web['exact'], [
             'fresh_working::fresh_authenticated_draft_and_worktree_survive_cold_exact_retries',
         ])
-        self.assertEqual((unit['kind'], unit['max_tests']), ('lib', 1))
+        self.assertEqual((unit['kind'], unit['max_tests']), ('lib', 3))
         self.assertEqual((rpc['kind'], rpc['name'], rpc['max_tests']),
                          ('test', 'phase1_smb_rpc', 2))
         self.assertEqual((web['kind'], web['name'], web['max_tests']),
@@ -1657,7 +1665,7 @@ class TargetedSelection(unittest.TestCase):
             'container-unchanged-save', 'portable-path-consumers',
         ], ['container-path-facts-engine', 'container-lifecycle-engine',
             'upload-occurrence-source', 'workspace-version-construction',
-            'workspace-logical-input'])
+            'workspace-logical-input', 'ordinary-smb-manual-draft'])
         self.assertEqual(plan['groups'],
                          ['ci-selection', 'container-tags-engine',
                           'container-unchanged-save', 'portable-path-consumers'])

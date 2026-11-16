@@ -2204,7 +2204,7 @@ impl Backend for EngineBackend {
         let workspace = workspace_authorize(&engine, &current, workspace)?;
         if let Some(path) = file {
             engine
-                .validate_workspace_file_selection(&workspace, path)
+                .validate_workspace_automatic_write(&workspace, path)
                 .map_err(error)?;
         }
         let logical_size = match access {
@@ -2425,6 +2425,10 @@ impl Backend for EngineBackend {
         Ok(disk_monitor::observe(observation))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/engine_backend/automatic_mode_tests.rs"]
+mod automatic_mode_tests;
 
 #[cfg(test)]
 #[path = "../../../test/server/unit/engine_backend/locked_admission_tests.rs"]

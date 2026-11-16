@@ -441,6 +441,16 @@ fn flush_writer(
                 || error.code == storage_contract::ErrorCode::OperationNotFound => {}
         Err(error) => return Err(error),
     }
+    // Existing/uncertain operations above keep their original completion path.
+    // A still-undecided Auto handle must pass today's exact captured-FILE mode
+    // before copying its mutable bytes into another upload preparation. A mode
+    // change during preparation is fenced again by the existing whole-State
+    // revalidation at finish, not a second SMB-specific decision gate.
+    shared.backend.authorize_workspace_write(
+        identity,
+        &writer.workspace.workspace_id,
+        writer.write_access(branch),
+    )?;
     writer
         .directory
         .verify_payload(
