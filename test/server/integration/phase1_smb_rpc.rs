@@ -72,8 +72,8 @@ impl Fixture {
         let engine = Engine::initialize(
             &system,
             Config::development([(
-                name_policy::Name::parse("Primary fixture").unwrap(),
-                root.path().join("p"),
+                name_policy::Name::parse("p").unwrap(),
+                root.path().join("mounted-primary"),
             )]).unwrap(),
         )
         .unwrap();
