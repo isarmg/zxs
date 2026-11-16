@@ -420,7 +420,10 @@ fn assert_single_storage(fixture: &PreparedFixture, storage: &Path) -> Result<()
 // not evidence that the helper UI or a real machine installation has passed.
 fn prepare_primary(fixture: &PreparedFixture, password: &str) -> Result<std::path::PathBuf> {
     use std::sync::{Arc, Mutex};
-    use storage_server::{Backend, setup_recovery::StorageActivationRequest};
+    use name_policy::Name;
+    use storage_server::{
+        Backend, setup_recovery::{NamedStorageSelection, StorageActivationRequest},
+    };
     let storage = fixture.storage_directory()?;
     let discovery = fixture.root.join("storage-parent");
     let (backend, auth) = storage_server::management::open_service_with_options(
@@ -464,7 +467,10 @@ fn prepare_primary(fixture: &PreparedFixture, password: &str) -> Result<std::pat
             backend.setup_operation(
                 "activate",
                 json_codec::to_value(StorageActivationRequest {
-                    selections: vec![selection],
+                    selections: vec![NamedStorageSelection {
+                        selection,
+                        name: Name::parse("Offline fixture")?,
+                    }],
                     mode: storage_engine::Mode::Development,
                 })?,
                 None,

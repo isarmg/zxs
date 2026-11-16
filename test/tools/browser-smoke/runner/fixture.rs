@@ -1,6 +1,7 @@
 //! Test-only persisted file fixture. No product upload/download CLI is required.
 //! The caller owns a fresh private TempDir; never accept a user pool path.
 use super::{Read, Result};
+use name_policy::Name;
 use storage_engine::{CommitRequest, Engine};
 
 const PRINCIPAL: &str = "smoke-admin";
@@ -58,7 +59,11 @@ pub(super) fn initialize_management(temporary: &tempfile::TempDir, password: &st
     let pool = root.join("pool");
     let discovery = root.join("disks");
     fs::DirBuilder::new().mode(0o700).create(&discovery)?;
-    let paths = ["P01", "B01", "C01"].map(|slot| discovery.join(slot));
+    let paths = [
+        (Name::parse("Fixture primary")?, discovery.join("P01")),
+        (Name::parse("Fixture backup")?, discovery.join("B01")),
+        (Name::parse("Fixture archive")?, discovery.join("C01")),
+    ];
     let mut engine = Engine::initialize(&pool, storage_engine::Config::development(paths)?)?;
     let management = pool.join("management");
     fs::DirBuilder::new().mode(0o700).create(&management)?;

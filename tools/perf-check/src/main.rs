@@ -8,6 +8,7 @@ use std::{
     path::Path,
     time::Instant,
 };
+use name_policy::Name;
 use storage_engine::{CommitRequest, Config, Engine};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -151,9 +152,9 @@ fn main() -> Result<()> {
         .tempdir()?;
     let root = temp.path().join("system");
     let config = Config::development([
-        temp.path().join("primary"),
-        temp.path().join("backup"),
-        temp.path().join("tertiary"),
+        (Name::parse("Benchmark primary")?, temp.path().join("primary")),
+        (Name::parse("Benchmark backup")?, temp.path().join("backup")),
+        (Name::parse("Benchmark tertiary")?, temp.path().join("tertiary")),
     ])?;
     let mut engine = Engine::initialize(&root, config)?;
     let repo = engine.create_repository(

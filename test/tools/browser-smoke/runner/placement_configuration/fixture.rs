@@ -1,5 +1,6 @@
 //! Isolated five-directory pool. Never read or mutate a supplied user pool.
 use super::*;
+use name_policy::Name;
 use std::{collections::BTreeMap, os::unix::fs::DirBuilderExt};
 use storage_engine::{CommitRequest, Config, DiskConfig, Engine, OperationId, Repository};
 
@@ -48,12 +49,16 @@ impl Fixture {
             .tempdir_in(parent)?;
         let root = temporary.path();
         let pool = root.join("pool");
-        let mut config =
-            Config::development([root.join("P01"), root.join("B01"), root.join("C01")])?;
+        let mut config = Config::development([
+            (Name::parse("Primary one")?, root.join("P01")),
+            (Name::parse("Backup one")?, root.join("B01")),
+            (Name::parse("Archive one")?, root.join("C01")),
+        ])?;
         for (slot, level, upstream) in [("P02", 1, None), ("B02", 2, Some("P02"))] {
             config.disks.push(DiskConfig {
                 slot_id: slot.into(),
                 disk_id: storage_engine::new_id("disk")?,
+                name: Name::parse(slot)?,
                 root: root.join(slot),
                 level,
                 upstream_slot_id: upstream.map(str::to_owned),

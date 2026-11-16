@@ -141,6 +141,7 @@
     "perf-check": {
       "path": "tools/perf-check",
       "runtime": [
+        "name-policy",
         "storage-engine",
         "platform-io"
       ],
@@ -156,6 +157,7 @@
     "browser-smoke": {
       "path": "tools/browser-smoke",
       "runtime": [
+        "name-policy",
         "storage-engine",
         "storage-server"
       ],

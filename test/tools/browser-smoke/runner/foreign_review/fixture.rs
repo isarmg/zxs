@@ -4,6 +4,7 @@ use std::{
     collections::BTreeMap,
     os::unix::fs::{DirBuilderExt, MetadataExt},
 };
+use name_policy::Name;
 use storage_engine::{
     CommitRequest, Config, Engine, NamespaceOperation, NamespaceOperationKind, OperationId,
     Repository, RepositoryName,
@@ -105,7 +106,8 @@ impl Fixture {
         fs::DirBuilder::new().mode(0o700).create(&discovery)?;
         let pool = root.join("pool");
         let target = discovery.join("known");
-        let mut engine = Engine::initialize(&pool, Config::development([target.clone()])?)?;
+        let config = Config::development([(Name::parse("Known target")?, target.clone())])?;
+        let mut engine = Engine::initialize(&pool, config)?;
         let repository = engine.create_disk_root("P01", PRINCIPAL, OperationId::generate()?)?;
         let workspace = engine.create_workspace(&repository.main_branch_id, PRINCIPAL)?;
         engine.namespace_operation(
@@ -125,10 +127,10 @@ impl Fixture {
         let source = discovery.join("foreign");
         let foreign_pool = root.join("foreign-system");
         let mut config = Config::development([
-            root.join("origin-one"),
-            root.join("backup"),
-            source.clone(),
-            root.join("origin-two"),
+            (Name::parse("Primary one")?, root.join("origin-one")),
+            (Name::parse("Backup disk")?, root.join("backup")),
+            (Name::parse("Archive disk")?, source.clone()),
+            (Name::parse("Primary two")?, root.join("origin-two")),
         ])?;
         config.disks[3].slot_id = "P02".into();
         config.disks[3].level = 1;

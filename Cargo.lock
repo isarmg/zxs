@@ -145,6 +145,7 @@ dependencies = [
  "base64",
  "http",
  "json-codec",
+ "name-policy",
  "storage-engine",
  "storage-server",
  "tempfile",
@@ -852,6 +853,7 @@ name = "perf-check"
 version = "0.1.0"
 dependencies = [
  "json-codec",
+ "name-policy",
  "platform-io",
  "sqlite-access",
  "storage-engine",
