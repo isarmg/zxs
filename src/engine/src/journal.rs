@@ -10,7 +10,8 @@ use std::{
 };
 mod retained_encoding;
 pub(crate) use retained_encoding::{
-    AuthenticatedMetadataRead, MetadataDomain, RawMetadataRead, RetainedMetadataEncoding,
+    AuthenticatedMetadataRead, BorrowedMetadataEncoding, MetadataDomain, RawMetadataRead,
+    RetainedMetadataEncoding,
 };
 
 pub(crate) const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -709,13 +710,7 @@ impl PreparedMetadataObject {
     }
     /// Install already-hashed bytes through an admitted, held directory root.
     pub(crate) fn store_at_root(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<()> {
-        if self.bytes.len() > MAX_METADATA {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ResourceLimit,
-                "serialized metadata exceeds reader limit",
-            ));
-        }
-        write_object_bytes_at(root, disk, self.kind, &self.hash, &self.bytes)
+        store_prepared_bytes_at(root, disk, self.kind, &self.hash, &self.bytes)
     }
     #[cfg(test)]
     pub(crate) fn store(&self, members: &[DiskConfig]) -> Result<String> {
@@ -754,6 +749,22 @@ impl PreparedMetadataObject {
         }
         Ok(self.hash.clone())
     }
+}
+
+fn store_prepared_bytes_at(
+    root: &DiskRoot,
+    disk: &DiskConfig,
+    kind: &'static str,
+    hash: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    if bytes.len() > MAX_METADATA {
+        return Err(Error::new(
+            storage_contract::ErrorCode::ResourceLimit,
+            "serialized metadata exceeds reader limit",
+        ));
+    }
+    write_object_bytes_at(root, disk, kind, hash, bytes)
 }
 
 /// An immutable JSON object authenticated against its referenced domain digest.

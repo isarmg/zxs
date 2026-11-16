@@ -2864,6 +2864,22 @@
         }
       ]
     },
+    "backup-native-recipe-encoding": {
+      "reason": "Reuse only the successful canonical encoding of the exact immutable owner-borrowed native recipe within one ObjectSet. Keep every per-object checkpoint and every target-local held-root read, collision check, write, sync and fresh verification. These two exact regressions cover same-token reuse, cancellation, conflicting or replaced later roots and original per-object failure order. The existing shared journal selection already covers the borrowed encoding/error-precedence test; preserve its independent cap and original 900-second transaction. This does not claim the transaction timeout is resolved.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "exact": [
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::native_metadata::store::tests::native_recipe_reuses_one_encoding_but_rechecks_conflicting_and_replaced_targets",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::native_metadata::store::tests::native_recipe_failure_keeps_original_per_object_write_and_error_order"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "backup-scoped-encoding-memo": {
       "reason": "Reuse only bounded deterministic SYSTEM/DISK SQLite encoding bytes for original and published scopes inside one Backup worker with one shared bounded account. Re-admit target identity, registry and full native history and decode/compare SQLite on every use; preserve the original full transaction 900-second bound and prior backup budget/snapshot regressions. Measure real native serving components only from test-side calls, with all existing admission and physical verification intact. Native archive decoding borrows the freshly authenticated Value instead of cloning its tree; owned-reference differential admission retains roundtrip equality, actual reads, errors, budgets and cancellation. Installed target verification reuses one canonical Task encoding for its intent bytes and domain digest, preserving the existing intent bound and every target read. Authenticated metadata-index/history-root decoding borrows the retained Value and snapshot control-auth takes ownership of its already authenticated Value; preserve every read, graph/schema guard and independent differential admission. Native archive reads may reuse only a journal-created canonical encoding and digest after exact fresh raw/domain equality; retain original strict parsing, expected digest/size checks, target-local budgets and every typed/State/history admission in the original shared transaction account. The no-observer native archive report can reuse a sealed successful read transcript only after each current target repeats the same ordered actual reads, original budgets and cancellation points with exact raw-byte equality. Changed bytes return to the unique verifier using this invocation's already-read prefix; no State/root/decision is cached. Trace retention shares the unchanged worker account and declines without changing admission.",
       "python_tests": [
@@ -11933,6 +11949,18 @@
       "groups": [
         "container-path-facts-engine",
         "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/native_metadata/store.rs",
+      "groups": [
+        "backup-native-recipe-encoding"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_native_metadata_tests.rs",
+      "groups": [
+        "backup-native-recipe-encoding"
       ]
     },
     {

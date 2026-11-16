@@ -2,8 +2,8 @@
 //! continued use of the separate frozen preparation domain; it cannot select
 //! a Config, registration, I/O epoch, generation marker or writer.
 use super::*;
-use crate::journal::AuthenticatedMetadataObject;
-use std::{collections::BTreeSet, path::Path};
+use crate::journal::{BorrowedMetadataEncoding, RawMetadataRead};
+use std::{cell::OnceCell, collections::BTreeSet, path::Path};
 
 const TARGET_SELECTION: &str = "backup-native-metadata-selected.json";
 const MAX_SELECTION: usize = 4096;
@@ -99,8 +99,13 @@ pub(in super::super) fn require_unselected_target(root: &DiskRoot) -> Result<()>
     Ok(())
 }
 
+struct ObjectRecipe<'a> {
+    bytes: &'a [u8],
+    encoding: OnceCell<BorrowedMetadataEncoding<'a>>,
+}
+
 pub(super) struct ObjectSet<'a> {
-    objects: BTreeMap<(&'static str, &'a str), &'a [u8]>,
+    objects: BTreeMap<(&'static str, &'a str), ObjectRecipe<'a>>,
     candidate: &'a str,
     seal: &'a [u8],
     bytes: usize,
@@ -111,11 +116,11 @@ impl<'a> ObjectSet<'a> {
         candidate: &'a str,
         seal: &'a [u8],
     ) -> Result<Self> {
-        let mut objects = BTreeMap::new();
+        let mut objects: BTreeMap<_, ObjectRecipe<'a>> = BTreeMap::new();
         let mut bytes = seal.len();
         for (kind, hash, value) in values {
             if let Some(saved) = objects.get(&(kind, hash)) {
-                if *saved != value {
+                if saved.bytes != value {
                     return Err(invalid("ordinary native object has colliding exact bytes"));
                 }
                 continue;
@@ -124,7 +129,10 @@ impl<'a> ObjectSet<'a> {
             if objects.len() == MAX_OBJECTS || bytes > MAX_BYTES || value.len() > MAX_METADATA {
                 return Err(budget());
             }
-            objects.insert((kind, hash), value);
+            objects.insert((kind, hash), ObjectRecipe {
+                bytes: value,
+                encoding: OnceCell::new(),
+            });
         }
         if seal.len() > MAX_METADATA || bytes > MAX_BYTES {
             return Err(budget());
@@ -139,10 +147,10 @@ impl<'a> ObjectSet<'a> {
     pub(super) fn references(&self) -> Vec<ObjectReference<'_>> {
         self.objects
             .iter()
-            .map(|((kind, hash), bytes)| ObjectReference {
+            .map(|((kind, hash), recipe)| ObjectReference {
                 kind,
                 hash,
-                bytes: bytes.len(),
+                bytes: recipe.bytes.len(),
             })
             .collect()
     }
@@ -153,7 +161,7 @@ impl<'a> ObjectSet<'a> {
         self.bytes
     }
     pub(super) fn get(&self, kind: &'static str, hash: &str) -> Result<&[u8]> {
-        self.objects.get(&(kind, hash)).copied().ok_or_else(|| {
+        self.objects.get(&(kind, hash)).map(|recipe| recipe.bytes).ok_or_else(|| {
             invalid("native registry requested an object outside its exact closed graph")
         })
     }
@@ -169,11 +177,12 @@ impl<'a> ObjectSet<'a> {
     ) -> Result<()> {
         let mut missing = 0u64;
         let mut largest = 0u64;
-        for ((kind, hash), expected) in &self.objects {
+        for ((kind, hash), recipe) in &self.objects {
             preparation_checkpoint(stop)?;
+            let expected = recipe.bytes;
             let paths = crate::journal::existing_object_paths_at(root, disk, kind, hash)?;
             if let Some(path) = paths.first() {
-                if root.read_bytes(path, expected.len())? != *expected {
+                if root.read_bytes(path, expected.len())? != expected {
                     return Err(Error::new(
                         ErrorCode::ObjectCollision,
                         "ordinary native metadata conflicts; no existing object replaced",
@@ -219,19 +228,22 @@ impl<'a> ObjectSet<'a> {
         disk: &DiskConfig,
         stop: &AtomicBool,
     ) -> Result<()> {
-        for ((kind, hash), bytes) in &self.objects {
+        for ((kind, hash), recipe) in &self.objects {
             preparation_checkpoint(stop)?;
-            let object = AuthenticatedMetadataObject::authenticate(
-                kind,
-                hash,
-                storage_contract::strict_json(bytes)?,
-            )?
-            .into_prepared(MAX_METADATA)?;
-            if object.bytes() != *bytes {
-                return Err(invalid(
-                    "ordinary metadata recipe is not the original canonical native bytes",
-                ));
-            }
+            // These are the same immutable owner-borrowed bytes on every disk,
+            // not a lookup by digest or a cached disk observation. Retain only
+            // successful pure encoding, at the original first-use position.
+            let object = match recipe.encoding.get() {
+                Some(object) => object,
+                None => {
+                    let object = RawMetadataRead::parse(kind, hash, recipe.bytes)?
+                        .into_canonical_encoding()?
+                        .ok_or_else(|| invalid(
+                            "ordinary metadata recipe is not the original canonical native bytes",
+                        ))?;
+                    recipe.encoding.get_or_init(|| object)
+                }
+            };
             // Production native storage rejects flat aliases, never replaces a
             // conflicting hash name, and repeats file/directory durability.
             object.store_at_root(root, disk)?;
@@ -244,10 +256,10 @@ impl<'a> ObjectSet<'a> {
         disk: &DiskConfig,
         stop: &AtomicBool,
     ) -> Result<()> {
-        for ((kind, hash), bytes) in &self.objects {
+        for ((kind, hash), recipe) in &self.objects {
             preparation_checkpoint(stop)?;
             let object = crate::journal::load_authenticated_object_at(root, disk, kind, hash)?;
-            if object.bytes() != *bytes {
+            if object.bytes() != recipe.bytes {
                 return Err(invalid(
                     "ordinary native object no longer has its exact published bytes",
                 ));

@@ -36,6 +36,24 @@ pub(crate) struct AuthenticatedMetadataRead<'a> {
     object: AuthenticatedMetadataObject,
 }
 
+/// Canonical recipe bytes borrowed from one immutable owner. This is not a
+/// retained disk read: every installation still uses the ordinary held writer.
+pub(crate) struct BorrowedMetadataEncoding<'a> {
+    kind: &'static str,
+    hash: &'a str,
+    bytes: &'a [u8],
+}
+
+impl BorrowedMetadataEncoding<'_> {
+    pub(crate) fn store_at_root(
+        &self,
+        root: &crate::disk::DiskRoot,
+        disk: &crate::DiskConfig,
+    ) -> Result<()> {
+        super::store_prepared_bytes_at(root, disk, self.kind, self.hash, self.bytes)
+    }
+}
+
 impl<'a> RawMetadataRead<'a> {
     /// Address admission and bounded fresh read/accounting belong to the caller.
     /// Parse only JSON here, preserving its position before canonical encoding.
@@ -59,6 +77,17 @@ impl<'a> RawMetadataRead<'a> {
 
     pub(crate) fn raw(&self) -> &[u8] {
         self.raw
+    }
+
+    /// Keep only a borrow of the exact canonical input after the original
+    /// parser, size and expected-digest gates. Equivalent noncanonical JSON is
+    /// not a recipe; the caller retains its existing noncanonical-input error.
+    pub(crate) fn into_canonical_encoding(self) -> Result<Option<BorrowedMetadataEncoding<'a>>> {
+        let kind = self.domain.0;
+        let hash = self.expected.0;
+        let bytes = self.raw;
+        let object = self.authenticate(None)?.into_object().into_prepared(super::MAX_METADATA)?;
+        Ok((object.bytes() == bytes).then_some(BorrowedMetadataEncoding { kind, hash, bytes }))
     }
 
     pub(crate) fn authenticate(

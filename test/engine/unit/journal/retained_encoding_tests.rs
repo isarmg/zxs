@@ -186,3 +186,38 @@ fn canonical_size_precedes_expected_digest_and_retention_counts_raw_bytes() {
     assert_eq!(payload_bytes(usize::MAX, 1, 0), None);
     assert_eq!(payload_bytes(1, usize::MAX - 1, 1), None);
 }
+
+#[test]
+fn borrowed_canonical_recipe_keeps_exact_input_and_original_error_precedence() {
+    let raw = br#"{"value":1}"#;
+    let (_, expected) = storage_contract::encode_hashed_value(
+        "state-page", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    let encoding = RawMetadataRead::parse("state-page", &expected, raw).unwrap()
+        .into_canonical_encoding().unwrap().unwrap();
+    assert_eq!(encoding.kind, "state-page");
+    assert!(std::ptr::eq(encoding.bytes, raw.as_slice()));
+    assert!(std::ptr::eq(encoding.hash, expected.as_str()));
+
+    // Same canonical value is not the owner's exact canonical recipe bytes.
+    let spaced = b" { \"value\" : 1 } ";
+    assert!(RawMetadataRead::parse("state-page", &expected, spaced).unwrap()
+        .into_canonical_encoding().unwrap().is_none());
+
+    let raw = br#"{"value":2}"#;
+    let reference = AuthenticatedMetadataObject::authenticate(
+        "state-page", &expected, storage_contract::strict_json(raw).unwrap(),
+    ).err().unwrap();
+    let observed = RawMetadataRead::parse("state-page", &expected, raw).unwrap()
+        .into_canonical_encoding().err().unwrap();
+    assert_eq!(signature(&observed), signature(&reference));
+
+    let oversized = json_codec::to_vec(&"x".repeat(crate::journal::MAX_METADATA)).unwrap();
+    let reference = AuthenticatedMetadataObject::authenticate(
+        "state-page", "wrong", storage_contract::strict_json(&oversized).unwrap(),
+    ).err().unwrap();
+    let observed = RawMetadataRead::parse("state-page", "wrong", &oversized).unwrap()
+        .into_canonical_encoding().err().unwrap();
+    assert_eq!(observed.code(), storage_contract::ErrorCode::ResourceLimit);
+    assert_eq!(signature(&observed), signature(&reference));
+}
