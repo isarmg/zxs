@@ -647,18 +647,22 @@ impl DiskRoot {
         Self::same_domain(self.io_binding()?, target.io_binding()?)?;
         let source_operation = self.operation()?;
         let target_operation = target.operation()?;
-        let (source, from_name) = source_operation.private_parent(from)?;
-        let (destination, to_name) = target_operation.private_parent(to)?;
-        source_operation.check_running()?;
-        target_operation.check_running()?;
-        rustix::fs::renameat_with(
-            &source, from_name.as_os_str(), &destination, to_name.as_os_str(),
-            rustix::fs::RenameFlags::NOREPLACE,
-        ).map_err(std::io::Error::from)?;
-        destination.sync_all()?;
-        source.sync_all()?;
-        target_operation.check_running()?;
-        source_operation.check_running()
+        source_operation.rename_to_held_synced(from, &target_operation, to)
+    }
+
+    /// A fresh Add is not an active disk generation. Only the recorded
+    /// bootstrap product may install its fixed area under the original locks.
+    pub(crate) fn install_recorded_addition_area(
+        area: &crate::engine::membership_transition::RecordedAdditionArea<'_>,
+    ) -> Result<()> {
+        let (source, target, name) = area.require()?;
+        let source_operation = source.operation()?;
+        let target_operation = target.operation()?;
+        source_operation.rename_to_held_synced(
+            &source.path().join(name.as_path()),
+            &target_operation,
+            &target.path().join(name.as_path()),
+        )
     }
 
     /// Synchronize the destination before the source-name removal. Publication
@@ -1082,6 +1086,28 @@ impl RootOperation<'_> {
     fn sync_dir(&self, path: &Path) -> Result<()> {
         self.directory(path)?.sync_all()?;
         Ok(())
+    }
+
+    fn rename_to_held_synced(
+        &self,
+        from: &Path,
+        target: &RootOperation<'_>,
+        to: &Path,
+    ) -> Result<()> {
+        let (source, from_name) = self.private_parent(from)?;
+        let (destination, to_name) = target.private_parent(to)?;
+        self.check_running()?;
+        target.check_running()?;
+        rustix::fs::renameat_with(
+            &source, from_name.as_os_str(), &destination, to_name.as_os_str(),
+            rustix::fs::RenameFlags::NOREPLACE,
+        ).map_err(std::io::Error::from)?;
+        // Failed destination durability must not confirm the source unlink.
+        // Cancellation cannot skip this tail after the rename took effect.
+        destination.sync_all()?;
+        source.sync_all()?;
+        target.check_running()?;
+        self.check_running()
     }
 
     fn rename_noreplace_synced(

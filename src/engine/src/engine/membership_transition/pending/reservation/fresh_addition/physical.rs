@@ -9,7 +9,7 @@ use crate::engine::membership_transition::pending::reservation::{
     ReservedRoot, lock, name, verify_marker, verify_writer,
 };
 use crate::engine::membership_transition::pending::reservation::fresh_addition::{
-    Preparation, PreparationFormat, origin,
+    Preparation, PreparationFormat, RecordedAdditionArea, origin,
 };
 use crate::persist::layout;
 use crate::working_tree::records::{file_identity, local_entity};
@@ -178,10 +178,10 @@ impl HeldAddition {
             let destination = self.root.path().join(name.as_path());
             if self.root.optional_metadata(&destination)?.is_none() {
                 let stage = stage.as_ref().ok_or(Failure::AdditionEvidence)?;
-                stage.private_entry_matching(name, file_identity(expected.entity))
-                    .map_err(fresh_layout::directory_error)?;
-                stage.rename_to_held_synced(&stage.path().join(name.as_path()),
-                    &self.root, &destination)?;
+                DiskRoot::install_recorded_addition_area(&RecordedAdditionArea {
+                    root: &self.root, stage, writer: &self.writer,
+                    preparation: value, name, expected,
+                })?;
             }
             self.root.sync_private_entry_matching(name, file_identity(expected.entity))
                 .map_err(fresh_layout::directory_error)?;

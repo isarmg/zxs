@@ -49,6 +49,7 @@ pub use terminal_chain::{
 pub use terminal_resume::{TerminalMetadataResumeAdmission, TerminalReadmissionPreview};
 pub(crate) mod pending;
 pub(in crate::engine) use pending::admission::verify_named_root;
+pub(crate) use pending::reservation::fresh_addition::RecordedAdditionArea;
 pub use archive::{
     MembershipArchiveInspection, MembershipControlArchive, MembershipJournalInspection,
     verify_membership_control_archive,

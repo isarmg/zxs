@@ -45,6 +45,42 @@ enum PreparationFormat {
     FreshRoot,
 }
 
+/// Only `physical::HeldAddition::install`, after the original members have
+/// synchronized the complete feedback, constructs this fixed-area operation.
+/// It borrows the original writer/directory locks and grants no disk admission.
+pub(crate) struct RecordedAdditionArea<'a> {
+    root: &'a DiskRoot,
+    stage: &'a DiskRoot,
+    writer: &'a crate::disk::FenceOwner,
+    preparation: &'a Preparation,
+    name: &'a platform_io::fs_safety::EntryName,
+    expected: &'a LocalDirectoryBinding,
+}
+impl RecordedAdditionArea<'_> {
+    pub(crate) fn require(
+        &self,
+    ) -> Result<(&DiskRoot, &DiskRoot, &platform_io::fs_safety::EntryName)> {
+        if admission::verify_named_root(self.root)?
+            != file_identity(self.preparation.root.root_entity)
+        {
+            return Err(Failure::AdditionEvidence.into());
+        }
+        super::verify_writer(self.root, self.writer)?;
+        let stage_name = layout::membership_layout_stage(self.preparation.stage.directory_id);
+        let named = self.root.private_entry_matching(
+            &stage_name, file_identity(self.preparation.stage.entity),
+        ).map_err(fresh_layout::directory_error)?;
+        if named.directory_identity(named.path())?
+            != self.stage.directory_identity(self.stage.path())?
+        {
+            return Err(Failure::AdditionEvidence.into());
+        }
+        self.stage.private_entry_matching(self.name, file_identity(self.expected.entity))
+            .map_err(fresh_layout::directory_error)?;
+        Ok((self.stage, self.root, self.name))
+    }
+}
+
 /// This product owns the original directory/writer fences. Its target is the
 /// result of the actual synchronized creation, never caller-provided inodes.
 pub(in crate::engine::membership_transition) struct PreparedAddition {
