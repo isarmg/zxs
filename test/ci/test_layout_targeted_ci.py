@@ -3,7 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
-from test_targeted_ci import assert_path_group_extension
+from test_targeted_ci import assert_path_group_extension, origin_selections
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -173,13 +173,16 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
         for path in paths:
             with self.subTest(path=path):
                 plan = CI.select_plan(self.policy, [path])
-                self.assertEqual(plan['groups'], ['checkpoint-layout', 'held-directory-layout'])
-                product = next(target for target in plan['rust_targets']
-                               if target.get('mode') == 'check')
+                groups = ['checkpoint-layout', 'held-directory-layout']
+                if path == paths[1]:
+                    groups.append('generation-anchor-restore')
+                self.assertEqual(plan['groups'], sorted(groups))
+                checkpoint = origin_selections(plan, 'checkpoint-layout')
+                product = next(target for target in checkpoint if target.get('mode') == 'check')
                 self.assertEqual(product['package'], 'storage-engine')
                 self.assertFalse(product['default_features'])
                 self.assertNotIn('features', product)
-                injected = next(target for target in plan['rust_targets']
+                injected = next(target for target in checkpoint
                                 if target.get('features') == ['fault-injection'])
                 self.assertEqual(injected['prefixes'], ['engine::recovery_checkpoint::tests::'])
                 self.assertEqual(injected['max_tests'], 53)
@@ -199,7 +202,8 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
         plan = assert_path_group_extension(self, self.policy, paths,
             ['checkpoint-layout', 'ci-selection', 'held-directory-layout',
              'ordinary-conversion-name-budget', 'projection-cache-layout'],
-            ['fresh-first-add-root-binding', 'terminal-backup-source-layout'])
+            ['fresh-first-add-root-binding', 'generation-anchor-restore',
+             'terminal-backup-source-layout'])
         self.assertEqual(plan['groups'],
                          ['checkpoint-layout', 'ci-selection', 'held-directory-layout',
                           'ordinary-conversion-name-budget', 'projection-cache-layout'])
