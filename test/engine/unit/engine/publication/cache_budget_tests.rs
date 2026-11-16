@@ -167,233 +167,199 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
 
 #[test]
 fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
+    use std::{os::unix::fs::MetadataExt, path::PathBuf};
+
+    // Follow the admitted source-area and container, not the retired
+    // disk-global version locator. This observes the same roots as publication.
+    fn paths(engine: &Engine, version: &FileVersion) -> Vec<(PathBuf, PathBuf, PathBuf)> {
+        engine.config.disks.iter().map(|disk| {
+            let scope = crate::engine::fresh_layout::containers::observe_replica(
+                &engine.config, &engine.disk_resources, engine.state(),
+                version.file_id.parse().unwrap(), disk,
+            ).unwrap();
+            let material = crate::disk::VersionMaterial::current(&scope, version).unwrap();
+            (
+                material.directory().unwrap(),
+                material.body_path().unwrap(),
+                scope.container().unwrap().path().to_owned(),
+            )
+        }).collect()
+    }
+
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
     let config = Config::development([
         (name_policy::Name::parse("Primary").unwrap(), temp.path().join("a")),
         (name_policy::Name::parse("Backup").unwrap(), temp.path().join("b")),
         (name_policy::Name::parse("Archive").unwrap(), temp.path().join("c")),
-    ])
-    .unwrap();
+    ]).unwrap();
+    let slot = config.disks[0].slot_id.clone();
     let mut engine = Engine::initialize(&root, config).unwrap();
-    let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("cache").unwrap(),
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let workspace = engine
-        .create_workspace(&repo.main_branch_id, "alice")
-        .unwrap();
-    engine
-        .stage_bytes(&workspace.workspace_id, "file.txt", b"published bytes")
-        .unwrap();
-    engine
-        .commit_workspace(CommitRequest {
-            workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate().unwrap(),
-            principal: "alice".into(),
-            expected_head: workspace.base_head,
-            fencing_token: workspace.fencing_token,
-            message: "save".into(),
-            request_digest: None,
-        })
-        .unwrap();
+    // Only the actual genesis-root publication binds the user namespace to
+    // common-data. A generic logical repository is not a physical RootOrigin.
+    let repo = engine.create_disk_root(
+        &slot, "alice", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    let policy = new_id("policy").unwrap();
+    engine.update_protection_policy(crate::ProtectionPolicyUpdate {
+        policy_id: &policy, repository_id: &repo.repository_id, path_prefix: "",
+        target_copies: 3, expected_generation: 0, principal: "alice",
+        operation_id: storage_contract::OperationId::generate().unwrap(),
+    }).unwrap();
+    let workspace = engine.create_workspace(&repo.main_branch_id, "alice").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "file.txt", b"published bytes").unwrap();
+    engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: storage_contract::OperationId::generate().unwrap(),
+        principal: "alice".into(), expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token, message: "save".into(), request_digest: None,
+    }).unwrap();
     let old_entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
     let old_version = engine.state.versions[&old_entry.version_id].clone();
-    let original_paths: Vec<_> = engine
-        .config
-        .disks
-        .iter()
-        .map(|disk| {
-            let directory = version_dir(disk, &repo.history_tree_id, &old_entry.version_id);
-            let content = crate::container_storage::content_path(&directory, &old_version).unwrap();
-            let cache = content
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join("container.json");
-            let cache_bytes = std::fs::read(&cache).unwrap();
-            (directory, content, cache, cache_bytes)
-        })
-        .collect();
+    let original_paths = paths(&engine, &old_version).into_iter().map(|(dir, body, container)| {
+        let cache = std::fs::read(container.join("container.json")).unwrap();
+        let database = std::fs::read(container.join(".zxs-file.sqlite")).unwrap();
+        let identity = std::fs::metadata(&container).unwrap();
+        (dir, body, container, cache, database, (identity.dev(), identity.ino()))
+    }).collect::<Vec<_>>();
+    assert_eq!(original_paths.len(), 3);
     let before = canonical_json(engine.state()).unwrap();
     let original_snapshot = engine.snapshot.clone();
     let original_slot = engine.next_slot;
-    let logs: Vec<_> = engine
-        .members()
-        .iter()
-        .map(|disk| std::fs::read(log_path(disk)).unwrap())
-        .collect();
-    let mut next = engine.state().clone();
-    next.sequence = engine.next_slot;
-    let source = root.join("unpublished-source");
-    std::fs::write(&source, b"replacement bytes").unwrap();
-    let mut pending = Vec::new();
-    let version = engine
-        .build_version(
-            &mut next,
-            &mut pending,
-            crate::business::VersionBuild {
-                history: &repo.history_tree_id,
-                file_id: &old_entry.file_id,
-                path: &name_policy::PortablePath::parse("renamed.txt").unwrap(),
-                source: &crate::engine::ReadSource::external(source.clone()),
-                primary: "P01",
-                copies: 3,
-                source_ids: vec![old_entry.version_id.clone()],
-                checkpoint: false,
-            },
-        )
-        .unwrap();
-    let original = next.commits[&next.branches[&repo.main_branch_id].head_commit_id].clone();
-    let mut commit = original.clone();
-    commit.commit_id = new_id("commit").unwrap();
-    commit.parent_commit_ids = vec![original.commit_id];
-    commit.sequence = next.sequence;
-    commit.kind = "content".into();
-    commit.entries = vec![Entry {
-        entry_id: new_id("entry").unwrap(),
-        path: name_policy::PortablePath::parse("renamed.txt").unwrap(),
-        kind: NamespaceEntryKind::File,
-        file_id: old_entry.file_id.clone(),
-        version_id: version.version_id.clone(),
-        size: version.logical_size,
-    }];
-    next.branches
-        .get_mut(&repo.main_branch_id)
-        .unwrap()
-        .head_commit_id = commit.commit_id.clone();
-    next.commits.insert(commit.commit_id.clone(), commit);
-    next.file_names
-        .insert(old_entry.file_id.clone(), "renamed.txt".into());
-    next.file_locations
-        .insert(old_entry.file_id.clone(), "renamed.txt".into());
-    let mut result = next.operations.values().next().unwrap().clone();
-    result.operation_id = storage_contract::OperationId::generate().unwrap();
-    result.sequence = next.sequence;
-    next.operations.insert(result.operation_id, result.clone());
-    let copy_pending = || {
-        pending.iter().map(|payload| Prepared {
-            version: payload.version.clone(),
-            placement: payload.placement.clone(),
-            source: payload.source.clone(),
-        }).collect::<Vec<_>>()
+    let logs = engine.members().iter()
+        .map(|disk| std::fs::read(log_path(disk)).unwrap()).collect::<Vec<_>>();
+
+    // Build a real second content save, including its exact permanent receipt,
+    // actor, path audit and file-branch/node changes. Whole-container rename has
+    // a separate, still-unimplemented physical transition; it is not this budget test.
+    let workspace = engine.create_workspace(&repo.main_branch_id, "alice").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "file.txt", b"replacement bytes").unwrap();
+    let request = CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: storage_contract::OperationId::generate().unwrap(),
+        principal: "alice".into(), expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token, message: "replace contents".into(),
+        request_digest: None,
     };
+    let plan = engine.plan_workspace_commit_inner(request.clone(), None).unwrap();
+    let planned_workspace = plan.workspace;
+    let crate::engine::MutationPlan::Prepared { next, prepared: pending, result } = plan.mutation
+    else { panic!("new workspace save must produce an unpublished plan"); };
+    let next = *next;
+    assert_eq!(pending.len(), 1);
+    let version = pending[0].version.clone();
+    assert_eq!(version.file_id, old_entry.file_id);
+    assert_eq!(version.source_version_ids, vec![old_entry.version_id.clone()]);
+    assert_eq!(pending[0].placement.route_slot_ids.len(), 3);
+    let new_paths = paths(&engine, &version);
+    let copy_pending = || pending.iter().map(|payload| Prepared {
+        version: payload.version.clone(), placement: payload.placement.clone(),
+        source: payload.source.clone(),
+    }).collect::<Vec<_>>();
     let retry_pending = copy_pending();
-    // Exact metadata admission must precede even the first new payload/container
-    // preparation. A smaller metadata budget is not permission to stage first.
+
+    // Exact metadata admission precedes even the first new payload preparation.
     let error = engine.planning_context().prepare_publication_bounded(
         next.clone(), copy_pending(), result.clone(), 128, MAX_METADATA,
     ).err().unwrap();
-    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
-    assert_eq!(canonical_json(engine.state()).unwrap(), before);
-    assert_eq!(engine.snapshot, original_snapshot);
-    assert_eq!(engine.next_slot, original_slot);
-    for disk in &engine.config.disks {
-        assert!(!version_dir(disk, &repo.history_tree_id, &version.version_id).exists());
-    }
-    for (_, content, cache, cache_bytes) in &original_paths {
-        assert_eq!(std::fs::read(content).unwrap(), b"published bytes");
-        assert_eq!(std::fs::read(cache).unwrap(), *cache_bytes);
-    }
-    assert_eq!(
-        engine.members().iter()
-            .map(|disk| std::fs::read(log_path(disk)).unwrap())
-            .collect::<Vec<_>>(),
-        logs,
-    );
-    let error = engine
-        .planning_context()
-        .prepare_publication_bounded(next.clone(), pending, result.clone(), MAX_METADATA, 128)
-        .err()
-        .unwrap();
-    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit, "{error:?}");
     assert!(!engine.blocked);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert_eq!(engine.snapshot, original_snapshot);
     assert_eq!(engine.next_slot, original_slot);
-    assert_eq!(
-        engine.list_tree(&repo.main_branch_id).unwrap()[0].path.as_str(),
-        "file.txt"
-    );
-    assert_eq!(
-        engine
-            .members()
-            .iter()
-            .map(|disk| std::fs::read(log_path(disk)).unwrap())
-            .collect::<Vec<_>>(),
-        logs
-    );
-    for (directory, content, cache, cache_bytes) in &original_paths {
-        assert_eq!(
-            crate::container_storage::content_path(directory, &old_version).unwrap(),
-            *content
-        );
-        assert_eq!(std::fs::read(content).unwrap(), b"published bytes");
-        assert_eq!(std::fs::read(cache).unwrap(), *cache_bytes);
+    for (directory, body, _) in &new_paths {
+        assert!(!directory.exists());
+        assert!(!body.exists());
     }
-    for disk in &engine.config.disks {
-        // Installation happened, but no publication proof or visible rename did.
-        let directory = version_dir(disk, &repo.history_tree_id, &version.version_id);
-        verify_payload(&directory, &version).unwrap();
-        assert!(!directory.join("commit-proof.json").exists());
+    for (_, body, container, cache, database, identity) in &original_paths {
+        assert_eq!(std::fs::read(body).unwrap(), b"published bytes");
+        assert_eq!(std::fs::read(container.join("container.json")).unwrap(), *cache);
+        assert_eq!(std::fs::read(container.join(".zxs-file.sqlite")).unwrap(), *database);
+        let current = std::fs::metadata(container).unwrap();
+        assert_eq!((current.dev(), current.ino()), *identity);
     }
+    assert_eq!(engine.members().iter()
+        .map(|disk| std::fs::read(log_path(disk)).unwrap()).collect::<Vec<_>>(), logs);
+
+    let error = engine.planning_context().prepare_publication_bounded(
+        next.clone(), pending, result.clone(), MAX_METADATA, 128,
+    ).err().unwrap();
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit, "{error:?}");
+    assert!(!engine.blocked);
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert_eq!(engine.snapshot, original_snapshot);
+    assert_eq!(engine.next_slot, original_slot);
+    assert_eq!(engine.list_tree(&repo.main_branch_id).unwrap(), vec![old_entry.clone()]);
+    assert_eq!(engine.members().iter()
+        .map(|disk| std::fs::read(log_path(disk)).unwrap()).collect::<Vec<_>>(), logs);
+    assert_eq!(paths(&engine, &old_version), original_paths.iter()
+        .map(|(dir, body, container, ..)| (dir.clone(), body.clone(), container.clone()))
+        .collect::<Vec<_>>());
+    for (_, body, container, cache, database, identity) in &original_paths {
+        assert_eq!(std::fs::read(body).unwrap(), b"published bytes");
+        assert_eq!(std::fs::read(container.join("container.json")).unwrap(), *cache);
+        assert_eq!(std::fs::read(container.join(".zxs-file.sqlite")).unwrap(), *database);
+        let current = std::fs::metadata(container).unwrap();
+        assert_eq!((current.dev(), current.ino()), *identity);
+    }
+    let installed = engine.config.disks.iter().zip(&new_paths).map(|(disk, (dir, body, _))| {
+        // BODY installation happened, but no local decision proof or namespace
+        // change did. Verify the actual source-scoped descriptor and BODY FD.
+        let scope = crate::engine::fresh_layout::containers::observe_replica(
+            &engine.config, &engine.disk_resources, engine.state(),
+            version.file_id.parse().unwrap(), disk,
+        ).unwrap();
+        let material = crate::disk::VersionMaterial::current(&scope, &version).unwrap();
+        let verified = material.verify_payload().unwrap();
+        drop(verified);
+        assert_eq!(std::fs::read(body).unwrap(), b"replacement bytes");
+        assert!(!dir.join(crate::persist::layout::VERSION_COMMIT_PROOF.as_path()).exists());
+        let identity = std::fs::metadata(body).unwrap();
+        (identity.dev(), identity.ino())
+    }).collect::<Vec<_>>();
     drop(engine);
     let mut engine = Engine::open(&root).unwrap();
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert_eq!(engine.operation(result.operation_id).unwrap_err().code(),
+        storage_contract::ErrorCode::OperationNotFound);
     let expected_state = canonical_json(&next).unwrap();
     let expected_snapshot = prepare_snapshot(&next, MAX_METADATA).unwrap().hash;
     let expected_versions = canonical_json(&retry_pending.iter().map(|payload| VersionEvidence {
-        version: payload.version.clone(),
-        placement: payload.placement.clone(),
+        version: payload.version.clone(), placement: payload.placement.clone(),
     }).collect::<Vec<_>>()).unwrap();
-    let detached = engine
-        .planning_context()
-        .prepare_publication_bounded(
-            next,
-            retry_pending,
-            result.clone(),
-            MAX_METADATA,
-            MAX_METADATA,
-        )
-        .unwrap();
+    let detached = engine.planning_context().prepare_publication_bounded(
+        next, retry_pending, result.clone(), MAX_METADATA, MAX_METADATA,
+    ).unwrap();
     assert_eq!(canonical_json(&detached.next).unwrap(), expected_state);
     assert_eq!(detached.candidate.snapshot_hash, expected_snapshot);
     assert_eq!(canonical_json(&detached.candidate.versions).unwrap(), expected_versions);
     assert_eq!(detached.candidate.operation_id, result.operation_id);
-    engine.decide_publication(detached).unwrap();
-    assert_eq!(
-        engine.list_tree(&repo.main_branch_id).unwrap()[0].path.as_str(),
-        "renamed.txt"
-    );
-    for disk in &engine.config.disks {
-        let directory = version_dir(disk, &repo.history_tree_id, &version.version_id);
-        let content = crate::container_storage::content_path(&directory, &version).unwrap();
-        assert_eq!(
-            content
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .file_name()
-                .unwrap(),
-            "renamed.txt"
-        );
-        assert_eq!(std::fs::read(content).unwrap(), b"replacement bytes");
+    engine.write_workspace_commit_request(&planned_workspace, &request, None).unwrap();
+    let published = engine.decide_publication(detached).unwrap();
+    engine.complete_workspace_commit(planned_workspace, published.clone()).unwrap();
+    let saved = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    assert_eq!(saved.path.as_str(), "file.txt");
+    assert_eq!(saved.file_id, old_entry.file_id);
+    assert_eq!(saved.version_id, version.version_id);
+    for ((_, body, container), identity) in paths(&engine, &version).iter().zip(&installed) {
+        assert_eq!(container.file_name().unwrap(), "file.txt");
+        assert_eq!(std::fs::read(body).unwrap(), b"replacement bytes");
+        let current = std::fs::metadata(body).unwrap();
+        assert_eq!((current.dev(), current.ino()), *identity);
+    }
+    for (_, body, container, ..) in &original_paths {
+        assert_eq!(std::fs::read(body).unwrap(), b"published bytes");
+        assert!(!container.with_file_name("renamed.txt").exists());
     }
     drop(engine);
-    let engine = Engine::open(&root).unwrap();
-    assert_eq!(
-        engine.operation(result.operation_id).unwrap().operation_id,
-        result.operation_id
-    );
-    assert_eq!(
-        engine.list_tree(&repo.main_branch_id).unwrap()[0].version_id,
-        version.version_id
-    );
+    let mut engine = Engine::open(&root).unwrap();
+    assert_eq!(engine.operation(result.operation_id).unwrap(), published);
+    assert_eq!(engine.list_tree(&repo.main_branch_id).unwrap()[0].version_id, version.version_id);
+    let completed = canonical_json(engine.state()).unwrap();
+    let snapshot = engine.snapshot.clone();
+    let slot = engine.next_slot;
+    assert_eq!(engine.commit_workspace(request).unwrap(), published);
+    assert_eq!(canonical_json(engine.state()).unwrap(), completed);
+    assert_eq!(engine.snapshot, snapshot);
+    assert_eq!(engine.next_slot, slot);
 }

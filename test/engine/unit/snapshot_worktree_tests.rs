@@ -375,6 +375,52 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         message: "explicit directory commit".into(),
         operation_id: OperationId::generate().unwrap(),
     };
+    #[cfg(feature = "fault-injection")]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        // Initial workspace creation does not publish a namespace admission.
+        // The first decision is this commit's SYSTEM reserve: this real cut
+        // occurs before PREPARE and before the local ledger enters Publishing.
+        assert!(engine.admitted_current_namespaces().unwrap().is_none());
+        let before = Arc::clone(&engine.state);
+        let slot = engine.next_slot;
+        let snapshot = engine.snapshot.clone();
+        engine.inject_fault_once("after_payloads");
+        let error = commit_worktree(&mut engine, &directory_commit, &principal()).unwrap_err();
+        let RegistrationError::Publication(error) = error else {
+            panic!("the real SYSTEM reserve must reach the injected decision cut");
+        };
+        assert_eq!(error.code(), storage_contract::ErrorCode::InjectedFailure);
+        assert_eq!(error.message().as_ref(), "interrupted at after_payloads");
+        assert!(Arc::ptr_eq(&before, &engine.state));
+        assert_eq!(engine.next_slot, slot);
+        assert_eq!(engine.snapshot, snapshot);
+        assert_eq!(engine.state().operations, edited_receipts);
+        assert!(!engine.state().operations.contains_key(&directory_commit.operation_id));
+        assert_eq!(engine.file_branch_head(&selected.branch_id).unwrap(), file_head);
+        assert_eq!(engine.state().versions, original_versions);
+        assert_eq!(inventory(&disks[0].join("common-data")), cold_edited_material);
+        let metadata = fs::metadata(&edited_path).unwrap();
+        assert_eq!((metadata.dev(), metadata.ino()), edited_inode);
+        read_edit(&engine);
+
+        // The transient lease/upload and prepared SYSTEM objects may remain.
+        // They must not become a reserve, a FILE result or a local ledger tail
+        // when cold admission selects the last actually published source.
+        drop(engine);
+        engine = Engine::open(&system).unwrap();
+        assert!(!engine.is_read_only());
+        assert_eq!(engine.state().operations, edited_receipts);
+        assert_eq!(engine.file_branch_head(&selected.branch_id).unwrap(), file_head);
+        assert_eq!(engine.state().versions, original_versions);
+        assert_eq!(inventory(&disks[0].join("common-data")), cold_edited_material);
+        let metadata = fs::metadata(&edited_path).unwrap();
+        assert_eq!((metadata.dev(), metadata.ino()), edited_inode);
+        read_edit(&engine);
+    }
+    // The same explicit request now publishes exactly one FILE successor and
+    // one directory node, retaining the original source and worktree identity.
     let updated = commit_worktree(&mut engine, &directory_commit, &principal()).unwrap();
     assert_eq!(updated.repository_id, handle.repository_id);
     assert_eq!(updated.branch_id, handle.branch_id);

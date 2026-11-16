@@ -14,7 +14,7 @@ PARENT = "test/engine/integration/workspace_commit_replay.rs"
 CHILD = "test/engine/integration/workspace_commit_replay/fresh_pool.rs"
 ORACLE = "test/ci/test_fresh_pool_core_targeted_ci.py"
 SHARED_LAYOUT = "src/engine/src/container_storage/shared_layout.rs"
-INITIALIZATION = "persist::layout::tests::initialization_and_recovery_use_the_existing_disk_paths_and_bytes"
+INITIALIZATION = "persist::layout::tests::initialization_and_recovery_bind_the_fresh_roots_and_preserve_their_bytes"
 EXACT = "fresh_pool::empty_held_pool_stages_reopens_commits_and_selects_real_file_history"
 
 

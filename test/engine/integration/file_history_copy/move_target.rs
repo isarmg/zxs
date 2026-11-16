@@ -8,7 +8,11 @@ use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 fn two_targets() -> Fixture {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development((0..5).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development((0..5).map(|n| {
+            let label = format!("Fixture disk {n}");
+            (Name::parse(&label).unwrap(), temp.path().join(format!("disk-{n}")))
+        }))
+        .unwrap();
     for disk in config.disks.iter_mut().skip(3) {
         disk.metadata_member = false;
     }

@@ -300,7 +300,7 @@
           "package": "storage-engine",
           "manifest": "src/engine/Cargo.toml",
           "exact": [
-            "persist::layout::tests::initialization_and_recovery_use_the_existing_disk_paths_and_bytes"
+            "persist::layout::tests::initialization_and_recovery_bind_the_fresh_roots_and_preserve_their_bytes"
           ],
           "max_tests": 1
         },

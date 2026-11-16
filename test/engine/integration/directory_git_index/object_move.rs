@@ -35,7 +35,10 @@ fn fixture_with_config(
 ) -> (tempfile::TempDir, Engine, Repository, Destination) {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development([temp.path().join("source"), temp.path().join("target")]).unwrap();
+        Config::development(["source", "target"].map(|label| {
+            (Name::parse(label).unwrap(), temp.path().join(label))
+        }))
+        .unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     configure(&mut config);

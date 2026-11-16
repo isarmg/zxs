@@ -9,6 +9,7 @@ mod file_separation;
 mod object_move;
 #[path = "directory_git_index/rename.rs"]
 mod rename;
+use name_policy::Name;
 use std::io::Read;
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 use storage_engine::{
@@ -21,11 +22,9 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([
-            temp.path().join("p"),
-            temp.path().join("b"),
-            temp.path().join("c"),
-        ])
+        Config::development([("A", "p"), ("B", "b"), ("C", "c")].map(
+            |(name, path)| (Name::parse(name).unwrap(), temp.path().join(path)),
+        ))
         .unwrap(),
     )
     .unwrap();

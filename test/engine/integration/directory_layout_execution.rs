@@ -11,6 +11,7 @@ use std::{
     os::unix::fs::{DirBuilderExt, MetadataExt},
     path::{Path, PathBuf},
 };
+use name_policy::Name;
 use storage_engine::{
     BranchName, CommitRequest, Config, DirectoryCommitRequest, DirectoryDefaultSelection, Engine,
     Entry, ErrorCode, NamespaceOperation, NamespaceOperationKind, OperationId, Repository,
@@ -73,7 +74,11 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let temporary = tempfile::tempdir().unwrap();
-        let config = Config::development([temporary.path().join("primary")]).unwrap();
+        let config = Config::development([(
+            Name::parse("Primary fixture").unwrap(),
+            temporary.path().join("primary"),
+        )])
+        .unwrap();
         let primary = config.disks[0].root.clone();
         assert_eq!(config.disks[0].slot_id, "P01");
         let mut engine = Engine::initialize(&temporary.path().join("system"), config).unwrap();

@@ -5,6 +5,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
+use name_policy::Name;
 use storage_engine::*;
 
 struct Fixture {
@@ -45,7 +46,11 @@ fn fixture() -> Fixture {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut config =
-        Config::development((0..4).map(|index| temp.path().join(format!("disk-{index}")))).unwrap();
+        Config::development((0..4).map(|index| {
+            let label = format!("Fixture disk {index}");
+            (Name::parse(&label).unwrap(), temp.path().join(format!("disk-{index}")))
+        }))
+        .unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     config.disks[2].level = 2;
@@ -230,7 +235,11 @@ fn identity_targets(
     operation: OperationId,
     lowers: &[PathBuf],
 ) -> (Engine, ForeignIdentityTarget) {
-    let config = Config::development([f.temp.path().join("identity-current")]).unwrap();
+    let config = Config::development([(
+        Name::parse("Identity current").unwrap(),
+        f.temp.path().join("identity-current"),
+    )])
+    .unwrap();
     let current = Engine::initialize(&f.temp.path().join("identity-system"), config).unwrap();
     let mut proposed = current.config().clone();
     for (index, root) in lowers
@@ -242,6 +251,7 @@ fn identity_targets(
         proposed.disks.push(DiskConfig {
             disk_id: format!("disk_{:032x}", 500 + index),
             slot_id: format!("NEW{}", index + 1),
+            name: Name::parse(&format!("Identity target {}", index + 1)).unwrap(),
             root,
             level: index as u32 + 1,
             upstream_slot_id: index.checked_sub(1).map(|i| format!("NEW{}", i + 1)),

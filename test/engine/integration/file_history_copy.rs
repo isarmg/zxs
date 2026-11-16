@@ -11,6 +11,7 @@ use std::{
 use storage_contract::{
     history_window::HistoryWindowCancellation, shared_history::SharedHistoryRequest,
 };
+use name_policy::Name;
 use storage_engine::*;
 
 fn installed_body(container: &std::path::Path, version: &FileVersion) -> std::path::PathBuf {
@@ -111,7 +112,11 @@ impl Fixture {
     fn new(current: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut config =
-            Config::development((0..5).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development((0..5).map(|n| {
+                let label = format!("Fixture disk {n}");
+                (Name::parse(&label).unwrap(), temp.path().join(format!("disk-{n}")))
+            }))
+            .unwrap();
         for disk in config.disks.iter_mut().skip(3) {
             disk.level = 1;
             disk.upstream_slot_id = None;
@@ -574,7 +579,11 @@ fn history_copy_rejects_configured_placement_or_backup_without_changing_the_sour
 fn history_copy_does_not_admit_a_fanout_topology_as_a_selected_linear_route() {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development((0..3).map(|n| {
+            let label = format!("Fixture disk {n}");
+            (Name::parse(&label).unwrap(), temp.path().join(format!("disk-{n}")))
+        }))
+        .unwrap();
     config.disks[2].level = 2;
     config.disks[2].upstream_slot_id = Some(config.disks[0].slot_id.clone());
     assert_eq!(

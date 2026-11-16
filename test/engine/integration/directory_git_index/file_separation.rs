@@ -479,7 +479,11 @@ fn ambiguous_or_stale_separation_rejects_without_publishing_a_partial_file() {
 fn current_registry_separation_admits_exact_replacement_and_cold_idempotent_retry() {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development((0..4).map(|index| temp.path().join(format!("disk-{index}")))).unwrap();
+        Config::development((0..4).map(|index| {
+            let label = format!("Fixture disk {index}");
+            (Name::parse(&label).unwrap(), temp.path().join(format!("disk-{index}")))
+        }))
+        .unwrap();
     config.disks[3].level = 1;
     config.disks[3].upstream_slot_id = None;
     config.disks[3].metadata_member = false;
