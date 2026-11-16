@@ -59,6 +59,30 @@ fn write_history_content(engine: &mut Engine, branch: &str, path: &str, bytes: &
     engine.file_branch_head(branch).unwrap()
 }
 
+// Passwords are generated per fixture and are never printed or embedded in
+// source. Other regression cases keep their public test actor name; the Manual
+// cross-protocol test also generates its account name at runtime.
+struct TestCredentials {
+    username: String,
+    password: String,
+}
+
+impl TestCredentials {
+    fn generated() -> Self {
+        Self::for_username(format!("user_{}", random_test_value::<12>()))
+    }
+
+    fn for_username(username: String) -> Self {
+        Self { username, password: random_test_value::<32>() }
+    }
+}
+
+fn random_test_value<const N: usize>() -> String {
+    let mut bytes = [0; N];
+    system_entropy::fill(&mut bytes).unwrap();
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 struct Fixture {
     runtime: tokio::runtime::Runtime,
     server: tokio::task::JoinHandle<io::Result<()>>,
@@ -69,6 +93,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_credentials(&TestCredentials::for_username("alice".into()))
+    }
+
+    fn with_credentials(credentials: &TestCredentials) -> Self {
         let root = tempfile::tempdir().unwrap();
         let system = root.path().join("state");
         let engine = Engine::initialize(
@@ -79,7 +107,9 @@ impl Fixture {
             )]).unwrap(),
         )
         .unwrap();
-        let auth = AuthStore::initialize(&system, "alice", "phase-one-smb-password").unwrap();
+        let auth = AuthStore::initialize(
+            &system, &credentials.username, &credentials.password,
+        ).unwrap();
         Self::start(root, engine, auth)
     }
 
@@ -91,12 +121,13 @@ impl Fixture {
     fn start(root: tempfile::TempDir, engine: Engine, auth: AuthStore) -> Self {
         let backend = Arc::new(EngineBackend::new(engine));
         let auth = backend.protect_auth(auth).unwrap();
+        let username = auth.sole_identity().unwrap().principal;
         let auth = Arc::new(Mutex::new(auth));
         let config = SmbConfig {
             socket: root.path().join("run/bridge.sock"),
             spool_dir: root.path().join("management/smb-spool"),
             allowed_uid: rustix::process::geteuid().as_raw(),
-            username: "alice".into(),
+            username,
             additional_users: vec![],
             spool_limits: SpoolLimits {
                 bytes_per_account: 16 * 1024 * 1024,
@@ -126,9 +157,10 @@ impl Fixture {
     }
 
     fn connect(&mut self) -> Client {
+        let username = self.identity().principal;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            match Client::connect_default(&self.root.path().join("run/bridge.sock"), "alice") {
+            match Client::connect_default(&self.root.path().join("run/bridge.sock"), &username) {
                 Ok(client) => return client,
                 Err(error)
                     if matches!(

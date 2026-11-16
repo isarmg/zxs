@@ -176,25 +176,11 @@ pub(super) fn directory_entries(
     }
     let mut changed: Option<Vec<Entry>> = None;
     for (index, entry) in entries.as_slice().iter().enumerate() {
-        if entry.kind != NamespaceEntryKind::File {
-            continue;
-        }
-        let file: FileId = entry.file_id.parse().map_err(ApiError::invalid_source)?;
-        let Some(record) = engine.state().file_containers.get(&file) else {
+        let Some(size) = published_size(engine, repository, entry)? else {
             continue;
         };
-        let Some((_, payload)) = record.working.draft() else {
-            continue;
-        };
-        let target = DraftLocation {
-            repository: repository.repository_id.parse().map_err(ApiError::invalid_source)?,
-            path: entry.path.clone(),
-            entry: entry.entry_id.parse().map_err(ApiError::invalid_source)?,
-            file,
-        };
-        engine.file_draft_base(&target).map_err(error)?;
         let changed = changed.get_or_insert_with(|| entries.as_slice().to_vec());
-        changed[index].size = payload.logical_size();
+        changed[index].size = size;
     }
     Ok(match changed {
         Some(entries) => {
@@ -202,4 +188,32 @@ pub(super) fn directory_entries(
         }
         None => entries,
     })
+}
+
+/// Project only an already-selected current ordinary occurrence under the same
+/// admission lock. The scalar is frozen in its caller's owned page, never read
+/// again by the RPC cursor. Named, historical and backup entries receive no overlay.
+pub(in crate::engine_backend) fn published_size(
+    engine: &storage_engine::Engine,
+    repository: &storage_contract::Repository,
+    entry: &Entry,
+) -> Result<Option<u64>, ApiError> {
+    if !repository.file_manager_root || entry.kind != NamespaceEntryKind::File {
+        return Ok(None);
+    }
+    let file: FileId = entry.file_id.parse().map_err(ApiError::invalid_source)?;
+    let Some(record) = engine.state().file_containers.get(&file) else {
+        return Ok(None);
+    };
+    let Some((_, payload)) = record.working.draft() else {
+        return Ok(None);
+    };
+    let target = DraftLocation {
+        repository: repository.repository_id.parse().map_err(ApiError::invalid_source)?,
+        path: entry.path.clone(),
+        entry: entry.entry_id.parse().map_err(ApiError::invalid_source)?,
+        file,
+    };
+    engine.file_draft_base(&target).map_err(error)?;
+    Ok(Some(payload.logical_size()))
 }

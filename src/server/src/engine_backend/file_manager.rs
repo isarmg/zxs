@@ -345,7 +345,9 @@ fn listed_current_entry(
         name: entry.name().into(),
         path: display,
         kind: entry.kind,
-        size: entry.size,
+        // The selected current namespace and this published working row share
+        // the same authorized projection. Do not re-query from the RPC cursor.
+        size: super::smb_draft::published_size(engine, repo, entry)?.unwrap_or(entry.size),
         file_id: entry.file_id.clone(),
         version,
         location: Some(ListingLocation {

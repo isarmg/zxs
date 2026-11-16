@@ -16,7 +16,9 @@ struct Management {
 }
 
 impl Management {
-    fn open(root: tempfile::TempDir, engine: Engine) -> Self {
+    fn open(
+        root: tempfile::TempDir, engine: Engine, credentials: &TestCredentials,
+    ) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -31,7 +33,7 @@ impl Management {
         });
         let mut result = Self { runtime, root, app, token: String::new() };
         let login = result.json("POST", "/api/auth/login", Some(json!({
-            "username": "alice", "password": "phase-one-smb-password",
+            "username": credentials.username, "password": credentials.password,
         })));
         result.token = login["token"].as_str().unwrap().to_owned();
         result
@@ -55,7 +57,7 @@ impl Management {
             let bytes = http_routing::body::to_bytes(response.into_body(), 1024 * 1024)
                 .await.unwrap();
             let value: Value = json_codec::from_slice(&bytes).unwrap();
-            assert!(status.is_success(), "{method} {route}: {status} {value}");
+            assert!(status.is_success(), "{method} {route}: {status}");
             value
         })
     }
@@ -142,7 +144,8 @@ fn require_history(fixture: &Fixture, repository: &Repository, entry: &Entry, he
 
 #[test]
 fn public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_commit() {
-    let mut fixture = Fixture::new();
+    let credentials = TestCredentials::generated();
+    let mut fixture = Fixture::with_credentials(&credentials);
     let client = fixture.connect();
     let original = b"original immutable FILE body";
     save(&client, "p/manual.txt", original, true);
@@ -150,7 +153,7 @@ fn public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_c
     let entry = fixture.entry(&repository.main_branch_id, "manual.txt");
     drop(client);
     let (root, engine) = fixture.cold_open();
-    let web = Management::open(root, engine);
+    let web = Management::open(root, engine, &credentials);
     let history_route = format!("/api/file-manager/files/{}/history", entry.file_id);
     // Read the FILE branch materialized by the real file-manager save.
     // This GET does not create it or substitute the directory main branch.
@@ -242,6 +245,9 @@ fn public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_c
     client.call(Request::Flush { handle: writer.handle }).unwrap();
     assert_eq!(fixture.backend.file_working(&fixture.identity(), target.clone()).unwrap().working,
         flushed_working);
+    // The default share's virtual disk root takes the listing path, not the
+    // ordinary repository ReadDirectory path. Keep its original page pinned.
+    let (directory, directory_fd) = open(&client, "p", false, false, false);
     let (pinned, placeholder) = open(&client, "p/manual.txt", false, false, false);
     assert!(pinned.version_id.is_none());
     assert!(pinned.workspace_id.is_none());
@@ -256,13 +262,21 @@ fn public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_c
     drop(placeholder);
     assert_eq!(read(&client, "p/manual.txt").1, final_bytes);
     assert_eq!(client.stat("p/manual.txt".into()).unwrap().size, final_bytes.len() as u64);
-    let (directory, directory_fd) = open(&client, "p", false, false, false);
-    let listing: DirectoryPage = json_codec::from_value(client.call(Request::ReadDirectory {
+    let stale_listing = client.call(Request::ReadDirectory {
         handle: directory.handle, restart: false,
+    }).unwrap_err();
+    assert_eq!(remote_code(&stale_listing), ErrorCode::ListingChanged);
+    // Restart recaptures one whole authorized page; it must not stitch the
+    // old namespace cursor to a later unpinned draft-size lookup.
+    let listing: DirectoryPage = json_codec::from_value(client.call(Request::ReadDirectory {
+        handle: directory.handle, restart: true,
     }).unwrap()).unwrap();
     assert!(!listing.more);
     assert_eq!(listing.entries.len(), 1);
     assert_eq!(listing.entries[0].entry.size, final_bytes.len() as u64);
+    assert_eq!(listing.entries[0].entry.entry_id, entry.entry_id);
+    assert_eq!(listing.entries[0].entry.file_id, entry.file_id);
+    assert_eq!(listing.entries[0].entry.version_id, entry.version_id);
     close(&client, directory.handle);
     drop(directory_fd);
     require_history(&fixture, &repository, &entry, &head);
@@ -294,7 +308,7 @@ fn public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_c
     assert_eq!(read(&client, "p/manual.txt").1, final_bytes);
     drop(client);
     let (root, engine) = fixture.cold_open();
-    let web = Management::open(root, engine);
+    let web = Management::open(root, engine, &credentials);
     let dirty = web.json("GET", &read_working, None);
     assert_eq!(dirty["working"]["state"], "manual_dirty");
     assert_eq!(web.json("GET", &history_route, None)["nodes"], history["nodes"]);
@@ -315,7 +329,7 @@ fn public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_c
     assert_eq!(engine.file_history(&entry.file_id).unwrap().len(), 2);
     assert_eq!(version_bytes(&engine, &entry.version_id), original);
     assert_eq!(version_bytes(&engine, &version), final_bytes);
-    let web = Management::open(root, engine);
+    let web = Management::open(root, engine, &credentials);
     assert_eq!(web.json("POST", &working_route, Some(commit)), receipt);
     assert_eq!(web.json("GET", &read_working, None), committed);
     assert_eq!(custody(web.root.path()), retained_records);
