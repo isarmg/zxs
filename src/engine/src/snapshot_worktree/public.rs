@@ -30,7 +30,9 @@ impl SnapshotWorktreeError {
             | RegistrationError::EditScope | RegistrationError::CommitScope => {
                 ErrorCode::UnsupportedOperation
             }
-            RegistrationError::Pending(_) => ErrorCode::RecoveryRequired,
+            RegistrationError::Pending(_) | RegistrationError::CommitWorkspaceRelease { .. } => {
+                ErrorCode::RecoveryRequired
+            }
             RegistrationError::Operation(_) | RegistrationError::Digest(_) => {
                 ErrorCode::IdempotencyKeyReused
             }

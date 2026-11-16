@@ -2379,21 +2379,36 @@ class ContainerTagsSelection(unittest.TestCase):
 
     def test_retained_backup_transaction_is_isolated_without_changing_its_test_or_timeout(self):
         first_addition = ['first_additions::empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy']
-        targets = [target for group in self.policy['groups'].values()
-                   for target in group['rust_targets']
-                   if target.get('package') == 'storage-engine'
-                   and target.get('name') == 'recursive_backup_paths'
-                   and target.get('mode', 'test') == 'test'
-                   and target.get('exact') != first_addition]
-        self.assertTrue(targets)
-        for target in targets:
-            self.assertIs(target.get('isolate'), True)
-            self.assertEqual(target['timeout_seconds'], 900)
-            self.assertEqual(target['max_tests'], 1)
-            self.assertEqual(target['exact'], [
-                'backup_preparation::transaction_serving::'
-                'same_backup_switch_serves_and_replays_normal_successor_publications',
-            ])
+        retained = [
+            'backup_preparation::transaction_serving::'
+            'same_backup_switch_serves_and_replays_normal_successor_publications',
+        ]
+        ordinary = [
+            'ordinary_namespace_parents::ordinary_mkdir_holds_parent_occurrences_through_cuts_file_writes_and_cold_index',
+            'ordinary_namespace_parents::nested_backup_binds_b_then_c_parent_occurrences_and_retained_bodies',
+        ]
+        retained_targets = []
+        ordinary_targets = []
+        for group, spec in self.policy['groups'].items():
+            for target in spec['rust_targets']:
+                if (target.get('package') != 'storage-engine'
+                        or target.get('name') != 'recursive_backup_paths'
+                        or target.get('mode', 'test') != 'test'):
+                    continue
+                if target.get('exact') == first_addition:
+                    continue
+                self.assertIs(target.get('isolate'), True)
+                self.assertEqual(target['timeout_seconds'], 900)
+                if group == 'ordinary-namespace-parents' and target.get('exact') == ordinary:
+                    self.assertEqual(target['max_tests'], 2)
+                    self.assertIs(target.get('default_features'), True)
+                    ordinary_targets.append(target.get('features'))
+                    continue
+                self.assertEqual(target['max_tests'], 1)
+                self.assertEqual(target['exact'], retained)
+                retained_targets.append(group)
+        self.assertIn('ordinary-namespace-parents', retained_targets)
+        self.assertCountEqual(ordinary_targets, [[], ['fault-injection']])
 
     def test_http_identity_is_isolated_with_every_original_selection_and_budget(self):
         def is_http(target):

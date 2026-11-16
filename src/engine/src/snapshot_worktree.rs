@@ -95,6 +95,12 @@ pub(crate) enum RegistrationError {
     CommitScope,
     #[error("reading the independently sealed worktree edit")]
     CommitRead(#[source] std::io::Error),
+    #[error("{operation}; releasing its unreserved workspace also failed: {cleanup}")]
+    CommitWorkspaceRelease {
+        #[source]
+        operation: Box<RegistrationError>,
+        cleanup: crate::Error,
+    },
 }
 
 type Result<T> = std::result::Result<T, RegistrationError>;

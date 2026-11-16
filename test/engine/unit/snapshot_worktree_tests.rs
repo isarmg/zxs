@@ -375,6 +375,36 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         message: "explicit directory commit".into(),
         operation_id: OperationId::generate().unwrap(),
     };
+    // Even the same actor, branch and bytes do not identify our adapter.
+    // A real pre-existing workspace must keep its lease and complete evidence.
+    {
+        let foreign = engine.create_workspace(&selected.branch_id, principal().as_str()).unwrap();
+        engine.stage_bytes(&foreign.workspace_id, edit.path.as_str(), edited_body).unwrap();
+        let foreign = engine.workspace(&foreign.workspace_id).unwrap();
+        let foreign_bytes = crate::disk::encode_metadata(&foreign, crate::disk::MAX_METADATA)
+            .unwrap();
+        let before = Arc::clone(&engine.state);
+        let slot = engine.next_slot;
+        let error = commit_worktree(&mut engine, &directory_commit, &principal()).unwrap_err();
+        let RegistrationError::Publication(error) = error else {
+            panic!("another workspace must still reject the transient adapter");
+        };
+        assert_eq!(error.code(), storage_contract::ErrorCode::FileBusy);
+        assert!(Arc::ptr_eq(&before, &engine.state));
+        assert_eq!(engine.next_slot, slot);
+        assert_eq!(crate::disk::encode_metadata(
+            &engine.workspace(&foreign.workspace_id).unwrap(), crate::disk::MAX_METADATA,
+        ).unwrap(), foreign_bytes);
+        let staged = foreign.files.values().next().unwrap();
+        let mut stored = Vec::new();
+        engine.planning_context().staged_source(&foreign, staged).unwrap().open().unwrap()
+            .read_to_end(&mut stored).unwrap();
+        assert_eq!(stored, edited_body);
+        assert_eq!(inventory(&disks[0].join("common-data")), cold_edited_material);
+        read_edit(&engine);
+        // Only the original owner explicitly releases that unrelated lease.
+        engine.abort_workspace(&foreign.workspace_id, &foreign.principal).unwrap();
+    }
     #[cfg(feature = "fault-injection")]
     {
         use std::os::unix::fs::MetadataExt;
@@ -386,6 +416,8 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         let before = Arc::clone(&engine.state);
         let slot = engine.next_slot;
         let snapshot = engine.snapshot.clone();
+        let previous_workspaces: std::collections::BTreeSet<_> =
+            engine.workspaces.keys().cloned().collect();
         engine.inject_fault_once("after_payloads");
         let error = commit_worktree(&mut engine, &directory_commit, &principal()).unwrap_err();
         let RegistrationError::Publication(error) = error else {
@@ -405,12 +437,34 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         assert_eq!((metadata.dev(), metadata.ino()), edited_inode);
         read_edit(&engine);
 
-        // The transient lease/upload and prepared SYSTEM objects may remain.
-        // They must not become a reserve, a FILE result or a local ledger tail
-        // when cold admission selects the last actually published source.
+        let adapters: Vec<_> = engine.workspaces.values()
+            .filter(|workspace| !previous_workspaces.contains(&workspace.workspace_id))
+            .collect();
+        assert_eq!(adapters.len(), 1);
+        let adapter = (*adapters[0]).clone();
+        assert_eq!(adapter.state, storage_contract::WorkspaceState::Aborted);
+        assert_eq!(adapter.files.len(), 1);
+        let adapter_bytes = crate::disk::encode_metadata(&adapter, crate::disk::MAX_METADATA)
+            .unwrap();
+        let require_released_adapter = |engine: &Engine| {
+            let actual = engine.workspace(&adapter.workspace_id).unwrap();
+            assert_eq!(crate::disk::encode_metadata(&actual, crate::disk::MAX_METADATA).unwrap(),
+                adapter_bytes);
+            let staged = actual.files.values().next().unwrap();
+            let mut stored = Vec::new();
+            engine.planning_context().staged_source(&actual, staged).unwrap().open().unwrap()
+                .read_to_end(&mut stored).unwrap();
+            assert_eq!(stored, edited_body);
+        };
+        require_released_adapter(&engine);
+
+        // Returned pre-PREPARE failure durably closes only its own adapter.
+        // Its upload and prepared SYSTEM objects remain, but its lease cannot
+        // block the same explicit request after a real cold reopen.
         drop(engine);
         engine = Engine::open(&system).unwrap();
         assert!(!engine.is_read_only());
+        require_released_adapter(&engine);
         assert_eq!(engine.state().operations, edited_receipts);
         assert_eq!(engine.file_branch_head(&selected.branch_id).unwrap(), file_head);
         assert_eq!(engine.state().versions, original_versions);

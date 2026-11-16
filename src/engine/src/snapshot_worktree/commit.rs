@@ -102,29 +102,58 @@ pub(crate) fn commit_worktree(
     // The durable draft is the independent edit receipt/ledger above, not it.
     let workspace = engine.create_workspace(&branch.to_string(), principal.as_str())
         .map_err(RegistrationError::Publication)?;
-    engine.stage_bytes(&workspace.workspace_id, edit.path.as_str(), &bytes)
-        .map_err(RegistrationError::Publication)?;
-    let command = CommitRequest {
-        workspace_id: workspace.workspace_id.clone(),
-        operation_id: OperationId::generate().map_err(RegistrationError::Allocation)?,
-        principal: principal.as_str().into(), expected_head: workspace.base_head.clone(),
-        fencing_token: workspace.fencing_token, message: request.message.clone(),
-        request_digest: None,
+    let reserve_source = Arc::clone(&engine.state);
+    let reserve_slot = engine.next_slot;
+    let reserve_snapshot = engine.snapshot.clone();
+    let attempt = (|| -> Result<_> {
+        engine.stage_bytes(&workspace.workspace_id, edit.path.as_str(), &bytes)
+            .map_err(RegistrationError::Publication)?;
+        let command = CommitRequest {
+            workspace_id: workspace.workspace_id.clone(),
+            operation_id: OperationId::generate().map_err(RegistrationError::Allocation)?,
+            principal: principal.as_str().into(), expected_head: workspace.base_head.clone(),
+            fencing_token: workspace.fencing_token, message: request.message.clone(),
+            request_digest: None,
+        };
+        let staged = engine.workspace(&workspace.workspace_id)
+            .map_err(RegistrationError::Publication)?;
+        let plan = CommitReservation {
+            request: request.clone(), source: source_handle, binding, before, edit,
+            original: original_file, original_source, file_history, file_base,
+            file_operation: command.operation_id,
+            file_request: FileRequestCommitment::capture(&staged, &command)
+                .map_err(RegistrationError::Codec)?,
+            node: SnapshotNodeId::generate().map_err(RegistrationError::Allocation)?,
+            node_publication: OperationId::generate().map_err(RegistrationError::Allocation)?,
+            completion: OperationId::generate().map_err(RegistrationError::Allocation)?,
+        };
+        let record = Record::ReserveCommit(plan.clone());
+        let commitment = record.commitment().map_err(RegistrationError::Codec)?;
+        publication::publish_new(engine, request.operation_id, principal, &record)?;
+        Ok((command, plan, commitment))
+    })();
+    let (command, plan, commitment) = match attempt {
+        Ok(reserved) => reserved,
+        Err(operation) => {
+            // next_slot advances before the first PREPARE, even when its I/O
+            // fails. Only this still-exclusive, unchanged source proves that
+            // the adapter created above has no possible reserved continuation.
+            // Do not discover or adopt a workspace by actor, branch or bytes.
+            if engine.blocked || engine.next_slot != reserve_slot
+                || !Arc::ptr_eq(&engine.state, &reserve_source)
+                || engine.snapshot != reserve_snapshot
+            {
+                return Err(operation);
+            }
+            return match engine.abort_workspace(&workspace.workspace_id, &workspace.principal) {
+                Ok(()) => Err(operation),
+                Err(cleanup) => Err(RegistrationError::CommitWorkspaceRelease {
+                    operation: Box::new(operation),
+                    cleanup,
+                }),
+            };
+        }
     };
-    let staged = engine.workspace(&workspace.workspace_id).map_err(RegistrationError::Publication)?;
-    let plan = CommitReservation {
-        request: request.clone(), source: source_handle, binding, before, edit,
-        original: original_file, original_source, file_history, file_base,
-        file_operation: command.operation_id,
-        file_request: FileRequestCommitment::capture(&staged, &command)
-            .map_err(RegistrationError::Codec)?,
-        node: SnapshotNodeId::generate().map_err(RegistrationError::Allocation)?,
-        node_publication: OperationId::generate().map_err(RegistrationError::Allocation)?,
-        completion: OperationId::generate().map_err(RegistrationError::Allocation)?,
-    };
-    let record = Record::ReserveCommit(plan.clone());
-    let commitment = record.commitment().map_err(RegistrationError::Codec)?;
-    publication::publish_new(engine, request.operation_id, principal, &record)?;
     let mut version = ReservedFileVersion::new(Arc::clone(&engine.state), plan.clone());
     let mut ledger = session.into_ledger();
     ledger.append(Event::Commit {
