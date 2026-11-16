@@ -32,7 +32,9 @@ if [[ "$component" == engine ]]; then
   create_test+=private_entry_sync_failure_preserves_created_identity_and_held_directory
   install_test=disk::owned::working_directory::tests::
   install_test+=working_directory_rename_sync_failure_retains_installed_outcome
-  for selected_test in "$create_test" "$install_test"; do
+  rename_test=disk::owned::working_directory::tests::
+  rename_test+=destination_first_rename_preserves_order_and_entity_after_sync_failure
+  for selected_test in "$create_test" "$install_test" "$rename_test"; do
     listed="$("$binary" --list --ignored --exact "$selected_test")"
     [[ "$(grep -Fxc "$selected_test: test" <<< "$listed")" == 1 ]]
   done
@@ -63,4 +65,24 @@ if [[ "$component" == engine ]]; then
     '^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out;' \
     "$temporary/result"
   rm "$temporary/events"
+  for scenario in destination source same-parent; do
+    rename_root="$temporary/rename-$scenario"
+    mkdir -m 700 "$rename_root"
+    stage=parent
+    case "$scenario" in
+      destination) root="$rename_root/destination";;
+      source) root="$rename_root/source";;
+      same-parent) root="$rename_root/parent"; stage=observe;;
+    esac
+    env LD_PRELOAD="$temporary/directory-retry.so" ZXS_DIRECTORY_ROOT="$root" \
+      ZXS_DIRECTORY_LOG="$temporary/events" ZXS_DIRECTORY_STAGE="$stage" \
+      ZXS_RENAME_ROOT="$rename_root" ZXS_RENAME_SCENARIO="$scenario" \
+      "$binary" --ignored --exact --nocapture --test-threads=1 --color never \
+      "$rename_test" | tee "$temporary/result"
+    grep -Fqx "ZXS_RENAME_DURABILITY_COMPLETE scenario=$scenario" "$temporary/result"
+    grep -Eq \
+      '^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out;' \
+      "$temporary/result"
+    rm "$temporary/events"
+  done
 fi

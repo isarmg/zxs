@@ -502,6 +502,80 @@ fn working_directory_recorded_container_cannot_be_traversed_as_an_ordinary_direc
 }
 
 #[test]
+#[ignore = "requires directory_retry.c LD_PRELOAD in an isolated test child"]
+fn destination_first_rename_preserves_order_and_entity_after_sync_failure() {
+    let root = PathBuf::from(std::env::var_os("ZXS_RENAME_ROOT").unwrap());
+    let scenario = std::env::var("ZXS_RENAME_SCENARIO").unwrap();
+    let (source, destination) = match scenario.as_str() {
+        "destination" | "source" => (root.join("source"), root.join("destination")),
+        "same-parent" => (root.join("parent"), root.join("parent")),
+        _ => panic!("unknown rename durability scenario"),
+    };
+    for parent in [&source, &destination] {
+        if !parent.exists() {
+            fs::create_dir(parent).unwrap();
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    let old = source.join("prepared");
+    let new = destination.join("published");
+    fs::create_dir(&old).unwrap();
+    fs::set_permissions(&old, fs::Permissions::from_mode(0o700)).unwrap();
+    let contents = b"same held body after directory rename";
+    fs::write(old.join("body"), contents).unwrap();
+    let held_directory = fs::File::open(&old).unwrap();
+    let mut held_body = fs::File::open(old.join("body")).unwrap();
+    held_body.sync_all().unwrap();
+    held_directory.sync_all().unwrap();
+    let directory_identity = FileIdentity::from_metadata(&held_directory.metadata().unwrap());
+    let body_identity = FileIdentity::from_metadata(&held_body.metadata().unwrap());
+    let disk = DiskRoot::open(&root).unwrap();
+    let injected_parent = PathBuf::from(std::env::var_os("ZXS_DIRECTORY_ROOT").unwrap());
+    let expected_parent = match scenario.as_str() {
+        "source" => &source,
+        "destination" | "same-parent" => &destination,
+        _ => panic!("unknown rename durability scenario"),
+    };
+    assert_eq!(&injected_parent, expected_parent);
+    // Only now arm the existing interposer, after all fixture durability I/O.
+    fs::create_dir(injected_parent.join("branch")).unwrap();
+    let result = disk.rename_noreplace_destination_first_synced(&old, &new);
+    if scenario == "same-parent" {
+        result.unwrap();
+    } else {
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), storage_contract::ErrorCode::IoError);
+        let crate::Error::Contract(storage_contract::Error::Io { source, .. }) = error else {
+            panic!("rename did not retain the actual I/O cause");
+        };
+        assert_eq!(source.raw_os_error(), Some(rustix::io::Errno::IO.raw_os_error()));
+    }
+    assert!(!old.exists());
+    assert_eq!(
+        FileIdentity::from_metadata(&fs::metadata(&new).unwrap()),
+        directory_identity,
+    );
+    assert_eq!(
+        FileIdentity::from_metadata(&fs::metadata(new.join("body")).unwrap()),
+        body_identity,
+    );
+    let mut retained = Vec::new();
+    std::io::Read::read_to_end(&mut held_body, &mut retained).unwrap();
+    assert_eq!(retained, contents);
+    assert_eq!(fs::read(new.join("body")).unwrap(), contents);
+    let events = fs::read_to_string(std::env::var_os("ZXS_DIRECTORY_LOG").unwrap()).unwrap();
+    let expected = match scenario.as_str() {
+        // Do not persist source-name removal after an unconfirmed destination.
+        "destination" => format!("fail {}\n", destination.display()),
+        "source" => format!("sync {}\nfail {}\n", destination.display(), source.display()),
+        "same-parent" => format!("sync {}\n", destination.display()),
+        _ => panic!("unknown rename durability scenario"),
+    };
+    assert_eq!(events, expected);
+    println!("\nZXS_RENAME_DURABILITY_COMPLETE scenario={scenario}");
+}
+
+#[test]
 fn working_directory_fault_children_preserve_create_and_install_durability_outcomes() {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../test/platform/unit/fs_safety/directory-retry.sh");

@@ -21,8 +21,10 @@ int fsync(int fd) {
     /* Trusted creation synchronizes existing ancestors before mkdir. Arm only
      * once the new child exists, so the failure belongs to its creation. */
     if (access(child, F_OK)) return real_fsync(fd);
-    int fail = !injected && !strcmp(path,
-        !strcmp(getenv("ZXS_DIRECTORY_STAGE"), "child") ? child : root);
+    const char *stage = getenv("ZXS_DIRECTORY_STAGE");
+    /* Observation-only mode checks successful same-parent synchronization. */
+    int fail = !injected && strcmp(stage, "observe") && !strcmp(path,
+        !strcmp(stage, "child") ? child : root);
     int result = fail ? -1 : real_fsync(fd);
     int saved_errno = fail ? EIO : errno;
     FILE *log = fopen(getenv("ZXS_DIRECTORY_LOG"), "a");
