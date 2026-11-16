@@ -389,6 +389,8 @@ fn assert_primary_offline_authenticated_history(
     // Once State is genuinely admitted, C can serve its independent local
     // Publication/UUID-chain/BODY evidence even after B also disappears. A new
     // process with C alone must still fail the original quorum below.
+    let b_bytes = files(b);
+    let b_inode = fs::metadata(b).unwrap().ino();
     fs::rename(b, &parked_b).unwrap();
     assert_registered_history_reads(&engine, system, versions, 2);
     assert!(!a.exists());
@@ -436,6 +438,8 @@ fn assert_primary_offline_authenticated_history(
         ErrorCode::MetadataQuorumUnavailable);
     assert!(!a.exists());
     assert!(!b.exists());
+    assert_eq!(files(&parked_b), b_bytes);
+    assert_eq!(fs::metadata(&parked_b).unwrap().ino(), b_inode);
     fs::rename(&parked_b, b).unwrap();
     let engine = Engine::open(system).unwrap();
     assert!(engine.is_read_only());

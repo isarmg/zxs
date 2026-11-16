@@ -254,7 +254,8 @@ class TargetedSelection(unittest.TestCase):
         name = 'startup-exit-preflight'
         cases = [
             ('src/engine/src/engine.rs', [
-                'fresh-managed-core', 'held-directory-layout', 'historical-directory-runtime',
+                'first-backup-additions', 'fresh-managed-core', 'held-directory-layout',
+                'historical-directory-runtime',
             ]),
             ('src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs', []),
             ('src/engine/src/engine/membership_transition/pending/activation/exit/verify.rs', []),
