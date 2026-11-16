@@ -32,7 +32,7 @@ struct Session {
 }
 
 struct Fixture {
-    backend: Arc<ManagementBackend>,
+    backend: Option<Arc<ManagementBackend>>,
     app: Option<Router>,
     session: Option<Session>,
     data: PathBuf,
@@ -67,7 +67,7 @@ impl Fixture {
         let app =
             storage_server::router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
         let mut fixture = Self {
-            backend,
+            backend: Some(backend),
             app: Some(app),
             session: None,
             data,
@@ -96,6 +96,10 @@ impl Fixture {
         });
         fixture.assert_unactivated();
         fixture
+    }
+
+    fn backend(&self) -> &Arc<ManagementBackend> {
+        self.backend.as_ref().expect("running fixture owns its backend")
     }
 
     fn cookie_request(&self, method: &str, route: &str) -> Builder {
@@ -186,7 +190,7 @@ impl Fixture {
 
     async fn wait_idle(&self) {
         let deadline = Instant::now() + Duration::from_secs(15);
-        while self.backend.management_status().recovering() {
+        while self.backend().management_status().recovering() {
             assert!(
                 Instant::now() < deadline,
                 "management worker did not finish"
@@ -199,7 +203,7 @@ impl Fixture {
         let deadline = Instant::now() + Duration::from_secs(15);
         // Activation explicitly returns recovering=true; wait for the owned
         // native reopen, not an arbitrary delay or a retried failed listing.
-        while self.backend.management_status().state() != StorageState::Ready {
+        while self.backend().management_status().state() != StorageState::Ready {
             assert!(
                 Instant::now() < deadline,
                 "activated storage did not reopen"
@@ -224,14 +228,19 @@ impl Fixture {
 
     async fn stop(&mut self) {
         drop(self.app.take());
-        let backend = Arc::clone(&self.backend);
+        // Drain is not ownership transfer: the backend still owns AuthStore and
+        // its exclusive lock. A real cold start must drop that final owner too.
+        let backend = self.backend.take().unwrap();
+        let retired = Arc::downgrade(&backend);
         tokio::task::spawn_blocking(move || backend.drain_management())
             .await.unwrap().unwrap();
+        assert!(retired.upgrade().is_none(), "cold start retained the old backend");
         self.drained = true;
     }
 
     async fn reopen(&mut self) {
         assert!(self.drained);
+        assert!(self.backend.is_none());
         let (backend, auth) = open_service_with_options(
             &self.data, &self.management,
             ManagementOptions {
@@ -240,10 +249,11 @@ impl Fixture {
                 ..Default::default()
             },
         ).unwrap();
+        assert!(auth.is_available(), "cold management credentials must be admitted");
         self.app = Some(storage_server::router(
             backend.clone(), auth, ServerConfig::new(&self.management),
         ).unwrap());
-        self.backend = backend;
+        self.backend = Some(backend);
         self.drained = false;
         self.wait_idle().await;
         let login = self.send(request("POST", "/api/auth/login"), Some(json!({
@@ -257,13 +267,7 @@ impl Fixture {
     }
 
     async fn finish(mut self) {
-        drop(self.app.take());
-        let backend = Arc::clone(&self.backend);
-        tokio::task::spawn_blocking(move || backend.drain_management())
-            .await
-            .unwrap()
-            .unwrap();
-        self.drained = true;
+        self.stop().await;
     }
 }
 
@@ -273,7 +277,9 @@ impl Drop for Fixture {
         if !self.drained {
             // A failed assertion must not remove the fixture under native
             // writers or replace the original failure with a second panic.
-            if let Err(error) = self.backend.drain_management() {
+            if let Some(backend) = &self.backend
+                && let Err(error) = backend.drain_management()
+            {
                 eprintln!("discovery fixture cleanup after failure: {error:?}");
             }
         }
@@ -363,7 +369,7 @@ async fn cookie_discovery_inspection_and_activation_produce_browsable_primary_ro
     assert_eq!(result["activated"], true);
     assert_eq!(result["recovering"], true);
     f.wait_ready().await;
-    assert_eq!(f.backend.management_status().state(), StorageState::Ready);
+    assert_eq!(f.backend().management_status().state(), StorageState::Ready);
     let intent_path = f.data.join("storage-activation-intent.json");
     let ready_path = f.data.join("storage-activation-ready.json");
     let complete_path = f.data.join("storage-activation-complete.json");
@@ -383,7 +389,7 @@ async fn cookie_discovery_inspection_and_activation_produce_browsable_primary_ro
     f.stop().await;
     fs::remove_file(&complete_path).unwrap();
     f.reopen().await;
-    assert_eq!(f.backend.management_status().state(), StorageState::RecoveryRequired);
+    assert_eq!(f.backend().management_status().state(), StorageState::RecoveryRequired);
     let status = f.json("GET", "/api/admin/storage/status", None).await;
     assert_eq!(status["completion_available"], true);
     let completed = f.json(
