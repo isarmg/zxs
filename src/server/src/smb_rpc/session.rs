@@ -65,6 +65,7 @@ impl Session {
             Request::Flush { handle } | Request::Close { handle } | Request::Dirty { handle } => {
                 match self.handles.get(handle) {
                     Some(Handle::Write(writer, _)) => Some(writer.operation_id.to_string()),
+                    Some(Handle::ManualWrite(writer, _)) => Some(writer.operation().to_string()),
                     _ => None,
                 }
             }
@@ -78,10 +79,16 @@ impl Session {
         })();
         // Dirty can create a new generation and submit it for write-through.
         // Report that generation, not the previously published operation.
-        if let Some(handle) = dirty_handle
-            && let Some(Handle::Write(writer, _)) = self.handles.get(&handle)
-        {
-            operation_id = Some(writer.operation_id.to_string());
+        if let Some(handle) = dirty_handle {
+            match self.handles.get(&handle) {
+                Some(Handle::Write(writer, _)) => {
+                    operation_id = Some(writer.operation_id.to_string());
+                }
+                Some(Handle::ManualWrite(writer, _)) => {
+                    operation_id = Some(writer.operation().to_string());
+                }
+                Some(Handle::Read(..) | Handle::ReadDraft(..) | Handle::Directory(_)) | None => {}
+            }
         }
         result.map_err(|mut error| {
             // Namespace has no replay protocol. Even a transient error must

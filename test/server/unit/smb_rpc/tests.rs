@@ -38,6 +38,8 @@ mod directory_tests;
 mod history_move_tests;
 #[path = "mtime_tests.rs"]
 mod mtime_tests;
+#[path = "manual_draft_tests.rs"]
+mod manual_draft_tests;
 #[path = "named_move_tests.rs"]
 mod named_move_tests;
 #[path = "namespace_tests.rs"]
@@ -84,6 +86,33 @@ impl LostCommitReply {
     }
 }
 impl Backend for LostCommitReply {
+    fn smb_file_working(
+        &self, identity: &Identity, branch: &str, entry: &storage_contract::Entry,
+    ) -> Result<Option<crate::SmbManualFile>, ApiError> {
+        self.inner.smb_file_working(identity, branch, entry)
+    }
+    fn authorize_smb_draft(
+        &self, identity: &Identity, file: &crate::SmbManualFile, access: crate::SmbDraftAccess,
+    ) -> Result<(), ApiError> {
+        self.inner.authorize_smb_draft(identity, file, access)
+    }
+    fn smb_draft_content(
+        &self, identity: &Identity, file: &crate::SmbManualFile, deadline: std::time::Instant,
+    ) -> Result<Content, ApiError> {
+        self.inner.smb_draft_content(identity, file, deadline)
+    }
+    fn write_smb_draft(
+        &self, identity: &Identity, request: crate::ChangeFileWorking, source: &crate::UploadSource,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let result = self.inner.write_smb_draft(identity, request, source)?;
+        if self.fail.swap(false, Ordering::SeqCst) {
+            return Err(ApiError::io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "lost reply after actual durable draft publication",
+            )));
+        }
+        Ok(result)
+    }
     fn operation(
         &self,
         _identity: &Identity,

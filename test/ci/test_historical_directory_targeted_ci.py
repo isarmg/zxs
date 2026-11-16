@@ -97,7 +97,9 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
             'test/server/unit/smb_rpc/phase1_new_file_tests.rs',
         ]:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                added = (['ordinary-smb-manual-draft']
+                         if path == 'test/server/integration/phase1_smb_rpc.rs' else [])
+                plan = assert_path_group_extension(self, self.policy, [path], None, added)
                 self.assertIn('note-target-consumers', plan['groups'])
                 self.assertEqual(len(plan['rust_targets']), 2)
 
@@ -135,7 +137,11 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
         self.assertEqual(len(paths), 14)
         for path in paths:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                added = (['ordinary-smb-manual-draft'] if path in {
+                    'src/server/src/engine_backend.rs', 'src/server/src/lib.rs',
+                    'test/server/integration/phase1_smb_rpc.rs',
+                } else [])
+                plan = assert_path_group_extension(self, self.policy, [path], None, added)
                 self.assertEqual(plan['changed_paths'], [path])
                 self.assertLessEqual(len(plan['rust_targets']), 16)
 
@@ -153,7 +159,8 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
                 'container-tags-http', 'directory-rename-http-retirement',
                 'note-http-boundary', 'note-target-consumers', 'paged-deletion-review',
                 'server-authorization', 'version-metadata-read',
-            ], ['container-path-facts-http', 'container-lifecycle-http']),
+            ], ['container-path-facts-http', 'container-lifecycle-http',
+                'ordinary-smb-manual-draft']),
             CI.select_plan(self.policy, policy),
         ]
         # HTTP retirement adds a core product check without dropping any old selection.

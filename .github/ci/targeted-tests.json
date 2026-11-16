@@ -5035,6 +5035,78 @@
           "features": []
         }
       ]
+    },
+    "ordinary-smb-manual-draft": {
+      "reason": "Actual authenticated SMB Manual FILE handles publish only file.draft.write, retain frozen uncertain requests and local bytes/quota, and cold-read the published shared draft. The genuine HTTP management endpoint alone creates a FILE version. Include lost-response/later-FD-byte refusal and the unchanged Automatic path. No new pool format, RPC wire, unflushed-orphan adoption, or Samba-network acceptance claim.",
+      "python_tests": [
+        "test_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "timeout_seconds": 900,
+          "kind": "lib",
+          "exact": [
+            "smb_rpc::tests::manual_draft_tests::lost_manual_reply_reuses_the_frozen_request_and_never_acknowledges_later_fd_bytes"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "phase1_smb_rpc",
+          "exact": [
+            "manual_draft::public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_commit",
+            "public_smb_bridge_read_only_create_existing_keeps_pinned_content_without_a_writer"
+          ],
+          "max_tests": 2
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "exact": [
+            "fresh_working::fresh_authenticated_draft_and_worktree_survive_cold_exact_retries"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -5994,7 +6066,8 @@
     {
       "path": "src/server/src/engine_backend/file_draft.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
@@ -8343,13 +8416,15 @@
     {
       "path": "test/server/unit/smb_rpc/close_tests.rs",
       "groups": [
-        "container-tags-http"
+        "container-tags-http",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
       "path": "test/server/unit/smb_rpc/snapshot_semantics_tests.rs",
       "groups": [
-        "container-tags-http"
+        "container-tags-http",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
@@ -8601,7 +8676,8 @@
     {
       "path": "src/server/src/lib.rs",
       "groups": [
-        "directory-rename-http-retirement"
+        "directory-rename-http-retirement",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
@@ -9437,14 +9513,16 @@
     {
       "path": "src/server/src/backend_methods.rs",
       "groups": [
-        "paged-deletion-review"
+        "paged-deletion-review",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
       "path": "src/server/src/engine_backend.rs",
       "groups": [
         "paged-deletion-review",
-        "note-http-boundary"
+        "note-http-boundary",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
@@ -9853,7 +9931,8 @@
     {
       "path": "test/server/unit/smb_rpc/namespace_tests.rs",
       "groups": [
-        "portable-path-consumers"
+        "portable-path-consumers",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
@@ -9871,7 +9950,8 @@
     {
       "path": "test/server/unit/smb_rpc/tests.rs",
       "groups": [
-        "portable-path-consumers"
+        "portable-path-consumers",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
@@ -10042,7 +10122,8 @@
       "path": "src/server/src/http_boundary.rs",
       "groups": [
         "container-current-name",
-        "note-http-boundary"
+        "note-http-boundary",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
@@ -10533,7 +10614,8 @@
     {
       "path": "test/server/integration/phase1_smb_rpc.rs",
       "groups": [
-        "note-target-consumers"
+        "note-target-consumers",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
@@ -14691,6 +14773,84 @@
       "path": "src/engine/src/engine/membership_transition/pending/activation/backup/startup.rs",
       "groups": [
         "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_smb_draft.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/read_projection.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/smb_draft.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/handles.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/manual/layout.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/manual.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/metadata.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/publication.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/recovery_record.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/session.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_smb_rpc/manual_draft.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/manual_draft_tests.rs",
+      "groups": [
+        "ordinary-smb-manual-draft"
       ]
     }
   ],

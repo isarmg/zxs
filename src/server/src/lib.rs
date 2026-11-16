@@ -113,6 +113,8 @@ mod http_file_merge;
 pub use backend_file_merge::{MergeFileBranches, MergeFileHistory};
 mod backend_file_tags;
 mod backend_file_draft;
+mod backend_smb_draft;
+pub use backend_smb_draft::{SmbDraftAccess, SmbManualFile};
 mod http_file_draft;
 pub use backend_file_draft::{ChangeFileWorking, FileWorkingSnapshot, ReadFileDraft};
 mod http_file_metadata;

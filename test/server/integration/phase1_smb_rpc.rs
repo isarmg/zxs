@@ -2,6 +2,8 @@
 //! These are real framed Unix RPC/FD/Engine tests, not Samba network tests.
 #[path = "phase1_smb_rpc/directory_rename.rs"]
 mod directory_rename;
+#[path = "phase1_smb_rpc/manual_draft.rs"]
+mod manual_draft;
 use smb_protocol::{
     client::{Client, RemoteError, RemoteErrorCode},
     protocol::{DirectoryPage, NamespaceOperation, OpenResult, Request},
@@ -77,12 +79,18 @@ impl Fixture {
             )]).unwrap(),
         )
         .unwrap();
+        let auth = AuthStore::initialize(&system, "alice", "phase-one-smb-password").unwrap();
+        Self::start(root, engine, auth)
+    }
+
+    fn resume(root: tempfile::TempDir, engine: Engine) -> Self {
+        let auth = AuthStore::open(&root.path().join("state")).unwrap();
+        Self::start(root, engine, auth)
+    }
+
+    fn start(root: tempfile::TempDir, engine: Engine, auth: AuthStore) -> Self {
         let backend = Arc::new(EngineBackend::new(engine));
-        let auth = backend
-            .protect_auth(
-                AuthStore::initialize(&system, "alice", "phase-one-smb-password").unwrap(),
-            )
-            .unwrap();
+        let auth = backend.protect_auth(auth).unwrap();
         let auth = Arc::new(Mutex::new(auth));
         let config = SmbConfig {
             socket: root.path().join("run/bridge.sock"),

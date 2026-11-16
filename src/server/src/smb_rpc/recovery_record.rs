@@ -86,6 +86,24 @@ impl PersistedRecord {
 }
 
 impl ActiveRecord {
+    pub(super) fn remove(
+        &mut self, directory: &PrivateDirectory, name: &EntryName,
+    ) -> Result<(), ApiError> {
+        let previous = self.persisted.as_ref().ok_or_else(|| ApiError::conflict(
+            storage_contract::ErrorCode::UploadStateInvalid,
+            "manual recovery record has no held publication",
+        ))?;
+        if !previous.unchanged(directory, name)? {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::UploadStateInvalid,
+                "manual recovery record changed before cleanup",
+            ));
+        }
+        directory.remove_file(name).map_err(crate::upload_fs_error)?;
+        self.persisted = None;
+        Ok(())
+    }
+
     pub(super) fn persist(
         &mut self,
         directory: &PrivateDirectory,

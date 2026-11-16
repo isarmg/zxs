@@ -141,19 +141,22 @@ impl crate::backend_read::DirectoryRegistryBinding {
 impl crate::DirectoryReadSnapshot {
     fn capture(engine: &Engine, branch: &str) -> Result<Self, ApiError> {
         let namespace = engine.namespace_snapshot(branch).map_err(error)?;
+        let commit_id = namespace.head_commit_id().into();
+        let entries = match namespace.into_entries() {
+            storage_engine::NamespaceEntries::Commit(commit) => {
+                crate::backend_read::DirectoryEntries::Commit(commit)
+            }
+            storage_engine::NamespaceEntries::Projected(entries) => {
+                crate::backend_read::DirectoryEntries::Projected(entries)
+            }
+        };
+        let entries = super::smb_draft::directory_entries(engine, branch, entries)?;
         Ok(Self {
             branch_id: branch.into(),
             history_tree_id: engine.state().branches[branch].history_tree_id.clone(),
-            commit_id: namespace.head_commit_id().into(),
+            commit_id,
             binding: crate::backend_read::DirectoryRegistryBinding::capture(engine),
-            entries: match namespace.into_entries() {
-                storage_engine::NamespaceEntries::Commit(commit) => {
-                    crate::backend_read::DirectoryEntries::Commit(commit)
-                }
-                storage_engine::NamespaceEntries::Projected(entries) => {
-                    crate::backend_read::DirectoryEntries::Projected(entries)
-                }
-            },
+            entries,
         })
     }
 

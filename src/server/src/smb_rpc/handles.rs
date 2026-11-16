@@ -166,6 +166,13 @@ impl Session {
             };
             return Ok((result, fd));
         }
+        if let Some(entry) = &existing
+            && let Some(manual) = self.shared.backend.smb_file_working(
+                &self.identity, &self.branch, entry,
+            )?
+        {
+            return self.open_manual(handle_id, manual, writable, truncate, write_through);
+        }
         let path = path.expect("invariant: a file handle has an admitted entry path");
         let mtime = match version.as_deref() {
             Some(version) => self.version_mtime(version)?,
@@ -378,7 +385,7 @@ impl Session {
         let opened = self.handles.get_mut(&handle).ok_or_else(missing_handle)?;
         opened.authorize_read(&self.shared, &self.identity, &self.branch)?;
         let content = match opened {
-            Handle::Read(content, _) => content,
+            Handle::Read(content, _) | Handle::ReadDraft(content, _) => content,
             Handle::Directory(_) => {
                 return Err(ApiError::new(
                     ::http::StatusCode::CONFLICT,
@@ -386,7 +393,9 @@ impl Session {
                     "directory data is not readable",
                 ));
             }
-            Handle::Write(_, _) => return Err(ApiError::unsupported()),
+            Handle::Write(_, _) | Handle::ManualWrite(_, _) => {
+                return Err(ApiError::unsupported());
+            }
         };
         // Version authorization concerns metadata; it does not admit disk I/O.
         // Check even a cached/empty read so an idle handle cannot resurrect a
@@ -456,6 +465,12 @@ impl Handle {
     ) -> Result<(), ApiError> {
         match self {
             Self::Read(_, version) => shared.backend.authorize_version(identity, version),
+            Self::ReadDraft(_, file) => {
+                shared.backend.authorize_smb_draft(identity, file, crate::SmbDraftAccess::Read)
+            }
+            Self::ManualWrite(writer, _) => shared.backend.authorize_smb_draft(
+                identity, writer.selection(), crate::SmbDraftAccess::Read,
+            ),
             Self::Write(..) | Self::Directory(_) => {
                 shared.backend.authorize_current(identity, branch)
             }

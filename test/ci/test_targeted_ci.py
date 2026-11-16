@@ -66,6 +66,85 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_ordinary_smb_manual_draft_keeps_actual_rpc_http_and_old_consumers(self):
+        name = 'ordinary-smb-manual-draft'
+        paths = [
+            'src/server/src/backend_methods.rs',
+            'src/server/src/backend_smb_draft.rs',
+            'src/server/src/engine_backend/file_draft.rs',
+            'src/server/src/engine_backend/read_projection.rs',
+            'src/server/src/engine_backend/smb_draft.rs',
+            'src/server/src/engine_backend.rs',
+            'src/server/src/http_boundary.rs',
+            'src/server/src/lib.rs',
+            'src/server/src/smb_rpc/handles.rs',
+            'src/server/src/smb_rpc/manual/layout.rs',
+            'src/server/src/smb_rpc/manual.rs',
+            'src/server/src/smb_rpc/metadata.rs',
+            'src/server/src/smb_rpc/publication.rs',
+            'src/server/src/smb_rpc/recovery_record.rs',
+            'src/server/src/smb_rpc/session.rs',
+            'src/server/src/smb_rpc.rs',
+            'test/server/integration/phase1_smb_rpc/manual_draft.rs',
+            'test/server/integration/phase1_smb_rpc.rs',
+            'test/server/unit/smb_rpc/close_tests.rs',
+            'test/server/unit/smb_rpc/manual_draft_tests.rs',
+            'test/server/unit/smb_rpc/namespace_tests.rs',
+            'test/server/unit/smb_rpc/snapshot_semantics_tests.rs',
+            'test/server/unit/smb_rpc/tests.rs',
+        ]
+        group = self.policy['groups'][name]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(name, plan['groups'])
+                self.assertIn('test_targeted_ci', plan['python_tests'])
+                self.assertCountEqual(origin_selections(plan, name), group['rust_targets'])
+                if len(plan['groups']) > 1:
+                    assert_path_group_extension(self, self.policy, [path], None, [name])
+        assert_path_group_extension(self, self.policy, paths + [
+            '.github/ci/targeted-tests.json', 'test/ci/test_targeted_ci.py',
+            'test/ci/test_deletion_targeted_ci.py',
+            'test/ci/test_version_read_targeted_ci.py',
+            'test/ci/test_historical_directory_targeted_ci.py',
+        ], None, [name])
+        unit, rpc, web, product, lean = group['rust_targets']
+        self.assertEqual(unit['exact'], [
+            'smb_rpc::tests::manual_draft_tests::'
+            'lost_manual_reply_reuses_the_frozen_request_and_never_acknowledges_later_fd_bytes',
+        ])
+        self.assertEqual(rpc['exact'], [
+            'manual_draft::'
+            'public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_commit',
+            'public_smb_bridge_read_only_create_existing_keeps_pinned_content_without_a_writer',
+        ])
+        self.assertEqual(web['exact'], [
+            'fresh_working::fresh_authenticated_draft_and_worktree_survive_cold_exact_retries',
+        ])
+        self.assertEqual((unit['kind'], unit['max_tests']), ('lib', 1))
+        self.assertEqual((rpc['kind'], rpc['name'], rpc['max_tests']),
+                         ('test', 'phase1_smb_rpc', 2))
+        self.assertEqual((web['kind'], web['name'], web['max_tests']),
+                         ('test', 'phase1_save_tags', 1))
+        for runtime in (unit, rpc, web):
+            self.assertEqual(runtime['package'], 'storage-server')
+            self.assertEqual(runtime['manifest'], 'src/server/Cargo.toml')
+            self.assertEqual(runtime['features'], ['core'])
+            self.assertIs(runtime['default_features'], True)
+            self.assertIs(runtime['isolate'], True)
+            self.assertEqual(runtime['timeout_seconds'], 900)
+            self.assertEqual(runtime.get('prefixes', []), [])
+            self.assertFalse(runtime.get('whole', False))
+        for check in (product, lean):
+            self.assertEqual(check['package'], 'storage-server')
+            self.assertEqual(check['mode'], 'check')
+        self.assertEqual((product['default_features'], product['features']), (True, ['core']))
+        self.assertEqual((lean['default_features'], lean['features']), (False, []))
+        untouched = CI.select_plan(self.policy,
+            ['src/server/src/smb_rpc/default_share.rs'], shardable=True)
+        self.assertNotIn(name, untouched['groups'])
+        self.assertIn('ordinary-smb-native-mkdir', untouched['groups'])
+
     def test_initial_storage_result_keeps_exact_web_completion_and_old_consumers(self):
         name = 'initial-storage-result-admission'
         paths = [
@@ -2328,7 +2407,7 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
             'container-lifecycle-contract', 'container-lifecycle-web',
             'container-path-facts-schema',
             'fresh-root-name-budget', 'ordinary-namespace-parents',
-            'ordinary-empty-directory-backup',
+            'ordinary-empty-directory-backup', 'ordinary-smb-manual-draft',
         ])
         self.assertEqual(len(plan['rust_targets']), 14)
         self.assertEqual(len(plan['python_tests']), 8)

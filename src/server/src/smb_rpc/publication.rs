@@ -195,6 +195,9 @@ impl Session {
         end: u64,
         bytes: u64,
     ) -> Result<Value, ApiError> {
+        if let Some(Handle::ManualWrite(writer, _)) = self.handles.get_mut(&handle) {
+            return writer.prepare_write(&self.shared, &self.identity, end, bytes);
+        }
         let Some(Handle::Write(writer, _)) = self.handles.get_mut(&handle) else {
             return Err(ApiError::forbidden());
         };
@@ -215,6 +218,9 @@ impl Session {
     pub(super) fn dirty(&mut self, handle: u64) -> Result<Value, ApiError> {
         // The FD has already been modified. Preserve it even when current
         // authorization or rebase validation rejects the operation.
+        if let Some(Handle::ManualWrite(writer, _)) = self.handles.get_mut(&handle) {
+            return writer.dirty(&self.shared, &self.identity, self.max_file_bytes);
+        }
         let Some(Handle::Write(writer, _)) = self.handles.get_mut(&handle) else {
             return Err(ApiError::forbidden());
         };
@@ -294,6 +300,9 @@ impl Session {
             .get_mut(&handle)
             .ok_or_else(handles::missing_handle)?;
         match opened {
+            Handle::ManualWrite(writer, _) => {
+                writer.flush(&self.shared, &self.identity, self.max_file_bytes)
+            }
             Handle::Write(writer, _) if writer.dirty => flush_writer(
                 &self.shared,
                 &self.identity,
@@ -305,11 +314,13 @@ impl Session {
                 // No-change acknowledgements still require current authority.
                 opened.authorize_read(&self.shared, &self.identity, &self.branch)?;
                 match opened {
-                    Handle::Read(content, _) => content.file.sync_all().map_err(ApiError::io)?,
+                    Handle::Read(content, _) | Handle::ReadDraft(content, _) => {
+                        content.file.sync_all().map_err(ApiError::io)?;
+                    }
                     Handle::Directory(directory) => {
                         directory.file.sync_all().map_err(ApiError::io)?;
                     }
-                    Handle::Write(_, _) => {}
+                    Handle::Write(_, _) | Handle::ManualWrite(_, _) => {}
                 }
                 Ok(json!({"saved":true,"changed":false}))
             }
@@ -330,7 +341,9 @@ impl Session {
             .handles
             .remove(&handle)
             .ok_or_else(handles::missing_handle)?;
-        if let Handle::Write(mut writer, _paths) = opened {
+        if let Handle::ManualWrite(mut writer, _paths) = opened {
+            writer.close(&self.shared, &self.identity, self.max_file_bytes, abort)?;
+        } else if let Handle::Write(mut writer, _paths) = opened {
             // Close owns the descriptor even when publication fails. Its path
             // reservation stays held until cleanup or detached retention finishes.
             let saved = (|| {
@@ -376,7 +389,10 @@ impl Session {
             .remove(&handle)
             .ok_or_else(handles::missing_handle)?;
         let mut result = json!({"closed":true,"detached":true});
-        if let Handle::Write(mut writer, _paths) = entry {
+        if let Handle::ManualWrite(mut writer, _paths) = entry {
+            writer.retain(&self.identity.principal);
+            result["operation_id"] = json!(writer.operation());
+        } else if let Handle::Write(mut writer, _paths) = entry {
             let reason = ApiError::new(
                 ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::RecoveryRequired,

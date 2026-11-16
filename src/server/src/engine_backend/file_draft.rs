@@ -80,6 +80,18 @@ pub(super) fn content(
         http::StatusCode::CONFLICT, storage_contract::ErrorCode::FileBranchConflict,
         "selected file has no shared draft body",
     ))?.1;
+    verified_content(payload, request.deadline, || {
+        let file = engine.open_file_draft(&request.target).map_err(error)?;
+        drop(engine);
+        Ok(file)
+    })
+}
+
+pub(super) fn verified_content(
+    payload: storage_contract::file_draft::DraftPayload,
+    deadline: std::time::Instant,
+    open: impl FnOnce() -> Result<storage_engine::ReadFile, ApiError>,
+) -> Result<Content, ApiError> {
     const CHUNK: u32 = 65_536;
     let count = usize::try_from(payload.logical_size().div_ceil(u64::from(CHUNK)))
         .map_err(|source| {
@@ -89,11 +101,10 @@ pub(super) fn content(
         .and_then(|bytes| bytes.checked_add(storage_contract::CHECKSUM_HEADER_BYTES))
         .ok_or_else(|| ApiError::limit("draft checksum proof length overflow"))?;
     let proof_memory = crate::content_proof_budget::reserve(encoded_bytes)?;
-    if std::time::Instant::now() >= request.deadline {
+    if std::time::Instant::now() >= deadline {
         return Err(crate::transfer_limits::timeout_error());
     }
-    let mut file = engine.open_file_draft(&request.target).map_err(error)?;
-    drop(engine);
+    let mut file = open()?;
     // The core API returns its fully verified held descriptor. Build range
     // proofs from that same descriptor and compare the complete digest again;
     // neither a new pathname nor unchecked raw-None streaming is accepted.
@@ -103,7 +114,7 @@ pub(super) fn content(
     let mut remaining = payload.logical_size();
     let mut digest = blake3::Hasher::new();
     while remaining > 0 {
-        if std::time::Instant::now() >= request.deadline {
+        if std::time::Instant::now() >= deadline {
             return Err(crate::transfer_limits::timeout_error());
         }
         file.check_running().map_err(error)?;

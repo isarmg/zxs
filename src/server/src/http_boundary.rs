@@ -19,6 +19,8 @@ pub(crate) enum ApiErrorSource {
     #[error("{0}")]
     AuthenticatedPrincipal(#[source] storage_contract::EmptyPrincipal),
     #[error("{0}")]
+    WorkingRevision(#[source] storage_contract::GenerationExhausted),
+    #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Join(#[from] tokio::task::JoinError),

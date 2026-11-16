@@ -327,6 +327,26 @@ struct NamespaceFailure {
     aborts: AtomicUsize,
 }
 impl Backend for NamespaceFailure {
+    fn smb_file_working(
+        &self, identity: &Identity, branch: &str, entry: &storage_contract::Entry,
+    ) -> Result<Option<crate::SmbManualFile>, ApiError> {
+        self.inner.smb_file_working(identity, branch, entry)
+    }
+    fn authorize_smb_draft(
+        &self, identity: &Identity, file: &crate::SmbManualFile, access: crate::SmbDraftAccess,
+    ) -> Result<(), ApiError> {
+        self.inner.authorize_smb_draft(identity, file, access)
+    }
+    fn smb_draft_content(
+        &self, identity: &Identity, file: &crate::SmbManualFile, deadline: std::time::Instant,
+    ) -> Result<Content, ApiError> {
+        self.inner.smb_draft_content(identity, file, deadline)
+    }
+    fn write_smb_draft(
+        &self, identity: &Identity, request: crate::ChangeFileWorking, source: &crate::UploadSource,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner.write_smb_draft(identity, request, source)
+    }
     fn operation(
         &self,
         _identity: &Identity,
@@ -1502,6 +1522,26 @@ struct PreparationFailure {
     commits: AtomicUsize,
 }
 impl Backend for PreparationFailure {
+    fn smb_file_working(
+        &self, identity: &Identity, branch: &str, entry: &storage_contract::Entry,
+    ) -> Result<Option<crate::SmbManualFile>, ApiError> {
+        self.inner.smb_file_working(identity, branch, entry)
+    }
+    fn authorize_smb_draft(
+        &self, identity: &Identity, file: &crate::SmbManualFile, access: crate::SmbDraftAccess,
+    ) -> Result<(), ApiError> {
+        self.inner.authorize_smb_draft(identity, file, access)
+    }
+    fn smb_draft_content(
+        &self, identity: &Identity, file: &crate::SmbManualFile, deadline: std::time::Instant,
+    ) -> Result<Content, ApiError> {
+        self.inner.smb_draft_content(identity, file, deadline)
+    }
+    fn write_smb_draft(
+        &self, identity: &Identity, request: crate::ChangeFileWorking, source: &crate::UploadSource,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner.write_smb_draft(identity, request, source)
+    }
     fn operation(
         &self,
         _identity: &Identity,

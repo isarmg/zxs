@@ -31,6 +31,7 @@ mod budget;
 mod default_share;
 mod directory;
 mod handles;
+mod manual;
 mod metadata;
 mod namespace;
 mod object_move;
@@ -109,6 +110,7 @@ impl Shared {
 
 enum Handle {
     Read(Content, String),
+    ReadDraft(Content, crate::SmbManualFile),
     Directory(DirectoryHandle),
     // Every live writer has handed out a mutable FD. The peer can have
     // changed it before a Dirty request reached us, including after a
@@ -117,6 +119,7 @@ enum Handle {
     // publishing a new generation. Explicit successful Close still cleans up.
     // The handle owns its path reservation independently of the Session map.
     Write(Box<Writer>, path_reservation::PathReservation),
+    ManualWrite(Box<manual::ManualWriter>, path_reservation::PathReservation),
 }
 
 struct DirectoryHandle {

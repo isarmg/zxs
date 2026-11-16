@@ -465,6 +465,34 @@ macro_rules! methods {
                 ) -> Result<storage_contract::StagedFile, $crate::ApiError>;
             }
             optional {
+                fn smb_file_working(
+                    &self, identity: &$crate::Identity, branch: &str,
+                    entry: &storage_contract::Entry,
+                ) -> Result<Option<$crate::SmbManualFile>, $crate::ApiError> {
+                    let _ = (identity, branch, entry);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn authorize_smb_draft(
+                    &self, identity: &$crate::Identity, file: &$crate::SmbManualFile,
+                    access: $crate::SmbDraftAccess,
+                ) -> Result<(), $crate::ApiError> {
+                    let _ = (identity, file, access);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn smb_draft_content(
+                    &self, identity: &$crate::Identity, file: &$crate::SmbManualFile,
+                    deadline: ::std::time::Instant,
+                ) -> Result<$crate::Content, $crate::ApiError> {
+                    let _ = (identity, file, deadline);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn write_smb_draft(
+                    &self, identity: &$crate::Identity, request: $crate::ChangeFileWorking,
+                    source: &$crate::UploadSource,
+                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
+                    let _ = (identity, request, source);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn file_working(
                     &self, identity: &$crate::Identity,
                     target: storage_contract::file_draft::DraftLocation,

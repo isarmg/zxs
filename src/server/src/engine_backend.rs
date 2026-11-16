@@ -24,6 +24,7 @@ mod disk_monitor;
 mod error_registry;
 mod file_deletion;
 mod file_draft;
+mod smb_draft;
 mod file_history_move;
 mod file_manager;
 mod foreign_identity;
@@ -640,6 +641,26 @@ impl Backend for EngineBackend {
         let (engine, _) = self.lock_current(identity)?;
         repository(&engine, id)?;
         Ok(())
+    }
+    fn smb_file_working(
+        &self, identity: &Identity, branch: &str, entry: &storage_contract::Entry,
+    ) -> Result<Option<crate::SmbManualFile>, ApiError> {
+        smb_draft::capture(self, identity, branch, entry)
+    }
+    fn authorize_smb_draft(
+        &self, identity: &Identity, file: &crate::SmbManualFile, access: crate::SmbDraftAccess,
+    ) -> Result<(), ApiError> {
+        smb_draft::authorize(self, identity, file, access)
+    }
+    fn smb_draft_content(
+        &self, identity: &Identity, file: &crate::SmbManualFile, deadline: std::time::Instant,
+    ) -> Result<Content, ApiError> {
+        smb_draft::content(self, identity, file, deadline)
+    }
+    fn write_smb_draft(
+        &self, identity: &Identity, request: crate::ChangeFileWorking, source: &crate::UploadSource,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        smb_draft::write(self, identity, request, source)
     }
     fn file_working(
         &self, identity: &Identity, target: storage_contract::file_draft::DraftLocation,

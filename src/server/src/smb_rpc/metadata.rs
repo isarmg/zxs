@@ -36,13 +36,21 @@ impl Session {
                 }
             }
             SmbRelativePath::Entry(path) => {
-                let entry = self.find(path)?.ok_or_else(|| {
+                let mut entry = self.find(path)?.ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
                         "entry missing",
                     )
                 })?;
+                if entry.kind == storage_contract::NamespaceEntryKind::File
+                    && let Some(file) = self.shared.backend.smb_file_working(
+                        &self.identity, &self.branch, &entry,
+                    )?
+                    && let Some((_, payload)) = file.working.draft()
+                {
+                    entry.size = payload.logical_size();
+                }
                 let mtime = match entry.kind {
                     storage_contract::NamespaceEntryKind::File => {
                         self.version_mtime(&entry.version_id)?
@@ -67,6 +75,12 @@ impl Session {
     pub(super) fn handle_metadata(&self, opened: &Handle) -> Result<AuthorizedMetadata, ApiError> {
         let mtime = match opened {
             Handle::Read(_, version) => self.version_mtime(version)?,
+            Handle::ReadDraft(_, file) => {
+                self.version_mtime(&file.base.version_id().to_string())?
+            }
+            Handle::ManualWrite(writer, _) => {
+                self.version_mtime(&writer.selection().base.version_id().to_string())?
+            }
             Handle::Directory(_) => FileMtime::NotFile {},
             Handle::Write(writer, _) => {
                 let entry = self.shared.backend.lookup_at(
