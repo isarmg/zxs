@@ -80,6 +80,29 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         ).unwrap()
     }
 
+    fn assert_cold_material(
+        before: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+        after: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+        database: &Path,
+        scope: &crate::container_storage::ObjectDatabaseScope,
+        final_sequence: u64,
+    ) {
+        // Current cold repair can rematerialize FILE at its admitted SYSTEM
+        // sequence. This is not zero-write: only that header may advance.
+        // The strict reader still verifies the complete format/scope/row hash.
+        let before_file = file_material(before[database].as_ref().unwrap(), scope);
+        let after_file = file_material(after[database].as_ref().unwrap(), scope);
+        assert_eq!(after_file.scope(), before_file.scope());
+        assert_eq!(after_file.records_hash(), before_file.records_hash());
+        assert_eq!(after_file.records(), before_file.records());
+        assert!(before_file.source_sequence() <= after_file.source_sequence());
+        assert_eq!(after_file.source_sequence(), final_sequence);
+        let mut expected = before.clone();
+        *expected.get_mut(database).unwrap() = after[database].clone();
+        // Every directory, BODY, manifest, ledger and other file remains exact.
+        assert_eq!(after, &expected);
+    }
+
     fn original_request(engine: &Engine, repository: &crate::Repository) -> InitializeSnapshot {
         let root = engine.namespace_host_root(
             repository.repository_id.parse().unwrap(),
@@ -183,24 +206,14 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         file_id: entry.file_id.clone(),
         history_tree_id: container.history_tree_id.to_string(),
     };
-    let before_file = file_material(first_material[&database].as_ref().unwrap(), &file_scope);
     drop(engine);
 
     engine = Engine::open(&system).unwrap();
     assert!(!engine.is_read_only());
-    // Cold repair may rematerialize FILE at the final admitted SYSTEM sequence.
-    // It must not change its scope or any record, nor any other source bytes.
     let cold_material = inventory(&disks[0].join("common-data"));
-    let cold_file = file_material(cold_material[&database].as_ref().unwrap(), &file_scope);
-    assert_eq!(cold_file.scope(), before_file.scope());
-    assert_eq!(cold_file.records_hash(), before_file.records_hash());
-    assert_eq!(cold_file.records(), before_file.records());
-    assert!(before_file.source_sequence() <= cold_file.source_sequence());
-    assert_eq!(cold_file.source_sequence(), engine.state().sequence);
-    assert_eq!(cold_file.source_sequence(), complete.sequence);
-    let mut expected_material = first_material;
-    *expected_material.get_mut(&database).unwrap() = cold_material[&database].clone();
-    assert_eq!(cold_material, expected_material);
+    assert_cold_material(&first_material, &cold_material, &database, &file_scope,
+        engine.state().sequence);
+    assert_eq!(engine.state().sequence, complete.sequence);
     let before = Arc::clone(&engine.state);
     assert_eq!(initialize_root(&mut engine, &request, &principal()).unwrap(), handle);
     assert!(Arc::ptr_eq(&before, &engine.state));
@@ -268,6 +281,9 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     drop(engine);
 
     engine = Engine::open(&system).unwrap();
+    let cold_worktree_material = inventory(&disks[0].join("common-data"));
+    assert_cold_material(&material, &cold_worktree_material, &database, &file_scope,
+        engine.state().sequence);
     let before = Arc::clone(&engine.state);
     assert_eq!(create_worktree(&mut engine, &worktree_request, &principal()).unwrap(), worktree);
     assert!(Arc::ptr_eq(&before, &engine.state));
@@ -284,7 +300,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         assert_eq!(bytes, BODY);
         Ok((session.instance(), session.worktree().clone(), view.stamp()))
     }).unwrap(), observed);
-    assert_eq!(inventory(&disks[0].join("common-data")), material);
+    assert_eq!(inventory(&disks[0].join("common-data")), cold_worktree_material);
 
     // A durable worktree edit is not a lease workspace and does not publish FILE.
     let edited_body = b"one explicit worktree change, not an automatic FILE save";
@@ -328,12 +344,15 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     let edited_receipts = engine.state().operations.clone();
     drop(engine);
     engine = Engine::open(&system).unwrap();
+    let cold_edited_material = inventory(&disks[0].join("common-data"));
+    assert_cold_material(&edited_material, &cold_edited_material, &database, &file_scope,
+        engine.state().sequence);
     read_edit(&engine);
     let before = Arc::clone(&engine.state);
     assert_eq!(edit_worktree(&mut engine, &edit, edited_body, &principal()).unwrap(), revision);
     assert!(Arc::ptr_eq(&before, &engine.state));
     assert_eq!(engine.state().operations, edited_receipts);
-    assert_eq!(inventory(&disks[0].join("common-data")), edited_material);
+    assert_eq!(inventory(&disks[0].join("common-data")), cold_edited_material);
     assert_eq!(engine.file_branch_head(&selected.branch_id).unwrap(), file_head);
     assert_eq!(engine.state().versions, original_versions);
 
@@ -406,12 +425,15 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     let committed_receipts = engine.state().operations.clone();
     drop(engine);
     engine = Engine::open(&system).unwrap();
+    let cold_committed_material = inventory(&disks[0].join("common-data"));
+    assert_cold_material(&committed_material, &cold_committed_material, &database, &file_scope,
+        engine.state().sequence);
     read_committed(&engine);
     let before = Arc::clone(&engine.state);
     assert_eq!(commit_worktree(&mut engine, &directory_commit, &principal()).unwrap(), updated);
     assert!(Arc::ptr_eq(&before, &engine.state));
     assert_eq!(engine.state().operations, committed_receipts);
-    assert_eq!(inventory(&disks[0].join("common-data")), committed_material);
+    assert_eq!(inventory(&disks[0].join("common-data")), cold_committed_material);
     assert!(!edited_path.exists());
 
     // The same actual container now gets a shared manual body. A lease
@@ -528,6 +550,9 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         assert_eq!(inventory(&disks[0].join("common-data")), dirty_media);
         drop(engine);
         engine = Engine::open(&system).unwrap();
+        let cold_dirty_media = inventory(&disks[0].join("common-data"));
+        assert_cold_material(&dirty_media, &cold_dirty_media, &database, &file_scope,
+            engine.state().sequence);
         assert!(!engine.is_read_only());
         assert_eq!(engine.file_working_state(&target).unwrap(), dirty);
         assert_eq!(read_draft(&engine, &target), draft_bytes);
@@ -540,7 +565,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
             &write, &principal(), write_operation, input(b"must not be consumed"),
         ).unwrap(), written);
         assert!(Arc::ptr_eq(&before, &engine.state));
-        assert_eq!(inventory(&disks[0].join("common-data")), dirty_media);
+        assert_eq!(inventory(&disks[0].join("common-data")), cold_dirty_media);
         let commit = DraftCommand::Commit {
             target: target.clone(), expected: dirty.revision(), base,
             message: "explicit shared container draft commit".into(),
@@ -566,13 +591,16 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         let material = inventory(&disks[0].join("common-data"));
         drop(engine);
         engine = Engine::open(&system).unwrap();
+        let cold_manual_material = inventory(&disks[0].join("common-data"));
+        assert_cold_material(&material, &cold_manual_material, &database, &file_scope,
+            engine.state().sequence);
         assert!(!engine.is_read_only());
         let before = Arc::clone(&engine.state);
         assert_eq!(engine.change_file_working(&commit, &principal(), commit_operation).unwrap(),
             committed);
         assert!(Arc::ptr_eq(&before, &engine.state));
         assert_eq!(engine.file_branch_head(&selected.branch_id).unwrap(), version);
-        assert_eq!(inventory(&disks[0].join("common-data")), material);
+        assert_eq!(inventory(&disks[0].join("common-data")), cold_manual_material);
         let mut bytes = Vec::new();
         engine.open_content(&version).unwrap().file.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, draft_bytes);
