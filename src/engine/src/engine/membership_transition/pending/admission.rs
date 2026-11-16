@@ -394,7 +394,7 @@ fn validate_metadata_namespace(root: &DiskRoot, expected: &PendingDiskSeal) -> R
     }
     Ok(())
 }
-pub(in crate::engine::membership_transition) fn verify_named_root(
+pub(in crate::engine) fn verify_named_root(
     root: &DiskRoot,
 ) -> Result<FileIdentity> {
     // Even a read-only name comparison is target I/O. Keep the original

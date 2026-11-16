@@ -292,8 +292,12 @@ pub(crate) fn verify_root(
 fn verify_bound_root(config: &Config, disk: &DiskConfig, root: &DiskRoot) -> Result<()> {
     let binding = config.storage_roots.get(&disk.disk_id.parse::<DiskId>()?)
         .ok_or(FreshLayoutError::Registration)?;
+    // An open descriptor can outlive the configured name. Observe that name
+    // under the original I/O lease before trusting any child or seal through
+    // the held root; a moved disk is not an available source or destination.
     if binding.registration != registration(config, disk)
-        || root.directory_identity(root.path())? != file_identity(binding.root_entity)
+        || super::membership_transition::verify_named_root(root)?
+            != file_identity(binding.root_entity)
     {
         return Err(FreshLayoutError::RootIdentity.into());
     }

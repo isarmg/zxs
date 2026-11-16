@@ -43,6 +43,10 @@ impl Fixture {
     }
 
     fn media(&self) -> Vec<BTreeMap<PathBuf, (u64, u64, Vec<u8>)>> {
+        self.media_at(&self.roots)
+    }
+
+    fn media_at(&self, roots: &[PathBuf]) -> Vec<BTreeMap<PathBuf, (u64, u64, Vec<u8>)>> {
         fn visit(root: &Path, path: &Path, out: &mut BTreeMap<PathBuf, (u64, u64, Vec<u8>)>) {
             let metadata = fs::symlink_metadata(path).unwrap();
             assert!(!metadata.file_type().is_symlink());
@@ -55,7 +59,7 @@ impl Fixture {
                 }
             }
         }
-        std::iter::once(&self.system).chain(self.roots.iter()).map(|root| {
+        std::iter::once(&self.system).chain(roots.iter()).map(|root| {
             let mut result = BTreeMap::new();
             visit(root, root, &mut result);
             result
@@ -146,4 +150,28 @@ fn prepared_backup_source_does_not_adopt_a_replacement_common_directory() {
     fs::remove_dir(common).unwrap();
     fs::rename(parked, fixture.roots[1].join("common-data")).unwrap();
     plan.require_context(&context).unwrap();
+
+    let c = context.prepare_backup_source_path(repository, branch, fixture.ids[2]).unwrap();
+    // A held FD and all unchanged child inodes must not hide loss of the root's
+    // configured name. Cover the namespace owner, direct source and destination.
+    for index in 0..fixture.roots.len() {
+        let parked = fixture._temporary.path().join(format!("parked-root-{index}"));
+        let original = fs::metadata(&fixture.roots[index]).unwrap();
+        fs::rename(&fixture.roots[index], &parked).unwrap();
+        fs::write(&fixture.roots[index], b"not the admitted disk directory").unwrap();
+        let mut held_roots = fixture.roots.clone();
+        held_roots[index] = parked.clone();
+        let before = fixture.media_at(&held_roots);
+        assert!(c.require_context(&context).is_err());
+        assert!(context.observe_backup_source_path(repository, branch, fixture.ids[2]).is_err());
+        assert!(read_backup_source_path(&fixture.engine.state, &fixture.engine.config,
+            &fixture.engine.disk_resources, repository, branch, fixture.ids[2]).is_err());
+        assert_eq!(fixture.media_at(&held_roots), before);
+        assert_eq!(fs::read(&fixture.roots[index]).unwrap(), b"not the admitted disk directory");
+        fs::remove_file(&fixture.roots[index]).unwrap();
+        fs::rename(&parked, &fixture.roots[index]).unwrap();
+        let restored = fs::metadata(&fixture.roots[index]).unwrap();
+        assert_eq!((restored.dev(), restored.ino()), (original.dev(), original.ino()));
+        c.require_context(&context).unwrap();
+    }
 }
