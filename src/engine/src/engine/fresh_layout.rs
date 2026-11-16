@@ -16,6 +16,7 @@ use storage_contract::working_tree::{
 };
 
 pub(crate) mod containers;
+pub(crate) mod directories;
 pub(crate) mod draft_source;
 pub(crate) mod namespace;
 

@@ -7,7 +7,8 @@ use storage_contract::{MapChanges, SequenceChanges};
 macro_rules! state_map_fields {
     ($consumer:ident) => {
         $consumer! {
-            file_containers,container_tags,repositories,histories,branches,commits,
+            file_containers,namespace_directories,container_tags,repositories,
+            histories,branches,commits,
             versions,placements,merge_links,
             history_boundaries,content_states,operations,plans,placement_rules,
             protection_policies,operation_principals,file_selections,directory_branches,

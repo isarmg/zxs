@@ -251,7 +251,11 @@ class TargetedSelection(unittest.TestCase):
         ]
         for path, groups, package, prefix in cases:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path], shardable=True)
+                if path.endswith('snapshot_incremental_oracle_tests.rs'):
+                    plan = assert_path_group_extension(
+                        self, self.policy, [path], groups, ['ordinary-namespace-parents'])
+                else:
+                    plan = CI.select_plan(self.policy, [path], shardable=True)
                 self.assertEqual(plan['groups'], groups)
                 selected = []
                 for target in plan['rust_targets']:
@@ -269,7 +273,7 @@ class TargetedSelection(unittest.TestCase):
             '.github/ci/targeted-tests.json', 'test/ci/test_targeted_ci.py',
         ], [
             'ci-selection', 'container-tags-storage', 'portable-path-consumers',
-        ], ['file-metadata-plan'])
+        ], ['file-metadata-plan', 'ordinary-namespace-parents'])
         self.assertEqual(combined['groups'], [
             'ci-selection', 'container-tags-storage', 'portable-path-consumers',
         ])
@@ -2036,7 +2040,7 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
             'container-path-facts-http', 'container-lifecycle-http',
             'container-lifecycle-contract', 'container-lifecycle-web',
             'container-path-facts-schema',
-            'fresh-root-name-budget',
+            'fresh-root-name-budget', 'ordinary-namespace-parents',
         ])
         self.assertEqual(len(plan['rust_targets']), 14)
         self.assertEqual(len(plan['python_tests']), 8)
@@ -2584,6 +2588,93 @@ class ContainerTagsSelection(unittest.TestCase):
                       contract['exact'])
         self.assertEqual(contract['max_tests'], 96)
 
+    def test_ordinary_parent_occurrences_keep_exact_defaults_faults_and_strict_maps(self):
+        name = 'ordinary-namespace-parents'
+        paths = [
+            'docs/contracts/README.md',
+            'docs/contracts/core.schema.json',
+            'docs/contracts/openapi.json',
+            'docs/contracts/vectors.json',
+            'src/contract/src/file_container.rs',
+            'src/contract/src/model.rs',
+            'src/engine/src/business/namespace.rs',
+            'src/engine/src/container_storage/namespace_host.rs',
+            'src/engine/src/container_storage/ordinary_preparation/directories.rs',
+            'src/engine/src/container_storage/ordinary_preparation/prefix.rs',
+            'src/engine/src/container_storage/ordinary_preparation.rs',
+            'src/engine/src/container_storage.rs',
+            'src/engine/src/engine/fresh_layout/containers.rs',
+            'src/engine/src/engine/fresh_layout/directories.rs',
+            'src/engine/src/engine/fresh_layout/namespace.rs',
+            'src/engine/src/engine/fresh_layout.rs',
+            'src/engine/src/engine/index/system_changes/catalog.rs',
+            'src/engine/src/engine/index/system_changes.rs',
+            'src/engine/src/engine/metadata_projection.rs',
+            'src/engine/src/engine/publication.rs',
+            'src/engine/src/foreign_import/identity_closure/catalog.rs',
+            'src/engine/src/history_package/state_read.rs',
+            'src/engine/src/journal/snapshot.rs',
+            'src/engine/src/persist/layout/container.rs',
+            'src/engine/src/persist/mod.rs',
+            'src/engine/src/persist/namespace_directory.rs',
+            'src/engine/src/publication_shape.rs',
+            'src/engine/src/snapshot_worktree/registry.rs',
+            'src/engine/src/state_projection.rs',
+            'test/contract/unit/file_container_tests.rs',
+            'test/engine/integration/ordinary_namespace_parents.rs',
+            'test/engine/integration/recursive_backup_paths.rs',
+            'test/engine/unit/engine/current_backup_configuration_tests.rs',
+            'test/engine/unit/history_package/changes.rs',
+            'test/engine/unit/journal/container_tags_fixture.rs',
+            'test/engine/unit/journal/snapshot/reference.rs',
+            'test/engine/unit/journal/snapshot_incremental_oracle_tests.rs',
+            'test/tools/contract-check/unit/main_tests.rs',
+            'tools/contract-check/src/main.rs',
+        ]
+        group = self.policy['groups'][name]
+        for path in paths:
+            with self.subTest(path=path):
+                complete = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(name, complete['groups'])
+                self.assertCountEqual(origin_selections(complete, name), group['rust_targets'])
+        assert_path_group_extension(self, self.policy, paths, None, [name])
+        default, faults, transaction, contract, schema, product, lean = group['rust_targets']
+        expected = [
+            'ordinary_namespace_parents::'
+            'ordinary_mkdir_holds_parent_occurrences_through_cuts_file_writes_and_cold_index',
+            'ordinary_namespace_parents::'
+            'nested_backup_binds_b_then_c_parent_occurrences_and_retained_bodies',
+        ]
+        self.assertEqual(default['exact'], expected)
+        self.assertEqual(faults['exact'], expected)
+        self.assertEqual(default['features'], [])
+        self.assertEqual(faults['features'], ['fault-injection'])
+        for target in (default, faults):
+            self.assertEqual((target['name'], target['max_tests'], target['timeout_seconds']),
+                             ('recursive_backup_paths', 2, 900))
+            self.assertTrue(target['default_features'])
+            self.assertTrue(target['isolate'])
+            self.assertNotIn('prefixes', target)
+            self.assertNotIn('whole', target)
+        self.assertEqual(transaction, self.policy['groups']['backup-entity-entry-budget']
+                         ['rust_targets'][1])
+        self.assertEqual(transaction['max_tests'], 1)
+        self.assertEqual(transaction['timeout_seconds'], 900)
+        self.assertEqual(contract['exact'], [
+            'file_container::'
+            'tests::ordinary_directory_vectors_preserve_independent_target_and_source_occurrences',
+            'file_container::'
+            'tests::ordinary_file_parent_and_directory_records_reject_missing_or_ambiguous_fields',
+            'file_container::tests::ordinary_state_requires_both_physical_maps_even_when_empty',
+        ])
+        self.assertEqual((contract['package'], contract['max_tests']), ('storage-contract', 3))
+        self.assertEqual(schema['exact'],
+                         ['tests::ordinary_physical_vectors_match_strict_core_and_openapi_shapes'])
+        self.assertEqual((schema['package'], schema['max_tests']), ('contract-check', 1))
+        self.assertEqual((product['mode'], lean['mode']), ('check', 'check'))
+        self.assertTrue(product['default_features'])
+        self.assertFalse(lean['default_features'])
+
     def test_file_material_copy_reuse_keeps_target_gates_and_product_checks(self):
         paths = [
             'src/engine/src/container_storage.rs',
@@ -2600,7 +2691,7 @@ class ContainerTagsSelection(unittest.TestCase):
                         self, self.policy, [path],
                         ['container-tags-storage', 'engine-date-errors',
                          'engine-integer-errors', 'file-material-copy-reuse'],
-                        ['fresh-managed-core'],
+                        ['fresh-managed-core', 'ordinary-namespace-parents'],
                     )
                 else:
                     plan = CI.select_plan(self.policy, [path])

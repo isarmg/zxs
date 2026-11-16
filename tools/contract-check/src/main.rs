@@ -152,6 +152,22 @@ fn validate_content_view(value: &Value) -> Result {
 
 fn semantics(name: &str, value: &Value) -> Result {
     match name {
+        "NamespaceDirectoryRecord" => {
+            let _: storage_contract::file_container::NamespaceDirectoryRecord =
+                json_codec::from_value(value.clone())?;
+        }
+        "FileContainerRecord" => {
+            let _: storage_contract::file_container::FileContainerRecord =
+                json_codec::from_value(value.clone())?;
+        }
+        "OrdinaryPhysicalStateFields" => {
+            let _: storage_contract::TrackedFiles<
+                storage_contract::file_container::FileContainerRecord,
+            > = json_codec::from_value(value["file_containers"].clone())?;
+            let _: storage_contract::TrackedMap<
+                storage_contract::file_container::NamespaceDirectoryRecord,
+            > = json_codec::from_value(value["namespace_directories"].clone())?;
+        }
         "StorageReadmissionRequest" => {
             let _: storage_contract::storage_readmission::ReadmissionRequest =
                 json_codec::from_value(value.clone())?;

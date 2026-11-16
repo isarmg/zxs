@@ -164,7 +164,28 @@ impl<'a> NamespaceHost<'a> {
         let mut expected = BTreeSet::new();
         for entry in self.snapshot.tree().visible_entries() {
             require_ordinary(&entry.path)?;
-            if entry.kind != NamespaceEntryKind::File || entry.path.parent().is_some() {
+            if entry.kind == NamespaceEntryKind::Directory {
+                let id = entry.entry_id.parse::<EntryId>()
+                    .map_err(NamespaceHostError::Identity)?;
+                let record = self.engine.state().namespace_directories.get(&entry.entry_id)
+                    .ok_or(NamespaceHostError::RootInventory)?;
+                let owner = self.root.binding().registration.disk_id.parse()
+                    .map_err(NamespaceHostError::Identity)?;
+                if record.repository != self.address.repository_id
+                    || record.branch != self.address.branch_id || record.owner_disk != owner
+                {
+                    return Err(NamespaceHostError::RootInventory);
+                }
+                super::ordinary_preparation::verify_namespace_directory(
+                    &self.engine.config, &self.engine.disk_resources, self.engine.state(),
+                    id, owner,
+                ).map_err(NamespaceHostError::Source)?;
+                if entry.path.parent().is_none() {
+                    expected.insert(crate::persist::layout::namespace::directory(&record.name));
+                }
+                continue;
+            }
+            if entry.kind != NamespaceEntryKind::File {
                 return Err(NamespaceHostError::RootInventory);
             }
             let file = entry.file_id.parse::<storage_contract::FileId>()
@@ -174,15 +195,17 @@ impl<'a> NamespaceHost<'a> {
             if record.namespace.repository != self.address.repository_id
                 || record.namespace.branch != self.address.branch_id
                 || record.namespace.entry.to_string() != entry.entry_id
-                || record.namespace.name.as_str() != entry.path.as_str()
+                || record.namespace.name.as_str() != entry.name()
                 || record.owner_disk != self.root.binding().registration.disk_id
                     .parse().map_err(NamespaceHostError::Identity)?
             {
                 return Err(NamespaceHostError::RootInventory);
             }
-            expected.insert(crate::persist::layout::namespace::directory(
-                &record.namespace.name,
-            ));
+            if entry.path.parent().is_none() {
+                expected.insert(crate::persist::layout::namespace::directory(
+                    &record.namespace.name,
+                ));
+            }
         }
         if has_repository {
             expected.insert(crate::persist::layout::SNAPSHOT_REPOSITORY.clone());
@@ -355,12 +378,16 @@ fn current_main(engine: &Engine, branch: BranchId) -> Result<(&Repository, Names
 }
 
 fn require_ordinary(path: &PortablePath) -> Result<()> {
+    if !ordinary_path(path) {
+        return Err(NamespaceHostError::Management);
+    }
+    Ok(())
+}
+
+pub(crate) fn ordinary_path(path: &PortablePath) -> bool {
     let management = name_policy::lookup_key(
         crate::persist::layout::SNAPSHOT_REPOSITORY.as_os_str().to_str()
             .expect("invariant: snapshot management name is ASCII"),
     );
-    if path.key().split('/').any(|component| component == management) {
-        return Err(NamespaceHostError::Management);
-    }
-    Ok(())
+    !path.key().split('/').any(|component| component == management)
 }

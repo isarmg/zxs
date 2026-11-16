@@ -11,6 +11,16 @@
 拒绝；固定请求没有可伪造的 level/upstream 字段。真实源码另强制一级、来源与
 目标互斥、完整摘要、当前授权和准确原回执，schema 本身不证明这些时序条件。
 外来 ZXS 的可移植身份和完整历史闭包没有因这些 wire 定义而实现。
+
+盘名使用已有 `name_policy::Name`，不从目录尾段、挂载点或槽位补值。
+`StorageActivationRequest.selections` 每项为严格的 `{selection, name}`，
+`StorageDirectoryAddition` 与 `OrdinaryDiskConversionRequest` 也必须携带 `name`。
+目录观察 `StorageCandidateSelection` 本身不变：它不是新盘名或写入权威。
+`StorageDiskName` 记录字符串形状和 240 UTF-8 字节上限；`maxLength` 只计 Unicode
+字符，不替代源码中固定 Unicode 的 NFC、字符、保留名和完整配置名称冲突检查。
+转换请求的固定语义反例继续由现有严格 Rust DTO 解码器检查，不增加宽松解析。
+补名后的旧 higher-tier 反例仍因额外 `level` 拒绝；未命名旧选择、缺失或非字符串盘名
+不自动补齐。这些请求样例不是已封存的旧池字节，不改规范摘要或永久回执向量。
 普通转换的 `stopping/stopped` 与 `completed` 分开，`stop_operation_id` 和
 `stop_result` 是必需的 nullable 字段，不能省略后默认成没有停止意图。
 停止请求要求明确确认保留来源、已接纳目标与暂存数据；服务器只凭核心准确
@@ -31,7 +41,7 @@
 | [core.schema.json](core.schema.json) | UINT64 精确上界、实体 ID、Branch / Commit 待写入映射、泛型 Entry 及文件分支投影、唯一管理员认证请求/响应、版本描述、内容提交请求、操作结果、完整上传状态、内容保存 PUBLICATION 字段、当前有界快照、分页历史根、共享索引/引用/叶页及路径证明形状 | 完整命名规则、父边和来源闭合、授权、实际 I/O、Tree/日志完整格式及所有管理操作 |
 | [openapi.json](openapi.json) | 登录/当前会话/注销/改密、保存、结果查询、版本/校验/内容/上传状态、文件管理（含零正文分支创建、冻结父版本与自有版本分开的继承投影、目录分页与精确选择、目录批量分支准备查询和128字节单行备注）及管理员系统状态、真实功耗和监测历史 | bootstrap 与凭据恢复、工作区创建/上传写接口、事件及其余尚未建模的管理接口 |
 | [config-constraints.schema.json](config-constraints.schema.json) | 第 21 章关键常量、分支冻结引用/首写物化、当前 JSON/CLI 资源额度及明确标注的分页/告警设计目标投影 | 当前进程 JSON Config、完整部署配置、目录身份、拓扑和启动状态验证 |
-| [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、快照38映射与历史根33映射、必需标识、共享引用种类/深度/未知字段及旧格式拒绝、路径证明节点数边界、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
+| [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、快照40映射与历史根33映射、必需标识、共享引用种类/深度/未知字段及旧格式拒绝、路径证明节点数边界、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
 | [contract-check](../tools/contract-check.md) | Rust 实现的 schema/OpenAPI 有效性、两者定义一致性、固定向量、配置投影、文档本地链接和 JSON/TOML 语法校验 | 模型检查、平台测试、网络端点行为和性能 |
 
 新增 `StorageReadmission*` 与 `StorageRegistration*` 定义覆盖登记查询、纯元数据预览、明确提交、原操作查询及继续入口。UINT64 仍为十进制字符串，nullable 状态字段必须显式出现；未知字段、客户端替换路径/actor、Detached 登记模式与无回执 completed 均拒绝。固定向量是合成字段样例，不能证明来源权威、实际固定 quorum、真实目录身份或新的 I/O epoch；这些仍由服务器和核心执行。终态 authority 的 wire 形状不代表任意终态目录可恢复，须由已认证的可恢复角色与对应核心入口共同准入。
@@ -92,7 +102,7 @@ Rust 依赖源码已包含在仓库中，首次构建也使用唯一根锁文件
 
 `FileMetadataNode` 保存不可变标签/合并子节点，`FileBranchMerge` 独立保存全部合并来源和安全图边。文件合并请求要求明确确认、结果归属及每个参与head，标签批量请求固定源节点与branch head，scope备份配置同时固定稳定身份和自身代数。标签的16项/128字节限制、无控制字符和全部预检由共享Rust验证及业务事务执行；schema检查不代替真实发布。目录分支合并待用户确认，暂不实现，能力为false。
 
-`Snapshot`、`PagedHistoryRoot`、`MetadataIndex`、`MetadataReference` 和 `MetadataLeaf` 描述本次有界根实验源码的存储形状。两个根都必须携带 `format: "container-tags-radix-map-roots"`，这是布局语义标识，不是项目发行版本号；分别要求准确38个 State 映射和33个历史映射，空映射也有引用。快照的三个代数使用 UInt64 十进制字符串，events 是独立映射根，control_auth 引用独立 `state-control-auth` 对象；该对象仍按原 `Option<Value>` 编码（包括 null）。历史根内仓库/历史身份使用 `HistoryRepository`、`HistoryIdentity`。`Candidate.history_roots` 绑定 history ID→manifest hash 的映射根，替代旧 `history_manifest_hashes`；当前 Candidate 自身没有 format 字段。原 `FileFeatureStateFields` 仍只是 State / 逻辑 HistoryManifest 的局部投影。这组存储组件在 OpenAPI 中保持镜像，HTTP 操作结果与诊断投影另按上文契约描述。
+`Snapshot`、`PagedHistoryRoot`、`MetadataIndex`、`MetadataReference` 和 `MetadataLeaf` 描述本次有界根实验源码的存储形状。两个根都必须携带 `format: "container-current-name-radix-map-roots"`，这是布局语义标识，不是项目发行版本号；分别要求准确40个 State 映射和33个历史映射，空映射也有引用。快照的三个代数使用 UInt64 十进制字符串，events 是独立映射根，control_auth 引用独立 `state-control-auth` 对象；该对象仍按原 `Option<Value>` 编码（包括 null）。历史根内仓库/历史身份使用 `HistoryRepository`、`HistoryIdentity`。`Candidate.history_roots` 绑定 history ID→manifest hash 的映射根，替代旧 `history_manifest_hashes`；当前 Candidate 自身没有 format 字段。原 `FileFeatureStateFields` 仍只是 State / 逻辑 HistoryManifest 的局部投影。这组存储组件在 OpenAPI 中保持镜像，HTTP 操作结果与诊断投影另按上文契约描述。
 
 字段向量使用合成摘要，只检查 schema，不能证明引用对象存在或摘要正确。已有历史根正反向量均使用有效 marker，另行覆盖 markerless 根、旧 `history-index` 引用和旧 flat Snapshot 的拒绝，避免负例只因缺 marker 通过。原固定 canonical bytes/BLAKE3 向量保持不变，不由被测编码器生成期望。
 
@@ -163,7 +173,7 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 
 同一 operation_id 的原请求先匹配永久摘要与收据，再决定是否需要规划；来源变化后仍可重放已经发布的原结果，不能为重试改用新来源。Web 在首次发送前保存完整创建或选择请求，恢复保留原 HTTP method、目标、来源、期望 HEAD 及操作 ID；本地恢复记录不证明发布成功。默认分支选择仍使用稳定分支 ID 与双 HEAD 的 PUT，不恢复按名 directory-select。新增固定向量和回归源码尚须由统一 GitHub CI 执行。
 
-`DirectoryGitRepository` 保存各目录仓库独立的 HEAD、index 与明确孩子引用。必需 `main_branch_id` 固定初始化时的目录分支身份，布局基准读取该分支最新已保存工作组合（包括未提交内容），不随 current 或显示名称改变；缺失字段拒绝，不隐式补齐。Snapshot 与 PagedHistoryRoot 的必需映射各增加 `directory_git_repositories`，结合文件删除生命周期表后，总数分别为38与33；缺失此映射的根拒绝，不补空表迁移旧格式。原证明仍绑定完整根，这些 schema 不能证明跨源完整历史或引用闭包。
+`DirectoryGitRepository` 保存各目录仓库独立的 HEAD、index 与明确孩子引用。必需 `main_branch_id` 固定初始化时的目录分支身份，布局基准读取该分支最新已保存工作组合（包括未提交内容），不随 current 或显示名称改变；缺失字段拒绝，不隐式补齐。Snapshot 与 PagedHistoryRoot 的必需映射各增加 `directory_git_repositories`，结合文件删除生命周期表后，当前总数分别为40与33（另两个物理身份映射只属于 Snapshot）；缺失此映射的根拒绝，不补空表迁移旧格式。原证明仍绑定完整根，这些 schema 不能证明跨源完整历史或引用闭包。
 
 `DirectoryGitStatus` 和孩子状态的 nullable 字段必须显式出现，`unstaged` 为必填布尔值且不补旧响应默认值；目录初始化不创建提交，读取不初始化。暂存及提交请求必须携带规范十进制字符串 index 代数，未知字段、数值或遗漏代数拒绝。固定正反向量由 schema 及 Rust DTO 回归共同验证。HTTP 公开四个目录 Git 接口，旧 `/directory-scopes` 和按名 `/directory-select` 入口移除，目录选择改用稳定分支 ID 及双 HEAD CAS；父提交只采用固定暂存快照和明确暂存的孩子 HEAD，不递归提交，也不自动加入暂存后保存的工作内容。状态 GET 的完整编码上限为1MiB，超过失败而不截断。
 
@@ -171,7 +181,7 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 
 ## 文件软删除生命周期候选
 
-`FileDeletionNode` 是独立无正文记录，保存所有保留文件分支自身 HEAD 及去重父边；不能添加 `version_id` 伪装正文节点。State 和 HistoryManifest 必需 `file_deletions` 表，Snapshot/PagedHistoryRoot 当前分别为38/33个必需映射根。缺表拒绝，不兼容或迁移旧池。四条新 schema 向量覆盖合法无正文节点、空删除表、伪造正文字段和缺表拒绝；具体产品接线边界见[生命周期说明](../design/file-soft-deletion.md)。
+`FileDeletionNode` 是独立无正文记录，保存所有保留文件分支自身 HEAD 及去重父边；不能添加 `version_id` 伪装正文节点。State 和 HistoryManifest 必需 `file_deletions` 表，Snapshot/PagedHistoryRoot 当前分别为40/33个必需映射根。缺表拒绝，不兼容或迁移旧池。四条新 schema 向量覆盖合法无正文节点、空删除表、伪造正文字段和缺表拒绝；具体产品接线边界见[生命周期说明](../design/file-soft-deletion.md)。
 
 ## 独立盘来源图只读预览
 
@@ -197,7 +207,7 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 ## 文件容器标签新格式
 
 标签只属于稳定 FileId，由 `ContainerTags {tags,generation}` 的 `container_tags` 必需映射保存。
-Snapshot/PagedHistoryRoot 使用 `container-tags-radix-map-roots`，分别有38/33个必需映射根；
+Snapshot/PagedHistoryRoot 使用 `container-current-name-radix-map-roots`，分别有40/33个必需映射根；
 旧格式与缺失映射拒绝，不改原池和备份字节，也不提供空值兼容或自动迁移。
 节点、版本和分支没有标签快照或继承链，`HistoryNodeSummary` 不再接受 tags 或 kind=tags。
 
@@ -207,3 +217,23 @@ TagSet 不自动 trim/去重，最多16项、每项128 UTF-8字节。schema 之�
 关系由共享 Rust DTO 再核验；真实消费者还须绑定原始完整请求。未知态回执不是成功证明。
 
 合成向量和旧真实拒绝样例的区别、待 GitHub 捕获项见[验证边界](../validation/container-tags-contracts.md)。
+
+
+## 普通目录父实体与 FILE 同次决定
+
+`OrdinaryPhysicalStateFields` 只描述完整 State 的必需 `file_containers` 和
+`namespace_directories` 两张物理身份表，不是可独立安装的 DTO，也不进入可携带的
+HistoryManifest。对应 Snapshot 必须包含两个准确映射根，即使为空也不得省略或补默认值。
+`ContainerNamespace.parent` 必需，引用逻辑根或准确父 EntryId，不接受路径代替。
+
+每个 `NamespaceDirectoryRecord` 只保存一个逻辑 EntryId；其 `replicas` 按目标 DiskId
+分开记录完整来源登记链、目标 RootId、实际父实体、独占 preparation 与本体 inode。
+A 原件、B/A 和 C/B/A 各自的 occurrence 不共享物理身份。Mkdir 的逻辑变更、这些实体反馈、
+FILE 父引用、Snapshot 及 SYSTEM family 41 必须出自同一 Candidate 决定；同名、同内容或另一
+目标的记录都不能授权采用目录。现源码只支持实际 FILE 触发的 B/C 父链；独立空目录复制及
+终态 Backup 切换仍不是该 schema 的完成承诺。
+
+新固定向量是合成的编解码/字段反例，不是物理准入凭据。它们覆盖缺物理表、缺 FILE 父、
+父类型混淆、缺来源链、错误登记代数编码和伪路径字段；实际 inode、来源、前后 State 关系与
+预算仍由核心生产链核验。保留所有原 canonical 字节/摘要向量，不重算旧材料来冒充新格式。
+本批有意不读缺字段的旧快照，也不写入旧池，不提供迁移或双路径回退。

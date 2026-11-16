@@ -12711,7 +12711,7 @@
         "type": "object",
         "properties": {
           "format": {
-            "const": "container-tags-radix-map-roots"
+            "const": "container-current-name-radix-map-roots"
           },
           "repository": {
             "$ref": "#/components/schemas/HistoryRepository"
@@ -13136,7 +13136,7 @@
         "type": "object",
         "properties": {
           "format": {
-            "const": "container-tags-radix-map-roots"
+            "const": "container-current-name-radix-map-roots"
           },
           "sequence": {
             "$ref": "#/components/schemas/UInt64"
@@ -13263,6 +13263,12 @@
               },
               "container_tags": {
                 "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_containers": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "namespace_directories": {
+                "$ref": "#/components/schemas/MetadataReference"
               }
             },
             "required": [
@@ -13303,7 +13309,9 @@
               "file_selection_generations",
               "directory_git_repositories",
               "file_deletions",
-              "container_tags"
+              "container_tags",
+              "file_containers",
+              "namespace_directories"
             ],
             "additionalProperties": false
           },
@@ -13324,7 +13332,7 @@
           "control_auth"
         ],
         "additionalProperties": false,
-        "description": "snapshot域固定38个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。 当前删除生命周期要求file_deletions独立映射根。 容器标签新格式必须包含container_tags根；旧format或缺根拒绝，不迁移原字节。"
+        "description": "snapshot域固定40个State映射根及独立events根；空映射仍有根引用。file_containers和namespace_directories各为必需根；容器namespace.parent也是必需字段。events叶键为20位补零ordinal，核心核连续性。schema仅约束形状，不证明对象存在、摘要、完整State、父实体、来源链或写权限。缺字段或旧format拒绝，不迁移原字节。"
       },
       "InclusionProof": {
         "type": "object",
@@ -16684,7 +16692,7 @@
             "minItems": 1,
             "maxItems": 32,
             "items": {
-              "$ref": "#/components/schemas/StorageCandidateSelection"
+              "$ref": "#/components/schemas/StorageNamedSelection"
             }
           },
           "mode": {
@@ -18161,6 +18169,9 @@
           "selection": {
             "$ref": "#/components/schemas/StorageCandidateSelection"
           },
+          "name": {
+            "$ref": "#/components/schemas/StorageDiskName"
+          },
           "slot_id": {
             "$ref": "#/components/schemas/SlotId"
           },
@@ -18185,6 +18196,7 @@
         },
         "required": [
           "selection",
+          "name",
           "slot_id",
           "level",
           "upstream_slot_id",
@@ -18476,6 +18488,9 @@
           "target": {
             "$ref": "#/components/schemas/StorageCandidateSelection"
           },
+          "name": {
+            "$ref": "#/components/schemas/StorageDiskName"
+          },
           "slot_id": {
             "$ref": "#/components/schemas/SlotId"
           },
@@ -18487,6 +18502,7 @@
           "operation_id",
           "source",
           "target",
+          "name",
           "slot_id",
           "metadata_member"
         ]
@@ -21747,6 +21763,523 @@
         "maxLength": 15,
         "pattern": "^[a-z0-9]{15}$",
         "description": "容器内稳定版本身份，严格15位小写ASCII字母或数字；不含文件名。"
+      },
+      "WorkingTreeRootId": {
+        "type": "string",
+        "pattern": "^root_[0-9a-f]{32}(?![\\s\\S])"
+      },
+      "WorkingTreeDirectoryId": {
+        "type": "string",
+        "pattern": "^directory_[0-9a-f]{32}(?![\\s\\S])"
+      },
+      "DraftPayloadId": {
+        "type": "string",
+        "pattern": "^draft_[0-9a-f]{32}(?![\\s\\S])"
+      },
+      "ContainerEntity": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{32}(?![\\s\\S])",
+        "description": "device和inode各16位小写十六进制，固定32字节。全零仅供未观察预算形状；本schema不授实际实体，核心原生准入拒绝零inode。"
+      },
+      "ContainerLookupName": {
+        "type": "string",
+        "minLength": 1,
+        "description": "实际LookupName单组件原拼写；核心名称规则及目标UTF-8组件预算另验，不是路径或身份来源。"
+      },
+      "OrdinaryDiskRegistration": {
+        "type": "object",
+        "properties": {
+          "pool_id": {
+            "$ref": "#/components/schemas/PoolId"
+          },
+          "disk_id": {
+            "$ref": "#/components/schemas/DiskId"
+          },
+          "slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "binding_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "pool_id",
+          "disk_id",
+          "slot_id",
+          "binding_generation"
+        ],
+        "additionalProperties": false,
+        "description": "完整登记元组；这里只约束持久形状，不证明当前或历史登记权威。"
+      },
+      "ContainerManagementAreas": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "$ref": "#/components/schemas/ContainerEntity"
+          },
+          "common_data": {
+            "$ref": "#/components/schemas/ContainerEntity"
+          },
+          "deleted_data": {
+            "$ref": "#/components/schemas/ContainerEntity"
+          }
+        },
+        "required": [
+          "root",
+          "common_data",
+          "deleted_data"
+        ],
+        "additionalProperties": false
+      },
+      "ContainerAreas": {
+        "type": "object",
+        "properties": {
+          "common_data": {
+            "$ref": "#/components/schemas/ContainerEntity"
+          },
+          "deleted_data": {
+            "$ref": "#/components/schemas/ContainerEntity"
+          },
+          "zxs_data": {
+            "$ref": "#/components/schemas/ContainerManagementAreas"
+          }
+        },
+        "required": [
+          "common_data",
+          "deleted_data",
+          "zxs_data"
+        ],
+        "additionalProperties": false
+      },
+      "ContainerPrefix": {
+        "type": "object",
+        "properties": {
+          "source_disk": {
+            "$ref": "#/components/schemas/DiskId"
+          },
+          "preparation": {
+            "$ref": "#/components/schemas/WorkingTreeDirectoryId"
+          },
+          "entity": {
+            "$ref": "#/components/schemas/ContainerEntity"
+          },
+          "areas": {
+            "$ref": "#/components/schemas/ContainerAreas"
+          }
+        },
+        "required": [
+          "source_disk",
+          "preparation",
+          "entity",
+          "areas"
+        ],
+        "additionalProperties": false
+      },
+      "ContainerReplica": {
+        "type": "object",
+        "properties": {
+          "root_id": {
+            "$ref": "#/components/schemas/WorkingTreeRootId"
+          },
+          "prefixes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerPrefix"
+            }
+          },
+          "preparation": {
+            "$ref": "#/components/schemas/WorkingTreeDirectoryId"
+          },
+          "entity": {
+            "$ref": "#/components/schemas/ContainerEntity"
+          }
+        },
+        "required": [
+          "root_id",
+          "prefixes",
+          "preparation",
+          "entity"
+        ],
+        "additionalProperties": false
+      },
+      "NamespaceDirectoryParent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "root"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "directory"
+              },
+              "entry": {
+                "$ref": "#/components/schemas/EntryId"
+              }
+            },
+            "required": [
+              "kind",
+              "entry"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "BindingLifecycle": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "current"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "retained"
+              },
+              "operation_id": {
+                "$ref": "#/components/schemas/OperationId"
+              }
+            },
+            "required": [
+              "kind",
+              "operation_id"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "NamespaceDirectoryReplica": {
+        "type": "object",
+        "properties": {
+          "root_id": {
+            "$ref": "#/components/schemas/WorkingTreeRootId"
+          },
+          "source_chain": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrdinaryDiskRegistration"
+            }
+          },
+          "parent_entity": {
+            "$ref": "#/components/schemas/ContainerEntity"
+          },
+          "preparation": {
+            "$ref": "#/components/schemas/WorkingTreeDirectoryId"
+          },
+          "entity": {
+            "$ref": "#/components/schemas/ContainerEntity"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/BindingLifecycle"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "root_id",
+          "source_chain",
+          "parent_entity",
+          "preparation",
+          "entity",
+          "lifecycle",
+          "created_by"
+        ],
+        "additionalProperties": false,
+        "description": "同逻辑EntryId在一个目标盘的实际occurrence。source_chain为直接来源在前的完整登记链；parent_entity是该目标中已绑定的物理父实体。仅正式EXCL准备、同Candidate决定及读回能发行，不能由路径或另一盘副本猜测。"
+      },
+      "NamespaceDirectoryRecord": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "branch": {
+            "$ref": "#/components/schemas/BranchId"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/EntryId"
+          },
+          "parent": {
+            "$ref": "#/components/schemas/NamespaceDirectoryParent"
+          },
+          "name": {
+            "$ref": "#/components/schemas/ContainerLookupName"
+          },
+          "owner_disk": {
+            "$ref": "#/components/schemas/DiskId"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "replicas": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/DiskId"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/NamespaceDirectoryReplica"
+            }
+          }
+        },
+        "required": [
+          "repository",
+          "branch",
+          "entry",
+          "parent",
+          "name",
+          "owner_disk",
+          "created_by",
+          "replicas"
+        ],
+        "additionalProperties": false,
+        "description": "逻辑EntryId只登记一次，各目标原件/副本occurrence独立绑定；整个映射与FILE父引用在同一原生快照决定，不是可单独安装的目录清单。"
+      },
+      "NamespaceDirectoriesMap": {
+        "type": "object",
+        "propertyNames": {
+          "$ref": "#/components/schemas/EntryId"
+        },
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NamespaceDirectoryRecord"
+        }
+      },
+      "ContainerNamespace": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "branch": {
+            "$ref": "#/components/schemas/BranchId"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/EntryId"
+          },
+          "parent": {
+            "$ref": "#/components/schemas/NamespaceDirectoryParent"
+          },
+          "name": {
+            "$ref": "#/components/schemas/ContainerLookupName"
+          }
+        },
+        "required": [
+          "repository",
+          "branch",
+          "entry",
+          "parent",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "DraftBase": {
+        "type": "object",
+        "properties": {
+          "branch_id": {
+            "$ref": "#/components/schemas/BranchId"
+          },
+          "node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          },
+          "selection_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "branch_id",
+          "node_id",
+          "version_id",
+          "selection_generation"
+        ],
+        "additionalProperties": false
+      },
+      "DraftPayload": {
+        "type": "object",
+        "properties": {
+          "payload_id": {
+            "$ref": "#/components/schemas/DraftPayloadId"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "logical_size": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "payload_id",
+          "content_hash",
+          "logical_size"
+        ],
+        "additionalProperties": false
+      },
+      "FileWorkingState": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "automatic"
+              },
+              "revision": {
+                "$ref": "#/components/schemas/UInt64"
+              }
+            },
+            "required": [
+              "state",
+              "revision"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "manual_clean"
+              },
+              "revision": {
+                "$ref": "#/components/schemas/UInt64"
+              }
+            },
+            "required": [
+              "state",
+              "revision"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "manual_dirty"
+              },
+              "revision": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "base": {
+                "$ref": "#/components/schemas/DraftBase"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/DraftPayload"
+              }
+            },
+            "required": [
+              "state",
+              "revision",
+              "base",
+              "payload"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "FileContainerRecord": {
+        "type": "object",
+        "properties": {
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "owner_disk": {
+            "$ref": "#/components/schemas/DiskId"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "namespace": {
+            "$ref": "#/components/schemas/ContainerNamespace"
+          },
+          "working": {
+            "$ref": "#/components/schemas/FileWorkingState"
+          },
+          "replicas": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/DiskId"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ContainerReplica"
+            }
+          }
+        },
+        "required": [
+          "history_tree_id",
+          "owner_disk",
+          "created_by",
+          "namespace",
+          "working",
+          "replicas"
+        ],
+        "additionalProperties": false
+      },
+      "FileContainersMap": {
+        "type": "object",
+        "propertyNames": {
+          "$ref": "#/components/schemas/FileId"
+        },
+        "additionalProperties": {
+          "$ref": "#/components/schemas/FileContainerRecord"
+        }
+      },
+      "OrdinaryPhysicalStateFields": {
+        "type": "object",
+        "properties": {
+          "file_containers": {
+            "$ref": "#/components/schemas/FileContainersMap"
+          },
+          "namespace_directories": {
+            "$ref": "#/components/schemas/NamespaceDirectoriesMap"
+          }
+        },
+        "required": [
+          "file_containers",
+          "namespace_directories"
+        ],
+        "additionalProperties": true,
+        "description": "仅完整State中的原件容器和普通目录物理映射投影，不是HistoryManifest或公共State API。两个映射即使为空也必需；缺字段拒绝，无兼容补值。完整State/源链/相同Candidate、实体及父关系由核心另验。"
+      },
+      "StorageDiskName": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 240,
+        "x-maxUtf8Bytes": 240,
+        "x-namePolicy": "Name"
+      },
+      "StorageNamedSelection": {
+        "type": "object",
+        "properties": {
+          "selection": {
+            "$ref": "#/components/schemas/StorageCandidateSelection"
+          },
+          "name": {
+            "$ref": "#/components/schemas/StorageDiskName"
+          }
+        },
+        "required": [
+          "selection",
+          "name"
+        ],
+        "additionalProperties": false
       }
     }
   }

@@ -1,5 +1,94 @@
 {
   "groups": {
+    "ordinary-namespace-parents": {
+      "reason": "Bind ordinary Mkdir parents and FILE-triggered B/C parent occurrences to the same decided snapshot, original EntryIds, target roots, complete source registration chains and physical entities. Run both exact real nested-directory flows with and without fault injection, mandatory-map and strict mirrored schema/vector tests, and both product modes. Preserve the separately isolated original terminal-switch transaction and its 900-second limit; this does not claim terminal backup-switch, standalone empty-directory replication or unknown layout modes are supported.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "default_features": true,
+          "isolate": true,
+          "exact": [
+            "ordinary_namespace_parents::ordinary_mkdir_holds_parent_occurrences_through_cuts_file_writes_and_cold_index",
+            "ordinary_namespace_parents::nested_backup_binds_b_then_c_parent_occurrences_and_retained_bodies"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "default_features": true,
+          "isolate": true,
+          "exact": [
+            "ordinary_namespace_parents::ordinary_mkdir_holds_parent_occurrences_through_cuts_file_writes_and_cold_index",
+            "ordinary_namespace_parents::nested_backup_binds_b_then_c_parent_occurrences_and_retained_bodies"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900,
+          "features": [
+            "fault-injection"
+          ]
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "isolate": true,
+          "exact": [
+            "backup_preparation::transaction_serving::same_backup_switch_serves_and_replays_normal_successor_publications"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "exact": [
+            "file_container::tests::ordinary_directory_vectors_preserve_independent_target_and_source_occurrences",
+            "file_container::tests::ordinary_file_parent_and_directory_records_reject_missing_or_ambiguous_fields",
+            "file_container::tests::ordinary_state_requires_both_physical_maps_even_when_empty"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "contract-check",
+          "manifest": "tools/contract-check/Cargo.toml",
+          "kind": "bin",
+          "name": "contract-check",
+          "features": [],
+          "exact": [
+            "tests::ordinary_physical_vectors_match_strict_core_and_openapi_shapes"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
+    },
     "fresh-managed-core": {
       "reason": "Fresh managed-pool format: real held initialization, ordinary file branches and saves, verifiable two- and three-tier BODY/retained backfill, worktree and Draft publish/reopen, authenticated HTTP controls, and explicit first-init inputs. Keep original overlapping scopes. No claims of live SMB, full distribution, or old-pool migration.",
       "python_tests": [],
@@ -4500,7 +4589,8 @@
     {
       "path": "src/contract/src/file_container.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -4572,13 +4662,15 @@
     {
       "path": "src/engine/src/container_storage.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "src/engine/src/container_storage/namespace_host.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -4596,7 +4688,8 @@
     {
       "path": "src/engine/src/container_storage/ordinary_preparation.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -4608,7 +4701,8 @@
     {
       "path": "src/engine/src/container_storage/ordinary_preparation/prefix.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -4644,13 +4738,15 @@
     {
       "path": "src/engine/src/engine/fresh_layout.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "src/engine/src/engine/fresh_layout/containers.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -4668,7 +4764,8 @@
     {
       "path": "src/engine/src/engine/fresh_layout/namespace.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -4692,7 +4789,8 @@
     {
       "path": "src/engine/src/engine/publication.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -4728,7 +4826,8 @@
     {
       "path": "src/engine/src/persist/layout/container.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -4836,7 +4935,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/registry.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -5947,7 +6047,8 @@
     {
       "path": "test/engine/integration/recursive_backup_paths.rs",
       "groups": [
-        "first-backup-additions"
+        "first-backup-additions",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -5959,7 +6060,8 @@
     {
       "path": "src/engine/src/business/namespace.rs",
       "groups": [
-        "namespace-allocation"
+        "namespace-allocation",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -6121,7 +6223,8 @@
     {
       "path": "src/engine/src/persist/mod.rs",
       "groups": [
-        "file-metadata-plan"
+        "file-metadata-plan",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -6417,7 +6520,8 @@
     {
       "path": "src/contract/src/model.rs",
       "groups": [
-        "container-tags-contract"
+        "container-tags-contract",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -6579,13 +6683,15 @@
     {
       "path": "src/engine/src/engine/index/system_changes.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "src/engine/src/engine/index/system_changes/catalog.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -6616,7 +6722,8 @@
       "path": "src/engine/src/engine/metadata_projection.rs",
       "groups": [
         "container-tags-storage",
-        "history-visible-context"
+        "history-visible-context",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -6667,7 +6774,8 @@
     {
       "path": "src/engine/src/foreign_import/identity_closure/catalog.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -6697,13 +6805,15 @@
     {
       "path": "src/engine/src/history_package/state_read.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "src/engine/src/journal/snapshot.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -6727,13 +6837,15 @@
     {
       "path": "src/engine/src/publication_shape.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "src/engine/src/state_projection.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -7016,7 +7128,8 @@
     {
       "path": "test/engine/unit/engine/current_backup_configuration_tests.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -7076,7 +7189,8 @@
     {
       "path": "test/engine/unit/history_package/changes.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -7094,19 +7208,22 @@
     {
       "path": "test/engine/unit/journal/container_tags_fixture.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "test/engine/unit/journal/snapshot/reference.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "test/engine/unit/journal/snapshot_incremental_oracle_tests.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -7324,13 +7441,15 @@
     {
       "path": "tools/contract-check/src/main.rs",
       "groups": [
-        "container-tags-contract"
+        "container-tags-contract",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "test/tools/contract-check/unit/main_tests.rs",
       "groups": [
-        "container-tags-contract"
+        "container-tags-contract",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -7348,25 +7467,29 @@
     {
       "path": "docs/contracts/README.md",
       "groups": [
-        "container-tags-contract"
+        "container-tags-contract",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "docs/contracts/core.schema.json",
       "groups": [
-        "container-tags-contract"
+        "container-tags-contract",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "docs/contracts/openapi.json",
       "groups": [
-        "container-tags-contract"
+        "container-tags-contract",
+        "ordinary-namespace-parents"
       ]
     },
     {
       "path": "docs/contracts/vectors.json",
       "groups": [
-        "container-tags-contract"
+        "container-tags-contract",
+        "ordinary-namespace-parents"
       ]
     },
     {
@@ -13014,6 +13137,36 @@
       "path": "test/engine/unit/repair/io_tail_tests.rs",
       "groups": [
         "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/directories.rs",
+      "groups": [
+        "ordinary-namespace-parents"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/directories.rs",
+      "groups": [
+        "ordinary-namespace-parents"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/namespace_directory.rs",
+      "groups": [
+        "ordinary-namespace-parents"
+      ]
+    },
+    {
+      "path": "test/contract/unit/file_container_tests.rs",
+      "groups": [
+        "ordinary-namespace-parents"
+      ]
+    },
+    {
+      "path": "test/engine/integration/ordinary_namespace_parents.rs",
+      "groups": [
+        "ordinary-namespace-parents"
       ]
     }
   ],

@@ -18,6 +18,14 @@ pub(crate) fn state() -> State {
             let repository = engine
                 .create_disk_root("P01", "admin", OperationId::generate().unwrap())
                 .unwrap();
+            engine.file_namespace(
+                &repository.repository_id,
+                crate::NamespaceOperation::Mkdir {
+                    path: name_policy::PortablePath::parse("folder").unwrap(),
+                },
+                "admin",
+                OperationId::generate().unwrap(),
+            ).unwrap();
             for (path, body) in [
                 ("folder/a.txt", "first a"),
                 ("folder/b.txt", "first b"),

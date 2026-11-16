@@ -67,7 +67,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `POST /api/admin/storage/foreign/execution-intents/status` | 按完整目标 registration、原 ID 和摘要读取目标记录，不探测旧源路径；不完整残留明确要求恢复 |
 | `GET /api/admin/storage/directories?path=…` | 只能列举发现父目录本身，子目录请求拒绝；返回直接空目录及已识别ZXS目录和截断计数，不递归发现 |
 | `POST /api/admin/storage/directories/inspect` | 请求 mount_path/root_path，检查已存在的空私有目录并返回绑定身份的 CandidateSelection |
-| `POST /api/admin/storage/activate` | 首次激活：selections 与 production/development 模式；不提供已初始化池的热增盘 |
+| `POST /api/admin/storage/activate` | 首次激活：selections 项为 {selection, name}，另有 mode；不用于已初始化池热增盘 |
 | `POST /api/admin/storage/complete-activation` | 空对象，仅补全服务端证明可恢复的原激活意图；不重选目录或重置管理员 |
 | `POST /api/auth/login` | 唯一管理员登录；请求 username/password，返回 token/csrf_token/principal/expires_at |
 | `GET /api/auth/me` | 当前有效会话；返回 principal/csrf_token |

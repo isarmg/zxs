@@ -11,6 +11,9 @@ use std::sync::OnceLock;
 mod prefix;
 mod areas;
 mod draft;
+mod directories;
+use directories::HeldDirectories;
+use storage_contract::file_container::NamespaceDirectoryParent;
 use prefix::{HeldParent, HeldPrefixes, Observation};
 
 pub(crate) struct ObservedContainerReplica {
@@ -33,12 +36,21 @@ impl ObservedContainerReplica {
         source: crate::engine::fresh_layout::containers::PublishedReplicaSource<'_>,
     ) -> Result<Self> {
         use crate::engine::fresh_layout::containers::ReplicaNamespace;
-        let (file, record, disk, namespace) = source.into_parts();
+        let config = source.config();
+        let resources = source.resources();
+        let (file, record, disk, namespace, state) = source.into_parts();
         let id = disk.seal.disk_id.parse::<DiskId>()?;
         let replica = record.replicas.get(&id).ok_or(Failure::ContainerScope)?;
         let container_descriptors = if record.working.draft().is_some() { 2 } else { 1 };
+        let parent_count = match record.namespace.parent {
+            NamespaceDirectoryParent::Root => 0,
+            NamespaceDirectoryParent::Directory(entry) => {
+                crate::engine::fresh_layout::directories::chain(state, entry)?.len()
+            }
+        };
         let count = replica.prefixes.len().checked_mul(6)
             .and_then(|count| count.checked_add(container_descriptors))
+            .and_then(|count| count.checked_add(parent_count))
             .ok_or(Failure::ContainerBudget)?;
         let reservation = Arc::new(crate::engine::payload_proof_budget().reserve(count)
             .ok_or(Failure::ContainerBudget)?);
@@ -53,6 +65,10 @@ impl ObservedContainerReplica {
                 prefix::published_parent(&source, disk, &replica.prefixes)?
             }
         };
+        let parent = attach_directory_parent(
+            config, resources, state, record, id, parent, Observation::Published,
+            &reservation, &mut HeldDirectories::new(),
+        )?;
         let held = open_published_container(
             parent.root()?, &record.namespace.name, replica.entity,
         )?;
@@ -175,6 +191,7 @@ impl ObservedContainerReplica {
 pub(crate) struct PreparedContainerEntities {
     held: BTreeMap<(FileId, DiskId), Arc<ObservedContainerReplica>>,
     prefixes: HeldPrefixes,
+    directories: HeldDirectories,
     config: ValidatedConfig,
     resources: Arc<DiskResources>,
     _reservation: Arc<crate::engine::PayloadProofReservation>,
@@ -211,11 +228,19 @@ impl PreparedContainerEntities {
         plan: &ContainerPreparation,
         input: Option<&mut crate::engine::file_draft::DraftPublicationInput>,
     ) -> Result<Self> {
+        let directory_targets = directories::targets(
+            plan.budget_state(), Some(plan.targets()), Some(plan.directory_additions()),
+        )?;
+        let count = descriptor_count(plan.budget_state(), Some(plan.targets()))?
+            .checked_add(directory_targets.len()).ok_or(Failure::ContainerBudget)?;
         let reservation = Arc::new(crate::engine::payload_proof_budget()
-            .reserve(descriptor_count(plan.budget_state(), Some(plan.targets()))?)
+            .reserve(count)
             .ok_or(Failure::ContainerBudget)?);
         let mut held = BTreeMap::new();
         let mut prefixes = HeldPrefixes::new();
+        let mut directories = HeldDirectories::new();
+        directories::preflight(context.config, context.disk_resources, context.state,
+            plan.budget_state(), &directory_targets)?;
         // Check every component against the actual held target before any mkdir.
         // Existing source directories are not retroactively charged as new names.
         for (file, id) in plan.targets() {
@@ -268,6 +293,11 @@ impl PreparedContainerEntities {
                     &layout::container::prefix_preparation(prefix.preparation))?;
             }
         }
+        for (entry, disk) in directory_targets {
+            directories::bind(context.config, context.disk_resources, context.state,
+                plan.budget_state(), entry, disk, Observation::Prepare, &reservation,
+                &mut directories, &mut prefixes)?;
+        }
         for (file, id) in plan.targets() {
             crate::engine::fresh_layout::containers::require_current_container(
                 plan.budget_state(), *file,
@@ -276,6 +306,9 @@ impl PreparedContainerEntities {
             let disk = configured_disk(context.config, *id)?;
             let handle = context.disk_resources.get(disk)?;
             let parent = bind_parent(context, record, *id, Observation::Prepare, &mut prefixes)?;
+            let parent = attach_directory_parent(context.config, context.disk_resources,
+                plan.budget_state(), record, *id, parent, Observation::Prepare,
+                &reservation, &mut directories)?;
             let target = parent.root()?;
             let replica = record.replicas.get(id).ok_or(Failure::ContainerScope)?;
             let installed = OnceLock::new();
@@ -305,7 +338,7 @@ impl PreparedContainerEntities {
         draft::populate(&mut held, input, context.config.max_file_bytes)?;
         let result = Self {
             held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
-            prefixes, config: context.config.clone(),
+            prefixes, directories, config: context.config.clone(),
             resources: Arc::clone(context.disk_resources), _reservation: reservation,
         };
         result.verify()?;
@@ -395,11 +428,19 @@ impl PreparedContainerEntities {
                 Some(targets)
             }
         };
-        let count = descriptor_count(next, targets.as_ref())?;
+        let directory_targets = directories::targets(next, targets.as_ref(), None)?;
+        let count = descriptor_count(next, targets.as_ref())?
+            .checked_add(directory_targets.len()).ok_or(Failure::ContainerBudget)?;
         let reservation = Arc::new(crate::engine::payload_proof_budget()
             .reserve(count).ok_or(Failure::ContainerBudget)?);
         let mut held = BTreeMap::new();
         let mut prefixes = HeldPrefixes::new();
+        let mut directories = HeldDirectories::new();
+        for (entry, disk) in directory_targets {
+            directories::bind(config, resources, previous, next, entry, disk,
+                Observation::Candidate(previous), &reservation, &mut directories,
+                &mut prefixes)?;
+        }
         for (file, record) in next.file_containers.iter() {
             if targets.as_ref().is_some_and(|targets| {
                 !record.replicas.keys().any(|id| targets.contains(&(*file, *id)))
@@ -415,6 +456,9 @@ impl PreparedContainerEntities {
                 let handle = resources.get(disk)?;
                 let parent = bind_read_parent(config, resources, previous, record, *id,
                     Observation::Candidate(previous), &mut prefixes)?;
+                let parent = attach_directory_parent(config, resources, next,
+                    record, *id, parent, Observation::Candidate(previous),
+                    &reservation, &mut directories)?;
                 let common = parent.root()?;
                 let management = handle.management_root()?;
                 let named = common.path()
@@ -458,7 +502,7 @@ impl PreparedContainerEntities {
         draft::populate(&mut held, None, config.max_file_bytes)?;
         let result = Self {
             held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
-            prefixes, config: config.clone(),
+            prefixes, directories, config: config.clone(),
             resources: Arc::clone(resources),
             _reservation: reservation,
         };
@@ -472,11 +516,21 @@ impl PreparedContainerEntities {
         state: &State,
     ) -> Result<Self> {
         crate::engine::fresh_layout::containers::validate_state(state)?;
-        let count = descriptor_count(state, None)?;
+        let directory_targets = directories::targets(state, None, None)?;
+        let count = descriptor_count(state, None)?
+            .checked_add(directory_targets.len()).ok_or(Failure::ContainerBudget)?;
         let reservation = Arc::new(crate::engine::payload_proof_budget()
             .reserve(count).ok_or(Failure::ContainerBudget)?);
         let mut held = BTreeMap::new();
         let mut prefixes = HeldPrefixes::new();
+        let mut directories = HeldDirectories::new();
+        for (entry, id) in directory_targets {
+            let disk = configured_disk(config, id)?;
+            if resources.available(disk).is_some() {
+                directories::bind(config, resources, state, state, entry, id,
+                    Observation::Published, &reservation, &mut directories, &mut prefixes)?;
+            }
+        }
         for (file, record) in state.file_containers.iter() {
             crate::engine::fresh_layout::containers::require_current_container(state, *file)?;
             for (id, replica) in &record.replicas {
@@ -493,7 +547,7 @@ impl PreparedContainerEntities {
                 let source = crate::engine::fresh_layout::containers::published_source(
                     config, resources, state, *file, disk,
                 )?;
-                let (_, _, observed_handle, namespace) = source.into_parts();
+                let (_, _, observed_handle, namespace, _) = source.into_parts();
                 if !Arc::ptr_eq(handle, observed_handle) {
                     return Err(Failure::ContainerScope.into());
                 }
@@ -509,6 +563,8 @@ impl PreparedContainerEntities {
                             Observation::Published, &mut prefixes)?
                     }
                 };
+                let parent = attach_directory_parent(config, resources, state,
+                    record, *id, parent, Observation::Published, &reservation, &mut directories)?;
                 let directory = open_published_container(parent.root()?, &record.namespace.name,
                     replica.entity)?;
                 let installed = OnceLock::new();
@@ -523,7 +579,7 @@ impl PreparedContainerEntities {
         draft::populate(&mut held, None, config.max_file_bytes)?;
         let result = Self {
             held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
-            prefixes, config: config.clone(), resources: Arc::clone(resources),
+            prefixes, directories, config: config.clone(), resources: Arc::clone(resources),
             _reservation: reservation,
         };
         result.verify()?;
@@ -534,6 +590,9 @@ impl PreparedContainerEntities {
         crate::engine::fresh_layout::verify_available(&self.config, &self.resources)?;
         for prefix in self.prefixes.values() {
             prefix.verify()?;
+        }
+        for directory in self.directories.values() {
+            directory.verify()?;
         }
         for container in self.held.values() {
             container.verify()?;
@@ -547,6 +606,12 @@ impl PreparedContainerEntities {
         self.held.iter().any(|((_, id), container)| {
             *id == disk && container.draft.is_some()
         })
+    }
+
+    pub(crate) fn directory_record(
+        &self, entry: storage_contract::EntryId, disk: DiskId,
+    ) -> Result<storage_contract::file_container::NamespaceDirectoryReplica> {
+        self.directories.get(&(entry, disk)).ok_or(Failure::ContainerScope)?.record()
     }
 
     pub(crate) fn entity(&self, file: FileId, disk: DiskId) -> Result<ContainerEntity> {
@@ -651,6 +716,9 @@ impl PreparedContainerEntities {
 
     pub(super) fn install_decided(&self) -> Result<()> {
         self.verify()?;
+        for directory in self.directories.values() {
+            directory.install()?;
+        }
         for container in self.held.values() {
             container.install()?;
         }
@@ -776,4 +844,51 @@ fn descriptor_count(
     }
     let prefix_descriptors = prefixes.len().checked_mul(6).ok_or(Failure::ContainerBudget)?;
     containers.checked_add(prefix_descriptors).ok_or_else(|| Failure::ContainerBudget.into())
+}
+
+fn attach_directory_parent(
+    config: &Config, resources: &DiskResources, material: &State,
+    record: &FileContainerRecord, disk: DiskId, parent: HeldParent, mode: Observation<'_>,
+    reservation: &Arc<crate::engine::PayloadProofReservation>, directories: &mut HeldDirectories,
+) -> Result<HeldParent> {
+    match record.namespace.parent {
+        NamespaceDirectoryParent::Root => Ok(parent),
+        NamespaceDirectoryParent::Directory(entry) => {
+            let logical = material.namespace_directories.get(&entry.to_string())
+                .ok_or(Failure::NamespaceUnmapped)?;
+            if logical.owner_disk != record.owner_disk
+                || logical.repository != record.namespace.repository
+                || logical.branch != record.namespace.branch
+            {
+                return Err(Failure::NamespaceSource.into());
+            }
+            let handle = resources.get(configured_disk(config, disk)?)?;
+            directories::attach(config, material, entry, disk, handle, parent, mode,
+                reservation, directories)
+        }
+    }
+}
+
+/// Read-only ordinary directory observation used by the shared snapshot namespace
+/// index. No snapshot reservation can replace this original Mkdir occurrence.
+pub(crate) fn verify_namespace_directory(
+    config: &Config, resources: &DiskResources, state: &State,
+    entry: storage_contract::EntryId, disk: DiskId,
+) -> Result<()> {
+    let chain = crate::engine::fresh_layout::directories::chain(state, entry)?;
+    let record = *chain.first().ok_or(Failure::NamespaceUnmapped)?;
+    let prefixes = if disk == record.owner_disk {
+        0
+    } else {
+        crate::engine::fresh_layout::directories::source_file(state, record, disk)?
+            .replicas[&disk].prefixes.len()
+    };
+    let count = prefixes.checked_mul(6).and_then(|count| count.checked_add(chain.len()))
+        .ok_or(Failure::ContainerBudget)?;
+    let reservation = Arc::new(crate::engine::payload_proof_budget().reserve(count)
+        .ok_or(Failure::ContainerBudget)?);
+    directories::bind(config, resources, state, state, entry, disk,
+        Observation::Published, &reservation, &mut HeldDirectories::new(),
+        &mut HeldPrefixes::new())?.root()?;
+    Ok(())
 }

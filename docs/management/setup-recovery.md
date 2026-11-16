@@ -22,7 +22,11 @@
 
 - `SetupStatus`：状态 `empty`、`management_ready`、`existing`、`recovery_required`、`unavailable`；公开首次状态只返回 `state`；独立 `recovery-status` 在 bootstrap 授权后返回恢复字段与 `csrf_token`。`management_ready` 表示系统管理权威已建立、尚未激活存储，不代表零成员池。
 - 首次初始化请求只含 `username`、`password`，拒绝 `disk_ids`、`mode`、预设或配置字段；成功响应为 `initialized: true, storage_pending: true`。凭据不进入诊断或浏览器持久存储。
-- `StorageActivationRequest`：`selections` 为 1—32 项已检查的目录身份，另有 `mode`。只接受当前管理员会话，开发模式必须由可信本地配置启用。第一项为 P01 主存储，后续按顺序形成逐级备份链，所有项都是元数据成员；正常写入全部成员在线，系统恢复要求原成员严格多数。
+- `StorageActivationRequest`：`selections` 为 1—32 项 `{selection, name}`，分别保留准确目录观察和
+  显式盘名，另有 `mode`。盘名不从路径补值，缺失名称的旧选择拒绝。
+  只接受当前管理员会话，开发模式必须由可信本地配置启用。当前初始化调用
+  `Config::independent_roots`，按顺序登记 D01、D02 等独立一级成员，不推断备份链；
+  所有项都是元数据成员。正常写入全部成员在线，系统恢复要求原成员严格多数。
 - `RestoreRequest`：1—32 个不同允许 ID；bootstrap 恢复要求 `accept_stale_credentials: true`。选定幸存者必须满足原配置成员法定数，不能按可达盘重算法定数。管理盘丢失后旧密码/授权可能过时，所有恢复会话必须清除。
 - `RecoveryPreviewRequest`：`operation_id`、`reason`。
 - `RecoveryCommitRequest`：`recovery_id`、`digest`、`accept_permanent_loss`。

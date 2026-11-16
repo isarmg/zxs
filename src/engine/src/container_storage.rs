@@ -6,6 +6,7 @@ pub(crate) mod backup_ordinary;
 pub(crate) mod backup_original_objects;
 mod changes;
 mod ordinary_preparation;
+pub(crate) use ordinary_preparation::verify_namespace_directory as verify_ordinary_directory;
 pub(crate) use ordinary_preparation::{
     ObservedContainerReplica, PreparedContainerEntities, open_published_container,
     ordinary_body_path,

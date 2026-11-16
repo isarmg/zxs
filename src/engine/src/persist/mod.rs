@@ -9,3 +9,5 @@ pub(crate) mod snapshot_worktree;
 pub(crate) mod namespace_root;
 
 pub(crate) mod automatic_backup;
+
+pub(crate) mod namespace_directory;

@@ -1674,3 +1674,36 @@ fn container_tags_vectors_bind_strict_wire_and_retire_old_node_contracts() {
         "#/components/schemas/FileContainerTagsReplacement",
     );
 }
+
+#[test]
+fn ordinary_physical_vectors_match_strict_core_and_openapi_shapes() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let mut core = read(&root.join("core.schema.json")).unwrap();
+    let mut api = read(&root.join("openapi.json")).unwrap();
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    for name in [
+        "NamespaceDirectoryRecord", "FileContainerRecord", "OrdinaryPhysicalStateFields",
+        "Snapshot", "PagedHistoryRoot",
+    ] {
+        core["$ref"] = format!("#/$defs/{name}").into();
+        api["$ref"] = format!("#/components/schemas/{name}").into();
+        let core_schema = validator(&core).unwrap();
+        let api_schema = validator(&api).unwrap();
+        let mut positives = 0;
+        let mut negatives = 0;
+        for group in ["positive", "negative"] {
+            for case in array(&vectors[group]).unwrap().iter()
+                .filter(|case| case["schema"] == name)
+            {
+                let accepted = group == "positive" || case["layer"] == "semantic";
+                assert_eq!(core_schema.is_valid(&case["value"]), accepted, "{}", case["name"]);
+                assert_eq!(api_schema.is_valid(&case["value"]), accepted, "{}", case["name"]);
+                if accepted {
+                    assert_eq!(semantics(name, &case["value"]).is_ok(), group == "positive");
+                }
+                if group == "positive" { positives += 1; } else { negatives += 1; }
+            }
+        }
+        assert!(positives > 0 && negatives > 0, "missing fixed vectors for {name}");
+    }
+}

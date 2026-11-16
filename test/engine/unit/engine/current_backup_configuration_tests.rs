@@ -630,6 +630,25 @@ fn every_state_field_rejects_an_unplanned_change_in_live_and_cold_backup_publica
             let key = file.parse::<storage_contract::FileId>().unwrap();
             assert!(state.file_containers.remove(&key).is_some());
         },
+        namespace_directories => {
+            // A foreign physical row is not part of the real backup request.
+            // It is an invalid candidate input, never a directory capability.
+            let file = file.parse::<storage_contract::FileId>().unwrap();
+            let container = &next.file_containers[&file];
+            let entry = storage_contract::EntryId::from_random([0xff; 16]);
+            state.namespace_directories.insert(entry.to_string(),
+                storage_contract::file_container::NamespaceDirectoryRecord {
+                    repository: container.namespace.repository,
+                    branch: container.namespace.branch,
+                    entry,
+                    parent: storage_contract::file_container::NamespaceDirectoryParent::Root,
+                    name: name_policy::LookupName::parse("unplanned").unwrap(),
+                    owner_disk: container.owner_disk,
+                    created_by: container.created_by,
+                    replicas: BTreeMap::new(),
+                },
+            );
+        },
         container_tags => {
             let key = file.parse::<storage_contract::FileId>().unwrap();
             let previous = state.container_tags[&key].clone();

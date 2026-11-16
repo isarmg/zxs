@@ -24,12 +24,22 @@ fn inventory(state: &State) -> Result<BTreeMap<FileId, HistoryTreeId>> {
 
 /// Structural native-snapshot check, not permission to open a named directory.
 pub(crate) fn validate_state(state: &State) -> Result<()> {
+    super::directories::validate_state(state)?;
     let files = inventory(state)?;
     if files.len() != state.file_containers.len() {
         return Err(Failure::ContainerShape.into());
     }
     let mut entities = BTreeSet::new();
     let mut preparations = BTreeSet::new();
+    for record in state.namespace_directories.values() {
+        for (disk, replica) in &record.replicas {
+            if !entities.insert((*disk, replica.entity))
+                || !preparations.insert((*disk, replica.preparation))
+            {
+                return Err(Failure::ContainerShape.into());
+            }
+        }
+    }
     for ((disk, _), prefix) in prefixes::collect(state)? {
         if std::iter::once(prefix.entity).chain(prefix.areas.entities())
             .any(|entity| !entities.insert((disk, entity)))
@@ -55,11 +65,29 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
         {
             return Err(Failure::ContainerScope.into());
         }
+        let parents = match record.namespace.parent {
+            storage_contract::file_container::NamespaceDirectoryParent::Root => Vec::new(),
+            storage_contract::file_container::NamespaceDirectoryParent::Directory(entry) => {
+                super::directories::chain(state, entry)?
+            }
+        };
         for (disk, replica) in &record.replicas {
             if replica.entity.inode() == 0 || !entities.insert((*disk, replica.entity))
                 || !preparations.insert((*disk, replica.preparation))
             {
                 return Err(Failure::ContainerShape.into());
+            }
+            for parent in &parents {
+                let occurrence = parent.replicas.get(disk).ok_or(Failure::NamespaceUnmapped)?;
+                if parent.repository != record.namespace.repository
+                    || parent.branch != record.namespace.branch
+                    || parent.owner_disk != record.owner_disk
+                    || occurrence.root_id != replica.root_id
+                    || replica.prefixes.iter().map(|prefix| prefix.source_disk.to_string())
+                        .ne(occurrence.source_chain.iter().map(|source| source.disk_id.clone()))
+                {
+                    return Err(Failure::NamespaceSource.into());
+                }
             }
         }
     }
@@ -71,6 +99,7 @@ pub(crate) struct ContainerPreparation {
     // Scope is frozen before capacity admission and exclusive physical preparation.
     additions: BTreeMap<(FileId, DiskId), String>,
     targets: BTreeSet<(FileId, DiskId)>,
+    directory_additions: BTreeSet<(storage_contract::EntryId, DiskId)>,
 }
 impl ContainerPreparation {
     pub(crate) fn new(
@@ -92,6 +121,22 @@ impl ContainerPreparation {
         if next.file_containers != expected {
             return Err(Failure::ContainerScope.into());
         }
+        if next.namespace_directories != context.state.namespace_directories {
+            return Err(Failure::ContainerScope.into());
+        }
+        let (directories, directory_additions) = super::directories::project(
+            context.config, context.state, &next, result, None,
+        )?;
+        if !directory_additions.is_empty()
+            && (context.current_namespaces.is_some() || context.config.generation().is_some())
+        {
+            return Err(Failure::NamespaceUnmapped.into());
+        }
+        next.namespace_directories = directories;
+        let mut directory_additions = directory_additions.into_iter().map(|entry| {
+            let record = &next.namespace_directories[&entry.to_string()];
+            (entry, record.owner_disk)
+        }).collect::<BTreeSet<_>>();
         let before = inventory(context.state)?;
         let after = inventory(&next)?;
         if before.iter().any(|(file, history)| after.get(file) != Some(history)) {
@@ -184,6 +229,16 @@ impl ContainerPreparation {
                 targets.extend(record.replicas.keys().map(|disk| (file, *disk)));
             }
         }
+        let mut directories = next.namespace_directories.clone();
+        directory_additions.extend(super::directories::project_replicas(
+            context.config, &next, result, &mut directories, None,
+        )?);
+        if !directory_additions.is_empty()
+            && (context.current_namespaces.is_some() || context.config.generation().is_some())
+        {
+            return Err(Failure::NamespaceUnmapped.into());
+        }
+        next.namespace_directories = directories;
         let touched = targets.iter().map(|(file, _)| *file).collect::<BTreeSet<_>>();
         for file in &touched {
             if let Some(record) = context.state.file_containers.get(file) {
@@ -193,7 +248,17 @@ impl ContainerPreparation {
         if after.len() != next.file_containers.len() {
             return Err(Failure::ContainerScope.into());
         }
-        Ok(Self { next, additions, targets })
+        Ok(Self { next, additions, targets, directory_additions })
+    }
+
+    pub(crate) fn needs_entity_feedback(&self) -> bool {
+        !self.additions.is_empty() || !self.directory_additions.is_empty()
+    }
+
+    pub(crate) fn directory_additions(&self)
+        -> &BTreeSet<(storage_contract::EntryId, DiskId)>
+    {
+        &self.directory_additions
     }
 
     pub(crate) fn budget_state(&self) -> &State {
@@ -213,6 +278,17 @@ impl ContainerPreparation {
         entities: &crate::container_storage::PreparedContainerEntities,
     ) -> Result<State> {
         entities.verify()?;
+        for (entry, disk) in &self.directory_additions {
+            let record = self.next.namespace_directories.get_mut(&entry.to_string())
+                .ok_or(Failure::ContainerScope)?;
+            let observed = entities.directory_record(record.entry, *disk)?;
+            let expected = record.replicas.get_mut(disk)
+                .ok_or(Failure::ContainerScope)?;
+            if expected.entity.inode() != 0 || expected.preparation != observed.preparation {
+                return Err(Failure::ContainerScope.into());
+            }
+            *expected = observed;
+        }
         let mut updated = BTreeMap::new();
         for (file, disk) in self.additions.keys() {
             let entity = entities.entity(*file, *disk)?;
@@ -255,17 +331,27 @@ pub(crate) struct PublishedReplicaSource<'a> {
     record: &'a FileContainerRecord,
     handle: &'a std::sync::Arc<crate::disk::DiskHandle>,
     namespace: ReplicaNamespace<'a>,
+    state: &'a State,
+    config: &'a Config,
+    resources: &'a DiskResources,
 }
 pub(crate) enum ReplicaNamespace<'a> {
     Owner(super::namespace::RegisteredNamespaceRoot<'a>),
     Backup(super::namespace::PreparedBackupSourcePath<'a>),
 }
 impl<'a> PublishedReplicaSource<'a> {
+    pub(crate) fn config(&self) -> &'a Config {
+        self.config
+    }
+    pub(crate) fn resources(&self) -> &'a DiskResources {
+        self.resources
+    }
+
     pub(crate) fn into_parts(self) -> (
         FileId, &'a FileContainerRecord, &'a std::sync::Arc<crate::disk::DiskHandle>,
-        ReplicaNamespace<'a>,
+        ReplicaNamespace<'a>, &'a State,
     ) {
-        (self.file, self.record, self.handle, self.namespace)
+        (self.file, self.record, self.handle, self.namespace, self.state)
     }
 }
 
@@ -327,7 +413,7 @@ pub(crate) fn published_source<'a>(
         )?)
     };
     Ok(PublishedReplicaSource {
-        file, record, handle: resources.get(disk)?, namespace,
+        file, record, handle: resources.get(disk)?, namespace, state, config, resources,
     })
 }
 
@@ -383,6 +469,17 @@ pub(crate) fn verify_available(
     state: &State,
 ) -> Result<()> {
     validate_state(state)?;
+    for record in state.namespace_directories.values() {
+        for id in record.replicas.keys() {
+            let disk = config.disks.iter().find(|disk| disk.disk_id == id.to_string())
+                .ok_or(Failure::Registration)?;
+            if resources.available(disk).is_some() {
+                crate::container_storage::verify_ordinary_directory(
+                    config, resources, state, record.entry, *id,
+                )?;
+            }
+        }
+    }
     for (file, record) in state.file_containers.iter() {
         for id in record.replicas.keys() {
             let disk = config.disks.iter().find(|disk| disk.disk_id == id.to_string())
@@ -416,10 +513,13 @@ impl VerifiedContainerTransition<'_> {
     }
 
     pub(crate) fn attach_feedback(&self, reconstructed: &mut State) -> Result<()> {
-        if reconstructed.file_containers != self.previous.file_containers {
+        if reconstructed.file_containers != self.previous.file_containers
+            || reconstructed.namespace_directories != self.previous.namespace_directories
+        {
             return Err(Failure::ContainerScope.into());
         }
         reconstructed.file_containers = self.next.file_containers.clone();
+        reconstructed.namespace_directories = self.next.namespace_directories.clone();
         Ok(())
     }
 }
@@ -435,6 +535,12 @@ pub(crate) fn verify_transition<'a>(
     validate_state(previous)?;
     validate_state(next)?;
     let result = next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
+    let (mut directories, additions) = super::directories::project(
+        config, previous, next, result, Some(&next.namespace_directories),
+    )?;
+    if !additions.is_empty() && candidate.generation().is_some() {
+        return Err(Failure::NamespaceSource.into());
+    }
     let working = crate::engine::file_draft::verify_working_transition(previous, next, result)?;
     let mut expected = previous.file_containers.clone();
     if let Some(file) = working {
@@ -518,6 +624,14 @@ pub(crate) fn verify_transition<'a>(
     }
     if expected != next.file_containers {
         return Err(Failure::ContainerScope.into());
+    }
+    let additions = super::directories::project_replicas(
+        config, next, result, &mut directories, Some(&next.namespace_directories),
+    )?;
+    if directories != next.namespace_directories
+        || (!additions.is_empty() && candidate.generation().is_some())
+    {
+        return Err(Failure::NamespaceSource.into());
     }
     Ok(VerifiedContainerTransition { previous, next, candidate })
 }

@@ -11,6 +11,7 @@ pub(super) enum HeldParent {
     Common(Arc<DiskHandle>),
     Prefix(Arc<HeldPrefix>),
     Current(Arc<HeldPrefix>),
+    Directory(Arc<super::directories::HeldDirectory>),
 }
 impl Clone for HeldParent {
     fn clone(&self) -> Self {
@@ -19,12 +20,14 @@ impl Clone for HeldParent {
             Self::Common(disk) => Self::Common(Arc::clone(disk)),
             Self::Prefix(prefix) => Self::Prefix(Arc::clone(prefix)),
             Self::Current(prefix) => Self::Current(Arc::clone(prefix)),
+            Self::Directory(directory) => Self::Directory(Arc::clone(directory)),
         }
     }
 }
 impl HeldParent {
     pub(super) fn root(&self) -> Result<&DiskRoot> {
         match self {
+            Self::Directory(directory) => directory.root(),
             Self::Disk(disk) => {
                 disk.current_management_root()?;
                 Ok(&disk.root)
@@ -43,6 +46,7 @@ impl HeldParent {
 
     pub(super) fn installed(&self) -> bool {
         match self {
+            Self::Directory(directory) => directory.installed(),
             Self::Disk(_) | Self::Common(_) => true,
             Self::Prefix(prefix) | Self::Current(prefix) => prefix.installed.get().is_some(),
         }
@@ -50,6 +54,7 @@ impl HeldParent {
 
     pub(super) fn published_path(&self) -> Result<PathBuf> {
         match self {
+            Self::Directory(directory) => directory.published_path(),
             Self::Disk(disk) => Ok(disk.root.path().to_owned()),
             Self::Common(disk) => Ok(disk.content_root()?.path().to_owned()),
             Self::Current(prefix) => Ok(prefix.parent.published_path()?
@@ -61,6 +66,7 @@ impl HeldParent {
 
     pub(super) fn current_zxs(&self) -> Result<&DiskRoot> {
         match self {
+            Self::Directory(directory) => directory.current_zxs(),
             Self::Common(disk) => disk.current_management_root(),
             Self::Current(prefix) => {
                 prefix.verify()?;
@@ -72,6 +78,7 @@ impl HeldParent {
 
     pub(super) fn install(&self) -> Result<()> {
         match self {
+            Self::Directory(directory) => directory.install(),
             Self::Disk(_) | Self::Common(_) => Ok(()),
             Self::Prefix(prefix) | Self::Current(prefix) => prefix.install(),
         }
@@ -259,7 +266,8 @@ pub(super) fn bind_chain(
     }
     match parent {
         HeldParent::Prefix(prefix) => Ok(HeldParent::Current(prefix)),
-        HeldParent::Disk(_) | HeldParent::Common(_) | HeldParent::Current(_) => {
+        HeldParent::Disk(_) | HeldParent::Common(_) | HeldParent::Current(_)
+        | HeldParent::Directory(_) => {
             Err(Failure::ContainerScope.into())
         }
     }

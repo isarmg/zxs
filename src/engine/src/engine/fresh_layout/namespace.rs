@@ -152,6 +152,22 @@ pub(super) fn registered_root<'a>(
     repository: RepositoryId,
     branch: BranchId,
 ) -> Result<RegisteredNamespaceRoot<'a>> {
+    let origin = root_origin(state, repository, branch)?;
+    let disk = config.disks.iter().find(|disk| {
+        disk.disk_id == origin.genesis.registration.disk_id
+    }).ok_or(Failure::Registration)?;
+    let id = disk.disk_id.parse::<DiskId>()?;
+    if config.storage_roots.get(&id) != Some(&origin.genesis) {
+        return Err(Failure::RootIdentity.into());
+    }
+    let source = RegisteredNamespaceRoot { _state: state, config, resources, disk, origin };
+    source.common()?;
+    Ok(source)
+}
+
+pub(super) fn root_origin(
+    state: &State, repository: RepositoryId, branch: BranchId,
+) -> Result<RootOrigin> {
     let current = state.repositories.get(&repository.to_string())
         .ok_or(Failure::NamespaceUnmapped)?;
     if !current.file_manager_root || current.main_branch_id != branch.to_string() {
@@ -169,17 +185,7 @@ pub(super) fn registered_root<'a>(
         verify_origin(state, receipt, current, &origin)?;
         selected = Some(origin);
     }
-    let origin = selected.ok_or(Failure::NamespaceUnmapped)?;
-    let disk = config.disks.iter().find(|disk| {
-        disk.disk_id == origin.genesis.registration.disk_id
-    }).ok_or(Failure::Registration)?;
-    let id = disk.disk_id.parse::<DiskId>()?;
-    if config.storage_roots.get(&id) != Some(&origin.genesis) {
-        return Err(Failure::RootIdentity.into());
-    }
-    let source = RegisteredNamespaceRoot { _state: state, config, resources, disk, origin };
-    source.common()?;
-    Ok(source)
+    selected.ok_or_else(|| Failure::NamespaceUnmapped.into())
 }
 
 fn verify_origin(
@@ -251,13 +257,14 @@ pub(super) fn file_target(
         entry.kind == crate::NamespaceEntryKind::File && entry.file_id == file_key
     });
     let entry = entries.next().ok_or(Failure::NamespaceUnmapped)?;
-    if entries.next().is_some() || entry.path.parent().is_some() {
+    if entries.next().is_some() {
         return Err(Failure::NamespaceUnmapped.into());
     }
     Ok(storage_contract::file_container::ContainerNamespace {
         repository: repository.repository_id.parse()?,
         branch: branch.branch_id.parse()?,
         entry: entry.entry_id.parse()?,
+        parent: super::directories::parent(&commit.entries, entry)?,
         name: name_policy::LookupName::parse(entry.name())?,
     })
 }

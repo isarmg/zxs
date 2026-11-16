@@ -23,6 +23,11 @@ pub(crate) fn prefix_preparation(id: DirectoryId) -> EntryName {
         .expect("invariant: generated preparation identity is one relative entry")
 }
 
+pub(crate) fn namespace_preparation(id: DirectoryId) -> EntryName {
+    EntryName::new(format!("namespace-prepare-{id}"))
+        .expect("invariant: generated namespace preparation is one relative entry")
+}
+
 /// Draft payload ids are a separate domain from immutable VersionIds.
 pub(crate) static DRAFTS: std::sync::LazyLock<EntryName> = std::sync::LazyLock::new(|| {
     EntryName::new("drafts").expect("invariant: draft storage is one internal entry")

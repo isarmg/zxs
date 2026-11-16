@@ -112,7 +112,8 @@ macro_rules! history_coverage {
                     sequence: _, business_generation: _, topology_generation: _,
                     control_auth: _, events: _, operations: _, operation_principals: _, plans: _,
                     content_states: _,
-                    histories: _, file_containers: _, container_tags, repositories, $($field,)*
+                    histories: _, file_containers: _, namespace_directories: _,
+                    container_tags, repositories, $($field,)*
                 } = state;
                 if self.container_tags.iter().ne(container_tags.keys()) {
                     return Err(invalid("container tags contain unowned records"));

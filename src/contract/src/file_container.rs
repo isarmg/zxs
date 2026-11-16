@@ -103,6 +103,45 @@ pub struct ContainerReplica {
     pub entity: ContainerEntity,
 }
 
+/// Logical parent identity is independent of any physical occurrence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", content = "entry", rename_all = "snake_case",
+    deny_unknown_fields)]
+pub enum NamespaceDirectoryParent {
+    Root,
+    Directory(EntryId),
+}
+
+/// An occurrence on one target disk. The ordered full source registrations
+/// distinguish B/A and C/B/A. Parent identity is physical evidence, not a path.
+/// Preparation doubles as this occurrence's stable DirectoryId after rename.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct NamespaceDirectoryReplica {
+    pub root_id: RootId,
+    pub source_chain: Vec<crate::working_tree::DiskRegistrationIdentity>,
+    pub parent_entity: ContainerEntity,
+    pub preparation: DirectoryId,
+    pub entity: ContainerEntity,
+    pub lifecycle: crate::working_tree::BindingLifecycle,
+    pub created_by: OperationId,
+}
+
+/// One logical EntryId, with independently decided physical occurrences. The
+/// logical identity is not duplicated when FILE-triggered B/C parents are added.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct NamespaceDirectoryRecord {
+    pub repository: RepositoryId,
+    pub branch: BranchId,
+    pub entry: EntryId,
+    pub parent: NamespaceDirectoryParent,
+    pub name: name_policy::LookupName,
+    pub owner_disk: DiskId,
+    pub created_by: OperationId,
+    pub replicas: BTreeMap<DiskId, NamespaceDirectoryReplica>,
+}
+
 /// The namespace occurrence selecting the ordinary container's physical name.
 /// It is checked against the current main namespace and its published root
 /// registration. A path string, global FILE selection or latest route is not it.
@@ -112,6 +151,7 @@ pub struct ContainerNamespace {
     pub repository: RepositoryId,
     pub branch: BranchId,
     pub entry: EntryId,
+    pub parent: NamespaceDirectoryParent,
     pub name: name_policy::LookupName,
 }
 
@@ -125,3 +165,7 @@ pub struct FileContainerRecord {
     pub working: FileWorkingState,
     pub replicas: BTreeMap<DiskId, ContainerReplica>,
 }
+
+#[cfg(test)]
+#[path = "../../../test/contract/unit/file_container_tests.rs"]
+mod tests;

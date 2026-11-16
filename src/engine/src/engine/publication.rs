@@ -1598,7 +1598,7 @@ impl crate::engine::PlanningContext<'_> {
         let containers = super::fresh_layout::containers::ContainerPreparation::new(
             self, next, &prepared, &result,
         )?;
-        let needs_entity_feedback = !containers.additions().is_empty();
+        let needs_entity_feedback = containers.needs_entity_feedback();
         let next = containers.budget_state();
         let metadata_epoch = self.metadata_integrity.capture();
         let members = self.members();

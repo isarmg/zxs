@@ -578,7 +578,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -1446,7 +1446,7 @@
       "schema": "Snapshot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "sequence": "0",
         "business_generation": "1",
         "topology_generation": "18446744073709551615",
@@ -1602,6 +1602,14 @@
           "container_tags": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "events": {
@@ -3548,30 +3556,33 @@
       "value": {
         "selections": [
           {
-            "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "mount_path": "/mnt/disk",
-            "root_path": "/mnt/disk/nested/storage",
-            "mount_identity": {
-              "mount_id": "10",
-              "device_major": 8,
-              "device_minor": 1,
-              "root_inode": "2",
-              "filesystem": "ext4",
-              "filesystem_root": "/"
+            "selection": {
+              "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "mount_path": "/mnt/disk",
+              "root_path": "/mnt/disk/nested/storage",
+              "mount_identity": {
+                "mount_id": "10",
+                "device_major": 8,
+                "device_minor": 1,
+                "root_inode": "2",
+                "filesystem": "ext4",
+                "filesystem_root": "/"
+              },
+              "root_identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_root": "/mnt/disk",
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
             },
-            "root_identity": {
-              "device": "2049",
-              "inode": "9007199254740993",
-              "ctime_seconds": "1793750000",
-              "ctime_nanoseconds": 12
-            },
-            "discovery_root": "/mnt/disk",
-            "discovery_identity": {
-              "device": "2049",
-              "inode": "2",
-              "ctime_seconds": "1793750000",
-              "ctime_nanoseconds": 12
-            }
+            "name": "Primary storage"
           }
         ],
         "mode": "production"
@@ -4086,7 +4097,8 @@
           }
         },
         "slot_id": "D02",
-        "metadata_member": false
+        "metadata_member": false,
+        "name": "Converted primary"
       }
     },
     {
@@ -5858,6 +5870,411 @@
       "schema": "FileLifecycleCursor",
       "layer": "schema",
       "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:op_00000000000000000000000000000001:1:fpath_00000000000000000000000000000001"
+    },
+    {
+      "name": "ordinary-directory-three-occurrences",
+      "schema": "NamespaceDirectoryRecord",
+      "layer": "schema",
+      "value": {
+        "repository": "repo_00000000000000000000000000000001",
+        "branch": "br_00000000000000000000000000000001",
+        "entry": "entry_00000000000000000000000000000007",
+        "parent": {
+          "kind": "root"
+        },
+        "name": "docs",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000001",
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "source_chain": [],
+            "parent_entity": "0000000000000001000000000000000a",
+            "preparation": "directory_00000000000000000000000000000001",
+            "entity": "0000000000000001000000000000000b",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000001"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              }
+            ],
+            "parent_entity": "00000000000000010000000000000014",
+            "preparation": "directory_00000000000000000000000000000002",
+            "entity": "00000000000000010000000000000015",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000002"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000002",
+                "slot_id": "B01",
+                "binding_generation": "1"
+              },
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              }
+            ],
+            "parent_entity": "0000000000000001000000000000001e",
+            "preparation": "directory_00000000000000000000000000000003",
+            "entity": "0000000000000001000000000000001f",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000003"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-file-parent-and-three-occurrences",
+      "schema": "FileContainerRecord",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000004",
+        "namespace": {
+          "repository": "repo_00000000000000000000000000000001",
+          "branch": "br_00000000000000000000000000000001",
+          "entry": "entry_00000000000000000000000000000008",
+          "parent": {
+            "kind": "directory",
+            "entry": "entry_00000000000000000000000000000007"
+          },
+          "name": "report.txt"
+        },
+        "working": {
+          "state": "automatic",
+          "revision": "1"
+        },
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "prefixes": [],
+            "preparation": "directory_0000000000000000000000000000000b",
+            "entity": "0000000000000001000000000000000c"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "prefixes": [
+              {
+                "source_disk": "disk_00000000000000000000000000000001",
+                "preparation": "directory_00000000000000000000000000000015",
+                "entity": "000000000000000100000000000000d2",
+                "areas": {
+                  "common_data": "000000000000000100000000000000d3",
+                  "deleted_data": "000000000000000100000000000000d4",
+                  "zxs_data": {
+                    "root": "000000000000000100000000000000d5",
+                    "common_data": "000000000000000100000000000000d6",
+                    "deleted_data": "000000000000000100000000000000d7"
+                  }
+                }
+              }
+            ],
+            "preparation": "directory_0000000000000000000000000000000c",
+            "entity": "00000000000000010000000000000016"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "prefixes": [
+              {
+                "source_disk": "disk_00000000000000000000000000000002",
+                "preparation": "directory_00000000000000000000000000000020",
+                "entity": "00000000000000010000000000000140",
+                "areas": {
+                  "common_data": "00000000000000010000000000000141",
+                  "deleted_data": "00000000000000010000000000000142",
+                  "zxs_data": {
+                    "root": "00000000000000010000000000000143",
+                    "common_data": "00000000000000010000000000000144",
+                    "deleted_data": "00000000000000010000000000000145"
+                  }
+                }
+              },
+              {
+                "source_disk": "disk_00000000000000000000000000000001",
+                "preparation": "directory_0000000000000000000000000000001f",
+                "entity": "00000000000000010000000000000136",
+                "areas": {
+                  "common_data": "00000000000000010000000000000137",
+                  "deleted_data": "00000000000000010000000000000138",
+                  "zxs_data": {
+                    "root": "00000000000000010000000000000139",
+                    "common_data": "0000000000000001000000000000013a",
+                    "deleted_data": "0000000000000001000000000000013b"
+                  }
+                }
+              }
+            ],
+            "preparation": "directory_0000000000000000000000000000000d",
+            "entity": "00000000000000010000000000000020"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-physical-state-fields",
+      "schema": "OrdinaryPhysicalStateFields",
+      "layer": "schema",
+      "value": {
+        "file_containers": {
+          "file_00000000000000000000000000000001": {
+            "history_tree_id": "history_00000000000000000000000000000001",
+            "owner_disk": "disk_00000000000000000000000000000001",
+            "created_by": "op_00000000000000000000000000000004",
+            "namespace": {
+              "repository": "repo_00000000000000000000000000000001",
+              "branch": "br_00000000000000000000000000000001",
+              "entry": "entry_00000000000000000000000000000008",
+              "parent": {
+                "kind": "directory",
+                "entry": "entry_00000000000000000000000000000007"
+              },
+              "name": "report.txt"
+            },
+            "working": {
+              "state": "automatic",
+              "revision": "1"
+            },
+            "replicas": {
+              "disk_00000000000000000000000000000001": {
+                "root_id": "root_00000000000000000000000000000001",
+                "prefixes": [],
+                "preparation": "directory_0000000000000000000000000000000b",
+                "entity": "0000000000000001000000000000000c"
+              },
+              "disk_00000000000000000000000000000002": {
+                "root_id": "root_00000000000000000000000000000002",
+                "prefixes": [
+                  {
+                    "source_disk": "disk_00000000000000000000000000000001",
+                    "preparation": "directory_00000000000000000000000000000015",
+                    "entity": "000000000000000100000000000000d2",
+                    "areas": {
+                      "common_data": "000000000000000100000000000000d3",
+                      "deleted_data": "000000000000000100000000000000d4",
+                      "zxs_data": {
+                        "root": "000000000000000100000000000000d5",
+                        "common_data": "000000000000000100000000000000d6",
+                        "deleted_data": "000000000000000100000000000000d7"
+                      }
+                    }
+                  }
+                ],
+                "preparation": "directory_0000000000000000000000000000000c",
+                "entity": "00000000000000010000000000000016"
+              },
+              "disk_00000000000000000000000000000003": {
+                "root_id": "root_00000000000000000000000000000003",
+                "prefixes": [
+                  {
+                    "source_disk": "disk_00000000000000000000000000000002",
+                    "preparation": "directory_00000000000000000000000000000020",
+                    "entity": "00000000000000010000000000000140",
+                    "areas": {
+                      "common_data": "00000000000000010000000000000141",
+                      "deleted_data": "00000000000000010000000000000142",
+                      "zxs_data": {
+                        "root": "00000000000000010000000000000143",
+                        "common_data": "00000000000000010000000000000144",
+                        "deleted_data": "00000000000000010000000000000145"
+                      }
+                    }
+                  },
+                  {
+                    "source_disk": "disk_00000000000000000000000000000001",
+                    "preparation": "directory_0000000000000000000000000000001f",
+                    "entity": "00000000000000010000000000000136",
+                    "areas": {
+                      "common_data": "00000000000000010000000000000137",
+                      "deleted_data": "00000000000000010000000000000138",
+                      "zxs_data": {
+                        "root": "00000000000000010000000000000139",
+                        "common_data": "0000000000000001000000000000013a",
+                        "deleted_data": "0000000000000001000000000000013b"
+                      }
+                    }
+                  }
+                ],
+                "preparation": "directory_0000000000000000000000000000000d",
+                "entity": "00000000000000010000000000000020"
+              }
+            }
+          }
+        },
+        "namespace_directories": {
+          "entry_00000000000000000000000000000007": {
+            "repository": "repo_00000000000000000000000000000001",
+            "branch": "br_00000000000000000000000000000001",
+            "entry": "entry_00000000000000000000000000000007",
+            "parent": {
+              "kind": "root"
+            },
+            "name": "docs",
+            "owner_disk": "disk_00000000000000000000000000000001",
+            "created_by": "op_00000000000000000000000000000001",
+            "replicas": {
+              "disk_00000000000000000000000000000001": {
+                "root_id": "root_00000000000000000000000000000001",
+                "source_chain": [],
+                "parent_entity": "0000000000000001000000000000000a",
+                "preparation": "directory_00000000000000000000000000000001",
+                "entity": "0000000000000001000000000000000b",
+                "lifecycle": {
+                  "kind": "current"
+                },
+                "created_by": "op_00000000000000000000000000000001"
+              },
+              "disk_00000000000000000000000000000002": {
+                "root_id": "root_00000000000000000000000000000002",
+                "source_chain": [
+                  {
+                    "pool_id": "pool_00000000000000000000000000000004",
+                    "disk_id": "disk_00000000000000000000000000000001",
+                    "slot_id": "P01",
+                    "binding_generation": "1"
+                  }
+                ],
+                "parent_entity": "00000000000000010000000000000014",
+                "preparation": "directory_00000000000000000000000000000002",
+                "entity": "00000000000000010000000000000015",
+                "lifecycle": {
+                  "kind": "current"
+                },
+                "created_by": "op_00000000000000000000000000000002"
+              },
+              "disk_00000000000000000000000000000003": {
+                "root_id": "root_00000000000000000000000000000003",
+                "source_chain": [
+                  {
+                    "pool_id": "pool_00000000000000000000000000000004",
+                    "disk_id": "disk_00000000000000000000000000000002",
+                    "slot_id": "B01",
+                    "binding_generation": "1"
+                  },
+                  {
+                    "pool_id": "pool_00000000000000000000000000000004",
+                    "disk_id": "disk_00000000000000000000000000000001",
+                    "slot_id": "P01",
+                    "binding_generation": "1"
+                  }
+                ],
+                "parent_entity": "0000000000000001000000000000001e",
+                "preparation": "directory_00000000000000000000000000000003",
+                "entity": "0000000000000001000000000000001f",
+                "lifecycle": {
+                  "kind": "current"
+                },
+                "created_by": "op_00000000000000000000000000000003"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-empty-physical-state-fields",
+      "schema": "OrdinaryPhysicalStateFields",
+      "layer": "schema",
+      "value": {
+        "file_containers": {},
+        "namespace_directories": {}
+      }
+    },
+    {
+      "name": "storage-named-selection-keeps-user-name-separate-from-root",
+      "schema": "StorageNamedSelection",
+      "layer": "schema",
+      "value": {
+        "selection": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "name": "Primary storage"
+      }
+    },
+    {
+      "name": "storage-addition-carries-explicit-name",
+      "schema": "StorageAdditionRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_22222222222222222222222222222222",
+        "additions": [
+          {
+            "selection": {
+              "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "mount_path": "/mnt/disk",
+              "root_path": "/mnt/disk/nested/storage",
+              "mount_identity": {
+                "mount_id": "10",
+                "device_major": 8,
+                "device_minor": 1,
+                "root_inode": "2",
+                "filesystem": "ext4",
+                "filesystem_root": "/"
+              },
+              "root_identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_root": "/mnt/disk",
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "name": "Archive member",
+            "slot_id": "B01",
+            "level": 2,
+            "upstream_slot_id": "P01",
+            "metadata_member": false
+          }
+        ]
+      }
     }
   ],
   "negative": [
@@ -6846,7 +7263,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -7005,7 +7422,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -7172,7 +7589,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -7336,7 +7753,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -7499,7 +7916,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -7664,7 +8081,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -10249,7 +10666,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -10599,6 +11016,14 @@
           "container_tags": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "events": {
@@ -10616,7 +11041,7 @@
       "schema": "Snapshot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "sequence": "0",
         "business_generation": "1",
         "topology_generation": "18446744073709551615",
@@ -10768,6 +11193,14 @@
           "container_tags": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "events": {
@@ -10785,7 +11218,7 @@
       "schema": "Snapshot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "sequence": "0",
         "business_generation": "1",
         "topology_generation": "18446744073709551615",
@@ -10945,6 +11378,14 @@
           "container_tags": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "events": {
@@ -10962,7 +11403,7 @@
       "schema": "Snapshot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "sequence": 0,
         "business_generation": "1",
         "topology_generation": "18446744073709551615",
@@ -11118,6 +11559,14 @@
           "container_tags": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "events": {
@@ -11135,7 +11584,7 @@
       "schema": "Snapshot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "sequence": "0",
         "business_generation": "1",
         "topology_generation": "18446744073709551615",
@@ -11291,6 +11740,14 @@
           "container_tags": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "events": [],
@@ -11305,7 +11762,7 @@
       "schema": "Snapshot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "sequence": "0",
         "business_generation": "1",
         "topology_generation": "18446744073709551615",
@@ -11461,6 +11918,14 @@
           "container_tags": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "events": {
@@ -11475,7 +11940,7 @@
       "schema": "Snapshot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "scalars": {
           "sequence": "0",
           "business_generation": "1",
@@ -17301,7 +17766,8 @@
         },
         "slot_id": "D02",
         "metadata_member": false,
-        "level": 2
+        "level": 2,
+        "name": "Converted primary"
       }
     },
     {
@@ -18088,7 +18554,7 @@
       "schema": "Snapshot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "sequence": "0",
         "business_generation": "1",
         "topology_generation": "18446744073709551615",
@@ -18240,6 +18706,14 @@
           "container_tags": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "events": {
@@ -18257,7 +18731,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -20857,7 +21331,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -21172,6 +21646,14 @@
           "container_tags": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "events": {
@@ -21189,7 +21671,7 @@
       "schema": "Snapshot",
       "layer": "schema",
       "value": {
-        "format": "container-tags-radix-map-roots",
+        "format": "container-current-name-radix-map-roots",
         "sequence": "0",
         "business_generation": "1",
         "topology_generation": "18446744073709551615",
@@ -21341,6 +21823,14 @@
           "file_deletions": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "events": {
@@ -23595,6 +24085,1974 @@
         "created_at": "2026-10-20T00:00:00Z",
         "storage_id": "000000000000001",
         "storage_name": "v000001_20261020T000000Z_6437b3ac.txt"
+      }
+    },
+    {
+      "name": "ordinary-snapshot-missing-file_containers",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "container-current-name-radix-map-roots",
+        "sequence": "0",
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_principals": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_deletions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "container_tags": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "events": {
+          "kind": "state-page",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "control_auth": {
+          "kind": "state-control-auth",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "ordinary-snapshot-missing-namespace_directories",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "container-current-name-radix-map-roots",
+        "sequence": "0",
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_principals": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_deletions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "container_tags": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "events": {
+          "kind": "state-page",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "control_auth": {
+          "kind": "state-control-auth",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "ordinary-snapshot-obsolete-tags-format",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "container-tags-radix-map-roots",
+        "sequence": "0",
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_principals": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_deletions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "container_tags": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_containers": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "namespace_directories": {
+            "kind": "state-page",
+            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "events": {
+          "kind": "state-page",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "control_auth": {
+          "kind": "state-control-auth",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "ordinary-state-missing-file_containers",
+      "schema": "OrdinaryPhysicalStateFields",
+      "layer": "schema",
+      "value": {
+        "namespace_directories": {
+          "entry_00000000000000000000000000000007": {
+            "repository": "repo_00000000000000000000000000000001",
+            "branch": "br_00000000000000000000000000000001",
+            "entry": "entry_00000000000000000000000000000007",
+            "parent": {
+              "kind": "root"
+            },
+            "name": "docs",
+            "owner_disk": "disk_00000000000000000000000000000001",
+            "created_by": "op_00000000000000000000000000000001",
+            "replicas": {
+              "disk_00000000000000000000000000000001": {
+                "root_id": "root_00000000000000000000000000000001",
+                "source_chain": [],
+                "parent_entity": "0000000000000001000000000000000a",
+                "preparation": "directory_00000000000000000000000000000001",
+                "entity": "0000000000000001000000000000000b",
+                "lifecycle": {
+                  "kind": "current"
+                },
+                "created_by": "op_00000000000000000000000000000001"
+              },
+              "disk_00000000000000000000000000000002": {
+                "root_id": "root_00000000000000000000000000000002",
+                "source_chain": [
+                  {
+                    "pool_id": "pool_00000000000000000000000000000004",
+                    "disk_id": "disk_00000000000000000000000000000001",
+                    "slot_id": "P01",
+                    "binding_generation": "1"
+                  }
+                ],
+                "parent_entity": "00000000000000010000000000000014",
+                "preparation": "directory_00000000000000000000000000000002",
+                "entity": "00000000000000010000000000000015",
+                "lifecycle": {
+                  "kind": "current"
+                },
+                "created_by": "op_00000000000000000000000000000002"
+              },
+              "disk_00000000000000000000000000000003": {
+                "root_id": "root_00000000000000000000000000000003",
+                "source_chain": [
+                  {
+                    "pool_id": "pool_00000000000000000000000000000004",
+                    "disk_id": "disk_00000000000000000000000000000002",
+                    "slot_id": "B01",
+                    "binding_generation": "1"
+                  },
+                  {
+                    "pool_id": "pool_00000000000000000000000000000004",
+                    "disk_id": "disk_00000000000000000000000000000001",
+                    "slot_id": "P01",
+                    "binding_generation": "1"
+                  }
+                ],
+                "parent_entity": "0000000000000001000000000000001e",
+                "preparation": "directory_00000000000000000000000000000003",
+                "entity": "0000000000000001000000000000001f",
+                "lifecycle": {
+                  "kind": "current"
+                },
+                "created_by": "op_00000000000000000000000000000003"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-state-missing-namespace_directories",
+      "schema": "OrdinaryPhysicalStateFields",
+      "layer": "schema",
+      "value": {
+        "file_containers": {
+          "file_00000000000000000000000000000001": {
+            "history_tree_id": "history_00000000000000000000000000000001",
+            "owner_disk": "disk_00000000000000000000000000000001",
+            "created_by": "op_00000000000000000000000000000004",
+            "namespace": {
+              "repository": "repo_00000000000000000000000000000001",
+              "branch": "br_00000000000000000000000000000001",
+              "entry": "entry_00000000000000000000000000000008",
+              "parent": {
+                "kind": "directory",
+                "entry": "entry_00000000000000000000000000000007"
+              },
+              "name": "report.txt"
+            },
+            "working": {
+              "state": "automatic",
+              "revision": "1"
+            },
+            "replicas": {
+              "disk_00000000000000000000000000000001": {
+                "root_id": "root_00000000000000000000000000000001",
+                "prefixes": [],
+                "preparation": "directory_0000000000000000000000000000000b",
+                "entity": "0000000000000001000000000000000c"
+              },
+              "disk_00000000000000000000000000000002": {
+                "root_id": "root_00000000000000000000000000000002",
+                "prefixes": [
+                  {
+                    "source_disk": "disk_00000000000000000000000000000001",
+                    "preparation": "directory_00000000000000000000000000000015",
+                    "entity": "000000000000000100000000000000d2",
+                    "areas": {
+                      "common_data": "000000000000000100000000000000d3",
+                      "deleted_data": "000000000000000100000000000000d4",
+                      "zxs_data": {
+                        "root": "000000000000000100000000000000d5",
+                        "common_data": "000000000000000100000000000000d6",
+                        "deleted_data": "000000000000000100000000000000d7"
+                      }
+                    }
+                  }
+                ],
+                "preparation": "directory_0000000000000000000000000000000c",
+                "entity": "00000000000000010000000000000016"
+              },
+              "disk_00000000000000000000000000000003": {
+                "root_id": "root_00000000000000000000000000000003",
+                "prefixes": [
+                  {
+                    "source_disk": "disk_00000000000000000000000000000002",
+                    "preparation": "directory_00000000000000000000000000000020",
+                    "entity": "00000000000000010000000000000140",
+                    "areas": {
+                      "common_data": "00000000000000010000000000000141",
+                      "deleted_data": "00000000000000010000000000000142",
+                      "zxs_data": {
+                        "root": "00000000000000010000000000000143",
+                        "common_data": "00000000000000010000000000000144",
+                        "deleted_data": "00000000000000010000000000000145"
+                      }
+                    }
+                  },
+                  {
+                    "source_disk": "disk_00000000000000000000000000000001",
+                    "preparation": "directory_0000000000000000000000000000001f",
+                    "entity": "00000000000000010000000000000136",
+                    "areas": {
+                      "common_data": "00000000000000010000000000000137",
+                      "deleted_data": "00000000000000010000000000000138",
+                      "zxs_data": {
+                        "root": "00000000000000010000000000000139",
+                        "common_data": "0000000000000001000000000000013a",
+                        "deleted_data": "0000000000000001000000000000013b"
+                      }
+                    }
+                  }
+                ],
+                "preparation": "directory_0000000000000000000000000000000d",
+                "entity": "00000000000000010000000000000020"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-file-missing-parent",
+      "schema": "FileContainerRecord",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000004",
+        "namespace": {
+          "repository": "repo_00000000000000000000000000000001",
+          "branch": "br_00000000000000000000000000000001",
+          "entry": "entry_00000000000000000000000000000008",
+          "name": "report.txt"
+        },
+        "working": {
+          "state": "automatic",
+          "revision": "1"
+        },
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "prefixes": [],
+            "preparation": "directory_0000000000000000000000000000000b",
+            "entity": "0000000000000001000000000000000c"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "prefixes": [
+              {
+                "source_disk": "disk_00000000000000000000000000000001",
+                "preparation": "directory_00000000000000000000000000000015",
+                "entity": "000000000000000100000000000000d2",
+                "areas": {
+                  "common_data": "000000000000000100000000000000d3",
+                  "deleted_data": "000000000000000100000000000000d4",
+                  "zxs_data": {
+                    "root": "000000000000000100000000000000d5",
+                    "common_data": "000000000000000100000000000000d6",
+                    "deleted_data": "000000000000000100000000000000d7"
+                  }
+                }
+              }
+            ],
+            "preparation": "directory_0000000000000000000000000000000c",
+            "entity": "00000000000000010000000000000016"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "prefixes": [
+              {
+                "source_disk": "disk_00000000000000000000000000000002",
+                "preparation": "directory_00000000000000000000000000000020",
+                "entity": "00000000000000010000000000000140",
+                "areas": {
+                  "common_data": "00000000000000010000000000000141",
+                  "deleted_data": "00000000000000010000000000000142",
+                  "zxs_data": {
+                    "root": "00000000000000010000000000000143",
+                    "common_data": "00000000000000010000000000000144",
+                    "deleted_data": "00000000000000010000000000000145"
+                  }
+                }
+              },
+              {
+                "source_disk": "disk_00000000000000000000000000000001",
+                "preparation": "directory_0000000000000000000000000000001f",
+                "entity": "00000000000000010000000000000136",
+                "areas": {
+                  "common_data": "00000000000000010000000000000137",
+                  "deleted_data": "00000000000000010000000000000138",
+                  "zxs_data": {
+                    "root": "00000000000000010000000000000139",
+                    "common_data": "0000000000000001000000000000013a",
+                    "deleted_data": "0000000000000001000000000000013b"
+                  }
+                }
+              }
+            ],
+            "preparation": "directory_0000000000000000000000000000000d",
+            "entity": "00000000000000010000000000000020"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-directory-parent-missing-entry",
+      "schema": "FileContainerRecord",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000004",
+        "namespace": {
+          "repository": "repo_00000000000000000000000000000001",
+          "branch": "br_00000000000000000000000000000001",
+          "entry": "entry_00000000000000000000000000000008",
+          "parent": {
+            "kind": "directory"
+          },
+          "name": "report.txt"
+        },
+        "working": {
+          "state": "automatic",
+          "revision": "1"
+        },
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "prefixes": [],
+            "preparation": "directory_0000000000000000000000000000000b",
+            "entity": "0000000000000001000000000000000c"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "prefixes": [
+              {
+                "source_disk": "disk_00000000000000000000000000000001",
+                "preparation": "directory_00000000000000000000000000000015",
+                "entity": "000000000000000100000000000000d2",
+                "areas": {
+                  "common_data": "000000000000000100000000000000d3",
+                  "deleted_data": "000000000000000100000000000000d4",
+                  "zxs_data": {
+                    "root": "000000000000000100000000000000d5",
+                    "common_data": "000000000000000100000000000000d6",
+                    "deleted_data": "000000000000000100000000000000d7"
+                  }
+                }
+              }
+            ],
+            "preparation": "directory_0000000000000000000000000000000c",
+            "entity": "00000000000000010000000000000016"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "prefixes": [
+              {
+                "source_disk": "disk_00000000000000000000000000000002",
+                "preparation": "directory_00000000000000000000000000000020",
+                "entity": "00000000000000010000000000000140",
+                "areas": {
+                  "common_data": "00000000000000010000000000000141",
+                  "deleted_data": "00000000000000010000000000000142",
+                  "zxs_data": {
+                    "root": "00000000000000010000000000000143",
+                    "common_data": "00000000000000010000000000000144",
+                    "deleted_data": "00000000000000010000000000000145"
+                  }
+                }
+              },
+              {
+                "source_disk": "disk_00000000000000000000000000000001",
+                "preparation": "directory_0000000000000000000000000000001f",
+                "entity": "00000000000000010000000000000136",
+                "areas": {
+                  "common_data": "00000000000000010000000000000137",
+                  "deleted_data": "00000000000000010000000000000138",
+                  "zxs_data": {
+                    "root": "00000000000000010000000000000139",
+                    "common_data": "0000000000000001000000000000013a",
+                    "deleted_data": "0000000000000001000000000000013b"
+                  }
+                }
+              }
+            ],
+            "preparation": "directory_0000000000000000000000000000000d",
+            "entity": "00000000000000010000000000000020"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-root-parent-with-entry",
+      "schema": "NamespaceDirectoryRecord",
+      "layer": "schema",
+      "value": {
+        "repository": "repo_00000000000000000000000000000001",
+        "branch": "br_00000000000000000000000000000001",
+        "entry": "entry_00000000000000000000000000000007",
+        "parent": {
+          "kind": "root",
+          "entry": "entry_00000000000000000000000000000007"
+        },
+        "name": "docs",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000001",
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "source_chain": [],
+            "parent_entity": "0000000000000001000000000000000a",
+            "preparation": "directory_00000000000000000000000000000001",
+            "entity": "0000000000000001000000000000000b",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000001"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              }
+            ],
+            "parent_entity": "00000000000000010000000000000014",
+            "preparation": "directory_00000000000000000000000000000002",
+            "entity": "00000000000000010000000000000015",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000002"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000002",
+                "slot_id": "B01",
+                "binding_generation": "1"
+              },
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              }
+            ],
+            "parent_entity": "0000000000000001000000000000001e",
+            "preparation": "directory_00000000000000000000000000000003",
+            "entity": "0000000000000001000000000000001f",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000003"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-parent-entity-is-not-struct",
+      "schema": "NamespaceDirectoryRecord",
+      "layer": "schema",
+      "value": {
+        "repository": "repo_00000000000000000000000000000001",
+        "branch": "br_00000000000000000000000000000001",
+        "entry": "entry_00000000000000000000000000000007",
+        "parent": {
+          "kind": "root"
+        },
+        "name": "docs",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000001",
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "source_chain": [],
+            "parent_entity": "0000000000000001000000000000000a",
+            "preparation": "directory_00000000000000000000000000000001",
+            "entity": "0000000000000001000000000000000b",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000001"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              }
+            ],
+            "parent_entity": {
+              "device": "1",
+              "inode": "20"
+            },
+            "preparation": "directory_00000000000000000000000000000002",
+            "entity": "00000000000000010000000000000015",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000002"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000002",
+                "slot_id": "B01",
+                "binding_generation": "1"
+              },
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              }
+            ],
+            "parent_entity": "0000000000000001000000000000001e",
+            "preparation": "directory_00000000000000000000000000000003",
+            "entity": "0000000000000001000000000000001f",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000003"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-replica-missing-source-chain",
+      "schema": "NamespaceDirectoryRecord",
+      "layer": "schema",
+      "value": {
+        "repository": "repo_00000000000000000000000000000001",
+        "branch": "br_00000000000000000000000000000001",
+        "entry": "entry_00000000000000000000000000000007",
+        "parent": {
+          "kind": "root"
+        },
+        "name": "docs",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000001",
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "source_chain": [],
+            "parent_entity": "0000000000000001000000000000000a",
+            "preparation": "directory_00000000000000000000000000000001",
+            "entity": "0000000000000001000000000000000b",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000001"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              }
+            ],
+            "parent_entity": "00000000000000010000000000000014",
+            "preparation": "directory_00000000000000000000000000000002",
+            "entity": "00000000000000010000000000000015",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000002"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "parent_entity": "0000000000000001000000000000001e",
+            "preparation": "directory_00000000000000000000000000000003",
+            "entity": "0000000000000001000000000000001f",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000003"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-source-generation-not-string",
+      "schema": "NamespaceDirectoryRecord",
+      "layer": "schema",
+      "value": {
+        "repository": "repo_00000000000000000000000000000001",
+        "branch": "br_00000000000000000000000000000001",
+        "entry": "entry_00000000000000000000000000000007",
+        "parent": {
+          "kind": "root"
+        },
+        "name": "docs",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000001",
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "source_chain": [],
+            "parent_entity": "0000000000000001000000000000000a",
+            "preparation": "directory_00000000000000000000000000000001",
+            "entity": "0000000000000001000000000000000b",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000001"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": 1
+              }
+            ],
+            "parent_entity": "00000000000000010000000000000014",
+            "preparation": "directory_00000000000000000000000000000002",
+            "entity": "00000000000000010000000000000015",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000002"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000002",
+                "slot_id": "B01",
+                "binding_generation": "1"
+              },
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              }
+            ],
+            "parent_entity": "0000000000000001000000000000001e",
+            "preparation": "directory_00000000000000000000000000000003",
+            "entity": "0000000000000001000000000000001f",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000003"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-replica-path-is-not-authority",
+      "schema": "NamespaceDirectoryRecord",
+      "layer": "schema",
+      "value": {
+        "repository": "repo_00000000000000000000000000000001",
+        "branch": "br_00000000000000000000000000000001",
+        "entry": "entry_00000000000000000000000000000007",
+        "parent": {
+          "kind": "root"
+        },
+        "name": "docs",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000001",
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "source_chain": [],
+            "parent_entity": "0000000000000001000000000000000a",
+            "preparation": "directory_00000000000000000000000000000001",
+            "entity": "0000000000000001000000000000000b",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000001"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              }
+            ],
+            "parent_entity": "00000000000000010000000000000014",
+            "preparation": "directory_00000000000000000000000000000002",
+            "entity": "00000000000000010000000000000015",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000002",
+            "path": "A/docs"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "source_chain": [
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000002",
+                "slot_id": "B01",
+                "binding_generation": "1"
+              },
+              {
+                "pool_id": "pool_00000000000000000000000000000004",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              }
+            ],
+            "parent_entity": "0000000000000001000000000000001e",
+            "preparation": "directory_00000000000000000000000000000003",
+            "entity": "0000000000000001000000000000001f",
+            "lifecycle": {
+              "kind": "current"
+            },
+            "created_by": "op_00000000000000000000000000000003"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-directory-key-must-be-entry-id",
+      "schema": "OrdinaryPhysicalStateFields",
+      "layer": "schema",
+      "value": {
+        "file_containers": {
+          "file_00000000000000000000000000000001": {
+            "history_tree_id": "history_00000000000000000000000000000001",
+            "owner_disk": "disk_00000000000000000000000000000001",
+            "created_by": "op_00000000000000000000000000000004",
+            "namespace": {
+              "repository": "repo_00000000000000000000000000000001",
+              "branch": "br_00000000000000000000000000000001",
+              "entry": "entry_00000000000000000000000000000008",
+              "parent": {
+                "kind": "directory",
+                "entry": "entry_00000000000000000000000000000007"
+              },
+              "name": "report.txt"
+            },
+            "working": {
+              "state": "automatic",
+              "revision": "1"
+            },
+            "replicas": {
+              "disk_00000000000000000000000000000001": {
+                "root_id": "root_00000000000000000000000000000001",
+                "prefixes": [],
+                "preparation": "directory_0000000000000000000000000000000b",
+                "entity": "0000000000000001000000000000000c"
+              },
+              "disk_00000000000000000000000000000002": {
+                "root_id": "root_00000000000000000000000000000002",
+                "prefixes": [
+                  {
+                    "source_disk": "disk_00000000000000000000000000000001",
+                    "preparation": "directory_00000000000000000000000000000015",
+                    "entity": "000000000000000100000000000000d2",
+                    "areas": {
+                      "common_data": "000000000000000100000000000000d3",
+                      "deleted_data": "000000000000000100000000000000d4",
+                      "zxs_data": {
+                        "root": "000000000000000100000000000000d5",
+                        "common_data": "000000000000000100000000000000d6",
+                        "deleted_data": "000000000000000100000000000000d7"
+                      }
+                    }
+                  }
+                ],
+                "preparation": "directory_0000000000000000000000000000000c",
+                "entity": "00000000000000010000000000000016"
+              },
+              "disk_00000000000000000000000000000003": {
+                "root_id": "root_00000000000000000000000000000003",
+                "prefixes": [
+                  {
+                    "source_disk": "disk_00000000000000000000000000000002",
+                    "preparation": "directory_00000000000000000000000000000020",
+                    "entity": "00000000000000010000000000000140",
+                    "areas": {
+                      "common_data": "00000000000000010000000000000141",
+                      "deleted_data": "00000000000000010000000000000142",
+                      "zxs_data": {
+                        "root": "00000000000000010000000000000143",
+                        "common_data": "00000000000000010000000000000144",
+                        "deleted_data": "00000000000000010000000000000145"
+                      }
+                    }
+                  },
+                  {
+                    "source_disk": "disk_00000000000000000000000000000001",
+                    "preparation": "directory_0000000000000000000000000000001f",
+                    "entity": "00000000000000010000000000000136",
+                    "areas": {
+                      "common_data": "00000000000000010000000000000137",
+                      "deleted_data": "00000000000000010000000000000138",
+                      "zxs_data": {
+                        "root": "00000000000000010000000000000139",
+                        "common_data": "0000000000000001000000000000013a",
+                        "deleted_data": "0000000000000001000000000000013b"
+                      }
+                    }
+                  }
+                ],
+                "preparation": "directory_0000000000000000000000000000000d",
+                "entity": "00000000000000010000000000000020"
+              }
+            }
+          }
+        },
+        "namespace_directories": {
+          "docs": {
+            "repository": "repo_00000000000000000000000000000001",
+            "branch": "br_00000000000000000000000000000001",
+            "entry": "entry_00000000000000000000000000000007",
+            "parent": {
+              "kind": "root"
+            },
+            "name": "docs",
+            "owner_disk": "disk_00000000000000000000000000000001",
+            "created_by": "op_00000000000000000000000000000001",
+            "replicas": {
+              "disk_00000000000000000000000000000001": {
+                "root_id": "root_00000000000000000000000000000001",
+                "source_chain": [],
+                "parent_entity": "0000000000000001000000000000000a",
+                "preparation": "directory_00000000000000000000000000000001",
+                "entity": "0000000000000001000000000000000b",
+                "lifecycle": {
+                  "kind": "current"
+                },
+                "created_by": "op_00000000000000000000000000000001"
+              },
+              "disk_00000000000000000000000000000002": {
+                "root_id": "root_00000000000000000000000000000002",
+                "source_chain": [
+                  {
+                    "pool_id": "pool_00000000000000000000000000000004",
+                    "disk_id": "disk_00000000000000000000000000000001",
+                    "slot_id": "P01",
+                    "binding_generation": "1"
+                  }
+                ],
+                "parent_entity": "00000000000000010000000000000014",
+                "preparation": "directory_00000000000000000000000000000002",
+                "entity": "00000000000000010000000000000015",
+                "lifecycle": {
+                  "kind": "current"
+                },
+                "created_by": "op_00000000000000000000000000000002"
+              },
+              "disk_00000000000000000000000000000003": {
+                "root_id": "root_00000000000000000000000000000003",
+                "source_chain": [
+                  {
+                    "pool_id": "pool_00000000000000000000000000000004",
+                    "disk_id": "disk_00000000000000000000000000000002",
+                    "slot_id": "B01",
+                    "binding_generation": "1"
+                  },
+                  {
+                    "pool_id": "pool_00000000000000000000000000000004",
+                    "disk_id": "disk_00000000000000000000000000000001",
+                    "slot_id": "P01",
+                    "binding_generation": "1"
+                  }
+                ],
+                "parent_entity": "0000000000000001000000000000001e",
+                "preparation": "directory_00000000000000000000000000000003",
+                "entity": "0000000000000001000000000000001f",
+                "lifecycle": {
+                  "kind": "current"
+                },
+                "created_by": "op_00000000000000000000000000000003"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-file-working-required",
+      "schema": "FileContainerRecord",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000004",
+        "namespace": {
+          "repository": "repo_00000000000000000000000000000001",
+          "branch": "br_00000000000000000000000000000001",
+          "entry": "entry_00000000000000000000000000000008",
+          "parent": {
+            "kind": "directory",
+            "entry": "entry_00000000000000000000000000000007"
+          },
+          "name": "report.txt"
+        },
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "prefixes": [],
+            "preparation": "directory_0000000000000000000000000000000b",
+            "entity": "0000000000000001000000000000000c"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "prefixes": [
+              {
+                "source_disk": "disk_00000000000000000000000000000001",
+                "preparation": "directory_00000000000000000000000000000015",
+                "entity": "000000000000000100000000000000d2",
+                "areas": {
+                  "common_data": "000000000000000100000000000000d3",
+                  "deleted_data": "000000000000000100000000000000d4",
+                  "zxs_data": {
+                    "root": "000000000000000100000000000000d5",
+                    "common_data": "000000000000000100000000000000d6",
+                    "deleted_data": "000000000000000100000000000000d7"
+                  }
+                }
+              }
+            ],
+            "preparation": "directory_0000000000000000000000000000000c",
+            "entity": "00000000000000010000000000000016"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "prefixes": [
+              {
+                "source_disk": "disk_00000000000000000000000000000002",
+                "preparation": "directory_00000000000000000000000000000020",
+                "entity": "00000000000000010000000000000140",
+                "areas": {
+                  "common_data": "00000000000000010000000000000141",
+                  "deleted_data": "00000000000000010000000000000142",
+                  "zxs_data": {
+                    "root": "00000000000000010000000000000143",
+                    "common_data": "00000000000000010000000000000144",
+                    "deleted_data": "00000000000000010000000000000145"
+                  }
+                }
+              },
+              {
+                "source_disk": "disk_00000000000000000000000000000001",
+                "preparation": "directory_0000000000000000000000000000001f",
+                "entity": "00000000000000010000000000000136",
+                "areas": {
+                  "common_data": "00000000000000010000000000000137",
+                  "deleted_data": "00000000000000010000000000000138",
+                  "zxs_data": {
+                    "root": "00000000000000010000000000000139",
+                    "common_data": "0000000000000001000000000000013a",
+                    "deleted_data": "0000000000000001000000000000013b"
+                  }
+                }
+              }
+            ],
+            "preparation": "directory_0000000000000000000000000000000d",
+            "entity": "00000000000000010000000000000020"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-area-entity-lowercase-only",
+      "schema": "FileContainerRecord",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "owner_disk": "disk_00000000000000000000000000000001",
+        "created_by": "op_00000000000000000000000000000004",
+        "namespace": {
+          "repository": "repo_00000000000000000000000000000001",
+          "branch": "br_00000000000000000000000000000001",
+          "entry": "entry_00000000000000000000000000000008",
+          "parent": {
+            "kind": "directory",
+            "entry": "entry_00000000000000000000000000000007"
+          },
+          "name": "report.txt"
+        },
+        "working": {
+          "state": "automatic",
+          "revision": "1"
+        },
+        "replicas": {
+          "disk_00000000000000000000000000000001": {
+            "root_id": "root_00000000000000000000000000000001",
+            "prefixes": [],
+            "preparation": "directory_0000000000000000000000000000000b",
+            "entity": "0000000000000001000000000000000c"
+          },
+          "disk_00000000000000000000000000000002": {
+            "root_id": "root_00000000000000000000000000000002",
+            "prefixes": [
+              {
+                "source_disk": "disk_00000000000000000000000000000001",
+                "preparation": "directory_00000000000000000000000000000015",
+                "entity": "000000000000000100000000000000d2",
+                "areas": {
+                  "common_data": "000000000000000100000000000000d3",
+                  "deleted_data": "000000000000000100000000000000d4",
+                  "zxs_data": {
+                    "root": "000000000000000100000000000000d5",
+                    "common_data": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+                    "deleted_data": "000000000000000100000000000000d7"
+                  }
+                }
+              }
+            ],
+            "preparation": "directory_0000000000000000000000000000000c",
+            "entity": "00000000000000010000000000000016"
+          },
+          "disk_00000000000000000000000000000003": {
+            "root_id": "root_00000000000000000000000000000003",
+            "prefixes": [
+              {
+                "source_disk": "disk_00000000000000000000000000000002",
+                "preparation": "directory_00000000000000000000000000000020",
+                "entity": "00000000000000010000000000000140",
+                "areas": {
+                  "common_data": "00000000000000010000000000000141",
+                  "deleted_data": "00000000000000010000000000000142",
+                  "zxs_data": {
+                    "root": "00000000000000010000000000000143",
+                    "common_data": "00000000000000010000000000000144",
+                    "deleted_data": "00000000000000010000000000000145"
+                  }
+                }
+              },
+              {
+                "source_disk": "disk_00000000000000000000000000000001",
+                "preparation": "directory_0000000000000000000000000000001f",
+                "entity": "00000000000000010000000000000136",
+                "areas": {
+                  "common_data": "00000000000000010000000000000137",
+                  "deleted_data": "00000000000000010000000000000138",
+                  "zxs_data": {
+                    "root": "00000000000000010000000000000139",
+                    "common_data": "0000000000000001000000000000013a",
+                    "deleted_data": "0000000000000001000000000000013b"
+                  }
+                }
+              }
+            ],
+            "preparation": "directory_0000000000000000000000000000000d",
+            "entity": "00000000000000010000000000000020"
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-conversion-missing-name",
+      "schema": "OrdinaryDiskConversionRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "source": {
+          "path": "/mnt/disk/nested/ordinary",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "target": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk/nested",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "slot_id": "D02",
+        "metadata_member": false
+      }
+    },
+    {
+      "name": "ordinary-conversion-null-name",
+      "schema": "OrdinaryDiskConversionRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "source": {
+          "path": "/mnt/disk/nested/ordinary",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "target": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk/nested",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "slot_id": "D02",
+        "metadata_member": false,
+        "name": null
+      }
+    },
+    {
+      "name": "ordinary-conversion-number-name",
+      "schema": "OrdinaryDiskConversionRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "source": {
+          "path": "/mnt/disk/nested/ordinary",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "target": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk/nested",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "slot_id": "D02",
+        "metadata_member": false,
+        "name": 7
+      }
+    },
+    {
+      "name": "ordinary-conversion-reserved-name",
+      "schema": "OrdinaryDiskConversionRequest",
+      "layer": "semantic",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "source": {
+          "path": "/mnt/disk/nested/ordinary",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "target": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk/nested",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "slot_id": "D02",
+        "metadata_member": false,
+        "name": "CON"
+      }
+    },
+    {
+      "name": "ordinary-conversion-non-nfc-name",
+      "schema": "OrdinaryDiskConversionRequest",
+      "layer": "semantic",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "source": {
+          "path": "/mnt/disk/nested/ordinary",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "target": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk/nested",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "slot_id": "D02",
+        "metadata_member": false,
+        "name": "café"
+      }
+    },
+    {
+      "name": "ordinary-conversion-utf8-byte-overflow-name",
+      "schema": "OrdinaryDiskConversionRequest",
+      "layer": "semantic",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "source": {
+          "path": "/mnt/disk/nested/ordinary",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "target": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk/nested",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "slot_id": "D02",
+        "metadata_member": false,
+        "name": "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"
+      }
+    },
+    {
+      "name": "storage-activation-rejects-unnamed-selection",
+      "schema": "StorageActivationRequest",
+      "layer": "schema",
+      "value": {
+        "selections": [
+          {
+            "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mount_path": "/mnt/disk",
+            "root_path": "/mnt/disk/nested/storage",
+            "mount_identity": {
+              "mount_id": "10",
+              "device_major": 8,
+              "device_minor": 1,
+              "root_inode": "2",
+              "filesystem": "ext4",
+              "filesystem_root": "/"
+            },
+            "root_identity": {
+              "device": "2049",
+              "inode": "9007199254740993",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            },
+            "discovery_root": "/mnt/disk",
+            "discovery_identity": {
+              "device": "2049",
+              "inode": "2",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            }
+          }
+        ],
+        "mode": "production"
+      }
+    },
+    {
+      "name": "storage-named-selection-requires-name",
+      "schema": "StorageNamedSelection",
+      "layer": "schema",
+      "value": {
+        "selection": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "storage-addition-requires-name",
+      "schema": "StorageDirectoryAddition",
+      "layer": "schema",
+      "value": {
+        "selection": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "slot_id": "B01",
+        "level": 2,
+        "upstream_slot_id": "P01",
+        "metadata_member": false
       }
     }
   ],

@@ -296,7 +296,7 @@ pub(crate) fn apply_namespace(
     apply_namespace_with_ids(entries, op, &mut |prefix| Ok(new_id(prefix)?))
 }
 
-pub(super) fn apply_namespace_with_ids(
+pub(crate) fn apply_namespace_with_ids(
     entries: &mut Vec<Entry>,
     op: &NamespaceOperation,
     ids: &mut impl FnMut(&str) -> Result<String>,

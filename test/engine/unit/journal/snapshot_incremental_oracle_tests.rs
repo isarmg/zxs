@@ -5,6 +5,8 @@
 use super::*;
 
 const REQUIRED_FIELDS: &[&str] = &[
+    "file_containers",
+    "namespace_directories",
     "container_tags",
     "repositories",
     "histories",
@@ -49,6 +51,8 @@ const OPTIONAL_FIELDS: &[&str] = &[
 
 macro_rules! every_tracked_field {
     ($apply:ident) => {
+        $apply!(file_containers);
+        $apply!(namespace_directories);
         $apply!(container_tags);
         $apply!(repositories);
         $apply!(histories);
@@ -186,7 +190,7 @@ fn populated_state() -> State {
     state.control_auth =
         Some(json_codec::json!({"\u{10000}": {"roles": ["读者"]}, "\u{e000}": true}));
     let encoded = json_codec::to_value(&state).unwrap();
-    assert_eq!(REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len(), 38);
+    assert_eq!(REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len(), 40);
     for field in REQUIRED_FIELDS.iter().chain(OPTIONAL_FIELDS) {
         assert!(!encoded[*field].as_object().unwrap().is_empty(), "{field}");
     }
@@ -289,6 +293,11 @@ fn incremental_oracle_fixture_covers_every_tracked_field_and_current_wire_catego
     let empty = prepare_snapshot(&empty_state, MAX_METADATA).unwrap();
     assert_explicit_empty_roots(&empty.descriptor);
     assert_complete_byte_oracle(&empty, &empty_state, &config.disks);
+    for field in ["file_containers", "namespace_directories"] {
+        let mut missing = empty.descriptor.clone();
+        missing.maps.remove(field);
+        assert!(snapshot::validate_schema(&missing).is_err(), "{field}");
+    }
 }
 
 fn baseline(state: &State, members: &[DiskConfig]) -> SnapshotReuse {
@@ -407,6 +416,9 @@ fn incremental_snapshot_each_tracked_field_mutation_reencodes_only_that_field() 
     let basis = baseline(&before, &config.disks);
     let descriptor = prepare_snapshot(&before, MAX_METADATA).unwrap().descriptor;
     macro_rules! new_key {
+        (file_containers) => {
+            "file_ffffffffffffffffffffffffffffffff".parse().unwrap()
+        };
         (container_tags) => {
             "file_ffffffffffffffffffffffffffffffff".parse().unwrap()
         };

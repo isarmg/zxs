@@ -317,6 +317,28 @@ impl<'a> ReceiptIndex<'a> {
             pending_branches: BTreeMap::new(),
             planned_files: BTreeSet::new(),
         };
+        // Ordinary Mkdir bindings and snapshot host bindings share one identity
+        // index. Only their originating decisions differ. A snapshot may borrow
+        // the already-published binding, never reallocate or overwrite it.
+        crate::engine::fresh_layout::directories::validate_state(source)
+            .map_err(RegistrationError::Publication)?;
+        for record in source.namespace_directories.values() {
+            let directory = crate::engine::fresh_layout::directories::owner_binding(source, record)
+                .map_err(RegistrationError::Publication)?;
+            let key = (directory.root_id, record.entry);
+            if index.directory_ids.insert(directory.directory_id, key).is_some()
+                || index.directory_entities.insert(
+                    (directory.root_id, directory.entity), record.entry,
+                ).is_some()
+                || index.directories.insert(key, RegisteredDirectory {
+                    repository: record.repository,
+                    binding: NamespaceDirectoryBinding { entry: record.entry, directory },
+                    reservation: record.created_by, complete: true,
+                }).is_some()
+            {
+                return Err(RegistrationError::Host);
+            }
+        }
         let mut allocations = Allocations::default();
         for (_, (receipt, decoded)) in records {
             let author = source.operation_principals.get(&receipt.operation_id)
@@ -550,6 +572,9 @@ impl<'a> ReceiptIndex<'a> {
                 Some(previous) => {
                     if previous.repository != host.namespace.repository_id
                         || previous.binding != *binding || !previous.complete
+                        || self.source.operations.get(&directory.operation_id)
+                            .zip(self.source.operations.get(&operation))
+                            .is_none_or(|(origin, snapshot)| origin.sequence > snapshot.sequence)
                     {
                         return Err(RegistrationError::Host);
                     }

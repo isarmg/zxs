@@ -1020,6 +1020,7 @@ pub struct ProtectionPolicy {
 #[serialization(deny_unknown_fields)]
 pub struct State {
     pub file_containers: crate::TrackedFiles<crate::file_container::FileContainerRecord>,
+    pub namespace_directories: crate::TrackedMap<crate::file_container::NamespaceDirectoryRecord>,
     pub container_tags: crate::TrackedFiles<crate::file_container_tags::ContainerTags>,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
@@ -1123,6 +1124,7 @@ impl State {
         }
         track!(
             file_containers,
+            namespace_directories,
             container_tags,
             events,
             repositories,

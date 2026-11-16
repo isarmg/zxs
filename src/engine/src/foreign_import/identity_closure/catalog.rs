@@ -167,6 +167,7 @@ impl Catalog {
             directory_selection_generations: _,
             file_selection_generations: _,
             file_containers: _,
+            namespace_directories: _,
             container_tags: _,
             file_notes: _,
             version_notes: _,

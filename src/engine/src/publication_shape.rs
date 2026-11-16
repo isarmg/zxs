@@ -88,6 +88,7 @@ macro_rules! state_tables {
 }
 state_tables! {
     file_containers => FileContainers,
+    namespace_directories => NamespaceDirectories,
     container_tags => ContainerTags,
     repositories => Repositories,
     histories => Histories,

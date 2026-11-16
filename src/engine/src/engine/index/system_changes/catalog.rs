@@ -124,6 +124,8 @@ macro_rules! changed_keys {
 
 catalog_families! {
     FileContainer => (40, file_containers, storage_contract::file_container::FileContainerRecord),
+    NamespaceDirectory => (41, namespace_directories,
+        storage_contract::file_container::NamespaceDirectoryRecord),
     Repository => (2, repositories, Repository),
     History => (3, histories, HistoryTree),
     Branch => (4, branches, Branch),
