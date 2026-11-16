@@ -100,9 +100,9 @@ impl Engine {
                     hash,
                 )?;
             }
-            if candidate.candidate.registry().is_some()
-                || self.is_backup_first_candidate(&candidate.candidate)?
-            {
+            let registry = candidate.candidate.registry().is_some()
+                || self.is_backup_first_candidate(&candidate.candidate)?;
+            if registry {
                 if candidate.next_namespaces.is_none()
                     && let Err(source) =
                         self.preflight_registry_barrier(&prepared.online, receipts, &seal)
@@ -114,12 +114,21 @@ impl Engine {
                     prepared.candidates.insert(*sequence, candidate);
                     break;
                 }
-                let admitted = candidate
-                    .snapshot
-                    .take()
-                    .expect("invariant: registry preflight authenticated its snapshot")
-                    .into_admitted();
-                let original = admitted.for_candidate(&candidate.candidate)?;
+            }
+            // Every published predecessor supplies the actual namespace source
+            // for the following slot's source-scoped local-proof discovery.
+            // Retain the authenticated original, never reconstruct it from next.
+            let admitted = match candidate.snapshot.take() {
+                Some(snapshot) => snapshot.into_admitted(),
+                None => verified_recovery_snapshot_at(
+                    &self.disk_resources,
+                    &prepared.online,
+                    &candidate.candidate.snapshot_hash,
+                )?,
+            };
+            let original = admitted.for_candidate(&candidate.candidate)?;
+            verify_current_candidate_receipt(&candidate.candidate, original.state())?;
+            if registry {
                 namespaces = Some(match candidate.next_namespaces.take() {
                     Some(view) => view,
                     None if self.is_backup_first_candidate(&candidate.candidate)? => self
@@ -142,20 +151,20 @@ impl Engine {
                         &seal,
                     )?,
                 });
-                let shared = admitted.into_shared();
-                previous_state = shared.share_state();
-                // The original proof remains unmodified for this candidate.
-                // Only the next slot's predecessor includes an authenticated
-                // recovered outcome, just as the visible replay state does.
-                if let Some(publication) = &candidate.publication
-                    && publication.recovery.is_some()
-                {
-                    Arc::make_mut(&mut previous_state)
-                        .operations
-                        .insert(candidate.candidate.operation_id, publication.result.clone());
-                }
-                candidate.snapshot = Some(shared);
             }
+            let shared = admitted.into_shared();
+            previous_state = shared.share_state();
+            // The original proof remains unmodified for this candidate.
+            // Only the next slot's predecessor includes an authenticated
+            // recovered outcome, just as the visible replay state does.
+            if let Some(publication) = &candidate.publication
+                && publication.recovery.is_some()
+            {
+                Arc::make_mut(&mut previous_state)
+                    .operations
+                    .insert(candidate.candidate.operation_id, publication.result.clone());
+            }
+            candidate.snapshot = Some(shared);
             previous = Some(candidate.candidate.snapshot_hash.clone());
             published = Some(*sequence);
             // Keep only the latest proven slot, plus at most the first pending

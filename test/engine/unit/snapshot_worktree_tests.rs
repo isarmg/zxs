@@ -69,6 +69,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         // Inspect a detached copy of these exact captured bytes, not an active
         // container while the Engine retains its writer lease.
         let detached = tempfile::tempdir().unwrap();
+        fs::set_permissions(detached.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let path = detached.path().join(crate::container_storage::file_database::NAME);
         fs::write(&path, bytes).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();

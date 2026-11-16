@@ -667,20 +667,16 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
         if let Some(point) = cut {
             engine.inject_fault_once(point);
             let error = engine.commit_workspace(first_request.clone()).unwrap_err();
-            assert_eq!(error.code(), ErrorCode::CommitInDoubt);
-            let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
-            let mut exact = false;
-            while let Some(cause) = source {
-                if let Some(injected) = cause.downcast_ref::<storage_engine::Error>() {
-                    if injected.code() == ErrorCode::InjectedFailure {
-                        exact = injected.message().as_ref()
-                            == format!("interrupted at {point}").as_str();
-                        break;
-                    }
-                }
-                source = cause.source();
-            }
-            assert!(exact, "missing actual {point}: {error}");
+            assert_eq!(error.code(), ErrorCode::InDoubt, "{point}: {error}");
+            let storage_engine::Error::Context { source, .. } = &error else {
+                panic!("missing decided error context at {point}: {error}");
+            };
+            let injected = source.as_ref();
+            assert_eq!(injected.code(), ErrorCode::InjectedFailure, "{point}: {error}");
+            assert_eq!(
+                injected.message().as_ref(), format!("interrupted at {point}").as_str(),
+                "wrong injected cause at {point}: {error}",
+            );
         } else {
             assert_eq!(engine.commit_workspace(first_request.clone()).unwrap().commit_state,
                 CommitState::Published);

@@ -161,9 +161,27 @@ async fn fresh_authenticated_draft_and_worktree_survive_cold_exact_retries() {
         "parent_node_id": original_node["node_id"],
         "endpoint": "in_window",
     })]);
-    let mut retained_node = original_node.clone();
-    retained_node["current"] = json!(false);
-    assert!(committed_history["nodes"].as_array().unwrap().contains(&retained_node));
+    let retained_node = committed_history["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate["node_id"] == original_node["node_id"])
+        .unwrap();
+    assert_eq!(retained_node["current"], false);
+    // branch_id reports a branch currently headed at this version, not its
+    // immutable author. The existing selected FILE branch now heads the new
+    // version; all other retained node/material fields remain unchanged.
+    assert_eq!(original_node["branch_id"], initial["base"]["branch_id"]);
+    assert_eq!(node["branch_id"], original_node["branch_id"]);
+    assert!(retained_node["branch_id"].is_null());
+    for field in [
+        "node_id", "version_id", "kind", "path", "previous_path", "note", "size",
+        "content_hash", "content_state", "download_name", "storage_name", "parents",
+        "sequence", "fields",
+    ] {
+        assert_eq!(retained_node[field], original_node[field], "retained {field}");
+    }
+    assert_eq!(fixture.body(entry["version_id"].as_str().unwrap()).await, original_body);
     assert_eq!(fixture.body(selected["version_id"].as_str().unwrap()).await, edited);
     let committed_working = fixture.json("GET", &read_working, None).await;
     assert_eq!(committed_working["working"]["state"], "manual_clean");
