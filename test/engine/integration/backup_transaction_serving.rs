@@ -425,7 +425,9 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
         let error = Engine::resume_backup_transaction_at_with_workspace_limits(
             &system, operation, "admin", None,
         ).err().expect("a replaced selected target parent cannot resume");
-        assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid, "{error:?}");
+        // A present replacement has the wrong inode; this is not a missing
+        // directory or a failure to recover an ordinary layout receipt.
+        assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch, "{error:?}");
         assert!(!extension.join("complete.json").exists());
         assert!(!system.join("backup-serving-installed.json").exists());
         assert_eq!(fs::read(extension.join("selected.json")).unwrap(), selected);
