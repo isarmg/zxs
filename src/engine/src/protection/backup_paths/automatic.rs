@@ -3,14 +3,17 @@
 //! only the ordinary preparation/decision path creates its prefix entities.
 use crate::engine::{PlanningContext, Prepared, ReadSource};
 use crate::engine::fresh_layout::containers::VerifiedContainerTransition;
-use crate::persist::automatic_backup::{self as codec, Input, NamedDisk, PolicyId, Source};
+use crate::persist::automatic_backup::{
+    self as codec, Input, NamedDisk, PolicyId, Selection, Source,
+};
 use crate::protection::backup_paths::{
-    Scope, backup_primaries_in, exact_policy, initial, namespace,
+    Scope, backup_primaries_in, effective_policy_in, exact_policy, inherited_by_scope,
+    initial, namespace, within,
 };
 use crate::{Engine, Error, ErrorCode, Event, FileVersion, OperationResult, Placement, Result, State};
 use name_policy::PortablePath;
 use std::collections::{BTreeMap, BTreeSet};
-use storage_contract::{DiskId, Generation, OperationId, Principal, RepositoryId};
+use storage_contract::{BranchId, DiskId, EntryId, Generation, OperationId, Principal, RepositoryId};
 
 #[derive(Debug, error_definition::Error)]
 pub enum AutomaticBackupError {
@@ -53,6 +56,34 @@ pub struct AutomaticBackupConfigurationRequest<'a> {
     pub operation_id: OperationId,
 }
 
+/// Explicitly protect a real ordinary directory, including empty descendants.
+/// Independent child policies keep their own scope. A pathname alone is not the
+/// directory fence; Existing uses this complete request before mutable checks.
+#[derive(Clone, Copy, Debug)]
+pub struct AutomaticDirectoryBackupRequest<'a> {
+    pub repository_id: RepositoryId,
+    pub path: &'a PortablePath,
+    pub directory_id: EntryId,
+    pub target_copies: u32,
+    pub expected_generation: Generation,
+    pub principal: &'a Principal,
+    pub operation_id: OperationId,
+}
+
+pub(crate) struct DirectoryBackupSelection {
+    entries: BTreeSet<EntryId>,
+    route: Vec<DiskId>,
+}
+impl DirectoryBackupSelection {
+    pub(crate) fn entries(&self) -> impl Iterator<Item = EntryId> + '_ {
+        self.entries.iter().copied()
+    }
+
+    pub(crate) fn route(&self) -> &[DiskId] {
+        &self.route
+    }
+}
+
 impl Engine {
     pub fn configure_automatic_backups(
         &mut self,
@@ -64,15 +95,39 @@ impl Engine {
             target_copies: request.target_copies,
             expected_generation: request.expected_generation,
         };
-        self.mutate(codec::KIND, request.principal.as_str(), request.operation_id,
-            codec::request(&input)?, |engine, next, pending| {
+        self.configure_automatic_backup_input(input, Selection::RetainedFiles,
+            request.principal, request.operation_id)
+    }
+
+    pub fn configure_automatic_directory_backups(
+        &mut self, request: AutomaticDirectoryBackupRequest<'_>,
+    ) -> Result<OperationResult> {
+        let input = Input {
+            repository_id: request.repository_id, path: Some(request.path.clone()),
+            target_copies: request.target_copies,
+            expected_generation: request.expected_generation,
+        };
+        self.configure_automatic_backup_input(input, Selection::DirectoryTree(request.directory_id),
+            request.principal, request.operation_id)
+    }
+
+    fn configure_automatic_backup_input(
+        &mut self, input: Input, selection: Selection,
+        principal: &Principal, operation_id: OperationId,
+    ) -> Result<OperationResult> {
+        self.mutate(selection.kind(), principal.as_str(), operation_id,
+            codec::selected_request(&input, selection)?, |engine, next, pending| {
                 let context = engine.planning_context();
                 let repository = input.repository_id.to_string();
                 let prefixes = BTreeMap::new();
-                let scoped = input.scoped(&repository, &prefixes,
-                    request.principal.as_str(), request.operation_id);
+                let expected_scope = selection.directory().map(|entry| entry.to_string());
+                let mut scoped = input.scoped(&repository, &prefixes,
+                    principal.as_str(), operation_id);
+                scoped.expected_scope_id = expected_scope.as_deref();
                 let (scope, previous) = initial::select(next, scoped)?;
                 let source = source(&context, &input, &scope)?;
+                directory_selection(context.config, next, &input, selection, &source,
+                    &scope, previous.as_ref())?;
                 let mut generated = Vec::new();
                 let configured = initial::apply(
                     &context, next, scoped, scope, previous, BTreeMap::new(),
@@ -92,7 +147,7 @@ impl Engine {
                         source: engine.valid_backup_replica(&version.version_id)?,
                     }),
                 )?;
-                codec::outcome(&input, &source, &generated,
+                codec::selected_outcome(&input, selection, &source, &generated,
                     &engine.state().repositories[&repository].history_tree_id,
                     &configured, crate::business::now()?)
             })
@@ -146,11 +201,107 @@ fn source(context: &PlanningContext<'_>, input: &Input, scope: &Scope) -> Result
     Ok(Source { root: origin.binding().clone(), disks })
 }
 
+fn directory_selection(
+    config: &crate::Config, state: &State, input: &Input, selection: Selection,
+    source: &Source, scope: &Scope, previous: Option<&crate::ProtectionPolicy>,
+) -> Result<Option<DirectoryBackupSelection>> {
+    let Selection::DirectoryTree(expected) = selection else { return Ok(None); };
+    if scope.kind != crate::NamespaceEntryKind::Directory
+        || scope.id != expected.to_string() || scope.path.is_empty()
+    {
+        return Err(wrong_source());
+    }
+    let repository = input.repository_id.to_string();
+    let repo = state.repositories.get(&repository).ok_or_else(wrong_source)?;
+    let branch = repo.main_branch_id.parse::<BranchId>()?;
+    let owner_record = state.namespace_directories.get(&expected.to_string())
+        .ok_or_else(wrong_source)?;
+    let owner = owner_record.owner_disk;
+    if owner_record.repository != input.repository_id || owner_record.branch != branch
+        || config.storage_roots.get(&owner) != Some(&source.root)
+        || source.root.registration.disk_id.parse::<DiskId>()? != owner
+        || source.disks.len() != usize::try_from(input.target_copies)?
+        || source.disks.is_empty() || source.disks.len() > 3
+    {
+        return Err(wrong_source());
+    }
+    let mut route = Vec::with_capacity(source.disks.len());
+    let mut preceding: Option<&crate::DiskConfig> = None;
+    for named in &source.disks {
+        let id = named.disk_id()?;
+        let disk = config.disks.iter().find(|disk| disk.disk_id == id.to_string())
+            .ok_or_else(wrong_source)?;
+        if NamedDisk::from_config(config, disk)? != *named || route.contains(&id) {
+            return Err(wrong_source());
+        }
+        match preceding {
+            None if id != owner || disk.level != 1 || disk.upstream_slot_id.is_some() => {
+                return Err(wrong_source());
+            }
+            Some(previous) if disk.upstream_slot_id.as_ref()
+                .is_none_or(|slot| !slot.eq_ignore_ascii_case(&previous.slot_id))
+                || previous.level.checked_add(1) != Some(disk.level) => {
+                return Err(wrong_source());
+            }
+            None | Some(_) => (),
+        }
+        route.push(id);
+        preceding = Some(disk);
+    }
+    let current = namespace(state, &repository)?;
+    let mut entries = BTreeSet::new();
+    for entry in current.entries.iter().filter(|entry| {
+        entry.kind == crate::NamespaceEntryKind::Directory && within(&scope.path, entry.path())
+            && inherited_by_scope(&current.entries, &scope.path, previous,
+                effective_policy_in(state, &current.entries, &repository, None, entry.path()))
+    }) {
+        let id = entry.entry_id.parse::<EntryId>()?;
+        for parent in crate::engine::fresh_layout::directories::chain(state, id)? {
+            if parent.repository != input.repository_id || parent.branch != branch
+                || parent.owner_disk != owner || !parent.replicas.contains_key(&owner)
+            {
+                return Err(wrong_source());
+            }
+            entries.insert(parent.entry);
+        }
+    }
+    if !entries.contains(&expected) { return Err(wrong_source()); }
+    Ok(Some(DirectoryBackupSelection { entries, route }))
+}
+
+/// Pure scope projection for the full container-map verifier. This only binds
+/// physical rows to the strict request and original namespace/configuration;
+/// the same Candidate must still pass the complete business replay below before
+/// publication. No root, preparation or installer is issued here.
+pub(crate) fn candidate_directory_selection(
+    config: &crate::Config, previous: &State, next: &State, result: &OperationResult,
+) -> Result<Option<DirectoryBackupSelection>> {
+    if !codec::recognizes(result)? || result.kind != codec::DIRECTORY_KIND {
+        return Ok(None);
+    }
+    if next.operations.get(&result.operation_id) != Some(result)
+        || previous.operations.contains_key(&result.operation_id)
+        || result.sequence != next.sequence || result.sequence <= previous.sequence
+    {
+        return Err(invalid());
+    }
+    let decoded = codec::decode(result)?;
+    let principal = next.operation_principals.get(&result.operation_id).ok_or_else(invalid)?;
+    let repository = decoded.input.repository_id.to_string();
+    let prefixes = BTreeMap::new();
+    let expected_scope = decoded.selection.directory().map(|entry| entry.to_string());
+    let mut scoped = decoded.input.scoped(&repository, &prefixes, principal, result.operation_id);
+    scoped.expected_scope_id = expected_scope.as_deref();
+    let (scope, old) = initial::select(previous, scoped)?;
+    directory_selection(config, previous, &decoded.input, decoded.selection,
+        &decoded.source, &scope, old.as_ref())
+}
+
 fn reconstruct(
     context: &PlanningContext<'_>,
     next: &State,
     result: &OperationResult,
-) -> Result<(State, Vec<(FileVersion, Placement)>)> {
+) -> Result<(State, Vec<(FileVersion, Placement)>, Option<DirectoryBackupSelection>)> {
     if next.operations.get(&result.operation_id) != Some(result)
         || context.state.operations.contains_key(&result.operation_id)
         || next.sequence != result.sequence || next.sequence <= context.state.sequence
@@ -163,7 +314,9 @@ fn reconstruct(
     let decoded = codec::decode(result)?;
     let repository = decoded.input.repository_id.to_string();
     let prefixes = BTreeMap::new();
-    let scoped = decoded.input.scoped(&repository, &prefixes, principal, result.operation_id);
+    let expected_scope = decoded.selection.directory().map(|entry| entry.to_string());
+    let mut scoped = decoded.input.scoped(&repository, &prefixes, principal, result.operation_id);
+    scoped.expected_scope_id = expected_scope.as_deref();
     let mut expected = context.state.as_ref().clone();
     expected.begin_tracking();
     crate::container_storage::capture_names(&mut expected);
@@ -174,6 +327,8 @@ fn reconstruct(
     if source(context, &decoded.input, &scope)? != decoded.source {
         return Err(wrong_source());
     }
+    let directories = directory_selection(context.config, context.state, &decoded.input,
+        decoded.selection, &decoded.source, &scope, previous.as_ref())?;
     let mut ids = decoded.generated.iter();
     let mut facts = Vec::new();
     let mut seen = BTreeSet::new();
@@ -203,12 +358,12 @@ fn reconstruct(
     expected.operation_principals.insert(result.operation_id, principal.clone());
     expected.events.push(Event {
         sequence: next.sequence, operation_id: result.operation_id,
-        kind: codec::KIND.into(),
+        kind: decoded.selection.kind().into(),
         object_id: receipt.history_tree_id.clone().ok_or_else(invalid)?,
     });
     crate::node_retirement_engine::verify(context.state, &expected)?;
     crate::file_deletion::publication::verify(context.state, &expected, None)?;
-    Ok((expected, facts))
+    Ok((expected, facts, directories))
 }
 
 pub(crate) fn verify_prepared(
@@ -216,10 +371,10 @@ pub(crate) fn verify_prepared(
     next: &State,
     result: &OperationResult,
     prepared: &[Prepared],
-) -> Result<()> {
-    if !codec::recognizes(result)? { return Ok(()); }
+) -> Result<Option<DirectoryBackupSelection>> {
+    if !codec::recognizes(result)? { return Ok(None); }
     context.require_write()?;
-    let (expected, facts) = reconstruct(context, next, result)?;
+    let (expected, facts, directories) = reconstruct(context, next, result)?;
     if !crate::publication_shape::same_transition(context.state, &expected, next)
         || prepared.len() != facts.len()
     {
@@ -234,7 +389,7 @@ pub(crate) fn verify_prepared(
         };
         source.require_backup_source(context, version)?;
     }
-    Ok(())
+    Ok(directories)
 }
 
 pub(crate) fn verify_candidate(
@@ -253,7 +408,7 @@ pub(crate) fn verify_candidate(
     {
         return Err(invalid());
     }
-    let (mut expected, facts) = reconstruct(context, next, result)?;
+    let (mut expected, facts, _) = reconstruct(context, next, result)?;
     // The exact same container verifier proved these physical rows. Neither an
     // automatic receipt nor a reconstructed logical plan can supply them.
     containers.attach_feedback(&mut expected)?;

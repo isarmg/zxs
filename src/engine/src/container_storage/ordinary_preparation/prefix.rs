@@ -157,6 +157,9 @@ pub(super) enum Observation<'a> {
 fn previously_published(state: &State, disk: DiskId, expected: &ContainerPrefix) -> bool {
     state.file_containers.values().any(|record| {
         record.replicas.get(&disk).is_some_and(|replica| replica.prefixes.contains(expected))
+    }) || state.namespace_directories.values().any(|record| {
+        record.replicas.get(&disk)
+            .is_some_and(|replica| replica.source_prefixes.contains(expected))
     })
 }
 

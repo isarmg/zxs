@@ -228,10 +228,15 @@ HistoryManifest。对应 Snapshot 必须包含两个准确映射根，即使为�
 
 每个 `NamespaceDirectoryRecord` 只保存一个逻辑 EntryId；其 `replicas` 按目标 DiskId
 分开记录完整来源登记链、目标 RootId、实际父实体、独占 preparation 与本体 inode。
+必需 `source_prefixes` 保存同目标本地每层前缀及其五区实体；原件为空，副本顺序必须与
+`source_chain` 一致。FILE 和目录记录对同目标/来源前缀必须逐字段相同，不能等有 FILE 后
+才推算空目录的来源身份。
 A 原件、B/A 和 C/B/A 各自的 occurrence 不共享物理身份。Mkdir 的逻辑变更、这些实体反馈、
 FILE 父引用、Snapshot 及 SYSTEM family 41 必须出自同一 Candidate 决定；同名、同内容或另一
-目标的记录都不能授权采用目录。现源码只支持实际 FILE 触发的 B/C 父链；独立空目录复制及
-终态 Backup 切换仍不是该 schema 的完成承诺。
+目标的记录都不能授权采用目录。`backup.configure-automatic-directory` 使用明确 EntryId、
+路径、策略代数及同次登记来源，选择现有目录及继承其策略的后代；独立子策略保持不动。
+根本身没有虚构 EntryId。Initial 的空目录可走相同 EXCL/决定/安装协议，后来的 FILE 复用
+已经发表的完整前缀与父实体；Current/Add/终态 Backup 切换仍不由此接口授权。
 
 新固定向量是合成的编解码/字段反例，不是物理准入凭据。它们覆盖缺物理表、缺 FILE 父、
 父类型混淆、缺来源链、错误登记代数编码和伪路径字段；实际 inode、来源、前后 State 关系与

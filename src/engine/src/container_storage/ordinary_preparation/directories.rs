@@ -116,9 +116,33 @@ pub(super) fn targets(
     for (entry, disk) in additions.into_iter().flatten() {
         for parent in crate::engine::fresh_layout::directories::chain(state, *entry)? {
             selected.insert((parent.entry, *disk));
+            let replica = parent.replicas.get(disk).ok_or(Failure::NamespaceUnmapped)?;
+            for source in &replica.source_chain {
+                let source = source.disk_id.parse::<DiskId>()?;
+                if !parent.replicas.contains_key(&source) {
+                    return Err(Failure::NamespaceSource.into());
+                }
+                selected.insert((parent.entry, source));
+            }
         }
     }
     Ok(selected)
+}
+
+/// Observe the same EntryId at the direct predecessor before preparing a new
+/// downstream occurrence. DiskId lexical order is not route order.
+pub(super) fn ordered(
+    state: &State, targets: BTreeSet<(EntryId, DiskId)>,
+) -> Result<Vec<(EntryId, DiskId)>> {
+    let mut ordered = Vec::with_capacity(targets.len());
+    for (entry, disk) in targets {
+        let record = state.namespace_directories.get(&entry.to_string())
+            .ok_or(Failure::NamespaceUnmapped)?;
+        let replica = record.replicas.get(&disk).ok_or(Failure::NamespaceUnmapped)?;
+        ordered.push((replica.source_chain.len(), entry, disk));
+    }
+    ordered.sort();
+    Ok(ordered.into_iter().map(|(_, entry, disk)| (entry, disk)).collect())
 }
 
 /// Check all newly introduced components before any EXCL creation. Name limits
@@ -138,9 +162,23 @@ pub(super) fn preflight(
             resources.get(configured_disk(config, *disk)?)?.content_root()?
         } else {
             let source = crate::engine::fresh_layout::directories::read_backup(
-                config, resources, previous, state, record, *disk,
+                config, resources, previous, record, *disk,
             )?;
-            source.target_root()?;
+            let replica = record.replicas.get(disk).ok_or(Failure::NamespaceUnmapped)?;
+            if replica.source_prefixes.iter().any(|prefix| prefix.entity.inode() == 0) {
+                source.verify_new_component_budget()?;
+                for name in [
+                    &*layout::COMMON_DATA_ROOT, &*layout::DELETED_DATA_ROOT,
+                    &*layout::ZXS_DATA_ROOT,
+                ] {
+                    version_names::check_target_name(source.target_root()?, name)?;
+                }
+                let handle = resources.get(configured_disk(config, *disk)?)?;
+                for prefix in &replica.source_prefixes {
+                    version_names::check_target_name(handle.management_root()?,
+                        &layout::container::prefix_preparation(prefix.preparation))?;
+                }
+            }
             &resources.get(configured_disk(config, *disk)?)?.root
         };
         let replica = record.replicas.get(disk).ok_or(Failure::NamespaceUnmapped)?;
@@ -163,6 +201,14 @@ pub(super) fn bind(
 ) -> Result<HeldParent> {
     let chain = crate::engine::fresh_layout::directories::chain(state, entry)?;
     let first = *chain.first().ok_or(Failure::NamespaceUnmapped)?;
+    let leaf = *chain.last().ok_or(Failure::NamespaceUnmapped)?;
+    let occurrence = leaf.replicas.get(&disk).ok_or(Failure::NamespaceUnmapped)?;
+    if matches!(mode, Observation::Prepare) && occurrence.entity.inode() == 0
+        && let Some(direct) = occurrence.source_chain.first()
+    {
+        held.get(&(entry, direct.disk_id.parse::<DiskId>()?))
+            .ok_or(Failure::NamespaceSource)?.root()?;
+    }
     let handle = resources.get(configured_disk(config, disk)?)?;
     let parent = if disk == first.owner_disk {
         let source = crate::engine::fresh_layout::directories::read_owner(
@@ -174,11 +220,10 @@ pub(super) fn bind(
         HeldParent::Common(Arc::clone(handle))
     } else {
         let source = crate::engine::fresh_layout::directories::read_backup(
-            config, resources, source_state, state, first, disk,
+            config, resources, source_state, first, disk,
         )?;
         source.require_source(source_state, config, resources)?;
-        let file = crate::engine::fresh_layout::directories::source_file(state, first, disk)?;
-        prefix::bind_chain(&source, handle, &file.replicas[&disk].prefixes, mode, prefixes)?
+        prefix::bind_chain(&source, handle, &first.replicas[&disk].source_prefixes, mode, prefixes)?
     };
     attach(config, state, entry, disk, handle, parent, mode, reservation, held)
 }

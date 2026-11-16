@@ -1683,7 +1683,7 @@ fn ordinary_physical_vectors_match_strict_core_and_openapi_shapes() {
     let vectors = read(&root.join("vectors.json")).unwrap();
     for name in [
         "NamespaceDirectoryRecord", "FileContainerRecord", "OrdinaryPhysicalStateFields",
-        "Snapshot", "PagedHistoryRoot",
+        "Snapshot", "PagedHistoryRoot", "AutomaticDirectoryBackupRequest",
     ] {
         core["$ref"] = format!("#/$defs/{name}").into();
         api["$ref"] = format!("#/components/schemas/{name}").into();

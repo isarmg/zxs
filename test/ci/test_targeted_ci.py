@@ -66,6 +66,51 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_empty_directory_backup_keeps_real_parent_and_terminal_scopes(self):
+        name = 'ordinary-empty-directory-backup'
+        paths = [
+            'src/contract/src/file_container.rs',
+            'src/engine/src/engine/fresh_layout/containers.rs',
+            'src/engine/src/engine/fresh_layout/containers/prefixes.rs',
+            'src/engine/src/engine/fresh_layout/directories.rs',
+            'src/engine/src/container_storage/ordinary_preparation.rs',
+            'src/engine/src/container_storage/ordinary_preparation/directories.rs',
+            'src/engine/src/container_storage/ordinary_preparation/prefix.rs',
+            'src/engine/src/protection/backup_paths/automatic.rs',
+            'src/engine/src/persist/automatic_backup.rs',
+            'test/engine/integration/ordinary_namespace_parents.rs',
+            'docs/contracts/core.schema.json',
+            'docs/contracts/openapi.json',
+            'docs/contracts/vectors.json',
+        ]
+        group = self.policy['groups'][name]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(name, plan['groups'])
+                self.assertCountEqual(origin_selections(plan, name), group['rust_targets'])
+        assert_path_group_extension(self, self.policy, paths, None, [name])
+        default, faults, contract, schema, product, lean = group['rust_targets']
+        exact = ['ordinary_namespace_parents::'
+                 'empty_directory_backup_decides_b_then_c_without_a_file_'
+                 'and_reuses_the_same_parents']
+        for target in (default, faults):
+            self.assertEqual(target['exact'], exact)
+            self.assertEqual((target['name'], target['max_tests'], target['timeout_seconds']),
+                             ('recursive_backup_paths', 1, 900))
+            self.assertTrue(target['isolate'])
+            self.assertNotIn('prefixes', target)
+            self.assertNotIn('whole', target)
+        self.assertEqual(default['features'], [])
+        self.assertEqual(faults['features'], ['fault-injection'])
+        parents = self.policy['groups']['ordinary-namespace-parents']['rust_targets']
+        self.assertEqual(parents[0]['max_tests'], 2)
+        self.assertEqual(parents[1]['max_tests'], 2)
+        self.assertEqual(parents[2],
+                         self.policy['groups']['backup-entity-entry-budget']['rust_targets'][1])
+        self.assertEqual((parents[2]['max_tests'], parents[2]['timeout_seconds']), (1, 900))
+        self.assertEqual([contract, schema, product, lean], parents[3:])
+
     def test_shared_component_budget_runs_both_actual_consumers_with_separate_caps(self):
         plan = CI.select_plan(self.policy, ['src/engine/src/name_budget.rs'])
         self.assertEqual(plan['groups'],
@@ -617,6 +662,7 @@ class TargetedSelection(unittest.TestCase):
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-lifecycle-contract', 'container-lifecycle-http',
             'container-lifecycle-web', 'container-path-facts-schema', 'file-metadata-plan',
+            'ordinary-empty-directory-backup',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -631,7 +677,8 @@ class TargetedSelection(unittest.TestCase):
                                              ['src/engine/src/lib.rs'], [
             'held-directory-layout', 'ordinary-conversion-name-budget',
             'typed-name-consumers',
-        ], ['container-path-facts-engine', 'container-lifecycle-engine', 'file-metadata-plan'])
+        ], ['container-path-facts-engine', 'container-lifecycle-engine',
+            'file-metadata-plan', 'ordinary-empty-directory-backup'])
         self.assertNotIn('working-directory-prerequisite', central['groups'])
         self.assertEqual(central['groups'], [
             'held-directory-layout', 'ordinary-conversion-name-budget',
@@ -1373,7 +1420,7 @@ class TargetedSelection(unittest.TestCase):
         ], [
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-path-facts-http', 'container-lifecycle-http', 'path-fact-activity',
-            'file-metadata-plan',
+            'file-metadata-plan', 'ordinary-empty-directory-backup',
         ])
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
                                          'ordinary-conversion-name-budget',
@@ -2041,6 +2088,7 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
             'container-lifecycle-contract', 'container-lifecycle-web',
             'container-path-facts-schema',
             'fresh-root-name-budget', 'ordinary-namespace-parents',
+            'ordinary-empty-directory-backup',
         ])
         self.assertEqual(len(plan['rust_targets']), 14)
         self.assertEqual(len(plan['python_tests']), 8)
@@ -2387,8 +2435,12 @@ class ContainerTagsSelection(unittest.TestCase):
             'ordinary_namespace_parents::ordinary_mkdir_holds_parent_occurrences_through_cuts_file_writes_and_cold_index',
             'ordinary_namespace_parents::nested_backup_binds_b_then_c_parent_occurrences_and_retained_bodies',
         ]
+        empty = ['ordinary_namespace_parents::'
+                 'empty_directory_backup_decides_b_then_c_without_a_file_'
+                 'and_reuses_the_same_parents']
         retained_targets = []
         ordinary_targets = []
+        empty_targets = []
         for group, spec in self.policy['groups'].items():
             for target in spec['rust_targets']:
                 if (target.get('package') != 'storage-engine'
@@ -2404,11 +2456,17 @@ class ContainerTagsSelection(unittest.TestCase):
                     self.assertIs(target.get('default_features'), True)
                     ordinary_targets.append(target.get('features'))
                     continue
+                if group == 'ordinary-empty-directory-backup' and target.get('exact') == empty:
+                    self.assertEqual(target['max_tests'], 1)
+                    self.assertIs(target.get('default_features'), True)
+                    empty_targets.append(target.get('features'))
+                    continue
                 self.assertEqual(target['max_tests'], 1)
                 self.assertEqual(target['exact'], retained)
                 retained_targets.append(group)
         self.assertIn('ordinary-namespace-parents', retained_targets)
         self.assertCountEqual(ordinary_targets, [[], ['fault-injection']])
+        self.assertCountEqual(empty_targets, [[], ['fault-injection']])
 
     def test_http_identity_is_isolated_with_every_original_selection_and_budget(self):
         def is_http(target):

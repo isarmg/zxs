@@ -10,7 +10,9 @@ pub(super) mod directory_namespaces;
 mod recursive;
 pub(super) mod initial;
 pub(crate) mod automatic;
-pub use automatic::{AutomaticBackupConfigurationRequest, AutomaticBackupError};
+pub use automatic::{
+    AutomaticBackupConfigurationRequest, AutomaticBackupError, AutomaticDirectoryBackupRequest,
+};
 pub use directory_namespaces::PublishedBackupDirectory;
 pub(crate) use recursive::RecursiveBackupMode;
 pub use recursive::{RecursiveBackupCapture, RecursiveBackupConfigurationRequest};

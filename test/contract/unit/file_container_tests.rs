@@ -25,6 +25,11 @@ fn ordinary_directory_vectors_preserve_independent_target_and_source_occurrences
     let b = &record.replicas[&disks[1]];
     let c = &record.replicas[&disks[2]];
     assert!(original.source_chain.is_empty());
+    assert!(original.source_prefixes.is_empty());
+    assert_eq!(b.source_prefixes[0].source_disk, disks[0]);
+    assert_eq!(c.source_prefixes[0].source_disk, disks[1]);
+    assert_eq!(c.source_prefixes[1].source_disk, disks[0]);
+    assert_ne!(b.source_prefixes[0].entity, c.source_prefixes[1].entity);
     assert_eq!(b.source_chain[0].disk_id, disks[0].to_string());
     assert_eq!(c.source_chain[0].disk_id, disks[1].to_string());
     assert_eq!(c.source_chain[1].disk_id, disks[0].to_string());
@@ -56,8 +61,8 @@ fn ordinary_file_parent_and_directory_records_reject_missing_or_ambiguous_fields
         missing.as_object_mut().unwrap().remove(field);
         assert!(json_codec::from_value::<NamespaceDirectoryRecord>(missing).is_err(), "{field}");
     }
-    for field in ["root_id", "source_chain", "parent_entity", "preparation", "entity",
-        "lifecycle", "created_by"]
+    for field in ["root_id", "source_chain", "source_prefixes", "parent_entity", "preparation",
+        "entity", "lifecycle", "created_by"]
     {
         let mut missing = json_codec::to_value(&directory).unwrap();
         let replica = missing["replicas"].as_object_mut().unwrap().values_mut().next().unwrap();

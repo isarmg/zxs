@@ -120,6 +120,7 @@ pub enum NamespaceDirectoryParent {
 pub struct NamespaceDirectoryReplica {
     pub root_id: RootId,
     pub source_chain: Vec<crate::working_tree::DiskRegistrationIdentity>,
+    pub source_prefixes: Vec<ContainerPrefix>,
     pub parent_entity: ContainerEntity,
     pub preparation: DirectoryId,
     pub entity: ContainerEntity,

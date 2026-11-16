@@ -225,7 +225,7 @@ pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_h
 /// This validates only a name, never a disk identity or permission to admit it.
 pub use name_policy::validate_slot;
 pub use protection::{
-    AutomaticBackupConfigurationRequest, AutomaticBackupError,
+    AutomaticBackupConfigurationRequest, AutomaticBackupError, AutomaticDirectoryBackupRequest,
     BackupConfigurationRequest, PlacementConfigurationRequest, PlacementRuleUpdate,
     ProtectionPolicyUpdate, PublishedBackupDirectory, RecursiveBackupCapture,
     RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,

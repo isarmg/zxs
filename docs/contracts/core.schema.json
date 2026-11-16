@@ -11682,6 +11682,12 @@
             "$ref": "#/$defs/OrdinaryDiskRegistration"
           }
         },
+        "source_prefixes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContainerPrefix"
+          }
+        },
         "parent_entity": {
           "$ref": "#/$defs/ContainerEntity"
         },
@@ -11701,6 +11707,7 @@
       "required": [
         "root_id",
         "source_chain",
+        "source_prefixes",
         "parent_entity",
         "preparation",
         "entity",
@@ -11708,7 +11715,7 @@
         "created_by"
       ],
       "additionalProperties": false,
-      "description": "同逻辑EntryId在一个目标盘的实际occurrence。source_chain为直接来源在前的完整登记链；parent_entity是该目标中已绑定的物理父实体。仅正式EXCL准备、同Candidate决定及读回能发行，不能由路径或另一盘副本猜测。"
+      "description": "同逻辑EntryId在一个目标盘的实际occurrence。source_chain为直接来源在前的完整登记链；parent_entity是该目标中已绑定的物理父实体。仅正式EXCL准备、同Candidate决定及读回能发行，不能由路径或另一盘副本猜测。 source_prefixes是该目标本地、同一决定写入的完整前缀与五区inode证据；原件为空，副本顺序必须与source_chain一致，不依赖存在FILE。"
     },
     "NamespaceDirectoryRecord": {
       "type": "object",
@@ -11984,6 +11991,39 @@
         "name"
       ],
       "additionalProperties": false
+    },
+    "AutomaticDirectoryBackupRequest": {
+      "type": "object",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "实际已存在普通目录的规范相对路径；严格PortablePath和实际组件预算由核心解析/准入。"
+        },
+        "directory_id": {
+          "$ref": "#/$defs/EntryId"
+        },
+        "target_copies": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "expected_generation": {
+          "$ref": "#/$defs/UInt64"
+        }
+      },
+      "required": [
+        "repository_id",
+        "path",
+        "directory_id",
+        "target_copies",
+        "expected_generation"
+      ],
+      "additionalProperties": false,
+      "description": "Initial普通目录显式保护请求。实际EntryId、路径、原策略代数及原op共同绑定，独立子策略不继承。操作种类backup.configure-automatic-directory；不是旧手工前缀请求或Current/terminal授权。"
     }
   }
 }

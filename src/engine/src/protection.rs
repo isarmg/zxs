@@ -5,6 +5,7 @@ mod backup_paths;
 mod placement_configuration;
 pub(crate) use backup_paths::initial::Configuration as InitialBackupConfiguration;
 pub(crate) use backup_paths::automatic::{
+    DirectoryBackupSelection, candidate_directory_selection,
     invalid as invalid_automatic_backup,
     verify_candidate as verify_automatic_backup_candidate,
     verify_prepared as verify_automatic_backup_prepared,
@@ -17,7 +18,7 @@ pub(crate) use backup_paths::directory_namespaces::{
     published_directories_at, repair_current as repair_current_backup_directories,
 };
 pub use backup_paths::{
-    AutomaticBackupConfigurationRequest, AutomaticBackupError,
+    AutomaticBackupConfigurationRequest, AutomaticBackupError, AutomaticDirectoryBackupRequest,
     BackupConfigurationRequest, PublishedBackupDirectory, RecursiveBackupCapture,
     RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,
 };

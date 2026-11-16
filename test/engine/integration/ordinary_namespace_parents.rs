@@ -6,7 +6,8 @@ use std::{
 };
 use storage_contract::{CommitState, DiskId, ErrorCode, Generation, OperationId, Principal};
 use storage_engine::{
-    AutomaticBackupConfigurationRequest, CommitRequest, Config, Engine, NamespaceOperation,
+    AutomaticBackupConfigurationRequest, AutomaticDirectoryBackupRequest,
+    CommitRequest, Config, Engine, NamespaceOperation,
     Repository, SystemCatalogKind, SystemCatalogValue,
 };
 
@@ -430,5 +431,201 @@ fn nested_backup_binds_b_then_c_parent_occurrences_and_retained_bodies() {
     assert_eq!(body(&engine, &third.version_id), b"nested V3 after both additions");
     for (path, id) in parents.iter().zip(parent_ids) {
         assert_eq!(identity(path), id);
+    }
+}
+
+#[test]
+fn empty_directory_backup_decides_b_then_c_without_a_file_and_reuses_the_same_parents() {
+    #[cfg(feature = "fault-injection")]
+    let cuts = [None, Some("after_payloads"), Some("after_accept_1")];
+    #[cfg(not(feature = "fault-injection"))]
+    let cuts: [Option<&str>; 1] = [None];
+    for cut in cuts {
+        let (temp, mut engine, repository, roots) = fixture();
+        let system = temp.path().join("system");
+        engine.file_namespace(&repository.repository_id,
+            mkdir("nested/empty"), "admin", op()).unwrap();
+        engine.file_namespace(&repository.repository_id,
+            mkdir("nested/excluded"), "admin", op()).unwrap();
+        let principal = "admin".parse::<Principal>().unwrap();
+        let path = name_policy::PortablePath::parse("nested").unwrap();
+        let excluded_path = name_policy::PortablePath::parse("nested/excluded").unwrap();
+        let namespace = engine.namespace_tree(&repository.main_branch_id).unwrap();
+        let directory = namespace.get(path.as_str()).unwrap().entry_id.parse().unwrap();
+        let excluded = namespace.get(excluded_path.as_str()).unwrap().entry_id.parse().unwrap();
+        drop(namespace);
+        let ids = engine.config().disks.iter().map(|disk| disk.disk_id.parse::<DiskId>().unwrap())
+            .collect::<Vec<_>>();
+        let a_name = format!("Alpha--{}", &ids[0].to_string()["disk_".len()..]);
+        let b_name = format!("Beta--{}", &ids[1].to_string()["disk_".len()..]);
+        let slices = [roots[0].clone(), roots[1].join(&a_name),
+            roots[2].join(&b_name).join(&a_name)];
+        let parents = slices.each_ref().map(|slice| slice.join("common-data/nested"));
+        let excluded_request = AutomaticDirectoryBackupRequest {
+            repository_id: repository.repository_id.parse().unwrap(), path: &excluded_path,
+            directory_id: excluded, target_copies: 1, expected_generation: Generation::new(0),
+            principal: &principal, operation_id: op(),
+        };
+        engine.configure_automatic_directory_backups(excluded_request).unwrap();
+        assert!(engine.state().file_containers.is_empty());
+        assert!(engine.state().versions.is_empty());
+        let original = catalog(&engine);
+        let request = AutomaticDirectoryBackupRequest {
+            repository_id: repository.repository_id.parse().unwrap(), path: &path,
+            directory_id: directory, target_copies: 2, expected_generation: Generation::new(0),
+            principal: &principal, operation_id: op(),
+        };
+        let wrong = AutomaticDirectoryBackupRequest { directory_id: excluded, ..request };
+        let before = media(&roots);
+        assert_eq!(engine.configure_automatic_directory_backups(wrong).unwrap_err().code(),
+            ErrorCode::ScopeChanged);
+        assert_eq!(media(&roots), before);
+        assert!(engine.operation(request.operation_id).is_err());
+        if cut.is_none() {
+            // Even an empty, private same-name prefix is not our preparation.
+            fs::create_dir(&slices[1]).unwrap();
+            fs::set_permissions(&slices[1], fs::Permissions::from_mode(0o700)).unwrap();
+            let before = media(&roots);
+            assert_eq!(engine.configure_automatic_directory_backups(request).unwrap_err().code(),
+                ErrorCode::ContainerLayoutInvalid);
+            assert_eq!(media(&roots), before);
+            assert_eq!(catalog(&engine), original);
+            fs::remove_dir(&slices[1]).unwrap();
+        }
+        if let Some(point) = cut {
+            #[cfg(feature = "fault-injection")]
+            engine.inject_fault_once(point);
+            exact_cut(&engine.configure_automatic_directory_backups(request).unwrap_err(), point);
+            assert_eq!(catalog(&engine), original);
+            assert!(!slices[1].exists());
+            assert!(engine.state().file_containers.is_empty());
+        } else {
+            engine.configure_automatic_directory_backups(request).unwrap();
+        }
+        drop(engine);
+        engine = Engine::open(&system).unwrap();
+        assert!(!engine.is_read_only());
+        let receipt = engine.configure_automatic_directory_backups(request).unwrap();
+        assert_eq!(receipt.kind, "backup.configure-automatic-directory");
+        assert_eq!(receipt.commit_state, CommitState::Published);
+        assert_eq!(receipt.result["file_count"], "0");
+        assert_eq!(receipt.result["version_count"], "0");
+        assert!(engine.state().versions.is_empty());
+        assert!(engine.state().file_containers.is_empty());
+        assert!(parents[1].join("empty").is_dir());
+        assert!(!parents[1].join("excluded").exists());
+        assert!(!slices[2].exists());
+        let b_rows = catalog(&engine);
+        for row in b_rows.values() {
+            assert_eq!(row.replicas[&ids[0]], original[&row.entry.to_string()].replicas[&ids[0]]);
+            if row.entry == excluded {
+                assert_eq!(row.replicas.len(), 1);
+                continue;
+            }
+            let replica = &row.replicas[&ids[1]];
+            assert_eq!(replica.source_prefixes.len(), 1);
+            assert_eq!(replica.source_prefixes[0].source_disk, ids[0]);
+            assert_eq!((replica.source_prefixes[0].entity.device(),
+                replica.source_prefixes[0].entity.inode()), identity(&slices[1]));
+        }
+        let before = media(&roots);
+        assert_eq!(engine.configure_automatic_directory_backups(request).unwrap(), receipt);
+        assert_eq!(media(&roots), before);
+        let c_request = AutomaticDirectoryBackupRequest {
+            target_copies: 3, expected_generation: Generation::new(1), operation_id: op(), ..request
+        };
+        // C's direct source must be observed, not inferred from its configured UUID.
+        let parked_b = temp.path().join("held-B");
+        fs::rename(&roots[1], &parked_b).unwrap();
+        fs::write(&roots[1], b"not the registered source root").unwrap();
+        let held_roots = [roots[0].clone(), parked_b.clone(), roots[2].clone()];
+        let before = media(&held_roots);
+        assert!(engine.configure_automatic_directory_backups(c_request).is_err());
+        assert_eq!(media(&held_roots), before);
+        assert_eq!(catalog(&engine), b_rows);
+        assert!(engine.operation(c_request.operation_id).is_err());
+        assert!(!slices[2].exists());
+        fs::remove_file(&roots[1]).unwrap();
+        fs::rename(&parked_b, &roots[1]).unwrap();
+        let c_receipt = engine.configure_automatic_directory_backups(c_request).unwrap();
+        assert_eq!(c_receipt.commit_state, CommitState::Published);
+        assert!(engine.state().versions.is_empty());
+        assert!(engine.state().file_containers.is_empty());
+        let rows = catalog(&engine);
+        for row in rows.values().filter(|row| row.entry != excluded) {
+            let replica = &row.replicas[&ids[2]];
+            assert_eq!(replica.source_prefixes.iter().map(|prefix| prefix.source_disk)
+                .collect::<Vec<_>>(), vec![ids[1], ids[0]]);
+            assert_ne!(replica.source_prefixes[1], row.replicas[&ids[1]].source_prefixes[0]);
+            assert_eq!(row.replicas[&ids[1]], b_rows[&row.entry.to_string()].replicas[&ids[1]]);
+        }
+        assert!(!parents[2].join("excluded").exists());
+        assert!(!roots[2].join(&a_name).exists());
+        let selected = &rows[&directory.to_string()];
+        for (target, paths) in [
+            (1, vec![slices[1].clone()]),
+            (2, vec![roots[2].join(&b_name), slices[2].clone()]),
+        ] {
+            let replica = &selected.replicas[&ids[target]];
+            assert_eq!(replica.source_chain,
+                engine.config().storage_roots[&ids[target]].source_chain);
+            for (prefix, path) in replica.source_prefixes.iter().zip(paths) {
+                assert_eq!((prefix.entity.device(), prefix.entity.inode()), identity(&path));
+                for (entity, relative) in prefix.areas.entities().into_iter().zip([
+                    "common-data", "deleted-data", "zxs-data",
+                    "zxs-data/common-data", "zxs-data/deleted-data",
+                ]) {
+                    assert_eq!((entity.device(), entity.inode()), identity(&path.join(relative)));
+                }
+            }
+        }
+        drop(engine);
+        // Keep the enclosing prefixes intact while replacing each actual area
+        // or parent with byte-identical foreign entities. No journal repair may run.
+        for (index, path) in [slices[1].join("common-data"), parents[2].join("empty")]
+            .into_iter().enumerate()
+        {
+            let parked = temp.path().join(format!("original-area-{index}"));
+            let old = identity(&path);
+            fs::rename(&path, &parked).unwrap();
+            copy_tree(&parked, &path);
+            assert_ne!(identity(&path), old);
+            let before = journal(&roots);
+            assert_eq!(Engine::open(&system).err().unwrap().code(),
+                ErrorCode::ContainerLayoutInvalid);
+            assert_eq!(journal(&roots), before);
+            fs::remove_dir_all(&path).unwrap();
+            fs::rename(&parked, &path).unwrap();
+            assert_eq!(identity(&path), old);
+        }
+        engine = Engine::open(&system).unwrap();
+        assert_eq!(catalog(&engine), rows);
+        let before = media(&roots);
+        assert_eq!(engine.configure_automatic_directory_backups(c_request).unwrap(), c_receipt);
+        assert_eq!(media(&roots), before);
+        let parent_ids = parents.each_ref().map(|parent| identity(parent));
+        let prefix_ids = slices.each_ref().map(|slice| identity(slice));
+        let entry = save(&mut engine, &repository,
+            b"first actual BODY after directory-only backup");
+        let version = engine.state().versions[&entry.version_id].clone();
+        let file = &engine.state().file_containers[
+            &entry.file_id.parse::<storage_contract::FileId>().unwrap()
+        ];
+        let directory_row = rows.values().find(|row| row.name.as_str() == "empty").unwrap();
+        for (index, id) in ids.iter().enumerate() {
+            assert_eq!(file.replicas[id].prefixes, directory_row.replicas[id].source_prefixes);
+            assert_eq!(identity(&parents[index]), parent_ids[index]);
+            assert_eq!(identity(&slices[index]), prefix_ids[index]);
+            let body = parents[index].join("empty/file.txt/versions")
+                .join(format!("{}-file.txt", version.storage_id));
+            assert_eq!(fs::read(body).unwrap(), b"first actual BODY after directory-only backup");
+        }
+        assert_eq!(catalog(&engine), rows);
+        drop(engine);
+        engine = Engine::open(&system).unwrap();
+        assert_eq!(catalog(&engine), rows);
+        assert_eq!(body(&engine, &version.version_id),
+            b"first actual BODY after directory-only backup");
+        assert!(!engine.is_read_only());
     }
 }

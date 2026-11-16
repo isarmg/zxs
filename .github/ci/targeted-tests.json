@@ -4522,6 +4522,81 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "ordinary-empty-directory-backup": {
+      "reason": "Explicit Initial EntryId/generation/op scope for directory-only B then C backup. Same shared FILE/directory prefix evidence, all-source descriptor/name admission, EXCL preparation, Candidate feedback and cold exact-inode recovery. Preserve both existing parent tests and the original separately isolated terminal transaction/900s. No membership Add or terminal first-slot claim.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "default_features": true,
+          "isolate": true,
+          "exact": [
+            "ordinary_namespace_parents::empty_directory_backup_decides_b_then_c_without_a_file_and_reuses_the_same_parents"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "default_features": true,
+          "isolate": true,
+          "exact": [
+            "ordinary_namespace_parents::empty_directory_backup_decides_b_then_c_without_a_file_and_reuses_the_same_parents"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900,
+          "features": [
+            "fault-injection"
+          ]
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "exact": [
+            "file_container::tests::ordinary_directory_vectors_preserve_independent_target_and_source_occurrences",
+            "file_container::tests::ordinary_file_parent_and_directory_records_reject_missing_or_ambiguous_fields",
+            "file_container::tests::ordinary_state_requires_both_physical_maps_even_when_empty"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "contract-check",
+          "manifest": "tools/contract-check/Cargo.toml",
+          "kind": "bin",
+          "name": "contract-check",
+          "features": [],
+          "exact": [
+            "tests::ordinary_physical_vectors_match_strict_core_and_openapi_shapes"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -4661,7 +4736,8 @@
       "path": "src/contract/src/file_container.rs",
       "groups": [
         "fresh-managed-core",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
@@ -4760,7 +4836,8 @@
       "path": "src/engine/src/container_storage/ordinary_preparation.rs",
       "groups": [
         "fresh-managed-core",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
@@ -4773,7 +4850,8 @@
       "path": "src/engine/src/container_storage/ordinary_preparation/prefix.rs",
       "groups": [
         "fresh-managed-core",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
@@ -4817,13 +4895,15 @@
       "path": "src/engine/src/engine/fresh_layout/containers.rs",
       "groups": [
         "fresh-managed-core",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
       "path": "src/engine/src/engine/fresh_layout/containers/prefixes.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
@@ -4885,7 +4965,8 @@
     {
       "path": "src/engine/src/persist/automatic_backup.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
@@ -4922,19 +5003,22 @@
     {
       "path": "src/engine/src/protection.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
       "path": "src/engine/src/protection/backup_paths.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
       "path": "src/engine/src/protection/backup_paths/automatic.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
@@ -6282,7 +6366,8 @@
     {
       "path": "src/engine/src/lib.rs",
       "groups": [
-        "file-metadata-plan"
+        "file-metadata-plan",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
@@ -7520,7 +7605,8 @@
       "path": "test/tools/contract-check/unit/main_tests.rs",
       "groups": [
         "container-tags-contract",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
@@ -7539,28 +7625,32 @@
       "path": "docs/contracts/README.md",
       "groups": [
         "container-tags-contract",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
       "path": "docs/contracts/core.schema.json",
       "groups": [
         "container-tags-contract",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
       "path": "docs/contracts/openapi.json",
       "groups": [
         "container-tags-contract",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
       "path": "docs/contracts/vectors.json",
       "groups": [
         "container-tags-contract",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
@@ -13213,13 +13303,15 @@
     {
       "path": "src/engine/src/container_storage/ordinary_preparation/directories.rs",
       "groups": [
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
       "path": "src/engine/src/engine/fresh_layout/directories.rs",
       "groups": [
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
@@ -13231,13 +13323,15 @@
     {
       "path": "test/contract/unit/file_container_tests.rs",
       "groups": [
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     },
     {
       "path": "test/engine/integration/ordinary_namespace_parents.rs",
       "groups": [
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "ordinary-empty-directory-backup"
       ]
     }
   ],

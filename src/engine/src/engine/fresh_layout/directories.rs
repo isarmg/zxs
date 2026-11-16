@@ -147,9 +147,12 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
                 || !state.operations.get(&replica.created_by)
                     .is_some_and(|result| result.sequence <= state.sequence)
                 || (disk == &record.owner_disk && (!replica.source_chain.is_empty()
+                    || !replica.source_prefixes.is_empty()
                     || replica.root_id != origin.genesis.root_id))
                 || (disk != &record.owner_disk && replica.source_chain.last()
                     .is_none_or(|source| source.disk_id != record.owner_disk.to_string()))
+                || replica.source_prefixes.iter().map(|prefix| prefix.source_disk.to_string())
+                    .ne(replica.source_chain.iter().map(|source| source.disk_id.clone()))
             {
                 return Err(Failure::ContainerShape.into());
             }
@@ -159,15 +162,8 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
                     ContainerEntity::new(entity.device(), entity.inode())
                 }
                 Parent::Root => {
-                    let file = source_file(state, record, *disk)?;
-                    let source = &file.replicas[disk];
-                    if source.root_id != replica.root_id
-                        || source.prefixes.iter().map(|prefix| prefix.source_disk.to_string())
-                            .ne(replica.source_chain.iter().map(|source| source.disk_id.clone()))
-                    {
-                        return Err(Failure::NamespaceSource.into());
-                    }
-                    source.prefixes.last().ok_or(Failure::NamespaceSource)?.areas.common_data
+                    replica.source_prefixes.last()
+                        .ok_or(Failure::NamespaceSource)?.areas.common_data
                 }
                 Parent::Directory(parent) => {
                     let parent = state.namespace_directories.get(&parent.to_string())
@@ -177,6 +173,7 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
                         || parent.owner_disk != record.owner_disk
                         || occurrence.root_id != replica.root_id
                         || occurrence.source_chain != replica.source_chain
+                        || occurrence.source_prefixes != replica.source_prefixes
                     {
                         return Err(Failure::ContainerShape.into());
                     }
@@ -329,7 +326,8 @@ pub(super) fn project(
             name: name_policy::LookupName::parse(entry.name())?, owner_disk: owner,
             created_by: result.operation_id,
             replicas: BTreeMap::from([(owner, Replica {
-                root_id: origin.genesis.root_id, source_chain: Vec::new(), parent_entity,
+                root_id: origin.genesis.root_id, source_chain: Vec::new(),
+                source_prefixes: Vec::new(), parent_entity,
                 preparation, entity, lifecycle: BindingLifecycle::Current,
                 created_by: result.operation_id,
             })]),
@@ -338,33 +336,8 @@ pub(super) fn project(
     Ok((records, additions))
 }
 
-/// Reuse only a source slice already named by a FILE occurrence in this exact
-/// snapshot. Neither a same-named directory nor another destination supplies it.
-pub(crate) fn source_file<'a>(
-    state: &'a State, directory: &Record, target: DiskId,
-) -> Result<&'a storage_contract::file_container::FileContainerRecord> {
-    let mut found: Option<&storage_contract::file_container::FileContainerRecord> = None;
-    for file in state.file_containers.values().filter(|file| {
-        file.owner_disk == directory.owner_disk
-            && file.namespace.repository == directory.repository
-            && file.namespace.branch == directory.branch
-            && file.replicas.contains_key(&target)
-    }) {
-        let replica = &file.replicas[&target];
-        if let Some(previous) = found {
-            let old = &previous.replicas[&target];
-            if old.root_id != replica.root_id || old.prefixes != replica.prefixes {
-                return Err(Failure::ContainerIdentity.into());
-            }
-        } else {
-            found = Some(file);
-        }
-    }
-    found.ok_or_else(|| Failure::NamespaceUnmapped.into())
-}
-
-/// Add parent occurrences only for actual nested FILE targets. Logical Mkdir
-/// identity remains unchanged; empty-directory replication is not inferred.
+/// Add occurrences for actual FILE parents and explicit directory-backup scope
+/// through the same pure row constructor. No logical EntryId is reallocated.
 pub(super) fn project_replicas(
     config: &Config, next: &State, result: &OperationResult, records: &mut Records,
     actual: Option<&Records>,
@@ -372,66 +345,100 @@ pub(super) fn project_replicas(
     let mut additions = BTreeSet::new();
     for file in next.file_containers.values() {
         let Parent::Directory(leaf) = file.namespace.parent else { continue; };
-        for (disk, file_replica) in &file.replicas {
-            if *disk == file.owner_disk {
-                continue;
-            }
+        for (disk, replica) in &file.replicas {
+            if *disk == file.owner_disk { continue; }
             let binding = config.storage_roots.get(disk).ok_or(Failure::Registration)?;
-            if binding.root_id != file_replica.root_id
-                || file_replica.prefixes.iter().map(|prefix| prefix.source_disk.to_string())
-                    .ne(binding.source_chain.iter().map(|source| source.disk_id.clone()))
-                || binding.source_chain.last()
-                    .is_none_or(|source| source.disk_id != file.owner_disk.to_string())
+            if binding.root_id != replica.root_id {
+                return Err(Failure::NamespaceSource.into());
+            }
+            let parent = next.namespace_directories.get(&leaf.to_string())
+                .ok_or(Failure::NamespaceUnmapped)?;
+            if parent.repository != file.namespace.repository
+                || parent.branch != file.namespace.branch
+                || parent.owner_disk != file.owner_disk
             {
                 return Err(Failure::NamespaceSource.into());
             }
-            let mut parent_entity = file_replica.prefixes.last()
-                .ok_or(Failure::NamespaceSource)?.areas.common_data;
-            for parent in chain(next, leaf)? {
-                if parent.repository != file.namespace.repository
-                    || parent.branch != file.namespace.branch
-                    || parent.owner_disk != file.owner_disk
-                {
-                    return Err(Failure::NamespaceSource.into());
-                }
-                let record = records.get(&parent.entry.to_string())
-                    .ok_or(Failure::NamespaceUnmapped)?;
-                if let Some(old) = record.replicas.get(disk) {
-                    if old.root_id != binding.root_id || old.source_chain != binding.source_chain
-                        || old.parent_entity != parent_entity
-                    {
-                        return Err(Failure::ContainerIdentity.into());
-                    }
-                    parent_entity = old.entity;
-                    continue;
-                }
-                let observed = actual.and_then(|all| all.get(&parent.entry.to_string()))
-                    .and_then(|record| record.replicas.get(disk));
-                let preparation = match observed {
-                    Some(replica) => replica.preparation,
-                    None if actual.is_none() => DirectoryId::generate()?,
-                    None => return Err(Failure::NamespaceSource.into()),
-                };
-                let entity = observed.map_or(ContainerEntity::new(0, 0), |replica| replica.entity);
-                records.get_mut(&parent.entry.to_string()).ok_or(Failure::NamespaceUnmapped)?
-                    .replicas.insert(*disk, Replica {
-                        root_id: binding.root_id, source_chain: binding.source_chain.clone(),
-                        parent_entity, preparation, entity, lifecycle: BindingLifecycle::Current,
-                        created_by: result.operation_id,
-                    });
-                additions.insert((parent.entry, *disk));
-                parent_entity = entity;
-            }
+            project_occurrence(config, next, result, records, leaf, *disk,
+                &replica.prefixes, actual, &mut additions)?;
         }
     }
     Ok(additions)
+}
+
+pub(super) fn project_directory_backups(
+    config: &Config, next: &State, result: &OperationResult, records: &mut Records,
+    selected: &crate::protection::DirectoryBackupSelection, actual: Option<&Records>,
+    mut prefixes: impl FnMut(&Record, DiskId)
+        -> Result<Vec<storage_contract::file_container::ContainerPrefix>>,
+) -> Result<BTreeSet<(EntryId, DiskId)>> {
+    let mut additions = BTreeSet::new();
+    for disk in selected.route() {
+        for entry in selected.entries() {
+            let record = next.namespace_directories.get(&entry.to_string())
+                .ok_or(Failure::NamespaceUnmapped)?;
+            if *disk == record.owner_disk { continue; }
+            let chain = prefixes(record, *disk)?;
+            project_occurrence(config, next, result, records, entry, *disk,
+                &chain, actual, &mut additions)?;
+        }
+    }
+    Ok(additions)
+}
+
+fn project_occurrence(
+    config: &Config, next: &State, result: &OperationResult, records: &mut Records,
+    leaf: EntryId, disk: DiskId, prefixes: &[storage_contract::file_container::ContainerPrefix],
+    actual: Option<&Records>, additions: &mut BTreeSet<(EntryId, DiskId)>,
+) -> Result<()> {
+    let leaf_record = next.namespace_directories.get(&leaf.to_string())
+        .ok_or(Failure::NamespaceUnmapped)?;
+    let binding = config.storage_roots.get(&disk).ok_or(Failure::Registration)?;
+    super::containers::prefixes::require_source_geometry(
+        config, leaf_record.owner_disk, disk, binding.root_id, prefixes,
+    )?;
+    let mut parent_entity = prefixes.last().ok_or(Failure::NamespaceSource)?.areas.common_data;
+    for parent in chain(next, leaf)? {
+        if parent.repository != leaf_record.repository || parent.branch != leaf_record.branch
+            || parent.owner_disk != leaf_record.owner_disk
+        {
+            return Err(Failure::NamespaceSource.into());
+        }
+        let record = records.get(&parent.entry.to_string()).ok_or(Failure::NamespaceUnmapped)?;
+        if let Some(old) = record.replicas.get(&disk) {
+            if old.root_id != binding.root_id || old.source_chain != binding.source_chain
+                || old.source_prefixes != prefixes || old.parent_entity != parent_entity
+            {
+                return Err(Failure::ContainerIdentity.into());
+            }
+            parent_entity = old.entity;
+            continue;
+        }
+        let observed = actual.and_then(|all| all.get(&parent.entry.to_string()))
+            .and_then(|record| record.replicas.get(&disk));
+        let preparation = match observed {
+            Some(replica) => replica.preparation,
+            None if actual.is_none() => DirectoryId::generate()?,
+            None => return Err(Failure::NamespaceSource.into()),
+        };
+        let entity = observed.map_or(ContainerEntity::new(0, 0), |replica| replica.entity);
+        records.get_mut(&parent.entry.to_string()).ok_or(Failure::NamespaceUnmapped)?
+            .replicas.insert(disk, Replica {
+                root_id: binding.root_id, source_chain: binding.source_chain.clone(),
+                source_prefixes: prefixes.to_vec(), parent_entity, preparation, entity,
+                lifecycle: BindingLifecycle::Current, created_by: result.operation_id,
+            });
+        additions.insert((parent.entry, disk));
+        parent_entity = entity;
+    }
+    Ok(())
 }
 
 /// Lossless owner projection into the existing worktree directory vocabulary.
 /// Source-slice occurrences are not mapped to an invented anchor DirectoryId.
 pub(crate) fn owner_binding(state: &State, record: &Record) -> Result<DirectoryBinding> {
     let replica = record.replicas.get(&record.owner_disk).ok_or(Failure::ContainerShape)?;
-    if !replica.source_chain.is_empty() {
+    if !replica.source_chain.is_empty() || !replica.source_prefixes.is_empty() {
         return Err(Failure::NamespaceSource.into());
     }
     let parent_directory_id = match record.parent {
@@ -461,7 +468,8 @@ pub(crate) fn read_owner<'a>(
         source, config, resources, record.repository, record.branch,
     )?;
     let replica = record.replicas.get(&target).ok_or(Failure::NamespaceUnmapped)?;
-    if !replica.source_chain.is_empty() || replica.root_id != root.binding().root_id
+    if !replica.source_chain.is_empty() || !replica.source_prefixes.is_empty()
+        || replica.root_id != root.binding().root_id
         || root.disk().disk_id.parse::<DiskId>()? != target
     {
         return Err(Failure::NamespaceSource.into());
@@ -471,14 +479,18 @@ pub(crate) fn read_owner<'a>(
 
 pub(crate) fn read_backup<'a>(
     config: &'a Config, resources: &'a crate::disk::DiskResources, source: &'a State,
-    material: &State, record: &Record, target: DiskId,
+    record: &Record, target: DiskId,
 ) -> Result<super::namespace::PreparedBackupSourcePath<'a>> {
     if target == record.owner_disk {
         return Err(Failure::NamespaceSource.into());
     }
-    let file = source_file(material, record, target)?;
-    let source = super::containers::read_backup_source(config, resources, source, file, target)?;
+    let source = super::namespace::read_backup_source_path(
+        source, config, resources, record.repository, record.branch, target,
+    )?;
     let replica = record.replicas.get(&target).ok_or(Failure::NamespaceUnmapped)?;
+    super::containers::prefixes::require_source_geometry(
+        config, record.owner_disk, target, replica.root_id, &replica.source_prefixes,
+    )?;
     if replica.root_id != source.target_binding().root_id
         || replica.source_chain != source.destination().source_registrations().collect::<Vec<_>>()
     {

@@ -8,7 +8,7 @@ use storage_contract::{DiskId, FileId, Generation, HistoryTreeId, OperationResul
 use storage_contract::file_container::{ContainerEntity, ContainerReplica, FileContainerRecord};
 use storage_contract::file_draft::{FileWorkingState, WorkingRevision};
 
-mod prefixes;
+pub(super) mod prefixes;
 
 fn inventory(state: &State) -> Result<BTreeMap<FileId, HistoryTreeId>> {
     let mut files = BTreeMap::new();
@@ -83,6 +83,7 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
                     || parent.branch != record.namespace.branch
                     || parent.owner_disk != record.owner_disk
                     || occurrence.root_id != replica.root_id
+                    || occurrence.source_prefixes != replica.prefixes
                     || replica.prefixes.iter().map(|prefix| prefix.source_disk.to_string())
                         .ne(occurrence.source_chain.iter().map(|source| source.disk_id.clone()))
                 {
@@ -100,6 +101,7 @@ pub(crate) struct ContainerPreparation {
     additions: BTreeMap<(FileId, DiskId), String>,
     targets: BTreeSet<(FileId, DiskId)>,
     directory_additions: BTreeSet<(storage_contract::EntryId, DiskId)>,
+    directory_targets: BTreeSet<(storage_contract::EntryId, DiskId)>,
 }
 impl ContainerPreparation {
     pub(crate) fn new(
@@ -109,7 +111,9 @@ impl ContainerPreparation {
         result: &OperationResult,
     ) -> Result<Self> {
         validate_state(context.state)?;
-        crate::protection::verify_automatic_backup_prepared(context, &next, result, prepared)?;
+        let directory_backup = crate::protection::verify_automatic_backup_prepared(
+            context, &next, result, prepared,
+        )?;
         let working = crate::engine::file_draft::verify_working_transition(
             context.state, &next, result,
         )?;
@@ -233,12 +237,25 @@ impl ContainerPreparation {
         directory_additions.extend(super::directories::project_replicas(
             context.config, &next, result, &mut directories, None,
         )?);
+        if let Some(selected) = &directory_backup {
+            directory_additions.extend(super::directories::project_directory_backups(
+                context.config, &next, result, &mut directories, selected, None,
+                |record, disk| prefixes::plan_source(context, record.repository, record.branch,
+                    record.owner_disk, disk, &mut known_prefixes),
+            )?);
+        }
         if !directory_additions.is_empty()
             && (context.current_namespaces.is_some() || context.config.generation().is_some())
         {
             return Err(Failure::NamespaceUnmapped.into());
         }
         next.namespace_directories = directories;
+        let mut directory_targets = directory_additions.clone();
+        if let Some(selected) = &directory_backup {
+            for disk in selected.route() {
+                directory_targets.extend(selected.entries().map(|entry| (entry, *disk)));
+            }
+        }
         let touched = targets.iter().map(|(file, _)| *file).collect::<BTreeSet<_>>();
         for file in &touched {
             if let Some(record) = context.state.file_containers.get(file) {
@@ -248,17 +265,17 @@ impl ContainerPreparation {
         if after.len() != next.file_containers.len() {
             return Err(Failure::ContainerScope.into());
         }
-        Ok(Self { next, additions, targets, directory_additions })
+        Ok(Self { next, additions, targets, directory_additions, directory_targets })
     }
 
     pub(crate) fn needs_entity_feedback(&self) -> bool {
         !self.additions.is_empty() || !self.directory_additions.is_empty()
     }
 
-    pub(crate) fn directory_additions(&self)
+    pub(crate) fn directory_targets(&self)
         -> &BTreeSet<(storage_contract::EntryId, DiskId)>
     {
-        &self.directory_additions
+        &self.directory_targets
     }
 
     pub(crate) fn budget_state(&self) -> &State {
@@ -625,9 +642,27 @@ pub(crate) fn verify_transition<'a>(
     if expected != next.file_containers {
         return Err(Failure::ContainerScope.into());
     }
-    let additions = super::directories::project_replicas(
+    let mut additions = super::directories::project_replicas(
         config, next, result, &mut directories, Some(&next.namespace_directories),
     )?;
+    if let Some(selected) = crate::protection::candidate_directory_selection(
+        config, previous, next, result,
+    )? {
+        additions.extend(super::directories::project_directory_backups(
+            config, next, result, &mut directories, &selected, Some(&next.namespace_directories),
+            |record, disk| {
+                let replica = record.replicas.get(&disk).ok_or(Failure::NamespaceSource)?;
+                for prefix in &replica.source_prefixes {
+                    if known_prefixes.insert((disk, prefix.source_disk), prefix.clone())
+                        .is_some_and(|old| old != *prefix)
+                    {
+                        return Err(Failure::ContainerIdentity.into());
+                    }
+                }
+                Ok(replica.source_prefixes.clone())
+            },
+        )?);
+    }
     if directories != next.namespace_directories
         || (!additions.is_empty() && candidate.generation().is_some())
     {

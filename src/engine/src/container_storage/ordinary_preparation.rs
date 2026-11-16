@@ -229,10 +229,11 @@ impl PreparedContainerEntities {
         input: Option<&mut crate::engine::file_draft::DraftPublicationInput>,
     ) -> Result<Self> {
         let directory_targets = directories::targets(
-            plan.budget_state(), Some(plan.targets()), Some(plan.directory_additions()),
+            plan.budget_state(), Some(plan.targets()), Some(plan.directory_targets()),
         )?;
-        let count = descriptor_count(plan.budget_state(), Some(plan.targets()))?
-            .checked_add(directory_targets.len()).ok_or(Failure::ContainerBudget)?;
+        let count = descriptor_count(
+            plan.budget_state(), Some(plan.targets()), &directory_targets,
+        )?;
         let reservation = Arc::new(crate::engine::payload_proof_budget()
             .reserve(count)
             .ok_or(Failure::ContainerBudget)?);
@@ -293,7 +294,7 @@ impl PreparedContainerEntities {
                     &layout::container::prefix_preparation(prefix.preparation))?;
             }
         }
-        for (entry, disk) in directory_targets {
+        for (entry, disk) in directories::ordered(plan.budget_state(), directory_targets)? {
             directories::bind(context.config, context.disk_resources, context.state,
                 plan.budget_state(), entry, disk, Observation::Prepare, &reservation,
                 &mut directories, &mut prefixes)?;
@@ -429,8 +430,7 @@ impl PreparedContainerEntities {
             }
         };
         let directory_targets = directories::targets(next, targets.as_ref(), None)?;
-        let count = descriptor_count(next, targets.as_ref())?
-            .checked_add(directory_targets.len()).ok_or(Failure::ContainerBudget)?;
+        let count = descriptor_count(next, targets.as_ref(), &directory_targets)?;
         let reservation = Arc::new(crate::engine::payload_proof_budget()
             .reserve(count).ok_or(Failure::ContainerBudget)?);
         let mut held = BTreeMap::new();
@@ -517,8 +517,7 @@ impl PreparedContainerEntities {
     ) -> Result<Self> {
         crate::engine::fresh_layout::containers::validate_state(state)?;
         let directory_targets = directories::targets(state, None, None)?;
-        let count = descriptor_count(state, None)?
-            .checked_add(directory_targets.len()).ok_or(Failure::ContainerBudget)?;
+        let count = descriptor_count(state, None, &directory_targets)?;
         let reservation = Arc::new(crate::engine::payload_proof_budget()
             .reserve(count).ok_or(Failure::ContainerBudget)?);
         let mut held = BTreeMap::new();
@@ -611,7 +610,12 @@ impl PreparedContainerEntities {
     pub(crate) fn directory_record(
         &self, entry: storage_contract::EntryId, disk: DiskId,
     ) -> Result<storage_contract::file_container::NamespaceDirectoryReplica> {
-        self.directories.get(&(entry, disk)).ok_or(Failure::ContainerScope)?.record()
+        let mut record = self.directories.get(&(entry, disk))
+            .ok_or(Failure::ContainerScope)?.record()?;
+        for source in &mut record.source_prefixes {
+            *source = prefix::record(&self.prefixes, disk, source.source_disk)?;
+        }
+        Ok(record)
     }
 
     pub(crate) fn entity(&self, file: FileId, disk: DiskId) -> Result<ContainerEntity> {
@@ -829,6 +833,7 @@ fn bind_read_parent(
 fn descriptor_count(
     state: &State,
     targets: Option<&std::collections::BTreeSet<(FileId, DiskId)>>,
+    directories: &BTreeSet<(storage_contract::EntryId, DiskId)>,
 ) -> Result<usize> {
     let mut prefixes = std::collections::BTreeSet::new();
     let mut containers = 0usize;
@@ -842,8 +847,15 @@ fn descriptor_count(
             prefixes.extend(replica.prefixes.iter().map(|prefix| (*id, prefix.source_disk)));
         }
     }
+    for (entry, disk) in directories {
+        let replica = state.namespace_directories.get(&entry.to_string())
+            .and_then(|record| record.replicas.get(disk)).ok_or(Failure::NamespaceUnmapped)?;
+        prefixes.extend(replica.source_prefixes.iter().map(|prefix| (*disk, prefix.source_disk)));
+    }
     let prefix_descriptors = prefixes.len().checked_mul(6).ok_or(Failure::ContainerBudget)?;
-    containers.checked_add(prefix_descriptors).ok_or_else(|| Failure::ContainerBudget.into())
+    containers.checked_add(prefix_descriptors)
+        .and_then(|count| count.checked_add(directories.len()))
+        .ok_or_else(|| Failure::ContainerBudget.into())
 }
 
 fn attach_directory_parent(
@@ -880,8 +892,7 @@ pub(crate) fn verify_namespace_directory(
     let prefixes = if disk == record.owner_disk {
         0
     } else {
-        crate::engine::fresh_layout::directories::source_file(state, record, disk)?
-            .replicas[&disk].prefixes.len()
+        record.replicas.get(&disk).ok_or(Failure::NamespaceUnmapped)?.source_prefixes.len()
     };
     let count = prefixes.checked_mul(6).and_then(|count| count.checked_add(chain.len()))
         .ok_or(Failure::ContainerBudget)?;
