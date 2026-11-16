@@ -214,11 +214,11 @@ fn complete_preview_rejects_registration_or_ancestry_budget_exhaustion() {
 
 fn engine_fixture() -> (tempfile::TempDir, Engine) {
     let temporary = tempfile::tempdir().unwrap();
-    let config =
-        crate::Config::development(crate::test_disks(
-            ["A", "B", "C"].map(|name| temporary.path().join(name)),
-        ))
-            .unwrap();
+    let config = crate::Config::development(
+        [("A", "first-mount"), ("B", "second-mount"), ("C", "third-mount")]
+            .map(|(name, mount)| (Name::parse(name).unwrap(), temporary.path().join(mount))),
+    )
+    .unwrap();
     let engine = Engine::initialize(&temporary.path().join("system"), config).unwrap();
     (temporary, engine)
 }
@@ -241,13 +241,115 @@ fn live_preview_reads_held_capabilities_without_changing_state_or_files() {
     let config = crate::canonical_json(engine.config()).unwrap();
     let mut before = BTreeMap::new();
     files(temporary.path(), &mut before);
-    let disk_id = engine.config().disks[1].disk_id.parse().unwrap();
+    let disk_id = engine
+        .config()
+        .disks
+        .iter()
+        .find(|disk| disk.name.as_str() == "B")
+        .unwrap()
+        .disk_id
+        .parse()
+        .unwrap();
     let preview = engine
         .preview_disk_source_names(disk_id, &Name::parse("Renamed").unwrap())
         .unwrap();
     assert!(preview.blockers.is_empty());
     assert_eq!(preview.slices.len(), 3);
     assert_eq!(preview.rename_roots.len(), 1);
+    for observed in &preview.disks {
+        let configured = engine
+            .config()
+            .disks
+            .iter()
+            .find(|disk| disk.disk_id == observed.identity.disk_id.to_string())
+            .unwrap();
+        assert_ne!(
+            configured.root.file_name().unwrap().to_str().unwrap(),
+            configured.name.as_str(),
+        );
+        assert_eq!(observed.observed_name.as_ref(), Some(&configured.name));
+    }
+    let ids = ["A", "B", "C"].map(|name| {
+        engine
+            .config()
+            .disks
+            .iter()
+            .find(|disk| disk.name.as_str() == name)
+            .unwrap()
+            .disk_id
+            .parse::<DiskId>()
+            .unwrap()
+    });
+    let a = format!("A--{}", &ids[0].to_string()["disk_".len()..]);
+    let b = format!("B--{}", &ids[1].to_string()["disk_".len()..]);
+    let renamed_b = format!("Renamed--{}", &ids[1].to_string()["disk_".len()..]);
+    let c_slices = preview
+        .slices
+        .iter()
+        .filter(|slice| slice.target == ids[2])
+        .collect::<Vec<_>>();
+    assert_eq!(c_slices.len(), 2);
+    assert_eq!(c_slices[0].source, ids[1]);
+    assert_eq!(c_slices[0].chain, vec![ids[1]]);
+    assert_eq!(c_slices[0].before.as_ref().unwrap().as_str(), b);
+    assert_eq!(c_slices[0].after.as_ref().unwrap().as_str(), renamed_b);
+    assert_eq!(c_slices[1].source, ids[0]);
+    assert_eq!(c_slices[1].chain, vec![ids[1], ids[0]]);
+    assert_eq!(
+        c_slices[1].after.as_ref().unwrap().as_str(),
+        format!("{renamed_b}/{a}"),
+    );
+    let configured = configuration::ConfiguredDiskNames::new(engine.config()).unwrap();
+    let actual_path = configured.source_path(ids[2]).unwrap();
+    assert_eq!(actual_path.direct_source(), Some(ids[1]));
+    assert_eq!(actual_path.source_ids().collect::<Vec<_>>(), c_slices[1].chain);
+    assert_eq!(
+        actual_path.relative_prefix(),
+        Some(c_slices[1].before.as_ref().unwrap().as_str()),
+    );
+    assert_eq!(preview.rename_roots[0].target, ids[2]);
+    assert_eq!(preview.rename_roots[0].source, ids[1]);
+    assert_eq!(preview.rename_roots[0].before.as_ref().unwrap().as_str(), b);
+    assert_eq!(preview.rename_roots[0].after.as_ref().unwrap().as_str(), renamed_b);
+    assert!(matches!(preview.execution, DiskNamePreviewExecution::PreviewOnly));
+
+    // Renaming the primary changes B's A root and only C's nested A root.
+    // This is the same current geometry used by the actual source-path domain,
+    // not evidence that either prospective rename has happened.
+    let renamed_a = format!("Primary--{}", &ids[0].to_string()["disk_".len()..]);
+    let primary = engine
+        .preview_disk_source_names(ids[0], &Name::parse("Primary").unwrap())
+        .unwrap();
+    assert!(primary.blockers.is_empty());
+    assert!(matches!(primary.execution, DiskNamePreviewExecution::PreviewOnly));
+    assert_eq!(primary.slices.len(), 3);
+    assert_eq!(primary.rename_roots.len(), 2);
+    for (target, before, after) in [
+        (ids[1], a.clone(), renamed_a.clone()),
+        (ids[2], format!("{b}/{a}"), format!("{b}/{renamed_a}")),
+    ] {
+        let root = primary
+            .rename_roots
+            .iter()
+            .find(|root| root.target == target)
+            .unwrap();
+        assert_eq!(root.source, ids[0]);
+        assert_eq!(root.before.as_ref().unwrap().as_str(), before);
+        assert_eq!(root.after.as_ref().unwrap().as_str(), after);
+        assert_eq!(
+            configured.source_path(target).unwrap().relative_prefix(),
+            Some(before.as_str()),
+        );
+    }
+    let unchanged_b = primary
+        .slices
+        .iter()
+        .find(|slice| slice.target == ids[2] && slice.source == ids[1])
+        .unwrap();
+    assert_eq!(unchanged_b.chain, vec![ids[1]]);
+    assert_eq!(unchanged_b.before.as_ref().unwrap().as_str(), b);
+    assert_eq!(unchanged_b.after.as_ref().unwrap().as_str(), b);
+    assert!(!unchanged_b.affected);
     assert!(preview
         .disks
         .iter()

@@ -169,7 +169,8 @@ pub struct DiskSourceNamePreview {
 impl Engine {
     /// Observe every current registration, including Disabled, without opening
     /// new roots or modifying capture bytes, State, configuration, or directories.
-    /// Configured basenames are explicitly observations, not authenticated names.
+    /// Names come from the matching admitted configuration; held roots supply
+    /// only observed capacity. This preview does not authorize a rename.
     pub fn preview_disk_source_names(
         &self,
         disk_id: DiskId,
@@ -253,13 +254,7 @@ fn observe(
         blockers.push(DiskNamePreviewBlocker::ConfigIdentityMismatch { disk_id });
         return Ok(observation);
     };
-    match configured.root.file_name().and_then(|name| name.to_str()) {
-        Some(name) => match Name::parse(name) {
-            Ok(name) => observation.observed_name = Some(name),
-            Err(source) => blockers.push(DiskNamePreviewBlocker::InvalidName { disk_id, source }),
-        },
-        None => blockers.push(DiskNamePreviewBlocker::NameUnavailable { disk_id }),
-    }
+    observation.observed_name = Some(configured.name.clone());
     match engine.disk_resources.get(configured) {
         Ok(handle) => {
             let seal = &handle.seal;

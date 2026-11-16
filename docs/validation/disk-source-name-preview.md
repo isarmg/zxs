@@ -1,5 +1,31 @@
 # 磁盘来源组合名只读预览
 
+## 当前代码范围更正（2026-11-16）
+
+以下原始预览阶段记录保留当时的实现范围与未执行声明，不改写历史验收。
+本次基于 `0ffcc7f50c99d4a1a352433a08e3dd41e262a75f` 的修正，将已匹配
+pool / disk / slot / binding / level / upstream 的名称来源改为该已准入
+`DiskConfig.name`。挂载目录 basename 不再作为名称；根地址仍只是本地定位，
+实际 held root 继续独立提供身份检查和目标组件预算。
+
+公开签名、错误类型、`source=configured_root_observation` 与
+`execution=preview_only` wire 标记均保持不变。此处沿用旧 source 标记，不表示
+名称仍来自 basename，也不把预览变成名称发布或目录改名许可。before / after
+只提供同 UUID 的路径投影；没有增加 HTTP / Web 写入口、永久收据或配置迁移。
+
+当前普通 B/C 写入已使用显式配置名的 source-first 几何：B 上为 A 段，C 上为
+B/A 两段，相关 common / deleted / zxs areas 由实际准备与发布绑定。原文“新布局
+仍未接通”是旧阶段记录，不再概括当前实现；已登记空 deleted area 仍不等于支持
+整容器删除。此次预览回归从真实具名配置取得 UUID，明确让名称与挂载名不同；
+A 改名投影为 B/A 与 C/B/A 的 A 段，B 改名只投影 C/B 外层，所有实际文件不动。
+原 14 条测试与所有拒绝矩阵保留，本次未在本地编译或运行。
+
+真正磁盘改名仍未实现：必须由认证名称后继决定绑定旧/新配置、全目标原 inode、
+原收据与 exact old/new 路径，并闭合冷恢复、缺盘拒绝、NOREPLACE 和同步顺序。
+不得直接编辑 Config 或扫描同名目录来认领实体；只读投影不证明这些事务已完成。
+
+## 原始预览阶段记录
+
 ## 本次可用边界
 
 新增 Engine 只读接口 `Engine::preview_disk_source_names(DiskId, &Name)`，返回专域 `DiskSourceNameError`，保留底层原因和原错误码。已有 API 和所有永久备份请求、capture、摘要、收据保持不变。此片未接 HTTP / Web，也未提供写入、改名、初始化普通目录或布局切换入口。

@@ -1,7 +1,10 @@
 //! Ordinary immutable metadata and its unselected-target boundary. Temporary
 //! files only; these fixtures do not claim an Engine cutover or writer test.
 use super::*;
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::{
+    fs,
+    os::unix::fs::{MetadataExt, PermissionsExt},
+};
 
 fn target() -> (tempfile::TempDir, DiskRoot) {
     let temp = tempfile::Builder::new()
@@ -182,20 +185,38 @@ fn native_recipe_reuses_one_encoding_but_rechecks_conflicting_and_replaced_targe
     assert_eq!(fs::read(&path).unwrap(), changed);
     fs::write(&path, object.bytes()).unwrap();
 
-    // Replacing the second named root cannot reuse the first root's success.
+    // These low-level writers retain the original directory FD. Replacing its
+    // name must not redirect either writer into the substitute directory; it is
+    // not a registered-root admission test or permission to adopt the new root.
     let old_path = second.path().to_owned();
+    let original_root = fs::metadata(&old_path).unwrap();
+    let original_object = fs::metadata(&path).unwrap();
     let parked = old_path.with_extension("parked");
     fs::rename(&old_path, &parked).unwrap();
     fs::create_dir(&old_path).unwrap();
     fs::set_permissions(&old_path, fs::Permissions::from_mode(0o700)).unwrap();
-    let reference = object.store_at_root(&second, &config.disks[1]).unwrap_err();
-    let observed = set.install(&second, &config.disks[1], &stop).unwrap_err();
-    assert_eq!(error_signature(&observed), error_signature(&reference));
-    assert_eq!(fs::read_dir(&old_path).unwrap().count(), 0);
-    assert_eq!(
-        fs::read(parked.join(path.strip_prefix(&old_path).unwrap())).unwrap(),
-        object.bytes(),
+    let replacement = fs::metadata(&old_path).unwrap();
+    assert_ne!(
+        (replacement.dev(), replacement.ino()),
+        (original_root.dev(), original_root.ino()),
     );
+    object.store_at_root(&second, &config.disks[1]).unwrap();
+    assert_eq!(fs::read_dir(&old_path).unwrap().count(), 0);
+    set.install(&second, &config.disks[1], &stop).unwrap();
+    assert_eq!(fs::read_dir(&old_path).unwrap().count(), 0);
+    assert!(std::ptr::eq(first_encoding, recipe.encoding.get().unwrap()));
+    let held_root = fs::metadata(&parked).unwrap();
+    assert_eq!(
+        (held_root.dev(), held_root.ino()),
+        (original_root.dev(), original_root.ino()),
+    );
+    let held_path = parked.join(path.strip_prefix(&old_path).unwrap());
+    let held_object = fs::metadata(&held_path).unwrap();
+    assert_eq!(
+        (held_object.dev(), held_object.ino()),
+        (original_object.dev(), original_object.ino()),
+    );
+    assert_eq!(fs::read(&held_path).unwrap(), object.bytes());
     fs::remove_dir(&old_path).unwrap();
     fs::rename(&parked, &old_path).unwrap();
     set.verify(&second, &config.disks[1], &stop).unwrap();
