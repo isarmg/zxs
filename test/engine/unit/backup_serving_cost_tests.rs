@@ -409,7 +409,9 @@ fn measure_original_verification(
         )
     })?;
     let projection = measured("original_registry_project", iteration, 0, || {
-        registration::project(&prepared.task, &prepared.targets, stop)
+        registration::project(
+            &prepared.task, &prepared.targets, &prepared.roots, &prepared.layouts, stop,
+        )
     })?;
     assert_eq!(canonical_json(&projection)?, canonical_json(&prepared.projection)?);
     // Only the complete production entry may commit pending encodings after
