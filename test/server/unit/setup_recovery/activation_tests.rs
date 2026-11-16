@@ -546,6 +546,19 @@ fn changed_config_or_seal_blocks_completion_without_resetting_data() {
 
 #[test]
 fn complete_genesis_without_ready_receipt_is_checked_and_completed_not_reinitialized() {
+    // Either substituted root bindings or a foreign Genesis must fail the
+    // fixed quorum with the concrete saved-registration conflict before readback.
+    fn assert_fixed_genesis_conflict(error: &ApiError) {
+        assert_eq!(error.code, storage_contract::ErrorCode::MetadataQuorumUnavailable);
+        let Some(crate::http_boundary::ApiErrorSource::Engine(
+            storage_engine::Error::Context { code, source, .. },
+        )) = error.source.as_deref() else {
+            panic!("expected the restricted Genesis quorum error and its source: {error:?}");
+        };
+        assert_eq!(*code, storage_contract::ErrorCode::MetadataQuorumUnavailable);
+        assert_eq!(source.code(), storage_contract::ErrorCode::ConfigConflict);
+    }
+
     fn inventory(root: &Path) -> BTreeMap<PathBuf, (u64, u64, u32, Option<Vec<u8>>)> {
         fn walk(
             root: &Path,
@@ -629,7 +642,7 @@ fn complete_genesis_without_ready_receipt_is_checked_and_completed_not_reinitial
     let error = f.service.complete_activation_exact(
         &admin(), &original_request, |_| Ok(()), |_| panic!("foreign root feedback adopted"),
     ).unwrap_err();
-    assert_eq!(error.code, storage_contract::ErrorCode::RecoveryRequired);
+    assert_fixed_genesis_conflict(&error);
     assert_eq!(inventory(f._temp.path()), before);
     fs::write(&configuration_path, configuration_bytes).unwrap();
     fs::rename(&one, &parked).unwrap();
@@ -651,17 +664,7 @@ fn complete_genesis_without_ready_receipt_is_checked_and_completed_not_reinitial
     let error = f.service.complete_activation_exact(
         &admin(), &original_request, |_| Ok(()), |_| panic!("foreign Genesis adopted"),
     ).unwrap_err();
-    // Restricted startup authenticates the fixed Genesis before the created-root
-    // result readback. One foreign voter cannot satisfy this two-voter pool.
-    // Keep the concrete registration cause, not just any unavailable quorum.
-    assert_eq!(error.code, storage_contract::ErrorCode::MetadataQuorumUnavailable);
-    let Some(crate::http_boundary::ApiErrorSource::Engine(
-        storage_engine::Error::Context { code, source, .. },
-    )) = error.source.as_deref() else {
-        panic!("expected the restricted Genesis quorum error and its source: {error:?}");
-    };
-    assert_eq!(*code, storage_contract::ErrorCode::MetadataQuorumUnavailable);
-    assert_eq!(source.code(), storage_contract::ErrorCode::ConfigConflict);
+    assert_fixed_genesis_conflict(&error);
     assert_eq!(inventory(f._temp.path()), before);
     fs::write(&genesis, original_genesis).unwrap();
     f.service.complete_activation_exact(
