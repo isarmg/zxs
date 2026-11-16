@@ -230,11 +230,15 @@ def development_workflow(name, original):
                                     '    if: ${{ false && (' + PUBLISH_CONDITION + ') }}\n')
         else:
             source = source.replace(f'  {job}:\n', f'  {job}:\n' + PAUSE, 1)
-    return targeted_projection(workspace_projection(source)) if name == 'ci.yml' else source
+    if name == 'ci.yml':
+        return targeted_projection(workspace_projection(source))
+    if name == 'smb-sdk.yml':
+        return sdk_projection(source)
+    return source
 
 
 FULL_CONDITION = "github.event_name == 'workflow_dispatch' && inputs.scope == 'full'"
-TARGETED_JOB = """
+TARGETED_JOB = r"""
   targeted-plan:
     name: Admit complete targeted selection
     if: github.event_name == 'push' || inputs.scope == 'targeted'
@@ -242,6 +246,7 @@ TARGETED_JOB = """
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      smb_manual_fd: ${{ steps.sdk.outputs.smb_manual_fd }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -250,6 +255,19 @@ TARGETED_JOB = """
       - name: Partition the complete same-commit selection
         id: plan
         run: python3 .github/scripts/check-targeted-ci.py matrix
+      - name: Route selected real-SDK descriptor tests
+        id: sdk
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          summary = json.loads(Path('target/targeted-ci/summary.json').read_text())
+          if summary['head'] != os.environ['GITHUB_SHA'] or summary['status'] != 'planned':
+              raise ValueError('SDK selection lacks the current admitted plan')
+          selected = 'smb-vfs-manual-fd' in summary['plan']['groups']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('smb_manual_fd=' + str(selected).lower() + '\n')
+          PY
       - name: Retain complete selected scope
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -258,6 +276,14 @@ TARGETED_JOB = """
           path: target/targeted-ci/summary.json
           if-no-files-found: error
           retention-days: 7
+
+  targeted-smb-sdk:
+    name: Selected real-SDK descriptor tests
+    needs: targeted-plan
+    if: needs.targeted-plan.outputs.smb_manual_fd == 'true'
+    uses: ./.github/workflows/smb-sdk.yml
+    with:
+      suite: manual-fd
 
   targeted:
     name: Selected change tests (${{ matrix.index }})
@@ -301,7 +327,7 @@ TARGETED_JOB = """
 
   targeted-coverage:
     name: Complete same-commit targeted coverage
-    needs: [targeted-plan, targeted]
+    needs: [targeted-plan, targeted, targeted-smb-sdk]
     if: always() && needs.targeted-plan.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -315,6 +341,11 @@ TARGETED_JOB = """
         env:
           ZXS_TARGETED_JOB_RESULT: ${{ needs.targeted.result }}
         run: test "$ZXS_TARGETED_JOB_RESULT" = success
+      - name: Require the selected real-SDK descriptor job
+        if: always() && needs.targeted-plan.outputs.smb_manual_fd == 'true'
+        env:
+          ZXS_TARGETED_SDK_RESULT: ${{ needs.targeted-smb-sdk.result }}
+        run: test "$ZXS_TARGETED_SDK_RESULT" = success
       - name: Fetch every targeted shard from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -361,6 +392,99 @@ def targeted_projection(source):
                             "      - name: Retain measured first-party Clippy warnings\n        if: always() && matrix.suite == 'quality'\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n        with:\n          name: clippy-warnings-quality-${{ github.sha }}\n          path: target/clippy-warnings/quality.json\n          if-no-files-found: error\n          retention-days: 7\n"
                             + '      - name: Retain workspace shard inventory and execution evidence\n', 1)
     return source + TARGETED_JOB
+
+
+# Exact additive SDK projection. The archived full recipe and its digest stay
+# unchanged; no free-form input or active workflow text supplies these edits.
+SDK_EDITS = (
+    (r"""# Full CI: main pushes and manual runs; pull requests, schedules and Release remain paused.
+""", r"""# Reusable exact SDK: full suite or an independently selected descriptor-only suite.
+"""),
+    (r"""  workflow_call:
+""", r"""  workflow_call:
+    inputs:
+      suite:
+        type: string
+        required: false
+        default: full
+"""),
+    (r"""    name: Debian 13 apt Samba exact SDK ABI and real SMB acceptance
+""", r"""    name: Debian 13 apt Samba exact SDK (${{ inputs.suite }})
+"""),
+    (r"""      - name: Build exact Debian source SDK and matching VFS
+        run: bash .github/scripts/debian13-run.sh bash .github/scripts/smb-sdk.sh
+""", r"""      - name: Validate the reviewed SDK scope
+        env:
+          ZXS_SDK_SUITE: ${{ inputs.suite }}
+        run: |
+          case "$ZXS_SDK_SUITE" in
+            full|manual-fd) ;;
+            *) printf 'unsupported SDK suite\n' >&2; exit 1 ;;
+          esac
+      - name: Build exact Debian source SDK and matching VFS
+        env:
+          ZXS_SDK_SUITE: ${{ inputs.suite }}
+        run: |
+          args=()
+          if [[ "$ZXS_SDK_SUITE" == manual-fd ]]; then args=(--manual-fd-tests); fi
+          bash .github/scripts/debian13-run.sh bash .github/scripts/smb-sdk.sh "${args[@]}"
+      - name: Bind bounded SDK evidence to the triggering commit
+        if: inputs.suite == 'manual-fd'
+        env:
+          ZXS_EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          python3 - <<'PYSDK'
+          import json, os
+          from pathlib import Path
+          receipt = json.loads(Path('target/targeted-ci/summary.json').read_text())
+          if (receipt['head'] != os.environ['ZXS_EXPECTED_HEAD']
+                  or receipt['status'] != 'selected-sdk-tests-passed'
+                  or receipt['scope'] != 'smb-vfs-manual-fd'):
+              raise ValueError('bounded SDK evidence is not from this successful exact run')
+          PYSDK
+"""),
+    (r"""      - name: Build minimal Debian system-Samba runtime acceptance image
+""", r"""      - name: Build minimal Debian system-Samba runtime acceptance image
+        if: inputs.suite == 'full'
+"""),
+    ('      - name: Load VFS in apt smbd and exercise real storage engine '
+     'without compiler or network\n',
+     '      - name: Load VFS in apt smbd and exercise real storage engine '
+     'without compiler or network\n'
+     "        if: inputs.suite == 'full'\n"),
+    (r"""      - name: Preserve exact VFS and system-Samba evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debian13-vfs-${{ github.sha }}
+          if-no-files-found: error
+          path: target/smb-debian13/product/
+""", r"""      - name: Preserve exact VFS and system-Samba evidence
+        if: always() && inputs.suite == 'full'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debian13-vfs-${{ github.sha }}
+          if-no-files-found: error
+          path: target/smb-debian13/product/
+      - name: Preserve bounded real-SDK descriptor evidence
+        if: always() && inputs.suite == 'manual-fd'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debian13-vfs-manual-fd-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            target/targeted-ci/summary.json
+            target/targeted-ci/*.log
+"""),
+)
+
+
+def sdk_projection(source):
+    for previous, replacement in SDK_EDITS:
+        if source.count(previous) != 1:
+            raise ValueError('reviewed SDK projection anchor is not unique')
+        source = source.replace(previous, replacement, 1)
+    return source
 
 
 def check_workflows(root):

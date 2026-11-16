@@ -159,13 +159,19 @@ class DevelopmentCiPolicy(unittest.TestCase):
         ci = jobs((ROOT / '.github/workflows/ci.yml').read_text())
         self.assertEqual(set(ci), {'static', 'tests', 'web-production', 'browser-smoke',
                                    'smb-sdk', 'phase-one-core', 'workspace-coverage', 'targeted',
-                                   'targeted-plan', 'targeted-coverage'})
+                                   'targeted-plan', 'targeted-smb-sdk', 'targeted-coverage'})
         for name, body in ci.items():
             if name == 'workspace-coverage':
                 self.assertIn("    if: always() && (" + POLICY.FULL_CONDITION + ") && needs.static.result == 'success'\n", body)
                 self.assertNotIn('continue-on-error:', body)
             elif name == 'targeted-coverage':
                 self.assertIn("    if: always() && needs.targeted-plan.result == 'success'\n", body)
+                self.assertNotIn('continue-on-error:', body)
+            elif name == 'targeted-smb-sdk':
+                self.assertIn('    needs: targeted-plan\n', body)
+                self.assertIn("    if: needs.targeted-plan.outputs.smb_manual_fd == 'true'\n", body)
+                self.assertIn('    uses: ./.github/workflows/smb-sdk.yml\n', body)
+                self.assertIn('      suite: manual-fd\n', body)
                 self.assertNotIn('continue-on-error:', body)
             elif name in {'targeted', 'targeted-plan'}:
                 self.assertIn("    if: github.event_name == 'push' || inputs.scope == 'targeted'\n", body)
@@ -191,24 +197,32 @@ class DevelopmentCiPolicy(unittest.TestCase):
         sdk = jobs((ROOT / '.github/workflows/smb-sdk.yml').read_text())
         self.assertEqual(set(sdk), {'smb-sdk'})
         self.assertNotRegex(sdk['smb-sdk'], r'(?m)^    (if|continue-on-error):')
+        self.assertIn('    timeout-minutes: 45\n', sdk['smb-sdk'])
         release = jobs((ROOT / '.github/workflows/release.yml').read_text())
         self.assertEqual(set(release) - set(POLICY.PAUSED_JOBS['release.yml']), {'static'})
         self.assertIn('    timeout-minutes: 5\n', release['static'])
 
     def test_targeted_coverage_rejects_failed_cancelled_skipped_or_missing_job_results(self):
         body = jobs((ROOT / '.github/workflows/ci.yml').read_text())['targeted-coverage']
-        gate = body.split('      - name: Require every selected shard job to succeed\n', 1)[1]
-        gate = gate.split('      - name:', 1)[0]
-        self.assertIn('        if: always()\n', gate)
-        self.assertIn('ZXS_TARGETED_JOB_RESULT: ${{ needs.targeted.result }}', gate)
-        command = re.search(r'^        run: (.+)$', gate, re.MULTILINE).group(1)
-        for status in ['success', 'failure', 'cancelled', 'skipped', '']:
-            result = subprocess.run(['bash', '-c', command],
-                                    env=dict(os.environ, ZXS_TARGETED_JOB_RESULT=status),
-                                    capture_output=True, text=True, timeout=5)
-            self.assertEqual(result.returncode == 0, status == 'success')
-        self.assertLess(body.index('Require every selected shard job'),
-                        body.index('Fetch every targeted shard'))
+        self.assertIn('    needs: [targeted-plan, targeted, targeted-smb-sdk]\n', body)
+        for step, variable, result_name, condition in (
+            ('Require every selected shard job to succeed', 'ZXS_TARGETED_JOB_RESULT',
+             'targeted', 'always()'),
+            ('Require the selected real-SDK descriptor job', 'ZXS_TARGETED_SDK_RESULT',
+             'targeted-smb-sdk', "always() && needs.targeted-plan.outputs.smb_manual_fd == 'true'"),
+        ):
+            gate = body.split('      - name: ' + step + '\n', 1)[1]
+            gate = gate.split('      - name:', 1)[0]
+            self.assertIn('        if: ' + condition + '\n', gate)
+            self.assertIn(variable + ': ${{ needs.' + result_name + '.result }}', gate)
+            command = re.search(r'^        run: (.+)$', gate, re.MULTILINE).group(1)
+            for status in ['success', 'failure', 'cancelled', 'skipped', '']:
+                with self.subTest(job=result_name, status=status):
+                    result = subprocess.run(['bash', '-c', command],
+                                            env=dict(os.environ, **{variable: status}),
+                                            capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode == 0, status == 'success')
+            self.assertLess(body.index(step), body.index('Fetch every targeted shard'))
 
     def test_full_ci_jobs_cannot_be_silently_paused(self):
         for name in ('ci.yml', 'smb-sdk.yml'):
@@ -266,17 +280,44 @@ class DevelopmentCiPolicy(unittest.TestCase):
             ('release.yml', '    needs: [version, assemble]\n'),
             ('ci.yml', '          name: debian13-vfs-${{ github.sha }}\n'),
             ('ci.yml', '          if-no-files-found: error\n'),
-            ('smb-sdk.yml', '        run: bash .github/scripts/debian13-run.sh bash .github/scripts/smb-sdk.sh\n'),
+            ('smb-sdk.yml', '          bash .github/scripts/debian13-run.sh '
+             'bash .github/scripts/smb-sdk.sh "${args[@]}"\n'),
+            ('smb-sdk.yml', '        default: full\n'),
+            ('smb-sdk.yml', "        if: inputs.suite == 'full'\n"),
+            ('smb-sdk.yml', "        if: always() && inputs.suite == 'full'\n"),
+            ('smb-sdk.yml', '          name: debian13-vfs-${{ github.sha }}\n'),
+            ('smb-sdk.yml', '          if-no-files-found: error\n'),
+            ('ci.yml', "    if: needs.targeted-plan.outputs.smb_manual_fd == 'true'\n"),
+            ('ci.yml', "        if: always() && "
+             "needs.targeted-plan.outputs.smb_manual_fd == 'true'\n"),
+            ('ci.yml', "          if summary['head'] != os.environ['GITHUB_SHA'] "
+             "or summary['status'] != 'planned':\n"),
+            ('smb-sdk.yml', "          if (receipt['head'] != os.environ['ZXS_EXPECTED_HEAD']\n"),
+            ('smb-sdk.yml', "                  or receipt['status'] "
+             "!= 'selected-sdk-tests-passed'\n"),
+            ('smb-sdk.yml', "                  or receipt['scope'] != 'smb-vfs-manual-fd'):\n"),
+            ('smb-sdk.yml', '          name: debian13-vfs-manual-fd-${{ github.sha }}\n'),
         ):
             with self.subTest(workflow=name, old=old):
                 self.reject_edit(name, old, '')
 
     def test_full_recipe_cannot_be_silently_rewritten_to_match_active_policy(self):
-        path = self.root / '.github/ci/full-workflows/ci.yml'
-        path.write_text(path.read_text().replace('    needs: [static, web-production, smb-sdk]',
-                                                  '    needs: static'))
-        with self.assertRaisesRegex(ValueError, 'retained full recipe changed'):
-            POLICY.check_workflows(self.root)
+        for name, old, new in (
+            ('ci.yml', '    needs: [static, web-production, smb-sdk]', '    needs: static'),
+            ('smb-sdk.yml', '  workflow_call:\n',
+             '  workflow_call:\n    inputs:\n      suite:\n        default: manual-fd\n'),
+        ):
+            path = self.root / '.github/ci/full-workflows' / name
+            original = path.read_text()
+            self.assertIn(old, original)
+            path.write_text(original.replace(old, new, 1))
+            try:
+                with self.subTest(workflow=name), self.assertRaisesRegex(
+                    ValueError, 'retained full recipe changed',
+                ):
+                    POLICY.check_workflows(self.root)
+            finally:
+                path.write_text(original)
 
 
     def install_profiler_workflow(self):
