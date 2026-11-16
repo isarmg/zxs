@@ -19,6 +19,8 @@ const BODY: &[u8] = b"independent immutable snapshot body, not a FILE database";
 
 fn op() -> OperationId { OperationId::generate().unwrap() }
 
+fn admin() -> Principal { "admin".parse().unwrap() }
+
 fn setup() -> (tempfile::TempDir, Engine, Repository) {
     let temp = tempfile::Builder::new().permissions(fs::Permissions::from_mode(0o700))
         .tempdir().unwrap();
@@ -112,7 +114,9 @@ fn reject_all_starts(engine: &mut Engine, root: &Path, paths: &[PathBuf], handle
     require_registered(engine.start_backup_preparation(
         single, fs::File::open(&paths[0]).unwrap(),
     ).unwrap_err(), handle.publication);
-    assert!(engine.operation(single_op).is_none());
+    assert_eq!(
+        engine.operation(single_op).unwrap_err().code(), ErrorCode::OperationNotFound,
+    );
     assert_eq!(media(root), original);
 
     let batch = request(engine, paths.to_vec());
@@ -120,7 +124,9 @@ fn reject_all_starts(engine: &mut Engine, root: &Path, paths: &[PathBuf], handle
     require_registered(engine.start_backup_batch_preparation(
         batch, paths.iter().map(|path| fs::File::open(path).unwrap()).collect(),
     ).unwrap_err(), handle.publication);
-    assert!(engine.operation(batch_op).is_none());
+    assert_eq!(
+        engine.operation(batch_op).unwrap_err().code(), ErrorCode::OperationNotFound,
+    );
     assert_eq!(media(root), original);
 
     let preparation = request(engine, paths.to_vec());
@@ -136,7 +142,9 @@ fn reject_all_starts(engine: &mut Engine, root: &Path, paths: &[PathBuf], handle
     require_registered(engine.start_backup_transaction(
         transaction, paths.iter().map(|path| fs::File::open(path).unwrap()).collect(),
     ).unwrap_err(), handle.publication);
-    assert!(engine.operation(transaction_op).is_none());
+    assert_eq!(
+        engine.operation(transaction_op).unwrap_err().code(), ErrorCode::OperationNotFound,
+    );
     assert!(engine.backup_preparation_status().is_none());
     assert!(!root.join("system/backup-preparation").exists());
     assert!(Arc::ptr_eq(&before, &engine.state));
@@ -152,7 +160,7 @@ fn published_snapshot_blocks_whole_backup_before_intent_or_target_writes() {
     let (temp, mut engine, repository) = setup();
     let request = snapshot_request(&engine, &repository);
     let handle = engine.initialize_directory_snapshot(
-        &request, &Principal::parse("admin").unwrap(),
+        &request, &admin(),
     ).unwrap();
     assert_eq!(engine.operation(request.operation_id).unwrap().kind, codec::NODE_RESERVE);
     assert_eq!(engine.operation(handle.publication).unwrap().kind, codec::NODE_COMPLETE);
@@ -164,7 +172,7 @@ fn published_snapshot_blocks_whole_backup_before_intent_or_target_writes() {
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
     assert!(!engine.is_read_only());
     assert_eq!(engine.initialize_directory_snapshot(
-        &request, &Principal::parse("admin").unwrap(),
+        &request, &admin(),
     ).unwrap(), handle);
     reject_all_starts(&mut engine, temp.path(), &paths, handle);
 }
@@ -183,12 +191,14 @@ fn reserved_snapshot_is_pending_not_a_published_snapshot() {
         request.host.expected_root_generation, request.operation_id,
     ).unwrap();
     let (_reserved, _manifest) = publication::reserve(
-        &mut engine, &host, &request, allocated, &Principal::parse("admin").unwrap(),
+        &mut engine, &host, &request, allocated, &admin(),
     ).unwrap();
     // This is the actual durable reserve boundary. No node preparation or
     // completion was attempted, and no completion row is fabricated.
     assert_eq!(engine.operation(request.operation_id).unwrap().kind, codec::NODE_RESERVE);
-    assert!(engine.operation(allocated.completion).is_none());
+    assert_eq!(
+        engine.operation(allocated.completion).unwrap_err().code(), ErrorCode::OperationNotFound,
+    );
     let index = ReceiptIndex::capture(engine.state()).unwrap();
     assert!(index.completions.contains_key(&allocated.completion));
     drop(index);
