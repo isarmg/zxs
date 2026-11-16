@@ -3,6 +3,7 @@
 //! Creation uses the same exclusive directory and five-area kernels as ordinary
 //! publication. Only its exact original-member source can invoke preparation.
 use super::*;
+use crate::engine::fresh_layout::directory_error;
 use crate::engine::membership_transition::{BackupLayoutPreparation, BackupLayoutSource};
 use std::sync::atomic::AtomicBool;
 use crate::history_package::preparation_checkpoint;
@@ -260,7 +261,7 @@ impl BackupTargetLayout {
                 lifecycle: BindingLifecycle::Current, created_by: source.operation(),
             });
         }
-        for (file, logical) in &state.file_containers {
+        for (file, logical) in state.file_containers.iter() {
             preparation_checkpoint(stop)?;
             if logical.owner_disk != owner || logical.replicas.contains_key(&source.disk())
                 || !matches!(logical.working,
@@ -449,7 +450,8 @@ fn identity(value: ContainerEntity) -> FileIdentity {
 fn management(source: &BackupLayoutSource<'_>) -> Result<DiskRoot> {
     let expected = source.binding()?.roots.zxs_data.entity;
     Ok(source.root()?.private_entry_matching(&layout::ZXS_DATA_ROOT,
-        FileIdentity { device: expected.device(), inode: expected.inode() })?)
+        FileIdentity { device: expected.device(), inode: expected.inode() })
+        .map_err(directory_error)?)
 }
 fn absent(root: &DiskRoot, name: &EntryName) -> Result<()> {
     if root.optional_metadata(&root.path().join(name.as_path()))?.is_some() {
@@ -491,8 +493,10 @@ fn locate(
     let staged = management.optional_metadata(&management.path().join(stage.as_path()))?.is_some();
     let named = parent.optional_metadata(&parent.path().join(name.as_path()))?.is_some();
     let (root, installed) = match (staged, named, parent_installed) {
-        (true, false, _) => (management.private_entry_matching(stage, identity(expected))?, false),
-        (false, true, true) => (parent.private_entry_matching(name, identity(expected))?, true),
+        (true, false, _) => (management.private_entry_matching(stage, identity(expected))
+            .map_err(directory_error)?, false),
+        (false, true, true) => (parent.private_entry_matching(name, identity(expected))
+            .map_err(directory_error)?, true),
         _ => return Err(Failure::ContainerIdentity.into()),
     };
     Ok(HeldNode { root, installed })

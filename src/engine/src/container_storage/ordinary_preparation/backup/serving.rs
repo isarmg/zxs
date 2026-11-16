@@ -148,7 +148,7 @@ impl<'a> BackupServingImage<'a> {
             }
         }
         let state = source.published().state();
-        for (id, version) in &state.versions {
+        for (id, version) in state.versions.iter() {
             preparation_checkpoint(stop)?;
             if state.content_states.get(id).is_some_and(|state| *state != ContentState::Available) {
                 return Err(Failure::BackupLayoutUnsupported.into());

@@ -5,6 +5,7 @@ use super::*;
 use crate::container_storage::{backup_databases, file_database};
 use crate::database_install::{InstallAdmission, PreparedInstall, Scope};
 use crate::disk::{FileStamp, HeldRegular};
+use crate::engine::fresh_layout::directory_error;
 use crate::engine::membership_transition::{PublishedBackupOriginal, PublishedBackupPayload};
 use crate::state_projection::ProjectionSnapshot;
 use std::sync::Arc;
@@ -48,7 +49,8 @@ impl File {
             .zip(layout::container::source_components(&chain))
         {
             let parent = prefixes.last().map(|value| &value.0).unwrap_or(source_root);
-            let root = parent.private_entry_matching(&name, identity(prefix.entity))?;
+            let root = parent.private_entry_matching(&name, identity(prefix.entity))
+                .map_err(directory_error)?;
             let areas = areas::HeldAreas::observe(&root, prefix.areas)?;
             prefixes.push((root, areas, name, prefix.entity));
         }
@@ -65,14 +67,14 @@ impl File {
                 };
                 let common = source_root.private_entry_matching(
                     &layout::COMMON_DATA_ROOT, to_identity(roots.common_data.entity),
-                )?;
+                ).map_err(directory_error)?;
                 let management = source_root.private_entry_matching(
                     &layout::ZXS_DATA_ROOT, to_identity(roots.zxs_data.entity),
-                )?;
+                ).map_err(directory_error)?;
                 let current = management.private_entry_matching(
                     &layout::COMMON_DATA_ROOT,
                     to_identity(roots.zxs_lifecycles.common_data.entity),
-                )?;
+                ).map_err(directory_error)?;
                 (common, current)
             }
         };
@@ -96,12 +98,14 @@ impl File {
                 return Err(Failure::ContainerIdentity.into());
             }
             let name = layout::namespace::directory(&logical.name);
-            let root = parent.private_entry_matching(&name, identity(occurrence.entity))?;
+            let root = parent.private_entry_matching(&name, identity(occurrence.entity))
+                .map_err(directory_error)?;
             directories.push((root, name, occurrence.entity));
         }
         let parent = directories.last().map(|value| &value.0).unwrap_or(&common);
         let name = layout::namespace::directory(&logical.namespace.name);
-        let root = parent.private_entry_matching(&name, identity(record.entity))?;
+        let root = parent.private_entry_matching(&name, identity(record.entity))
+            .map_err(directory_error)?;
         let history = current.path().join(logical.history_tree_id.to_string());
         current.private_child(&history)?;
         Ok(Self {
@@ -113,7 +117,8 @@ impl File {
     fn verify(&self, source_root: &DiskRoot) -> Result<()> {
         let mut parent = source_root;
         for (root, areas, name, expected) in &self.prefixes {
-            let observed = parent.private_entry_matching(name, identity(*expected))?;
+            let observed = parent.private_entry_matching(name, identity(*expected))
+                .map_err(directory_error)?;
             if root.directory_identity(root.path())?
                 != observed.directory_identity(observed.path())?
             {
@@ -126,7 +131,8 @@ impl File {
         // own five children. Retain these exact lifecycle FDs through the DB tail.
         let mut parent = &self.common;
         for (root, name, expected) in &self.directories {
-            let observed = parent.private_entry_matching(name, identity(*expected))?;
+            let observed = parent.private_entry_matching(name, identity(*expected))
+                .map_err(directory_error)?;
             if root.directory_identity(root.path())?
                 != observed.directory_identity(observed.path())?
             {
@@ -134,7 +140,8 @@ impl File {
             }
             parent = root;
         }
-        let observed = parent.private_entry_matching(&self.name, identity(self.entity))?;
+        let observed = parent.private_entry_matching(&self.name, identity(self.entity))
+            .map_err(directory_error)?;
         if self.root.directory_identity(self.root.path())?
             != observed.directory_identity(observed.path())?
         {

@@ -3,7 +3,7 @@
 //! and history catalog from the original selected decision. No online subset,
 //! target completion file or caller-provided State can change that recipe.
 use super::*;
-use crate::history_package::preparation_checkpoint;
+use crate::history_package::{preparation_checkpoint, AdmittedState};
 use std::{collections::BTreeMap, path::PathBuf, sync::atomic::AtomicBool};
 
 const MAX_BYTES: usize = 128 * 1024 * 1024;
