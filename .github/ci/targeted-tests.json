@@ -5276,6 +5276,42 @@
           "features": []
         }
       ]
+    },
+    "retained-readmission-preflight": {
+      "reason": "Existing authorized Retained readmission rejects a complete activation that exceeds its reader bound before request or immutable votes; preserve exact historical media, successful cold recovery and the four original bootstrap faults. No new admission or disk-name protocol.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "engine::membership_transition::pending::terminal_resume::tests::retained_readmission::single_disabled_metadata_returns_with_identity_history_data_and_real_receipt",
+            "engine::membership_transition::pending::terminal_resume::tests::retained_readmission::retained_resume_faults_recover_only_the_exact_original_operation"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900,
+          "isolate": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -15317,6 +15353,36 @@
       "path": "docs/validation/automatic-manual-handle-fence.md",
       "groups": [
         "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/terminal_resume/retained.rs",
+      "groups": [
+        "retained-readmission-preflight"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/terminal_resume/cancellation.rs",
+      "groups": [
+        "retained-readmission-preflight"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/terminal_resume.rs",
+      "groups": [
+        "retained-readmission-preflight"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/terminal_resume_tests.rs",
+      "groups": [
+        "retained-readmission-preflight"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/terminal_readmission_tests.rs",
+      "groups": [
+        "retained-readmission-preflight"
       ]
     }
   ],

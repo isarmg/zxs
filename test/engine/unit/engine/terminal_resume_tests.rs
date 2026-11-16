@@ -39,13 +39,7 @@ impl Fixture {
             Engine::initialize(&temporary.path().join("system"), original.clone()).unwrap();
         let initial = OperationId::generate().unwrap();
         let repository = engine
-            .create_repository(
-                &RepositoryName::parse("preserved").unwrap(),
-                "P01",
-                1,
-                "admin",
-                initial,
-            )
+            .create_disk_root("P01", "admin", initial)
             .unwrap();
         let branch = repository.main_branch_id;
         let workspace = engine.create_workspace(&branch, "admin").unwrap();

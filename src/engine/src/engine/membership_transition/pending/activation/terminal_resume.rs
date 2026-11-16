@@ -67,19 +67,7 @@ pub(in crate::engine::membership_transition::pending) fn activate(
             "resume activation selects another completed terminal authority",
         ));
     }
-    let (base, history) = source.generation_base(core.archive_intent())?;
-    core.verify_source(&base)?;
-    let generation = Arc::new(Generation {
-        backup_continuation: None,
-        hash: portable.hash()?,
-        workspace_roots: portable.workspace_root_aliases()?,
-        original: portable.genesis_config()?,
-        epoch: portable.epoch()?,
-        intent: intent.clone(),
-        portable,
-        history,
-        base: Arc::new(base),
-    });
+    let generation = generation_from_source(&source, &core, portable, &intent)?;
     generation.next_state()?;
     PreparedMetadataObject::new(
         "membership-generation-bundle",
@@ -256,6 +244,57 @@ pub(in crate::engine::membership_transition::pending) fn activate(
         false,
     )?;
     Ok(engine)
+}
+
+/// This is the same construction used after real decisions in `activate`.
+/// The preflight caller retains no Generation or planned decision authority.
+fn generation_from_source(
+    source: &PendingControlArchive,
+    core: &ResumeCore,
+    portable: PortableAuthority,
+    intent: &TransitionIntent,
+) -> Result<Arc<Generation>> {
+    let (base, history) = source.generation_base(core.archive_intent())?;
+    core.verify_source(&base)?;
+    Ok(Arc::new(Generation {
+        backup_continuation: None,
+        hash: portable.hash()?,
+        workspace_roots: portable.workspace_root_aliases()?,
+        original: portable.genesis_config()?,
+        epoch: portable.epoch()?,
+        intent: intent.clone(),
+        portable,
+        history,
+        base: Arc::new(base),
+    }))
+}
+
+/// Read-only admissibility of the complete prescribed activation, not a vote,
+/// installed namespace, root grant or successful resumption receipt.
+pub(in crate::engine::membership_transition) fn preflight_source_activation(
+    source: &PendingControlArchive,
+    core: &ResumeCore,
+) -> Result<()> {
+    let portable = PortableAuthority::new_terminal_resume(core.clone())?;
+    let intent = portable.intent()?;
+    let generation = generation_from_source(source, core, portable, &intent)?;
+    let (next, _) = generation.next_state()?;
+    PreparedMetadataObject::new(
+        "membership-generation-bundle",
+        &generation.portable,
+        MAX_METADATA,
+    )?;
+    generation.portable.restrict_io(
+        intent.target.clone().with_generation(Arc::clone(&generation))?,
+    )?;
+    prepare_snapshot(&next, MAX_METADATA)?;
+    crate::history_package::prepare_history_manifests(&next, MAX_METADATA)?;
+    generation.portable.verify_registry_source(&generation.base)?;
+    let mut replay = super::exit::replay::NamespaceReplay::new();
+    source.replay_publications(|publication| replay.advance(publication))?;
+    let previous = replay.finish_source(&generation.base, generation.snapshot().as_deref())?;
+    generation.portable.prepare_namespace_activation(&generation.base, previous.as_ref())?;
+    Ok(())
 }
 
 fn hold_resources(

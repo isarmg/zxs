@@ -364,6 +364,41 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual([product['mode'], lean['mode']], ['check', 'check'])
         self.assertFalse(lean['default_features'])
 
+    def test_retained_readmission_preflight_preserves_existing_scopes_and_exact_faults(self):
+        name = 'retained-readmission-preflight'
+        paths = [
+            ('src/engine/src/engine/membership_transition/pending/terminal_resume/retained.rs',
+             ['fresh-first-add-root-binding', 'held-directory-layout']),
+            ('src/engine/src/engine/membership_transition/terminal_resume/cancellation.rs', []),
+            ('src/engine/src/engine/membership_transition/pending/activation/terminal_resume.rs',
+             ['fresh-first-add-root-binding', 'held-directory-layout']),
+            ('test/engine/unit/engine/terminal_resume_tests.rs', ['fresh-managed-core']),
+            ('test/engine/unit/engine/terminal_readmission_tests.rs', ['fresh-managed-core']),
+        ]
+        for path, retained in paths:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, self.policy, [path], retained, [name])
+        assert_path_group_extension(self, self.policy, [path for path, _ in paths], None, [name])
+        target, product, lean = self.policy['groups'][name]['rust_targets']
+        prefix = ('engine::membership_transition::pending::terminal_resume::tests::'
+                  'retained_readmission::')
+        self.assertEqual(target['exact'], [
+            prefix + 'single_disabled_metadata_returns_with_identity_history_data_and_real_receipt',
+            prefix + 'retained_resume_faults_recover_only_the_exact_original_operation',
+        ])
+        self.assertEqual((target['kind'], target['max_tests'], target['timeout_seconds']),
+                         ('lib', 2, 900))
+        self.assertEqual(target['features'], ['fault-injection'])
+        self.assertIs(target['default_features'], True)
+        self.assertIs(target['isolate'], True)
+        self.assertFalse(target.get('whole', False))
+        self.assertEqual(target.get('prefixes', []), [])
+        self.assertEqual([product['mode'], lean['mode']], ['check', 'check'])
+        self.assertEqual([product['default_features'], lean['default_features']], [True, False])
+        unrelated = CI.select_plan(self.policy, ['src/engine/src/business/workspace.rs'],
+                                   shardable=True)
+        self.assertNotIn(name, unrelated['groups'])
+
     def test_first_add_root_feedback_has_its_own_exact_cuts_and_products(self):
         name = 'fresh-first-add-root-binding'
         paths = [

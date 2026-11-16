@@ -115,7 +115,7 @@ impl TerminalManagement {
             },
         )?;
         proposal.follow_cancellation(attempts.previous_hash()?);
-        proposal.preflight_outcomes(&attempts.cancelled)?;
+        proposal.preflight_source_activation(&attempts.cancelled, &source)?;
         super::super::super::terminal_resume::cancellation::attempts::synchronize_history(
             self.system_root(),
             self.verified_authority(),

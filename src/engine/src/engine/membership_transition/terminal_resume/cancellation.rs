@@ -73,6 +73,24 @@ impl ResumeProposal {
         &self,
         cancelled: &[ResumeCancellation],
     ) -> Result<()> {
+        self.preflight_outcomes_with_source(cancelled, None)
+    }
+
+    /// Check the actual retained archive before persisting a new request or
+    /// consuming an immutable vote. Planned receipts never escape this pass.
+    pub(in crate::engine::membership_transition) fn preflight_source_activation(
+        &self,
+        cancelled: &[ResumeCancellation],
+        source: &PendingControlArchive,
+    ) -> Result<()> {
+        self.preflight_outcomes_with_source(cancelled, Some(source))
+    }
+
+    fn preflight_outcomes_with_source(
+        &self,
+        cancelled: &[ResumeCancellation],
+        source: Option<&PendingControlArchive>,
+    ) -> Result<()> {
         let transition = object_hash(INTENT_KIND, &self.intent)?;
         let mut resume = BTreeMap::new();
         let mut cancel = BTreeMap::new();
@@ -101,7 +119,10 @@ impl ResumeProposal {
                 );
             }
         }
-        ResumeCore::with_cancellations(self.clone(), resume, cancelled.to_vec())?;
+        let planned = ResumeCore::with_cancellations(self.clone(), resume, cancelled.to_vec())?;
+        if let Some(source) = source {
+            pending::activation::terminal_resume::preflight_source_activation(source, &planned)?;
+        }
         if self.retained_request().is_none() {
             ResumeCancellation::new(self.clone(), cancel)?;
         }

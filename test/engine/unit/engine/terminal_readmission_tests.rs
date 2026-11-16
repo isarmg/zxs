@@ -26,8 +26,169 @@ fn prepare_retained(fixture: &mut Fixture) -> TerminalMetadataResume {
         .unwrap()
 }
 
+/// Exercise the actual reader bound, not a smaller test-only production limit.
+/// A second genuine terminal epoch makes the portable predecessor closure larger
+/// than the old ResumeCore-only preflight. Neither source nor vote is fabricated.
+fn activation_bundle_limit_rejects_before_request_or_votes_and_retries() {
+    use crate::disk::MAX_METADATA;
+    use crate::journal::PreparedMetadataObject;
+    use std::{io::Read, os::unix::fs::MetadataExt};
+
+    fn next_terminal() -> Fixture {
+        let mut fixture = Fixture::new(MembershipExitAction::PlannedOffline, 0);
+        let mut engine = prepare_retained(&mut fixture).activate().unwrap();
+        let stop = OperationId::generate().unwrap();
+        engine
+            .begin_disk_exit(
+                &fixture.original.disks[0].disk_id,
+                MembershipExitAction::PlannedOffline,
+                "admin",
+                stop,
+            )
+            .unwrap();
+        let mut exit = engine.prepare_terminal_disk_exit().unwrap();
+        fixture.management = Some(exit.complete(&mut engine).unwrap());
+        drop(exit);
+        drop(engine);
+        fixture.terminal = stop;
+        fixture.resume = OperationId::generate().unwrap();
+        fixture
+    }
+
+    type MediaEntry = (u64, u64, u32, u64, u64, Option<[u8; 32]>);
+
+    fn media(root: &Path) -> BTreeMap<PathBuf, MediaEntry> {
+        fn visit(base: &Path, path: &Path, result: &mut BTreeMap<PathBuf, MediaEntry>) {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            assert!(!metadata.file_type().is_symlink());
+            let digest = metadata.is_file().then(|| {
+                let mut file = File::open(path).unwrap();
+                let opened = file.metadata().unwrap();
+                assert_eq!((opened.dev(), opened.ino()), (metadata.dev(), metadata.ino()));
+                let mut hash = blake3::Hasher::new();
+                let mut buffer = [0u8; 16 * 1024];
+                loop {
+                    let bytes = file.read(&mut buffer).unwrap();
+                    if bytes == 0 {
+                        break;
+                    }
+                    hash.update(&buffer[..bytes]);
+                }
+                *hash.finalize().as_bytes()
+            });
+            result.insert(
+                path.strip_prefix(base).unwrap().to_owned(),
+                (
+                    metadata.dev(),
+                    metadata.ino(),
+                    metadata.mode(),
+                    metadata.nlink(),
+                    metadata.len(),
+                    digest,
+                ),
+            );
+            if metadata.is_dir() {
+                for entry in fs::read_dir(path).unwrap() {
+                    visit(base, &entry.unwrap().path(), result);
+                }
+            }
+        }
+        let mut result = BTreeMap::new();
+        visit(root, root, &mut result);
+        result
+    }
+
+    // Measure only sizes from a real independent successful request and actual
+    // decision receipts. Its IDs/receipts are never input to the tested pool.
+    let padding = {
+        let mut reference = next_terminal();
+        let mut pending = prepare_retained(&mut reference);
+        pending.synchronize().unwrap();
+        let core = pending.core.as_ref().unwrap();
+        let core_bytes = PreparedMetadataObject::new(
+            activation::AUTHORITY_KIND, core, MAX_METADATA,
+        )
+        .unwrap()
+        .bytes()
+        .len();
+        let portable = activation::PortableAuthority::new_terminal_resume(core.clone()).unwrap();
+        let bundle_bytes = PreparedMetadataObject::new(
+            "membership-generation-bundle", &portable, MAX_METADATA,
+        )
+        .unwrap()
+        .bytes()
+        .len();
+        let extra = bundle_bytes.checked_sub(core_bytes).unwrap();
+        assert!(extra > 1024, "a genuine predecessor must add its full retained closure");
+        MAX_METADATA.checked_sub(core_bytes + extra / 2).unwrap()
+    };
+    let mut fixture = next_terminal();
+    let disk = fixture.original.disks[0].clone();
+    let principal = format!("admin{}", "p".repeat(padding));
+    // Principal is unbounded nonempty audit input in the trusted Engine API.
+    // This deliberately reaches the real 64 MiB metadata boundary, not HTTP auth.
+    let original_source = fixture.management.as_ref().unwrap().result().clone();
+    let before = media(fixture.temporary.path());
+    let error = fixture
+        .management
+        .take()
+        .unwrap()
+        .prepare_disk_readmission(
+            &disk.disk_id, &principal, fixture.resume, retained_directory(&disk),
+        )
+        .err()
+        .expect("complete activation bundle must not fit the reader bound");
+    assert_eq!(error.code(), ErrorCode::ResourceLimit, "{error:?}");
+    assert_eq!(media(fixture.temporary.path()), before);
+    assert!(!fixture.source_path().join("resume.json").exists());
+    assert!(!fixture.source_path().join("resume-generation.json").exists());
+    assert!(!fixture.source_path().join("resume-complete.json").exists());
+    assert!(
+        TerminalManagement::metadata_resume_recovery(&fixture.system())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(media(fixture.temporary.path()), before);
+
+    // Failed preflight did not reserve the operation. Reopen the real original
+    // authority and submit a bounded actor using that same unused operation.
+    fixture.management = Some(TerminalManagement::open(&fixture.system()).unwrap());
+    assert_eq!(fixture.management.as_ref().unwrap().result(), &original_source);
+    let pending = prepare_retained(&mut fixture);
+    assert!(pending.status().unwrap().synchronized_target_votes.is_empty());
+    assert!(pending.status().unwrap().installed_certificates.is_empty());
+    // Counterfactual only: reconstruct the rejected caller's audit input on the
+    // same genuine proposal and run the old bound. No modified proposal is ever
+    // written or supplied to an authority/decision consumer.
+    let mut old_preflight = pending.proposal.clone();
+    old_preflight.intent.principal = principal;
+    old_preflight.preflight_outcomes(&[]).unwrap();
+    assert_eq!(
+        old_preflight.preflight_source_activation(&[], &pending.source)
+            .unwrap_err().code(),
+        ErrorCode::ResourceLimit,
+    );
+    drop(old_preflight);
+    let engine = pending.activate().unwrap();
+    let published = engine.state.operations[&fixture.resume].clone();
+    assert_eq!(published.kind, "disk-readmit");
+    assert_eq!(engine.state.operations[&fixture.terminal], original_source);
+    assert_eq!(
+        crate::canonical_json(&engine.state.versions).unwrap(), fixture.historical_versions,
+    );
+    drop(engine);
+    let reopened = Engine::open(&fixture.system()).unwrap();
+    assert_eq!(reopened.state.operations[&fixture.resume], published);
+    assert_eq!(reopened.state.operations[&fixture.terminal], original_source);
+    assert_eq!(
+        crate::canonical_json(&reopened.state.versions).unwrap(), fixture.historical_versions,
+    );
+    assert_eq!(reopened.list_tree(&fixture.branch).unwrap().len(), 1);
+}
+
 #[test]
 fn single_disabled_metadata_returns_with_identity_history_data_and_real_receipt() {
+    activation_bundle_limit_rejects_before_request_or_votes_and_retries();
     let mut fixture = Fixture::new(MembershipExitAction::PlannedOffline, 1);
     let old = fixture.original.disks[0].clone();
     let management = fixture.management.as_ref().unwrap();
