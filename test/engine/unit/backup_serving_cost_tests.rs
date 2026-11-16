@@ -824,6 +824,29 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
         index.require_root(&system)?;
         prepared.recheck_names()?;
     }
+    // The same actual selected transaction supplies the ordinary SYSTEM/root
+    // interval differential; do not create another source or fake completion.
+    let serving = Plan::capture(&prepared, &decision, &expected, &stop)?;
+    let body = serving.with_image(&prepared, 1, &stop, |image, state| {
+        let version = state.versions.values().next().unwrap();
+        let home = image.file_home(
+            &version.history_tree_id, &version.file_id, &version.version_id,
+        )?;
+        Ok(prepared.targets[1].root.path().join(home)
+            .join(".zxs-versions")
+            .join(&version.version_id)
+            .join("content")
+            .join(&version.creation_name))
+    })?;
+    registration::system_database::interval_tests::verify_read_interval(
+        _temp.path(),
+        &common_databases::Context {
+            system: &system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared, &decision, &expected, &body, &index, &stop,
+    )?;
     assert!(engine.is_read_only());
     assert!(engine.membership_fence_status().is_some());
     assert!(!engine.state().operations.contains_key(&operation));

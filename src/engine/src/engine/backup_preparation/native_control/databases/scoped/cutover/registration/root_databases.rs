@@ -339,8 +339,26 @@ pub(super) fn observe(
     expected: &BackupFirstPublicationHash,
     stop: &AtomicBool,
 ) -> Result<BackupRootDatabasesReport> {
+    let (report, ()) = observe_around(
+        context, prepared, decision, expected, stop, |_| Ok(()),
+    )?;
+    Ok(report)
+}
+
+/// Bracket a nested read-only observation with independent full source and
+/// ordinary-pair reads. The local expected recipe is not a successful-read
+/// cache or a writer; installation keeps its own before/after captures.
+pub(super) fn observe_around<T>(
+    context: &common_databases::Context<'_>,
+    prepared: &PreparedBackupRegistry,
+    decision: &AdmittedBackupDecision,
+    expected: &BackupFirstPublicationHash,
+    stop: &AtomicBool,
+    action: impl FnOnce(&BackupRootDatabasesReport) -> Result<T>,
+) -> Result<(BackupRootDatabasesReport, T)> {
     let before = Plan::capture(context, prepared, decision, expected, stop)?;
     before.require_complete(context, prepared, stop)?;
+    let value = action(&before.report)?;
     let after = Plan::capture(context, prepared, decision, expected, stop)?;
     if before.bytes != after.bytes {
         return Err(invalid(
@@ -348,5 +366,5 @@ pub(super) fn observe(
         ));
     }
     after.require_complete(context, prepared, stop)?;
-    Ok(after.report)
+    Ok((after.report, value))
 }

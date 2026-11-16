@@ -10,6 +10,8 @@ GROUP = 'terminal-backup-source-layout'
 EXACT = ('backup_preparation::transaction_serving::'
          'same_backup_switch_serves_and_replays_normal_successor_publications')
 PATHS = [
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/target_locator/store.rs',
+    'test/engine/unit/backup_target_locator_tests.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_publication.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/configuration.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving.rs',
@@ -90,6 +92,9 @@ class TerminalBackupSourceSelection(unittest.TestCase):
 
     def test_shared_sources_keep_the_original_independent_selections(self):
         for path, groups in {
+            'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/target_locator/store.rs':
+                ['held-directory-layout'],
+            'test/engine/unit/backup_target_locator_tests.rs': ['fresh-managed-core'],
             'src/engine/src/journal.rs': ['backup-scoped-encoding-memo',
                                         'version-publication-location', 'held-directory-layout'],
             'src/engine/src/container_storage/file_database/install.rs':
@@ -105,6 +110,43 @@ class TerminalBackupSourceSelection(unittest.TestCase):
                     self.assertIn(group, plan['groups'])
                     self.assertCountEqual(origin_selections(plan, group),
                                           self.policy['groups'][group]['rust_targets'])
+
+    def test_locator_address_selects_actual_inventory_guards_and_full_terminal(self):
+        group = 'backup-target-locator-address'
+        paths = [
+            'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/target_locator/store.rs',
+            'test/engine/unit/backup_target_locator_tests.rs',
+            'test/ci/test_terminal_backup_source_ci.py',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(group, plan['groups'])
+                self.assertIn(GROUP, plan['groups'])
+                for selected in (group, GROUP):
+                    self.assertCountEqual(origin_selections(plan, selected),
+                                          self.policy['groups'][selected]['rust_targets'])
+        target, = self.policy['groups'][group]['rust_targets']
+        prefix = ('engine::backup_preparation::native_control::databases::scoped::'
+                  'cutover::registration::target_locator::store::tests::')
+        names = [
+            'observing_partial_locator_never_creates_missing_native_files',
+            'unowned_matching_native_namespace_is_not_adopted',
+            'selected_complete_locator_loss_is_detected_without_repair',
+            'data_only_target_inventory_rejects_an_active_metadata_journal',
+            'original_locator_selection_cannot_be_relabelled',
+            'copied_locator_selection_cannot_rebind_a_second_directory',
+            'generated_locator_paths_cannot_escape_fixed_native_namespaces',
+            'changed_native_file_is_preserved_and_rejected_by_readback',
+        ]
+        self.assertEqual(target['exact'], [prefix + name for name in names])
+        self.assertEqual((target['kind'], target['max_tests'], target['timeout_seconds']),
+                         ('lib', 8, 120))
+        self.assertTrue(target['default_features'])
+        self.assertEqual(target['features'], [])
+        self.assertNotIn('prefixes', target)
+        self.assertNotIn('whole', target)
+        assert_path_group_extension(self, self.policy, paths, None, [group, GROUP])
 
 
 if __name__ == '__main__':

@@ -22,6 +22,20 @@ pub(in super::super) fn is_namespace(name: &OsStr) -> bool {
         .is_some_and(|value| NAMESPACES.contains(&value))
 }
 
+fn genesis_namespace() -> &'static Path {
+    layout::GENESIS_CONFIGURATION
+        .as_path()
+        .parent()
+        .expect("invariant: the fixed Genesis configuration has a management parent")
+}
+
+fn namespaces() -> impl Iterator<Item = PathBuf> {
+    NAMESPACES
+        .into_iter()
+        .map(|namespace| PathBuf::from("metadata").join(namespace))
+        .chain(std::iter::once(genesis_namespace().to_owned()))
+}
+
 #[derive(Serialize, Deserialize)]
 #[serialization(rename_all = "kebab-case")]
 enum SelectionFormat {
@@ -141,8 +155,8 @@ impl LocalSelection {
         if preparation_path_exists(root, &root.path().join(SELECTED))? {
             self.require(root, SELECTED)?;
         } else {
-            for namespace in NAMESPACES {
-                if preparation_path_exists(root, &root.path().join("metadata").join(namespace))? {
+            for namespace in namespaces() {
+                if preparation_path_exists(root, &root.path().join(namespace))? {
                     return Err(Error::new(
                         ErrorCode::ObjectCollision,
                         "unowned Backup target native namespace retained without adoption",
@@ -208,14 +222,22 @@ impl Inventory {
         let mut bytes = 0u64;
         for (path, value) in files {
             let mut components = path.components();
-            if components.next() != Some(std::path::Component::Normal(OsStr::new("metadata")))
-                || components
-                    .next()
-                    .is_none_or(|part| !is_namespace(part.as_os_str()))
-                || components
-                    .clone()
-                    .any(|part| !matches!(part, std::path::Component::Normal(_)))
-                || components.next().is_none()
+            let Some(std::path::Component::Normal(base)) = components.next() else {
+                return Err(invalid(
+                    "generated Backup locator file is outside its fixed native namespaces",
+                ));
+            };
+            // Genesis has one canonical management address. This does not
+            // admit arbitrary zxs-data files or an alternate anchor location.
+            if path != layout::GENESIS_CONFIGURATION.as_path()
+                && (base != OsStr::new("metadata")
+                    || components
+                        .next()
+                        .is_none_or(|part| !is_namespace(part.as_os_str()))
+                    || components
+                        .clone()
+                        .any(|part| !matches!(part, std::path::Component::Normal(_)))
+                    || components.next().is_none())
             {
                 return Err(invalid(
                     "generated Backup locator file is outside its fixed native namespaces",
@@ -229,7 +251,7 @@ impl Inventory {
             for directory in path
                 .ancestors()
                 .skip(1)
-                .take_while(|parent| *parent != Path::new("metadata"))
+                .take_while(|parent| *parent != Path::new(base))
             {
                 directories.insert(directory.to_owned());
             }
@@ -263,7 +285,7 @@ impl Inventory {
     }
 
     pub(super) fn inspect(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
-        let scopes = NAMESPACES.map(|namespace| PathBuf::from("metadata").join(namespace));
+        let scopes: Vec<_> = namespaces().collect();
         self.inspect_under(root, &scopes, &[], stop)
     }
 

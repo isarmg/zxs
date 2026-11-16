@@ -43,7 +43,7 @@ fn selection(root: &DiskRoot, plan: &str, files: &str) -> LocalSelection {
 fn files() -> BTreeMap<PathBuf, Vec<u8>> {
     BTreeMap::from([
         (
-            PathBuf::from("metadata/pool-membership/config.json"),
+            layout::GENESIS_CONFIGURATION.as_path().to_owned(),
             b"fixed configuration".to_vec(),
         ),
         (
@@ -82,23 +82,29 @@ fn observing_partial_locator_never_creates_missing_native_files() {
             .is_err()
     );
     assert!(!root.path().join("metadata").exists());
+    assert!(!root.path().join("zxs-data").exists());
 }
 
 #[test]
 fn unowned_matching_native_namespace_is_not_adopted() {
-    let (_temp, root) = root();
-    let files = files();
-    let inventory = inventory(&files);
-    write_files(&root, &files);
-    let selected = selection(&root, &"e".repeat(64), &inventory.hash);
-    assert_eq!(
-        selected.select(&root).unwrap_err().code(),
-        ErrorCode::ObjectCollision
-    );
-    assert!(!root.path().join(SELECTED).exists());
-    inventory
-        .verify_present(&root, Presence::Complete, &AtomicBool::new(false))
-        .unwrap();
+    let anchor_only = BTreeMap::from([(
+        layout::GENESIS_CONFIGURATION.as_path().to_owned(),
+        b"fixed configuration".to_vec(),
+    )]);
+    for files in [anchor_only, files()] {
+        let (_temp, root) = root();
+        let inventory = inventory(&files);
+        write_files(&root, &files);
+        let selected = selection(&root, &"e".repeat(64), &inventory.hash);
+        assert_eq!(
+            selected.select(&root).unwrap_err().code(),
+            ErrorCode::ObjectCollision
+        );
+        assert!(!root.path().join(SELECTED).exists());
+        inventory
+            .verify_present(&root, Presence::Complete, &AtomicBool::new(false))
+            .unwrap();
+    }
 }
 
 #[test]
@@ -114,7 +120,7 @@ fn selected_complete_locator_loss_is_detected_without_repair() {
         .unwrap();
     selected.complete(&root).unwrap();
     selected.require_complete(&root).unwrap();
-    let missing = root.path().join("metadata/pool-membership/config.json");
+    let missing = root.path().join(layout::GENESIS_CONFIGURATION.as_path());
     fs::remove_file(&missing).unwrap();
     assert!(
         inventory
@@ -127,27 +133,30 @@ fn selected_complete_locator_loss_is_detected_without_repair() {
 
 #[test]
 fn data_only_target_inventory_rejects_an_active_metadata_journal() {
-    let (_temp, root) = root();
-    let files = files();
-    let inventory = inventory(&files);
-    selection(&root, &"e".repeat(64), &inventory.hash)
-        .select(&root)
-        .unwrap();
-    write_files(&root, &files);
-    let path = root
-        .path()
-        .join("metadata/membership-generations")
-        .join("a".repeat(64))
-        .join("journal.bin");
-    install_preparation_bytes(&root, &path, b"retain unknown journal").unwrap();
-    assert_eq!(
-        inventory
-            .inspect(&root, &AtomicBool::new(false))
-            .unwrap_err()
-            .code(),
-        ErrorCode::ObjectCollision
-    );
-    assert_eq!(fs::read(path).unwrap(), b"retain unknown journal");
+    for relative in [
+        PathBuf::from("metadata/membership-generations")
+            .join("a".repeat(64))
+            .join("journal.bin"),
+        genesis_namespace().join("unexpected.json"),
+    ] {
+        let (_temp, root) = root();
+        let files = files();
+        let inventory = inventory(&files);
+        selection(&root, &"e".repeat(64), &inventory.hash)
+            .select(&root)
+            .unwrap();
+        write_files(&root, &files);
+        let path = root.path().join(relative);
+        install_preparation_bytes(&root, &path, b"retain unknown bytes").unwrap();
+        assert_eq!(
+            inventory
+                .inspect(&root, &AtomicBool::new(false))
+                .unwrap_err()
+                .code(),
+            ErrorCode::ObjectCollision
+        );
+        assert_eq!(fs::read(path).unwrap(), b"retain unknown bytes");
+    }
 }
 
 #[test]
@@ -188,12 +197,22 @@ fn generated_locator_paths_cannot_escape_fixed_native_namespaces() {
         "metadata/objects/x",
         "metadata/pool-membership",
         "metadata/pool-membership/../other",
+        "zxs-data/pool-membership",
+        "zxs-data/pool-membership/unrelated.json",
+        "zxs-data/pool-membership/config.json/extra",
+        "zxs-data/pool-membership/../other",
+        "zxs-data/objects/x",
+        "/zxs-data/pool-membership/config.json",
     ] {
         assert!(
             Inventory::capture(std::iter::once((PathBuf::from(path), b"bytes".as_slice())))
                 .is_err()
         );
     }
+    let accepted = inventory(&files());
+    assert!(accepted.files.contains_key(layout::GENESIS_CONFIGURATION.as_path()));
+    assert!(accepted.directories.contains(genesis_namespace()));
+    assert!(!accepted.directories.contains(Path::new("zxs-data")));
 }
 
 #[test]
@@ -205,7 +224,7 @@ fn changed_native_file_is_preserved_and_rejected_by_readback() {
         .select(&root)
         .unwrap();
     write_files(&root, &files);
-    let path = root.path().join("metadata/pool-membership/config.json");
+    let path = root.path().join(layout::GENESIS_CONFIGURATION.as_path());
     root.write_atomic(&path, b"different bytes", true).unwrap();
     assert!(
         inventory

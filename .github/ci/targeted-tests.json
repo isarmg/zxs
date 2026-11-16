@@ -1,5 +1,32 @@
 {
   "groups": {
+    "backup-target-locator-address": {
+      "reason": "Keep the sole generated Genesis configuration address inside the sealed terminal locator inventory and its no-adoption/readback boundary. These eight local inventory fixtures are not native authority; the separate unchanged default/FI original 900-second transaction proves the actual producer and cold path.",
+      "python_tests": [
+        "test_terminal_backup_source_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [],
+          "exact": [
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_locator::store::tests::observing_partial_locator_never_creates_missing_native_files",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_locator::store::tests::unowned_matching_native_namespace_is_not_adopted",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_locator::store::tests::selected_complete_locator_loss_is_detected_without_repair",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_locator::store::tests::data_only_target_inventory_rejects_an_active_metadata_journal",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_locator::store::tests::original_locator_selection_cannot_be_relabelled",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_locator::store::tests::copied_locator_selection_cannot_rebind_a_second_directory",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_locator::store::tests::generated_locator_paths_cannot_escape_fixed_native_namespaces",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_locator::store::tests::changed_native_file_is_preserved_and_rejected_by_readback"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 120
+        }
+      ]
+    },
     "ordinary-smb-native-mkdir": {
       "reason": "Run ordinary default SMB RPC Mkdir through the exact native publication, retain replay/budget gates, and verify independent file histories after an authenticated local bridge round trip. These are RPC tests, not a Samba or Windows run.",
       "python_tests": [
@@ -6351,7 +6378,9 @@
     {
       "path": "test/engine/unit/backup_target_locator_tests.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "backup-target-locator-address",
+        "terminal-backup-source-layout"
       ]
     },
     {
@@ -9153,7 +9182,9 @@
     {
       "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/target_locator/store.rs",
       "groups": [
-        "held-directory-layout"
+        "held-directory-layout",
+        "backup-target-locator-address",
+        "terminal-backup-source-layout"
       ]
     },
     {
@@ -14872,7 +14903,8 @@
     {
       "path": "test/ci/test_terminal_backup_source_ci.py",
       "groups": [
-        "terminal-backup-source-layout"
+        "terminal-backup-source-layout",
+        "backup-target-locator-address"
       ]
     },
     {
@@ -15004,6 +15036,27 @@
     },
     {
       "path": "test/engine/unit/backup_current_read_plan_tests.rs",
+      "groups": [
+        "backup-scoped-encoding-memo",
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/root_databases.rs",
+      "groups": [
+        "backup-scoped-encoding-memo",
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/system_database.rs",
+      "groups": [
+        "backup-scoped-encoding-memo",
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_system_read_interval_tests.rs",
       "groups": [
         "backup-scoped-encoding-memo",
         "terminal-backup-source-layout"

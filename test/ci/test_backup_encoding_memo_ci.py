@@ -10,6 +10,9 @@ from test_targeted_ci import CI, assert_path_group_extension
 
 ROOT = Path(__file__).resolve().parents[2]
 PATHS = [
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/root_databases.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/system_database.rs',
+    'test/engine/unit/backup_system_read_interval_tests.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_publication.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/configuration.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving/reads.rs',
@@ -83,6 +86,39 @@ class BackupEncodingMemoSelection(unittest.TestCase):
         ]
         for path in paths:
             with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertEqual(plan['groups'], [
+                    'backup-scoped-encoding-memo', 'terminal-backup-source-layout'])
+        unit = self.policy['groups']['backup-scoped-encoding-memo']['rust_targets'][0]
+        self.assertIn(
+            'engine::backup_preparation::native_control::databases::scoped::cutover::'
+            'registration::serving::cost_tests::', unit['prefixes'])
+        self.assertEqual(unit['max_tests'], 96)
+        self.assertEqual(unit['timeout_seconds'], 900)
+        targets = self.policy['groups']['terminal-backup-source-layout']['rust_targets']
+        for target, features in zip(targets[:2], [[], ['fault-injection']]):
+            self.assertEqual(target['features'], features)
+            self.assertTrue(target['default_features'])
+            self.assertTrue(target['isolate'])
+            self.assertEqual(target['exact'], [
+                'backup_preparation::transaction_serving::'
+                'same_backup_switch_serves_and_replays_normal_successor_publications'])
+            self.assertEqual(target['max_tests'], 1)
+            self.assertEqual(target['timeout_seconds'], 900)
+
+    def test_system_root_read_interval_uses_exact_existing_differential_and_both_transactions(self):
+        prefix = ('src/engine/src/engine/backup_preparation/native_control/'
+                  'databases/scoped/cutover/registration/')
+        paths = [prefix + 'root_databases.rs', prefix + 'system_database.rs',
+                 'test/engine/unit/backup_system_read_interval_tests.rs']
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual([rule for rule in self.policy['rules']
+                                  if rule['path'] == path], [{
+                    'path': path,
+                    'groups': ['backup-scoped-encoding-memo',
+                               'terminal-backup-source-layout'],
+                }])
                 plan = CI.select_plan(self.policy, [path], shardable=True)
                 self.assertEqual(plan['groups'], [
                     'backup-scoped-encoding-memo', 'terminal-backup-source-layout'])

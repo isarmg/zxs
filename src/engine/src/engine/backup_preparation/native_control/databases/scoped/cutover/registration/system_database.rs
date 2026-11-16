@@ -53,6 +53,17 @@ impl Plan {
         // Root observation includes all original real Publication slots, every
         // selected target's independent full material and both ordinary pairs.
         let roots = root_databases::observe(context, prepared, decision, expected, stop)?;
+        Self::capture_with_roots(context, prepared, decision, expected, roots, stop)
+    }
+
+    fn capture_with_roots(
+        context: &common_databases::Context<'_>,
+        prepared: &PreparedBackupRegistry,
+        decision: &AdmittedBackupDecision,
+        expected: &BackupFirstPublicationHash,
+        roots: BackupRootDatabasesReport,
+        stop: &AtomicBool,
+    ) -> Result<Self> {
         let common = &roots.aliases.current.common;
         context.sources.recheck(context.system)?;
         let database = context.system.read_bytes(
@@ -187,10 +198,23 @@ pub(super) fn observe(
     expected: &BackupFirstPublicationHash,
     stop: &AtomicBool,
 ) -> Result<BackupSystemDatabaseReport> {
-    let before = Plan::capture(context, prepared, decision, expected, stop)?;
-    let selected = Selected::read(context.system, &before)?;
-    selected.require_complete(context.system, &before, stop)?;
-    let after = Plan::capture(context, prepared, decision, expected, stop)?;
+    // SYSTEM reads fit inside one complete root observation: both sides still
+    // reconstruct all source proofs and read every actual pair independently.
+    // No installation or retry is allowed to reuse this read-only interval.
+    let (roots, (before, selected)) = root_databases::observe_around(
+        context, prepared, decision, expected, stop,
+        |roots| {
+            let before = Plan::capture_with_roots(
+                context, prepared, decision, expected, roots.clone(), stop,
+            )?;
+            let selected = Selected::read(context.system, &before)?;
+            selected.require_complete(context.system, &before, stop)?;
+            Ok((before, selected))
+        },
+    )?;
+    let after = Plan::capture_with_roots(
+        context, prepared, decision, expected, roots, stop,
+    )?;
     if before.binding_hash != after.binding_hash {
         return Err(invalid(
             "SYSTEM native installation proof changed during observation",
@@ -199,3 +223,7 @@ pub(super) fn observe(
     selected.require_complete(context.system, &after, stop)?;
     Ok(after.report(&selected))
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../../../../test/engine/unit/backup_system_read_interval_tests.rs"]
+pub(super) mod interval_tests;
