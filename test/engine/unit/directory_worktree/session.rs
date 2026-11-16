@@ -285,7 +285,7 @@ fn pending_publication_reopens_only_as_the_original_publishers_resume_state() {
         operation: operation(10),
         expected: ledger.worktree().revision(),
     }, no_publication).unwrap();
-    let expected = *ledger.worktree().phase();
+    let expected = ledger.worktree().phase();
     drop(ledger);
     let recovered = WorktreeSession::reopen(
         &fixture.source, prepared.binding(), checkpoint, no_publication,
@@ -293,7 +293,7 @@ fn pending_publication_reopens_only_as_the_original_publishers_resume_state() {
     let ReopenedWorktree::Publishing(pending) = recovered else {
         panic!("an uncompleted publication must not return an ordinary session")
     };
-    assert_eq!(pending.worktree().phase(), &expected);
+    assert_eq!(pending.worktree().phase(), expected);
     assert!(matches!(expected, Phase::Publishing { .. }));
     assert!(pending.edits().is_empty());
     empty(&fixture.source.worktrees_directory().path()

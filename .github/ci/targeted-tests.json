@@ -4392,6 +4392,48 @@
   },
   "rules": [
     {
+      "path": "test/engine/unit/directory_worktree/session.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/verified_payloads/guarded_proof_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/daily_management.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/directory_layout.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/directory_layout/lifecycle.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/plan_lookup.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/published_reconciliation.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
       "path": ".github/scripts/check-debian13-single-binary.py",
       "groups": [
         "fresh-managed-core"

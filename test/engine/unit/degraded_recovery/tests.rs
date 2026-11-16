@@ -1,6 +1,20 @@
 use super::*;
 use crate::{r29_local_publication, repair_io_tail_support as io_tail_support};
 
+fn pending_container_sources(
+    engine: &Engine,
+    candidate: &Candidate,
+) -> crate::container_storage::PreparedContainerEntities {
+    let (pending, original, _, _) = engine
+        .pending_recovery_candidate(candidate.operation_id, None)
+        .unwrap();
+    assert_eq!(canonical_json(&pending).unwrap(), canonical_json(candidate).unwrap());
+    crate::container_storage::PreparedContainerEntities::observe_candidate(
+        &engine.planning_context(), candidate, &original,
+    )
+    .unwrap()
+}
+
 #[test]
 fn loss_classification_rejects_io_and_authority_failures() {
     for kind in [
@@ -47,24 +61,18 @@ fn classification_read_eio_preserves_original_failure_instead_of_declaring_corru
     use io_tail_support::{Point, SyscallGate};
     for checksum in [false, true] {
         let (_temp, engine, _, candidate) = fixture("after_accept_2");
+        let sources = pending_container_sources(&engine, &candidate);
         let evidence = &candidate.versions[0];
         let disk = engine
             .disk(&evidence.placement.route_slot_ids[0])
             .unwrap()
             .clone();
-        let root = &engine.disk_resources.get(&disk).unwrap().root;
-        let directory = version_dir(
-            &disk,
-            &evidence.version.history_tree_id,
-            &evidence.version.version_id,
-        );
-        let content = crate::container_storage::content_path_at(
-            root,
-            &directory,
-            &evidence.version,
-            &mut |_| Ok(()),
-        )
-        .unwrap();
+        let scope = sources.scope(
+            evidence.version.file_id.parse().unwrap(), disk.disk_id.parse().unwrap(),
+        ).unwrap();
+        let material = crate::disk::VersionMaterial::current(scope, &evidence.version).unwrap();
+        let directory = material.directory().unwrap();
+        let content = material.body_path().unwrap();
         let watched = if checksum {
             directory.join("checksums.bin")
         } else {
@@ -84,7 +92,7 @@ fn classification_read_eio_preserves_original_failure_instead_of_declaring_corru
             .collect();
         std::thread::scope(|threads| {
             let gate = SyscallGate::arm(&disk.root, &watched, Point::Read, true);
-            let work = threads.spawn(|| observe(&engine, &candidate));
+            let work = threads.spawn(|| observe(&engine, &candidate, &sources));
             gate.wait();
             gate.release();
             let error = work.join().unwrap().unwrap_err();
@@ -109,24 +117,22 @@ fn classification_read_eio_preserves_original_failure_instead_of_declaring_corru
 #[test]
 fn loss_observation_keeps_missing_corrupt_and_revoked_authority_distinct() {
     let (_temp, engine, _, candidate) = fixture("after_accept_2");
+    let sources = pending_container_sources(&engine, &candidate);
     let evidence = &candidate.versions[0];
     let first = engine.disk(&evidence.placement.route_slot_ids[0]).unwrap();
     let second = engine.disk(&evidence.placement.route_slot_ids[1]).unwrap();
     let directory = |disk: &DiskConfig| {
-        version_dir(
-            disk,
-            &evidence.version.history_tree_id,
-            &evidence.version.version_id,
-        )
+        let scope = sources.scope(
+            evidence.version.file_id.parse().unwrap(), disk.disk_id.parse().unwrap(),
+        ).unwrap();
+        crate::disk::VersionMaterial::current(scope, &evidence.version)
+            .unwrap().directory().unwrap()
     };
     let content = |disk: &DiskConfig| {
-        crate::container_storage::content_path_at(
-            &engine.disk_resources.get(disk).unwrap().root,
-            &directory(disk),
-            &evidence.version,
-            &mut |_| Ok(()),
-        )
-        .unwrap()
+        let scope = sources.scope(
+            evidence.version.file_id.parse().unwrap(), disk.disk_id.parse().unwrap(),
+        ).unwrap();
+        scope.body_path(&evidence.version).unwrap()
     };
     let first_content = content(first);
     let second_content = content(second);
@@ -143,7 +149,7 @@ fn loss_observation_keeps_missing_corrupt_and_revoked_authority_distinct() {
         .collect();
     fs::remove_file(directory(first).join("checksums.bin")).unwrap();
     fs::remove_file(&second_content).unwrap();
-    let observed = observe(&engine, &candidate).unwrap();
+    let observed = observe(&engine, &candidate, &sources).unwrap();
     assert_eq!(observed[0]["slots"][0]["state"], "CORRUPT");
     assert_eq!(observed[0]["slots"][1]["state"], "MISSING");
     assert_eq!(observed[0]["slots"][2]["state"], "COMPLETE_VERIFIED");
@@ -157,7 +163,7 @@ fn loss_observation_keeps_missing_corrupt_and_revoked_authority_distinct() {
             .unwrap()
             .unwrap(),
     );
-    let error = observe(&engine, &candidate).unwrap_err();
+    let error = observe(&engine, &candidate, &sources).unwrap_err();
     assert!(matches!(
         error.code(),
         ErrorCode::RecoveryRequired | ErrorCode::DiskUnavailable
@@ -175,26 +181,21 @@ fn loss_observation_keeps_missing_corrupt_and_revoked_authority_distinct() {
 fn classification_close_holds_original_descriptor_and_writer_until_real_tail() {
     use io_tail_support::{Point, SyscallGate, competitor, descriptors, excluded};
     let (_temp, engine, _, candidate) = fixture("after_accept_2");
+    let sources = pending_container_sources(&engine, &candidate);
     let evidence = &candidate.versions[0];
     let disk = engine
         .disk(&evidence.placement.route_slot_ids[0])
         .unwrap()
         .clone();
     let owner = std::sync::Arc::clone(engine.disk_resources.get(&disk).unwrap());
-    let directory = version_dir(
-        &disk,
-        &evidence.version.history_tree_id,
-        &evidence.version.version_id,
-    );
-    let content = crate::container_storage::content_path_at(
-        &owner.root,
-        &directory,
-        &evidence.version,
-        &mut |_| Ok(()),
-    )
-    .unwrap();
-    // Fail before verify_payload opens the body, then skip content_path_at's
-    // presence probe so the gate covers the classifier's own descriptor.
+    let scope = sources.scope(
+        evidence.version.file_id.parse().unwrap(), disk.disk_id.parse().unwrap(),
+    ).unwrap();
+    let material = crate::disk::VersionMaterial::current(scope, &evidence.version).unwrap();
+    let directory = material.directory().unwrap();
+    let content = material.body_path().unwrap();
+    // Fail before verification opens the BODY, so the close gate covers
+    // the classifier's own descriptor. Typed source lookup does not probe BODY.
     fs::remove_file(directory.join("checksums.bin")).unwrap();
     let bytes = fs::read(&content).unwrap();
     let frozen = canonical_json(&candidate).unwrap();
@@ -211,9 +212,8 @@ fn classification_close_holds_original_descriptor_and_writer_until_real_tail() {
     let competitor = competitor(&disk);
     std::thread::scope(|threads| {
         let gate = SyscallGate::arm(&disk.root, &content, Point::Close, false);
-        gate.skip_presence_close();
         let work = threads.spawn(move || {
-            let result = observe(&engine, &candidate);
+            let result = observe(&engine, &candidate, &sources);
             (engine, candidate, result)
         });
         gate.wait();

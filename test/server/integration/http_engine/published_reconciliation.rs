@@ -11,11 +11,11 @@ async fn terminal_workspace_failure_keeps_http_receipt_queryable_and_writes_fenc
     };
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
-    let config = Config::development([
+    let config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     let mut engine = Engine::initialize(&system, config).unwrap();
     let mut auth = AuthStore::initialize(&system, "admin", "integration-test-password").unwrap();

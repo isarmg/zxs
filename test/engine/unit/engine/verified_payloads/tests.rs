@@ -1080,7 +1080,7 @@ fn existing_copy_reservations_follow_installation_success_and_error() {
         assert_eq!(budget.held(), 1);
         let result = engine
             .planning_context()
-            .prepare_payload_with_existing(p, Some(copies));
+            .prepare_payload_with_existing(p, Some(copies), None);
         if replace_body {
             assert_eq!(result.unwrap_err().code(), ErrorCode::PreparationStale);
         } else {
@@ -1169,7 +1169,7 @@ fn incomplete_private_admission_is_not_an_uncached_request() {
     let prepared = existing_prepared(&engine, &candidate);
     engine
         .planning_context()
-        .prepare_payload_with_existing(&prepared[0], Some(Vec::new()))
+        .prepare_payload_with_existing(&prepared[0], Some(Vec::new()), None)
         .unwrap();
 }
 
@@ -1179,10 +1179,20 @@ fn incomplete_private_version_admission_cannot_be_truncated_by_zip() {
     let _budget = test_budget(LEGACY_DESCRIPTOR_BUDGET);
     let (_temp, engine, candidate) = fixture();
     let prepared = existing_prepared(&engine, &candidate);
-    engine
-        .planning_context()
-        .prepare_payloads(&prepared, Vec::new())
+    let context = engine.planning_context();
+    // Observe the exact already-published containers, with no new entity or name.
+    // The malformed private admission must panic before it consumes this scope.
+    let plan = crate::engine::fresh_layout::containers::ContainerPreparation::new(
+        &context,
+        engine.state().clone(),
+        &prepared,
+        &engine.state().operations[&candidate.operation_id],
+    )
+    .unwrap();
+    assert!(plan.additions().is_empty());
+    let containers = crate::container_storage::PreparedContainerEntities::prepare(&context, &plan)
         .unwrap();
+    context.prepare_payloads(&prepared, Vec::new(), &containers).unwrap();
 }
 
 #[path = "guarded_proof_tests.rs"]

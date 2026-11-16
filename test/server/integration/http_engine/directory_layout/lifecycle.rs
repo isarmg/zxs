@@ -42,7 +42,10 @@ impl BlockingGate {
 }
 
 async fn fixture(root: &Path) -> (Router, String, Value) {
-    let app = configured_application(root, Config::development([root.join("d1")]).unwrap());
+    let app = configured_application(
+        root,
+        Config::development(crate::test_disks([root.join("d1")])).unwrap(),
+    );
     let token = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &token, "docs/a.txt", b"queued layout payload").await;
     manager_initialize_git(&app, &token, "docs").await;

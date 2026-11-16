@@ -187,7 +187,8 @@ fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
             concat!(
                 r#"{{"branches":{{}},"business_generation":"{}","commits":{{}},"#,
                 r#""container_tags":{{}},"content_states":{{}},"control_auth":null,"#,
-                r#""directory_git_repositories":{{}},"events":[],"file_deletions":{{}},"#,
+                r#""directory_git_repositories":{{}},"events":[],"file_containers":{{}},"#,
+                r#""file_deletions":{{}},"#,
                 r#""histories":{{}},"history_boundaries":{{}},"merge_links":{{}},"#,
                 r#""operation_principals":{{}},"operations":{{}},"placement_rules":{{}},"#,
                 r#""placements":{{}},"plans":{{}},"protection_policies":{{}},"#,
@@ -204,6 +205,7 @@ fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
         for field in [
             "business_generation",
             "container_tags",
+            "file_containers",
             "directory_git_repositories",
             "file_deletions",
             "history_boundaries",

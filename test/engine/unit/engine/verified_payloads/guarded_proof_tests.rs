@@ -18,11 +18,20 @@ fn idle_payload_proof_closes_body_metadata_and_seal_without_another_validation()
     let (_temp, engine, candidate) = fixture();
     let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
     let entry = &proof.entries[0];
-    let binding = entry.disk.root.io_binding().unwrap();
-    let body =
-        crate::container_storage::content_path(&entry.directory, &candidate.versions[0].version)
-            .unwrap();
-    let seal = entry.disk.root.path().join("disk.json");
+    let seal = proof.disks.iter()
+        .find(|seal| seal.disk.seal.slot_id == entry.slot_id)
+        .unwrap();
+    let binding = seal.disk.root.io_binding().unwrap();
+    let disk = engine.disk(&entry.slot_id).unwrap();
+    let body = proof.sources.with_replica(
+        &engine.config,
+        &engine.disk_resources,
+        &candidate.versions[0].version,
+        disk,
+        |scope| scope.body_path(&candidate.versions[0].version),
+    )
+    .unwrap();
+    let seal = seal.path.clone();
     let paths = std::iter::once(body)
         .chain(entry.metadata.iter().map(|(path, _)| path.clone()))
         .chain(std::iter::once(seal))

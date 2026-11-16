@@ -463,15 +463,19 @@ async fn backup_path_collisions_are_rejected_for_every_session_without_overwriti
 #[tokio::test]
 async fn administrator_discovers_historical_primary_routes_and_all_required_backup_prefixes() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
+    let mut config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
-    for (slot, level, parent) in [("P02", 1, None), ("B02", 2, Some("P02"))] {
+    for (slot, name, level, parent) in [
+        ("P02", "Second primary", 1, None),
+        ("B02", "Second backup", 2, Some("P02")),
+    ] {
         config.disks.push(storage_contract::DiskConfig {
             slot_id: slot.into(),
+            name: name_policy::Name::parse(name).unwrap(),
             disk_id: new_id("disk").unwrap(),
             root: root.path().join(slot),
             level,

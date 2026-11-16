@@ -22,7 +22,8 @@ macro_rules! projection_fields {
             file { file_write_origins, file_locations, file_backup_paths, file_backup_policies, file_selection_generations, file_notes, file_names, }
             directory { directory_tree_selections, directory_selection_generations, }
             special { file_contexts, file_branch_aliases, file_path_notes, file_selections, directory_trees, directory_selections, }
-            independent { operations, operation_principals, plans, }
+            // Physical bindings belong to SYSTEM, not a portable history projection.
+            independent { file_containers, operations, operation_principals, plans, }
         }
     };
 }

@@ -835,8 +835,11 @@ async fn move_routes_keep_invalid_request_responses_for_malformed_source_slots()
 #[tokio::test]
 async fn cross_repository_move_keeps_source_deletion_and_target_rename_after_replay() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = Config::development([root.path().join("d1"), root.path().join("d2")])
-        .unwrap();
+    let mut config = Config::development(crate::test_disks([
+        root.path().join("d1"),
+        root.path().join("d2"),
+    ]))
+    .unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     let app = configured_application(root.path(), config);
@@ -975,8 +978,11 @@ async fn activity_upload(app: &Router, token: &str, slot: &str, path: &str) -> V
 #[tokio::test]
 async fn cross_repository_overwrite_keeps_both_deletions_at_the_same_path() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = Config::development([root.path().join("d1"), root.path().join("d2")])
-        .unwrap();
+    let mut config = Config::development(crate::test_disks([
+        root.path().join("d1"),
+        root.path().join("d2"),
+    ]))
+    .unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     let app = configured_application(root.path(), config);

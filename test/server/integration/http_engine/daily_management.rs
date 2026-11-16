@@ -252,11 +252,11 @@ async fn backend_purge_and_split_plans_support_exact_web_review() {
         let system = root.path().join("system");
         let mut engine = Engine::initialize(
             &system,
-            Config::development([
+            Config::development(crate::test_disks([
                 root.path().join("d1"),
                 root.path().join("d2"),
                 root.path().join("d3"),
-            ])
+            ]))
             .unwrap(),
         )
         .unwrap();

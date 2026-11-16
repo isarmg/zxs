@@ -750,7 +750,8 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
         let second_request = request(&second, "reuse published source entity");
         engine.commit_workspace(second_request.clone()).unwrap();
         let entries = engine.list_tree(&repository.main_branch_id).unwrap();
-        let second_file = entries.iter().find(|entry| entry.path == "two.txt").unwrap();
+        let second_file = entries.iter()
+            .find(|entry| entry.path.as_str() == "two.txt").unwrap();
         let second_id = second_file.file_id.parse::<storage_contract::FileId>().unwrap();
         assert_eq!(engine.state().file_containers[&second_id].replicas[&backup].prefixes,
             vec![binding.clone()]);
@@ -873,7 +874,7 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
         let third_receipt = engine.commit_workspace(third_request.clone()).unwrap();
         assert_eq!(third_receipt.commit_state, CommitState::Published);
         let latest = engine.list_tree(&repository.main_branch_id).unwrap().into_iter()
-            .find(|entry| entry.path == "one.txt").unwrap();
+            .find(|entry| entry.path.as_str() == "one.txt").unwrap();
         assert_eq!(latest.file_id, first.file_id);
         assert_ne!(latest.version_id, first.version_id);
         let extended = engine.state().file_containers[&file].clone();
@@ -923,7 +924,7 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
         let fourth_request = request(&fourth, "reuse both published C source identities");
         engine.commit_workspace(fourth_request.clone()).unwrap();
         let fourth_file = engine.list_tree(&repository.main_branch_id).unwrap().into_iter()
-            .find(|entry| entry.path == "three.txt").unwrap();
+            .find(|entry| entry.path.as_str() == "three.txt").unwrap();
         let fourth_id = fourth_file.file_id.parse::<storage_contract::FileId>().unwrap();
         assert_eq!(engine.state().file_containers[&fourth_id].replicas[&third].prefixes,
             third_prefixes);
@@ -981,7 +982,7 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
         assert_eq!(engine.commit_workspace(v3_request.clone()).unwrap().commit_state,
             CommitState::Published);
         let v3 = engine.list_tree(&repository.main_branch_id).unwrap().into_iter()
-            .find(|entry| entry.path == "one.txt").unwrap();
+            .find(|entry| entry.path.as_str() == "one.txt").unwrap();
         assert_eq!(v3.file_id, first.file_id);
         assert_ne!(v3.version_id, latest.version_id);
         assert_eq!(engine.file_branch_head(&selected_branch).unwrap(), v3.version_id);

@@ -1,6 +1,10 @@
 //! Recovery and HTTP-adaptation boundaries of the real public layout API.
 //! These tests use temporary roots only. No endpoint/operation protocol is
 //! invented here, and no filesystem snapshot is treated as a content receipt.
+#[path = "../support/configured_disks.rs"]
+mod configured_disks;
+use configured_disks::disks as test_disks;
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -68,9 +72,9 @@ struct Fixture {
 impl Fixture {
     fn new(roots: usize, primary_is_metadata: bool) -> Self {
         let temporary = tempfile::tempdir().unwrap();
-        let mut config = Config::development(
+        let mut config = Config::development(crate::test_disks(
             (0..roots).map(|index| temporary.path().join(format!("disk-{index}"))),
-        )
+        ))
         .unwrap();
         config.disks[0].metadata_member = primary_is_metadata;
         let mut engine =

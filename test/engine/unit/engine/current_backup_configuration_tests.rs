@@ -626,6 +626,10 @@ fn every_state_field_rejects_an_unplanned_change_in_live_and_cold_backup_publica
                 .message
                 .push_str(" changed");
         },
+        file_containers => {
+            let key = file.parse::<storage_contract::FileId>().unwrap();
+            assert!(state.file_containers.remove(&key).is_some());
+        },
         container_tags => {
             let key = file.parse::<storage_contract::FileId>().unwrap();
             let previous = state.container_tags[&key].clone();

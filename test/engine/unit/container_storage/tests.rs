@@ -831,6 +831,7 @@ fn empty_name_projection_has_no_staging_file() {
                     )
                 },
                 shared_layout::PreparedLayouts::default(),
+                None, // No FILE/version target exists in this empty-projection test.
             )
             .unwrap();
             assert!(
