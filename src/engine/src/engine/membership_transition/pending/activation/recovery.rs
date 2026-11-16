@@ -225,21 +225,26 @@ fn marker_at(
     marker_path_at(root, &disk.root, projected)
 }
 
+/// Genesis may have no generation directory. Inspect each optional component
+/// below the held root; only absence is optional, never a linked/unsafe parent
+/// or another I/O error. Callers still enforce the seal's authority requirement.
+fn open_generation_marker(root: &DiskRoot, path: &Path) -> Result<Option<crate::ReadFile>> {
+    let directory = path.join("metadata/pool-membership");
+    if root.optional_metadata(&path.join("metadata"))?.is_none()
+        || root.optional_metadata(&directory)?.is_none()
+    {
+        return Ok(None);
+    }
+    root.directory(&directory)?;
+    root.open_optional_read_regular(&path.join(GENERATION_FILE))
+}
+
 fn marker_path_at(
     root: &DiskRoot,
     path: &Path,
     projected: &ValidatedConfig,
 ) -> Result<Option<PortableAuthority>> {
-    let directory = path.join("metadata/pool-membership");
-    let file = if root.optional_metadata(&path.join("metadata"))?.is_some()
-        && root.optional_metadata(&directory)?.is_some()
-    {
-        root.directory(&directory)?;
-        root.open_optional_read_regular(&path.join(GENERATION_FILE))?
-    } else {
-        None
-    };
-    let Some(file) = file else {
+    let Some(file) = open_generation_marker(root, path)? else {
         if let Some(file) =
             root.open_optional_read_regular(&path.join(layout::DISK_IDENTITY.as_path()))?
         {
@@ -378,7 +383,7 @@ pub(crate) fn restore_anchor(
     original: ValidatedConfig,
 ) -> Result<ValidatedConfig> {
     let root = DiskRoot::open(path)?;
-    let Some(file) = root.open_optional_read_regular(&path.join(GENERATION_FILE))? else {
+    let Some(file) = open_generation_marker(&root, path)? else {
         if matches!(seal.format, DiskSealFormat::MembershipGeneration { .. }) {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -816,3 +821,7 @@ impl Engine {
         Ok(engine)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../test/engine/unit/engine/generation_marker_tests.rs"]
+mod generation_marker_tests;

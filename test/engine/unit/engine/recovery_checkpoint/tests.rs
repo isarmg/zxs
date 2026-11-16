@@ -580,6 +580,15 @@ fn checkpoint_survives_system_disk_loss_without_becoming_authority() {
     let (_temp, root, config) = setup();
     let (engine, _) = reopen(&root);
     let expected = canonical_json(engine.state()).unwrap();
+    let generation_parent = std::path::Path::new("metadata/pool-membership");
+    for disk in &config.disks {
+        assert_eq!(
+            std::fs::symlink_metadata(disk.root.join(generation_parent))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound,
+        );
+    }
     drop(engine);
     std::fs::remove_dir_all(&root).unwrap();
     let disks = config
@@ -589,6 +598,16 @@ fn checkpoint_survives_system_disk_loss_without_becoming_authority() {
         .collect::<Vec<_>>();
     let engine = Engine::restore_from_disks(&root, &disks).unwrap();
     assert_eq!(canonical_json(engine.state()).unwrap(), expected);
+    for disk in &config.disks {
+        assert_eq!(
+            std::fs::symlink_metadata(disk.root.join(generation_parent))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound,
+        );
+    }
+    drop(engine);
+    assert_eq!(canonical_json(Engine::open(&root).unwrap().state()).unwrap(), expected);
 }
 
 #[test]

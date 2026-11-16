@@ -5312,6 +5312,38 @@
           "features": []
         }
       ]
+    },
+    "generation-anchor-restore": {
+      "reason": "Explicit Genesis restore shares the existing held generation-marker opener: optional ancestor absence stays distinct from unsafe or failed I/O, Current still requires its actual authority, and a renamed held root never redirects to its replacement. Preserve the existing system-disk-loss checkpoint restore and all pre-existing selections.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::membership_transition::pending::activation::recovery::generation_marker_tests::generation_marker_absence_does_not_hide_unsafe_parents_or_leaves",
+            "engine::membership_transition::pending::activation::recovery::generation_marker_tests::generation_marker_observation_stays_on_the_original_held_root",
+            "engine::membership_transition::pending::activation::recovery::generation_marker_tests::current_restore_requires_its_actual_generation_marker_at_every_absence_depth"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -15383,6 +15415,24 @@
       "path": "test/engine/unit/engine/terminal_readmission_tests.rs",
       "groups": [
         "retained-readmission-preflight"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/recovery.rs",
+      "groups": [
+        "generation-anchor-restore"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/generation_marker_tests.rs",
+      "groups": [
+        "generation-anchor-restore"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery_checkpoint/tests.rs",
+      "groups": [
+        "generation-anchor-restore"
       ]
     }
   ],
