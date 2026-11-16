@@ -100,6 +100,8 @@ async fn fresh_authenticated_draft_and_worktree_survive_cold_exact_retries() {
     let clean = fixture.json("GET", &read_working, None).await;
     assert_eq!(clean["working"]["state"], "manual_clean");
     assert_eq!(clean["base"], initial["base"]);
+    let drafts = fixture.root.path().join("primary/common-data/original.txt/drafts");
+    assert!(!drafts.exists(), "a mode change must not pre-create draft storage");
 
     let edited = b"independent manual draft HTTP bytes";
     let write = json!({
@@ -114,9 +116,13 @@ async fn fresh_authenticated_draft_and_worktree_survive_cold_exact_retries() {
     let failed = write_draft(&fixture, &file, &write, &vec![b'x'; edited.len()]).await;
     assert_eq!(failed.status(), StatusCode::BAD_REQUEST);
     assert_eq!(fixture.json("GET", &read_working, None).await, clean);
+    assert!(!drafts.exists(), "rejected upload bytes must not create draft storage");
     let written = json_response(write_draft(&fixture, &file, &write, edited).await).await;
     let dirty = fixture.json("GET", &read_working, None).await;
     assert_eq!(dirty["working"]["state"], "manual_dirty");
+    let draft_payload = dirty["working"]["payload"]["payload_id"].as_str().unwrap();
+    assert_eq!(std::fs::read_dir(&drafts).unwrap().count(), 1);
+    assert_eq!(std::fs::read(drafts.join(draft_payload)).unwrap(), edited);
     assert_eq!(fixture.history(&file).await["nodes"], history["nodes"]);
     assert_eq!(fixture.entry("D01", "original.txt").await["version_id"], entry["version_id"]);
 
@@ -154,6 +160,8 @@ async fn fresh_authenticated_draft_and_worktree_survive_cold_exact_retries() {
     assert_eq!(fixture.json("POST", &working_route, Some(commit)).await, committed);
     // Replay must reach the permanent receipt before the old revision/base gates.
     assert_eq!(json_response(write_draft(&fixture, &file, &write, edited).await).await, written);
+    assert_eq!(std::fs::read_dir(&drafts).unwrap().count(), 1);
+    assert_eq!(std::fs::read(drafts.join(draft_payload)).unwrap(), edited);
     assert_eq!(fixture.json("POST", &working_route, Some(mode)).await, mode_receipt);
     assert_eq!(fixture.json("GET", &read_working, None).await, committed_working);
     assert_eq!(fixture.history(&file).await, committed_history);

@@ -76,16 +76,18 @@ pub(super) fn populate(
             return Err(Failure::ContainerScope.into());
         }
         target.verify_entity()?;
-        let path = draft_path(&target.held, payload);
-        if target.held.optional_metadata(&path)?.is_some() {
-            return Err(Failure::ContainerIdentity.into());
-        }
+        // A fresh Automatic container has no draft storage. Optional metadata
+        // admits absence only at the leaf, so retain its parent first.
         let directory_path = target.held.path().join(layout::container::DRAFTS.as_path());
         target.held.private_dir(&directory_path)?;
         let directory = target.held.private_child(&directory_path)?;
+        let name = layout::container::draft_payload(payload.payload_id());
+        if directory.optional_metadata(&directory.path().join(name.as_path()))?.is_some() {
+            return Err(Failure::ContainerIdentity.into());
+        }
         input.source().seek(SeekFrom::Start(0))?;
         let copied = directory.copy_new_entry_verified_synced(
-            &layout::container::draft_payload(payload.payload_id()), input.source(),
+            &name, input.source(),
             platform_io::payload::Expectation {
                 bytes: payload.logical_size(), blake3: Some(payload.content_hash().digest()),
             },
