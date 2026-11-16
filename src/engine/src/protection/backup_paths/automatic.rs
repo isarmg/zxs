@@ -220,7 +220,7 @@ fn directory_selection(
     if owner_record.repository != input.repository_id || owner_record.branch != branch
         || config.storage_roots.get(&owner) != Some(&source.root)
         || source.root.registration.disk_id.parse::<DiskId>()? != owner
-        || source.disks.len() != usize::try_from(input.target_copies)?
+        || source.disks.len() != usize::try_from(input.target_copies).map_err(|_| wrong_source())?
         || source.disks.is_empty() || source.disks.len() > 3
     {
         return Err(wrong_source());
