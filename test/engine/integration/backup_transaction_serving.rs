@@ -356,7 +356,10 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
     let error = engine
         .complete_backup_registry_placement_decision(operation, "admin")
         .unwrap_err();
-    assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid, "{error:?}");
+    // The named held-parent check rejects the replacement inode before FILE
+    // layout admission. This is a disk identity failure, not a layout fallback.
+    assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch, "{error:?}");
+    assert!(matches!(&error, storage_engine::Error::FreshLayout(_)), "{error:?}");
     assert!(engine.is_read_only());
     assert!(!engine.state().operations.contains_key(&operation));
     assert_eq!(engine.state().operations, before);

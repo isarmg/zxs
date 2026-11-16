@@ -129,7 +129,7 @@ fn reject_all_starts(engine: &mut Engine, root: &Path, paths: &[PathBuf], handle
         preparation,
         targets: paths.iter().enumerate().map(|(index, _)| BackupTopologyTarget {
             name: Name::parse(&format!("New archive {index}")).unwrap(),
-            disk_id: crate::new_id("disk"), slot_id: format!("C{:02}", index + 2),
+            disk_id: crate::new_id("disk").unwrap(), slot_id: format!("C{:02}", index + 2),
             upstream_slot_id: "B01".into(),
         }).collect(),
     };

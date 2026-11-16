@@ -8,6 +8,7 @@ fn namespaces(
     prepared: &PreparedBackupRegistry,
     plan: &Plan,
     expected: &BackupFirstPublicationHash,
+    source: &crate::State,
     stop: &AtomicBool,
 ) -> Result<Vec<Vec<u8>>> {
     let mut observations = Vec::new();
@@ -18,7 +19,19 @@ fn namespaces(
                 let (head, entries) = admitted.branch(id)?;
                 branches.insert(id.clone(), (head.to_owned(), entries.to_vec()));
             }
-            assert!(admitted.state().directory_branches.is_empty());
+            // The real fixture has a registered root and two ordinary Mkdir
+            // branches. They are not initialized DirectoryGit repositories.
+            // Compare complete logical records with the actual original Engine
+            // State, not a hard-coded zero or merely the resulting row count.
+            assert_eq!(admitted.state().repositories, source.repositories);
+            assert_eq!(admitted.state().directory_branches, source.directory_branches);
+            assert_eq!(
+                admitted.state().namespace_directories.keys().collect::<Vec<_>>(),
+                source.namespace_directories.keys().collect::<Vec<_>>(),
+            );
+            assert_eq!(admitted.state().directory_git_repositories,
+                source.directory_git_repositories);
+            assert!(source.directory_git_repositories.is_empty());
             // Complete State includes all deletion and retirement facts, even
             // though this original fixture has no nonempty deletion history.
             Ok(canonical_json(&(
@@ -80,23 +93,24 @@ fn verify_committed_namespace_encodings(
     prepared: &mut PreparedBackupRegistry,
     decision: &AdmittedBackupDecision,
     expected: &BackupFirstPublicationHash,
+    source: &crate::State,
     stop: &AtomicBool,
 ) -> Result<()> {
     let retained = prepared.scope_encoding.take();
     let before = fixture_tree(root);
     let plan = Plan::capture(prepared, decision, expected, stop)?;
-    let baseline = namespaces(prepared, &plan, expected, stop)?;
+    let baseline = namespaces(prepared, &plan, expected, source, stop)?;
     assert_eq!(baseline.len(), 2);
     assert_eq!(fixture_tree(root), before);
     prepared.scope_encoding = Some(encoding_memo::ScopeEncodingMemo::new());
     // This is a cold, committed-only miss. It must not populate the account;
     // the dedicated memo tests assert the exact internal account equality.
-    assert_eq!(namespaces(prepared, &plan, expected, stop)?, baseline);
+    assert_eq!(namespaces(prepared, &plan, expected, source, stop)?, baseline);
     assert_eq!(fixture_tree(root), before);
     // Only the original full registry verifier may populate this request memo.
     prepared.verify(stop)?;
     assert_eq!(fixture_tree(root), before);
-    assert_eq!(namespaces(prepared, &plan, expected, stop)?, baseline);
+    assert_eq!(namespaces(prepared, &plan, expected, source, stop)?, baseline);
     assert_eq!(fixture_tree(root), before);
 
     for index in 0..prepared.targets.len() {
@@ -106,7 +120,7 @@ fn verify_committed_namespace_encodings(
         for bad in [b"{}".as_slice(), br#"{"a":1,"a":1}"#.as_slice()] {
             fs::write(&path, bad).unwrap();
             compare_rejection(root, prepared, |prepared| {
-                namespaces(prepared, &plan, expected, stop).map(|_| ())
+                namespaces(prepared, &plan, expected, source, stop).map(|_| ())
             });
         }
         fs::write(&path, original).unwrap();
@@ -114,7 +128,7 @@ fn verify_committed_namespace_encodings(
 
     let stopped = AtomicBool::new(true);
     compare_rejection(root, prepared, |prepared| {
-        namespaces(prepared, &plan, expected, &stopped).map(|_| ())
+        namespaces(prepared, &plan, expected, source, &stopped).map(|_| ())
     });
     compare_rejection(root, prepared, |prepared| {
         let called = Cell::new(false);
@@ -178,11 +192,11 @@ fn verify_committed_namespace_encodings(
     fs::rename(&named, &displaced).unwrap();
     fs::DirBuilder::new().mode(0o700).create(&named).unwrap();
     compare_rejection(root, prepared, |prepared| {
-        namespaces(prepared, &plan, expected, stop).map(|_| ())
+        namespaces(prepared, &plan, expected, source, stop).map(|_| ())
     });
     fs::remove_dir(&named).unwrap();
     fs::rename(&displaced, &named).unwrap();
-    assert_eq!(namespaces(prepared, &plan, expected, stop)?, baseline);
+    assert_eq!(namespaces(prepared, &plan, expected, source, stop)?, baseline);
     assert_eq!(fixture_tree(root), before);
     prepared.scope_encoding = retained;
     Ok(())

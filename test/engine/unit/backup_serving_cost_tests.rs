@@ -634,7 +634,7 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
         _temp.path(), &mut prepared, &decision, &expected, &stop,
     )?;
     published_registry::encoding_probe::verify_committed_namespace_encodings(
-        _temp.path(), &mut prepared, &decision, &expected, &stop,
+        _temp.path(), &mut prepared, &decision, &expected, engine.state(), &stop,
     )?;
     generation_control::encoding_probe::verify_generation_encoding_reuse(
         _temp.path(), &mut prepared, &decision, &stop,
