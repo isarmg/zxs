@@ -1,5 +1,25 @@
 {
   "groups": {
+    "named-backup-root-admission": {
+      "reason": "Keep observed named-root replacement tests and real empty-directory backup independently selected. Test the held-root boundary without claiming raw descriptor invalidation.",
+      "python_tests": [
+        "test_named_backup_root_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::fresh_layout::namespace::backup::tests::actual_genesis_backup_source_keeps_direct_uuid_and_held_common_roots",
+            "engine::fresh_layout::namespace::backup::tests::actual_backup_source_rejects_a_same_value_rebound_source_and_nonbackup_target",
+            "engine::fresh_layout::namespace::backup::tests::prepared_backup_source_does_not_adopt_a_replacement_common_directory"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "named-disk-verification-tools": {
       "reason": "Compile the three named-layout verification tool binaries with the explicit configured disk identity contract. Also check exact CI admission for these tool consumers. This does not run a benchmark or a live browser.",
       "python_tests": [
@@ -4649,6 +4669,33 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/engine/membership_transition.rs",
+      "groups": [
+        "named-backup-root-admission",
+        "ordinary-empty-directory-backup"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout.rs",
+      "groups": [
+        "named-backup-root-admission",
+        "ordinary-empty-directory-backup"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk_names/backup_source_tests.rs",
+      "groups": [
+        "named-backup-root-admission"
+      ]
+    },
+    {
+      "path": "test/ci/test_named_backup_root_targeted_ci.py",
+      "groups": [
+        "named-backup-root-admission",
+        "ordinary-empty-directory-backup"
+      ]
+    },
     {
       "path": ".github/architecture-policy.json",
       "groups": [
