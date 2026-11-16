@@ -42,7 +42,7 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
             }
         }
     }
-    for ((disk, _), prefix) in prefixes::collect(state)? {
+    for ((disk, _), prefix) in prefixes::collect(state)?.into_records() {
         if std::iter::once(prefix.entity).chain(prefix.areas.entities())
             .any(|entity| !entities.insert((disk, entity)))
             || !preparations.insert((disk, prefix.preparation))
@@ -774,13 +774,7 @@ pub(crate) fn verify_transition<'a>(
                 return Err(Failure::ContainerScope.into());
             }
             predecessor = Some(id);
-            for prefix in &replica.prefixes {
-                if known_prefixes.insert((id, prefix.source_disk), prefix.clone())
-                    .is_some_and(|old| old != *prefix)
-                {
-                    return Err(Failure::ContainerIdentity.into());
-                }
-            }
+            known_prefixes.extend_chain(id, &replica.prefixes)?;
             // Existing complete records never retarget, even for identical bytes.
             record.replicas.entry(id).or_insert_with(|| replica.clone());
         }
@@ -799,13 +793,7 @@ pub(crate) fn verify_transition<'a>(
             config, next, result, &mut directories, &selected, Some(&next.namespace_directories),
             |record, disk| {
                 let replica = record.replicas.get(&disk).ok_or(Failure::NamespaceSource)?;
-                for prefix in &replica.source_prefixes {
-                    if known_prefixes.insert((disk, prefix.source_disk), prefix.clone())
-                        .is_some_and(|old| old != *prefix)
-                    {
-                        return Err(Failure::ContainerIdentity.into());
-                    }
-                }
+                known_prefixes.extend_chain(disk, &replica.source_prefixes)?;
                 Ok(replica.source_prefixes.clone())
             },
         )?);

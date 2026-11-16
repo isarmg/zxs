@@ -4666,6 +4666,40 @@
           "features": []
         }
       ]
+    },
+    "source-prefix-address-continuity": {
+      "reason": "Retain exact target/source/parent identity and the original prefix plus five areas across existing live reuse and cold FILE/directory feedback. No Config successor, physical rename or new I/O authority.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [],
+          "exact": [
+            "engine::fresh_layout::containers::prefixes::tests::source_prefix_inventory_preserves_target_parent_and_full_entities",
+            "engine::fresh_layout::containers::prefixes::tests::source_prefix_inventory_rejects_reparenting_even_with_identical_record",
+            "engine::fresh_layout::containers::prefixes::tests::source_prefix_inventory_rejects_entity_or_preparation_substitution"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 180
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -9997,13 +10031,13 @@
       ]
     },
     {
-      "path": "\u7981\u6b62\u9632\u5fa1\u6027\u7f16\u7a0b.md",
+      "path": "禁止防御性编程.md",
       "groups": [
         "engineering-guidance"
       ]
     },
     {
-      "path": "\u5de5\u7a0b\u89c4\u8303.md",
+      "path": "工程规范.md",
       "groups": [
         "engineering-guidance"
       ]
@@ -13506,6 +13540,30 @@
       "path": "docs/design/ordinary-container-rename.md",
       "groups": [
         "ordinary-container-rename"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers/prefixes.rs",
+      "groups": [
+        "source-prefix-address-continuity"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers.rs",
+      "groups": [
+        "source-prefix-address-continuity"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/source_prefix_inventory_tests.rs",
+      "groups": [
+        "source-prefix-address-continuity"
+      ]
+    },
+    {
+      "path": "docs/design/source-prefix-address-continuity.md",
+      "groups": [
+        "source-prefix-address-continuity"
       ]
     }
   ],

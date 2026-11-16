@@ -4,20 +4,79 @@ use crate::disk_names::configuration::ConfiguredDiskNames;
 use storage_contract::file_container::{ContainerAreas, ContainerNamespace, ContainerPrefix};
 use storage_contract::working_tree::DirectoryId;
 
-pub(super) type Prefixes = BTreeMap<(DiskId, DiskId), ContainerPrefix>;
+/// Structural address only. Names are deliberately absent: changing a Config
+/// string cannot change a source area's target, direct parent or owned entities.
+/// A physical consumer still needs its admitted source and held-root checks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PrefixAddress {
+    target: DiskId,
+    source: DiskId,
+    parent: Option<DiskId>,
+}
+
+struct PrefixOccurrence {
+    address: PrefixAddress,
+    record: ContainerPrefix,
+}
+
+/// One inventory shared by shape admission, live preparation and cold feedback.
+/// Preserve the parent relation proved by collect_chain instead of discarding
+/// it and later comparing only the leaf's inode/areas under another parent.
+#[derive(Default)]
+pub(super) struct Prefixes {
+    occurrences: BTreeMap<(DiskId, DiskId), PrefixOccurrence>,
+}
+
+impl Prefixes {
+    fn insert(&mut self, address: PrefixAddress, record: &ContainerPrefix) -> bool {
+        let key = (address.target, address.source);
+        if let Some(previous) = self.occurrences.get(&key) {
+            return previous.address == address && previous.record == *record;
+        }
+        self.occurrences.insert(key, PrefixOccurrence { address, record: record.clone() });
+        true
+    }
+
+    fn at(
+        &self, target: DiskId, parent: Option<DiskId>, source: DiskId,
+    ) -> Result<Option<&ContainerPrefix>> {
+        let Some(previous) = self.occurrences.get(&(target, source)) else {
+            return Ok(None);
+        };
+        if previous.address != (PrefixAddress { target, source, parent }) {
+            return Err(Failure::ContainerIdentity.into());
+        }
+        Ok(Some(&previous.record))
+    }
+
+    pub(super) fn extend_chain(&mut self, target: DiskId, chain: &[ContainerPrefix]) -> Result<()> {
+        let mut parent = None;
+        for record in chain {
+            let source = record.source_disk;
+            if !self.insert(PrefixAddress { target, source, parent }, record) {
+                return Err(Failure::ContainerIdentity.into());
+            }
+            parent = Some(source);
+        }
+        Ok(())
+    }
+
+    pub(super) fn into_records(self) -> impl Iterator<Item = ((DiskId, DiskId), ContainerPrefix)> {
+        self.occurrences.into_iter().map(|(key, occurrence)| (key, occurrence.record))
+    }
+}
 
 pub(super) fn collect(state: &State) -> Result<Prefixes> {
-    let mut result = BTreeMap::new();
-    let mut parents = BTreeMap::new();
+    let mut result = Prefixes::default();
     for record in state.file_containers.values() {
         for (disk, replica) in &record.replicas {
-            collect_chain(*disk, record.owner_disk, &replica.prefixes, &mut result, &mut parents)?;
+            collect_chain(*disk, record.owner_disk, &replica.prefixes, &mut result)?;
         }
     }
     for record in state.namespace_directories.values() {
         for (disk, replica) in &record.replicas {
             collect_chain(*disk, record.owner_disk, &replica.source_prefixes,
-                &mut result, &mut parents)?;
+                &mut result)?;
         }
     }
     Ok(result)
@@ -25,7 +84,6 @@ pub(super) fn collect(state: &State) -> Result<Prefixes> {
 
 fn collect_chain(
     disk: DiskId, owner: DiskId, chain: &[ContainerPrefix], result: &mut Prefixes,
-    parents: &mut BTreeMap<(DiskId, DiskId), Option<DiskId>>,
 ) -> Result<()> {
     if (disk == owner) != chain.is_empty()
         || (!chain.is_empty() && chain.last().map(|prefix| prefix.source_disk) != Some(owner))
@@ -35,14 +93,14 @@ fn collect_chain(
     let mut parent = None;
     let mut seen = BTreeSet::new();
     for prefix in chain {
-        let key = (disk, prefix.source_disk);
         if !seen.insert(prefix.source_disk) || prefix.source_disk == disk
             || prefix.entity.inode() == 0
             || prefix.areas.entities().iter().any(|entity| {
                 entity.inode() == 0 || entity.device() != prefix.entity.device()
             })
-            || parents.insert(key, parent).is_some_and(|old| old != parent)
-            || result.insert(key, prefix.clone()).is_some_and(|old| old != *prefix)
+            || !result.insert(PrefixAddress {
+                target: disk, source: prefix.source_disk, parent,
+            }, prefix)
         {
             return Err(Failure::ContainerShape.into());
         }
@@ -61,7 +119,7 @@ pub(super) fn plan(
     plan_source(context, namespace.repository, namespace.branch, owner, target, known)
 }
 
-pub(in crate::engine::fresh_layout) fn plan_source(
+pub(super) fn plan_source(
     context: &PlanningContext<'_>, repository: storage_contract::RepositoryId,
     branch: storage_contract::BranchId, owner: DiskId, target: DiskId,
     known: &mut Prefixes,
@@ -82,9 +140,9 @@ pub(in crate::engine::fresh_layout) fn plan_source(
         return Err(Failure::NamespaceSource.into());
     }
     let mut result = Vec::new();
+    let mut parent = None;
     for source_disk in source.destination().source_ids() {
-        let key = (target, source_disk);
-        let prefix = match known.get(&key) {
+        let prefix = match known.at(target, parent, source_disk)? {
             Some(prefix) => prefix.clone(),
             None => {
                 let prefix = ContainerPrefix {
@@ -93,11 +151,16 @@ pub(in crate::engine::fresh_layout) fn plan_source(
                     entity: ContainerEntity::new(0, 0),
                     areas: ContainerAreas::budget(),
                 };
-                known.insert(key, prefix.clone());
+                if !known.insert(PrefixAddress {
+                    target, source: source_disk, parent,
+                }, &prefix) {
+                    return Err(Failure::ContainerIdentity.into());
+                }
                 prefix
             }
         };
         result.push(prefix);
+        parent = Some(source_disk);
     }
     Ok(result)
 }
@@ -134,3 +197,7 @@ pub(in crate::engine::fresh_layout) fn require_source_geometry(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/engine/source_prefix_inventory_tests.rs"]
+mod tests;
