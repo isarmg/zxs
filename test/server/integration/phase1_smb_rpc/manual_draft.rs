@@ -193,9 +193,12 @@ fn public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_c
     stage(&client, stale.handle, &stale_fd, stale_bytes);
     let before = fixture.backend.file_working(&fixture.identity(), target.clone()).unwrap();
     let competing = b"another authorized durable draft";
-    let mut competing_fd = tempfile::tempfile().unwrap();
-    competing_fd.write_all(competing).unwrap();
-    let source = UploadSource::from_file(competing_fd, 1024 * 1024).unwrap();
+    // UploadSource requires a retained plain file with exactly one link.
+    let mut competing_file = tempfile::NamedTempFile::new_in(fixture.root.path()).unwrap();
+    competing_file.as_file_mut().write_all(competing).unwrap();
+    let source = UploadSource::from_file(
+        competing_file.reopen().unwrap(), 1024 * 1024,
+    ).unwrap();
     fixture.backend.write_file_draft(&fixture.identity(), ChangeFileWorking {
         operation_id: OperationId::generate().unwrap(),
         command: DraftCommand::Write {
