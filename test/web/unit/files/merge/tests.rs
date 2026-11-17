@@ -1,5 +1,24 @@
 use super::*;
 
+#[test]
+fn generated_node_labels_fit_without_shortening_notes() {
+    use crate::files::history::tests::node;
+
+    for kind in ["content", "rename", "merge"] {
+        let generated = node(json!({
+            "kind": kind,
+            "note": "",
+            "sequence": u64::MAX.to_string(),
+        }));
+        let label = node_label(&generated, 0);
+        assert!(label.starts_with(&u64::MAX.to_string()));
+        assert!(label.len() < 32, "{kind}: {label}");
+    }
+    let note = "这是应该保留全文的用户备注，不是自动生成的节点名称";
+    let custom = node(json!({"kind":"merge", "note":note, "sequence":"12"}));
+    assert_eq!(node_label(&custom, 0), format!("12 · {note}"));
+}
+
 fn branch(id: &str, head: &str) -> SelectedBranch {
     SelectedBranch {
         id: id.into(),

@@ -29,6 +29,7 @@ fn empty_note_has_an_explicit_sequence_label_not_an_invented_comment() {
         format!("{} #42", t("无备注", "No note"))
     );
     assert_eq!(title("", 3), format!("{} #3", t("无备注", "No note")));
+    assert!(title("", u64::MAX).len() < 32);
 }
 
 #[test]

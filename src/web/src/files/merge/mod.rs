@@ -515,9 +515,11 @@ pub(super) fn node_label(node: &FileNode, _index: usize) -> String {
     let note = node.note();
     let descriptor = if note.is_empty() {
         match node.kind() {
-            NodeKind::Rename => t("路径变化", "Path changed"),
-            NodeKind::Merge => t("合并节点", "Merge node"),
-            NodeKind::Content => t("文件内容", "File content"),
+            // The longest sequence has 20 digits and the separator uses 4
+            // bytes, leaving 7 UTF-8 bytes in the generated node name.
+            NodeKind::Rename => t("路径", "Path"),
+            NodeKind::Merge => t("合并", "Merge"),
+            NodeKind::Content => t("正文", "Content"),
         }
     } else {
         note.to_owned()
