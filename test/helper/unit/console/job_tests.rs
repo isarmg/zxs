@@ -71,6 +71,34 @@ async fn typed_jobs_preserve_response_and_release_owner() {
 }
 
 #[tokio::test]
+async fn successful_job_keeps_its_slot_until_all_queued_response_bytes_are_released() {
+    let state = state();
+    let response = app(state.clone(), echo)
+        .oneshot(request(r#"{"number":7}"#))
+        .await
+        .unwrap();
+    assert_eq!(state.jobs.available_permits(), 0);
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    let queued = bytes.clone();
+    drop(bytes);
+    let rejected = app(state.clone(), empty)
+        .oneshot(request("{}"))
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
+    assert_eq!(body(rejected).await["error"]["code"], "helper_busy");
+    assert_eq!(state.jobs.available_permits(), 0);
+    drop(queued);
+    assert_eq!(state.jobs.available_permits(), 1);
+    let response = app(state.clone(), empty)
+        .oneshot(request("{}"))
+        .await
+        .unwrap();
+    drop(response);
+    assert_eq!(state.jobs.available_permits(), 1);
+}
+
+#[tokio::test]
 async fn typed_and_empty_input_are_strict_and_budgeted_before_work() {
     fn unreachable_work(_: Echo) -> crate::Result<Echo> {
         panic!("invalid input reached worker")

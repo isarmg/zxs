@@ -1,11 +1,12 @@
 //! One owner for typed JSON jobs, from HTTP admission through blocking work.
-use super::{Failure, State, admit_job, input, secret_input};
+use crate::console::{
+    State,
+    http::{Failure, admit_job, input, response_body, secret_input},
+};
 use data_serialization::{Deserialize, Serialize, de::DeserializeOwned};
 use http_routing::{
-    Json,
     extract::{Request, State as ExtractState},
     http::StatusCode,
-    response::IntoResponse,
     routing::{MethodRouter, post},
 };
 
@@ -79,8 +80,7 @@ impl Job {
                 };
                 let output = tokio::task::spawn_blocking(move || {
                     // A disconnected HTTP caller cannot release the native owner.
-                    let _owner = permit;
-                    operation(input).map_err(|error| {
+                    let output = operation(input).map_err(|error| {
                         let message = match kind {
                             Input::Json => crate::diagnostic_chain(error.as_ref()),
                             // Credential operations own a public top-level diagnostic;
@@ -88,13 +88,14 @@ impl Job {
                             Input::Credential(_) => error.to_string(),
                         };
                         Failure::message(StatusCode::CONFLICT, self.operation_error, &message)
-                    })
+                    })?;
+                    Ok::<_, Failure>(response_body::json(output, permit))
                 })
                 .await
                 .map_err(|error| {
                     Failure::new(StatusCode::INTERNAL_SERVER_ERROR, self.worker_error, error)
                 })??;
-                Ok::<_, Failure>(Json(output).into_response())
+                Ok::<_, Failure>(output)
             },
         )
     }

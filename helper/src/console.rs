@@ -2,6 +2,7 @@
 //! program installation is a separate fixed-path, no-overwrite operation.
 mod boundary;
 mod http;
+mod transport;
 mod work;
 
 use crate::{Result, deployment::activation::Handoff};
@@ -85,7 +86,9 @@ pub(crate) fn run(options: Options) -> Result<Option<Handoff>> {
         .enable_all()
         .build()?;
     // Runtime shutdown waits for the blocking read owner after HTTP disconnect.
-    runtime.block_on(serve(options))
+    let result = runtime.block_on(serve(options));
+    drop(runtime);
+    result
 }
 
 async fn serve(options: Options) -> Result<Option<Handoff>> {
@@ -103,6 +106,8 @@ async fn serve(options: Options) -> Result<Option<Handoff>> {
         listen.port()
     );
     let handoff = Arc::clone(&state.handoff);
+    let drain = transport::Drain::default();
+    let listener = transport::BoundedListener::new(listener, drain.clone());
     http_routing::serve(listener, http::router(state))
         .with_graceful_shutdown(async move {
             tokio::select! {
@@ -111,6 +116,9 @@ async fn serve(options: Options) -> Result<Option<Handoff>> {
                 _ = stopped.changed() => {},
             }
             stopping.send_replace(true);
+            // Bound only HTTP teardown. Blocking workers retain their native
+            // owner and the outer process lease until runtime shutdown ends.
+            drain.begin();
             eprintln!("zxs-helper: stopping admission; waiting for active requests and disk reads. Do not remove source media until the process exits.");
         })
         .await?;
