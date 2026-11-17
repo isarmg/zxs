@@ -23,7 +23,7 @@ pub(super) mod read_trace;
 pub(super) mod generation_objects;
 
 const FORMAT: &str = "zxs-container-current-name-backup-native-control";
-const ROOT: &str = "native-control";
+pub(super) const ROOT: &str = "native-control";
 const MAX_BYTES: usize = 128 * 1024 * 1024;
 const MAX_READS: usize = 32768;
 const MAX_PUBLICATIONS: usize = 2048;
@@ -496,10 +496,10 @@ impl PreparedArchive {
         }
         visit(manifest_path(root), &self.manifest)
     }
-    pub(super) fn copy(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
+    pub(super) fn install(&self, root: &DiskRoot, mode: completion_fanout::MaterialMode, stop: &AtomicBool) -> Result<()> {
         self.visit(root.path(), |path, bytes| {
             crate::history_package::preparation_checkpoint(stop)?;
-            crate::history_package::install_preparation_bytes(root, &path, bytes)
+            mode.write(root, &path, bytes)
         })
     }
 }

@@ -214,17 +214,28 @@ pub(crate) fn install_preparation_bytes(root: &DiskRoot, path: &Path, bytes: &[u
             .expect("invariant: prepared object has parent"),
     )?;
     if root.optional_metadata(path)?.is_some() {
-        if root.read_bytes(path, bytes.len())? != bytes {
-            return Err(Error::new(
-                ErrorCode::ObjectCollision,
-                "prepared metadata differs from its frozen source",
-            ));
-        }
-        root.open_regular(path)?.sync_all()?;
-        root.sync_dir(path.parent().expect("invariant: metadata has parent"))
+        sync_exact_file(root, path, bytes)
     } else {
         root.write_atomic(path, bytes, false)
     }
+}
+
+/// Completed evidence must survive on its own. Replay every ordinary directory
+/// and file sync, but do not create an absent ancestor or refill a missing file.
+pub(crate) fn sync_existing_preparation_bytes(root: &DiskRoot, path: &Path, bytes: &[u8]) -> Result<()> {
+    root.sync_existing_private_chain(path.parent().expect("invariant: metadata has parent"))?;
+    sync_exact_file(root, path, bytes)
+}
+
+fn sync_exact_file(root: &DiskRoot, path: &Path, bytes: &[u8]) -> Result<()> {
+    if root.read_bytes(path, bytes.len())? != bytes {
+        return Err(Error::new(
+            ErrorCode::ObjectCollision,
+            "prepared metadata differs from its frozen source",
+        ));
+    }
+    root.open_regular(path)?.sync_all()?;
+    root.sync_dir(path.parent().expect("invariant: metadata has parent"))
 }
 
 struct StoppableReader<'a> {

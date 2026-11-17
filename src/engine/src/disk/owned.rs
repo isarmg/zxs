@@ -600,6 +600,16 @@ impl DiskRoot {
         self.operation()?.private_dir(path)
     }
 
+    /// Replay the private directory sync chain without creating even a missing
+    /// ancestor. A completed material set may be verified, never reconstructed.
+    pub(crate) fn sync_existing_private_chain(&self, path: &Path) -> Result<()> {
+        let operation = self.operation()?;
+        if path == self.path {
+            return Ok(());
+        }
+        operation.sync_private_chain(Some(&self.relative(path)?), false)
+    }
+
     /// Create exactly one new private directory. An existing empty name is not
     /// adopted. The new directory and its parent are synchronized while the
     /// admitting operation still owns both descriptors.
@@ -1028,21 +1038,27 @@ impl RootOperation<'_> {
     }
 
     fn private_relative_dir(&self, path: Option<&RelativePath>) -> Result<()> {
+        self.sync_private_chain(path, true)
+    }
+
+    fn sync_private_chain(&self, path: Option<&RelativePath>, create: bool) -> Result<()> {
         let Some(path) = path else {
             return Ok(());
         };
         let (parent_path, name) = path.split_parent();
         // A previous attempt may have created any ancestor before its fsync
         // failed. Admit and synchronize the complete chain, not just the leaf.
-        self.private_relative_dir(parent_path.as_ref())?;
+        self.sync_private_chain(parent_path.as_ref(), create)?;
         let parent = self.open_relative_directory(parent_path.as_ref())?;
-        match rustix::fs::mkdirat(
-            &parent,
-            name.as_os_str(),
-            rustix::fs::Mode::from_raw_mode(0o700),
-        ) {
-            Ok(()) | Err(rustix::io::Errno::EXIST) => (),
-            Err(error) => return Err(std::io::Error::from(error).into()),
+        if create {
+            match rustix::fs::mkdirat(
+                &parent,
+                name.as_os_str(),
+                rustix::fs::Mode::from_raw_mode(0o700),
+            ) {
+                Ok(()) | Err(rustix::io::Errno::EXIST) => (),
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            }
         }
         let directory = File::from(
             rustix::fs::openat2(

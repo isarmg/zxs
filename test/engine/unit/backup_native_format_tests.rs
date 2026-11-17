@@ -16,6 +16,10 @@ struct Fixture {
 
 impl Fixture {
     fn prepared() -> Self {
+        Self::prepared_with_sibling(false)
+    }
+
+    fn prepared_with_sibling(include_sibling: bool) -> Self {
         let temp = tempfile::Builder::new()
             .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
             .tempdir()
@@ -56,17 +60,28 @@ impl Fixture {
         assert_eq!(engine.state().versions.len(), 1);
         let target = temp.path().join("selected-target");
         fs::DirBuilder::new().mode(0o700).create(&target).unwrap();
+        let mut targets = vec![target.clone()];
+        if include_sibling {
+            let sibling = temp.path().join("sibling-target");
+            fs::DirBuilder::new().mode(0o700).create(&sibling).unwrap();
+            targets.push(sibling);
+        }
         let operation = operation();
         let request = BackupPreparationRequest {
             operation_id: operation,
             principal: "admin".into(),
             source_slot_id: "B01".into(),
-            target_paths: vec![target.clone()],
+            target_paths: targets.clone(),
             expected_sequence: engine.state().sequence,
         };
-        engine
-            .start_backup_preparation(request, fs::File::open(&target).unwrap())
-            .unwrap();
+        if include_sibling {
+            engine.start_backup_batch_preparation(
+                request,
+                targets.iter().map(|path| fs::File::open(path).unwrap()).collect(),
+            ).unwrap();
+        } else {
+            engine.start_backup_preparation(request, fs::File::open(&target).unwrap()).unwrap();
+        }
         assert_eq!(
             engine.wait_backup_preparation().unwrap().phase,
             BackupPreparationPhase::HistoryPrepared
@@ -219,4 +234,63 @@ fn old_original_seal_is_rejected_inside_current_rehashed_archive_without_writes(
         assert_eq!(fixture.read(&expected).unwrap_err().code(), ErrorCode::InvalidJson);
         assert_eq!(fixture.bytes(), before);
     }
+}
+
+#[test]
+fn partial_native_marker_fanout_never_refills_a_peer_or_ignores_a_late_conflict() {
+    use std::os::unix::fs::MetadataExt;
+    let mut fixture = Fixture::prepared_with_sibling(true);
+    let system = fixture.temp.path().join("system");
+    let sibling = fixture.temp.path().join("sibling-target");
+    let first_marker = fixture.target.join(super::COMPLETE);
+    let last_marker = sibling.join(super::COMPLETE);
+    let expected = fs::read(&last_marker).unwrap();
+    assert_eq!(fs::read(&first_marker).unwrap(), expected);
+    let last_inode = fs::metadata(&last_marker).unwrap().ino();
+    let first_journals = journal_path(&fixture.target, 0).parent().unwrap().to_owned();
+    let saved = fixture.temp.path().join("saved-original-journals");
+    // Crash during marker fan-out: the only marker is on the *last* peer.
+    fs::remove_file(&first_marker).unwrap();
+    fs::rename(&first_journals, &saved).unwrap();
+    drop(fixture.engine);
+    fixture.engine = Engine::open(&system).unwrap();
+    assert_eq!(fixture.engine.wait_backup_preparation().unwrap().phase, BackupPreparationPhase::Blocked);
+    assert!(!first_journals.exists()); // no mkdir, not just no rewritten journal
+    assert!(!first_marker.exists());
+    assert_eq!(fs::read(&last_marker).unwrap(), expected);
+    // Even with the original physical evidence back, a later conflicting
+    // completion may not be discovered only after the first marker was created.
+    fs::rename(&saved, &first_journals).unwrap();
+    fs::write(&last_marker, b"unrelated retained evidence").unwrap();
+    fixture.engine.start_backup_native_preparation(fixture.operation, "admin").unwrap();
+    assert_eq!(fixture.engine.wait_backup_preparation().unwrap().phase, BackupPreparationPhase::Blocked);
+    assert!(!first_marker.exists());
+    assert_eq!(fs::read(&last_marker).unwrap(), b"unrelated retained evidence");
+    // With all material and existing marker exact, only the interrupted marker
+    // tail completes. The observed peer inode, target bindings and original task survive.
+    fs::write(&last_marker, &expected).unwrap();
+    fixture.engine.start_backup_native_preparation(fixture.operation, "admin").unwrap();
+    assert_eq!(fixture.engine.wait_backup_preparation().unwrap().phase, BackupPreparationPhase::NativeControlPrepared);
+    assert_eq!(fs::metadata(&last_marker).unwrap().ino(), last_inode);
+    assert_eq!(fs::read(first_marker).unwrap(), expected);
+    let report = super::offline_check_backup_native_preparation(&[fixture.target, sibling]).unwrap();
+    assert_eq!(canonical_json(&report).unwrap(), expected);
+}
+
+#[test]
+fn incomplete_native_archive_resumes_original_task_but_unowned_evidence_is_not_adopted() {
+    let mut fixture = Fixture::prepared();
+    let journal = journal_path(&fixture.target, 0);
+    let expected = fs::read(&journal).unwrap();
+    fs::remove_file(fixture.target.join(super::COMPLETE)).unwrap();
+    fs::remove_file(&journal).unwrap();
+    fixture.engine.start_backup_native_preparation(fixture.operation, "admin").unwrap();
+    assert_eq!(fixture.engine.wait_backup_preparation().unwrap().phase, BackupPreparationPhase::NativeControlPrepared);
+    assert_eq!(fs::read(journal).unwrap(), expected);
+    let system_intent = fixture.temp.path().join("system").join(super::TASK);
+    fs::remove_file(&system_intent).unwrap();
+    let before = fixture.bytes();
+    assert_eq!(fixture.engine.start_backup_native_preparation(fixture.operation, "admin").unwrap_err().code(), ErrorCode::ConfigConflict);
+    assert!(!system_intent.exists());
+    assert_eq!(fixture.bytes(), before);
 }

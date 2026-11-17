@@ -2,6 +2,7 @@
 //! before opening old target paths; a partial archive retries only the same task.
 use super::*;
 use archive::PreparedArchive;
+use completion_fanout::{Fanout, MaterialMode};
 
 pub(super) struct Target {
     pub(super) root: DiskRoot,
@@ -49,6 +50,14 @@ impl Engine {
             super::resume(self, &system)?;
         } else {
             let work = prepare(self, &selection)?;
+            let fanout = Fanout::observe(COMPLETE, &work, selection.jobs())?;
+            for target in &work {
+                for name in [INTENT, archive::ROOT, COMPLETE] {
+                    if target.root.optional_metadata(&target.root.path().join(name))?.is_some() {
+                        return Err(invalid("native target evidence predates its SYSTEM intent; existing material retained"));
+                    }
+                }
+            }
             let archive = PreparedArchive::freeze(self, selection.first())?;
             for target in &work {
                 require_capacity(&target.root, &archive)?;
@@ -62,7 +71,7 @@ impl Engine {
             // partially persisted attempt can never silently select other disks.
             system.write_atomic(&self.root.join(TASK), &task.bytes()?, false)?;
             self.backup_preparation =
-                Some(match spawn(self, task.clone(), system, work, archive) {
+                Some(match spawn(self, task.clone(), system, work, archive, fanout) {
                     Ok(worker) => worker,
                     Err(error) => task.selection.idle(error, BackupPreparationPhase::Blocked),
                 });
@@ -162,8 +171,11 @@ pub(in crate::engine::backup_preparation) fn resume(
                 "original native prefix changed; retained bytes were not overwritten",
             ));
         }
-        for target in &work {
-            require_capacity(&target.root, &archive)?;
+        let fanout = Fanout::observe(COMPLETE, &work, task.selection.jobs())?;
+        if matches!(fanout.mode(), MaterialMode::CopyMissing) {
+            for target in &work {
+                require_capacity(&target.root, &archive)?;
+            }
         }
         spawn(
             engine,
@@ -171,6 +183,7 @@ pub(in crate::engine::backup_preparation) fn resume(
             DiskRoot::open(system.path())?,
             work,
             archive,
+            fanout,
         )
     })();
     engine.backup_preparation = Some(match resumed {
@@ -184,13 +197,18 @@ fn copy_control(
     task: &NativeTask,
     work: &[Target],
     archive: &PreparedArchive,
+    mut fanout: Fanout,
     progress: &Progress,
 ) -> Result<()> {
     let stop = progress.stop.as_ref();
     let intent = task.bytes()?;
-    for (target, job) in work.iter().zip(task.selection.jobs()) {
-        named_target(&target.root, job)?;
-        require_capacity(&target.root, archive)?;
+    fanout.refresh(work, task.selection.jobs())?;
+    let mode = fanout.mode();
+    if matches!(mode, MaterialMode::CopyMissing) {
+        for (target, job) in work.iter().zip(task.selection.jobs()) {
+            named_target(&target.root, job)?;
+            require_capacity(&target.root, archive)?;
+        }
     }
     for (index, (target, job)) in work.iter().zip(task.selection.jobs()).enumerate() {
         crate::history_package::preparation_checkpoint(stop)?;
@@ -203,12 +221,8 @@ fn copy_control(
             );
         })?;
         named_target(&target.root, job)?;
-        crate::history_package::install_preparation_bytes(
-            &target.root,
-            &target.root.path().join(INTENT),
-            &intent,
-        )?;
-        archive.copy(&target.root, stop)?;
+        mode.write(&target.root, &target.root.path().join(INTENT), &intent)?;
+        archive.install(&target.root, mode, stop)?;
         let report = archive::read(&target.root, job, &task.archive_hash, stop)?;
         if report != archive.report {
             return Err(invalid(
@@ -225,18 +239,7 @@ fn copy_control(
             "native completion exceeds reader budget",
         ));
     }
-    for (target, job) in work.iter().zip(task.selection.jobs()) {
-        crate::history_package::preparation_checkpoint(stop)?;
-        named_target(&target.root, job)?;
-        crate::history_package::install_preparation_bytes(
-            &target.root,
-            &target.root.path().join(COMPLETE),
-            &bytes,
-        )?;
-    }
-    for (target, job) in work.iter().zip(task.selection.jobs()) {
-        named_target(&target.root, job)?;
-    }
+    fanout.finish(work, task.selection.jobs(), &bytes, MAX_TASK, stop)?;
     progress.update(|status| {
         status.phase = BackupPreparationPhase::NativeControlPrepared;
         status.detail = format!(
@@ -252,6 +255,7 @@ fn spawn(
     system: DiskRoot,
     work: Vec<Target>,
     archive: PreparedArchive,
+    fanout: Fanout,
 ) -> Result<Worker> {
     let locks = engine.retain_writer_locks()?;
     let initial = task.selection.status();
@@ -262,7 +266,7 @@ fn spawn(
         "zxs-backup-native-control",
         move |progress| {
             // Retain all target locks through complete-set and failure diagnostics.
-            progress.finish(copy_control(&frozen, &work, &archive, progress));
+            progress.finish(copy_control(&frozen, &work, &archive, fanout, progress));
         },
     )
 }
