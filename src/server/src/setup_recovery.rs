@@ -63,7 +63,7 @@ pub struct SetupRequest {
     pub disks: Vec<NamedSetupDisk>,
     pub mode: Mode,
     pub username: String,
-    pub password: String,
+    pub password: authentication::SecretPassword,
 }
 
 #[derive(Deserialize)]
@@ -122,7 +122,7 @@ pub struct RecoveryCommitRequest {
 #[serialization(deny_unknown_fields)]
 pub struct CompleteSetupRequest {
     pub username: String,
-    pub password: String,
+    pub password: authentication::SecretPassword,
 }
 
 #[derive(Deserialize)]
@@ -136,7 +136,7 @@ pub struct PresetSetupRequest {
     pub preset_id: String,
     pub config_digest: String,
     pub username: String,
-    pub password: String,
+    pub password: authentication::SecretPassword,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -479,7 +479,8 @@ impl SetupRecovery {
         self.verify_permit(permit)?;
         authentication::normalize_administrator_username(&request.username)
             .map_err(ApiError::invalid_source)?;
-        authentication::validate_password(&request.password).map_err(ApiError::invalid_source)?;
+        authentication::validate_password(request.password.expose())
+            .map_err(ApiError::invalid_source)?;
         let _lock = self.lock()?;
         self.verify_permit(permit)?;
         if self.status().state != InstallationState::Empty {
@@ -508,7 +509,7 @@ impl SetupRecovery {
             config,
             disk_ids,
             &request.username,
-            &request.password,
+            request.password.expose(),
             install,
         )
     }
@@ -613,7 +614,8 @@ impl SetupRecovery {
         self.verify_permit(permit)?;
         authentication::normalize_administrator_username(&request.username)
             .map_err(ApiError::invalid_source)?;
-        authentication::validate_password(&request.password).map_err(ApiError::invalid_source)?;
+        authentication::validate_password(request.password.expose())
+            .map_err(ApiError::invalid_source)?;
         let _lock = self.lock()?;
         self.verify_permit(permit)?;
         if self.status().state != InstallationState::Empty {
@@ -635,7 +637,7 @@ impl SetupRecovery {
             config,
             ids,
             &request.username,
-            &request.password,
+            request.password.expose(),
             install,
         )
     }
@@ -799,7 +801,8 @@ impl SetupRecovery {
         self.verify_permit(permit)?;
         authentication::normalize_administrator_username(&request.username)
             .map_err(ApiError::invalid_source)?;
-        authentication::validate_password(&request.password).map_err(ApiError::invalid_source)?;
+        authentication::validate_password(request.password.expose())
+            .map_err(ApiError::invalid_source)?;
         let _lock = self.lock()?;
         self.verify_permit(permit)?;
         self.completion_proof()?;
@@ -825,7 +828,7 @@ impl SetupRecovery {
         // Recheck after core open, before any authority publication.
         self.completion_proof()?;
         self.verify_permit(permit)?;
-        install(engine, &request.username, &request.password)
+        install(engine, &request.username, request.password.expose())
     }
 
     // Internal management operations receive identities revalidated by

@@ -7092,6 +7092,54 @@
           "max_tests": 8
         }
       ]
+    },
+    "setup-and-browser-secret-ownership": {
+      "reason": "Verify exact setup password input and unchanged first-account admission, existing Web bearer and CSRF wire domain, move-only generation ownership, retained revocation retry and scrubbed credential header failures. Runner and WASM checks are only compilations; a real packaged Chrome must separately exercise the throwing native setter; JS, transport and generic JSON intermediates are not guaranteed erased.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "setup_recovery::tests::setup_preset_completion_and_first_account_preserve_the_unmodified_secret",
+            "setup_recovery::tests::validates_credentials_before_writes",
+            "setup_recovery::activation::tests::management_initialization_needs_no_storage_directory_or_pool"
+          ],
+          "max_tests": 3
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "api::session::secret_tests::admitted_secret_moves_its_owned_buffer_and_the_bearer_prefix_uses_erasable_scratch",
+            "api::session::secret_tests::header_failures_only_describe_the_standard_browser_class_and_header_name",
+            "api::tests::authentication_dtos_accept_the_existing_wire_domain_without_normalizing_identity",
+            "api::tests::malformed_authentication_success_cannot_install_or_restore_a_session",
+            "api::tests::beginning_logout_invalidates_pending_login_without_losing_revocation_credentials"
+          ],
+          "max_tests": 5
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        },
+        {
+          "mode": "check",
+          "package": "browser-smoke",
+          "manifest": "tools/browser-smoke/Cargo.toml",
+          "kind": "bin",
+          "name": "browser-smoke"
+        }
+      ]
     }
   },
   "rules": [
@@ -21188,6 +21236,66 @@
       "path": "helper/src/deployment/activation/samba.rs",
       "groups": [
         "held-helper-installation-files"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery.rs",
+      "groups": [
+        "setup-and-browser-secret-ownership"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/activation.rs",
+      "groups": [
+        "setup-and-browser-secret-ownership"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery_tests.rs",
+      "groups": [
+        "setup-and-browser-secret-ownership"
+      ]
+    },
+    {
+      "path": "src/web/Cargo.toml",
+      "groups": [
+        "setup-and-browser-secret-ownership"
+      ]
+    },
+    {
+      "path": "src/web/src/api.rs",
+      "groups": [
+        "setup-and-browser-secret-ownership"
+      ]
+    },
+    {
+      "path": "src/web/src/api/session.rs",
+      "groups": [
+        "setup-and-browser-secret-ownership"
+      ]
+    },
+    {
+      "path": "test/web/unit/api/tests.rs",
+      "groups": [
+        "setup-and-browser-secret-ownership"
+      ]
+    },
+    {
+      "path": "test/web/unit/api/session_secrets.rs",
+      "groups": [
+        "setup-and-browser-secret-ownership"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/error_feedback.rs",
+      "groups": [
+        "setup-and-browser-secret-ownership"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/error_feedback.js",
+      "groups": [
+        "setup-and-browser-secret-ownership"
       ]
     }
   ],

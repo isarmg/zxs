@@ -169,7 +169,8 @@ impl SetupRecovery {
     ) -> Result<(), ApiError> {
         authentication::normalize_administrator_username(&request.username)
             .map_err(ApiError::invalid_source)?;
-        authentication::validate_password(&request.password).map_err(ApiError::invalid_source)?;
+        authentication::validate_password(request.password.expose())
+            .map_err(ApiError::invalid_source)?;
         let _lock = self.lock()?;
         if present(&self.management_root.join("management-auth.json"))?
             || !self.empty_system_directory(&["setup.lock", MANAGEMENT_INTENT])?
@@ -189,7 +190,7 @@ impl SetupRecovery {
                 },
             )?;
         }
-        install(&request.username, &request.password)?;
+        install(&request.username, request.password.expose())?;
         if !self.management_authority_present()? {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::AuthorityRecoveryRequired,

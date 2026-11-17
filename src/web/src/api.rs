@@ -12,21 +12,21 @@ mod browser;
 mod read_queue;
 mod response;
 mod session;
-use session::{LoginResponse, SessionResponse};
+use session::{LoginResponse, SessionResponse, SessionSecret};
 use browser::AbortOnDrop;
 pub(crate) use browser::{ReadCancellation, js_error};
 
 // Token and CSRF belong to one credential generation. A response from a
 // previous login may not clear or replace the current login's credentials.
 // Deliberately no Debug: this state contains authentication secrets.
-#[derive(Clone, Default)]
+#[derive(Default)]
 struct Credentials {
-    token: Option<String>,
-    csrf: Option<String>,
+    token: Option<SessionSecret>,
+    csrf: Option<SessionSecret>,
     generation: u64,
 }
 impl Credentials {
-    fn replace(&mut self, token: Option<String>, csrf: Option<String>) {
+    fn replace(&mut self, token: Option<SessionSecret>, csrf: Option<SessionSecret>) {
         self.generation += 1;
         self.token = token;
         self.csrf = csrf;
@@ -34,8 +34,8 @@ impl Credentials {
     fn replace_if_current(
         &mut self,
         generation: u64,
-        token: Option<String>,
-        csrf: Option<String>,
+        token: Option<SessionSecret>,
+        csrf: Option<SessionSecret>,
     ) -> bool {
         if self.generation != generation {
             return false;
@@ -72,6 +72,8 @@ pub enum ErrorSource {
     ForeignPlanInput(#[source] name_policy::Error),
     #[error("invalid authentication response: {0}")]
     Session(#[source] session::DecodeError),
+    #[error("{0}")]
+    SessionHeader(#[source] session::HeaderFailure),
     #[error("encoding HTTP request: {0}")]
     RequestEncoding(#[source] json_codec::Error),
     #[error("invalid management status response: {0}")]
@@ -334,8 +336,8 @@ async fn fetch_authorized<T: data_serialization::Serialize>(
         if !public_setup && let Some(token) = credentials.token.as_ref() {
             request
                 .headers()
-                .set("Authorization", &format!("Bearer {token}"))
-                .map_err(js_error)?;
+                .set("Authorization", token.bearer_header().as_str())
+                .map_err(|error| session::header_error(session::Header::Authorization, &error))?;
         }
         if !public_setup
             && !matches!(method, "GET" | "HEAD")
@@ -343,8 +345,8 @@ async fn fetch_authorized<T: data_serialization::Serialize>(
         {
             request
                 .headers()
-                .set("X-CSRF-Token", token)
-                .map_err(js_error)?;
+                .set("X-CSRF-Token", token.expose())
+                .map_err(|error| session::header_error(session::Header::Csrf, &error))?;
         }
         Ok::<_, Error>(credentials.generation)
     })?;
@@ -575,8 +577,8 @@ fn accept_login(generation: u64, result: Value) -> Result<Authenticated, Error> 
     let accepted = CREDENTIALS.with(|saved| {
         saved.borrow_mut().replace_if_current(
             generation,
-            Some(session.token.0),
-            Some(session.csrf_token.0),
+            Some(session.token),
+            Some(session.csrf_token),
         )
     });
     if !accepted {
@@ -614,7 +616,7 @@ fn accept_restore(generation: u64, value: Value) -> Result<Authenticated, Error>
         if saved.generation != generation {
             return false;
         }
-        saved.csrf = Some(session.csrf_token.0);
+        saved.csrf = Some(session.csrf_token);
         true
     });
     if accepted {

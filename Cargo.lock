@@ -1883,6 +1883,7 @@ dependencies = [
  "wasm-bindgen",
  "web-interface",
  "web-sys",
+ "zeroize",
 ]
 
 [[package]]

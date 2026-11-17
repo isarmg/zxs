@@ -9,6 +9,7 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+zeroize = { version = "1.9.1", path = "../foundation/cryptography/zeroize" }
 date-time = { workspace = true, features = ["parsing"] }
 data-serialization.workspace = true
 error-definition.workspace = true

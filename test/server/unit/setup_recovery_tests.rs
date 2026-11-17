@@ -172,6 +172,27 @@ fn rejects_unknown_duplicate_or_changed_disk() {
     assert!(f.service.selected(&["one".into()]).is_err());
 }
 #[test]
+fn setup_preset_completion_and_first_account_preserve_the_unmodified_secret() {
+    // Input ownership is not password policy. Each existing ingress must pass
+    // exactly the supplied bytes to its own verifier without becoming serializable.
+    let secret = "  全量🙂 synthetic\nsetup secret  ";
+    let common = json_codec::json!({"username":"admin","password":secret});
+    let complete: CompleteSetupRequest = json_codec::from_value(common.clone()).unwrap();
+    let mut initial = common.clone();
+    initial["disks"] = json_codec::json!([]);
+    initial["mode"] = json_codec::json!(Mode::Development);
+    let setup: SetupRequest = json_codec::from_value(initial).unwrap();
+    let mut preset = common;
+    preset["preset_id"] = "synthetic".into();
+    preset["config_digest"] = "test-only".into();
+    let preset: PresetSetupRequest = json_codec::from_value(preset).unwrap();
+    for input in [setup.password, complete.password, preset.password] {
+        assert_eq!(input.expose().as_bytes(), secret.as_bytes());
+        assert_eq!(format!("{input:?}"), "SecretPassword([REDACTED])");
+    }
+}
+
+#[test]
 fn validates_credentials_before_writes() {
     let f = fixture();
     let mut req = request();

@@ -46,6 +46,19 @@ fn refresh_mode(browser: &Browser, mode: &str) -> Result<()> {
 }
 
 fn read_errors(browser: &Browser) -> Result<()> {
+    let reads = browser.script("return window.__zxsErrorFeedback.reads")?;
+    refresh_mode(browser, "private-header")?;
+    check(
+        browser,
+        "private header exception is redacted before fetch",
+        &format!(r#"
+            const s=window.__zxsErrorFeedback,center=document.querySelector('.zxs-error-center');
+            return s.privateHeaderFailures>0&&s.reads==={reads}&&
+                /The browser could not use this session credential|浏览器无法使用当前会话凭据/.test(center?.textContent||'')&&
+                !document.body.textContent.includes('SYNTHETIC-PRIVATE-HEADER-MESSAGE');
+        "#),
+    )?;
+    dismiss(browser)?;
     for (mode, expected) in [
         ("error", "Error: Smoke structured Error detail"),
         ("network", "TypeError: Smoke fetch or policy rejection"),

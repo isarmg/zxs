@@ -1,21 +1,32 @@
 // Faults enter through native exception/Response values, never Rust UI state.
 const originalFetch = window.fetch;
+const originalHeaderSet = Headers.prototype.set;
 const originalSetTimeout = window.setTimeout;
 const originalClearTimeout = window.clearTimeout;
 const timers = new Map();
 const pending = new Set();
 let lastDeadline;
 const state = window.__zxsErrorFeedback = {
-    mode: 'pass', reads: 0, aborted: 0, polls: 0, writes: 0, operation: null,
+    mode: 'pass', privateHeaderFailures: 0, reads: 0, aborted: 0, polls: 0, writes: 0, operation: null,
     recover: false, pollPaths: [], timeout: null,
     restore() {
         window.fetch = originalFetch;
+        Headers.prototype.set = originalHeaderSet;
         window.setTimeout = originalSetTimeout;
         window.clearTimeout = originalClearTimeout;
         for (const release of pending) release();
         pending.clear();
         timers.clear();
     },
+};
+// Never collect or echo a real credential. Only a fixed synthetic marker
+// simulates a browser/JS exception whose message must not enter the UI.
+Headers.prototype.set = function(name, value) {
+    if (state.mode === 'private-header' && name.toLowerCase() === 'authorization') {
+        state.privateHeaderFailures++;
+        throw new TypeError('SYNTHETIC-PRIVATE-HEADER-MESSAGE');
+    }
+    return originalHeaderSet.call(this, name, value);
 };
 window.setTimeout = function(callback, delay, ...args) {
     const id = originalSetTimeout.call(this, callback, delay, ...args);

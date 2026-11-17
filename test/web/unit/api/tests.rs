@@ -1,5 +1,12 @@
 use super::*;
 
+// Synthetic session fixtures enter through the same decoder as real replies.
+impl From<&str> for SessionSecret {
+    fn from(value: &str) -> Self {
+        json_codec::from_value(json!(value)).expect("admitted synthetic nonempty session value")
+    }
+}
+
 #[test]
 fn invalid_domain_response_retains_uncertainty_and_the_original_source() {
     use std::error::Error as _;
@@ -51,7 +58,7 @@ fn old_401_keeps_new_credentials_and_their_queued_management_read() {
         Pin::new(&mut current).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(Ok(_))
     ));
-    CREDENTIALS.with(|saved| assert_eq!(saved.borrow().token.as_deref(), Some("new-token")));
+    CREDENTIALS.with(|saved| assert_eq!(saved.borrow().token.as_ref().map(SessionSecret::expose), Some("new-token")));
     clear_session();
 }
 
@@ -114,8 +121,8 @@ fn late_login_cannot_restore_cleared_or_replace_newer_credentials() {
     let current = saved.generation;
     assert!(saved.replace_if_current(current, Some("new".into()), Some("csrf".into())));
     assert!(!saved.replace_if_current(current, Some("late".into()), None));
-    assert_eq!(saved.token.as_deref(), Some("new"));
-    assert_eq!(saved.csrf.as_deref(), Some("csrf"));
+    assert_eq!(saved.token.as_ref().map(SessionSecret::expose), Some("new"));
+    assert_eq!(saved.csrf.as_ref().map(SessionSecret::expose), Some("csrf"));
 }
 #[test]
 fn an_old_unauthorized_response_cannot_revoke_a_new_login() {
@@ -124,8 +131,8 @@ fn an_old_unauthorized_response_cannot_revoke_a_new_login() {
     let old_request = saved.generation;
     saved.replace(Some("new-token".into()), Some("new-csrf".into()));
     assert!(!saved.revoke(old_request));
-    assert_eq!(saved.token.as_deref(), Some("new-token"));
-    assert_eq!(saved.csrf.as_deref(), Some("new-csrf"));
+    assert_eq!(saved.token.as_ref().map(SessionSecret::expose), Some("new-token"));
+    assert_eq!(saved.csrf.as_ref().map(SessionSecret::expose), Some("new-csrf"));
     assert!(saved.revoke(saved.generation));
     assert!(saved.token.is_none());
     assert!(saved.csrf.is_none());
@@ -171,8 +178,8 @@ fn beginning_logout_invalidates_pending_login_without_losing_revocation_credenti
     CREDENTIALS.with(|saved| {
         let mut saved = saved.borrow_mut();
         assert!(!saved.replace_if_current(generation, Some("late-token".into()), None));
-        assert_eq!(saved.token.as_deref(), Some("active-token"));
-        assert_eq!(saved.csrf.as_deref(), Some("active-csrf"));
+        assert_eq!(saved.token.as_ref().map(SessionSecret::expose), Some("active-token"));
+        assert_eq!(saved.csrf.as_ref().map(SessionSecret::expose), Some("active-csrf"));
     });
     // Transport failure locks the UI but must retain the exact credential for
     // a later revocation retry, rather than replacing it with a new identity.
@@ -181,8 +188,8 @@ fn beginning_logout_invalidates_pending_login_without_losing_revocation_credenti
     assert_eq!(crate::ui::begin_logout(&mut state), Some(2));
     CREDENTIALS.with(|saved| {
         let saved = saved.borrow();
-        assert_eq!(saved.token.as_deref(), Some("active-token"));
-        assert_eq!(saved.csrf.as_deref(), Some("active-csrf"));
+        assert_eq!(saved.token.as_ref().map(SessionSecret::expose), Some("active-token"));
+        assert_eq!(saved.csrf.as_ref().map(SessionSecret::expose), Some("active-csrf"));
     });
     clear_session();
 }
@@ -224,8 +231,8 @@ fn invalid_logout_success_preserves_credentials_and_the_revocation_retry_fence()
             });
             CREDENTIALS.with(|saved| {
                 let saved = saved.borrow();
-                assert_eq!(saved.token.as_deref(), Some("original-bearer"));
-                assert_eq!(saved.csrf.as_deref(), Some("original-csrf"));
+                assert_eq!(saved.token.as_ref().map(SessionSecret::expose), Some("original-bearer"));
+                assert_eq!(saved.csrf.as_ref().map(SessionSecret::expose), Some("original-csrf"));
                 assert_eq!(saved.generation, generation);
             });
             // A valid retry, not a fresh login, settles the original intent.
@@ -255,11 +262,7 @@ fn restored_response() -> Value {
 
 #[test]
 fn malformed_authentication_success_cannot_install_or_restore_a_session() {
-    let original = Credentials {
-        token: Some("existing-token".into()),
-        csrf: Some("existing-csrf".into()),
-        generation: 10,
-    };
+    const GENERATION: u64 = 10;
     for login in [false, true] {
         let valid = if login {
             session_response()
@@ -310,20 +313,26 @@ fn malformed_authentication_success_cannot_install_or_restore_a_session() {
             }
         }
         for value in invalid {
-            CREDENTIALS.with(|saved| *saved.borrow_mut() = original.clone());
+            CREDENTIALS.with(|saved| {
+                *saved.borrow_mut() = Credentials {
+                    token: Some("existing-token".into()),
+                    csrf: Some("existing-csrf".into()),
+                    generation: GENERATION,
+                };
+            });
             let result = if login {
-                accept_login(original.generation, value)
+                accept_login(GENERATION, value)
             } else {
-                accept_restore(original.generation, value)
+                accept_restore(GENERATION, value)
             };
             let error = result.expect_err("incomplete or retired identities must not open the UI");
             assert_eq!(error.code, storage_contract::ErrorCode::InvalidSession);
             assert_eq!(error.status, 200);
             CREDENTIALS.with(|saved| {
                 let saved = saved.borrow();
-                assert_eq!(saved.generation, original.generation);
-                assert_eq!(saved.token, original.token);
-                assert_eq!(saved.csrf, original.csrf);
+                assert_eq!(saved.generation, GENERATION);
+                assert_eq!(saved.token.as_ref().map(SessionSecret::expose), Some("existing-token"));
+                assert_eq!(saved.csrf.as_ref().map(SessionSecret::expose), Some("existing-csrf"));
             });
         }
     }
@@ -346,7 +355,7 @@ fn validated_session_restoration_requires_the_original_credential_generation() {
             saved.token.is_none(),
             "restoration uses the HTTP-only cookie"
         );
-        assert_eq!(saved.csrf.as_deref(), Some("new-csrf"));
+        assert_eq!(saved.csrf.as_ref().map(SessionSecret::expose), Some("new-csrf"));
     });
     assert_eq!(
         accept_login(0, session_response()).unwrap(),
@@ -361,8 +370,8 @@ fn validated_session_restoration_requires_the_original_credential_generation() {
     CREDENTIALS.with(|saved| {
         let saved = saved.borrow();
         assert_eq!(saved.generation, 1);
-        assert_eq!(saved.token.as_deref(), Some("new-token"));
-        assert_eq!(saved.csrf.as_deref(), Some("new-csrf"));
+        assert_eq!(saved.token.as_ref().map(SessionSecret::expose), Some("new-token"));
+        assert_eq!(saved.csrf.as_ref().map(SessionSecret::expose), Some("new-csrf"));
     });
     clear_session();
 }
@@ -414,13 +423,13 @@ fn authentication_dtos_accept_the_existing_wire_domain_without_normalizing_ident
         let value: Value = json_codec::from_str(&wire).unwrap();
         let response = session::decode::<LoginResponse>(value).unwrap();
         assert_eq!(response.principal.as_str(), " ");
-        assert_eq!(response.csrf_token.0, " ");
-        assert_eq!(response.token.0, " ");
+        assert_eq!(response.csrf_token.expose(), " ");
+        assert_eq!(response.token.expose(), " ");
     }
     let wire = r#"{"principal":"owner","csrf_token":"new-csrf"}"#;
     let response = session::decode::<SessionResponse>(json_codec::from_str(wire).unwrap()).unwrap();
     assert_eq!(response.principal.as_str(), "owner");
-    assert_eq!(response.csrf_token.0, "new-csrf");
+    assert_eq!(response.csrf_token.expose(), "new-csrf");
 }
 
 #[test]
