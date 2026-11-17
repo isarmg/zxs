@@ -39,6 +39,7 @@ mod file_rows;
 mod fixture;
 mod first_commit_tabs;
 mod automatic_files;
+mod nested_picks;
 use fixture::seed_files;
 mod feedback_lifecycle;
 mod fonts;
@@ -673,9 +674,10 @@ fn run() -> Result<()> {
                 .ok_or("missing WebDriver session")?
                 .to_owned(),
         };
-        let result = if let Some((slot, observed))=&first_commit_slot {
+        let result = if let Some((slot, observed, nested))=&first_commit_slot {
             first_commit_tabs::run(&browser,&origin,&password,slot)
                 .and_then(|()| automatic_files::run(&browser,&origin,&password,slot,observed))
+                .and_then(|()| nested_picks::run(&browser,&origin,&password,slot,nested))
         }else if placement_only {
             placement_configuration::run(&browser, &cli_binary, server_assets, &pool, root, &password)
         } else if foreign_review_only {
@@ -717,7 +719,11 @@ fn run() -> Result<()> {
             }
         }
     }
-    result
+    result?;
+    // The actual packaged server has stopped and released its writer before
+    // this independent Engine checks the original publication and both bodies.
+    if let Some((_,_,nested))=&first_commit_slot { nested_picks::cold(&pool,nested)?; }
+    Ok(())
 }
 fn main() {
     if let Err(error) = run() {
