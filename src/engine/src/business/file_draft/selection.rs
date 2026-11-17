@@ -56,11 +56,12 @@ pub(crate) fn resolve(state: &State, target: &DraftLocation) -> Result<Selection
         || branch.file_id.as_deref() != Some(entry.file_id.as_str())
         || branch.history_tree_id != repository.history_tree_id
         || context.inherited_from.is_some()
-        || !branch.pending_file_versions.is_empty()
         || state.file_branch_aliases.contains_key(&branch.branch_id)
     {
         return Err(missing());
     }
+    // Pending FILE branches inherit a real immutable version. Resolve that
+    // exact selected HEAD below; only an explicit commit materializes the branch.
     let head = super::super::file_nodes::branch_head(state, &branch.branch_id)?;
     let node = context.node_id.as_deref().unwrap_or(&entry.version_id);
     if node != head || super::super::file_nodes::node_version(state, &entry.file_id, node)?

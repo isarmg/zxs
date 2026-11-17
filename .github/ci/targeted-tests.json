@@ -1,5 +1,27 @@
 {
   "groups": {
+    "fresh-manual-file-normal-http": {
+      "reason": "Real empty-root default Manual save followed by authenticated first/second FILE commits, exact V1 branch selection, first Manual write and explicit commit on that inherited branch, real body reads and unchanged original V2. No preview, synthetic version, cold-fault matrix or Samba claim.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "http_engine",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "exact": [
+            "fresh_file_manual::manual_file_first_versions_and_pending_branch_edit"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "degraded-current-format-recovery": {
       "reason": "Exercise the existing two-ACCEPT degraded recovery oracle on a real disk-root namespace and three actual replicas. Preserve surviving-source rejection, per-target healthy BODY verification, exact publication byte budgets, cold replay and decode-count expectations.",
       "python_tests": [],
@@ -5610,6 +5632,42 @@
     }
   },
   "rules": [
+    {
+      "path": "test/server/integration/http_engine.rs",
+      "groups": [
+        "fresh-manual-file-normal-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/fresh_file_manual.rs",
+      "groups": [
+        "fresh-manual-file-normal-http"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/selection.rs",
+      "groups": [
+        "fresh-manual-file-normal-http"
+      ]
+    },
+    {
+      "path": "src/server/src/http_file_draft.rs",
+      "groups": [
+        "fresh-manual-file-normal-http"
+      ]
+    },
+    {
+      "path": "src/server/src/http_create_file_branch.rs",
+      "groups": [
+        "fresh-manual-file-normal-http"
+      ]
+    },
+    {
+      "path": "src/server/src/http_file_selection.rs",
+      "groups": [
+        "fresh-manual-file-normal-http"
+      ]
+    },
     {
       "path": "test/engine/unit/engine/recovery/directory_checkpoint.rs",
       "groups": [
