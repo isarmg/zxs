@@ -363,6 +363,13 @@ fn lifecycle_path_members_share_an_operation_without_sharing_cards_or_cursors() 
         event_anchor(&target.file, &first),
         event_anchor(&target.file, &second),
     );
+    let first_anchor = event_anchor(&target.file, &first);
+    let second_anchor = event_anchor(&target.file, &second);
+    assert_eq!(
+        event_link(&first_anchor).strip_prefix('#'),
+        Some(first_anchor.as_str()),
+    );
+    assert_ne!(event_link(&first_anchor), event_link(&second_anchor));
     assert_eq!(action_label(&first.detail), t("路径变更", "Path changed"));
     assert_eq!(event_time(&first), "1970-01-01T00:02:03Z");
     let Detail::PathChanged { before, after, .. } = &first.detail else {
@@ -429,6 +436,29 @@ fn lifecycle_path_members_share_an_operation_without_sharing_cards_or_cursors() 
         &target.context,
     )
     .is_err());
+}
+
+#[test]
+fn lifecycle_refresh_after_changed_history_keeps_only_current_page_links() {
+    let target = target();
+    let mut model = Model::default();
+    model.set_target(Some(target.clone()));
+    let initial = model.begin();
+    model.complete(&target, initial, Ok(page(&target, 1, 2, true)));
+    let paging = model.begin();
+    model.complete(&target, paging, Err(failed()));
+    assert!(model.page.is_none());
+    assert!(model.request(false).unwrap().unwrap().cursor.is_none());
+
+    let refreshing = model.begin();
+    model.complete(&target, refreshing, Ok(page(&target, 3, 1, false)));
+    model.complete(&target, paging, Ok(page(&target, 2, 1, false)));
+    let visible = model.page.unwrap();
+    assert_eq!(visible.events.len(), 1);
+    assert_eq!(
+        event_anchor(&visible.file_id, &visible.events[0]),
+        event_anchor(&target.file, &deletion(3)),
+    );
 }
 
 #[test]

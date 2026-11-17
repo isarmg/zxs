@@ -241,3 +241,94 @@ fn native_dispatch_uses_real_engine_and_cold_unborn_content_without_transport() 
 
 #[path = "native_worktree_tests.rs"]
 mod worktree;
+
+#[test]
+fn live_automatic_save_becomes_manual_draft_through_the_production_dispatcher() {
+    use std::io::Read;
+    use storage_contract::OperationId;
+    use storage_contract::file_draft::{CommitMode, DraftCommand};
+
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("state");
+    let engine = Engine::initialize(
+        &system,
+        Config::development([(
+            name_policy::Name::parse("p").unwrap(),
+            root.path().join("mounted-primary"),
+        )]).unwrap(),
+    ).unwrap();
+    let password = authentication::random_token().unwrap();
+    let auth = AuthStore::initialize(&system, "alice", &password).unwrap();
+    let spool = root.path().join("spool");
+    fs::create_dir(&spool).unwrap();
+    fs::set_permissions(&spool, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::create_dir(spool.join("empty-directory")).unwrap();
+    let mut direct = Direct::start(root.path(), engine, auth);
+
+    let path = "p/first.txt";
+    let original = b"original history bytes";
+    let (native, _) = direct.open(path, true, true);
+    assert_eq!(native.data_io, OpenIo::NativeWorking);
+    direct.write(native.handle, WorkingPosition::At { offset: 0 }, original);
+    direct.flush(native.handle);
+    direct.call(Request::Close { handle: native.handle });
+    let target = direct.listed(original.len() as u64);
+    let current = direct._auth.sole_identity().unwrap();
+    let pending = direct.backend.unborn_file_working(&current, target.clone()).unwrap();
+    direct.backend.commit_unborn_file(&current, crate::CommitUnbornFile {
+        operation_id: OperationId::generate().unwrap(),
+        target: target.clone(),
+        expected: pending.expected,
+        message: "first explicit history node".into(),
+    }).unwrap();
+    let switch = |direct: &Direct, mode| {
+        let view = direct.backend.file_working(&current, target.clone()).unwrap();
+        direct.backend.change_file_working(&current, crate::ChangeFileWorking {
+            operation_id: OperationId::generate().unwrap(),
+            command: DraftCommand::SetMode {
+                target: target.clone(),
+                expected: view.working.revision(),
+                mode,
+            },
+        }).unwrap();
+        view.base
+    };
+    let historical = switch(&direct, CommitMode::Automatic);
+    let (old, file) = direct.open(path, true, false);
+    assert_eq!(old.data_io, OpenIo::Descriptor);
+    let bytes = b"staged before manual switch";
+    direct.call(Request::PrepareWrite {
+        handle: old.handle, end: bytes.len() as u64, bytes: bytes.len() as u64,
+    });
+    file.write_all_at(bytes, 0).unwrap();
+    file.set_len(bytes.len() as u64).unwrap();
+    direct.call(Request::Dirty { handle: old.handle });
+    assert_eq!(switch(&direct, CommitMode::Manual), historical);
+    let blocked = direct.share.dispatch(Request::PrepareWrite {
+        handle: old.handle, end: 4096, bytes: 1,
+    }).unwrap_err();
+    assert_eq!(blocked.error.code, storage_contract::ErrorCode::FileBranchConflict);
+    let receipt = direct.flush(old.handle);
+    assert_eq!(receipt["operation_kind"], "file.draft.write");
+    assert_eq!(direct.flush(old.handle), receipt);
+    direct.call(Request::Close { handle: old.handle });
+    let now = direct.backend.file_working(&current, target.clone()).unwrap();
+    assert_eq!(now.base, historical);
+    assert!(now.working.draft().is_some());
+    assert_eq!(direct.backend.file_history(&current, &target.file.to_string()).unwrap().len(), 1);
+    let (read, _) = direct.open(path, false, false);
+    assert_eq!(direct.read(read.handle), bytes);
+    direct.call(Request::Close { handle: read.handle });
+    drop(file);
+    drop(direct);
+
+    let engine = Engine::open(&system).unwrap();
+    let mut body = Vec::new();
+    engine.open_file_draft(&target).unwrap().read_to_end(&mut body).unwrap();
+    assert_eq!(body, bytes);
+    body.clear();
+    engine.open_content(&historical.version_id().to_string())
+        .unwrap().file.read_to_end(&mut body).unwrap();
+    assert_eq!(body, original);
+    assert_eq!(engine.file_history(&target.file.to_string()).unwrap().len(), 1);
+}

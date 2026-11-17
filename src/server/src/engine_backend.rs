@@ -732,6 +732,16 @@ impl Backend for EngineBackend {
     ) -> Result<Option<crate::SmbManualFile>, ApiError> {
         smb_draft::capture(self, identity, branch, entry)
     }
+    fn capture_smb_automatic(
+        &self, identity: &Identity, branch: &str, entry: &storage_contract::Entry,
+    ) -> Result<Option<crate::SmbAutomaticFile>, ApiError> {
+        smb_draft::capture_automatic(self, identity, branch, entry)
+    }
+    fn switched_smb_draft_revision(
+        &self, identity: &Identity, automatic: &crate::SmbAutomaticFile,
+    ) -> Result<Option<storage_contract::file_draft::WorkingRevision>, ApiError> {
+        smb_draft::switched_revision(self, identity, automatic)
+    }
     fn authorize_smb_draft(
         &self, identity: &Identity, file: &crate::SmbManualFile, access: crate::SmbDraftAccess,
     ) -> Result<(), ApiError> {
@@ -2592,6 +2602,7 @@ impl Backend for EngineBackend {
             crate::ReadContent {
                 version,
                 context: None,
+                backup_slot: None,
             },
         )?
         .fully_verified()

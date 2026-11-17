@@ -169,6 +169,52 @@ impl Engine {
             .map_err(Error::ConversionNameBudget)?;
         Ok(())
     }
+
+    /// Reject an impossible prospective upload before allocating a private
+    /// workspace. Publication independently checks the actual replica targets.
+    pub fn validate_disk_root_upload_path(
+        &self,
+        repository: storage_contract::RepositoryId,
+        path: &name_policy::PortablePath,
+    ) -> Result<()> {
+        let repo = self.state.repositories.get(&repository.to_string())
+            .filter(|repo| repo.file_manager_root)
+            .ok_or(crate::engine::FreshLayoutError::NamespaceUnmapped)?;
+        self.validate_disk_root_upload_paths(repo, std::iter::once(path))
+    }
+
+    pub(super) fn validate_disk_root_upload_paths<'a>(
+        &self,
+        repo: &Repository,
+        paths: impl IntoIterator<Item = &'a name_policy::PortablePath>,
+    ) -> Result<()> {
+        use std::borrow::Cow;
+
+        self.require_write()?;
+        if let Some(current) = self.admitted_current_namespaces()? {
+            current.require_branch_write(&self.state, &repo.main_branch_id)?;
+        }
+        let disk = self.disk(&repo.primary_slot_id)?;
+        self.route(&disk.slot_id, 1)?;
+        let root = self.disk_resources.get(disk)?.content_root()?;
+        let budget = crate::name_budget::NameBudget::from_maximum(root.component_name_maximum()?)
+            .map_err(Error::ConversionNameBudget)?;
+        let current = self.namespace_tree(&repo.main_branch_id)?;
+        for path in paths {
+            let mut next = Some(Cow::Borrowed(path));
+            while let Some(component) = next {
+                if current.get_key(component.key()).is_some() {
+                    // Existing ancestors keep their admitted spelling.
+                    break;
+                }
+                budget.component(component.file_name(), path.as_str())
+                    .map_err(Error::ConversionNameBudget)?;
+                next = component.parent().map(Cow::Owned);
+            }
+        }
+        Ok(())
+    }
+
     pub fn create_disk_root(
         &mut self,
         primary: &str,

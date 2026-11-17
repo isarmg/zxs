@@ -487,6 +487,9 @@ impl PreparedContainerEntities {
             let common = if record.namespace.parent.is_worktree() {
                 handle.deleted_root()?
             } else { handle.content_root()? };
+            if plan.rename(*file).is_some() || plan.additions().contains_key(&(*file, *id)) {
+                require_introduced_user_name(common, &record.namespace.name)?;
+            }
             if let Some((_, payload)) = record.working.draft() {
                 version_names::check_target_name(common, &layout::container::DRAFTS)?;
                 version_names::check_target_name(common,
@@ -1062,6 +1065,15 @@ impl PreparedContainerEntities {
         }
         self.verify()
     }
+}
+
+// All ordinary descendants are bound with SameMount, so a held target root
+// has the destination's limit even before its new parent directories exist.
+fn require_introduced_user_name(root: &DiskRoot, name: &name_policy::LookupName) -> Result<()> {
+    let maximum = root.component_name_maximum()?;
+    crate::name_budget::NameBudget::from_maximum(maximum)
+        .and_then(|budget| budget.component(name.as_str(), name.as_str()))
+        .map_err(Error::ConversionNameBudget)
 }
 
 fn open_record_container(

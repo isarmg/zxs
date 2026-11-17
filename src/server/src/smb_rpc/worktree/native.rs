@@ -5,14 +5,14 @@ use crate::smb_rpc::worktree::{display_path, layout};
 use crate::smb_rpc::{Session, path_reservation};
 use crate::{ApiError, SmbWorktreeWorkingOpen, SmbWorktreeWorkingSource};
 use data_serialization::{Deserialize, Serialize};
-use name_policy::{LookupPath, PortablePath};
+use name_policy::{LookupPath, Name, PortablePath};
 use platform_io::fs_safety::PrivateDirectory;
 use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
 use smb_protocol::protocol::OpenResult;
 use std::os::fd::OwnedFd;
 use storage_contract::snapshot_worktree::additions::{CreateWorktreeFile, WorktreeFileTarget};
 use storage_contract::snapshot_worktree::{WorktreeHandle, WorktreeStatus};
-use storage_contract::{ErrorCode, OperationId, Principal};
+use storage_contract::{ErrorCode, NamespaceEntryKind, OperationId, Principal};
 
 const MAX_JOURNAL_ENTRIES: usize = 4096;
 const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
@@ -41,7 +41,22 @@ impl Session {
         truncate: bool,
         write_through: bool,
     ) -> Result<(OpenResult, OwnedFd), ApiError> {
-        let path = PortablePath::try_from(path.clone()).map_err(ApiError::invalid_source)?;
+        let path = if let Some((parent, leaf)) = path.as_str().rsplit_once('/') {
+            let parent = LookupPath::parse(parent).map_err(ApiError::invalid_source)?;
+            let parent = self.shared.backend.smb_worktree_entry(
+                &self.identity, status.target, &parent,
+            )?;
+            if parent.kind() != NamespaceEntryKind::Directory {
+                return Err(ApiError::conflict(
+                    ErrorCode::NotDirectory,
+                    "worktree file parent is not a directory",
+                ));
+            }
+            let name = Name::parse(leaf).map_err(ApiError::invalid_source)?;
+            parent.path.join_name(&name).map_err(ApiError::invalid_source)?
+        } else {
+            PortablePath::try_from(path.clone()).map_err(ApiError::invalid_source)?
+        };
         let display = display_path(&status.name, Some(&path))?;
         let paths = path_reservation::PathReservation::acquire(
             &self.shared,

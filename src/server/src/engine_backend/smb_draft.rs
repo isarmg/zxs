@@ -1,12 +1,14 @@
 //! SMB may replace a shared draft, never change mode, discard it or commit a
 //! history node. Management's separate admission remains mandatory for those.
 use crate::engine_backend::{EngineBackend, error, read_projection, repo_for_branch, repository};
-use crate::{ApiError, Content, Identity, SmbDraftAccess, SmbManualFile};
-use storage_contract::file_draft::{CommitMode, DraftCommand, DraftLocation};
+use crate::{ApiError, Content, Identity, SmbAutomaticFile, SmbDraftAccess, SmbManualFile};
+use storage_contract::file_draft::{
+    CommitMode, DraftCommand, DraftLocation, FileWorkingState, WorkingRevision,
+};
 use storage_contract::{Entry, ErrorCode, FileId, NamespaceEntryKind};
 
 fn changed() -> ApiError {
-    ApiError::conflict(ErrorCode::FileBranchConflict, "the open manual FILE selection changed")
+    ApiError::conflict(ErrorCode::FileBranchConflict, "the open FILE working selection changed")
 }
 
 fn authorize_target(
@@ -42,6 +44,105 @@ fn require_selection(
     Ok(())
 }
 
+/// A current occurrence may enrich an automatic handle, but an unsupported
+/// share or mode cannot produce a conversion proof.
+pub(super) fn capture_automatic(
+    backend: &EngineBackend,
+    identity: &Identity,
+    branch: &str,
+    observed: &Entry,
+) -> Result<Option<SmbAutomaticFile>, ApiError> {
+    let (engine, current) = backend.lock_current(identity)?;
+    let repo = repo_for_branch(&engine, branch)?;
+    if !repo.file_manager_root
+        || repo.main_branch_id != branch
+        || observed.kind != NamespaceEntryKind::File
+    {
+        return Ok(None);
+    }
+    let file = observed.file_id.parse().map_err(ApiError::invalid_source)?;
+    let Some(record) = engine.state().file_containers.get(&file) else {
+        return Ok(None);
+    };
+    let FileWorkingState::Automatic { revision } = &record.working else {
+        return Ok(None);
+    };
+    let target = location(repo, observed, file)?;
+    authorize_target(&engine, &current, &target)?;
+    let base = match engine.file_draft_base(&target) {
+        Ok(base) => base,
+        Err(source)
+            if matches!(
+                source.code(), ErrorCode::UnsupportedOperation | ErrorCode::FileBranchConflict
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(source) => return Err(error(source)),
+    };
+    if base.version_id().to_string() != observed.version_id {
+        return Ok(None);
+    }
+    Ok(Some(SmbAutomaticFile { base, target, revision: *revision }))
+}
+
+pub(super) fn switched_revision(
+    backend: &EngineBackend,
+    identity: &Identity,
+    automatic: &SmbAutomaticFile,
+) -> Result<Option<WorkingRevision>, ApiError> {
+    let (engine, current) = backend.lock_current(identity)?;
+    authorize_target(&engine, &current, &automatic.target)?;
+    let record = engine.state().file_containers.get(&automatic.target.file)
+        .ok_or_else(changed)?;
+    let revision = match &record.working {
+        FileWorkingState::Automatic { .. } => return Ok(None),
+        FileWorkingState::ManualClean { revision } => *revision,
+        FileWorkingState::Unborn { .. } | FileWorkingState::ManualDirty { .. }
+        | FileWorkingState::ManualIncremental { .. } => return Err(changed()),
+    };
+    let next = automatic.revision.next().map_err(|source| {
+        ApiError::limit("the shared draft revision is exhausted")
+            .with_source(crate::http_boundary::ApiErrorSource::WorkingRevision(source))
+    })?;
+    if next != revision
+        || engine.file_draft_base(&automatic.target).map_err(error)? != automatic.base
+    {
+        return Err(changed());
+    }
+    Ok(Some(revision))
+}
+
+fn observed_occurrence(
+    engine: &storage_engine::Engine,
+    branch: &str,
+    observed: &Entry,
+) -> Result<Option<Entry>, ApiError> {
+    let actual = read_projection::lookup_current(
+        engine, branch, &name_policy::LookupPath::from(&observed.path),
+    )?;
+    Ok(actual.filter(|actual| {
+        actual.kind == NamespaceEntryKind::File
+            && actual.entry_id == observed.entry_id
+            && actual.file_id == observed.file_id
+            && actual.version_id == observed.version_id
+            && actual.path == observed.path
+    }))
+}
+
+fn location(
+    repository: &storage_contract::Repository,
+    actual: &Entry,
+    file: FileId,
+) -> Result<DraftLocation, ApiError> {
+    Ok(DraftLocation {
+        repository: repository.repository_id.parse().map_err(ApiError::invalid_source)?,
+        path: actual.path.clone(),
+        entry: actual.entry_id.parse().map_err(ApiError::invalid_source)?,
+        file,
+    })
+}
+
 pub(super) fn capture(
     backend: &EngineBackend,
     identity: &Identity,
@@ -49,27 +150,14 @@ pub(super) fn capture(
     observed: &Entry,
 ) -> Result<Option<SmbManualFile>, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
-    let actual = read_projection::lookup_current(
-        &engine, branch, &name_policy::LookupPath::from(&observed.path),
-    )?.ok_or_else(changed)?;
-    if actual.kind != NamespaceEntryKind::File
-        || actual.entry_id != observed.entry_id || actual.file_id != observed.file_id
-        || actual.version_id != observed.version_id || actual.path != observed.path
-    {
-        return Err(changed());
-    }
-    let file: FileId = actual.file_id.parse().map_err(ApiError::invalid_source)?;
+    let actual = observed_occurrence(&engine, branch, observed)?.ok_or_else(changed)?;
+    let file = actual.file_id.parse().map_err(ApiError::invalid_source)?;
     let record = engine.state().file_containers.get(&file).ok_or_else(changed)?;
     if record.working.mode() == CommitMode::Automatic {
         return Ok(None);
     }
     let repository = repo_for_branch(&engine, branch)?;
-    let target = DraftLocation {
-        repository: repository.repository_id.parse().map_err(ApiError::invalid_source)?,
-        path: actual.path,
-        entry: actual.entry_id.parse().map_err(ApiError::invalid_source)?,
-        file,
-    };
+    let target = location(repository, &actual, file)?;
     authorize_target(&engine, &current, &target)?;
     if repository.main_branch_id != branch {
         return Err(ApiError::forbidden());

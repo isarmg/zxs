@@ -5825,6 +5825,20 @@ async fn fresh_disk_paths_apply_target_name_budget_before_root_or_workspace_crea
             )
             .await;
         }
+        let bytes = manager_disk_files(root.path());
+        let inodes = identities(root.path());
+        let path = format!("new-parent/{too_long}");
+        let body = if directory {
+            json!({"kind":"mkdir","path":path,"operation_id":new_id("op").unwrap()})
+        } else {
+            json!({"path":path})
+        };
+        let (status, rejected) = send(&app, Some(&token), "POST", route, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+        assert_eq!(rejected["error"]["code"], "PLAN_INVALID");
+        assert_eq!(manager_disk_files(root.path()), bytes);
+        assert_eq!(identities(root.path()), inodes);
+
         drop(app);
         let engine = reopen_after_router_drop(&root.path().join("system")).await;
         let repository = engine

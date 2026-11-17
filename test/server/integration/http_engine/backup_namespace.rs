@@ -33,6 +33,103 @@ fn read_only_listing(value: &Value) {
 }
 
 #[tokio::test]
+async fn authenticated_backup_range_selects_only_the_published_third_disk() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let config = Config::development(test_disks([
+        root.path().join("d1"),
+        root.path().join("d2"),
+        root.path().join("d3"),
+    ]))
+    .unwrap();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let operation = || storage_contract::OperationId::generate().unwrap();
+    let repo = engine.create_disk_root("P01", "admin", operation()).unwrap();
+    let save = |engine: &mut Engine, name: &str, bytes: &[u8]| {
+        let workspace = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
+        engine.stage_bytes(&workspace.workspace_id, name, bytes).unwrap();
+        engine.commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: operation(),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "prepare backup read fixture".into(),
+            request_digest: None,
+        }).unwrap();
+        engine.namespace_tree(&repo.main_branch_id).unwrap()
+            .get(name).unwrap().version_id.clone()
+    };
+    let current_version = save(&mut engine, "primary.txt", b"primary-only body");
+    engine.update_protection_policy(storage_engine::ProtectionPolicyUpdate {
+        policy_id: &new_id("policy").unwrap(),
+        repository_id: &repo.repository_id,
+        path_prefix: "",
+        target_copies: 3,
+        expected_generation: 0,
+        principal: "admin",
+        operation_id: operation(),
+    }).unwrap();
+    let version = save(&mut engine, "backed-up.txt", b"second stored body");
+    assert_eq!(
+        engine.state().placements[&version].route_slot_ids,
+        ["P01", "B01", "C01"]
+    );
+    assert_eq!(
+        engine.state().placements[&current_version].route_slot_ids,
+        ["P01"]
+    );
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend
+        .protect_auth(AuthStore::initialize(&system, "admin", "integration-test-password").unwrap())
+        .unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
+    let admin = login(&app, "admin", "integration-test-password").await;
+    let selected = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/versions/{version}/content?backup_slot=C01"))
+                .header("authorization", format!("Bearer {admin}"))
+                .header("range", "bytes=7-12")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(selected.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(selected.headers()["content-range"], "bytes 7-12/18");
+    assert_eq!(
+        http_routing::body::to_bytes(selected.into_body(), 65536)
+            .await
+            .unwrap()
+            .as_ref(),
+        b"stored"
+    );
+
+    let (status, error) = send(
+        &app,
+        Some(&admin),
+        "GET",
+        &format!("/api/versions/{current_version}/content?backup_slot=C01"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error["error"]["code"], "CONTENT_UNAVAILABLE");
+    let (status, error) = send(
+        &app,
+        Some(&admin),
+        "GET",
+        &format!("/api/versions/{version}/content?backup_slot=P01"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+}
+
+#[tokio::test]
 async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_rename_and_delete() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());

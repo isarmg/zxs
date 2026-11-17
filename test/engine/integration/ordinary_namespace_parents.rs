@@ -97,6 +97,90 @@ fn catalog(
 }
 
 #[test]
+fn existing_disk_targets_reserve_sixteen_bytes_before_publication() {
+    use storage_engine::NamespaceOperationKind;
+
+    let (_temporary, mut engine, repository, roots) = fixture();
+    engine
+        .file_namespace(&repository.repository_id, mkdir("parent"), "admin", op())
+        .unwrap();
+    let accepted = format!("{}a.txt", "界".repeat(78));
+    let rejected = format!("{}ab.txt", "界".repeat(78));
+    assert_eq!((accepted.len(), rejected.len()), (239, 240));
+    let accepted_path = format!("parent/{accepted}");
+    let rejected_path = format!("parent/{rejected}");
+    let branch = &repository.main_branch_id;
+    let workspace = engine.create_workspace(branch, "admin").unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, &accepted_path, b"keep these bytes")
+        .unwrap();
+    engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: op(),
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "exact name budget".into(),
+        request_digest: None,
+    }).unwrap();
+    let file = engine
+        .namespace_tree(branch).unwrap().get(&accepted_path).unwrap().clone();
+    assert_eq!(body(&engine, &file.version_id), b"keep these bytes");
+    let on_disk = roots[0].join("common-data").join(&accepted_path);
+    assert!(on_disk.is_dir());
+
+    let workspace = engine.create_workspace(branch, "admin").unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, &rejected_path, b"must stay private")
+        .unwrap();
+    let before_state = engine.state().clone();
+    let before_media = media(&roots);
+    let rename = NamespaceOperation::parse(
+        NamespaceOperationKind::Rename,
+        &accepted_path,
+        Some(&rejected_path),
+    ).unwrap();
+    for change in [mkdir(&format!("parent/new/{rejected}")), rename] {
+        let operation = op();
+        let error = engine
+            .file_namespace(&repository.repository_id, change, "admin", operation)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::PlanInvalid, "{error}");
+        assert!(engine.operation(operation).is_err());
+        assert_eq!(engine.state(), &before_state);
+        assert!(media(&roots) == before_media, "rejected namespace change modified media");
+    }
+    let birth = storage_contract::file_draft::BirthRequest {
+        repository: repository.repository_id.parse().unwrap(),
+        path: name_policy::PortablePath::parse(&rejected_path).unwrap(),
+        expected_namespace_head: engine.state().branches[branch].head_commit_id.parse().unwrap(),
+    };
+    let operation = op();
+    let error = engine
+        .create_unborn_file(&birth, &"admin".parse().unwrap(), operation)
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::PlanInvalid, "{error}");
+    assert!(engine.operation(operation).is_err());
+    assert_eq!(engine.state(), &before_state);
+    assert!(media(&roots) == before_media, "rejected file birth modified media");
+    let operation = op();
+    let error = engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: operation,
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "over budget".into(),
+        request_digest: None,
+    }).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::PlanInvalid, "{error}");
+    assert!(engine.operation(operation).is_err());
+    assert_eq!(engine.state(), &before_state);
+    assert!(media(&roots) == before_media, "rejected workspace commit modified media");
+    assert_eq!(body(&engine, &file.version_id), b"keep these bytes");
+}
+
+#[test]
 fn ordinary_mkdir_holds_parent_occurrences_through_cuts_file_writes_and_cold_index() {
     #[cfg(feature = "fault-injection")]
     let cuts = [None, Some("after_payloads"), Some("after_accept_1")];

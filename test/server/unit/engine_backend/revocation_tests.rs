@@ -1758,6 +1758,7 @@ impl Request {
                             repository_id: fixture.repo.repository_id.clone(),
                             path: name_policy::LookupPath::parse("file.txt").unwrap(),
                         }),
+                        backup_slot: None,
                     },
                 )
                 .map(|_| ()),
@@ -1767,6 +1768,7 @@ impl Request {
                     crate::ReadContent {
                         version: &fixture.version,
                         context: None,
+                        backup_slot: None,
                     },
                 )
                 .map(|_| ()),

@@ -145,11 +145,14 @@ class TargetedSelection(unittest.TestCase):
             'src/engine/src/snapshot_worktree/commit.rs',
             'src/engine/src/snapshot_worktree/commit/added.rs',
             'src/engine/src/snapshot_worktree/commit/transfer.rs',
+            'src/engine/src/snapshot_worktree/initialize.rs',
+            'src/engine/src/snapshot_worktree/source.rs',
             'src/engine/src/snapshot_worktree/public/namespace.rs',
             'src/engine/src/snapshot_worktree/public/transport.rs',
             'src/engine/src/snapshot_worktree/registry.rs',
             'src/engine/src/snapshot_worktree/registry/added_commits.rs',
             'src/engine/src/snapshot_worktree/registry/edits.rs',
+            'src/engine/src/snapshot_worktree/registry/files.rs',
             'src/engine/src/snapshot_worktree/registry/historical.rs',
             'src/engine/src/snapshot_worktree/registry/history.rs',
             'src/engine/src/snapshot_worktree/registry/outcome.rs',
@@ -163,6 +166,7 @@ class TargetedSelection(unittest.TestCase):
             'test/engine/unit/directory_worktree/ledger.rs',
             'test/engine/unit/snapshot_worktree/added_files.rs',
             'test/engine/unit/snapshot_worktree/added_first.rs',
+            'test/engine/unit/snapshot_worktree/draft_gateway/fixture.rs',
             'test/server/unit/smb_rpc/native_worktree_tests.rs',
             'test/server/unit/smb_rpc/worktree_commit_tests.rs',
         ]
@@ -191,14 +195,16 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(engine['exact'], [
             'snapshot_worktree::commit::added::tests::'
             'single_added_first_commit_keeps_deleted_owner_moves_full_and_cold_retries_exactly',
+            'snapshot_worktree::commit::added::tests::'
+            'nested_added_first_commit_uses_snapshot_parent_and_cold_retries_exactly',
         ])
         self.assertEqual(server['exact'], [
             'smb_rpc::tests::native_dispatch_tests::worktree::commit::'
             'native_added_single_commit_over_tcp_preserves_other_instance_and_cold_original_result',
         ])
-        for target in (engine, server):
+        for target, expected_count in [(engine, 2), (server, 1)]:
             self.assertEqual((target['kind'], target.get('mode', 'test')), ('lib', 'test'))
-            self.assertEqual((target['max_tests'], target['timeout_seconds']), (1, 900))
+            self.assertEqual((target['max_tests'], target['timeout_seconds']), (expected_count, 900))
             self.assertIs(target.get('default_features', True), True)
             self.assertFalse(target.get('isolate', False))
             self.assertEqual(target.get('prefixes', []), [])
@@ -288,6 +294,7 @@ class TargetedSelection(unittest.TestCase):
             'src/engine/src/business/workspace.rs',
             'src/engine/src/business/file_draft.rs',
             'test/server/unit/engine_backend/automatic_mode_tests.rs',
+            'test/server/unit/smb_rpc/native_dispatch_tests.rs',
             'docs/validation/automatic-manual-handle-fence.md',
             'src/server/src/backend_methods.rs',
             'src/server/src/backend_smb_draft.rs',
@@ -336,6 +343,10 @@ class TargetedSelection(unittest.TestCase):
             'real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_cold',
             'engine_backend::automatic_mode_tests::'
             'accepted_auto_rpc_save_cold_completes_before_mode_switch_and_replays_only_original_request',
+            'engine_backend::automatic_mode_tests::'
+            'live_auto_generation_after_one_mode_switch_saves_a_shared_draft_without_history',
+            'smb_rpc::tests::native_dispatch_tests::'
+            'live_automatic_save_becomes_manual_draft_through_the_production_dispatcher',
         ])
         self.assertEqual(rpc['exact'], [
             'manual_draft::'
@@ -345,7 +356,7 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(web['exact'], [
             'fresh_working::fresh_authenticated_draft_and_worktree_survive_cold_exact_retries',
         ])
-        self.assertEqual((unit['kind'], unit['max_tests']), ('lib', 3))
+        self.assertEqual((unit['kind'], unit['max_tests']), ('lib', 5))
         self.assertEqual((rpc['kind'], rpc['name'], rpc['max_tests']),
                          ('test', 'phase1_smb_rpc', 2))
         self.assertEqual((web['kind'], web['name'], web['max_tests']),
@@ -684,8 +695,8 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(default['features'], [])
         self.assertEqual(faults['features'], ['fault-injection'])
         parents = self.policy['groups']['ordinary-namespace-parents']['rust_targets']
-        self.assertEqual(parents[0]['max_tests'], 2)
-        self.assertEqual(parents[1]['max_tests'], 2)
+        self.assertEqual(parents[0]['max_tests'], 3)
+        self.assertEqual(parents[1]['max_tests'], 3)
         self.assertEqual(parents[2],
                          self.policy['groups']['backup-entity-entry-budget']['rust_targets'][1])
         self.assertEqual((parents[2]['max_tests'], parents[2]['timeout_seconds']), (1, 900))
@@ -3036,6 +3047,7 @@ class ContainerTagsSelection(unittest.TestCase):
             'same_backup_switch_serves_and_replays_normal_successor_publications',
         ]
         ordinary = [
+            'ordinary_namespace_parents::existing_disk_targets_reserve_sixteen_bytes_before_publication',
             'ordinary_namespace_parents::ordinary_mkdir_holds_parent_occurrences_through_cuts_file_writes_and_cold_index',
             'ordinary_namespace_parents::nested_backup_binds_b_then_c_parent_occurrences_and_retained_bodies',
         ]
@@ -3078,7 +3090,7 @@ class ContainerTagsSelection(unittest.TestCase):
                     self.assertIs(target.get('default_features', True), True)
                     continue
                 if group == 'ordinary-namespace-parents' and target.get('exact') == ordinary:
-                    self.assertEqual(target['max_tests'], 2)
+                    self.assertEqual(target['max_tests'], 3)
                     self.assertIs(target.get('default_features'), True)
                     ordinary_targets.append(target.get('features'))
                     continue
@@ -3347,6 +3359,8 @@ class ContainerTagsSelection(unittest.TestCase):
         default, faults, transaction, contract, schema, product, lean = group['rust_targets']
         expected = [
             'ordinary_namespace_parents::'
+            'existing_disk_targets_reserve_sixteen_bytes_before_publication',
+            'ordinary_namespace_parents::'
             'ordinary_mkdir_holds_parent_occurrences_through_cuts_file_writes_and_cold_index',
             'ordinary_namespace_parents::'
             'nested_backup_binds_b_then_c_parent_occurrences_and_retained_bodies',
@@ -3357,7 +3371,7 @@ class ContainerTagsSelection(unittest.TestCase):
         self.assertEqual(faults['features'], ['fault-injection'])
         for target in (default, faults):
             self.assertEqual((target['name'], target['max_tests'], target['timeout_seconds']),
-                             ('recursive_backup_paths', 2, 900))
+                             ('recursive_backup_paths', 3, 900))
             self.assertTrue(target['default_features'])
             self.assertTrue(target['isolate'])
             self.assertNotIn('prefixes', target)

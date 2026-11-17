@@ -305,6 +305,9 @@ impl Session {
                     )?;
                     entry_id = staged.item_id;
                 }
+                let automatic = existing.as_ref().map(|entry| {
+                    self.shared.backend.capture_smb_automatic(&self.identity, &self.branch, entry)
+                }).transpose()?.flatten();
                 let fd = OwnedFd::from(file.try_clone().map_err(ApiError::io)?);
                 let workspace_id = workspace.workspace_id.clone();
                 let mut writer = Writer {
@@ -316,6 +319,8 @@ impl Session {
                     path: path.clone(),
                     item_id: entry_id.clone(),
                     last_head: workspace.base_head.clone(),
+                    automatic,
+                    switched_draft: None,
                     workspace,
                     dirty: existing.is_none() || truncate,
                     committed: false,
@@ -361,6 +366,7 @@ impl Session {
                 crate::ReadContent {
                     version: version_id,
                     context: None,
+                    backup_slot: None,
                 },
             )?;
             let manifest = content.checksum_manifest.as_ref().ok_or_else(|| {

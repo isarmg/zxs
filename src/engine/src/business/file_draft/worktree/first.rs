@@ -48,9 +48,12 @@ fn publish_graph(
         .commits
         .get(&history.root_commit_id)
         .ok_or_else(invalid)?;
+    // The detached FILE tree has no namespace parents. Keep the full worktree
+    // occurrence in the birth receipt, owner and directory snapshot, not here.
+    let leaf = name_policy::PortablePath::parse(plan.added.target.path.file_name())?;
     let entry = Entry {
         entry_id: plan.added.target.entry.to_string(),
-        path: plan.added.target.path.clone(),
+        path: leaf,
         kind: NamespaceEntryKind::File,
         file_id: plan.added.target.file.to_string(),
         version_id: content.version.version_id.clone(),
@@ -263,6 +266,7 @@ pub(crate) fn validate_retained(
             || commit.entries.len() != 1
             || commit.entries[0].file_id != file.to_string()
             || commit.entries[0].entry_id != birth.target.entry.to_string()
+            || commit.entries[0].path.as_str() != birth.target.path.file_name()
             || commit.entries[0].version_id != version.version_id
             || record.working.revision().generation().get()
                 <= plan.added.working.revision().generation().get()

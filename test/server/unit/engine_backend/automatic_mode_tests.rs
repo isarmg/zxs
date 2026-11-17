@@ -1,5 +1,5 @@
 //! Real HTTP management and framed SMB/SCM_RIGHTS share the actual admission
-//! owner. Local custody is retained evidence, never an automatically adopted draft.
+//! owner. Only a live, exactly bound generation can become a shared draft.
 use super::*;
 use crate::{auth::AuthStore, Backend, ReadTree, ServerConfig, SmbConfig, SpoolLimits};
 use http_routing::{Router, body::Body, http::Request as HttpRequest};
@@ -7,7 +7,7 @@ use json_codec::{Value, json};
 use service_stack::ServiceExt;
 use smb_protocol::{
     client::{Client, RemoteError, RemoteErrorCode},
-    protocol::{OpenResult, Request},
+    protocol::{OpenIo, OpenResult, Request, WorkingPosition},
 };
 use std::{
     fs::{self, File},
@@ -201,10 +201,14 @@ impl Fronts {
     }
 
     fn mode_request(&self, target: &DraftLocation) -> Value {
+        self.request_mode(target, "manual")
+    }
+
+    fn request_mode(&self, target: &DraftLocation, mode: &str) -> Value {
         let snapshot = self.backend.file_working(&self.identity(), target.clone()).unwrap();
         json!({ "operation_id": OperationId::generate().unwrap(), "command": {
             "action": "set_mode", "target": target,
-            "expected": snapshot.working.revision(), "mode": "manual",
+            "expected": snapshot.working.revision(), "mode": mode,
         } })
     }
 }
@@ -224,11 +228,51 @@ fn stage(client: &Client, opened: &OpenResult, file: &File, bytes: &[u8]) {
     file.set_len(bytes.len() as u64).unwrap();
     client.call(Request::Dirty { handle: opened.handle }).unwrap();
 }
-fn save(client: &Client, name: &str, bytes: &[u8]) {
+fn save(fronts: &Fronts, client: &Client, name: &str, bytes: &[u8]) {
     let (opened, file) = open(client, name, true);
-    stage(client, &opened, &file, bytes);
+    if opened.data_io == OpenIo::NativeWorking {
+        assert_eq!(client.write_working(
+            opened.handle, WorkingPosition::At { offset: 0 }, bytes,
+        ).unwrap(), bytes.len());
+    } else {
+        stage(client, &opened, &file, bytes);
+    }
     client.call(Request::Flush { handle: opened.handle }).unwrap();
     client.call(Request::Close { handle: opened.handle }).unwrap();
+    if opened.data_io != OpenIo::NativeWorking {
+        return;
+    }
+    let (directory, _) = client.open(Request::Open {
+        path: "p".into(), writable: false, create: false, truncate: false,
+        exclusive: false, write_through: false,
+    }).unwrap();
+    let page = client.read_directory(directory.handle, true).unwrap();
+    let item = page.entries.iter().find(|entry| entry.path().as_str() == name).unwrap();
+    let smb_protocol::protocol::DirectoryEntry::Unborn { target, .. } = item else {
+        panic!("new SMB file must begin as an unpublished container");
+    };
+    client.call(Request::Close { handle: directory.handle }).unwrap();
+    let query = url_encoding::form::Serializer::new(String::new())
+        .append_pair("repository_id", &target.repository.to_string())
+        .append_pair("path", target.path.as_str())
+        .append_pair("entry_id", &target.entry.to_string()).finish();
+    let (status, view) = fronts.http("GET", &format!(
+        "/api/file-manager/files/{}/unborn-working?{query}", target.file,
+    ), None);
+    assert!(status.is_success(), "{view}");
+    assert_eq!(view["mode"], "manual");
+    let (status, first) = fronts.http("POST", &format!(
+        "/api/file-manager/files/{}/first-commit", target.file,
+    ), Some(json!({
+        "operation_id": OperationId::generate().unwrap(), "target": target,
+        "expected": view["expected"], "message": "first explicit node",
+    })));
+    assert!(status.is_success(), "{first}");
+    let route = format!("/api/file-manager/files/{}/working", target.file);
+    let (status, automatic) = fronts.http(
+        "POST", &route, Some(fronts.request_mode(target, "automatic")),
+    );
+    assert!(status.is_success(), "{automatic}");
 }
 fn remote(error: &io::Error) -> (ErrorCode, Option<String>) {
     let error = error.get_ref().unwrap().downcast_ref::<RemoteError>().unwrap();
@@ -273,7 +317,7 @@ fn real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_
     let credentials = Credentials::generate();
     let fronts = Fronts::new(&credentials);
     let client = fronts.connect();
-    save(&client, "target.txt", b"first immutable body");
+    save(&fronts, &client, "target.txt", b"first immutable body");
     let (repository, first, target) = fronts.target("target.txt");
     let (opened, file) = open(&client, "target.txt", false);
     stage(&client, &opened, &file, b"already in automatic preparation");
@@ -321,6 +365,13 @@ fn real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_
     let (status, switched) = fronts.http("POST", &route, Some(request.clone()));
     assert!(status.is_success());
     assert_eq!(switched["commit_state"], "PUBLISHED");
+    // An intervening mode cycle revokes adoption of the old generation.
+    for mode in ["automatic", "manual"] {
+        let (status, result) = fronts.http(
+            "POST", &route, Some(fronts.request_mode(&target, mode)),
+        );
+        assert!(status.is_success(), "{result}");
+    }
     let switched_state = fronts.backend.file_working(&identity, target.clone()).unwrap();
     let sequence = fronts.backend.engine.lock().unwrap().state().sequence;
     let replay = fronts.backend.commit_workspace(&identity, original_request).unwrap();
@@ -356,12 +407,19 @@ fn real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_
         branch: &repository.main_branch_id, commit: None,
     }).unwrap().commit_id, head);
     assert_eq!(fronts.backend.file_history(&identity, &first.file_id).unwrap().len(), 2);
-    save(&client, "unrelated.txt", b"another FILE remains writable");
+    save(&fronts, &client, "unrelated.txt", b"another FILE remains writable");
     let (manual, manual_file) = open(&client, "target.txt", false);
     assert!(manual.workspace_id.is_none());
-    stage(&client, &manual, &manual_file, b"a new real shared manual draft");
+    let bytes_for_new_draft = b"a new real shared manual draft";
+    if manual.data_io == OpenIo::NativeWorking {
+        client.write_working(
+            manual.handle, WorkingPosition::At { offset: 0 }, bytes_for_new_draft,
+        ).unwrap();
+    } else {
+        stage(&client, &manual, &manual_file, bytes_for_new_draft);
+    }
     let draft = client.call(Request::Flush { handle: manual.handle }).unwrap();
-    assert_eq!(draft["operation_kind"], "file.draft.write");
+    assert_eq!(draft["commit_state"], "PUBLISHED");
     client.call(Request::Close { handle: manual.handle }).unwrap();
     drop(manual_file);
     drop(file);
@@ -386,11 +444,72 @@ fn real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_
 
 
 #[test]
+fn live_auto_generation_after_one_mode_switch_saves_a_shared_draft_without_history() {
+    let credentials = Credentials::generate();
+    let fronts = Fronts::new(&credentials);
+    let client = fronts.connect();
+    let original = b"one historical version";
+    save(&fronts, &client, "target.txt", original);
+    let (repository, first, target) = fronts.target("target.txt");
+    let (opened, file) = open(&client, "target.txt", false);
+    assert_eq!(opened.data_io, OpenIo::Descriptor);
+    let bytes = b"bytes staged before switching to manual";
+    stage(&client, &opened, &file, bytes);
+    let (_, record) = custody(fronts.root.path(), opened.workspace_id.as_deref().unwrap());
+    let operation = saved_request(&record).operation_id;
+    let route = format!("/api/file-manager/files/{}/working", target.file);
+    let (status, switched) = fronts.http("POST", &route, Some(fronts.mode_request(&target)));
+    assert!(status.is_success(), "{switched}");
+    let blocked = client.call(Request::PrepareWrite {
+        handle: opened.handle, end: 4096, bytes: 1,
+    }).unwrap_err();
+    assert_eq!(remote(&blocked).0, ErrorCode::FileBranchConflict);
+    let identity = fronts.identity();
+    let before = fronts.backend.file_working(&identity, target.clone()).unwrap();
+    let receipt = client.call(Request::Flush { handle: opened.handle }).unwrap();
+    assert_eq!(receipt["operation_kind"], "file.draft.write");
+    assert_eq!(receipt["operation_id"], operation.to_string());
+    assert_eq!(client.call(Request::Flush { handle: opened.handle }).unwrap(), receipt);
+    client.call(Request::Close { handle: opened.handle }).unwrap();
+    let current = fronts.backend.file_working(&identity, target.clone()).unwrap();
+    assert_eq!(current.base, before.base);
+    assert!(current.working.draft().is_some());
+    assert_eq!(
+        fronts.backend.tree_snapshot(&identity, ReadTree {
+            branch: &repository.main_branch_id, commit: None,
+        }).unwrap().entries.into_iter().find(|entry| entry.entry_id == first.entry_id)
+            .unwrap().version_id,
+        first.version_id,
+    );
+    assert_eq!(fronts.backend.file_history(&identity, &first.file_id).unwrap().len(), 1);
+
+    let (new_handle, _) = client.open(Request::Open {
+        path: "p/target.txt".into(), writable: false, create: false, truncate: false,
+        exclusive: false, write_through: false,
+    }).unwrap();
+    let mut actual = [0; 128];
+    let size = client.read(new_handle.handle, 0, &mut actual).unwrap();
+    assert_eq!(&actual[..size], bytes);
+    client.call(Request::Close { handle: new_handle.handle }).unwrap();
+    drop(file);
+    drop(client);
+    let (_root, engine) = fronts.cold();
+    assert_eq!(engine.file_history(&first.file_id).unwrap().len(), 1);
+    let mut content = Vec::new();
+    engine.open_file_draft(&target).unwrap().read_to_end(&mut content).unwrap();
+    assert_eq!(content, bytes);
+    content.clear();
+    engine.open_content(&first.version_id).unwrap().file.read_to_end(&mut content).unwrap();
+    assert_eq!(content, original);
+}
+
+
+#[test]
 fn accepted_auto_rpc_save_cold_completes_before_mode_switch_and_replays_only_original_request() {
     let credentials = Credentials::generate();
     let fronts = Fronts::new(&credentials);
     let client = fronts.connect();
-    save(&client, "accepted.txt", b"original automatic node");
+    save(&fronts, &client, "accepted.txt", b"original automatic node");
     let (_, first, target) = fronts.target("accepted.txt");
     let (opened, file) = open(&client, "accepted.txt", false);
     let bytes = b"the same native automatic decision must finish after restart";

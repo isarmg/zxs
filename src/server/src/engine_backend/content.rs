@@ -55,7 +55,17 @@ impl EngineBackend {
             (record, None)
         };
         let repo = repo_for_history(&engine, &record.history_tree_id)?;
-        let plan = engine.prepare_content(version).map_err(error)?;
+        let plan = match request.backup_slot {
+            Some(slot) => {
+                let version = record
+                    .version_id
+                    .parse::<storage_contract::VersionId>()
+                    .map_err(ApiError::invalid_source)?;
+                engine.prepare_backup_content(version, slot)
+            }
+            None => engine.prepare_content(version),
+        }
+        .map_err(error)?;
         let proof_memory =
             crate::content_proof_budget::reserve(plan.checksum_manifest_bytes().map_err(error)?)?;
         let download_name = match logical_name {

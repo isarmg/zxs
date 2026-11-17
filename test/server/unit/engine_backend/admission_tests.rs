@@ -376,6 +376,7 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
                 crate::ReadContent {
                     version: &entry.version_id,
                     context: Some(&context),
+                    backup_slot: None,
                 },
             )
             .unwrap();
@@ -471,7 +472,8 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
                 &caller(),
                 crate::ReadContent {
                     version: &entry.version_id,
-                    context: Some(&context)
+                    context: Some(&context),
+                    backup_slot: None,
                 }
             )
             .err()

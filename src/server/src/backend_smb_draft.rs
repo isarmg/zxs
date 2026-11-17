@@ -15,6 +15,14 @@ impl SmbManualFile {
     }
 }
 
+/// The exact committed FILE behind an automatic descriptor generation.
+#[derive(Clone, Debug)]
+pub struct SmbAutomaticFile {
+    pub(crate) target: DraftLocation,
+    pub(crate) base: DraftBase,
+    pub(crate) revision: WorkingRevision,
+}
+
 #[derive(Clone, Copy)]
 pub enum SmbDraftAccess {
     Read,

@@ -120,7 +120,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `GET /api/operations/{operation}/outcome` | 只查询确定结果或处理中状态，供写入后的结果核对；不观察当前健康 |
 | `GET /api/operations/{operation}` | 显式管理员诊断：原操作结果与当前健康观察分开返回 |
 | `POST /api/workspaces/{workspace}/abort` | 仅在安全阶段中止 |
-| `GET /api/versions/{version}/content` | 受授权的固定版本内容与 Range；可传 repository_id/path 按具体逻辑别名生成下载名称 |
+| `GET /api/versions/{version}/content` | 受授权的固定版本内容与 Range；可传 repository_id/path 按具体逻辑别名生成下载名称，也可传 backup_slot 指定唯一备份副本且不回退 |
 | `GET /api/versions/{version}` | 返回获授权版本描述及可信校验清单摘要 |
 | `GET /api/versions/{version}/checksums` | 返回该版本完整二进制校验清单，按当前认证及内容状态核验 |
 | `GET /api/files/{file}/history` | 当前根上的正文版本摘要窗口，默认只读首页 |

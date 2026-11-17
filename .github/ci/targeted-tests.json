@@ -1,7 +1,7 @@
 {
   "groups": {
     "worktree-added-native": {
-      "reason": "Run the first real Added-file worktree slice: held same-disk deleted-data FILE birth, empty Manual identity, two native range saves, independent operation completion and cold reopen through Engine and DefaultShare. Keep original FILE parent vectors and unchanged old snapshot paths. Added explicit commit and subdirectory birth remain refused; this does not execute external Samba, AF_UNIX framing or cross-disk MOVE.",
+      "reason": "Run Added-file worktree birth at the root and beneath exact snapshot directories: held same-disk deleted-data FILE identity, Manual range saves, independent operation completion and cold reopen through Engine and DefaultShare. This does not execute external Samba, AF_UNIX framing or cross-disk MOVE.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -41,9 +41,10 @@
             "core"
           ],
           "exact": [
-            "smb_rpc::tests::native_dispatch_tests::worktree::native_worktree_added_birth_resaves_close_and_cold_reopen_keep_independent_identity"
+            "smb_rpc::tests::native_dispatch_tests::worktree::native_worktree_added_birth_resaves_close_and_cold_reopen_keep_independent_identity",
+            "smb_rpc::tests::native_dispatch_tests::worktree::native_worktree_nested_birth_resaves_close_and_cold_reopen_keep_independent_identity"
           ],
-          "max_tests": 1,
+          "max_tests": 2,
           "timeout_seconds": 900
         }
       ]
@@ -866,10 +867,11 @@
           "default_features": true,
           "isolate": true,
           "exact": [
+            "ordinary_namespace_parents::existing_disk_targets_reserve_sixteen_bytes_before_publication",
             "ordinary_namespace_parents::ordinary_mkdir_holds_parent_occurrences_through_cuts_file_writes_and_cold_index",
             "ordinary_namespace_parents::nested_backup_binds_b_then_c_parent_occurrences_and_retained_bodies"
           ],
-          "max_tests": 2,
+          "max_tests": 3,
           "timeout_seconds": 900,
           "features": []
         },
@@ -881,10 +883,11 @@
           "default_features": true,
           "isolate": true,
           "exact": [
+            "ordinary_namespace_parents::existing_disk_targets_reserve_sixteen_bytes_before_publication",
             "ordinary_namespace_parents::ordinary_mkdir_holds_parent_occurrences_through_cuts_file_writes_and_cold_index",
             "ordinary_namespace_parents::nested_backup_binds_b_then_c_parent_occurrences_and_retained_bodies"
           ],
-          "max_tests": 2,
+          "max_tests": 3,
           "timeout_seconds": 900,
           "features": [
             "fault-injection"
@@ -2378,12 +2381,13 @@
             "core"
           ],
           "exact": [
+            "backup_namespace::authenticated_backup_range_selects_only_the_published_third_disk",
             "backup_namespace::user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_rename_and_delete",
             "file_notes_are_authorized_bounded_persistent_and_download_uses_current_container_name",
             "history_alias_operations::workspace_history_keeps_both_deleted_alias_paths_with_retained_occurrence",
             "history_query::history_query_rejects_unknown_fields_and_preserves_paired_context"
           ],
-          "max_tests": 4,
+          "max_tests": 5,
           "timeout_seconds": 900
         }
       ]
@@ -5744,7 +5748,7 @@
       "rust_targets": []
     },
     "ordinary-smb-manual-draft": {
-      "reason": "Actual authenticated SMB Manual FILE handles publish only file.draft.write, retain frozen uncertain requests and local bytes/quota, and cold-read the published shared draft. The genuine HTTP management endpoint alone creates a FILE version. Include lost-response/later-FD-byte refusal and the unchanged Automatic path. No new pool format, RPC wire, unflushed-orphan adoption, or Samba-network acceptance claim. Real HTTP Auto-to-Manual switching also fences old undecided Automatic handles before upload while preserving same-inode custody/quota, the existing preparation lock, original ACCEPT cold completion and permanent exact retries.",
+      "reason": "Actual authenticated SMB Manual FILE handles publish only file.draft.write, retain frozen uncertain requests and local bytes/quota, and cold-read the published shared draft. The genuine HTTP management endpoint alone creates a FILE version. Include lost-response/later-FD-byte refusal and the unchanged Automatic path. No new pool format, RPC wire, unflushed-orphan adoption, or Samba-network acceptance claim. Real HTTP Auto-to-Manual switching fences old automatic node creation, admits a live exactly bound staged generation as a shared draft, retains conflicted private custody, and keeps original ACCEPT cold completion and permanent exact retries.",
       "python_tests": [
         "test_targeted_ci"
       ],
@@ -5762,9 +5766,11 @@
           "exact": [
             "smb_rpc::tests::manual_draft_tests::lost_manual_reply_reuses_the_frozen_request_and_never_acknowledges_later_fd_bytes",
             "engine_backend::automatic_mode_tests::real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_cold",
-            "engine_backend::automatic_mode_tests::accepted_auto_rpc_save_cold_completes_before_mode_switch_and_replays_only_original_request"
+            "engine_backend::automatic_mode_tests::accepted_auto_rpc_save_cold_completes_before_mode_switch_and_replays_only_original_request",
+            "engine_backend::automatic_mode_tests::live_auto_generation_after_one_mode_switch_saves_a_shared_draft_without_history",
+            "smb_rpc::tests::native_dispatch_tests::live_automatic_save_becomes_manual_draft_through_the_production_dispatcher"
           ],
-          "max_tests": 3
+          "max_tests": 5
         },
         {
           "package": "storage-server",
@@ -6055,7 +6061,7 @@
       ]
     },
     "worktree-added-commit": {
-      "reason": "One real retained Added file commits through the existing worktree request: independently prepared FULL and first FILE publication, same-disk deleted-data ownership, no-replace directory MOVE with original COPY, stable SMB EntryId and original-operation cold retry. Engine and authenticated TCP/DefaultShare normal flows preserve the other instance. No mixed selection, multiple dirty files, external Samba or Chrome claim.",
+      "reason": "One real retained Added file at root or a nested snapshot path commits through the existing worktree request: independently prepared FULL and first FILE publication, same-disk deleted-data ownership, no-replace directory MOVE with original COPY, stable SMB EntryId and original-operation cold retry. Engine and authenticated TCP/DefaultShare normal flows preserve the other instance. No mixed selection, multiple dirty files, external Samba or Chrome claim.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -6063,9 +6069,10 @@
           "manifest": "src/engine/Cargo.toml",
           "kind": "lib",
           "exact": [
-            "snapshot_worktree::commit::added::tests::single_added_first_commit_keeps_deleted_owner_moves_full_and_cold_retries_exactly"
+            "snapshot_worktree::commit::added::tests::single_added_first_commit_keeps_deleted_owner_moves_full_and_cold_retries_exactly",
+            "snapshot_worktree::commit::added::tests::nested_added_first_commit_uses_snapshot_parent_and_cold_retries_exactly"
           ],
-          "max_tests": 1,
+          "max_tests": 2,
           "timeout_seconds": 900
         },
         {
@@ -6430,7 +6437,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/registry/files.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "worktree-added-commit"
       ]
     },
     {
@@ -6568,7 +6576,8 @@
     {
       "path": "test/server/unit/smb_rpc/native_dispatch_tests.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "ordinary-smb-manual-draft"
       ]
     },
     {
@@ -7663,7 +7672,8 @@
     {
       "path": "test/engine/unit/snapshot_worktree/draft_gateway/fixture.rs",
       "groups": [
-        "directory-working-publication"
+        "directory-working-publication",
+        "worktree-added-commit"
       ]
     },
     {
@@ -9011,7 +9021,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/initialize.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "worktree-added-commit"
       ]
     },
     {
@@ -9067,7 +9078,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/source.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "worktree-added-commit"
       ]
     },
     {

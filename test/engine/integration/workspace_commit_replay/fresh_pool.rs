@@ -1017,6 +1017,33 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
             assert_eq!(row["parent_node_ids"], json_codec::to_value(
                 engine.file_node_parents(&first.file_id, version).unwrap()).unwrap());
         }
+        // Exact backup reads use the admitted C inode even with A and B readable.
+        let c_slot = name_policy::SlotId::parse(&engine.config().disks[2].slot_id).unwrap();
+        let v3_id = v3.version_id.parse().unwrap();
+        let exact = engine.prepare_backup_content(v3_id, &c_slot).unwrap();
+        let mut exact = exact.open().unwrap();
+        assert!(exact.fallback_files.is_empty());
+        let observed = exact.file.metadata().unwrap();
+        let expected = fs::metadata(&c_body).unwrap();
+        assert_eq!((observed.dev(), observed.ino()), (expected.dev(), expected.ino()));
+        let mut exact_bytes = Vec::new();
+        exact.file.read_to_end(&mut exact_bytes).unwrap();
+        assert_eq!(exact_bytes, b"V3 after C is active");
+        drop(exact);
+        assert_eq!(
+            engine
+                .prepare_backup_content(first.version_id.parse().unwrap(), &c_slot)
+                .err()
+                .unwrap()
+                .code(),
+            ErrorCode::ContentUnavailable
+        );
+        let parked_c = temporary.path().join("V3-unavailable-C");
+        fs::rename(&c_body, &parked_c).unwrap();
+        let unavailable = engine.prepare_backup_content(v3_id, &c_slot).unwrap();
+        assert_eq!(unavailable.open().err().unwrap().code(), ErrorCode::ContentUnavailable);
+        assert_eq!(body(&engine, &v3.version_id), b"V3 after C is active");
+        fs::rename(&parked_c, &c_body).unwrap();
         let parked_a = temporary.path().join("V3-unavailable-A");
         let parked_b = temporary.path().join("V3-unavailable-B");
         fs::rename(&a_body, &parked_a).unwrap();

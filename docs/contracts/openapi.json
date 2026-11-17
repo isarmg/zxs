@@ -397,7 +397,7 @@
     "/api/versions/{version}/content": {
       "get": {
         "operationId": "getContent",
-        "description": "固定版本单范围读取；不执行改变字节偏移的编码转换。repository_id/path成对指定逻辑别名，验证此路径当前条目属于该版本的文件身份，下载名始终取容器当前名称，不取历史或别名路径叶名。省略位置时仍使用已登记的当前容器名；历史正文仍以稳定版本ID读取，不使用storage_name作为下载名。",
+        "description": "固定版本单范围读取；不执行改变字节偏移的编码转换。repository_id/path成对指定逻辑别名，验证此路径当前条目属于该版本的文件身份，下载名始终取容器当前名称，不取历史或别名路径叶名。省略位置时仍使用已登记的当前容器名；历史正文仍以稳定版本ID读取，不使用storage_name作为下载名。可用 backup_slot 只读该备份盘的已发布副本，不从其它盘回退；省略该参数则沿原副本路线读取。",
         "parameters": [
           {
             "name": "version",
@@ -449,6 +449,15 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          {
+            "name": "backup_slot",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SlotId"
+            },
+            "description": "指定已登记的备份槽位。该版本在该槽无可读副本时返回 CONTENT_UNAVAILABLE，不回退。"
           }
         ],
         "responses": {
@@ -565,7 +574,7 @@
       },
       "head": {
         "operationId": "headContent",
-        "description": "返回完整表示元信息，不返回正文；当前认证、域状态及清除状态仍须检查。 下载Content-Disposition按容器当前名称生成UTF-8 filename*，不会把历史版本storage_name用作下载名。",
+        "description": "返回完整表示元信息，不返回正文；当前认证、域状态及清除状态仍须检查。 下载Content-Disposition按容器当前名称生成UTF-8 filename*，不会把历史版本storage_name用作下载名。提供 backup_slot 时只准入该备份盘的副本。",
         "parameters": [
           {
             "name": "version",
@@ -592,6 +601,14 @@
               "type": "string"
             },
             "description": "弱比较；支持单独 * 或 ETag 列表（含多个同名字段）。命中返回无响应体的 304；仍先核对当前授权、内容墓碑和域状态。"
+          },
+          {
+            "name": "backup_slot",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SlotId"
+            }
           }
         ],
         "responses": {

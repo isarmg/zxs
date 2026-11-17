@@ -37,7 +37,6 @@ pub(crate) fn create(
     let current = index.worktree(request.target)?;
     if current.revision() != request.expected
         || current.published_node().is_some()
-        || request.path.parent().is_some()
         || !crate::container_storage::namespace_host::ordinary_path(&request.path)
     {
         return Err(RegistrationError::EditScope);

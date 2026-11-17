@@ -63,6 +63,9 @@ fn write_recovery_record(
         "descriptor_changes_unconfirmed": true,
         "handle_state": if detached.is_some() { "detached" } else { "active" }
     });
+    if let Some(request) = &writer.switched_draft {
+        value["switched_draft"] = json!(request);
+    }
     if let Some((error, synced)) = detached {
         value["detach_error"] = json!({"code": error.code, "message": error.message});
         value["retained_bytes_synced"] = json!(synced);
@@ -211,6 +214,12 @@ impl Session {
             &writer.workspace.workspace_id,
             writer.write_access(&self.branch),
         )?;
+        if writer.switched_draft.is_some() {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::FileBranchConflict,
+                "reopen the file after its automatic save became a manual draft",
+            ));
+        }
         let current = writer.file.metadata().map_err(ApiError::io)?.len();
         writer
             .reservation
@@ -239,6 +248,12 @@ impl Session {
             &writer.workspace.workspace_id,
             writer.write_access(&self.branch),
         )?;
+        if writer.switched_draft.is_some() {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::FileBranchConflict,
+                "reopen the file after its automatic save became a manual draft",
+            ));
+        }
         if writer.committed {
             let operation_id = OperationId::generate().map_err(ApiError::contract_input)?;
             let workspace = self.shared.workspace(&self.identity, &self.branch)?;
@@ -268,18 +283,29 @@ impl Session {
                         "the open file changed since this handle last published",
                     ));
                 }
-                Ok(())
+                current.as_ref().map(|entry| {
+                    self.shared.backend.capture_smb_automatic(
+                        &self.identity, &self.branch, entry,
+                    )
+                }).transpose().map(Option::flatten)
             })();
-            if let Err(error) = validate {
-                if let Err(abort_error) = self
-                    .shared
-                    .backend
-                    .abort_workspace(&self.identity, &workspace.workspace_id)
-                {
-                    tracing::warn!(error = ?abort_error, "SMB preparation abort failed; workspace retained for recovery");
+            let automatic = match validate {
+                Ok(automatic) => automatic,
+                Err(error) => {
+                    if let Err(abort_error) = self
+                        .shared
+                        .backend
+                        .abort_workspace(&self.identity, &workspace.workspace_id)
+                    {
+                        tracing::warn!(
+                            error = ?abort_error,
+                            "SMB preparation abort failed; workspace retained for recovery"
+                        );
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
+            };
+            writer.automatic = automatic;
             writer.workspace = workspace;
             writer.committed = false;
             writer.operation_id = operation_id;
@@ -322,13 +348,15 @@ impl Session {
             Handle::ManualWrite(writer, _) => {
                 writer.flush(&self.shared, &self.identity, self.max_file_bytes)
             }
-            Handle::Write(writer, _) if writer.dirty => flush_writer(
-                &self.shared,
-                &self.identity,
-                &self.branch,
-                self.max_file_bytes,
-                writer,
-            ),
+            Handle::Write(writer, _) if writer.dirty || writer.switched_draft.is_some() => {
+                flush_writer(
+                    &self.shared,
+                    &self.identity,
+                    &self.branch,
+                    self.max_file_bytes,
+                    writer,
+                )
+            }
             opened => {
                 // No-change acknowledgements still require current authority.
                 opened.authorize_read(&self.shared, &self.identity, &self.branch)?;
@@ -381,7 +409,7 @@ impl Session {
             // Close owns the descriptor even when publication fails. Its path
             // reservation stays held until cleanup or detached retention finishes.
             let saved = (|| {
-                if !abort && writer.dirty {
+                if !abort && (writer.dirty || writer.switched_draft.is_some()) {
                     flush_writer(
                         &self.shared,
                         &self.identity,
@@ -461,11 +489,13 @@ fn flush_writer(
     }
     // A lost response must not restage under a new dirty generation and
     // thereby change the original request digest. Reconcile by operation id.
-    match shared
-        .backend
-        .operation_outcome(identity, writer.operation_id)
-    {
+    let draft_kind = writer.switched_draft.as_ref().map(|request| request.command.kind());
+    match shared.backend.operation_outcome(identity, writer.operation_id) {
+        Ok(result) if draft_kind == Some(result.kind.as_str()) => {
+            // The draft writer below reconciles the exact frozen request.
+        }
         Ok(result) if result.commit_state == storage_contract::CommitState::Published => {
+            writer.switched_draft = None;
             return finish_publication(shared, identity, branch, writer, result);
         }
         Ok(_) => {
@@ -480,45 +510,108 @@ fn flush_writer(
                 || error.code == storage_contract::ErrorCode::OperationNotFound => {}
         Err(error) => return Err(error),
     }
+    if writer.switched_draft.is_some() {
+        let source = source_for_publication(writer, max_file_bytes)?;
+        return save_switched_draft(shared, identity, branch, max_file_bytes, writer, &source);
+    }
     // Existing/uncertain operations above keep their original completion path.
     // A still-undecided Auto handle must pass today's exact captured-FILE mode
     // before copying its mutable bytes into another upload preparation. A mode
     // change during preparation is fenced again by the existing whole-State
     // revalidation at finish, not a second SMB-specific decision gate.
-    shared.backend.authorize_workspace_write(
+    if let Err(error) = shared.backend.authorize_workspace_write(
         identity,
         &writer.workspace.workspace_id,
         writer.write_access(branch),
-    )?;
-    writer
-        .directory
-        .verify_payload(
-            &platform_io::fs_safety::EntryName::new(
-                writer
-                    .source
-                    .file_name()
-                    .ok_or_else(|| ApiError::invalid("SMB source filename missing"))?,
-            )
-            .map_err(crate::upload_fs_error)?,
-            &writer.file,
-        )
-        .map_err(crate::upload_fs_error)?;
-    writer.file.sync_all().map_err(ApiError::io)?;
-    if writer.file.metadata().map_err(ApiError::io)?.len() > max_file_bytes {
-        return Err(ApiError::limit("file exceeds SMB byte limit"));
+    ) {
+        if error.code == storage_contract::ErrorCode::FileBranchConflict
+            && let Some(automatic) = &writer.automatic
+            && let Some(expected) = shared.backend.switched_smb_draft_revision(identity, automatic)?
+        {
+            let source = source_for_publication(writer, max_file_bytes)?;
+            writer.switched_draft = Some(crate::ChangeFileWorking {
+                operation_id: writer.operation_id,
+                command: storage_contract::file_draft::DraftCommand::Write {
+                    target: automatic.target.clone(),
+                    expected,
+                    base: automatic.base,
+                    content_hash: source.hash,
+                    logical_size: source.size,
+                },
+            });
+            return save_switched_draft(shared, identity, branch, max_file_bytes, writer, &source);
+        }
+        return Err(error);
     }
+    let source = source_for_publication(writer, max_file_bytes)?;
     shared.backend.upload(
         identity,
         &writer.workspace.workspace_id,
         &writer.item_id,
         &writer.path,
-        &crate::UploadSource::from_file(
-            writer.file.try_clone().map_err(ApiError::io)?,
-            max_file_bytes,
-        )?,
+        &source,
     )?;
     let result = shared
         .backend
         .commit_workspace(identity, writer.save_request())?;
     finish_publication(shared, identity, branch, writer, result.into())
+}
+
+fn source_for_publication(
+    writer: &Writer,
+    max_file_bytes: u64,
+) -> Result<crate::UploadSource, ApiError> {
+    let name = platform_io::fs_safety::EntryName::new(
+        writer.source.file_name().ok_or_else(|| ApiError::invalid("SMB source filename missing"))?,
+    ).map_err(crate::upload_fs_error)?;
+    writer.directory.verify_payload(&name, &writer.file).map_err(crate::upload_fs_error)?;
+    writer.file.sync_all().map_err(ApiError::io)?;
+    if writer.file.metadata().map_err(ApiError::io)?.len() > max_file_bytes {
+        return Err(ApiError::limit("file exceeds SMB byte limit"));
+    }
+    crate::UploadSource::from_file(writer.file.try_clone().map_err(ApiError::io)?, max_file_bytes)
+}
+
+fn save_switched_draft(
+    shared: &Shared,
+    identity: &Identity,
+    branch: &str,
+    max_file_bytes: u64,
+    writer: &mut Writer,
+    source: &crate::UploadSource,
+) -> Result<Value, ApiError> {
+    // Record the frozen command before reusing the durable idempotent draft
+    // writer. The FILE command still checks the exact base and CAS revision
+    // under the engine lock; nothing is admitted by a private spool record.
+    recovery_record(writer, &identity.principal, branch)?;
+    let Some(request) = writer.switched_draft.clone() else {
+        return Err(ApiError::forbidden());
+    };
+    let storage_contract::file_draft::DraftCommand::Write { content_hash, logical_size, .. } =
+        request.command
+    else {
+        return Err(ApiError::forbidden());
+    };
+    let result = shared.backend.write_smb_draft(identity, request, source)?;
+    if result.commit_state != storage_contract::CommitState::Published {
+        return Err(ApiError::conflict(
+            storage_contract::ErrorCode::RecoveryRequired,
+            "the switched draft save must be reconciled first",
+        ));
+    }
+    // The fd is not sealed by SCM_RIGHTS. Verify the latest bytes against
+    // this exact receipt before acknowledging the generation.
+    let latest = crate::UploadSource::from_file(
+        writer.file.try_clone().map_err(ApiError::io)?,
+        max_file_bytes,
+    )?;
+    writer.dirty = latest.hash != content_hash || latest.size != logical_size;
+    if writer.dirty {
+        return Err(ApiError::conflict(
+            storage_contract::ErrorCode::FileBranchConflict,
+            "original draft saved; later descriptor bytes remain unsaved",
+        ));
+    }
+    recovery_record(writer, &identity.principal, branch)?;
+    crate::operation_wire::operation_wire(result.into())
 }

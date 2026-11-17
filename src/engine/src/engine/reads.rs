@@ -1,6 +1,7 @@
 //! Verified replicas, read leases, offline export and disk observations.
 use super::provenance::MetadataReadContext;
 use super::{Engine, OpenedContent, ReadLease, ReadSource};
+use crate::error::BackupReadError;
 use crate::{disk::*, *};
 use std::path::Path;
 use std::{io::Read, path::PathBuf, sync::Arc};
@@ -432,6 +433,24 @@ pub struct RangeContent {
 impl Engine {
     /// Does no filesystem access and reads no payload bytes.
     pub fn prepare_content(&self, version_id: &str) -> Result<ContentReadPlan> {
+        self.prepare_content_route(version_id, None)
+    }
+
+    /// Read only this backup occurrence, never a different replica of the version.
+    /// The normal publication and chunk-proof path still decides whether it can be read.
+    pub fn prepare_backup_content(
+        &self,
+        version_id: storage_contract::VersionId,
+        slot: &name_policy::SlotId,
+    ) -> Result<ContentReadPlan> {
+        self.prepare_content_route(&version_id.to_string(), Some(slot))
+    }
+
+    fn prepare_content_route(
+        &self,
+        version_id: &str,
+        backup_slot: Option<&name_policy::SlotId>,
+    ) -> Result<ContentReadPlan> {
         if self
             .state
             .content_states
@@ -460,11 +479,25 @@ impl Engine {
                 "version placement missing",
             )
         })?;
-        let disks = placement
-            .route_slot_ids
-            .iter()
-            .map(|slot| self.disk(slot).cloned())
-            .collect::<Result<Vec<_>>>()?;
+        let disks = if let Some(slot) = backup_slot {
+            let disk = self.disk(slot.as_str())?;
+            if disk.level == 1 {
+                return Err(BackupReadError::Primary.into());
+            }
+            let generation = placement.binding_generations.get(&disk.slot_id);
+            if !placement.route_slot_ids.contains(&disk.slot_id)
+                || generation != Some(&disk.binding_generation)
+            {
+                return Err(BackupReadError::MissingReplica.into());
+            }
+            vec![disk.clone()]
+        } else {
+            placement
+                .route_slot_ids
+                .iter()
+                .map(|slot| self.disk(slot).cloned())
+                .collect::<Result<Vec<_>>>()?
+        };
         self.reads
             .lock()
             .expect("invariant: read lease lock poisoned")

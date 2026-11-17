@@ -6,6 +6,8 @@ use crate::persist::snapshot_worktree::files::{
     WorktreeFileBirth, WorktreeFileCompletion, WorktreeFileSave, WorktreeFileSaveRequest,
 };
 use crate::snapshot_worktree::{RegistrationError, Result};
+use crate::working_tree::snapshot::SnapshotEntryContent;
+use name_policy::PortablePath;
 use storage_contract::file_container::retained::{RetainedKind, RetainedName};
 use storage_contract::file_draft::UnbornWorking;
 use storage_contract::snapshot_worktree::additions::{CreateWorktreeFile, WorktreeFileTarget};
@@ -131,10 +133,16 @@ impl<'a> ReceiptIndex<'a> {
         let operation = receipt.original.operation_id;
         let current = self.worktree(plan.request.target)?;
         let owner = current.source().host();
+        let entries = current.source().manifest().entries();
+        let original = |path: &PortablePath| {
+            entries
+                .binary_search_by(|entry| entry.path.key().cmp(path.key()))
+                .ok()
+                .map(|index| &entries[index])
+        };
         if plan.request.operation_id != operation
             || plan.target.worktree != plan.request.target
             || plan.target.path != plan.request.path
-            || plan.target.path.parent().is_some()
             || !crate::container_storage::namespace_host::ordinary_path(&plan.target.path)
             || current.published_node().is_some()
             || current.binding() != plan.binding
@@ -145,12 +153,13 @@ impl<'a> ReceiptIndex<'a> {
             || owner.registration.disk_id != plan.owner.to_string()
             || owner.registration.pool_id != plan.allocation.registration.pool.to_string()
             || plan.allocation.registration.disk != plan.owner
-            || current
-                .source()
-                .manifest()
-                .entries()
-                .iter()
-                .any(|entry| entry.path.key() == plan.target.path.key())
+            || original(&plan.target.path).is_some()
+            || plan.target.path.parent().is_some_and(|parent| {
+                !original(&parent).is_some_and(|entry| {
+                    entry.path == parent
+                        && matches!(entry.content, SnapshotEntryContent::Directory {})
+                })
+            })
             || self.added(plan.request.target).iter().any(|file| {
                 file.target.path.key() == plan.target.path.key()
                     || file.target.file == plan.target.file

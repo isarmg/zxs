@@ -230,6 +230,10 @@ fn event_anchor(file: &HistoryFileId, event: &Event) -> String {
     format!("lifecycle-{file}-{}-{}", event.operation_id, event.source_id())
 }
 
+fn event_link(anchor: &str) -> String {
+    format!("#{anchor}")
+}
+
 fn location_label(location: &PathLocation) -> String {
     format!("{} / {}", location.repository_id, location.path)
 }
@@ -304,37 +308,54 @@ fn event_time(event: &Event) -> String {
 fn event_view(file: HistoryFileId, event: Event) -> impl IntoView {
     let operation = event.operation_id.to_string();
     let anchor = event_anchor(&file, &event);
+    let link = event_link(&anchor);
+    let action = action_label(&event.detail);
+    let marker = format!("{action} · {}", event.sequence);
     let source = event.source_id().to_string();
+    let marker_label = format!("{marker} · {source}");
     let detail = detail_view(&event.detail);
     view! {
-        <article
-            class="zxs-content-panel zxs-frame zxs-stack zxs-stack--flush"
-            id=anchor
-            data-zxs-lifecycle-operation=operation
-            data-zxs-lifecycle-source=source
+        <div
+            class="zxs-lifecycle-event"
+            role="listitem"
         >
-            <p
-                class="zxs-row"
-                role="heading"
-                {web_interface::attr::custom::custom_attribute("aria-level", "4")}
+            <a
+                class="zxs-lifecycle-marker"
+                href=link
+                aria-label=marker_label
             >
-                {action_label(&event.detail)}
-            </p>
-            <p class="zxs-row">
-                {event_time(&event)}
-            </p>
-            <p class="zxs-row">
-                {format!("{}: {}", t("操作", "Operation"), event.operation_id)}
-            </p>
-            {detail}
-            <p class="zxs-row">
-                {format!(
-                    "{}: {}",
-                    t("保留记录序号", "Retained record sequence"),
-                    event.sequence,
-                )}
-            </p>
-        </article>
+                {marker}
+            </a>
+            <article
+                class="zxs-lifecycle-record zxs-content-panel zxs-frame zxs-stack zxs-stack--flush"
+                id=anchor
+                tabindex="-1"
+                data-zxs-lifecycle-operation=operation
+                data-zxs-lifecycle-source=source
+            >
+                <p
+                    class="zxs-row"
+                    role="heading"
+                    {web_interface::attr::custom::custom_attribute("aria-level", "4")}
+                >
+                    {action}
+                </p>
+                <p class="zxs-row">
+                    {event_time(&event)}
+                </p>
+                <p class="zxs-row">
+                    {format!("{}: {}", t("操作", "Operation"), event.operation_id)}
+                </p>
+                {detail}
+                <p class="zxs-row">
+                    {format!(
+                        "{}: {}",
+                        t("保留记录序号", "Retained record sequence"),
+                        event.sequence,
+                    )}
+                </p>
+            </article>
+        </div>
     }
 }
 
@@ -371,11 +392,16 @@ fn page_view(page: Page) -> impl IntoView {
                     page.observation_sequence,
                 )}
             </p>
-            <For
-                each=each
-                key=event_identity
-                children=children
-            />
+            <div
+                class="zxs-lifecycle-rail"
+                role="list"
+            >
+                <For
+                    each=each
+                    key=event_identity
+                    children=children
+                />
+            </div>
         </div>
     }
 }

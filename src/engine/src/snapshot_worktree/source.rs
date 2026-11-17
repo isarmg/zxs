@@ -16,7 +16,7 @@ pub enum SnapshotSourceError {
     DirectoryPublication(#[source] DirectoryPublicationFailure),
     #[error("snapshot source no longer names the admitted current root namespace")]
     Namespace,
-    #[error("this snapshot mode requires root-level ordinary files")]
+    #[error("this snapshot mode requires the registered root namespace")]
     RootFiles,
     #[error("snapshot source exceeds the complete manifest budget")]
     Budget,
@@ -93,8 +93,12 @@ pub(super) fn construct(
     current.entries = snapshot.entries().to_vec();
     let mut entries = Vec::new();
     for entry in snapshot.tree().visible_entries() {
-        if entry.kind != NamespaceEntryKind::File || entry.path.parent().is_some() {
-            return Err(reject(SnapshotSourceError::RootFiles));
+        if entry.kind == NamespaceEntryKind::Directory {
+            entries.push(SnapshotEntry {
+                path: entry.path.clone(),
+                content: SnapshotEntryContent::Directory {},
+            });
+            continue;
         }
         let file = entry.file_id.parse::<FileId>()?;
         let version = entry.version_id.parse::<VersionId>()?;

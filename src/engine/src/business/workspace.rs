@@ -1084,6 +1084,14 @@ impl Engine {
         request: &CommitRequest,
         wire: Option<&crate::wire::WireCommit>,
     ) -> Result<()> {
+        if w.purpose == WorkspacePurpose::Normal && !w.files.is_empty() {
+            let repo = self.repository_for_branch(&w.branch_id)?;
+            if repo.file_manager_root && repo.main_branch_id == w.branch_id {
+                // Do not retain an intent for a definitively impossible upload.
+                let paths = w.files.values().map(|file| &file.path);
+                self.validate_disk_root_upload_paths(repo, paths)?;
+            }
+        }
         write_json(
             &self
                 .root

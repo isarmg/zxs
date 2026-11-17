@@ -32,7 +32,6 @@ pub(crate) fn birth(
     let operation = plan.request.operation_id;
     if plan.target.worktree != plan.request.target
         || plan.target.path != plan.request.path
-        || plan.target.path.parent().is_some()
         || !crate::container_storage::namespace_host::ordinary_path(&plan.target.path)
         || plan.owner != plan.allocation.registration.disk
     {

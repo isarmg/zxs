@@ -25,7 +25,26 @@ pub enum OriginalReceiptError {
 }
 
 #[derive(Debug, error_definition::Error)]
+pub enum BackupReadError {
+    #[error("the selected slot is not a backup disk")]
+    Primary,
+    #[error("the version has no replica on the selected backup disk binding")]
+    MissingReplica,
+}
+
+impl BackupReadError {
+    fn code(&self) -> ErrorCode {
+        match self {
+            Self::Primary => ErrorCode::InvalidRequest,
+            Self::MissingReplica => ErrorCode::ContentUnavailable,
+        }
+    }
+}
+
+#[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error(transparent)]
+    BackupRead(#[from] BackupReadError),
     #[error(transparent)]
     OriginalReceipt(OriginalReceiptError),
     #[error(transparent)]
@@ -143,6 +162,7 @@ impl Error {
             source @ (Self::HistoricalBranch(_)
             | Self::FreshLayout(_)
             | Self::AutomaticBackup(_)
+            | Self::BackupRead(_)
             | Self::ConfiguredDiskName(_)
             | Self::OriginalReceipt(_)
             | Self::SnapshotSource(_)
@@ -185,6 +205,7 @@ impl Error {
             Self::HistoricalBranch(_)
             | Self::FreshLayout(_)
             | Self::AutomaticBackup(_)
+            | Self::BackupRead(_)
             | Self::ConfiguredDiskName(_)
             | Self::OriginalReceipt(_)
             | Self::SnapshotSource(_)
@@ -222,6 +243,7 @@ impl Error {
             Self::ContainerTags(error) => error.code(),
             Self::FreshLayout(error) => error.code(),
             Self::AutomaticBackup(error) => error.code(),
+            Self::BackupRead(error) => error.code(),
             Self::ConfiguredDiskName(error) => error.code(),
             Self::OriginalReceipt(_) => ErrorCode::PublicationInvalid,
             Self::SnapshotSource(error) => error.code(),
@@ -285,6 +307,7 @@ impl Error {
             Self::ContainerTags(error) => error.to_string().into(),
             Self::FreshLayout(error) => error.to_string().into(),
             Self::AutomaticBackup(error) => error.to_string().into(),
+            Self::BackupRead(error) => error.to_string().into(),
             Self::ConfiguredDiskName(error) => error.to_string().into(),
             Self::OriginalReceipt(error) => error.to_string().into(),
             Self::SnapshotSource(error) => error.to_string().into(),
@@ -350,6 +373,7 @@ impl Error {
             Self::HistoricalBranch(_)
             | Self::FreshLayout(_)
             | Self::AutomaticBackup(_)
+            | Self::BackupRead(_)
             | Self::ConfiguredDiskName(_)
             | Self::OriginalReceipt(_)
             | Self::SnapshotSource(_)

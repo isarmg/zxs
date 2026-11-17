@@ -238,7 +238,6 @@ impl<'a> ReceiptIndex<'a> {
         if container.created_by != plan.added.birth
             || container.history_tree_id != plan.history
             || container.namespace.repository != source.host().namespace.repository_id
-            || plan.added.target.path.parent().is_some()
         {
             return Err(RegistrationError::CommitScope);
         }
@@ -386,7 +385,7 @@ impl<'a> ReceiptIndex<'a> {
             || commit.entries.len() != 1
             || commit.entries[0].file_id != version.file_id
             || commit.entries[0].entry_id != plan.added.target.entry.to_string()
-            || commit.entries[0].path != plan.added.target.path
+            || commit.entries[0].path.as_str() != plan.added.target.path.file_name()
             || commit.entries[0].version_id != version.version_id
             || container.namespace.entry != plan.added.target.entry
             || container.created_by != plan.added.birth

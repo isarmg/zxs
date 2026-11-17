@@ -30,6 +30,10 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new() -> (Self, Engine) {
+        Self::with_nested_directory(false)
+    }
+
+    pub(super) fn with_nested_directory(nested: bool) -> (Self, Engine) {
         let temporary = tempfile::tempdir().unwrap();
         let system = temporary.path().join("system");
         let disks = [temporary.path().join("owner"), temporary.path().join("other")];
@@ -47,9 +51,24 @@ impl Fixture {
         let repository = engine.create_disk_root(
             &slot, "admin", OperationId::generate().unwrap(),
         ).unwrap();
+        if nested {
+            engine.file_namespace(
+                &repository.repository_id,
+                crate::NamespaceOperation::Mkdir {
+                    path: PortablePath::parse("Folder/Child").unwrap(),
+                },
+                "admin",
+                OperationId::generate().unwrap(),
+            ).unwrap();
+        }
         let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
         for (path, body) in PATHS.into_iter().zip([FIRST_ORIGINAL, SECOND_ORIGINAL]) {
             engine.stage_bytes(&workspace.workspace_id, path, body).unwrap();
+        }
+        if nested {
+            engine.stage_bytes(
+                &workspace.workspace_id, "Folder/Child/existing.txt", b"unchanged nested original",
+            ).unwrap();
         }
         engine.commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id.clone(),

@@ -157,6 +157,8 @@ struct Writer {
     committed: bool,
     operation_id: OperationId,
     last_head: String,
+    automatic: Option<crate::SmbAutomaticFile>,
+    switched_draft: Option<crate::ChangeFileWorking>,
     write_through: bool,
 }
 

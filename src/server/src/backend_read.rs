@@ -274,6 +274,8 @@ pub struct DownloadContext {
 pub struct ReadContent<'a> {
     pub version: &'a str,
     pub context: Option<&'a DownloadContext>,
+    /// Restricts the already-authorized version to a single registered backup disk.
+    pub backup_slot: Option<&'a name_policy::SlotId>,
 }
 
 /// Select a branch head or one immutable commit in the same history.

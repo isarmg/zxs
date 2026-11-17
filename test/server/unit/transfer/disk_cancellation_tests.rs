@@ -86,6 +86,7 @@ impl ManagedFixture {
                 crate::ReadContent {
                     version: &self.version,
                     context: None,
+                    backup_slot: None,
                 },
             )
             .unwrap()

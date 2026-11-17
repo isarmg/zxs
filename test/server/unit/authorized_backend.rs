@@ -1609,7 +1609,11 @@ impl Backend for RecordingBackend {
         self.read(
             "range_content",
             identity,
-            json!({"version": request.version,"context":context}),
+            json!({
+                "version": request.version,
+                "context": context,
+                "backup_slot": request.backup_slot.map(name_policy::SlotId::as_str),
+            }),
         )
     }
     fn workspace_content(
@@ -2492,6 +2496,7 @@ impl Fixture {
                         crate::ReadContent {
                             version: "version-range",
                             context: None,
+                            backup_slot: None,
                         },
                     )
                     .map(content),
@@ -2507,6 +2512,7 @@ impl Fixture {
                                 repository_id: "repository".into(),
                                 path: name_policy::LookupPath::parse("File.txt").unwrap(),
                             }),
+                            backup_slot: Some(&name_policy::SlotId::parse("C01").unwrap()),
                         },
                     )
                     .map(content),
@@ -2718,8 +2724,12 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         upload,
         generation,
         json!({"version": "version-content"}),
-        json!({"version":"version-range","context":null}),
-        json!({"version":"version-context","context":{"repository_id":"repository","path":"File.txt","key":"file.txt"}}),
+        json!({"version":"version-range","context":null,"backup_slot":null}),
+        json!({
+            "version":"version-context",
+            "context":{"repository_id":"repository","path":"File.txt","key":"file.txt"},
+            "backup_slot":"C01"
+        }),
         json!({"workspace": "workspace-read", "item": "item-read"}),
         json!({"version": "version-checksums"}),
     ];

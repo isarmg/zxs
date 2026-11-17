@@ -1016,6 +1016,10 @@ pub(super) fn write_session(
             ));
         }
     }
+    if repo.file_manager_root && existing.is_none() {
+        let repository = repo.repository_id.parse().map_err(ApiError::contract_input)?;
+        engine.validate_disk_root_upload_path(repository, &relative).map_err(error)?;
+    }
     let workspace = engine
         .create_workspace(&repo.main_branch_id, &identity.principal)
         .map_err(error)?;

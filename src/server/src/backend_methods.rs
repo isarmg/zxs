@@ -582,6 +582,24 @@ macro_rules! methods {
                     let _ = (identity, branch, entry);
                     Err($crate::ApiError::unsupported())
                 }
+                fn capture_smb_automatic(
+                    &self, identity: &$crate::Identity, branch: &str,
+                    entry: &storage_contract::Entry,
+                ) -> Result<Option<$crate::SmbAutomaticFile>, $crate::ApiError> {
+                    let _ = (identity, branch, entry);
+                    Ok(None)
+                }
+                fn switched_smb_draft_revision(
+                    &self,
+                    identity: &$crate::Identity,
+                    automatic: &$crate::SmbAutomaticFile,
+                ) -> Result<
+                    Option<storage_contract::file_draft::WorkingRevision>,
+                    $crate::ApiError,
+                > {
+                    let _ = (identity, automatic);
+                    Ok(None)
+                }
                 fn authorize_smb_draft(
                     &self, identity: &$crate::Identity, file: &$crate::SmbManualFile,
                     access: $crate::SmbDraftAccess,

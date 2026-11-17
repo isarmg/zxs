@@ -1,5 +1,4 @@
-//! Root-file capture under an actually registered Initial root. This is private
-//! until the full writable lifecycle and its recovery modes are implemented.
+//! Capture the admitted ordinary namespace within an actually registered Initial root.
 use crate::persist::snapshot_worktree::NodeAllocation;
 use crate::snapshot_worktree::{RegistrationError, Result, prepare_namespace_host, publication};
 use crate::Engine;

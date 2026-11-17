@@ -2011,6 +2011,7 @@ fn download_context_is_paired_nonempty_and_parses_lookup_spelling_once() {
         let error = ContentQuery {
             repository_id: repository_id.map(str::to_owned),
             path: path.map(str::to_owned),
+            backup_slot: None,
         }
         .into_context()
         .unwrap_err();
@@ -2020,6 +2021,7 @@ fn download_context_is_paired_nonempty_and_parses_lookup_spelling_once() {
     let context = ContentQuery {
         repository_id: Some("repo".into()),
         path: Some("CAFE\u{301}.TXT".into()),
+        backup_slot: None,
     }
     .into_context()
     .unwrap()
@@ -2029,6 +2031,7 @@ fn download_context_is_paired_nonempty_and_parses_lookup_spelling_once() {
     let error = ContentQuery {
         repository_id: Some("repo".into()),
         path: Some("../file.txt".into()),
+        backup_slot: None,
     }
     .into_context()
     .unwrap_err();

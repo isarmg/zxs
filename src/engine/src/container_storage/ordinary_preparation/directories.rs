@@ -185,8 +185,7 @@ pub(super) fn preflight(
         };
         let replica = record.replicas.get(disk).ok_or(Failure::NamespaceUnmapped)?;
         if replica.entity.inode() == 0 {
-            version_names::check_target_name(target,
-                &layout::namespace::directory(&record.name))?;
+            super::require_introduced_user_name(target, &record.name)?;
             let handle = resources.get(configured_disk(config, *disk)?)?;
             version_names::check_target_name(handle.management_root()?,
                 &layout::container::namespace_preparation(replica.preparation))?;

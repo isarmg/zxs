@@ -635,6 +635,7 @@ fn unsatisfiable_range(error: ApiError, size: u64, method: &Method) -> Response 
 pub(crate) struct ContentQuery {
     repository_id: Option<String>,
     path: Option<String>,
+    backup_slot: Option<String>,
 }
 impl ContentQuery {
     fn into_context(self) -> Result<Option<crate::DownloadContext>, ApiError> {
@@ -675,12 +676,19 @@ pub(crate) async fn content(
         deadline,
         crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit).run_with_permit(
             move |backend, permit| {
+                let backup_slot = query
+                    .backup_slot
+                    .as_deref()
+                    .map(name_policy::SlotId::parse)
+                    .transpose()
+                    .map_err(ApiError::invalid_source)?;
                 let context = query.into_context()?;
                 let mut content = backend.range_content(
                     &identity,
                     crate::ReadContent {
                         version: &version,
                         context: context.as_ref(),
+                        backup_slot: backup_slot.as_ref(),
                     },
                 )?;
                 content.lease = Box::new((content.lease, permit));

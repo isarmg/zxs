@@ -131,7 +131,7 @@ pub use backend_unborn::{
     CommitUnbornFile, UnbornContent, UnbornExpectation, UnbornFileSnapshot,
 };
 mod backend_smb_draft;
-pub use backend_smb_draft::{SmbDraftAccess, SmbManualFile};
+pub use backend_smb_draft::{SmbAutomaticFile, SmbDraftAccess, SmbManualFile};
 mod http_file_draft;
 pub use backend_file_draft::{ChangeFileWorking, FileWorkingSnapshot, ReadFileDraft};
 mod http_file_metadata;
