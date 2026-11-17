@@ -139,7 +139,7 @@ fn operation_write_sets_are_typed_bounded_and_branch_isolated() {
     );
     assert_eq!(
         next.changed_key_bytes,
-        std::mem::size_of::<crate::OperationId>()
+        id.encoded_len()
     );
     let encoded = crate::canonical_json(&branch).unwrap();
     let decoded: TrackedOperations<String> = json_codec::from_slice(&encoded).unwrap();
@@ -323,7 +323,7 @@ fn operation_insert_shares_old_payloads_and_only_selected_mutation_clones() {
         next.changes_since(&before),
         MapChanges::Keys(Arc::new(BTreeSet::from([id(1024)])))
     );
-    // Mutable escape is conservative, but still copies only the touched value.
+    // Typed mutable access retains the exact dirty key and clones only the touched value.
     next.get_mut(&id(0)).unwrap().payload["nested"] = json_codec::json!([]);
     assert_eq!(clones.load(Ordering::Relaxed), 1);
     assert_eq!(
@@ -440,5 +440,80 @@ fn state_tracking_starts_each_field_without_changing_stored_values() {
         placement_rules,
         protection_policies,
         operation_principals,
+    );
+}
+
+#[test]
+fn typed_map_keys_preserve_fixed_bytes_and_record_precise_mutations() {
+    const BYTES: &[u8] = br#"{"file_00000000000000000000000000000001":"first","file_00000000000000000000000000000002":"second"}"#;
+    let first: crate::FileId = "file_00000000000000000000000000000001".parse().unwrap();
+    let second: crate::FileId = "file_00000000000000000000000000000002".parse().unwrap();
+    let before: TrackedMap<String, crate::FileId> = json_codec::from_slice(BYTES).unwrap();
+    assert_eq!(crate::canonical_json(&before).unwrap(), BYTES);
+    let mut next = before.clone();
+    next.begin_tracking();
+    next.entry(first).and_modify(|value| value.push('!'));
+    next.get_mut(&first).unwrap().push('?');
+    next.remove(&second);
+    assert_eq!(
+        next.changes_since(&before),
+        MapChanges::Keys(Arc::new(BTreeSet::from([first, second])))
+    );
+    assert_eq!(
+        next.changed_key_bytes,
+        first.to_string().len() + second.to_string().len()
+    );
+    assert_eq!(crate::canonical_json(&before).unwrap(), BYTES);
+    assert_eq!(next.get(&first).unwrap(), "first!?");
+    assert!(next.get(&second).is_none());
+}
+
+#[test]
+fn typed_shared_keys_keep_missing_mutations_noop_and_charge_each_spelling_once() {
+    let first = crate::FileId::from_random([1; 16]);
+    let absent = crate::FileId::from_random([2; 16]);
+    let before: TrackedFiles<String> = [(first, "first".to_owned())].into_iter().collect();
+    let mut next = before.clone();
+    next.begin_tracking();
+    assert!(next.get_mut(&absent).is_none());
+    assert!(next.remove(&absent).is_none());
+    assert!(!next.remove_discard(&absent));
+    assert!(next.changes_since(&before).is_empty());
+    assert!(Arc::ptr_eq(&before.value, &next.value));
+    next.get_mut(&first).unwrap().push('!');
+    next.insert(first, "updated".into());
+    assert!(next.remove_discard(&first));
+    assert_eq!(next.changed_key_bytes, first.to_string().len());
+    assert_eq!(
+        next.changes_since(&before),
+        MapChanges::Keys(Arc::new(BTreeSet::from([first])))
+    );
+    assert_eq!(before.get(&first).unwrap(), "first");
+}
+
+#[test]
+fn typed_key_lengths_match_canonical_text_including_unicode_and_node_domains() {
+    let operation = crate::OperationId::from_random([0; 16]);
+    assert_eq!(operation.encoded_len(), 35);
+    assert_eq!(operation.encoded_len(), operation.to_string().len());
+    for text in [
+        "ver_00000000000000000000000000000001",
+        "fnode_00000000000000000000000000000001",
+        "fmeta_00000000000000000000000000000001",
+        "fmerge_00000000000000000000000000000001",
+    ] {
+        let id: crate::FileNodeId = text.parse().unwrap();
+        assert_eq!(id.encoded_len(), text.len());
+    }
+    let path = name_policy::PortablePath::parse("文档/资料").unwrap();
+    let mut paths: TrackedMap<usize, name_policy::PortablePath> = TrackedMap::default();
+    let before = paths.clone();
+    paths.begin_tracking();
+    paths.insert(path.clone(), 1);
+    assert_eq!(paths.changed_key_bytes, "文档/资料".len());
+    assert_eq!(path.encoded_len(), path.as_str().len());
+    assert_eq!(
+        paths.changes_since(&before),
+        MapChanges::Keys(Arc::new(BTreeSet::from([path])))
     );
 }

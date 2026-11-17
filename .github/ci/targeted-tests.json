@@ -1,5 +1,36 @@
 {
   "groups": {
+    "tracked-key-budgets": {
+      "reason": "Generic typed map and shared-record mutation paths retain exact canonical key spelling budgets, copy-on-write isolation and persisted receipt bytes. Product consumer compilation is selected separately; this is not full recovery or a runtime feature-matrix pass.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "tracked::tests::"
+          ],
+          "max_tests": 32,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "kind": "lib"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "kind": "lib",
+          "features": [
+            "core"
+          ]
+        }
+      ]
+    },
     "default-share-backup-visibility": {
       "reason": "Publish three independent file copies, cold reopen, read both backup replicas through the Engine, then verify the authenticated production DefaultShare lists and opens only the primary. Not external Samba or browser evidence.",
       "python_tests": [],
@@ -6129,6 +6160,9 @@
     }
   },
   "rules": [
+    {"path": "src/contract/src/encoded_len.rs", "groups": ["tracked-key-budgets"]},
+    {"path": "src/contract/src/tracked.rs", "groups": ["tracked-key-budgets"]},
+    {"path": "test/contract/unit/tracked.rs", "groups": ["tracked-key-budgets"]},
     {
       "path": "test/server/unit/smb_rpc/native_dispatch_tests.rs",
       "groups": ["default-share-backup-visibility"]

@@ -80,6 +80,8 @@ pub mod detached_history;
 pub mod model;
 pub use commit_comparison::{CommitChange, CommitComparison};
 mod shared_records;
+mod encoded_len;
+pub use encoded_len::EncodedLen;
 mod tracked;
 mod tracked_events;
 pub use tracked::{MapChanges, Tracked, TrackedMap, TrackedFiles, TrackedOperations, TrackedRecords};

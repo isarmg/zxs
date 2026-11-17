@@ -4,7 +4,7 @@
 //! the first write to a shared plain map copies that map, not unrelated fields.
 //! Provenance is valid only for values without interior mutability, as with
 //! State business records: mutation through a shared reference cannot be tracked.
-use crate::SharedRecords;
+use crate::{EncodedLen, SharedRecords};
 use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     borrow::Borrow,
@@ -36,9 +36,11 @@ pub struct Tracked<T, K = String> {
     changes: MapChanges<K>,
     changed_key_bytes: usize,
 }
-pub type TrackedMap<T> = Tracked<BTreeMap<String, T>>;
-pub type TrackedRecords<T> = Tracked<SharedRecords<T>>;
-pub type TrackedOperations<T> = Tracked<SharedRecords<T, crate::OperationId>, crate::OperationId>;
+pub type TrackedMap<T, K = String> = Tracked<BTreeMap<K, T>, K>;
+pub type TrackedRecords<T, K = String> = Tracked<SharedRecords<T, K>, K>;
+pub type TrackedOperations<T> = TrackedRecords<T, crate::OperationId>;
+/// File-owned authority with typed incremental dirty keys.
+pub type TrackedFiles<T> = TrackedRecords<T, crate::FileId>;
 
 impl<T, K: Clone + Ord> Tracked<T, K> {
     pub fn new(value: T) -> Self {
@@ -70,7 +72,11 @@ impl<T, K: Clone + Ord> Tracked<T, K> {
             MapChanges::All
         }
     }
-    fn key_changed(&mut self, key: &K, key_bytes: usize) {
+    fn key_changed(&mut self, key: &K)
+    where
+        K: EncodedLen,
+    {
+        let key_bytes = key.encoded_len();
         self.identity = Arc::new(());
         if let MapChanges::Keys(keys) = &mut self.changes
             && !keys.contains(key)
@@ -146,51 +152,49 @@ impl<T, K: Clone + Ord> From<T> for Tracked<T, K> {
         Self::new(value)
     }
 }
-impl<V> FromIterator<(String, V)> for TrackedMap<V> {
-    fn from_iter<I: IntoIterator<Item = (String, V)>>(iter: I) -> Self {
+impl<V, K: Clone + Ord> FromIterator<(K, V)> for TrackedMap<V, K> {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         Self::new(iter.into_iter().collect())
     }
 }
-impl<V> FromIterator<(String, V)> for TrackedRecords<V> {
-    fn from_iter<I: IntoIterator<Item = (String, V)>>(iter: I) -> Self {
+impl<V, K: Clone + Ord> FromIterator<(K, V)> for TrackedRecords<V, K> {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         Self::new(iter.into_iter().collect())
     }
 }
-impl<V, const N: usize> From<[(String, V); N]> for TrackedMap<V> {
-    fn from(values: [(String, V); N]) -> Self {
+impl<V, K: Clone + Ord, const N: usize> From<[(K, V); N]> for TrackedMap<V, K> {
+    fn from(values: [(K, V); N]) -> Self {
         values.into_iter().collect()
     }
 }
-impl<V: Clone> TrackedMap<V> {
-    pub fn entry(&mut self, key: String) -> std::collections::btree_map::Entry<'_, String, V> {
-        self.key_changed(&key, key.len());
+impl<V: Clone, K: Clone + Ord + EncodedLen> TrackedMap<V, K> {
+    pub fn entry(&mut self, key: K) -> std::collections::btree_map::Entry<'_, K, V> {
+        self.key_changed(&key);
         Arc::make_mut(&mut self.value).entry(key)
     }
-    pub fn insert(&mut self, key: String, value: V) -> Option<V> {
-        self.key_changed(&key, key.len());
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.key_changed(&key);
         Arc::make_mut(&mut self.value).insert(key, value)
     }
     pub fn get_mut<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<&mut V>
     where
-        String: Borrow<Q>,
+        K: Borrow<Q>,
     {
         let owned = self.value.get_key_value(key)?.0.clone();
-        let bytes = owned.len();
-        self.key_changed(&owned, bytes);
+        self.key_changed(&owned);
         Arc::make_mut(&mut self.value).get_mut(key)
     }
     pub fn remove<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<V>
     where
-        String: Borrow<Q>,
+        K: Borrow<Q>,
     {
         let owned = self.value.get_key_value(key)?.0.clone();
-        let bytes = owned.len();
-        self.key_changed(&owned, bytes);
+        self.key_changed(&owned);
         Arc::make_mut(&mut self.value).remove(key)
     }
     /// Remove selected keys without granting mutable access to retained values.
     /// The predicate scans the map; only removed keys enter the exact write set.
-    pub fn retain_keys(&mut self, mut keep: impl FnMut(&String, &V) -> bool) {
+    pub fn retain_keys(&mut self, mut keep: impl FnMut(&K, &V) -> bool) {
         let removed = self
             .value
             .iter()
@@ -201,100 +205,88 @@ impl<V: Clone> TrackedMap<V> {
             self.remove(&key);
         }
     }
-    pub fn retain(&mut self, mut keep: impl FnMut(&String, &mut V) -> bool) {
+    pub fn retain(&mut self, mut keep: impl FnMut(&K, &mut V) -> bool) {
         // The predicate receives mutable values, so even retained keys are dirty.
         self.all_changed();
         Arc::make_mut(&mut self.value).retain(|key, value| keep(key, value));
     }
 }
-impl<V: Clone> TrackedRecords<V> {
-    pub fn insert(&mut self, key: String, value: V) -> Option<V> {
-        self.key_changed(&key, key.len());
+impl<V: Clone, K: Clone + Ord + EncodedLen> TrackedRecords<V, K> {
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.key_changed(&key);
         Arc::make_mut(&mut self.value).insert(key, value)
     }
-    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    pub fn get_mut<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<&mut V>
     where
-        String: Borrow<Q>,
-        Q: Ord + ToOwned<Owned = String> + ?Sized,
+        K: Borrow<Q>,
     {
-        if !self.value.contains_key(key) {
-            return None;
-        }
-        let owned = key.to_owned();
-        let bytes = owned.len();
-        self.key_changed(&owned, bytes);
+        let owned = self.value.get_key_value(key)?.0.clone();
+        self.key_changed(&owned);
         Arc::make_mut(&mut self.value).get_mut(key)
     }
-    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    pub fn remove<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<V>
     where
-        String: Borrow<Q>,
-        Q: Ord + ToOwned<Owned = String> + ?Sized,
+        K: Borrow<Q>,
     {
-        if !self.value.contains_key(key) {
-            return None;
-        }
-        let owned = key.to_owned();
-        let bytes = owned.len();
-        self.key_changed(&owned, bytes);
+        let owned = self.value.get_key_value(key)?.0.clone();
+        self.key_changed(&owned);
         Arc::make_mut(&mut self.value).remove(key)
     }
 }
-impl<V> TrackedRecords<V> {
+impl<V, K: Clone + Ord + EncodedLen> TrackedRecords<V, K> {
     /// Extend immutable records while recording each incoming key precisely.
-    pub fn extend_shared(&mut self, source: &SharedRecords<V>) {
+    pub fn extend_shared(&mut self, source: &SharedRecords<V, K>) {
         for key in source.keys() {
-            self.key_changed(key, key.len());
+            self.key_changed(key);
         }
         Arc::make_mut(&mut self.value).extend_shared(source);
     }
 
-    pub fn remove_discard<Q>(&mut self, key: &Q) -> bool
+    pub fn remove_discard<Q: Ord + ?Sized>(&mut self, key: &Q) -> bool
     where
-        String: Borrow<Q>,
-        Q: Ord + ToOwned<Owned = String> + ?Sized,
+        K: Borrow<Q>,
     {
-        if !self.value.contains_key(key) {
+        let Some((owned, _)) = self.value.get_key_value(key) else {
             return false;
-        }
-        let owned = key.to_owned();
-        let bytes = owned.len();
-        self.key_changed(&owned, bytes);
+        };
+        let owned = owned.clone();
+        self.key_changed(&owned);
         Arc::make_mut(&mut self.value).remove_discard(key)
     }
 }
-impl<V: Clone> Extend<(String, V)> for TrackedMap<V> {
-    fn extend<I: IntoIterator<Item = (String, V)>>(&mut self, values: I) {
+impl<V: Clone, K: Clone + Ord + EncodedLen> Extend<(K, V)> for TrackedMap<V, K> {
+    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, values: I) {
         for (key, value) in values {
             self.insert(key, value);
         }
     }
 }
-impl<V> Extend<(String, V)> for TrackedRecords<V> {
-    fn extend<I: IntoIterator<Item = (String, V)>>(&mut self, values: I) {
+impl<V, K: Clone + Ord + EncodedLen> Extend<(K, V)> for TrackedRecords<V, K> {
+    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, values: I) {
         for (key, value) in values {
-            self.key_changed(&key, key.len());
+            self.key_changed(&key);
             Arc::make_mut(&mut self.value).extend(std::iter::once((key, value)));
         }
     }
 }
-impl<'a, V> IntoIterator for &'a TrackedMap<V> {
-    type Item = (&'a String, &'a V);
-    type IntoIter = std::collections::btree_map::Iter<'a, String, V>;
+impl<'a, V, K> IntoIterator for &'a TrackedMap<V, K> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = std::collections::btree_map::Iter<'a, K, V>;
     fn into_iter(self) -> Self::IntoIter {
         self.value.iter()
     }
 }
-impl<'a, V: Clone> IntoIterator for &'a mut TrackedMap<V> {
-    type Item = (&'a String, &'a mut V);
-    type IntoIter = std::collections::btree_map::IterMut<'a, String, V>;
+impl<'a, V: Clone, K: Clone + Ord> IntoIterator for &'a mut TrackedMap<V, K> {
+    type Item = (&'a K, &'a mut V);
+    type IntoIter = std::collections::btree_map::IterMut<'a, K, V>;
     fn into_iter(self) -> Self::IntoIter {
         self.all_changed();
         Arc::make_mut(&mut self.value).iter_mut()
     }
 }
-impl<V: Clone> IntoIterator for TrackedMap<V> {
-    type Item = (String, V);
-    type IntoIter = std::collections::btree_map::IntoIter<String, V>;
+impl<V: Clone, K: Clone> IntoIterator for TrackedMap<V, K> {
+    type Item = (K, V);
+    type IntoIter = std::collections::btree_map::IntoIter<K, V>;
     fn into_iter(self) -> Self::IntoIter {
         Arc::unwrap_or_clone(self.value).into_iter()
     }
@@ -303,47 +295,3 @@ impl<V: Clone> IntoIterator for TrackedMap<V> {
 #[cfg(test)]
 #[path = "../../../test/contract/unit/tracked.rs"]
 mod tests;
-
-impl<V: Clone> TrackedOperations<V> {
-    pub fn insert(&mut self, key: crate::OperationId, value: V) -> Option<V> {
-        self.key_changed(&key, std::mem::size_of::<crate::OperationId>());
-        Arc::make_mut(&mut self.value).insert(key, value)
-    }
-}
-impl<V> FromIterator<(crate::OperationId, V)> for TrackedOperations<V> {
-    fn from_iter<I: IntoIterator<Item = (crate::OperationId, V)>>(iter: I) -> Self {
-        Self::new(iter.into_iter().collect())
-    }
-}
-
-/// File-owned authority with typed incremental dirty keys.
-pub type TrackedFiles<T> = Tracked<SharedRecords<T, crate::FileId>, crate::FileId>;
-
-impl<V: Clone> TrackedFiles<V> {
-    pub fn insert(&mut self, key: crate::FileId, value: V) -> Option<V> {
-        // Canonical file ID is "file_" followed by 32 hexadecimal digits.
-        self.key_changed(&key, 37);
-        Arc::make_mut(&mut self.value).insert(key, value)
-    }
-}
-
-impl<V: Clone> TrackedFiles<V> {
-    pub fn remove(&mut self, key: &crate::FileId) -> Option<V> {
-        self.key_changed(key, 37);
-        Arc::make_mut(&mut self.value).remove(key)
-    }
-}
-
-impl<V> FromIterator<(crate::FileId, V)> for TrackedFiles<V> {
-    fn from_iter<I: IntoIterator<Item = (crate::FileId, V)>>(iter: I) -> Self {
-        Self::new(iter.into_iter().collect())
-    }
-}
-
-impl<V: Clone> Extend<(crate::FileId, V)> for TrackedFiles<V> {
-    fn extend<I: IntoIterator<Item = (crate::FileId, V)>>(&mut self, iter: I) {
-        for (key, value) in iter {
-            self.insert(key, value);
-        }
-    }
-}
