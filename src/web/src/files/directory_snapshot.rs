@@ -4,6 +4,7 @@ mod requests;
 mod storage;
 mod view;
 mod wire;
+mod worktree;
 
 use crate::api;
 use crate::files::{actions, page::Entry};
@@ -162,10 +163,12 @@ pub(crate) struct Model {
     message: String,
     error: Option<api::Error>,
     publication: Option<Publication>,
+    worktree: worktree::Model,
 }
 
 impl Model {
     pub(crate) fn clear_review(&mut self) {
+        self.worktree.invalidate();
         if let Some(cancellation) = self.cancellation.take() {
             cancellation.abort();
         }

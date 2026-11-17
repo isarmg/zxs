@@ -1,4 +1,5 @@
 //! Browser-boundary DTOs and immutable requests for the formal `.zxs` path.
+mod worktree;
 use crate::api;
 use data_serialization::{Deserialize, Serialize};
 use json_codec::Value;
@@ -12,7 +13,9 @@ use storage_contract::snapshot_worktree::draft_commit::{
     DirectoryUnbornExpectation, SelectedDirectoryDraft,
 };
 use storage_contract::snapshot_worktree::root::{RegisterSnapshotRoot, RegisteredSnapshotRoot};
-use storage_contract::snapshot_worktree::{InitializeSnapshot, SnapshotHandle};
+use storage_contract::snapshot_worktree::{
+    CommitWorktree, CreateWorktree, InitializeSnapshot, SnapshotHandle, WorktreeHandle,
+};
 use storage_contract::{CommitState, OperationId, Principal, RepositoryId};
 
 pub(super) const MAX_SELECTIONS: usize = crate::files::page::PAGE_SIZE;
@@ -176,6 +179,15 @@ pub(super) enum Command {
         repository: RepositoryId,
         request: CommitDirectoryDrafts,
     },
+    CreateWorktree {
+        repository: RepositoryId,
+        request: CreateWorktree,
+    },
+    CommitWorktree {
+        repository: RepositoryId,
+        source: SnapshotHandle,
+        request: CommitWorktree,
+    },
 }
 
 impl Command {
@@ -184,6 +196,8 @@ impl Command {
             Self::RegisterRoot { operation_id, .. } => *operation_id,
             Self::Initialize { request, .. } => request.operation_id,
             Self::Commit { request, .. } => request.operation_id,
+            Self::CreateWorktree { request, .. } => request.operation_id,
+            Self::CommitWorktree { request, .. } => request.operation_id,
         }
     }
 
@@ -195,6 +209,11 @@ impl Command {
             ),
             Self::Initialize { .. } => "/api/directory-snapshots".into(),
             Self::Commit { .. } => "/api/directory-snapshots/commits".into(),
+            Self::CreateWorktree { .. } => "/api/directory-worktrees".into(),
+            Self::CommitWorktree { request, .. } => format!(
+                "/api/directory-worktrees/{}/commits",
+                request.target.worktree_id,
+            ),
         }
     }
 
@@ -205,25 +224,42 @@ impl Command {
             }),
             Self::Initialize { request, .. } => json_codec::to_value(request),
             Self::Commit { request, .. } => json_codec::to_value(request),
+            Self::CreateWorktree { request, .. } => json_codec::to_value(request),
+            Self::CommitWorktree { request, .. } => json_codec::to_value(request),
         };
         result.map_err(|source| failure(DecodeError::Wire(source)))
     }
 
     pub(super) fn outcome_endpoint(&self) -> Option<String> {
-        let Self::Commit { request, .. } = self else {
-            return None;
-        };
-        Some(format!(
-            concat!(
-                "/api/directory-snapshots/commits/{}?source_publication={}",
-                "&repository_id={}&branch_id={}&node_id={}",
-            ),
-            request.operation_id,
-            request.source.publication,
-            request.source.repository_id,
-            request.source.branch_id,
-            request.source.node_id,
-        ))
+        match self {
+            Self::CreateWorktree {
+                repository,
+                request,
+            } => Some(format!(
+                "/api/repositories/{repository}/directory-worktrees/creations/{}",
+                request.operation_id,
+            )),
+            Self::CommitWorktree {
+                repository,
+                request,
+                ..
+            } => Some(format!(
+                "/api/repositories/{repository}/directory-worktrees/commits/{}",
+                request.operation_id,
+            )),
+            Self::RegisterRoot { .. } | Self::Initialize { .. } => None,
+            Self::Commit { request, .. } => Some(format!(
+                concat!(
+                    "/api/directory-snapshots/commits/{}?source_publication={}",
+                    "&repository_id={}&branch_id={}&node_id={}",
+                ),
+                request.operation_id,
+                request.source.publication,
+                request.source.repository_id,
+                request.source.branch_id,
+                request.source.node_id,
+            )),
+        }
     }
 }
 
@@ -254,7 +290,11 @@ impl Record {
 
     fn validate(&self) -> Result<(), api::Error> {
         match &self.command {
-            Command::RegisterRoot { .. } => {}
+            Command::RegisterRoot { .. } | Command::CreateWorktree { .. } => {}
+            Command::CommitWorktree { request, .. } => {
+                storage_contract::validate_note(&request.message)
+                    .map_err(|source| failure(DecodeError::Contract(source)))?;
+            }
             Command::Initialize { request, .. } => {
                 if request.source.root.is_some() {
                     return Err(invalid("only the current registered root is supported"));
@@ -314,6 +354,15 @@ impl Record {
                 object_field(request, "host")?;
                 object_field(request, "source")?;
             }
+            Some("create_worktree") => {
+                object_field(object_field(command, "request")?, "source")?;
+            }
+            Some("commit_worktree") => {
+                object_field(command, "source")?;
+                let request = object_field(command, "request")?;
+                object_field(request, "target")?;
+                object_field(request, "expected")?;
+            }
             Some("commit") => {
                 let request = object_field(command, "request")?;
                 object_field(request, "source")?;
@@ -342,8 +391,18 @@ impl Record {
         Ok(record)
     }
 
+    pub(super) fn lookup_result(&self, value: Value) -> Result<LookupResult, api::Error> {
+        worktree::lookup(self, value)
+    }
+
     pub(super) fn result(&self, value: Value) -> Result<Publication, api::Error> {
         match &self.command {
+            Command::CreateWorktree { repository, .. } => worktree::created(*repository, value),
+            Command::CommitWorktree {
+                repository,
+                source,
+                request,
+            } => worktree::committed(*repository, *source, request.target, value),
             Command::RegisterRoot { slot, .. } => {
                 let root: RegisteredSnapshotRoot = decode(value)?;
                 if &root.slot_id != slot {
@@ -408,7 +467,22 @@ impl Record {
 }
 
 #[derive(Clone, Debug)]
+pub(super) enum LookupResult {
+    Pending,
+    Complete(Publication),
+}
+
+#[derive(Clone, Debug)]
 pub(super) enum Publication {
+    WorktreeCreated {
+        repository: RepositoryId,
+        target: WorktreeHandle,
+    },
+    WorktreeCommitted {
+        repository: RepositoryId,
+        target: WorktreeHandle,
+        snapshot: SnapshotHandle,
+    },
     Registered(RegisteredSnapshotRoot),
     Initialized(SnapshotHandle),
     Committed {
@@ -417,7 +491,7 @@ pub(super) enum Publication {
     },
 }
 
-fn object_field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, api::Error> {
+pub(super) fn object_field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, api::Error> {
     value
         .get(key)
         .filter(|field| field.is_object())

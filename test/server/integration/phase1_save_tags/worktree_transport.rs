@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use storage_contract::OperationId;
 use storage_contract::snapshot_worktree::{
-    CommitWorktree, EditWorktree, SnapshotHandle, WorktreeHandle, WorktreeStatus,
+    CommitWorktree, CreateWorktree, EditWorktree, SnapshotHandle, WorktreeHandle, WorktreeStatus,
+};
+use storage_contract::snapshot_worktree::outcome::{
+    WorktreeCommitOutcome, WorktreeCommitReceipt, WorktreeCreationOutcome, WorktreeCreationReceipt,
 };
 use storage_engine::Engine;
 use storage_server::auth::AuthStore;
@@ -161,14 +164,24 @@ async fn initialized(http: &Http, repository: &str) -> (Value, SnapshotHandle) {
     }))).await;
     (context, json_codec::from_value(snapshot).unwrap())
 }
-async fn instance(http: &Http, context: &Value, source: SnapshotHandle, name: &str)
-    -> WorktreeHandle
-{
-    json_codec::from_value(http.json("POST", "/api/directory-worktrees", Some(json!({
+async fn instance(
+    http: &Http, repository: &str, context: &Value, source: SnapshotHandle, name: &str,
+) -> WorktreeHandle {
+    let request: CreateWorktree = json_codec::from_value(json!({
         "source":source, "parent_directory_id":context["host"]["directory_id"],
         "expected_root_generation":context["host"]["expected_root_generation"],
         "name":name, "operation_id":OperationId::generate().unwrap(),
-    }))).await).unwrap()
+    })).unwrap();
+    let target = json_codec::from_value(http.json("POST", "/api/directory-worktrees",
+        Some(json_codec::to_value(&request).unwrap())).await).unwrap();
+    let receipt: WorktreeCreationReceipt = json_codec::from_value(http.json("GET", &format!(
+        "/api/repositories/{repository}/directory-worktrees/creations/{}", request.operation_id,
+    ), None).await).unwrap();
+    assert_eq!(receipt.repository_id, repository.parse().unwrap());
+    assert_eq!(receipt.request, request);
+    assert_eq!(receipt.result, WorktreeCreationOutcome::Complete { target });
+    assert_ne!(target.publication, request.operation_id);
+    target
 }
 
 #[tokio::test]
@@ -183,8 +196,10 @@ async fn tcp_worktree_edit_commit_cold_retry_keeps_exact_identity_and_move() {
     let repository = history["identity"]["context"]["repository_id"].as_str().unwrap();
     let http = Http::start(fixture.app.clone(), &fixture.token).await;
     let (context, original_node) = initialized(&http, repository).await;
-    let target = instance(&http, &context, original_node, "worktree-main-001").await;
-    let independent = instance(&http, &context, original_node, "worktree-main-002").await;
+    let target = instance(&http, repository, &context, original_node, "worktree-main-001").await;
+    let independent = instance(
+        &http, repository, &context, original_node, "worktree-main-002",
+    ).await;
     assert_ne!(target.worktree_id, independent.worktree_id);
     assert_eq!(http.read(target, "original.txt").await, original);
     assert_eq!(http.read(independent, "original.txt").await, original);
@@ -253,6 +268,16 @@ async fn tcp_worktree_edit_commit_cold_retry_keeps_exact_identity_and_move() {
     let committed = http.json("POST", &commit_route(target),
         Some(json_codec::to_value(&commit).unwrap())).await;
     let node: SnapshotHandle = json_codec::from_value(committed.clone()).unwrap();
+    let outcome_route = format!(
+        "/api/repositories/{repository}/directory-worktrees/commits/{}", commit.operation_id,
+    );
+    let outcome: WorktreeCommitReceipt = json_codec::from_value(
+        http.json("GET", &outcome_route, None).await,
+    ).unwrap();
+    assert_eq!(outcome.repository_id, repository.parse().unwrap());
+    assert_eq!(outcome.request, commit);
+    assert_eq!(outcome.result, WorktreeCommitOutcome::Complete { snapshot: node });
+    assert_ne!(node.publication, commit.operation_id);
     assert_eq!(node.repository_id, original_node.repository_id);
     assert_eq!(node.branch_id, original_node.branch_id);
     assert_ne!(node.node_id, original_node.node_id);
@@ -279,9 +304,17 @@ async fn tcp_worktree_edit_commit_cold_retry_keeps_exact_identity_and_move() {
     drop(opened);
     let sequence = engine.state().sequence;
     let receipt = engine.operation(commit.operation_id).unwrap();
+    assert!(engine.directory_worktree_commit_receipt(
+        repository.parse().unwrap(), commit.operation_id, &"another-owner".parse().unwrap(),
+    ).is_err());
     let fixture = resume(root, engine, token);
     let http = Http::start(fixture.app.clone(), &fixture.token).await;
     let before = inventory(&fixture.root.path().join("primary/common-data"));
+    let cold_outcome: WorktreeCommitReceipt = json_codec::from_value(
+        http.json("GET", &outcome_route, None).await,
+    ).unwrap();
+    assert_eq!(cold_outcome, outcome);
+    assert_eq!(inventory(&fixture.root.path().join("primary/common-data")), before);
     assert_eq!(http.json("POST", &commit_route(target),
         Some(json_codec::to_value(&commit).unwrap())).await, committed);
     assert_eq!(http.read(target, "original.txt").await, bytes);
@@ -303,7 +336,7 @@ async fn tcp_worktree_auth_shape_and_rejected_body_leave_current_bytes_unchanged
     let repository = history["identity"]["context"]["repository_id"].as_str().unwrap();
     let http = Http::start(fixture.app.clone(), &fixture.token).await;
     let (context, node) = initialized(&http, repository).await;
-    let target = instance(&http, &context, node, "worktree-main-001").await;
+    let target = instance(&http, repository, &context, node, "worktree-main-001").await;
     let before = inventory(&fixture.root.path().join("primary/common-data"));
     let command = EditWorktree {
         target, path: name_policy::PortablePath::parse("original.txt").unwrap(), expected: http.status(target).await.revision,

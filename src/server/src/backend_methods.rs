@@ -703,6 +703,30 @@ macro_rules! methods {
                     let _ = (identity, lookup);
                     Err($crate::ApiError::unsupported())
                 }
+                fn directory_worktree_creation_receipt(
+                    &self,
+                    identity: &$crate::Identity,
+                    repository: storage_contract::RepositoryId,
+                    operation: storage_contract::OperationId,
+                ) -> Result<
+                    storage_contract::snapshot_worktree::outcome::WorktreeCreationReceipt,
+                    $crate::ApiError,
+                > {
+                    let _ = (identity, repository, operation);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn directory_worktree_commit_receipt(
+                    &self,
+                    identity: &$crate::Identity,
+                    repository: storage_contract::RepositoryId,
+                    operation: storage_contract::OperationId,
+                ) -> Result<
+                    storage_contract::snapshot_worktree::outcome::WorktreeCommitReceipt,
+                    $crate::ApiError,
+                > {
+                    let _ = (identity, repository, operation);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn create_directory_worktree(
                     &self,
                     identity: &$crate::Identity,

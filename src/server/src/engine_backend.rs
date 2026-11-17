@@ -818,6 +818,22 @@ impl Backend for EngineBackend {
     > {
         snapshot_worktree::drafts::read(self, identity, lookup)
     }
+    fn directory_worktree_creation_receipt(
+        &self, identity: &Identity, repository: storage_contract::RepositoryId,
+        operation: storage_contract::OperationId,
+    ) -> Result<
+        storage_contract::snapshot_worktree::outcome::WorktreeCreationReceipt, ApiError,
+    > {
+        snapshot_worktree::outcome::creation(self, identity, repository, operation)
+    }
+    fn directory_worktree_commit_receipt(
+        &self, identity: &Identity, repository: storage_contract::RepositoryId,
+        operation: storage_contract::OperationId,
+    ) -> Result<
+        storage_contract::snapshot_worktree::outcome::WorktreeCommitReceipt, ApiError,
+    > {
+        snapshot_worktree::outcome::commit(self, identity, repository, operation)
+    }
     fn create_directory_worktree(
         &self, identity: &Identity,
         request: storage_contract::snapshot_worktree::CreateWorktree,

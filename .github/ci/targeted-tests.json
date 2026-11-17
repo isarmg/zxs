@@ -85,6 +85,27 @@
         }
       ]
     },
+    "directory-web-worktree-management": {
+      "reason": "Check the Web controls for creating, opening and explicitly committing a selected worktree and exact-original operation recovery. Changes run native Web and Wasm, not a browser or external SMB.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "files::directory_snapshot::worktree::tests::"
+          ],
+          "max_tests": 5
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        }
+      ]
+    },
     "directory-web-selection": {
       "reason": "Check the real directory head and draft selection UI and product Wasm compile. Native state tests and Wasm build do not assert that Chromium or Samba ran.",
       "python_tests": [],
@@ -6085,6 +6106,66 @@
       "path": "test/web/unit/files/backup/automatic_tests.rs",
       "groups": [
         "automatic-directory-backup-entry"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree/outcome.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/public/outcome.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/outcome.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/snapshot_worktree/outcome.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/server/src/http_snapshot_worktree/outcome.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/wire/worktree.rs",
+      "groups": [
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree.rs",
+      "groups": [
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/requests.rs",
+      "groups": [
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/view.rs",
+      "groups": [
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_worktree_tests.rs",
+      "groups": [
+        "directory-web-worktree-management"
       ]
     },
     {

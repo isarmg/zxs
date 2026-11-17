@@ -4,6 +4,7 @@ mod drafts;
 mod discovery;
 mod transport;
 mod namespace;
+mod outcome;
 pub use transport::WorktreeContent;
 pub use namespace::{
     WorktreeCursor, WorktreeEntry, WorktreeEntryContent, WorktreePage, WorktreePageStamp,

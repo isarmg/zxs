@@ -1,0 +1,70 @@
+//! Only the admitted original and its independently completed receipt determine
+//! a result. Neither current HEAD, a reused mount name nor disk bytes are queried.
+use super::{Publication, ReceiptIndex};
+use crate::snapshot_worktree::{RegistrationError, Result};
+use storage_contract::snapshot_worktree::WorktreeHandle;
+use storage_contract::snapshot_worktree::outcome::{
+    WorktreeCommitOutcome, WorktreeCommitReceipt, WorktreeCreationOutcome, WorktreeCreationReceipt,
+};
+use storage_contract::{OperationId, Principal, RepositoryId};
+
+impl ReceiptIndex<'_> {
+    pub(in crate::snapshot_worktree) fn creation_outcome(
+        &self,
+        repository: RepositoryId,
+        operation: OperationId,
+        principal: &Principal,
+    ) -> Result<WorktreeCreationReceipt> {
+        let record = self
+            .worktrees
+            .get(&operation)
+            .ok_or(RegistrationError::Operation(operation))?;
+        if record.receipt.principal != *principal
+            || record.plan.host.namespace.repository_id != repository
+        {
+            return Err(RegistrationError::Digest(operation));
+        }
+        let result = match record.publication {
+            Publication::Reserved => WorktreeCreationOutcome::Pending {},
+            Publication::Complete(_) => WorktreeCreationOutcome::Complete {
+                target: WorktreeHandle {
+                    publication: record.plan.allocated.completion,
+                    worktree_id: record.plan.allocated.worktree,
+                },
+            },
+        };
+        Ok(WorktreeCreationReceipt {
+            repository_id: repository,
+            request: record.plan.request.clone(),
+            result,
+        })
+    }
+
+    pub(in crate::snapshot_worktree) fn commit_outcome(
+        &self,
+        repository: RepositoryId,
+        operation: OperationId,
+        principal: &Principal,
+    ) -> Result<WorktreeCommitReceipt> {
+        let record = self
+            .commits
+            .get(&operation)
+            .ok_or(RegistrationError::Operation(operation))?;
+        if record.receipt.principal != *principal
+            || record.node_plan.host.namespace.repository_id != repository
+        {
+            return Err(RegistrationError::Digest(operation));
+        }
+        let result = match record.completion {
+            Publication::Reserved => WorktreeCommitOutcome::Pending {},
+            Publication::Complete(_) => WorktreeCommitOutcome::Complete {
+                snapshot: record.plan.handle(),
+            },
+        };
+        Ok(WorktreeCommitReceipt {
+            repository_id: repository,
+            request: record.plan.request.clone(),
+            result,
+        })
+    }
+}

@@ -161,6 +161,20 @@ fn publication_view(state: RwSignal<State>) -> impl IntoView {
             .with(|state| state.files.directory_snapshot.publication.clone())
             .map(|publication| {
                 let (text, identity) = match publication {
+                    Publication::WorktreeCreated { target, .. } => (
+                        t(
+                            "worktree 已创建；正在读取精确实例状态。",
+                            "Worktree created. Reading its exact instance status.",
+                        ),
+                        target.worktree_id.to_string(),
+                    ),
+                    Publication::WorktreeCommitted { snapshot, .. } => (
+                        t(
+                            "此 worktree 已显式提交到新目录节点。",
+                            "This worktree was explicitly committed to a new directory node.",
+                        ),
+                        snapshot.node_id.to_string(),
+                    ),
                     Publication::Registered(root) => (
                         t(
                             "空盘根已登记；可继续初始化 .zxs。",
@@ -264,6 +278,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 </Show>
                 {review_view(state)}
                 {publication_view(state)}
+                {super::worktree::view(state)}
             </Show>
             {move ||state.with(|state| {
                 let model = &state.files.directory_snapshot;
@@ -277,7 +292,7 @@ pub(crate) fn recovery_view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <Show when=move ||state.with(blocks_writes)>
             <aside class="zxs-surface zxs-stack" data-zxs-directory-snapshot-recovery="">
-                <h2>{t("目录快照：原请求恢复", "Directory snapshot: original-request recovery")}</h2>
+                <h2>{t("目录快照 / worktree：原请求恢复", "Snapshot / worktree: original-request recovery")}</h2>
                 <p>{t(
                     "保留原账号、目录、分支、选集及操作编号。刷新不自动重发；查询只读永久回执，重试只发送原请求，不改选最新工作稿。",
                     concat!(
@@ -303,7 +318,7 @@ pub(crate) fn recovery_view(state: RwSignal<State>) -> impl IntoView {
                     })
                     on:click=move |_|requests::lookup(state)
                 >
-                    {t("查询原目录提交回执", "Look up original commit receipt")}
+                    {t("查询原操作结果", "Look up original operation result")}
                 </button>
                 <button
                     class="zxs-button"

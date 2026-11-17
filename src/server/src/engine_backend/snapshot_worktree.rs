@@ -3,6 +3,7 @@
 pub(super) mod drafts;
 pub(super) mod discovery;
 pub(super) mod root;
+pub(super) mod outcome;
 pub(super) mod transport;
 
 use super::{EngineBackend, error_registry};

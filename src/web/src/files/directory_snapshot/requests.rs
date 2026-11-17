@@ -60,6 +60,7 @@ pub(super) fn load(state: RwSignal<State>) {
                 Err(error) => model.error = Some(error),
             }
         });
+        super::worktree::after_review(state);
     });
 }
 
@@ -218,7 +219,7 @@ pub(super) fn submit(state: RwSignal<State>) {
     );
 }
 
-fn retain_and_send(state: RwSignal<State>, record: Result<Record, api::Error>) {
+pub(super) fn retain_and_send(state: RwSignal<State>, record: Result<Record, api::Error>) {
     let record = match record {
         Ok(record) => Arc::new(record),
         Err(error) => {
@@ -320,6 +321,10 @@ fn send(state: RwSignal<State>, record: Arc<Record>, first: bool) {
         if !release(state, epoch, &record) {
             return;
         }
+        let (result, fresh_rejection) = match result {
+            Ok(value) => (record.result(value), false),
+            Err(error) => (Err(error), fresh_rejection),
+        };
         finish(state, epoch, &record, result, fresh_rejection);
     });
 }
@@ -372,12 +377,22 @@ pub(super) fn lookup(state: RwSignal<State>) {
         return;
     };
     spawn_local(async move {
-        let result = api::request("GET", &endpoint, None).await;
+        let result = api::request("GET", &endpoint, None)
+            .await
+            .and_then(|value| record.lookup_result(value));
         if !release(state, epoch, &record) {
             return;
         }
         // A missing read is not proof that the original POST did not publish.
-        finish(state, epoch, &record, result, false);
+        match result {
+            Ok(wire::LookupResult::Pending) => {
+                state.update(|state| state.files.directory_snapshot.error = None);
+            }
+            Ok(wire::LookupResult::Complete(publication)) => {
+                finish(state, epoch, &record, Ok(publication), false);
+            }
+            Err(error) => finish(state, epoch, &record, Err(error), false),
+        }
     });
 }
 
@@ -385,25 +400,23 @@ fn finish(
     state: RwSignal<State>,
     epoch: u64,
     record: &Record,
-    result: Result<json_codec::Value, api::Error>,
+    result: Result<wire::Publication, api::Error>,
     first: bool,
 ) {
     match result {
-        Ok(value) => match record.result(value) {
-            Ok(publication) => {
-                state.update(|state| {
-                    let model = &mut state.files.directory_snapshot;
-                    if let Some(pending) = model.pending.as_mut() {
-                        pending.phase = Phase::Settled;
-                    }
-                    model.publication = Some(publication);
-                    model.error = None;
-                    model.clear_review();
-                });
-                cleanup(state);
-            }
-            Err(error) => state.update(|state| state.files.directory_snapshot.error = Some(error)),
-        },
+        Ok(publication) => {
+            state.update(|state| {
+                super::worktree::accept_publication(state, record, &publication);
+                let model = &mut state.files.directory_snapshot;
+                if let Some(pending) = model.pending.as_mut() {
+                    pending.phase = Phase::Settled;
+                }
+                model.publication = Some(publication);
+                model.error = None;
+                model.clear_review();
+            });
+            cleanup(state);
+        }
         Err(error) => {
             if first && !error.mutation_outcome_unknown() {
                 state.update(|state| {
@@ -467,6 +480,9 @@ pub(crate) fn restore(state: RwSignal<State>) {
     let result = storage::load(&owner.1);
     state.update(|state| {
         let model = &mut state.files.directory_snapshot;
+        if model.owner.as_ref() != Some(&owner) {
+            model.worktree.clear();
+        }
         model.owner = Some(owner);
         model.clear_review();
         match result {
