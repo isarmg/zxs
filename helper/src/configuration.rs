@@ -3,7 +3,7 @@ use crate::{Result, print, private_io};
 use command_line::Subcommand;
 use json_codec::json;
 use std::path::{Path, PathBuf};
-use storage_engine::{Config, ValidatedConfig};
+use storage_engine::{Config, DiskName, ValidatedConfig};
 #[derive(Debug)]
 struct BackupFailure {
     path: PathBuf,
@@ -29,7 +29,7 @@ impl std::error::Error for BackupFailure {
 #[derive(Clone, Debug, data_serialization::Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct NamedDisk {
-    name: name_policy::Name,
+    name: DiskName,
     root: PathBuf,
 }
 
@@ -58,7 +58,7 @@ pub(crate) enum Command {
         #[arg(long)]
         disk_id: String,
         #[arg(long)]
-        name: name_policy::Name,
+        name: DiskName,
         #[arg(long)]
         path: PathBuf,
         #[arg(long)]

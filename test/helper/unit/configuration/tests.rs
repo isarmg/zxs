@@ -1,16 +1,16 @@
 use super::*;
 
-pub(super) fn named_roots(root: &Path) -> [(name_policy::Name, PathBuf); 3] {
+pub(super) fn named_roots(root: &Path) -> [(storage_engine::DiskName, PathBuf); 3] {
     [
-        (name_policy::Name::parse("Primary").unwrap(), root.join("p")),
-        (name_policy::Name::parse("Near archive").unwrap(), root.join("b")),
-        (name_policy::Name::parse("Far archive").unwrap(), root.join("c")),
+        (storage_engine::DiskName::parse("Primary").unwrap(), root.join("p")),
+        (storage_engine::DiskName::parse("Near archive").unwrap(), root.join("b")),
+        (storage_engine::DiskName::parse("Far archive").unwrap(), root.join("c")),
     ]
 }
 
 fn registration(root: &Path, config: std::path::PathBuf) -> Command {
     Command::RegisterDisk {
-        name: name_policy::Name::parse("Additional primary").unwrap(),
+        name: storage_engine::DiskName::parse("Additional primary").unwrap(),
         config,
         slot: "D01".into(),
         disk_id: storage_engine::new_id("disk").unwrap(),
@@ -164,7 +164,7 @@ fn repeated_registration_keeps_the_immediately_previous_draft() {
     let previous = std::fs::read(&path).unwrap();
     let mut args = registration(root.path(), path.clone());
     if let Command::RegisterDisk { slot, path, name, .. } = &mut args {
-        *name = name_policy::Name::parse("Fifth archive").unwrap();
+        *name = storage_engine::DiskName::parse("Fifth archive").unwrap();
         *slot = "D02".into();
         *path = root.path().join("fifth");
     }
@@ -197,7 +197,7 @@ fn templates_accept_one_or_many_disks_without_initializing_them() {
             production: false,
             disks: (0..count)
                 .map(|i| NamedDisk {
-                    name: name_policy::Name::parse(&format!("Archive {i}")).unwrap(),
+                    name: storage_engine::DiskName::parse(&format!("Archive {i}")).unwrap(),
                     root: root.path().join(format!("disk{i}")),
                 })
                 .collect(),
@@ -242,7 +242,7 @@ fn invalid_templates_do_not_write_an_output() {
             run(Command::Template {
                 production: false,
                 disks: disks.into_iter().enumerate().map(|(i, root)| NamedDisk {
-                    name: name_policy::Name::parse(&format!("Archive {i}")).unwrap(),
+                    name: storage_engine::DiskName::parse(&format!("Archive {i}")).unwrap(),
                     root,
                 }).collect(),
                 output: Some(output.clone())

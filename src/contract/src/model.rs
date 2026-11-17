@@ -48,13 +48,16 @@ pub enum PoolSemanticFormat {
 }
 strict_string_deserialize!(PoolSemanticFormat { ManualDirectoryV1 => "manual-directory-v1" });
 
+/// The validated display name consumed by the disk configuration contract.
+pub type DiskName = name_policy::Name;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DiskConfig {
     pub slot_id: String,
     pub disk_id: String,
     /// Explicit user-owned display name. Never inferred from the mount or slot.
-    pub name: name_policy::Name,
+    pub name: DiskName,
     pub root: PathBuf,
     pub level: u32,
     pub upstream_slot_id: Option<String>,

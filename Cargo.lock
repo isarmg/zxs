@@ -1357,7 +1357,6 @@ dependencies = [
  "data-serialization",
  "http-routing",
  "json-codec",
- "name-policy",
  "platform-io",
  "rustix",
  "service-stack",

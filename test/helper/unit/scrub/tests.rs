@@ -12,7 +12,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, Engine) {
     let root = directory.path().join("system");
     let disk = directory.path().join("disk");
     let config = Config::development([(
-        name_policy::Name::parse("Scrub fixture").unwrap(),
+        storage_engine::DiskName::parse("Scrub fixture").unwrap(),
         disk,
     )])
     .unwrap();
