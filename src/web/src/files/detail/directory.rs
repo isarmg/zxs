@@ -76,6 +76,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             <Show when=move ||state.with(|s|s.files.directory_preview.is_some())><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|actions::return_to_default(state)>{t("返回默认视图","Return to default view")}</button></Show>
             <p class="zxs-row">{t("这里只浏览已有目录分支，不改变默认读取或 SMB 暴露。","Browsing existing folder branches does not change default reads or SMB exposure.")}</p>
         </div>
+            {super::super::directory_snapshot::view(state)}
             {super::super::staging::view(state)}
             {backup::view(state)}
             {super::super::placement::view(state)}

@@ -1,5 +1,26 @@
 {
   "groups": {
+    "directory-web-selection": {
+      "reason": "Check the real directory head and draft selection UI and product Wasm compile. Native state tests and Wasm build do not assert that Chromium or Samba ran.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "files::directory_snapshot::tests::"
+          ],
+          "max_tests": 6
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        }
+      ]
+    },
     "worktree-http-transport": {
       "reason": "Test real router transport of repeated complete worktree file edits, selected commit and cold retry. This group does not exercise external Samba.",
       "python_tests": [],
@@ -5713,6 +5734,90 @@
     }
   },
   "rules": [
+    {
+      "path": "src/web/src/api.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/actions/mod.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/detail/directory.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/requests.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/storage.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/view.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/wire.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/inline.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/mod.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/model.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/ui.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_snapshot_tests.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/model/tests.rs",
+      "groups": [
+        "directory-web-selection"
+      ]
+    },
     {
       "path": "src/engine/src/snapshot_worktree/public/transport.rs",
       "groups": [

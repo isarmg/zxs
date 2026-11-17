@@ -73,6 +73,7 @@ pub(crate) fn pending(state: &State) -> bool {
         || super::deletion::blocks_writes(state)
         || super::mkdir::blocks_writes(state)
         || super::unborn::blocks_writes(state)
+        || super::directory_snapshot::blocks_writes(state)
         || state
             .files
             .operations

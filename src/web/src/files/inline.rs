@@ -22,8 +22,8 @@ pub(super) fn first_folder_hint(state: RwSignal<State>) -> impl IntoView {
     view! {
         <Show when=move ||state.with(|state|needs_first_folder(&state.files))>
             <p class="zxs-row" role="status" data-first-folder="">{t(
-                "先用“新建文件夹”创建第一个目录。创建确认后，可在当前目录详情或新文件夹详情中手动初始化独立仓库；建目录不会自动初始化或提交。",
-                "Use New folder to create the first folder. Once creation is confirmed, initialize an independent repository in the current folder's Details or the new folder's Details. Creating a folder does not initialize or commit a repository.",
+                "可用“新建文件夹”开始普通目录操作；建目录不会初始化 .zxs 或隐式提交。若要建立目录快照，请先在本目录详情中“登记空盘根”，再初始化 .zxs。",
+                "Use New folder for ordinary directory operations; it neither initializes .zxs nor commits files. For directory snapshots, open this folder’s Details, register the empty disk root, then initialize .zxs.",
             )}</p>
         </Show>
     }

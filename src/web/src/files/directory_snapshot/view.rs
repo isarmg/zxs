@@ -1,0 +1,340 @@
+use crate::files::directory_snapshot::{
+    Candidate, Phase, Publication, Target, blocks_writes, can_initialize, can_register, can_review,
+    can_submit, requests, toggle,
+};
+use crate::ui::State;
+use storage_contract::snapshot_worktree::discovery::SnapshotHeadDiscovery;
+use storage_contract::snapshot_worktree::draft_commit::DirectoryDraftExpectation;
+use web_interface::{i18n::t, prelude::*};
+
+fn candidate_view(state: RwSignal<State>, candidate: Candidate, generation: u64) -> impl IntoView {
+    let entry = candidate.selected.target.entry;
+    let label = match candidate.selected.expected {
+        DirectoryDraftExpectation::Born { .. } => t("已有历史的修改稿", "Modified historical file"),
+        DirectoryDraftExpectation::Unborn { .. } => {
+            t("新文件，首次历史提交", "New file, first history")
+        }
+    };
+    view! {
+        <label class="zxs-frame zxs-flow" data-zxs-directory-draft=entry.to_string()>
+            <input
+                type="checkbox"
+                aria-label=candidate.selected.target.path.as_str().to_owned()
+                disabled=move ||!state.with(can_review)
+                prop:checked=move ||state.with(|state| {
+                    state.files.directory_snapshot.reviewed(state)
+                        .is_some_and(|review| review.selected.contains(&entry))
+                })
+                on:change=move |event|toggle(state, entry, generation, event_target_checked(&event))
+            />
+            <span>{candidate.selected.target.path.as_str().to_owned()}</span>
+            <span>{format!("{} · {}", label, crate::format::bytes(candidate.size))}</span>
+        </label>
+    }
+}
+
+fn review_view(state: RwSignal<State>) -> impl IntoView {
+    move || {
+        state.with(|state| {
+        state.files.directory_snapshot.reviewed(state).map(|review| {
+            (
+                review.head.clone(),
+                review.candidates.clone(),
+                state.files.directory_snapshot.read_generation,
+            )
+        })
+    }).map(|(head, candidates, generation)| {
+        match head.head {
+            SnapshotHeadDiscovery::NotInitialized => view! {
+                <div class="zxs-stack" data-zxs-directory-snapshot-state="not_initialized">
+                    <p class="zxs-row">
+                        {t("此根目录尚未初始化 .zxs。", "This root has no .zxs repository yet.")}
+                    </p>
+                    <p class="zxs-row">{t(
+                        "初始化当前支持空根目录，或本页完整列出的直属已有历史文件。若有子目录、无历史新文件、筛选或分页，请先使用空根目录初始化；不会替文件隐式提交。",
+                        concat!(
+                            "Initialize an empty root or a complete, unfiltered page of direct ",
+                            "files with history. Subfolders, unborn files and pagination are ",
+                            "not admitted. No file is implicitly committed.",
+                        ),
+                    )}</p>
+                    <button
+                        class="zxs-button"
+                        data-zxs-directory-snapshot-initialize=""
+                        disabled=move ||!state.with(can_initialize)
+                        on:click=move |_|requests::initialize(state)
+                    >
+                        {t("初始化 .zxs 目录快照", "Initialize .zxs snapshots")}
+                    </button>
+                </div>
+            }.into_any(),
+            SnapshotHeadDiscovery::Pending { operation } => view! {
+                <p class="zxs-row" role="status" data-zxs-directory-snapshot-state="pending">
+                    {format!("{} {operation}", t(
+                        "已有初始化操作尚待完成，保留原操作并恢复，不重复初始化：",
+                        concat!(
+                            "Initialization is pending. Recover its original operation ",
+                            "instead of initializing again:",
+                        ),
+                    ))}
+                </p>
+            }.into_any(),
+            SnapshotHeadDiscovery::Head { snapshot, branch_name } => {
+                let empty = candidates.is_empty();
+                view! {
+                    <div class="zxs-stack" data-zxs-directory-snapshot-state="head">
+                        <dl class="zxs-stack">
+                            <div>
+                                <dt>{t("真实 .zxs 分支", "Actual .zxs branch")}</dt>
+                                <dd>{branch_name.as_str().to_owned()}</dd>
+                            </div>
+                            <div>
+                                <dt>{t("分支身份", "Branch identity")}</dt>
+                                <dd>{snapshot.branch_id.to_string()}</dd>
+                            </div>
+                            <div>
+                                <dt>{t("当前节点", "Current node")}</dt>
+                                <dd>{snapshot.node_id.to_string()}</dd>
+                            </div>
+                        </dl>
+                        <p class="zxs-row">{t(
+                            "请选择纳入本次提交的工作稿。这里只列当前文件列表页；其他页、子目录和未勾选稿不纳入。一次请求同时发布所选文件与目录快照，不逐文件提交。",
+                            concat!(
+                                "Choose drafts from the current file-list page. Other pages, ",
+                                "subfolders and unchecked drafts are excluded. One request ",
+                                "publishes the selected files and directory snapshot together.",
+                            ),
+                        )}</p>
+                        {empty.then(||view! {
+                            <p class="zxs-row" role="status">{t(
+                                "本页没有待提交工作稿。保存文件后刷新目录，再读取工作稿。",
+                                concat!(
+                                    "No pending drafts on this page. Save files, refresh the ",
+                                    "folder, then review again.",
+                                ),
+                            )}</p>
+                        })}
+                        {candidates.into_iter().map(|candidate| {
+                            candidate_view(state, candidate, generation)
+                        }).collect_view()}
+                        <label class="zxs-stack">
+                            {t("目录提交备注", "Directory commit message")}
+                            <input
+                                type="text"
+                                maxlength="128"
+                                prop:value=move ||state.with(|state| {
+                                    state.files.directory_snapshot.message.clone()
+                                })
+                                disabled=move ||!state.with(can_review)
+                                on:input=move |event|state.update(|state| {
+                                    if can_review(state) {
+                                        state.files.directory_snapshot.message =
+                                            event_target_value(&event);
+                                    }
+                                })
+                            />
+                        </label>
+                        <p class="zxs-row" role="status">{move ||state.with(|state| {
+                            state.files.directory_snapshot.reviewed(state).map(|review| format!(
+                                "{} {}", t("已选择", "Selected"), review.selected.len(),
+                            ))
+                        })}</p>
+                        <button
+                            class="zxs-button"
+                            data-zxs-directory-snapshot-commit=""
+                            disabled=move ||!state.with(can_submit)
+                            on:click=move |_|requests::submit(state)
+                        >
+                            {t("一次提交所选工作稿", "Commit selected drafts together")}
+                        </button>
+                    </div>
+                }.into_any()
+            }
+        }
+    })
+    }
+}
+
+fn publication_view(state: RwSignal<State>) -> impl IntoView {
+    move || {
+        state
+            .with(|state| state.files.directory_snapshot.publication.clone())
+            .map(|publication| {
+                let (text, identity) = match publication {
+                    Publication::Registered(root) => (
+                        t(
+                            "空盘根已登记；可继续初始化 .zxs。",
+                            "Disk root registered. You can now initialize .zxs.",
+                        ),
+                        root.repository_id.to_string(),
+                    ),
+                    Publication::Initialized(snapshot) => (
+                        t(".zxs 已初始化。", ".zxs initialized."),
+                        snapshot.node_id.to_string(),
+                    ),
+                    Publication::Committed {
+                        snapshot,
+                        degraded: false,
+                    } => (
+                        t(
+                            "所选工作稿已共同提交。未选稿保持原样。",
+                            "Selected drafts committed together. Unselected drafts are unchanged.",
+                        ),
+                        snapshot.node_id.to_string(),
+                    ),
+                    Publication::Committed {
+                        snapshot,
+                        degraded: true,
+                    } => (
+                        t(
+                            "所选工作稿已发布，但发布时保护不足，请检查磁盘状态。",
+                            "Selected drafts published with reduced protection. Check disk status.",
+                        ),
+                        snapshot.node_id.to_string(),
+                    ),
+                };
+                view! {
+                    <p class="zxs-row" role="status" data-zxs-directory-snapshot-result="">
+                        {format!("{text} {identity}")}
+                    </p>
+                }
+            })
+    }
+}
+
+pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
+    let target = Memo::new(move |_| state.with(Target::capture));
+    Effect::new(move |_| {
+        let current = target.get();
+        state.update(|state| state.files.directory_snapshot.clear_review());
+        if current.is_some() {
+            requests::load(state);
+        }
+    });
+    on_cleanup(move || {
+        let _ = state.try_update(|state| state.files.directory_snapshot.clear_review());
+    });
+    view! {
+        <section class="zxs-entry-section zxs-stack" data-zxs-directory-snapshot="">
+            <h3 class="zxs-row">{t(".zxs 目录快照", ".zxs directory snapshots")}</h3>
+            <Show when=move ||state.with(can_register)>
+                <p class="zxs-row">{t(
+                    "此空盘尚未登记文件管理根。先登记真实根身份，再独立初始化 .zxs；这一步不创建文件历史。",
+                    concat!(
+                        "This empty disk has no registered file-manager root. Register its real ",
+                        "identity, then initialize .zxs separately. This creates no file history.",
+                    ),
+                )}</p>
+                <button
+                    class="zxs-button"
+                    data-zxs-directory-snapshot-register=""
+                    on:click=move |_|requests::register(state)
+                >
+                    {t("登记空盘根", "Register empty disk root")}
+                </button>
+            </Show>
+            <Show
+                when=move ||target.get().is_some()
+                fallback=move ||view! {
+                    <p class="zxs-row">{t(
+                        "此入口要求已登记的根目录。全新空盘先使用“登记空盘根”；子目录和历史预览暂不支持正式 .zxs 初始化，不调用旧目录仓库写接口。",
+                        concat!(
+                            "This entry requires a registered root. On a new empty disk, use ",
+                            "Register empty disk root first. Subfolders and historical previews ",
+                            "do not ",
+                            "support formal .zxs initialization here.",
+                        ),
+                    )}</p>
+                }
+            >
+                <button
+                    class="zxs-button"
+                    data-zxs-directory-snapshot-review=""
+                    disabled=move ||!state.with(can_review)
+                    on:click=move |_|requests::load(state)
+                >
+                    {t("刷新真实分支与本页工作稿", "Refresh actual branch and this page's drafts")}
+                </button>
+                <Show when=move ||state.with(|state| {
+                    state.files.directory_snapshot.reading.is_some()
+                })>
+                    <p class="zxs-row" role="status">
+                        {t("正在读取真实分支和工作稿…", "Reading the actual branch and drafts…")}
+                    </p>
+                </Show>
+                {review_view(state)}
+                {publication_view(state)}
+            </Show>
+            {move ||state.with(|state| {
+                let model = &state.files.directory_snapshot;
+                if model.pending.is_none() { model.error.clone() } else { None }
+            }).map(|error|view! {<p role="alert">{error.to_string()}</p>})}
+        </section>
+    }
+}
+
+pub(crate) fn recovery_view(state: RwSignal<State>) -> impl IntoView {
+    view! {
+        <Show when=move ||state.with(blocks_writes)>
+            <aside class="zxs-surface zxs-stack" data-zxs-directory-snapshot-recovery="">
+                <h2>{t("目录快照：原请求恢复", "Directory snapshot: original-request recovery")}</h2>
+                <p>{t(
+                    "保留原账号、目录、分支、选集及操作编号。刷新不自动重发；查询只读永久回执，重试只发送原请求，不改选最新工作稿。",
+                    concat!(
+                        "The account, directory, branch, selection and operation ID are retained. ",
+                        "Refresh never resubmits. Look up the receipt or retry the exact ",
+                        "original request without selecting newer drafts.",
+                    ),
+                )}</p>
+                <p>{move ||state.with(|state| format!(
+                    "{} {}", t("保留的原请求数：", "Retained original requests:"),
+                    state.files.directory_snapshot.retained_count,
+                ))}</p>
+                <p>{move ||state.with(|state| {
+                    state.files.directory_snapshot.pending.as_ref()
+                        .map(|pending| pending.record.command.operation().to_string())
+                })}</p>
+                <button
+                    class="zxs-button"
+                    data-zxs-directory-snapshot-outcome=""
+                    disabled=move ||state.with(|state| {
+                        requests::retry_record(state)
+                            .and_then(|record| record.command.outcome_endpoint()).is_none()
+                    })
+                    on:click=move |_|requests::lookup(state)
+                >
+                    {t("查询原目录提交回执", "Look up original commit receipt")}
+                </button>
+                <button
+                    class="zxs-button"
+                    data-zxs-directory-snapshot-retry=""
+                    disabled=move ||state.with(|state| requests::retry_record(state).is_none())
+                    on:click=move |_|requests::retry(state)
+                >
+                    {t("重试原请求", "Retry original request")}
+                </button>
+                <Show when=move ||state.with(|state| {
+                    state.files.directory_snapshot.pending.as_ref()
+                        .is_some_and(|pending| pending.phase == Phase::Settled)
+                })>
+                    <p>{t(
+                        "原结果已确认，仅本机记录清理待完成。",
+                        "The result is confirmed; local recovery cleanup remains.",
+                    )}</p>
+                    <button class="zxs-button" on:click=move |_|requests::cleanup(state)>
+                        {t("重试本机记录清理", "Retry local cleanup")}
+                    </button>
+                </Show>
+                <button
+                    class="zxs-button"
+                    disabled=move ||state.with(|state| state.files.mutation_pending)
+                    on:click=move |_|requests::restore(state)
+                >
+                    {t("重新读取本机原请求", "Reload local original request")}
+                </button>
+                {move ||state.with(|state| state.files.directory_snapshot.error.clone())
+                    .map(|error|view! {<p role="alert">{error.to_string()}</p>})}
+            </aside>
+        </Show>
+    }
+}

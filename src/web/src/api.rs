@@ -56,6 +56,8 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid directory snapshot response or request: {0}")]
+    DirectorySnapshot(#[source] crate::files::DirectorySnapshotError),
     #[error("invalid first-commit response or request: {0}")]
     FirstCommitWire(#[source] json_codec::Error),
     #[error("invalid first-commit recovery record: {0}")]
