@@ -7,11 +7,9 @@ use json_codec::{Value, json};
 use service_stack::ServiceExt;
 
 fn state() -> State {
-    let (stopping, _receiver) = watch::channel(false);
     State::new(
         SocketAddr::from(([0, 0, 0, 0], 9040)),
         "repair-csrf".into(),
-        stopping,
     )
 }
 fn post(path: &str, body: Value) -> Request<Body> {

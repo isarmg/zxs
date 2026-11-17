@@ -496,7 +496,7 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
     Json(json!({
         "name":"zxs-helper", "version":env!("CARGO_PKG_VERSION"),
         "mode":"program_install_and_independent_check", "authentication":"none",
-        "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
+        "csrf":state.csrf.as_ref(), "stopping":state.shutdown.stopping(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":true, "participating_zxs_lease_root":platform_io::service_lease::HOST_ROOT, "source_writes_available":false, "first_storage_initialization":"confirmed_empty_existing_roots_only", "program_installation":crate::installation::availability(),
         "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","sealed_same_source_vfs_installation","embedded_license_material_download","same_payload_program_repair_with_retained_original","inactive_systemd_samba_bundle","host_lease_root_preparation","local_service_account_preparation","separate_samba_unix_account_preparation","debian_13_samba_dependency_installation","empty_service_private_layout","empty_service_runtime_and_protected_export","fixed_configuration_file_installation","explicit_installed_service_activation","original_configuration_installation_recovery","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch","existing_local_tdbsam_password_reset","missing_local_tdbsam_account_enrollment","active_empty_directory_addition","foreign_complete_lower_chain_material","foreign_original_state_and_three_scope_database_material","foreign_complete_chain_identity_proposal","foreign_complete_object_identity_material","nonterminal_disk_deregistration","final_voter_terminal_deregistration","terminal_remaining_registration_inspection","sequential_terminal_registration_retirement","retained_terminal_metadata_readmission","completed_terminal_chain_checkpoint_export","terminal_chain_retained_readmission_proposal","terminal_chain_target_decision_preparation","terminal_chain_first_native_inputs","terminal_chain_actual_first_publication","terminal_chain_published_current_read","terminal_chain_exact_epoch_plan","terminal_chain_actual_io_decision","terminal_chain_generation_log_and_frozen_current","terminal_chain_exact_generation_selector_read"],
@@ -506,18 +506,17 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
 
 fn admit_job(state: &State, request: &Request) -> Result<OwnedSemaphorePermit, Failure> {
     boundary::post(state, request)?;
-    if *state.stopping.borrow() {
-        return Err(Failure::message(
+    let permit = state.shutdown.admit(|| state.jobs.clone().try_acquire_owned());
+    match permit {
+        None => Err(Failure::message(
             StatusCode::SERVICE_UNAVAILABLE,
             "helper_stopping",
             "The helper is draining; no new maintenance operation was started.",
-        ));
+        )),
+        Some(result) => {
+            result.map_err(|error| Failure::new(StatusCode::CONFLICT, "helper_busy", error))
+        }
     }
-    state
-        .jobs
-        .clone()
-        .try_acquire_owned()
-        .map_err(|error| Failure::new(StatusCode::CONFLICT, "helper_busy", error))
 }
 async fn input<T: DeserializeOwned>(request: Request) -> Result<T, Failure> {
     let bytes = tokio::time::timeout(
@@ -615,7 +614,7 @@ async fn shutdown(
             "Explicitly confirm stop-helper. This stops only this helper, not ZXS or any disk.",
         ));
     }
-    state.stopping.send_replace(true);
+    state.shutdown.stop();
     Ok(
         Json(json!({"stopping":true,"wait_for_process_exit":true,"zxs_stopped_by_helper":false}))
             .into_response(),

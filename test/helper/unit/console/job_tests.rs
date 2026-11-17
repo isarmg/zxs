@@ -7,11 +7,10 @@ use http_routing::{
 use json_codec::{Value, json};
 use service_stack::ServiceExt;
 use std::sync::{Arc, Mutex, mpsc};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 
 fn state() -> State {
-    let (stopping, _) = watch::channel(false);
-    State::new(([0, 0, 0, 0], 9040).into(), "job-csrf".into(), stopping)
+    State::new(([0, 0, 0, 0], 9040).into(), "job-csrf".into())
 }
 fn request(body: impl Into<Body>) -> Request<Body> {
     Request::builder()
@@ -152,7 +151,7 @@ async fn csrf_stopping_and_busy_precede_body_decode() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(body(response).await["error"]["code"], "helper_busy");
-    state.stopping.send_replace(true);
+    state.shutdown.stop();
     let response = app(state.clone(), empty)
         .oneshot(request("not JSON"))
         .await
@@ -450,7 +449,7 @@ async fn credential_routes_keep_exact_parser_codes_and_admission_before_decode()
             .unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(body(response).await["error"]["code"], "helper_busy");
-        state.stopping.send_replace(true);
+        state.shutdown.stop();
         let response = credential_app(state.clone(), empty, input)
             .oneshot(request("not JSON"))
             .await

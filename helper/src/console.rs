@@ -2,16 +2,15 @@
 //! program installation is a separate fixed-path, no-overwrite operation.
 mod boundary;
 mod http;
+mod shutdown;
 mod transport;
 mod work;
 
 use crate::{Result, deployment::activation::Handoff};
 use command_line::Args;
-use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-};
-use tokio::sync::{Semaphore, watch};
+use shutdown::Shutdown;
+use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::Semaphore;
 
 const DEFAULT_PORT: u16 = 9040;
 pub(super) const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -36,35 +35,23 @@ struct State {
     listen: SocketAddr,
     csrf: Arc<str>,
     jobs: Arc<Semaphore>,
-    stopping: watch::Sender<bool>,
-    handoff: Arc<Mutex<Option<Handoff>>>,
+    shutdown: Arc<Shutdown<Handoff>>,
 }
 impl State {
-    fn new(listen: SocketAddr, csrf: String, stopping: watch::Sender<bool>) -> Self {
+    fn new(listen: SocketAddr, csrf: String) -> Self {
         Self {
             listen,
             csrf: csrf.into(),
             jobs: Arc::new(Semaphore::new(1)),
-            stopping,
-            handoff: Arc::new(Mutex::new(None)),
+            shutdown: Arc::new(Shutdown::new()),
         }
     }
     fn request_handoff(&self, handoff: Handoff) -> Result<()> {
-        if *self.stopping.borrow() {
+        if !self.shutdown.queue(handoff) {
             return Err(
                 "helper shutdown was already requested; service startup was not queued".into(),
             );
         }
-        let mut pending = self
-            .handoff
-            .lock()
-            .expect("invariant: handoff owner does not panic");
-        assert!(
-            pending.is_none(),
-            "invariant: single admitted job queues one handoff"
-        );
-        *pending = Some(handoff);
-        self.stopping.send_replace(true);
         Ok(())
     }
 }
@@ -98,14 +85,15 @@ async fn serve(options: Options) -> Result<Option<Handoff>> {
     let csrf = storage_engine::OperationId::generate()?.to_string();
     let listener = tokio::net::TcpListener::bind(options.listen).await?;
     let listen = listener.local_addr()?;
-    let (stopping, mut stopped) = watch::channel(false);
-    let state = State::new(listen, csrf, stopping.clone());
+    let state = State::new(listen, csrf);
+    let shutdown = Arc::clone(&state.shutdown);
+    let mut stopped = shutdown.subscribe();
     eprintln!("zxs-helper: {WARNING}");
     eprintln!(
         "zxs-helper: listening on {listen}; open http://<host-IP>:{} . Independent-disk checks/downloads are read-only; embedded program installation is fixed-path and never replaces different bytes. Stop all source writers first; this console retains the /zxs service lease until all requests and workers end. ZXS startup is handed off only after this helper exits. Older binaries and external/Samba writers require separate exclusion.",
         listen.port()
     );
-    let handoff = Arc::clone(&state.handoff);
+    let draining = Arc::clone(&shutdown);
     let drain = transport::Drain::default();
     let listener = transport::BoundedListener::new(listener, drain.clone());
     http_routing::serve(listener, http::router(state))
@@ -115,18 +103,14 @@ async fn serve(options: Options) -> Result<Option<Handoff>> {
                 _ = terminate.recv() => {},
                 _ = stopped.changed() => {},
             }
-            stopping.send_replace(true);
+            draining.stop();
             // Bound only HTTP teardown. Blocking workers retain their native
             // owner and the outer process lease until runtime shutdown ends.
             drain.begin();
             eprintln!("zxs-helper: stopping admission; waiting for active requests and disk reads. Do not remove source media until the process exits.");
         })
         .await?;
-    let pending = handoff
-        .lock()
-        .expect("invariant: handoff owner does not panic")
-        .take();
-    Ok(pending)
+    Ok(shutdown.take_after_drain())
 }
 
 #[cfg(test)]

@@ -20,11 +20,9 @@ use storage_engine::{
 };
 
 fn state() -> State {
-    let (stopping, _receiver) = watch::channel(false);
     State::new(
         SocketAddr::from(([0, 0, 0, 0], 9040)),
         "test-csrf".into(),
-        stopping,
     )
 }
 fn post(path: &str, body: Value) -> Request<Body> {
@@ -327,14 +325,14 @@ async fn shutdown_requires_exact_confirmation_and_stops_new_disk_admission() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(!*state.stopping.borrow());
+    assert!(!state.shutdown.stopping());
     let response = app
         .clone()
         .oneshot(post("/api/shutdown", json!({"confirmation":"stop-helper"})))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(*state.stopping.borrow());
+    assert!(state.shutdown.stopping());
     let response = app
         .oneshot(post("/api/authority/check", json!({})))
         .await
@@ -560,7 +558,7 @@ async fn readmission_routes_enforce_origin_csrf_busy_and_shutdown_before_native_
         assert_eq!(json_body(response).await["error"]["code"], "helper_busy");
         drop(permit);
         let stopped = state();
-        stopped.stopping.send_replace(true);
+        stopped.shutdown.stop();
         let response = http::router(stopped)
             .oneshot(post(path, json!({})))
             .await
@@ -626,7 +624,7 @@ async fn chain_readmission_proposal_requires_origin_csrf_and_available_worker() 
     );
     drop(permit);
     let stopped = state();
-    stopped.stopping.send_replace(true);
+    stopped.shutdown.stop();
     assert_eq!(
         http::router(stopped)
             .oneshot(post(path, json!({})))
@@ -688,7 +686,7 @@ async fn chain_target_and_handoff_routes_reject_cross_origin_missing_csrf_busy_a
         );
         drop(permit);
         let stopped = state();
-        stopped.stopping.send_replace(true);
+        stopped.shutdown.stop();
         assert_eq!(
             http::router(stopped)
                 .oneshot(post(path, json!({})))
