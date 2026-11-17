@@ -12,7 +12,7 @@ use storage_contract::{FileId, OperationId, Principal, Sequence};
 
 mod frozen;
 mod fence;
-pub(super) use fence::invalidate_changed;
+pub(super) use fence::{PreparationCheck, invalidate_changed};
 use frozen::Frozen;
 
 pub struct AutomaticFilePreparation {
@@ -146,7 +146,8 @@ impl AutomaticFilePreparation {
         self.lease.check()?;
         let context = self.frozen.context();
         let request = &self.request;
-        let selected = Arc::new(SelectedWorkingSources::capture(&context, std::slice::from_ref(request))?);
+        let selected = SelectedWorkingSources::capture(&context, std::slice::from_ref(request))?;
+        let selected = Arc::new(selected.for_automatic_preparation(self.lease.preparation_check()));
         let [source] = selected.sources() else { return Err(business::invalid()); };
         let body = match request.expected.content {
             WorkingContentExpectation::Born { base, payload } => {

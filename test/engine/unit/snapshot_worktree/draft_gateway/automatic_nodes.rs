@@ -121,3 +121,38 @@ fn emergency_before_copy_keeps_all_existing_material_and_the_saved_bytes_after_r
     let query = scope(target, NamespaceDirectoryId::Repository(target.repository), 0, u64::MAX);
     assert!(engine.automatic_node_page(&query).unwrap().0.rows.is_empty());
 }
+
+#[test]
+fn emergency_after_real_unborn_full_keeps_zero_history_and_the_exact_saved_body() {
+    let (fixture, mut engine) = Fixture::new();
+    let principal = "admin".parse().unwrap();
+    let repository = fixture.targets[0].repository;
+    let branch = &engine.state().repositories[&repository.to_string()].main_branch_id;
+    let head = engine.state().branches[branch].head_commit_id.parse().unwrap();
+    let birth = engine.create_unborn_file(&BirthRequest {
+        repository,
+        path: name_policy::PortablePath::parse("first-only.txt").unwrap(),
+        expected_namespace_head: head,
+    }, &principal, OperationId::generate().unwrap()).unwrap();
+    let target = crate::persist::file_draft::birth::decode(&birth).unwrap().target().clone();
+    mode(&mut engine, &target, &principal, CommitMode::Automatic);
+    let saved = save(&mut engine, &target, &principal, &vec![67; 150_000]);
+    let prepared = engine.prepare_automatic_file(target.file).unwrap().execute().unwrap();
+    let before = engine.state().versions.len();
+    mode(&mut engine, &target, &principal, CommitMode::Manual);
+    let current = engine.unborn_working_state(&target).unwrap();
+    assert!(current.automatic_controller().is_none());
+    let media = fixture.media();
+    assert!(engine.finish_automatic_file(prepared).is_err());
+    assert_eq!(fixture.media(), media);
+    drop(engine);
+    let engine = Engine::open(&fixture.system).unwrap();
+    assert_eq!(engine.state().versions.len(), before);
+    assert_eq!(engine.unborn_working_state(&target).unwrap(), current);
+    assert_eq!(engine.operation(saved.operation_id).unwrap(), saved);
+    let handle = engine.open_native_working(&target, &principal, false).unwrap();
+    let mut bytes = vec![0; 150_000];
+    let count = engine.read_native_working(&handle, &mut bytes, 0).unwrap();
+    assert_eq!(count, bytes.len());
+    assert!(bytes.iter().all(|byte| *byte == 67));
+}

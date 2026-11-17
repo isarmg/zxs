@@ -124,9 +124,28 @@ pub(crate) struct SelectedWorkingSources {
     snapshot: Option<String>,
     slot: u64,
     sources: Vec<SelectedWorkingSource>,
+    preparation_check: Option<super::automatic::PreparationCheck>,
 }
 
 impl SelectedWorkingSources {
+    pub(in crate::engine::file_draft) fn for_automatic_preparation(
+        mut self,
+        check: super::automatic::PreparationCheck,
+    ) -> Self {
+        self.preparation_check = Some(check);
+        self
+    }
+
+    /// Cancellation only applies while a private independent FULL is being
+    /// made. Real selected-material proof and permanent recovery never depend
+    /// on this process-local checkpoint.
+    pub(crate) fn check_preparation(&self) -> Result<()> {
+        match &self.preparation_check {
+            Some(check) => check.check(),
+            None => Ok(()),
+        }
+    }
+
     pub(crate) fn open_sole_born(&self) -> Result<ReadFile> {
         if self.sources.len() != 1 { return Err(crate::business::file_draft::invalid()); }
         self.open_born(0, &self.born_path(0)?)
@@ -242,7 +261,7 @@ impl SelectedWorkingSources {
         let result = SelectedWorkingSources {
             state: Arc::clone(context.state), config: context.config.clone(),
             resources: Arc::clone(context.disk_resources), snapshot: context.snapshot.clone(),
-            slot: context.next_slot, sources,
+            slot: context.next_slot, sources, preparation_check: None,
         };
         result.require_context(context)?;
         Ok(result)

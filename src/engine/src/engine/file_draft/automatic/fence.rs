@@ -2,11 +2,25 @@
 //! create an eligible task, select its revision, or replace the durable CAS.
 use crate::{Error, Result, State};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, Mutex, Weak, atomic::{AtomicBool, Ordering}};
 use storage_contract::{FileId, PoolId};
 
 type Active = (FileId, Arc<AtomicBool>);
 static ACTIVE: Mutex<BTreeMap<PoolId, Active>> = Mutex::new(BTreeMap::new());
+
+/// Only a currently held worker can issue a checkpoint. It cannot keep the
+/// lease alive, create another task or invalidate an already accepted decision.
+pub(in crate::engine::file_draft) struct PreparationCheck(Weak<AtomicBool>);
+
+impl PreparationCheck {
+    pub(in crate::engine::file_draft) fn check(&self) -> Result<()> {
+        if self.0.upgrade().is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            Ok(())
+        } else {
+            Err(super::stale())
+        }
+    }
+}
 
 pub(super) struct Lease {
     pool: PoolId,
@@ -23,6 +37,10 @@ impl Lease {
         slots.insert(pool, (file, Arc::clone(&active)));
         Ok(Self { pool, active })
     }
+    pub(super) fn preparation_check(&self) -> PreparationCheck {
+        PreparationCheck(Arc::downgrade(&self.active))
+    }
+
     pub(super) fn check(&self) -> Result<()> {
         if self.active.load(Ordering::Acquire) { Ok(()) } else { Err(super::stale()) }
     }

@@ -21,6 +21,13 @@ enum FullSelection {
     Worktree(Arc<crate::engine::file_draft::worktree::WorktreeFirstSource>),
 }
 impl FullSelection {
+    fn check_preparation(&self) -> Result<()> {
+        match self {
+            Self::Ordinary(selected) => selected.check_preparation(),
+            Self::Worktree(_) => Ok(()),
+        }
+    }
+
     fn require_context(&self, context: &PlanningContext<'_>) -> Result<()> {
         match self {
             Self::Ordinary(selected) => selected.require_context(context),
@@ -121,10 +128,12 @@ impl PreparedUnbornFull {
         let scope = &source.scope;
         scope.verify()?;
         crate::container_storage::version_names::check_target_name(&scope.held, &name)?;
-        let receipt = scope.held.copy_new_entry_verified_synced(
+        let mut checkpoint = || selection.check_preparation();
+        let receipt = scope.held.copy_new_entry_verified_synced_observed(
             &name,
             &mut Merged { source: &source, offset: 0 },
             platform_io::payload::Expectation { bytes, blake3: None },
+            &mut checkpoint,
         ).map_err(|error| match error {
             NewEntryCopyError::Admission(source) | NewEntryCopyError::Published { source, .. } => {
                 source
@@ -132,7 +141,7 @@ impl PreparedUnbornFull {
             NewEntryCopyError::Payload(source) => source.into(),
         })?;
         let path = scope.held.path().join(name.as_path());
-        let mut file = scope.held.open_leased_regular(&path)?;
+        let file = scope.held.open_leased_regular(&path)?;
         let metadata = file.metadata()?;
         if metadata.dev() != receipt.identity.device || metadata.ino() != receipt.identity.inode
             || metadata.nlink() != 1 || metadata.len() != bytes || receipt.bytes != bytes
@@ -141,9 +150,11 @@ impl PreparedUnbornFull {
         }
         let stamp = FileStamp::from_metadata(&metadata);
         // Reopen/readback is the physical boundary, not trust in a copied hash.
-        file.verify_full(platform_io::payload::Expectation {
-            bytes, blake3: Some(receipt.blake3),
-        })?;
+        file.verify_full_observed(
+            platform_io::payload::Expectation { bytes, blake3: Some(receipt.blake3) },
+            &mut checkpoint,
+        )?;
+        checkpoint()?;
         selection.require_context(context)?;
         let result = Arc::new(Self {
             selection, id, source, name, path, file, stamp,
