@@ -560,10 +560,7 @@ fn bounded_total(before: usize, additional: usize) -> Result<usize, LedgerError>
 }
 
 fn event_frame(before: Checkpoint, event: &Event) -> Result<(Vec<u8>, Checkpoint), LedgerError> {
-    let sequence = before.sequence.next().map_err(LedgerError::Sequence)?;
-    if sequence.get() >= MAX_FRAMES {
-        return Err(LedgerError::Budget);
-    }
+    let sequence = before.next_frame_sequence()?;
     let frame = Frame {
         format: Format::WorktreeTransitions, sequence,
         previous: Some(before.commitment), body: Body::Event(event.clone()),

@@ -25,6 +25,24 @@ const MAX_FRAMES: u64 = 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_LEDGER_BYTES: usize = 64 * 1024 * 1024;
 
+impl Checkpoint {
+    pub(crate) fn next_frame_sequence(self) -> Result<storage_contract::Sequence, LedgerError> {
+        frame_after(self.sequence)
+    }
+
+    /// Both the committing and completed frames must fit before publishing any
+    /// part of this operation. This is not a reservation for later saves.
+    pub(crate) fn require_publication_frames(self) -> Result<(), LedgerError> {
+        frame_after(self.next_frame_sequence()?).map(|_| ())
+    }
+}
+
+fn frame_after(before: storage_contract::Sequence) -> Result<storage_contract::Sequence, LedgerError> {
+    let next = before.next().map_err(LedgerError::Sequence)?;
+    if next.get() >= MAX_FRAMES { return Err(LedgerError::FrameLimit); }
+    Ok(next)
+}
+
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum LedgerError {
     #[error("worktree ledger disk I/O failed")]
@@ -65,6 +83,8 @@ pub(crate) enum LedgerError {
     Chain,
     #[error("worktree ledger exceeds its bounded frame, byte or edit inventory")]
     Budget,
+    #[error("worktree ledger has no remaining frame for this transition")]
+    FrameLimit,
     #[error("worktree ledger operation identity was reused for different work")]
     OperationConflict,
     #[error("worktree ledger transition uses a stale worktree revision")]

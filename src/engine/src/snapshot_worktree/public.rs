@@ -90,7 +90,8 @@ impl SnapshotWorktreeError {
             | RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Cursor) => {
                 ErrorCode::ListingChanged
             }
-            RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Budget) => {
+            RegistrationError::Ledger(crate::directory_worktree::ledger::LedgerError::FrameLimit)
+            | RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Budget) => {
                 ErrorCode::ResourceLimitExceeded
             }
             _ => ErrorCode::MetadataUnavailable,

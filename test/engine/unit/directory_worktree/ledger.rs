@@ -23,6 +23,28 @@ struct Fixture {
     instance: HeldSparseWorktree,
 }
 fn operation(byte: u8) -> OperationId { OperationId::from_random([byte; 16]) }
+
+#[test]
+fn last_edit_slot_cannot_also_promise_a_two_frame_publication() {
+    // Test just the shared sequence rule, not a fabricated admitted ledger.
+    // Real appends and fresh native reserves both use these positions.
+    let at = |sequence| Checkpoint {
+        sequence: storage_contract::Sequence::new(sequence),
+        commitment: storage_contract::working_tree::MaterialCommitment::from_digest(
+            blake3::hash(b"frame position fixture"),
+        ),
+    };
+    let pair = at(MAX_FRAMES - 3);
+    pair.require_publication_frames().unwrap();
+    let last_edit = at(pair.next_frame_sequence().unwrap().get());
+    assert_eq!(last_edit.next_frame_sequence().unwrap().get(), MAX_FRAMES - 1);
+    assert!(matches!(last_edit.require_publication_frames(), Err(LedgerError::FrameLimit)));
+    let full = at(MAX_FRAMES - 1);
+    assert!(matches!(full.next_frame_sequence(), Err(LedgerError::FrameLimit)));
+    assert!(matches!(full.require_publication_frames(), Err(LedgerError::FrameLimit)));
+    assert!(matches!(at(u64::MAX).next_frame_sequence(), Err(LedgerError::Sequence(_))));
+}
+
 fn mount(name: &str) -> Mount {
     Mount {
         parent: DirectoryId::from_random([90; 16]),

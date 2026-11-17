@@ -202,6 +202,7 @@ fn publish_planned(
     {
         let index = engine.snapshot_receipts()?;
         index.require_planned(&next, &result, principal, record)?;
+        require_new_ledger_capacity(record)?;
         index.require_new_mount_namespace(&next, engine.config.max_entries, record)?;
     }
     let expected = next.as_ref().clone();
@@ -210,4 +211,23 @@ fn publish_planned(
         return Err(RegistrationError::PublicationChanged);
     }
     Ok(())
+}
+
+/// A fresh permanent reserve cannot consume the operation or freeze its
+/// worktree if its own known frame sequence is already impossible. The caller
+/// has matched `before` to the original receipt head. Do not reclassify old
+/// receipts on replay or bypass full byte, state and inode admission on append.
+fn require_new_ledger_capacity(record: &Record) -> Result<()> {
+    match record {
+        Record::ReserveEdit(plan) => plan.before.next_frame_sequence().map(|_| ()),
+        Record::ReserveCommit(plan) => plan.before.require_publication_frames(),
+        Record::ReserveHistoricalCommit(plan) => plan.before.require_publication_frames(),
+        Record::ReserveAddedCommit(plan) => plan.before.require_publication_frames(),
+        Record::ReserveNode(_) | Record::CompleteNode(_) | Record::ReserveWorktree(_)
+        | Record::ReserveAllocatedWorktree(_) | Record::CompleteWorktree(_)
+        | Record::CompleteEdit(_) | Record::PrepareHistoricalCommit(_) | Record::PublishCommitNode(_)
+        | Record::CompleteCommit(_) | Record::BirthFile(_) | Record::SaveFile(_)
+        | Record::CompleteFile(_) | Record::PublishAddedFile(_) | Record::PublishAddedNode(_)
+        | Record::CompleteAddedCommit(_) => Ok(()),
+    }.map_err(RegistrationError::Ledger)
 }
