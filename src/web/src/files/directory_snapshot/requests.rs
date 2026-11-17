@@ -249,15 +249,29 @@ pub(super) fn retain_and_send(state: RwSignal<State>, record: Result<Record, api
 
 pub(super) fn retry_record(state: &State) -> Option<Arc<Record>> {
     let model = &state.files.directory_snapshot;
-    if !model.owns(state) || state.files.mutation_pending || !state.management.storage.writable() {
+    if !model.owns(state) || state.files.mutation_pending {
         return None;
     }
     let pending = model.pending.as_ref()?;
-    (pending.phase == Phase::Pending).then(|| Arc::clone(&pending.record))
+    // Retained Named requests can only query a receipt. They need readable
+    // storage, not write permission; other commands keep their existing gate.
+    let available = match pending.record.command {
+        Command::CreateWorktree { .. } => state.management.storage.readable(),
+        Command::RegisterRoot { .. }
+        | Command::Initialize { .. }
+        | Command::Commit { .. }
+        | Command::AllocateWorktree { .. }
+        | Command::CommitWorktree { .. } => state.management.storage.writable(),
+    };
+    (pending.phase == Phase::Pending && available).then(|| Arc::clone(&pending.record))
+}
+
+pub(super) fn retry_post_record(state: &State) -> Option<Arc<Record>> {
+    retry_record(state).filter(|record| record.command.can_post())
 }
 
 pub(super) fn retry(state: RwSignal<State>) {
-    if let Some(record) = state.with_untracked(retry_record) {
+    if let Some(record) = state.with_untracked(retry_post_record) {
         send(state, record, false);
     }
 }
@@ -299,14 +313,20 @@ fn release(state: RwSignal<State>, epoch: u64, record: &Arc<Record>) -> bool {
 }
 
 fn send(state: RwSignal<State>, record: Arc<Record>, first: bool) {
+    // A retained Named description proves only local intent, not a server
+    // reservation. Reject its POST before begin; its GET and bytes remain usable.
+    let body = match record.command.body() {
+        Ok(body) => body,
+        Err(error) => {
+            state.update(|state| state.files.directory_snapshot.error = Some(error));
+            return;
+        }
+    };
     let Some(epoch) = begin(state, &record) else {
         return;
     };
     spawn_local(async move {
-        let result = match record.command.body() {
-            Ok(body) => api::request("POST", &record.command.endpoint(), Some(body)).await,
-            Err(error) => Err(error),
-        };
+        let result = api::request("POST", &record.command.endpoint(), Some(body)).await;
         if !current_session(state, epoch) {
             return;
         }
@@ -405,6 +425,16 @@ fn finish(
 ) {
     match result {
         Ok(publication) => {
+            if let Err(error) = super::worktree::remember_publication(record, &publication) {
+                // Publication is confirmed, but losing the only browser handle
+                // reference is not successful cleanup. Keep the original so a
+                // later read-only lookup can obtain and retain that same result.
+                state.update(|state| {
+                    state.files.directory_snapshot.publication = Some(publication);
+                    state.files.directory_snapshot.error = Some(error);
+                });
+                return;
+            }
             state.update(|state| {
                 super::worktree::accept_publication(state, record, &publication);
                 let model = &mut state.files.directory_snapshot;

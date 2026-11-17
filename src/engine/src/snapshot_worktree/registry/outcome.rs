@@ -1,6 +1,7 @@
 //! Only the admitted original and its independently completed receipt determine
 //! a result. Neither current HEAD, a reused mount name nor disk bytes are queried.
-use super::{Publication, ReceiptIndex};
+use super::{CreationIntent, Publication, ReceiptIndex};
+use storage_contract::snapshot_worktree::creation::WorktreeCreationRequest;
 use crate::snapshot_worktree::{RegistrationError, Result};
 use storage_contract::snapshot_worktree::WorktreeHandle;
 use storage_contract::snapshot_worktree::outcome::{
@@ -35,7 +36,12 @@ impl ReceiptIndex<'_> {
         };
         Ok(WorktreeCreationReceipt {
             repository_id: repository,
-            request: record.plan.request.clone(),
+            request: match &record.intent {
+                CreationIntent::Named => WorktreeCreationRequest::Named(record.plan.request.clone()),
+                CreationIntent::Automatic(original) => {
+                    WorktreeCreationRequest::Automatic(original.clone())
+                }
+            },
             result,
         })
     }

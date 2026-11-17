@@ -1,5 +1,8 @@
-//! A private instance lifecycle over one independently completed original node.
-//! There is no namespace exposure or writable session API in this first slice.
+//! One independent instance publisher for explicit and automatically allocated
+//! mounts. Both retain the exact original before any physical preparation.
+mod allocation;
+pub(crate) use allocation::allocate_worktree;
+
 use crate::container_storage::namespace_host::NamespaceHost;
 use crate::directory_worktree::ledger::LedgerError;
 use crate::directory_worktree::lifecycle::Mount;
@@ -9,6 +12,7 @@ use crate::persist::snapshot_worktree::{
     Record, WorktreeAllocation, WorktreeCompletion, WorktreeReservation,
 };
 use crate::snapshot_worktree::{RegistrationError, Result, publication};
+use crate::snapshot_worktree::registry::ReceiptIndex;
 use crate::working_tree::snapshot::HeldSnapshotNode;
 use crate::{Engine, State, ValidatedConfig};
 use std::sync::Arc;
@@ -39,11 +43,24 @@ pub(crate) fn create_worktree(
         with_worktree(engine, handle, |_| Ok(()))?;
         return Ok(handle);
     }
+    require_initial(engine)?;
+    let (source, plan) = prepare(engine, &index, request)?;
+    let record = Record::ReserveWorktree(plan.clone());
+    publish(engine, principal, source, plan, record)
+}
+
+fn require_initial(engine: &Engine) -> Result<()> {
     if engine.admitted_current_namespaces().map_err(RegistrationError::Publication)?.is_some()
         || engine.config.generation().is_some()
     {
         return Err(RegistrationError::InitialOnly);
     }
+    Ok(())
+}
+
+fn prepare(
+    engine: &Engine, index: &ReceiptIndex<'_>, request: &CreateWorktree,
+) -> Result<(HeldSnapshotNode, WorktreeReservation)> {
     let registered = index.node(request.source)?;
     if request.parent_directory_id != registered.initialization().host.directory_id
         || request.expected_root_generation
@@ -65,11 +82,17 @@ pub(crate) fn create_worktree(
         },
         material: source.manifest().reference(),
     };
-    let record = Record::ReserveWorktree(plan.clone());
+    Ok((source, plan))
+}
+
+fn publish(
+    engine: &mut Engine, principal: &Principal, source: HeldSnapshotNode,
+    plan: WorktreeReservation, record: Record,
+) -> Result<WorktreeHandle> {
     let commitment = record.commitment().map_err(RegistrationError::Codec)?;
     let config = engine.config.clone();
     let resources = Arc::clone(&engine.disk_resources);
-    publication::publish_new(engine, request.operation_id, principal, &record)?;
+    publication::publish_new(engine, plan.request.operation_id, principal, &record)?;
     ReservedWorktree {
         state: Arc::clone(&engine.state), config, resources, source, plan,
         principal: principal.clone(), commitment,

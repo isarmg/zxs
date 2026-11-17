@@ -56,6 +56,15 @@ impl SnapshotWorktreeError {
                 ErrorCode::IdempotencyKeyReused
             }
             RegistrationError::Host | RegistrationError::Mount => ErrorCode::NameCollision,
+            RegistrationError::WorktreeName(source) => match source {
+                crate::directory_worktree::names::NameError::Exhausted => {
+                    ErrorCode::ResourceLimitExceeded
+                }
+                crate::directory_worktree::names::NameError::TooLong => ErrorCode::NameTooLong,
+                crate::directory_worktree::names::NameError::Invalid(source) => {
+                    ErrorCode::from(source)
+                }
+            },
             RegistrationError::PublicationChanged => ErrorCode::PreparationStale,
             RegistrationError::EditBody
             | RegistrationError::EditVerification(platform_io::payload::Error::Length { .. }
@@ -138,6 +147,14 @@ impl Engine {
         &mut self, request: &CreateWorktree, principal: &Principal,
     ) -> Result<WorktreeHandle> {
         super::create_worktree(self, request, principal).map_err(Into::into)
+    }
+
+    pub fn allocate_directory_worktree(
+        &mut self,
+        request: &storage_contract::snapshot_worktree::creation::AllocateWorktree,
+        principal: &Principal,
+    ) -> Result<WorktreeHandle> {
+        super::allocate_worktree(self, request, principal).map_err(Into::into)
     }
 
     pub fn directory_worktree_status(&self, target: WorktreeHandle) -> Result<WorktreeStatus> {

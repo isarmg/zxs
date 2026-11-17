@@ -1,8 +1,11 @@
-use super::{Observed, Scope, can_commit, can_create, can_load, status, status_endpoint};
+use super::{
+    Observed, Scope, available, bookmark, can_commit, can_create, can_load, status, status_endpoint,
+};
 use crate::api;
 use crate::files::directory_snapshot::{requests, wire};
 use crate::ui::{State, accept_read_response};
-use storage_contract::snapshot_worktree::{CommitWorktree, CreateWorktree};
+use storage_contract::snapshot_worktree::CommitWorktree;
+use storage_contract::snapshot_worktree::creation::{AllocateWorktree, WorktreeNaming};
 use web_interface::{prelude::*, tasks::spawn_local};
 
 pub(super) fn create_command(
@@ -15,12 +18,12 @@ pub(super) fn create_command(
     let model = &state.files.directory_snapshot;
     let review = model.reviewed(state)?;
     let host = review.head.context.host;
-    Some(wire::Command::CreateWorktree {
+    Some(wire::Command::AllocateWorktree {
         repository: review.target.repository,
-        request: CreateWorktree {
+        request: AllocateWorktree {
             source: wire::ready_source(&review.head)?,
             parent_directory_id: host.directory_id,
-            name: name_policy::Name::parse(&model.worktree.name).ok()?,
+            naming: WorktreeNaming::Automatic,
             expected_root_generation: host.expected_root_generation,
             operation_id,
         },
@@ -83,11 +86,56 @@ fn submit(
 }
 
 pub(in crate::files::directory_snapshot) fn after_review(state: RwSignal<State>) {
+    restore_reference(state);
     if state.with_untracked(|state| {
         state.files.directory_snapshot.worktree.refresh_after_review && can_load(state)
     }) {
         load(state);
     }
+}
+
+fn restore_reference(state: RwSignal<State>) {
+    let input = state.with_untracked(|state| {
+        if !available(state) {
+            return None;
+        }
+        let scope = Scope::capture(state)?;
+        if state
+            .files
+            .directory_snapshot
+            .worktree
+            .bookmark_scope
+            .as_ref()
+            == Some(&scope)
+        {
+            return None;
+        }
+        Some((scope, state.principal.clone()?))
+    });
+    let Some((scope, principal)) = input else {
+        return;
+    };
+    let result = bookmark::load(&principal, scope.repository);
+    state.update(|state| {
+        if !scope.current(state) || state.principal.as_ref() != Some(&principal) {
+            return;
+        }
+        let model = &mut state.files.directory_snapshot.worktree;
+        model.cancel_read();
+        model.created = None;
+        match result {
+            Ok(reference) => {
+                model.refresh_after_review = reference.is_some();
+                model.reference = reference;
+                model.bookmark_scope = Some(scope);
+            }
+            Err(error) => {
+                model.reference = None;
+                model.bookmark_scope = None;
+                state.files.directory_snapshot.error = Some(error);
+            }
+        }
+    });
 }
 
 pub(super) fn load(state: RwSignal<State>) {

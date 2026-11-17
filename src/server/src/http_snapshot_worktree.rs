@@ -11,7 +11,7 @@ use crate::http_boundary::{ApiJson, ApiPath, ApiQuery, Authenticated, JsonBody};
 use data_serialization::Deserialize;
 use http_routing::{Json, extract::State};
 use storage_contract::snapshot_worktree::{
-    CreateWorktree, InitializeSnapshot, SnapshotHandle, SnapshotRootContext,
+    InitializeSnapshot, SnapshotHandle, SnapshotRootContext,
     WorktreeHandle, WorktreeId, WorktreeStatus,
 };
 
@@ -27,7 +27,9 @@ impl JsonBody for InitializeBody {
     }
 }
 
-pub(crate) struct CreateBody(CreateWorktree);
+pub(crate) struct CreateBody(
+    storage_contract::snapshot_worktree::creation::AllocateWorktree,
+);
 impl JsonBody for CreateBody {
     fn from_json(value: json_codec::Value) -> Result<Self, ApiError> {
         if !value.get("source").is_some_and(json_codec::Value::is_object) {

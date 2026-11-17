@@ -1,4 +1,4 @@
-use super::{available, can_commit, can_create, can_load, edit_handle, requests, smb_path};
+use super::{available, can_commit, can_create, can_load, requests, smb_path};
 use crate::ui::State;
 use web_interface::{i18n::t, prelude::*};
 
@@ -86,11 +86,16 @@ pub(in crate::files::directory_snapshot) fn view(state: RwSignal<State>) -> impl
         <section class="zxs-surface zxs-stack" data-zxs-worktree="">
             <h3 class="zxs-row">{t("当前节点的 worktree", "Worktrees from the current node")}</h3>
             <p class="zxs-row">{t(
-                "仅从上面读取的真实 .zxs HEAD 创建独立实例，不使用旧目录 Git。这里尚不浏览任意历史节点，也不自动分配 001–999 名称。",
                 concat!(
-                    "Create an independent instance from the actual .zxs HEAD above, not ",
-                    "legacy directory Git. Arbitrary history browsing and automatic ",
-                    "001–999 name allocation are not provided here.",
+                    "从上面读取的真实 .zxs HEAD 创建独立实例。服务器按真实分支名自动分配 ",
+                    "worktree-分支名-001 至 999，已占用或保留名称不会被覆盖；",
+                    "这里尚不浏览任意历史节点。",
+                ),
+                concat!(
+                    "Create an independent instance from the actual .zxs HEAD above. The ",
+                    "server uses the real branch name to allocate worktree-branch-001 through ",
+                    "999 without replacing occupied or reserved names. Arbitrary history ",
+                    "browsing is not provided here.",
                 ),
             )}</p>
             <p class="zxs-row">{t(
@@ -101,65 +106,28 @@ pub(in crate::files::directory_snapshot) fn view(state: RwSignal<State>) -> impl
                     "server. This page does not switch or migrate layouts.",
                 ),
             )}</p>
-            <label class="zxs-stack">
-                {t("手动填写新 worktree 名称", "Enter the new worktree name manually")}
-                <input
-                    type="text"
-                    data-zxs-worktree-name=""
-                    prop:value=move ||state.with(|state| {
-                        state.files.directory_snapshot.worktree.name.clone()
-                    })
-                    disabled=move ||!state.with(available)
-                    on:input=move |event|state.update(|state| {
-                        if available(state) {
-                            state.files.directory_snapshot.worktree.name =
-                                event_target_value(&event);
-                        }
-                    })
-                />
-            </label>
             <button
                 class="zxs-button"
                 data-zxs-worktree-create=""
                 disabled=move ||!state.with(can_create)
                 on:click=move |_|requests::create(state)
             >
-                {t("从当前真实节点创建 worktree", "Create a worktree from the actual current node")}
+                {t("自动命名并创建 worktree", "Allocate a name and create a worktree")}
             </button>
             <p class="zxs-row">{t(
-                "名称按实际目标预算校验，重名不覆盖。下列两项共同标识已创建实例；可复制保留，重新打开时填写后只读查询。名称本身不是实例身份。",
                 concat!(
-                    "The server checks the target name budget and never replaces a collision. ",
-                    "Keep both identifiers below to reopen this exact instance with a read-only ",
-                    "lookup. A display name is not its identity.",
+                    "此浏览器只记住当前账号、当前目录最近创建或提交的实例。",
+                    "刷新后仅查询原实例，不重新创建；这不是全部 worktree 列表，",
+                    "无需填写内部身份。名称和 SMB 路径以服务器实际状态为准。",
+                ),
+                concat!(
+                    "This browser remembers only this account and folder's most recently ",
+                    "created or committed instance. Refresh only reads that exact instance; ",
+                    "it never creates another one. This is not a complete worktree list and ",
+                    "no internal identifiers need to be entered. The server supplies its ",
+                    "actual name and SMB path.",
                 ),
             )}</p>
-            <label class="zxs-stack">
-                {t("worktree 身份", "Worktree identity")}
-                <input
-                    type="text"
-                    autocomplete="off"
-                    data-zxs-worktree-id=""
-                    prop:value=move ||state.with(|state| {
-                        state.files.directory_snapshot.worktree.handle_text.clone()
-                    })
-                    disabled=move ||!state.with(available)
-                    on:input=move |event|edit_handle(state, false, event_target_value(&event))
-                />
-            </label>
-            <label class="zxs-stack">
-                {t("创建完成回执身份", "Creation completion identity")}
-                <input
-                    type="text"
-                    autocomplete="off"
-                    data-zxs-worktree-publication=""
-                    prop:value=move ||state.with(|state| {
-                        state.files.directory_snapshot.worktree.publication_text.clone()
-                    })
-                    disabled=move ||!state.with(available)
-                    on:input=move |event|edit_handle(state, true, event_target_value(&event))
-                />
-            </label>
             <button
                 class="zxs-button"
                 data-zxs-worktree-refresh=""

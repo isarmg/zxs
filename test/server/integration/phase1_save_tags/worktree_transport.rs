@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use storage_contract::OperationId;
 use storage_contract::snapshot_worktree::{
-    CommitWorktree, CreateWorktree, EditWorktree, SnapshotHandle, WorktreeHandle, WorktreeStatus,
+    CommitWorktree, EditWorktree, SnapshotHandle, WorktreeHandle, WorktreeStatus,
+};
+use storage_contract::snapshot_worktree::creation::{
+    AllocateWorktree, WorktreeCreationRequest, WorktreeNaming,
 };
 use storage_contract::snapshot_worktree::outcome::{
     WorktreeCommitOutcome, WorktreeCommitReceipt, WorktreeCreationOutcome, WorktreeCreationReceipt,
@@ -165,12 +168,12 @@ async fn initialized(http: &Http, repository: &str) -> (Value, SnapshotHandle) {
     (context, json_codec::from_value(snapshot).unwrap())
 }
 async fn instance(
-    http: &Http, repository: &str, context: &Value, source: SnapshotHandle, name: &str,
+    http: &Http, repository: &str, context: &Value, source: SnapshotHandle, expected_name: &str,
 ) -> WorktreeHandle {
-    let request: CreateWorktree = json_codec::from_value(json!({
+    let request: AllocateWorktree = json_codec::from_value(json!({
         "source":source, "parent_directory_id":context["host"]["directory_id"],
         "expected_root_generation":context["host"]["expected_root_generation"],
-        "name":name, "operation_id":OperationId::generate().unwrap(),
+        "naming":WorktreeNaming::Automatic, "operation_id":OperationId::generate().unwrap(),
     })).unwrap();
     let target = json_codec::from_value(http.json("POST", "/api/directory-worktrees",
         Some(json_codec::to_value(&request).unwrap())).await).unwrap();
@@ -178,8 +181,13 @@ async fn instance(
         "/api/repositories/{repository}/directory-worktrees/creations/{}", request.operation_id,
     ), None).await).unwrap();
     assert_eq!(receipt.repository_id, repository.parse().unwrap());
-    assert_eq!(receipt.request, request);
+    assert_eq!(receipt.request, WorktreeCreationRequest::Automatic(request.clone()));
     assert_eq!(receipt.result, WorktreeCreationOutcome::Complete { target });
+    assert_eq!(http.status(target).await.name.as_str(), expected_name);
+    let retried: WorktreeHandle = json_codec::from_value(http.json(
+        "POST", "/api/directory-worktrees", Some(json_codec::to_value(&request).unwrap()),
+    ).await).unwrap();
+    assert_eq!(retried, target);
     assert_ne!(target.publication, request.operation_id);
     target
 }
@@ -337,6 +345,25 @@ async fn tcp_worktree_auth_shape_and_rejected_body_leave_current_bytes_unchanged
     let http = Http::start(fixture.app.clone(), &fixture.token).await;
     let (context, node) = initialized(&http, repository).await;
     let target = instance(&http, repository, &context, node, "worktree-main-001").await;
+    // A real, otherwise valid Named request cannot enter the public writer.
+    // Original Named receipts remain queryable; this POST accepts automatic intent only.
+    let named_operation = OperationId::generate().unwrap();
+    let named = storage_contract::snapshot_worktree::CreateWorktree {
+        source: node,
+        parent_directory_id: json_codec::from_value(context["host"]["directory_id"].clone())
+            .unwrap(),
+        expected_root_generation: json_codec::from_value(
+            context["host"]["expected_root_generation"].clone(),
+        ).unwrap(),
+        name: name_policy::Name::parse("client-chosen-name").unwrap(),
+        operation_id: named_operation,
+    };
+    let all_before = inventory(fixture.root.path());
+    let (status, _) = http.raw(true, "POST", "/api/directory-worktrees", &[
+        ("content-type", "application/json".into()),
+    ], &json_codec::to_vec(&named).unwrap()).await;
+    assert_eq!(status, 400);
+    assert_eq!(inventory(fixture.root.path()), all_before);
     let before = inventory(&fixture.root.path().join("primary/common-data"));
     let command = EditWorktree {
         target, path: name_policy::PortablePath::parse("original.txt").unwrap(), expected: http.status(target).await.revision,
@@ -380,5 +407,6 @@ async fn tcp_worktree_auth_shape_and_rejected_body_leave_current_bytes_unchanged
     assert_eq!(http.read(target, "original.txt").await, b"changed");
     http.close().await;
     let (_root, engine, _token) = cold(fixture).await;
+    assert!(engine.operation(named_operation).is_err());
     assert!(engine.operation(subsequent.operation_id).is_err());
 }

@@ -836,7 +836,7 @@ impl Backend for EngineBackend {
     }
     fn create_directory_worktree(
         &self, identity: &Identity,
-        request: storage_contract::snapshot_worktree::CreateWorktree,
+        request: storage_contract::snapshot_worktree::creation::AllocateWorktree,
     ) -> Result<storage_contract::snapshot_worktree::WorktreeHandle, ApiError> {
         snapshot_worktree::create(self, identity, request)
     }

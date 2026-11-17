@@ -153,6 +153,55 @@ impl<'a> NamespaceHost<'a> {
         self.require_root_inventory(true)
     }
 
+    /// Observe an allocation budget and every ordinary top-level name while the
+    /// caller holds the same engine. Registered worktree reservations are added
+    /// by their receipt index, including names without completed material.
+    pub(crate) fn root_mount_allocation(
+        &self,
+        parent: storage_contract::working_tree::DirectoryId,
+        generation: Generation,
+    ) -> Result<(crate::name_budget::NameBudget, Vec<LookupName>)> {
+        self.engine.require_write().map_err(NamespaceHostError::Source)?;
+        preparation::require_namespace_write(
+            self.engine, self.address.branch_id, self.root.disk(),
+        )?;
+        if self.address.directory != NamespaceDirectoryId::Repository(self.address.repository_id)
+            || parent != self.root.binding().roots.common_data.directory_id
+        {
+            return Err(NamespaceHostError::RootMount);
+        }
+        let common = self.held_root(self.root.binding().root_id, generation)?;
+        let maximum = common.component_name_maximum().map_err(NamespaceHostError::Source)?;
+        let budget = crate::name_budget::NameBudget::from_maximum(maximum)
+            .map_err(NamespaceHostError::NameBudget)?;
+        // Keep the current physical inventory gate. Merely finding a logical
+        // name does not admit unknown or unsupported material below this root.
+        self.require_root_inventory(true)?;
+        let entries = self.engine.native_current_entries(self.address.repository_id)
+            .map_err(NamespaceHostError::Source)?;
+        let mut occupied = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let path = match entry {
+                crate::NativeCurrentEntry::Published(entry) => entry.path,
+                crate::NativeCurrentEntry::Unborn { target, .. } => target.path,
+            };
+            let component = path.as_str().split('/').next()
+                .expect("invariant: a portable path has a component");
+            occupied.push(LookupName::parse(component).map_err(NamespaceHostError::Name)?);
+        }
+        for repository in self.engine.state().repositories.values() {
+            if !repository.file_manager_root
+                && repository.primary_slot_id == self.root.disk().slot_id
+            {
+                occupied.push(LookupName::parse(&repository.name)
+                    .map_err(NamespaceHostError::Name)?);
+            }
+        }
+        // Existing names are occupancy facts, not newly introduced components:
+        // never reject an old ancestor against today's reduced name budget.
+        Ok((budget, occupied))
+    }
+
     /// This is an exact root inventory check, not a FILE content proof. Only
     /// published namespace-bound container names are allowed; the original BODY
     /// reader separately admits the exact entity and complete selected bytes.

@@ -1,10 +1,13 @@
-use super::{Observed, Scope, can_commit, can_create, can_load, requests, smb_path, status};
+use super::{
+    Observed, Scope, bookmark, can_commit, can_create, can_load, requests, smb_path, status,
+};
 use crate::files::directory_snapshot::{
     Model, Pending, Phase, Review, Target, blocks_writes, wire,
 };
 use crate::ui::State;
 use json_codec::json;
 use std::{collections::BTreeSet, num::NonZeroU32, sync::Arc};
+use storage_contract::snapshot_worktree::creation::WorktreeCreationRequest;
 use storage_contract::snapshot_worktree::discovery::{
     DirectorySnapshotHead, SnapshotHeadDiscovery,
 };
@@ -107,11 +110,14 @@ fn state() -> State {
         selected: BTreeSet::new(),
     });
     let model = &mut state.files.directory_snapshot.worktree;
-    model.name = "worktree-actual-001".into();
-    model.handle_text = handle().worktree_id.to_string();
-    model.publication_text = handle().publication.to_string();
+    model.reference = Some(bookmark::Reference::new(
+        state.principal.clone().unwrap(),
+        repository(),
+        handle(),
+    ));
     model.message = "explicit worktree save".into();
     let scope = Scope::capture(&state).unwrap();
+    state.files.directory_snapshot.worktree.bookmark_scope = Some(scope.clone());
     state.files.directory_snapshot.worktree.observed = Some(Observed {
         scope,
         status: observed_status(),
@@ -150,8 +156,16 @@ fn worktree_ui_captures_actual_head_and_latest_exact_status_without_legacy_ids()
         json!(DirectoryId::from_random([7; 16]))
     );
     assert_eq!(body["expected_root_generation"], "3");
-    assert_eq!(body["name"], "worktree-actual-001");
+    assert!(
+        body.get("name").is_none(),
+        "the browser never picks a suffix"
+    );
+    assert_eq!(body["naming"], "automatic");
     assert_ne!(create.command.operation(), handle().publication);
+    assert_eq!(
+        Record::parse(&create.encode().unwrap(), &create.principal).unwrap(),
+        create
+    );
     assert!(
         matches!(create.result(json_codec::to_value(handle()).unwrap()).unwrap(),
         Publication::WorktreeCreated { target, .. } if target == handle())
@@ -174,9 +188,10 @@ fn worktree_ui_status_binds_exact_handle_source_parent_before_showing_real_smb_p
     let state = state();
     let scope = Scope::capture(&state).unwrap();
     let record = creation(&state);
-    let Command::CreateWorktree { request, .. } = record.command else {
-        panic!("create");
+    let Command::AllocateWorktree { request, .. } = record.command else {
+        panic!("automatic create");
     };
+    let request = WorktreeCreationRequest::Automatic(request);
     let value = json_codec::to_value(observed_status()).unwrap();
     assert!(status(value.clone(), &scope, handle(), Some(&request)).is_ok());
     assert_eq!(smb_path(&state).unwrap(), "真实磁盘名/worktree-actual-001");
@@ -204,21 +219,24 @@ fn worktree_ui_status_binds_exact_handle_source_parent_before_showing_real_smb_p
         wrong[field] = changed;
         assert!(status(wrong, &scope, handle(), None).is_err(), "{field}");
     }
-    let mut wrong = value;
-    wrong["name"] = json!("another-instance");
-    assert!(status(wrong, &scope, handle(), Some(&request)).is_err());
+    let mut allocated = value;
+    allocated["name"] = json!("worktree-actual-002");
+    assert!(
+        status(allocated, &scope, handle(), Some(&request)).is_ok(),
+        "the admitted server, not the browser, allocates the actual name"
+    );
 }
 
 #[test]
 fn worktree_ui_creation_lookup_requires_original_request_and_independent_completion() {
-    let state = state();
+    let mut state = state();
     let record = creation(&state);
-    let Command::CreateWorktree { request, .. } = record.command.clone() else {
-        panic!("create");
+    let Command::AllocateWorktree { request, .. } = record.command.clone() else {
+        panic!("automatic create");
     };
     let pending = WorktreeCreationReceipt {
         repository_id: repository(),
-        request,
+        request: WorktreeCreationRequest::Automatic(request),
         result: WorktreeCreationOutcome::Pending {},
     };
     assert!(matches!(
@@ -236,7 +254,10 @@ fn worktree_ui_creation_lookup_requires_original_request_and_independent_complet
         LookupResult::Complete(Publication::WorktreeCreated { target, .. }) if target == handle())
     );
     let mut wrong = complete;
-    wrong.request.name = name_policy::Name::parse("other-name").unwrap();
+    let WorktreeCreationRequest::Automatic(request) = &mut wrong.request else {
+        panic!("automatic receipt");
+    };
+    request.parent_directory_id = DirectoryId::from_random([99; 16]);
     assert!(
         record
             .lookup_result(json_codec::to_value(wrong).unwrap())
@@ -249,6 +270,61 @@ fn worktree_ui_creation_lookup_requires_original_request_and_independent_complet
             repository(),
             record.command.operation(),
         )
+    );
+    let named_request = storage_contract::snapshot_worktree::CreateWorktree {
+        source: source(),
+        parent_directory_id: DirectoryId::from_random([7; 16]),
+        name: name_policy::Name::parse("retained-manual-name").unwrap(),
+        expected_root_generation: Generation::new(3),
+        operation_id: OperationId::from_random([33; 16]),
+    };
+    let named = Record::new(
+        "alice".parse().unwrap(),
+        Command::CreateWorktree {
+            repository: repository(),
+            request: named_request.clone(),
+        },
+    )
+    .unwrap();
+    let frozen = named.encode().unwrap();
+    assert_eq!(Record::parse(&frozen, &named.principal).unwrap(), named);
+    assert!(!named.command.can_post());
+    assert!(named.command.body().is_err(), "Named has no POST body");
+    state.files.directory_snapshot.pending = Some(Pending {
+        record: Arc::new(named.clone()),
+        phase: Phase::Pending,
+    });
+    assert!(crate::files::directory_snapshot::requests::retry_record(&state).is_some());
+    assert!(crate::files::directory_snapshot::requests::retry_post_record(&state).is_none());
+    state.management.storage = crate::management::Storage::ReadOnly;
+    assert!(crate::files::directory_snapshot::requests::retry_record(&state).is_some());
+    assert!(crate::files::directory_snapshot::requests::retry_post_record(&state).is_none());
+    assert_eq!(
+        crate::files::directory_snapshot::requests::retry_record(&state)
+            .unwrap()
+            .encode()
+            .unwrap(),
+        frozen,
+        "query eligibility preserves the exact original without enabling a POST",
+    );
+    let receipt = WorktreeCreationReceipt {
+        repository_id: repository(),
+        request: WorktreeCreationRequest::Named(named_request),
+        result: WorktreeCreationOutcome::Complete { target: handle() },
+    };
+    assert!(matches!(
+        named
+            .lookup_result(json_codec::to_value(receipt).unwrap())
+            .unwrap(),
+        LookupResult::Complete(Publication::WorktreeCreated { .. })
+    ));
+    state.files.directory_snapshot.pending = Some(Pending {
+        record: Arc::new(record),
+        phase: Phase::Pending,
+    });
+    assert!(
+        crate::files::directory_snapshot::requests::retry_record(&state).is_none(),
+        "Automatic retains its existing writable-storage gate",
     );
 }
 
@@ -356,4 +432,46 @@ fn worktree_ui_reuses_original_request_journal_and_gates_old_scope_or_new_head()
     state.session_epoch += 1;
     assert!(!can_load(&state));
     assert!(smb_path(&state).is_none());
+}
+
+#[test]
+fn worktree_ui_last_instance_reference_is_typed_account_root_scoped_and_not_write_authority() {
+    let mut state = state();
+    let principal = state.principal.clone().unwrap();
+    let reference = bookmark::Reference::new(principal.clone(), repository(), handle());
+    let bytes = reference.encode().unwrap();
+    assert_eq!(
+        bookmark::parse(&bytes, &principal, repository()).unwrap(),
+        reference
+    );
+    assert!(bookmark::parse(&bytes, &"bob".parse().unwrap(), repository()).is_err());
+    assert!(bookmark::parse(&bytes, &principal, RepositoryId::from_random([99; 16])).is_err());
+    assert_ne!(
+        bookmark::key(&principal, repository()),
+        bookmark::key(&"bob".parse().unwrap(), repository())
+    );
+    assert_ne!(
+        bookmark::key(&principal, repository()),
+        bookmark::key(&principal, RepositoryId::from_random([99; 16]))
+    );
+    state.files.directory_snapshot.worktree.observed = None;
+    assert!(
+        can_load(&state),
+        "the retained handle permits only an exact read"
+    );
+    assert!(
+        !can_commit(&state),
+        "a bookmark is not reviewed server status"
+    );
+    state.files.directory_snapshot.worktree.bookmark_scope = None;
+    assert!(
+        !can_create(&state),
+        "failed bookmark admission must be resolved before a new create"
+    );
+    state.files.directory_snapshot.worktree.reference = Some(bookmark::Reference::new(
+        "bob".parse().unwrap(),
+        repository(),
+        handle(),
+    ));
+    assert!(!can_load(&state));
 }

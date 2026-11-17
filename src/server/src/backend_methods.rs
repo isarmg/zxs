@@ -730,7 +730,7 @@ macro_rules! methods {
                 fn create_directory_worktree(
                     &self,
                     identity: &$crate::Identity,
-                    request: storage_contract::snapshot_worktree::CreateWorktree,
+                    request: storage_contract::snapshot_worktree::creation::AllocateWorktree,
                 ) -> Result<storage_contract::snapshot_worktree::WorktreeHandle, $crate::ApiError> {
                     let _ = (identity, request);
                     Err($crate::ApiError::unsupported())

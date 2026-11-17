@@ -5,6 +5,7 @@ use data_serialization::{Deserialize, Serialize};
 use json_codec::Value;
 use name_policy::SlotId;
 use storage_contract::file_draft::{CommitMode, DraftBase, DraftLocation, FileWorkingState};
+use storage_contract::snapshot_worktree::creation::AllocateWorktree;
 use storage_contract::snapshot_worktree::discovery::{
     DirectorySnapshotHead, SnapshotHeadDiscovery,
 };
@@ -183,6 +184,10 @@ pub(super) enum Command {
         repository: RepositoryId,
         request: CreateWorktree,
     },
+    AllocateWorktree {
+        repository: RepositoryId,
+        request: AllocateWorktree,
+    },
     CommitWorktree {
         repository: RepositoryId,
         source: SnapshotHandle,
@@ -197,6 +202,7 @@ impl Command {
             Self::Initialize { request, .. } => request.operation_id,
             Self::Commit { request, .. } => request.operation_id,
             Self::CreateWorktree { request, .. } => request.operation_id,
+            Self::AllocateWorktree { request, .. } => request.operation_id,
             Self::CommitWorktree { request, .. } => request.operation_id,
         }
     }
@@ -209,11 +215,24 @@ impl Command {
             ),
             Self::Initialize { .. } => "/api/directory-snapshots".into(),
             Self::Commit { .. } => "/api/directory-snapshots/commits".into(),
-            Self::CreateWorktree { .. } => "/api/directory-worktrees".into(),
+            Self::CreateWorktree { .. } | Self::AllocateWorktree { .. } => {
+                "/api/directory-worktrees".into()
+            }
             Self::CommitWorktree { request, .. } => format!(
                 "/api/directory-worktrees/{}/commits",
                 request.target.worktree_id,
             ),
+        }
+    }
+
+    pub(super) fn can_post(&self) -> bool {
+        match self {
+            Self::CreateWorktree { .. } => false,
+            Self::RegisterRoot { .. }
+            | Self::Initialize { .. }
+            | Self::Commit { .. }
+            | Self::AllocateWorktree { .. }
+            | Self::CommitWorktree { .. } => true,
         }
     }
 
@@ -224,7 +243,12 @@ impl Command {
             }),
             Self::Initialize { request, .. } => json_codec::to_value(request),
             Self::Commit { request, .. } => json_codec::to_value(request),
-            Self::CreateWorktree { request, .. } => json_codec::to_value(request),
+            Self::CreateWorktree { .. } => {
+                return Err(invalid(
+                    "named worktree requests are read-only; query the original result",
+                ));
+            }
+            Self::AllocateWorktree { request, .. } => json_codec::to_value(request),
             Self::CommitWorktree { request, .. } => json_codec::to_value(request),
         };
         result.map_err(|source| failure(DecodeError::Wire(source)))
@@ -233,6 +257,13 @@ impl Command {
     pub(super) fn outcome_endpoint(&self) -> Option<String> {
         match self {
             Self::CreateWorktree {
+                repository,
+                request,
+            } => Some(format!(
+                "/api/repositories/{repository}/directory-worktrees/creations/{}",
+                request.operation_id,
+            )),
+            Self::AllocateWorktree {
                 repository,
                 request,
             } => Some(format!(
@@ -290,7 +321,9 @@ impl Record {
 
     fn validate(&self) -> Result<(), api::Error> {
         match &self.command {
-            Command::RegisterRoot { .. } | Command::CreateWorktree { .. } => {}
+            Command::RegisterRoot { .. }
+            | Command::CreateWorktree { .. }
+            | Command::AllocateWorktree { .. } => {}
             Command::CommitWorktree { request, .. } => {
                 storage_contract::validate_note(&request.message)
                     .map_err(|source| failure(DecodeError::Contract(source)))?;
@@ -354,7 +387,7 @@ impl Record {
                 object_field(request, "host")?;
                 object_field(request, "source")?;
             }
-            Some("create_worktree") => {
+            Some("create_worktree" | "allocate_worktree") => {
                 object_field(object_field(command, "request")?, "source")?;
             }
             Some("commit_worktree") => {
@@ -397,7 +430,8 @@ impl Record {
 
     pub(super) fn result(&self, value: Value) -> Result<Publication, api::Error> {
         match &self.command {
-            Command::CreateWorktree { repository, .. } => worktree::created(*repository, value),
+            Command::CreateWorktree { repository, .. }
+            | Command::AllocateWorktree { repository, .. } => worktree::created(*repository, value),
             Command::CommitWorktree {
                 repository,
                 source,

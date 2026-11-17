@@ -163,8 +163,8 @@ fn publication_view(state: RwSignal<State>) -> impl IntoView {
                 let (text, identity) = match publication {
                     Publication::WorktreeCreated { target, .. } => (
                         t(
-                            "worktree 已创建；正在读取精确实例状态。",
-                            "Worktree created. Reading its exact instance status.",
+                            "worktree 已创建；可读取精确实例状态。",
+                            "Worktree created. Its exact instance status can now be read.",
                         ),
                         target.worktree_id.to_string(),
                     ),
@@ -320,10 +320,23 @@ pub(crate) fn recovery_view(state: RwSignal<State>) -> impl IntoView {
                 >
                     {t("查询原操作结果", "Look up original operation result")}
                 </button>
+                <Show when=move ||state.with(|state| {
+                    state.files.directory_snapshot.pending.as_ref()
+                        .is_some_and(|pending| !pending.record.command.can_post())
+                })>
+                    <p>{t(
+                        "此手动命名 worktree 原请求只可查询结果，不再重发创建；原请求保留，不改成新操作。",
+                        concat!(
+                            "This retained named-worktree request is read-only. Query its ",
+                            "original result; creation cannot be retried. Its original bytes ",
+                            "are retained, not replaced with a new operation.",
+                        ),
+                    )}</p>
+                </Show>
                 <button
                     class="zxs-button"
                     data-zxs-directory-snapshot-retry=""
-                    disabled=move ||state.with(|state| requests::retry_record(state).is_none())
+                    disabled=move ||state.with(|state| requests::retry_post_record(state).is_none())
                     on:click=move |_|requests::retry(state)
                 >
                     {t("重试原请求", "Retry original request")}

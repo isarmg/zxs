@@ -1159,3 +1159,58 @@ fn born_working_batch_uses_one_prior_and_exact_sources_without_independent_clear
     fs::remove_file(&path).unwrap();
     fs::rename(&parked, &path).unwrap();
 }
+
+#[test]
+fn fresh_pool_format_refuses_unmarked_system_and_disk_before_recovery_writes() {
+    use crate::{Config, Engine, ErrorCode, Mode};
+    use name_policy::Name;
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let disk = temp.path().join("disk");
+    let replacement_system = temp.path().join("replacement-system");
+    for root in [&system, &disk] {
+        fs::create_dir(root).unwrap();
+        fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config =
+        Config::independent_roots(Mode::Development, [(Name::parse("Primary").unwrap(), disk.clone())])
+            .unwrap();
+    drop(Engine::initialize(&system, config).unwrap());
+
+    let config_path = system.join("config.json");
+    let seal_path = disk.join(crate::persist::layout::DISK_IDENTITY.as_path());
+    let unmark = |bytes: &[u8]| {
+        let mut value: json_codec::Value = json_codec::from_slice(bytes).unwrap();
+        let original = value.as_object_mut().unwrap().remove("pool_semantic_format");
+        assert_eq!(original.unwrap(), "manual-directory-v1");
+        json_codec::to_vec(&value).unwrap()
+    };
+    let config = fs::read(&config_path).unwrap();
+    let seal = fs::read(&seal_path).unwrap();
+
+    let without_config_marker = unmark(&config);
+    fs::write(&config_path, &without_config_marker).unwrap();
+    let inode = fs::metadata(&config_path).unwrap().ino();
+    let error = Engine::open(&system).err().expect("unmarked SYSTEM must reject");
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert_eq!(fs::metadata(&config_path).unwrap().ino(), inode);
+    assert_eq!(fs::read(&config_path).unwrap(), without_config_marker);
+    assert_eq!(fs::read(&seal_path).unwrap(), seal);
+    fs::write(&config_path, config).unwrap();
+
+    let without_disk_marker = unmark(&seal);
+    fs::write(&seal_path, &without_disk_marker).unwrap();
+    let inode = fs::metadata(&seal_path).unwrap().ino();
+    let error = Engine::restore_from_disks(&replacement_system, &[disk])
+        .err()
+        .expect("unmarked disk must reject explicit recovery");
+    assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch);
+    assert!(!replacement_system.exists());
+    assert_eq!(fs::metadata(&seal_path).unwrap().ino(), inode);
+    assert_eq!(fs::read(&seal_path).unwrap(), without_disk_marker);
+    fs::write(&seal_path, seal).unwrap();
+    drop(Engine::open(&system).unwrap());
+}

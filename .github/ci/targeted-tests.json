@@ -149,6 +149,25 @@
         }
       ]
     },
+    "worktree-automatic-names": {
+      "reason": "Exercise actual server-owned worktree name allocation, collisions at the real host, original automatic receipts, cold retries, and the existing transport and Web consumer selections.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "snapshot_worktree::instance::allocation::tests::"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "worktree-http-transport": {
       "reason": "Test real router transport of repeated complete worktree file edits, selected commit and cold retry. This group does not exercise external Samba.",
       "python_tests": [],
@@ -1530,7 +1549,7 @@
             "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_writers::store::tests::",
             "container_storage::tests::cross_directory_recovery::"
           ],
-          "max_tests": 171
+          "max_tests": 172
         },
         {
           "package": "storage-engine",
@@ -6166,6 +6185,39 @@
       "path": "test/web/unit/files/directory_worktree_tests.rs",
       "groups": [
         "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree/creation.rs",
+      "groups": [
+        "worktree-automatic-names",
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/instance/allocation.rs",
+      "groups": [
+        "worktree-automatic-names",
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/allocation.rs",
+      "groups": [
+        "worktree-automatic-names",
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/bookmark.rs",
+      "groups": [
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/automatic_names.rs",
+      "groups": [
+        "worktree-automatic-names"
       ]
     },
     {

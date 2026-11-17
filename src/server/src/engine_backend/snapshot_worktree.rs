@@ -8,8 +8,9 @@ pub(super) mod transport;
 
 use super::{EngineBackend, error_registry};
 use crate::{ApiError, auth::Identity};
+use storage_contract::snapshot_worktree::creation::AllocateWorktree;
 use storage_contract::snapshot_worktree::{
-    CreateWorktree, InitializeSnapshot, SnapshotHandle, SnapshotRootContext,
+    InitializeSnapshot, SnapshotHandle, SnapshotRootContext,
     WorktreeHandle, WorktreeStatus,
 };
 
@@ -57,13 +58,13 @@ pub(super) fn initialize(
 }
 
 pub(super) fn create(
-    backend: &EngineBackend, identity: &Identity, request: CreateWorktree,
+    backend: &EngineBackend, identity: &Identity, request: AllocateWorktree,
 ) -> Result<WorktreeHandle, ApiError> {
     let (mut engine, current) = backend.lock_current(identity)?;
     management(&current)?;
     let principal = current.principal.parse()
         .map_err(ApiError::invalid_authenticated_principal)?;
-    engine.create_directory_worktree(&request, &principal).map_err(error)
+    engine.allocate_directory_worktree(&request, &principal).map_err(error)
 }
 
 pub(super) fn status(

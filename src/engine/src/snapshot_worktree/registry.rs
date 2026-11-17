@@ -30,6 +30,7 @@ mod drafts;
 mod discovery;
 mod mounts;
 mod outcome;
+mod allocation;
 mod transport;
 mod working;
 use working::WorkingRecord;
@@ -134,8 +135,14 @@ struct NodeRecord<'a> {
     publication: Publication<NodeCompletion>,
 }
 
+enum CreationIntent {
+    Named,
+    Automatic(storage_contract::snapshot_worktree::creation::AllocateWorktree),
+}
+
 struct WorktreeRecord<'a> {
     receipt: Receipt<'a>,
+    intent: CreationIntent,
     plan: WorktreeReservation,
     commitment: MaterialCommitment,
     publication: Publication<WorktreeCompletion>,
@@ -335,7 +342,9 @@ impl<'a> ReceiptIndex<'a> {
         }
         let tree = self.worktrees.get(&request.operation_id)
             .ok_or(RegistrationError::Operation(request.operation_id))?;
-        if &tree.plan.request != request || &tree.receipt.principal != principal {
+        if !matches!(tree.intent, CreationIntent::Named)
+            || &tree.plan.request != request || &tree.receipt.principal != principal
+        {
             return Err(RegistrationError::Digest(request.operation_id));
         }
         let Publication::Complete(_) = &tree.publication else {
@@ -492,7 +501,12 @@ impl<'a> ReceiptIndex<'a> {
                 }
                 Record::CompleteNode(completion) => index.complete_node(receipt, completion)?,
                 Record::ReserveWorktree(plan) => {
-                    index.reserve_worktree(receipt, plan, commitment, &mut allocations)?;
+                    index.reserve_worktree(
+                        receipt, plan, CreationIntent::Named, commitment, &mut allocations,
+                    )?;
+                }
+                Record::ReserveAllocatedWorktree(plan) => {
+                    index.reserve_allocated_worktree(receipt, plan, commitment, &mut allocations)?;
                 }
                 Record::CompleteWorktree(completion) => {
                     index.complete_worktree(receipt, completion)?;
@@ -741,6 +755,7 @@ impl<'a> ReceiptIndex<'a> {
         &mut self,
         receipt: Receipt<'a>,
         plan: WorktreeReservation,
+        intent: CreationIntent,
         commitment: MaterialCommitment,
         allocations: &mut Allocations,
     ) -> Result<()> {
@@ -776,7 +791,7 @@ impl<'a> ReceiptIndex<'a> {
             CompletionOwner::Worktree(operation),
         )?;
         self.worktrees.insert(operation, WorktreeRecord {
-            receipt, plan, commitment, publication: Publication::Reserved,
+            receipt, intent, plan, commitment, publication: Publication::Reserved,
         });
         Ok(())
     }

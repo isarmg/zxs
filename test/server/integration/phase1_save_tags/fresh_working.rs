@@ -215,7 +215,7 @@ async fn fresh_authenticated_draft_and_worktree_survive_cold_exact_retries() {
     let create = json!({
         "source": source,
         "parent_directory_id": context["host"]["directory_id"],
-        "name": "independent-worktree",
+        "naming": "automatic",
         "expected_root_generation": context["host"]["expected_root_generation"],
         "operation_id": new_id("op").unwrap(),
     });
@@ -227,7 +227,7 @@ async fn fresh_authenticated_draft_and_worktree_survive_cold_exact_retries() {
     );
     let before = fixture.json("GET", &status_route, None).await;
     assert_eq!(before["original"], source);
-    assert_eq!(before["name"], "independent-worktree");
+    assert_eq!(before["name"], "worktree-main-001");
     assert_eq!(before["revision"]["generation"], "0");
     let wrong = format!(
         "/api/directory-worktrees/{worktree_id}?publication={}", new_id("op").unwrap(),

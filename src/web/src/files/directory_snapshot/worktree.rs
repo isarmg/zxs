@@ -1,13 +1,14 @@
 //! A small management consumer of real worktree handles. Editing remains in
 //! SMB; all mutations use the parent snapshot original-request journal.
+mod bookmark;
 mod requests;
 mod view;
 
 use super::{Target, can_review, wire};
 use crate::{api, ui::State};
-use name_policy::LookupName;
 use storage_contract::RepositoryId;
-use storage_contract::snapshot_worktree::{CreateWorktree, WorktreeHandle, WorktreeStatus};
+use storage_contract::snapshot_worktree::creation::WorktreeCreationRequest;
+use storage_contract::snapshot_worktree::{WorktreeHandle, WorktreeStatus};
 use storage_contract::working_tree::{DirectoryId, SnapshotRepositoryId};
 use web_interface::prelude::*;
 
@@ -47,13 +48,11 @@ struct Observed {
 
 #[derive(Clone, Default)]
 pub(super) struct Model {
-    name: String,
-    // Unparsed form text is never a lookup capability or mutation target.
-    handle_text: String,
-    publication_text: String,
+    reference: Option<bookmark::Reference>,
+    bookmark_scope: Option<Scope>,
     message: String,
     observed: Option<Observed>,
-    created: Option<CreateWorktree>,
+    created: Option<WorktreeCreationRequest>,
     reading: bool,
     generation: u64,
     cancellation: Option<api::ReadCancellation>,
@@ -80,17 +79,19 @@ impl Model {
     }
 
     fn handle(&self) -> Option<WorktreeHandle> {
-        Some(WorktreeHandle {
-            worktree_id: self.handle_text.parse().ok()?,
-            publication: self.publication_text.parse().ok()?,
-        })
+        self.reference.as_ref().map(|reference| reference.target)
     }
 
     fn observed<'a>(&'a self, state: &State) -> Option<&'a Observed> {
         self.observed.as_ref().filter(|observed| {
             !self.reading
                 && observed.scope.current(state)
-                && self.handle() == Some(observed.status.target)
+                && self.reference.as_ref().is_some_and(|reference| {
+                    state.principal.as_ref().is_some_and(|principal| {
+                        reference.belongs(principal, observed.scope.repository)
+                            && reference.target == observed.status.target
+                    })
+                })
         })
     }
 }
@@ -102,13 +103,33 @@ fn available(state: &State) -> bool {
 fn can_create(state: &State) -> bool {
     available(state)
         && !state.files.directory_snapshot.worktree.reading
-        && name_policy::Name::parse(&state.files.directory_snapshot.worktree.name).is_ok()
+        && state
+            .files
+            .directory_snapshot
+            .worktree
+            .bookmark_scope
+            .as_ref()
+            == Scope::capture(state).as_ref()
 }
 
 fn can_load(state: &State) -> bool {
     available(state)
         && !state.files.directory_snapshot.worktree.reading
-        && state.files.directory_snapshot.worktree.handle().is_some()
+        && state
+            .files
+            .directory_snapshot
+            .worktree
+            .reference
+            .as_ref()
+            .is_some_and(|reference| {
+                state
+                    .principal
+                    .as_ref()
+                    .zip(Scope::capture(state))
+                    .is_some_and(|(principal, scope)| {
+                        reference.belongs(principal, scope.repository)
+                    })
+            })
 }
 
 fn can_commit(state: &State) -> bool {
@@ -139,7 +160,7 @@ fn status(
     value: json_codec::Value,
     scope: &Scope,
     target: WorktreeHandle,
-    created: Option<&CreateWorktree>,
+    created: Option<&WorktreeCreationRequest>,
 ) -> Result<WorktreeStatus, api::Error> {
     wire::object_field(&value, "target")?;
     wire::object_field(&value, "original")?;
@@ -153,10 +174,16 @@ fn status(
             "the worktree status belongs to another instance or root",
         ));
     }
-    if created.is_some_and(|request| {
-        status.original != request.source
-            || status.parent_directory_id != request.parent_directory_id
-            || status.name != LookupName::from(&request.name)
+    if created.is_some_and(|request| match request {
+        WorktreeCreationRequest::Named(request) => {
+            status.original != request.source
+                || status.parent_directory_id != request.parent_directory_id
+                || status.name != name_policy::LookupName::from(&request.name)
+        }
+        WorktreeCreationRequest::Automatic(request) => {
+            status.original != request.source
+                || status.parent_directory_id != request.parent_directory_id
+        }
     }) {
         return Err(wire::invalid(
             "the created worktree differs from its original request",
@@ -175,21 +202,23 @@ fn smb_path(state: &State) -> Option<String> {
     Some(format!("{}/{}", disk.name, observed.status.name.as_str()))
 }
 
-fn edit_handle(state: RwSignal<State>, publication: bool, value: String) {
-    state.update(|state| {
-        if !available(state) {
-            return;
-        }
-        let model = &mut state.files.directory_snapshot.worktree;
-        model.cancel_read();
-        model.created = None;
-        model.refresh_after_review = false;
-        if publication {
-            model.publication_text = value;
-        } else {
-            model.handle_text = value;
-        }
-    });
+pub(super) fn remember_publication(
+    record: &wire::Record,
+    value: &wire::Publication,
+) -> Result<(), api::Error> {
+    match value {
+        wire::Publication::WorktreeCreated { repository, target }
+        | wire::Publication::WorktreeCommitted {
+            repository, target, ..
+        } => bookmark::save(&bookmark::Reference::new(
+            record.principal.clone(),
+            *repository,
+            *target,
+        )),
+        wire::Publication::Registered(_)
+        | wire::Publication::Initialized(_)
+        | wire::Publication::Committed { .. } => Ok(()),
+    }
 }
 
 pub(super) fn accept_publication(
@@ -211,12 +240,25 @@ pub(super) fn accept_publication(
         | wire::Publication::Initialized(_)
         | wire::Publication::Committed { .. } => return,
     };
+    let scope = Scope::capture(state);
+    let Some(scope) = scope else {
+        return;
+    };
     let model = &mut state.files.directory_snapshot.worktree;
     model.cancel_read();
-    model.handle_text = target.worktree_id.to_string();
-    model.publication_text = target.publication.to_string();
+    model.reference = Some(bookmark::Reference::new(
+        record.principal.clone(),
+        scope.repository,
+        target,
+    ));
+    model.bookmark_scope = Some(scope);
     model.created = match &record.command {
-        wire::Command::CreateWorktree { request, .. } => Some(request.clone()),
+        wire::Command::CreateWorktree { request, .. } => {
+            Some(WorktreeCreationRequest::Named(request.clone()))
+        }
+        wire::Command::AllocateWorktree { request, .. } => {
+            Some(WorktreeCreationRequest::Automatic(request.clone()))
+        }
         wire::Command::RegisterRoot { .. }
         | wire::Command::Initialize { .. }
         | wire::Command::Commit { .. }

@@ -43,6 +43,11 @@ impl NameBudget {
         Ok(Self { allowed })
     }
 
+    /// Prospective allocators share this actual target's already reserved limit.
+    pub(crate) fn allowed(&self) -> usize {
+        self.allowed
+    }
+
     /// Check a complete relative path only when every component is newly introduced.
     pub(crate) fn path<'a>(&self, path: &'a str) -> Result<&'a str, NameBudgetError> {
         for component in path.split('/') {

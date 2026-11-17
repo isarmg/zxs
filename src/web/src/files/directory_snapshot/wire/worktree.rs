@@ -3,6 +3,7 @@ use super::{Command, LookupResult, Publication, Record, decode, invalid, object_
 use crate::api;
 use json_codec::Value;
 use storage_contract::RepositoryId;
+use storage_contract::snapshot_worktree::creation::WorktreeCreationRequest;
 use storage_contract::snapshot_worktree::outcome::{
     WorktreeCommitOutcome, WorktreeCommitReceipt, WorktreeCreationOutcome, WorktreeCreationReceipt,
 };
@@ -42,28 +43,19 @@ pub(super) fn lookup(record: &Record, value: Value) -> Result<LookupResult, api:
         Command::CreateWorktree {
             repository,
             request,
-        } => {
-            object_field(object_field(&value, "request")?, "source")?;
-            let result = object_field(&value, "result")?;
-            if result.get("state").and_then(Value::as_str) == Some("complete") {
-                object_field(result, "target")?;
-            }
-            let receipt: WorktreeCreationReceipt = decode(value)?;
-            if receipt.repository_id != *repository || receipt.request != *request {
-                return Err(invalid(
-                    "the worktree creation receipt differs from the original",
-                ));
-            }
-            match receipt.result {
-                WorktreeCreationOutcome::Pending {} => Ok(LookupResult::Pending),
-                WorktreeCreationOutcome::Complete { target } => {
-                    Ok(LookupResult::Complete(Publication::WorktreeCreated {
-                        repository: *repository,
-                        target,
-                    }))
-                }
-            }
-        }
+        } => creation_lookup(
+            *repository,
+            WorktreeCreationRequest::Named(request.clone()),
+            value,
+        ),
+        Command::AllocateWorktree {
+            repository,
+            request,
+        } => creation_lookup(
+            *repository,
+            WorktreeCreationRequest::Automatic(request.clone()),
+            value,
+        ),
         Command::CommitWorktree {
             repository,
             source,
@@ -104,6 +96,33 @@ pub(super) fn lookup(record: &Record, value: Value) -> Result<LookupResult, api:
         Command::Commit { .. } => record.result(value).map(LookupResult::Complete),
         Command::RegisterRoot { .. } | Command::Initialize { .. } => {
             Err(invalid("this original request has no outcome lookup"))
+        }
+    }
+}
+
+fn creation_lookup(
+    repository: RepositoryId,
+    request: WorktreeCreationRequest,
+    value: Value,
+) -> Result<LookupResult, api::Error> {
+    object_field(object_field(&value, "request")?, "source")?;
+    let result = object_field(&value, "result")?;
+    if result.get("state").and_then(Value::as_str) == Some("complete") {
+        object_field(result, "target")?;
+    }
+    let receipt: WorktreeCreationReceipt = decode(value)?;
+    if receipt.repository_id != repository || receipt.request != request {
+        return Err(invalid(
+            "the worktree creation receipt differs from the original",
+        ));
+    }
+    match receipt.result {
+        WorktreeCreationOutcome::Pending {} => Ok(LookupResult::Pending),
+        WorktreeCreationOutcome::Complete { target } => {
+            Ok(LookupResult::Complete(Publication::WorktreeCreated {
+                repository,
+                target,
+            }))
         }
     }
 }

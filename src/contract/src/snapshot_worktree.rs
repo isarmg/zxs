@@ -6,6 +6,7 @@ pub mod draft_commit;
 pub mod discovery;
 pub mod root;
 pub mod outcome;
+pub mod creation;
 
 use crate::working_tree::{
     DirectoryId, RootId, SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId,

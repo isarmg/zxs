@@ -807,7 +807,7 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(len(plan['rust_targets']), 13)
         self.assertEqual(plan['python_tests'], [])
         held, readmission, _ = self.policy['groups']['held-directory-layout']['rust_targets']
-        self.assertEqual(held['max_tests'], 171)
+        self.assertEqual(held['max_tests'], 172)
         self.assertEqual(held.get('timeout_seconds', 300), 300)
         self.assertNotIn('engine::membership_transition::readmission::', held['prefixes'])
         self.assertEqual(readmission['prefixes'], ['engine::membership_transition::readmission::'])
@@ -1701,7 +1701,7 @@ class TargetedSelection(unittest.TestCase):
                           'historical-directory-runtime',
                           'portable-path-consumers', 'projection-cache-layout'])
         self.assertEqual([selection['max_tests'] for selection in engine['selections']],
-                         [171, 21, 6, 160, 52])
+                         [172, 21, 6, 160, 52])
 
     def test_container_unchanged_save_keeps_tests_product_check_and_overlapping_coverage(self):
         paths = ['src/engine/src/business/workspace.rs', 'test/engine/unit/tests.rs',
@@ -1852,7 +1852,7 @@ class TargetedSelection(unittest.TestCase):
                           'ordinary-conversion-name-budget',
                           'portable-path-consumers', 'typed-name-consumers'])
         self.assertEqual([selection['max_tests'] for selection in engine['selections']],
-                         [171, 21, 24, 160, 40])
+                         [172, 21, 24, 160, 40])
         server = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-server'
                       and target.get('kind', 'lib') == 'lib'

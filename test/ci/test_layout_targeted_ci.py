@@ -12,16 +12,16 @@ CI = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CI)
 
 # Compiled inventory: run 43227554097, artifact 13954370354, SHA 09b7715f3.
-# All 190 runnable names remain selected. Two first-slot repair regressions add
-# behavior, so readmission now has its own 21-case cap beside the retained 171.
-# New counts are static source evidence; CI must re-enumerate the current binary.
+# The current default binary inventory (61efc1e, run 44047340858, shard 0)
+# adds one disk admission case: 172 layout and 21 readmission runnable cases.
+# CI re-enumerates the candidate binary; this fixture tests the exact guard.
 # Record module sizes, not test names, so legitimate behavior renames remain possible.
 # Each tuple is (prefix, runnable count, ignored count).
 MODULE_SIZES = [
     ('persist::layout::tests::', 4, 0),
     ('disk::owned::root_operation_tests::', 10, 0),
     ('disk::owned::directory_entries_tests::', 9, 0),
-    ('disk::admission_tests::', 3, 2),
+    ('disk::admission_tests::', 4, 2),
     ('journal::writer_lifecycle_tests::', 9, 0),
     ('journal::writer_tests::', 2, 0),
     ('engine::membership_transition::readmission::', 21, 0),
@@ -77,8 +77,8 @@ class LayoutTargetedCi(unittest.TestCase):
         selected = CI.selected_tests(self.runnable + self.ignored + unrelated,
                                      self.ignored, self.target)
         self.assertEqual(selected, sorted(self.runnable))
-        self.assertEqual(len(selected), 192)
-        self.assertEqual([part['max_tests'] for part in self.target['selections']], [171, 21])
+        self.assertEqual(len(selected), 193)
+        self.assertEqual([part['max_tests'] for part in self.target['selections']], [172, 21])
         self.assertEqual(self.target['selection_groups'],
                          ['held-directory-layout', 'held-directory-layout'])
         self.assertEqual(len(self.ignored), 3)
@@ -132,13 +132,13 @@ class ProjectionCacheTargetedCi(unittest.TestCase):
         engine = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-engine'
                       and target.get('mode', 'test') == 'test' and not target.get('features'))
-        self.assertEqual([item['max_tests'] for item in engine['selections']], [171, 21, 52])
+        self.assertEqual([item['max_tests'] for item in engine['selections']], [172, 21, 52])
         layout = [f'{prefix}behavior_{index}'
                   for prefix, count, _ in MODULE_SIZES for index in range(count)]
         selected = CI.selected_tests(layout + self.runnable + self.ignored,
                                      self.ignored, engine)
         self.assertEqual(selected, sorted(layout + self.runnable))
-        self.assertEqual(len(selected), 244)
+        self.assertEqual(len(selected), 245)
         self.assertEqual({target['package'] for target in plan['rust_targets']},
                          {'storage-engine', 'platform-io'})
 
@@ -215,7 +215,7 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
                          ['held-directory-layout', 'held-directory-layout',
                           'ordinary-conversion-name-budget',
                           'projection-cache-layout'])
-        self.assertEqual([item['max_tests'] for item in engine['selections']], [171, 21, 24, 52])
+        self.assertEqual([item['max_tests'] for item in engine['selections']], [172, 21, 24, 52])
         self.assertEqual([item.get('timeout_seconds', 300) for item in engine['selections']],
                          [300, 300, 900, 300])
         platform = next(target for target in plan['rust_targets']

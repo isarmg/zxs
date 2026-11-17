@@ -49,15 +49,7 @@ pub(crate) fn allocate(
         let Some(number) = key.strip_prefix(&prefix_key) else {
             continue;
         };
-        if number.len() != 3 || !number.bytes().all(|byte| byte.is_ascii_digit()) {
-            continue;
-        }
-        // Three ASCII digits are bounded below 1000 without parsing or overflow.
-        let bytes = number.as_bytes();
-        let ordinal = u16::from(bytes[0] - b'0') * 100
-            + u16::from(bytes[1] - b'0') * 10
-            + u16::from(bytes[2] - b'0');
-        if ordinal >= FIRST {
+        if let Some(ordinal) = ordinal(number) {
             used[usize::from(ordinal - FIRST)] = true;
         }
     }
@@ -69,6 +61,25 @@ pub(crate) fn allocate(
         }
     }
     Err(NameError::Exhausted)
+}
+
+/// Replay proves the reserved spelling belongs to its admitted source branch.
+/// It cannot recompute the lowest free name from a later ordinary namespace.
+pub(crate) fn is_allocated_name(branch: &BranchName, name: &Name) -> bool {
+    let prefix = format!("worktree-{}-", branch.as_str());
+    name.as_str().strip_prefix(&prefix).and_then(ordinal).is_some()
+}
+
+fn ordinal(number: &str) -> Option<u16> {
+    if number.len() != 3 || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    // Three ASCII digits are bounded below 1000 without parsing or overflow.
+    let bytes = number.as_bytes();
+    let ordinal = u16::from(bytes[0] - b'0') * 100
+        + u16::from(bytes[1] - b'0') * 10
+        + u16::from(bytes[2] - b'0');
+    (ordinal >= FIRST).then_some(ordinal)
 }
 
 #[cfg(test)]

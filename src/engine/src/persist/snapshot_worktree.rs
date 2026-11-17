@@ -22,6 +22,7 @@ use storage_contract::{
 pub(crate) const NODE_RESERVE: &str = "snapshot.repository.reserve";
 pub(crate) const NODE_COMPLETE: &str = "snapshot.repository.complete";
 pub(crate) const WORKTREE_RESERVE: &str = "snapshot.worktree.reserve";
+pub(crate) const WORKTREE_ALLOCATE: &str = "snapshot.worktree.allocate";
 pub(crate) const WORKTREE_COMPLETE: &str = "snapshot.worktree.complete";
 pub(crate) const EDIT_RESERVE: &str = "snapshot.worktree.edit-reserve";
 pub(crate) const EDIT_COMPLETE: &str = "snapshot.worktree.edit-complete";
@@ -161,6 +162,15 @@ pub(crate) struct WorktreeReservation {
     pub(crate) material: SnapshotReference,
 }
 
+/// The original automatic intent remains independent of the resolved plan.
+/// The request digest covers request; the reservation commitment covers both.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct AllocatedWorktreeReservation {
+    pub(crate) request: storage_contract::snapshot_worktree::creation::AllocateWorktree,
+    pub(crate) resolved: WorktreeReservation,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct WorktreeCompletion {
@@ -198,6 +208,7 @@ pub(crate) enum Record {
     ReserveNode(NodeReservation),
     CompleteNode(NodeCompletion),
     ReserveWorktree(WorktreeReservation),
+    ReserveAllocatedWorktree(AllocatedWorktreeReservation),
     CompleteWorktree(WorktreeCompletion),
     ReserveEdit(EditReservation),
     CompleteEdit(EditCompletion),
@@ -250,6 +261,9 @@ impl Record {
             Self::ReserveWorktree(record) => {
                 json_codec::to_value(&record.request).map_err(CodecError::Value)
             }
+            Self::ReserveAllocatedWorktree(record) => {
+                json_codec::to_value(&record.request).map_err(CodecError::Value)
+            }
             Self::ReserveEdit(record) => {
                 json_codec::to_value(&record.request).map_err(CodecError::Value)
             }
@@ -268,6 +282,7 @@ impl Record {
             Self::ReserveNode(_) => NODE_RESERVE,
             Self::CompleteNode(_) => NODE_COMPLETE,
             Self::ReserveWorktree(_) => WORKTREE_RESERVE,
+            Self::ReserveAllocatedWorktree(_) => WORKTREE_ALLOCATE,
             Self::CompleteWorktree(_) => WORKTREE_COMPLETE,
             Self::ReserveEdit(_) => EDIT_RESERVE,
             Self::CompleteEdit(_) => EDIT_COMPLETE,
@@ -330,7 +345,7 @@ impl PublicationEncoding {
 
 fn indexed_kind(kind: &str) -> bool {
     matches!(kind,
-        NODE_RESERVE | NODE_COMPLETE | WORKTREE_RESERVE | WORKTREE_COMPLETE
+        NODE_RESERVE | NODE_COMPLETE | WORKTREE_RESERVE | WORKTREE_ALLOCATE | WORKTREE_COMPLETE
             | EDIT_RESERVE | EDIT_COMPLETE | COMMIT_RESERVE | COMMIT_NODE | COMMIT_COMPLETE)
 }
 
@@ -361,23 +376,26 @@ pub(crate) fn decode(receipt: &OperationResult) -> Result<Option<Decoded>, Codec
     }
     // Bound the array before cloning and typed decoding this already bounded
     // metadata value. The same manifest constructor owns all further budgets.
-    if receipt.result.get("snapshot_worktree")
-        .and_then(|record| record.get("record"))
-        .and_then(|record| record.get("entries"))
+    let record = receipt.result.get("snapshot_worktree")
+        .and_then(|envelope| envelope.get("record"));
+    if record.and_then(|record| record.get("entries"))
         .and_then(json_codec::Value::as_array)
         .is_some_and(|entries| entries.len() > crate::working_tree::snapshot::MAX_ENTRIES)
     {
         return Err(CodecError::Budget);
     }
-    if receipt.result.get("snapshot_worktree")
-        .and_then(|record| record.get("record"))
-        .and_then(|record| record.get("host"))
-        .and_then(|host| host.get("directories"))
-        .and_then(json_codec::Value::as_array)
-        .is_some_and(|directories| {
-            directories.len() > crate::working_tree::admission::MAX_DIRECTORY_DEPTH
-        })
-    {
+    // Check both recognized shapes, including a malformed object containing
+    // both. Unknown fields must not hide an oversized nested host before clone.
+    let hosts = [
+        record.and_then(|record| record.get("host")),
+        record.and_then(|record| record.get("resolved")).and_then(|plan| plan.get("host")),
+    ];
+    if hosts.into_iter().flatten().any(|host| {
+        host.get("directories").and_then(json_codec::Value::as_array)
+            .is_some_and(|directories| {
+                directories.len() > crate::working_tree::admission::MAX_DIRECTORY_DEPTH
+            })
+    }) {
         return Err(CodecError::Budget);
     }
     let envelope: Envelope = json_codec::from_value(receipt.result.clone())

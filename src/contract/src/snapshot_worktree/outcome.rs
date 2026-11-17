@@ -1,7 +1,8 @@
 //! Read-only original-operation results. Reservation operation IDs are not
 //! completion or node-publication IDs. Pending never grants a retry or cleanup.
 use crate::RepositoryId;
-use crate::snapshot_worktree::{CommitWorktree, CreateWorktree, SnapshotHandle, WorktreeHandle};
+use crate::snapshot_worktree::creation::WorktreeCreationRequest;
+use crate::snapshot_worktree::{CommitWorktree, SnapshotHandle, WorktreeHandle};
 use data_serialization::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -15,7 +16,7 @@ pub enum WorktreeCreationOutcome {
 #[serialization(deny_unknown_fields)]
 pub struct WorktreeCreationReceipt {
     pub repository_id: RepositoryId,
-    pub request: CreateWorktree,
+    pub request: WorktreeCreationRequest,
     pub result: WorktreeCreationOutcome,
 }
 

@@ -25,7 +25,7 @@ pub(crate) use registry::{
 };
 pub(crate) use prepare::prepare_namespace_host;
 pub(crate) use initialize::initialize_root;
-pub(crate) use instance::{create_worktree, with_worktree};
+pub(crate) use instance::{allocate_worktree, create_worktree, with_worktree};
 pub(crate) use edit::edit_worktree;
 pub(crate) use commit::{commit_worktree, ReservedFileVersion, ReservedDirectoryTransfer};
 pub(crate) use publication::PublishedNodeReservation;
@@ -84,6 +84,8 @@ pub(crate) enum RegistrationError {
     Host,
     #[error("worktree name is already reserved in its actual parent")]
     Mount,
+    #[error("allocating a worktree name in its actual parent")]
+    WorktreeName(#[source] crate::directory_worktree::names::NameError),
     #[error("snapshot/worktree completion does not match its original reservation: {0}")]
     Completion(storage_contract::OperationId),
     #[error("snapshot/worktree registration has an absent or conflicting original source")]
