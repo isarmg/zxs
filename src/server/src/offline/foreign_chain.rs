@@ -215,6 +215,25 @@ struct Report {
     targets: Vec<TargetProgress>,
 }
 impl Report {
+    fn require_plan(&self, plan: &Plan) -> Result<()> {
+        let lower = &plan.binding.lower;
+        if lower.is_empty()
+            || self.targets.len() != lower.len()
+            || plan.capsule_digests.len() != lower.len()
+            || self.targets.iter().zip(lower).zip(&plan.capsule_digests)
+                .any(|((actual, selected), capsule_digest)| {
+                    actual.level != selected.directory.level
+                        || actual.path != format!("{}/{CAPSULE}", selected.directory.root_path)
+                        || actual.capsule_digest != *capsule_digest
+                })
+        {
+            return Err(
+                "foreign-chain report differs from the complete original ordered target set".into(),
+            );
+        }
+        Ok(())
+    }
+
     fn all_published(&self) -> bool {
         !self.targets.is_empty()
             && self
@@ -329,6 +348,7 @@ impl Root {
         if completion.request_digest != digest(plan)? || !completion.report.all_published() {
             return Err("original chain completion record differs; no repair was attempted".into());
         }
+        completion.report.require_plan(plan)?;
         Ok(Some(completion))
     }
 }
@@ -401,6 +421,7 @@ pub(crate) fn original(input: Original) -> Result<json_codec::Value> {
     else {
         return Err("unexpected foreign-chain status reply".into());
     };
+    report.require_plan(&plan)?;
     if let Some(completion) = &completion
         && completion.report != report
     {
@@ -449,6 +470,7 @@ fn finish(
     let Output::Report { report } = crate::offline::service_worker::run(envelope)? else {
         return Err("unexpected foreign-chain prepare reply".into());
     };
+    report.require_plan(&input.plan)?;
     if !report.all_published() || completion.as_ref().is_some_and(|old| old.report != report) {
         return Err("complete-chain result does not contain every original capsule".into());
     }

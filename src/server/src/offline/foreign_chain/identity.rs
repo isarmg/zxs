@@ -39,6 +39,7 @@ impl Proposal {
         if observation.targets.len() != plan.binding.lower.len() || !observation.completed() {
             return Err("all original three-scope databases must be independently verified before identity mapping".into());
         }
+        databases::require_targets(plan, &observation.targets)?;
         let original = &observation.targets[0].original;
         if original.pool_id == configuration.pool_id
             || !original

@@ -231,7 +231,7 @@ fn original_full_state_must_bind_the_exact_foreign_source_registration() {
 
 #[test]
 fn proposal_digest_binds_every_selected_physical_root_and_the_original_operation() {
-    let (configuration, mut plan, observation) = fixture();
+    let (configuration, mut plan, mut observation) = fixture();
     let (first, _) = Proposal::capture(&configuration, &plan, &observation).unwrap();
     let mut renamed = plan.clone();
     renamed.binding.lower[0].directory.name = name_policy::Name::parse("Other archive").unwrap();
@@ -241,10 +241,91 @@ fn proposal_digest_binds_every_selected_physical_root_and_the_original_operation
     renamed.binding.source_name = name_policy::Name::parse("Other source").unwrap();
     assert_ne!(digest(&renamed.binding).unwrap(), digest(&plan.binding).unwrap());
     plan.binding.lower[0].selection.root_identity.inode += 1;
+    assert!(Proposal::capture(&configuration, &plan, &observation).is_err());
+    // A different original batch needs freshly bound target evidence. The old
+    // database completion cannot merely be carried across the root change.
+    let chain = digest(&plan.binding).unwrap();
+    for report in &mut observation.targets {
+        report.chain_digest = chain.clone();
+    }
+    observation.statuses = observation.targets.iter().cloned()
+        .map(|report| ForeignDatabaseStatus::Verified { report: Box::new(report) })
+        .collect();
     let (second, _) = Proposal::capture(&configuration, &plan, &observation).unwrap();
     assert_ne!(digest(&first).unwrap(), digest(&second).unwrap());
     assert_ne!(
         first.targets[0].registration.disk_id,
         second.targets[0].registration.disk_id
     );
+}
+
+#[test]
+fn capsule_completion_requires_every_exact_ordered_plan_target() {
+    let (_, plan, _) = fixture();
+    let report = Report {
+        targets: plan.binding.lower.iter().zip(&plan.capsule_digests)
+            .map(|(selected, capsule_digest)| TargetProgress {
+                level: selected.directory.level,
+                path: format!("{}/{CAPSULE}", selected.directory.root_path),
+                capsule_digest: capsule_digest.clone(),
+                progress: Progress::PublishedCapsule,
+            }).collect(),
+    };
+    report.require_plan(&plan).unwrap();
+    assert!(report.all_published());
+    let round_trip: Report = json_codec::from_slice(&json_codec::to_vec(&report).unwrap()).unwrap();
+    round_trip.require_plan(&plan).unwrap();
+    assert_eq!(json_codec::to_vec(&round_trip).unwrap(), json_codec::to_vec(&report).unwrap());
+
+    for change in 0..7 {
+        let mut changed = report.clone();
+        match change {
+            0 => { changed.targets.pop(); }
+            1 => changed.targets.swap(0, 1),
+            2 => changed.targets[1] = changed.targets[0].clone(),
+            3 => changed.targets[1].level += 1,
+            4 => changed.targets[1].path.push_str("-other"),
+            5 => changed.targets[1].capsule_digest = "f".repeat(64),
+            6 => changed.targets.push(changed.targets[0].clone()),
+            _ => unreachable!(),
+        }
+        assert!(changed.all_published());
+        assert!(changed.require_plan(&plan).is_err());
+    }
+    let mut pending = report;
+    pending.targets[1].progress = Progress::Reserved;
+    pending.require_plan(&plan).unwrap();
+    assert!(!pending.all_published());
+}
+
+#[test]
+fn self_consistent_database_status_cannot_rebind_another_chain_or_scope() {
+    let (configuration, plan, observed) = fixture();
+    observed.expected(&plan).unwrap();
+    for change in 0..8 {
+        let mut changed = observed.clone();
+        match change {
+            0 => { changed.targets.pop(); }
+            1 => changed.targets.swap(0, 1),
+            2 => changed.targets[1].capsule_digest = "f".repeat(64),
+            3 => changed.targets[1].chain_digest = "0".repeat(64),
+            4 => changed.targets[1].target_level += 1,
+            5 => changed.targets[1].original.state_hash = "0".repeat(64),
+            6 => changed.targets[1].manifest_hash = "0".repeat(64),
+            7 => changed.targets[1].database_bytes += 1,
+            _ => unreachable!(),
+        }
+        changed.statuses = changed.targets.iter().cloned()
+            .map(|report| ForeignDatabaseStatus::Verified { report: Box::new(report) })
+            .collect();
+        assert!(changed.completed());
+        assert!(changed.expected(&plan).is_err());
+        assert!(Proposal::capture(&configuration, &plan, &changed).is_err());
+    }
+    let mut absent_status = observed.clone();
+    absent_status.statuses.pop();
+    assert!(absent_status.expected(&plan).is_err());
+    let mut swapped_status = observed;
+    swapped_status.statuses.swap(0, 1);
+    assert!(swapped_status.expected(&plan).is_err());
 }

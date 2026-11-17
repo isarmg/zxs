@@ -22,11 +22,58 @@ impl Observation {
             })
     }
     pub(super) fn expected(&self, plan: &Plan) -> Result<Expected> {
+        require_targets(plan, &self.targets)?;
+        if self.statuses.len() != self.targets.len()
+            || self.targets.iter().zip(&self.statuses).any(|(expected, status)| {
+                matches!(status, ForeignDatabaseStatus::Verified { report }
+                    if report.as_ref() != expected)
+            })
+        {
+            return Err("foreign database statuses differ from their exact target reports".into());
+        }
         Ok(Expected {
             request_digest: digest(plan)?,
             targets: self.targets.clone(),
         })
     }
+}
+
+/// IPC replies and persisted root records are separate read boundaries. A
+/// complete-looking status cannot replace one target's exact capsule binding.
+pub(super) fn require_targets(
+    plan: &Plan,
+    targets: &[ForeignOriginalDatabasesReport],
+) -> Result<()> {
+    let lower = &plan.binding.lower;
+    if lower.is_empty()
+        || targets.len() != lower.len()
+        || plan.capsule_digests.len() != lower.len()
+    {
+        return Err("foreign database evidence omits part of the original lower chain".into());
+    }
+    let chain_digest = digest(&plan.binding)?;
+    let first = &targets[0];
+    if first.original.pool_id != plan.binding.source.registration.pool_id
+        || !first.original.registrations.contains(&plan.binding.source.registration)
+        || targets.iter().zip(lower).zip(&plan.capsule_digests)
+            .any(|((actual, selected), capsule_digest)| {
+                actual.target_level != selected.directory.level
+                    || actual.capsule_digest != *capsule_digest
+                    || actual.chain_digest != chain_digest
+                    || actual.original != first.original
+                    || actual.manifest_hash != first.manifest_hash
+                    || actual.databases != first.databases
+                    || actual.database_bytes != first.database_bytes
+                    || actual.original_disks != first.original_disks
+                    || actual.file_databases != first.file_databases
+                    || actual.directory_databases != first.directory_databases
+            })
+    {
+        return Err(
+            "foreign database evidence changed its original source, target or three-scope set".into(),
+        );
+    }
+    Ok(())
 }
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -54,6 +101,7 @@ fn saved(root: &Root, plan: &Plan, complete: bool) -> Result<Option<Expected>> {
     if record.request_digest != digest(plan)? || record.targets.len() != plan.binding.lower.len() {
         return Err("foreign database record differs from the original entire lower chain".into());
     }
+    require_targets(plan, &record.targets)?;
     if complete && saved(root, plan, false)?.as_ref() != Some(&record) {
         return Err("original database completion lacks its matching immutable intent".into());
     }

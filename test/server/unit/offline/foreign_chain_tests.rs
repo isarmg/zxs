@@ -148,3 +148,26 @@ fn chain_admission_keeps_cardinality_then_slot_then_link_error_order() {
         Some(&name_policy::Error::InvalidSlot)
     );
 }
+
+#[test]
+fn higher_chain_requires_all_real_levels_through_the_existing_thirty_two_level_limit() {
+    for source_level in [4, storage_engine::ForeignMigrationPlan::MAX_CHAIN_LEVEL] {
+        let lower: Vec<_> = (1..source_level).map(|level| {
+            let upstream = (level > 1).then(|| format!("level_{}", level - 1));
+            lower(level, &format!("level_{level}"), upstream.as_deref())
+        }).collect();
+        let source_slot = format!("level_{source_level}");
+        let upstream = format!("level_{}", source_level - 1);
+        let references: Vec<_> = lower.iter().collect();
+        complete_chain(source_level, &source_slot, &upstream, &references).unwrap();
+        for missing in 0..references.len() {
+            let mut partial = references.clone();
+            partial.remove(missing);
+            assert!(complete_chain(source_level, &source_slot, &upstream, &partial).is_err());
+        }
+        let mut reversed = references;
+        reversed.swap(0, 1);
+        assert!(complete_chain(source_level, &source_slot, &upstream, &reversed).is_err());
+    }
+    assert!(complete_chain(33, "source", "lower", &[]).is_err());
+}
