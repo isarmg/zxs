@@ -894,6 +894,16 @@ fn whole_working_selection_checks_all_cas_before_open_and_retains_real_published
     assert!(matches!(engine.select_working_sources(&stale),
         Err(crate::Error::FileDraft(DraftError::RevisionChanged { .. }))));
     assert!(selected.sources()[0].require_source().is_err());
+    // A draft download retains only its exact physical source, not every
+    // dirty container in the pool. The missing selected body still fails.
+    assert!(engine.open_file_draft(&requests[0].target).is_err());
+    {
+        use std::io::Read;
+        let mut second = engine.open_file_draft(&requests[1].target).unwrap();
+        let mut body = Vec::new();
+        second.read_to_end(&mut body).unwrap();
+        assert_eq!(body, bytes[1]);
+    }
     assert!(Arc::ptr_eq(&state, engine.planning_context().state));
     drop(selected);
     fs::rename(&parked, &path).unwrap();
