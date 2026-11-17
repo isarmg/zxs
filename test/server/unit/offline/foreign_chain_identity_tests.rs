@@ -329,3 +329,132 @@ fn self_consistent_database_status_cannot_rebind_another_chain_or_scope() {
     swapped_status.statuses.swap(0, 1);
     assert!(swapped_status.expected(&plan).is_err());
 }
+
+fn object_report(
+    plan: &Plan,
+    databases: &databases::Observation,
+) -> storage_engine::ForeignIdentityClosureReport {
+    use storage_engine::{ForeignIdentityBaseline, ForeignIdentityClosureReport};
+    ForeignIdentityClosureReport {
+        baseline: ForeignIdentityBaseline {
+            pool_id: "pool_current".into(),
+            sequence: 4,
+            state_hash: "1".repeat(64),
+            configuration_hash: "2".repeat(64),
+            proposed_configuration_hash: "3".repeat(64),
+            operation_id: plan.binding.operation_id,
+            request_digest: digest(plan).unwrap(),
+            chain_digest: digest(&plan.binding).unwrap(),
+            registration_proposal_digest: "4".repeat(64),
+        },
+        original: databases.targets[0].original.clone(),
+        mapping_digest: "5".repeat(64),
+        objects_by_domain: [("file".into(), 2)].into_iter().collect(),
+        objects: 2,
+        archived_operations: 2,
+        archived_principals: 2,
+        archived_plans: 0,
+        archived_events: 2,
+        mapping_bytes: 4096,
+    }
+}
+
+#[test]
+fn identity_preflight_matches_complete_reports_without_consuming_the_original_retry() {
+    let (_, plan, databases) = fixture();
+    let expected_databases = databases.expected(&plan).unwrap();
+    let expected = object_report(&plan, &databases);
+    let observed = objects::Observation {
+        expected: expected.clone(),
+        statuses: vec![objects::Progress::Preparing, objects::Progress::NotStarted],
+    };
+    let original_bytes = json_codec::to_vec(&observed).unwrap();
+    objects::match_expected(&plan, &expected_databases, &observed, &expected).unwrap();
+
+    let changes: &[fn(&mut storage_engine::ForeignIdentityClosureReport)] = &[
+        |report| report.baseline.pool_id = "pool_other".into(),
+        |report| report.baseline.sequence += 1,
+        |report| report.baseline.state_hash = "0".repeat(64),
+        |report| report.baseline.configuration_hash = "0".repeat(64),
+        |report| report.baseline.proposed_configuration_hash = "0".repeat(64),
+        |report| report.baseline.registration_proposal_digest = "0".repeat(64),
+        |report| report.original.snapshot_hash = "0".repeat(64),
+        |report| report.original.registrations[0].binding_generation += 1,
+        |report| report.mapping_digest = "0".repeat(64),
+        |report| report.objects += 1,
+        |report| report.mapping_bytes += 1,
+        |report| report.archived_operations += 1,
+        |report| report.archived_principals += 1,
+        |report| report.archived_plans += 1,
+        |report| report.archived_events += 1,
+        |report| report.objects_by_domain.clear(),
+    ];
+    for change in changes {
+        let mut altered = expected.clone();
+        change(&mut altered);
+        assert!(objects::match_expected(
+            &plan, &expected_databases, &observed, &altered,
+        ).is_err());
+        assert_eq!(json_codec::to_vec(&observed).unwrap(), original_bytes);
+        objects::match_expected(&plan, &expected_databases, &observed, &expected).unwrap();
+    }
+}
+
+#[test]
+fn identity_observation_requires_the_exact_original_and_every_lower_status() {
+    let (_, plan, databases) = fixture();
+    let expected_databases = databases.expected(&plan).unwrap();
+    let expected = object_report(&plan, &databases);
+    for change in [
+        (|report: &mut storage_engine::ForeignIdentityClosureReport| {
+            report.baseline.request_digest = "0".repeat(64);
+        }) as fn(&mut storage_engine::ForeignIdentityClosureReport),
+        |report| report.baseline.chain_digest = "0".repeat(64),
+        |report| {
+            report.baseline.operation_id = "op_22222222222222222222222222222222".parse().unwrap();
+        },
+        |report| report.original.prefix_hash = "0".repeat(64),
+        |report| report.original.registrations.clear(),
+    ] {
+        let mut altered = expected.clone();
+        change(&mut altered);
+        let observed = objects::Observation {
+            expected: altered.clone(),
+            statuses: vec![objects::Progress::Verified, objects::Progress::Verified],
+        };
+        assert!(observed.completed(&plan));
+        assert!(objects::match_expected(
+            &plan, &expected_databases, &observed, &altered,
+        ).is_err());
+    }
+    for count in [0, 1, 3] {
+        let observed = objects::Observation {
+            expected: expected.clone(),
+            statuses: (0..count).map(|_| objects::Progress::Verified).collect(),
+        };
+        assert!(objects::match_expected(
+            &plan, &expected_databases, &observed, &expected,
+        ).is_err());
+    }
+}
+
+#[test]
+fn database_preflight_rejects_self_consistent_source_drift_and_keeps_exact_retry() {
+    let (_, plan, observed) = fixture();
+    let expected = observed.expected(&plan).unwrap();
+    let original_bytes = json_codec::to_vec(&expected).unwrap();
+    let mut altered = observed.clone();
+    for target in &mut altered.targets {
+        target.original.state_hash = "0".repeat(64);
+    }
+    altered.statuses = altered.targets.iter().cloned()
+        .map(|report| ForeignDatabaseStatus::Verified { report: Box::new(report) })
+        .collect();
+    assert!(altered.completed());
+    altered.expected(&plan).unwrap();
+    assert!(databases::match_expected(&plan, &altered, &expected).is_err());
+    assert_eq!(json_codec::to_vec(&expected).unwrap(), original_bytes);
+    databases::match_expected(&plan, &observed, &expected).unwrap();
+    expected.require_original(&plan, &observed.targets[0].original).unwrap();
+    assert!(expected.require_original(&plan, &altered.targets[0].original).is_err());
+}

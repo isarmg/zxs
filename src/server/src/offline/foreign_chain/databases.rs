@@ -8,6 +8,21 @@ pub(super) struct Expected {
     request_digest: String,
     targets: Vec<ForeignOriginalDatabasesReport>,
 }
+impl Expected {
+    pub(super) fn require_original(
+        &self,
+        plan: &Plan,
+        original: &storage_engine::ForeignOriginalStateReport,
+    ) -> Result<()> {
+        require_targets(plan, &self.targets)?;
+        if self.request_digest != digest(plan)? || &self.targets[0].original != original {
+            return Err(
+                "foreign evidence differs from the saved complete original database scope".into(),
+            );
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct Observation {
@@ -178,11 +193,29 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
         );
     }
     let (root, plan) = root(&input.input)?;
+    require_targets(&plan, &input.expected.targets)?;
+    if saved(&root, &plan, false)?.as_ref().is_some_and(|old| old != &input.expected) {
+        return Err("original database intent cannot be replaced".into());
+    }
     let completion = saved(&root, &plan, true)?;
     if completion
         .as_ref()
         .is_some_and(|old| old != &input.expected)
     {
+        return Err("completed original database batch cannot be replaced".into());
+    }
+    let (root, plan) = if completion.is_none() {
+        preflight(root, &plan, &input.expected)?;
+        // Reacquire the original selector after releasing the worker's lease;
+        // a successful scan does not authorize a different current context.
+        self::root(&input.input)?
+    } else {
+        // A completed exact intent already passed this admission. The normal
+        // worker still rechecks all physical evidence; do not scan it twice.
+        (root, plan)
+    };
+    let completion = saved(&root, &plan, true)?;
+    if completion.as_ref().is_some_and(|old| old != &input.expected) {
         return Err("completed original database batch cannot be replaced".into());
     }
     let envelope = WorkerRequest {
@@ -202,6 +235,22 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     )?;
     drop(root);
     finish(input, plan, envelope).map_err(coordinator::pending::<super::Plan>)
+}
+fn preflight(root: Root, plan: &Plan, expected: &Expected) -> Result<()> {
+    // Reject altered caller evidence before it becomes a permanent intent.
+    // This read-only action releases root handles and never installs scopes.
+    let envelope = WorkerRequest {
+        context: root.into_context(),
+        action: Action::Databases {
+            plan: plan.clone(),
+            prepare: None,
+            completed: false,
+        },
+    };
+    let Output::Databases { report } = crate::offline::service_worker::run(envelope)? else {
+        return Err("unexpected foreign database preflight response".into());
+    };
+    match_expected(plan, &report, expected)
 }
 fn finish(input: Prepare, plan: Plan, envelope: WorkerRequest) -> Result<json_codec::Value> {
     let Output::Databases { report } = crate::offline::service_worker::run(envelope)? else {
