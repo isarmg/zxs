@@ -24,8 +24,13 @@ pub(crate) struct PreparedAutomaticFull {
 }
 
 impl PreparedAutomaticFull {
-    pub(crate) fn prepare(context: &PlanningContext<'_>, selected: Arc<SelectedWorkingSources>,
-        hash: ContentHash) -> Result<Arc<Self>> {
+    pub(crate) fn prepare(
+        context: &PlanningContext<'_>,
+        selected: Arc<SelectedWorkingSources>,
+        hash: ContentHash,
+        mut checkpoint: impl FnMut() -> Result<()>,
+    ) -> Result<Arc<Self>> {
+        checkpoint()?;
         context.require_write()?;
         selected.require_context(context)?;
         let [source] = selected.sources() else { return Err(invalid()); };
@@ -54,18 +59,21 @@ impl PreparedAutomaticFull {
         crate::container_storage::version_names::check_target_name(&scope.held, &name)?;
         let mut reader = selected.open_sole_born()?;
         let expectation = || platform_io::payload::Expectation { bytes, blake3: Some(hash.digest()) };
-        let copied = scope.held.copy_new_entry_verified_synced(&name, &mut reader, expectation())
+        let copied = scope.held.copy_new_entry_verified_synced_observed(
+            &name, &mut reader, expectation(), &mut checkpoint,
+        )
             .map_err(|e| match e {
                 NewEntryCopyError::Admission(e) | NewEntryCopyError::Published { source: e, .. } => e,
                 NewEntryCopyError::Payload(e) => e.into(),
             })?;
         let path = scope.held.path().join(name.as_path());
-        let mut file = scope.held.open_leased_regular(&path)?;
+        let file = scope.held.open_leased_regular(&path)?;
         let metadata = file.metadata()?;
         if metadata.nlink() != 1 || metadata.len() != bytes || metadata.dev() != copied.identity.device
             || metadata.ino() != copied.identity.inode || copied.bytes != bytes || copied.blake3 != hash.digest()
         { return Err(invalid()); }
-        file.verify_full(expectation())?;
+        file.verify_full_observed(expectation(), &mut checkpoint)?;
+        checkpoint()?;
         selected.require_context(context)?;
         Ok(Arc::new(Self { selected, scope, path, file, stamp: FileStamp::from_metadata(&metadata),
             _reservation: reservation }))
@@ -77,9 +85,9 @@ impl PreparedAutomaticFull {
         if source.target() != target || source.record().working.draft().map(|(_, p)| *p) != Some(payload) {
             return Err(invalid());
         }
-        self.verify()
+        self.require_source()
     }
-    fn verify(&self) -> Result<()> {
+    pub(crate) fn require_source(&self) -> Result<()> {
         self.scope.verify()?;
         self.file.check_running()?;
         let actual = self.scope.held.open_leased_regular(&self.path)?;
@@ -87,11 +95,13 @@ impl PreparedAutomaticFull {
             || FileStamp::from_metadata(&actual.metadata()?) != self.stamp { return Err(invalid()); }
         Ok(())
     }
-    pub(crate) fn open(&self, path: &Path) -> Result<ReadFile> {
+    pub(crate) fn open(self: &Arc<Self>, path: &Path) -> Result<ReadFile> {
         if path != self.path { return Err(invalid()); }
-        self.verify()?;
+        self.require_source()?;
+        let reservation = crate::engine::payload_proof_budget().reserve(1)
+            .ok_or(Error::FileDraft(DraftError::Size))?;
         let file = self.scope.held.open_leased_regular(path)?;
         if FileStamp::from_metadata(&file.metadata()?) != self.stamp { return Err(invalid()); }
-        Ok(ReadFile::in_container(file, Arc::clone(&self.scope)))
+        Ok(ReadFile::automatic_full(file, Arc::clone(self), reservation))
     }
 }

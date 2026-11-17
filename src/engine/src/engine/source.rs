@@ -202,6 +202,22 @@ impl ReadFile {
     }
 }
 
+/// A returned FULL descriptor retains the actual producer and its own I/O
+/// reservation, including across independent handle clones.
+enum FullOwner {
+    First(Arc<crate::container_storage::PreparedUnbornFull>),
+    Automatic(Arc<crate::container_storage::PreparedAutomaticFull>),
+}
+
+impl Clone for FullOwner {
+    fn clone(&self) -> Self {
+        match self {
+            Self::First(source) => Self::First(Arc::clone(source)),
+            Self::Automatic(source) => Self::Automatic(Arc::clone(source)),
+        }
+    }
+}
+
 enum ReadFileSource {
     IncrementalDraft {
         scope: Arc<crate::container_storage::ObservedContainerReplica>,
@@ -211,7 +227,7 @@ enum ReadFileSource {
     Managed(DiskFile),
     WorkingFull {
         file: DiskFile,
-        source: Arc<crate::container_storage::PreparedUnbornFull>,
+        source: FullOwner,
         _reservation: super::PayloadProofReservation,
     },
     Container {
@@ -279,7 +295,23 @@ impl ReadFile {
         source: Arc<crate::container_storage::PreparedUnbornFull>,
         reservation: super::PayloadProofReservation,
     ) -> Self {
-        Self(ReadFileSource::WorkingFull { file, source, _reservation: reservation })
+        Self(ReadFileSource::WorkingFull {
+            file,
+            source: FullOwner::First(source),
+            _reservation: reservation,
+        })
+    }
+
+    pub(crate) fn automatic_full(
+        file: DiskFile,
+        source: Arc<crate::container_storage::PreparedAutomaticFull>,
+        reservation: super::PayloadProofReservation,
+    ) -> Self {
+        Self(ReadFileSource::WorkingFull {
+            file,
+            source: FullOwner::Automatic(source),
+            _reservation: reservation,
+        })
     }
 
     pub(crate) fn verify_full(
@@ -352,9 +384,11 @@ impl ReadFile {
                 let reservation = super::payload_proof_budget().reserve(1).ok_or_else(|| {
                     io::Error::other(crate::business::file_draft::DraftError::Size)
                 })?;
-                file.try_clone().map(|file| {
-                    Self::working_full(file, Arc::clone(source), reservation)
-                })
+                file.try_clone().map(|file| Self(ReadFileSource::WorkingFull {
+                    file,
+                    source: source.clone(),
+                    _reservation: reservation,
+                }))
             }
         }
     }

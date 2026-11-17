@@ -96,3 +96,47 @@ fn a_failed_source_does_not_turn_into_an_empty_worktree_file() {
     ).is_err());
     assert!(directory.open_optional_read_entry(&name).unwrap().is_none());
 }
+
+#[test]
+fn revoked_copy_stops_after_its_first_real_chunk_without_installing_any_name() {
+    use std::cell::Cell;
+
+    struct Metered<'a> {
+        source: Cursor<Vec<u8>>,
+        bytes: &'a Cell<usize>,
+    }
+    impl Read for Metered<'_> {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.source.read(output)?;
+            self.bytes.set(self.bytes.get() + read);
+            Ok(read)
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let root_path = temp.path().join("held");
+    let held = root(&root_path);
+    let sentinel = root_path.join("preserve");
+    std::fs::write(&sentinel, b"unrelated original").unwrap();
+    let source = vec![71; 1_048_576];
+    let expected = expectation(&source);
+    let bytes = Cell::new(0usize);
+    let mut input = Metered { source: Cursor::new(source), bytes: &bytes };
+    let name = EntryName::new("tentative-full").unwrap();
+    let result = held.copy_new_entry_verified_synced_observed(
+        &name,
+        &mut input,
+        expected,
+        &mut || {
+            if bytes.get() == 0 {
+                Ok(())
+            } else {
+                Err(crate::business::file_draft::automatic::stale())
+            }
+        },
+    );
+    assert!(result.is_err());
+    assert!((1..=64 * 1024).contains(&bytes.get()));
+    assert!(held.open_optional_read_entry(&name).unwrap().is_none());
+    assert_eq!(std::fs::read_dir(root_path).unwrap().count(), 1);
+    assert_eq!(std::fs::read(sentinel).unwrap(), b"unrelated original");
+}

@@ -280,6 +280,15 @@ pub(crate) struct ReadDraftDigest {
 
 impl ReadDraftDigest {
     pub(crate) fn capture(source: Arc<HeldManualReader>, chunk_bytes: u32) -> Result<Arc<Self>> {
+        Self::capture_observed(source, chunk_bytes, || Ok(()))
+    }
+
+    pub(crate) fn capture_observed(
+        source: Arc<HeldManualReader>,
+        chunk_bytes: u32,
+        mut checkpoint: impl FnMut() -> Result<()>,
+    ) -> Result<Arc<Self>> {
+        checkpoint()?;
         source.require_source()?;
         let payload = source.scope.incremental_identity()?;
         let mut full = blake3::Hasher::new();
@@ -287,6 +296,7 @@ impl ReadDraftDigest {
         let mut buffer = vec![0; chunk_bytes as usize];
         let mut offset = 0;
         while offset < payload.logical_size() {
+            checkpoint()?;
             let count = source.read_at(&mut buffer, offset)?;
             if count == 0 { return Err(changed()); }
             full.update(&buffer[..count]);
@@ -294,6 +304,7 @@ impl ReadDraftDigest {
             offset += count as u64;
         }
         source.require_source()?;
+        checkpoint()?;
         Ok(Arc::new(Self {
             source, payload, hash: storage_contract::ContentHash::from_digest(full.finalize()),
             checksums: storage_contract::ChecksumManifest {

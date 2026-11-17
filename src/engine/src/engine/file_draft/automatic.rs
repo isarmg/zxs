@@ -153,7 +153,9 @@ impl AutomaticFilePreparation {
                 let native = codec::AutomaticRequest { target: request.target.clone(), base, payload,
                     saved: self.saved.clone() };
                 let command = native.command();
-                let read = source.draft_digest(context.state, context.config.checksum_chunk_bytes)?;
+                let read = source.draft_digest_observed(
+                    context.state, context.config.checksum_chunk_bytes, || self.lease.check(),
+                )?;
                 let mut projected = business::unborn::begin(context.state, Sequence::new(context.next_slot))?;
                 let mut versions = Vec::new();
                 let (full, content) = if business::draft_matches_base(context.state, &command, read.as_deref())? {
@@ -161,7 +163,9 @@ impl AutomaticFilePreparation {
                 } else {
                     let hash = business::draft_content_hash(context.state, &request.target, read.as_deref())?;
                     self.lease.check()?;
-                    let full = PreparedAutomaticFull::prepare(&context, Arc::clone(&selected), hash)?;
+                    let full = PreparedAutomaticFull::prepare(
+                        &context, Arc::clone(&selected), hash, || self.lease.check(),
+                    )?;
                     let content = business::build_automatic_content(&context, &mut projected, &mut versions,
                         &command, &self.actor, self.operation, Arc::clone(&full), read.as_deref())?;
                     (Some(full), Some(content))

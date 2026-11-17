@@ -37,6 +37,16 @@ impl SelectedWorkingSource {
     pub(crate) fn draft_digest(
         &self, state: &State, chunk_bytes: u32,
     ) -> Result<Option<Arc<crate::container_storage::ReadDraftDigest>>> {
+        self.draft_digest_observed(state, chunk_bytes, || Ok(()))
+    }
+
+    pub(crate) fn draft_digest_observed(
+        &self,
+        state: &State,
+        chunk_bytes: u32,
+        mut checkpoint: impl FnMut() -> Result<()>,
+    ) -> Result<Option<Arc<crate::container_storage::ReadDraftDigest>>> {
+        checkpoint()?;
         if self.record.working.incremental().is_none() { return Ok(None); }
         let HeldWorkingBody::Born { scope, .. } = &self.body else {
             return Err(Error::FileDraft(Failure::WorkingBodyChanged));
@@ -48,7 +58,9 @@ impl SelectedWorkingSource {
         let reader = crate::container_storage::HeldManualReader::capture(
             Arc::clone(scope), *base, version,
         )?;
-        crate::container_storage::ReadDraftDigest::capture(Arc::new(reader), chunk_bytes).map(Some)
+        crate::container_storage::ReadDraftDigest::capture_observed(
+            Arc::new(reader), chunk_bytes, checkpoint,
+        ).map(Some)
     }
 
     pub(crate) fn born_scope(&self) -> Result<&Arc<ObservedContainerReplica>> {

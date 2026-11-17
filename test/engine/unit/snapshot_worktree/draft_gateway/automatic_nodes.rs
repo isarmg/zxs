@@ -98,3 +98,26 @@ fn actual_automatic_nodes_bind_original_save_cause_stable_parent_and_half_open_t
     assert_eq!(engine.automatic_node_page(&scope(&nested, sub.scope.directory, t, t+1)).unwrap().0.rows, page.rows);
     for receipt in receipts { assert_eq!(engine.operation(receipt.operation_id).unwrap(), receipt); }
 }
+
+#[test]
+fn emergency_before_copy_keeps_all_existing_material_and_the_saved_bytes_after_reopen() {
+    let (fixture, mut engine) = Fixture::new();
+    let target = &fixture.targets[0];
+    let principal = "admin".parse().unwrap();
+    mode(&mut engine, target, &principal, CommitMode::Automatic);
+    let saved = save(&mut engine, target, &principal, b"newest durable replacement");
+    let expected = super::read_draft(&engine, target);
+    let job = engine.prepare_automatic_file(target.file).unwrap();
+    mode(&mut engine, target, &principal, CommitMode::Manual);
+    let before = fixture.media();
+    let version_count = engine.state().versions.len();
+    assert!(job.execute().is_err());
+    assert_eq!(fixture.media(), before);
+    drop(engine);
+    let engine = Engine::open(&fixture.system).unwrap();
+    assert_eq!(engine.state().versions.len(), version_count);
+    assert_eq!(engine.operation(saved.operation_id).unwrap(), saved);
+    assert_eq!(super::read_draft(&engine, target), expected);
+    let query = scope(target, NamespaceDirectoryId::Repository(target.repository), 0, u64::MAX);
+    assert!(engine.automatic_node_page(&query).unwrap().0.rows.is_empty());
+}

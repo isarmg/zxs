@@ -1117,11 +1117,22 @@ impl DiskIoResource<File> {
         &self,
         expectation: platform_io::payload::Expectation,
     ) -> std::result::Result<platform_io::payload::Receipt, platform_io::payload::Error> {
+        self.verify_full_observed(expectation, &mut || Ok(()))
+    }
+
+    pub(crate) fn verify_full_observed(
+        &self,
+        expectation: platform_io::payload::Expectation,
+        checkpoint: &mut impl FnMut() -> crate::Result<()>,
+    ) -> std::result::Result<platform_io::payload::Receipt, platform_io::payload::Error> {
         let mut access = self.access()?;
         platform_io::payload::verify_full_observed(
             &mut access.value().resource,
             expectation,
-            &mut || self.check_io(),
+            &mut || {
+                self.check_io()?;
+                checkpoint().map_err(io::Error::other)
+            },
         )
     }
 
