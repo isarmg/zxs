@@ -213,6 +213,19 @@ impl PlanningContext<'_> {
     }
 }
 
+impl crate::engine::ArchivedBackupPublication<'_> {
+    /// The immutable original archive needs registered geometry, not access to
+    /// the former owner's live common root. The complete container transition
+    /// still verifies every changed physical record against this same Config.
+    pub(crate) fn namespace_metadata(
+        &self, repository: RepositoryId, branch: BranchId,
+    ) -> Result<PublishedNamespaceMetadata<'_>> {
+        Ok(PublishedNamespaceMetadata(registered_namespace(
+            self.previous(), self.config(), repository, branch,
+        )?))
+    }
+}
+
 fn registered_namespace<'a>(
     state: &'a State, config: &'a Config, repository: RepositoryId, branch: BranchId,
 ) -> Result<NamespaceRegistration<'a>> {

@@ -66,6 +66,53 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_backup_archive_automatic_paths_keep_two_copy_and_previous_selections(self):
+        name = 'backup-terminal-two-copy'
+        paths = [
+            'src/engine/src/engine.rs',
+            'src/engine/src/engine/disk_registry/current/backup.rs',
+            'src/engine/src/engine/fresh_layout/namespace.rs',
+            'src/engine/src/protection.rs',
+            'src/engine/src/protection/backup_paths.rs',
+            'src/engine/src/protection/backup_paths/automatic.rs',
+            'src/engine/src/protection/backup_paths/automatic/archive.rs',
+            'src/engine/src/protection/backup_paths/initial.rs',
+            'test/engine/integration/backup_transaction_serving.rs',
+            'test/engine/integration/backup_terminal_switch.rs',
+        ]
+        group = self.policy['groups'][name]
+        self.assertEqual(group['python_tests'], [])
+        self.assertEqual(len(group['rust_targets']), 1)
+        target = group['rust_targets'][0]
+        self.assertEqual((target['package'], target['manifest'], target['kind'], target['name']),
+                         ('storage-engine', 'src/engine/Cargo.toml', 'test',
+                          'recursive_backup_paths'))
+        self.assertEqual(target['exact'], [
+            'backup_preparation::transaction_serving::terminal::'
+            'two_copy_terminal_switch_preserves_history_and_cold_successor',
+        ])
+        self.assertEqual((target['max_tests'], target['timeout_seconds']), (1, 900))
+        self.assertIs(target.get('isolate'), True)
+        self.assertIs(target.get('default_features', True), True)
+        self.assertEqual(target.get('features', []), [])
+        self.assertEqual(target.get('prefixes', []), [])
+        self.assertFalse(target.get('whole', False))
+        self.assertCountEqual(
+            [rule['path'] for rule in self.policy['rules'] if name in rule['groups']], paths,
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                complete = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(name, complete['groups'])
+                self.assertEqual(origin_selections(complete, name), [target])
+                if len(complete['groups']) > 1:
+                    assert_path_group_extension(self, self.policy, [path], None, [name])
+                else:
+                    self.assertEqual(len(complete['rust_targets']), 1)
+        assert_path_group_extension(self, self.policy, paths + [
+            CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
+        ], None, [name])
+
     def test_single_added_commit_paths_select_both_real_producers_and_keep_old_groups(self):
         name = 'worktree-added-commit'
         paths = [
@@ -419,6 +466,7 @@ class TargetedSelection(unittest.TestCase):
                     extensions.append('initial-storage-result-admission')
                 if path == 'src/engine/src/engine.rs':
                     extensions.append('worktree-added-native')
+                    extensions.append('backup-terminal-two-copy')
                 self.assertEqual(plan['groups'], sorted(retained + extensions))
                 self.assertIn('test_targeted_ci', plan['python_tests'])
                 self.assertCountEqual(origin_selections(plan, name), group['rust_targets'])
@@ -3020,6 +3068,15 @@ class ContainerTagsSelection(unittest.TestCase):
                     continue
                 self.assertIs(target.get('isolate'), True)
                 self.assertEqual(target['timeout_seconds'], 900)
+                if group == 'backup-terminal-two-copy':
+                    self.assertEqual(target['exact'], [
+                        'backup_preparation::transaction_serving::terminal::'
+                        'two_copy_terminal_switch_preserves_history_and_cold_successor',
+                    ])
+                    self.assertEqual(target['max_tests'], 1)
+                    self.assertEqual(target.get('features', []), [])
+                    self.assertIs(target.get('default_features', True), True)
+                    continue
                 if group == 'ordinary-namespace-parents' and target.get('exact') == ordinary:
                     self.assertEqual(target['max_tests'], 2)
                     self.assertIs(target.get('default_features'), True)

@@ -726,7 +726,10 @@ impl Engine {
                     }
                 }
                 let configured = initial::apply(
-                    &engine.planning_context(), state, request, scope, previous, normalized,
+                    |primary, copies| {
+                        initial::live_route(&engine.planning_context(), primary, copies)
+                    },
+                    state, request, scope, previous, normalized,
                     || Ok(new_id("policy")?), pending,
                     |version, placement| {
                         let (source, _) = engine.valid_replica(&version.version_id)?;

@@ -2,6 +2,8 @@
 //! The request has no prefix strings. Actual root registration selects geometry;
 //! only the ordinary preparation/decision path creates its prefix entities.
 use crate::engine::{PlanningContext, Prepared, ReadSource};
+mod archive;
+pub(crate) use archive::{VerifiedArchivedAutomaticBackup, verify as verify_archived};
 use crate::engine::fresh_layout::containers::VerifiedContainerTransition;
 use crate::persist::automatic_backup::{
     self as codec, FileSelection, Input, NamedDisk, PolicyId, Selection, Source,
@@ -168,7 +170,8 @@ impl Engine {
                     &scope, previous.as_ref())?;
                 let mut generated = Vec::new();
                 let configured = initial::apply(
-                    &context, next, scoped, scope, previous, BTreeMap::new(),
+                    |primary, copies| initial::live_route(&context, primary, copies),
+                    next, scoped, scope, previous, BTreeMap::new(),
                     || {
                         let id = PolicyId::generate()?;
                         if context.state.protection_policies.contains_key(&id.to_string())
@@ -251,20 +254,46 @@ fn source_for_replay(
         &namespace(context.state, &repository)?.entries, &repository, scope,
         |file, path| context.file_placement_settings(&repository, file, path)
             .map(|settings| settings.0))?;
-    if exact_policy(context.state, &repository, scope)
+    source_geometry(
+        context.config, context.state, input, scope, binding, disk.disk_id.parse()?,
+        primaries, |slot| context.disk(slot), |primary, copies| context.route(primary, copies),
+        |id| match &published {
+            Some(source) => source.require_backup_target(id),
+            None => {
+                // New/Accepted preparation still requires every original held source.
+                context.observe_backup_source_path(input.repository_id,
+                    repo.main_branch_id.parse()?, id)?.require_context(context)
+            }
+        },
+    )
+}
+
+fn source_geometry<'a>(
+    config: &crate::Config,
+    state: &State,
+    input: &Input,
+    scope: &Scope,
+    binding: &storage_contract::working_tree::RootBinding,
+    owner: DiskId,
+    primaries: BTreeSet<String>,
+    disk: impl Fn(&str) -> Result<&'a crate::DiskConfig>,
+    select_route: impl Fn(&str, u32) -> Result<Vec<String>>,
+    require_target: impl Fn(DiskId) -> Result<()>,
+) -> Result<Source> {
+    let repository = input.repository_id.to_string();
+    if exact_policy(state, &repository, scope)
         .is_some_and(|policy| !policy.backup_prefixes.is_empty())
-        || scope.files.keys().any(|file| context.state.file_backup_paths.get(file)
+        || scope.files.keys().any(|file| state.file_backup_paths.get(file)
             .is_some_and(|paths| !paths.is_empty()))
     {
         return Err(wrong_source());
     }
-    let owner = disk.disk_id.parse::<DiskId>()?;
     let mut route = None;
     for primary in primaries {
-        if context.disk(&primary)?.disk_id.parse::<DiskId>()? != owner {
+        if disk(&primary)?.disk_id.parse::<DiskId>()? != owner {
             return Err(wrong_source());
         }
-        let selected = context.route(&primary, input.target_copies)?;
+        let selected = select_route(&primary, input.target_copies)?;
         if route.as_ref().is_some_and(|old| old != &selected) {
             return Err(wrong_source());
         }
@@ -273,20 +302,12 @@ fn source_for_replay(
     let route = route.ok_or_else(wrong_source)?;
     let mut disks = Vec::with_capacity(route.len());
     for slot in &route {
-        let disk = context.disk(slot)?;
+        let disk = disk(slot)?;
         let id = disk.disk_id.parse::<DiskId>()?;
         if id != owner {
-            match &published {
-                Some(source) => source.require_backup_target(id)?,
-                None => {
-                    // New/Accepted preparation still requires every original
-                    // held source. A Published read loan cannot reach this gate.
-                    context.observe_backup_source_path(input.repository_id,
-                        repo.main_branch_id.parse()?, id)?.require_context(context)?;
-                }
-            }
+            require_target(id)?;
         }
-        disks.push(NamedDisk::from_config(context.config, disk)?);
+        disks.push(NamedDisk::from_config(config, disk)?);
     }
     Ok(Source { root: binding.clone(), disks })
 }
@@ -393,42 +414,57 @@ fn reconstruct(
     result: &OperationResult,
     readonly: Option<&crate::engine::ReadOnlyPublishedCandidate<'_>>,
 ) -> Result<(State, Vec<(FileVersion, Placement)>, Option<DirectoryBackupSelection>)> {
+    reconstruct_with(
+        context.config, context.state, next, result,
+        |input, scope| source_for_replay(context, input, scope, readonly),
+        |primary, copies| initial::live_route(context, primary, copies),
+    )
+}
+
+fn reconstruct_with(
+    config: &crate::ValidatedConfig,
+    previous_state: &State,
+    next: &State,
+    result: &OperationResult,
+    source: impl FnOnce(&Input, &Scope) -> Result<Source>,
+    route: impl FnMut(&str, u32) -> Result<initial::InitialRoute>,
+) -> Result<(State, Vec<(FileVersion, Placement)>, Option<DirectoryBackupSelection>)> {
     if next.operations.get(&result.operation_id) != Some(result)
-        || context.state.operations.contains_key(&result.operation_id)
-        || next.sequence != result.sequence || next.sequence <= context.state.sequence
+        || previous_state.operations.contains_key(&result.operation_id)
+        || next.sequence != result.sequence || next.sequence <= previous_state.sequence
     {
         return Err(invalid());
     }
     let principal = next.operation_principals.get(&result.operation_id).ok_or_else(invalid)?;
     Engine::require_actor(principal)?;
-    crate::directory_conversion::require_import_not_stopped(context.state, result.operation_id)?;
+    crate::directory_conversion::require_import_not_stopped(previous_state, result.operation_id)?;
     let decoded = codec::decode(result)?;
     let repository = decoded.input.repository_id.to_string();
     let prefixes = BTreeMap::new();
     let expected_scope = decoded.selection.directory().map(|entry| entry.to_string());
     let mut scoped = decoded.input.scoped(&repository, &prefixes, principal, result.operation_id);
     scoped.expected_scope_id = expected_scope.as_deref();
-    let mut expected = context.state.as_ref().clone();
+    let mut expected = previous_state.clone();
     expected.begin_tracking();
     crate::container_storage::capture_names(&mut expected);
     expected.sequence = next.sequence;
     expected.business_generation = expected.business_generation.checked_add(1)
         .ok_or(Error::AutomaticBackup(AutomaticBackupError::Generation))?;
     let (scope, previous) = select_scope(&expected, &decoded.input, decoded.selection, scoped)?;
-    if source_for_replay(context, &decoded.input, &scope, readonly)? != decoded.source {
+    if source(&decoded.input, &scope)? != decoded.source {
         return Err(wrong_source());
     }
-    let directories = directory_selection(context.config, context.state, &decoded.input,
+    let directories = directory_selection(config, previous_state, &decoded.input,
         decoded.selection, &decoded.source, &scope, previous.as_ref())?;
     let mut ids = decoded.generated.iter();
     let mut facts = Vec::new();
     let mut seen = BTreeSet::new();
     let configured = initial::apply(
-        context, &mut expected, scoped, scope, previous, BTreeMap::new(),
+        route, &mut expected, scoped, scope, previous, BTreeMap::new(),
         || {
             let id = *ids.next().ok_or_else(invalid)?;
             if !seen.insert(id)
-                || context.state.protection_policies.contains_key(&id.to_string())
+                || previous_state.protection_policies.contains_key(&id.to_string())
             {
                 return Err(invalid());
             }
@@ -438,11 +474,11 @@ fn reconstruct(
     )?;
     if ids.next().is_some() { return Err(invalid()); }
     // Preserve the ordinary non-content gates before any payload/root writer.
-    crate::file_deletion::freeze::verify(context.state, &expected)?;
-    crate::business::file_tags::preserve_existing(context.state, &expected)?;
-    crate::container_storage::capture_changed_names(context.state, &mut expected);
-    let receipt = codec::receipt(context.config, &decoded,
-        &context.state.repositories[&repository].history_tree_id, &configured,
+    crate::file_deletion::freeze::verify(previous_state, &expected)?;
+    crate::business::file_tags::preserve_existing(previous_state, &expected)?;
+    crate::container_storage::capture_changed_names(previous_state, &mut expected);
+    let receipt = codec::receipt(config, &decoded,
+        &previous_state.repositories[&repository].history_tree_id, &configured,
         &facts, result.operation_id, next.sequence, principal)?;
     if receipt != *result { return Err(invalid()); }
     expected.operations.insert(result.operation_id, receipt.clone());
@@ -452,8 +488,8 @@ fn reconstruct(
         kind: decoded.selection.kind().into(),
         object_id: receipt.history_tree_id.clone().ok_or_else(invalid)?,
     });
-    crate::node_retirement_engine::verify(context.state, &expected)?;
-    crate::file_deletion::publication::verify(context.state, &expected, None)?;
+    crate::node_retirement_engine::verify(previous_state, &expected)?;
+    crate::file_deletion::publication::verify(previous_state, &expected, None)?;
     Ok((expected, facts, directories))
 }
 
@@ -545,11 +581,22 @@ fn verify_candidate_source(
     {
         return Err(invalid());
     }
-    let (mut expected, facts, _) = reconstruct(context, next, result, readonly)?;
+    let (expected, facts, _) = reconstruct(context, next, result, readonly)?;
+    verify_reconstructed_candidate(context.state, next, candidate, containers, expected, &facts)
+}
+
+fn verify_reconstructed_candidate(
+    previous: &State,
+    next: &State,
+    candidate: &crate::journal::Candidate,
+    containers: &VerifiedContainerTransition<'_>,
+    mut expected: State,
+    facts: &[(FileVersion, Placement)],
+) -> Result<()> {
     // The exact same container verifier proved these physical rows. Neither an
     // automatic receipt nor a reconstructed logical plan can supply them.
     containers.attach_feedback(&mut expected)?;
-    if !crate::publication_shape::same_transition(context.state, &expected, next)
+    if !crate::publication_shape::same_transition(previous, &expected, next)
         || facts.len() != candidate.versions.len()
         || facts.iter().zip(&candidate.versions).any(|((version, placement), evidence)| {
             version != &evidence.version || placement != &evidence.placement

@@ -53,6 +53,7 @@ pub use fresh_layout::FreshLayoutError;
 pub(crate) use fresh_layout::namespace::RegisteredNamespaceRoot;
 pub use config::ValidatedConfig;
 mod disk_registry;
+pub(crate) use disk_registry::current::backup::ArchivedBackupPublication;
 pub(crate) use disk_registry::current::{
     CurrentBatchScope, CurrentNamespaces, NamespaceReadView, WorkspaceNamespaceBaseline,
 };

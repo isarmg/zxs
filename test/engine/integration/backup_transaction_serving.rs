@@ -5,6 +5,9 @@ use super::*;
 use std::io::Read;
 use storage_engine::{BackupTopologyTarget, BackupTransactionRequest};
 
+#[path = "backup_terminal_switch.rs"]
+mod terminal;
+
 // Write directly to the process stream: libtest retains eprintln! output until
 // a test returns, which would hide the last completed stage on a CI timeout.
 fn diagnostic(start: std::time::Instant, stage: &str) {

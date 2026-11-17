@@ -6082,6 +6082,24 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "backup-terminal-two-copy": {
+      "reason": "Exercise the independent normal two-copy terminal Backup transaction through activation, exact cold replay and successor writes; preserve the separate original three-tier fanout regression and its unchanged timeout.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "isolate": true,
+          "exact": [
+            "backup_preparation::transaction_serving::terminal::two_copy_terminal_switch_preserves_history_and_cold_successor"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -18691,6 +18709,66 @@
       "path": "test/server/unit/smb_rpc/worktree_commit_tests.rs",
       "groups": [
         "worktree-added-commit"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "backup-terminal-two-copy"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/backup.rs",
+      "groups": [
+        "backup-terminal-two-copy"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/namespace.rs",
+      "groups": [
+        "backup-terminal-two-copy"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection.rs",
+      "groups": [
+        "backup-terminal-two-copy"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths.rs",
+      "groups": [
+        "backup-terminal-two-copy"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths/automatic.rs",
+      "groups": [
+        "backup-terminal-two-copy"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths/automatic/archive.rs",
+      "groups": [
+        "backup-terminal-two-copy"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths/initial.rs",
+      "groups": [
+        "backup-terminal-two-copy"
+      ]
+    },
+    {
+      "path": "test/engine/integration/backup_transaction_serving.rs",
+      "groups": [
+        "backup-terminal-two-copy"
+      ]
+    },
+    {
+      "path": "test/engine/integration/backup_terminal_switch.rs",
+      "groups": [
+        "backup-terminal-two-copy"
       ]
     }
   ],

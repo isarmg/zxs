@@ -44,8 +44,33 @@ pub(super) fn select_scope(
     Ok((scope, previous))
 }
 
+/// Live callers retain the actual Current routing and write-slot admission.
+/// The shared transformation only consumes these already-selected disk records.
+pub(super) fn live_route(
+    context: &PlanningContext<'_>, primary: &str, copies: u32,
+) -> Result<InitialRoute> {
+    InitialRoute::bind(context.route(primary, copies)?, |slot| context.disk(slot))
+}
+
+/// Preserve the selected route's exact slot spelling and its binding generations.
+/// Neither adapter may normalize a published route by rebuilding it from disks.
+pub(super) struct InitialRoute {
+    slots: Vec<String>,
+    bindings: BTreeMap<String, u64>,
+}
+impl InitialRoute {
+    pub(super) fn bind<'a>(
+        slots: Vec<String>, disk: impl Fn(&str) -> Result<&'a crate::DiskConfig>,
+    ) -> Result<Self> {
+        let bindings = slots.iter().map(|slot| {
+            Ok((slot.clone(), disk(slot)?.binding_generation))
+        }).collect::<Result<_>>()?;
+        Ok(Self { slots, bindings })
+    }
+}
+
 pub(super) fn apply<T>(
-    context: &PlanningContext<'_>,
+    mut route: impl FnMut(&str, u32) -> Result<InitialRoute>,
     state: &mut State,
     request: ScopedBackupConfigurationRequest<'_>,
     scope: Scope,
@@ -103,14 +128,12 @@ pub(super) fn apply<T>(
     prune_retained_policies(state, repository);
     for version in &versions {
         let previous = state.placements[&version.version_id].clone();
-        let route = context.route(&previous.primary_slot_id, copies)?;
+        let route = route(&previous.primary_slot_id, copies)?;
         let placement = Placement {
             version_id: version.version_id.clone(), primary_slot_id: previous.primary_slot_id,
-            target_copies: copies, route_slot_ids: route.clone(),
+            target_copies: copies, route_slot_ids: route.slots,
             topology_generation: state.topology_generation,
-            binding_generations: route.iter().map(|slot| {
-                Ok((slot.clone(), context.disk(slot)?.binding_generation))
-            }).collect::<Result<_>>()?,
+            binding_generations: route.bindings,
         };
         let payload = prepare(version, &placement)?;
         state.placements.insert(version.version_id.clone(), placement);

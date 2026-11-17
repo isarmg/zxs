@@ -16,6 +16,7 @@ pub(in crate::engine::disk_registry) use routing::BackupRouting;
 /// then completes the entire archive before calling finish.
 pub(in crate::engine) struct BackupNamespaceReplay {
     view: CurrentNamespaces,
+    original: crate::ValidatedConfig,
     previous: State,
     snapshot: Option<String>,
 }
@@ -46,6 +47,7 @@ impl BackupNamespaceReplay {
                 recursive_policies: Arc::default(),
                 backup_routing: None,
             },
+            original: first.original_config().clone(),
             previous: State::default(),
             snapshot: None,
         })
@@ -70,9 +72,19 @@ impl BackupNamespaceReplay {
         }
         // The normal exact-write-set verifiers maintain deletion freezes,
         // retirement, copy identity fences and recursive-follow policy state.
-        // A legacy operation they cannot admit is rejected, never reconstructed
-        // by trusting receipt labels or defaulting to an empty policy index.
-        self.view = self.view.advance(&self.previous, next)?;
+        // Initial automatic publications instead use their original complete
+        // business/container replay. No receipt label alone admits a delta.
+        let source = ArchivedBackupPublication {
+            config: &self.original,
+            previous: &self.previous,
+            next,
+            candidate,
+            snapshot: self.snapshot.as_deref(),
+        };
+        self.view = match crate::protection::verify_archived_automatic_backup(&source)? {
+            Some(verified) => self.view.advance_archived_automatic(&verified)?,
+            None => self.view.advance(&self.previous, next)?,
+        };
         self.previous = next.clone();
         self.snapshot = Some(candidate.snapshot_hash.clone());
         Ok(())
@@ -164,6 +176,41 @@ impl BackupNamespaceReplay {
             view: self.view,
             publication,
         })
+    }
+}
+
+/// The original fixed-Genesis publication currently being replayed for Backup.
+/// Only observe constructs this loan, after its caller authenticates the native
+/// journal/seal/history/payload prefix. It grants neither roots nor a writer;
+/// even a proved business delta remains private until the entire archive finishes.
+pub(crate) struct ArchivedBackupPublication<'a> {
+    config: &'a crate::ValidatedConfig,
+    previous: &'a State,
+    next: &'a State,
+    candidate: &'a Candidate,
+    snapshot: Option<&'a str>,
+}
+impl ArchivedBackupPublication<'_> {
+    pub(crate) fn config(&self) -> &crate::ValidatedConfig { self.config }
+    pub(crate) fn previous(&self) -> &State { self.previous }
+    pub(crate) fn next(&self) -> &State { self.next }
+    pub(crate) fn candidate(&self) -> &Candidate { self.candidate }
+    pub(crate) fn snapshot(&self) -> Option<&str> { self.snapshot }
+}
+
+impl CurrentNamespaces {
+    fn advance_archived_automatic(
+        &self, verified: &crate::protection::VerifiedArchivedAutomaticBackup<'_>,
+    ) -> Result<Self> {
+        let (previous, next) = verified.states();
+        if !self.matches_source(previous) || !self.matches_source(next) {
+            return Err(stale());
+        }
+        let mut view = self.clone();
+        // A changed policy invalidates an old recursive binding, but automatic
+        // placement grants no new Current recursive-path authority.
+        view.recursive_policies = self.advance_recursive_index(previous, next, None, None)?;
+        Ok(view)
     }
 }
 
