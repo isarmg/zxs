@@ -1568,7 +1568,7 @@ pub(crate) fn prepare_layout_repair(
     )
 }
 
-fn projection_locations(
+pub(crate) fn projection_locations(
     config: &Config,
     previous: StateProjection<'_>,
     next: StateProjection<'_>,

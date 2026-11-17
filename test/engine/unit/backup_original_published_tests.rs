@@ -428,6 +428,24 @@ fn original_file_epoch_is_not_the_latest_whole_pool_sequence() -> Result<()> {
             source.require_file_predecessor(file, epoch, physical.records_hash())?;
             assert!(source.require_file_predecessor(file, state.sequence, physical.records_hash()).is_err());
             assert!(source.require_file_predecessor(file, epoch, &"0".repeat(64)).is_err());
+            // Pure selector boundary, not a fabricated publication: retain the
+            // last disk's FILE registration but remove every BODY route to it,
+            // then change only file metadata. Do not mark that holder written.
+            let excluded = source.config().disks.last().unwrap();
+            let mut previous = state.clone();
+            for version in state.versions.values().filter(|version| version.file_id == *id) {
+                previous.placements.get_mut(&version.version_id).unwrap().route_slot_ids
+                    .retain(|slot| slot != &excluded.slot_id);
+            }
+            assert!(previous.file_containers[&file].replicas.contains_key(&excluded.disk_id.parse()?));
+            let mut next = previous.clone();
+            next.file_notes.insert(id.clone(), "new note only".into());
+            assert!(crate::container_storage::affected_file_material(&previous, &next).contains(id));
+            let transition = crate::state_projection::ProjectionTransition::new(&previous, &next, None)?;
+            let writers = crate::container_storage::projection_locations(
+                source.config(), transition.previous(), transition.next(), id,
+            )?;
+            assert!(!writers.iter().any(|(slot, _)| slot == &excluded.slot_id));
         }
         assert_eq!(media(temporary), before);
         Ok(())

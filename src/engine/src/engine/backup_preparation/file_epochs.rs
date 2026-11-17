@@ -9,7 +9,7 @@ use crate::{
     },
     history_package::{AdmittedState, preparation_checkpoint},
     journal::Candidate,
-    state_projection::ProjectionSnapshot,
+    state_projection::ProjectionTransition,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -46,7 +46,8 @@ fn holder(replica: &ContainerReplica) -> Result<blake3::Hash> {
 }
 
 pub(super) struct FileEpochReplay {
-    original_pool: String,
+    original: crate::ValidatedConfig,
+    first: String,
     previous: State,
     snapshot: Option<String>,
     epochs: BTreeMap<(FileId, DiskId), Epoch>,
@@ -54,7 +55,8 @@ pub(super) struct FileEpochReplay {
 impl FileEpochReplay {
     pub(super) fn new(first: &PreparedBackupFirstCandidate) -> Self {
         Self {
-            original_pool: first.original_config().pool_id.clone(),
+            original: first.original_config().clone(),
+            first: first.hash().to_owned(),
             previous: State::default(),
             snapshot: None,
             epochs: BTreeMap::new(),
@@ -71,7 +73,7 @@ impl FileEpochReplay {
     ) -> Result<()> {
         preparation_checkpoint(stop)?;
         let next = admitted.state();
-        if candidate.pool_id != self.original_pool
+        if candidate.pool_id != self.original.pool_id
             || candidate.generation().is_some()
             || candidate.registry().is_some()
             || self.previous.sequence.checked_add(1) != Some(candidate.sequence)
@@ -125,7 +127,7 @@ impl FileEpochReplay {
         if inspect.is_empty() {
             return Ok(());
         }
-        let projection = ProjectionSnapshot::new(next);
+        let projection = ProjectionTransition::new(&self.previous, next, None)?;
         for file in inspect {
             preparation_checkpoint(stop)?;
             let before = self.previous.file_containers.get(&file);
@@ -139,10 +141,33 @@ impl FileEpochReplay {
                 }
             }
             let Some(after) = after else { continue };
+            // This is the ordinary physical FILE writer's exact destination
+            // selector (old/new BODY routes, plus a real Unborn owner).
+            // Registration alone is not a write, nor is an unrelated repair.
+            let slots = if regular.contains(&file) {
+                crate::container_storage::projection_locations(
+                    &self.original,
+                    projection.previous(),
+                    projection.next(),
+                    &file.to_string(),
+                )?
+            } else {
+                BTreeSet::new()
+            };
+            let history = after.history_tree_id.to_string();
             let mut rows = None;
             for (disk, occurrence) in &after.replicas {
-                if !regular.contains(&file)
-                    && before.and_then(|old| old.replicas.get(disk)) == Some(occurrence)
+                if before.and_then(|old| old.replicas.get(disk)) != Some(occurrence) {
+                    self.epochs.remove(&(file, *disk));
+                }
+                let selected = self
+                    .original
+                    .disks
+                    .iter()
+                    .find(|selected| selected.disk_id == disk.to_string())
+                    .ok_or(Failure::Registration)?;
+                if self.original.excludes_io_disk(&selected.disk_id)
+                    || !slots.contains(&(selected.slot_id.clone(), history.clone()))
                 {
                     continue;
                 }
@@ -156,7 +181,7 @@ impl FileEpochReplay {
                     None => {
                         let captured =
                             crate::container_storage::file_database::capture_projected_copy(
-                                projection.view(),
+                                projection.next(),
                                 &file.to_string(),
                                 &after.history_tree_id.to_string(),
                             )?;
@@ -180,7 +205,7 @@ impl FileEpochReplay {
     }
 
     pub(super) fn finish(self, first: &PreparedBackupFirstCandidate) -> Result<OriginalFileEpochs> {
-        if first.original_config().pool_id != self.original_pool
+        if first.hash() != self.first
             || self.snapshot.is_none()
             || self.snapshot != first.candidate().previous_snapshot
             || self.previous.sequence >= first.sequence()
