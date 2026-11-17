@@ -7,6 +7,7 @@ use data_serialization::{Deserialize, Serialize};
 use std::fmt;
 
 pub mod manifest;
+pub mod automatic;
 mod incremental;
 pub use incremental::IncrementalManifest;
 mod unborn;
