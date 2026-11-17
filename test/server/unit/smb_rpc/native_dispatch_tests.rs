@@ -244,6 +244,15 @@ mod worktree;
 
 #[test]
 fn live_automatic_save_becomes_manual_draft_through_the_production_dispatcher() {
+    exercise_live_automatic_switch(false);
+}
+
+#[test]
+fn old_automatic_handle_cannot_publish_after_switching_back_to_automatic() {
+    exercise_live_automatic_switch(true);
+}
+
+fn exercise_live_automatic_switch(cycle_back: bool) {
     use std::io::Read;
     use storage_contract::OperationId;
     use storage_contract::file_draft::{CommitMode, DraftCommand};
@@ -304,10 +313,27 @@ fn live_automatic_save_becomes_manual_draft_through_the_production_dispatcher() 
     file.set_len(bytes.len() as u64).unwrap();
     direct.call(Request::Dirty { handle: old.handle });
     assert_eq!(switch(&direct, CommitMode::Manual), historical);
+    if cycle_back {
+        assert_eq!(switch(&direct, CommitMode::Automatic), historical);
+    }
     let blocked = direct.share.dispatch(Request::PrepareWrite {
         handle: old.handle, end: 4096, bytes: 1,
     }).unwrap_err();
     assert_eq!(blocked.error.code, storage_contract::ErrorCode::FileBranchConflict);
+    if cycle_back {
+        let rejected = direct.share.dispatch(Request::Flush { handle: old.handle }).unwrap_err();
+        assert_eq!(rejected.error.code, storage_contract::ErrorCode::FileBranchConflict);
+        let working = direct.backend.file_working(&current, target.clone()).unwrap();
+        assert_eq!(working.base, historical);
+        assert_eq!(working.working.mode(), CommitMode::Automatic);
+        assert!(working.working.draft().is_none());
+        let file = target.file.to_string();
+        assert_eq!(direct.backend.file_history(&current, &file).unwrap().len(), 1);
+        let (read, _) = direct.open(path, false, false);
+        assert_eq!(direct.read(read.handle), original);
+        direct.call(Request::Close { handle: read.handle });
+        return;
+    }
     let receipt = direct.flush(old.handle);
     assert_eq!(receipt["operation_kind"], "file.draft.write");
     assert_eq!(direct.flush(old.handle), receipt);

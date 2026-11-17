@@ -209,10 +209,11 @@ impl Session {
         };
         // A published generation keeps its captured selection, while Dirty
         // creates its successor. Active generations also require an open lease.
-        self.shared.backend.authorize_workspace_write(
+        self.shared.backend.authorize_smb_automatic_write(
             &self.identity,
             &writer.workspace.workspace_id,
             writer.write_access(&self.branch),
+            writer.automatic.as_ref(),
         )?;
         if writer.switched_draft.is_some() {
             return Err(ApiError::conflict(
@@ -243,10 +244,11 @@ impl Session {
         recovery_record(writer, &self.identity.principal, &self.branch)?;
         // Even an already published handle remains bound to the selection it
         // opened. A same-content default switch must not retarget this FD.
-        self.shared.backend.authorize_workspace_write(
+        self.shared.backend.authorize_smb_automatic_write(
             &self.identity,
             &writer.workspace.workspace_id,
             writer.write_access(&self.branch),
+            writer.automatic.as_ref(),
         )?;
         if writer.switched_draft.is_some() {
             return Err(ApiError::conflict(
@@ -305,7 +307,15 @@ impl Session {
                     return Err(error);
                 }
             };
-            writer.automatic = automatic;
+            // A successor tracks its new content base but cannot refresh a
+            // descriptor's original mode generation after an intervening switch.
+            if let Some(next) = automatic
+                && writer.automatic.as_ref().is_none_or(|original| {
+                    original.target == next.target && original.revision == next.revision
+                })
+            {
+                writer.automatic = Some(next);
+            }
             writer.workspace = workspace;
             writer.committed = false;
             writer.operation_id = operation_id;
@@ -519,10 +529,11 @@ fn flush_writer(
     // before copying its mutable bytes into another upload preparation. A mode
     // change during preparation is fenced again by the existing whole-State
     // revalidation at finish, not a second SMB-specific decision gate.
-    if let Err(error) = shared.backend.authorize_workspace_write(
+    if let Err(error) = shared.backend.authorize_smb_automatic_write(
         identity,
         &writer.workspace.workspace_id,
         writer.write_access(branch),
+        writer.automatic.as_ref(),
     ) {
         if error.code == storage_contract::ErrorCode::FileBranchConflict
             && let Some(automatic) = &writer.automatic
@@ -553,7 +564,9 @@ fn flush_writer(
     )?;
     let result = shared
         .backend
-        .commit_workspace(identity, writer.save_request())?;
+        .commit_smb_automatic_workspace(
+            identity, writer.save_request(), writer.automatic.as_ref(),
+        )?;
     finish_publication(shared, identity, branch, writer, result.into())
 }
 

@@ -439,8 +439,25 @@ impl Backend for EngineBackend {
         identity: &Identity,
         command: crate::CommitWorkspace,
     ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.commit_smb_automatic_workspace(identity, command, None)
+    }
+
+    fn commit_smb_automatic_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+        automatic: Option<&crate::SmbAutomaticFile>,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
         let (mut engine, current) = self.lock_current(identity)?;
         let identity = &current;
+        if let Some(automatic) = automatic {
+            let workspace = workspace_authorize(&engine, identity, &command.workspace_id)?;
+            smb_draft::require_automatic_revision(&engine, identity, automatic)?;
+            engine.validate_workspace_automatic_write(&workspace, &automatic.target.path)
+                .map_err(error)?;
+        }
+        // Mode admission and preparation share the engine lock. A mode change
+        // cannot publish while an automatic preparation owns its reservation.
         let workspace_id = command.workspace_id.clone();
         let plan = Application::new(&mut engine, identity).prepare_commit_workspace(command)?;
         drop(engine);
@@ -2402,6 +2419,16 @@ impl Backend for EngineBackend {
         workspace: &str,
         access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), ApiError> {
+        self.authorize_smb_automatic_write(identity, workspace, access, None)
+    }
+
+    fn authorize_smb_automatic_write(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        access: crate::WorkspaceWrite<'_>,
+        automatic: Option<&crate::SmbAutomaticFile>,
+    ) -> Result<(), ApiError> {
         let (engine, current) = self.lock_current(identity)?;
         let file = match access {
             crate::WorkspaceWrite::Upload { .. } => None,
@@ -2416,6 +2443,9 @@ impl Backend for EngineBackend {
             engine
                 .validate_workspace_automatic_write(&workspace, path)
                 .map_err(error)?;
+        }
+        if let Some(automatic) = automatic {
+            smb_draft::require_automatic_revision(&engine, &current, automatic)?;
         }
         let logical_size = match access {
             crate::WorkspaceWrite::Upload { logical_size } => logical_size,

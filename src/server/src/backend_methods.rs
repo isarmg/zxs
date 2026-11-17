@@ -582,6 +582,25 @@ macro_rules! methods {
                     let _ = (identity, branch, entry);
                     Err($crate::ApiError::unsupported())
                 }
+                fn authorize_smb_automatic_write(
+                    &self,
+                    identity: &$crate::Identity,
+                    workspace: &str,
+                    access: $crate::WorkspaceWrite<'_>,
+                    automatic: Option<&$crate::SmbAutomaticFile>,
+                ) -> Result<(), $crate::ApiError> {
+                    let _ = automatic;
+                    self.authorize_workspace_write(identity, workspace, access)
+                }
+                fn commit_smb_automatic_workspace(
+                    &self,
+                    identity: &$crate::Identity,
+                    command: $crate::CommitWorkspace,
+                    automatic: Option<&$crate::SmbAutomaticFile>,
+                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
+                    let _ = automatic;
+                    self.commit_workspace(identity, command)
+                }
                 fn capture_smb_automatic(
                     &self, identity: &$crate::Identity, branch: &str,
                     entry: &storage_contract::Entry,

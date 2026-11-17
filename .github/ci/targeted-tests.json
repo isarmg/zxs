@@ -5768,9 +5768,10 @@
             "engine_backend::automatic_mode_tests::real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_cold",
             "engine_backend::automatic_mode_tests::accepted_auto_rpc_save_cold_completes_before_mode_switch_and_replays_only_original_request",
             "engine_backend::automatic_mode_tests::live_auto_generation_after_one_mode_switch_saves_a_shared_draft_without_history",
-            "smb_rpc::tests::native_dispatch_tests::live_automatic_save_becomes_manual_draft_through_the_production_dispatcher"
+            "smb_rpc::tests::native_dispatch_tests::live_automatic_save_becomes_manual_draft_through_the_production_dispatcher",
+            "smb_rpc::tests::native_dispatch_tests::old_automatic_handle_cannot_publish_after_switching_back_to_automatic"
           ],
-          "max_tests": 5
+          "max_tests": 6
         },
         {
           "package": "storage-server",

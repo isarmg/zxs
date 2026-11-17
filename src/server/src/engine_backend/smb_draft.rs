@@ -86,6 +86,22 @@ pub(super) fn capture_automatic(
     Ok(Some(SmbAutomaticFile { base, target, revision: *revision }))
 }
 
+pub(super) fn require_automatic_revision(
+    engine: &storage_engine::Engine,
+    current: &Identity,
+    automatic: &SmbAutomaticFile,
+) -> Result<(), ApiError> {
+    authorize_target(engine, current, &automatic.target)?;
+    let record = engine.state().file_containers.get(&automatic.target.file)
+        .ok_or_else(changed)?;
+    if let FileWorkingState::Automatic { revision } = &record.working
+        && *revision == automatic.revision
+    {
+        return Ok(());
+    }
+    Err(changed())
+}
+
 pub(super) fn switched_revision(
     backend: &EngineBackend,
     identity: &Identity,

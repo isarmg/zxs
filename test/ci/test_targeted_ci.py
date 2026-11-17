@@ -347,6 +347,8 @@ class TargetedSelection(unittest.TestCase):
             'live_auto_generation_after_one_mode_switch_saves_a_shared_draft_without_history',
             'smb_rpc::tests::native_dispatch_tests::'
             'live_automatic_save_becomes_manual_draft_through_the_production_dispatcher',
+            'smb_rpc::tests::native_dispatch_tests::'
+            'old_automatic_handle_cannot_publish_after_switching_back_to_automatic',
         ])
         self.assertEqual(rpc['exact'], [
             'manual_draft::'
@@ -356,7 +358,7 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(web['exact'], [
             'fresh_working::fresh_authenticated_draft_and_worktree_survive_cold_exact_retries',
         ])
-        self.assertEqual((unit['kind'], unit['max_tests']), ('lib', 5))
+        self.assertEqual((unit['kind'], unit['max_tests']), ('lib', 6))
         self.assertEqual((rpc['kind'], rpc['name'], rpc['max_tests']),
                          ('test', 'phase1_smb_rpc', 2))
         self.assertEqual((web['kind'], web['name'], web['max_tests']),
