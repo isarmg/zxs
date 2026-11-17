@@ -4,6 +4,8 @@
 use super::{DerivedOwners, FileRows, State, Writes};
 use storage_contract::{OperationId, OperationResult, SharedRecords};
 mod membership;
+mod admitted;
+pub(crate) use admitted::AdmittedLifecycle;
 pub(crate) use membership::LifecycleMembershipIndex;
 
 #[derive(Clone, Debug, PartialEq)]

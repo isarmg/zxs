@@ -5,7 +5,7 @@
 use crate::{disk::*, journal::*, *};
 mod recovery_snapshot;
 pub(crate) use recovery_snapshot::{
-    AdmittedSnapshot, OriginalReceiptProjection, SharedAdmittedSnapshot,
+    AdmittedSnapshot, OriginalReceiptProjection, SharedAdmittedSnapshot, VisibleSnapshot, SnapshotLifecycleBinding,
     verified_recovery_snapshot_at,
 };
 

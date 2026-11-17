@@ -2,7 +2,10 @@
 use crate::engine::history_window::HistoryCancellationCheckpoint;
 use crate::engine::history_window::read::HistoryWindowRead;
 use crate::{Engine, Result, State};
-use crate::state_projection::lifecycles::{LifecycleMembershipIndex, LifecycleSource};
+use crate::publication_evidence::SnapshotLifecycleBinding;
+use crate::state_projection::lifecycles::{
+    AdmittedLifecycle, LifecycleMembershipIndex, LifecycleSource,
+};
 use std::sync::{Arc, Mutex, Weak};
 use storage_contract::file_lifecycle::{
     Cursor, Detail, Event, LifecycleError, Page, Request, Timestamp,
@@ -41,6 +44,7 @@ impl EventBudget {
 pub(in crate::engine) struct LifecycleCache {
     slot: Mutex<Option<CachedAudit>>,
     memberships: Mutex<Option<CachedMemberships>>,
+    snapshot: Mutex<Option<SnapshotLifecycleBinding>>,
 }
 
 struct AuditKey {
@@ -68,6 +72,18 @@ impl AuditKey {
 }
 
 impl LifecycleCache {
+    /// Issued only by installation of an admitted original disk snapshot. A
+    /// changed recovered result yields None before it reaches this boundary.
+    pub(in crate::engine) fn install_snapshot(&self, source: Option<SnapshotLifecycleBinding>) {
+        if let Ok(mut slot) = self.snapshot.lock() {
+            *slot = source;
+        }
+    }
+    fn snapshot(&self, key: &AuditKey) -> Option<Arc<AdmittedLifecycle>> {
+        let slot = self.snapshot.lock().ok()?;
+        slot.as_ref()?.for_state(&key.state)
+    }
+
     fn lookup(&self, key: &AuditKey) -> Option<Arc<[Event]>> {
         self.slot.lock().ok()?.as_ref()
             .filter(|cached| cached.key.matches(key))
@@ -191,12 +207,16 @@ impl FileLifecycleRead {
 
     fn admit_events(&self) -> Result<Vec<Event>> {
         let reusable = self.source_is_original();
-        let index = reusable.then(|| self.cache.membership_index(&self.key)).flatten();
-        let source = match index {
-            Some(index) => LifecycleSource::from_index(&self.source, &self.request.file_id, &index),
-            None => LifecycleSource::capture(
-                &self.source, &self.request.file_id, || self.read.cancellation.checkpoint(),
-            )?,
+        let admission = reusable.then(|| self.cache.snapshot(&self.key)).flatten();
+        let source = if let Some(verified) = &admission {
+            verified.source(&self.source, &self.request.file_id)
+        } else if let Some(index) = reusable.then(|| self.cache.membership_index(&self.key)).flatten()
+        {
+            LifecycleSource::from_index(&self.source, &self.request.file_id, &index)
+        } else {
+            LifecycleSource::capture(&self.source, &self.request.file_id, || {
+                self.read.cancellation.checkpoint()
+            })?
         };
         self.read.cancellation.checkpoint()?;
         let mut budget = EventBudget::new();
@@ -243,7 +263,8 @@ impl FileLifecycleRead {
         {
             return Err(LifecycleError::SourceIncomplete.into_error().into());
         }
-        self.append_path_events(source.path_ledger(), &mut events, &mut budget)?;
+        let checked = admission.as_deref().map(|verified| verified.paths(&self.request.file_id));
+        self.append_path_events(source.path_ledger(), checked, &mut events, &mut budget)?;
         events.sort_by_key(Event::order_key);
         self.read.cancellation.checkpoint()?;
         for pair in events.windows(2) {
@@ -278,34 +299,41 @@ impl FileLifecycleRead {
     fn append_path_events(
         &self,
         ledger: &crate::persist::path_changes::LedgerRead<'_>,
+        checked: Option<&[crate::persist::path_changes::PathChanged]>,
         events: &mut Vec<Event>,
         budget: &mut EventBudget,
     ) -> Result<()> {
-        ledger.visit(
-            || self.read.cancellation.checkpoint(),
-            |fact| {
-                if fact.file_id.to_string() != self.request.file_id.as_str() {
-                    return Ok(());
-                }
-                if fact.history_tree_id.to_string() != self.read.context.history_tree_id.as_str()
-                {
-                    return Err(crate::persist::path_changes::invalid());
-                }
-                let event = Event {
-                    operation_id: fact.operation_id,
-                    sequence: fact.sequence.get(),
-                    occurred_at: Some(fact.occurred_at),
-                    detail: Detail::PathChanged {
-                        event_id: fact.event_id,
-                        before: fact.before,
-                        after: fact.after,
-                    },
-                };
-                budget.admit(&event)?;
-                events.push(event);
-                Ok(())
-            },
-        )
+        let mut append = |fact: crate::persist::path_changes::PathChanged| {
+            if fact.file_id.to_string() != self.request.file_id.as_str() {
+                return Ok(());
+            }
+            if fact.history_tree_id.to_string() != self.read.context.history_tree_id.as_str()
+            {
+                return Err(crate::persist::path_changes::invalid());
+            }
+            let event = Event {
+                operation_id: fact.operation_id,
+                sequence: fact.sequence.get(),
+                occurred_at: Some(fact.occurred_at),
+                detail: Detail::PathChanged {
+                    event_id: fact.event_id,
+                    before: fact.before,
+                    after: fact.after,
+                },
+            };
+            budget.admit(&event)?;
+            events.push(event);
+            Ok(())
+        };
+        if let Some(facts) = checked {
+            for fact in facts {
+                self.read.cancellation.checkpoint()?;
+                append(fact.clone())?;
+            }
+            Ok(())
+        } else {
+            ledger.visit(|| self.read.cancellation.checkpoint(), append)
+        }
     }
 }
 impl Engine {

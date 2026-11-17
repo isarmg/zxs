@@ -83,13 +83,35 @@ pub(crate) fn visit(
 fn visit_rows<'a>(
     state: &State,
     rows: impl Iterator<Item = (&'a OperationId, &'a OperationResult)>,
+    checkpoint: impl FnMut() -> Result<()>,
+    path: impl FnMut(PathChanged) -> Result<()>,
+) -> Result<()> {
+    visit_checked(state, rows, checkpoint, |_, _| Ok(()), path)
+}
+
+/// Optional read-index construction may observe only this exhaustive native
+/// pass. Unknown/malformed envelopes and cross-receipt collisions are still
+/// validated regardless of whether the small in-memory index overflows.
+pub(crate) fn admit_indexed(
+    state: &State,
+    member: impl FnMut(OperationId, &OperationResult) -> Result<()>,
+    path: impl FnMut(PathChanged) -> Result<()>,
+) -> Result<()> {
+    visit_checked(state, state.operations.iter(), || Ok(()), member, path)
+}
+
+fn visit_checked<'a>(
+    state: &State,
+    rows: impl Iterator<Item = (&'a OperationId, &'a OperationResult)>,
     mut checkpoint: impl FnMut() -> Result<()>,
+    mut member: impl FnMut(OperationId, &OperationResult) -> Result<()>,
     mut path: impl FnMut(PathChanged) -> Result<()>,
 ) -> Result<()> {
     let mut references = References::new(state);
     let mut collisions = crate::history_package::path_audit::CollisionIndex::new(state);
     for (id, receipt) in rows {
         checkpoint()?;
+        member(*id, receipt)?;
         if !carries_ledger(&receipt.kind) {
             continue;
         }

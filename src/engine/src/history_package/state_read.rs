@@ -18,19 +18,26 @@ impl RawState {
     }
 }
 
-pub(crate) struct AdmittedState(State);
+type Lifecycle = Option<Arc<crate::state_projection::lifecycles::AdmittedLifecycle>>;
+
+pub(crate) struct AdmittedState(State, Lifecycle);
 
 impl AdmittedState {
     /// Preserve full State admission for native archive consumers that already
     /// replayed typed state, without a serialize/deserialize round trip.
     pub(crate) fn admit_replayed(state: State) -> Result<Self> {
-        validate(&state)?;
-        Ok(Self(state))
+        let mut lifecycle = None;
+        validate_with(&state, |state| {
+            lifecycle = crate::state_projection::lifecycles::AdmittedLifecycle::admit(state)?;
+            Ok(())
+        })?;
+        Ok(Self(state, lifecycle))
     }
 
     pub(crate) fn state(&self) -> &State {
         &self.0
     }
+    pub(crate) fn into_parts(self) -> (State, Lifecycle) { (self.0, self.1) }
     pub(crate) fn into_state(self) -> State {
         self.0
     }
@@ -38,13 +45,14 @@ impl AdmittedState {
     /// Lend the original admitted bytes to read-only workspace admission while
     /// retaining the proof for the same candidate's later history checks.
     pub(crate) fn into_shared(self) -> SharedAdmittedState {
-        SharedAdmittedState(Arc::new(self.0))
+        SharedAdmittedState(Arc::new(self.0), self.1)
     }
 }
 
-pub(crate) struct SharedAdmittedState(Arc<State>);
+pub(crate) struct SharedAdmittedState(Arc<State>, Lifecycle);
 
 impl SharedAdmittedState {
+    pub(crate) fn lifecycle(&self) -> Lifecycle { self.1.clone() }
     pub(crate) fn share_state(&self) -> Arc<State> {
         Arc::clone(&self.0)
     }
@@ -55,7 +63,7 @@ impl SharedAdmittedState {
         let Ok(state) = Arc::try_unwrap(self.0) else {
             unreachable!("invariant: workspace admission released its snapshot loan");
         };
-        AdmittedState(state)
+        AdmittedState(state, self.1)
     }
 }
 
@@ -63,8 +71,7 @@ impl TryFrom<RawState> for AdmittedState {
     type Error = Error;
 
     fn try_from(raw: RawState) -> Result<Self> {
-        validate(&raw.0)?;
-        Ok(Self(raw.0))
+        Self::admit_replayed(raw.0)
     }
 }
 
@@ -165,6 +172,10 @@ history_coverage! {
 }
 
 pub(crate) fn validate(state: &State) -> Result<()> {
+    validate_with(state, crate::persist::path_changes::admit_ledger)
+}
+
+fn validate_with(state: &State, ledger: impl FnOnce(&State) -> Result<()>) -> Result<()> {
     if !state.file_path_nodes.is_empty() {
         return Err(crate::persist::path_changes::invalid());
     }
@@ -176,7 +187,7 @@ pub(crate) fn validate(state: &State) -> Result<()> {
             ));
         }
     }
-    crate::persist::path_changes::admit_ledger(state)?;
+    ledger(state)?;
     crate::file_deletion::publication::admit_current(state)?;
     // Event polling seeks by sequence while preserving ordinal array order.
     // Writers append increasing publication slots; recovery must establish the

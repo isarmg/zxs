@@ -19,6 +19,8 @@ pub(crate) struct LifecycleMembershipIndex {
 }
 
 impl LifecycleMembershipIndex {
+    pub(super) fn len(&self) -> usize { self.count }
+
     pub(super) fn observe(
         &mut self,
         operation: OperationId,

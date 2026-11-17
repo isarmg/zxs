@@ -898,21 +898,22 @@ impl Engine {
 
     pub(in crate::engine) fn install_recovered_namespace_state(
         &mut self,
-        next: State,
+        snapshot_state: crate::publication_evidence::VisibleSnapshot,
         snapshot: String,
         originals: &Arc<crate::engine::OriginalReceiptCursor>,
     ) -> Result<()> {
+        let (next, lifecycle) = snapshot_state.into_installation();
         let next_view = self
             .current_namespaces
             .as_ref()
             .map(|view| view.advance(&self.state, &next).map(Arc::new))
             .transpose()?;
-        let next = Arc::new(next);
         let snapshot = Some(snapshot);
         let original_receipts = originals.install(
             &self.config, &self.disk_resources, &next, &snapshot,
         )?;
         self.named_namespaces.install_state(&mut self.state, next);
+        self.lifecycle_cache.install_snapshot(lifecycle);
         self.original_receipts = original_receipts;
         self.snapshot = snapshot;
         self.named_namespaces.install_current(&mut self.current_namespaces, next_view);

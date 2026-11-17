@@ -874,3 +874,29 @@ fn lifecycle_membership_cache_uses_exact_state_and_never_holds_its_authority() {
     drop(state);
     assert!(first.state.upgrade().is_none());
 }
+
+#[test]
+fn cold_lifecycle_uses_the_exact_disk_admission_before_first_page_but_not_an_altered_projection() {
+    let (temp, mut engine, file, version) = actual();
+    initialize_file_branch_owner(&mut engine, &version);
+    let history = engine.state.versions[version.as_str()].history_tree_id.clone();
+    let repo = engine.state.histories[&history].repository_id.clone();
+    let moved = engine.file_namespace(&repo, crate::NamespaceOperation::parse(
+        crate::NamespaceOperationKind::Rename, "file.txt", Some("renamed.txt")).unwrap(),
+        "admin", OperationId::generate().unwrap()).unwrap();
+    drop(engine);
+    let engine = Engine::open(&temp.path().join("state")).unwrap();
+    let request = request_for(&engine, &file, 1);
+    let read = engine.capture_file_lifecycle(request.clone(), HistoryWindowCancellation::new()).unwrap();
+    assert!(read.cache.lookup(&read.key).is_none()); // no page has run
+    assert!(read.cache.membership_index(&read.key).is_none());
+    assert!(read.cache.snapshot(&read.key).is_some()); // supplied by actual snapshot installation
+    let page = read.page().unwrap();
+    assert!(page.events.iter().any(|item| item.operation_id == moved.operation_id));
+    drop(read);
+    let mut changed = engine.capture_file_lifecycle(request, HistoryWindowCancellation::new()).unwrap();
+    let raw = &mut changed.source.operations.get_mut(&moved.operation_id).unwrap().result;
+    raw.as_object_mut().unwrap().remove("path_changes");
+    assert!(!changed.source_is_original());
+    assert!(changed.page().is_err()); // no borrowed cold proof over this damaged ledger
+}

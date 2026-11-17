@@ -7,12 +7,59 @@ use crate::{
     journal::{Candidate, Publication, PublicationSeal, verify_publication_seal},
     OriginalReceiptError,
 };
-use std::sync::Arc;
+use crate::state_projection::lifecycles::AdmittedLifecycle;
+use std::sync::{Arc, Weak};
 use storage_contract::{CommitState, Principal};
 
+/// Tied to the exact destination allocation, not merely a value-equal State.
+pub(crate) struct SnapshotLifecycleBinding {
+    state: Weak<State>,
+    source: Arc<AdmittedLifecycle>,
+}
+
+impl SnapshotLifecycleBinding {
+    pub(crate) fn for_state(&self, state: &Weak<State>) -> Option<Arc<AdmittedLifecycle>> {
+        Weak::ptr_eq(&self.state, state).then(|| Arc::clone(&self.source))
+    }
+}
+
+pub(crate) struct VisibleSnapshot {
+    state: State,
+    lifecycle: Option<Arc<AdmittedLifecycle>>,
+}
+
+impl VisibleSnapshot {
+    fn visible(
+        mut state: State,
+        mut lifecycle: Option<Arc<AdmittedLifecycle>>,
+        operation: OperationId,
+        overlay: Option<OperationResult>,
+    ) -> Self {
+        if let Some(outcome) = overlay {
+            state.operations.insert(operation, outcome);
+            // No result overlay, even a value-equal one, is the original ledger.
+            lifecycle = None;
+        }
+        Self { state, lifecycle }
+    }
+
+    pub(crate) fn state(&self) -> &State {
+        &self.state
+    }
+
+    pub(crate) fn into_installation(self) -> (Arc<State>, Option<SnapshotLifecycleBinding>) {
+        let state = Arc::new(self.state);
+        let lifecycle = self.lifecycle.map(|source| SnapshotLifecycleBinding {
+            state: Arc::downgrade(&state),
+            source,
+        });
+        (state, lifecycle)
+    }
+}
+
 /// Constructed only after the referenced snapshot and its complete closure have
-/// passed the ordinary disk authentication and RawState admission path.
-/// No constructor accepts a visible Engine State or a caller-supplied proof.
+/// passed disk authentication and RawState admission. No constructor accepts a
+/// visible Engine State or a caller-supplied proof.
 pub(crate) struct AdmittedSnapshot {
     snapshot_hash: String,
     original: AdmittedState,
@@ -54,12 +101,9 @@ impl AdmittedSnapshot {
         self,
         operation: OperationId,
         recovered_result: Option<OperationResult>,
-    ) -> State {
-        let mut state = self.original.into_state();
-        if let Some(result) = recovered_result {
-            state.operations.insert(operation, result);
-        }
-        state
+    ) -> VisibleSnapshot {
+        let (state, lifecycle) = self.original.into_parts();
+        VisibleSnapshot::visible(state, lifecycle, operation, recovered_result)
     }
 }
 
@@ -184,6 +228,19 @@ pub(crate) struct SharedAdmittedSnapshot {
 }
 
 impl SharedAdmittedSnapshot {
+    pub(crate) fn visible_state(
+        &self,
+        operation: OperationId,
+        overlay: Option<OperationResult>,
+    ) -> VisibleSnapshot {
+        VisibleSnapshot::visible(
+            self.original.share_state().as_ref().clone(),
+            self.original.lifecycle(),
+            operation,
+            overlay,
+        )
+    }
+
     pub(crate) fn project_original_receipt(
         &self,
         candidate: &Candidate,

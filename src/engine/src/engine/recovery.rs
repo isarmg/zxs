@@ -829,12 +829,9 @@ impl Engine {
                 // The returned completion is the actual member/barrier tail,
                 // not a presumed success inferred from its visible State.
                 let original = admitted.into_shared();
-                let mut visible = original.share_state().as_ref().clone();
-                if let Some(result) = recovered_result {
-                    visible.operations.insert(candidate.operation_id, result);
-                }
+                let visible = original.visible_state(candidate.operation_id, recovered_result);
                 completed.retain_original(
-                    self, &candidate, &original, &visible,
+                    self, &candidate, &original, visible.state(),
                     std::sync::Arc::make_mut(&mut original_receipts),
                 )?;
                 self.install_recovered_namespace_state(
