@@ -26,7 +26,8 @@ pub(crate) struct RawMetadataRead<'a> {
 #[derive(Clone)]
 pub(crate) struct RetainedMetadataEncoding {
     domain: MetadataDomain,
-    raw: Arc<[u8]>,
+    // Absent only when the bytes actually read were the exact canonical bytes.
+    distinct_raw: Option<Arc<[u8]>>,
     canonical: Arc<[u8]>,
     digest: CanonicalMetadataDigest,
 }
@@ -34,6 +35,14 @@ pub(crate) struct RetainedMetadataEncoding {
 pub(crate) struct AuthenticatedMetadataRead<'a> {
     raw: &'a [u8],
     object: AuthenticatedMetadataObject,
+}
+
+/// A lightweight allocation plan borrowing the freshly authenticated input.
+pub(crate) struct MetadataRetention<'a> {
+    domain: MetadataDomain,
+    distinct_raw: Option<&'a [u8]>,
+    canonical: &'a [u8],
+    digest: &'a str,
 }
 
 /// Canonical recipe bytes borrowed from one immutable owner. This is not a
@@ -114,28 +123,48 @@ impl<'a> RawMetadataRead<'a> {
 
 impl RetainedMetadataEncoding {
     pub(crate) fn matches(&self, read: &RawMetadataRead<'_>) -> bool {
-        self.domain == read.domain && self.raw.as_ref() == read.raw
+        let raw = self.distinct_raw.as_deref().unwrap_or(&self.canonical);
+        self.domain == read.domain && raw == read.raw
     }
 
-    /// Heap payload only; the shared account must also charge its key/value
-    /// storage. Arc handles do not allocate another copy of these payloads.
     pub(crate) fn payload_bytes(&self) -> Option<usize> {
-        payload_bytes(self.raw.len(), self.canonical.len(), self.digest.0.len())
+        payload_bytes(
+            self.distinct_raw.as_deref().map_or(0, <[u8]>::len),
+            self.canonical.len(),
+            self.digest.0.len(),
+        )
+    }
+}
+
+impl MetadataRetention<'_> {
+    pub(crate) fn payload_bytes(&self) -> Option<usize> {
+        payload_bytes(
+            self.distinct_raw.map_or(0, <[u8]>::len),
+            self.canonical.len(),
+            self.digest.len(),
+        )
+    }
+
+    /// No owned allocation until the single shared account has admitted this
+    /// exact payload and its entry storage.
+    pub(crate) fn retain(self) -> RetainedMetadataEncoding {
+        RetainedMetadataEncoding {
+            domain: self.domain,
+            distinct_raw: self.distinct_raw.map(Arc::from),
+            canonical: Arc::from(self.canonical),
+            digest: CanonicalMetadataDigest(Arc::from(self.digest)),
+        }
     }
 }
 
 impl AuthenticatedMetadataRead<'_> {
-    pub(crate) fn retained_payload_bytes(&self) -> Option<usize> {
-        payload_bytes(self.raw.len(), self.object.bytes().len(), self.object.hash().len())
-    }
-
-    /// The caller reserves the single shared memo budget before copying payloads.
-    pub(crate) fn retain_encoding(&self) -> RetainedMetadataEncoding {
-        RetainedMetadataEncoding {
+    pub(crate) fn retention(&self) -> MetadataRetention<'_> {
+        let canonical = self.object.bytes();
+        MetadataRetention {
             domain: MetadataDomain(self.object.kind()),
-            raw: Arc::from(self.raw),
-            canonical: Arc::from(self.object.bytes()),
-            digest: CanonicalMetadataDigest(Arc::from(self.object.hash())),
+            distinct_raw: (self.raw != canonical).then_some(self.raw),
+            canonical,
+            digest: self.object.hash(),
         }
     }
 

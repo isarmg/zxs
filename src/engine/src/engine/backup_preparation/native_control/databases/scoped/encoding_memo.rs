@@ -156,10 +156,15 @@ impl<'a> Session<'a> {
         // A key is only a lookup hint. Journal compares the complete newly read
         // raw bytes and domain before reusing any canonical bytes or digest.
         let authenticated = read.authenticate(encoding)?;
-        if let Some(payload) = authenticated.retained_payload_bytes() {
-            if self.reserve(key, payload) {
+        // A committed or session-local key cannot be replaced, even when it
+        // only supplied a colliding hint and the fresh value was re-encoded.
+        if retained.is_none() {
+            let candidate = authenticated.retention();
+            if let Some(payload) = candidate.payload_bytes()
+                && self.reserve(key, payload)
+            {
                 self.pending.insert(key, Bytes::Canonical {
-                    encoding: authenticated.retain_encoding(),
+                    encoding: candidate.retain(),
                     payload,
                 });
             }

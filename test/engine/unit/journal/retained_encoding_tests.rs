@@ -50,8 +50,8 @@ fn exact_raw_and_domain_reuse_preserves_fresh_value_and_original_object() {
     let domain = read.domain();
     assert_eq!(read.raw(), raw);
     let fresh = read.authenticate(None).unwrap();
-    let charge = fresh.retained_payload_bytes().unwrap();
-    let retained = fresh.retain_encoding();
+    let charge = fresh.retention().payload_bytes().unwrap();
+    let retained = fresh.retention().retain();
     assert_eq!(retained.payload_bytes(), Some(charge));
     let original = fresh.into_object();
     assert_eq!(charge, raw.len() + original.bytes().len() + original.hash().len());
@@ -75,7 +75,7 @@ fn mismatched_raw_or_domain_falls_back_to_original_encoding() {
     let value = storage_contract::strict_json(raw).unwrap();
     let (_, expected) = storage_contract::encode_hashed_value("snapshot", &value).unwrap();
     let retained = RawMetadataRead::parse("snapshot", &expected, raw).unwrap()
-        .authenticate(None).unwrap().retain_encoding();
+        .authenticate(None).unwrap().retention().retain();
     let changed = br#"{"value":2}"#;
     let changed_read = RawMetadataRead::parse("snapshot", &expected, changed).unwrap();
     assert!(!retained.matches(&changed_read));
@@ -127,7 +127,7 @@ fn fresh_parse_and_typed_projection_are_not_cached() {
         "snapshot", &storage_contract::strict_json(raw).unwrap(),
     ).unwrap();
     let retained = RawMetadataRead::parse("snapshot", &expected, raw).unwrap()
-        .authenticate(None).unwrap().retain_encoding();
+        .authenticate(None).unwrap().retention().retain();
     for invalid in [
         br#"{"value":1,"value":1}"#.as_slice(),
         br#"{"value":"#.as_slice(),
@@ -146,7 +146,7 @@ fn fresh_parse_and_typed_projection_are_not_cached() {
     ).unwrap();
     let fresh = RawMetadataRead::parse("snapshot", &unknown_hash, unknown).unwrap()
         .authenticate(None).unwrap();
-    let proof = fresh.retain_encoding();
+    let proof = fresh.retention().retain();
     let object = compare(
         RawMetadataRead::parse("snapshot", &unknown_hash, unknown).unwrap(),
         Some(&proof),
@@ -177,8 +177,8 @@ fn canonical_size_precedes_expected_digest_and_retention_counts_raw_bytes() {
     ).unwrap();
     let fresh = RawMetadataRead::parse("snapshot", &expected, padded).unwrap()
         .authenticate(None).unwrap();
-    let charge = fresh.retained_payload_bytes().unwrap();
-    let proof = fresh.retain_encoding();
+    let charge = fresh.retention().payload_bytes().unwrap();
+    let proof = fresh.retention().retain();
     assert_eq!(proof.payload_bytes(), Some(charge));
     let object = fresh.into_object();
     assert!(padded.len() > object.bytes().len());

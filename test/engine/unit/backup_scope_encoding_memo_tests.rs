@@ -10,7 +10,7 @@ fn canonical_bytes_share_sqlite_budget_without_evaluating_its_lazy_binding() {
     ).unwrap();
     let fresh = RawMetadataRead::parse("snapshot", &expected, raw).unwrap()
         .authenticate(None).unwrap();
-    let payload = fresh.retained_payload_bytes().unwrap();
+    let payload = fresh.retention().payload_bytes().unwrap();
     let total = payload + std::mem::size_of::<(Key, Bytes)>();
     let binding = |_: &AtomicBool| -> Result<Option<[u8; 32]>> {
         panic!("canonical inputs must not evaluate SQLite authority binding")
@@ -80,7 +80,7 @@ fn canonical_lookup_collision_never_substitutes_domain_raw_or_current_expected_d
         input: *blake3::hash(other).as_bytes(),
         kind: Kind::Canonical(read.domain()),
     };
-    let proof = read.authenticate(None).unwrap().retain_encoding();
+    let proof = read.authenticate(None).unwrap().retention().retain();
     let payload = proof.payload_bytes().unwrap();
     {
         // Deliberately place a genuine proof under another raw input's key.
@@ -885,7 +885,7 @@ fn committed_metadata_capacity_decline_and_colliding_proof_do_not_fill_or_replac
     }
     let memo = ScopeEncodingMemo::new();
     let proof = RawMetadataRead::parse("snapshot", &expected, raw).unwrap()
-        .authenticate(None).unwrap().retain_encoding();
+        .authenticate(None).unwrap().retention().retain();
     let (_, page_expected) = storage_contract::encode_hashed_value(
         "state-page", &storage_contract::strict_json(raw).unwrap(),
     ).unwrap();
@@ -958,4 +958,45 @@ pub(in crate::engine::backup_preparation::native_control) fn move_pending_archiv
         }
     }
     panic!("fixture retained no pending archive proof");
+}
+
+#[test]
+fn one_canonical_copy_fits_but_equal_noncanonical_input_needs_its_own_raw_budget() {
+    let raw = br#"{"value":1}"#;
+    let spaced = br#" { "value" : 1 } "#;
+    let (_, hash) = storage_contract::encode_hashed_value(
+        "snapshot", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    let entry = std::mem::size_of::<(Key, Bytes)>();
+    let one_copy = entry + raw.len() + hash.len();
+    let memo = memo_with_limit(one_copy, 2);
+    let binding = |_: &AtomicBool| -> Result<Option<[u8; 32]>> {
+        panic!("canonical journal input does not require a scoped SQL binding");
+    };
+    // Both decode to the same value, but a distinct physical encoding requires
+    // retaining both its own bytes and the canonical result, or not caching it.
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    let object = transaction.metadata(RawMetadataRead::parse("snapshot", &hash, spaced).unwrap())
+        .unwrap();
+    assert_eq!(object.bytes(), raw.as_slice());
+    transaction.commit();
+    assert_eq!(memo_usage(&memo), (0, 0, 0, 0));
+
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    let result = transaction.metadata(RawMetadataRead::parse("snapshot", &hash, raw).unwrap())
+        .unwrap();
+    assert_eq!(result.bytes(), raw.as_slice());
+    assert_eq!(memo_usage(&memo), (0, 0, one_copy, 1));
+    transaction.commit();
+    assert_eq!(memo_usage(&memo), (one_copy, 1, 0, 0));
+
+    // Retaining only one buffer for identical input cannot authorize another
+    // expected address or turn the different raw form into a committed hit.
+    assert!(memo.committed_metadata(
+        RawMetadataRead::parse("snapshot", "wrong", raw).unwrap(),
+    ).is_err());
+    assert_eq!(memo.committed_metadata(
+        RawMetadataRead::parse("snapshot", &hash, spaced).unwrap(),
+    ).unwrap().bytes(), raw.as_slice());
+    assert_eq!(memo_usage(&memo), (one_copy, 1, 0, 0));
 }
