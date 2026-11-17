@@ -6,6 +6,7 @@ use crate::container_storage::BackupServingImage as Image;
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupFirstPublicationHash};
 
 mod start;
+mod tail;
 use start::{Markers, Progress};
 
 const INTENT: &str = "backup-preparation/ordinary-serving.json";
@@ -226,6 +227,69 @@ impl<'a> Plan<'a> {
             }
         })
     }
+    fn install_pending(
+        &self, context: &common_databases::Context<'_>, prepared: &PreparedBackupRegistry,
+        has_intent: bool, progress: &[Progress], stop: &AtomicBool,
+    ) -> Result<()> {
+        let minimum = context
+            .sources
+            .metadata_reserve_bytes()
+            .checked_add(1024 * 1024)
+            .ok_or_else(|| invalid("ordinary Backup completion reserve overflow"))?;
+        target_writers::visit(context, prepared, stop, |root| {
+            if root.available()? < minimum {
+                return Err(Error::new(
+                    ErrorCode::NoSpace,
+                    "ordinary Backup completion needs reserve plus 1 MiB on each participant",
+                ));
+            }
+            Ok(())
+        })?;
+        if has_intent {
+            self.require_intent(context.system)?;
+        } else {
+            install_preparation_bytes(
+                context.system, &context.system.path().join(INTENT), &self.bytes,
+            )?;
+        }
+        // Every target's original selection is durable before the first new
+        // ordinary entity. No source data or active alias is changed.
+        for (index, target) in prepared.targets.iter().enumerate() {
+            target.with_writer_io(self.io_hash(), |root| {
+                if progress[index] == Progress::Unselected {
+                    install_preparation_bytes(root, &root.path().join(SELECTED), &self.selection(index)?)
+                } else {
+                    self.require_selection(root, index)
+                }
+            })?;
+        }
+        // Independently read every durable selector again after the last
+        // write, before any target can receive the first ordinary material.
+        self.require_intent(context.system)?;
+        for (index, target) in prepared.targets.iter().enumerate() {
+            preparation_checkpoint(stop)?;
+            target.with_writer_io(self.io_hash(), |root| self.require_selection(root, index))?;
+        }
+        for index in 0..prepared.targets.len() {
+            self.with_image(prepared, index, stop, |image, root| {
+                self.require_selection(root, index)?;
+                if progress[index] == Progress::LocalComplete
+                    || preparation_path_exists(root, &root.path().join(LOCAL_COMPLETE))?
+                {
+                    self.require_local(root, image, stop)?;
+                } else {
+                    image.require_capacity(root, context.sources.metadata_reserve_bytes(),
+                        prospective_records(self.selection(index)?.len()), stop)?;
+                    image.install(root, stop)?;
+                    let observed = image.verify(root, stop)?;
+                    install_preparation_bytes(root, &root.path().join(LOCAL_COMPLETE), &observed)?;
+                    self.require_local(root, image, stop)?;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
     fn require_local(
         &self,
         root: &DiskRoot,
@@ -313,11 +377,9 @@ pub(super) fn install(
     stop: &AtomicBool,
 ) -> Result<BackupOrdinaryServingReport> {
     let plan = Plan::capture(context, prepared, decision, expected, stop)?;
-    let mut common = false;
-    target_writers::visit(context, prepared, stop, |root| {
-        common |= preparation_path_exists(root, &root.path().join(COMPLETE))?;
-        Ok(())
-    })?;
+    let mut tail = tail::Completions::default();
+    target_writers::visit(context, prepared, stop, |root| tail.observe(root))?;
+    let common = tail.any();
     let has_intent = preparation_path_exists(context.system, &context.system.path().join(INTENT))?;
     if common || has_intent {
         plan.require_intent(context.system)?;
@@ -331,63 +393,8 @@ pub(super) fn install(
                 prepared, index, has_intent, context.sources.metadata_reserve_bytes(), stop,
             )?);
         }
-        start::require_barrier(&progress)?;
-        let minimum = context
-            .sources
-            .metadata_reserve_bytes()
-            .checked_add(1024 * 1024)
-            .ok_or_else(|| invalid("ordinary Backup completion reserve overflow"))?;
-        target_writers::visit(context, prepared, stop, |root| {
-            if root.available()? < minimum {
-                return Err(Error::new(
-                    ErrorCode::NoSpace,
-                    "ordinary Backup completion needs reserve plus 1 MiB on each participant",
-                ));
-            }
-            Ok(())
-        })?;
-        if has_intent {
-            plan.require_intent(context.system)?;
-        } else {
-            install_preparation_bytes(
-                context.system, &context.system.path().join(INTENT), &plan.bytes,
-            )?;
-        }
-        // Every target's original selection is durable before the first new
-        // ordinary entity. No source data or active alias is changed.
-        for (index, target) in prepared.targets.iter().enumerate() {
-            target.with_writer_io(plan.io_hash(), |root| {
-                if progress[index] == Progress::Unselected {
-                    install_preparation_bytes(root, &root.path().join(SELECTED), &plan.selection(index)?)
-                } else {
-                    plan.require_selection(root, index)
-                }
-            })?;
-        }
-        // Independently read every durable selector again after the last
-        // write, before any target can receive the first ordinary material.
-        plan.require_intent(context.system)?;
-        for (index, target) in prepared.targets.iter().enumerate() {
-            preparation_checkpoint(stop)?;
-            target.with_writer_io(plan.io_hash(), |root| plan.require_selection(root, index))?;
-        }
-        for index in 0..prepared.targets.len() {
-            plan.with_image(prepared, index, stop, |image, root| {
-                plan.require_selection(root, index)?;
-                if progress[index] == Progress::LocalComplete
-                    || preparation_path_exists(root, &root.path().join(LOCAL_COMPLETE))?
-                {
-                    plan.require_local(root, image, stop)?;
-                } else {
-                    image.require_capacity(root, context.sources.metadata_reserve_bytes(),
-                        prospective_records(plan.selection(index)?.len()), stop)?;
-                    image.install(root, stop)?;
-                    let observed = image.verify(root, stop)?;
-                    install_preparation_bytes(root, &root.path().join(LOCAL_COMPLETE), &observed)?;
-                    plan.require_local(root, image, stop)?;
-                }
-                Ok(())
-            })?;
+        if start::require_barrier(&progress)? == start::LocalWork::PrepareRemaining {
+            plan.install_pending(context, prepared, has_intent, &progress, stop)?;
         }
     }
     let before = plan.bytes.clone();
@@ -401,31 +408,17 @@ pub(super) fn install(
     after.require_intent(context.system)?;
     let targets = after.verify_targets(prepared, stop)?;
     let completion = after.completion(&targets)?;
-    // Validate all existing common records before filling only absent copies.
-    target_writers::visit(context, prepared, stop, |root| {
-        if preparation_path_exists(root, &root.path().join(COMPLETE))? {
-            require_completion(root, &completion)?;
-        }
-        Ok(())
-    })?;
+    // All inputs and actual local completions have been read back. No
+    // whole-stage resource floor or reinstall applies to this marker-only tail.
+    target_writers::visit(context, prepared, stop, |root| tail.review(root, &completion))?;
     for target in &prepared.targets {
-        target.with_writer_io(after.io_hash(), |root| {
-            install_preparation_bytes(root, &root.path().join(COMPLETE), &completion)
-        })?;
+        target.with_writer_io(after.io_hash(), |root| tail.finish(root, &completion))?;
     }
     context.sources.for_each_disk(
-        stop,
-        |root, _| install_preparation_bytes(root, &root.path().join(COMPLETE), &completion),
-        &prepared.task.selection().first().pool_id,
+        stop, |root, _| tail.finish(root, &completion), &prepared.task.selection().first().pool_id,
     )?;
-    install_preparation_bytes(
-        context.system,
-        &context.system.path().join(COMPLETE),
-        &completion,
-    )?;
-    target_writers::visit(context, prepared, stop, |root| {
-        require_completion(root, &completion)
-    })?;
+    tail.finish(context.system, &completion)?;
+    target_writers::visit(context, prepared, stop, |root| tail.verify(root, &completion))?;
     context.sources.recheck(context.system)?;
     prepared.recheck_names()?;
     Ok(BackupOrdinaryServingReport {

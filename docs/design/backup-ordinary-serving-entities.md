@@ -39,7 +39,7 @@ SYSTEM `backup-preparation/ordinary-serving.json` 绑定原 fence、决定、Pub
 
 `backup-ordinary-serving-installed.json` 保存配方摘要与全部实际目录、文件、locator 的设备／inode。该记录一旦存在，缺件、改字节、丢 locator、同字节新 inode 均拒绝，不因其它目标尚未完成而重建。只读观察不创建材料或修复。
 
-全部目标本地完成后，释放旧计划并重新观察原完整证据，再构造相同全体计划和核验全部实际普通实体。只有原计划不变且每目标原 inode 完成仍完整，才向全部目标、原盘和 SYSTEM 写入共同 `backup-ordinary-serving-set-installed.json`。任一共同记录存在后，只可补其它相同共同记录，不重造本地材料。
+全部目标本地完成后，释放旧计划并重新观察原完整证据，再构造相同全体计划和核验全部实际普通实体。只有原计划不变且每目标原 inode 完成仍完整，才向全部目标、原盘和 SYSTEM 写入共同 `backup-ordinary-serving-set-installed.json`。任一共同记录存在后，只可补其它相同共同记录，不重造本地材料。 所有目标的真实本地完成均已逐个验过时，即使第一份共同记录还没有写，也直接重验原计划、完整内容和本地完成，不以新物料的预留空间拒绝重试。全体原盘、目标、SYSTEM 现存共同记录须与本次真实验存得出的完整字节相同；缺的只按这份记录实际长度和所需 inode 预检。单次调用中见过的记录若丢失或同字节换了 inode，保留拒绝，不把它变回缺件补造。
 
 公开 `inspect_backup_ordinary_serving` 仍需要 Engine 所持原任务和实际 target writer；它返回全体实际读回报告，不返回可写 State、FD 或普通 Current。`GenerationOrdinaryServingInstalled` 只是普通目标实物阶段。
 

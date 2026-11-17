@@ -31,13 +31,20 @@ pub(super) fn markers(root: &DiskRoot, selection: &[u8], has_intent: bool) -> Re
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Progress { Unselected, SelectedEmpty, Started, LocalComplete }
 
-pub(super) fn require_barrier(targets: &[Progress]) -> Result<()> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LocalWork { PrepareRemaining, VerifyOnly }
+
+pub(super) fn require_barrier(targets: &[Progress]) -> Result<LocalWork> {
     if targets.contains(&Progress::Unselected)
         && targets.iter().any(|p| matches!(p, Progress::Started | Progress::LocalComplete))
     {
         return Err(invalid("ordinary Backup material already exists beyond an incomplete target selection set"));
     }
-    Ok(())
+    Ok(if targets.iter().all(|p| *p == Progress::LocalComplete) {
+        LocalWork::VerifyOnly
+    } else {
+        LocalWork::PrepareRemaining
+    })
 }
 
 #[cfg(test)]

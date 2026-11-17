@@ -40,5 +40,10 @@ fn ordinary_partial_selector_batch_can_resume_only_before_any_target_started() {
     assert!(require_barrier(&[Progress::Started, Progress::Unselected]).is_err());
     assert!(require_barrier(&[Progress::LocalComplete, Progress::Unselected]).is_err());
     assert!(!two.path().join(SELECTED).exists());
-    require_barrier(&[Progress::Started, Progress::SelectedEmpty]).unwrap();
+    assert_eq!(require_barrier(&[Progress::Started, Progress::SelectedEmpty]).unwrap(),
+        LocalWork::PrepareRemaining);
+    assert_eq!(require_barrier(&[Progress::LocalComplete, Progress::LocalComplete]).unwrap(),
+        LocalWork::VerifyOnly);
+    assert_eq!(require_barrier(&[Progress::LocalComplete, Progress::SelectedEmpty]).unwrap(),
+        LocalWork::PrepareRemaining);
 }
