@@ -51,6 +51,7 @@ pub(super) fn observe(
             "storage completion does not match its original initialization request",
         )));
     }
+    let original_operation = super::scope_closure::genesis_operation(config)?;
     let expected = storage_contract::canonical_json(config)?;
     let mut disks = BTreeMap::new();
     for disk in &config.disks {
@@ -66,7 +67,9 @@ pub(super) fn observe(
                 source,
             })
         })?;
-        if storage_contract::canonical_json(&genesis)? != expected {
+        if super::scope_closure::genesis_operation(&genesis)? != original_operation
+            || storage_contract::canonical_json(&genesis)? != expected
+        {
             return Err(management_error(BootstrapError::ManagementOnly(
                 "initial storage differs from its fixed genesis configuration",
             )));

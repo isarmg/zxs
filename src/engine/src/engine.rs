@@ -45,6 +45,7 @@ pub use membership_transition::{
 };
 mod config;
 mod initial_storage;
+pub(crate) mod scope_closure;
 pub use initial_storage::{InitialSealDigest, InitialStorageDisk, InitialStorageObservation};
 pub(crate) mod file_draft;
 pub use file_draft::{NativeCurrentEntry, NativeWorkingFile, NativeWorkingTarget};
@@ -662,7 +663,7 @@ impl Engine {
             disk.root.write_atomic(
                 &d.root.join("README.txt"),
                 concat!(
-                    "ZXS fresh unified layout candidate v1. ",
+                    "ZXS managed disk. ",
                     "Ordinary full files are stored below common-data/. ",
                     "Use zxs-helper offline-check/offline-export before recovery. ",
                     "Filesystem choice and physical failure-domain independence ",
@@ -681,6 +682,9 @@ impl Engine {
             }
             disk.root.sync_dir(&d.root)?;
         }
+        // Re-open the selected roots after installing the private layout. Never
+        // commit an empty inventory if any user-data or management area changed.
+        scope_closure::capture_initial_roots(&config, &disk_resources)?;
         // Every payload disk retains the fixed membership anchor for offline proofs.
         for d in &config.disks {
             let address = d.root.join(layout::GENESIS_CONFIGURATION.as_path());
@@ -689,10 +693,7 @@ impl Engine {
         disk_lifecycle::bootstrap::runtime::initialize(&root, &config, &disk_resources)?;
         write_json(&root.join("config.json"), &config, false)?;
         private_dir(&root.join("workspaces"))?;
-        let state = State {
-            topology_generation: 1,
-            ..State::default()
-        };
+        let state = scope_closure::initial_state();
         let journals = config
             .disks
             .iter()

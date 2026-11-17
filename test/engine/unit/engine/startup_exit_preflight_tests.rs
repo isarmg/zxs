@@ -317,3 +317,25 @@ fn held_recovery_verifies_the_registered_top_root_before_binding_io() {
     assert!(resources.available(&admitted.disks[0]).is_some());
     assert_eq!(images(temp.path()), before);
 }
+
+
+#[test]
+fn fixed_genesis_rejects_mixed_initialization_occurrences_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let input = Config::development(crate::test_disks(
+        (0..3).map(|index| temp.path().join(format!("member-{index}"))),
+    )).unwrap();
+    let engine = Engine::initialize(&system, input).unwrap();
+    let mut actual = engine.config().clone();
+    let original = scope_closure::genesis_operation(&actual).unwrap();
+    assert!(actual.storage_roots.values().all(|binding| binding.operation_id == original));
+    let before = images(temp.path());
+    let first = actual.storage_roots.values_mut().next().unwrap();
+    first.operation_id = storage_contract::OperationId::generate().unwrap();
+    assert_eq!(
+        scope_closure::genesis_operation(&actual).unwrap_err().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(images(temp.path()), before);
+}

@@ -50,6 +50,8 @@ pub enum Error {
     #[error(transparent)]
     FreshLayout(#[from] crate::engine::FreshLayoutError),
     #[error(transparent)]
+    ScopeClosure(#[from] crate::engine::scope_closure::ScopeClosureError),
+    #[error(transparent)]
     AutomaticBackup(crate::AutomaticBackupError),
     #[error(transparent)]
     ConfiguredDiskName(crate::ConfiguredDiskNameError),
@@ -160,6 +162,7 @@ impl Error {
                 source,
             },
             source @ (Self::HistoricalBranch(_)
+            | Self::ScopeClosure(_)
             | Self::FreshLayout(_)
             | Self::AutomaticBackup(_)
             | Self::BackupRead(_)
@@ -203,6 +206,7 @@ impl Error {
             Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
             Self::HistoricalBranch(_)
+            | Self::ScopeClosure(_)
             | Self::FreshLayout(_)
             | Self::AutomaticBackup(_)
             | Self::BackupRead(_)
@@ -241,6 +245,7 @@ impl Error {
         match self {
             Self::HistoricalBranch(error) => error.code(),
             Self::ContainerTags(error) => error.code(),
+            Self::ScopeClosure(error) => error.code(),
             Self::FreshLayout(error) => error.code(),
             Self::AutomaticBackup(error) => error.code(),
             Self::BackupRead(error) => error.code(),
@@ -305,6 +310,7 @@ impl Error {
         match self {
             Self::HistoricalBranch(error) => error.to_string().into(),
             Self::ContainerTags(error) => error.to_string().into(),
+            Self::ScopeClosure(error) => error.to_string().into(),
             Self::FreshLayout(error) => error.to_string().into(),
             Self::AutomaticBackup(error) => error.to_string().into(),
             Self::BackupRead(error) => error.to_string().into(),
@@ -371,6 +377,7 @@ impl Error {
             Self::Context { source, .. } => source.published_result(),
             Self::Cleanup { operation, .. } => operation.published_result(),
             Self::HistoricalBranch(_)
+            | Self::ScopeClosure(_)
             | Self::FreshLayout(_)
             | Self::AutomaticBackup(_)
             | Self::BackupRead(_)
