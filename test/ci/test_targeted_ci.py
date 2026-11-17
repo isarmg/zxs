@@ -3030,7 +3030,7 @@ class ContainerTagsSelection(unittest.TestCase):
         self.assertEqual(target['package'], 'storage-engine')
         retained, rows = target['selections']
         self.assertEqual(retained['max_tests'], 45)
-        self.assertEqual(rows['max_tests'], 18)
+        self.assertEqual(rows['max_tests'], 19)
         self.assertEqual(rows['prefixes'], ['container_storage::file_database::tests::'])
         self.assertNotIn(rows['prefixes'][0], retained['prefixes'])
         self.assertEqual([part['timeout_seconds'] for part in target['selections']], [900, 900])
@@ -3448,7 +3448,7 @@ class ContainerTagsSelection(unittest.TestCase):
             'container_storage::file_database::tests::',
             'container_storage::file_database::install::tests::',
         ])
-        self.assertEqual(targets[0]['max_tests'], 21)
+        self.assertEqual(targets[0]['max_tests'], 22)
         self.assertEqual(targets[1]['prefixes'], ['database_install::tests::'])
         self.assertEqual(targets[1]['max_tests'], 16)
         self.assertTrue(all(target['timeout_seconds'] == 900 for target in targets))

@@ -254,7 +254,7 @@ mod tests;
 
 /// A separate native ordinary root keeps positional assumptions of the standard
 /// three-tier browser suite unchanged. Only this per-run private pool is seeded.
-pub(super) fn seed_first_commit(temporary:&tempfile::TempDir)->Result<String>{
+pub(super) fn seed_first_commit(temporary:&tempfile::TempDir)->Result<(String,super::automatic_files::Evidence)>{
     let mut engine=Engine::open(&temporary.path().join("pool"))?;
     let slot=engine.config().disks[0].slot_id.clone();
     let repo=engine.create_disk_root(&slot,PRINCIPAL,storage_contract::OperationId::generate()?)?;
@@ -263,5 +263,6 @@ pub(super) fn seed_first_commit(temporary:&tempfile::TempDir)->Result<String>{
         engine.create_unborn_file(&storage_contract::file_draft::BirthRequest{repository:repo.repository_id.parse()?,
             path:name_policy::PortablePath::parse(name)?,expected_namespace_head:head},&PRINCIPAL.parse()?,storage_contract::OperationId::generate()?)?;
     }
-    Ok(slot)
+    let observed=super::automatic_files::seed(&mut engine,&repo,&PRINCIPAL.parse()?)?;
+    Ok((slot,observed))
 }

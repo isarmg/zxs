@@ -42,7 +42,7 @@
             "state_projection::lifecycles::membership::tests::",
             "engine::history_window::read::lifecycle::tests::"
           ],
-          "max_tests": 13,
+          "max_tests": 14,
           "timeout_seconds": 900
         },
         {
@@ -161,7 +161,7 @@
             "console::http::response_body::tests::",
             "console::http::job::tests::"
           ],
-          "max_tests": 16,
+          "max_tests": 18,
           "timeout_seconds": 900
         },
         {
@@ -1720,7 +1720,7 @@
             "container_storage::file_database::tests::",
             "container_storage::file_database::install::tests::"
           ],
-          "max_tests": 21,
+          "max_tests": 22,
           "timeout_seconds": 900
         },
         {
@@ -3644,7 +3644,7 @@
           "prefixes": [
             "container_storage::file_database::tests::"
           ],
-          "max_tests": 18,
+          "max_tests": 19,
           "timeout_seconds": 900
         },
         {
@@ -6605,7 +6605,12 @@
             "engine::backup_preparation::capacity::tests::",
             "engine::backup_preparation::capacity::records::tests::"
           ],
-          "max_tests": 7
+          "max_tests": 10,
+          "exact": [
+            "engine::backup_preparation::capacity::layout::tests::fresh_layout_cannot_borrow_bytes_or_inodes_and_keeps_original_reserves",
+            "engine::backup_preparation::capacity::layout::tests::fresh_voter_feedback_probe_does_not_create_parents_or_adopt_an_existing_copy",
+            "container_storage::ordinary_preparation::backup::allocation_tests::native_layout_directory_demand_includes_real_versions_and_each_source_area"
+          ]
         },
         {
           "package": "storage-engine",
@@ -6781,9 +6786,11 @@
           ],
           "exact": [
             "snapshot_worktree::drafts::native_tests::automatic_nodes::native_save_preparation_does_not_hold_manual_switch_and_a_stale_worker_has_no_node",
-            "snapshot_worktree::drafts::native_tests::automatic_nodes::actual_automatic_nodes_bind_original_save_cause_stable_parent_and_half_open_time_after_cold_open"
+            "snapshot_worktree::drafts::native_tests::automatic_nodes::actual_automatic_nodes_bind_original_save_cause_stable_parent_and_half_open_time_after_cold_open",
+            "snapshot_worktree::drafts::native_tests::automatic_nodes::emergency_before_copy_keeps_all_existing_material_and_the_saved_bytes_after_reopen",
+            "disk::owned::worktree_io::tests::revoked_copy_stops_after_its_first_real_chunk_without_installing_any_name"
           ],
-          "max_tests": 2,
+          "max_tests": 4,
           "isolate": true,
           "timeout_seconds": 900
         }
@@ -6908,7 +6915,7 @@
       ]
     },
     "real-browser-first-commit-delivery": {
-      "reason": "Compile the actual two-tab independent-root harness and retain the packaged acceptance wiring. A targeted check is not execution in Chrome or a substitute for the complete release candidate.",
+      "reason": "Compile the real two-tab first-commit and automatic observation/protection harness: original native saves and one independent node, the real private rolling warning, exact UTC window and explicit resume without backlog. Packaged Chrome remains a separate actual acceptance, not a targeted-check result.",
       "python_tests": [
         "test_release_acceptance",
         "test_current_branch_slices_targeted_ci"
@@ -6957,9 +6964,11 @@
             "container_storage::ordinary_preparation::backup::originals::inventory_tests::registered_file_is_independent_of_body_routes_and_each_route_needs_its_original_binding",
             "engine::backup_preparation::native_control::archive::format_tests::object_scoped_and_cutover_marker_tails_require_the_unmarked_peers_own_evidence",
             "database_install::tests::required_exchange_does_not_adopt_empty_or_matching_successors_from_another_root",
-            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::serving_activation::original_objects::tests::original_file_epoch_is_not_the_latest_whole_pool_sequence"
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::serving_activation::original_objects::tests::original_file_epoch_is_not_the_latest_whole_pool_sequence",
+            "container_storage::ordinary_preparation::backup::name_tests::native_backup_names_charge_every_source_uuid_on_the_actual_fanout_target",
+            "container_storage::ordinary_preparation::backup::name_tests::native_backup_new_empty_directory_needs_user_reserve_even_without_version_leaves"
           ],
-          "max_tests": 5,
+          "max_tests": 7,
           "isolate": true,
           "timeout_seconds": 900
         },
@@ -6992,9 +7001,11 @@
             "snapshot_worktree::drafts::native_tests::root_snapshot_selects_a_nested_file_without_copying_unselected_working_bytes",
             "snapshot_worktree::drafts::native_tests::automatic_save_is_durable_without_history_and_emergency_manual_switch_keeps_its_body",
             "snapshot_worktree::instance::allocation::tests::mounted_path_budget::depth_32_is_servable_but_a_33rd_component_never_reserves_a_mount",
-            "snapshot_worktree::instance::allocation::tests::mounted_path_budget::fresh_mount_uses_its_real_prefix_and_accepts_the_exact_utf16_boundary"
+            "snapshot_worktree::instance::allocation::tests::mounted_path_budget::fresh_mount_uses_its_real_prefix_and_accepts_the_exact_utf16_boundary",
+            "snapshot_worktree::drafts::tests::first_preflight::first_full_waits_for_the_native_envelope_and_prospective_metadata",
+            "snapshot_worktree::drafts::tests::first_preflight::two_individually_fitting_first_files_cannot_spend_the_same_owner_capacity"
           ],
-          "max_tests": 4,
+          "max_tests": 6,
           "isolate": true,
           "timeout_seconds": 900
         },
@@ -7048,9 +7059,12 @@
             "console::configuration_recovery_tests::both_original_configuration_routes_keep_csrf_and_one_owner",
             "console::materials_tests::material_downloads_keep_same_origin_and_bounded_work_admission",
             "console::program_repair_tests::every_repair_route_retains_csrf_and_one_worker_admission",
-            "console::runtime_tests::runtime_routes_keep_origin_csrf_and_single_work_owner_boundaries"
+            "console::runtime_tests::runtime_routes_keep_origin_csrf_and_single_work_owner_boundaries",
+            "console::http::diagnostic::tests::exact_ceiling_and_atomic_escapes_leave_a_valid_utf8_marker",
+            "console::http::diagnostic::tests::variable_display_stops_rendering_before_building_an_unbounded_string",
+            "console::http::diagnostic::tests::a_short_message_per_node_cannot_make_an_unbounded_or_cyclic_cause_chain"
           ],
-          "max_tests": 4
+          "max_tests": 7
         }
       ]
     },
@@ -18014,7 +18028,8 @@
     {
       "path": "test/engine/unit/disk/new_entry_copy.rs",
       "groups": [
-        "directory-history-worktree"
+        "directory-history-worktree",
+        "automatic-management-observation"
       ]
     },
     {
@@ -21066,6 +21081,92 @@
       "path": "test/server/unit/automatic_file_authority.rs",
       "groups": [
         "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/automatic_files.rs",
+      "groups": [
+        "real-browser-first-commit-delivery",
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/automatic_files/fixture.rs",
+      "groups": [
+        "real-browser-first-commit-delivery",
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/backup_target_names.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/working/measurement.rs",
+      "groups": [
+        "nested-ordinary-and-smb-birth"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/draft_gateway/first_preflight.rs",
+      "groups": [
+        "nested-ordinary-and-smb-birth"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection/lifecycles/admitted.rs",
+      "groups": [
+        "lifecycle-membership-cache"
+      ]
+    },
+    {
+      "path": "src/server/src/spool_budget/restart.rs",
+      "groups": [
+        "upload-restart-cleanup"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/capacity/layout.rs",
+      "groups": [
+        "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_layout_capacity_tests.rs",
+      "groups": [
+        "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/backup_layout_allocations.rs",
+      "groups": [
+        "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "helper/src/console/http/activation.rs",
+      "groups": [
+        "helper-existing-host-boundaries"
+      ]
+    },
+    {
+      "path": "helper/src/console/http/diagnostic.rs",
+      "groups": [
+        "helper-existing-host-boundaries"
+      ]
+    },
+    {
+      "path": "helper/src/console/http/materials.rs",
+      "groups": [
+        "helper-existing-host-boundaries"
+      ]
+    },
+    {
+      "path": "test/helper/unit/console/small_diagnostic_tests.rs",
+      "groups": [
+        "helper-existing-host-boundaries"
       ]
     }
   ],

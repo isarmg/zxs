@@ -99,7 +99,7 @@ class ParallelImplementationSelection(unittest.TestCase):
             'worktree-exact-originals': (11, ['snapshot_worktree::explicit_occurrence_tests::',
                                             'snapshot_worktree::instance::allocation::tests::']),
             'draft-base-retention': (2, ['node_retirement::working::tests::']),
-            'lifecycle-membership-cache': (13, ['state_projection::lifecycles::membership::tests::',
+            'lifecycle-membership-cache': (14, ['state_projection::lifecycles::membership::tests::',
                                                'engine::history_window::read::lifecycle::tests::']),
         }
         for group, (maximum, prefixes) in expected.items():
@@ -114,7 +114,7 @@ class ParallelImplementationSelection(unittest.TestCase):
 
     def test_offline_and_helper_modules_use_their_real_binary_test_targets(self):
         for group, package, name, maximum in [
-            ('helper-http-owner-budgets', 'storage-helper', 'zxs-helper', 16),
+            ('helper-http-owner-budgets', 'storage-helper', 'zxs-helper', 18),
             ('helper-maintenance-replies', 'storage-helper', 'zxs-helper', 6),
             ('offline-worker-failures', 'storage-server', 'zxs', 2),
             ('foreign-original-material', 'storage-server', 'zxs', 23),

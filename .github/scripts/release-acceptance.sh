@@ -25,7 +25,8 @@ cargo run --locked --offline --release -p browser-smoke -- \
   --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-service-runtime "${screenshot_args[@]}"
 
 # The cross-tab acceptance needs an independent ordinary root and two real
-# Unborn files, rather than the main suite's three-tier, named-repository graph.
+# Unborn files. In that same ordinary pool, exercise original automatic node
+# counts, a real rolling-save warning and explicit resume, without fake replies.
 cargo run --locked --offline --release -p browser-smoke -- \
   --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-service-runtime --first-commit-only
 

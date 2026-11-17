@@ -7,7 +7,7 @@ fn switch(browser: &Browser, handle: &str) -> Result<()> {
     browser.command("POST", "/window", Some(json!({"handle":handle})))?;
     Ok(())
 }
-fn ready(browser: &Browser, origin: &str, password: &str) -> Result<()> {
+pub(super) fn ready(browser: &Browser, origin: &str, password: &str) -> Result<()> {
     browser.command("POST", "/url", Some(json!({"url":origin})))?;
     let panel = wait_for(
         "authenticated file listing or its actual login form",

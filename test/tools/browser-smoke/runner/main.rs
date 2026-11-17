@@ -38,6 +38,7 @@ mod file_row_visual;
 mod file_rows;
 mod fixture;
 mod first_commit_tabs;
+mod automatic_files;
 use fixture::seed_files;
 mod feedback_lifecycle;
 mod fonts;
@@ -672,7 +673,10 @@ fn run() -> Result<()> {
                 .ok_or("missing WebDriver session")?
                 .to_owned(),
         };
-        let result = if let Some(slot)=first_commit_slot.as_deref(){first_commit_tabs::run(&browser,&origin,&password,slot)}else if placement_only {
+        let result = if let Some((slot, observed))=&first_commit_slot {
+            first_commit_tabs::run(&browser,&origin,&password,slot)
+                .and_then(|()| automatic_files::run(&browser,&origin,&password,slot,observed))
+        }else if placement_only {
             placement_configuration::run(&browser, &cli_binary, server_assets, &pool, root, &password)
         } else if foreign_review_only {
             foreign_review::run(&browser, &cli_binary, server_assets, &pool, root, &password)
