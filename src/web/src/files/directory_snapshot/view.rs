@@ -101,12 +101,8 @@ fn review_view(state: RwSignal<State>) -> impl IntoView {
                             </div>
                         </dl>
                         <p class="zxs-row">{t(
-                            "请选择纳入本次提交的工作稿。这里只列当前文件列表页；其他页、子目录和未勾选稿不纳入。一次请求同时发布所选文件与目录快照，不逐文件提交。",
-                            concat!(
-                                "Choose drafts from the current file-list page. Other pages, ",
-                                "subfolders and unchecked drafts are excluded. One request ",
-                                "publishes the selected files and directory snapshot together.",
-                            ),
+                            "本页只读取直接文件。勾选后可保留准确的稿并前往同仓库其他文件夹；不会自动递归、选择未勾选的稿，或替换先前保留的修订。一次提交同时发布整个显式选集。",
+                            "Review direct files on this page. Keep checked drafts to add files from other folders in this repository. No recursive selection or revision replacement. One commit publishes the explicit set.",
                         )}</p>
                         {empty.then(||view! {
                             <p class="zxs-row" role="status">{t(
@@ -120,6 +116,7 @@ fn review_view(state: RwSignal<State>) -> impl IntoView {
                         {candidates.into_iter().map(|candidate| {
                             candidate_view(state, candidate, generation)
                         }).collect_view()}
+                        {super::picks::controls(state)}
                         <label class="zxs-stack">
                             {t("目录提交备注", "Directory commit message")}
                             <input
@@ -223,7 +220,14 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     let target = Memo::new(move |_| state.with(Target::capture));
     Effect::new(move |_| {
         let current = target.get();
-        state.update(|state| state.files.directory_snapshot.clear_review());
+        state.update(|state| {
+            let model=&mut state.files.directory_snapshot;
+            if let (Some(owner),Some(target))=(state.principal.as_ref(),current.as_ref())
+                && model.kept.as_ref().is_some_and(|set| !set.same_owner(owner,target)) {
+                model.kept=None;
+            }
+            model.clear_review();
+        });
         // A new child folder is ordinary browsing, not consent to read up to
         // one page of individual working statuses. Nested reviews are explicit.
         if current.is_some_and(|t| t.folder.is_none()) {

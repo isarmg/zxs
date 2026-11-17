@@ -1,5 +1,6 @@
 //! Formal root snapshots and explicit draft selections. The browser stores only
 //! the original descriptions; every write still enters the real HTTP authority.
+mod picks;
 mod requests;
 mod storage;
 mod view;
@@ -181,6 +182,7 @@ pub(crate) struct Model {
     cancellation: Option<api::ReadCancellation>,
     read_generation: u64,
     review: Option<Review>,
+    kept: Option<picks::Kept>,
     message: String,
     error: Option<api::Error>,
     publication: Option<Publication>,
@@ -280,7 +282,7 @@ fn can_submit(state: &State) -> bool {
         return false;
     };
     wire::ready_source(&review.head).is_some()
-        && !review.selected.is_empty()
+        && state.principal.as_ref().is_some_and(|who| picks::has_current(model.kept.as_ref(), who, review))
         && storage_contract::validate_note(&model.message).is_ok()
 }
 

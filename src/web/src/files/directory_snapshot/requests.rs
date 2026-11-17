@@ -178,12 +178,8 @@ pub(super) fn submit(state: RwSignal<State>) {
         }
         let model = &state.files.directory_snapshot;
         let review = model.reviewed(state)?;
-        let selected = review
-            .candidates
-            .iter()
-            .filter(|item| review.selected.contains(&item.selected.target.entry))
-            .map(|item| item.selected.clone())
-            .collect();
+        let selected = super::picks::collect(model.kept.as_ref(), state.principal.as_ref()?, review)
+            .map(|items| items.into_iter().map(|item|item.selected.clone()).collect());
         Some((
             state.principal.clone()?,
             review.target.repository,
@@ -194,6 +190,13 @@ pub(super) fn submit(state: RwSignal<State>) {
     });
     let Some((principal, repository, source, selected, message)) = input else {
         return;
+    };
+    let selected = match selected {
+        Ok(items) => items,
+        Err(error) => {
+            state.update(|s| s.files.directory_snapshot.error=Some(error.error()));
+            return;
+        }
     };
     let operation_id = match api::operation_id() {
         Ok(operation) => operation,
@@ -241,6 +244,7 @@ pub(super) fn retain_and_send(state: RwSignal<State>, record: Result<Record, api
             phase: Phase::Pending,
         });
         model.retained_count = 1;
+        if matches!(&record.command, Command::Commit { .. }) { model.kept = None; }
         model.error = None;
         model.publication = None;
     });
@@ -512,6 +516,7 @@ pub(crate) fn restore(state: RwSignal<State>) {
         let model = &mut state.files.directory_snapshot;
         if model.owner.as_ref() != Some(&owner) {
             model.worktree.clear();
+            model.kept=None;
         }
         model.owner = Some(owner);
         model.clear_review();

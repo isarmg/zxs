@@ -7257,9 +7257,11 @@
           "exact": [
             "files::directory_snapshot::nested_tests::nested_ordinary_review_binds_actual_page_parent_and_cannot_initialize_or_manage_worktrees",
             "files::directory_snapshot::tests::directory_snapshot_review_keeps_unborn_identity_and_rejects_wrong_responses",
-            "files::directory_snapshot::tests::directory_snapshot_initializes_only_a_complete_empty_or_born_root"
+            "files::directory_snapshot::tests::directory_snapshot_initializes_only_a_complete_empty_or_born_root",
+            "files::directory_snapshot::picks::tests::distinct_folders_freeze_one_exact_mixed_original_without_recursive_or_implicit_rows",
+            "files::directory_snapshot::picks::tests::changed_identity_revision_branch_account_and_budget_cannot_substitute_a_kept_original"
           ],
-          "max_tests": 3
+          "max_tests": 5
         },
         {
           "package": "web-app",
@@ -21608,6 +21610,18 @@
     },
     {
       "path": "test/web/unit/files/directory_snapshot_nested.rs",
+      "groups": [
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/picks.rs",
+      "groups": [
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_snapshot_picks.rs",
       "groups": [
         "nested-directory-web-selection"
       ]

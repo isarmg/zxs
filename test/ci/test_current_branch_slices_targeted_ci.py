@@ -25,7 +25,7 @@ class CurrentBranchSelection(unittest.TestCase):
             'original-cleanup-readback': ['test/engine/unit/cleanup_readback_tests.rs'],
             'offline-disjoint-held-roots': ['src/server/src/offline/managed_layout/physical.rs'],
             'nested-directory-web-selection': ['src/web/src/files/directory_snapshot/wire.rs',
-                                               'test/web/unit/files/directory_snapshot_nested.rs'],
+                                               'test/web/unit/files/directory_snapshot_nested.rs', 'src/web/src/files/directory_snapshot/picks.rs'],
             'held-helper-installation-files': [
                 'helper/src/deployment/install.rs', 'helper/src/private_io/configuration_files.rs',
                 'test/helper/unit/installation/vfs_records.rs', 'helper/src/private_io/fixed_program.rs',

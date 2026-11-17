@@ -312,16 +312,20 @@ impl Record {
                         "the explicit selection is empty or exceeds this page",
                     ));
                 }
-                let mut occurrences = Vec::new();
+                let mut files = std::collections::BTreeSet::new();
+                let mut entries = std::collections::BTreeSet::new();
+                let mut paths = std::collections::BTreeSet::new();
                 for selected in &request.selected {
-                    if selected.target.repository != *repository
-                        || occurrences.contains(&selected.target)
+                    let target=&selected.target;
+                    if target.repository != *repository
+                        || !files.insert(target.file)
+                        || !entries.insert(target.entry)
+                        || !paths.insert(target.path.key())
                     {
                         return Err(invalid(
-                            "the selection contains a foreign or duplicate occurrence",
+                            "the selection contains a foreign or aliased file, entry or path",
                         ));
                     }
-                    occurrences.push(selected.target.clone());
                 }
             }
         }

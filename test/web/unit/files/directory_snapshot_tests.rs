@@ -31,7 +31,7 @@ use wire::{Candidate, Command, Record};
 fn repository() -> RepositoryId {
     RepositoryId::from_random([1; 16])
 }
-fn location(seed: u8, name: &str) -> DraftLocation {
+pub(super) fn location(seed: u8, name: &str) -> DraftLocation {
     DraftLocation {
         repository: repository(),
         entry: EntryId::from_random([seed; 16]),
@@ -71,7 +71,7 @@ pub(super) fn head() -> DirectorySnapshotHead {
 fn revision() -> WorkingRevision {
     WorkingRevision::new(Generation::new(2))
 }
-fn born() -> Candidate {
+pub(super) fn born() -> Candidate {
     Candidate {
         selected: SelectedDirectoryDraft {
             target: location(11, "changed.txt"),
@@ -95,7 +95,7 @@ fn born() -> Candidate {
         size: 7,
     }
 }
-fn unborn() -> Candidate {
+pub(super) fn unborn() -> Candidate {
     Candidate {
         selected: SelectedDirectoryDraft {
             target: location(21, "first.txt"),
