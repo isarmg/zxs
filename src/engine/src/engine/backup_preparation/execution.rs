@@ -6,24 +6,18 @@ pub(super) fn require_capacity(
     target: &DiskRoot,
     plans: &[PreparedHistoryPackage],
     snapshot: &snapshot::PreparedSnapshot,
+    stop: &AtomicBool,
 ) -> Result<()> {
-    let remaining = plans
-        .iter()
-        .try_fold(snapshot.remaining_bytes(target)?, |total, plan| {
-            total
-                .checked_add(plan.remaining_bytes(target)?)
-                .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "backup space overflow"))
-        })?;
-    let required = remaining
-        .checked_add(if remaining == 0 { 64 * 1024 } else { RESERVE })
-        .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "backup space overflow"))?;
-    if target.available()? < required {
-        return Err(Error::new(
-            ErrorCode::NoSpace,
-            "backup target cannot hold the complete frozen unit",
-        ));
+    let mut census = capacity::Census::new(target)?;
+    let mut account = |path, length| {
+        crate::history_package::preparation_checkpoint(stop)?;
+        census.file(path, length)
+    };
+    for plan in plans {
+        plan.visit_files(&mut account)?;
     }
-    Ok(())
+    snapshot.visit_files(&mut account)?;
+    census.require()
 }
 
 pub(super) fn copy_target(
@@ -36,7 +30,7 @@ pub(super) fn copy_target(
 ) -> Result<BackupPreparationReport> {
     named_target(target, job)?;
     crate::history_package::preparation_checkpoint(stop)?;
-    require_capacity(target, &plans, snapshot)?;
+    require_capacity(target, &plans, snapshot, stop)?;
     update(&|_| {})?;
     snapshot.copy(target, stop)?;
     let admitted = snapshot::read(target, job, stop)?;

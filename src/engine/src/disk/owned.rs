@@ -567,6 +567,13 @@ impl DiskRoot {
         self.operation()?.optional_metadata(path)
     }
 
+    pub(crate) fn optional_relative_metadata(
+        &self,
+        path: &RelativePath,
+    ) -> Result<Option<fs::Metadata>> {
+        self.operation()?.optional_relative_metadata(path)
+    }
+
     pub(crate) fn read_bytes(&self, path: &Path, maximum: usize) -> Result<Vec<u8>> {
         self.operation()?.read_bytes(path, maximum)
     }
@@ -707,8 +714,13 @@ impl DiskRoot {
         self.operation()?.component_name_maximum()
     }
 
+    pub(crate) fn filesystem_statistics(&self) -> Result<rustix::fs::StatVfs> {
+        self.operation()?.filesystem_statistics()
+    }
+
     pub(crate) fn available(&self) -> Result<u64> {
-        self.operation()?.available()
+        let stat = self.filesystem_statistics()?;
+        Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
     }
 
     /// Spend the transition's unique control lease on a scoped metadata action.
@@ -906,7 +918,12 @@ impl RootOperation<'_> {
         if path == self.root.path {
             return Ok(Some(self.held().directory().metadata()?));
         }
-        let (parent, name) = self.parent(path)?;
+        self.optional_relative_metadata(&self.root.relative(path)?)
+    }
+
+    fn optional_relative_metadata(&self, path: &RelativePath) -> Result<Option<fs::Metadata>> {
+        let (relative_parent, name) = path.split_parent();
+        let parent = self.open_relative_directory(relative_parent.as_ref())?;
         match rustix::fs::openat2(
             &parent,
             name.as_os_str(),
@@ -1197,13 +1214,11 @@ impl RootOperation<'_> {
     }
 
     fn component_name_maximum(&self) -> Result<u64> {
-        let stat = rustix::fs::fstatvfs(self.held().directory()).map_err(std::io::Error::from)?;
-        Ok(stat.f_namemax)
+        Ok(self.filesystem_statistics()?.f_namemax)
     }
 
-    fn available(&self) -> Result<u64> {
-        let stat = rustix::fs::fstatvfs(self.held().directory()).map_err(std::io::Error::from)?;
-        Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
+    fn filesystem_statistics(&self) -> Result<rustix::fs::StatVfs> {
+        Ok(rustix::fs::fstatvfs(self.held().directory()).map_err(std::io::Error::from)?)
     }
 
     fn lock_file(&self) -> Result<File> {

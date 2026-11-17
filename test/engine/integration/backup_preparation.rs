@@ -712,3 +712,21 @@ fn preparation_coexists_with_local_database_installation_and_cold_repair() {
         assert_eq!(bytes, expected);
     }
 }
+
+#[test]
+fn new_single_backup_rejects_wrong_held_target_before_persisting_an_intent() {
+    let (temp, mut engine, repository) = setup();
+    save(&mut engine, &repository, "source", b"retained");
+    let named = target(temp.path(), "named-backup");
+    let other = target(temp.path(), "other-backup");
+    let original = request(&engine, vec![named.clone()], op());
+    let before = storage_engine::canonical_json(engine.state()).unwrap();
+    let error = engine
+        .start_backup_preparation(original, fs::File::open(&other).unwrap())
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch);
+    assert!(!temp.path().join("system/backup-preparation/job.json").exists());
+    assert_eq!(fs::read_dir(named).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(other).unwrap().count(), 0);
+    assert_eq!(before, storage_engine::canonical_json(engine.state()).unwrap());
+}

@@ -268,7 +268,12 @@ impl Engine {
         // No target writes precede the complete-set resource and identity
         // admission. Capacity is per disk; one target cannot borrow another's.
         for target in &work {
-            execution::require_capacity(&target.root, &target.histories, &snapshot)?;
+            execution::require_capacity(
+                &target.root,
+                &target.histories,
+                &snapshot,
+                &AtomicBool::new(false),
+            )?;
         }
         let bytes = batch.encoded()?;
         system.private_dir(&self.root.join("backup-preparation"))?;
@@ -524,7 +529,7 @@ fn spawn_batch(
             let intent = batch.encoded()?;
             for (job, target) in batch.targets.iter().zip(&work) {
                 named_target(&target.root, job)?;
-                execution::require_capacity(&target.root, &target.histories, &snapshot)?;
+                execution::require_capacity(&target.root, &target.histories, &snapshot, cancel)?;
             }
             for (index, (job, target)) in batch.targets.iter().zip(&mut work).enumerate() {
                 crate::history_package::preparation_checkpoint(cancel)?;

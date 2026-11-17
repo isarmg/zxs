@@ -258,53 +258,57 @@ impl PreparedHistoryPackage {
                 })
         })
     }
-    pub(crate) fn remaining_bytes(&self, target: &DiskRoot) -> Result<u64> {
-        let package = target.path().join("histories").join(self.history_id());
-        let mut total = 0u64;
-        let mut account = |path: PathBuf, bytes: u64| -> Result<()> {
-            if !preparation_path_exists(target, &path)? {
-                total = total
-                    .checked_add(bytes)
-                    .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "backup space overflow"))?;
-            }
-            Ok(())
-        };
+    /// Visit this complete history in target address order, without reordering
+    /// dependency-first installation. Only pointers into one admitted graph are sorted.
+    pub(crate) fn visit_files(
+        &self,
+        visit: &mut impl FnMut(PathBuf, u64) -> Result<()>,
+    ) -> Result<()> {
+        let package = Path::new("histories").join(self.history_id());
+        let mut objects = Vec::new();
         for object in &self.metadata.graph_objects {
-            let path = if object.kind() == "history-manifest" {
-                package.join("manifest.json")
+            if object.kind() == "history-manifest" {
+                visit(package.join("manifest.json"), object.bytes().len() as u64)?;
             } else {
-                package_object(&package, object.kind(), object.hash())?
-            };
-            account(path, object.bytes().len() as u64)?;
+                objects.push(object);
+            }
         }
-        account(
-            package.join("publication.json"),
-            canonical_json(&self.metadata.proof)?.len() as u64,
-        )?;
         if let Some(bytes) = &self.generation {
-            account(
+            visit(
                 package.join("membership-generation.json"),
                 bytes.len() as u64,
             )?;
         }
+        objects.sort_unstable_by(|a, b| (a.kind(), a.hash()).cmp(&(b.kind(), b.hash())));
+        for object in objects {
+            visit(
+                package_object(&package, object.kind(), object.hash())?,
+                object.bytes().len() as u64,
+            )?;
+        }
+        visit(
+            package.join("publication.json"),
+            canonical_json(&self.metadata.proof)?.len() as u64,
+        )?;
         for id in self.bodies.keys() {
             let version = &self.metadata.manifest.versions[id];
             let directory = package_version(&package, id);
-            account(
-                directory.join("content").join(&version.creation_name),
-                version.logical_size,
-            )?;
-            account(
-                directory.join("version.json"),
-                canonical_json(version)?.len() as u64,
-            )?;
-            account(
+            visit(
                 directory.join("checksums.bin"),
                 checksum_manifest_length(version)? as u64,
             )?;
+            visit(
+                directory.join("content").join(&version.creation_name),
+                version.logical_size,
+            )?;
+            visit(
+                directory.join("version.json"),
+                canonical_json(version)?.len() as u64,
+            )?;
         }
-        Ok(total)
+        Ok(())
     }
+
     pub(crate) fn copy(
         self,
         root: &DiskRoot,

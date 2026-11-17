@@ -17,6 +17,7 @@ use std::{
 };
 
 mod batch;
+mod capacity;
 mod completion;
 mod execution;
 mod inspection;
@@ -637,6 +638,8 @@ impl Engine {
                 "backup task exceeds metadata budget",
             ));
         }
+        execution::require_capacity(&target, &plans, &snapshot, &AtomicBool::new(false))?;
+        named_target(&target, &job)?;
         system.private_dir(&self.root.join("backup-preparation"))?;
         system.write_atomic(&self.root.join(JOB), &intent, false)?;
         reserve_target(&target, &job)?;

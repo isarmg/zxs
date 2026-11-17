@@ -222,24 +222,19 @@ impl PreparedSnapshot {
         resolve_admitted_snapshot(snapshot, load)
     }
 
-    pub(super) fn remaining_bytes(&self, root: &DiskRoot) -> Result<u64> {
-        let mut total = 0u64;
-        let mut account = |path: PathBuf, length: usize| -> Result<()> {
-            if !crate::history_package::preparation_path_exists(root, &path)? {
-                total = total.checked_add(length as u64).ok_or_else(|| {
-                    Error::new(ErrorCode::ResourceLimit, "snapshot space overflow")
-                })?;
-            }
-            Ok(())
-        };
-        account(
-            root.path().join(ROOT).join("publication.json"),
-            self.envelope.len(),
-        )?;
+    pub(super) fn visit_files(
+        &self,
+        visit: &mut impl FnMut(PathBuf, u64) -> Result<()>,
+    ) -> Result<()> {
+        // Address order keeps the target's parent census bounded by the current
+        // path depth, not the number of snapshot objects.
         for ((kind, hash), bytes) in &self.objects {
-            account(object_path(root.path(), kind, hash)?, bytes.len())?;
+            visit(object_path(Path::new(""), kind, hash)?, bytes.len() as u64)?;
         }
-        Ok(total)
+        visit(
+            Path::new(ROOT).join("publication.json"),
+            self.envelope.len() as u64,
+        )
     }
 
     pub(super) fn copy(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
