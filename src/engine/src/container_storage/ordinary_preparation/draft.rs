@@ -125,6 +125,7 @@ pub(super) fn populate(
     Ok(())
 }
 
+mod base_range;
 mod incremental;
 pub(crate) use incremental::{HeldManualReader, ReadDraftDigest};
 use incremental::HeldManualMaterial;

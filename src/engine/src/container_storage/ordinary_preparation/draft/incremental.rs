@@ -13,7 +13,7 @@ use storage_contract::file_draft::manifest::{WORKING_BLOCK_BYTES, WorkingBlock};
 use storage_contract::file_draft::{DraftBase, FileWorkingState, IncrementalManifest};
 use storage_contract::FileId;
 
-fn changed() -> Error {
+pub(super) fn changed() -> Error {
     Error::FileDraft(Failure::WorkingMaterialChanged)
 }
 
@@ -95,6 +95,14 @@ impl HeldManualMaterial {
         if self.working != scope.record.working {
             return Err(changed());
         }
+        self.validate_base(scope)?;
+        for held in self.extents.values() {
+            held.require_named(scope)?;
+        }
+        Ok(())
+    }
+
+    fn validate_base(&self, scope: &ObservedContainerReplica) -> Result<()> {
         self.file.check_running()?;
         let path = scope.body_path_for_material(&self.version)?;
         let named = scope.held.open_leased_regular(&path)?;
@@ -102,9 +110,6 @@ impl HeldManualMaterial {
             || FileStamp::from_metadata(&named.metadata()?) != self.stamp
         {
             return Err(changed());
-        }
-        for held in self.extents.values() {
-            held.require_named(scope)?;
         }
         Ok(())
     }
@@ -117,26 +122,10 @@ impl HeldManualMaterial {
         buffer: &mut [u8; WORKING_BLOCK_BYTES as usize],
     ) -> Result<()> {
         self.validate(scope)?;
-        buffer.fill(0);
-        let start = index
-            .checked_mul(WORKING_BLOCK_BYTES)
-            .ok_or(Error::FileDraft(Failure::Size))?;
-        let bytes = retained
-            .min(self.version.logical_size)
-            .saturating_sub(start)
-            .min(WORKING_BLOCK_BYTES) as usize;
-        if bytes > 0 {
-            let chunk_bytes = u64::from(self.checksums.chunk_bytes);
-            let chunk = start / chunk_bytes;
-            let chunk_start = chunk * chunk_bytes;
-            let count = (self.version.logical_size - chunk_start).min(chunk_bytes) as usize;
-            let expected = blake3::Hash::from_bytes(self.checksums.chunks[chunk as usize]);
-            let verified = platform_io::payload::read_verified_chunk(count, expected, |chunk| {
-                self.file.read_exact_at(chunk, chunk_start)
-            })?;
-            let within = (start - chunk_start) as usize;
-            buffer[..bytes].copy_from_slice(&verified[within..within + bytes]);
-        }
+        let mut base = super::base_range::BaseRange::new(&self.checksums);
+        base.block(index, retained, buffer, |bytes, offset| {
+            self.file.read_exact_at(bytes, offset)
+        })?;
         self.validate(scope)
     }
 
@@ -153,13 +142,23 @@ impl HeldManualMaterial {
         let count = length.saturating_sub(offset).min(output.len() as u64) as usize;
         let mut buffer = [0; WORKING_BLOCK_BYTES as usize];
         let mut copied = 0;
+        let mut base = super::base_range::BaseRange::new(&self.checksums);
         while copied < count {
             let position = offset + copied as u64;
             let index = position / WORKING_BLOCK_BYTES;
             let within = (position % WORKING_BLOCK_BYTES) as usize;
             match self.extents.get(&index) {
                 Some(extent) => extent.read_block(scope, &mut buffer)?,
-                None => self.base_block(scope, index, retained, &mut buffer)?,
+                None => {
+                    // Check the actual bound base for every consumed block.
+                    // Unrelated extents retain the full before/after check;
+                    // accessed extents verify their own held name and digest.
+                    self.validate_base(scope)?;
+                    base.block(index, retained, &mut buffer, |bytes, start| {
+                        self.file.read_exact_at(bytes, start)
+                    })?;
+                    self.validate_base(scope)?;
+                }
             }
             let take = (count - copied).min(buffer.len() - within);
             output[copied..copied + take].copy_from_slice(&buffer[within..within + take]);
