@@ -2,6 +2,7 @@
 //! held-root consumer. No public handle bypasses the independent receipt index.
 pub(super) mod drafts;
 pub(super) mod discovery;
+pub(super) mod history;
 pub(super) mod root;
 pub(super) mod outcome;
 pub(super) mod transport;

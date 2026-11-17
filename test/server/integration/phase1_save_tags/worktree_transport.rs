@@ -289,6 +289,26 @@ async fn tcp_worktree_edit_commit_cold_retry_keeps_exact_identity_and_move() {
     assert_eq!(node.repository_id, original_node.repository_id);
     assert_eq!(node.branch_id, original_node.branch_id);
     assert_ne!(node.node_id, original_node.node_id);
+    let page: storage_contract::snapshot_worktree::history::DirectorySnapshotHistory =
+        json_codec::from_value(http.json("GET", &format!(
+            "/api/repositories/{repository}/snapshot-history",
+        ), None).await).unwrap();
+    assert_eq!(page.repository_id, repository.parse().unwrap());
+    assert_eq!(page.nodes.len(), 2);
+    assert_eq!(page.nodes[0].snapshot, node);
+    assert_eq!(page.nodes[0].parent, Some(original_node));
+    assert!(page.nodes[0].is_head);
+    assert_eq!(page.nodes[1].snapshot, original_node);
+    assert_eq!(page.nodes[1].parent, None);
+    assert!(!page.nodes[1].is_head);
+    assert!(page.next_cursor.is_none());
+    let selected_history = page.nodes[1].snapshot;
+    let historical = instance(
+        &http, repository, &json_codec::to_value(&page.context).unwrap(),
+        selected_history, "worktree-main-003",
+    ).await;
+    assert_eq!(http.status(historical).await.original, selected_history);
+    assert_eq!(http.read(historical, "original.txt").await, original);
     assert_eq!(http.read(target, "original.txt").await, bytes);
     assert_eq!(http.read(independent, "original.txt").await, original);
     http.close().await;
@@ -345,6 +365,12 @@ async fn tcp_worktree_auth_shape_and_rejected_body_leave_current_bytes_unchanged
     let http = Http::start(fixture.app.clone(), &fixture.token).await;
     let (context, node) = initialized(&http, repository).await;
     let target = instance(&http, repository, &context, node, "worktree-main-001").await;
+    let history_route = format!("/api/repositories/{repository}/snapshot-history");
+    assert_eq!(http.raw(false, "GET", &history_route, &[], &[]).await.0, 401);
+    assert_eq!(
+        http.raw(true, "GET", &format!("{history_route}?sequence=1"), &[], &[]).await.0,
+        400,
+    );
     // A real, otherwise valid Named request cannot enter the public writer.
     // Original Named receipts remain queryable; this POST accepts automatic intent only.
     let named_operation = OperationId::generate().unwrap();

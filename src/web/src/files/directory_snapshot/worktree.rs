@@ -1,6 +1,7 @@
 //! A small management consumer of real worktree handles. Editing remains in
 //! SMB; all mutations use the parent snapshot original-request journal.
 mod bookmark;
+mod history;
 mod requests;
 mod view;
 
@@ -48,6 +49,7 @@ struct Observed {
 
 #[derive(Clone, Default)]
 pub(super) struct Model {
+    history: history::Model,
     reference: Option<bookmark::Reference>,
     bookmark_scope: Option<Scope>,
     message: String,
@@ -61,12 +63,13 @@ pub(super) struct Model {
 
 impl Model {
     pub(super) fn clear(&mut self) {
-        self.cancel_read();
+        self.invalidate();
         *self = Self::default();
     }
 
     pub(super) fn invalidate(&mut self) {
         self.cancel_read();
+        self.history.invalidate();
     }
 
     fn cancel_read(&mut self) {
@@ -102,6 +105,8 @@ fn available(state: &State) -> bool {
 
 fn can_create(state: &State) -> bool {
     available(state)
+        && !state.files.directory_snapshot.worktree.history.reading()
+        && history::source(state).is_some()
         && !state.files.directory_snapshot.worktree.reading
         && state
             .files

@@ -1,4 +1,4 @@
-use super::{available, can_commit, can_create, can_load, requests, smb_path};
+use super::{available, can_commit, can_create, can_load, history, requests, smb_path};
 use crate::ui::State;
 use web_interface::{i18n::t, prelude::*};
 
@@ -84,18 +84,18 @@ fn observed(state: RwSignal<State>) -> impl IntoView {
 pub(in crate::files::directory_snapshot) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <section class="zxs-surface zxs-stack" data-zxs-worktree="">
-            <h3 class="zxs-row">{t("当前节点的 worktree", "Worktrees from the current node")}</h3>
+            <h3 class="zxs-row">{t("目录历史与 worktree", "Directory history and worktrees")}</h3>
             <p class="zxs-row">{t(
                 concat!(
-                    "从上面读取的真实 .zxs HEAD 创建独立实例。服务器按真实分支名自动分配 ",
-                    "worktree-分支名-001 至 999，已占用或保留名称不会被覆盖；",
-                    "这里尚不浏览任意历史节点。",
+                    "从上面已读取的 .zxs HEAD 或下方选定的真实历史节点创建独立实例。",
+                    "服务器按源的真实分支名自动分配 worktree-分支名-001 至 999，",
+                    "已占用或保留名称不会被覆盖。选择来源不会切换已经打开的 worktree。",
                 ),
                 concat!(
-                    "Create an independent instance from the actual .zxs HEAD above. The ",
-                    "server uses the real branch name to allocate worktree-branch-001 through ",
-                    "999 without replacing occupied or reserved names. Arbitrary history ",
-                    "browsing is not provided here.",
+                    "Create from the reviewed .zxs HEAD or an exact historical node below. ",
+                    "The server allocates worktree-branch-001 through 999 using the source's ",
+                    "real branch name, without replacing occupied or reserved names. ",
+                    "Selecting a source does not switch the already opened worktree.",
                 ),
             )}</p>
             <p class="zxs-row">{t(
@@ -106,6 +106,7 @@ pub(in crate::files::directory_snapshot) fn view(state: RwSignal<State>) -> impl
                     "server. This page does not switch or migrate layouts.",
                 ),
             )}</p>
+            {history::view(state)}
             <button
                 class="zxs-button"
                 data-zxs-worktree-create=""

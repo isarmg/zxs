@@ -674,6 +674,20 @@ macro_rules! methods {
                     let _ = (identity, repository);
                     Err($crate::ApiError::unsupported())
                 }
+                fn directory_snapshot_history(
+                    &self,
+                    identity: &$crate::Identity,
+                    repository: storage_contract::RepositoryId,
+                    cursor: Option<
+                        storage_contract::snapshot_worktree::history::SnapshotHistoryCursor,
+                    >,
+                ) -> Result<
+                    storage_contract::snapshot_worktree::history::DirectorySnapshotHistory,
+                    $crate::ApiError,
+                > {
+                    let _ = (identity, repository, cursor);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn initialize_directory_snapshot(
                     &self,
                     identity: &$crate::Identity,

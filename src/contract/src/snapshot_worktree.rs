@@ -7,6 +7,7 @@ pub mod discovery;
 pub mod root;
 pub mod outcome;
 pub mod creation;
+pub mod history;
 
 use crate::working_tree::{
     DirectoryId, RootId, SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId,

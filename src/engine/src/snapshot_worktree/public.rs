@@ -2,6 +2,7 @@
 //! publishers. No transport input constructs a host, session or local anchor.
 mod drafts;
 mod discovery;
+mod history;
 mod transport;
 mod namespace;
 mod outcome;
@@ -78,7 +79,8 @@ impl SnapshotWorktreeError {
             RegistrationError::ReadView(crate::directory_worktree::io::ViewError::NotDirectory) => {
                 ErrorCode::NotDirectory
             }
-            RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Cursor) => {
+            RegistrationError::HistoryCursor
+            | RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Cursor) => {
                 ErrorCode::ListingChanged
             }
             RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Budget) => {

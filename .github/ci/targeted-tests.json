@@ -104,9 +104,10 @@
           "manifest": "src/web/Cargo.toml",
           "kind": "lib",
           "prefixes": [
-            "files::directory_snapshot::worktree::tests::"
+            "files::directory_snapshot::worktree::tests::",
+            "files::directory_snapshot::worktree::history::tests::"
           ],
-          "max_tests": 5
+          "max_tests": 8
         },
         {
           "package": "web-app",
@@ -5886,6 +5887,39 @@
           "mode": "check",
           "default_features": false,
           "features": []
+        }
+      ]
+    },
+    "directory-snapshot-history": {
+      "reason": "Read only real registered snapshot history, select exact old nodes through Automatic creation, and retain the already opened writer. Real Engine and existing TCP tests are included; no browser or external Samba is claimed.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "snapshot_worktree::public::history::tests::actual_history_lists_exact_nodes_and_creates_old_source_without_reselecting_head"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "worktree_transport::"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
         }
       ]
     }
@@ -17244,6 +17278,118 @@
       "path": "test/ci/test_directory_draft_http_ci.py",
       "groups": [
         "directory-draft-http"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree/history.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/public/history.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/history.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/discovery.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/working.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/server/src/http_snapshot_worktree/history.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/snapshot_worktree/history.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/history.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/history/view.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/requests.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/view.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/history.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_worktree_history_tests.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_worktree_tests.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/worktree_transport.rs",
+      "groups": [
+        "directory-snapshot-history",
+        "directory-web-worktree-management"
       ]
     }
   ],

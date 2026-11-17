@@ -30,6 +30,10 @@ pub(crate) fn routes() -> Router<AppState> {
             "/api/repositories/{repository}/snapshot-head",
             get(http_snapshot_worktree::discovery::head),
         )
+        .route(
+            "/api/repositories/{repository}/snapshot-history",
+            get(http_snapshot_worktree::history::read),
+        )
         .route("/api/directory-snapshots", post(http_snapshot_worktree::initialize))
         .route("/api/directory-snapshots/commits", post(http_snapshot_worktree::drafts::commit))
         .route(

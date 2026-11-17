@@ -22,6 +22,21 @@ struct WorkingNode {
     binding: SnapshotNodeBinding,
 }
 
+impl WorkingRecord<'_> {
+    pub(super) fn history_node(&self) -> Option<(PublishedNode<'_>, SnapshotHandle)> {
+        self.node.as_ref().map(|node| {
+            (
+                PublishedNode {
+                    plan: &node.plan,
+                    manifest: &node.manifest,
+                    binding: node.binding,
+                },
+                self.envelope.directory.request().source.handle,
+            )
+        })
+    }
+}
+
 impl<'a> ReceiptIndex<'a> {
     pub(in crate::snapshot_worktree) fn public_working_receipt(
         &self,

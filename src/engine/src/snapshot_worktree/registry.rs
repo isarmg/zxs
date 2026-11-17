@@ -28,6 +28,7 @@ mod edits;
 mod commits;
 mod drafts;
 mod discovery;
+mod history;
 mod mounts;
 mod outcome;
 mod allocation;

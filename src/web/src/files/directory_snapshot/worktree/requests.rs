@@ -1,5 +1,6 @@
 use super::{
-    Observed, Scope, available, bookmark, can_commit, can_create, can_load, status, status_endpoint,
+    Observed, Scope, available, bookmark, can_commit, can_create, can_load, history, status,
+    status_endpoint,
 };
 use crate::api;
 use crate::files::directory_snapshot::{requests, wire};
@@ -17,11 +18,11 @@ pub(super) fn create_command(
     }
     let model = &state.files.directory_snapshot;
     let review = model.reviewed(state)?;
-    let host = review.head.context.host;
+    let (source, host) = history::source(state)?;
     Some(wire::Command::AllocateWorktree {
         repository: review.target.repository,
         request: AllocateWorktree {
-            source: wire::ready_source(&review.head)?,
+            source,
             parent_directory_id: host.directory_id,
             naming: WorktreeNaming::Automatic,
             expected_root_generation: host.expected_root_generation,

@@ -57,7 +57,7 @@ fn observed_status() -> WorktreeStatus {
     }
 }
 
-fn state() -> State {
+pub(super) fn state() -> State {
     let principal = "alice".parse().unwrap();
     let mut state = State {
         authenticated: true,

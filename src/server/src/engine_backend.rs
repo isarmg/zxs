@@ -796,6 +796,14 @@ impl Backend for EngineBackend {
     > {
         snapshot_worktree::discovery::head(self, identity, repository)
     }
+    fn directory_snapshot_history(
+        &self, identity: &Identity, repository: storage_contract::RepositoryId,
+        cursor: Option<storage_contract::snapshot_worktree::history::SnapshotHistoryCursor>,
+    ) -> Result<
+        storage_contract::snapshot_worktree::history::DirectorySnapshotHistory, ApiError,
+    > {
+        snapshot_worktree::history::read(self, identity, repository, cursor)
+    }
     fn initialize_directory_snapshot(
         &self, identity: &Identity,
         request: storage_contract::snapshot_worktree::InitializeSnapshot,

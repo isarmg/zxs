@@ -88,6 +88,8 @@ pub(crate) enum RegistrationError {
     WorktreeName(#[source] crate::directory_worktree::names::NameError),
     #[error("snapshot/worktree completion does not match its original reservation: {0}")]
     Completion(storage_contract::OperationId),
+    #[error("snapshot history cursor no longer belongs to the current receipt prefix")]
+    HistoryCursor,
     #[error("snapshot/worktree registration has an absent or conflicting original source")]
     Source,
     #[error("snapshot/worktree reservation {0} is incomplete; its local material must be retained")]
