@@ -15,6 +15,7 @@ use storage_contract::{
 };
 use storage_engine::{Engine, Repository};
 mod fixture;
+mod tabs;
 const LEFT: &str = "pick-left/chosen.txt";
 const RIGHT: &str = "pick-right/chosen.txt";
 const SKIP: &str = "pick-right/leave.txt";
@@ -60,11 +61,17 @@ pub(super) fn run(
         ".zxs-disk-entry[data-slot='{slot}']:not([disabled])"
     ))?)?;
     row(browser, "pick-left")?;
+    tabs::with_peer(browser, origin, password, slot, |peer| {
+        exercise(browser, e, peer)
+    })
+}
+
+fn exercise(browser: &Browser, e: &Evidence, peer: &tabs::Peer) -> Result<()> {
     // The server sees the original unmodified request and the UI receives its
-    // actual response. Simulate a non-cooperating change only to this fixture's
-    // already-retained, non-secret local journal text before the UI settles.
+    // actual response after a second signed-in tab tries to submit a different
+    // real selection. Delay delivery; do not manufacture or change the reply.
     browser.script(r#"
-      const original=window.fetch,s=window.__zxsNestedSelection={count:0,request:null,receipt:null,restore(){window.fetch=original;}};
+      const original=window.fetch,s=window.__zxsNestedSelection={count:0,request:null,receipt:null,restore(){this.release?.();window.fetch=original;}};
       window.fetch=async function(...args){
         const r=args[0], u=new URL(r.url||r,location.href);
         if(u.origin!==location.origin||u.pathname!=='/api/directory-snapshots/commits'||r.method!=='POST')return original.apply(this,args);
@@ -74,11 +81,9 @@ pub(super) fn run(
           s.key=prefix+s.request.operation_id;s.original=localStorage.getItem(s.key);
           const grants=await navigator.locks.query();
           s.held=grants.held.some(x=>x.name===prefix&&x.mode==='exclusive');
-          if(s.original!==null){
-            s.replacement=s.original+'\n';
-            localStorage.setItem(s.key,s.replacement);
-          }
+          if(s.original!==null)s.replacement=s.original+'\n';
           s.receipt=await response.clone().json();
+          await new Promise(resolve=>{s.release=resolve;});
         }
         return response;
       };return true;
@@ -101,6 +106,7 @@ pub(super) fn run(
                 "two exact nested sources",
             )?;
             browser.click(&browser.css("[data-zxs-directory-snapshot-commit]:not([disabled])")?)?;
+            peer.contend(browser)?;
             let collected = wait_for("one actual original nested-directory publication", || {
                 let data=browser.script("const s=window.__zxsNestedSelection,p=document.querySelector('[data-zxs-directory-snapshot-result]');return s?.count===1&&s.receipt&&p?.textContent.includes(s.receipt.result.snapshot.node_id)?[s.request,s.receipt]:null")?;
                 if data.is_array() {

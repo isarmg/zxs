@@ -3,7 +3,7 @@
 use super::{Browser, Result, json, wait_for, with_cleanup};
 const HOOK: &str = include_str!("first_commit_tabs.js");
 const KEY: &str = "zxs:first-file-commit:smoke-admin";
-fn switch(browser: &Browser, handle: &str) -> Result<()> {
+pub(super) fn switch(browser: &Browser, handle: &str) -> Result<()> {
     browser.command("POST", "/window", Some(json!({"handle":handle})))?;
     Ok(())
 }
@@ -46,7 +46,7 @@ fn review(browser: &Browser, slot: &str, name: &str) -> Result<()> {
     browser.css("[data-zxs-first-commit]:not([disabled])")?;
     Ok(())
 }
-fn until(browser: &Browser, label: &str, script: &str) -> Result<()> {
+pub(super) fn until(browser: &Browser, label: &str, script: &str) -> Result<()> {
     wait_for(label, || {
         if browser.script(script)? == true {
             Ok(())
