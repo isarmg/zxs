@@ -7,6 +7,32 @@
         {
           "package": "storage-server",
           "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "default_features": true,
+          "isolate": true,
+          "exact": [
+            "smb_rpc::tests::native_dispatch_tests::native_dispatch_uses_real_engine_and_cold_unborn_content_without_transport"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "files::unborn::tests::listing_admits_unborn_without_manufacturing_version_or_branch_fields",
+            "files::unborn::tests::first_commit_review_pins_selection_and_retains_exact_original_across_navigation",
+            "files::unborn::tests::snapshot_and_original_receipt_require_exact_content_pin_and_strict_shape"
+          ],
+          "max_tests": 3
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
           "default_features": true,
           "features": [
             "core"
@@ -5396,6 +5422,325 @@
     }
   },
   "rules": [
+    {
+      "path": "src/contract/src/file_draft/manifest.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft/selection.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft/unborn.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/selected.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/unborn.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/unborn/current.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/unborn/first.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/unborn/replay.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/namespace/working.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/birth.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/working.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/working/full.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/working/write.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/input.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/native_io.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/selected.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/unborn.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/unborn/first.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/unborn/save.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers/unborn.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers/unborn/first.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_move_decision/ordinary/databases.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/file_draft/birth.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/file_draft/unborn_first.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/file_draft/unborn_save.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_smb_native.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_unborn.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager/listing.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/unborn.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/default_share/directory.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/directory.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/transport.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/smb/Cargo.toml",
+      "groups": [
+        "native-first-manual-save",
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "src/smb/src/client.rs",
+      "groups": [
+        "native-first-manual-save",
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "src/web/src/files/page.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/web/src/files/page/entry.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/web/src/files/unborn.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/web/src/files/unborn/storage.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/web/src/files/unborn/view.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/web/src/files/unborn/wire.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/mtime_tests.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/native_dispatch_tests.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/startup_tests.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "test/smb-vfs/unit/asynchronous/tests.rs",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb-vfs/unit/module/acl_tests.rs",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb-vfs/unit/module/descriptor_cleanup_tests.rs",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb/unit/client/admission.rs",
+      "groups": [
+        "native-first-manual-save",
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb/unit/client/metadata.rs",
+      "groups": [
+        "native-first-manual-save",
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb/unit/client/tests.rs",
+      "groups": [
+        "native-first-manual-save",
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb/unit/protocol/mtime_tests.rs",
+      "groups": [
+        "native-first-manual-save",
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/smb/unit/protocol/tests.rs",
+      "groups": [
+        "native-first-manual-save",
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/unborn_tests.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
     {
       "path": "src/server/src/smb_rpc/native.rs",
       "groups": [
