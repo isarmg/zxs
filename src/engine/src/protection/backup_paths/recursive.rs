@@ -201,6 +201,7 @@ impl Engine {
                 if engine.recursive_backup_capture()? != *request.capture {
                     return Err(changed());
                 }
+                require_published_backup_scope(engine, request.repository_id, request.path)?;
                 let current = engine
                     .admitted_current_namespaces()?
                     .ok_or_else(unavailable)?;

@@ -24,7 +24,7 @@ use storage_contract::file_draft::{
 /// Transfers that only carry committed versions must not silently omit a
 /// working file. Admission uses the selected stable identity, not its path,
 /// the current disk spelling, or whether the draft happens to have zero bytes.
-pub(in crate::business) fn require_committed_transfer(
+pub(crate) fn require_committed_transfer(
     state: &crate::State,
     file: &str,
 ) -> crate::Result<()> {

@@ -256,6 +256,19 @@ fn unborn_container_blocks_portable_history_before_any_output_is_created() {
     assert_eq!(error.code(), storage_contract::ErrorCode::FileBranchConflict);
     let error = engine.prepare_backup_history(&repo.history_tree_id).err().unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::FileBranchConflict);
+    let operation_id = OperationId::generate().unwrap();
+    let error = engine.configure_backups_scoped(crate::ScopedBackupConfigurationRequest {
+        repository_id: &repo.repository_id,
+        path: "",
+        expected_scope_id: Some(&repo.repository_id),
+        target_copies: 1,
+        backup_prefixes: &BTreeMap::new(),
+        expected_generation: 0,
+        principal: owner.as_str(),
+        operation_id,
+    }).unwrap_err();
+    assert!(matches!(error, crate::Error::FileDraft(crate::business::file_draft::DraftError::UnbornRequired)));
+    assert!(!engine.state().operations.contains_key(&operation_id));
     assert_eq!(inventory(temp.path()), before);
     assert!(!destination.parent().unwrap().exists());
 }

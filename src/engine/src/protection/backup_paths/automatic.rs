@@ -10,7 +10,8 @@ use crate::persist::automatic_backup::{
 };
 use crate::protection::backup_paths::{
     Scope, ScopedBackupConfigurationRequest, backup_primaries_in, effective_policy_in,
-    exact_policy, inherited_by_scope, initial, namespace, within,
+    exact_policy, inherited_by_scope, initial, namespace, require_committed_backup_files,
+    require_published_backup_scope, within,
 };
 use crate::{Engine, Error, ErrorCode, Event, FileVersion, OperationResult, Placement, Result, State};
 use name_policy::PortablePath;
@@ -164,7 +165,9 @@ impl Engine {
                 let mut scoped = input.scoped(&repository, &prefixes,
                     principal.as_str(), operation_id);
                 scoped.expected_scope_id = expected_scope.as_deref();
+                require_published_backup_scope(engine, &repository, scoped.path)?;
                 let (scope, previous) = select_scope(next, &input, selection, scoped)?;
+                require_committed_backup_files(engine.state(), scope.files.keys())?;
                 let source = source(&context, &input, &scope)?;
                 directory_selection(context.config, next, &input, selection, &source,
                     &scope, previous.as_ref())?;

@@ -177,6 +177,36 @@ struct Scope {
     path: String,
     files: BTreeMap<String, Entry>,
 }
+// Live request gate only. Published requests replay their original committed
+// source through the existing reducers, never today's working namespace.
+fn require_published_backup_scope(engine: &Engine, repository: &str, path: &str) -> Result<()> {
+    let state = engine.state();
+    if !state.repositories.get(repository).is_some_and(|repo| repo.file_manager_root) {
+        return Ok(());
+    }
+    let repository = repository.parse::<crate::RepositoryId>()?;
+    if !state.file_containers.values().any(|record| {
+        record.namespace.repository == repository
+            && !record.namespace.parent.is_worktree()
+            && record.working.unborn().is_some()
+    }) {
+        return Ok(());
+    }
+    let path = (!path.is_empty()).then(|| name_policy::LookupPath::parse(path)).transpose()?;
+    crate::business::namespace::working::WorkingNamespace::from_main_state(
+        state, repository, engine.config().max_entries,
+    )?.require_published_subtree(path.as_ref())
+}
+
+fn require_committed_backup_files<'a>(
+    state: &State, files: impl IntoIterator<Item = &'a String>,
+) -> Result<()> {
+    for file in files {
+        crate::business::file_draft::require_committed_transfer(state, file)?;
+    }
+    Ok(())
+}
+
 fn source_scope(
     state: &State,
     current: Option<&CurrentNamespaces>,
@@ -693,6 +723,7 @@ impl Engine {
             "backup.configure", principal, operation,
             json!({"repository_id":repository,"path":path,"expected_scope_id":expected_scope_id,"target_copies":copies,"backup_prefixes":prefixes,"expected_generation":expected_generation.to_string()}),
             |engine, state, pending| {
+                require_published_backup_scope(engine, repository, path)?;
                 if let Some(current) = engine.admitted_current_namespaces()? {
                     let plan = current.plan_backup_configuration(
                         engine.state(),
@@ -705,6 +736,7 @@ impl Engine {
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::RepositoryNotFound, "backup repository missing"))?;
 
                 let (scope, previous) = initial::select(state, request)?;
+                require_committed_backup_files(engine.state(), scope.files.keys())?;
                 let mut normalized = BTreeMap::new();
                 for (slot, prefix) in prefixes {
                     let disk = engine.disk(slot)?;
@@ -761,6 +793,7 @@ fn apply_current_plan(
     pending: &mut Vec<Prepared>,
     plan: CurrentBackupConfigurationPlan,
 ) -> Result<json_codec::Value> {
+    require_committed_backup_files(engine.state(), plan.bindings.keys())?;
     for version in &plan.versions {
         let source = engine.valid_backup_replica(&version.version_id)?;
         pending.push(Prepared {
