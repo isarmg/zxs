@@ -5,6 +5,8 @@
 //! publication replay closes the complete State before any physical grant.
 use storage_contract::GenerationExhausted;
 mod allocations;
+pub(crate) mod trace;
+pub(crate) mod ordinary;
 mod content;
 pub(crate) mod batch;
 pub(crate) use content::{PublishedContent, build as build_content, trace_limit};
@@ -42,6 +44,8 @@ pub(crate) fn require_committed_transfer(
 
 #[derive(Debug, error_definition::Error)]
 pub enum DraftError {
+    #[error("the nested FILE selector cannot verify original snapshot host registrations")]
+    NestedRegistration(#[source] Box<crate::SnapshotWorktreeError>),
     #[error("the exact worktree FILE publication could not complete")]
     Worktree(#[source] Box<crate::SnapshotWorktreeError>),
     #[error("this operation requires the canonical unborn-container transition")]
@@ -66,7 +70,7 @@ pub enum DraftError {
     WorkingSelection,
     #[error("the selected working body differs from the exact expected save")]
     WorkingBodyChanged,
-    #[error("manual draft is outside its exact selected root-level FILE occurrence")]
+    #[error("manual draft is outside its exact selected ordinary FILE occurrence")]
     Selection,
     #[error("this manual draft operation requires an Initial single-owner container")]
     UnsupportedScope,
@@ -105,7 +109,7 @@ impl DraftError {
     pub(crate) fn code(&self) -> storage_contract::ErrorCode {
         use storage_contract::ErrorCode;
         match self {
-            Self::Worktree(source) => source.code(),
+            Self::Worktree(source) | Self::NestedRegistration(source) => source.code(),
             Self::UnbornRequired => ErrorCode::UnsupportedOperation,
             Self::WorkingManifest(_) | Self::WorkingNamespace => ErrorCode::StateInvalid,
             Self::WorkingMaterialChanged => ErrorCode::ContainerLayoutInvalid,

@@ -1,4 +1,4 @@
-//! The bounded output of the one real root-level FILE publisher.
+//! The bounded output of the real FILE and ancestor namespace publishers.
 use crate::{Result, State};
 use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeSet, VecDeque};

@@ -70,9 +70,8 @@ impl PreparedUnbornFull {
         selection.require_context(context)?;
         let selected = selection.sources().get(selected_index)
             .ok_or(Error::FileDraft(Failure::WorkingSelection))?;
-        if selected.target().path.parent().is_some() {
-            return Err(Error::FileDraft(Failure::UnsupportedScope));
-        }
+        // An ordinary SelectedWorkingSource already holds the exact original
+        // parent-chain/source proof; the worktree route below remains separate.
         let source = Arc::clone(selected.unborn_reader()?);
         source.require_record(selected.target().file, selected.record())?;
         Self::prepare_source(context, FullSelection::Ordinary(selection), source)

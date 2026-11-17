@@ -137,7 +137,7 @@ fn preserve(previous: &State, next: &State) -> Result<()> {
             return Err(invalid());
         }
         if let Some((base, _)) = record.working.draft() {
-            let target = selection::target(*file, record)?;
+            let target = selection::target(previous, *file, record)?;
             if selection::resolve(next, &target)?.base != *base {
                 return Err(Error::FileDraft(Failure::Dirty));
             }

@@ -82,7 +82,7 @@ impl Engine {
             // second materialization of a previously decided operation.
             return Err(business::invalid());
         }
-        if request.target.path.parent().is_some() || context.current_namespaces.is_some()
+        if context.current_namespaces.is_some()
             || context.config.generation().is_some()
         {
             return Err(Error::FileDraft(Failure::UnsupportedScope));
@@ -101,6 +101,7 @@ impl Engine {
         {
             return Err(Error::FileDraft(Failure::UnsupportedScope));
         }
+        business::trace_limit(context.state, &request.target)?;
         let material = PreparedUnbornFull::prepare(&context, selected, 0)?;
         let (projection, prepared, content) = business::unborn::build_first_content(
             &context, &request.target, request.expected.revision, message, principal,

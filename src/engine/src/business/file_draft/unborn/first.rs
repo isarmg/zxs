@@ -164,9 +164,9 @@ fn require_first_source(
     target: &DraftLocation,
     read: &ReadWorkingDigest<'_>,
 ) -> Result<()> {
-    // Current and directory-wide publication need their own complete native
-    // transaction. This root-level first-file producer cannot mint either.
-    if config.generation().is_some() || target.path.parent().is_some() {
+    // The checked ordinary selection, including the full parent chain, is
+    // separate from Current membership and worktree owner authority.
+    if config.generation().is_some() {
         return Err(Error::FileDraft(Failure::UnsupportedScope));
     }
     let working = record.working.unborn().ok_or_else(invalid)?;
@@ -220,6 +220,7 @@ pub(in crate::business::file_draft) fn project(
         commit.message, commit.principal, &mut |prefix| replay.next(prefix),
     )?;
     replay.finish()?;
+    super::super::trace::require_item(&commit.content.allocations, false, true, commit.target)?;
     next.file_containers.get_mut(&commit.target.file).ok_or_else(invalid)?.working =
         working.after_first_commit()
             .map_err(|source| Error::FileDraft(Failure::RevisionExhausted(source)))?;
@@ -365,6 +366,7 @@ impl<'source> FirstContentConstruction<'source> {
             self.record.working.unborn().ok_or_else(invalid)?.after_first_commit()
                 .map_err(|source| Error::FileDraft(Failure::RevisionExhausted(source)))?;
         self.material.require_context(context)?;
+        super::super::trace::require_item(&allocations, false, true, self.target)?;
         Ok(PublishedContent { version, placement, allocations })
     }
 

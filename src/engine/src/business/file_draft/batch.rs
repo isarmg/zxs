@@ -168,6 +168,11 @@ impl PlannedItem {
     }
 }
 
+fn trace_budget(previous: &State, planned: &[PlannedItem]) -> Result<usize> {
+    super::trace::limit(previous, planned.iter().filter(|item| item.retained().is_none())
+        .map(|item| (item.target(), matches!(item, PlannedItem::Born { .. }))))
+}
+
 fn plan(
     previous: &State, request: &WorkingBatchRequest, sequence: Sequence,
     maximum_entries: usize, maximum_bytes: u64,
@@ -228,6 +233,8 @@ fn project(
     planned: &[PlannedItem],
     mut build: impl FnMut(usize, &mut State, &PlannedItem) -> Result<PublishedContent>,
 ) -> Result<WorkingBatchProjection> {
+    let limit = trace_budget(previous, planned)?;
+    let mut used = 0usize;
     let mut next = super::unborn::begin(previous, sequence)?;
     let mut items = Vec::with_capacity(planned.len());
     let mut contents = Vec::with_capacity(planned.len());
@@ -240,6 +247,8 @@ fn project(
             }
             None => {
                 let content = build(index, &mut next, item)?;
+                used = used.checked_add(content.allocations.len())
+                    .filter(|total| *total <= limit).ok_or(Error::FileDraft(Failure::Size))?;
                 contents.push(Some(content.clone()));
                 WorkingBatchResult::Published(content)
             }
@@ -308,6 +317,9 @@ pub(crate) fn build(
         context.state, request, sequence, context.config.max_entries, context.config.max_file_bytes,
         &reads,
     )?;
+    // Reject the complete allocation budget before even one first-FILE
+    // independent FULL can be prepared on the owner.
+    trace_budget(context.state, &planned)?;
     let materials = planned.iter().enumerate().map(|(index, item)| match item {
         PlannedItem::Born { .. } => Ok(None),
         PlannedItem::First { .. } => {
@@ -360,6 +372,11 @@ pub(crate) fn replay(
     reads: &[Option<Arc<ReadDraftDigest>>],
 ) -> Result<WorkingBatchProjection> {
     let planned = plan(previous, request, sequence, config.max_entries, config.max_file_bytes, reads)?;
+    let limit = trace_budget(previous, &planned)?;
+    trace.contents.iter().flatten().try_fold(0usize, |used, content| {
+        used.checked_add(content.allocations.len()).filter(|total| *total <= limit)
+            .ok_or(Error::FileDraft(Failure::Size))
+    })?;
     if trace.contents.len() != planned.len()
         || first_reads.len() != planned.len()
         || planned.iter().zip(&trace.contents)

@@ -34,6 +34,15 @@ fn require_initial(context: &PlanningContext<'_>, target: &DraftLocation) -> Res
     if record.replicas.len() != 1 || !record.replicas.contains_key(&record.owner_disk) {
         return Err(Error::FileDraft(Failure::UnsupportedScope));
     }
+    if target.path.parent().is_some() {
+        let occurrence = business::ordinary::OrdinaryOccurrence::capture(context.state, target.file, record)?;
+        occurrence.require_target(target)?;
+        let index = context.snapshot_receipts()
+            .map_err(|source| Error::FileDraft(Failure::NestedRegistration(Box::new(source.into()))))?;
+        if index.contains_nested_draft_host(target.repository, record.namespace.branch, &occurrence.parents) {
+            return Err(Error::FileDraft(Failure::UnsupportedScope));
+        }
+    }
     // This is the existing published root-origin issuer, not a path lookup or
     // direct Config -> namespace grant. Actual container use rechecks its entity.
     context.namespace_host_root(target.repository, record.namespace.branch)?.common()?;

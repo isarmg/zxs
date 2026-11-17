@@ -245,3 +245,46 @@ fn identical_directory_working_commit_clears_only_selected_draft_and_creates_no_
     assert_eq!(engine.state().versions.len(), versions);
     assert_eq!(inventory(&fixture.snapshot_path()), original);
 }
+
+#[test]
+fn root_snapshot_selects_a_nested_file_without_copying_unselected_working_bytes() {
+    use storage_contract::file_draft::DraftLocation;
+    let (fixture, mut engine) = Fixture::with_nested_directory(true);
+    let principal = "admin".parse().unwrap();
+    let repository = fixture.targets[0].repository;
+    let branch = engine.state().repositories[&repository.to_string()].main_branch_id.clone();
+    let nested = engine.list_tree(&branch).unwrap().into_iter()
+        .find(|entry| entry.path() == "Folder/Child/existing.txt").unwrap();
+    let target = DraftLocation {
+        repository, path: nested.path, entry: nested.entry_id.parse().unwrap(),
+        file: nested.file_id.parse().unwrap(),
+    };
+    let saved = write_draft(&mut engine, &target, b"only nested report changes");
+    write_draft(&mut engine, &fixture.targets[1], fixture::SECOND_DRAFT);
+    let unselected = engine.file_working_state(&fixture.targets[1]).unwrap();
+    let chosen = [selection(&engine, &target)];
+    let mut wrong = chosen.clone();
+    wrong[0].target.path = name_policy::PortablePath::parse("Folder/existing.txt").unwrap();
+    assert!(super::PendingDirectoryDrafts::capture(
+        &engine, fixture.intent(&wrong, &principal),
+    ).is_err());
+    let previous_versions = engine.state().versions.len();
+    let intent = fixture.intent(&chosen, &principal);
+    let operation = intent.operation;
+    let result = engine.commit_directory_working_set(intent).unwrap();
+    assert_eq!(engine.state().versions.len(), previous_versions + 1);
+    assert!(engine.file_working_state(&target).unwrap().draft().is_none());
+    let envelope = native::decode_record(&result, crate::disk::MAX_METADATA,
+        engine.config.max_entries).unwrap();
+    assert_eq!(envelope.directory.files().len(), 1);
+    assert_eq!(envelope.directory.files()[0].target, target);
+    assert!(envelope.directory.entries().iter().any(|entry| entry.path == target.path));
+    drop(engine);
+    let mut engine = Engine::open(&fixture.system).unwrap();
+    let mut retry = fixture.intent(&chosen, &principal);
+    retry.operation = operation;
+    assert_eq!(engine.commit_directory_working_set(retry).unwrap(), result);
+    assert_eq!(engine.operation(saved.operation_id).unwrap(), saved);
+    assert_eq!(engine.file_working_state(&fixture.targets[1]).unwrap(), unselected);
+    assert_eq!(read_draft(&engine, &fixture.targets[1]), fixture::SECOND_DRAFT);
+}

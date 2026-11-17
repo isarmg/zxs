@@ -84,6 +84,12 @@ pub(crate) fn selected<'a>(
     {
         return Err(Error::FileDraft(Failure::WorkingNamespace));
     }
+    let occurrence = super::ordinary::OrdinaryOccurrence::capture(namespace.state(), *file, record)?;
+    occurrence.require_target(target)?;
+    occurrence.require_visible(|path| match namespace.get(&name_policy::LookupPath::from(path)) {
+        Some(WorkingEntry::Published(entry)) => Some(entry),
+        _ => None,
+    })?;
     if record.working.revision() != expected {
         return Err(Error::FileDraft(Failure::RevisionChanged {
             expected,

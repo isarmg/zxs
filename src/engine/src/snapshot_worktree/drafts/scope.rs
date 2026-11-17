@@ -10,7 +10,6 @@ use crate::working_tree::snapshot::{
 use crate::{Engine, State, ValidatedConfig};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use storage_contract::file_container::NamespaceDirectoryParent;
 use storage_contract::file_draft::{DraftLocation, WorkingSelection};
 use storage_contract::snapshot_worktree::{NamespaceDirectoryId, SnapshotHandle};
 use storage_contract::{DiskId, OperationId, Principal};
@@ -84,7 +83,7 @@ impl DirectoryDraftScope {
             return Err(Failure::SourceChanged);
         }
         for selection in intent.selected {
-            require_owner(engine.state(), host, owner, &selection.target)?;
+            require_owner(engine.state(), &index, host, owner, &selection.target)?;
         }
         require_original(node.manifest().entries(), intent.selected)?;
         let projection = merge_selection(node.manifest().entries(), intent.selected)?;
@@ -185,9 +184,7 @@ pub(super) fn validate_selection(targets: &[WorkingSelection], maximum: usize) -
     let mut entries = BTreeSet::new();
     for selection in targets {
         let target = &selection.target;
-        if target.path.parent().is_some()
-            || !files.insert(target.file) || !entries.insert(target.entry)
-        {
+        if !files.insert(target.file) || !entries.insert(target.entry) {
             return Err(Failure::Selection);
         }
     }
@@ -201,6 +198,7 @@ pub(super) fn validate_selection(targets: &[WorkingSelection], maximum: usize) -
 
 pub(super) fn require_owner(
     state: &State,
+    index: &crate::snapshot_worktree::ReceiptIndex<'_>,
     host: &HostEvidence,
     owner: DiskId,
     target: &DraftLocation,
@@ -211,11 +209,17 @@ pub(super) fn require_owner(
         || record.namespace.repository != host.namespace.repository_id
         || record.namespace.branch != host.namespace.branch_id
         || record.namespace.entry != target.entry
-        || record.namespace.parent != NamespaceDirectoryParent::Root.into()
         || record.namespace.name.as_str() != target.path.file_name()
         || record.owner_disk != owner
     {
         return Err(Failure::Occurrence(target.file));
+    }
+    let occurrence = crate::business::file_draft::ordinary::OrdinaryOccurrence::capture(
+        state, target.file, record,
+    ).map_err(Failure::Engine)?;
+    occurrence.require_target(target).map_err(Failure::Engine)?;
+    if index.contains_nested_draft_host(target.repository, record.namespace.branch, &occurrence.parents) {
+        return Err(Failure::Scope);
     }
     // Born/Unborn, exact current occurrence, working mode/revision, selected
     // base and saved manifest belong to the unique working-set picker. Passing
@@ -226,6 +230,22 @@ pub(super) fn require_owner(
 pub(super) fn require_original(
     entries: &[SnapshotEntry], targets: &[WorkingSelection],
 ) -> Result<()> {
+    // A FILE-only picker may introduce a first file, but never an implicit
+    // directory. Every enclosing directory must already be part of this exact
+    // immutable source; no late current-only parent is copied into the result.
+    for selection in targets {
+        let mut parent = selection.target.path.parent();
+        while let Some(path) = parent {
+            let index = entries.binary_search_by(|entry| entry.path.key().cmp(path.key()))
+                .map_err(|_| Failure::Original(selection.target.file))?;
+            if entries[index].path != path
+                || !matches!(entries[index].content, SnapshotEntryContent::Directory {})
+            {
+                return Err(Failure::Original(selection.target.file));
+            }
+            parent = path.parent();
+        }
+    }
     let files: BTreeMap<_, _> = targets.iter()
         .map(|selection| (selection.target.file, &selection.target)).collect();
     let mut paths: Vec<_> = targets.iter().map(|selection| &selection.target).collect();
@@ -245,7 +265,7 @@ pub(super) fn require_original(
             && files.contains_key(&material.file_id)
         {
             // A move/alias is a separate occurrence transition. It cannot be
-            // smuggled into this root-only selected-body publication.
+            // smuggled into the root host selected-body publication.
             return Err(Failure::Original(material.file_id));
         }
     }

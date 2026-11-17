@@ -138,7 +138,6 @@ impl RequestDescription {
         for selection in &self.selected {
             let target = &selection.target;
             if target.repository != source.host.namespace.repository_id
-                || target.path.parent().is_some()
                 || !files.insert(target.file) || !entries.insert(target.entry)
             {
                 return Err(DescriptionError::Selection);

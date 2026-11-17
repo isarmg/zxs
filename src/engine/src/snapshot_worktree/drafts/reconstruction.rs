@@ -72,7 +72,7 @@ fn source_manifest(
     scope::validate_selection(selected.selected(), config.max_entries)
         .map_err(Failure::Source)?;
     for target in selected.selected() {
-        scope::require_owner(previous, host, owner, &target.target).map_err(Failure::Source)?;
+        scope::require_owner(previous, index, host, owner, &target.target).map_err(Failure::Source)?;
     }
     reconstruct_indexed_manifest(published.manifest(), &envelope.directory, config.max_entries)
 }

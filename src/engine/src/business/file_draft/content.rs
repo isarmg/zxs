@@ -40,15 +40,8 @@ pub(super) fn publish(
 }
 
 pub(crate) fn trace_limit(previous: &State, target: &DraftLocation) -> Result<usize> {
-    let repository = previous.repositories.get(&target.repository.to_string())
-        .ok_or_else(invalid)?;
-    let main = previous.branches.get(&repository.main_branch_id).ok_or_else(invalid)?;
-    let entries = previous.commits.get(&main.head_commit_id).ok_or_else(invalid)?.entries.len();
-    // One FILE commit/tree, one owner main commit/tree, one root snapshot pair.
-    // The root-only pass visits each source file once and may lazily allocate
-    // its shared branch/commit/tree. There is no ancestor recursion in this mode.
-    entries.checked_mul(3).and_then(|n| n.checked_add(8))
-        .ok_or_else(|| Error::FileDraft(Failure::Size))
+    let record = previous.file_containers.get(&target.file).ok_or_else(invalid)?;
+    super::trace::limit(previous, [(target, record.working.unborn().is_none())])
 }
 
 struct ReplayEffects<'a> {
@@ -113,7 +106,7 @@ pub(super) fn replay(
         || expected.content_states.contains_key(&facts.version.version_id)
         || facts.version.logical_size != payload.logical_size()
         || facts.version.content_hash != hash
-        || facts.allocations.len() > trace_limit(previous, target)?
+        || facts.allocations.len() > trace_limit(expected, target)?
     {
         return Err(invalid());
     }
@@ -139,12 +132,15 @@ pub(super) fn replay(
     }
     // In a combined publication earlier items already occupy their real IDs.
     // Check this accumulating projection, not only the original source table.
+    let old_namespace = super::trace::namespace_head(expected, target)?.to_owned();
     let mut replay = Replay::new(expected, &facts.allocations)?;
     publish(
         expected, target, selection.base, version.version_id.parse()?, message, principal,
         operation, &mut |prefix| replay.next(prefix),
     )?;
-    replay.finish()
+    replay.finish()?;
+    super::trace::require_item(&facts.allocations, true,
+        old_namespace != super::trace::namespace_head(expected, target)?, target)
 }
 
 /// One selected Born content policy. A descriptor alone cannot build it;
@@ -215,7 +211,8 @@ pub(super) fn build_planned(
         return Err(Error::FileDraft(Failure::Body));
     }
     let placement = next.placements.get(&version.version_id).cloned().ok_or_else(invalid)?;
-    let limit = trace_limit(context.state, target)?;
+    let limit = trace_limit(next, target)?;
+    let old_namespace = super::trace::namespace_head(next, target)?.to_owned();
     let mut allocations = Vec::new();
     publish(
         next, target, *base, version.version_id.parse()?, message, principal, operation,
@@ -229,6 +226,8 @@ pub(super) fn build_planned(
             Ok(text)
         },
     )?;
+    super::trace::require_item(&allocations, true,
+        old_namespace != super::trace::namespace_head(next, target)?, target)?;
     Ok(PublishedContent { version, placement, allocations })
 }
 

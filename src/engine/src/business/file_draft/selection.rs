@@ -16,12 +16,9 @@ fn missing() -> Error {
 }
 
 pub(crate) fn resolve(state: &State, target: &DraftLocation) -> Result<Selection> {
-    // The first writer is deliberately one root-level, already owned container.
-    // A sparse worktree path or same FileId in an unrelated namespace is not it.
-    if target.path.parent().is_some() {
-        return Err(Error::FileDraft(Failure::UnsupportedScope));
-    }
     let record = state.file_containers.get(&target.file).ok_or_else(missing)?;
+    let occurrence = super::ordinary::OrdinaryOccurrence::capture(state, target.file, record)?;
+    occurrence.require_target(target)?;
     let repository = state.repositories.get(&target.repository.to_string())
         .ok_or_else(missing)?;
     let main = state.branches.get(&repository.main_branch_id).ok_or_else(missing)?;
@@ -40,8 +37,10 @@ pub(crate) fn resolve(state: &State, target: &DraftLocation) -> Result<Selection
     let tree = super::super::NamespaceTree::from_current_state(
         state, &repository.repository_id, &entries,
     );
+    occurrence.require_visible(|path| tree.get_key(path.key()))?;
     let entry = tree.get_key(target.path.key()).ok_or_else(missing)?;
-    if entry.kind != NamespaceEntryKind::File || entry.file_id != target.file.to_string()
+    if entry.path != target.path || entry.kind != NamespaceEntryKind::File
+        || entry.file_id != target.file.to_string()
         || entry.entry_id != target.entry.to_string()
     {
         return Err(missing());
@@ -140,11 +139,6 @@ pub(crate) fn validate(
     Ok(())
 }
 
-pub(crate) fn target(file: FileId, record: &FileContainerRecord) -> Result<DraftLocation> {
-    Ok(DraftLocation {
-        repository: record.namespace.repository,
-        path: name_policy::PortablePath::parse(record.namespace.name.as_str())?,
-        entry: record.namespace.entry,
-        file,
-    })
+pub(crate) fn target(state: &State, file: FileId, record: &FileContainerRecord) -> Result<DraftLocation> {
+    Ok(super::ordinary::OrdinaryOccurrence::capture(state, file, record)?.target)
 }
