@@ -164,6 +164,12 @@ impl<'a> Census<'a> {
     }
 
     pub(super) fn file(&mut self, path: PathBuf, length: u64) -> Result<()> {
+        self.file_present(path, length).map(|_| ())
+    }
+
+    /// True means only that a regular, single-link file exists. A caller
+    /// enforcing exact retained bytes must still read and compare that file.
+    pub(super) fn file_present(&mut self, path: PathBuf, length: u64) -> Result<bool> {
         let file = RelativePath::new(path)?;
         let path = file.as_path();
         if self.previous.as_ref().is_some_and(|previous| {
@@ -191,9 +197,9 @@ impl<'a> Census<'a> {
             present = self.entry(&dir, present, EntryCost::Directory)?;
             self.parents.push((dir, present));
         }
-        self.entry(&file, present, EntryCost::File(length))?;
+        let present = self.entry(&file, present, EntryCost::File(length))?;
         self.previous = Some(file);
-        Ok(())
+        Ok(present)
     }
 
     pub(super) fn require(
@@ -205,6 +211,10 @@ impl<'a> Census<'a> {
     ) -> Result<()> {
         let reserve = self.needed.material_reserve();
         records.charge(&mut self, plans, counts, stop)?;
+        self.require_with_reserve(reserve)
+    }
+
+    pub(super) fn require_with_reserve(self, reserve: u64) -> Result<()> {
         // Sampling the free counts after the whole census matters for large
         // plans. External users may still consume space after this observation.
         let space = Space::observe(self.root)?;

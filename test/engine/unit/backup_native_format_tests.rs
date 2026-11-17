@@ -294,3 +294,68 @@ fn incomplete_native_archive_resumes_original_task_but_unowned_evidence_is_not_a
     assert!(!system_intent.exists());
     assert_eq!(fixture.bytes(), before);
 }
+
+#[test]
+fn native_allocation_visits_the_exact_written_archive_and_forecasts_the_real_fanout() {
+    let fixture = Fixture::prepared_with_sibling(true);
+    let task = fixture.task();
+    let archive = PreparedArchive::freeze(&fixture.engine, task.selection.first()).unwrap();
+    let stop = AtomicBool::new(false);
+    let roots = task.selection.jobs().iter().map(|job| DiskRoot::open(&job.request.target_paths[0]).unwrap()).collect::<Vec<_>>();
+    let held = roots.iter().collect::<Vec<_>>();
+    let mut installed = BTreeMap::new();
+    archive.visit_files(Path::new(""), VisitOrder::Install, |relative, bytes| {
+        for root in &roots {
+            assert_eq!(root.read_bytes(&root.path().join(&relative), bytes.len())?, bytes);
+        }
+        assert!(installed.insert(relative, bytes.len()).is_none());
+        Ok(())
+    }).unwrap();
+    let mut ordered = Vec::new();
+    archive.visit_files(Path::new(""), VisitOrder::Address, |relative, bytes| {
+        ordered.push((relative, bytes.len()));
+        Ok(())
+    }).unwrap();
+    assert_eq!(installed.into_iter().collect::<Vec<_>>(), ordered);
+    assert!(ordered.iter().any(|(path, _)| path.starts_with("native-control/journals")));
+    assert!(ordered.iter().any(|(path, _)| path.starts_with("native-control/objects/backup-original-seal")));
+    assert!(ordered.iter().any(|(path, _)| path == Path::new("native-control/manifest.json")));
+    let materials = task.selection.verify_material(&held, &stop).unwrap();
+    let length = super::allocation::completion_length(&task, &archive.report, materials.clone()).unwrap();
+    for root in &roots {
+        assert_eq!(fs::metadata(root.path().join(super::COMPLETE)).unwrap().len(), length as u64);
+    }
+    let mut too_large = materials;
+    too_large[0].format = "\"".repeat(super::MAX_TASK / 2);
+    assert_eq!(super::allocation::completion_length(&task, &archive.report, too_large).unwrap_err().code(), ErrorCode::ResourceLimit);
+}
+
+#[test]
+fn partial_native_archive_on_a_late_peer_is_checked_before_any_earlier_refill() {
+    let mut fixture = Fixture::prepared_with_sibling(true);
+    let sibling = fixture.temp.path().join("sibling-target");
+    for root in [&fixture.target, &sibling] {
+        fs::remove_file(root.join(super::COMPLETE)).unwrap();
+    }
+    // With neither marker left this is a copier, but all original targets must
+    // pass their *local* preflight before it restores any missing input.
+    let first = journal_path(&fixture.target, 0);
+    let expected = fs::read(&first).unwrap();
+    fs::remove_file(&first).unwrap();
+    let last = journal_path(&sibling, 0);
+    let mut conflict = fs::read(&last).unwrap();
+    conflict[0] ^= 1;
+    fs::write(&last, &conflict).unwrap();
+    fixture.engine.start_backup_native_preparation(fixture.operation, "admin").unwrap();
+    let status = fixture.engine.wait_backup_preparation().unwrap();
+    assert_eq!(status.phase, BackupPreparationPhase::Blocked);
+    assert_eq!(status.error_code, Some(ErrorCode::ObjectCollision));
+    assert!(!first.exists());
+    assert_eq!(fs::read(&last).unwrap(), conflict);
+    assert!(!fixture.target.join(super::COMPLETE).exists());
+    assert!(!sibling.join(super::COMPLETE).exists());
+    fs::write(&last, expected.as_slice()).unwrap();
+    fixture.engine.start_backup_native_preparation(fixture.operation, "admin").unwrap();
+    assert_eq!(fixture.engine.wait_backup_preparation().unwrap().phase, BackupPreparationPhase::NativeControlPrepared);
+    assert_eq!(fs::read(first).unwrap(), expected);
+}

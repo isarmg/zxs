@@ -2,6 +2,7 @@
 //! verified. Interrupted marker fan-out may not turn a peer back into a copy target.
 use super::{Job, Result, invalid, named_target, runtime::Target};
 use crate::disk::DiskRoot;
+use crate::engine::backup_preparation::capacity::Census;
 use crate::history_package::{
     install_preparation_bytes, preparation_checkpoint, preparation_path_exists,
     sync_existing_preparation_bytes,
@@ -90,6 +91,16 @@ impl Fanout {
                 return Err(invalid(
                     "retained Backup completion differs from the verified whole set",
                 ));
+            }
+        }
+        for (target, &present) in targets.iter().zip(&self.seen) {
+            preparation_checkpoint(stop)?;
+            if !present {
+                // Only a missing marker needs new blocks/inodes. Never gate an
+                // already complete root on space for another material copy.
+                let mut census = Census::new(&target.root)?;
+                census.file(self.marker.into(), expected.len() as u64)?;
+                census.require_with_reserve(0)?;
             }
         }
         for ((target, job), &present) in targets.iter().zip(jobs).zip(&self.seen) {

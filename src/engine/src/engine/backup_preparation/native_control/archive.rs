@@ -302,6 +302,8 @@ impl Source for Target<'_, '_> {
     }
 }
 
+pub(super) enum VisitOrder { Install, Address }
+
 pub(super) struct PreparedArchive {
     manifest: Vec<u8>,
     objects: BTreeMap<(String, String), Vec<u8>>,
@@ -471,33 +473,42 @@ impl PreparedArchive {
         })
     }
 
-    pub(super) fn remaining_bytes(&self, root: &DiskRoot) -> Result<u64> {
-        let mut bytes = 0u64;
-        self.visit(root.path(), |path, content| {
-            if !crate::history_package::preparation_path_exists(root, &path)? {
-                bytes = bytes
-                    .checked_add(content.len() as u64)
-                    .ok_or_else(budget_error)?;
-            }
-            Ok(())
-        })?;
-        Ok(bytes)
-    }
-    fn visit(
+    pub(super) fn visit_files(
         &self,
         root: &Path,
+        order: VisitOrder,
         mut visit: impl FnMut(PathBuf, &[u8]) -> Result<()>,
     ) -> Result<()> {
-        for ((kind, hash), bytes) in &self.objects {
-            visit(object_path(root, kind, hash)?, bytes)?;
+        enum Part { Objects, Journals, Manifest }
+        use Part::{Journals, Manifest, Objects};
+        // One source of addresses for both admission and the actual writer.
+        // Installation keeps its original order: the manifest is installed last.
+        let parts = match order {
+            VisitOrder::Install => [Objects, Journals, Manifest],
+            VisitOrder::Address => [Journals, Manifest, Objects],
+        };
+        for part in parts {
+            match part {
+                Objects => {
+                    for ((kind, hash), bytes) in &self.objects {
+                        visit(object_path(root, kind, hash)?, bytes)?;
+                    }
+                }
+                Journals => {
+                    for (index, bytes) in self.journals.iter().enumerate() {
+                        visit(journal_path(root, index), bytes)?;
+                    }
+                }
+                Manifest => visit(manifest_path(root), &self.manifest)?,
+            }
         }
-        for (index, bytes) in self.journals.iter().enumerate() {
-            visit(journal_path(root, index), bytes)?;
-        }
-        visit(manifest_path(root), &self.manifest)
+        Ok(())
     }
-    pub(super) fn install(&self, root: &DiskRoot, mode: completion_fanout::MaterialMode, stop: &AtomicBool) -> Result<()> {
-        self.visit(root.path(), |path, bytes| {
+
+    pub(super) fn install(
+        &self, root: &DiskRoot, mode: completion_fanout::MaterialMode, stop: &AtomicBool,
+    ) -> Result<()> {
+        self.visit_files(root.path(), VisitOrder::Install, |path, bytes| {
             crate::history_package::preparation_checkpoint(stop)?;
             mode.write(root, &path, bytes)
         })

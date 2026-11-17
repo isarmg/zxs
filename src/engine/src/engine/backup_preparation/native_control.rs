@@ -5,6 +5,7 @@ use std::path::{Component, Path};
 
 mod archive;
 mod completion_fanout;
+mod allocation;
 pub(in crate::engine) use archive::generation_objects::BackupNativeObjects;
 mod databases;
 pub(in crate::engine) use databases::ServingSwitch;
