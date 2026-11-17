@@ -238,3 +238,6 @@ fn native_dispatch_uses_real_engine_and_cold_unborn_content_without_transport() 
     no_file_history(&engine);
     assert_eq!(engine.native_current_entries(target.repository).unwrap().len(), 1);
 }
+
+#[path = "native_worktree_tests.rs"]
+mod worktree;

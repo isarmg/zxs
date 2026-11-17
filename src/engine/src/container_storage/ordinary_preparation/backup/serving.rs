@@ -302,7 +302,7 @@ impl<'a> BackupServingImage<'a> {
         let logical = source.state().file_containers.get(&file)
             .ok_or(Failure::BackupLayoutEvidence)?;
         let mut ancestors = Vec::new();
-        let mut cursor = logical.namespace.parent;
+        let mut cursor = logical.namespace.parent.ordinary().ok_or(Failure::BackupLayoutEvidence)?;
         while let Parent::Directory(entry) = cursor {
             let record = source.state().namespace_directories.get(&entry.to_string())
                 .ok_or(Failure::BackupLayoutEvidence)?;
@@ -581,7 +581,8 @@ impl<'a> BackupServingImage<'a> {
         }
         for (file, value) in &record.files {
             let logical = &source.state().file_containers[file];
-            let parent = parent(common, &self.held._directories, logical.namespace.parent)?;
+            let parent = parent(common, &self.held._directories,
+                logical.namespace.parent.ordinary().ok_or(Failure::BackupLayoutEvidence)?)?;
             install_name(&management, &layout::container::preparation(value.preparation),
                 parent, &layout::namespace::directory(&logical.namespace.name),
                 &self.held._files[file], stop)?;

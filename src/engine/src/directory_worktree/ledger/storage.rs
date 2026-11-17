@@ -5,7 +5,7 @@ use crate::directory_worktree::projection::namespace::NamespaceChange;
 use crate::name_budget::NameBudget;
 use super::record::{Body, Checkpoint, Event, Format, Frame, Genesis};
 use super::state::State;
-use super::{LedgerError, MAX_FRAME_BYTES, MAX_FRAMES, MAX_LEDGER_BYTES};
+use super::{AddedFile, LedgerError, MAX_FRAME_BYTES, MAX_FRAMES, MAX_LEDGER_BYTES};
 use crate::directory_worktree::lifecycle::{
     Mount, Phase, Publication, PublicationScope, SnapshotSource, Worktree, WorktreeId,
 };
@@ -326,6 +326,9 @@ impl<'a> HeldWorktreeLedger<'a> {
                     self.verify_edits(&self.state.edits, EditAccess::ReadOnly)?;
                 }
             Event::Namespace { changes, .. } => self.verify_prospective_names(changes)?,
+            Event::File { file, .. } => {
+                self.verify_prospective_paths(std::iter::once(&file.target.path))?;
+            }
             Event::Commit { .. } | Event::Delete { .. }
                 | Event::Restored { .. } | Event::Completed { .. } => {}
         }
@@ -341,11 +344,17 @@ impl<'a> HeldWorktreeLedger<'a> {
         Ok(checkpoint)
     }
     fn verify_prospective_names(&self, changes: &[NamespaceChange]) -> Result<(), LedgerError> {
-        let mut paths = changes.iter().filter_map(|change| match change {
+        let paths = changes.iter().filter_map(|change| match change {
             NamespaceChange::AddDirectory { path } => Some(path),
             NamespaceChange::Rename { target, .. } => Some(target),
             NamespaceChange::RemoveSubtree { .. } => None,
         });
+        self.verify_prospective_paths(paths)
+    }
+    fn verify_prospective_paths<'p>(
+        &self,
+        mut paths: impl Iterator<Item = &'p name_policy::PortablePath>,
+    ) -> Result<(), LedgerError> {
         let Some(first) = paths.next() else {
             return Ok(());
         };
@@ -404,6 +413,41 @@ impl<'a> HeldWorktreeLedger<'a> {
             return Err(LedgerError::Chain);
         }
         Ok(())
+    }
+    /// Complete preflight before publishing the native FILE decision. This
+    /// retains no new checkpoint and writes nothing; the same append admission
+    /// is repeated after that decision before its independent completion.
+    pub(crate) fn check_file(
+        &self,
+        operation: storage_contract::OperationId,
+        expected: crate::directory_worktree::lifecycle::Revision,
+        file: &AddedFile,
+    ) -> Result<(), LedgerError> {
+        self.admit_read_view()?;
+        let event = Event::File { operation, expected, file: file.clone() };
+        if self.state.prior(&event)?.is_some() {
+            return Ok(());
+        }
+        let (bytes, checkpoint) = event_frame(self.checkpoint, &event)?;
+        bounded_total(self.bytes, bytes.len())?;
+        self.state.clone().apply(
+            self.source.manifest(), &event, checkpoint, &mut |_, _| Err(LedgerError::FileResults),
+        )?;
+        self.verify_prospective_paths(std::iter::once(&file.target.path))
+    }
+
+    /// Append only after this exact FILE birth/save's independent native decision.
+    /// The owning publisher must decide CompleteFile before exposing the checkpoint.
+    pub(crate) fn file(
+        &mut self,
+        operation: storage_contract::OperationId,
+        expected: crate::directory_worktree::lifecycle::Revision,
+        file: AddedFile,
+    ) -> Result<Checkpoint, LedgerError> {
+        self.append(Event::File { operation, expected, file }, |_, _| Err(LedgerError::FileResults))
+    }
+    pub(crate) fn added_files(&self) -> &[AddedFile] {
+        &self.state.added
     }
     pub(crate) fn binding(&self) -> Binding {
         self.binding

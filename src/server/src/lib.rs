@@ -121,7 +121,8 @@ mod backend_unborn;
 mod backend_smb_worktree;
 pub use backend_smb_worktree::{
     SmbWorktreeAccess, SmbWorktreeCursor, SmbWorktreeEntry, SmbWorktreeFile,
-    SmbWorktreeLocation, SmbWorktreePage,
+    SmbWorktreeLocation, SmbWorktreePage, SmbWorktreeEntryContent,
+    SmbWorktreeWorkingOpen, SmbWorktreeWorkingSource,
 };
 mod backend_smb_native;
 pub use backend_smb_native::{SmbNativeEdit, SmbNativeHandle, SmbNativeOpen};

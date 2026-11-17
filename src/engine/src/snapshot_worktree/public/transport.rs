@@ -43,12 +43,15 @@ impl Engine {
             None => ReadMaterial::Original,
         };
         let view = session.read(material).map_err(RegistrationError::ReadView)?;
-        let EntryContent::File { material } = view.content(path)
-            .map_err(RegistrationError::ReadView)? else {
-                return Err(RegistrationError::ReadView(
-                    crate::directory_worktree::io::ViewError::IsDirectory,
-                ).into());
-            };
+        let material = match view.content(path).map_err(RegistrationError::ReadView)? {
+            EntryContent::File { material } => material,
+            EntryContent::Directory => return Err(RegistrationError::ReadView(
+                crate::directory_worktree::io::ViewError::IsDirectory,
+            ).into()),
+            EntryContent::Working { .. } => return Err(RegistrationError::ReadView(
+                crate::directory_worktree::io::ViewError::WorkingSourceRequired,
+            ).into()),
+        };
         let file = view.open_file(path).map_err(RegistrationError::ReadView)?;
         Ok(WorktreeContent {
             file,

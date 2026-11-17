@@ -530,6 +530,12 @@ macro_rules! methods {
                     let _ = (identity, request, source);
                     Err($crate::ApiError::unsupported())
                 }
+                fn smb_worktree_working_open(
+                    &self, identity: &$crate::Identity, request: $crate::SmbWorktreeWorkingOpen,
+                ) -> Result<$crate::SmbNativeHandle, $crate::ApiError> {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn smb_native_open(
                     &self, identity: &$crate::Identity, request: $crate::SmbNativeOpen<'_>,
                 ) -> Result<Option<$crate::SmbNativeHandle>, $crate::ApiError> {

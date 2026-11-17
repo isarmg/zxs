@@ -29,14 +29,23 @@ fn save_transition(
     next: &State,
     result: &OperationResult,
 ) -> Result<Option<VerifiedUnbornSave>> {
-    if result.kind != crate::persist::file_draft::unborn_save::KIND { return Ok(None); }
+    let worktree = result.kind == crate::persist::snapshot_worktree::FILE_SAVE;
+    if !worktree && result.kind != crate::persist::file_draft::unborn_save::KIND {
+        return Ok(None);
+    }
     let principal = next.operation_principals.get(&result.operation_id)
         .ok_or_else(invalid)?        .parse::<Principal>()        .map_err(|_| invalid())?;
-    let expected = unborn::replay_save(config, previous, result, &principal)?;
-    if !crate::publication_shape::same_transition(previous, expected.state(), next) {
+    let (expected, file) = if worktree {
+        crate::business::file_draft::worktree::replay(config, previous, result, &principal)?
+    } else {
+        let projected = unborn::replay_save(config, previous, result, &principal)?;
+        let file = projected.target().file;
+        (projected.into_state(), file)
+    };
+    if !crate::publication_shape::same_transition(previous, &expected, next) {
         return Err(invalid());
     }
-    Ok(Some(VerifiedUnbornSave { file: expected.target().file }))
+    Ok(Some(VerifiedUnbornSave { file }))
 }
 
 pub(super) fn save_plan(
@@ -53,7 +62,7 @@ pub(super) fn save_plan(
     if source.disk().disk_id.parse::<DiskId>()? != record.owner_disk {
         return Err(invalid());
     }
-    source.common()?;
+    if record.namespace.parent.is_worktree() { source.deleted()?; } else { source.common()?; }
     Ok(Some(proof))
 }
 
@@ -120,11 +129,16 @@ fn reconstruct(
 ) -> Result<(State, VerifiedUnbornBirth)> {
     let principal = next.operation_principals.get(&result.operation_id)
         .ok_or_else(invalid)?        .parse::<Principal>()        .map_err(|_| invalid())?;
-    let projected = unborn::replay_birth(config, previous, result, &principal)?;
-    let file = projected.target().file;
-    let record = projected.state().file_containers.get(&file).ok_or_else(invalid)?.clone();
+    let (projected, file) = if result.kind == crate::persist::snapshot_worktree::FILE_BIRTH {
+        crate::business::file_draft::worktree::replay(config, previous, result, &principal)?
+    } else {
+        let projection = unborn::replay_birth(config, previous, result, &principal)?;
+        let file = projection.target().file;
+        (projection.into_state(), file)
+    };
+    let record = projected.file_containers.get(&file).ok_or_else(invalid)?.clone();
     let root = config.storage_roots.get(&record.owner_disk).ok_or_else(invalid)?.root_id;
-    Ok((projected.into_state(), VerifiedUnbornBirth {
+    Ok((projected, VerifiedUnbornBirth {
         file, logical: record, root, receipt: result.clone(),
     }))
 }
@@ -135,7 +149,9 @@ pub(super) fn plan(
     prepared: &[Prepared],
     result: &OperationResult,
 ) -> Result<Option<VerifiedUnbornBirth>> {
-    if result.kind != codec::KIND { return Ok(None); }
+    if result.kind != codec::KIND && result.kind != crate::persist::snapshot_worktree::FILE_BIRTH {
+        return Ok(None);
+    }
     if context.current_namespaces.is_some() || !prepared.is_empty() {
         return Err(Error::FileDraft(Failure::UnsupportedScope));
     }
@@ -151,7 +167,11 @@ pub(super) fn plan(
     {
         return Err(invalid());
     }
-    source.common()?;
+    if proof.logical.namespace.parent.is_worktree() {
+        source.deleted()?;
+    } else {
+        source.common()?;
+    }
     Ok(Some(proof))
 }
 
@@ -162,7 +182,9 @@ pub(super) fn candidate(
     candidate: &Candidate,
 ) -> Result<Option<VerifiedUnbornBirth>> {
     let result = next.operations.get(&candidate.operation_id).ok_or_else(invalid)?;
-    if result.kind != codec::KIND { return Ok(None); }
+    if result.kind != codec::KIND && result.kind != crate::persist::snapshot_worktree::FILE_BIRTH {
+        return Ok(None);
+    }
     if candidate.generation().is_some() || !candidate.versions.is_empty()
         || next.sequence != candidate.sequence || result.sequence != candidate.sequence
         || result.request_digest != candidate.request_digest

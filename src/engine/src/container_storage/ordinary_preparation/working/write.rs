@@ -157,17 +157,29 @@ impl WorkingWriteSession {
         reader: HeldUnbornReader,
         operation: OperationId,
     ) -> Result<Self> {
-        Self::begin_source(context, SourceReader::Unborn(reader), operation)
+        Self::begin_source(
+            context, SourceReader::Unborn(reader), operation, context.config.max_file_bytes,
+        )
     }
 
     pub(crate) fn begin_manual(
         context: &PlanningContext<'_>, reader: HeldManualReader, operation: OperationId,
     ) -> Result<Self> {
-        Self::begin_source(context, SourceReader::Manual(reader), operation)
+        Self::begin_source(
+            context, SourceReader::Manual(reader), operation, context.config.max_file_bytes,
+        )
+    }
+
+    pub(crate) fn begin_bounded(
+        context: &PlanningContext<'_>, reader: HeldUnbornReader, operation: OperationId,
+        maximum: u64,
+    ) -> Result<Self> {
+        if maximum > context.config.max_file_bytes { return Err(Error::FileDraft(Failure::Size)); }
+        Self::begin_source(context, SourceReader::Unborn(reader), operation, maximum)
     }
 
     fn begin_source(
-        context: &PlanningContext<'_>, reader: SourceReader, operation: OperationId,
+        context: &PlanningContext<'_>, reader: SourceReader, operation: OperationId, maximum: u64,
     ) -> Result<Self> {
         let source = Source::capture(context, reader)?;
         if context.state.operations.contains_key(&operation) {
@@ -175,9 +187,9 @@ impl WorkingWriteSession {
         }
         let batch = match source.reader.manifest() {
             None => WorkingSave::first_with_length(source.reader.file(), operation,
-                source.reader.logical_size(), context.config.max_file_bytes,
+                source.reader.logical_size(), maximum,
             ).map_err(manifest_error)?,
-            Some(manifest) => manifest.begin_save(operation, context.config.max_file_bytes)
+            Some(manifest) => manifest.begin_save(operation, maximum)
                 .map_err(manifest_error)?,
         };
         let retained_base_bytes = source.reader.retained_base_bytes();
@@ -460,6 +472,27 @@ impl PreparedWorkingSave {
         Ok(storage_contract::file_draft::UnbornSaveRequest {
             target: target.clone(),
             expected: self.source.reader.scope().record.working.revision(),
+            manifest: self.manifest.clone(),
+        })
+    }
+
+    pub(crate) fn worktree_request(
+        &self, target: &storage_contract::snapshot_worktree::additions::WorktreeFileTarget,
+        expected: storage_contract::snapshot_worktree::WorktreeRevision,
+    ) -> Result<crate::persist::snapshot_worktree::files::WorktreeFileSaveRequest> {
+        let record = &self.source.reader.scope().record;
+        if !matches!(self.body, SavedBody::Unborn) || target.file != self.source.reader.file()
+            || target.entry != record.namespace.entry
+            || !matches!(&record.namespace.parent,
+                storage_contract::file_container::ContainerParent::Worktree {
+                    target: instance, path, ..
+                }
+                if *instance == target.worktree && *path == target.path)
+        {
+            return Err(Error::FileDraft(Failure::SourceChanged));
+        }
+        Ok(crate::persist::snapshot_worktree::files::WorktreeFileSaveRequest {
+            target: target.clone(), expected, working: record.working.revision(),
             manifest: self.manifest.clone(),
         })
     }

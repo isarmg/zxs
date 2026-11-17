@@ -92,7 +92,7 @@ impl SparseProjection<'_> {
             return FileObligationPlan { files: BTreeMap::new() };
         }
         let visible = self.entries.iter().filter_map(|entry| match entry.content {
-            Content::Directory => None,
+            Content::Directory | Content::Added { .. } => None,
             Content::File { original, .. } => self.edits.contains_key(&original)
                 .then_some((original, &entry.path)),
         }).collect::<BTreeMap<_, _>>();

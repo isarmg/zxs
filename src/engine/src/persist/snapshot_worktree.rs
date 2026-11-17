@@ -1,5 +1,6 @@
 //! Strict permanent reservation/completion records. Local material never supplies them.
 pub(crate) mod historical;
+pub(crate) mod files;
 pub(crate) use historical::{CommitRouting, HistoricalCommit, HistoricalFile, HistoricalReady};
 use crate::directory_worktree::ledger::{Binding as LedgerBinding, Checkpoint, EditRecord};
 use crate::working_tree::snapshot::{
@@ -20,6 +21,10 @@ use storage_contract::working_tree::{
 use storage_contract::{
     BranchName, CommitState, EntryId, OperationId, Principal, ProtectionAtPublish, VersionId,
 };
+
+pub(crate) const FILE_BIRTH: &str = "snapshot.worktree.file-birth";
+pub(crate) const FILE_SAVE: &str = "snapshot.worktree.file-save";
+pub(crate) const FILE_COMPLETE: &str = "snapshot.worktree.file-complete";
 
 pub(crate) const NODE_RESERVE: &str = "snapshot.repository.reserve";
 pub(crate) const NODE_COMPLETE: &str = "snapshot.repository.complete";
@@ -209,6 +214,9 @@ pub(crate) struct EditCompletion {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", content = "record", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Record {
+    BirthFile(files::WorktreeFileBirth),
+    SaveFile(files::WorktreeFileSave),
+    CompleteFile(files::WorktreeFileCompletion),
     ReserveNode(NodeReservation),
     CompleteNode(NodeCompletion),
     ReserveWorktree(WorktreeReservation),
@@ -223,7 +231,7 @@ pub(crate) enum Record {
     CompleteCommit(CommitCompletion),
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Envelope {
     snapshot_worktree: Record,
@@ -264,6 +272,12 @@ impl Record {
     fn request(&self) -> Result<json_codec::Value, CodecError> {
         match self {
             Self::ReserveNode(record) => PublicationEncoding::node_request(&record.request),
+            Self::BirthFile(record) => {
+                json_codec::to_value(&record.request).map_err(CodecError::Value)
+            }
+            Self::SaveFile(record) => {
+                json_codec::to_value(&record.request).map_err(CodecError::Value)
+            }
             Self::ReserveWorktree(record) => {
                 json_codec::to_value(&record.request).map_err(CodecError::Value)
             }
@@ -279,7 +293,8 @@ impl Record {
             Self::ReserveHistoricalCommit(record) => {
                 json_codec::to_value(&record.request).map_err(CodecError::Value)
             }
-            Self::CompleteNode(_) | Self::CompleteWorktree(_) | Self::CompleteEdit(_)
+            Self::CompleteFile(_) | Self::CompleteNode(_) | Self::CompleteWorktree(_)
+            | Self::CompleteEdit(_)
             | Self::PrepareHistoricalCommit(_) | Self::PublishCommitNode(_)
             | Self::CompleteCommit(_) => {
                 json_codec::to_value(self).map_err(CodecError::Value)
@@ -289,6 +304,9 @@ impl Record {
 
     pub(crate) fn kind(&self) -> &'static str {
         match self {
+            Self::BirthFile(_) => FILE_BIRTH,
+            Self::SaveFile(_) => FILE_SAVE,
+            Self::CompleteFile(_) => FILE_COMPLETE,
             Self::ReserveNode(_) => NODE_RESERVE,
             Self::CompleteNode(_) => NODE_COMPLETE,
             Self::ReserveWorktree(_) => WORKTREE_RESERVE,
@@ -357,7 +375,8 @@ impl PublicationEncoding {
 
 fn indexed_kind(kind: &str) -> bool {
     matches!(kind,
-        NODE_RESERVE | NODE_COMPLETE | WORKTREE_RESERVE | WORKTREE_ALLOCATE | WORKTREE_COMPLETE
+        FILE_BIRTH | FILE_SAVE | FILE_COMPLETE | NODE_RESERVE | NODE_COMPLETE
+            | WORKTREE_RESERVE | WORKTREE_ALLOCATE | WORKTREE_COMPLETE
             | EDIT_RESERVE | EDIT_COMPLETE | COMMIT_RESERVE | HISTORICAL_RESERVE | HISTORICAL_READY
             | COMMIT_NODE | COMMIT_COMPLETE)
 }
@@ -411,6 +430,16 @@ pub(crate) fn decode(receipt: &OperationResult) -> Result<Option<Decoded>, Codec
     }) {
         return Err(CodecError::Budget);
     }
+    if record.and_then(|record| record.get("request"))
+        .and_then(|request| request.get("manifest"))
+        .and_then(|manifest| manifest.get("blocks"))
+        .and_then(json_codec::Value::as_array)
+        .is_some_and(|blocks| {
+            blocks.len() > storage_contract::file_draft::manifest::MAX_WORKING_BLOCKS
+        })
+    {
+        return Err(CodecError::Budget);
+    }
     let envelope: Envelope = json_codec::from_value(receipt.result.clone())
         .map_err(CodecError::Decoding)?;
     if envelope.snapshot_worktree.kind() != receipt.kind {
@@ -424,4 +453,24 @@ pub(crate) fn decode(receipt: &OperationResult) -> Result<Option<Decoded>, Codec
         timestamp: envelope.timestamp,
         membership_epoch: envelope.membership_epoch,
     }))
+}
+
+impl Decoded {
+    pub(crate) fn receipt(
+        &self, operation: OperationId, sequence: storage_contract::Sequence,
+        principal: &Principal,
+    ) -> Result<OperationResult, CodecError> {
+        Ok(OperationResult {
+            operation_id: operation, kind: self.record.kind().into(),
+            commit_id: None, history_tree_id: None, branch_id: None,
+            commit_state: CommitState::Published,
+            protection_at_publish: ProtectionAtPublish::NotApplicable,
+            current_health: storage_contract::CurrentHealth::Healthy,
+            request_digest: self.record.digest(principal)?, sequence: sequence.get(),
+            result: json_codec::to_value(Envelope {
+                snapshot_worktree: self.record.clone(), timestamp: self.timestamp,
+                membership_epoch: self.membership_epoch, version_protection: Vec::new(),
+            }).map_err(CodecError::Value)?,
+        })
+    }
 }

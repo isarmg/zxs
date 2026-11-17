@@ -691,6 +691,11 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::snapshot_worktree::WorktreeRevision, ApiError> {
         smb_worktree::edit(self, identity, request, source)
     }
+    fn smb_worktree_working_open(
+        &self, identity: &Identity, request: crate::SmbWorktreeWorkingOpen,
+    ) -> Result<crate::SmbNativeHandle, ApiError> {
+        smb_worktree::open_working(self, identity, request)
+    }
     fn smb_native_open(
         &self, identity: &Identity, request: crate::SmbNativeOpen<'_>,
     ) -> Result<Option<crate::SmbNativeHandle>, ApiError> {

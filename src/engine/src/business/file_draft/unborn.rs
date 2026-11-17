@@ -19,7 +19,7 @@ mod replay;
 mod current;
 pub(crate) use first::{FirstCommit, build as build_first_content};
 pub(crate) use replay::{
-    birth as replay_birth, first as replay_first, save as replay_save,
+    birth as replay_birth, first as replay_first, save as replay_save, finish_state,
 };
 pub(crate) use current::{validate as validate_current, validate_record as validate_current_record};
 
@@ -92,16 +92,16 @@ pub(crate) fn selected<'a>(
     Ok(*record)
 }
 
-fn require_fresh(previous: &State, birth: &Birth) -> Result<()> {
-    let file = birth.file.to_string();
-    if previous.file_containers.contains_key(&birth.file)
-        || previous.container_tags.contains_key(&birth.file)
+pub(crate) fn require_fresh(previous: &State, id: FileId, target_entry: EntryId) -> Result<()> {
+    let file = id.to_string();
+    if previous.file_containers.contains_key(&id)
+        || previous.container_tags.contains_key(&id)
         || previous.versions.values().any(|version| version.file_id == file)
         || previous.branches.values().any(|branch| branch.file_id.as_ref() == Some(&file))
         || previous.commits.values().any(|commit| commit.entries.iter().any(|entry| {
-            entry.entry_id == birth.entry.to_string() || entry.file_id == file
+            entry.entry_id == target_entry.to_string() || entry.file_id == file
         }))
-        || previous.file_containers.values().any(|record| record.namespace.entry == birth.entry)
+        || previous.file_containers.values().any(|record| record.namespace.entry == target_entry)
     {
         return Err(invalid());
     }
@@ -113,7 +113,7 @@ fn birth_record(
     birth: &Birth,
     operation: OperationId,
 ) -> Result<FileContainerRecord> {
-    require_fresh(namespace.state(), birth)?;
+    require_fresh(namespace.state(), birth.file, birth.entry)?;
     let binding: ContainerNamespace = namespace.namespace_for_birth(&birth.path, birth.entry)?;
     Ok(FileContainerRecord {
         history_tree_id: namespace.history(),
@@ -128,7 +128,7 @@ fn birth_record(
     })
 }
 
-pub(super) fn begin(previous: &State, sequence: Sequence) -> Result<State> {
+pub(crate) fn begin(previous: &State, sequence: Sequence) -> Result<State> {
     let mut next = previous.clone();
     next.begin_tracking();
     crate::container_storage::capture_names(&mut next);

@@ -56,6 +56,7 @@ impl PublishedWorktree<'_> {
             || worktree.mount().parent != reserved.request.parent_directory_id
             || worktree.mount().name.as_str() != reserved.request.name.as_str()
             || worktree.revision() != self.revision()
+            || session.added_files() != self.added_files()
         {
             return Err(RegistrationError::Source);
         }

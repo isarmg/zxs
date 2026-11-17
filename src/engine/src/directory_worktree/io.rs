@@ -13,6 +13,8 @@ use crate::working_tree::snapshot::{
 use data_serialization::Serialize;
 use name_policy::{LookupPath, PortablePath};
 use std::num::NonZeroU16;
+use storage_contract::snapshot_worktree::additions::WorktreeFileTarget;
+use storage_contract::file_draft::UnbornWorking;
 
 const MAX_PAGE_ENTRIES: u16 = 256;
 const MAX_PAGE_BYTES: usize = 64 * 1024;
@@ -24,11 +26,33 @@ pub(crate) struct ViewStamp {
     pub(crate) checkpoint: Checkpoint,
     pub(crate) material: SnapshotReference,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum EntryContent {
+    Working {
+        target: WorktreeFileTarget,
+        #[serialization(serialize_with = "working_metadata")]
+        working: UnbornWorking,
+    },
     Directory,
     File { material: SnapshotFile },
+}
+
+// The page-byte bound counts exposed entry metadata, not the private extent
+// inventory that the native FILE source must independently reopen. Large
+// normal working bodies must not become unlistable merely by gaining blocks.
+fn working_metadata<S: data_serialization::Serializer>(
+    working: &UnbornWorking,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Metadata {
+        revision: storage_contract::file_draft::WorkingRevision,
+        #[serialization(with = "storage_contract::u64_string")]
+        logical_size: u64,
+    }
+    Metadata { revision: working.revision(), logical_size: working.logical_size() }
+        .serialize(serializer)
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct Entry {
@@ -64,6 +88,8 @@ pub(crate) enum ViewError {
     Missing,
     #[error("worktree entry is a directory, not file content")]
     IsDirectory,
+    #[error("worktree added file requires its native working source, not a complete version read")]
+    WorkingSourceRequired,
     #[error("worktree entry is not a directory")]
     NotDirectory,
     #[error("worktree directory cursor belongs to another view or parent")]
@@ -152,6 +178,7 @@ impl<'a> HeldReadView<'a> {
             Backing::Sparse { source, instance, projection } => {
                 match projection.route(path).ok_or(ViewError::Missing)? {
                     ReadRoute::Directory => Err(ViewError::IsDirectory),
+                    ReadRoute::Added { .. } => Err(ViewError::WorkingSourceRequired),
                     ReadRoute::Original { file } => {
                         source.open_payload(file.version_id).map_err(ViewError::Snapshot)
                     }
@@ -162,6 +189,7 @@ impl<'a> HeldReadView<'a> {
             }
             Backing::Published { node } => match self.admitted_content(path)? {
                 EntryContent::Directory => Err(ViewError::IsDirectory),
+                EntryContent::Working { .. } => Err(ViewError::WorkingSourceRequired),
                 EntryContent::File { material } => {
                     node.open_payload(material.version_id).map_err(ViewError::Snapshot)
                 }
@@ -193,6 +221,9 @@ impl<'a> HeldReadView<'a> {
             Backing::Sparse { projection, .. } => {
                 Ok(match projection.route(path).ok_or(ViewError::Missing)? {
                     ReadRoute::Directory => EntryContent::Directory,
+                    ReadRoute::Added { file } => EntryContent::Working {
+                        target: file.target.clone(), working: file.working.clone(),
+                    },
                     ReadRoute::Original { file } => EntryContent::File { material: file },
                     ReadRoute::Working { material } => {
                         EntryContent::File { material: material.file }

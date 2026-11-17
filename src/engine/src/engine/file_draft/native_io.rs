@@ -19,8 +19,26 @@ pub enum NativeCurrentEntry {
     },
 }
 
+/// Exact native issuer, not a guessed ordinary namespace for an instance path.
+pub enum NativeWorkingTarget {
+    Current(DraftLocation),
+    Worktree {
+        target: storage_contract::snapshot_worktree::additions::WorktreeFileTarget,
+        revision: storage_contract::snapshot_worktree::WorktreeRevision,
+        maximum: u64,
+    },
+}
+impl NativeWorkingTarget {
+    fn file(&self) -> storage_contract::FileId {
+        match self {
+            Self::Current(target) => target.file,
+            Self::Worktree { target, .. } => target.file,
+        }
+    }
+}
+
 pub struct NativeWorkingFile {
-    target: DraftLocation,
+    target: NativeWorkingTarget,
     principal: Principal,
     reader: NativeReader,
     writable: bool,
@@ -44,6 +62,7 @@ enum NativeReader {
 enum SaveRequest {
     Unborn(UnbornSaveRequest),
     Manual(crate::persist::file_draft::RangeSaveRequest),
+    Worktree(crate::persist::snapshot_worktree::files::WorktreeFileSaveRequest),
 }
 
 impl NativeReader {
@@ -77,7 +96,19 @@ impl NativeReader {
 }
 
 impl NativeWorkingFile {
-    pub fn target(&self) -> &DraftLocation { &self.target }
+    pub fn target(&self) -> &NativeWorkingTarget { &self.target }
+
+    pub(crate) fn worktree(
+        target: storage_contract::snapshot_worktree::additions::WorktreeFileTarget,
+        principal: Principal, reader: HeldUnbornReader, writable: bool,
+        revision: storage_contract::snapshot_worktree::WorktreeRevision, maximum: u64,
+    ) -> Self {
+        Self {
+            target: NativeWorkingTarget::Worktree { target, revision, maximum },
+            principal, reader: NativeReader::Unborn(reader), writable, stage: Stage::Idle,
+            operation: None, saved: None,
+        }
+    }
     pub fn operation(&self) -> Option<OperationId> { self.operation }
 
     fn require_writer(&self, principal: &Principal) -> Result<()> {
@@ -94,16 +125,32 @@ impl NativeWorkingFile {
         if matches!(self.stage, Stage::Idle) {
             // A later batch gets a new operation only from the then-current
             // admitted source. We do not rebind an old Editing source Arc.
-            let record = engine.state.file_containers.get(&self.target.file)
+            let record = engine.state.file_containers.get(&self.target.file())
                 .ok_or(Error::FileDraft(Failure::SourceChanged))?;
-            self.reader.require_record(self.target.file, record)?;
+            self.reader.require_record(self.target.file(), record)?;
             let operation = OperationId::generate()?;
-            let editing = match &self.reader {
-                NativeReader::Unborn(_) => engine.begin_unborn_write(&self.target, operation)?,
-                NativeReader::Manual(_) => WorkingWriteSession::begin_manual(
-                    &engine.planning_context(),
-                    engine.open_manual_working(&self.target)?, operation,
-                )?,
+            let editing = match (&self.target, &self.reader) {
+                (NativeWorkingTarget::Current(target), NativeReader::Unborn(_)) => {
+                    engine.begin_unborn_write(target, operation)?
+                }
+                (NativeWorkingTarget::Current(target), NativeReader::Manual(_)) => {
+                    WorkingWriteSession::begin_manual(&engine.planning_context(),
+                        engine.open_manual_working(target)?, operation)?
+                }
+                (NativeWorkingTarget::Worktree { target, revision, maximum },
+                    NativeReader::Unborn(_)) => {
+                    let (reader, current, limit) = crate::snapshot_worktree::additions::reader(
+                        engine, target, true,
+                    ).map_err(crate::business::file_draft::worktree::failure)?;
+                    if current != *revision || limit != *maximum {
+                        return Err(Error::FileDraft(Failure::SourceChanged));
+                    }
+                    WorkingWriteSession::begin_bounded(&engine.planning_context(), reader,
+                        operation, limit)?
+                }
+                (NativeWorkingTarget::Worktree { .. }, NativeReader::Manual(_)) => {
+                    return Err(Error::FileDraft(Failure::UnbornRequired));
+                }
             };
             self.stage = Stage::Editing(editing);
             self.operation = Some(operation);
@@ -149,7 +196,7 @@ impl Engine {
     ) -> Result<NativeWorkingFile> {
         if writable { self.planning_context().require_write()?; }
         Ok(NativeWorkingFile {
-            target: target.clone(), principal: principal.clone(),
+            target: NativeWorkingTarget::Current(target.clone()), principal: principal.clone(),
             reader: self.open_native_reader(target)?, writable, stage: Stage::Idle,
             operation: None, saved: None,
         })
@@ -227,10 +274,16 @@ impl Engine {
             };
             match editing.prepare(&self.planning_context())? {
                 Some(material) => {
-                    let request = if material.is_manual() {
-                        SaveRequest::Manual(material.manual_command(&file.target)?)
-                    } else {
-                        SaveRequest::Unborn(material.request(&file.target)?)
+                    let request = match &file.target {
+                        NativeWorkingTarget::Current(target) if material.is_manual() => {
+                            SaveRequest::Manual(material.manual_command(target)?)
+                        }
+                        NativeWorkingTarget::Current(target) => {
+                            SaveRequest::Unborn(material.request(target)?)
+                        }
+                        NativeWorkingTarget::Worktree { target, revision, .. } => {
+                            SaveRequest::Worktree(material.worktree_request(target, *revision)?)
+                        }
                     };
                     file.stage = Stage::Pending { request, material: Arc::new(material) };
                 }
@@ -251,13 +304,26 @@ impl Engine {
             SaveRequest::Unborn(request) => self.save_unborn_working(
                 request, principal, Some(Arc::clone(material)),
             )?,
+            SaveRequest::Worktree(request) => crate::snapshot_worktree::additions::save(
+                self, request, principal, Arc::clone(material),
+            ).map_err(crate::business::file_draft::worktree::failure)?,
             SaveRequest::Manual(request) => self.save_incremental_working(
                 request, principal, material.manifest().operation(), Arc::clone(material),
             )?,
         };
         // If post-publication source admission fails, retain Pending. The same
         // request will reach Existing before its old source revision on retry.
-        let reader = self.open_native_reader(&file.target)?;
+        let reader = match &mut file.target {
+            NativeWorkingTarget::Current(target) => self.open_native_reader(target)?,
+            NativeWorkingTarget::Worktree { target, revision, maximum } => {
+                let (reader, current, limit) =
+                    crate::snapshot_worktree::additions::reader(self, target, true)
+                    .map_err(crate::business::file_draft::worktree::failure)?;
+                *revision = current;
+                *maximum = limit;
+                NativeReader::Unborn(reader)
+            }
+        };
         file.reader = reader;
         file.stage = Stage::Idle;
         file.saved = Some(result.clone());

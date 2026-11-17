@@ -40,6 +40,7 @@ impl SnapshotWorktreeError {
     pub(crate) fn code_for_registration(source: &RegistrationError) -> ErrorCode {
         match source {
             RegistrationError::Publication(source) => source.code(),
+            RegistrationError::RetainedName(source) => source.code(),
             RegistrationError::OriginalReceipt(source) => source.code(),
             RegistrationError::Allocation(source) => source.code(),
             RegistrationError::DirectoryRecord(source) => source.code(),
@@ -78,6 +79,11 @@ impl SnapshotWorktreeError {
             }
             RegistrationError::ReadView(crate::directory_worktree::io::ViewError::NotDirectory) => {
                 ErrorCode::NotDirectory
+            }
+            RegistrationError::ReadView(
+                crate::directory_worktree::io::ViewError::WorkingSourceRequired,
+            ) => {
+                ErrorCode::UnsupportedOperation
             }
             RegistrationError::HistoryCursor
             | RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Cursor) => {

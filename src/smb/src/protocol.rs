@@ -26,13 +26,16 @@ pub const VERIFIED_READ_CAPABILITY: &str = "verified-range-reads";
 pub const VERSION_MTIME_CAPABILITY: &str = "published-version-mtime";
 /// Peers must distinguish mutable descriptors from ordered native working I/O.
 pub const NATIVE_WORKING_CAPABILITY: &str = "native-working-io";
-pub const REQUIRED_CAPABILITIES: [&str; 6] = [
+/// Added worktree entries carry real container identities without a Version.
+pub const WORKTREE_WORKING_CAPABILITY: &str = "worktree-working-entries";
+pub const REQUIRED_CAPABILITIES: [&str; 7] = [
     WRITE_RESERVATION_CAPABILITY,
     AUTHENTICATED_ACCOUNT_CAPABILITY,
     GENERATION_DIRTY_CAPABILITY,
     VERIFIED_READ_CAPABILITY,
     VERSION_MTIME_CAPABILITY,
     NATIVE_WORKING_CAPABILITY,
+    WORKTREE_WORKING_CAPABILITY,
 ];
 
 /// A single exact Samba account name, never an alias-to-principal mapping.
@@ -447,6 +450,12 @@ pub struct StatResult {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DirectoryEntry {
+    WorktreeWorking {
+        target: storage_contract::snapshot_worktree::additions::WorktreeFileTarget,
+        path: name_policy::PortablePath,
+        #[serialization(with = "storage_contract::u64_string")]
+        logical_size: u64,
+    },
     Worktree {
         target: storage_contract::snapshot_worktree::WorktreeHandle,
         path: name_policy::PortablePath,
@@ -466,13 +475,13 @@ impl DirectoryEntry {
     pub fn published(&self) -> Option<&storage_contract::Entry> {
         match self {
             Self::Published { entry, .. } => Some(entry),
-            Self::Unborn { .. } | Self::Worktree { .. } => None,
+            Self::Unborn { .. } | Self::Worktree { .. } | Self::WorktreeWorking { .. } => None,
         }
     }
     pub fn mtime(&self) -> FileMtime {
         match self {
             Self::Published { mtime, .. } => *mtime,
-            Self::Unborn { .. } => FileMtime::Unpublished {},
+            Self::Unborn { .. } | Self::WorktreeWorking { .. } => FileMtime::Unpublished {},
             Self::Worktree { kind, .. } => match kind {
                 storage_contract::NamespaceEntryKind::Directory => FileMtime::NotFile {},
                 storage_contract::NamespaceEntryKind::File => FileMtime::Unpublished {},
@@ -483,13 +492,14 @@ impl DirectoryEntry {
         match self {
             Self::Published { entry, .. } => &entry.path,
             Self::Unborn { target, .. } => &target.path,
-            Self::Worktree { path, .. } => path,
+            Self::Worktree { path, .. } | Self::WorktreeWorking { path, .. } => path,
         }
     }
     pub fn entry_id(&self) -> String {
         match self {
             Self::Published { entry, .. } => entry.entry_id.clone(),
             Self::Unborn { target, .. } => target.entry.to_string(),
+            Self::WorktreeWorking { target, .. } => target.entry.to_string(),
             Self::Worktree { target, relative_path, .. } => {
                 worktree_entry_id(*target, relative_path.as_ref())
             }
@@ -498,7 +508,9 @@ impl DirectoryEntry {
     pub fn kind(&self) -> storage_contract::NamespaceEntryKind {
         match self {
             Self::Published { entry, .. } => entry.kind,
-            Self::Unborn { .. } => storage_contract::NamespaceEntryKind::File,
+            Self::Unborn { .. } | Self::WorktreeWorking { .. } => {
+                storage_contract::NamespaceEntryKind::File
+            }
             Self::Worktree { kind, .. } => *kind,
         }
     }

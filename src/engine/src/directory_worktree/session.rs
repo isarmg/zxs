@@ -113,6 +113,10 @@ impl<'a> WorktreeSession<'a> {
         self.ledger.worktree()
     }
 
+    pub(crate) fn added_files(&self) -> &[crate::directory_worktree::ledger::AddedFile] {
+        self.ledger.added_files()
+    }
+
     pub(crate) fn instance(&self) -> SparseWorktreeBinding {
         self.ledger.instance()
     }

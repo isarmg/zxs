@@ -27,6 +27,8 @@ pub(crate) enum NamespaceChange {
 pub(crate) enum NamespaceError {
     #[error("worktree namespace belongs to a different original snapshot")]
     Source,
+    #[error("added files require their native namespace publication before namespace edits")]
+    Added,
     #[error("worktree namespace batch exceeds its operation budget")]
     Budget,
     #[error("worktree namespace source does not exist")]
@@ -43,6 +45,7 @@ pub(crate) enum NamespaceError {
 
 #[derive(Clone, Copy)]
 pub(super) enum Content {
+    Added { entry: storage_contract::EntryId },
     Directory,
     File { original: usize, material: SnapshotFile, source: SnapshotFileSource },
 }
@@ -66,6 +69,9 @@ impl<'a> SparseProjection<'a> {
     /// and publication checks. Removed sparse bodies stay owned by this view;
     /// logical deletion never authorizes physical cleanup or FILE publication.
     pub(crate) fn namespace(mut self, changes: &[NamespaceChange]) -> Result<Self, NamespaceError> {
+        if !self.added.is_empty() {
+            return Err(NamespaceError::Added);
+        }
         if changes.len() > MAX_CHANGES {
             return Err(NamespaceError::Budget);
         }
@@ -93,10 +99,11 @@ impl<'a> SparseProjection<'a> {
     }
 
     fn admit_namespace_material(self) -> Result<Self, NamespaceError> {
-        let material = self.entries.iter().map(|entry| SnapshotEntry {
+        let material = self.entries.iter().map(|entry| Ok(SnapshotEntry {
             path: entry.path.clone(),
             content: match entry.content {
                 Content::Directory => SnapshotEntryContent::Directory {},
+                Content::Added { .. } => return Err(NamespaceError::Added),
                 Content::File { original, material, source } => SnapshotEntryContent::File {
                     material: match self.edits.get(&original) {
                         Some(edited) => edited.file,
@@ -105,7 +112,7 @@ impl<'a> SparseProjection<'a> {
                     source,
                 },
             },
-        }).collect();
+        })).collect::<Result<Vec<_>, NamespaceError>>()?;
         self.source.validate_material_entries(material).map_err(NamespaceError::Material)?;
         Ok(self)
     }

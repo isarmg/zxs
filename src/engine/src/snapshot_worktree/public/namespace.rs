@@ -13,11 +13,14 @@ use storage_contract::snapshot_worktree::{
     NamespaceDirectoryId, NamespaceHostAddress, WorktreeHandle, WorktreeRevision, WorktreeStatus,
 };
 use storage_contract::{ContentHash, FileId, RepositoryId, VersionId};
+use storage_contract::snapshot_worktree::additions::WorktreeFileTarget;
+use storage_contract::file_draft::UnbornWorking;
 
 type Result<T> = std::result::Result<T, SnapshotWorktreeError>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorktreeEntryContent {
+    Working { target: WorktreeFileTarget, working: UnbornWorking },
     Directory,
     File {
         file: FileId,
@@ -59,6 +62,9 @@ impl From<Entry> for WorktreeEntry {
     fn from(entry: Entry) -> Self {
         let content = match entry.content {
             EntryContent::Directory => WorktreeEntryContent::Directory,
+            EntryContent::Working { target, working } => {
+                WorktreeEntryContent::Working { target, working }
+            }
             EntryContent::File { material } => WorktreeEntryContent::File {
                 file: material.file_id,
                 version: material.version_id,

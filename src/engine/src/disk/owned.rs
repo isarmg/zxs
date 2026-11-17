@@ -1325,6 +1325,22 @@ impl DiskHandle {
         self.retained_child(&layout::COMMON_DATA_ROOT, &layout.common)
     }
 
+    pub(crate) fn deleted_root(&self) -> Result<&DiskRoot> {
+        let roots = self.layout.as_ref()
+            .ok_or(crate::engine::FreshLayoutError::Registration)?;
+        self.retained_child(&layout::DELETED_DATA_ROOT, &roots.deleted)
+    }
+
+    pub(crate) fn retained_management_root(&self) -> Result<&DiskRoot> {
+        let roots = self.layout.as_ref()
+            .ok_or(crate::engine::FreshLayoutError::Registration)?;
+        let management = self.management_root()?;
+        management.private_entry_matching(&layout::DELETED_DATA_ROOT,
+            roots.retained_management.directory_identity(roots.retained_management.path())?)
+            .map_err(crate::engine::fresh_layout::directory_error)?;
+        Ok(&roots.retained_management)
+    }
+
     pub(crate) fn management_root(&self) -> Result<&DiskRoot> {
         let layout = self.layout.as_ref()
             .ok_or(crate::engine::FreshLayoutError::Registration)?;

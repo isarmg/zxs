@@ -3,6 +3,7 @@
 //! A handle names the independently published completion, not a local marker.
 //! Decoding these values does not admit a root, node, worktree or publication.
 pub mod draft_commit;
+pub mod additions;
 pub mod discovery;
 pub mod root;
 pub mod outcome;

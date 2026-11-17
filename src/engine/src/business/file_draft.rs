@@ -11,6 +11,7 @@ pub(crate) use content::{PublishedContent, build as build_content, trace_limit};
 mod selection;
 pub(crate) mod selected;
 pub(crate) mod unborn;
+pub(crate) mod worktree;
 pub(crate) use selection::{resolve, validate as validate_working_record};
 mod publication;
 pub(crate) use publication::{
@@ -22,6 +23,8 @@ use storage_contract::file_draft::{
 
 #[derive(Debug, error_definition::Error)]
 pub enum DraftError {
+    #[error("the exact worktree FILE publication could not complete")]
+    Worktree(#[source] Box<crate::SnapshotWorktreeError>),
     #[error("this operation requires the canonical unborn-container transition")]
     UnbornRequired,
     #[error("unborn working material is invalid")]
@@ -83,6 +86,7 @@ impl DraftError {
     pub(crate) fn code(&self) -> storage_contract::ErrorCode {
         use storage_contract::ErrorCode;
         match self {
+            Self::Worktree(source) => source.code(),
             Self::UnbornRequired => ErrorCode::UnsupportedOperation,
             Self::WorkingManifest(_) | Self::WorkingNamespace => ErrorCode::StateInvalid,
             Self::WorkingMaterialChanged => ErrorCode::ContainerLayoutInvalid,

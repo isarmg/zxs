@@ -102,6 +102,20 @@ impl RegisteredNamespaceRoot<'_> {
         self.disk
     }
 
+    pub(crate) fn deleted(&self) -> Result<&DiskRoot> {
+        // Common() closes the unchanged original root, seal and registration.
+        self.common()?;
+        let deleted = self.resources.get(self.disk)?.deleted_root()?;
+        if deleted.directory_identity(deleted.path())?
+            != crate::working_tree::records::file_identity(
+                self.origin.genesis.roots.deleted_data.entity,
+            )
+        {
+            return Err(Failure::RootIdentity.into());
+        }
+        Ok(deleted)
+    }
+
     pub(crate) fn common(&self) -> Result<&DiskRoot> {
         let handle = self.resources.get(self.disk)?;
         super::verify_bound_root(self.config, self.disk, &handle.root)?;
@@ -319,7 +333,7 @@ pub(super) fn file_target(
         repository: repository.repository_id.parse()?,
         branch: branch.branch_id.parse()?,
         entry: entry.entry_id.parse()?,
-        parent: super::directories::parent(&commit.entries, entry)?,
+        parent: super::directories::parent(&commit.entries, entry)?.into(),
         name: name_policy::LookupName::parse(entry.name())?,
     })
 }

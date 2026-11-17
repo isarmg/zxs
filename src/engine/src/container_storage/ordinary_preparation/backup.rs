@@ -141,7 +141,8 @@ impl BackupTargetLayout {
             preparation_checkpoint(stop)?;
             source.root()?;
             let logical = &source.state().file_containers[file];
-            let parent = parent(common, &directories, logical.namespace.parent)?;
+            let parent = parent(common, &directories,
+                logical.namespace.parent.ordinary().ok_or(Failure::BackupLayoutEvidence)?)?;
             absent(parent, &layout::namespace::directory(&logical.namespace.name))?;
             let (directory, identity) = prefix::create_exclusive(&management,
                 &layout::container::preparation(record.preparation))?;
@@ -214,9 +215,10 @@ impl BackupTargetLayout {
         for (file, record) in &self.files {
             preparation_checkpoint(stop)?;
             let logical = &source.state().file_containers[file];
-            let parent = parent(common, &directories, logical.namespace.parent)?;
+            let parent = parent(common, &directories,
+                logical.namespace.parent.ordinary().ok_or(Failure::BackupLayoutEvidence)?)?;
             let installed = parent_installed(common_installed, &directories,
-                logical.namespace.parent)?;
+                logical.namespace.parent.ordinary().ok_or(Failure::BackupLayoutEvidence)?)?;
             let node = locate(&management, &layout::container::preparation(record.preparation),
                 parent, &layout::namespace::directory(&logical.namespace.name),
                 installed, record.entity)?;

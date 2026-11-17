@@ -7,7 +7,7 @@ use crate::{BranchState, Entry, Error, NamespaceEntryKind, Result, State};
 use name_policy::{LookupPath, Name, PortablePath};
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::file_container::{
-    ContainerNamespace, FileContainerRecord, NamespaceDirectoryParent,
+    ContainerNamespace, ContainerParent, FileContainerRecord, NamespaceDirectoryParent,
 };
 use storage_contract::{BranchId, EntryId, FileId, HistoryTreeId, RepositoryId};
 
@@ -109,7 +109,8 @@ impl<'a> WorkingNamespace<'a> {
             .chain(state.file_deletions.keys().map(String::as_str))
             .map(str::parse).collect::<std::result::Result<_, _>>()?;
         for (file, record) in state.file_containers.iter() {
-            if record.namespace.repository != repository || record.working.unborn().is_none() {
+            if record.namespace.repository != repository || record.working.unborn().is_none()
+                || record.namespace.parent.is_worktree() {
                 continue;
             }
             let file_key = file.to_string();
@@ -131,14 +132,15 @@ impl<'a> WorkingNamespace<'a> {
                 return Err(invalid());
             }
             let name = Name::parse(record.namespace.name.as_str())?;
-            let path = match record.namespace.parent {
-                NamespaceDirectoryParent::Root => PortablePath::from_name(&name)?,
-                NamespaceDirectoryParent::Directory(parent) => {
-                    let entry = directory_by_id.get(&parent).ok_or_else(invalid)?;
+            let path = match &record.namespace.parent {
+                ContainerParent::Worktree { .. } => continue,
+                ContainerParent::Root => PortablePath::from_name(&name)?,
+                ContainerParent::Directory(parent) => {
+                    let entry = directory_by_id.get(parent).ok_or_else(invalid)?;
                     let binding = state.namespace_directories.get(&parent.to_string())
                         .ok_or_else(invalid)?;
                     if binding.repository != repository || binding.branch != branch_id
-                        || binding.entry != parent || binding.owner_disk != record.owner_disk
+                        || binding.entry != *parent || binding.owner_disk != record.owner_disk
                         || binding.name.as_str() != entry.name()
                         || visible.get_key(entry.lookup_key()).is_none()
                     {
@@ -213,7 +215,7 @@ impl<'a> WorkingNamespace<'a> {
             repository: self.repository,
             branch: self.branch,
             entry,
-            parent,
+            parent: parent.into(),
             name: name_policy::LookupName::parse(path.file_name())?,
         })
     }

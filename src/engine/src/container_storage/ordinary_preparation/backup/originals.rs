@@ -102,7 +102,8 @@ impl File {
                 (common, current)
             }
         };
-        let chain = match logical.namespace.parent {
+        let parent = logical.namespace.parent.ordinary().ok_or(Failure::BackupLayoutEvidence)?;
+        let chain = match parent {
             Parent::Root => Vec::new(),
             Parent::Directory(entry) => {
                 crate::engine::fresh_layout::directories::chain(state, entry)?
@@ -220,7 +221,8 @@ impl<'a> BackupOriginalImage<'a> {
             let record = &state.file_containers[file];
             let disk = source.disk().disk_id.parse::<DiskId>()?;
             let replica = record.replicas.get(&disk).ok_or(Failure::BackupLayoutEvidence)?;
-            let depth = match record.namespace.parent {
+            let parent = record.namespace.parent.ordinary().ok_or(Failure::BackupLayoutEvidence)?;
+            let depth = match parent {
                 Parent::Root => 0,
                 Parent::Directory(entry) => {
                     crate::engine::fresh_layout::directories::chain(state, entry)?.len()
@@ -435,7 +437,8 @@ impl<'a> BackupPayloadVersion<'a> {
         }
         let replica = record.replicas.get(&source.disk().disk_id.parse::<DiskId>()?)
             .ok_or(Failure::BackupLayoutEvidence)?;
-        let depth = match record.namespace.parent {
+        let parent = record.namespace.parent.ordinary().ok_or(Failure::BackupLayoutEvidence)?;
+            let depth = match parent {
             Parent::Root => 0,
             Parent::Directory(entry) => {
                 crate::engine::fresh_layout::directories::chain(source.state(), entry)?.len()

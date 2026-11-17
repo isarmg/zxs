@@ -12,8 +12,8 @@ mod state;
 mod storage;
 
 pub(crate) use leaf::EditLeaf;
-pub(crate) use record::{Checkpoint, EditRecord, Event};
-pub(crate) use state::revision_commitment;
+pub(crate) use record::{AddedFile, Checkpoint, EditRecord, Event};
+pub(crate) use state::{revision_commitment, revision_commitment_with_files};
 pub(crate) use storage::{
     Binding, HeldWorktreeLedger, LedgerPreparationError, PendingPublication, RecoveredLedger,
 };
@@ -45,6 +45,12 @@ pub(crate) enum LedgerError {
     NameBudget(#[source] crate::name_budget::NameBudgetError),
     #[error("worktree namespace changes require durable FILE publication obligations")]
     NamespacePublicationRequired,
+    #[error("added files require their first FILE publication before commit or delete")]
+    AddedPublicationRequired,
+    #[error("added worktree file differs from its exact birth or working predecessor")]
+    AddedFile,
+    #[error("added worktree working manifest is invalid")]
+    WorkingManifest(#[source] storage_contract::file_draft::manifest::ManifestError),
     #[error("worktree ledger differs from its independent identity or checkpoint")]
     Binding,
     #[error("worktree ledger instance reopening failed")]

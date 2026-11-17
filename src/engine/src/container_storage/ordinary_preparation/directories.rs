@@ -106,8 +106,10 @@ pub(super) fn targets(
     } else {
         for (file, disk) in files.into_iter().flatten() {
             let record = state.file_containers.get(file).ok_or(Failure::ContainerScope)?;
-            if let Parent::Directory(entry) = record.namespace.parent {
-                for parent in crate::engine::fresh_layout::directories::chain(state, entry)? {
+            if let storage_contract::file_container::ContainerParent::Directory(entry) =
+                &record.namespace.parent
+            {
+                for parent in crate::engine::fresh_layout::directories::chain(state, *entry)? {
                     selected.insert((parent.entry, *disk));
                 }
             }

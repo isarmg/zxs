@@ -20,6 +20,7 @@ pub(in crate::engine) enum WorkingPublicationInput {
     Incremental(super::incremental::IncrementalPublicationInput),
     Committed(super::incremental::CommittedDraftInput),
     Unborn(UnbornPublicationInput),
+    Worktree(super::worktree::WorktreePublicationInput),
 }
 
 impl WorkingPublicationInput {
@@ -29,6 +30,7 @@ impl WorkingPublicationInput {
             Self::Incremental(input) => Material::Incremental(input.file()),
             Self::Committed(input) => Material::Committed(input.file()),
             Self::Unborn(input) => Material::Unborn(input.file()),
+            Self::Worktree(input) => Material::Unborn(input.file()),
         }
     }
 
@@ -103,6 +105,7 @@ impl WorkingPublicationInput {
             Self::Incremental(input) => input.require_context(context),
             Self::Committed(input) => input.require_context(context),
             Self::Unborn(input) => input.require_context(context),
+            Self::Worktree(input) => input.require_context(context),
         }
     }
 
@@ -112,6 +115,7 @@ impl WorkingPublicationInput {
             Self::Incremental(input) => input.require_next(next, result),
             Self::Committed(input) => input.require_next(next, result),
             Self::Unborn(input) => input.require_next(next, result),
+            Self::Worktree(input) => input.require_next(next, result),
         }
     }
 
@@ -120,14 +124,14 @@ impl WorkingPublicationInput {
     {
         match self {
             Self::Committed(input) => Some(input.read()),
-            Self::Born(_) | Self::Unborn(_) | Self::Incremental(_) => None,
+            Self::Born(_) | Self::Unborn(_) | Self::Worktree(_) | Self::Incremental(_) => None,
         }
     }
 
     pub(in crate::engine) fn draft_mut(&mut self) -> Option<&mut DraftPublicationInput> {
         match self {
             Self::Born(input) => Some(input),
-            Self::Unborn(_) | Self::Incremental(_) | Self::Committed(_) => None,
+            Self::Unborn(_) | Self::Worktree(_) | Self::Incremental(_) | Self::Committed(_) => None,
         }
     }
 
@@ -136,7 +140,7 @@ impl WorkingPublicationInput {
             Self::Born(input) => Some((input.file(), input.payload())),
             // The extent writer already reserved and synced its actual bytes.
             // Publication still charges its exact native metadata as usual.
-            Self::Unborn(_) | Self::Incremental(_) | Self::Committed(_) => None,
+            Self::Unborn(_) | Self::Worktree(_) | Self::Incremental(_) | Self::Committed(_) => None,
         }
     }
 }

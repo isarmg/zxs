@@ -7,6 +7,8 @@ use crate::working_tree::snapshot::SnapshotFile;
 use data_serialization::{Deserialize, Deserializer, Serialize};
 use name_policy::PortablePath;
 use storage_contract::{OperationId, Sequence};
+use storage_contract::snapshot_worktree::additions::WorktreeFileTarget;
+use storage_contract::file_draft::UnbornWorking;
 use storage_contract::working_tree::{
     LocalEntityIdentity, MaterialCommitment, SnapshotBranchId, SnapshotNodeId,
 };
@@ -35,9 +37,20 @@ impl EditRecord {
     }
 }
 
+/// Latest instance-owned pre-history FILE result. Its original native receipt,
+/// not this local frame, supplies the permanent container and working authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct AddedFile {
+    pub(crate) target: WorktreeFileTarget,
+    pub(crate) birth: OperationId,
+    pub(crate) working: UnbornWorking,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Event {
+    File { operation: OperationId, expected: Revision, file: AddedFile },
     /// Explicit completed writes merged into the retained overlay. Omission
     /// never drops an earlier edit and an unfinished upload is not an event.
     Edits { operation: OperationId, expected: Revision, edits: Vec<EditRecord> },

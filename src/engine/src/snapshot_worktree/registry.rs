@@ -25,6 +25,7 @@ use storage_contract::{BranchName, EntryId, OperationId, Principal, RepositoryId
 mod backup;
 pub(crate) use backup::require_backup_snapshot_scope;
 mod edits;
+mod files;
 mod commits;
 mod historical;
 mod drafts;
@@ -54,6 +55,10 @@ pub(crate) struct ReceiptIndex<'a> {
     directory_ids: BTreeMap<DirectoryId, (RootId, EntryId)>,
     directory_entities: BTreeMap<(RootId, LocalEntityIdentity), EntryId>,
     edits: BTreeMap<OperationId, EditRecordEntry<'a>>,
+    files: BTreeMap<OperationId, files::FileRecord<'a>>,
+    retained: Option<crate::retained_names::RetainedDiskRegistry>,
+    added_files: BTreeMap<WorktreeId, Vec<crate::directory_worktree::ledger::AddedFile>>,
+    active_file_edits: BTreeMap<WorktreeId, Vec<crate::directory_worktree::ledger::EditRecord>>,
     heads: BTreeMap<WorktreeId, LedgerHead>,
     pending_edits: BTreeMap<WorktreeId, OperationId>,
     commits: BTreeMap<OperationId, CommitRecord<'a>>,
@@ -156,6 +161,7 @@ enum CompletionOwner {
     Node(OperationId),
     Worktree(OperationId),
     Edit(OperationId),
+    File(OperationId),
     CommitNode(OperationId),
     HistoricalReady,
     Commit,
@@ -166,6 +172,7 @@ impl CompletionOwner {
             Self::Node(_) => snapshot_worktree::NODE_COMPLETE,
             Self::Worktree(_) => snapshot_worktree::WORKTREE_COMPLETE,
             Self::Edit(_) => snapshot_worktree::EDIT_COMPLETE,
+            Self::File(_) => snapshot_worktree::FILE_COMPLETE,
             Self::CommitNode(_) => snapshot_worktree::COMMIT_NODE,
             Self::HistoricalReady => snapshot_worktree::HISTORICAL_READY,
             Self::Commit => snapshot_worktree::COMMIT_COMPLETE,
@@ -237,9 +244,14 @@ pub(super) struct PublishedWorktree<'a> {
     checkpoint: Checkpoint,
     revision: storage_contract::snapshot_worktree::WorktreeRevision,
     publication: Option<&'a CommitRecord<'a>>,
+    added: &'a [crate::directory_worktree::ledger::AddedFile],
 }
 
 impl PublishedWorktree<'_> {
+    pub(super) fn added_files(&self) -> &[crate::directory_worktree::ledger::AddedFile] {
+        self.added
+    }
+
     pub(super) fn handle(&self) -> WorktreeHandle {
         WorktreeHandle {
             publication: self.plan.allocated.completion,
@@ -449,7 +461,8 @@ impl<'a> ReceiptIndex<'a> {
             directories: BTreeMap::new(),
             directory_ids: BTreeMap::new(),
             directory_entities: BTreeMap::new(),
-            edits: BTreeMap::new(),
+            edits: BTreeMap::new(), files: BTreeMap::new(), retained: None,
+            added_files: BTreeMap::new(), active_file_edits: BTreeMap::new(),
             heads: BTreeMap::new(),
             pending_edits: BTreeMap::new(),
             commits: BTreeMap::new(), historical: BTreeMap::new(),
@@ -501,6 +514,9 @@ impl<'a> ReceiptIndex<'a> {
             let commitment = decoded.record.commitment().map_err(RegistrationError::Codec)?;
             let receipt = Receipt { original, principal };
             match decoded.record {
+                Record::BirthFile(plan) => index.birth_file(receipt, plan, commitment)?,
+                Record::SaveFile(plan) => index.save_file(receipt, plan, commitment)?,
+                Record::CompleteFile(completion) => index.complete_file(receipt, completion)?,
                 Record::ReserveNode(plan) => {
                     index.reserve_node(receipt, plan, commitment, &mut allocations)?;
                 }
@@ -605,6 +621,7 @@ impl<'a> ReceiptIndex<'a> {
             checkpoint: head.checkpoint,
             revision: head.revision,
             publication: self.worktree_publication(handle),
+            added: self.added(handle),
         })
     }
 

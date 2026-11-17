@@ -393,7 +393,8 @@ pub(super) fn project_replicas(
 ) -> Result<BTreeSet<(EntryId, DiskId)>> {
     let mut additions = BTreeSet::new();
     for file in next.file_containers.values() {
-        let Parent::Directory(leaf) = file.namespace.parent else { continue; };
+        let storage_contract::file_container::ContainerParent::Directory(leaf) =
+            &file.namespace.parent else { continue; };
         for (disk, replica) in &file.replicas {
             if *disk == file.owner_disk { continue; }
             let binding = config.storage_roots.get(disk).ok_or(Failure::Registration)?;
@@ -408,7 +409,7 @@ pub(super) fn project_replicas(
             {
                 return Err(Failure::NamespaceSource.into());
             }
-            project_occurrence(config, next, result, records, leaf, *disk,
+            project_occurrence(config, next, result, records, *leaf, *disk,
                 &replica.prefixes, actual, &mut additions)?;
         }
     }

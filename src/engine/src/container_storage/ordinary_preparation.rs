@@ -31,7 +31,7 @@ pub(crate) use working::{
 mod directories;
 mod rename;
 use directories::HeldDirectories;
-use storage_contract::file_container::NamespaceDirectoryParent;
+use storage_contract::file_container::ContainerParent;
 use prefix::{HeldParent, HeldPrefixes, Observation};
 
 pub(crate) struct ObservedContainerReplica {
@@ -108,10 +108,10 @@ impl ObservedContainerReplica {
         let id = disk.seal.disk_id.parse::<DiskId>()?;
         let replica = record.replicas.get(&id).ok_or(Failure::ContainerScope)?;
         let container_descriptors = if record.working.draft().is_some() { 2 } else { 1 };
-        let parent_count = match record.namespace.parent {
-            NamespaceDirectoryParent::Root => 0,
-            NamespaceDirectoryParent::Directory(entry) => {
-                crate::engine::fresh_layout::directories::chain(state, entry)?.len()
+        let parent_count = match &record.namespace.parent {
+            ContainerParent::Root | ContainerParent::Worktree { .. } => 0,
+            ContainerParent::Directory(entry) => {
+                crate::engine::fresh_layout::directories::chain(state, *entry)?.len()
             }
         };
         let count = replica.prefixes.len().checked_mul(6)
@@ -127,6 +127,12 @@ impl ObservedContainerReplica {
                 }
                 HeldParent::Common(Arc::clone(disk))
             }
+            ReplicaNamespace::Worktree(source) => {
+                if !std::ptr::eq(source.deleted()?, disk.deleted_root()?) {
+                    return Err(Failure::ContainerScope.into());
+                }
+                HeldParent::Deleted(Arc::clone(disk))
+            }
             ReplicaNamespace::Backup(source) => {
                 prefix::published_parent(&source, disk, &replica.prefixes)?
             }
@@ -138,7 +144,11 @@ impl ObservedContainerReplica {
         let installed = OnceLock::new();
         let (held, observed_name, rename) = match location {
             crate::engine::fresh_layout::containers::ReplicaReadLocation::Published(name) => {
-                let held = open_published_container(parent.root()?, name, replica.entity)?;
+                let held = if record.namespace.parent.is_worktree() {
+                    open_record_container(parent.root()?, record, replica.entity)?
+                } else {
+                    open_published_container(parent.root()?, name, replica.entity)?
+                };
                 let _ = installed.set(());
                 (held, name.clone(), None)
             }
@@ -271,9 +281,17 @@ impl ObservedContainerReplica {
         FileIdentity { device: self.entity.device(), inode: self.entity.inode() }
     }
 
+    fn physical_name(&self) -> platform_io::fs_safety::EntryName {
+        if self.record.namespace.parent.is_worktree() {
+            layout::namespace::container(&self.record.namespace)
+        } else {
+            layout::namespace::directory(&self.observed_name)
+        }
+    }
+
     fn named_path(&self) -> Result<PathBuf> {
         Ok(self.parent.root()?.path()
-            .join(layout::namespace::directory(&self.observed_name).as_path()))
+            .join(self.physical_name().as_path()))
     }
 
     fn preparation_path(&self) -> Result<PathBuf> {
@@ -301,7 +319,7 @@ impl ObservedContainerReplica {
             // after its inode is installed. Export the decided address only
             // after verify() has checked that same held entity at its real name.
             Ok(self.parent.published_path()?
-                .join(layout::namespace::directory(&self.observed_name).as_path()))
+                .join(self.physical_name().as_path()))
         } else {
             self.preparation_path()
         }
@@ -466,14 +484,16 @@ impl PreparedContainerEntities {
             } else {
                 require_owner(context, record, *id)?;
             }
-            let common = handle.content_root()?;
+            let common = if record.namespace.parent.is_worktree() {
+                handle.deleted_root()?
+            } else { handle.content_root()? };
             if let Some((_, payload)) = record.working.draft() {
                 version_names::check_target_name(common, &layout::container::DRAFTS)?;
                 version_names::check_target_name(common,
                     &layout::container::draft_payload(payload.payload_id()))?;
             }
             version_names::check_target_name(
-                common, &layout::namespace::directory(&record.namespace.name),
+                common, &layout::namespace::container(&record.namespace),
             )?;
             let name = name_policy::Name::parse(record.namespace.name.as_str())?;
             for version in plan.budget_state().versions.values()
@@ -521,7 +541,7 @@ impl PreparedContainerEntities {
                 (directory, replica.entity)
             } else if plan.additions().contains_key(&(*file, *id)) {
                 let named = target.path()
-                    .join(layout::namespace::directory(&record.namespace.name).as_path());
+                    .join(layout::namespace::container(&record.namespace).as_path());
                 if target.optional_metadata(&named)?.is_some() {
                     return Err(Failure::ContainerIdentity.into());
                 }
@@ -531,8 +551,7 @@ impl PreparedContainerEntities {
                 directory.sync_dir(directory.path())?;
                 (directory, ContainerEntity::new(identity.device, identity.inode))
             } else {
-                let directory = open_published_container(target, &record.namespace.name,
-                    replica.entity)?;
+                let directory = open_record_container(target, record, replica.entity)?;
                 let _ = installed.set(());
                 (directory, replica.entity)
             };
@@ -719,7 +738,7 @@ impl PreparedContainerEntities {
                 let common = parent.root()?;
                 let management = handle.management_root()?;
                 let named = common.path()
-                    .join(layout::namespace::directory(&record.namespace.name).as_path());
+                    .join(layout::namespace::container(&record.namespace).as_path());
                 let stage = management.path()
                     .join(layout::container::preparation(replica.preparation).as_path());
                 let identity = FileIdentity {
@@ -839,6 +858,12 @@ impl PreparedContainerEntities {
                         }
                         HeldParent::Common(Arc::clone(handle))
                     }
+                    crate::engine::fresh_layout::containers::ReplicaNamespace::Worktree(source) => {
+                        if !std::ptr::eq(source.deleted()?, handle.deleted_root()?) {
+                            return Err(Failure::ContainerScope.into());
+                        }
+                        HeldParent::Deleted(Arc::clone(handle))
+                    }
                     crate::engine::fresh_layout::containers::ReplicaNamespace::Backup(source) => {
                         prefix::bind_published_chain(
                             &source, handle, &replica.prefixes, &mut prefixes,
@@ -847,8 +872,7 @@ impl PreparedContainerEntities {
                 };
                 let parent = attach_directory_parent(config, resources, state,
                     record, *id, parent, Observation::Published, &reservation, &mut directories)?;
-                let directory = open_published_container(parent.root()?, &record.namespace.name,
-                    replica.entity)?;
+                let directory = open_record_container(parent.root()?, record, replica.entity)?;
                 let installed = OnceLock::new();
                 let _ = installed.set(());
                 held.insert((*file, *id), ObservedContainerReplica {
@@ -958,7 +982,7 @@ impl PreparedContainerEntities {
         let container = self.held.get(&(file, disk)).ok_or(Failure::ContainerScope)?;
         container.verify()?;
         Ok(container.parent.published_path()?
-            .join(layout::namespace::directory(&container.record.namespace.name).as_path()))
+            .join(layout::namespace::container(&container.record.namespace).as_path()))
     }
 
     /// The actual target occurrence names its direct source, which need not
@@ -1040,6 +1064,15 @@ impl PreparedContainerEntities {
     }
 }
 
+fn open_record_container(
+    root: &DiskRoot, record: &FileContainerRecord, expected: ContainerEntity,
+) -> Result<DiskRoot> {
+    let path = root.path().join(layout::namespace::container(&record.namespace).as_path());
+    root.private_child_matching(&path, FileIdentity {
+        device: expected.device(), inode: expected.inode(),
+    })
+}
+
 pub(crate) fn open_published_container(
     root: &DiskRoot,
     name: &name_policy::LookupName,
@@ -1076,7 +1109,7 @@ fn require_owner(
     if record.owner_disk != id || source.disk().disk_id.parse::<DiskId>()? != id {
         return Err(Failure::NamespaceSource.into());
     }
-    source.common()?;
+    if record.namespace.parent.is_worktree() { source.deleted()?; } else { source.common()?; }
     Ok(())
 }
 
@@ -1100,7 +1133,9 @@ fn bind_parent(
         if !replica.prefixes.is_empty() {
             return Err(Failure::ContainerScope.into());
         }
-        return Ok(HeldParent::Common(Arc::clone(handle)));
+        return Ok(if record.namespace.parent.is_worktree() {
+            HeldParent::Deleted(Arc::clone(handle))
+        } else { HeldParent::Common(Arc::clone(handle)) });
     }
     let source = context.prepare_backup_source_path(
         record.namespace.repository, record.namespace.branch, id,
@@ -1134,10 +1169,15 @@ fn bind_read_parent(
         config, resources, previous, record,
     )?;
     if id == record.owner_disk {
-        if !replica.prefixes.is_empty() || !std::ptr::eq(owner.common()?, handle.content_root()?) {
+        let same = if record.namespace.parent.is_worktree() {
+            std::ptr::eq(owner.deleted()?, handle.deleted_root()?)
+        } else { std::ptr::eq(owner.common()?, handle.content_root()?) };
+        if !replica.prefixes.is_empty() || !same {
             return Err(Failure::ContainerScope.into());
         }
-        return Ok(HeldParent::Common(Arc::clone(handle)));
+        return Ok(if record.namespace.parent.is_worktree() {
+            HeldParent::Deleted(Arc::clone(handle))
+        } else { HeldParent::Common(Arc::clone(handle)) });
     }
     let source = crate::engine::fresh_layout::containers::read_backup_source(
         config, resources, previous, record, id,
@@ -1179,9 +1219,9 @@ fn attach_directory_parent(
     record: &FileContainerRecord, disk: DiskId, parent: HeldParent, mode: Observation<'_>,
     reservation: &Arc<crate::engine::PayloadProofReservation>, directories: &mut HeldDirectories,
 ) -> Result<HeldParent> {
-    match record.namespace.parent {
-        NamespaceDirectoryParent::Root => Ok(parent),
-        NamespaceDirectoryParent::Directory(entry) => {
+    match &record.namespace.parent {
+        ContainerParent::Root | ContainerParent::Worktree { .. } => Ok(parent),
+        ContainerParent::Directory(entry) => {
             let logical = material.namespace_directories.get(&entry.to_string())
                 .ok_or(Failure::NamespaceUnmapped)?;
             if logical.owner_disk != record.owner_disk
@@ -1191,7 +1231,7 @@ fn attach_directory_parent(
                 return Err(Failure::NamespaceSource.into());
             }
             let handle = resources.get(configured_disk(config, disk)?)?;
-            directories::attach(config, material, entry, disk, handle, parent, mode,
+            directories::attach(config, material, *entry, disk, handle, parent, mode,
                 reservation, directories)
         }
     }

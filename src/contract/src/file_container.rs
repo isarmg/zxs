@@ -6,6 +6,8 @@ use crate::working_tree::{DirectoryId, RootId};
 use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 
+pub mod retained;
+
 /// Fixed-width wire evidence makes an unobserved preparation's metadata bound
 /// independent of the eventual device/inode numbers. Zero is a budget shape,
 /// never an admitted entity; native snapshot admission must reject it.
@@ -143,7 +145,43 @@ pub struct NamespaceDirectoryRecord {
     pub replicas: BTreeMap<DiskId, NamespaceDirectoryReplica>,
 }
 
-/// The namespace occurrence selecting the ordinary container's physical name.
+/// A FILE occurrence can belong to the ordinary namespace or to one exact
+/// worktree. Root/Directory retain their original persistent representation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", content = "entry", rename_all = "snake_case",
+    deny_unknown_fields)]
+pub enum ContainerParent {
+    Root,
+    Directory(EntryId),
+    Worktree {
+        target: crate::snapshot_worktree::WorktreeHandle,
+        path: name_policy::PortablePath,
+        name: retained::RetainedName,
+    },
+}
+
+impl From<NamespaceDirectoryParent> for ContainerParent {
+    fn from(value: NamespaceDirectoryParent) -> Self {
+        match value {
+            NamespaceDirectoryParent::Root => Self::Root,
+            NamespaceDirectoryParent::Directory(entry) => Self::Directory(entry),
+        }
+    }
+}
+
+impl ContainerParent {
+    pub fn ordinary(&self) -> Option<NamespaceDirectoryParent> {
+        match self {
+            Self::Root => Some(NamespaceDirectoryParent::Root),
+            Self::Directory(entry) => Some(NamespaceDirectoryParent::Directory(*entry)),
+            Self::Worktree { .. } => None,
+        }
+    }
+
+    pub const fn is_worktree(&self) -> bool { matches!(self, Self::Worktree { .. }) }
+}
+
+/// The exact logical occurrence selecting a container's physical parent.
 /// It is checked against the current main namespace and its published root
 /// registration. A path string, global FILE selection or latest route is not it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -152,7 +190,7 @@ pub struct ContainerNamespace {
     pub repository: RepositoryId,
     pub branch: BranchId,
     pub entry: EntryId,
-    pub parent: NamespaceDirectoryParent,
+    pub parent: ContainerParent,
     pub name: name_policy::LookupName,
 }
 

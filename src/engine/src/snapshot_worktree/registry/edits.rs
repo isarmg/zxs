@@ -1,5 +1,5 @@
 //! The owning SYSTEM receipt, not an observed ledger tail, selects each revision.
-use crate::directory_worktree::ledger::{EditLeaf, LedgerError, revision_commitment};
+use crate::directory_worktree::ledger::{EditLeaf, LedgerError, revision_commitment_with_files};
 use crate::persist::snapshot_worktree::{EditCompletion, EditReservation};
 use crate::snapshot_worktree::registry::{
     Allocations, CompletionOwner, Publication, Receipt, ReceiptIndex, require_completion,
@@ -8,7 +8,7 @@ use crate::snapshot_worktree::{RegistrationError, Result};
 use crate::working_tree::snapshot::{SnapshotEntryContent, SnapshotFile, SnapshotFileSource};
 use storage_contract::snapshot_worktree::{EditWorktree, WorktreeHandle, WorktreeRevision};
 use storage_contract::working_tree::MaterialCommitment;
-use storage_contract::{Generation, Principal};
+use storage_contract::Principal;
 
 pub(super) struct LedgerHead {
     pub(super) checkpoint: crate::directory_worktree::ledger::Checkpoint,
@@ -38,9 +38,8 @@ impl<'a> ReceiptIndex<'a> {
         {
             return Err(RegistrationError::EditScope);
         }
-        if expected.generation != Generation::new(0) {
-            let (previous, _) = self.completed_edit(target)?;
-            if previous.request.path != *path {
+        if let Some(previous) = self.active_file_edits.get(&target.worktree_id) {
+            if previous.len() != 1 || previous[0].path != *path {
                 return Err(RegistrationError::EditScope);
             }
         }
@@ -141,8 +140,9 @@ impl<'a> ReceiptIndex<'a> {
                 .map_err(|source| RegistrationError::Ledger(LedgerError::Lifecycle(
                     crate::directory_worktree::lifecycle::LifecycleError::Generation(source),
                 )))?,
-            manifest: revision_commitment(
+            manifest: revision_commitment_with_files(
                 source.manifest(), std::slice::from_ref(&completion.edit), &[],
+                self.added(plan.request.target),
             ).map_err(RegistrationError::Ledger)?,
         };
         let next = plan.before.sequence.next()
@@ -168,6 +168,7 @@ impl<'a> ReceiptIndex<'a> {
         self.heads.insert(worktree, LedgerHead {
             checkpoint: completion.checkpoint, revision: completion.revision,
         });
+        self.active_file_edits.insert(worktree, vec![completion.edit.clone()]);
         self.pending_edits.remove(&worktree);
         reserved.publication = Publication::Complete(completion);
         Ok(())

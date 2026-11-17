@@ -1317,3 +1317,60 @@ fn namespace_budget_preserves_existing_ancestor_components_and_removal() {
     let body = fixture.instance.directory().path().join(recovered.edits()[0].leaf.as_str());
     assert_eq!(fs::read(body).unwrap(), b"edited");
 }
+
+#[test]
+fn anchored_added_empty_file_reopens_as_working_without_inventing_a_snapshot_version() {
+    use storage_contract::file_draft::UnbornWorking;
+    use storage_contract::snapshot_worktree::{WorktreeHandle, additions::WorktreeFileTarget};
+    let fixture = Fixture::new();
+    let mut ledger = fixture.ledger();
+    let before = ledger.checkpoint();
+    let expected = ledger.worktree().revision();
+    let added = AddedFile {
+        target: WorktreeFileTarget {
+            worktree: WorktreeHandle {
+                publication: operation(70), worktree_id: ledger.worktree().id(),
+            },
+            path: PortablePath::parse("new.txt").unwrap(),
+            entry: storage_contract::EntryId::from_random([71; 16]),
+            file: FileId::from_random([72; 16]),
+        },
+        birth: operation(73),
+        working: UnbornWorking::birth(),
+    };
+    // This is a ledger/shape test, not native-container publication authority.
+    // The producer's real SYSTEM/DISK/FILE proof is covered by the SMB fixture.
+    ledger.check_file(added.birth, expected, &added).unwrap();
+    assert_eq!(ledger.checkpoint(), before);
+    let checkpoint = ledger.file(added.birth, expected, added.clone()).unwrap();
+    assert_ne!(checkpoint, before);
+    assert_eq!(ledger.file(added.birth, expected, added.clone()).unwrap(), checkpoint);
+    let binding = ledger.binding();
+    let revision = ledger.worktree().revision();
+    assert_eq!(revision.manifest, revision_commitment_with_files(
+        fixture.source.manifest(), &[], &[], std::slice::from_ref(&added),
+    ).unwrap());
+    let view = ledger.projection().unwrap();
+    assert!(matches!(view.route(&LookupPath::parse("new.txt").unwrap()),
+        Some(ReadRoute::Added { file }) if file == &added));
+    assert!(matches!(view.route(&LookupPath::parse("file.txt").unwrap()),
+        Some(ReadRoute::Original { .. })));
+    assert_eq!(view.added_file_budget(added.target.entry).unwrap(),
+        crate::working_tree::snapshot::MAX_LOGICAL_BYTES - 16);
+    assert_eq!(revision_commitment_with_files(fixture.source.manifest(), &[], &[], &[]).unwrap(),
+        revision_commitment(fixture.source.manifest(), &[], &[]).unwrap());
+    drop(view);
+    assert!(matches!(ledger.append(Event::Commit {
+        operation: operation(74), expected: revision,
+        current_head: fixture.source.manifest().node_id(),
+        fork_branch: SnapshotBranchId::from_random([75; 16]),
+    }, trusted), Err(LedgerError::AddedPublicationRequired)));
+    assert_eq!(ledger.checkpoint(), checkpoint);
+    drop(ledger);
+    let reopened =
+        HeldWorktreeLedger::reopen(&fixture.source, binding, checkpoint, trusted).unwrap();
+    assert_eq!(reopened.added_files(), std::slice::from_ref(&added));
+    assert_eq!(reopened.worktree().revision(), revision);
+    assert!(reopened.edits().is_empty());
+    assert_eq!(fixture.source.manifest().files().len(), 2);
+}

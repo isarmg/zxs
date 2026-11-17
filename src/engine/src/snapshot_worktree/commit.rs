@@ -65,6 +65,9 @@ fn commit_inner(
     let registered = index.worktree(request.target)?;
     let original = index.reopen_node(engine, registered.source().handle())?;
     let session = registered.reopen(&original)?;
+    if !session.added_files().is_empty() {
+        return Err(RegistrationError::CommitScope);
+    }
     let (edited, completed) = index.completed_edit(request.target)?;
     if request.expected != session.worktree().revision()
         || session.worktree().phase() != (crate::directory_worktree::lifecycle::Phase::Active {

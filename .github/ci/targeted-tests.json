@@ -1,5 +1,53 @@
 {
   "groups": {
+    "worktree-added-native": {
+      "reason": "Run the first real Added-file worktree slice: held same-disk deleted-data FILE birth, empty Manual identity, two native range saves, independent operation completion and cold reopen through Engine and DefaultShare. Keep original FILE parent vectors and unchanged old snapshot paths. Added explicit commit and subdirectory birth remain refused; this does not execute external Samba, AF_UNIX framing or cross-disk MOVE.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "retained_names::tests::"
+          ],
+          "exact": [
+            "snapshot_worktree::additions::tests::native_added_files_birth_deleted_containers_save_twice_and_cold_reopen_without_history",
+            "directory_worktree::ledger::tests::anchored_added_empty_file_reopens_as_working_without_inventing_a_snapshot_version"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "file_container::retained::tests::"
+          ],
+          "exact": [
+            "file_container::tests::ordinary_directory_vectors_preserve_independent_target_and_source_occurrences",
+            "file_container::tests::ordinary_file_parent_and_directory_records_reject_missing_or_ambiguous_fields",
+            "file_container::tests::ordinary_state_requires_both_physical_maps_even_when_empty"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "smb_rpc::tests::native_dispatch_tests::worktree::native_worktree_added_birth_resaves_close_and_cold_reopen_keep_independent_identity"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "ordinary-manual-incremental": {
       "reason": "Run production native range dispatch with actual held extents, path locks, cold merged reads and authenticated TCP HTTP explicit commits. This does not execute AF_UNIX framing, descriptor transfer, Samba or high-frequency policy. Manual save and range reads authenticate touched data without a full-body hash; exact explicit commit verifies material and suppresses an unchanged version.",
       "python_tests": [],
@@ -4723,7 +4771,7 @@
             "directory_worktree::io::tests::",
             "disk::owned::worktree_move::tests::"
           ],
-          "max_tests": 114,
+          "max_tests": 115,
           "timeout_seconds": 900
         }
       ]
@@ -6008,6 +6056,480 @@
     }
   },
   "rules": [
+    {
+      "path": "docs/design/worktree-added-native-files.md",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_container.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_container/retained.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree/additions.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/unborn.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/unborn/current.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/unborn/replay.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/worktree.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/namespace/working.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/backup.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/backup/originals.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/backup/serving.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/directories.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/prefix.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/working/write.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/io.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/ledger.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/ledger/record.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/ledger/state.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/ledger/storage.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/projection.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/projection/added.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/projection/namespace.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/projection/obligations.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/session.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/owned.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/input.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/native_io.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/worktree.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers/unborn.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/directories.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/namespace.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/lib.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout/namespace.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/snapshot_worktree.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/snapshot_worktree/files.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/retained_names.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/retained_names/allocation.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/additions.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/commit.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts/scope.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/public.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/public/namespace.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/public/transport.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/edits.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/files.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/reopen.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/working_tree/snapshot.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/working_tree/snapshot/manifest.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/engine/src/working_tree/snapshot/manifest/logical.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_methods.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_smb_native.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_smb_worktree.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/smb_native.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/smb_worktree.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/lib.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/metadata.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/native.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/worktree.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/worktree/layout.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/worktree/native.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "src/smb/src/protocol.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "test/contract/unit/file_container_tests.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "test/contract/unit/retained_names.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "test/engine/unit/directory_worktree/ledger.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "test/engine/unit/retained_names.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/added_files.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/native_dispatch_tests.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/native_worktree_tests.rs",
+      "groups": [
+        "worktree-added-native"
+      ]
+    },
     {
       "path": "src/platform/src/payload.rs",
       "groups": [

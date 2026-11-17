@@ -65,11 +65,10 @@ fn validate_owner(view: StateProjection<'_>, file: &str, history: &str) -> Resul
     if let Some(record) = view.state().file_containers.get(&file_id)
         && record.working.unborn().is_some()
     {
-        let namespace = crate::business::namespace::working::WorkingNamespace::from_main_state(
-            view.state(), record.namespace.repository, usize::MAX,
+        crate::business::file_draft::unborn::validate_current_record(
+            view.state(), file_id, record,
         )?;
-        if namespace.unborn_file(file_id)? != record
-            || record.history_tree_id != history_id
+        if record.history_tree_id != history_id
             || view.owners().file_histories(file).next().is_some()
         {
             return Err(crate::Error::FileDraft(crate::DraftError::WorkingFileGraph));

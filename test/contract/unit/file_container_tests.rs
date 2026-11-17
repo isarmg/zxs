@@ -1,6 +1,6 @@
 //! Fixed shape vectors are not physical admission or directory capabilities.
 use crate::file_container::{
-    FileContainerRecord, NamespaceDirectoryParent, NamespaceDirectoryRecord,
+    FileContainerRecord, NamespaceDirectoryRecord,
 };
 use crate::{State, canonical_json, decode_strict};
 use json_codec::Value;
@@ -51,7 +51,8 @@ fn ordinary_file_parent_and_directory_records_reject_missing_or_ambiguous_fields
     let directory: NamespaceDirectoryRecord = json_codec::from_value(
         positive("ordinary-directory-three-occurrences"),
     ).unwrap();
-    assert_eq!(file.namespace.parent, NamespaceDirectoryParent::Directory(directory.entry));
+    assert_eq!(file.namespace.parent,
+        crate::file_container::ContainerParent::Directory(directory.entry));
     assert_eq!(file.owner_disk, directory.owner_disk);
     assert_eq!(json_codec::to_value(&file).unwrap(), value);
     for field in ["repository", "branch", "entry", "parent", "name", "owner_disk",

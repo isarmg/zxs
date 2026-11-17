@@ -1,8 +1,11 @@
 //! Worktree routing is an admitted mount union, not a `.zxs` pathname shortcut.
-//! Writable opens use only an empty replacement or an actually supported CoW
-//! clone. Unsupported clones never fall back to a full foreground copy.
+//! Existing snapshot files use an empty replacement or a supported CoW clone.
+//! Added files reuse native working ranges; neither path copies a full body as fallback.
 use crate::smb_rpc::{Handle, Session, handles, path_reservation};
-use crate::{ApiError, SmbWorktreeAccess, SmbWorktreeCursor, SmbWorktreeFile, SmbWorktreeLocation};
+use crate::{
+    ApiError, SmbWorktreeAccess, SmbWorktreeCursor, SmbWorktreeEntryContent,
+    SmbWorktreeFile, SmbWorktreeLocation,
+};
 use name_policy::{LookupName, LookupPath, PortablePath};
 use platform_io::fs_safety::{PayloadOpenMode, PrivateDirectory};
 use smb_protocol::protocol::{
@@ -13,6 +16,7 @@ use storage_contract::snapshot_worktree::{WorktreeHandle, WorktreeStatus};
 use storage_contract::{ContentHash, ErrorCode, NamespaceEntryKind, OperationId};
 
 mod layout;
+mod native;
 mod writer;
 pub(super) use writer::WorktreeWriter;
 
@@ -50,18 +54,36 @@ impl Session {
     ) -> Result<(OpenResult, OwnedFd), ApiError> {
         let status = location.status;
         let target = status.target;
-        let entry = location.path.as_ref().map(|path| {
-            self.shared.backend.smb_worktree_entry(&self.identity, target, path)
-        }).transpose()?;
+        let entry = match location.path.as_ref() {
+            Some(path) => match self.shared.backend.smb_worktree_entry(
+                &self.identity, target, path,
+            ) {
+                Ok(entry) => Some(entry),
+                Err(error) if create && error.code == ErrorCode::NotFound => {
+                    return self.create_worktree_working(
+                        &status, path, writable, truncate, write_through,
+                    );
+                }
+                Err(error) => return Err(error),
+            },
+            None => None,
+        };
         if create && exclusive {
             return Err(ApiError::conflict(ErrorCode::NameConflict, "entry already exists"));
         }
         let path = display_path(&status.name, entry.as_ref().map(|entry| &entry.path))?;
+        if let Some(entry) = &entry
+            && let SmbWorktreeEntryContent::Working { target, .. } = &entry.content
+        {
+            return self.open_worktree_working(
+                target.clone(), &path, writable, truncate, write_through,
+            );
+        }
         let entry_id = worktree_entry_id(target, entry.as_ref().map(|entry| &entry.path));
         let handle = self.next_handle;
         self.next_handle += 1;
         let directory = entry.as_ref().is_none_or(|entry| {
-            entry.kind == NamespaceEntryKind::Directory
+            entry.kind() == NamespaceEntryKind::Directory
         });
         let (opened, descriptor, size, data_io) = if directory {
             if writable || create || truncate {
@@ -171,10 +193,15 @@ impl Session {
         let relative = entry.as_ref().map(|entry| &entry.path);
         let path = display_path(&location.status.name, relative)?;
         let (kind, size) = entry.as_ref().map_or((NamespaceEntryKind::Directory, 0), |entry| {
-            (entry.kind, entry.size)
+            (entry.kind(), entry.size())
         });
+        let entry_id = match entry.as_ref().map(|entry| &entry.content) {
+            Some(SmbWorktreeEntryContent::Working { target, .. }) => target.entry.to_string(),
+            Some(SmbWorktreeEntryContent::Directory | SmbWorktreeEntryContent::File { .. })
+                | None => worktree_entry_id(location.status.target, relative),
+        };
         Ok(StatResult {
-            entry_id: worktree_entry_id(location.status.target, relative),
+            entry_id,
             name: path.file_name().into(), path: path.into_string(), kind, size,
             mtime: if kind == NamespaceEntryKind::Directory { FileMtime::NotFile {} }
                 else { FileMtime::Unpublished {} },
@@ -210,10 +237,19 @@ impl Session {
         let mut entries = Vec::new();
         let mut bytes = 128usize;
         for entry in &page.entries {
-            let wire = DirectoryEntry::Worktree {
-                target: directory.target,
-                path: display_path(&directory.mount, Some(&entry.path))?,
-                relative_path: Some(entry.path.clone()), kind: entry.kind, size: entry.size,
+            let path = display_path(&directory.mount, Some(&entry.path))?;
+            let wire = match &entry.content {
+                SmbWorktreeEntryContent::Working { target, working } => {
+                    DirectoryEntry::WorktreeWorking {
+                        target: target.clone(), path, logical_size: working.logical_size(),
+                    }
+                }
+                SmbWorktreeEntryContent::Directory | SmbWorktreeEntryContent::File { .. } => {
+                    DirectoryEntry::Worktree {
+                        target: directory.target, path, relative_path: Some(entry.path.clone()),
+                        kind: entry.kind(), size: entry.size(),
+                    }
+                }
             };
             let extra = json_codec::to_vec(&wire).map_err(ApiError::invalid_source)?.len() + 1;
             if bytes + extra > smb_protocol::protocol::MAX_DIRECTORY_PAGE_BYTES {

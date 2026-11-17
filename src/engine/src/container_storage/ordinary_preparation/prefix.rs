@@ -11,6 +11,7 @@ use crate::container_storage::ordinary_preparation::areas::HeldAreas;
 pub(super) enum HeldParent {
     Disk(Arc<DiskHandle>),
     Common(Arc<DiskHandle>),
+    Deleted(Arc<DiskHandle>),
     Prefix(Arc<HeldPrefix>),
     Current(Arc<HeldPrefix>),
     Directory(Arc<super::directories::HeldDirectory>),
@@ -20,6 +21,7 @@ impl Clone for HeldParent {
         match self {
             Self::Disk(disk) => Self::Disk(Arc::clone(disk)),
             Self::Common(disk) => Self::Common(Arc::clone(disk)),
+            Self::Deleted(disk) => Self::Deleted(Arc::clone(disk)),
             Self::Prefix(prefix) => Self::Prefix(Arc::clone(prefix)),
             Self::Current(prefix) => Self::Current(Arc::clone(prefix)),
             Self::Directory(directory) => Self::Directory(Arc::clone(directory)),
@@ -35,6 +37,7 @@ impl HeldParent {
                 Ok(&disk.root)
             }
             Self::Common(disk) => disk.content_root(),
+            Self::Deleted(disk) => disk.deleted_root(),
             Self::Current(prefix) => {
                 prefix.verify()?;
                 Ok(prefix.areas.common())
@@ -49,7 +52,7 @@ impl HeldParent {
     pub(super) fn installed(&self) -> bool {
         match self {
             Self::Directory(directory) => directory.installed(),
-            Self::Disk(_) | Self::Common(_) => true,
+            Self::Disk(_) | Self::Common(_) | Self::Deleted(_) => true,
             Self::Prefix(prefix) | Self::Current(prefix) => prefix.installed.get().is_some(),
         }
     }
@@ -59,6 +62,7 @@ impl HeldParent {
             Self::Directory(directory) => directory.published_path(),
             Self::Disk(disk) => Ok(disk.root.path().to_owned()),
             Self::Common(disk) => Ok(disk.content_root()?.path().to_owned()),
+            Self::Deleted(disk) => Ok(disk.deleted_root()?.path().to_owned()),
             Self::Current(prefix) => Ok(prefix.parent.published_path()?
                 .join(prefix.component.as_path()).join(layout::COMMON_DATA_ROOT.as_path())),
             Self::Prefix(prefix) => Ok(prefix.parent.published_path()?
@@ -70,6 +74,7 @@ impl HeldParent {
         match self {
             Self::Directory(directory) => directory.current_zxs(),
             Self::Common(disk) => disk.current_management_root(),
+            Self::Deleted(disk) => disk.retained_management_root(),
             Self::Current(prefix) => {
                 prefix.verify()?;
                 Ok(prefix.areas.current_zxs())
@@ -81,7 +86,7 @@ impl HeldParent {
     pub(super) fn install(&self) -> Result<()> {
         match self {
             Self::Directory(directory) => directory.install(),
-            Self::Disk(_) | Self::Common(_) => Ok(()),
+            Self::Disk(_) | Self::Common(_) | Self::Deleted(_) => Ok(()),
             Self::Prefix(prefix) | Self::Current(prefix) => prefix.install(),
         }
     }
@@ -315,7 +320,8 @@ fn bind_source_chain(
     }
     match parent {
         HeldParent::Prefix(prefix) => Ok(HeldParent::Current(prefix)),
-        HeldParent::Disk(_) | HeldParent::Common(_) | HeldParent::Current(_)
+        HeldParent::Disk(_) | HeldParent::Common(_) | HeldParent::Deleted(_)
+        | HeldParent::Current(_)
         | HeldParent::Directory(_) => {
             Err(Failure::ContainerScope.into())
         }

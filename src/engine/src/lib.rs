@@ -34,6 +34,7 @@ mod directory_contents;
 mod directory_layout;
 mod directory_worktree;
 mod snapshot_worktree;
+mod retained_names;
 pub use directory_layout::LayoutError as DirectoryLayoutError;
 mod degraded_recovery;
 mod directory_conversion;
@@ -56,7 +57,7 @@ pub use disk_names::{
 mod persist;
 pub mod disk_authority;
 mod engine;
-pub use engine::{NativeCurrentEntry, NativeWorkingFile};
+pub use engine::{NativeCurrentEntry, NativeWorkingFile, NativeWorkingTarget};
 pub use engine::DetachedHistoryRead;
 pub use engine::{
     DirectorySnapshotBudget, DirectorySnapshotContent, DirectorySnapshotEntry,

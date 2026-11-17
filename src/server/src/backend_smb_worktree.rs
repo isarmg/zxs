@@ -2,6 +2,8 @@
 use name_policy::{LookupPath, PortablePath};
 use storage_contract::snapshot_worktree::{WorktreeHandle, WorktreeRevision, WorktreeStatus};
 use storage_contract::NamespaceEntryKind;
+use storage_contract::file_draft::UnbornWorking;
+use storage_contract::snapshot_worktree::additions::{CreateWorktreeFile, WorktreeFileTarget};
 
 pub struct SmbWorktreeLocation {
     pub status: WorktreeStatus,
@@ -17,8 +19,43 @@ pub struct SmbWorktreeFile {
 
 pub struct SmbWorktreeEntry {
     pub path: PortablePath,
-    pub kind: NamespaceEntryKind,
-    pub size: u64,
+    pub content: SmbWorktreeEntryContent,
+}
+
+pub enum SmbWorktreeEntryContent {
+    Directory,
+    File { size: u64 },
+    Working { target: WorktreeFileTarget, working: UnbornWorking },
+}
+
+impl SmbWorktreeEntry {
+    pub(crate) fn kind(&self) -> NamespaceEntryKind {
+        match &self.content {
+            SmbWorktreeEntryContent::Directory => NamespaceEntryKind::Directory,
+            SmbWorktreeEntryContent::File { .. } | SmbWorktreeEntryContent::Working { .. } => {
+                NamespaceEntryKind::File
+            }
+        }
+    }
+
+    pub(crate) fn size(&self) -> u64 {
+        match &self.content {
+            SmbWorktreeEntryContent::Directory => 0,
+            SmbWorktreeEntryContent::File { size } => *size,
+            SmbWorktreeEntryContent::Working { working, .. } => working.logical_size(),
+        }
+    }
+}
+
+pub enum SmbWorktreeWorkingSource {
+    Existing(WorktreeFileTarget),
+    Create(CreateWorktreeFile),
+}
+
+pub struct SmbWorktreeWorkingOpen {
+    pub source: SmbWorktreeWorkingSource,
+    pub writable: bool,
+    pub truncate: bool,
 }
 
 #[derive(Clone)]

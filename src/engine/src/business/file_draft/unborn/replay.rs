@@ -111,19 +111,26 @@ fn finish(
     previous: &State, mut projection: Projection,
     receipt: &OperationResult, principal: &Principal,
 ) -> Result<Projection> {
+    projection.state = finish_state(previous, projection.state, receipt, principal)?;
+    Ok(projection)
+}
+
+pub(crate) fn finish_state(
+    previous: &State, mut state: State, receipt: &OperationResult, principal: &Principal,
+) -> Result<State> {
     // These are the same ordinary pre-publication guards as the actual planner.
     // The canonical projection does not borrow unrelated tables from `next`.
-    crate::file_deletion::freeze::verify(previous, &projection.state)?;
-    crate::business::file_tags::preserve_existing(previous, &projection.state)?;
-    projection.state.operations.insert(receipt.operation_id, receipt.clone());
-    projection.state.operation_principals.insert(receipt.operation_id, principal.as_str().into());
-    projection.state.events.push(Event {
+    crate::file_deletion::freeze::verify(previous, &state)?;
+    crate::business::file_tags::preserve_existing(previous, &state)?;
+    state.operations.insert(receipt.operation_id, receipt.clone());
+    state.operation_principals.insert(receipt.operation_id, principal.as_str().into());
+    state.events.push(Event {
         sequence: receipt.sequence,
         operation_id: receipt.operation_id,
         kind: receipt.kind.clone(),
         object_id: receipt.operation_id.to_string(),
     });
-    crate::node_retirement_engine::verify(previous, &projection.state)?;
-    crate::file_deletion::publication::verify(previous, &projection.state, None)?;
-    Ok(projection)
+    crate::node_retirement_engine::verify(previous, &state)?;
+    crate::file_deletion::publication::verify(previous, &state, None)?;
+    Ok(state)
 }

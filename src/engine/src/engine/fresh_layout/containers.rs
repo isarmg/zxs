@@ -80,10 +80,11 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
         {
             return Err(Failure::ContainerScope.into());
         }
-        let parents = match record.namespace.parent {
-            storage_contract::file_container::NamespaceDirectoryParent::Root => Vec::new(),
-            storage_contract::file_container::NamespaceDirectoryParent::Directory(entry) => {
-                super::directories::chain(state, entry)?
+        let parents = match &record.namespace.parent {
+            storage_contract::file_container::ContainerParent::Worktree { .. }
+            | storage_contract::file_container::ContainerParent::Root => Vec::new(),
+            storage_contract::file_container::ContainerParent::Directory(entry) => {
+                super::directories::chain(state, *entry)?
             }
         };
         for (disk, replica) in &record.replicas {
@@ -452,6 +453,7 @@ pub(crate) enum ReplicaReadLocation<'a> {
 }
 pub(crate) enum ReplicaNamespace<'a> {
     Owner(super::namespace::RegisteredNamespaceRoot<'a>),
+    Worktree(super::namespace::RegisteredNamespaceRoot<'a>),
     Backup(super::namespace::PublishedBackupSourcePath<'a>),
 }
 impl<'a> PublishedReplicaSource<'a> {
@@ -525,8 +527,16 @@ pub(crate) fn published_source<'a>(
             return Err(Failure::NamespaceSource.into());
         }
         prefixes::require_geometry(config, record, id)?;
-        ReplicaNamespace::Owner(source)
+        if record.namespace.parent.is_worktree() {
+            source.deleted()?;
+            ReplicaNamespace::Worktree(source)
+        } else {
+            ReplicaNamespace::Owner(source)
+        }
     } else {
+        if record.namespace.parent.is_worktree() {
+            return Err(Failure::ContainerScope.into());
+        }
         let source = published_backup_source(config, resources, state, record, id)?;
         ReplicaNamespace::Backup(source)
     };

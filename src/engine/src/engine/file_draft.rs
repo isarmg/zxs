@@ -12,8 +12,9 @@ use storage_contract::{FileId, OperationId, Principal};
 
 mod unborn;
 mod native_io;
+mod worktree;
 mod incremental;
-pub use native_io::{NativeCurrentEntry, NativeWorkingFile};
+pub use native_io::{NativeCurrentEntry, NativeWorkingFile, NativeWorkingTarget};
 mod selected;
 mod batch;
 pub(crate) use batch::{

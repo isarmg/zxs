@@ -24,6 +24,15 @@ impl Session {
         let Some(file) = self.shared.backend.smb_native_open(&self.identity, SmbNativeOpen {
             branch: &self.branch, path, writable, create, truncate, exclusive,
         })? else { return Ok(None); };
+        let path = file.path().clone();
+        self.install_native(file, &path, writable, write_through, paths).map(Some)
+    }
+
+    pub(super) fn install_native(
+        &mut self, file: SmbNativeHandle, path: &name_policy::PortablePath,
+        writable: bool, write_through: bool,
+        paths: Option<path_reservation::PathReservation>,
+    ) -> Result<(OpenResult, OwnedFd), ApiError> {
         let size = self.shared.backend.smb_native_size(&self.identity, &file)?;
         // The same real non-content placeholder as verified reads. A peer that
         // ignores the negotiated mode cannot write container bytes through it.
@@ -33,17 +42,17 @@ impl Session {
         let handle = self.next_handle;
         self.next_handle += 1;
         let info = OpenResult {
-            data_io: OpenIo::NativeWorking, entry_id: file.target.entry.to_string(),
+            data_io: OpenIo::NativeWorking, entry_id: file.entry().to_string(),
             kind: storage_contract::NamespaceEntryKind::File,
-            path: file.target.path.as_str().into(), handle, size,
+            path: path.as_str().into(), handle, size,
             max_file_bytes: self.max_file_bytes,
-            version_id: file.version.map(|version| version.to_string()),
-            workspace_id: None, mtime: file.mtime,
+            version_id: file.version().map(|version| version.to_string()),
+            workspace_id: None, mtime: file.mtime(),
         };
         self.handles.insert(handle, Handle::Native(NativeHandle {
             file, writable, write_through, _paths: paths,
         }));
-        Ok(Some((info, descriptor)))
+        Ok((info, descriptor))
     }
 
     pub(super) fn working_stat(&self, handle: u64) -> Result<WorkingStat, ApiError> {

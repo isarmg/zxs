@@ -12,7 +12,9 @@ use storage_contract::{
 pub(crate) const MAX_ENTRIES: usize = 2048;
 pub(crate) const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 1024 * 1024;
-const MAX_VERSIONS: usize = 512;
+pub(crate) const MAX_VERSIONS: usize = 512;
+mod logical;
+pub(crate) use logical::LogicalAdmission;
 pub(crate) const MAX_LOGICAL_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, error_definition::Error)]
@@ -312,41 +314,14 @@ fn admit_sources(entries: &[SnapshotEntry]) -> Result<(), SnapshotManifestError>
 fn admit_entries(
     entries: &[SnapshotEntry],
 ) -> Result<BTreeMap<VersionId, SnapshotFile>, SnapshotManifestError> {
-    if entries.len() > MAX_ENTRIES {
-        return Err(SnapshotManifestError::Budget);
-    }
-    let management = name_policy::lookup_key(
-        layout::SNAPSHOT_REPOSITORY.as_os_str().to_str()
-            .expect("invariant: snapshot repository layout name is ASCII"),
-    );
-    let mut path_bytes = 0usize;
-    let mut logical_bytes = 0u64;
+    let mut logical = LogicalAdmission::new(entries.len())?;
     let mut files = BTreeMap::new();
-    for (index, entry) in entries.iter().enumerate() {
-        path_bytes = path_bytes.checked_add(entry.path.as_str().len())
-            .filter(|total| *total <= MAX_PATH_BYTES)
-            .ok_or(SnapshotManifestError::Budget)?;
-        if index > 0 && entries[index - 1].path.key() >= entry.path.key() {
-            return Err(SnapshotManifestError::Order);
-        }
-        if entry.path.key().split('/').any(|component| component == management) {
-            return Err(SnapshotManifestError::Management);
-        }
-        if let Some(parent) = entry.path.parent() {
-            let position = entries[..index].binary_search_by(|entry| {
-                entry.path.key().cmp(parent.key())
-            }).map_err(|_| SnapshotManifestError::Parent)?;
-            let ancestor = &entries[position];
-            if ancestor.path.as_str() != parent.as_str()
-                || !matches!(ancestor.content, SnapshotEntryContent::Directory {})
-            {
-                return Err(SnapshotManifestError::Parent);
-            }
-        }
+    for entry in entries {
+        logical.entry(&entry.path, match entry.content {
+            SnapshotEntryContent::Directory {} => None,
+            SnapshotEntryContent::File { material, .. } => Some(material.size),
+        })?;
         if let SnapshotEntryContent::File { material: file, .. } = entry.content {
-            logical_bytes = logical_bytes.checked_add(file.size)
-                .filter(|total| *total <= MAX_LOGICAL_BYTES)
-                .ok_or(SnapshotManifestError::Budget)?;
             if files.insert(file.version_id, file).is_some_and(|previous| previous != file) {
                 return Err(SnapshotManifestError::Version);
             }

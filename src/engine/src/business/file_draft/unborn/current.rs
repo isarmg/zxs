@@ -16,6 +16,11 @@ pub(crate) fn validate(state: &State, maximum: usize) -> Result<BTreeSet<FileId>
     let mut files = BTreeSet::new();
     for (file, record) in state.file_containers.iter() {
         if record.working.unborn().is_none() { continue; }
+        if record.namespace.parent.is_worktree() {
+            super::super::worktree::validate_record(state, *file, record)?;
+            files.insert(*file);
+            continue;
+        }
         let repository = record.namespace.repository;
         if let std::collections::btree_map::Entry::Vacant(entry) = namespaces.entry(repository) {
             entry.insert(WorkingNamespace::from_main_state(state, repository, maximum)?);
@@ -32,6 +37,9 @@ pub(crate) fn validate_record(
     file: FileId,
     record: &FileContainerRecord,
 ) -> Result<()> {
+    if record.namespace.parent.is_worktree() {
+        return super::super::worktree::validate_record(state, file, record);
+    }
     let namespace = WorkingNamespace::from_main_state(
         state, record.namespace.repository, usize::MAX,
     )?;

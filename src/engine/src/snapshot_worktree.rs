@@ -16,6 +16,7 @@ mod publication;
 mod instance;
 mod source;
 mod edit;
+pub(crate) mod additions;
 mod commit;
 pub(crate) mod drafts;
 pub use source::SnapshotSourceError;
@@ -84,6 +85,8 @@ pub(crate) enum RegistrationError {
     Host,
     #[error("worktree name is already reserved in its actual parent")]
     Mount,
+    #[error("allocating or validating the permanent retained container name")]
+    RetainedName(#[source] crate::retained_names::RetainedNameError),
     #[error("allocating a worktree name in its actual parent")]
     WorktreeName(#[source] crate::directory_worktree::names::NameError),
     #[error("snapshot/worktree completion does not match its original reservation: {0}")]

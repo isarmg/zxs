@@ -211,7 +211,7 @@ pub(super) fn require_owner(
         || record.namespace.repository != host.namespace.repository_id
         || record.namespace.branch != host.namespace.branch_id
         || record.namespace.entry != target.entry
-        || record.namespace.parent != NamespaceDirectoryParent::Root
+        || record.namespace.parent != NamespaceDirectoryParent::Root.into()
         || record.namespace.name.as_str() != target.path.file_name()
         || record.owner_disk != owner
     {

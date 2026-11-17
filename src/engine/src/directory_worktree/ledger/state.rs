@@ -1,4 +1,4 @@
-use super::record::{Checkpoint, EditRecord, Event, Genesis, commitment};
+use super::record::{AddedFile, Checkpoint, EditRecord, Event, Genesis, commitment};
 use super::LedgerError;
 use crate::directory_worktree::lifecycle::{
     Phase, Publication, PublicationMode, PublicationScope, Worktree,
@@ -11,12 +11,13 @@ use storage_contract::OperationId;
 use storage_contract::working_tree::MaterialCommitment;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OperationKind { Edits, Namespace, Commit, Delete, Restore }
+enum OperationKind { File, Edits, Namespace, Commit, Delete, Restore }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum Stage { Requested, Completed }
 impl Event {
     fn identity(&self) -> (OperationId, OperationKind, Stage) {
         match self {
+            Self::File { operation, .. } => (*operation, OperationKind::File, Stage::Requested),
             Self::Edits { operation, .. } => (*operation, OperationKind::Edits, Stage::Requested),
             Self::Namespace { operation, .. } => {
                 (*operation, OperationKind::Namespace, Stage::Requested)
@@ -62,6 +63,7 @@ pub(super) struct State {
     pub(super) worktree: Worktree,
     pub(super) edits: Vec<EditRecord>,
     pub(super) file_results: Vec<FileResult>,
+    pub(super) added: Vec<AddedFile>,
     // Frame and ledger byte limits bound the retained history on append/replay.
     namespace: NamespaceState,
     creation: OperationId,
@@ -77,6 +79,7 @@ impl State {
             ),
             edits: Vec::new(),
             file_results: Vec::new(),
+            added: Vec::new(),
             namespace: NamespaceState::Original,
             creation: genesis.binding.operation(),
             versions: BTreeSet::new(),
@@ -111,6 +114,52 @@ impl State {
         }
         let (operation, kind, stage) = event.identity();
         match event {
+            Event::File { expected, file, .. } => {
+                self.expected(*expected)?;
+                if matches!(self.worktree.phase(), Phase::Active { saved: Some(publication) }
+                    if matches!(publication.scope, PublicationScope::Directory { .. })) {
+                    return Err(LedgerError::RebaseRequired);
+                }
+                if file.target.worktree.worktree_id != self.worktree.id() {
+                    return Err(LedgerError::AddedFile);
+                }
+                let mut added = self.added.clone();
+                match added.binary_search_by_key(&file.target.entry, |old| old.target.entry) {
+                    Ok(index) => {
+                        let old = &added[index];
+                        if old.target != file.target || old.birth != file.birth {
+                            return Err(LedgerError::AddedFile);
+                        }
+                        let storage_contract::file_draft::UnbornBody::Saved { manifest } =
+                            file.working.body() else {
+                                return Err(LedgerError::AddedFile);
+                            };
+                        if manifest.operation() != operation {
+                            return Err(LedgerError::AddedFile);
+                        }
+                        let next = old.working.saved(file.target.file, manifest.clone(),
+                            crate::working_tree::snapshot::MAX_LOGICAL_BYTES)
+                            .map_err(LedgerError::WorkingManifest)?;
+                        if next != file.working {
+                            return Err(LedgerError::AddedFile);
+                        }
+                        added[index] = file.clone();
+                    }
+                    Err(index) => {
+                        if file.birth != operation || file.working
+                            != storage_contract::file_draft::UnbornWorking::birth() {
+                            return Err(LedgerError::AddedFile);
+                        }
+                        added.insert(index, file.clone());
+                    }
+                }
+                self.projection_with_files(source, &self.edits, &added)?;
+                let manifest = revision_commitment_with_files(
+                    source, &self.edits, self.namespace.batches(), &added,
+                )?;
+                self.worktree.record_edit(manifest).map_err(LedgerError::Lifecycle)?;
+                self.added = added;
+            }
             Event::Edits { expected, edits, .. } => {
                 self.expected(*expected)?;
                 if matches!(self.worktree.phase(), Phase::Active { saved: Some(publication) }
@@ -140,10 +189,14 @@ impl State {
                     }
                 }
                 admit_edits(source, &merged)?;
-                if matches!(self.namespace, NamespaceState::Edited { .. }) {
+                if matches!(self.namespace, NamespaceState::Edited { .. })
+                    || !self.added.is_empty()
+                {
                     self.projection_with_edits(source, &merged)?;
                 }
-                let manifest = revision_commitment(source, &merged, self.namespace.batches())?;
+                let manifest = revision_commitment_with_files(
+                    source, &merged, self.namespace.batches(), &self.added,
+                )?;
                 self.worktree.record_edit(manifest).map_err(LedgerError::Lifecycle)?;
                 self.edits = merged;
                 self.versions.extend(edits.iter().map(|edit| edit.material.version_id));
@@ -161,7 +214,9 @@ impl State {
                     .map_err(LedgerError::Namespace)?.into_namespace();
                 let mut batches = self.namespace.batches().to_vec();
                 batches.push(changes.clone());
-                let manifest = revision_commitment(source, &self.edits, &batches)?;
+                let manifest = revision_commitment_with_files(
+                    source, &self.edits, &batches, &self.added,
+                )?;
                 self.worktree.record_edit(manifest).map_err(LedgerError::Lifecycle)?;
                 self.namespace = NamespaceState::Edited { batches, view };
             }
@@ -234,20 +289,32 @@ impl State {
         source: &'a AdmittedSnapshotManifest,
         edits: &[EditRecord],
     ) -> Result<SparseProjection<'a>, LedgerError> {
+        self.projection_with_files(source, edits, &self.added)
+    }
+    fn projection_with_files<'a>(
+        &self,
+        source: &'a AdmittedSnapshotManifest,
+        edits: &[EditRecord],
+        added: &[AddedFile],
+    ) -> Result<SparseProjection<'a>, LedgerError> {
         let edits = edits.iter().map(EditRecord::file_edit).collect::<Vec<_>>();
         let view = SparseProjection::admit_with_results(source, edits, &self.file_results)
             .map_err(LedgerError::Projection)?;
-        match &self.namespace {
-            NamespaceState::Original => Ok(view),
+        let view = match &self.namespace {
+            NamespaceState::Original => view,
             NamespaceState::Edited { view: namespace, .. } => {
-                view.with_namespace(namespace).map_err(LedgerError::Namespace)
+                view.with_namespace(namespace).map_err(LedgerError::Namespace)?
             }
-        }
+        };
+        view.with_added(added).map_err(LedgerError::Projection)
     }
     fn require_publication_scope(&self) -> Result<(), LedgerError> {
         // Publication still associates FILE results with original paths. Until
         // durable obligations cover removed and renamed occurrences, neither a
         // directory commit nor files-before-delete can consume this namespace.
+        if !self.added.is_empty() {
+            return Err(LedgerError::AddedPublicationRequired);
+        }
         if matches!(self.namespace, NamespaceState::Edited { .. }) {
             return Err(LedgerError::NamespacePublicationRequired);
         }
@@ -284,6 +351,20 @@ pub(crate) fn revision_commitment(
     } else {
         storage_contract::canonical_json(&(source.reference(), edits, namespace))
     }.map_err(LedgerError::Codec)?;
+    Ok(commitment(&bytes))
+}
+pub(crate) fn revision_commitment_with_files(
+    source: &AdmittedSnapshotManifest,
+    edits: &[EditRecord],
+    namespace: &[Vec<NamespaceChange>],
+    added: &[AddedFile],
+) -> Result<MaterialCommitment, LedgerError> {
+    if added.is_empty() {
+        return revision_commitment(source, edits, namespace);
+    }
+    let bytes = storage_contract::canonical_json(
+        &("worktree-added-files", source.reference(), edits, namespace, added),
+    ).map_err(LedgerError::Codec)?;
     Ok(commitment(&bytes))
 }
 fn event_commitment(event: &Event) -> Result<MaterialCommitment, LedgerError> {

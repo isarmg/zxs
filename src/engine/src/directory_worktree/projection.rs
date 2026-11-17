@@ -1,5 +1,7 @@
 //! Existing-file sparse edits retain logical paths while physical bodies move.
 pub(crate) mod namespace;
+mod added;
+use crate::directory_worktree::ledger::AddedFile;
 pub(crate) mod obligations;
 use data_serialization::{Deserialize, Serialize};
 use crate::working_tree::snapshot::{
@@ -13,7 +15,7 @@ use crate::directory_worktree::projection::obligations::{
 };
 use platform_io::fs_safety::EntryName;
 use std::collections::BTreeMap;
-use storage_contract::{BranchId, DiskId, FileId, FileNodeId, VersionId};
+use storage_contract::{BranchId, DiskId, EntryId, FileId, FileNodeId, VersionId};
 use storage_contract::working_tree::LocalEntityIdentity;
 
 /// Complete bytes already admitted from this instance's held sparse directory.
@@ -59,6 +61,7 @@ pub(crate) enum ContainerPublication {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ReadRoute<'a> {
+    Added { file: &'a AddedFile },
     Directory,
     Original { file: SnapshotFile },
     Working { material: &'a WorkingFile },
@@ -106,10 +109,17 @@ pub(crate) enum ProjectionError {
     Material(#[source] SnapshotManifestError),
     #[error("published file baseline is not bound to this sparse occurrence or version")]
     FileResult,
+    #[error("added file identity, original birth or current path conflicts")]
+    Added,
+    #[error("added files have no first historical publication yet")]
+    AddedPublicationRequired,
+    #[error("added working manifest is invalid")]
+    WorkingManifest(#[source] storage_contract::file_draft::manifest::ManifestError),
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum PlanError<E> {
+    AddedPublicationRequired,
     Locate(E),
     ContainerDisk(ContainerDiskError),
 }
@@ -119,6 +129,7 @@ pub(crate) struct SparseProjection<'a> {
     entries: Vec<Entry>,
     edits: BTreeMap<usize, WorkingFile>,
     results: BTreeMap<usize, FileResult>,
+    added: BTreeMap<EntryId, AddedFile>,
 }
 impl<'a> SparseProjection<'a> {
     /// The complete original manifest supplies untouched files and empty dirs.
@@ -160,7 +171,8 @@ impl<'a> SparseProjection<'a> {
                 },
             },
         }).collect();
-        Ok(Self { source, entries, edits: by_index, results: BTreeMap::new() })
+        Ok(Self { source, entries, edits: by_index, results: BTreeMap::new(),
+            added: BTreeMap::new() })
     }
 
     /// Results come from the exact independently verified completion records,
@@ -206,7 +218,7 @@ impl<'a> SparseProjection<'a> {
     /// occurrence when a snapshot contains aliases of the same container.
     pub(crate) fn contains_source_file(&self, path: &PortablePath) -> bool {
         self.entries.iter().any(|entry| match entry.content {
-            Content::Directory => false,
+            Content::Directory | Content::Added { .. } => false,
             Content::File { original, .. } => self.source.entries()[original].path == *path,
         })
     }
@@ -224,6 +236,7 @@ impl<'a> SparseProjection<'a> {
         let index = self.entries.binary_search_by(|entry| entry.path.key().cmp(path.key())).ok()?;
         Some(match self.entries[index].content {
             Content::Directory => ReadRoute::Directory,
+            Content::Added { entry } => ReadRoute::Added { file: &self.added[&entry] },
             Content::File { original, material: file, .. } => match self.edits.get(&original) {
                 Some(material) => ReadRoute::Working { material },
                 None => ReadRoute::Original { file },
@@ -240,11 +253,15 @@ impl<'a> SparseProjection<'a> {
         repository_disk: DiskId,
         mut locate: impl FnMut(DiskId, FileId) -> Result<ContainerPresence, E>,
     ) -> Result<Vec<PlannedEntry<'_>>, PlanError<E>> {
+        if !self.added.is_empty() {
+            return Err(PlanError::AddedPublicationRequired);
+        }
         let files = self.file_obligations();
         let mut result = Vec::with_capacity(self.entries.len());
         for entry in &self.entries {
             let transfer = match entry.content {
                 Content::Directory => Transfer::Directory,
+                Content::Added { .. } => return Err(PlanError::AddedPublicationRequired),
                 Content::File { original, material, .. } => {
                     Self::file_transfer(
                         material, files.for_original(original), repository_disk, &mut locate,
@@ -305,8 +322,11 @@ impl<'a> SparseProjection<'a> {
         node: &AdmittedSnapshotManifest,
         published_sources: &[PublishedFileSource],
     ) -> Result<SnapshotReference, ProjectionError> {
+        if !self.added.is_empty() {
+            return Err(ProjectionError::AddedPublicationRequired);
+        }
         let visible_edits = self.entries.iter().filter(|entry| match entry.content {
-            Content::Directory => false,
+            Content::Directory | Content::Added { .. } => false,
             Content::File { original, .. } => self.edits.contains_key(&original),
         }).count();
         if published_sources.len() != visible_edits
@@ -333,6 +353,7 @@ impl<'a> SparseProjection<'a> {
     ) -> Result<SnapshotEntryContent, ProjectionError> {
         let (index, file, source) = match entry.content {
             Content::Directory => return Ok(SnapshotEntryContent::Directory {}),
+            Content::Added { .. } => return Err(ProjectionError::AddedPublicationRequired),
             Content::File { original, material, source } => (original, material, source),
         };
         Ok(match self.edits.get(&index) {

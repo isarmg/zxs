@@ -326,6 +326,8 @@ class TargetedSelection(unittest.TestCase):
                     'test/engine/unit/engine/startup_exit_preflight_tests.rs',
                 }:
                     extensions.append('initial-storage-result-admission')
+                if path == 'src/engine/src/engine.rs':
+                    extensions.append('worktree-added-native')
                 self.assertEqual(plan['groups'], sorted(retained + extensions))
                 self.assertIn('test_targeted_ci', plan['python_tests'])
                 self.assertCountEqual(origin_selections(plan, name), group['rust_targets'])
@@ -558,7 +560,7 @@ class TargetedSelection(unittest.TestCase):
             self.assertCountEqual(origin_selections(plan, name),
                                   self.policy['groups'][name]['rust_targets'])
         worktree, = origin_selections(plan, 'directory-history-worktree')
-        self.assertEqual(worktree['max_tests'], 114)
+        self.assertEqual(worktree['max_tests'], 115)
         self.assertIn('directory_worktree::ledger::tests::', worktree['prefixes'])
         conversion = origin_selections(plan, 'ordinary-conversion-name-budget')
         engine = next(target for target in conversion if target['package'] == 'storage-engine')
@@ -1114,6 +1116,8 @@ class TargetedSelection(unittest.TestCase):
             'container-lifecycle-contract', 'container-lifecycle-http',
             'container-lifecycle-web', 'container-path-facts-schema', 'file-metadata-plan',
             'ordinary-empty-directory-backup', 'fresh-first-add-root-binding', 'terminal-backup-source-layout',
+            'automatic-backup-entry', 'ordinary-backup-listing-regression',
+            'worktree-added-native',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -1129,7 +1133,8 @@ class TargetedSelection(unittest.TestCase):
             'held-directory-layout', 'ordinary-conversion-name-budget',
             'typed-name-consumers',
         ], ['container-path-facts-engine', 'container-lifecycle-engine',
-            'file-metadata-plan', 'ordinary-empty-directory-backup'])
+            'file-metadata-plan', 'ordinary-empty-directory-backup', 'automatic-backup-entry',
+            'ordinary-backup-listing-regression', 'worktree-added-native'])
         self.assertNotIn('working-directory-prerequisite', central['groups'])
         self.assertEqual(central['groups'], [
             'held-directory-layout', 'ordinary-conversion-name-budget',
@@ -1878,7 +1883,8 @@ class TargetedSelection(unittest.TestCase):
         ], [
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-path-facts-http', 'container-lifecycle-http', 'path-fact-activity',
-            'file-metadata-plan', 'ordinary-empty-directory-backup',
+            'file-metadata-plan', 'ordinary-empty-directory-backup', 'automatic-backup-entry',
+            'ordinary-backup-listing-regression', 'worktree-added-native',
         ])
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
                                          'ordinary-conversion-name-budget',
@@ -3478,6 +3484,7 @@ class ContainerPathFactSelection(unittest.TestCase):
             'ci-selection', 'container-lifecycle-engine', 'container-path-facts-engine',
             'container-tags-storage', 'current-name-layout-consumers',
             'engine-integer-errors', 'file-material-copy-reuse', 'held-directory-layout',
+            'worktree-added-native',
         ])
         for group in plan['groups']:
             self.assertCountEqual(self.selections(plan, group),
@@ -3593,8 +3600,13 @@ class ContainerPathFactSelection(unittest.TestCase):
             'test/engine/unit/working_tree/snapshot/store_tests.rs',
         ]:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
-                self.assertEqual(plan['groups'], ['directory-snapshot-material'])
+                extra = ['worktree-added-native'] if path in {
+                    'src/engine/src/working_tree/snapshot.rs',
+                    'src/engine/src/working_tree/snapshot/manifest.rs',
+                } else []
+                plan = assert_path_group_extension(
+                    self, self.policy, [path], ['directory-snapshot-material'], extra,
+                )
                 self.assertEqual(plan['python_tests'], [])
                 engine, product = plan['rust_targets']
                 self.assertEqual(engine['prefixes'], [

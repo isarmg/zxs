@@ -4,12 +4,13 @@ use crate::engine_backend::snapshot_worktree::error;
 use crate::{
     ApiError, Content, Identity, SmbWorktreeAccess, SmbWorktreeCursor, SmbWorktreeEntry,
     SmbWorktreeFile, SmbWorktreeLocation, SmbWorktreePage, UploadSource,
+    SmbNativeHandle, SmbWorktreeEntryContent, SmbWorktreeWorkingOpen, SmbWorktreeWorkingSource,
 };
 use name_policy::{LookupName, LookupPath};
 use storage_contract::snapshot_worktree::{
     EditWorktree, WorktreeHandle, WorktreeRevision, WorktreeStatus,
 };
-use storage_contract::{NamespaceEntryKind, RepositoryId};
+use storage_contract::RepositoryId;
 use storage_engine::{Engine, WorktreeEntry, WorktreeEntryContent};
 
 fn authorize(engine: &Engine, current: &Identity, owner: RepositoryId) -> Result<(), ApiError> {
@@ -23,18 +24,48 @@ fn authorize(engine: &Engine, current: &Identity, owner: RepositoryId) -> Result
     Ok(())
 }
 
-fn authorize_target(
+pub(super) fn authorize_target(
     engine: &Engine, current: &Identity, target: WorktreeHandle,
 ) -> Result<(), ApiError> {
     authorize(engine, current, engine.directory_worktree_owner(target).map_err(error)?)
 }
 
 fn entry(value: WorktreeEntry) -> SmbWorktreeEntry {
-    let (kind, size) = match value.content {
-        WorktreeEntryContent::Directory => (NamespaceEntryKind::Directory, 0),
-        WorktreeEntryContent::File { size, .. } => (NamespaceEntryKind::File, size),
+    let content = match value.content {
+        WorktreeEntryContent::Directory => SmbWorktreeEntryContent::Directory,
+        WorktreeEntryContent::File { size, .. } => SmbWorktreeEntryContent::File { size },
+        WorktreeEntryContent::Working { target, working } => {
+            SmbWorktreeEntryContent::Working { target, working }
+        }
     };
-    SmbWorktreeEntry { path: value.path, kind, size }
+    SmbWorktreeEntry { path: value.path, content }
+}
+
+pub(super) fn open_working(
+    backend: &EngineBackend, identity: &Identity, request: SmbWorktreeWorkingOpen,
+) -> Result<SmbNativeHandle, ApiError> {
+    let (mut engine, current) = backend.lock_current(identity)?;
+    let target = match &request.source {
+        SmbWorktreeWorkingSource::Existing(target) => target.worktree,
+        SmbWorktreeWorkingSource::Create(request) => request.target,
+    };
+    authorize_target(&engine, &current, target)?;
+    let principal = current.principal.parse().map_err(ApiError::invalid_authenticated_principal)?;
+    let target = match request.source {
+        SmbWorktreeWorkingSource::Existing(target) => target,
+        SmbWorktreeWorkingSource::Create(request) => {
+            engine.create_directory_worktree_file(&request, &principal).map_err(error)?
+        }
+    };
+    let mut held = engine.open_directory_worktree_working(&target, &principal, request.writable)
+        .map_err(error)?;
+    if request.truncate {
+        engine.resize_native_working(&mut held, &principal, 0)
+            .map_err(crate::engine_backend::error)?;
+    }
+    Ok(SmbNativeHandle {
+        source: crate::backend_smb_native::NativeSource::Worktree { target, held },
+    })
 }
 
 pub(super) fn mounts(
