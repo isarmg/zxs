@@ -432,3 +432,79 @@ fn observer_panic_does_not_skip_recovery_drain() {
     assert_eq!(Arc::strong_count(&retained), 1);
     assert!(backend.inner.recovery_worker.lock().unwrap().is_none());
 }
+
+#[test]
+fn conversion_drain_does_not_hold_the_addition_lock_needed_by_its_owner() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (backend, _) = open_service(
+        &temporary.path().join("system"),
+        &temporary.path().join("management"),
+    )
+    .unwrap();
+    let (entered, ready) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let conversion_backend = Arc::clone(&backend);
+    let conversion = std::thread::spawn(move || {
+        let _conversion = conversion_backend.inner.ordinary_conversion.lock().unwrap();
+        entered.send(()).unwrap();
+        released.recv_timeout(DEADLINE).unwrap();
+        let _addition = conversion_backend.inner.storage_addition.lock().unwrap();
+    });
+    ready.recv_timeout(DEADLINE).unwrap();
+    backend.stop_management();
+    let draining_backend = Arc::clone(&backend);
+    let (done, finished) = mpsc::channel();
+    let drain = std::thread::spawn(move || {
+        done.send(draining_backend.drain_management()).unwrap();
+    });
+    let early = finished.recv_timeout(Duration::from_millis(50));
+    release.send(()).unwrap();
+    assert!(matches!(early, Err(mpsc::RecvTimeoutError::Timeout)));
+    finished.recv_timeout(DEADLINE).unwrap().unwrap();
+    conversion.join().unwrap();
+    drain.join().unwrap();
+}
+
+#[test]
+fn coordinator_poison_does_not_detach_the_recovery_worker() {
+    for conversion in [false, true] {
+        let temporary = tempfile::tempdir().unwrap();
+        let (backend, _) = open_service(
+            &temporary.path().join("system"),
+            &temporary.path().join("management"),
+        )
+        .unwrap();
+        let poisoned = Arc::clone(&backend);
+        assert!(std::thread::spawn(move || {
+            let coordinator = if conversion {
+                &poisoned.inner.ordinary_conversion
+            } else {
+                &poisoned.inner.storage_addition
+            };
+            let _owner = coordinator.lock().unwrap();
+            panic!("injected coordinator failure");
+        }).join().is_err());
+        let retained = Arc::new(());
+        let resource = Arc::clone(&retained);
+        let (release, released) = mpsc::channel();
+        *backend.inner.recovery_worker.lock().unwrap() = Some(std::thread::spawn(move || {
+            let _resource = resource;
+            released.recv_timeout(DEADLINE).unwrap();
+        }));
+        let draining_backend = Arc::clone(&backend);
+        let (done, finished) = mpsc::channel();
+        let drain = std::thread::spawn(move || {
+            done.send(draining_backend.drain_management()).unwrap();
+        });
+        let early = finished.recv_timeout(Duration::from_millis(50));
+        release.send(()).unwrap();
+        assert!(matches!(early, Err(mpsc::RecvTimeoutError::Timeout)));
+        let error = finished.recv_timeout(DEADLINE).unwrap().unwrap_err();
+        drain.join().unwrap();
+        let source = shutdown_error(&error);
+        assert_eq!(source.conversion_poisoned, conversion);
+        assert_eq!(source.addition_poisoned, !conversion);
+        assert_eq!(Arc::strong_count(&retained), 1);
+        assert!(backend.inner.recovery_worker.lock().unwrap().is_none());
+    }
+}

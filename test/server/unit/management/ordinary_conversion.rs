@@ -1506,3 +1506,91 @@ fn completed_conversion_result_remains_queryable_after_source_exceeds_budget() {
     assert_eq!(resumed.result, completed.result);
     assert_eq!(conversion_import_snapshot(&backend), before);
 }
+
+#[test]
+fn business_shutdown_waits_for_the_existing_conversion_owner() {
+    use std::{sync::mpsc, time::Duration};
+    let f = fixture();
+    let gate = f.backend.inner.ordinary_conversion.lock().unwrap();
+    let backend = Arc::clone(&f.backend);
+    let (done, finished) = mpsc::channel();
+    let drain = std::thread::spawn(move || {
+        done.send(backend.finish_running_business()).unwrap();
+    });
+    let early = finished.recv_timeout(Duration::from_millis(50));
+    drop(gate);
+    assert!(matches!(early, Err(mpsc::RecvTimeoutError::Timeout)));
+    finished.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    drain.join().unwrap();
+}
+
+#[test]
+fn business_shutdown_reports_the_original_unfinished_conversion_without_writing() {
+    let (f, p) = interrupted_conversion(ImportInterruption::CommitIntent);
+    let path = f
+        .data
+        .join("management")
+        .join(DIRECTORY)
+        .join(name(p.operation_id).as_path());
+    let before = fs::read(&path).unwrap();
+    let backend = f.backend.inner.backend().unwrap();
+    let sequence = backend.test_with_engine_locked(|engine| engine.state().sequence);
+    let error = f.backend.finish_running_business().unwrap_err();
+    assert_eq!(error.code, ErrorCode::RecoveryRequired);
+    assert!(error.message.contains(&p.operation_id.to_string()));
+    assert_eq!(fs::read(path).unwrap(), before);
+    assert_eq!(
+        backend.test_with_engine_locked(|engine| engine.state().sequence),
+        sequence
+    );
+    assert_eq!(
+        fs::read(f.discovery.join("ordinary/document.txt")).unwrap(),
+        b"keep original content"
+    );
+}
+
+#[test]
+fn business_shutdown_uses_exact_receipt_even_after_lost_projection_and_revocation() {
+    let f = fixture();
+    let p = preview(&f);
+    commit(&f, &p, true).unwrap();
+    let directory =
+        PrivateDirectory::open_existing(f.data.join("management").join(DIRECTORY)).unwrap();
+    let mut record = owned_record(&directory, p.operation_id, &f.identity).unwrap();
+    record.status.phase = OrdinaryDiskConversionPhase::Importing;
+    record.status.result = None;
+    save(&directory, &record).unwrap();
+    let before = fs::read(directory.path().join(name(p.operation_id).as_path())).unwrap();
+    let auth = crate::lock(&f.backend.inner.auth).clone().unwrap();
+    crate::lock(&auth).logout(&f.token).unwrap();
+    f.backend.finish_running_business().unwrap();
+    assert_eq!(
+        fs::read(directory.path().join(name(p.operation_id).as_path())).unwrap(),
+        before
+    );
+    record
+        .commit_request
+        .as_mut()
+        .unwrap()
+        .message
+        .push_str(" changed");
+    save(&directory, &record).unwrap();
+    let error = f.backend.finish_running_business().unwrap_err();
+    assert_eq!(error.code, ErrorCode::RecoveryRequired);
+    assert!(error.message.contains(&p.operation_id.to_string()));
+}
+
+#[test]
+fn business_shutdown_accepts_only_the_exact_explicit_conversion_stop() {
+    let (f, p) = interrupted_conversion(ImportInterruption::WorkspaceCreated);
+    stop(&f, &p, true).unwrap();
+    f.backend.finish_running_business().unwrap();
+    let directory =
+        PrivateDirectory::open_existing(f.data.join("management").join(DIRECTORY)).unwrap();
+    let mut record = read_record(&directory, p.operation_id).unwrap();
+    record.status.stop_operation_id = Some(OperationId::generate().unwrap());
+    record.status.stop_result = None;
+    record.status.phase = OrdinaryDiskConversionPhase::Stopping;
+    save(&directory, &record).unwrap();
+    assert!(f.backend.finish_running_business().is_err());
+}

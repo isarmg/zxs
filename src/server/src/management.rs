@@ -339,10 +339,10 @@ struct RecoveryWorkerPanic {
 }
 
 #[derive(Debug, error_definition::Error)]
-#[error(
-    "management shutdown failed (recovery worker poisoned: {recovery_worker_poisoned}, admission state poisoned: {admission_state_poisoned})"
-)]
+#[error("management coordinator or recovery shutdown failed")]
 struct RecoveryShutdownError {
+    conversion_poisoned: bool,
+    addition_poisoned: bool,
     recovery_worker_poisoned: bool,
     admission_state_poisoned: bool,
     #[source]
@@ -355,6 +355,14 @@ struct ManagementDrainErrors {
     #[source]
     recovery: ApiError,
     scrub: ApiError,
+}
+
+#[derive(Debug, error_definition::Error)]
+#[error("ordinary conversion completion failed: {conversion}; storage completion failed: {storage}")]
+struct BusinessDrainErrors {
+    #[source]
+    conversion: ApiError,
+    storage: ApiError,
 }
 
 struct RecoveryPermit<'a>(&'a AtomicBool);
@@ -517,12 +525,17 @@ impl Inner {
     }
     fn drain(&self) -> Result<(), ApiError> {
         self.stop();
-        let _addition = self.storage_addition.lock().map_err(|_| {
-            ApiError::conflict(
-                storage_contract::ErrorCode::RecoveryRequired,
-                "storage addition coordinator failed during shutdown",
-            )
-        })?;
+        // Conversion can acquire the addition coordinator. Wait in the same
+        // order, including work whose HTTP caller has already disconnected.
+        // Poison is a shutdown failure, not permission to skip another owner.
+        let _conversion = match self.ordinary_conversion.lock() {
+            Ok(conversion) => conversion,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let _addition = match self.storage_addition.lock() {
+            Ok(addition) => addition,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let worker = match self.recovery_worker.lock() {
             Ok(mut worker) => worker.take(),
             Err(poisoned) => poisoned.into_inner().take(),
@@ -541,11 +554,15 @@ impl Inner {
                     }),
                 });
         let failure = RecoveryShutdownError {
+            conversion_poisoned: self.ordinary_conversion.is_poisoned(),
+            addition_poisoned: self.storage_addition.is_poisoned(),
             recovery_worker_poisoned: self.recovery_worker.is_poisoned(),
             admission_state_poisoned: self.state.is_poisoned(),
             worker_panic,
         };
-        if failure.recovery_worker_poisoned
+        if failure.conversion_poisoned
+            || failure.addition_poisoned
+            || failure.recovery_worker_poisoned
             || failure.admission_state_poisoned
             || failure.worker_panic.is_some()
         {
@@ -1671,9 +1688,19 @@ impl Backend for ManagementBackend {
         }
     }
     fn finish_running_business(&self) -> Result<(), ApiError> {
+        let conversion = self.finish_ordinary_conversion();
         let backend = crate::lock(&self.inner.state).backend.engine().cloned();
         // Do not keep the management-state lock while the engine's worker joins.
-        backend.map_or(Ok(()), |backend| backend.finish_running_business())
+        let storage = backend.map_or(Ok(()), |backend| backend.finish_running_business());
+        match (conversion, storage) {
+            (Ok(()), result) | (result, Ok(())) => result,
+            (Err(conversion), Err(storage)) => {
+                Err(ApiError::io(std::io::Error::other(BusinessDrainErrors {
+                    conversion,
+                    storage,
+                })))
+            }
+        }
     }
     fn stop_management(&self) {
         self.scrub.stop();

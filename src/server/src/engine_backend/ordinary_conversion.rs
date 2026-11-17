@@ -5,6 +5,43 @@ use storage_contract::{
 };
 
 impl EngineBackend {
+    /// Only the shutdown owner uses this read-only result. It does not reveal a
+    /// receipt or authenticate a caller, and cannot resume an interrupted import.
+    pub(crate) fn ordinary_conversion_completed_for_shutdown(
+        &self,
+        request: &CommitRequest,
+    ) -> Result<bool, ApiError> {
+        let engine = self.engine.lock().map_err(|_| {
+            ApiError::conflict(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "storage owner failed while checking the original conversion receipt",
+            )
+        })?;
+        match engine.native_workspace_commit_completed(request) {
+            Ok(completed) => Ok(completed),
+            Err(source) if source.code() == storage_contract::ErrorCode::OperationNotFound => {
+                Ok(false)
+            }
+            Err(source) => Err(error(source)),
+        }
+    }
+
+    pub(crate) fn ordinary_conversion_stop_completed_for_shutdown(
+        &self,
+        request: &storage_engine::DirectoryImportStopRequest,
+    ) -> Result<bool, ApiError> {
+        let engine = self.engine.lock().map_err(|_| {
+            ApiError::conflict(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "storage owner failed while checking the original conversion stop receipt",
+            )
+        })?;
+        engine
+            .directory_import_stop_result(request)
+            .map(|result| result.is_some())
+            .map_err(error)
+    }
+
     pub(crate) fn ordinary_conversion_identity(
         target: &AdditionPreview,
     ) -> Result<storage_engine::DiskRegistrationIdentity, ApiError> {

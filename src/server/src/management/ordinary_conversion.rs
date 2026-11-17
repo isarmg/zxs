@@ -253,6 +253,63 @@ fn apply_stop_result(
     Ok(())
 }
 impl ManagementBackend {
+    /// Shutdown only: wait for the existing coordinator, then consult the
+    /// original permanent receipt without resuming or changing a saved choice.
+    pub(super) fn finish_ordinary_conversion(&self) -> Result<(), ApiError> {
+        let _gate = self.inner.ordinary_conversion.lock().map_err(|_| {
+            ApiError::conflict(
+                ErrorCode::RecoveryRequired,
+                "conversion coordination failed; inspect the original operation after restart",
+            )
+        })?;
+        let directory = match PrivateDirectory::open_existing(
+            self.inner.management_root.join(DIRECTORY),
+        ) {
+            Ok(directory) => directory,
+            Err(platform_io::fs_safety::Error::Io(source))
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Ok(());
+            }
+            Err(source) => return Err(storage_error(source)),
+        };
+        let Some(operation) = read::<OperationId>(&directory, &storage_addition::latest_name())?
+        else {
+            return Ok(());
+        };
+        let record = read_record(&directory, operation)?;
+        let incomplete = || {
+            ApiError::conflict(
+                ErrorCode::RecoveryRequired,
+                format!(concat!(
+                    "ordinary conversion {operation} did not finish; ",
+                    "inspect the original task after restart",
+                ), operation = operation),
+            )
+        };
+        let backend = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| incomplete())?
+            .backend
+            .engine()
+            .cloned()
+            .ok_or_else(incomplete)?;
+        let finished = if record.status.stop_operation_id.is_some() {
+            backend.ordinary_conversion_stop_completed_for_shutdown(&stop_request(&record)?)?
+        } else if let Some(request) = &record.commit_request {
+            backend.ordinary_conversion_completed_for_shutdown(request)?
+        } else {
+            false
+        };
+        if finished {
+            Ok(())
+        } else {
+            Err(incomplete())
+        }
+    }
+
     pub(super) fn ordinary_conversion(
         &self,
         action: &str,
@@ -287,6 +344,9 @@ impl ManagementBackend {
                     "conversion coordination failed; restart and inspect the original operation",
                 ),
             })?;
+        // A caller admitted before stop may have waited for this coordinator.
+        // Once shutdown fences admission it cannot start a new durable phase.
+        self.inner.ensure_running()?;
         match action {
             "ordinary_conversion_preview" => {
                 let request = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
