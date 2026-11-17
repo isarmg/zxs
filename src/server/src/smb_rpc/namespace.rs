@@ -94,6 +94,18 @@ impl NamespaceInput {
     }
 }
 
+#[derive(data_serialization::Serialize)]
+struct NativeDirectoryIntent<'a> {
+    format: &'static str,
+    principal: &'a str,
+    repository_id: &'a str,
+    branch_id: &'a str,
+    binding_generation: u64,
+    slot_id: &'a str,
+    path: &'a name_policy::PortablePath,
+    operation_id: OperationId,
+}
+
 pub(super) struct NamespaceAdmission {
     record: PathBuf,
     _budget: budget::Lease,
@@ -114,6 +126,38 @@ impl NamespaceAdmission {
 
     pub(super) fn finish_published(&self) {
         cleanup_namespace_record(&self.record);
+    }
+
+    /// Publish the exact native Mkdir for an already selected ordinary root.
+    /// Keep the same spool receipt and reservation in both SMB entry points.
+    pub(super) fn create_native_directory(
+        &self,
+        shared: &Arc<Shared>,
+        identity: &Identity,
+        slot_id: String,
+        path: name_policy::PortablePath,
+    ) -> Result<Value, ApiError> {
+        let binding = identity.smb_binding.as_ref().ok_or_else(ApiError::forbidden)?;
+        let _paths = path_reservation::PathReservation::acquire(
+            shared, std::iter::once((binding.branch_id.as_str(), path.key())),
+        )?;
+        let operation_id = self.operation_id();
+        self.record_intent(&NativeDirectoryIntent {
+            format: "smb-native-directory-mkdir",
+            principal: &identity.principal,
+            repository_id: &binding.repository_id,
+            branch_id: &binding.branch_id,
+            binding_generation: binding.generation,
+            slot_id: &slot_id,
+            path: &path,
+            operation_id,
+        })?;
+        let result = shared.backend.create_disk_directory(
+            identity, crate::CreateDiskDirectory { slot_id, path, operation_id },
+        )?;
+        let result = crate::operation_wire::operation_wire(result.into())?;
+        self.finish_published();
+        Ok(result)
     }
 
     /// Native moves consume these records. Other namespace/workspace
@@ -445,7 +489,30 @@ impl Session {
                 admission,
             );
         }
-        let operation_id = admission.reservation.operation_id;
+        if let storage_contract::NamespaceOperation::Mkdir { path } = &change
+            && let Some(binding) = &self.identity.smb_binding
+        {
+            let repo = self.shared.backend.repository_snapshot(
+                &self.identity, &binding.repository_id,
+            )?;
+            if repo.file_manager_root {
+                if repo.repository_id != binding.repository_id
+                    || repo.main_branch_id != binding.branch_id
+                    || self.branch != binding.branch_id
+                    || repo.smb_binding_generation != binding.generation
+                    || !repo.smb_enabled
+                {
+                    return Err(ApiError::conflict(
+                        storage_contract::ErrorCode::SmbRebindRequired,
+                        "SMB directory target changed; reconnect before starting another operation",
+                    ));
+                }
+                return admission.create_native_directory(
+                    &self.shared, &self.identity, repo.primary_slot_id, path.clone(),
+                );
+            }
+        }
+        let operation_id = admission.operation_id();
         let record = &admission.record;
         let soft_delete_directory = if kind == NamespaceOperation::Rmdir {
             match &self.identity.smb_binding {

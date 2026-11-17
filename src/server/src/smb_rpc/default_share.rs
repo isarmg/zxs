@@ -17,18 +17,6 @@ struct SessionKey {
     generation: u64,
 }
 
-#[derive(data_serialization::Serialize)]
-struct NativeDirectoryIntent<'a> {
-    format: &'static str,
-    principal: &'a str,
-    repository_id: &'a str,
-    branch_id: &'a str,
-    binding_generation: u64,
-    slot_id: &'a str,
-    path: &'a name_policy::PortablePath,
-    operation_id: OperationId,
-}
-
 impl From<&SessionKey> for crate::auth::SmbBinding {
     fn from(key: &SessionKey) -> Self {
         Self {
@@ -486,26 +474,9 @@ impl DefaultShare {
                 // The ordinary layout admits the exact native file.namespace
                 // Mkdir receipt, not an implicit directory delta in workspace.commit.
                 let key = self.pin_binding(source.repository)?;
-                let _paths = super::path_reservation::PathReservation::acquire(
-                    &self.shared, std::iter::once((key.branch.as_str(), path.key())),
+                let result = admission.create_native_directory(
+                    &self.shared, &self.bound_identity(&key), slot.slot_id, path,
                 )?;
-                let identity = self.bound_identity(&key);
-                admission.record_intent(&NativeDirectoryIntent {
-                    format: "smb-native-directory-mkdir",
-                    principal: &identity.principal,
-                    repository_id: &key.repository,
-                    branch_id: &key.branch,
-                    binding_generation: key.generation,
-                    slot_id: &slot.slot_id,
-                    path: &path,
-                    operation_id,
-                })?;
-                let result = self.shared.backend.create_disk_directory(
-                    &identity,
-                    crate::CreateDiskDirectory { slot_id: slot.slot_id, path, operation_id },
-                )?;
-                let result = crate::operation_wire::operation_wire(result.into())?;
-                admission.finish_published();
                 return Ok(Reply::Json(result));
             }
             // Root namespaces cannot be renamed/deleted through the contents API.

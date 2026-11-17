@@ -431,3 +431,50 @@ fn exercise_live_automatic_switch(cycle_back: bool) {
     assert_eq!(body, original);
     assert_eq!(engine.file_history(&target.file.to_string()).unwrap().len(), 1);
 }
+
+#[test]
+fn named_ordinary_share_mkdir_publishes_native_directory_and_reopens() {
+    use super::{fixture_backend, identity, named_session};
+    use smb_protocol::protocol::NamespaceOperation;
+    use storage_contract::{NamespaceEntryKind, OperationId};
+
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("state");
+    let config = Config::development([
+        (name_policy::Name::parse("Primary").unwrap(), temp.path().join("p")),
+    ]).unwrap();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let repository = engine.create_disk_root(
+        "P01", "alice", OperationId::generate().unwrap(),
+    ).unwrap();
+    let (_fixture, shared, backend) = fixture_backend(temp, engine);
+    let mut named = named_session(shared.clone(), &repository.main_branch_id);
+    let operation_id = OperationId::generate().unwrap();
+    let request = || Request::Namespace {
+        kind: NamespaceOperation::Mkdir,
+        path: "Folder/Child".into(),
+        destination: None,
+        replace: false,
+        operation_id: operation_id.to_string(),
+    };
+    assert!(matches!(named.dispatch(request()).unwrap(), Reply::Json(_)));
+    let receipt = backend.inner.operation_outcome(&identity(&shared), operation_id).unwrap();
+    assert_eq!(receipt.kind, "file.namespace");
+    assert!(!shared.spool.join(format!("{operation_id}.namespace.json")).exists());
+
+    let repeated = named.dispatch(request()).unwrap_err();
+    assert_eq!(repeated.error.code, storage_contract::ErrorCode::OperationIdConflict);
+    assert!(!repeated.error.retryable);
+    assert!(shared.file_writers.lock().unwrap().is_empty());
+    drop(named);
+    drop(shared);
+    drop(backend);
+
+    let engine = Engine::open(&system).unwrap();
+    let tree = engine.namespace_tree(&repository.main_branch_id).unwrap();
+    for path in ["Folder", "Folder/Child"] {
+        assert_eq!(tree.get(path).unwrap().kind, NamespaceEntryKind::Directory);
+    }
+    assert_eq!(engine.state().operations[&operation_id].kind, "file.namespace");
+    assert!(engine.state().operations.values().all(|row| row.kind != "workspace.commit"));
+}
