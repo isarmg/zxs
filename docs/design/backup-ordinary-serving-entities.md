@@ -22,6 +22,8 @@ locator 配方来自已准入 State，不从磁盘记录提取新路径或权限
 
 SYSTEM `backup-preparation/ordinary-serving.json` 绑定原 fence、决定、Publication、原盘控制完成摘要和全部目标配方／物理根。预检所有目标后，SYSTEM 意图先行，每目标 `backup-ordinary-serving-selected.json` 全部落盘，再开始第一个普通实体写入。
 
+普通服务实体阶段的 SYSTEM 意图必须先于任一目标选定记录。若只写了部分目标的选定记录且全批仍只有原来预建的空目录，可以按同一意图继续；一旦任一真实目标已有安装名、正文、临时文件、新建空元数据父目录或本地完成记录，则所有目标都必须保有自己的原选定记录，缺失时不会补造。全部选定记录重新读回后才开始新材料，完成仍按真实内容、inode 和最终全批读回。
+
 选择之前，任何现存 `backup-entities`、`file-containers`、`directory-repositories` 或 `.zxs-layout` 都拒绝采用，即使为空或同字节。只遍历已准入历史的上述固定命名空间；未知文件、未知目录、链接及特殊文件保留拒绝，不清理另一历史或原 package。选择之后可以续原配方的未完成部分，不覆盖异内容文件。
 
 所有普通材料使用既有 no-clobber 原子写入／独立验证复制与同步。先完成实际目录和文件，再保存绑定实际 inode 的普通 locator。重试继续相同记录和同步尾部，不替换原实体身份。正常单目标验证要求：

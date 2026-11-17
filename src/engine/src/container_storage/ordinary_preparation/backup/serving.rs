@@ -386,7 +386,12 @@ impl<'a> BackupServingImage<'a> {
         self.source.layout().observe(self.source.source(), stop)
     }
 
-    fn inventory(&self, stop: &AtomicBool) -> Result<()> {
+    // The only entries created by the earlier exclusive layout stage inside
+    // these roots are one empty versions/ directory per FILE. The already-held
+    // record requires each of them to exist. Even an expected metadata parent
+    // or an atomic temporary is evidence that ordinary installation started;
+    // neither is a receipt or permission to recreate a missing selector.
+    fn inventory(&self, stop: &AtomicBool) -> Result<bool> {
         let mut management = BTreeSet::new();
         let mut files: BTreeMap<FileId, BTreeSet<PathBuf>> = self.held._files.keys()
             .map(|file| (*file, BTreeSet::from([layout::VERSIONS.as_path().to_owned()])))
@@ -402,23 +407,22 @@ impl<'a> BackupServingImage<'a> {
                 paths.insert(parent.to_owned());
             }
         }
-        let mut count = 0usize;
-        let mut temporaries = 0usize;
-        inventory(self.current_zxs()?, &management, stop, &mut count, &mut temporaries)?;
+        let mut observed = Inventory::default();
+        observed.read(self.current_zxs()?, &management, None, stop)?;
         for (file, paths) in files {
-            inventory(&self.held._files[&file].root, &paths, stop, &mut count, &mut temporaries)?;
+            let root = &self.held._files[&file].root;
+            observed.read(root, &paths, Some(&layout::VERSIONS), stop)?;
         }
-        Ok(())
+        let named = self.held._prefixes.iter().any(|(node, _)| node.installed)
+            || self.held._directories.values().any(|node| node.installed)
+            || self.held._files.values().any(|node| node.installed);
+        Ok(named || observed.started)
     }
 
     pub(crate) fn require_absent(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         self.require_root(root, stop)?;
-        self.inventory(stop)?;
-        if self.held._prefixes.iter().any(|(node, _)| node.installed)
-            || self.held._directories.values().any(|node| node.installed)
-            || self.held._files.values().any(|node| node.installed)
-        {
-            return Err(Failure::BackupLayoutEvidence.into());
+        if self.inventory(stop)? {
+            return Err(Failure::BackupRootUnrecorded.into());
         }
         for key in self.files.keys() {
             let held = self.root(key)?;
@@ -431,9 +435,9 @@ impl<'a> BackupServingImage<'a> {
 
     pub(crate) fn require_capacity(
         &self, root: &DiskRoot, reserve: u64, stop: &AtomicBool,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.require_root(root, stop)?;
-        self.inventory(stop)?;
+        let started = self.inventory(stop)?;
         let mut missing = 0u64;
         let mut largest = 0u64;
         for (key, data) in &self.files {
@@ -454,7 +458,7 @@ impl<'a> BackupServingImage<'a> {
         if root.available()? < needed {
             return Err(Failure::BackupRootSpace.into());
         }
-        Ok(())
+        Ok(started)
     }
 
     fn verify_file(&self, key: &Key, data: &Data<'_>, stop: &AtomicBool) -> Result<FileIdentity> {
@@ -658,41 +662,65 @@ fn install_name(
     }
     Ok(())
 }
-fn inventory(
-    root: &DiskRoot, expected: &BTreeSet<PathBuf>, stop: &AtomicBool,
-    count: &mut usize, temporaries: &mut usize,
-) -> Result<()> {
-    let mut pending = vec![PathBuf::new()];
-    while let Some(relative) = pending.pop() {
-        preparation_checkpoint(stop)?;
-        let parent = root.private_child(&root.path().join(&relative))?;
-        for item in parent.entries(parent.path())? {
+#[derive(Default)]
+struct Inventory {
+    entries: usize,
+    temporaries: usize,
+    started: bool,
+}
+impl Inventory {
+    fn read(
+        &mut self, root: &DiskRoot, expected: &BTreeSet<PathBuf>, baseline: Option<&EntryName>,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        let mut baseline_present = baseline.is_none();
+        let mut pending = vec![PathBuf::new()];
+        while let Some(relative) = pending.pop() {
             preparation_checkpoint(stop)?;
-            let name = item.map_err(crate::disk::fs_error)?;
-            *count = count.checked_add(1).ok_or(Failure::ContainerBudget)?;
-            if *count > MAX_ENTITIES {
-                return Err(Failure::ContainerBudget.into());
-            }
-            let child = relative.join(name.as_path());
-            let metadata = parent.optional_metadata(&parent.path().join(name.as_path()))?
-                .ok_or(Failure::BackupLayoutEvidence)?;
-            if expected.contains(&child) {
-                if metadata.is_dir() {
-                    pending.push(child);
-                } else if !metadata.is_file() || metadata.nlink() != 1 {
-                    return Err(Failure::BackupLayoutEvidence.into());
-                }
-            } else if platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
-                && metadata.is_file() && metadata.nlink() == 1
-            {
-                *temporaries = temporaries.checked_add(1).ok_or(Failure::ContainerBudget)?;
-                if *temporaries > 1024 {
+            let parent = root.private_child(&root.path().join(&relative))?;
+            for item in parent.entries(parent.path())? {
+                preparation_checkpoint(stop)?;
+                let name = item.map_err(crate::disk::fs_error)?;
+                self.entries = self.entries.checked_add(1).ok_or(Failure::ContainerBudget)?;
+                if self.entries > MAX_ENTITIES {
                     return Err(Failure::ContainerBudget.into());
                 }
-            } else {
-                return Err(Failure::BackupLayoutEvidence.into());
+                let child = relative.join(name.as_path());
+                let metadata = parent.optional_metadata(&parent.path().join(name.as_path()))?
+                    .ok_or(Failure::BackupLayoutEvidence)?;
+                if relative.as_os_str().is_empty() && baseline == Some(&name) {
+                    if !metadata.is_dir() {
+                        return Err(Failure::BackupLayoutEvidence.into());
+                    }
+                    baseline_present = true;
+                } else {
+                    self.started = true;
+                }
+                if expected.contains(&child) {
+                    if metadata.is_dir() {
+                        pending.push(child);
+                    } else if !metadata.is_file() || metadata.nlink() != 1 {
+                        return Err(Failure::BackupLayoutEvidence.into());
+                    }
+                } else if platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
+                    && metadata.is_file() && metadata.nlink() == 1
+                {
+                    self.temporaries = self.temporaries.checked_add(1).ok_or(Failure::ContainerBudget)?;
+                    if self.temporaries > 1024 {
+                        return Err(Failure::ContainerBudget.into());
+                    }
+                } else {
+                    return Err(Failure::BackupLayoutEvidence.into());
+                }
             }
         }
+        if !baseline_present {
+            return Err(Failure::BackupLayoutEvidence.into());
+        }
+        Ok(())
     }
-    Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/container_storage/backup_serving_inventory_tests.rs"]
+mod inventory_tests;

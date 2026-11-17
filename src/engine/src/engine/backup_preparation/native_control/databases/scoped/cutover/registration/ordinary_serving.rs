@@ -5,6 +5,9 @@ use super::*;
 use crate::container_storage::BackupServingImage as Image;
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupFirstPublicationHash};
 
+mod start;
+use start::{Markers, Progress};
+
 const INTENT: &str = "backup-preparation/ordinary-serving.json";
 const SELECTED: &str = "backup-ordinary-serving-selected.json";
 const LOCAL_COMPLETE: &str = "backup-ordinary-serving-installed.json";
@@ -191,36 +194,33 @@ impl<'a> Plan<'a> {
         Ok(bytes)
     }
     fn require_selection(&self, root: &DiskRoot, index: usize) -> Result<()> {
-        if root.read_bytes(&root.path().join(SELECTED), 8192)? != self.selection(index)? {
-            return Err(invalid(
-                "ordinary Backup target lost its exact original selection",
-            ));
-        }
-        Ok(())
+        start::require_selection(root, &self.selection(index)?)
     }
     fn preflight(
         &self,
         prepared: &PreparedBackupRegistry,
         index: usize,
+        has_intent: bool,
         reserve: u64,
         stop: &AtomicBool,
-    ) -> Result<()> {
+    ) -> Result<Progress> {
         self.with_image(prepared, index, stop, |image, root| {
-            if preparation_path_exists(root, &root.path().join(SELECTED))? {
-                self.require_selection(root, index)?;
-            } else {
-                image.require_absent(root, stop)?;
-                if preparation_path_exists(root, &root.path().join(LOCAL_COMPLETE))? {
-                    return Err(invalid(
-                        "ordinary Backup local completion lost its original selection",
-                    ));
+            match start::markers(root, &self.selection(index)?, has_intent)? {
+                Markers::None => {
+                    image.require_absent(root, stop)?;
+                    if image.require_capacity(root, reserve, stop)? {
+                        return Err(invalid("unselected ordinary Backup target contains a later write"));
+                    }
+                    Ok(Progress::Unselected)
                 }
-            }
-            if preparation_path_exists(root, &root.path().join(LOCAL_COMPLETE))? {
-                self.require_local(root, image, stop)?;
-                Ok(())
-            } else {
-                image.require_capacity(root, reserve, stop)
+                Markers::Selected => {
+                    let started = image.require_capacity(root, reserve, stop)?;
+                    Ok(if started { Progress::Started } else { Progress::SelectedEmpty })
+                }
+                Markers::LocalComplete => {
+                    self.require_local(root, image, stop)?;
+                    Ok(Progress::LocalComplete)
+                }
             }
         })
     }
@@ -310,20 +310,20 @@ pub(super) fn install(
         common |= preparation_path_exists(root, &root.path().join(COMPLETE))?;
         Ok(())
     })?;
-    if common || preparation_path_exists(context.system, &context.system.path().join(INTENT))? {
+    let has_intent = preparation_path_exists(context.system, &context.system.path().join(INTENT))?;
+    if common || has_intent {
         plan.require_intent(context.system)?;
     }
     if common {
         plan.verify_targets(prepared, stop)?;
     } else {
+        let mut progress = Vec::with_capacity(prepared.targets.len());
         for index in 0..prepared.targets.len() {
-            plan.preflight(
-                prepared,
-                index,
-                context.sources.metadata_reserve_bytes(),
-                stop,
-            )?;
+            progress.push(plan.preflight(
+                prepared, index, has_intent, context.sources.metadata_reserve_bytes(), stop,
+            )?);
         }
+        start::require_barrier(&progress)?;
         let minimum = context
             .sources
             .metadata_reserve_bytes()
@@ -338,26 +338,37 @@ pub(super) fn install(
             }
             Ok(())
         })?;
-        install_preparation_bytes(
-            context.system,
-            &context.system.path().join(INTENT),
-            &plan.bytes,
-        )?;
+        if has_intent {
+            plan.require_intent(context.system)?;
+        } else {
+            install_preparation_bytes(
+                context.system, &context.system.path().join(INTENT), &plan.bytes,
+            )?;
+        }
         // Every target's original selection is durable before the first new
         // ordinary entity. No source data or active alias is changed.
         for (index, target) in prepared.targets.iter().enumerate() {
             target.with_writer_io(plan.io_hash(), |root| {
-                install_preparation_bytes(
-                    root,
-                    &root.path().join(SELECTED),
-                    &plan.selection(index)?,
-                )
+                if progress[index] == Progress::Unselected {
+                    install_preparation_bytes(root, &root.path().join(SELECTED), &plan.selection(index)?)
+                } else {
+                    plan.require_selection(root, index)
+                }
             })?;
+        }
+        // Independently read every durable selector again after the last
+        // write, before any target can receive the first ordinary material.
+        plan.require_intent(context.system)?;
+        for (index, target) in prepared.targets.iter().enumerate() {
+            preparation_checkpoint(stop)?;
+            target.with_writer_io(plan.io_hash(), |root| plan.require_selection(root, index))?;
         }
         for index in 0..prepared.targets.len() {
             plan.with_image(prepared, index, stop, |image, root| {
                 plan.require_selection(root, index)?;
-                if preparation_path_exists(root, &root.path().join(LOCAL_COMPLETE))? {
+                if progress[index] == Progress::LocalComplete
+                    || preparation_path_exists(root, &root.path().join(LOCAL_COMPLETE))?
+                {
                     plan.require_local(root, image, stop)?;
                 } else {
                     image.require_capacity(root, context.sources.metadata_reserve_bytes(), stop)?;
