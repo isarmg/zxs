@@ -158,7 +158,8 @@ impl Engine {
         change: impl FnOnce(&Engine, &mut State, &mut Vec<crate::engine::Prepared>,
             storage_contract::Timestamp) -> Result<json_codec::Value>,
     ) -> Result<MutationPlan> {
-        if !codec::is_kind(kind) && kind != codec::unborn_save::KIND { return Err(business::invalid()); }
+        if !codec::is_kind(kind) && kind != codec::unborn_save::KIND
+            && kind != codec::unborn_first::KIND { return Err(business::invalid()); }
         let digest = Self::native_request_digest(kind, principal.as_str(), &request)?;
         let context = self.planning_context();
         if self.state.operations.contains_key(&operation) {
@@ -230,7 +231,7 @@ impl Engine {
                 );
                 let working = business::plan_change(engine.state(), command, Some(payload), business::SaveStamp::new(operation, next.sequence, time))?;
                 business::apply(next, command.target().file, working.clone())?;
-                codec::encode(Outcome { request: codec::Request::Command(command.clone()), working, content: None })
+                codec::encode(Outcome { request: codec::Request::Command(command.clone()), working, content: None, origin: None })
             },
         )?;
         match plan {
@@ -309,7 +310,11 @@ impl Engine {
                 // constructor succeeds. Errors leave the published draft intact.
                 business::apply(next, command.target().file, working.clone())?;
                 committed = read;
-                codec::encode(Outcome { request: codec::Request::Command(command.clone()), working, content })
+                let origin = content.as_ref().map(|body| business::origin::NodeOrigin::from_content(
+                    context.state, command.target(), body, business::origin::Reason::ManualFile {},
+                    operation, storage_contract::Sequence::new(next.sequence), time,
+                )).transpose()?;
+                codec::encode(Outcome { request: codec::Request::Command(command.clone()), working, content, origin })
             },
         )?;
         match plan {

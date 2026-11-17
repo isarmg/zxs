@@ -12,6 +12,7 @@ pub(crate) struct Outcome {
     pub(crate) request: Request,
     pub(crate) working: FileWorkingState,
     pub(crate) content: Option<PublishedContent>,
+    pub(crate) origin: Option<super::origin::NodeOrigin>,
 }
 
 /// From the single real new-decision clock, or the original receipt on replay.

@@ -40,6 +40,13 @@ impl RangeSaveRequest {
 }
 
 impl Request {
+    pub(crate) fn reason(&self) -> crate::Result<crate::business::file_draft::origin::Reason> {
+        match self {
+            Self::Command(DraftCommand::Commit { .. }) => Ok(super::Reason::ManualFile {}),
+            _ => Err(crate::business::file_draft::invalid()),
+        }
+    }
+
     pub(crate) fn target(&self) -> &DraftLocation {
         match self {
             Self::Command(command) => command.target(),

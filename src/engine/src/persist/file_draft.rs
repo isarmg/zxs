@@ -3,7 +3,7 @@ pub(crate) mod birth;
 pub(crate) mod unborn_save;
 pub(crate) mod unborn_first;
 
-use crate::business::file_draft::{Outcome, invalid, trace_limit};
+use crate::business::file_draft::{Outcome, invalid, trace_limit, origin::{NodeOrigin, Reason}};
 use crate::{Engine, Error, OperationResult, Result, State};
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::file_draft::{DraftCommand, FileWorkingState};
@@ -17,6 +17,7 @@ struct Envelope {
     request: Request,
     working: FileWorkingState,
     content: Option<crate::business::file_draft::PublishedContent>,
+    origin: Option<NodeOrigin>,
     #[serialization(with = "storage_contract::u64_string")]
     timestamp: u64,
     #[serialization(with = "storage_contract::u64_string")]
@@ -131,10 +132,14 @@ impl Decoded {
                 previous, self.outcome.request.target(), content,
             )?],
         };
-        if self.protection != expected { return Err(invalid()); }
+        let origin = self.outcome.content.as_ref().map(|body| NodeOrigin::from_content(
+            previous, self.outcome.request.target(), body, self.outcome.request.reason()?,
+            operation, storage_contract::Sequence::new(sequence), self.timestamp(),
+        )).transpose()?;
+        if self.protection != expected || self.outcome.origin != origin { return Err(invalid()); }
         let result = json_codec::to_value(Envelope {
             request: self.outcome.request.clone(), working: self.outcome.working.clone(),
-            content: self.outcome.content.clone(), timestamp: self.timestamp,
+            content: self.outcome.content.clone(), origin, timestamp: self.timestamp,
             membership_epoch: self.epoch, version_protection: expected,
         }).map_err(codec)?;
         Ok(OperationResult {
@@ -156,7 +161,7 @@ impl Decoded {
 pub(crate) fn decode(previous: &State, receipt: &OperationResult) -> Result<Decoded> {
     if !is_kind(&receipt.kind) { return Err(invalid()); }
     let object = receipt.result.as_object().ok_or_else(invalid)?;
-    let required = ["request", "working", "content", "timestamp", "membership_epoch",
+    let required = ["request", "working", "content", "origin", "timestamp", "membership_epoch",
         "version_protection"];
     if object.len() != required.len() || required.iter().any(|key| !object.contains_key(*key)) {
         return Err(invalid());
@@ -195,7 +200,7 @@ pub(crate) fn decode(previous: &State, receipt: &OperationResult) -> Result<Deco
     let envelope: Envelope = json_codec::from_value(receipt.result.clone()).map_err(codec)?;
     Ok(Decoded {
         outcome: Outcome {
-            request: envelope.request, working: envelope.working, content: envelope.content,
+            request: envelope.request, working: envelope.working, content: envelope.content, origin: envelope.origin,
         },
         timestamp: envelope.timestamp, epoch: envelope.membership_epoch,
         protection: envelope.version_protection,

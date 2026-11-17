@@ -4,7 +4,7 @@ use super::{
     ConstructionDescription, DecisionDescription, DecisionFormat, DirectoryResult,
     FileOutcome, SelectedOutcome, UnchangedDescription, UnchangedFormat,
 };
-use crate::business::file_draft::{PublishedContent, batch};
+use crate::business::file_draft::{PublishedContent, batch, origin::{NodeOrigin, Reason}};
 use crate::engine::file_draft::WorkingBatchHandoff;
 use crate::persist::file_draft::{Protection, content_protection};
 use crate::snapshot_worktree::drafts::DirectoryPhysicalInput;
@@ -52,6 +52,7 @@ impl NativeError {
 pub(crate) struct NativePlan {
     construction: ConstructionDescription,
     working_after: Vec<FileWorkingState>,
+    origins: Vec<Option<NodeOrigin>>,
     contents: Vec<Option<PublishedContent>>,
     timestamp: u64,
     epoch: u64,
@@ -64,6 +65,7 @@ pub(crate) struct Envelope {
     pub(crate) directory: DirectoryResult,
     pub(crate) working_after: Vec<FileWorkingState>,
     pub(crate) contents: Vec<Option<PublishedContent>>,
+    origins: Vec<Option<NodeOrigin>>,
     #[serialization(with = "storage_contract::u64_string")]
     pub(crate) timestamp: u64,
     #[serialization(with = "storage_contract::u64_string")]
@@ -103,8 +105,10 @@ impl NativePlan {
             return Err(NativeError::Shape);
         }
         let protection = protection(previous, &construction.files, &batch.trace().contents)?;
+        let origins = origins(previous, &construction.files, &batch.trace().contents,
+            construction.request.operation, Sequence::new(batch.state().sequence), timestamp)?;
         Ok(Self {
-            construction,
+            construction, origins,
             working_after: batch.items().iter().map(|item| item.working_after().clone()).collect(),
             contents: batch.trace().contents.clone(),
             timestamp,
@@ -136,6 +140,7 @@ impl NativePlan {
             directory: Directory<'a, B>,
             working_after: &'a [FileWorkingState],
             contents: &'a [Option<PublishedContent>],
+            origins: &'a [Option<NodeOrigin>],
             #[serialization(with = "storage_contract::u64_string")]
             timestamp: u64,
             #[serialization(with = "storage_contract::u64_string")]
@@ -151,7 +156,7 @@ impl NativePlan {
                 binding: input.original_binding().budget_encoding(input.reference()),
             },
             working_after: &self.working_after,
-            contents: &self.contents,
+            contents: &self.contents, origins: &self.origins,
             timestamp: self.timestamp,
             membership_epoch: self.epoch,
             version_protection: &self.protection,
@@ -195,12 +200,23 @@ impl NativePlan {
         Ok(Envelope {
             directory,
             working_after: self.working_after.clone(),
-            contents: self.contents.clone(),
+            contents: self.contents.clone(), origins: self.origins.clone(),
             timestamp: self.timestamp,
             membership_epoch: self.epoch,
             version_protection: self.protection.clone(),
         })
     }
+}
+
+fn origins(previous: &State, files: &[SelectedOutcome], contents: &[Option<PublishedContent>],
+    operation: storage_contract::OperationId, sequence: Sequence, timestamp: u64,
+) -> Result<Vec<Option<NodeOrigin>>> {
+    if files.len() != contents.len() { return Err(NativeError::Shape); }
+    files.iter().zip(contents).map(|(item, content)| content.as_ref().map(|body|
+        NodeOrigin::from_content(previous, &item.target, body, Reason::ManualDirectory {},
+            operation, sequence, storage_contract::Timestamp::from_unix_seconds(timestamp))
+            .map_err(NativeError::File)
+    ).transpose()).collect()
 }
 
 fn protection(
@@ -236,6 +252,8 @@ impl Envelope {
     ) -> Result<OperationResult> {
         self.directory.validate(maximum_entries).map_err(NativeError::Description)?;
         if self.working_after.len() != self.directory.files().len()
+            || self.origins != origins(previous, self.directory.files(), &self.contents,
+                self.directory.request().operation, sequence, self.timestamp)?
             || self.version_protection
                 != protection(previous, self.directory.files(), &self.contents)?
         {
@@ -250,6 +268,16 @@ impl Envelope {
         self.directory.validate(maximum_entries).map_err(NativeError::Description)?;
         if self.working_after.len() != self.directory.files().len()
             || self.contents.len() != self.directory.files().len()
+            || self.origins.len() != self.contents.len()
+            || self.origins.iter().zip(&self.contents).any(|(cause, body)| match (cause, body) {
+                (None, None) => false,
+                (Some(cause), Some(body)) => cause.reason != (Reason::ManualDirectory {})
+                    || cause.target.file.to_string() != body.version.file_id
+                    || cause.node.to_string() != body.version.version_id
+                    || cause.operation != self.directory.request().operation || cause.sequence != sequence
+                    || cause.published_at.unix_seconds() != self.timestamp || cause.ancestors.len() > 31,
+                _ => true,
+            })
             || self.version_protection.len() != self.contents.iter().filter(|v| v.is_some()).count()
         {
             return Err(NativeError::Shape);

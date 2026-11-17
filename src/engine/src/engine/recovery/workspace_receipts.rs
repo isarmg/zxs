@@ -161,6 +161,7 @@ impl OriginalReceiptCursor {
             || result.commit_state == storage_contract::CommitState::PublishedDegraded
             || crate::persist::file_draft::is_kind(&result.kind)
             || result.kind == crate::persist::file_draft::unborn_save::KIND
+            || result.kind == crate::persist::file_draft::unborn_first::KIND
             || crate::snapshot_worktree::ReceiptIndex::requires_original(result)
     }
 

@@ -1,7 +1,7 @@
 //! Original explicit first-commit request and exact constructor facts.
 //! Decoding descriptions never grants source, Version or working-clear authority.
 use super::{Protection, codec, content_protection};
-use crate::business::file_draft::{PublishedContent, invalid, trace_limit};
+use crate::business::file_draft::{PublishedContent, invalid, trace_limit, origin::{NodeOrigin, Reason}};
 use crate::{Engine, OperationResult, Result, State};
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::file_draft::manifest::{ManifestCommitment, SaveGeneration};
@@ -65,6 +65,7 @@ impl Request {
 struct Outcome<'a> {
     request: Request,
     content: &'a PublishedContent,
+    origin: &'a NodeOrigin,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -72,6 +73,7 @@ struct Outcome<'a> {
 struct Envelope {
     request: Request,
     content: PublishedContent,
+    origin: NodeOrigin,
     #[serialization(with = "storage_contract::u64_string")]
     timestamp: u64,
     #[serialization(with = "storage_contract::u64_string")]
@@ -84,10 +86,10 @@ pub(crate) fn request(selection: &WorkingSelection, message: &str) -> Result<jso
 }
 
 pub(crate) fn encode(
-    selection: &WorkingSelection, message: &str, content: &PublishedContent,
+    selection: &WorkingSelection, message: &str, content: &PublishedContent, origin: &NodeOrigin,
 ) -> Result<json_codec::Value> {
     json_codec::to_value(Outcome {
-        request: Request::from_selection(selection, message)?, content,
+        request: Request::from_selection(selection, message)?, content, origin,
     }).map_err(codec)
 }
 
@@ -103,7 +105,10 @@ impl Decoded {
         &self, previous: &State, operation: OperationId, sequence: Sequence, principal: &Principal,
     ) -> Result<OperationResult> {
         let protection = content_protection(previous, &self.0.request.target, &self.0.content)?;
-        if self.0.version_protection != [protection] { return Err(invalid()); }
+        let origin = NodeOrigin::from_content(previous, &self.0.request.target, &self.0.content,
+            Reason::ManualFile {}, operation, sequence,
+            storage_contract::Timestamp::from_unix_seconds(self.0.timestamp))?;
+        if self.0.version_protection != [protection] || self.0.origin != origin { return Err(invalid()); }
         Ok(OperationResult {
             operation_id: operation, kind: KIND.into(),
             commit_id: None, history_tree_id: None, branch_id: None,
@@ -122,7 +127,7 @@ impl Decoded {
 pub(crate) fn decode(previous: &State, receipt: &OperationResult) -> Result<Decoded> {
     if receipt.kind != KIND { return Err(invalid()); }
     let object = receipt.result.as_object().ok_or_else(invalid)?;
-    let required = ["request", "content", "timestamp", "membership_epoch", "version_protection"];
+    let required = ["request", "content", "origin", "timestamp", "membership_epoch", "version_protection"];
     if object.len() != required.len() || required.iter().any(|key| !object.contains_key(*key)) {
         return Err(invalid());
     }

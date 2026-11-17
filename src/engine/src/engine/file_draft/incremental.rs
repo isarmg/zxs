@@ -101,7 +101,7 @@ impl Engine {
                 codec::encode(Outcome {
                     request: codec::Request::Ranges(request.clone()),
                     working,
-                    content: None,
+                    content: None, origin: None,
                 })
             },
         )?;

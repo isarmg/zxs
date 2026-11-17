@@ -24,7 +24,9 @@ pub(super) fn status(
     let (mut engine, current) = backend.lock_current(identity)?;
     authorize(&mut engine, &current, &target)?;
     let selected = engine.selected_file_working(&target).map_err(error)?;
-    Ok(FileWorkingSnapshot { base: selected.base(), working: selected.working().clone() })
+    let snapshot = FileWorkingSnapshot { base: selected.base(), working: selected.working().clone() };
+    super::current_protected_identity(&engine, identity)?;
+    Ok(snapshot)
 }
 
 pub(super) fn authorize_write(
