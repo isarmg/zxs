@@ -57,6 +57,8 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
     #[error("{0}")]
+    AutomaticObservation(#[source] crate::files::AutomaticObservationError),
+    #[error("{0}")]
     FileCommitMode(#[source] crate::files::FileCommitModeError),
     #[error("invalid directory snapshot response or request: {0}")]
     DirectorySnapshot(#[source] crate::files::DirectorySnapshotError),

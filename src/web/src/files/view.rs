@@ -197,6 +197,7 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             </label>
         </div>
 
+        {super::automatic_observation::panel(state)}
         {directory_preview::view(state)}
         <Show when=move ||state.with(|s|s.files.checked_entries.len()>1)>
             <p class="zxs-row">{t(

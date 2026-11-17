@@ -3,6 +3,10 @@ use crate::*;
 pub(crate) fn routes() -> Router<AppState> {
     let routes = Router::new()
         .route(
+            "/api/file-manager/repositories/{repository}/automatic-nodes",
+            get(http_automatic_observation::read),
+        )
+        .route(
             "/api/file-manager/files/{file}/unborn-working",
             get(http_unborn::status),
         )

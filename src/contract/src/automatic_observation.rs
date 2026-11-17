@@ -159,15 +159,21 @@ fn bounded_rows<'de, D: Deserializer<'de>>(input: D) -> Result<Vec<Row>, D::Erro
     input.deserialize_seq(Rows)
 }
 
-/// Public query checksum, deliberately not an authorization token. A different
-/// account, time range, stable directory, sequence or last row invalidates it.
+/// Opaque continuation checksum, not an authorization token. The server supplies
+/// its admitted session hash by borrow; that internal hash never goes on the wire.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Binding(blake3::Hash);
 impl Binding {
-    pub fn for_request(principal: &Principal, request: &Request) -> crate::Result<Self> {
+    pub fn for_session(
+        principal: &Principal,
+        admitted_session: &str,
+        request: &Request,
+    ) -> crate::Result<Self> {
         let bytes = crate::canonical_json(&(principal, request))?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"automatic-file-nodes/original-window\0");
+        hasher.update(&(admitted_session.len() as u64).to_be_bytes());
+        hasher.update(admitted_session.as_bytes());
         hasher.update(&bytes);
         Ok(Self(hasher.finalize()))
     }
@@ -210,6 +216,8 @@ impl<'de> Deserialize<'de> for Binding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct Reply {
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
+    pub path: Option<name_policy::PortablePath>,
     pub page: Page,
     #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub next_binding: Option<Binding>,

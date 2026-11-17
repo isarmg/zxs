@@ -15,6 +15,8 @@ use json_codec::json;
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum ApiErrorSource {
     #[error("{0}")]
+    AutomaticObservation(#[from] storage_contract::automatic_observation::ObservationError),
+    #[error("{0}")]
     ContainerTagsWire(#[source] crate::operation_wire::ContainerTagsWireError),
     #[error("{0}")]
     AuthenticatedPrincipal(#[source] storage_contract::EmptyPrincipal),

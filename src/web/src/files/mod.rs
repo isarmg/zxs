@@ -1,4 +1,6 @@
 mod actions;
+mod automatic_observation;
+pub use automatic_observation::DecodeError as AutomaticObservationError;
 mod backup;
 mod batch;
 mod branch;

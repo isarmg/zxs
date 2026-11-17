@@ -640,6 +640,12 @@ macro_rules! methods {
                     let _ = (identity, request, source);
                     Err($crate::ApiError::unsupported())
                 }
+                fn automatic_node_observation(
+                    &self, identity: &$crate::Identity, request: $crate::AutomaticWindowRead,
+                ) -> Result<storage_contract::automatic_observation::Reply, $crate::ApiError> {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn unborn_file_working(
                     &self, identity: &$crate::Identity,
                     target: storage_contract::file_draft::DraftLocation,

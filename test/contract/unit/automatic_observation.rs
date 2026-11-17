@@ -40,8 +40,12 @@ fn cursor_binds_account_scope_interval_sequence_and_last_stable_pair() {
     let last = first.rows.last().unwrap().key;
     first.next = Some(last);
     let next = first.continuation().unwrap();
-    let original = Binding::for_request(&principal, &next).unwrap();
+    let original = Binding::for_session(&principal, "admitted-one", &next).unwrap();
     assert_eq!(original.to_string().parse::<Binding>().unwrap(), original);
+    assert_ne!(
+        original,
+        Binding::for_session(&principal, "relogin", &next).unwrap()
+    );
     assert!(
         original
             .to_string()
@@ -65,12 +69,12 @@ fn cursor_binds_account_scope_interval_sequence_and_last_stable_pair() {
     };
     for changed in [other_dir, other_time, other_sequence, other_last, request()] {
         assert_ne!(
-            Binding::for_request(&principal, &changed).unwrap(),
+            Binding::for_session(&principal, "admitted-one", &changed).unwrap(),
             original
         );
     }
     assert_ne!(
-        Binding::for_request(&"bob".parse().unwrap(), &next).unwrap(),
+        Binding::for_session(&"bob".parse().unwrap(), "admitted-one", &next).unwrap(),
         original
     );
 }

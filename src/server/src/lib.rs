@@ -127,6 +127,8 @@ pub use backend_smb_worktree::{
 mod backend_smb_native;
 pub use backend_smb_native::{SmbNativeEdit, SmbNativeHandle, SmbNativeOpen};
 mod http_unborn;
+mod http_automatic_observation;
+pub use http_automatic_observation::AutomaticWindowRead;
 pub use backend_unborn::{
     CommitUnbornFile, UnbornContent, UnbornExpectation, UnbornFileSnapshot,
 };
