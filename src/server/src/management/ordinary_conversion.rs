@@ -125,7 +125,11 @@ fn source_preview(source: &PreparedOrdinaryConversion) -> OrdinarySourcePreview 
 fn save(directory: &PrivateDirectory, record: &Record) -> Result<(), ApiError> {
     write(directory, &name(record.status.preview.operation_id), record)
 }
-fn conversion_operations(directory: &PrivateDirectory) -> Result<Vec<OperationId>, ApiError> {
+struct ConversionInventory {
+    operations: Vec<OperationId>,
+    latest: Option<OperationId>,
+}
+fn conversion_inventory(directory: &PrivateDirectory) -> Result<ConversionInventory, ApiError> {
     directory.verify_identity().map_err(storage_error)?;
     let files = directory
         .files(RECORD_INVENTORY)
@@ -158,7 +162,8 @@ fn conversion_operations(directory: &PrivateDirectory) -> Result<Vec<OperationId
         operations.push(operation);
     }
     operations.sort_unstable();
-    if let Some(latest) = read::<OperationId>(directory, &latest_name)?
+    let latest = read::<OperationId>(directory, &latest_name)?;
+    if let Some(latest) = latest
         && operations.binary_search(&latest).is_err()
     {
         return Err(ApiError::conflict(
@@ -166,8 +171,15 @@ fn conversion_operations(directory: &PrivateDirectory) -> Result<Vec<OperationId
             format!("ordinary conversion {latest} is missing its original control record"),
         ));
     }
-    Ok(operations)
+    Ok(ConversionInventory { operations, latest })
 }
+fn ambiguous_conversion_status() -> ApiError {
+    ApiError::conflict(
+        ErrorCode::RecoveryRequired,
+        "multiple unfinished conversion intents; query the exact original operation",
+    )
+}
+
 fn read_record(directory: &PrivateDirectory, id: OperationId) -> Result<Record, ApiError> {
     let record: Record = read(directory, &name(id))?.ok_or_else(|| {
         ApiError::new(
@@ -322,7 +334,7 @@ impl ManagementBackend {
             }
             Err(source) => return Err(storage_error(source)),
         };
-        for operation in conversion_operations(&directory)? {
+        for operation in conversion_inventory(&directory)?.operations {
             self.finish_conversion_record(&directory, operation)?;
         }
         directory.verify_identity().map_err(storage_error)
@@ -926,7 +938,7 @@ impl ManagementBackend {
         directory: &PrivateDirectory,
         identity: &Identity,
     ) -> Result<(), ApiError> {
-        for id in conversion_operations(directory)? {
+        for id in conversion_inventory(directory)?.operations {
             // Completion gates all future conversions, but is not authority to
             // disclose another principal's source, preview or receipt. A
             // recovered administrator may proceed only after the exact original
@@ -960,6 +972,52 @@ impl ManagementBackend {
             }
         }
     }
+    /// The workflow saves an original intent before updating the latest hint.
+    /// New work is fenced on every older receipt, so a single unresolved intent
+    /// is the only possible newer one. Multiple such intents have no safe order.
+    fn idle_conversion_status_id(
+        &self,
+        directory: &PrivateDirectory,
+        identity: &Identity,
+    ) -> Result<Option<OperationId>, ApiError> {
+        let inventory = conversion_inventory(directory)?;
+        let mut unresolved = None;
+        for operation in inventory.operations {
+            if Some(operation) == inventory.latest {
+                continue;
+            }
+            let record = read_record(directory, operation)?;
+            if !self.original_settled_for_discovery(identity, &record)? {
+                if unresolved.is_some() {
+                    return Err(ambiguous_conversion_status());
+                }
+                unresolved = Some(operation);
+            }
+        }
+        if unresolved.is_some()
+            && let Some(latest) = inventory.latest
+            && !self.original_settled_for_discovery(identity, &read_record(directory, latest)?)?
+        {
+            return Err(ambiguous_conversion_status());
+        }
+        directory.verify_identity().map_err(storage_error)?;
+        Ok(unresolved.or(inventory.latest))
+    }
+
+    fn original_settled_for_discovery(
+        &self,
+        identity: &Identity,
+        record: &Record,
+    ) -> Result<bool, ApiError> {
+        let settled = self.conversion_record_settled(identity, record);
+        // Implicit discovery cannot reveal another principal's recovery state
+        // or the failure behind an unverified private operation.
+        if record.principal != identity.principal && !matches!(&settled, Ok(true)) {
+            return Err(ApiError::forbidden());
+        }
+        settled
+    }
+
     fn ordinary_conversion_status(
         &self,
         identity: &Identity,
@@ -998,6 +1056,7 @@ impl ManagementBackend {
         let explicit = id.is_some();
         let selected = match id {
             Some(id) => Some(id),
+            None if gate.is_some() => self.idle_conversion_status_id(&directory, identity)?,
             None => read(&directory, &storage_addition::latest_name())?,
         };
         let Some(id) = selected else {
@@ -1005,7 +1064,7 @@ impl ManagementBackend {
         };
         let mut record = read_record(&directory, id)?;
         if record.principal != identity.principal {
-            if !explicit && self.conversion_record_settled(identity, &record)? {
+            if !explicit && self.original_settled_for_discovery(identity, &record)? {
                 // Global latest is only a startup hint. Do not expose the prior
                 // owner's completed workflow to a recovered administrator.
                 return Ok(OrdinaryDiskConversionStatusResponse { operation: None });

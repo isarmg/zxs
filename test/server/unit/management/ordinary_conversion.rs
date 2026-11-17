@@ -1612,6 +1612,10 @@ fn conversion_drain_and_new_work_find_an_intent_without_a_latest_hint() {
             .code,
         ErrorCode::RecoveryRequired
     );
+    let observed = f.backend.ordinary_conversion_status(&f.identity, None).unwrap();
+    let pending = observed.operation.unwrap();
+    assert_eq!(pending.preview.operation_id, p.operation_id);
+    assert_eq!(pending.phase, OrdinaryDiskConversionPhase::RecoveryRequired);
     assert_eq!(conversion_tree_snapshot(directory.path()), before);
 }
 
@@ -1638,6 +1642,51 @@ fn conversion_drain_and_new_work_find_an_intent_behind_a_settled_hint() {
             .code,
         ErrorCode::RecoveryRequired
     );
+    let observed = f.backend.ordinary_conversion_status(&f.identity, None).unwrap();
+    let pending = observed.operation.unwrap();
+    assert_eq!(pending.preview.operation_id, orphan.operation_id);
+    assert_eq!(pending.phase, OrdinaryDiskConversionPhase::RecoveryRequired);
+    assert_eq!(conversion_tree_snapshot(directory.path()), before);
+}
+
+#[test]
+fn idle_conversion_status_does_not_guess_between_two_unfinished_intents() {
+    let (f, first) = interrupted_conversion(ImportInterruption::CommitIntent);
+    let directory =
+        PrivateDirectory::open_existing(f.data.join("management").join(DIRECTORY)).unwrap();
+    let mut second = first.clone();
+    second.operation_id = OperationId::generate().unwrap();
+    second.import_operation_id = OperationId::generate().unwrap();
+    second.preview_digest = digest(&second);
+    save(&directory, &pending_record(&f, &second)).unwrap();
+    let before = conversion_tree_snapshot(directory.path());
+    assert_eq!(
+        f.backend.ordinary_conversion_status(&f.identity, None).unwrap_err().code,
+        ErrorCode::RecoveryRequired
+    );
+    for id in [first.operation_id, second.operation_id] {
+        let observed = f.backend.ordinary_conversion_status(&f.identity, Some(id)).unwrap();
+        assert_eq!(observed.operation.unwrap().preview.operation_id, id);
+    }
+    assert_eq!(conversion_tree_snapshot(directory.path()), before);
+}
+
+#[test]
+fn idle_conversion_status_does_not_reveal_another_owners_unhinted_intent() {
+    let f = fixture();
+    let p = preview(&f);
+    let directory = PrivateDirectory::open_existing(f.data.join("management"))
+        .unwrap()
+        .create_child(&EntryName::new(DIRECTORY).unwrap())
+        .unwrap();
+    let mut prior = pending_record(&f, &p);
+    prior.principal = "other-owner".into();
+    save(&directory, &prior).unwrap();
+    let before = conversion_tree_snapshot(directory.path());
+    let refusal = f.backend.ordinary_conversion_status(&f.identity, None).unwrap_err();
+    assert_eq!(refusal.status, http::StatusCode::FORBIDDEN);
+    assert!(!refusal.message.contains(&p.operation_id.to_string()));
+    assert!(!refusal.message.contains("other-owner"));
     assert_eq!(conversion_tree_snapshot(directory.path()), before);
 }
 
@@ -1687,7 +1736,7 @@ fn conversion_drain_keeps_multiple_exact_historical_successes_without_a_hint() {
     f.backend
         .ensure_prior_conversion_settled(&directory, &f.identity)
         .unwrap();
-    assert_eq!(conversion_operations(&directory).unwrap().len(), 3);
+    assert_eq!(conversion_inventory(&directory).unwrap().operations.len(), 3);
     assert_eq!(conversion_tree_snapshot(directory.path()), before);
     assert_eq!(
         backend.test_with_engine_locked(|engine| engine.state().sequence),

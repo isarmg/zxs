@@ -60,7 +60,9 @@
    成功不是转换完成。`GET /api/admin/storage/conversion/status` 可查最新意图，
    `?operation_id=…` 可查原意图；未知指定编号返回 `OPERATION_NOT_FOUND`。
    重启后按保存的完整提交请求核验真实回执，不把同 operation 的其他请求、
-   本地 completed 字段或仅有工作区 ID 当作成功。
+   本地 completed 字段或仅有工作区 ID 当作成功。退出后即便最新提示未写或还指向已
+   结束的操作，无编号查询也只读发现那个唯一未完成的原意图。不按 UUID 或时间猜顺序；
+   多个未完成意图只能明确按原编号查询，不能借此发现另一主体的私有操作。
 6. `POST /api/admin/storage/conversion/resume` 只接受原 `{operation_id}`，可显式
    继续原注册阶段，以及尚未留下任何根操作/工作区/提交请求意图的导入前窗口。
    所有导入写入必须先持久化这些意图；仅有开始标记不等于已经写入。已有任一
