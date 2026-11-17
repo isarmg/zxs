@@ -78,13 +78,13 @@ class ShutdownCleanupSelection(unittest.TestCase):
         group = self.policy["groups"]["normal-shutdown-owners"]
         runtime = group["rust_targets"][0]
         self.assertEqual(runtime["prefixes"], ["management::shutdown_tests::"])
-        self.assertEqual(len(runtime["exact"]), 4)
+        self.assertEqual(len(runtime["exact"]), 10)
         self.assertTrue(all(name.startswith("management::ordinary_conversion::tests::")
                             for name in runtime["exact"]))
-        self.assertEqual(runtime["max_tests"], 16)
+        self.assertEqual(runtime["max_tests"], 22)
         previous = self.policy["groups"]["ordinary-conversion-name-budget"]["rust_targets"][1]
         self.assertEqual(previous["prefixes"], ["management::ordinary_conversion::tests::"])
-        self.assertEqual(previous["max_tests"], 26)
+        self.assertEqual(previous["max_tests"], 32)
         self.assertEqual(
             {target.get("default_features", True) for target in group["rust_targets"]
              if target.get("mode") == "check"}, {True, False})
