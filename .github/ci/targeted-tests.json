@@ -1,5 +1,110 @@
 {
   "groups": {
+    "upload-restart-cleanup": {
+      "reason": "Select actual held-upload cleanup, workspace restart and HTTP spool-budget behavior rather than unrelated fresh-pool exacts. Production compile checks remain separate from explicit fault-injection test builds. These tests do not establish power-loss, physical-disk, Chrome or Samba acceptance.",
+      "python_tests": [
+        "test_shutdown_cleanup_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "disk::admission::upload::tests::",
+            "engine::workspace_storage::tests::"
+          ],
+          "max_tests": 24,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "workspace_upload_retries",
+          "features": [
+            "fault-injection"
+          ],
+          "whole": true,
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "spool_budget::tests::"
+          ],
+          "max_tests": 13,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "mode": "check"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "features": [
+            "core"
+          ]
+        }
+      ]
+    },
+    "normal-shutdown-owners": {
+      "reason": "Drain owned management recovery and ordinary-conversion work under the existing mutexes. Exact original receipts, rejected incomplete operations, poisoned coordinators and concurrent draining are selected. No overall clean-shutdown or power-loss claim follows from this bounded slice.",
+      "python_tests": [
+        "test_shutdown_cleanup_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "management::shutdown_tests::"
+          ],
+          "exact": [
+            "management::ordinary_conversion::tests::business_shutdown_waits_for_the_existing_conversion_owner",
+            "management::ordinary_conversion::tests::business_shutdown_reports_the_original_unfinished_conversion_without_writing",
+            "management::ordinary_conversion::tests::business_shutdown_uses_exact_receipt_even_after_lost_projection_and_revocation",
+            "management::ordinary_conversion::tests::business_shutdown_accepts_only_the_exact_explicit_conversion_stop"
+          ],
+          "max_tests": 16,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
     "tracked-key-budgets": {
       "reason": "Generic typed map and shared-record mutation paths retain exact canonical key spelling budgets, copy-on-write isolation and persisted receipt bytes. Product consumer compilation is selected separately; this is not full recovery or a runtime feature-matrix pass.",
       "python_tests": [],
@@ -3048,7 +3153,7 @@
           "prefixes": [
             "management::ordinary_conversion::tests::"
           ],
-          "max_tests": 22,
+          "max_tests": 26,
           "timeout_seconds": 900
         },
         {
@@ -6160,6 +6265,19 @@
     }
   },
   "rules": [
+    {"path": "src/server/src/spool_budget.rs", "groups": ["upload-restart-cleanup"]},
+    {"path": "test/server/unit/spool_budget/tests.rs", "groups": ["upload-restart-cleanup"]},
+    {"path": "src/engine/src/disk/admission/upload.rs", "groups": ["upload-restart-cleanup"]},
+    {"path": "test/engine/unit/disk/upload_resources_tests.rs", "groups": ["upload-restart-cleanup"]},
+    {"path": "src/engine/src/engine/workspace_storage.rs", "groups": ["upload-restart-cleanup"]},
+    {"path": "test/engine/unit/engine/workspace_storage_tests.rs", "groups": ["upload-restart-cleanup"]},
+    {"path": "test/engine/integration/workspace_upload_retries.rs", "groups": ["upload-restart-cleanup"]},
+    {"path": "src/server/src/management.rs", "groups": ["normal-shutdown-owners"]},
+    {"path": "test/server/unit/management_shutdown_tests.rs", "groups": ["normal-shutdown-owners"]},
+    {"path": "src/server/src/management/ordinary_conversion.rs", "groups": ["normal-shutdown-owners"]},
+    {"path": "src/server/src/engine_backend/ordinary_conversion.rs", "groups": ["normal-shutdown-owners"]},
+    {"path": "test/server/unit/management/ordinary_conversion.rs", "groups": ["normal-shutdown-owners"]},
+    {"path": "test/ci/test_shutdown_cleanup_targeted_ci.py", "groups": ["upload-restart-cleanup", "normal-shutdown-owners"]},
     {"path": "src/contract/src/encoded_len.rs", "groups": ["tracked-key-budgets"]},
     {"path": "src/contract/src/tracked.rs", "groups": ["tracked-key-budgets"]},
     {"path": "test/contract/unit/tracked.rs", "groups": ["tracked-key-budgets"]},
