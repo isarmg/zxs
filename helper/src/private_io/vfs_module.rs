@@ -64,15 +64,25 @@ impl VfsDestination {
         self.recheck()?;
         self.destination.matches_or_absent(bytes)
     }
-    pub(crate) fn install(&self, bytes: &[u8]) -> Result<bool> {
+    pub(crate) fn capture(&self, bytes: &[u8]) -> Result<Option<HeldProgram>> {
         self.recheck()?;
-        let created = self.destination.install(bytes)?;
+        self.destination.matching_file(bytes)
+    }
+    pub(crate) fn require_held(&self, program: &HeldProgram) -> Result<()> {
         self.recheck()?;
-        if !self.destination.matches_or_absent(bytes)? {
-            return Err(
-                "VFS module disappeared after publication; no completion is claimed".into(),
-            );
-        }
-        Ok(created)
+        self.destination.require_held(program)
+    }
+    pub(crate) fn install_captured(
+        &self,
+        bytes: &[u8],
+        captured: Option<HeldProgram>,
+        complete: bool,
+    ) -> Result<(bool, HeldProgram)> {
+        self.recheck()?;
+        let (created, held) = self
+            .destination
+            .install_captured(bytes, captured, complete)?;
+        self.require_held(&held)?;
+        Ok((created, held))
     }
 }

@@ -16,15 +16,20 @@ pub(crate) fn verified_payload_metadata() -> Result<PayloadMetadata> {
 pub(crate) struct InstalledProgram {
     destination: crate::private_io::ProgramDestination,
     payload: payload::Payload,
+    held: crate::private_io::HeldProgram,
 }
 impl InstalledProgram {
     pub(crate) fn open() -> Result<Self> {
         let payload = payload::required()?;
         let destination =
             crate::private_io::ProgramDestination::open(std::path::Path::new(DESTINATION))?;
+        let held = destination
+            .matching_file(payload.bytes)?
+            .ok_or("install the exact embedded ZXS program before installing configuration")?;
         let result = Self {
             destination,
             payload,
+            held,
         };
         result.recheck()?;
         Ok(result)
@@ -33,12 +38,7 @@ impl InstalledProgram {
         self.payload.metadata()
     }
     pub(crate) fn recheck(&self) -> Result<()> {
-        if !self.destination.matches_or_absent(self.payload.bytes)? {
-            return Err(
-                "install the exact embedded ZXS program before installing configuration".into(),
-            );
-        }
-        Ok(())
+        self.destination.require_held(&self.held)
     }
 }
 use crate::{
@@ -137,13 +137,21 @@ fn require_root() -> Result<()> {
     }
     Ok(())
 }
-fn prepare(payload: payload::Payload) -> Result<(BundleDestination, ProgramDestination, Preview)> {
+struct PreparedProgram {
+    host: BundleDestination,
+    destination: ProgramDestination,
+    preview: Preview,
+    captured: Option<crate::private_io::HeldProgram>,
+    installed: bool,
+}
+fn prepare(payload: payload::Payload) -> Result<PreparedProgram> {
     require_root()?;
     let host = BundleDestination::open(Path::new(platform_io::service_lease::HOST_ROOT))?;
     let destination = ProgramDestination::open(Path::new(DESTINATION))?;
-    baseline::existing(&host, &baseline::expected(&host, &destination, payload)?)?;
+    let installed = baseline::existing(&host, &baseline::expected(&host, &destination, payload)?)?;
     let identity = destination.parent_identity();
-    let matches = destination.matches_or_absent(payload.bytes)?;
+    let captured = destination.matching_file(payload.bytes)?;
+    let matches = captured.is_some();
     let plan = Plan {
         format: "zxs-helper-program-install",
         destination: DESTINATION,
@@ -154,10 +162,10 @@ fn prepare(payload: payload::Payload) -> Result<(BundleDestination, ProgramDesti
         payload: payload.metadata(),
     };
     let digest = platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(&plan)?));
-    Ok((
+    Ok(PreparedProgram {
         host,
         destination,
-        Preview {
+        preview: Preview {
             plan,
             request_digest: digest,
             existing_program_matches: matches,
@@ -166,10 +174,12 @@ fn prepare(payload: payload::Payload) -> Result<(BundleDestination, ProgramDesti
             systemd_or_smb_configuration_included: false,
             service_start_included: false,
         },
-    ))
+        captured,
+        installed,
+    })
 }
 pub(crate) fn preview() -> Result<Preview> {
-    Ok(prepare(payload::required()?)?.2)
+    Ok(prepare(payload::required()?)?.preview)
 }
 pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     if input.confirmation != "install-program-only" {
@@ -179,21 +189,22 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
         );
     }
     let payload = payload::required()?;
-    let (host, destination, preview) = prepare(payload)?;
+    let PreparedProgram {
+        host,
+        destination,
+        preview,
+        captured,
+        installed,
+    } = prepare(payload)?;
     if preview.request_digest != input.request_digest {
         return Err("installation parent or payload differs from the exact preview; no installation was attempted".into());
     }
     host.recheck()?;
-    let created = destination.install(payload.bytes)?;
+    let (created, held) = destination.install_captured(payload.bytes, captured, installed)?;
     let baseline = baseline::expected(&host, &destination, payload)?;
     host.publish(baseline::NAME, &[("receipt.json", &baseline)])?;
     host.recheck()?;
-    if !destination.matches_or_absent(payload.bytes)? {
-        return Err(
-            "program disappeared after baseline publication; no successful installation is claimed"
-                .into(),
-        );
-    }
+    destination.require_held(&held)?;
     Ok(
         json!({"state":if created {"new_program_installed"} else {"matching_program_durably_verified"}, "destination":DESTINATION, "payload":payload.metadata(), "request_digest":preview.request_digest, "same_payload_baseline_recorded":true, "system_initialized":false, "service_configured":false, "service_started":false, "replaced_different_program":false}),
     )

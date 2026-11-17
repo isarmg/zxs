@@ -206,7 +206,12 @@ fn dropping_draft_transaction_releases_lock_while_child_holds_parent_directory()
     let path = root.path().join("draft.json");
     write_new(&path, b"draft").unwrap();
     let transaction = DraftTransaction::open(&path).unwrap();
-    let parent = transaction.target.directory.directory().try_clone().unwrap();
+    let parent = transaction
+        .target
+        .directory
+        .directory()
+        .try_clone()
+        .unwrap();
     let identity = FileIdentity::from_fd(&parent).unwrap();
     let mut child = directory_child::DirectoryChild::start(
         parent.try_clone().unwrap(),
@@ -408,16 +413,16 @@ fn verified_program_file_keeps_its_inode_through_synchronization_and_name_replac
     assert!(destination.matching_file(payload).unwrap().is_none());
     assert!(destination.install(payload).unwrap());
     let held = destination.matching_file(payload).unwrap().unwrap();
-    let identity = FileIdentity::from_fd(&held).unwrap();
+    let identity = FileIdentity::from_fd(&held.file).unwrap();
     fs::rename(&path, &original).unwrap();
     fs::write(&path, payload).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o555)).unwrap();
 
-    held.sync_all().unwrap();
+    held.file.sync_all().unwrap();
     let mut bytes = [0_u8; 22];
-    held.read_exact_at(&mut bytes, 0).unwrap();
+    held.file.read_exact_at(&mut bytes, 0).unwrap();
     assert_eq!(&bytes, payload);
-    assert_eq!(FileIdentity::from_fd(&held).unwrap(), identity);
+    assert_eq!(FileIdentity::from_fd(&held.file).unwrap(), identity);
     assert_eq!(
         FileIdentity::from_fd(File::open(&original).unwrap()).unwrap(),
         identity
@@ -446,4 +451,36 @@ fn verified_program_file_keeps_its_inode_through_synchronization_and_name_replac
     assert!(destination.install(payload).is_err());
     assert_eq!(fs::read(&path).unwrap(), b"different program");
     assert_eq!(fs::read(&original).unwrap(), payload);
+}
+
+// Convenience for the ordinary fresh path. The product facade separately
+// retains its captured file and supplies the historical completion predicate.
+impl ProgramDestination {
+    fn install(&self, bytes: &[u8]) -> Result<bool> {
+        self.install_captured(bytes, self.matching_file(bytes)?, false)
+            .map(|(made, _)| made)
+    }
+}
+#[test]
+fn historical_program_or_vfs_install_never_recreates_lost_or_substituted_inode() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("module.so");
+    let destination = ProgramDestination::open(&path).unwrap();
+    let bytes = b"original sealed module";
+    assert!(destination.install_captured(bytes, None, true).is_err());
+    assert!(!path.exists());
+    let (created, published) = destination.install_captured(bytes, None, false).unwrap();
+    assert!(created);
+    let inode = fs::metadata(&path).unwrap().ino();
+    let original = destination.matching_file(bytes).unwrap();
+    let elsewhere = root.path().join("original-retained");
+    fs::rename(&path, &elsewhere).unwrap();
+    assert!(destination.install_captured(bytes, original, true).is_err());
+    assert!(!path.exists());
+    fs::write(&path, bytes).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o555)).unwrap();
+    assert!(destination.require_held(&published).is_err());
+    assert_eq!(fs::metadata(elsewhere).unwrap().ino(), inode);
+    assert_ne!(fs::metadata(path).unwrap().ino(), inode);
 }

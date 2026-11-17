@@ -7051,6 +7051,29 @@
           "max_tests": 4
         }
       ]
+    },
+    "held-helper-installation-files": {
+      "reason": "Read and synchronize the actual retained or newly published program, sealed VFS and both configuration leaves. Verify pending vs published without inventing historical authority. Root ownership, actual host package/ABI/login and replacement/rollback need separate validation.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "exact": [
+            "installation::vfs::tests::a_pending_vfs_receipt_is_not_completed_and_requires_a_published_original_intent",
+            "installation::baseline::tests::fully_written_pending_program_baseline_is_not_repair_authority",
+            "private_io::tests::historical_program_or_vfs_install_never_recreates_lost_or_substituted_inode",
+            "private_io::tests::verified_program_file_keeps_its_inode_through_synchronization_and_name_replacement",
+            "private_io::configuration_files::tests::completed_configuration_cannot_be_refilled_and_a_live_receipt_rejects_a_same_byte_replacement",
+            "private_io::configuration_files::tests::a_late_same_byte_configuration_is_not_adopted_by_an_earlier_absent_capture"
+          ],
+          "max_tests": 6
+        }
+      ]
     }
   },
   "rules": [
@@ -7067,7 +7090,8 @@
         "real-browser-first-commit-delivery",
         "selected-scope-and-physical-images",
         "nested-ordinary-and-smb-birth",
-        "helper-existing-host-boundaries"
+        "helper-existing-host-boundaries",
+        "held-helper-installation-files"
       ]
     },
     {
@@ -15631,7 +15655,8 @@
       "path": "test/helper/unit/private_io/tests.rs",
       "groups": [
         "directory-lock-child-inheritance",
-        "helper-samba-observation-sources"
+        "helper-samba-observation-sources",
+        "held-helper-installation-files"
       ]
     },
     {
@@ -20932,7 +20957,8 @@
     {
       "path": "helper/src/system_program.rs",
       "groups": [
-        "original-holder-recovery"
+        "original-holder-recovery",
+        "held-helper-installation-files"
       ]
     },
     {
@@ -20960,6 +20986,66 @@
       "groups": [
         "selected-scope-and-physical-images",
         "backup-published-original-files"
+      ]
+    },
+    {
+      "path": "helper/src/deployment/install.rs",
+      "groups": [
+        "held-helper-installation-files"
+      ]
+    },
+    {
+      "path": "helper/src/installation.rs",
+      "groups": [
+        "held-helper-installation-files"
+      ]
+    },
+    {
+      "path": "helper/src/installation/vfs.rs",
+      "groups": [
+        "held-helper-installation-files"
+      ]
+    },
+    {
+      "path": "helper/src/installation/baseline.rs",
+      "groups": [
+        "held-helper-installation-files"
+      ]
+    },
+    {
+      "path": "helper/src/private_io.rs",
+      "groups": [
+        "held-helper-installation-files"
+      ]
+    },
+    {
+      "path": "helper/src/private_io/configuration_files.rs",
+      "groups": [
+        "held-helper-installation-files"
+      ]
+    },
+    {
+      "path": "helper/src/private_io/vfs_module.rs",
+      "groups": [
+        "held-helper-installation-files"
+      ]
+    },
+    {
+      "path": "test/helper/unit/private_io/configuration_files_tests.rs",
+      "groups": [
+        "held-helper-installation-files"
+      ]
+    },
+    {
+      "path": "test/helper/unit/installation/baseline_tests.rs",
+      "groups": [
+        "held-helper-installation-files"
+      ]
+    },
+    {
+      "path": "test/helper/unit/installation/vfs_records.rs",
+      "groups": [
+        "held-helper-installation-files"
       ]
     }
   ],

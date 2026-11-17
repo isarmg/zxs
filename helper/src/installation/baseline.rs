@@ -2,7 +2,7 @@
 use super::payload;
 use crate::{
     Result,
-    private_io::{BundleDestination, ProgramDestination},
+    private_io::{BundleDestination, BundleState, ProgramDestination},
 };
 use data_serialization::{Deserialize, Serialize};
 
@@ -77,7 +77,7 @@ pub(super) fn existing(host: &BundleDestination, expected: &[u8]) -> Result<bool
 }
 
 pub(super) fn require(host: &BundleDestination, expected: &[u8]) -> Result<()> {
-    if !existing(host, expected)? {
+    if host.inspect(NAME, &[("receipt.json", expected)])? != BundleState::Published {
         return Err("same-payload repair requires the original verified program installation baseline; missing provenance is not permission to replace an unknown version".into());
     }
     Ok(())

@@ -201,7 +201,25 @@ fn publish_pending(prepared: &Prepared) -> Result<json_codec::Value> {
 fn publish(prepared: &Prepared) -> Result<json_codec::Value> {
     let plan = &prepared.preview.plan;
     let digest = &prepared.preview.request_digest;
-    recovery::check_records(prepared)?;
+    // Capture both existing leaves before any original proof or file publication.
+    // An absent fresh target can only win NOREPLACE; a captured target cannot
+    // disappear or be substituted (even with identical bytes) during the tail.
+    let originals = prepared.context.configuration.capture(
+        plan.unit.content.as_bytes(),
+        plan.samba.as_ref().map(|file| file.content.as_bytes()),
+    )?;
+    let state = recovery::check_records(prepared)?;
+    originals.require_current()?;
+    let must_exist = matches!(
+        state,
+        recovery::RecoveryState::CompletionPublicationPending
+            | recovery::RecoveryState::CompletedConfigurationFiles
+    );
+    if must_exist
+        && (originals.unit.is_none() || (plan.samba.is_some() && originals.samba.is_none()))
+    {
+        return Err("configuration publication already reached completion; none of its files can be refilled".into());
+    }
     let original = recovery::record_bytes(prepared)?;
     prepared.host.publish(
         &recovery::request_name(digest),
@@ -220,29 +238,24 @@ fn publish(prepared: &Prepared) -> Result<json_codec::Value> {
         .host
         .publish(&format!(".zxs-helper-config-intent-{digest}"), &files)?;
     prepared.recheck()?;
-    let unit_created = prepared
-        .context
-        .configuration
-        .install_unit(plan.unit.content.as_bytes())?;
+    let unit = prepared.context.configuration.install_unit(
+        plan.unit.content.as_bytes(),
+        originals.unit,
+        must_exist,
+    )?;
     prepared.recheck()?;
-    let samba_created = match &plan.samba {
-        Some(file) => Some(
-            prepared
-                .context
-                .configuration
-                .install_samba(file.content.as_bytes())?,
-        ),
+    let samba = match &plan.samba {
+        Some(file) => Some(prepared.context.configuration.install_samba(
+            file.content.as_bytes(),
+            originals.samba,
+            must_exist,
+        )?),
         None => None,
     };
     prepared.recheck()?;
-    let presence = prepared.context.configuration.inspect(
-        plan.unit.content.as_bytes(),
-        plan.samba.as_ref().map(|file| file.content.as_bytes()),
-    )?;
-    if presence.iter().any(|present| !present) {
-        return Err(
-            "a configuration file disappeared before the durable completion receipt".into(),
-        );
+    unit.require_current()?;
+    if let Some(held) = &samba {
+        held.require_current()?;
     }
     let receipt = completion_receipt(prepared);
     let bytes = json_codec::to_vec_pretty(&receipt)?;
@@ -251,13 +264,12 @@ fn publish(prepared: &Prepared) -> Result<json_codec::Value> {
         &[("receipt.json", bytes.as_slice())],
     )?;
     prepared.recheck()?;
-    let final_presence = prepared.context.configuration.inspect(
-        plan.unit.content.as_bytes(),
-        plan.samba.as_ref().map(|file| file.content.as_bytes()),
-    )?;
-    if final_presence.iter().any(|present| !present) {
-        return Err("configuration changed after the installation receipt; receipt is not current readiness evidence".into());
+    unit.require_current()?;
+    if let Some(held) = &samba {
+        held.require_current()?;
     }
+    let unit_created = unit.created;
+    let samba_created = samba.as_ref().map(|held| held.created);
     Ok(
         json!({"state":"configuration_files_durably_installed_not_activated", "receipt":receipt,
         "unit_created_in_this_attempt":unit_created,"samba_created_in_this_attempt":samba_created,

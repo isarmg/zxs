@@ -3,7 +3,7 @@ use super::{InstalledProgram, PayloadMetadata, vfs_payload};
 use crate::{
     Result,
     deployment::activation,
-    private_io::{BundleDestination, VfsDestination},
+    private_io::{BundleDestination, BundleState, VfsDestination},
     system_program::{Executable, Program, Snapshot},
 };
 use data_serialization::{Deserialize, Serialize};
@@ -11,7 +11,6 @@ use json_codec::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-const RECORD_LIMIT: usize = 64 * 1024;
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Original {
@@ -55,6 +54,7 @@ struct Prepared {
     host: BundleDestination,
     program: InstalledProgram,
     destination: VfsDestination,
+    initial: Option<crate::private_io::HeldProgram>,
     payload: vfs_payload::Verified,
     daemon: Executable,
     systemctl: Executable,
@@ -74,7 +74,7 @@ impl Prepared {
         let daemon = activation::samba_module_host()?;
         let systemctl = Executable::open(Program::Systemctl)?;
         let destination = VfsDestination::open()?;
-        destination.matches_or_absent(payload.bytes)?;
+        let initial = destination.capture(payload.bytes)?;
         let parent = destination.parent_identity();
         let plan = Plan {
             format: "zxs-helper-sealed-vfs-installation",
@@ -94,6 +94,7 @@ impl Prepared {
             host,
             program,
             destination,
+            initial,
             payload,
             daemon,
             systemctl,
@@ -108,7 +109,11 @@ impl Prepared {
         self.program.recheck()?;
         self.daemon.recheck()?;
         self.systemctl.recheck()?;
-        self.destination.recheck()
+        self.destination.recheck()?;
+        if let Some(held) = &self.initial {
+            self.destination.require_held(held)?;
+        }
+        Ok(())
     }
     fn require_digest(&self, expected: &str) -> Result<()> {
         if self.digest != expected {
@@ -127,41 +132,27 @@ impl Prepared {
             "passwords_changed":false,"native_module_loaded":false,
             "network_smb_login_verified":false,"complete_installation_ready":false})
     }
-    fn records(&self) -> Result<(bool, bool)> {
-        let plan = json_codec::to_vec_pretty(&self.plan)?;
-        let receipt = json_codec::to_vec_pretty(&self.receipt())?;
-        let original = self
-            .host
-            .read_operation(&self.name("intent"), "plan.json", RECORD_LIMIT)?;
-        if original.as_ref().is_some_and(|bytes| bytes != &plan) {
-            return Err(
-                "retained VFS intent differs from this exact original request; preserve it".into(),
-            );
-        }
-        let complete =
-            self.host
-                .read_operation(&self.name("installed"), "receipt.json", RECORD_LIMIT)?;
-        if complete.as_ref().is_some_and(|bytes| bytes != &receipt)
-            || (complete.is_some() && original.is_none())
-        {
-            return Err(
-                "retained VFS completion is inconsistent or lacks its original intent".into(),
-            );
-        }
-        Ok((original.is_some(), complete.is_some()))
+    fn records(&self) -> Result<(BundleState, BundleState)> {
+        inspect_records(
+            &self.host,
+            &self.name("intent"),
+            &json_codec::to_vec_pretty(&self.plan)?,
+            &self.name("installed"),
+            &json_codec::to_vec_pretty(&self.receipt())?,
+        )
     }
     fn observation(&self) -> Result<Observation> {
         self.recheck()?;
         let (intent, complete) = self.records()?;
         let exact = self.destination.matches_or_absent(self.payload.bytes)?;
         self.recheck()?;
-        let state = if complete {
+        let state = if complete == BundleState::Published {
             if exact {
                 "completed_historical_receipt_and_current_bytes_match"
             } else {
                 "completed_module_missing_do_not_reinstall"
             }
-        } else if intent {
+        } else if intent != BundleState::Absent {
             "original_installation_pending"
         } else {
             "no_original_intent"
@@ -169,16 +160,32 @@ impl Prepared {
         Ok(Observation {
             state,
             request_digest: self.digest.clone(),
-            intent_readable: intent,
-            completion_readable: complete,
+            intent_readable: intent == BundleState::Published,
+            completion_readable: complete == BundleState::Published,
             current_module_matches: exact,
-            receipt: complete.then(|| self.receipt()),
+            receipt: (complete == BundleState::Published).then(|| self.receipt()),
             service_state_verified: false,
             native_module_loaded: false,
             automatic_retry: false,
             complete_installation_ready: false,
         })
     }
+}
+/// A staged directory (even a fully written receipt in it) is not published.
+/// Once the completion tail exists, the module must already exist on its own.
+fn inspect_records(
+    host: &BundleDestination,
+    original_name: &str,
+    plan: &[u8],
+    completed_name: &str,
+    receipt: &[u8],
+) -> Result<(BundleState, BundleState)> {
+    let intent = host.inspect(original_name, &[("plan.json", plan)])?;
+    let completion = host.inspect(completed_name, &[("receipt.json", receipt)])?;
+    if completion != BundleState::Absent && intent != BundleState::Published {
+        return Err("VFS completion evidence lacks its fully published original intent; keep both directories unchanged".into());
+    }
+    Ok((intent, completion))
 }
 pub(crate) fn preview() -> Result<Value> {
     let prepared = Prepared::open()?;
@@ -222,26 +229,25 @@ pub(crate) fn commit(input: Commit) -> Result<Value> {
     {
         return Err("explicit sealed VFS-only installation and continuously stopped external Samba/package/service administrators are required".into());
     }
-    let prepared = Prepared::open()?;
+    let mut prepared = Prepared::open()?;
     prepared.require_digest(&input.request_digest)?;
     activation::require_samba_stopped_for_vfs(&prepared.systemctl)?;
-    publish(&prepared).map_err(|source| {
+    publish(&mut prepared).map_err(|source| {
         Box::new(Pending {
             digest: prepared.digest.clone(),
             source,
         }) as Box<dyn std::error::Error + Send + Sync>
     })
 }
-fn publish(prepared: &Prepared) -> Result<Value> {
+fn publish(prepared: &mut Prepared) -> Result<Value> {
     prepared.recheck()?;
     let (_, complete) = prepared.records()?;
-    let matches = prepared
-        .destination
-        .matches_or_absent(prepared.payload.bytes)?;
-    if complete && !matches {
+    let captured = prepared.initial.take();
+    let must_exist = complete != BundleState::Absent;
+    if must_exist && captured.is_none() {
         return Err("a completed VFS module is missing; installation does not recreate it or discard the original completion".into());
     }
-    if !complete {
+    if !must_exist {
         let plan = json_codec::to_vec_pretty(&prepared.plan)?;
         prepared
             .host
@@ -249,15 +255,20 @@ fn publish(prepared: &Prepared) -> Result<Value> {
     }
     prepared.recheck()?;
     activation::require_samba_stopped_for_vfs(&prepared.systemctl)?;
-    let created = prepared.destination.install(prepared.payload.bytes)?;
+    let (created, held) =
+        prepared
+            .destination
+            .install_captured(prepared.payload.bytes, captured, must_exist)?;
     prepared.recheck()?;
     activation::require_samba_stopped_for_vfs(&prepared.systemctl)?;
     let receipt = json_codec::to_vec_pretty(&prepared.receipt())?;
+    prepared.destination.require_held(&held)?;
     prepared
         .host
         .publish(&prepared.name("installed"), &[("receipt.json", &receipt)])?;
     let current = prepared.observation()?;
-    if !current.current_module_matches {
+    prepared.destination.require_held(&held)?;
+    if !current.current_module_matches || !current.completion_readable {
         return Err(
             "VFS module changed after receipt publication; no current success is claimed".into(),
         );
@@ -267,3 +278,7 @@ fn publish(prepared: &Prepared) -> Result<Value> {
         "created_in_this_attempt":created,"current":current,"receipt":prepared.receipt()}),
     )
 }
+
+#[cfg(test)]
+#[path = "../../../test/helper/unit/installation/vfs_records.rs"]
+mod tests;

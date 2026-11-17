@@ -44,3 +44,20 @@ fn baseline_staging_without_a_receipt_cannot_become_a_new_software_generation() 
     assert!(existing(&host, &expected(&host, &program, payload()).unwrap()).is_err());
     assert!(fs::read_dir(&pending).unwrap().next().is_none());
 }
+
+#[test]
+fn fully_written_pending_program_baseline_is_not_repair_authority() {
+    let temp = tempfile::tempdir().unwrap();
+    let host = BundleDestination::open(temp.path()).unwrap();
+    let exact = b"same original baseline";
+    host.publish(NAME, &[("receipt.json", exact)]).unwrap();
+    assert!(require(&host, exact).is_ok());
+    fs::rename(
+        temp.path().join(NAME),
+        temp.path().join(format!("{NAME}.pending")),
+    )
+    .unwrap();
+    assert!(existing(&host, exact).unwrap());
+    assert!(require(&host, exact).is_err());
+    assert!(!temp.path().join(NAME).exists());
+}

@@ -16,6 +16,10 @@ class CurrentBranchSelection(unittest.TestCase):
 
     def test_changed_inputs_select_held_budget_helper_and_admission_tests(self):
         for group, files in {
+            'held-helper-installation-files': [
+                'helper/src/deployment/install.rs', 'helper/src/private_io/configuration_files.rs',
+                'test/helper/unit/installation/vfs_records.rs',
+            ],
             'selected-scope-and-physical-images': [
                 'src/engine/src/engine/index/system_changes/prepared.rs',
                 'src/engine/src/container_storage/file_database/physical.rs',

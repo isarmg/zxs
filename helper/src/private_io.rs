@@ -163,6 +163,13 @@ pub(crate) struct ProgramDestination {
     target: AnchoredPath,
     _lock: AdvisoryLock,
 }
+/// In-memory proof only; the next invocation must open and admit its own
+/// current executable. No persisted baseline or receipt fields are invented.
+pub(crate) struct HeldProgram {
+    file: File,
+    identity: FileIdentity,
+    stamp: crate::system_program::FileStamp,
+}
 impl ProgramDestination {
     pub(crate) fn open(path: &Path) -> Result<Self> {
         let target = AnchoredPath::open(path)?;
@@ -202,8 +209,7 @@ impl ProgramDestination {
     pub(crate) fn matches_or_absent(&self, expected: &[u8]) -> Result<bool> {
         Ok(self.matching_file(expected)?.is_some())
     }
-    // Keep the verified inode available to the caller through its durability barrier.
-    fn matching_file(&self, expected: &[u8]) -> Result<Option<File>> {
+    pub(crate) fn matching_file(&self, expected: &[u8]) -> Result<Option<HeldProgram>> {
         self.recheck_parent()?;
         let file = match self
             .target
@@ -227,38 +233,76 @@ impl ProgramDestination {
             return Err("existing program does not have the exact safe owner, executable mode and expected size; ordinary installation does not repair it; use explicit same-payload repair only with the original installation baseline".into());
         }
         let identity = SingleLinkRequirement::check(&file)?;
-        let mut bytes = Vec::new();
-        (&file)
-            .take(expected.len() as u64 + 1)
-            .read_to_end(&mut bytes)?;
-        if bytes != expected {
-            return Err("existing program differs from the embedded payload; ordinary installation did not overwrite it; explicit same-payload repair requires the original installation baseline".into());
+        let stamp = crate::system_program::FileStamp::of(&metadata);
+        let mut input = &file;
+        let mut scratch = [0u8; 32 * 1024];
+        for chunk in expected.chunks(scratch.len()) {
+            input.read_exact(&mut scratch[..chunk.len()])?;
+            if scratch[..chunk.len()] != *chunk {
+                return Err("existing program differs from the embedded payload; ordinary installation did not overwrite it; explicit same-payload repair requires the original installation baseline".into());
+            }
+        }
+        if input.read(&mut scratch[..1])? != 0
+            || crate::system_program::FileStamp::of(&file.metadata()?) != stamp
+        {
+            return Err(
+                "executable changed during bounded payload verification; preserve both names"
+                    .into(),
+            );
         }
         self.target
             .directory
             .verify_entry_identity(&self.target.name, identity)?;
         self.recheck_parent()?;
-        Ok(Some(file))
+        Ok(Some(HeldProgram {
+            file,
+            identity,
+            stamp,
+        }))
     }
-    pub(crate) fn install(&self, bytes: &[u8]) -> Result<bool> {
-        if let Some(file) = self.matching_file(bytes)? {
-            file.sync_all()?;
-            self.target.directory.directory().sync_all()?;
-            if !self.matches_or_absent(bytes)? {
-                return Err("program disappeared while resolving its existing publication".into());
-            }
-            self.target
-                .directory
-                .verify_entry_identity(&self.target.name, FileIdentity::from_fd(&file)?)?;
-            return Ok(false);
+    pub(crate) fn require_held(&self, held: &HeldProgram) -> Result<()> {
+        self.recheck_parent()?;
+        self.target
+            .directory
+            .verify_entry_identity(&self.target.name, held.identity)?;
+        if crate::system_program::FileStamp::of(&held.file.metadata()?) != held.stamp {
+            return Err(
+                "held executable changed during publication; do not claim the current file".into(),
+            );
         }
-        write_atomic_at_mode(
+        Ok(())
+    }
+    pub(crate) fn install_captured(
+        &self,
+        bytes: &[u8],
+        captured: Option<HeldProgram>,
+        must_exist: bool,
+    ) -> Result<(bool, HeldProgram)> {
+        self.recheck_parent()?;
+        if let Some(held) = captured {
+            self.require_held(&held)?;
+            held.file.sync_all()?;
+            self.target.directory.directory().sync_all()?;
+            self.require_held(&held)?;
+            return Ok((false, held));
+        }
+        if must_exist {
+            return Err("the recorded installed executable is missing; do not reinstall from a historical receipt".into());
+        }
+        let publication = write_atomic_at_mode_receipt(
             &self.target.directory,
             &self.target.name,
             bytes,
             false,
             0o555,
         )?;
-        Ok(true)
+        let held = self
+            .matching_file(bytes)?
+            .ok_or("new executable disappeared after publication")?;
+        if held.identity != publication.identity() {
+            return Err("new executable no longer has the original published inode".into());
+        }
+        self.require_held(&held)?;
+        Ok((true, held))
     }
 }

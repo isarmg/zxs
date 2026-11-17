@@ -1,6 +1,6 @@
 //! New fixed configuration files only. The parent descriptors and directory
 //! locks outlive every read, no-clobber rename and durability barrier.
-use super::write_atomic_at_mode;
+use super::write_atomic_at_mode_receipt;
 use crate::Result;
 use data_serialization::Serialize;
 use platform_io::fs_safety::{
@@ -107,21 +107,33 @@ impl ConfigurationFiles {
         }
         Ok(())
     }
-    pub(crate) fn inspect(&self, unit: &[u8], samba: Option<&[u8]>) -> Result<Vec<bool>> {
+    pub(crate) fn capture(
+        &self,
+        unit: &[u8],
+        samba: Option<&[u8]>,
+    ) -> Result<ConfigurationCapture<'_>> {
         self.recheck()?;
-        let mut present = vec![matching(&self.units.root, "zxs.service", unit)?.is_some()];
-        match (&self.samba, samba) {
-            (Some(parent), Some(bytes)) => {
-                present.push(matching(&parent.root, "zxs.conf", bytes)?.is_some())
-            }
-            (None, None) => {}
+        let unit = matching(&self.units.root, "zxs.service", unit)?;
+        let samba = match (&self.samba, samba) {
+            (Some(parent), Some(bytes)) => matching(&parent.root, "zxs.conf", bytes)?,
+            (None, None) => None,
             _ => return Err("configuration set differs from its admitted target parents".into()),
-        }
+        };
+        let captured = ConfigurationCapture { unit, samba };
         self.recheck()?;
+        captured.require_current()?;
+        Ok(captured)
+    }
+    pub(crate) fn inspect(&self, unit: &[u8], samba: Option<&[u8]>) -> Result<Vec<bool>> {
+        let captured = self.capture(unit, samba)?;
+        let mut present = vec![captured.unit.is_some()];
+        if self.samba.is_some() {
+            present.push(captured.samba.is_some());
+        }
         Ok(present)
     }
     /// The dedicated Samba service is installed only by explicit activation.
-    /// Old configuration-only requests retain their original two-file format.
+    /// Configuration-file installation covers the unit and optional Samba config, not activation.
     pub(crate) fn inspect_smb_unit(&self, bytes: &[u8]) -> Result<bool> {
         self.recheck()?;
         let present = matching(&self.units.root, "zxs-smb.service", bytes)?.is_some();
@@ -130,25 +142,36 @@ impl ConfigurationFiles {
     }
     pub(crate) fn install_smb_unit(&self, bytes: &[u8]) -> Result<bool> {
         self.recheck()?;
-        let created = publish(&self.units.root, "zxs-smb.service", bytes)?;
+        let held = publish(&self.units.root, "zxs-smb.service", bytes, false)?;
         self.recheck()?;
-        Ok(created)
+        held.require_current()?;
+        Ok(held.created)
     }
-    pub(crate) fn install_unit(&self, bytes: &[u8]) -> Result<bool> {
+    pub(crate) fn install_unit<'a>(
+        &'a self,
+        bytes: &[u8],
+        original: Option<ConfigPublication<'a>>,
+        must_exist: bool,
+    ) -> Result<ConfigPublication<'a>> {
         self.recheck()?;
-        let created = publish(&self.units.root, "zxs.service", bytes)?;
+        let held = publish_captured(&self.units.root, "zxs.service", bytes, original, must_exist)?;
         self.recheck()?;
-        Ok(created)
+        Ok(held)
     }
-    pub(crate) fn install_samba(&self, bytes: &[u8]) -> Result<bool> {
+    pub(crate) fn install_samba<'a>(
+        &'a self,
+        bytes: &[u8],
+        original: Option<ConfigPublication<'a>>,
+        must_exist: bool,
+    ) -> Result<ConfigPublication<'a>> {
         self.recheck()?;
         let parent = self
             .samba
             .as_ref()
             .ok_or("no Samba destination was admitted")?;
-        let created = publish(&parent.root, "zxs.conf", bytes)?;
+        let held = publish_captured(&parent.root, "zxs.conf", bytes, original, must_exist)?;
         self.recheck()?;
-        Ok(created)
+        Ok(held)
     }
 }
 fn trusted(file: &File) -> Result<()> {
@@ -158,9 +181,49 @@ fn trusted(file: &File) -> Result<()> {
     }
     Ok(())
 }
-fn matching(root: &OpenAt2Root, name: &str, bytes: &[u8]) -> Result<Option<File>> {
+pub(crate) struct ConfigurationCapture<'a> {
+    pub(crate) unit: Option<ConfigPublication<'a>>,
+    pub(crate) samba: Option<ConfigPublication<'a>>,
+}
+impl ConfigurationCapture<'_> {
+    pub(crate) fn require_current(&self) -> Result<()> {
+        if let Some(held) = &self.unit {
+            held.require_current()?;
+        }
+        if let Some(held) = &self.samba {
+            held.require_current()?;
+        }
+        Ok(())
+    }
+}
+/// The exact compared leaf remains open across subsequent file/receipt steps.
+pub(crate) struct ConfigPublication<'a> {
+    root: &'a OpenAt2Root,
+    name: EntryName,
+    held: File,
+    identity: FileIdentity,
+    stamp: crate::system_program::FileStamp,
+    pub(crate) created: bool,
+}
+impl ConfigPublication<'_> {
+    pub(crate) fn require_current(&self) -> Result<()> {
+        self.root.verify_entry_identity(&self.name, self.identity)?;
+        if crate::system_program::FileStamp::of(&self.held.metadata()?) != self.stamp {
+            return Err(
+                "configuration changed after exact comparison; preserve the original receipt"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+fn matching<'a>(
+    root: &'a OpenAt2Root,
+    name: &str,
+    bytes: &[u8],
+) -> Result<Option<ConfigPublication<'a>>> {
     if bytes.len() > MAX_CONFIG_BYTES {
-        return Err("configuration exceeds its byte budget".into());
+        return Err("configuration file exceeds the fixed size budget".into());
     }
     let name = EntryName::new(name)?;
     let file = match root.open_file(&name.as_relative(), false) {
@@ -176,6 +239,7 @@ fn matching(root: &OpenAt2Root, name: &str, bytes: &[u8]) -> Result<Option<File>
         return Err(format!("existing configuration {:?} has different ownership, mode or size; it was not overwritten", name.as_os_str()).into());
     }
     let identity = SingleLinkRequirement::check(&file)?;
+    let stamp = crate::system_program::FileStamp::of(&metadata);
     let mut actual = Vec::new();
     (&file)
         .take(bytes.len() as u64 + 1)
@@ -183,33 +247,65 @@ fn matching(root: &OpenAt2Root, name: &str, bytes: &[u8]) -> Result<Option<File>
     if actual != bytes {
         return Err(format!("existing configuration {:?} differs; replacement is not implemented and all bytes are preserved", name.as_os_str()).into());
     }
-    check_named(root, &name, identity)?;
-    Ok(Some(file))
+    let held = ConfigPublication {
+        root,
+        name,
+        held: file,
+        identity,
+        stamp,
+        created: false,
+    };
+    held.require_current()?;
+    Ok(Some(held))
 }
-fn check_named(root: &OpenAt2Root, name: &EntryName, identity: FileIdentity) -> Result<()> {
-    if root.identity_of(&name.as_relative())? != identity {
-        return Err("configuration identity changed during inspection".into());
-    }
-    Ok(())
+fn publish<'a>(
+    root: &'a OpenAt2Root,
+    name: &str,
+    bytes: &[u8],
+    must_exist: bool,
+) -> Result<ConfigPublication<'a>> {
+    publish_captured(root, name, bytes, matching(root, name, bytes)?, must_exist)
 }
-fn publish(root: &OpenAt2Root, name: &str, bytes: &[u8]) -> Result<bool> {
-    let created = match matching(root, name, bytes)? {
-        Some(file) => {
-            file.sync_all()?;
-            false
+fn publish_captured<'a>(
+    root: &'a OpenAt2Root,
+    name: &str,
+    bytes: &[u8],
+    original: Option<ConfigPublication<'a>>,
+    must_exist: bool,
+) -> Result<ConfigPublication<'a>> {
+    let held = match original {
+        Some(held) => {
+            if held.root.identity() != root.identity()
+                || held.name.as_os_str() != std::ffi::OsStr::new(name)
+            {
+                return Err("captured configuration names another original parent or file".into());
+            }
+            held.require_current()?;
+            held
+        }
+        None if must_exist => {
+            return Err(
+                "a completed configuration file is missing; do not refill it on retry".into(),
+            );
         }
         None => {
-            write_atomic_at_mode(root, &EntryName::new(name)?, bytes, false, 0o644)?;
-            true
+            let published =
+                write_atomic_at_mode_receipt(root, &EntryName::new(name)?, bytes, false, 0o644)?;
+            let mut held =
+                matching(root, name, bytes)?.ok_or("published configuration disappeared")?;
+            if held.identity != published.identity() {
+                return Err(
+                    "configuration was replaced before its original inode was read back".into(),
+                );
+            }
+            held.created = true;
+            held
         }
     };
-    // Existing names also need a barrier: the earlier publisher may have been
-    // interrupted after rename and before the directory became durable.
+    held.held.sync_all()?;
     root.directory().sync_all()?;
-    let file = matching(root, name, bytes)?.ok_or("published configuration disappeared")?;
-    file.sync_all()?;
-    root.directory().sync_all()?;
-    Ok(created)
+    held.require_current()?;
+    Ok(held)
 }
 
 #[cfg(test)]
