@@ -207,6 +207,106 @@ fn committed_exact_input_reuses_owned_bytes_without_reexecuting_encoder() {
 }
 
 #[test]
+fn one_pending_capture_reuses_exact_encodings_without_publishing_or_sharing_mutations() {
+    let memo = ScopeEncodingMemo::new();
+    let mut session = Session::new(Some((&memo, [1; 32])));
+    let mut calls = 0;
+    let mut first = session.system([2; 32], || {
+        calls += 1;
+        Ok(vec![3, 4])
+    }).unwrap();
+    first[0] = 9;
+    assert_eq!(session.system([2; 32], || {
+        calls += 1;
+        Ok(vec![5])
+    }).unwrap(), [3, 4]);
+    let mut pair = session.disk_pair(Some([2; 32]), || {
+        calls += 1;
+        Ok((vec![6], vec![7]))
+    }).unwrap();
+    pair.0[0] = 9;
+    pair.1[0] = 9;
+    assert_eq!(session.disk_pair(Some([2; 32]), || {
+        calls += 1;
+        Ok((vec![8], vec![9]))
+    }).unwrap(), (vec![6], vec![7]));
+    assert_eq!(calls, 2);
+    assert_eq!(session.reserved_entries, 2);
+    assert!(memo.state.lock().unwrap().entries.is_empty());
+
+    // An independent capture cannot see either pending value, even with the
+    // same context and equal-length input. Its own encoder still runs.
+    let mut other = Session::new(Some((&memo, [1; 32])));
+    assert_eq!(other.system([2; 32], || Ok(vec![5, 6])).unwrap(), [5, 6]);
+    assert_eq!(other.disk_pair(Some([2; 32]), || {
+        Ok((vec![8], vec![9]))
+    }).unwrap(), (vec![8], vec![9]));
+    drop(other);
+    drop(session);
+    let state = memo.state.lock().unwrap();
+    assert!(state.entries.is_empty());
+    assert_eq!(state.bytes, 0);
+    assert_eq!(state.reserved_bytes, 0);
+    assert_eq!(state.reserved_entries, 0);
+}
+
+#[test]
+fn pending_canonical_reuse_reauthenticates_exact_raw_domain_and_expected_digest() {
+    let memo = ScopeEncodingMemo::new();
+    let raw = br#"{"value":1}"#;
+    let other = br#"{"value":2}"#;
+    let (_, expected) = storage_contract::encode_hashed_value(
+        "snapshot", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    let (_, other_expected) = storage_contract::encode_hashed_value(
+        "snapshot", &storage_contract::strict_json(other).unwrap(),
+    ).unwrap();
+    let mut session = Session::new(Some((&memo, [0; 32])));
+    let first = session.metadata(
+        RawMetadataRead::parse("snapshot", &expected, raw).unwrap(),
+    ).unwrap();
+    assert_eq!(session.metadata(
+        RawMetadataRead::parse("snapshot", &expected, raw).unwrap(),
+    ).unwrap().bytes(), first.bytes());
+    assert_eq!(session.reserved_entries, 1);
+    for (domain, digest, bytes) in [
+        ("snapshot", other_expected.as_str(), raw.as_slice()),
+        ("snapshot", expected.as_str(), other.as_slice()),
+        ("state-page", expected.as_str(), raw.as_slice()),
+    ] {
+        let reference = RawMetadataRead::parse(domain, digest, bytes).unwrap()
+            .authenticate(None).err().unwrap();
+        let actual = session.metadata(
+            RawMetadataRead::parse(domain, digest, bytes).unwrap(),
+        ).err().unwrap();
+        assert_eq!(committed_error(&actual), committed_error(&reference));
+    }
+
+    // Force a lookup collision while retaining an authentic proof. The fresh
+    // raw bytes, not the key or equal length, determine the accepted value.
+    let key = *session.pending.keys().next().unwrap();
+    let proof = session.pending.remove(&key).unwrap();
+    let colliding = Key {
+        input: *blake3::hash(other).as_bytes(),
+        ..key
+    };
+    session.pending.insert(colliding, proof);
+    assert_eq!(session.metadata(
+        RawMetadataRead::parse("snapshot", &expected, other).unwrap(),
+    ).err().unwrap().code(), ErrorCode::ObjectCorrupt);
+    assert_eq!(session.metadata(
+        RawMetadataRead::parse("snapshot", &other_expected, other).unwrap(),
+    ).unwrap().hash(), other_expected);
+    assert_eq!(session.reserved_entries, 1);
+    assert!(memo.state.lock().unwrap().entries.is_empty());
+    drop(session);
+    let state = memo.state.lock().unwrap();
+    assert!(state.entries.is_empty());
+    assert_eq!(state.reserved_bytes, 0);
+    assert_eq!(state.reserved_entries, 0);
+}
+
+#[test]
 fn failed_or_uncommitted_capture_never_adds_material_and_releases_reservations() {
     let memo = ScopeEncodingMemo::new();
     {

@@ -130,16 +130,24 @@ impl<'a> Session<'a> {
         self.memo.is_some()
     }
 
+    fn retained(&self, key: &Key) -> Option<Bytes> {
+        // Earlier pure encodings belong to this capture, not another reader.
+        // Reuse does not publish a reservation or bypass its caller's fresh
+        // physical read, authentication, final binding or cancellation checks.
+        self.pending.get(key).cloned()
+            .or_else(|| self.memo.and_then(|memo| memo.get(key)))
+    }
+
     fn metadata(&mut self, read: RawMetadataRead<'_>) -> Result<AuthenticatedMetadataObject> {
-        let Some(memo) = self.memo.filter(|memo| read.raw().len() <= memo.maximum_bytes) else {
+        if self.memo.is_none_or(|memo| read.raw().len() > memo.maximum_bytes) {
             return Ok(read.authenticate(None)?.into_object());
-        };
+        }
         let key = Key {
             context: [0; 32],
             input: *blake3::hash(read.raw()).as_bytes(),
             kind: Kind::Canonical(read.domain()),
         };
-        let retained = memo.get(&key);
+        let retained = self.retained(&key);
         let encoding = match &retained {
             Some(Bytes::Canonical { encoding, .. }) => Some(encoding),
             Some(Bytes::System(_)) | Some(Bytes::DiskPair(_, _))
@@ -165,7 +173,7 @@ impl<'a> Session<'a> {
         encode: impl FnOnce() -> Result<Vec<u8>>,
     ) -> Result<Vec<u8>> {
         let key = Key { context: self.context, input, kind: Kind::System };
-        if let Some(Bytes::System(bytes)) = self.memo.and_then(|memo| memo.get(&key)) {
+        if let Some(Bytes::System(bytes)) = self.retained(&key) {
             return Ok(bytes.as_ref().to_vec());
         }
         let bytes = encode()?;
@@ -184,7 +192,7 @@ impl<'a> Session<'a> {
             return encode();
         };
         let key = Key { context: self.context, input, kind: Kind::DiskPair };
-        if let Some(Bytes::DiskPair(current, history)) = self.memo.and_then(|memo| memo.get(&key)) {
+        if let Some(Bytes::DiskPair(current, history)) = self.retained(&key) {
             return Ok((current.as_ref().to_vec(), history.as_ref().to_vec()));
         }
         let (current, history) = encode()?;
