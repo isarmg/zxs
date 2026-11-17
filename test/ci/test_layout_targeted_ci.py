@@ -203,7 +203,7 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
             ['checkpoint-layout', 'ci-selection', 'held-directory-layout',
              'ordinary-conversion-name-budget', 'projection-cache-layout'],
             ['fresh-first-add-root-binding', 'generation-anchor-restore',
-             'terminal-backup-source-layout'])
+             'terminal-backup-source-layout', 'worktree-added-native'])
         self.assertEqual(plan['groups'],
                          ['checkpoint-layout', 'ci-selection', 'held-directory-layout',
                           'ordinary-conversion-name-budget', 'projection-cache-layout'])

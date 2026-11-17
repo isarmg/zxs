@@ -21,7 +21,9 @@ class OfflineTargetedCi(unittest.TestCase):
         plan = assert_path_group_extension(self, self.policy, ['src/engine/src/lib.rs'], [
             'container-lifecycle-engine', 'container-path-facts-engine',
             'held-directory-layout', 'ordinary-conversion-name-budget', 'typed-name-consumers',
-        ], ['file-metadata-plan', 'ordinary-empty-directory-backup'])
+        ], ['automatic-backup-entry', 'file-metadata-plan',
+            'ordinary-backup-listing-regression', 'ordinary-empty-directory-backup',
+            'worktree-added-native'])
         self.assertEqual(plan['groups'], ['container-lifecycle-engine',
                                          'container-path-facts-engine',
                                          'held-directory-layout',

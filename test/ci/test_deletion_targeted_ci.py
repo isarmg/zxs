@@ -17,7 +17,7 @@ class DeletionTargetedCi(unittest.TestCase):
 
     def test_server_entrypoint_selects_registered_deletion_scope(self):
         plan = assert_path_group_extension(self, self.policy,
-            ['src/server/src/lib.rs'], None, ['ordinary-smb-manual-draft'])
+            ['src/server/src/lib.rs'], None, ['ordinary-smb-manual-draft', 'worktree-added-native'])
         self.assertIn('paged-deletion-review', plan['groups'])
         self.assertEqual(len(plan['rust_targets']), 8)
         group = self.policy['groups']['paged-deletion-review']
