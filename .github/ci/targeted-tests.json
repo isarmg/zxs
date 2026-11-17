@@ -7245,7 +7245,7 @@
       ]
     },
     "nested-directory-web-selection": {
-      "reason": "The current directory chooser reviews only explicit direct listed occurrences at the original root snapshot, never initializes a child or admits a new worktree parent. The single-file and directory actions must decode the same present Unborn response including its actual controller. Real Chrome execution is separate.",
+      "reason": "The current directory chooser reviews only explicit direct listed occurrences at the original root snapshot, never initializes a child or admits a new worktree parent. The single-file and directory actions must decode the same present Unborn response including its actual controller. Real Chrome execution is separate. Check the existing directory/worktree journal at its precise account lock, epoch and raw text; only an original receipt or a rejection observed while the initial lock is still held can authorize its corresponding cleanup.",
       "python_tests": [
         "test_current_branch_slices_targeted_ci"
       ],
@@ -7259,9 +7259,16 @@
             "files::directory_snapshot::tests::directory_snapshot_review_keeps_unborn_identity_and_rejects_wrong_responses",
             "files::directory_snapshot::tests::directory_snapshot_initializes_only_a_complete_empty_or_born_root",
             "files::directory_snapshot::picks::tests::distinct_folders_freeze_one_exact_mixed_original_without_recursive_or_implicit_rows",
-            "files::directory_snapshot::picks::tests::changed_identity_revision_branch_account_and_budget_cannot_substitute_a_kept_original"
+            "files::directory_snapshot::picks::tests::changed_identity_revision_branch_account_and_budget_cannot_substitute_a_kept_original",
+            "files::directory_snapshot::requests::delivery::tests::queued_directory_admission_never_fences_a_replacement_principal_epoch_or_original",
+            "files::directory_snapshot::requests::delivery::tests::unknown_directory_receipt_can_be_read_without_widening_retries_or_releasing_another_writer",
+            "files::directory_snapshot::requests::delivery::tests::failed_replacement_account_scan_never_displays_or_retries_the_previous_original",
+            "files::directory_snapshot::requests::delivery::tests::observed_directory_original_is_prioritized_and_never_replaced_or_demoted_by_reload",
+            "files::directory_snapshot::tests::directory_snapshot_storage_keys_retain_independent_tab_originals",
+            "files::directory_snapshot::worktree::tests::worktree_ui_creation_lookup_requires_original_request_and_independent_completion",
+            "files::directory_snapshot::worktree::tests::worktree_ui_reuses_original_request_journal_and_keeps_old_source_when_head_advances"
           ],
-          "max_tests": 5
+          "max_tests": 12
         },
         {
           "package": "web-app",
@@ -8686,7 +8693,8 @@
     {
       "path": "src/web/src/files/directory_snapshot/storage.rs",
       "groups": [
-        "directory-web-selection"
+        "directory-web-selection",
+        "nested-directory-web-selection"
       ]
     },
     {
@@ -8953,7 +8961,8 @@
       "path": "test/web/unit/files/directory_worktree_tests.rs",
       "groups": [
         "directory-web-worktree-management",
-        "worktree-historical-commit"
+        "worktree-historical-commit",
+        "nested-directory-web-selection"
       ]
     },
     {
@@ -20666,7 +20675,8 @@
       "groups": [
         "native-first-manual-save",
         "browser-identity-generation",
-        "real-browser-first-commit-delivery"
+        "real-browser-first-commit-delivery",
+        "nested-directory-web-selection"
       ]
     },
     {
@@ -21722,6 +21732,18 @@
       "path": "test/tools/browser-smoke/runner/nested_picks/fixture.rs",
       "groups": [
         "real-browser-first-commit-delivery",
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/requests/delivery.rs",
+      "groups": [
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_snapshot_delivery.rs",
+      "groups": [
         "nested-directory-web-selection"
       ]
     }

@@ -291,7 +291,7 @@ fn worktree_ui_creation_lookup_requires_original_request_and_independent_complet
     assert!(!named.command.can_post());
     assert!(named.command.body().is_err(), "Named has no POST body");
     state.files.directory_snapshot.pending = Some(Pending {
-        record: Arc::new(named.clone()),
+        record: Arc::new(crate::files::directory_snapshot::storage::Original::fresh(named.clone()).unwrap()),
         phase: Phase::Pending,
     });
     assert!(crate::files::directory_snapshot::requests::retry_record(&state).is_some());
@@ -319,7 +319,7 @@ fn worktree_ui_creation_lookup_requires_original_request_and_independent_complet
         LookupResult::Complete(Publication::WorktreeCreated { .. })
     ));
     state.files.directory_snapshot.pending = Some(Pending {
-        record: Arc::new(record),
+        record: Arc::new(crate::files::directory_snapshot::storage::Original::fresh(record).unwrap()),
         phase: Phase::Pending,
     });
     assert!(
@@ -415,9 +415,9 @@ fn worktree_ui_commit_lookup_never_confuses_unchanged_revision_with_published_no
 #[test]
 fn worktree_ui_reuses_original_request_journal_and_keeps_old_source_when_head_advances() {
     let mut state = state();
-    let record = Arc::new(commit(&state));
+    let record = Arc::new(crate::files::directory_snapshot::storage::Original::fresh(commit(&state)).unwrap());
     let frozen = record.encode().unwrap();
-    assert_eq!(Record::parse(&frozen, &record.principal).unwrap(), *record);
+    assert_eq!(Record::parse(&frozen, &record.principal).unwrap(), **record);
     assert!(Record::parse(&frozen, &"bob".parse().unwrap()).is_err());
     let key = crate::files::directory_snapshot::storage::key(&record);
     assert!(

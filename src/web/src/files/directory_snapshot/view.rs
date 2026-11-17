@@ -360,7 +360,7 @@ pub(crate) fn recovery_view(state: RwSignal<State>) -> impl IntoView {
                         "原结果已确认，仅本机记录清理待完成。",
                         "The result is confirmed; local recovery cleanup remains.",
                     )}</p>
-                    <button class="zxs-button" on:click=move |_|requests::cleanup(state)>
+                    <button class="zxs-button" data-zxs-directory-snapshot-cleanup="" on:click=move |_|requests::cleanup(state)>
                         {t("重试本机记录清理", "Retry local cleanup")}
                     </button>
                 </Show>

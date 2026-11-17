@@ -60,15 +60,27 @@ pub(super) fn run(
         ".zxs-disk-entry[data-slot='{slot}']:not([disabled])"
     ))?)?;
     row(browser, "pick-left")?;
-    // Retain only this non-secret business request and receipt. Do not patch
-    // headers, responses, body contents, delivery timing or any Rust UI state.
+    // The server sees the original unmodified request and the UI receives its
+    // actual response. Simulate a non-cooperating change only to this fixture's
+    // already-retained, non-secret local journal text before the UI settles.
     browser.script(r#"
       const original=window.fetch,s=window.__zxsNestedSelection={count:0,request:null,receipt:null,restore(){window.fetch=original;}};
       window.fetch=async function(...args){
         const r=args[0], u=new URL(r.url||r,location.href);
         if(u.origin!==location.origin||u.pathname!=='/api/directory-snapshots/commits'||r.method!=='POST')return original.apply(this,args);
         s.count++;s.request=await r.clone().json();const response=await original.apply(this,args);
-        if(response.ok)s.receipt=await response.clone().json();return response;
+        if(response.ok){
+          const prefix='zxs:directory-snapshot:smoke-admin:';
+          s.key=prefix+s.request.operation_id;s.original=localStorage.getItem(s.key);
+          const grants=await navigator.locks.query();
+          s.held=grants.held.some(x=>x.name===prefix&&x.mode==='exclusive');
+          if(s.original!==null){
+            s.replacement=s.original+'\n';
+            localStorage.setItem(s.key,s.replacement);
+          }
+          s.receipt=await response.clone().json();
+        }
+        return response;
       };return true;
     "#)?;
     with_cleanup(
@@ -107,6 +119,28 @@ pub(super) fn run(
             {
                 return Err("browser did not publish both previously captured actual revision/content expectations in one original".into());
             }
+            let cleanup = browser.css("[data-zxs-directory-snapshot-cleanup]:not([disabled])")?;
+            if browser.script(
+                "const s=window.__zxsNestedSelection; return s.held && s.original!==null && s.replacement!==s.original && localStorage.getItem(s.key)===s.replacement && s.count===1 && !!document.querySelector('[data-zxs-directory-snapshot-recovery] [role=alert]')",
+            )? != true {
+                return Err("original receipt removed different local bytes or did not retain its account lock".into());
+            }
+            // Restore the fixture's exact earlier text. A terminal local
+            // cleanup has no authority to resend the POST or fabricate a receipt.
+            if browser.script("const s=window.__zxsNestedSelection;if(localStorage.getItem(s.key)!==s.replacement)return false;localStorage.setItem(s.key,s.original);return true")? != true {
+                return Err("the fixture no longer owns its expected replacement".into());
+            }
+            browser.click(&cleanup)?;
+            wait_for(
+                "terminal cleanup of only the exact retained local text",
+                || {
+                    if browser.script("const s=window.__zxsNestedSelection;return s.count===1&&localStorage.getItem(s.key)===null&&!document.querySelector('[data-zxs-directory-snapshot-cleanup]')")? == true {
+                    Ok(())
+                } else {
+                    Err("original local cleanup did not finish without a second POST".into())
+                }
+                },
+            )?;
             e.original.set(Some(request.operation_id));
             Ok(())
         },

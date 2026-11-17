@@ -1,12 +1,15 @@
 //! Bounded reads and a single frozen POST. Unknown outcomes retain the account,
 //! source, exact selections and operation ID across navigation and browser reload.
+mod delivery;
 use crate::api;
-use crate::files::actions;
 use crate::files::directory_snapshot::{
     BodyKind, Command, Pending, Phase, ReadItem, Record, Review, Target, can_initialize,
     can_register, can_review, can_submit, storage, wire,
 };
-use crate::ui::{ErrorContext, State, accept_read_response, current_session, fail_in};
+use crate::ui::{State, accept_read_response};
+pub(super) use delivery::{
+    cleanup, lookup, retain_and_send, retry, retry_post_record, retry_record,
+};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use storage_contract::snapshot_worktree::InitializeSnapshot;
@@ -178,8 +181,15 @@ pub(super) fn submit(state: RwSignal<State>) {
         }
         let model = &state.files.directory_snapshot;
         let review = model.reviewed(state)?;
-        let selected = super::picks::collect(model.kept.as_ref(), state.principal.as_ref()?, review)
-            .map(|items| items.into_iter().map(|item|item.selected.clone()).collect());
+        let selected =
+            super::picks::collect(model.kept.as_ref(), state.principal.as_ref()?, review).map(
+                |items| {
+                    items
+                        .into_iter()
+                        .map(|item| item.selected.clone())
+                        .collect()
+                },
+            );
         Some((
             state.principal.clone()?,
             review.target.repository,
@@ -194,7 +204,7 @@ pub(super) fn submit(state: RwSignal<State>) {
     let selected = match selected {
         Ok(items) => items,
         Err(error) => {
-            state.update(|s| s.files.directory_snapshot.error=Some(error.error()));
+            state.update(|s| s.files.directory_snapshot.error = Some(error.error()));
             return;
         }
     };
@@ -220,137 +230,6 @@ pub(super) fn submit(state: RwSignal<State>) {
             },
         ),
     );
-}
-
-pub(super) fn retain_and_send(state: RwSignal<State>, record: Result<Record, api::Error>) {
-    let record = match record {
-        Ok(record) => Arc::new(record),
-        Err(error) => {
-            state.update(|state| state.files.directory_snapshot.error = Some(error));
-            return;
-        }
-    };
-    if let Err(error) = storage::save(&record) {
-        state.update(|state| {
-            state.files.directory_snapshot.storage_ready = false;
-            state.files.directory_snapshot.error = Some(error);
-        });
-        return;
-    }
-    state.update(|state| {
-        let model = &mut state.files.directory_snapshot;
-        model.pending = Some(Pending {
-            record: Arc::clone(&record),
-            phase: Phase::Pending,
-        });
-        model.retained_count = 1;
-        if matches!(&record.command, Command::Commit { .. }) { model.kept = None; }
-        model.error = None;
-        model.publication = None;
-    });
-    send(state, record, true);
-}
-
-pub(super) fn retry_record(state: &State) -> Option<Arc<Record>> {
-    let model = &state.files.directory_snapshot;
-    if !model.owns(state) || state.files.mutation_pending {
-        return None;
-    }
-    let pending = model.pending.as_ref()?;
-    // Retained Named requests can only query a receipt. They need readable
-    // storage, not write permission; other commands keep their existing gate.
-    let available = match pending.record.command {
-        Command::CreateWorktree { .. } => state.management.storage.readable(),
-        Command::RegisterRoot { .. }
-        | Command::Initialize { .. }
-        | Command::Commit { .. }
-        | Command::AllocateWorktree { .. }
-        | Command::CommitWorktree { .. } => state.management.storage.writable(),
-    };
-    (pending.phase == Phase::Pending && available).then(|| Arc::clone(&pending.record))
-}
-
-pub(super) fn retry_post_record(state: &State) -> Option<Arc<Record>> {
-    retry_record(state).filter(|record| record.command.can_post())
-}
-
-pub(super) fn retry(state: RwSignal<State>) {
-    if let Some(record) = state.with_untracked(retry_post_record) {
-        send(state, record, false);
-    }
-}
-
-fn begin(state: RwSignal<State>, record: &Arc<Record>) -> Option<u64> {
-    if let Err(error) = storage::verify(record) {
-        state.update(|state| state.files.directory_snapshot.error = Some(error));
-        return None;
-    }
-    state
-        .try_update(|state| {
-            let expected = retry_record(state)?;
-            if !Arc::ptr_eq(&expected, record) {
-                return None;
-            }
-            let pending = state.files.directory_snapshot.pending.as_mut()?;
-            pending.phase = Phase::Sending;
-            state.files.mutation_pending = true;
-            Some(state.session_epoch)
-        })
-        .flatten()
-}
-
-fn release(state: RwSignal<State>, epoch: u64, record: &Arc<Record>) -> bool {
-    if !current_session(state, epoch) {
-        return false;
-    }
-    state.try_update(|state| {
-        let Some(pending) = state.files.directory_snapshot.pending.as_mut() else {
-            return false;
-        };
-        if !Arc::ptr_eq(&pending.record, record) {
-            return false;
-        }
-        pending.phase = Phase::Pending;
-        state.files.mutation_pending = false;
-        true
-    }) == Some(true)
-}
-
-fn send(state: RwSignal<State>, record: Arc<Record>, first: bool) {
-    // A retained Named description proves only local intent, not a server
-    // reservation. Reject its POST before begin; its GET and bytes remain usable.
-    let body = match record.command.body() {
-        Ok(body) => body,
-        Err(error) => {
-            state.update(|state| state.files.directory_snapshot.error = Some(error));
-            return;
-        }
-    };
-    let Some(epoch) = begin(state, &record) else {
-        return;
-    };
-    spawn_local(async move {
-        let result = api::request("POST", &record.command.endpoint(), Some(body)).await;
-        if !current_session(state, epoch) {
-            return;
-        }
-        let (result, fresh_rejection) = match result {
-            Ok(value) if matches!(record.command, Command::Initialize { .. }) => {
-                // The POST succeeded. A later GET rejection cannot establish
-                // that initialization was rejected or release its original.
-                (verify_initialization(&record, value).await, false)
-            }
-            other => (other, first),
-        };
-        if !release(state, epoch, &record) {
-            return;
-        }
-        let (result, fresh_rejection) = match result {
-            Ok(value) => (record.result(value), false),
-            Err(error) => (Err(error), fresh_rejection),
-        };
-        finish(state, epoch, &record, result, fresh_rejection);
-    });
 }
 
 async fn verify_initialization(
@@ -390,150 +269,87 @@ pub(super) fn verify_initialization_head(
     Ok(())
 }
 
-pub(super) fn lookup(state: RwSignal<State>) {
-    let Some(record) = state.with_untracked(retry_record) else {
-        return;
-    };
-    let Some(endpoint) = record.command.outcome_endpoint() else {
-        return;
-    };
-    let Some(epoch) = begin(state, &record) else {
-        return;
-    };
-    spawn_local(async move {
-        let result = api::request("GET", &endpoint, None)
-            .await
-            .and_then(|value| record.lookup_result(value));
-        if !release(state, epoch, &record) {
-            return;
-        }
-        // A missing read is not proof that the original POST did not publish.
-        match result {
-            Ok(wire::LookupResult::Pending) => {
-                state.update(|state| state.files.directory_snapshot.error = None);
-            }
-            Ok(wire::LookupResult::Complete(publication)) => {
-                finish(state, epoch, &record, Ok(publication), false);
-            }
-            Err(error) => finish(state, epoch, &record, Err(error), false),
-        }
-    });
-}
-
-fn finish(
-    state: RwSignal<State>,
-    epoch: u64,
-    record: &Record,
-    result: Result<wire::Publication, api::Error>,
-    first: bool,
-) {
-    match result {
-        Ok(publication) => {
-            if let Err(error) = super::worktree::remember_publication(record, &publication) {
-                // Publication is confirmed, but losing the only browser handle
-                // reference is not successful cleanup. Keep the original so a
-                // later read-only lookup can obtain and retain that same result.
-                state.update(|state| {
-                    state.files.directory_snapshot.publication = Some(publication);
-                    state.files.directory_snapshot.error = Some(error);
-                });
-                return;
-            }
-            state.update(|state| {
-                super::worktree::accept_publication(state, record, &publication);
-                let model = &mut state.files.directory_snapshot;
-                if let Some(pending) = model.pending.as_mut() {
-                    pending.phase = Phase::Settled;
-                }
-                model.publication = Some(publication);
-                model.error = None;
-                model.clear_review();
-            });
-            cleanup(state);
-        }
-        Err(error) => {
-            if first && !error.mutation_outcome_unknown() {
-                state.update(|state| {
-                    if let Some(pending) = state.files.directory_snapshot.pending.as_mut() {
-                        pending.phase = Phase::Settled;
-                    }
-                    state.files.directory_snapshot.clear_review();
-                });
-                cleanup(state);
-            }
-            state.update(|state| state.files.directory_snapshot.error = Some(error.clone()));
-            fail_in(
-                state,
-                epoch,
-                ErrorContext::Operation(record.command.operation().to_string()),
-                error,
-            );
-        }
-    }
-}
-
-pub(super) fn cleanup(state: RwSignal<State>) {
-    let record = state.with_untracked(|state| {
-        let model = &state.files.directory_snapshot;
-        if !model.owns(state) {
-            return None;
-        }
-        model
-            .pending
-            .as_ref()
-            .filter(|pending| pending.phase == Phase::Settled)
-            .map(|pending| Arc::clone(&pending.record))
-    });
-    let Some(record) = record else {
-        return;
-    };
-    match storage::remove(&record) {
-        Ok(()) => {
-            state.update(|state| {
-                state.files.directory_snapshot.pending = None;
-                state.files.directory_snapshot.storage_ready = true;
-            });
-            // Re-scan so another tab's independent original is not forgotten.
-            restore(state);
-            actions::refresh_directory(state);
-        }
-        Err(error) => state.update(|state| state.files.directory_snapshot.error = Some(error)),
-    }
-}
-
 pub(crate) fn restore(state: RwSignal<State>) {
     let owner = state.with_untracked(|state| {
         if !state.session_active() || state.files.mutation_pending {
             return None;
         }
-        Some((state.session_epoch, state.principal.clone()?))
+        let owner = (state.session_epoch, state.principal.clone()?);
+        let m = &state.files.directory_snapshot;
+        let preferred = (m.owner.as_ref() == Some(&owner))
+            .then(|| {
+                m.pending
+                    .as_ref()
+                    .map(|pending| pending.record.command.operation())
+            })
+            .flatten();
+        Some((owner, preferred))
     });
-    let Some(owner) = owner else {
+    let Some((owner, preferred)) = owner else {
         return;
     };
-    let result = storage::load(&owner.1);
+    let result = storage::load(&owner.1, preferred);
     state.update(|state| {
-        let model = &mut state.files.directory_snapshot;
-        if model.owner.as_ref() != Some(&owner) {
-            model.worktree.clear();
-            model.kept=None;
-        }
-        model.owner = Some(owner);
-        model.clear_review();
-        match result {
-            Ok(records) => {
-                model.storage_ready = true;
-                model.error = None;
-                model.retained_count = records.len();
-                model.pending = records.into_iter().next().map(|record| Pending {
-                    record,
-                    phase: Phase::Pending,
-                });
-            }
-            Err(error) => {
-                model.storage_ready = false;
-                model.error = Some(error);
-            }
+        if state.session_active()
+            && state.session_epoch == owner.0
+            && state.principal.as_ref() == Some(&owner.1)
+            && !state.files.mutation_pending
+        {
+            restored(&mut state.files.directory_snapshot, owner, result);
         }
     });
+}
+
+fn restored(
+    model: &mut super::Model,
+    owner: (u64, storage_contract::Principal),
+    result: Result<storage::Inventory, api::Error>,
+) {
+    // Even an unreadable new account must not inherit the previous account's
+    // pending operation, produced node, kept paths, message or worktree handle.
+    // This drops only the view; it never removes another account's stored bytes.
+    if model.owner.as_ref() != Some(&owner) {
+        model.worktree.clear();
+        model.kept = None;
+        model.pending = None;
+        model.retained_count = 0;
+        model.publication = None;
+        model.error = None;
+    }
+    model.owner = Some(owner);
+    model.clear_review();
+    match result {
+        Ok(records) => {
+            model.retained_count = records.count();
+            if let Some(pending) = &model.pending {
+                if records.first.as_deref() == Some(pending.record.as_ref()) {
+                    // Explicit re-observation is not a new operation. In particular,
+                    // a known terminal receipt must never be demoted to a POST retry.
+                    model.storage_ready = true;
+                    model.error = None;
+                    return;
+                }
+                let previous_absent = records.first.as_ref().is_none_or(|seen| {
+                    seen.command.operation() != pending.record.command.operation()
+                });
+                if pending.phase != Phase::Settled || !previous_absent {
+                    model.storage_ready = false;
+                    model.error = Some(wire::invalid(
+                        "The local original changed or is missing. The in-memory original is retained.",
+                    ));
+                    return;
+                }
+            }
+            model.storage_ready = true;
+            model.error = None;
+            model.pending = records.first.map(|record| Pending {
+                record,
+                phase: Phase::Pending,
+            });
+        }
+        Err(error) => {
+            model.storage_ready = false;
+            model.error = Some(error);
+        }
+    }
 }

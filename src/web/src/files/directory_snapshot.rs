@@ -161,14 +161,16 @@ struct Review {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {
+    Retaining,
     Pending,
     Sending,
     Settled,
+    Cleaning,
 }
 
 #[derive(Clone)]
 struct Pending {
-    record: Arc<Record>,
+    record: Arc<storage::Original>,
     phase: Phase,
 }
 

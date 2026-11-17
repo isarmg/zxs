@@ -107,7 +107,7 @@ pub(super) fn unborn() -> Candidate {
         size: 0,
     }
 }
-fn record() -> Record {
+pub(super) fn record() -> Record {
     Record::new(
         "alice".parse().unwrap(),
         Command::Commit {
@@ -194,7 +194,7 @@ fn directory_snapshot_uses_actual_head_and_exact_mixed_original_request() {
     assert!(!can_submit(&state), "a child never inherits a root page review");
     state.files.repository_path.clear();
 
-    let record = Arc::new(record());
+    let record = Arc::new(super::storage::Original::fresh(record()).unwrap());
     let body = record.command.body().unwrap();
     assert_eq!(
         record.command.endpoint(),
@@ -206,7 +206,7 @@ fn directory_snapshot_uses_actual_head_and_exact_mixed_original_request() {
     assert!(body["selected"][1]["expected"].get("base").is_none());
     assert_eq!(body["selected"][1]["expected"]["content"]["state"], "empty");
     let frozen = record.encode().unwrap();
-    assert_eq!(Record::parse(&frozen, &record.principal).unwrap(), *record);
+    assert_eq!(Record::parse(&frozen, &record.principal).unwrap(), **record);
     state.files.directory_snapshot.pending = Some(Pending {
         record: Arc::clone(&record),
         phase: Phase::Pending,
@@ -405,6 +405,19 @@ fn directory_snapshot_receipt_and_recovery_keep_exact_scope() {
 
 #[test]
 fn directory_snapshot_storage_keys_retain_independent_tab_originals() {
+    let original=super::storage::Original::fresh(record()).unwrap();
+    let compact=original.encode().unwrap();
+    let replacement=format!("{compact} ");
+    let mut inventory=super::storage::Inventory::default();
+    let key=super::storage::key(&original);
+    inventory.observe(&key,&replacement,&original.principal).unwrap();
+    assert_eq!(inventory.count(),1);
+    assert!(inventory.observe(&key,&compact,&original.principal).is_err(),"unstable duplicate scan cannot become an admission");
+    let replaced=inventory.first.unwrap();
+    assert_eq!(*original,**replaced,"semantic equality is not local byte identity");
+    assert!(original.matches(&compact)&&!original.matches(&replacement));
+    assert!(replaced.matches(&replacement)&&!replaced.matches(&compact));
+
     let first = record();
     let mut second = record();
     let Command::Commit { request, .. } = &mut second.command else {
