@@ -939,6 +939,34 @@ impl AppState {
         self.spool_budget.budget()
     }
 }
+// Existing permits, not a second task registry. Jobs that outlive a request
+// still own these permits until their native work actually returns.
+struct HttpWork {
+    slots: [(Arc<tokio::sync::Semaphore>, u32); 5],
+    uploads: Arc<transfer_limits::Admission>,
+    reads: Arc<transfer_limits::Admission>,
+}
+impl HttpWork {
+    fn capture_new_router(state: &AppState) -> Self {
+        let slots = [
+            &state.backend_slots, &state.management_slots, &state.password_slots,
+            &state.smb_password_slots, &state.authorization_slots,
+        ].map(|slots| (Arc::clone(slots), slots.available_permits() as u32));
+        Self { slots, uploads: state.upload_slots.clone(), reads: state.read_slots.clone() }
+    }
+
+    async fn drain(self) -> std::io::Result<()> {
+        let mut idle = Vec::with_capacity(self.slots.len());
+        for (slots, capacity) in self.slots {
+            idle.push(slots.acquire_many_owned(capacity).await.map_err(std::io::Error::other)?);
+        }
+        while !self.uploads.is_idle()? || !self.reads.is_idle()? {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        Ok(())
+    }
+}
+
 fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     value.lock().expect("service state lock poisoned")
 }
@@ -970,7 +998,7 @@ pub fn router(
         spool_budget,
         runtime.smb_account,
     )
-    .map(|router| router.layer(http_routing::Extension(shutdown)))
+    .map(|(router, _)| router.layer(http_routing::Extension(shutdown)))
 }
 
 /// Common initialization for embedded routers and the network server. Callers
@@ -1031,7 +1059,7 @@ fn router_shared(
     telemetry: Arc<telemetry::Telemetry>,
     spool_budget: Arc<http_spool::HttpSpool>,
     smb_account: Option<Arc<smb_account_binding::Authority>>,
-) -> Result<Router, ApiError> {
+) -> Result<(Router, HttpWork), ApiError> {
     let static_etags = config.web_dir.as_ref().and_then(|root| {
         match web_assets::static_etags(root) {
             Ok(etags) => Some(etags),
@@ -1310,7 +1338,8 @@ fn router_shared(
     if config.web_dir.is_none() && web_assets_available {
         app = app.fallback_service(web_assets::embedded::fallback());
     }
-    Ok(app
+    let work = HttpWork::capture_new_router(&state);
+    Ok((app
         .layer(DefaultBodyLimit::disable())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -1321,7 +1350,7 @@ fn router_shared(
             http_boundary::admit_request,
         ))
         .layer(middleware::from_fn(security_headers))
-        .with_state(state))
+        .with_state(state), work))
 }
 
 #[derive(Debug, error_definition::Error)]
@@ -1389,7 +1418,7 @@ pub async fn serve_with_shutdown(
     let bridge_auth = auth.clone();
     let spool_config = Arc::clone(&config);
     let bridge_account = smb_account.clone();
-    let app = router_shared(
+    let (app, work) = router_shared(
         backend.clone(),
         auth,
         config,
@@ -1397,7 +1426,12 @@ pub async fn serve_with_shutdown(
         spool_budget,
         smb_account,
     )?;
-    let http = |stopped| http_shutdown::serve(listener, app, stopped);
+    let http = |stopped| async move {
+        http_shutdown::serve(listener, app, stopped).await?;
+        // No HTTP connections remain, but an admitted blocking job may have
+        // outlived its request. Keep management open until those owners finish.
+        work.drain().await
+    };
     let smb_connections = management_shutdown.smb_connections();
     let bridge = async move {
         if let (Some(smb), Some(bridge_account)) = (smb, bridge_account) {

@@ -268,3 +268,27 @@ async fn poisoned_network_destructors_close_sockets_during_unwind() {
         assert!(closed.sockets.is_empty());
     }
 }
+
+
+#[tokio::test]
+async fn normal_http_drain_waits_for_detached_owners_of_existing_permits() {
+    use std::sync::Arc;
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    let still_running = slots.clone().try_acquire_owned().unwrap();
+    let uploads = crate::transfer_limits::Admission::new(&crate::transfer_limits::TransferLimits::default());
+    let reads = crate::transfer_limits::Admission::new(&crate::transfer_limits::TransferLimits::default());
+    let upload = uploads.acquire().unwrap();
+    let mut work_slots = std::array::from_fn(|_| (Arc::new(tokio::sync::Semaphore::new(1)), 1));
+    work_slots[0] = (slots.clone(), 1);
+    let work = crate::HttpWork { slots: work_slots, uploads, reads };
+    let drain = tokio::spawn(work.drain());
+    tokio::task::yield_now().await;
+    assert!(!drain.is_finished());
+    drop(still_running);
+    tokio::task::yield_now().await;
+    assert!(!drain.is_finished());
+    drop(upload);
+    tokio::time::timeout(std::time::Duration::from_secs(2), drain)
+        .await.unwrap().unwrap().unwrap();
+    assert_eq!(slots.available_permits(), 1);
+}

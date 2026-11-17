@@ -54,6 +54,12 @@ impl Admission {
             slots: limits.slots,
         })
     }
+    pub(crate) fn is_idle(&self) -> std::io::Result<bool> {
+        self.active.lock().map_err(|_| std::io::Error::other("HTTP transfer admission is poisoned"))?
+            .map(|active| active == 0)
+            .ok_or_else(|| std::io::Error::other("HTTP transfer count is unknown"))
+    }
+
     pub(crate) fn acquire(self: &Arc<Self>) -> Result<Permit, ApiError> {
         let mut state = lock(&self.active);
         let active = state.as_mut().ok_or_else(|| {
