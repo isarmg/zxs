@@ -15265,6 +15265,20 @@
       ]
     },
     {
+      "path": "src/web/public/styles/components/history.css",
+      "groups": [
+        "container-lifecycle-web",
+        "web-directory-history-retirement"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/content.rs",
+      "groups": [
+        "fresh-managed-core",
+        "history-visible-context"
+      ]
+    },
+    {
       "path": "test/web/unit/files/lifecycle_tests.rs",
       "groups": [
         "container-lifecycle-web"

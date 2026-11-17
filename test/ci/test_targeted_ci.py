@@ -1498,6 +1498,25 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual((http['package'], http['kind'], http['name'], http['features']),
                          ('storage-server', 'test', 'phase1_save_tags', ['core']))
 
+    def test_history_style_and_content_read_select_their_runtime_consumers(self):
+        cases = {
+            'src/web/public/styles/components/history.css': {
+                'container-lifecycle-web', 'web-directory-history-retirement',
+            },
+            'src/server/src/engine_backend/content.rs': {
+                'fresh-managed-core', 'history-visible-context',
+            },
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertTrue(expected <= set(plan['groups']))
+        content = self.policy['groups']['history-visible-context']['rust_targets']
+        self.assertTrue(any(
+            'backup_namespace::authenticated_backup_range_selects_only_the_published_third_disk'
+            in target.get('exact', []) for target in content
+        ))
+
     def test_lifecycle_receipt_source_keeps_shared_readers_and_endpoint_checks(self):
         paths = [
             'src/engine/src/state_projection/lifecycles.rs',
