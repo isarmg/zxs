@@ -143,3 +143,7 @@ type Result<T> = std::result::Result<T, RegistrationError>;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/snapshot_worktree_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/snapshot_worktree/explicit_occurrence.rs"]
+mod explicit_occurrence_tests;

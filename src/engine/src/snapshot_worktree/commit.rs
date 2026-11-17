@@ -113,11 +113,8 @@ fn commit_inner(
     let original_file = edited.original;
     let original_source = edited.original_source;
     let edit = completed.edit.clone();
-    if edit.material.content_hash == original_file.content_hash
-        && edit.material.size == original_file.size
-    {
-        return Err(RegistrationError::CommitScope);
-    }
+    // The sealed edit receipt is the write fact. Equal bytes do not erase its
+    // reserved version or turn its physical MOVE into an original-node COPY.
     let instance = HeldSparseWorktree::reopen(&original, session.instance())
         .map_err(RegistrationError::EditInstance)?;
     let mut body = instance.open_material(&edit.file_edit().material)

@@ -1561,9 +1561,10 @@ impl crate::engine::PlanningContext<'_> {
                     let path = location.as_str();
                     let final_location = upload_locations.get(&file.item_id).expect("invariant: workspace preview covers every upload");
                     written_paths.push(final_location.as_str().to_owned());
-                    // An unchanged save retains the selected content node and
-                    // pending source. Fork only when the visible bytes change.
-                    if existing.as_ref().is_some_and(|entry| {
+                    // Ordinary unchanged saves retain their selected node. A
+                    // worktree reservation instead binds an explicit edit and
+                    // its exact fresh version, independently of content equality.
+                    if reserved.is_none() && existing.as_ref().is_some_and(|entry| {
                         state.versions.get(&entry.version_id).is_some_and(|version| {
                             version.content_hash == file.content_hash
                                 && version.logical_size == file.size
