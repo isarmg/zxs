@@ -124,6 +124,56 @@ fn inventory(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     found
 }
 
+#[test]
+fn named_root_pages_reopen_the_captured_mounts_and_restart_on_membership_change() {
+    let setup = setup();
+    let mut named = named_session(Arc::clone(&setup.shared), &setup.repository.main_branch_id);
+    let Reply::Open { metadata, descriptor: _fd } = named.dispatch(Request::Open {
+        path: String::new(), writable: false, create: false, truncate: false,
+        exclusive: false, write_through: false,
+    }).unwrap() else { panic!("real bound root handle"); };
+    let page = |restart| Request::ReadDirectory { handle: metadata.handle, restart };
+    let status = observe(&setup, |engine| engine.directory_worktree_status(setup.target).unwrap());
+    let instance = setup.disk.join("common-data/.zxs").join(status.original.node_id.to_string())
+        .join("worktrees").join(setup.target.worktree_id.to_string());
+    let outside = tempfile::tempdir().unwrap();
+    let original = outside.path().join("bound-instance");
+    fs::rename(&instance, &original).unwrap();
+    fs::create_dir(&instance).unwrap();
+    fs::set_permissions(&instance, fs::metadata(&original).unwrap().permissions()).unwrap();
+    assert_ne!(fs::metadata(&instance).unwrap().ino(), fs::metadata(&original).unwrap().ino());
+    assert!(named.dispatch(page(false)).is_err(),
+        "the captured root may not disclose an unverified mount");
+    fs::rename(&instance, outside.path().join("replacement")).unwrap();
+    fs::rename(&original, &instance).unwrap();
+    let Reply::Directory(restored) = named.dispatch(page(false)).unwrap() else {
+        panic!("restoring the same instance resumes the same cursor");
+    };
+    let mounts = |entries: Vec<DirectoryEntry>| entries.into_iter().filter_map(|entry| match entry {
+        DirectoryEntry::Worktree { target, relative_path: None, .. } => Some(target),
+        _ => None,
+    }).collect::<Vec<_>>();
+    assert_eq!(mounts(restored.entries), [setup.target, setup.independent]);
+
+    let third = setup.backend.inner.test_with_engine_locked(|engine| {
+        let context = engine.snapshot_root_context(setup.repository.repository_id.parse().unwrap())
+            .unwrap();
+        engine.create_directory_worktree(&CreateWorktree {
+            source: status.original, parent_directory_id: status.parent_directory_id,
+            name: Name::parse("worktree-main-003").unwrap(),
+            expected_root_generation: context.host.expected_root_generation,
+            operation_id: OperationId::generate().unwrap(),
+        }, &"alice".parse().unwrap()).unwrap()
+    });
+    assert!(matches!(named.dispatch(page(false)), Err(error)
+        if error.code == storage_contract::ErrorCode::ListingChanged));
+    let Reply::Directory(fresh) = named.dispatch(page(true)).unwrap() else {
+        panic!("restart recaptures the live mount union");
+    };
+    assert_eq!(mounts(fresh.entries), [setup.target, setup.independent, third]);
+    named.dispatch(Request::Close { handle: metadata.handle }).unwrap();
+}
+
 fn share(setup: &Setup) -> DefaultShare {
     let generation = setup.shared.account.read().unwrap().selection().generation;
     DefaultShare::new(Arc::clone(&setup.shared), identity(&setup.shared), generation, 4096).unwrap()

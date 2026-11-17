@@ -203,6 +203,29 @@ impl crate::DirectoryReadSnapshot {
         }
         Ok(())
     }
+
+    /// Ordinary entries stay pinned to the opened directory. A worktree row,
+    /// however, is a live mount: the handle and its canonical name do not
+    /// establish that the registered node/instance is still present and ready.
+    fn require_root_mounts(&self, engine: &Engine, repository: &str) -> Result<(), ApiError> {
+        let owner = repository.parse().map_err(ApiError::contract_input)?;
+        let mounts = engine.directory_worktree_mounts(owner)
+            .map_err(super::snapshot_worktree::error)?;
+        let current = mounts.iter().map(|mount| (mount.target, mount.name.as_str()));
+        let captured = self.unborn.iter().filter_map(|entry| match entry {
+            smb_protocol::protocol::DirectoryEntry::Worktree {
+                target, relative_path: None, path, ..
+            } => Some((*target, path.as_str())),
+            _ => None,
+        });
+        // Both inventories use the same portable lookup-key ordering. A save
+        // inside a still-valid mount does not change the exposed directory row.
+        if !current.eq(captured) {
+            return Err(ApiError::conflict(storage_contract::ErrorCode::ListingChanged,
+                "worktree mounts changed; reopen or restart the directory"));
+        }
+        Ok(())
+    }
 }
 
 impl DirectorySnapshot {
@@ -223,6 +246,9 @@ impl DirectorySnapshot {
                 ..
             } => {
                 snapshot.authorize_current(engine, branch)?;
+                if path.is_none() && repository.file_manager_root && repository.main_branch_id == branch {
+                    snapshot.require_root_mounts(engine, &repository.repository_id)?;
+                }
                 crate::DirectoryReadSnapshot::clone(snapshot)
             }
             crate::DirectorySelection::Capture
