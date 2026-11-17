@@ -44,6 +44,7 @@ use commits::CommitRecord;
 pub(super) use commits::{CommitRetry, verify_file_publication};
 pub(crate) use commits::PublishedCommitTail;
 use edits::{EditRecordEntry, LedgerHead};
+pub(super) use edits::EditRetry;
 
 /// This is a relation among independently admitted SYSTEM receipts. It holds
 /// neither a directory handle nor namespace/write authority. Uncompleted

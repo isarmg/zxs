@@ -7,6 +7,7 @@ use crate::persist::snapshot_worktree::{
     EditCompletion, EditReservation, Record, WorktreeReservation,
 };
 use crate::snapshot_worktree::{RegistrationError, Result, publication, with_worktree};
+use crate::snapshot_worktree::registry::EditRetry;
 use crate::working_tree::records::local_entity;
 use crate::working_tree::snapshot::{HeldSnapshotNode, SnapshotEntryContent, SnapshotFile};
 use crate::{Engine, State, ValidatedConfig};
@@ -35,12 +36,19 @@ pub(crate) fn edit_worktree(
 ) -> Result<WorktreeRevision> {
     let receipts = engine.snapshot_receipt_source()?;
     let index = receipts.index()?;
+    let after_reserve = |source| RegistrationError::DirectoryResponse {
+        operation: request.operation_id, source: Box::new(source),
+    };
     // Exact original intent wins before a new transport body or today's size
     // limit. A retry does not resave, reread the upload, or allocate a version;
     // the actual published instance must still pass its held integrity proof.
-    if let Some(revision) = index.retry_edit(request, principal)? {
-        with_worktree(engine, request.target, |_| Ok(()))?;
-        return Ok(revision);
+    if let Some(retry) = index.retry_edit(request, principal)? {
+        return match retry {
+            EditRetry::Reserved => Err(RegistrationError::Pending(request.operation_id)),
+            EditRetry::Complete(revision) => {
+                index.with_worktree(engine, request.target, |_, _| Ok(revision))
+            }
+        }.map_err(after_reserve);
     }
     if request.size > engine.config().max_file_bytes {
         return Err(RegistrationError::EditBody);
@@ -93,7 +101,7 @@ pub(crate) fn edit_worktree(
     ReservedEdit {
         state: Arc::clone(&engine.state), config, resources, worktree, plan,
         principal: principal.clone(), commitment,
-    }.complete(engine, &source, session.into_ledger(), bytes)
+    }.complete(engine, &source, session.into_ledger(), bytes).map_err(after_reserve)
 }
 
 impl ReservedEdit {
@@ -147,6 +155,8 @@ impl ReservedEdit {
         ledger.admit_read_view().map_err(RegistrationError::Ledger)?;
         let revision = ledger.worktree().revision();
         self.require_engine(engine)?;
+        #[cfg(feature = "fault-injection")]
+        engine.failpoint("after_worktree_edit_ledger").map_err(RegistrationError::Publication)?;
         let completion = Record::CompleteEdit(EditCompletion {
             reserve: request.operation_id, reservation: self.commitment,
             edit, checkpoint, revision,
@@ -173,3 +183,7 @@ pub(in crate::snapshot_worktree) fn require_mount(
             &plan.request.name,
         ).map_err(RegistrationError::NamespaceHost)
 }
+
+#[cfg(all(test, feature = "fault-injection"))]
+#[path = "../../../../test/engine/unit/snapshot_worktree/edit_recovery.rs"]
+mod recovery_tests;

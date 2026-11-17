@@ -232,6 +232,20 @@ fn complete_resaves_keep_original_occurrence_and_move_only_exact_current_revisio
         source(source_directory.path(), "retry-A", b"")).unwrap(), revision_a);
     assert_eq!(engine.edit_directory_worktree(&second, &principal,
         source(source_directory.path(), "retry-B", b"partial retry")).unwrap(), revision_b);
+    // A completed original still cannot serve a replacement sparse inode.
+    // Retain the original operation in the error, not a newly supplied upload.
+    let parked = source_directory.path().join("parked-sealed-B");
+    fs::rename(&path_b, &parked).unwrap();
+    fs::write(&path_b, b).unwrap();
+    fs::set_permissions(&path_b, fs::metadata(&parked).unwrap().permissions()).unwrap();
+    let error = engine.edit_directory_worktree(&second, &principal,
+        source(source_directory.path(), "retry-replaced-B", b"")).unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::RecoveryRequired);
+    assert_eq!(error.published_operation(), Some(second.operation_id));
+    fs::rename(&path_b, source_directory.path().join("replacement-B")).unwrap();
+    fs::rename(&parked, &path_b).unwrap();
+    assert_eq!(engine.edit_directory_worktree(&second, &principal,
+        source(source_directory.path(), "retry-restored-B", b"")).unwrap(), revision_b);
     assert_eq!(engine.edit_directory_worktree(&second, &"other".parse().unwrap(),
         source(source_directory.path(), "wrong-principal", b"")).unwrap_err().code(),
         storage_contract::ErrorCode::IdempotencyKeyReused);

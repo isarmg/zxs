@@ -22,6 +22,11 @@ pub(super) struct EditRecordEntry<'a> {
     pub(super) publication: Publication<EditCompletion>,
 }
 
+pub(in crate::snapshot_worktree) enum EditRetry {
+    Reserved,
+    Complete(WorktreeRevision),
+}
+
 impl<'a> ReceiptIndex<'a> {
     /// A new sealed revision may replace only the same original occurrence at
     /// any admitted snapshot depth. Its parents come from the immutable source,
@@ -48,7 +53,7 @@ impl<'a> ReceiptIndex<'a> {
         &self,
         request: &EditWorktree,
         principal: &Principal,
-    ) -> Result<Option<WorktreeRevision>> {
+    ) -> Result<Option<EditRetry>> {
         if !self.source.operations.contains_key(&request.operation_id) {
             return Ok(None);
         }
@@ -57,10 +62,10 @@ impl<'a> ReceiptIndex<'a> {
         if &edit.plan.request != request || &edit.receipt.principal != principal {
             return Err(RegistrationError::Digest(request.operation_id));
         }
-        let Publication::Complete(completion) = &edit.publication else {
-            return Err(RegistrationError::Pending(request.operation_id));
-        };
-        Ok(Some(completion.revision))
+        Ok(Some(match &edit.publication {
+            Publication::Reserved => EditRetry::Reserved,
+            Publication::Complete(completion) => EditRetry::Complete(completion.revision),
+        }))
     }
 
     pub(super) fn reserve_edit(
