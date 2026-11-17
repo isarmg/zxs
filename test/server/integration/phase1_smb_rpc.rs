@@ -4,6 +4,8 @@
 mod directory_rename;
 #[path = "phase1_smb_rpc/manual_draft.rs"]
 mod manual_draft;
+#[path = "phase1_smb_rpc/native_working.rs"]
+mod native_working;
 use smb_protocol::{
     client::{Client, RemoteError, RemoteErrorCode},
     protocol::{DirectoryPage, NamespaceOperation, OpenResult, Request},
@@ -367,7 +369,7 @@ fn directory(client: &Client, path: &str) -> Vec<String> {
         names.extend(
             page.entries
                 .iter()
-                .map(|entry| entry.entry.path.as_str().to_owned()),
+                .map(|entry| entry.path().as_str().to_owned()),
         );
         if !page.more {
             break;

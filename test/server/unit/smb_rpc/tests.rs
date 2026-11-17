@@ -40,6 +40,8 @@ mod history_move_tests;
 mod mtime_tests;
 #[path = "manual_draft_tests.rs"]
 mod manual_draft_tests;
+#[path = "native_dispatch_tests.rs"]
+mod native_dispatch_tests;
 #[path = "named_move_tests.rs"]
 mod named_move_tests;
 #[path = "namespace_tests.rs"]

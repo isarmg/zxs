@@ -221,6 +221,7 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
     file.write_all_at(b"good", 0).unwrap();
     let opened = vfs::Open {
         info: Arc::new(OpenResult {
+            data_io: smb_protocol::protocol::OpenIo::VerifiedRanges,
             entry_id: "entry".into(),
             kind: storage_contract::NamespaceEntryKind::File,
             path: "file".into(),
@@ -275,6 +276,9 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
                 .unwrap();
             opened.writable = writable;
             Arc::get_mut(&mut opened.info).unwrap().workspace_id = workspace.map(str::to_owned);
+            Arc::get_mut(&mut opened.info).unwrap().data_io = if writable || workspace.is_some() {
+                smb_protocol::protocol::OpenIo::Descriptor
+            } else { smb_protocol::protocol::OpenIo::VerifiedRanges };
             let private_work = workspace.is_some();
             let mut metadata = sdk::SMB_STRUCT_STAT::default();
             assert_eq!(

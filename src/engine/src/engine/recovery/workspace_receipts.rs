@@ -454,7 +454,28 @@ impl Engine {
         original: &crate::history_package::AdmittedState,
         publication: Option<&Publication>,
     ) -> Result<()> {
-        self.verify_replay_namespace_source(candidate, original, publication, None)
+        self.verify_replay_namespace_source(candidate, original, publication, None, None)
+    }
+
+    /// Borrow the cursor that already admitted the actual later publications.
+    /// It changes only a physical historical read location, never its original
+    /// State, receipt, namespace or immutable extent identities.
+    pub(super) fn verify_replay_namespace_at_locations(
+        &self,
+        candidate: &Candidate,
+        original: &crate::history_package::AdmittedState,
+        publication: Option<&Publication>,
+        seal: Option<&PublicationSeal>,
+        locations: &super::super::fresh_layout::containers::RecoveryRenameLocations<'_>,
+    ) -> Result<()> {
+        match (publication, seal) {
+            (Some(publication), Some(seal)) => self.verify_readonly_published_namespace_source(
+                candidate, original, publication, seal, Some(locations),
+            ),
+            _ => self.verify_replay_namespace_source(
+                candidate, original, publication, None, Some(locations),
+            ),
+        }
     }
 
     /// Called only from recover's !can_repair branch after the same actual seal
@@ -466,13 +487,26 @@ impl Engine {
         publication: &Publication,
         seal: &PublicationSeal,
     ) -> Result<()> {
+        self.verify_readonly_published_namespace_source(
+            candidate, original, publication, seal, None,
+        )
+    }
+
+    fn verify_readonly_published_namespace_source(
+        &self,
+        candidate: &Candidate,
+        original: &crate::history_package::AdmittedState,
+        publication: &Publication,
+        seal: &PublicationSeal,
+        locations: Option<&super::super::fresh_layout::containers::RecoveryRenameLocations<'_>>,
+    ) -> Result<()> {
         // The caller retains PreparedRecovery's unchanged fixed-member quorum;
         // this source cannot enter the pending or can_repair branches. A
         // degraded recovery keeps its original strict source path: only normal
         // all-member ACCEPT/FINALIZE/Publication evidence issues this loan.
         if publication.recovery.is_some() {
-            return self.verify_replay_namespace_candidate(
-                candidate, original, Some(publication),
+            return self.verify_replay_namespace_source(
+                candidate, original, Some(publication), None, locations,
             );
         }
         self.verify_candidate_membership(candidate)?;
@@ -491,7 +525,9 @@ impl Engine {
             _seal: seal,
         };
         source.require_pair(&self.planning_context(), original.state(), candidate)?;
-        self.verify_replay_namespace_source(candidate, original, Some(publication), Some(&source))
+        self.verify_replay_namespace_source(
+            candidate, original, Some(publication), Some(&source), locations,
+        )
     }
 
     fn verify_replay_namespace_source(
@@ -500,6 +536,7 @@ impl Engine {
         original: &crate::history_package::AdmittedState,
         publication: Option<&Publication>,
         readonly: Option<&ReadOnlyPublishedCandidate<'_>>,
+        locations: Option<&super::super::fresh_layout::containers::RecoveryRenameLocations<'_>>,
     ) -> Result<()> {
         let activation = self.config.generation().filter(|generation| {
             self.current_namespaces.is_none()
@@ -508,7 +545,7 @@ impl Engine {
         });
         let Some(generation) = activation else {
             return self.verify_current_recovery_candidate_source(
-                candidate, original.state(), readonly,
+                candidate, original.state(), readonly, locations,
             );
         };
         if self.snapshot != generation.snapshot()
@@ -531,7 +568,7 @@ impl Engine {
         candidate: &Candidate,
         next: &State,
     ) -> Result<()> {
-        self.verify_current_recovery_candidate_source(candidate, next, None)
+        self.verify_current_recovery_candidate_source(candidate, next, None, None)
     }
 
     fn verify_current_recovery_candidate_source(
@@ -539,10 +576,12 @@ impl Engine {
         candidate: &Candidate,
         next: &State,
         readonly: Option<&ReadOnlyPublishedCandidate<'_>>,
+        locations: Option<&super::super::fresh_layout::containers::RecoveryRenameLocations<'_>>,
     ) -> Result<()> {
-        let containers = super::super::fresh_layout::containers::verify_transition(
-            &self.config, &self.state, next, candidate,
-        )?;
+        let containers =
+            super::super::fresh_layout::containers::verify_transition_with_working_source(
+                &self.config, &self.disk_resources, &self.state, next, candidate, locations,
+            )?;
         match readonly {
             Some(source) => crate::protection::verify_readonly_automatic_backup_candidate(
                 &self.planning_context(), next, candidate, &containers, source,

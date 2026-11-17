@@ -99,7 +99,7 @@ fn public_smb_soft_delete_revokes_cached_reads_and_pages_and_restores_exact_file
         !page
             .entries
             .iter()
-            .any(|entry| entry.entry.file_id == a.file_id)
+            .any(|entry| entry.published().is_some_and(|published| published.file_id == a.file_id))
     );
     assert!(!directory(&client, "p").contains(&"A.txt".to_owned()));
     assert_eq!(

@@ -520,7 +520,8 @@ fn successful_open_descriptor_keeps_the_shared_connection_reusable() {
             .send(
                 &Response::Ok {
                     result: json_codec::json!({
-                        "entry_id": "entry", "kind": "file", "path": "file",
+                        "data_io":"verified_ranges",
+            "entry_id": "entry", "kind": "file", "path": "file",
                         "handle": "1", "size": "0", "max_file_bytes": "1024",
                         "version_id": null, "workspace_id": null,
                         "mtime":{"state":"unpublished"}
@@ -618,12 +619,14 @@ fn malformed_open_result_closes_descriptor_and_disconnects_every_clone() {
     for result in [
         json_codec::json!({}),
         json_codec::json!({
+            "data_io":"verified_ranges",
             "entry_id": "entry", "kind": "file", "path": "file",
             "handle": 1, "size": "0", "max_file_bytes": "1024",
             "version_id": null, "workspace_id": null,
             "mtime":{"state":"unpublished"}
         }),
         json_codec::json!({
+            "data_io":"verified_ranges",
             "entry_id": "entry", "kind": "file", "path": "file",
             "handle": "1", "size": "0", "max_file_bytes": "1024",
             "version_id": null, "workspace_id": null, "unknown": true,

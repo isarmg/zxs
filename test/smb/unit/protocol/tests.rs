@@ -435,6 +435,7 @@ fn immutable_reads_hide_appended_bytes_while_workspace_reads_follow_live_length(
     let file = unsafe { File::from_raw_fd(raw) };
     file.write_all_at(b"good", 0).unwrap();
     let info = OpenResult {
+        data_io: crate::protocol::OpenIo::VerifiedRanges,
         entry_id: "entry".into(),
         kind: storage_contract::NamespaceEntryKind::File,
         path: "file".into(),
@@ -492,7 +493,8 @@ fn namespace_and_open_kind_reject_unknown_wire_states() {
     value["kind"] = "future_operation".into();
     assert!(json_codec::from_value::<Request>(value).is_err());
     let opened = json_codec::json!({
-        "entry_id":"entry", "kind":"future_kind", "path":"entry", "handle":"1",
+        "data_io":"verified_ranges",
+            "entry_id":"entry", "kind":"future_kind", "path":"entry", "handle":"1",
         "size":"0", "max_file_bytes":"1024", "version_id":null, "workspace_id":null
     });
     assert!(json_codec::from_value::<OpenResult>(opened).is_err());
@@ -599,5 +601,36 @@ fn default_hello_is_explicit_and_cannot_carry_a_repository_override() {
         let mut missing = value.clone();
         missing.as_object_mut().unwrap().remove(required);
         assert!(json_codec::from_value::<Request>(missing).is_err());
+    }
+}
+
+
+#[test]
+fn native_working_io_has_explicit_mode_and_never_requires_a_fake_version() {
+    let opened = OpenResult {
+        data_io: OpenIo::NativeWorking, entry_id: "entry".into(),
+        kind: storage_contract::NamespaceEntryKind::File, path: "new.txt".into(),
+        handle: 1, size: 0, max_file_bytes: 1024,
+        version_id: None, workspace_id: None, mtime: FileMtime::Unpublished {},
+    };
+    let wire = json_codec::to_value(&opened).unwrap();
+    assert_eq!(wire["data_io"], "native_working");
+    assert!(wire["version_id"].is_null() && wire["workspace_id"].is_null());
+    let decoded: OpenResult = json_codec::from_value(wire.clone()).unwrap();
+    assert_eq!(decoded.data_io, OpenIo::NativeWorking);
+    let mut missing = wire.clone();
+    missing.as_object_mut().unwrap().remove("data_io");
+    assert!(json_codec::from_value::<OpenResult>(missing).is_err());
+    let mut future = wire;
+    future["data_io"] = "guess_from_descriptor".into();
+    assert!(json_codec::from_value::<OpenResult>(future).is_err());
+    for position in [WorkingPosition::At { offset: u64::MAX }, WorkingPosition::Append {}] {
+        let request: Request = Request::WorkingWrite { handle: 1, position, bytes: vec![0, 255] };
+        let wire = json_codec::to_value(request).unwrap();
+        let decoded: Request = json_codec::from_value(wire.clone()).unwrap();
+        assert!(matches!(decoded.parse_operation_id().unwrap(), Request::WorkingWrite { .. }));
+        let mut unknown = wire;
+        unknown["version_id"] = "not-an-authority".into();
+        assert!(json_codec::from_value::<Request>(unknown).is_err());
     }
 }

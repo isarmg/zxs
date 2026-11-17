@@ -40,6 +40,14 @@ pub enum Mode {
 }
 strict_string_deserialize!(Mode { Production => "production", Development => "development" });
 
+/// Immutable semantic format authenticated by the Genesis configuration and disk seals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum PoolSemanticFormat {
+    #[serialization(rename = "manual-directory-v1")]
+    ManualDirectoryV1,
+}
+strict_string_deserialize!(PoolSemanticFormat { ManualDirectoryV1 => "manual-directory-v1" });
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DiskConfig {
@@ -62,6 +70,7 @@ pub struct DiskConfig {
 #[serialization(deny_unknown_fields)]
 pub struct Config {
     pub pool_id: String,
+    pub pool_semantic_format: PoolSemanticFormat,
     /// Empty only in an initialization request. Persisted genesis requires the
     /// complete, same-lock observed physical roots; no old-format default.
     pub storage_roots: BTreeMap<crate::DiskId, crate::working_tree::RootBinding>,
@@ -114,6 +123,7 @@ impl Config {
     pub fn is_initialization_result_of(&self, input: &Self) -> bool {
         let Self {
             pool_id,
+            pool_semantic_format,
             storage_roots,
             mode,
             disks,
@@ -132,6 +142,7 @@ impl Config {
         input.storage_roots.is_empty()
             && !storage_roots.is_empty()
             && *pool_id == input.pool_id
+            && *pool_semantic_format == input.pool_semantic_format
             && *mode == input.mode
             && *disks == input.disks
             && *checksum_chunk_bytes == input.checksum_chunk_bytes
@@ -180,6 +191,7 @@ impl Config {
         }
         Ok(Self {
             pool_id: crate::new_id("pool")?,
+            pool_semantic_format: PoolSemanticFormat::ManualDirectoryV1,
             storage_roots: BTreeMap::new(),
             mode: Mode::Development,
             disks: disks

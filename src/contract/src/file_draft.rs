@@ -6,6 +6,12 @@ use crate::{BranchId, ContentHash, FileNodeId, Generation, GenerationExhausted, 
 use data_serialization::{Deserialize, Serialize};
 use std::fmt;
 
+pub mod manifest;
+mod unborn;
+pub use unborn::{BirthRequest, UnbornBody, UnbornSaveRequest, UnbornWorking};
+mod selection;
+pub use selection::{WorkingContentExpectation, WorkingExpectation, WorkingSelection};
+
 /// A selected occurrence, not a FileId-only or global-default lookup.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -190,6 +196,11 @@ impl DraftPayload {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FileWorkingState {
+    /// The current container exists, but no historical FILE node does. This is
+    /// not ManualClean: there is no selected Version to reopen or discard to.
+    Unborn {
+        working: UnbornWorking,
+    },
     Automatic {
         revision: WorkingRevision,
     },
@@ -204,8 +215,23 @@ pub enum FileWorkingState {
 }
 
 impl FileWorkingState {
+    /// Actual still-referenced working storage, separate from historical FULL
+    /// versions and from a sparse body's potentially much larger visible length.
+    pub fn material_bytes(&self) -> u64 {
+        match self {
+            Self::Unborn { working } => match working.body() {
+                UnbornBody::Empty {} => 0,
+                UnbornBody::Saved { manifest } => manifest.blocks().iter()
+                    .map(|block| block.extent().bytes()).sum(),
+            },
+            Self::ManualDirty { payload, .. } => payload.logical_size(),
+            Self::Automatic { .. } | Self::ManualClean { .. } => 0,
+        }
+    }
+
     pub const fn revision(&self) -> WorkingRevision {
         match self {
+            Self::Unborn { working } => working.revision(),
             Self::Automatic { revision }
             | Self::ManualClean { revision }
             | Self::ManualDirty { revision, .. } => *revision,
@@ -214,6 +240,7 @@ impl FileWorkingState {
 
     pub const fn mode(&self) -> CommitMode {
         match self {
+            Self::Unborn { working } => working.mode(),
             Self::Automatic { .. } => CommitMode::Automatic,
             Self::ManualClean { .. } | Self::ManualDirty { .. } => CommitMode::Manual,
         }
@@ -221,8 +248,16 @@ impl FileWorkingState {
 
     pub const fn draft(&self) -> Option<(&DraftBase, &DraftPayload)> {
         match self {
+            Self::Unborn { .. } => None,
             Self::Automatic { .. } | Self::ManualClean { .. } => None,
             Self::ManualDirty { base, payload, .. } => Some((base, payload)),
+        }
+    }
+
+    pub const fn unborn(&self) -> Option<&UnbornWorking> {
+        match self {
+            Self::Unborn { working } => Some(working),
+            Self::Automatic { .. } | Self::ManualClean { .. } | Self::ManualDirty { .. } => None,
         }
     }
 }

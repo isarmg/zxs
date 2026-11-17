@@ -151,6 +151,7 @@ impl ValidatedConfig {
                 "Backup writer projection already carries a generation",
             ));
         }
+        self.verify_generation_semantic_format(&generation)?;
         let targets = generation.portable.backup_writer_target_ids(&self)?;
         let admitted = Arc::make_mut(&mut self.admitted);
         admitted.generation = Some(generation);
@@ -181,6 +182,7 @@ impl ValidatedConfig {
                 "Backup continuation changes its original native authority or replayed source",
             ));
         }
+        self.verify_generation_semantic_format(&generation)?;
         Arc::make_mut(&mut self.admitted).generation = Some(generation);
         Ok(self)
     }
@@ -321,8 +323,22 @@ impl ValidatedConfig {
                 "generation is already admitted",
             ));
         }
+        self.verify_generation_semantic_format(&generation)?;
         Arc::make_mut(&mut self.admitted).generation = Some(generation);
         Ok(self)
+    }
+
+    fn verify_generation_semantic_format(
+        &self,
+        generation: &super::membership_transition::pending::activation::Generation,
+    ) -> Result<()> {
+        if self.pool_semantic_format != generation.original().pool_semantic_format {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "successor configuration changes the fixed Genesis pool format",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn same_metadata_membership(&self, other: &Self) -> bool {

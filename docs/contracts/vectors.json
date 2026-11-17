@@ -6381,6 +6381,230 @@
         "target_copies": 3,
         "expected_generation": "0"
       }
+    },
+    {
+      "name": "new-pool-explicit-initialization-config",
+      "schema": "PoolConfiguration",
+      "layer": "schema",
+      "value": {
+        "pool_id": "pool_00000000000000000000000000000001",
+        "pool_semantic_format": "manual-directory-v1",
+        "storage_roots": {},
+        "mode": "development",
+        "disks": [
+          {
+            "slot_id": "P01",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "name": "Primary",
+            "root": "/chosen/primary",
+            "level": 1,
+            "upstream_slot_id": null,
+            "metadata_member": true,
+            "binding_generation": "1",
+            "capacity_bytes": null
+          }
+        ],
+        "checksum_chunk_bytes": 65536,
+        "max_file_bytes": "1073741824",
+        "max_workspace_bytes": "2147483648",
+        "max_workspaces": 16,
+        "max_retained_workspaces": 4096,
+        "max_retained_workspaces_per_principal": 1024,
+        "max_retained_workspace_metadata_bytes": "134217728",
+        "max_retained_workspace_metadata_bytes_per_principal": "67108864",
+        "max_entries": 10000,
+        "metadata_reserve_bytes": "67108864",
+        "workspace_ttl_seconds": "3600"
+      }
+    },
+    {
+      "name": "new-pool-complete-five-area-config",
+      "schema": "PoolConfiguration",
+      "layer": "schema",
+      "value": {
+        "pool_id": "pool_00000000000000000000000000000001",
+        "pool_semantic_format": "manual-directory-v1",
+        "storage_roots": {
+          "disk_00000000000000000000000000000002": {
+            "layout": "unified_working_tree_v1",
+            "root_id": "root_00000000000000000000000000000003",
+            "registration": {
+              "pool_id": "pool_00000000000000000000000000000001",
+              "disk_id": "disk_00000000000000000000000000000002",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "source_chain": [],
+            "root_entity": {
+              "device": "42",
+              "inode": "1000"
+            },
+            "roots": {
+              "common_data": {
+                "directory_id": "directory_00000000000000000000000000000004",
+                "entity": {
+                  "device": "42",
+                  "inode": "1004"
+                }
+              },
+              "deleted_data": {
+                "directory_id": "directory_00000000000000000000000000000005",
+                "entity": {
+                  "device": "42",
+                  "inode": "1005"
+                }
+              },
+              "zxs_data": {
+                "directory_id": "directory_00000000000000000000000000000006",
+                "entity": {
+                  "device": "42",
+                  "inode": "1006"
+                }
+              },
+              "zxs_lifecycles": {
+                "common_data": {
+                  "directory_id": "directory_00000000000000000000000000000007",
+                  "entity": {
+                    "device": "42",
+                    "inode": "1007"
+                  }
+                },
+                "deleted_data": {
+                  "directory_id": "directory_00000000000000000000000000000008",
+                  "entity": {
+                    "device": "42",
+                    "inode": "1008"
+                  }
+                }
+              }
+            },
+            "operation_id": "op_00000000000000000000000000000009",
+            "generation": "1"
+          }
+        },
+        "mode": "development",
+        "disks": [
+          {
+            "slot_id": "P01",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "name": "Primary",
+            "root": "/chosen/primary",
+            "level": 1,
+            "upstream_slot_id": null,
+            "metadata_member": true,
+            "binding_generation": "1",
+            "capacity_bytes": null
+          }
+        ],
+        "checksum_chunk_bytes": 65536,
+        "max_file_bytes": "1073741824",
+        "max_workspace_bytes": "2147483648",
+        "max_workspaces": 16,
+        "max_retained_workspaces": 4096,
+        "max_retained_workspaces_per_principal": 1024,
+        "max_retained_workspace_metadata_bytes": "134217728",
+        "max_retained_workspace_metadata_bytes_per_principal": "67108864",
+        "max_entries": 10000,
+        "metadata_reserve_bytes": "67108864",
+        "workspace_ttl_seconds": "3600"
+      }
+    },
+    {
+      "name": "new-pool-five-area-binding",
+      "schema": "PoolRootBinding",
+      "layer": "schema",
+      "value": {
+        "layout": "unified_working_tree_v1",
+        "root_id": "root_00000000000000000000000000000003",
+        "registration": {
+          "pool_id": "pool_00000000000000000000000000000001",
+          "disk_id": "disk_00000000000000000000000000000002",
+          "slot_id": "P01",
+          "binding_generation": "1"
+        },
+        "source_chain": [],
+        "root_entity": {
+          "device": "42",
+          "inode": "1000"
+        },
+        "roots": {
+          "common_data": {
+            "directory_id": "directory_00000000000000000000000000000004",
+            "entity": {
+              "device": "42",
+              "inode": "1004"
+            }
+          },
+          "deleted_data": {
+            "directory_id": "directory_00000000000000000000000000000005",
+            "entity": {
+              "device": "42",
+              "inode": "1005"
+            }
+          },
+          "zxs_data": {
+            "directory_id": "directory_00000000000000000000000000000006",
+            "entity": {
+              "device": "42",
+              "inode": "1006"
+            }
+          },
+          "zxs_lifecycles": {
+            "common_data": {
+              "directory_id": "directory_00000000000000000000000000000007",
+              "entity": {
+                "device": "42",
+                "inode": "1007"
+              }
+            },
+            "deleted_data": {
+              "directory_id": "directory_00000000000000000000000000000008",
+              "entity": {
+                "device": "42",
+                "inode": "1008"
+              }
+            }
+          }
+        },
+        "operation_id": "op_00000000000000000000000000000009",
+        "generation": "1"
+      }
+    },
+    {
+      "name": "new-pool-held-managed-seal",
+      "schema": "PoolDiskSeal",
+      "layer": "schema",
+      "value": {
+        "format": "unified-working-tree-managed-directory-v1",
+        "pool_semantic_format": "manual-directory-v1",
+        "pool_id": "pool_00000000000000000000000000000001",
+        "disk_id": "disk_00000000000000000000000000000002",
+        "slot_id": "P01",
+        "binding_generation": "1",
+        "device": "42",
+        "inode": "1000",
+        "simulation": true
+      }
+    },
+    {
+      "name": "new-pool-held-generation-seal",
+      "schema": "PoolDiskSeal",
+      "layer": "schema",
+      "value": {
+        "format": {
+          "unified-working-tree-membership-generation-v1": {
+            "authority_hash": "b3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "pool_semantic_format": "manual-directory-v1",
+        "pool_id": "pool_00000000000000000000000000000001",
+        "disk_id": "disk_00000000000000000000000000000002",
+        "slot_id": "P01",
+        "binding_generation": "1",
+        "device": "42",
+        "inode": "1000",
+        "simulation": true
+      }
     }
   ],
   "negative": [
@@ -26627,6 +26851,475 @@
         "directory_id": "entry_00000000000000000000000000000007",
         "target_copies": 3,
         "expected_generation": "0"
+      }
+    },
+    {
+      "name": "new-pool-config-missing-semantic-format",
+      "schema": "PoolConfiguration",
+      "layer": "schema",
+      "value": {
+        "pool_id": "pool_00000000000000000000000000000001",
+        "storage_roots": {},
+        "mode": "development",
+        "disks": [
+          {
+            "slot_id": "P01",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "name": "Primary",
+            "root": "/chosen/primary",
+            "level": 1,
+            "upstream_slot_id": null,
+            "metadata_member": true,
+            "binding_generation": "1",
+            "capacity_bytes": null
+          }
+        ],
+        "checksum_chunk_bytes": 65536,
+        "max_file_bytes": "1073741824",
+        "max_workspace_bytes": "2147483648",
+        "max_workspaces": 16,
+        "max_retained_workspaces": 4096,
+        "max_retained_workspaces_per_principal": 1024,
+        "max_retained_workspace_metadata_bytes": "134217728",
+        "max_retained_workspace_metadata_bytes_per_principal": "67108864",
+        "max_entries": 10000,
+        "metadata_reserve_bytes": "67108864",
+        "workspace_ttl_seconds": "3600"
+      }
+    },
+    {
+      "name": "new-pool-config-null-semantic-format",
+      "schema": "PoolConfiguration",
+      "layer": "schema",
+      "value": {
+        "pool_id": "pool_00000000000000000000000000000001",
+        "pool_semantic_format": null,
+        "storage_roots": {},
+        "mode": "development",
+        "disks": [
+          {
+            "slot_id": "P01",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "name": "Primary",
+            "root": "/chosen/primary",
+            "level": 1,
+            "upstream_slot_id": null,
+            "metadata_member": true,
+            "binding_generation": "1",
+            "capacity_bytes": null
+          }
+        ],
+        "checksum_chunk_bytes": 65536,
+        "max_file_bytes": "1073741824",
+        "max_workspace_bytes": "2147483648",
+        "max_workspaces": 16,
+        "max_retained_workspaces": 4096,
+        "max_retained_workspaces_per_principal": 1024,
+        "max_retained_workspace_metadata_bytes": "134217728",
+        "max_retained_workspace_metadata_bytes_per_principal": "67108864",
+        "max_entries": 10000,
+        "metadata_reserve_bytes": "67108864",
+        "workspace_ttl_seconds": "3600"
+      }
+    },
+    {
+      "name": "new-pool-config-unknown-semantic-format",
+      "schema": "PoolConfiguration",
+      "layer": "schema",
+      "value": {
+        "pool_id": "pool_00000000000000000000000000000001",
+        "pool_semantic_format": "manual-directory-v2",
+        "storage_roots": {},
+        "mode": "development",
+        "disks": [
+          {
+            "slot_id": "P01",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "name": "Primary",
+            "root": "/chosen/primary",
+            "level": 1,
+            "upstream_slot_id": null,
+            "metadata_member": true,
+            "binding_generation": "1",
+            "capacity_bytes": null
+          }
+        ],
+        "checksum_chunk_bytes": 65536,
+        "max_file_bytes": "1073741824",
+        "max_workspace_bytes": "2147483648",
+        "max_workspaces": 16,
+        "max_retained_workspaces": 4096,
+        "max_retained_workspaces_per_principal": 1024,
+        "max_retained_workspace_metadata_bytes": "134217728",
+        "max_retained_workspace_metadata_bytes_per_principal": "67108864",
+        "max_entries": 10000,
+        "metadata_reserve_bytes": "67108864",
+        "workspace_ttl_seconds": "3600"
+      }
+    },
+    {
+      "name": "new-pool-config-object-semantic-format",
+      "schema": "PoolConfiguration",
+      "layer": "schema",
+      "value": {
+        "pool_id": "pool_00000000000000000000000000000001",
+        "pool_semantic_format": {
+          "manual-directory-v1": null
+        },
+        "storage_roots": {},
+        "mode": "development",
+        "disks": [
+          {
+            "slot_id": "P01",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "name": "Primary",
+            "root": "/chosen/primary",
+            "level": 1,
+            "upstream_slot_id": null,
+            "metadata_member": true,
+            "binding_generation": "1",
+            "capacity_bytes": null
+          }
+        ],
+        "checksum_chunk_bytes": 65536,
+        "max_file_bytes": "1073741824",
+        "max_workspace_bytes": "2147483648",
+        "max_workspaces": 16,
+        "max_retained_workspaces": 4096,
+        "max_retained_workspaces_per_principal": 1024,
+        "max_retained_workspace_metadata_bytes": "134217728",
+        "max_retained_workspace_metadata_bytes_per_principal": "67108864",
+        "max_entries": 10000,
+        "metadata_reserve_bytes": "67108864",
+        "workspace_ttl_seconds": "3600"
+      }
+    },
+    {
+      "name": "new-pool-config-extra-compatibility-switch",
+      "schema": "PoolConfiguration",
+      "layer": "schema",
+      "value": {
+        "pool_id": "pool_00000000000000000000000000000001",
+        "pool_semantic_format": "manual-directory-v1",
+        "storage_roots": {},
+        "mode": "development",
+        "disks": [
+          {
+            "slot_id": "P01",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "name": "Primary",
+            "root": "/chosen/primary",
+            "level": 1,
+            "upstream_slot_id": null,
+            "metadata_member": true,
+            "binding_generation": "1",
+            "capacity_bytes": null
+          }
+        ],
+        "checksum_chunk_bytes": 65536,
+        "max_file_bytes": "1073741824",
+        "max_workspace_bytes": "2147483648",
+        "max_workspaces": 16,
+        "max_retained_workspaces": 4096,
+        "max_retained_workspaces_per_principal": 1024,
+        "max_retained_workspace_metadata_bytes": "134217728",
+        "max_retained_workspace_metadata_bytes_per_principal": "67108864",
+        "max_entries": 10000,
+        "metadata_reserve_bytes": "67108864",
+        "workspace_ttl_seconds": "3600",
+        "legacy_format": true
+      }
+    },
+    {
+      "name": "new-pool-seal-missing-semantic-format",
+      "schema": "PoolDiskSeal",
+      "layer": "schema",
+      "value": {
+        "format": "unified-working-tree-managed-directory-v1",
+        "pool_id": "pool_00000000000000000000000000000001",
+        "disk_id": "disk_00000000000000000000000000000002",
+        "slot_id": "P01",
+        "binding_generation": "1",
+        "device": "42",
+        "inode": "1000",
+        "simulation": true
+      }
+    },
+    {
+      "name": "new-pool-seal-null-semantic-format",
+      "schema": "PoolDiskSeal",
+      "layer": "schema",
+      "value": {
+        "format": "unified-working-tree-managed-directory-v1",
+        "pool_semantic_format": null,
+        "pool_id": "pool_00000000000000000000000000000001",
+        "disk_id": "disk_00000000000000000000000000000002",
+        "slot_id": "P01",
+        "binding_generation": "1",
+        "device": "42",
+        "inode": "1000",
+        "simulation": true
+      }
+    },
+    {
+      "name": "new-pool-seal-unknown-semantic-format",
+      "schema": "PoolDiskSeal",
+      "layer": "schema",
+      "value": {
+        "format": "unified-working-tree-managed-directory-v1",
+        "pool_semantic_format": "manual-directory-v2",
+        "pool_id": "pool_00000000000000000000000000000001",
+        "disk_id": "disk_00000000000000000000000000000002",
+        "slot_id": "P01",
+        "binding_generation": "1",
+        "device": "42",
+        "inode": "1000",
+        "simulation": true
+      }
+    },
+    {
+      "name": "new-pool-seal-object-semantic-format",
+      "schema": "PoolDiskSeal",
+      "layer": "schema",
+      "value": {
+        "format": "unified-working-tree-managed-directory-v1",
+        "pool_semantic_format": {
+          "manual-directory-v1": null
+        },
+        "pool_id": "pool_00000000000000000000000000000001",
+        "disk_id": "disk_00000000000000000000000000000002",
+        "slot_id": "P01",
+        "binding_generation": "1",
+        "device": "42",
+        "inode": "1000",
+        "simulation": true
+      }
+    },
+    {
+      "name": "new-pool-seal-extra-compatibility-switch",
+      "schema": "PoolDiskSeal",
+      "layer": "schema",
+      "value": {
+        "format": "unified-working-tree-managed-directory-v1",
+        "pool_semantic_format": "manual-directory-v1",
+        "pool_id": "pool_00000000000000000000000000000001",
+        "disk_id": "disk_00000000000000000000000000000002",
+        "slot_id": "P01",
+        "binding_generation": "1",
+        "device": "42",
+        "inode": "1000",
+        "simulation": true,
+        "legacy_format": true
+      }
+    },
+    {
+      "name": "new-pool-config-missing-root-feedback-map",
+      "schema": "PoolConfiguration",
+      "layer": "schema",
+      "value": {
+        "pool_id": "pool_00000000000000000000000000000001",
+        "pool_semantic_format": "manual-directory-v1",
+        "mode": "development",
+        "disks": [
+          {
+            "slot_id": "P01",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "name": "Primary",
+            "root": "/chosen/primary",
+            "level": 1,
+            "upstream_slot_id": null,
+            "metadata_member": true,
+            "binding_generation": "1",
+            "capacity_bytes": null
+          }
+        ],
+        "checksum_chunk_bytes": 65536,
+        "max_file_bytes": "1073741824",
+        "max_workspace_bytes": "2147483648",
+        "max_workspaces": 16,
+        "max_retained_workspaces": 4096,
+        "max_retained_workspaces_per_principal": 1024,
+        "max_retained_workspace_metadata_bytes": "134217728",
+        "max_retained_workspace_metadata_bytes_per_principal": "67108864",
+        "max_entries": 10000,
+        "metadata_reserve_bytes": "67108864",
+        "workspace_ttl_seconds": "3600"
+      }
+    },
+    {
+      "name": "new-pool-binding-missing-fifth-area",
+      "schema": "PoolRootBinding",
+      "layer": "schema",
+      "value": {
+        "layout": "unified_working_tree_v1",
+        "root_id": "root_00000000000000000000000000000003",
+        "registration": {
+          "pool_id": "pool_00000000000000000000000000000001",
+          "disk_id": "disk_00000000000000000000000000000002",
+          "slot_id": "P01",
+          "binding_generation": "1"
+        },
+        "source_chain": [],
+        "root_entity": {
+          "device": "42",
+          "inode": "1000"
+        },
+        "roots": {
+          "common_data": {
+            "directory_id": "directory_00000000000000000000000000000004",
+            "entity": {
+              "device": "42",
+              "inode": "1004"
+            }
+          },
+          "deleted_data": {
+            "directory_id": "directory_00000000000000000000000000000005",
+            "entity": {
+              "device": "42",
+              "inode": "1005"
+            }
+          },
+          "zxs_data": {
+            "directory_id": "directory_00000000000000000000000000000006",
+            "entity": {
+              "device": "42",
+              "inode": "1006"
+            }
+          },
+          "zxs_lifecycles": {
+            "common_data": {
+              "directory_id": "directory_00000000000000000000000000000007",
+              "entity": {
+                "device": "42",
+                "inode": "1007"
+              }
+            }
+          }
+        },
+        "operation_id": "op_00000000000000000000000000000009",
+        "generation": "1"
+      }
+    },
+    {
+      "name": "new-pool-binding-numeric-inode",
+      "schema": "PoolRootBinding",
+      "layer": "schema",
+      "value": {
+        "layout": "unified_working_tree_v1",
+        "root_id": "root_00000000000000000000000000000003",
+        "registration": {
+          "pool_id": "pool_00000000000000000000000000000001",
+          "disk_id": "disk_00000000000000000000000000000002",
+          "slot_id": "P01",
+          "binding_generation": "1"
+        },
+        "source_chain": [],
+        "root_entity": {
+          "device": "42",
+          "inode": 1000
+        },
+        "roots": {
+          "common_data": {
+            "directory_id": "directory_00000000000000000000000000000004",
+            "entity": {
+              "device": "42",
+              "inode": "1004"
+            }
+          },
+          "deleted_data": {
+            "directory_id": "directory_00000000000000000000000000000005",
+            "entity": {
+              "device": "42",
+              "inode": "1005"
+            }
+          },
+          "zxs_data": {
+            "directory_id": "directory_00000000000000000000000000000006",
+            "entity": {
+              "device": "42",
+              "inode": "1006"
+            }
+          },
+          "zxs_lifecycles": {
+            "common_data": {
+              "directory_id": "directory_00000000000000000000000000000007",
+              "entity": {
+                "device": "42",
+                "inode": "1007"
+              }
+            },
+            "deleted_data": {
+              "directory_id": "directory_00000000000000000000000000000008",
+              "entity": {
+                "device": "42",
+                "inode": "1008"
+              }
+            }
+          }
+        },
+        "operation_id": "op_00000000000000000000000000000009",
+        "generation": "1"
+      }
+    },
+    {
+      "name": "new-pool-binding-old-layout",
+      "schema": "PoolRootBinding",
+      "layer": "schema",
+      "value": {
+        "layout": "working_tree_v1",
+        "root_id": "root_00000000000000000000000000000003",
+        "registration": {
+          "pool_id": "pool_00000000000000000000000000000001",
+          "disk_id": "disk_00000000000000000000000000000002",
+          "slot_id": "P01",
+          "binding_generation": "1"
+        },
+        "source_chain": [],
+        "root_entity": {
+          "device": "42",
+          "inode": "1000"
+        },
+        "roots": {
+          "common_data": {
+            "directory_id": "directory_00000000000000000000000000000004",
+            "entity": {
+              "device": "42",
+              "inode": "1004"
+            }
+          },
+          "deleted_data": {
+            "directory_id": "directory_00000000000000000000000000000005",
+            "entity": {
+              "device": "42",
+              "inode": "1005"
+            }
+          },
+          "zxs_data": {
+            "directory_id": "directory_00000000000000000000000000000006",
+            "entity": {
+              "device": "42",
+              "inode": "1006"
+            }
+          },
+          "zxs_lifecycles": {
+            "common_data": {
+              "directory_id": "directory_00000000000000000000000000000007",
+              "entity": {
+                "device": "42",
+                "inode": "1007"
+              }
+            },
+            "deleted_data": {
+              "directory_id": "directory_00000000000000000000000000000008",
+              "entity": {
+                "device": "42",
+                "inode": "1008"
+              }
+            }
+          }
+        },
+        "operation_id": "op_00000000000000000000000000000009",
+        "generation": "1"
       }
     }
   ],

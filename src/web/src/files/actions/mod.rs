@@ -72,6 +72,7 @@ pub(crate) fn pending(state: &State) -> bool {
     state.files.mutation_pending
         || super::deletion::blocks_writes(state)
         || super::mkdir::blocks_writes(state)
+        || super::unborn::blocks_writes(state)
         || state
             .files
             .operations

@@ -24,7 +24,9 @@ mod disk_monitor;
 mod error_registry;
 mod file_deletion;
 mod file_draft;
+mod unborn;
 mod smb_draft;
+mod smb_native;
 mod file_history_move;
 mod file_manager;
 mod foreign_identity;
@@ -642,6 +644,37 @@ impl Backend for EngineBackend {
         repository(&engine, id)?;
         Ok(())
     }
+    fn smb_native_open(
+        &self, identity: &Identity, request: crate::SmbNativeOpen<'_>,
+    ) -> Result<Option<crate::SmbNativeHandle>, ApiError> {
+        smb_native::open(self, identity, request)
+    }
+    fn smb_native_stat(
+        &self, identity: &Identity, branch: &str, path: &name_policy::LookupPath,
+    ) -> Result<Option<smb_protocol::protocol::StatResult>, ApiError> {
+        smb_native::stat(self, identity, branch, path)
+    }
+    fn smb_native_size(
+        &self, identity: &Identity, file: &crate::SmbNativeHandle,
+    ) -> Result<u64, ApiError> {
+        smb_native::size(self, identity, file)
+    }
+    fn smb_native_read(
+        &self, identity: &Identity, file: &crate::SmbNativeHandle, offset: u64, length: u32,
+    ) -> Result<bytes::Bytes, ApiError> {
+        smb_native::read(self, identity, file, offset, length)
+    }
+    fn smb_native_edit(
+        &self, identity: &Identity, file: &mut crate::SmbNativeHandle,
+        edit: crate::SmbNativeEdit<'_>,
+    ) -> Result<usize, ApiError> {
+        smb_native::edit(self, identity, file, edit)
+    }
+    fn smb_native_flush(
+        &self, identity: &Identity, file: &mut crate::SmbNativeHandle,
+    ) -> Result<Option<storage_contract::OperationResult>, ApiError> {
+        smb_native::flush(self, identity, file)
+    }
     fn smb_file_working(
         &self, identity: &Identity, branch: &str, entry: &storage_contract::Entry,
     ) -> Result<Option<crate::SmbManualFile>, ApiError> {
@@ -661,6 +694,16 @@ impl Backend for EngineBackend {
         &self, identity: &Identity, request: crate::ChangeFileWorking, source: &crate::UploadSource,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         smb_draft::write(self, identity, request, source)
+    }
+    fn unborn_file_working(
+        &self, identity: &Identity, target: storage_contract::file_draft::DraftLocation,
+    ) -> Result<crate::UnbornFileSnapshot, ApiError> {
+        unborn::status(self, identity, target)
+    }
+    fn commit_unborn_file(
+        &self, identity: &Identity, request: crate::CommitUnbornFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        unborn::commit(self, identity, request)
     }
     fn file_working(
         &self, identity: &Identity, target: storage_contract::file_draft::DraftLocation,

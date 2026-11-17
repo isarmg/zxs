@@ -1,7 +1,7 @@
 use platform_io::fs_safety::EntryName;
 use std::path::{Path, PathBuf};
 
-pub(super) fn read_placeholder(spool: &Path) -> PathBuf {
+pub(in crate::smb_rpc) fn read_placeholder(spool: &Path) -> PathBuf {
     spool.join("empty-directory")
 }
 

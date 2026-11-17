@@ -24,12 +24,15 @@ pub const GENERATION_DIRTY_CAPABILITY: &str = "generation-dirty-writes";
 pub const VERIFIED_READ_CAPABILITY: &str = "verified-range-reads";
 /// Metadata carries the selected published version's save time, never inode time.
 pub const VERSION_MTIME_CAPABILITY: &str = "published-version-mtime";
-pub const REQUIRED_CAPABILITIES: [&str; 5] = [
+/// Peers must distinguish mutable descriptors from ordered native working I/O.
+pub const NATIVE_WORKING_CAPABILITY: &str = "native-working-io";
+pub const REQUIRED_CAPABILITIES: [&str; 6] = [
     WRITE_RESERVATION_CAPABILITY,
     AUTHENTICATED_ACCOUNT_CAPABILITY,
     GENERATION_DIRTY_CAPABILITY,
     VERIFIED_READ_CAPABILITY,
     VERSION_MTIME_CAPABILITY,
+    NATIVE_WORKING_CAPABILITY,
 ];
 
 /// A single exact Samba account name, never an alias-to-principal mapping.
@@ -94,6 +97,22 @@ pub enum Request<O = String> {
         end: u64,
         #[serialization(with = "storage_contract::u64_string")]
         bytes: u64,
+    },
+    WorkingWrite {
+        #[serialization(with = "storage_contract::u64_string")]
+        handle: u64,
+        position: WorkingPosition,
+        bytes: Vec<u8>,
+    },
+    WorkingResize {
+        #[serialization(with = "storage_contract::u64_string")]
+        handle: u64,
+        #[serialization(with = "storage_contract::u64_string")]
+        length: u64,
+    },
+    WorkingStat {
+        #[serialization(with = "storage_contract::u64_string")]
+        handle: u64,
     },
     Dirty {
         #[serialization(with = "storage_contract::u64_string")]
@@ -189,6 +208,11 @@ impl Request<String> {
             Self::PrepareWrite { handle, end, bytes } => {
                 Request::PrepareWrite { handle, end, bytes }
             }
+            Self::WorkingWrite { handle, position, bytes } => {
+                Request::WorkingWrite { handle, position, bytes }
+            }
+            Self::WorkingResize { handle, length } => Request::WorkingResize { handle, length },
+            Self::WorkingStat { handle } => Request::WorkingStat { handle },
             Self::Dirty { handle } => Request::Dirty { handle },
             Self::AuthorizeRead { handle } => Request::AuthorizeRead { handle },
             Self::Read {
@@ -310,6 +334,7 @@ pub enum ResponsePayload<R> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct OpenResult {
+    pub data_io: OpenIo,
     pub entry_id: String,
     pub kind: storage_contract::NamespaceEntryKind,
     pub path: String,
@@ -322,6 +347,36 @@ pub struct OpenResult {
     pub version_id: Option<String>,
     pub workspace_id: Option<String>,
     pub mtime: FileMtime,
+}
+
+/// Required on every Open. IDs or descriptor flags cannot identify native I/O.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum OpenIo {
+    Descriptor,
+    VerifiedRanges,
+    NativeWorking,
+    Directory,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkingPosition {
+    At { #[serialization(with = "storage_contract::u64_string")] offset: u64 },
+    Append {},
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct WorkingStat {
+    #[serialization(with = "storage_contract::u64_string")]
+    pub size: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct WorkingWriteResult {
+    pub written: u32,
 }
 
 /// UTC Unix seconds in the supported saved-version range (1970 through 9999).
@@ -390,10 +445,46 @@ pub struct StatResult {
 
 /// A page entry and the time of that exact entry's selected version.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct DirectoryEntry {
-    pub entry: storage_contract::Entry,
-    pub mtime: FileMtime,
+#[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DirectoryEntry {
+    Published { entry: storage_contract::Entry, mtime: FileMtime },
+    Unborn {
+        target: storage_contract::file_draft::DraftLocation,
+        #[serialization(with = "storage_contract::u64_string")]
+        logical_size: u64,
+    },
+}
+impl DirectoryEntry {
+    pub fn published(&self) -> Option<&storage_contract::Entry> {
+        match self {
+            Self::Published { entry, .. } => Some(entry),
+            Self::Unborn { .. } => None,
+        }
+    }
+    pub fn mtime(&self) -> FileMtime {
+        match self {
+            Self::Published { mtime, .. } => *mtime,
+            Self::Unborn { .. } => FileMtime::Unpublished {},
+        }
+    }
+    pub fn path(&self) -> &name_policy::PortablePath {
+        match self {
+            Self::Published { entry, .. } => &entry.path,
+            Self::Unborn { target, .. } => &target.path,
+        }
+    }
+    pub fn entry_id(&self) -> String {
+        match self {
+            Self::Published { entry, .. } => entry.entry_id.clone(),
+            Self::Unborn { target, .. } => target.entry.to_string(),
+        }
+    }
+    pub fn kind(&self) -> storage_contract::NamespaceEntryKind {
+        match self {
+            Self::Published { entry, .. } => entry.kind,
+            Self::Unborn { .. } => storage_contract::NamespaceEntryKind::File,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

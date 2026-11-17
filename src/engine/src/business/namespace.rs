@@ -3,6 +3,7 @@ use super::*;
 use std::collections::BTreeMap;
 mod draft;
 mod query;
+pub(crate) mod working;
 pub(crate) mod container_name;
 pub(crate) use draft::NamespaceDraft;
 pub use query::{CurrentObject, NamespaceTree};

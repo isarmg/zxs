@@ -32,6 +32,7 @@ mod default_share;
 mod directory;
 mod handles;
 mod manual;
+mod native;
 mod metadata;
 mod namespace;
 mod object_move;
@@ -63,6 +64,8 @@ enum Reply {
     Metadata(AuthorizedMetadata),
     Directory(DirectoryPage),
     Read(bytes::Bytes),
+    WorkingStat(smb_protocol::protocol::WorkingStat),
+    WorkingWrite(smb_protocol::protocol::WorkingWriteResult),
 }
 
 impl Serialize for Reply {
@@ -71,6 +74,8 @@ impl Serialize for Reply {
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         match self {
+            Self::WorkingStat(value) => value.serialize(serializer),
+            Self::WorkingWrite(value) => value.serialize(serializer),
             Self::Json(value) => value.serialize(serializer),
             Self::Open { metadata, .. } => metadata.serialize(serializer),
             Self::Stat(value) => value.serialize(serializer),
@@ -109,6 +114,7 @@ impl Shared {
 }
 
 enum Handle {
+    Native(native::NativeHandle),
     Read(Content, String),
     ReadDraft(Content, crate::SmbManualFile),
     Directory(DirectoryHandle),

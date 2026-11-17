@@ -96,8 +96,14 @@ class TargetedSelection(unittest.TestCase):
         self.assertIn('snapshot_worktree::tests::'
                       'actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node',
                       selected[0]['exact'])
-        self.assertEqual(selected[0]['max_tests'], 3)
-        self.assertEqual(len(selected[0]['exact']), 3)
+        self.assertIn('business::file_draft::tests::'
+                      'unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node',
+                      selected[0]['exact'])
+        self.assertIn('business::file_draft::tests::'
+                      'fresh_pool_format_refuses_unmarked_system_and_disk_before_recovery_writes',
+                      selected[0]['exact'])
+        self.assertEqual(selected[0]['max_tests'], 5)
+        self.assertEqual(len(selected[0]['exact']), 5)
 
     def test_ordinary_smb_manual_draft_keeps_actual_rpc_http_and_old_consumers(self):
         name = 'ordinary-smb-manual-draft'

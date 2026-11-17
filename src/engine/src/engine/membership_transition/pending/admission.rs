@@ -562,6 +562,7 @@ pub(in crate::engine::membership_transition) fn same_addition_settings(
 fn same_pool_settings(old: &Config, new: &Config) -> bool {
     let Config {
         pool_id,
+        pool_semantic_format,
         storage_roots: _,
         mode,
         disks: _,
@@ -578,6 +579,7 @@ fn same_pool_settings(old: &Config, new: &Config) -> bool {
         workspace_ttl_seconds,
     } = old;
     pool_id == &new.pool_id
+        && pool_semantic_format == &new.pool_semantic_format
         && mode == &new.mode
         && *checksum_chunk_bytes == new.checksum_chunk_bytes
         && *max_file_bytes == new.max_file_bytes

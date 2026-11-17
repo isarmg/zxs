@@ -223,7 +223,9 @@ fn send_success(
         | Reply::Stat(_)
         | Reply::Metadata(_)
         | Reply::Directory(_)
-        | Reply::Read(_) => None,
+        | Reply::Read(_)
+        | Reply::WorkingStat(_)
+        | Reply::WorkingWrite(_) => None,
     }
     .or(requested_operation);
     let response = ResponsePayload::Ok { result: &result };
@@ -243,7 +245,9 @@ fn send_success(
         | Reply::Stat(_)
         | Reply::Metadata(_)
         | Reply::Directory(_)
-        | Reply::Read(_) => None,
+        | Reply::Read(_)
+        | Reply::WorkingStat(_)
+        | Reply::WorkingWrite(_) => None,
     };
     stream.send_serialized(&payload, descriptor)
 }

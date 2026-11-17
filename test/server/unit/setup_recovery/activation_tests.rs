@@ -191,6 +191,10 @@ fn first_pair_genesis_retains_fixed_quorum_and_reopens() {
             |engine| {
                 assert_eq!(engine.config().disks.len(), 2);
                 assert_eq!(engine.config().metadata_quorum(), 2);
+                assert_eq!(
+                    engine.config().pool_semantic_format,
+                    storage_contract::PoolSemanticFormat::ManualDirectoryV1
+                );
                 assert!(
                     engine
                         .config()
@@ -210,6 +214,20 @@ fn first_pair_genesis_retains_fixed_quorum_and_reopens() {
     );
     let engine = Engine::open(&f.service.data_root).unwrap();
     assert_eq!(engine.config().disks.len(), 2);
+    assert_eq!(
+        engine.config().pool_semantic_format,
+        storage_contract::PoolSemanticFormat::ManualDirectoryV1
+    );
+    let saved: Config = read_control(&f.service.data_root.join("config.json")).unwrap();
+    assert_eq!(saved.pool_semantic_format, engine.config().pool_semantic_format);
+    for disk in &engine.config().disks {
+        let seal: json_codec::Value = read_control(&disk.root.join("disk.json")).unwrap();
+        assert_eq!(seal["pool_semantic_format"], "manual-directory-v1");
+        let genesis: Config = read_control(
+            &disk.root.join("zxs-data/pool-membership/config.json"),
+        ).unwrap();
+        assert_eq!(genesis.pool_semantic_format, saved.pool_semantic_format);
+    }
     assert!(
         engine
             .config()
@@ -596,6 +614,59 @@ fn complete_genesis_without_ready_receipt_is_checked_and_completed_not_reinitial
     assert!(actual.is_initialization_result_of(&intent.config));
     fs::remove_file(f.service.data_root.join(ACTIVATION_READY)).unwrap();
     let seal_before = fs::read(f.service.disks["one"].join("disk.json")).unwrap();
+
+    // The original intent, saved Config, fixed Genesis and held seal are
+    // distinct read boundaries. None may reconstruct an omitted format marker.
+    // This is a real initialized pool with existing setup/bootstrap locks, not
+    // a claim that arbitrary old SYSTEM directories may be opened without writes.
+    let rejected_formats = [
+        (intent_path.clone(), "/config", storage_contract::ErrorCode::InvalidRequest),
+        (
+            f.service.data_root.join("config.json"),
+            "",
+            storage_contract::ErrorCode::InvalidRequest,
+        ),
+        (
+            f.service.disks["one"].join("zxs-data/pool-membership/config.json"),
+            "",
+            storage_contract::ErrorCode::MetadataQuorumUnavailable,
+        ),
+        (
+            f.service.disks["one"].join("disk.json"),
+            "",
+            storage_contract::ErrorCode::DiskIdentityMismatch,
+        ),
+    ];
+    for (path, pointer, expected_code) in rejected_formats {
+        let original = fs::read(&path).unwrap();
+        for marker in [None, Some(json_codec::Value::String("manual-directory-v2".into()))] {
+            let mut changed: json_codec::Value =
+                storage_contract::decode_strict(&original).unwrap();
+            let fields = changed.pointer_mut(pointer).unwrap().as_object_mut().unwrap();
+            match marker {
+                None => {
+                    fields.remove("pool_semantic_format");
+                }
+                Some(marker) => {
+                    fields.insert("pool_semantic_format".into(), marker);
+                }
+            }
+            fs::write(&path, json_codec::to_vec(&changed).unwrap()).unwrap();
+            let before = inventory(f._temp.path());
+            let error = f.service.complete_activation_exact(
+                &admin(),
+                &original_request,
+                |_| Ok(()),
+                |_| panic!("unsupported pool format installed"),
+            ).unwrap_err();
+            assert_eq!(error.code, expected_code, "{path:?}");
+            assert!(error.source.is_some(), "format rejection must retain its source");
+            assert_eq!(inventory(f._temp.path()), before);
+            assert!(!f.service.data_root.join(ACTIVATION_READY).exists());
+            assert!(!f.service.data_root.join(ACTIVATION_COMPLETE).exists());
+            fs::write(&path, &original).unwrap();
+        }
+    }
 
     // Matching request/Config bytes cannot adopt any of another real disk's
     // five area entities. Keep both intact and restore the original inodes.

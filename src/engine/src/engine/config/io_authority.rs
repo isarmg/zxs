@@ -26,6 +26,7 @@ pub(super) struct GenesisIoAuthority {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GenesisControlContext {
     pool_id: String,
+    pool_semantic_format: storage_contract::PoolSemanticFormat,
     storage_roots: BTreeMap<storage_contract::DiskId, storage_contract::working_tree::RootBinding>,
     mode: Mode,
     disks: BTreeMap<String, RegisteredDisk>,
@@ -44,6 +45,7 @@ impl GenesisIoAuthority {
         // explicit decision here, including the fresh physical root bindings.
         let Config {
             pool_id,
+            pool_semantic_format,
             storage_roots,
             mode,
             disks,
@@ -90,6 +92,7 @@ impl GenesisIoAuthority {
         Self {
             control: GenesisControlContext {
                 pool_id: pool_id.clone(),
+                pool_semantic_format: *pool_semantic_format,
                 storage_roots: storage_roots.clone(),
                 mode: mode.clone(),
                 disks,

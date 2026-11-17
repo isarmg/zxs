@@ -1233,6 +1233,7 @@ dependencies = [
  "data-serialization",
  "json-codec",
  "libc",
+ "name-policy",
  "storage-contract",
 ]
 

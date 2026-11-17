@@ -52,6 +52,7 @@ impl ListingMetadata {
 enum Candidate {
     Repository(String),
     Entry(usize),
+    Unborn(usize),
 }
 
 pub(in crate::engine_backend) enum ListingRead {
@@ -64,6 +65,8 @@ struct DirectoryCapture {
     within: String,
     within_key: String,
     namespace: storage_engine::NamespaceSnapshot,
+    unborn: Vec<(storage_contract::file_draft::DraftLocation,
+        storage_contract::file_draft::UnbornWorking)>,
     preview: Option<storage_engine::DirectoryBranchPreview>,
     git_initialized: bool,
 }
@@ -201,8 +204,18 @@ impl DirectoryCapture {
             .state()
             .directory_git_repositories
             .contains_key(directory_id);
+        let unborn = if repository.file_manager_root && preview.is_none() {
+            engine.native_current_entries(repository.repository_id.parse()
+                .map_err(ApiError::contract_input)?).map_err(error)?.into_iter()
+                .filter_map(|entry| match entry {
+                    storage_engine::NativeCurrentEntry::Published(_) => None,
+                    storage_engine::NativeCurrentEntry::Unborn { target, working } => {
+                        Some((target, working))
+                    }
+                }).collect()
+        } else { Vec::new() };
         Ok(Self {
-            repository,
+            repository, unborn,
             within: within.into(),
             within_key,
             namespace,
@@ -270,6 +283,13 @@ impl PrimaryListing {
             } else {
                 format!("{}/", directory.within_key)
             };
+            for (index, (target, _)) in directory.unborn.iter().enumerate() {
+                let Some(relative) = target.path.key().strip_prefix(&prefix) else { continue; };
+                directory_file_count += 1;
+                if relative.is_empty() || relative.contains('/') { continue; }
+                page.consider(SortKey::new(false, target.path.file_name(),
+                    target.path.as_str(), &target.entry.to_string()), Candidate::Unborn(index));
+            }
             // Scan the retained flat namespace, keeping at most limit + 1
             // candidates plus the independently requested selected entry.
             let entries = directory
@@ -384,6 +404,26 @@ impl SelectedListing {
     ) -> Result<ProjectedEntries, ApiError> {
         self.authorize_current(engine)?;
         let project = |candidate: &Candidate| match candidate {
+            Candidate::Unborn(index) => {
+                let directory = self.scope.directory.as_ref().ok_or_else(changed)?;
+                let (target, working) = &directory.unborn[*index];
+                // listing_snapshot() was compared under this same Engine lock:
+                // the captured current owner was not replaced between scan and projection.
+                Ok(crate::ListingEntry {
+                    entry_id: target.entry.to_string(), name: target.path.file_name().into(),
+                    path: target.path.as_str().into(),
+                    kind: storage_contract::NamespaceEntryKind::File,
+                    size: working.logical_size(), file_id: target.file.to_string(),
+                    version: crate::ListingVersion::Unborn { target: target.clone() },
+                    location: Some(crate::ListingLocation {
+                        repository_id: target.repository.to_string(),
+                        repository_path: Some(target.path.as_str().into()),
+                        container: true, selected_branch_id: None,
+                    }),
+                    note: None, node_id: None, read_only: Some(false),
+                    backup: false, historical_only: None,
+                })
+            }
             Candidate::Repository(id) => {
                 let repo = &self.scope.view.repositories[id];
                 Ok(directory(&repo.name, &repo.name, &repo.repository_id))

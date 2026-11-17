@@ -52,6 +52,12 @@ pub enum DecodeError {
         #[source]
         source: std::num::ParseIntError,
     },
+    #[error("invalid directory response identity {field}: {source}")]
+    Identity {
+        field: &'static str,
+        #[source]
+        source: storage_contract::Error,
+    },
     #[error("inconsistent directory response: {0}")]
     Relation(&'static str),
 }
@@ -176,6 +182,12 @@ enum Ownership {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Body {
     Directory,
+    Unborn {
+        target: storage_contract::file_draft::DraftLocation,
+        // Display-only bridge to existing row keys; request identity stays in target.
+        file_id: String,
+        size: u64,
+    },
     File {
         file_id: String,
         size: u64,
@@ -201,6 +213,12 @@ pub(crate) struct Entry {
     read_only: bool,
 }
 impl Entry {
+    pub(crate) fn unborn(&self) -> Option<&storage_contract::file_draft::DraftLocation> {
+        match &self.body {
+            Body::Unborn { target, .. } => Some(target),
+            Body::Directory | Body::File { .. } => None,
+        }
+    }
     pub(crate) fn preview(&self) -> bool {
         self.preview
     }
@@ -248,29 +266,30 @@ impl Entry {
         match &self.body {
             Body::Directory => "",
             Body::File { file_id, .. } => file_id,
+            Body::Unborn { file_id, .. } => file_id,
         }
     }
     pub(crate) fn kind(&self) -> NamespaceEntryKind {
         match self.body {
             Body::Directory => NamespaceEntryKind::Directory,
-            Body::File { .. } => NamespaceEntryKind::File,
+            Body::File { .. } | Body::Unborn { .. } => NamespaceEntryKind::File,
         }
     }
     pub(crate) fn size(&self) -> u64 {
         match self.body {
             Body::Directory => 0,
-            Body::File { size, .. } => size,
+            Body::File { size, .. } | Body::Unborn { size, .. } => size,
         }
     }
     pub(crate) fn version_id(&self) -> Option<&str> {
         match &self.body {
-            Body::Directory => None,
+            Body::Directory | Body::Unborn { .. } => None,
             Body::File { version_id, .. } => version_id.as_deref(),
         }
     }
     pub(crate) fn node_id(&self) -> Option<&str> {
         match &self.body {
-            Body::Directory => None,
+            Body::Directory | Body::Unborn { .. } => None,
             Body::File { node_id, .. } => (!node_id.is_empty()).then_some(node_id.as_str()),
         }
     }

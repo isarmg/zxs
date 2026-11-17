@@ -36,6 +36,11 @@ impl Session {
                 }
             }
             SmbRelativePath::Entry(path) => {
+                if let Some(native) = self.shared.backend.smb_native_stat(
+                    &self.identity, &self.branch, path,
+                )? {
+                    return Ok(native);
+                }
                 let mut entry = self.find(path)?.ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
@@ -74,6 +79,7 @@ impl Session {
     /// A dirty successor keeps that saved time; a new unpublished file has none.
     pub(super) fn handle_metadata(&self, opened: &Handle) -> Result<AuthorizedMetadata, ApiError> {
         let mtime = match opened {
+            Handle::Native(_) => FileMtime::Unpublished {},
             Handle::Read(_, version) => self.version_mtime(version)?,
             Handle::ReadDraft(_, file) => {
                 self.version_mtime(&file.base.version_id().to_string())?

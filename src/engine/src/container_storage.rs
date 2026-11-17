@@ -10,6 +10,7 @@ pub(crate) use ordinary_preparation::verify_namespace_directory as verify_ordina
 pub(crate) use ordinary_preparation::{
     BackupLayoutPlan, BackupOriginalImage, BackupPayloadVersion, BackupServingImage,
     BackupServingVersion, BackupTargetLayout, ObservedContainerReplica, PreparedContainerEntities,
+    HeldUnbornReader, PreparedUnbornFull, PreparedUnbornSave, ReadWorkingDigest, UnbornWriteSession,
     open_published_container,
     ordinary_body_path,
 };
@@ -1547,12 +1548,25 @@ pub(crate) fn prepare_layout_repair(
 }
 
 fn projection_locations(
+    config: &Config,
     previous: StateProjection<'_>,
     next: StateProjection<'_>,
     file: &str,
-) -> BTreeSet<(String, String)> {
+) -> Result<BTreeSet<(String, String)>> {
     let mut locations = BTreeSet::new();
+    let file_id = file.parse::<storage_contract::FileId>()?;
     for view in [previous, next] {
+        if let Some(record) = view.state().file_containers.get(&file_id)
+            .filter(|record| record.working.unborn().is_some())
+        {
+            if record.replicas.len() != 1 || !record.replicas.contains_key(&record.owner_disk) {
+                return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerScope.into());
+            }
+            let disk = config.disks.iter()
+                .find(|disk| disk.disk_id == record.owner_disk.to_string())
+                .ok_or(crate::engine::fresh_layout::FreshLayoutError::Registration)?;
+            locations.insert((disk.slot_id.clone(), record.history_tree_id.to_string()));
+        }
         for key in view.owners().versions(file) {
             let version = &view.state().versions[key];
             let placement = view
@@ -1565,7 +1579,7 @@ fn projection_locations(
             }
         }
     }
-    locations
+    Ok(locations)
 }
 
 fn projection_path<'a>(
@@ -1603,11 +1617,13 @@ fn validate_new_projection_path(location: Option<&String>) -> Result<()> {
 
 /// Pure new-candidate admission, before copying any payload. Use the exact same
 /// routed projections as cache preparation, not unused backup bindings.
-pub(crate) fn validate_new_projection_paths(projection: &ProjectionTransition<'_>) -> Result<()> {
+pub(crate) fn validate_new_projection_paths(
+    config: &Config, projection: &ProjectionTransition<'_>,
+) -> Result<()> {
     let previous = projection.previous();
     let next = projection.next();
     for file in changed_files(previous.state(), next.state()) {
-        for (slot, _) in projection_locations(previous, next, &file) {
+        for (slot, _) in projection_locations(config, previous, next, &file)? {
             validate_new_projection_path(projection_path(next.state(), &file, &slot).0)?;
         }
     }
@@ -1660,7 +1676,7 @@ fn prepare_names_inner(
             // Historical records must not reconstruct an obsolete user name.
             continue;
         }
-        let locations = projection_locations(previous, view, &file);
+        let locations = projection_locations(config, previous, view, &file)?;
         let mut description = None;
         let mut encoded_histories = BTreeMap::new();
         let mut prepared_copies: Option<file_database::install::PreparedFileCopies<'_>> = None;
@@ -1694,6 +1710,9 @@ fn prepare_names_inner(
             let container = containers.as_ref().map(|scope| {
                 scope.share_target(file.parse()?, held.seal.disk_id.parse()?)
             }).transpose()?;
+            let birth = containers.as_ref().map(|scope| {
+                scope.birth_file(file.parse()?, held.seal.disk_id.parse()?)
+            }).transpose()?.flatten();
             let root = if container.is_some() { &held.root } else { held.content_root()? };
             if !skip_shared {
                 database_scopes.insert((slot.clone(), history_id.clone(), file.clone()));
@@ -1815,11 +1834,20 @@ fn prepare_names_inner(
                     },
                     None => {
                         let (copies, database) = match &container {
-                            Some(container) => {
-                                file_database::install::PreparedFileCopies::capture_container(
-                                    database_root, (&history, &history_id),
-                                    container, &file, view, admission,
-                                )?
+                            Some(container) => match &birth {
+                                Some(birth) => {
+                                    use file_database::install::PreparedFileCopies;
+                                    PreparedFileCopies::capture_unborn_birth(
+                                        database_root, (&history, &history_id),
+                                        container, &file, view, admission, birth,
+                                    )?
+                                }
+                                None => {
+                                    file_database::install::PreparedFileCopies::capture_container(
+                                        database_root, (&history, &history_id),
+                                        container, &file, view, admission,
+                                    )?
+                                }
                             }
                             None => file_database::install::PreparedFileCopies::capture(
                                 root, (&history, &history_id), &current, &file, view, admission,

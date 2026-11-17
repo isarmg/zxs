@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 GROUP = 'smb-vfs-manual-fd'
 EXACT = [
     'module::tests::manual_fd_tests::'
+    'native_working_mode_uses_ordered_rpc_not_the_placeholder_fd_for_sync_and_async_io',
+    'module::tests::manual_fd_tests::'
     'manual_open_reads_its_real_fd_after_write_truncate_and_extend_without_workspace_identity',
     'module::tests::'
     'sync_and_async_immutable_reads_use_verified_rpc_bytes_with_a_directory_placeholder',
@@ -48,7 +50,7 @@ def main():
     run = ci.Run(ROOT)
     run.summary['scope'] = GROUP
     run.summary['unexecuted'] = (
-        'Only the seven exact VFS descriptor tests. No Server cold recovery, '
+        'Only the eight exact VFS descriptor tests. No Server cold recovery, '
         'system Samba/client acceptance, background synthesis or incremental format claim.')
     try:
         run.summary['head'] = run.command(['git', 'rev-parse', 'HEAD']).strip()

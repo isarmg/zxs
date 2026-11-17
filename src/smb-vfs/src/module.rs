@@ -317,7 +317,11 @@ unsafe extern "C" fn pread(
             let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
             let private_work = DescriptorRole::for_open(&opened.info, opened.writable)
                 == DescriptorRole::PrivateWork;
-            let count = opened.info.read_count(private_work, offset as u64, count);
+            let count = opened.info.read_count(
+                private_work
+                    || opened.info.data_io == smb_protocol::protocol::OpenIo::NativeWorking,
+                offset as u64, count,
+            );
             if !private_work {
                 let output = if count == 0 {
                     &mut []
@@ -449,6 +453,35 @@ fn write_data(
     if !writable {
         return Err(std::io::Error::from_raw_os_error(libc::EACCES));
     }
+    if info.data_io == smb_protocol::protocol::OpenIo::NativeWorking {
+        if offset < -1 { return Err(bad()); }
+        let mut written = 0;
+        // Each bounded frame is ordered by the same descriptor I/O mutex. A
+        // failed frame poisons the native batch. Do not acknowledge an earlier
+        // prefix as usable after that failure.
+        for chunk in data.chunks(smb_protocol::protocol::MAX_READ_BYTES) {
+            let position = if offset == -1 {
+                smb_protocol::protocol::WorkingPosition::Append {}
+            } else {
+                let offset = (offset as u64).checked_add(written as u64)
+                    .ok_or_else(|| std::io::Error::from_raw_os_error(libc::EFBIG))?;
+                smb_protocol::protocol::WorkingPosition::At { offset }
+            };
+            match client.write_working(info.handle, position, chunk) {
+                Ok(count) => written += count,
+                Err(error) => return Err(error),
+            }
+        }
+        if data.is_empty() {
+            let position = if offset == -1 {
+                smb_protocol::protocol::WorkingPosition::Append {}
+            } else {
+                smb_protocol::protocol::WorkingPosition::At { offset: offset as u64 }
+            };
+            client.write_working(info.handle, position, data)?;
+        }
+        return Ok(written as isize);
+    }
     let offset = if offset == -1 {
         // SAFETY: libc::stat is a C POD output structure whose integer and pointer fields admit
         // zero initialization.
@@ -505,6 +538,10 @@ unsafe extern "C" fn truncate(
             return Err(bad());
         }
         let mut sequence = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+        if opened.info.data_io == smb_protocol::protocol::OpenIo::NativeWorking {
+            context.client.resize_working(opened.info.handle, length as u64)?;
+            return Ok(0);
+        }
         sequence.mutate(
             opened.info.handle,
             length as u64,
@@ -539,7 +576,11 @@ unsafe extern "C" fn pread_send(
         let opened = unsafe { snapshot(handle, fsp) }?;
         let private_work = DescriptorRole::for_open(&opened.info, opened.writable)
             == DescriptorRole::PrivateWork;
-        let count = opened.info.read_count(private_work, offset as u64, count);
+        let count = opened.info.read_count(
+                private_work
+                    || opened.info.data_io == smb_protocol::protocol::OpenIo::NativeWorking,
+                offset as u64, count,
+            );
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(count)
@@ -837,6 +878,9 @@ unsafe fn authorized_fstat(
     let size = match role {
         DescriptorRole::Directory => 0,
         DescriptorRole::PrivateWork => physical.st_size,
+        DescriptorRole::NativeWorking => i64::try_from(
+            context.client.stat_working(opened.info.handle)?.size,
+        ).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?,
         DescriptorRole::VerifiedContent => i64::try_from(opened.info.size)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?,
     };
@@ -1062,15 +1106,14 @@ impl Directory {
         let page = self.client.read_directory(self.handle, self.restart)?;
         let mut entries = Vec::new();
         for node in page.entries {
-            let node = node.entry;
             let mut entry: sdk::dirent = Default::default();
-            let name = node.name();
+            let name = node.path().file_name();
             debug_assert!(
                 name.len() < entry.d_name.len(),
                 "invariant: portable names fit the supported SDK dirent"
             );
-            entry.d_ino = inode(&node.entry_id) as _;
-            entry.d_type = match node.kind {
+            entry.d_ino = inode(&node.entry_id()) as _;
+            entry.d_type = match node.kind() {
                 NamespaceEntryKind::Directory => libc::DT_DIR,
                 NamespaceEntryKind::File => libc::DT_REG,
             };

@@ -225,6 +225,14 @@ pub(crate) fn validate(state: &State) -> Result<()> {
             .map_err(|error| error.context(ErrorCode::StateInvalid, "invalid snapshot history"))?;
         covered.include(&manifest)?;
     }
+    // Current-only births are not members of any historical manifest. The
+    // native birth receipt and the one current namespace row own only their tags.
+    // Historical export/DerivedOwners never learn a synthetic version identity.
+    for file in crate::business::file_draft::unborn::validate_current(state, usize::MAX)? {
+        if !covered.container_tags.insert(file) {
+            return Err(crate::business::file_draft::invalid());
+        }
+    }
     covered.finish(state)?;
     crate::node_retirement_engine::admit_current(state)?;
     crate::engine::fresh_layout::containers::validate_state(state)

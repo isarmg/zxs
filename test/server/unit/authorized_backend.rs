@@ -429,6 +429,7 @@ impl Backend for RecordingBackend {
         Ok(crate::DirectorySnapshot {
             commit_id: "commit".into(),
             snapshot: crate::DirectoryReadSnapshot {
+                unborn: std::sync::Arc::new(Vec::new()),
                 branch_id: request.branch.into(),
                 history_tree_id: "history".into(),
                 commit_id: "commit".into(),

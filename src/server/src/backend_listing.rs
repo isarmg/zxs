@@ -261,6 +261,7 @@ pub struct ListingEntry {
     pub historical_only: Option<bool>,
 }
 pub enum ListingVersion {
+    Unborn { target: storage_contract::file_draft::DraftLocation },
     Directory(String),
     File {
         content: ContentDispositionSnapshot,
@@ -325,9 +326,14 @@ pub(crate) struct ListingEntryResponse {
 #[derive(Serialize)]
 #[serialization(untagged)]
 enum ListingVersionResponse {
+    Unborn { working_state: UnbornListingState },
     Directory { version_id: String },
     File(crate::backend_branch::ContentDispositionResponse),
 }
+#[derive(Serialize)]
+#[serialization(rename_all = "snake_case")]
+enum UnbornListingState { Unborn }
+
 impl From<ListingEntry> for ListingEntryResponse {
     fn from(entry: ListingEntry) -> Self {
         let ListingEntry {
@@ -346,6 +352,9 @@ impl From<ListingEntry> for ListingEntryResponse {
             historical_only,
         } = entry;
         let version = match version {
+            ListingVersion::Unborn { .. } => {
+                ListingVersionResponse::Unborn { working_state: UnbornListingState::Unborn }
+            }
             ListingVersion::Directory(version_id) => {
                 ListingVersionResponse::Directory { version_id }
             }

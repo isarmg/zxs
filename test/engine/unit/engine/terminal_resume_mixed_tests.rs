@@ -312,6 +312,7 @@ fn terminal_mixed_resume_cold_request_and_data_marker_reenter_same_operation() {
                 format: crate::disk::DiskSealFormat::MembershipGeneration {
                     authority_hash: hash.clone(),
                 },
+                pool_semantic_format: target.pool_semantic_format,
                 pool_id: identity.pool_id.clone(),
                 disk_id: identity.disk_id.clone(),
                 slot_id: identity.slot_id.clone(),

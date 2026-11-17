@@ -11,7 +11,7 @@ use std::{fs::File, io::{Read, Write}, os::fd::OwnedFd, path::Path};
 use storage_contract::OperationId;
 use storage_contract::file_draft::DraftCommand;
 
-mod layout;
+pub(super) mod layout;
 
 #[derive(Serialize)]
 #[serialization(tag = "state", rename_all = "snake_case")]
@@ -374,6 +374,8 @@ impl Session {
         };
         self.handles.insert(handle, opened);
         Ok((OpenResult {
+            data_io: if writable { smb_protocol::protocol::OpenIo::Descriptor }
+                else { smb_protocol::protocol::OpenIo::VerifiedRanges },
             entry_id, kind: storage_contract::NamespaceEntryKind::File,
             path: path.into_string(), handle, size, max_file_bytes: self.max_file_bytes,
             version_id: version, workspace_id: None, mtime,

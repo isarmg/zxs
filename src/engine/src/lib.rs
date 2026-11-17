@@ -56,6 +56,7 @@ pub use disk_names::{
 mod persist;
 pub mod disk_authority;
 mod engine;
+pub use engine::{NativeCurrentEntry, NativeWorkingFile};
 pub use engine::DetachedHistoryRead;
 pub use engine::{
     DirectorySnapshotBudget, DirectorySnapshotContent, DirectorySnapshotEntry,

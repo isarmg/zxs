@@ -33,6 +33,7 @@ pub struct DirectoryReadSnapshot {
     pub(crate) commit_id: String,
     pub(crate) binding: DirectoryRegistryBinding,
     pub(crate) entries: DirectoryEntries,
+    pub(crate) unborn: std::sync::Arc<Vec<smb_protocol::protocol::DirectoryEntry>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

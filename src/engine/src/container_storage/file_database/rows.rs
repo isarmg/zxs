@@ -104,7 +104,8 @@ pub(super) struct Validation<'a> {
     branches: BTreeMap<String, BranchRow>,
     path_branches: BTreeSet<storage_contract::BranchId>,
     nodes: BTreeMap<String, u64>,
-    file_row: bool,
+    file_row: Option<storage_contract::file_draft::FileWorkingState>,
+    historical_rows: bool,
     selected_branch: Option<String>,
     versions: usize,
     storage_ids: BTreeSet<storage_contract::VersionStorageId>,
@@ -120,7 +121,8 @@ impl<'a> Validation<'a> {
             branches: BTreeMap::new(),
             path_branches: BTreeSet::new(),
             nodes: BTreeMap::new(),
-            file_row: false,
+            file_row: None,
+            historical_rows: false,
             selected_branch: None,
             versions: 0,
             storage_ids: BTreeSet::new(),
@@ -166,13 +168,16 @@ impl<'a> Validation<'a> {
             _ => return Err(super::invalid("file database record kind is unsupported")),
         };
         storage_contract::validate_id(id, prefix)?;
+        self.historical_rows |= kind != "file";
         let (owner, own_id) = match kind {
             "file" => {
                 let row: FileRow = decode_local(body.as_bytes())?;
                 if let Some(branch) = &row.selected_branch_id {
                     storage_contract::validate_id(branch, "br")?;
                 }
-                self.file_row = true;
+                if self.file_row.replace(row.working).is_some() {
+                    return Err(crate::Error::FileDraft(crate::DraftError::WorkingFileGraph));
+                }
                 self.selected_branch = row.selected_branch_id;
                 (row.file_id.clone(), row.file_id)
             }
@@ -266,7 +271,23 @@ impl<'a> Validation<'a> {
         Ok(())
     }
     pub(super) fn finish(self) -> crate::Result<()> {
-        if !self.file_row || self.versions == 0 {
+        if let Some(storage_contract::file_draft::FileWorkingState::Unborn { working }) =
+            &self.file_row
+        {
+            let wrong_manifest = match working.body() {
+                storage_contract::file_draft::UnbornBody::Empty {} => false,
+                storage_contract::file_draft::UnbornBody::Saved { manifest } => {
+                    manifest.file().to_string() != self.file
+                }
+            };
+            if self.historical_rows || self.selected_branch.is_some() || wrong_manifest
+                || working.revision().generation().get() == 0
+            {
+                return Err(crate::Error::FileDraft(crate::DraftError::WorkingFileGraph));
+            }
+            return Ok(());
+        }
+        if self.file_row.is_none() || self.versions == 0 {
             return Err(super::invalid(
                 "file database is missing its file or retained versions",
             ));

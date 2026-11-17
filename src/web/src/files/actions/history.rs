@@ -44,7 +44,7 @@ impl Target {
             return None;
         }
         let entry = state.files.selected.as_ref()?;
-        if !super::super::model::file_kind(entry) {
+        if !super::super::model::file_kind(entry) || entry.unborn().is_some() {
             return None;
         }
         Some(Self {

@@ -145,7 +145,7 @@ fn directory(stream: &mut FrameStream, path: &str) -> Vec<String> {
         paths.extend(
             page.entries
                 .iter()
-                .map(|entry| entry.entry.path.as_str().to_owned()),
+                .map(|entry| entry.path().as_str().to_owned()),
         );
         if !page.more {
             break;
@@ -940,7 +940,7 @@ fn default_named_directory_identity_and_canonical_paths_match_enumeration_stat_a
     let listed = page
         .entries
         .iter()
-        .find(|entry| entry.entry.path.as_str() == "资料")
+        .find(|entry| entry.path().as_str() == "资料")
         .unwrap();
     let (stat, _) = okay(
         &mut stream,
@@ -950,8 +950,8 @@ fn default_named_directory_identity_and_canonical_paths_match_enumeration_stat_a
     );
     let (named, _fd) = open(&mut stream, "P/资料", false, false);
     assert_eq!(stat["path"], "p/资料");
-    assert_eq!(stat["entry_id"], listed.entry.entry_id);
-    assert_eq!(named.entry_id, listed.entry.entry_id);
+    assert_eq!(stat["entry_id"], listed.entry_id());
+    assert_eq!(named.entry_id, listed.entry_id());
     assert_eq!(named.path, "p/资料");
     let (contents, _) = okay(
         &mut stream,
@@ -961,7 +961,7 @@ fn default_named_directory_identity_and_canonical_paths_match_enumeration_stat_a
         },
     );
     let contents: smb_protocol::protocol::DirectoryPage = json_codec::from_value(contents).unwrap();
-    assert_eq!(contents.entries[0].entry.path.as_str(), "report.txt");
+    assert_eq!(contents.entries[0].published().unwrap().path.as_str(), "report.txt");
     let (reader, _fd) = open(&mut stream, "P/资料/report.txt", false, false);
     assert_eq!(reader.path, "p/资料/report.txt");
     let (stat, _) = okay(

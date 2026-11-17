@@ -41,9 +41,9 @@ impl HeldDraft {
         Ok(())
     }
 
-    pub(super) fn open(&self, container: &ObservedContainerReplica) -> Result<ReadFile> {
+    pub(super) fn open(&self, container: &Arc<ObservedContainerReplica>) -> Result<ReadFile> {
         self.validate(container)?;
-        let mut file = ReadFile::from(self.file.try_clone()?);
+        let mut file = ReadFile::in_container(self.file.try_clone()?, Arc::clone(container));
         file.seek(SeekFrom::Start(0))?;
         Ok(file)
     }

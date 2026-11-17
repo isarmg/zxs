@@ -183,6 +183,7 @@ fn registered_acl_rejects_unknown_fields_and_revoked_or_forced_identity() {
         let mut fsp = sdk::files_struct::default();
         let opened = Open {
             info: Arc::new(OpenResult {
+                data_io: smb_protocol::protocol::OpenIo::Directory,
                 entry_id: "directory".into(),
                 kind: NamespaceEntryKind::Directory,
                 path: String::new(),

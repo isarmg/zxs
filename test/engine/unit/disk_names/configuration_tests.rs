@@ -24,6 +24,7 @@ fn disk(index: u8, name: &str, level: u32, upstream: Option<u8>) -> DiskConfig {
 fn chain() -> Config {
     Config {
         pool_id: PoolId::from_random([9; 16]).to_string(),
+        pool_semantic_format: storage_contract::PoolSemanticFormat::ManualDirectoryV1,
         storage_roots: BTreeMap::new(),
         mode: Mode::Development,
         disks: vec![disk(1, "Alpha", 1, None), disk(2, "Beta", 2, Some(1)),

@@ -218,7 +218,11 @@ fn shared_decoder_preserves_metadata_admission_and_diagnostic_sources() {
         extra["unknown"] = Value::Bool(true);
         results.push(extra.to_string());
     }
-    results.push(json_codec::json!({"entry_id":"entry","kind":"file","path":"file","handle":"7","size":"3","max_file_bytes":"100","version_id":null,"workspace_id":"workspace","mtime":{"state":"unpublished"}}).to_string());
+    results.push(json_codec::json!({
+        "data_io":"descriptor", "entry_id":"entry", "kind":"file", "path":"file",
+        "handle":"7", "size":"3", "max_file_bytes":"100", "version_id":null,
+        "workspace_id":"workspace", "mtime":{"state":"unpublished"},
+    }).to_string());
     for result in results {
         for payload in [
             format!(r#"{{"status":"ok","result":{result}}}"#),

@@ -62,7 +62,7 @@ impl Databases {
             frozen.state(),
             None,
         )?;
-        crate::container_storage::validate_new_projection_paths(&transition)?;
+        crate::container_storage::validate_new_projection_paths(&engine.config, &transition)?;
         let files = crate::container_storage::prepare_names(
             &engine.config,
             &engine.disk_resources,

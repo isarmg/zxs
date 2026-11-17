@@ -48,6 +48,7 @@ fn reply_to_manual_open(wire: &mut FrameStream, source: &File) {
     assert!(writable);
     assert!(!create && !truncate && !exclusive && !write_through);
     let opened = OpenResult {
+        data_io: smb_protocol::protocol::OpenIo::Descriptor,
         entry_id: "entry".into(),
         kind: NamespaceEntryKind::File,
         path,
@@ -227,5 +228,157 @@ fn manual_open_reads_its_real_fd_after_write_truncate_and_extend_without_workspa
         drop(source);
         std::fs::remove_file(socket).unwrap();
         std::fs::remove_file(path).unwrap();
+    }
+}
+
+
+#[test]
+fn native_working_mode_uses_ordered_rpc_not_the_placeholder_fd_for_sync_and_async_io() {
+    use smb_protocol::protocol::{OpenIo, WorkingPosition};
+    for asynchronous_io in [false, true] {
+        let socket = std::env::temp_dir().join(format!(
+            "zxs-vfs-native-{}-{}.sock", std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+        ));
+        let listener = UnixListener::bind(&socket).unwrap();
+        let placeholder = File::open(std::env::temp_dir()).unwrap();
+        let held = placeholder.try_clone().unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut wire = FrameStream::with_timeout(
+                listener.accept().unwrap().0, Duration::from_secs(5),
+            ).unwrap();
+            assert!(matches!(wire.receive::<Request>().unwrap().0, Request::Hello { .. }));
+            ok(&mut wire, json_codec::json!({
+                "protocol": PROTOCOL, "capabilities": REQUIRED_CAPABILITIES,
+            }));
+            assert!(matches!(wire.receive::<Request>().unwrap().0,
+                Request::Open { writable: true, .. }));
+            let info = OpenResult {
+                data_io: OpenIo::NativeWorking, entry_id: "entry".into(),
+                kind: NamespaceEntryKind::File, path: "native".into(), handle: 7,
+                size: 0, max_file_bytes: 256 * 1024,
+                version_id: None, workspace_id: None, mtime: FileMtime::Unpublished {},
+            };
+            wire.send(&Response::Ok { result: json_codec::to_value(info).unwrap() },
+                Some(held.as_fd())).unwrap();
+            let mut bytes = Vec::<u8>::new();
+            let mut frames = Vec::new();
+            loop {
+                match wire.receive::<Request>().unwrap().0 {
+                    Request::WorkingWrite { handle: 7, position, bytes: input } => {
+                        let offset = match position {
+                            WorkingPosition::At { offset } => offset as usize,
+                            WorkingPosition::Append {} => bytes.len(),
+                        };
+                        assert!(input.len() <= smb_protocol::protocol::MAX_READ_BYTES);
+                        frames.push((offset, input.len()));
+                        bytes.resize(bytes.len().max(offset + input.len()), 0);
+                        bytes[offset..offset + input.len()].copy_from_slice(&input);
+                        ok(&mut wire, json_codec::json!({"written": input.len()}));
+                    }
+                    Request::WorkingResize { handle: 7, length } => {
+                        bytes.resize(length as usize, 0);
+                        ok(&mut wire, json_codec::json!({"resized": true}));
+                    }
+                    Request::Read { handle: 7, offset, length } => {
+                        let from = (offset as usize).min(bytes.len());
+                        let to = (from + length as usize).min(bytes.len());
+                        ok(&mut wire, json_codec::json!({"bytes": &bytes[from..to]}));
+                    }
+                    Request::WorkingStat { handle: 7 } => {
+                        ok(&mut wire, json_codec::json!({"size": bytes.len().to_string()}));
+                    }
+                    Request::AuthorizeRead { handle: 7 } => {
+                        ok(&mut wire, json_codec::json!({"mtime": {"state":"unpublished"}}));
+                    }
+                    Request::Flush { handle: 7 } => {
+                        assert_eq!(bytes, b"\0\0\0gg\0\0\0\0");
+                        ok(&mut wire, json_codec::json!({"saved":true}));
+                    }
+                    Request::Close { handle: 7 } => {
+                        ok(&mut wire, json_codec::json!({"closed":true}));
+                        break;
+                    }
+                    unexpected => panic!("native mode must not use FD/Dirty: {unexpected:?}"),
+                }
+            }
+            let block = smb_protocol::protocol::MAX_READ_BYTES;
+            assert_eq!(frames, [(3, block), (3 + block, 3), (6 + block, 2)]);
+            assert!(held.metadata().unwrap().is_dir());
+        });
+        let client = Client::connect(&socket, "alice", "repository").unwrap();
+        let owner = Box::new(Context {
+            samba_username: "alice".into(), client, files: BTreeMap::new(),
+        });
+        let mut authenticated = authentication::tests::AuthenticatedSession::new();
+        let mut host = authenticated.handle();
+        host.data = Box::into_raw(owner).cast();
+        let mut fsp = sdk::files_struct::default();
+        let filename = sdk::smb_filename {
+            base_name: c"native".as_ptr().cast_mut(), ..Default::default()
+        };
+        let how = sdk::vfs_open_how { flags: libc::O_RDWR, ..Default::default() };
+        // SAFETY: the real generated SDK host and buffers remain live on this
+        // event thread. Async work completes before any host storage is reused.
+        unsafe {
+            assert!(openat(&mut host, std::ptr::null(), &filename, &mut fsp, &how) >= 0);
+            let opened = &context(&mut host).unwrap().files[&(&mut fsp as *mut _ as usize)];
+            assert_eq!(opened.info.data_io, OpenIo::NativeWorking);
+            assert_eq!(DescriptorRole::for_open(&opened.info, opened.writable),
+                DescriptorRole::NativeWorking);
+            let event = asynchronous_io.then(|| asynchronous::tests::event_context());
+            let input = vec![b'g'; smb_protocol::protocol::MAX_READ_BYTES + 3];
+            if let Some(event) = event {
+                assert!(!event.is_null());
+                let request = pwrite_send(
+                    &mut host, std::ptr::null_mut(), event, &mut fsp,
+                    input.as_ptr().cast(), input.len(), 3,
+                );
+                assert_eq!(complete(request, event), input.len() as isize);
+            } else {
+                assert_eq!(pwrite(&mut host, &mut fsp,
+                    input.as_ptr().cast(), input.len(), 3), input.len() as isize);
+            }
+            assert_eq!(pwrite(&mut host, &mut fsp, b"++".as_ptr().cast(), 2, -1), 2);
+            assert_eq!(truncate(&mut host, &mut fsp, 5), 0);
+            assert_eq!(truncate(&mut host, &mut fsp, 9), 0);
+            let mut output = [0xff; 9];
+            let count = if let Some(event) = event {
+                let request = pread_send(
+                    &mut host, std::ptr::null_mut(), event, &mut fsp,
+                    output.as_mut_ptr().cast(), output.len(), 0,
+                );
+                complete(request, event)
+            } else {
+                pread(&mut host, &mut fsp, output.as_mut_ptr().cast(), output.len(), 0)
+            };
+            assert_eq!(count, 9);
+            assert_eq!(&output, b"\0\0\0gg\0\0\0\0");
+            let mut stat = sdk::SMB_STRUCT_STAT::default();
+            assert_eq!(fstat(&mut host, &mut fsp, &mut stat), 0);
+            assert_eq!(stat.st_ex_size, 9);
+            assert_eq!(lseek(&mut host, &mut fsp, 0, libc::SEEK_END), -1);
+            assert_eq!(*libc::__errno_location(), libc::ESPIPE);
+            let flush_event = match event {
+                Some(event) => event,
+                None => asynchronous::tests::event_context(),
+            };
+            assert!(!flush_event.is_null());
+            let flushing = fsync_send(
+                &mut host, std::ptr::null_mut(), flush_event, &mut fsp,
+            );
+            assert_eq!(complete(flushing, flush_event), 0);
+            if event.is_none() {
+                sdk::_talloc_free(flush_event.cast(), c"zxs native RPC test".as_ptr());
+            }
+            assert_eq!(close(&mut host, &mut fsp), 0);
+            free_context(&mut host.data);
+            if let Some(event) = event {
+                sdk::_talloc_free(event.cast(), c"zxs native RPC test".as_ptr());
+            }
+        }
+        worker.join().unwrap();
+        assert!(placeholder.metadata().unwrap().is_dir());
+        std::fs::remove_file(socket).unwrap();
     }
 }

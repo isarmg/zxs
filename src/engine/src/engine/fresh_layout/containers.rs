@@ -10,6 +10,8 @@ use storage_contract::file_draft::{FileWorkingState, WorkingRevision};
 
 pub(super) mod prefixes;
 mod rename;
+mod unborn;
+pub(crate) use unborn::{VerifiedUnbornBirth, VerifiedUnbornFirst};
 pub(crate) use rename::ContainerNameChange;
 
 fn inventory(state: &State) -> Result<BTreeMap<FileId, HistoryTreeId>> {
@@ -21,12 +23,20 @@ fn inventory(state: &State) -> Result<BTreeMap<FileId, HistoryTreeId>> {
             return Err(Failure::ContainerShape.into());
         }
     }
+    for (file, record) in state.file_containers.iter() {
+        if record.working.unborn().is_some()
+            && files.insert(*file, record.history_tree_id).is_some()
+        {
+            return Err(Failure::ContainerShape.into());
+        }
+    }
     Ok(files)
 }
 
 /// Structural native-snapshot check, not permission to open a named directory.
 pub(crate) fn validate_state(state: &State) -> Result<()> {
     super::directories::validate_state(state)?;
+    let current = crate::business::file_draft::unborn::validate_current(state, usize::MAX)?;
     let files = inventory(state)?;
     if files.len() != state.file_containers.len() {
         return Err(Failure::ContainerShape.into());
@@ -55,7 +65,8 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
         if record.history_tree_id != history
             || !record.replicas.contains_key(&record.owner_disk)
             || record.working.revision().generation().get() == 0
-            || super::namespace::file_target(state, file, history)? != record.namespace
+            || (!current.contains(&file)
+                && super::namespace::file_target(state, file, history)? != record.namespace)
             || !state.operations.get(&record.created_by)
                 .is_some_and(|result| result.sequence <= state.sequence)
         {
@@ -105,6 +116,8 @@ pub(crate) struct ContainerPreparation {
     directory_additions: BTreeSet<(storage_contract::EntryId, DiskId)>,
     directory_targets: BTreeSet<(storage_contract::EntryId, DiskId)>,
     renames: BTreeMap<FileId, ContainerNameChange>,
+    birth: Option<std::sync::Arc<VerifiedUnbornBirth>>,
+    first: Option<std::sync::Arc<VerifiedUnbornFirst>>,
 }
 impl ContainerPreparation {
     pub(crate) fn new(
@@ -114,14 +127,38 @@ impl ContainerPreparation {
         result: &OperationResult,
     ) -> Result<Self> {
         validate_state(context.state)?;
+        // Every old writer must still see Unborn names as occupied. This pure
+        // union check precedes capacity admission and all physical preparation.
+        let mut current_repositories = BTreeSet::new();
+        for record in next.file_containers.values().filter(|record| {
+            record.working.unborn().is_some()
+        }) {
+            if current_repositories.insert(record.namespace.repository) {
+                crate::business::namespace::working::WorkingNamespace::from_main_state(
+                    &next, record.namespace.repository, context.config.max_entries,
+                )?;
+            }
+        }
         let automatic_backup = crate::protection::verify_automatic_backup_prepared(
             context, &next, result, prepared,
         )?;
         let directory_backup = automatic_backup.as_ref().and_then(|proof| proof.directories());
-        let working = crate::engine::file_draft::verify_working_transition(
-            context.state, &next, result,
-        )?;
+        let birth = unborn::plan(context, &next, prepared, result)?.map(std::sync::Arc::new);
+        let saving = unborn::save_plan(context, &next, prepared, result)?;
+        let first = unborn::first_plan(context, &next, prepared, result)?;
+        let working = match (&birth, &saving, &first) {
+            (Some(_), None, None) => None,
+            (None, Some(proof), None) => Some(proof.file()),
+            (None, None, Some(proof)) => Some(proof.file()),
+            (None, None, None) => crate::engine::file_draft::verify_working_transition(
+                context.state, &next, result,
+            )?,
+            _ => return Err(Failure::ContainerScope.into()),
+        };
         let mut expected = context.state.file_containers.clone();
+        if let Some(birth) = &birth {
+            expected.insert(birth.file(), next.file_containers[&birth.file()].clone());
+        }
         if let Some(file) = working {
             let after = next.file_containers.get(&file).ok_or(Failure::ContainerScope)?;
             expected.get_mut(&file).ok_or(Failure::ContainerScope)?.working = after.working.clone();
@@ -164,6 +201,12 @@ impl ContainerPreparation {
         let mut known_prefixes = prefixes::collect(context.state)?;
         let mut additions = BTreeMap::new();
         let mut targets = BTreeSet::new();
+        if let Some(birth) = &birth {
+            unborn::add_owner(context, &mut next, birth)?;
+            let name = next.file_containers[&birth.file()].namespace.name.as_str().to_owned();
+            additions.insert((birth.file(), birth.owner()), name);
+            targets.insert((birth.file(), birth.owner()));
+        }
         for payload in prepared {
             let version = &payload.version;
             let placement = &payload.placement;
@@ -207,8 +250,9 @@ impl ContainerPreparation {
                 || !(matches!(record.working, FileWorkingState::Automatic { .. })
                     || (working == Some(file)
                         && matches!(record.working, FileWorkingState::ManualClean { .. })
-                        && context.state.file_containers.get(&file)
-                            .is_some_and(|before| before.working.draft().is_some())))
+                        && (context.state.file_containers.get(&file)
+                            .is_some_and(|before| before.working.draft().is_some())
+                            || first.as_ref().is_some_and(|proof| proof.file() == file))))
             {
                 return Err(Failure::ContainerScope.into());
             }
@@ -281,7 +325,17 @@ impl ContainerPreparation {
         if after.len() != next.file_containers.len() {
             return Err(Failure::ContainerScope.into());
         }
-        Ok(Self { next, additions, targets, directory_additions, directory_targets, renames })
+        Ok(Self {
+            next, additions, targets, directory_additions, directory_targets, renames, birth, first,
+        })
+    }
+
+    pub(crate) fn birth(&self) -> Option<&std::sync::Arc<VerifiedUnbornBirth>> {
+        self.birth.as_ref()
+    }
+
+    pub(crate) fn first(&self) -> Option<&std::sync::Arc<VerifiedUnbornFirst>> {
+        self.first.as_ref()
     }
 
     pub(crate) fn rename(&self, file: FileId) -> Option<&ContainerNameChange> {
@@ -510,15 +564,38 @@ pub(in crate::engine) fn recovery_rename_locations<'a>(
 }
 
 impl RecoveryRenameLocations<'_> {
-    pub(crate) fn permits_target(
+    fn require_pair(
         &self, previous: &State, next: &State, candidate: &crate::journal::Candidate,
-        file: FileId, disk: DiskId,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if !std::ptr::eq(previous, self.previous) || !std::ptr::eq(next, self.next)
             || !std::ptr::eq(candidate, self.candidate)
         {
             return Err(Failure::ContainerScope.into());
         }
+        Ok(())
+    }
+
+    /// The earlier Unborn record selects its original immutable extents inside
+    /// the same inode. Only this admitted replay loan can resolve a later name.
+    fn observe_previous(
+        &self,
+        config: &Config,
+        resources: &DiskResources,
+        previous: &State,
+        next: &State,
+        candidate: &crate::journal::Candidate,
+        file: FileId,
+        disk: &DiskConfig,
+    ) -> Result<crate::container_storage::ObservedContainerReplica> {
+        self.require_pair(previous, next, candidate)?;
+        observe_historical_replica(config, resources, previous, file, disk, self.locations)
+    }
+
+    pub(crate) fn permits_target(
+        &self, previous: &State, next: &State, candidate: &crate::journal::Candidate,
+        file: FileId, disk: DiskId,
+    ) -> Result<bool> {
+        self.require_pair(previous, next, candidate)?;
         let old = previous.file_containers.get(&file).ok_or(Failure::ContainerScope)?;
         let new = next.file_containers.get(&file).ok_or(Failure::ContainerScope)?;
         use crate::engine::recovery::container_locations::ReplayName;
@@ -670,8 +747,18 @@ pub(crate) struct VerifiedContainerTransition<'a> {
     next: &'a State,
     candidate: &'a crate::journal::Candidate,
     renames: BTreeMap<FileId, ContainerNameChange>,
+    birth: Option<std::sync::Arc<VerifiedUnbornBirth>>,
+    first: Option<std::sync::Arc<VerifiedUnbornFirst>>,
 }
 impl VerifiedContainerTransition<'_> {
+    pub(crate) fn birth(&self) -> Option<&std::sync::Arc<VerifiedUnbornBirth>> {
+        self.birth.as_ref()
+    }
+
+    pub(crate) fn first(&self) -> Option<&std::sync::Arc<VerifiedUnbornFirst>> {
+        self.first.as_ref()
+    }
+
     pub(in crate::engine) fn renames(&self) -> &BTreeMap<FileId, ContainerNameChange> {
         &self.renames
     }
@@ -699,6 +786,30 @@ impl VerifiedContainerTransition<'_> {
     }
 }
 
+/// First commit alone needs the original immutable working extents. Neither a
+/// serialized FULL hash nor the existence of a later Version supplies them.
+/// The ordinary pure verifier remains unchanged for every other operation.
+pub(crate) fn verify_transition_with_working_source<'a>(
+    config: &crate::ValidatedConfig,
+    resources: &std::sync::Arc<DiskResources>,
+    previous: &'a State,
+    next: &'a State,
+    candidate: &'a crate::journal::Candidate,
+    locations: Option<&RecoveryRenameLocations<'_>>,
+) -> Result<VerifiedContainerTransition<'a>> {
+    let result = next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
+    if result.kind != crate::persist::file_draft::unborn_first::KIND {
+        return verify_transition(config, previous, next, candidate);
+    }
+    validate_state(previous)?;
+    validate_state(next)?;
+    let first = unborn::first_candidate(config, resources, previous, next, candidate, locations)?
+        .ok_or(Failure::ContainerScope)?;
+    Ok(VerifiedContainerTransition {
+        previous, next, candidate, renames: BTreeMap::new(), birth: None, first: Some(first),
+    })
+}
+
 /// Cold ordinary transition check. Candidate evidence supplies the exact first
 /// prepared order; serialized owner/root fields cannot choose a different target.
 pub(crate) fn verify_transition<'a>(
@@ -712,7 +823,18 @@ pub(crate) fn verify_transition<'a>(
     if let Some(proof) = config.verify_backup_first_layout(previous, next, candidate)? {
         proof.require_pair(previous, next, candidate)?;
         return Ok(VerifiedContainerTransition {
+            previous, next, candidate, renames: BTreeMap::new(), birth: None, first: None,
+        });
+    }
+    if let Some(birth) = unborn::candidate(config, previous, next, candidate)? {
+        return Ok(VerifiedContainerTransition {
             previous, next, candidate, renames: BTreeMap::new(),
+            birth: Some(std::sync::Arc::new(birth)), first: None,
+        });
+    }
+    if unborn::save_candidate(config, previous, next, candidate)?.is_some() {
+        return Ok(VerifiedContainerTransition {
+            previous, next, candidate, renames: BTreeMap::new(), birth: None, first: None,
         });
     }
     let result = next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
@@ -838,7 +960,9 @@ pub(crate) fn verify_transition<'a>(
             config, previous, result, candidate,
         )?;
     }
-    Ok(VerifiedContainerTransition { previous, next, candidate, renames })
+    Ok(VerifiedContainerTransition {
+        previous, next, candidate, renames, birth: None, first: None,
+    })
 }
 
 #[cfg(test)]

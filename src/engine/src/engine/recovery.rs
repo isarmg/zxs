@@ -590,14 +590,12 @@ impl Engine {
                 };
                 self.preflight_backup_first_current(&candidate, original, published, &seal)?;
             } else {
-                match (&publication, &readonly_seal) {
-                    (Some(p), Some(seal)) => self.verify_readonly_published_namespace_candidate(
-                        &candidate, original, p, seal,
-                    )?,
-                    _ => self.verify_replay_namespace_candidate(
-                        &candidate, original, publication.as_ref(),
-                    )?,
-                }
+                let locations = super::fresh_layout::containers::recovery_rename_locations(
+                    &self.state, next, &candidate, &container_locations,
+                );
+                self.verify_replay_namespace_at_locations(
+                    &candidate, original, publication.as_ref(), readonly_seal.as_ref(), &locations,
+                )?;
             }
             if self.move_completion.as_ref().is_some_and(|selected| {
                 selected.sequence() == candidate.sequence && selected.candidate_hash() == hash

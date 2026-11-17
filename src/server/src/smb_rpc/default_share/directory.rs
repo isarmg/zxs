@@ -104,6 +104,7 @@ impl DefaultShare {
         let file = File::open(self.shared.spool.join("empty-directory")).map_err(ApiError::io)?;
         let descriptor = OwnedFd::from(file.try_clone().map_err(ApiError::io)?);
         let opened = OpenResult {
+            data_io: smb_protocol::protocol::OpenIo::Directory,
             entry_id,
             kind: storage_contract::NamespaceEntryKind::Directory,
             path,
@@ -154,6 +155,14 @@ impl DefaultShare {
         let mut entries = Vec::with_capacity(snapshot.entries.len());
         for entry in snapshot.entries {
             let (version_id, mtime) = match entry.version {
+                ListingVersion::Unborn { mut target } => {
+                    // This typed identity came from the locked current union;
+                    // only its displayed path is rebased at the virtual disk boundary.
+                    target.path = name_policy::PortablePath::parse(&entry.path)
+                        .map_err(ApiError::invalid_source)?;
+                    entries.push(DirectoryEntry::Unborn { target, logical_size: entry.size });
+                    continue;
+                }
                 ListingVersion::Directory(version) => (version, FileMtime::NotFile {}),
                 ListingVersion::File { content, .. } => {
                     let version = content
@@ -174,7 +183,7 @@ impl DefaultShare {
                     (version, mtime)
                 }
             };
-            entries.push(DirectoryEntry {
+            entries.push(DirectoryEntry::Published {
                 entry: Entry {
                     entry_id: entry.entry_id,
                     path: name_policy::PortablePath::parse(&entry.path)
@@ -312,7 +321,7 @@ impl DefaultShare {
             .take(MAX_DIRECTORY_PAGE_ENTRIES)
             .map(|slot| {
                 let path = slot.directory_name()?.clone();
-                Ok(DirectoryEntry {
+                Ok(DirectoryEntry::Published {
                     entry: Entry {
                         entry_id: slot.disk_id,
                         path,

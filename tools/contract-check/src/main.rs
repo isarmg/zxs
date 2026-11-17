@@ -152,6 +152,13 @@ fn validate_content_view(value: &Value) -> Result {
 
 fn semantics(name: &str, value: &Value) -> Result {
     match name {
+        "PoolConfiguration" => {
+            let _: storage_contract::Config = json_codec::from_value(value.clone())?;
+        }
+        "PoolRootBinding" => {
+            let _: storage_contract::working_tree::RootBinding =
+                json_codec::from_value(value.clone())?;
+        }
         "NamespaceDirectoryRecord" => {
             let _: storage_contract::file_container::NamespaceDirectoryRecord =
                 json_codec::from_value(value.clone())?;

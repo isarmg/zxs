@@ -516,6 +516,9 @@ impl DefaultShare {
         let handle = match &mut request {
             Request::AuthorizeRead { handle }
             | Request::Read { handle, .. }
+            | Request::WorkingWrite { handle, .. }
+            | Request::WorkingResize { handle, .. }
+            | Request::WorkingStat { handle }
             | Request::PrepareWrite { handle, .. }
             | Request::Dirty { handle }
             | Request::Flush { handle }

@@ -300,6 +300,16 @@ impl Session {
             .get_mut(&handle)
             .ok_or_else(handles::missing_handle)?;
         match opened {
+            Handle::Native(file) => {
+                if !file.writable {
+                    self.shared.backend.smb_native_size(&self.identity, &file.file)?;
+                    return Ok(json!({"saved": true, "changed": false}));
+                }
+                match self.shared.backend.smb_native_flush(&self.identity, &mut file.file)? {
+                    Some(result) => crate::operation_wire::operation_wire(result.into()),
+                    None => Ok(json!({"saved": true, "changed": false})),
+                }
+            }
             Handle::ManualWrite(writer, _) => {
                 writer.flush(&self.shared, &self.identity, self.max_file_bytes)
             }
@@ -320,7 +330,7 @@ impl Session {
                     Handle::Directory(directory) => {
                         directory.file.sync_all().map_err(ApiError::io)?;
                     }
-                    Handle::Write(_, _) | Handle::ManualWrite(_, _) => {}
+                    Handle::Native(_) | Handle::Write(_, _) | Handle::ManualWrite(_, _) => {}
                 }
                 Ok(json!({"saved":true,"changed":false}))
             }
@@ -341,7 +351,15 @@ impl Session {
             .handles
             .remove(&handle)
             .ok_or_else(handles::missing_handle)?;
-        if let Handle::ManualWrite(mut writer, _paths) = opened {
+        if let Handle::Native(mut file) = opened {
+            if !abort && file.writable {
+                self.shared.backend.smb_native_flush(&self.identity, &mut file.file)?;
+            } else {
+                // No inode cleanup. A pending native publication is recovered
+                // by its journal; failing size admission cannot claim Abort.
+                self.shared.backend.smb_native_size(&self.identity, &file.file)?;
+            }
+        } else if let Handle::ManualWrite(mut writer, _paths) = opened {
             writer.close(&self.shared, &self.identity, self.max_file_bytes, abort)?;
         } else if let Handle::Write(mut writer, _paths) = opened {
             // Close owns the descriptor even when publication fails. Its path
@@ -389,7 +407,9 @@ impl Session {
             .remove(&handle)
             .ok_or_else(handles::missing_handle)?;
         let mut result = json!({"closed":true,"detached":true});
-        if let Handle::ManualWrite(mut writer, _paths) = entry {
+        if let Handle::Native(file) = entry {
+            result["operation_id"] = json!(file.file.operation());
+        } else if let Handle::ManualWrite(mut writer, _paths) = entry {
             writer.retain(&self.identity.principal);
             result["operation_id"] = json!(writer.operation());
         } else if let Handle::Write(mut writer, _paths) = entry {

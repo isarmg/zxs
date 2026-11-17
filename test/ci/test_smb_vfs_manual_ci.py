@@ -35,9 +35,9 @@ class SmbManualDescriptorSelection(unittest.TestCase):
                 self.assertIn('test_smb_vfs_manual_ci', plan['python_tests'])
                 self.assertFalse(any(t['package'] == 'smb-vfs' for t in plan['rust_targets']))
 
-    def test_seven_exact_current_tests_are_required_and_never_satisfied_by_zero(self):
-        self.assertEqual(len(SDK.EXACT), 7)
-        self.assertEqual(len(set(SDK.EXACT)), 7)
+    def test_eight_exact_current_tests_are_required_and_never_satisfied_by_zero(self):
+        self.assertEqual(len(SDK.EXACT), 8)
+        self.assertEqual(len(set(SDK.EXACT)), 8)
         self.assertEqual(SDK.TARGET['features'], ['smb-sdk'])
         self.assertEqual(CI.selected_tests(SDK.EXACT, [], SDK.TARGET), sorted(SDK.EXACT))
         with self.assertRaises(ValueError):

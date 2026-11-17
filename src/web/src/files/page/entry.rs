@@ -18,7 +18,7 @@ pub(super) fn parse(value: Value) -> Result<Entry, DecodeError> {
     let file_id = fields.text("file_id")?;
     let (body, location, note, read_only) = match kind.as_str() {
         "directory" => directory(&mut fields, size, &file_id, backup)?,
-        "file" => file(&mut fields, size, file_id, backup)?,
+        "file" => file(&mut fields, &entry_id, size, file_id, backup)?,
         _ => return Err(field_error("kind", "file or directory")),
     };
     fields.finish()?;
@@ -72,6 +72,7 @@ fn directory(
 }
 fn file(
     fields: &mut Object,
+    entry_id: &str,
     size: u64,
     file_id: String,
     backup: bool,
@@ -81,6 +82,9 @@ fn file(
             "file_id",
             "a nonempty identity of at most 256 bytes",
         ));
+    }
+    if fields.contains("working_state") {
+        return unborn(fields, entry_id, size, file_id, backup);
     }
     let historical = if backup {
         fields.boolean("historical_only")?
@@ -113,6 +117,35 @@ fn file(
         Some(note),
         read_only,
     ))
+}
+fn unborn(
+    fields: &mut Object,
+    entry_id: &str,
+    size: u64,
+    file_id: String,
+    backup: bool,
+) -> Result<Details, DecodeError> {
+    if fields.text("working_state")? != "unborn" || backup {
+        return Err(field_error("working_state", "unborn on a current primary file"));
+    }
+    let location = location(fields, true, false)?;
+    if location.selected_branch_id.is_some() || fields.boolean("read_only")? {
+        return Err(DecodeError::Relation("unborn content has no historical selected branch"));
+    }
+    let target = storage_contract::file_draft::DraftLocation {
+        file: file_id.parse().map_err(|source| DecodeError::Identity {
+            field: "file_id", source,
+        })?,
+        entry: entry_id.parse().map_err(|source| DecodeError::Identity {
+            field: "entry_id", source,
+        })?,
+        repository: location.repository_id.parse()
+            .map_err(|source| DecodeError::Identity { field: "repository_id", source })?,
+        path: location.path.clone().ok_or(DecodeError::Relation("unborn path is required"))?,
+    };
+    // finish() rejects version/node/ownership fields instead of interpreting
+    // their absence as empty versions or an inherited historical branch.
+    Ok((Body::Unborn { target, file_id, size }, Some(location), None, false))
 }
 fn location(fields: &mut Object, file: bool, historical: bool) -> Result<Location, DecodeError> {
     let repository_id = fields.id("repository_id")?;

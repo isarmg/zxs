@@ -151,7 +151,21 @@ impl crate::DirectoryReadSnapshot {
             }
         };
         let entries = super::smb_draft::directory_entries(engine, branch, entries)?;
+        let repo = repo_for_branch(engine, branch)?;
+        let unborn = if repo.file_manager_root && repo.main_branch_id == branch {
+            engine.native_current_entries(repo.repository_id.parse()
+                .map_err(ApiError::contract_input)?).map_err(error)?.into_iter()
+                .filter_map(|entry| match entry {
+                    storage_engine::NativeCurrentEntry::Published(_) => None,
+                    storage_engine::NativeCurrentEntry::Unborn { target, working } => {
+                        Some(smb_protocol::protocol::DirectoryEntry::Unborn {
+                            target, logical_size: working.logical_size(),
+                        })
+                    }
+                }).collect()
+        } else { Vec::new() };
         Ok(Self {
+            unborn: std::sync::Arc::new(unborn),
             branch_id: branch.into(),
             history_tree_id: engine.state().branches[branch].history_tree_id.clone(),
             commit_id,
@@ -240,6 +254,7 @@ impl DirectorySnapshot {
                 &repository.repository_id,
                 &snapshot.commit_id,
                 entries,
+                &snapshot.unborn,
                 key,
                 after,
             )?,
@@ -265,6 +280,7 @@ impl DirectoryPageProjection {
         repository: &str,
         commit_id: &str,
         entries: &[storage_contract::Entry],
+        unborn: &[smb_protocol::protocol::DirectoryEntry],
         key: &str,
         after: Option<&str>,
     ) -> Result<Self, ApiError> {
@@ -294,7 +310,40 @@ impl DirectoryPageProjection {
         })
         .expect("invariant: internal JSON serialization succeeds")
         .len();
-        for entry in &entries[start..] {
+        let mut published = entries[start..].iter().peekable();
+        let native_start = unborn.partition_point(|entry| {
+            entry.path().key() < prefix.as_str()
+                || after.is_some_and(|after| entry.path().key() <= after)
+        });
+        let mut native = unborn[native_start..].iter().peekable();
+        loop {
+            let next_native = match (published.peek(), native.peek()) {
+                (Some(entry), Some(unborn)) => unborn.path().key() < entry.lookup_key(),
+                (None, Some(_)) => true,
+                (Some(_), None) => false,
+                (None, None) => break,
+            };
+            if next_native {
+                let Some(entry) = native.next() else { break; };
+                let Some(rest) = entry.path().key().strip_prefix(&prefix) else { continue; };
+                if rest.is_empty() || rest.contains('/') { continue; }
+                let extra = encoded_size(entry)
+                    .expect("invariant: internal JSON serialization succeeds")
+                    + usize::from(!page.entries.is_empty());
+                if page.entries.len() >= MAX_DIRECTORY_PAGE_ENTRIES
+                    || bytes.saturating_add(extra) > MAX_DIRECTORY_PAGE_BYTES
+                {
+                    if page.entries.is_empty() {
+                        return Err(ApiError::limit("directory entry exceeds page byte budget"));
+                    }
+                    page.more = true;
+                    break;
+                }
+                bytes += extra;
+                page.entries.push(entry.clone());
+                continue;
+            }
+            let Some(entry) = published.next() else { break; };
             let Some(rest) = entry.lookup_key().strip_prefix(&prefix) else {
                 break;
             };
@@ -324,7 +373,7 @@ impl DirectoryPageProjection {
                     crate::backend_read::version_mtime(version)?
                 }
             };
-            let entry = DirectoryEntry {
+            let entry = DirectoryEntry::Published {
                 entry: entry.clone(),
                 mtime,
             };

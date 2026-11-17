@@ -74,6 +74,7 @@ pub(crate) const MAX_CHECKSUM_MANIFEST: usize = 512 * 1024 * 1024 + CHECKSUM_HEA
 #[serialization(deny_unknown_fields)]
 pub(crate) struct DiskSeal {
     pub format: DiskSealFormat,
+    pub pool_semantic_format: storage_contract::PoolSemanticFormat,
     pub pool_id: String,
     pub disk_id: String,
     pub slot_id: String,
@@ -1108,6 +1109,7 @@ fn seal_for_root(config: &ValidatedConfig, disk: &DiskConfig, metadata: &fs::Met
                 authority_hash: hash.to_owned(),
             },
         },
+        pool_semantic_format: config.pool_semantic_format,
         pool_id: config.pool_id.clone(),
         disk_id: disk.disk_id.clone(),
         slot_id: disk.slot_id.clone(),
@@ -1154,6 +1156,7 @@ pub(crate) fn validate_seal_observed(
 
 pub(crate) fn validate_stored_seal(stored: &DiskSeal, live: &DiskSeal) -> Result<()> {
     if stored.format != live.format
+        || stored.pool_semantic_format != live.pool_semantic_format
         || stored.pool_id != live.pool_id
         || stored.disk_id != live.disk_id
         || stored.slot_id != live.slot_id

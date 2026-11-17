@@ -117,6 +117,8 @@ fn mtime_registered_sdk_callbacks_project_save_time_and_keep_read_handles_fixed(
         let mut fsp: sdk::files_struct = Default::default();
         let opened = Open {
             info: Arc::new(OpenResult {
+                data_io: if writable || workspace { smb_protocol::protocol::OpenIo::Descriptor }
+                else { smb_protocol::protocol::OpenIo::VerifiedRanges },
                 entry_id: "file".into(),
                 kind: NamespaceEntryKind::File,
                 path: "file".into(),

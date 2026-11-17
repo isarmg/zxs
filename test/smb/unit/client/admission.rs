@@ -26,7 +26,8 @@ fn typed_open_transfers_metadata_and_descriptor_ownership_to_the_caller() {
             .send(
                 &Response::Ok {
                     result: json_codec::json!({
-                        "entry_id": "entry", "kind": "file", "path": "file",
+                        "data_io":"verified_ranges",
+            "entry_id": "entry", "kind": "file", "path": "file",
                         "handle": "18446744073709551615", "size": "9007199254740992",
                         "max_file_bytes": "18446744073709551615",
                         "version_id": "version", "workspace_id": null,

@@ -27,6 +27,8 @@ mod staging;
 mod tags;
 mod version_tree;
 mod view;
+mod unborn;
+pub(crate) use unborn::{restore as restore_first_commit, recovery_view as first_commit_recovery};
 pub(crate) use actions::{load_disks, load_entries, load_file_history, pending, poll};
 pub(crate) use deletion::{
     recovery_view as deletion_recovery, restore_recovery as restore_deletion_recovery,

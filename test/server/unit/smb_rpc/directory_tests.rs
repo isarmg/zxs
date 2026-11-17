@@ -37,7 +37,7 @@ fn directory_cursor_freezes_its_commit_and_restart_captures_a_new_snapshot() {
     let handle = root(&mut client);
     let first = page(&mut client, handle, false);
     assert_eq!(first.entries.len(), 1);
-    assert_eq!(first.entries[0].entry.path.as_str(), "report.txt");
+    assert_eq!(first.entries[0].published().unwrap().path.as_str(), "report.txt");
     let mut writer = session(shared.clone(), &branch);
     writer
         .namespace(
@@ -54,7 +54,7 @@ fn directory_cursor_freezes_its_commit_and_restart_captures_a_new_snapshot() {
         restarted
             .entries
             .iter()
-            .map(|node| node.entry.path.as_str())
+            .map(|node| node.path().as_str())
             .collect::<Vec<_>>(),
         vec!["new-directory", "report.txt"]
     );
@@ -209,7 +209,7 @@ fn directory_read_failure_keeps_captured_page_and_restart_position() {
         .replace_authority(AuthStore::open(&temp.path().join("auth")).unwrap());
     let first: DirectoryPage = active.read_directory(opened.handle, false).unwrap();
     assert_eq!(first.entries.len(), 1);
-    assert_eq!(first.entries[0].entry.path.as_str(), "report.txt");
+    assert_eq!(first.entries[0].published().unwrap().path.as_str(), "report.txt");
     let exhausted = cursor_state(&active, opened.handle);
     assert_eq!(exhausted.0, captured.0);
     assert_eq!(exhausted.1.as_deref(), Some("report.txt"));
@@ -224,7 +224,7 @@ fn directory_read_failure_keeps_captured_page_and_restart_position() {
         restarted
             .entries
             .iter()
-            .map(|entry| entry.entry.path.as_str())
+            .map(|entry| entry.path().as_str())
             .collect::<Vec<_>>(),
         vec!["later", "report.txt"]
     );

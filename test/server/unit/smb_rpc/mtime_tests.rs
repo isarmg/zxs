@@ -63,13 +63,13 @@ fn mtime_tracks_exact_versions_across_same_size_saves_old_handles_and_frozen_pag
     let historical = page(&mut active, frozen.handle, false);
     assert_eq!(historical.entries.len(), 1);
     assert_eq!(
-        historical.entries[0].entry.version_id,
+        historical.entries[0].published().unwrap().version_id,
         old.version_id.unwrap()
     );
-    assert_eq!(historical.entries[0].mtime, original);
+    assert_eq!(historical.entries[0].mtime(), original);
     let current = page(&mut active, frozen.handle, true);
-    assert_eq!(current.entries[0].entry.version_id, new.version_id.unwrap());
-    assert_eq!(current.entries[0].mtime, saved);
+    assert_eq!(current.entries[0].published().unwrap().version_id, new.version_id.unwrap());
+    assert_eq!(current.entries[0].mtime(), saved);
     file.write_all_at(b"end", 0).unwrap();
     active.dirty(writer.handle).unwrap();
     assert_eq!(handle_time(&mut active, writer.handle), saved);
@@ -142,10 +142,10 @@ fn mtime_inherited_file_uses_its_visible_parent_version() {
     let root = directory(&mut active);
     let listed = page(&mut active, root.handle, false);
     assert_eq!(
-        listed.entries[0].entry.version_id,
+        listed.entries[0].published().unwrap().version_id,
         parent.version_id.unwrap()
     );
-    assert_eq!(listed.entries[0].mtime, parent.mtime);
+    assert_eq!(listed.entries[0].mtime(), parent.mtime);
     let (writer, _fd) = open_file(&mut active, true);
     assert_eq!(handle_time(&mut active, writer.handle), parent.mtime);
     active.close(writer.handle, true).unwrap();
@@ -277,7 +277,7 @@ fn mtime_metadata_never_reads_payload_bytes() {
     let expected = stat(&mut active, "report.txt").mtime;
     let root = directory(&mut active);
     assert_eq!(
-        page(&mut active, root.handle, false).entries[0].mtime,
+        page(&mut active, root.handle, false).entries[0].mtime(),
         expected
     );
     let (opened, _fd) = open_file(&mut active, false);
@@ -396,6 +396,6 @@ fn metadata_dispatch_keeps_typed_payloads_until_wire_serialization() {
         panic!("directory lost its typed payload")
     };
     assert_eq!(page.entries.len(), 1);
-    assert_eq!(page.entries[0].entry.path.as_str(), "report.txt");
+    assert_eq!(page.entries[0].published().unwrap().path.as_str(), "report.txt");
     active.close(root.handle, false).unwrap();
 }

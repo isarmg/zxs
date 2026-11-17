@@ -1,4 +1,8 @@
 //! Mandatory native request/receipt bytes for one shared container draft.
+pub(crate) mod birth;
+pub(crate) mod unborn_save;
+pub(crate) mod unborn_first;
+
 use crate::business::file_draft::{Outcome, invalid, trace_limit};
 use crate::{Engine, Error, OperationResult, Result, State};
 use data_serialization::{Deserialize, Serialize};
@@ -66,6 +70,32 @@ pub(crate) fn encode(outcome: Outcome) -> Result<json_codec::Value> {
     json_codec::to_value(outcome).map_err(codec)
 }
 
+fn content_protection(
+    previous: &State,
+    target: &storage_contract::file_draft::DraftLocation,
+    content: &crate::business::file_draft::PublishedContent,
+) -> Result<Protection> {
+    let placement = &content.placement;
+    let owner = previous.file_containers.get(&target.file).ok_or_else(invalid)?.owner_disk;
+    let slot = placement.route_slot_ids.first().ok_or_else(invalid)?;
+    if placement.route_slot_ids.len() != 1 || placement.target_copies != 1
+        || placement.primary_slot_id != *slot
+    {
+        return Err(invalid());
+    }
+    Ok(Protection {
+        version_id: content.version.version_id.parse()?,
+        primary_slot_id: slot.parse()?, target_copies: 1,
+        required_slots: vec![slot.parse()?],
+        topology_generation: placement.topology_generation,
+        slots: vec![Slot {
+            slot_id: slot.parse()?, copy_level: 1, disk_id: owner,
+            binding_generation: *placement.binding_generations.get(slot).ok_or_else(invalid)?,
+            state: SlotState::CompleteVerified,
+        }],
+    })
+}
+
 pub(crate) struct Decoded {
     outcome: Outcome,
     timestamp: u64,
@@ -86,29 +116,9 @@ impl Decoded {
     ) -> Result<OperationResult> {
         let expected = match &self.outcome.content {
             None => Vec::new(),
-            Some(content) => {
-                let placement = &content.placement;
-                let owner = previous.file_containers.get(&self.outcome.request.target().file)
-                    .ok_or_else(invalid)?.owner_disk;
-                let slot = placement.route_slot_ids.first().ok_or_else(invalid)?;
-                if placement.route_slot_ids.len() != 1 || placement.target_copies != 1
-                    || placement.primary_slot_id != *slot
-                {
-                    return Err(invalid());
-                }
-                vec![Protection {
-                    version_id: content.version.version_id.parse()?,
-                    primary_slot_id: slot.parse()?, target_copies: 1,
-                    required_slots: vec![slot.parse()?],
-                    topology_generation: placement.topology_generation,
-                    slots: vec![Slot {
-                        slot_id: slot.parse()?, copy_level: 1, disk_id: owner,
-                        binding_generation: *placement.binding_generations.get(slot)
-                            .ok_or_else(invalid)?,
-                        state: SlotState::CompleteVerified,
-                    }],
-                }]
-            }
+            Some(content) => vec![content_protection(
+                previous, self.outcome.request.target(), content,
+            )?],
         };
         if self.protection != expected { return Err(invalid()); }
         let result = json_codec::to_value(Envelope {

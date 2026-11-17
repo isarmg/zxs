@@ -500,9 +500,10 @@ fn warm_and_cold_container_bytes_match_full_scans_before_and_after_physical_appl
         .insert(fixture.file.clone(), "changed file note".into());
     let owners = DerivedOwners::from_state(before);
     let transition = ProjectionTransition::new(before, &after, Some(&owners)).unwrap();
-    validate_new_projection_paths(&transition).unwrap();
+    validate_new_projection_paths(&fixture.config, &transition).unwrap();
     assert_eq!(
-        projection_locations(transition.previous(), transition.next(), &fixture.file),
+        projection_locations(&fixture.config, transition.previous(), transition.next(), &fixture.file)
+            .unwrap(),
         full_locations(before, &after, &fixture.file)
     );
     let expected = fixture.expected(before, &after);

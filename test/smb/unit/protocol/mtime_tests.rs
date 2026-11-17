@@ -32,7 +32,8 @@ fn saved_mtime_requires_canonical_decimal_utc_seconds_in_range() {
 #[test]
 fn mtime_metadata_rejects_missing_unknown_duplicate_and_old_wire_fields() {
     let valid = json_codec::json!({
-        "entry_id":"entry", "kind":"file", "path":"entry", "handle":"1",
+        "data_io":"verified_ranges",
+            "entry_id":"entry", "kind":"file", "path":"entry", "handle":"1",
         "size":"0", "max_file_bytes":"1024", "version_id":"version", "workspace_id":null,
         "mtime":{"state":"saved","unix_seconds":"1600000000"}
     });

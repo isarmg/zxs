@@ -10,6 +10,14 @@ use storage_contract::file_draft::{
 };
 use storage_contract::{FileId, OperationId, Principal};
 
+mod unborn;
+mod native_io;
+pub use native_io::{NativeCurrentEntry, NativeWorkingFile};
+mod selected;
+mod input;
+pub(super) use input::WorkingPublicationInput;
+pub(crate) use selected::{SelectedWorkingSource, SelectedWorkingSources};
+
 pub(crate) use business::{validate_working_record, verify_working_transition};
 
 fn require_initial(context: &PlanningContext<'_>, target: &DraftLocation) -> Result<()> {

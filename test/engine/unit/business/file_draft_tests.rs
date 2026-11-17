@@ -2,6 +2,597 @@ use super::*;
 use storage_contract::file_draft::DraftPayloadId;
 use storage_contract::{BranchId, ContentHash, FileNodeId, Generation, VersionId};
 
+#[test]
+fn unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node() {
+    use crate::business::namespace::working::{WorkingEntry, WorkingNamespace};
+    use crate::engine::MutationPlan;
+    use crate::{Config, Engine};
+    use name_policy::{LookupPath, Name, PortablePath};
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use storage_contract::file_draft::{BirthRequest, DraftLocation};
+    use storage_contract::{EntryId, FileId, Mode, OperationId, Principal, Sequence};
+
+    let temporary = tempfile::tempdir().unwrap();
+    let system = temporary.path().join("system");
+    let disk = temporary.path().join("primary");
+    for path in [&system, &disk] {
+        fs::create_dir(path).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = Config::independent_roots(
+        Mode::Development,
+        [(Name::parse("Primary").unwrap(), disk.clone())],
+    ).unwrap();
+    let slot = config.disks[0].slot_id.clone();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let repository = engine.create_disk_root(
+        &slot, "admin", OperationId::generate().unwrap(),
+    ).unwrap();
+    let request = BirthRequest {
+        repository: repository.repository_id.parse().unwrap(),
+        path: PortablePath::parse("unborn.txt").unwrap(),
+        expected_namespace_head: engine.state().branches[&repository.main_branch_id]
+            .head_commit_id.parse().unwrap(),
+    };
+    let before = engine.state().clone();
+    let principal: Principal = "admin".parse().unwrap();
+    let operation = OperationId::generate().unwrap();
+    let plan = engine.plan_unborn_birth(&request, &principal, operation).unwrap();
+    let MutationPlan::Prepared { next, prepared, result } = plan else {
+        panic!("new request must produce a private plan");
+    };
+    assert!(prepared.is_empty());
+    assert_eq!(engine.state(), &before);
+    assert!(!engine.state().operations.contains_key(&operation));
+    assert_eq!(next.versions, before.versions);
+    assert_eq!(next.branches, before.branches);
+    assert_eq!(next.commits, before.commits);
+    assert_eq!(next.file_containers.len(), before.file_containers.len() + 1);
+    // Replay consumes the real planner's original allocation and complete receipt.
+    // This remains logical evidence, not a cold-installed container capability.
+    let replay = unborn::replay_birth(
+        engine.planning_context().config, &before, &result, &principal,
+    ).unwrap();
+    assert_eq!(replay.state(), next.as_ref());
+    let mut unrelated = next.as_ref().clone();
+    unrelated.repositories.get_mut(&repository.repository_id).unwrap().name = "unrelated".into();
+    assert!(!crate::publication_shape::same_transition(&before, replay.state(), &unrelated));
+    for field in ["unexpected", "version_protection"] {
+        let mut malformed = result.clone();
+        malformed.result[field] = json_codec::json!([null]);
+        assert!(unborn::replay_birth(
+            engine.planning_context().config, &before, &malformed, &principal,
+        ).is_err());
+    }
+    let mut wrong_owner = result.clone();
+    wrong_owner.result["owner"] = json_codec::json!(storage_contract::DiskId::generate().unwrap());
+    assert!(unborn::replay_birth(
+        engine.planning_context().config, &before, &wrong_owner, &principal,
+    ).is_err());
+    let namespace = WorkingNamespace::from_main_state(
+        &next, request.repository, engine.planning_context().config.max_entries,
+    ).unwrap();
+    let lookup = LookupPath::from(&request.path);
+    let Some(WorkingEntry::Unborn { file, record, path }) = namespace.get(&lookup) else {
+        panic!("the current union must retain this exact unborn owner");
+    };
+    assert_eq!(path, &request.path);
+    assert_eq!(record.working.mode(), CommitMode::Manual);
+    assert!(record.working.unborn().is_some());
+    assert_eq!(record.created_by, result.operation_id);
+    assert!(record.replicas.is_empty());
+    assert!(namespace.vacant_parent(&request.path).is_err());
+    assert!(namespace.require_published_subtree(Some(&lookup)).is_err());
+
+    // A pure replay counterexample, not an admitted or physically created file.
+    // The same current name may not be reallocated merely because Entry has no row.
+    let replacement = unborn::Birth {
+        repository: request.repository,
+        path: request.path.clone(),
+        expected_namespace_head: request.expected_namespace_head,
+        file: FileId::generate().unwrap(),
+        entry: EntryId::generate().unwrap(),
+        owner: record.owner_disk,
+    };
+    assert_ne!(&replacement.file, file);
+    assert!(unborn::project(
+        &next,
+        engine.planning_context().config,
+        OperationId::generate().unwrap(),
+        Sequence::new(next.sequence).next().unwrap(),
+        unborn::Edit::Birth(&replacement),
+        engine.planning_context().config.max_entries,
+        engine.planning_context().config.max_file_bytes,
+    ).is_err());
+
+    // The real producer now uses the ordinary budget/EXCL/Candidate pipeline.
+    // The earlier discarded logical plan never granted a physical identity.
+    let published = engine.create_unborn_file(&request, &principal, operation).unwrap();
+    let decoded = crate::persist::file_draft::birth::decode(&published).unwrap();
+    let target = decoded.target().clone();
+    let record = engine.state().file_containers[&target.file].clone();
+    assert_eq!(record.created_by, operation);
+    assert_eq!(record.working.mode(), CommitMode::Manual);
+    assert_eq!(record.replicas.len(), 1);
+    assert!(record.replicas[&record.owner_disk].entity.inode() != 0);
+    assert_eq!(engine.state().versions, before.versions);
+    assert_eq!(engine.state().branches, before.branches);
+    assert_eq!(engine.state().commits, before.commits);
+    assert!(engine.state().branches.values().all(|branch| branch.file_id.is_none()));
+    let read = engine.open_unborn_working(&target).unwrap();
+    assert_eq!(read.logical_size(), 0);
+    assert_eq!(read.read_at(&mut [0; 1], 0).unwrap(), 0);
+    drop(read);
+    assert_eq!(engine.create_unborn_file(&request, &principal, operation).unwrap(), published);
+    let state = std::sync::Arc::clone(engine.planning_context().state);
+    let slot = engine.planning_context().next_slot;
+    let duplicate = OperationId::generate().unwrap();
+    assert!(engine.create_unborn_file(&request, &principal, duplicate).is_err());
+    assert!(std::sync::Arc::ptr_eq(&state, engine.planning_context().state));
+    assert_eq!(engine.planning_context().next_slot, slot);
+    assert!(!engine.state().operations.contains_key(&duplicate));
+    drop(state);
+    drop(engine);
+
+    let mut engine = Engine::open(&system).unwrap();
+    assert_eq!(engine.state().file_containers[&target.file], record);
+    assert_eq!(engine.state().versions, before.versions);
+    assert_eq!(engine.state().branches, before.branches);
+    assert_eq!(engine.state().commits, before.commits);
+    assert_eq!(engine.open_unborn_working(&target).unwrap().logical_size(), 0);
+    assert_eq!(engine.create_unborn_file(&request, &principal, operation).unwrap(), published);
+    drop(engine);
+
+    // Equal bytes at the same name are not the decided container occurrence.
+    fn copy_tree(source: &std::path::Path, target: &std::path::Path) {
+        fs::create_dir(target).unwrap();
+        fs::set_permissions(target, fs::Permissions::from_mode(0o700)).unwrap();
+        for item in fs::read_dir(source).unwrap() {
+            let item = item.unwrap();
+            let next = target.join(item.file_name());
+            if item.file_type().unwrap().is_dir() {
+                copy_tree(&item.path(), &next);
+            } else {
+                assert!(item.file_type().unwrap().is_file());
+                fs::copy(item.path(), next).unwrap();
+            }
+        }
+    }
+    let container = crate::persist::layout::histories(&disk)
+        .join(crate::persist::layout::namespace::directory(&record.namespace.name).as_path());
+    let inode = fs::metadata(&container).unwrap();
+    let parked = temporary.path().join("decided-unborn");
+    fs::rename(&container, &parked).unwrap();
+    copy_tree(&parked, &container);
+    assert_ne!(fs::metadata(&container).unwrap().ino(), inode.ino());
+    assert!(Engine::open(&system).is_err());
+    fs::remove_dir_all(&container).unwrap();
+    fs::rename(&parked, &container).unwrap();
+    let restored = fs::metadata(&container).unwrap();
+    assert_eq!((restored.dev(), restored.ino()), (inode.dev(), inode.ino()));
+    let mut engine = Engine::open(&system).unwrap();
+    assert_eq!(engine.state().file_containers[&target.file], record);
+    assert_eq!(engine.open_unborn_working(&target).unwrap().logical_size(), 0);
+
+    // Multiple accepted edits belong to one immutable save, not one generation
+    // per frame. Truncation must mask both old blocks and the old partial tail.
+    use storage_contract::file_draft::manifest::{SaveGeneration, WORKING_BLOCK_BYTES};
+    use std::sync::Arc;
+    let save_operation = OperationId::generate().unwrap();
+    let mut writer = engine.begin_unborn_write(&target, save_operation).unwrap();
+    assert_eq!(writer.write_at(&engine.planning_context(), 0, b"draft original tail").unwrap(), 19);
+    let last = WORKING_BLOCK_BYTES + 7;
+    assert_eq!(writer.write_at(&engine.planning_context(), last, b"x").unwrap(), 1);
+    writer.truncate(&engine.planning_context(), last + 1, 3).unwrap();
+    writer.truncate(&engine.planning_context(), 3, last + 1).unwrap();
+    writer.write_at(&engine.planning_context(), last, b"z").unwrap();
+    let prepared = Arc::new(writer.prepare(&engine.planning_context()).unwrap().unwrap());
+    let save_request = prepared.request(&target);
+    assert_eq!(save_request.manifest.generation(), SaveGeneration::first());
+    let source = Arc::clone(engine.planning_context().state);
+    // A manifest naming genuine prepared files is still not the hot issuer.
+    assert!(engine.save_unborn_working(&save_request, &principal, None).is_err());
+    assert!(Arc::ptr_eq(&source, engine.planning_context().state));
+    assert!(!engine.state().operations.contains_key(&save_operation));
+    let saved = engine.save_unborn_working(
+        &save_request, &principal, Some(Arc::clone(&prepared)),
+    ).unwrap();
+    drop(prepared);
+    let replay = unborn::replay_save(
+        engine.planning_context().config, &source, &saved, &principal,
+    ).unwrap();
+    assert_eq!(replay.state(), engine.state());
+    let mut malformed = saved.clone();
+    malformed.result["unexpected"] = json_codec::json!(true);
+    assert!(unborn::replay_save(
+        engine.planning_context().config, &source, &malformed, &principal,
+    ).is_err());
+    let mut unrelated = engine.state().clone();
+    unrelated.repositories.get_mut(&repository.repository_id).unwrap().name = "unrelated".into();
+    assert!(!crate::publication_shape::same_transition(&source, replay.state(), &unrelated));
+    drop(source);
+    let mut expected = vec![0; last as usize + 1];
+    expected[..3].copy_from_slice(b"dra");
+    expected[last as usize] = b'z';
+    fn read_working(engine: &Engine, target: &DraftLocation, expected: &[u8]) {
+        let reader = engine.open_unborn_working(target).unwrap();
+        assert_eq!(reader.logical_size(), expected.len() as u64);
+        let mut actual = vec![0; expected.len()];
+        assert_eq!(reader.read_at(&mut actual, 0).unwrap(), actual.len());
+        assert_eq!(actual, expected);
+        assert_eq!(reader.full_digest().unwrap().content_hash(),
+            ContentHash::from_digest(blake3::hash(expected)));
+    }
+    read_working(&engine, &target, &expected);
+    let published_save = engine.state().file_containers[&target.file].clone();
+    let state = Arc::clone(engine.planning_context().state);
+    assert_eq!(engine.save_unborn_working(&save_request, &principal, None).unwrap(), saved);
+    assert!(Arc::ptr_eq(&state, engine.planning_context().state));
+    drop(state);
+    assert_eq!(engine.state().versions, before.versions);
+    assert_eq!(engine.state().branches, before.branches);
+    assert_eq!(engine.state().commits, before.commits);
+    assert_eq!(published_save.namespace, record.namespace);
+    assert_eq!(published_save.replicas, record.replicas);
+    drop(engine);
+
+    engine = Engine::open(&system).unwrap();
+    assert_eq!(engine.state().file_containers[&target.file], published_save);
+    read_working(&engine, &target, &expected);
+    assert_eq!(engine.save_unborn_working(&save_request, &principal, None).unwrap(), saved);
+    // A second save can retain the same immutable inode with a shorter visible
+    // prefix; re-extension is zero, never a revival of its older extent bytes.
+    let second_operation = OperationId::generate().unwrap();
+    let mut writer = engine.begin_unborn_write(&target, second_operation).unwrap();
+    writer.truncate(&engine.planning_context(), last + 1, 2).unwrap();
+    writer.truncate(&engine.planning_context(), 2, 7).unwrap();
+    let prepared = Arc::new(writer.prepare(&engine.planning_context()).unwrap().unwrap());
+    let second_request = prepared.request(&target);
+    assert_eq!(second_request.manifest.generation(), SaveGeneration::first().next().unwrap());
+    let second = engine.save_unborn_working(
+        &second_request, &principal, Some(prepared),
+    ).unwrap();
+    let expected = b"dr\0\0\0\0\0";
+    read_working(&engine, &target, expected);
+    drop(engine);
+    engine = Engine::open(&system).unwrap();
+    read_working(&engine, &target, expected);
+    assert_eq!(engine.save_unborn_working(&save_request, &principal, None).unwrap(), saved);
+    assert_eq!(engine.save_unborn_working(&second_request, &principal, None).unwrap(), second);
+    assert_eq!(engine.state().versions, before.versions);
+    assert_eq!(engine.state().branches, before.branches);
+    assert_eq!(engine.state().commits, before.commits);
+
+    let block = second_request.manifest.blocks()[0];
+    let extent = container.join(crate::persist::layout::container::working_extent(
+        block.extent().id(),
+    ).as_path());
+    let identity = fs::metadata(&extent).unwrap();
+    let extent_bytes = fs::read(&extent).unwrap();
+    let live = engine.open_unborn_working(&target).unwrap();
+    let parked = temporary.path().join("held-working-extent");
+    fs::rename(&extent, &parked).unwrap();
+    fs::copy(&parked, &extent).unwrap();
+    assert_ne!(fs::metadata(&extent).unwrap().ino(), identity.ino());
+    assert!(live.read_at(&mut [0; 2], 0).is_err());
+    drop(live);
+    drop(engine);
+    assert!(Engine::open(&system).is_err(), "equal bytes must not replace a recorded extent");
+    assert_eq!(fs::read(&parked).unwrap(), extent_bytes);
+    fs::remove_file(&extent).unwrap();
+    fs::rename(&parked, &extent).unwrap();
+    let restored = fs::metadata(&extent).unwrap();
+    assert_eq!((restored.dev(), restored.ino()), (identity.dev(), identity.ino()));
+    engine = Engine::open(&system).unwrap();
+    read_working(&engine, &target, expected);
+
+    // The explicit first-file producer materializes a genuine independent FULL
+    // from this published Unborn save. This is preparation, not a decided node.
+    use storage_contract::file_draft::{WorkingExpectation, WorkingSelection};
+    use std::io::Read;
+    let request = WorkingSelection {
+        target: target.clone(),
+        expected: WorkingExpectation::from_working(
+            &engine.state().file_containers[&target.file].working,
+        ).unwrap(),
+    };
+    let original = Arc::clone(engine.planning_context().state);
+    let slot_before = engine.planning_context().next_slot;
+    let commit_operation = OperationId::generate().unwrap();
+    let first = engine.prepare_unborn_first_file(
+        &request, &principal, commit_operation, "explicit first history only",
+    ).unwrap();
+    first.require_context(&engine.planning_context()).unwrap();
+    assert_eq!(first.prepared().len(), 1);
+    assert_eq!(first.content().version.file_id, target.file.to_string());
+    assert_eq!(first.content().version.logical_size, expected.len() as u64);
+    assert_eq!(first.content().version.content_hash,
+        ContentHash::from_digest(blake3::hash(expected)));
+    assert!(first.content().version.source_version_ids.is_empty());
+    assert_eq!(first.state().versions.len(), original.versions.len() + 1);
+    let resolved = resolve(first.state(), &target).unwrap();
+    assert_eq!(resolved.base.version_id().to_string(), first.content().version.version_id);
+    assert_eq!(resolved.base.node_id(), FileNodeId::Version(resolved.base.version_id()));
+    assert!(matches!(first.working_after().unwrap(), FileWorkingState::ManualClean { .. }));
+    assert_eq!(first.state().file_containers[&target.file].replicas, record.replicas);
+    assert!(Arc::ptr_eq(&original, engine.planning_context().state));
+    assert_eq!(engine.planning_context().next_slot, slot_before);
+    assert!(!engine.state().operations.contains_key(&commit_operation));
+    assert!(engine.state().file_containers[&target.file].working.unborn().is_some());
+    assert_eq!(engine.state().versions, before.versions);
+    let full_path = first.prepared()[0].source.path().to_owned();
+    let full_identity = fs::metadata(&full_path).unwrap();
+    assert_ne!(full_identity.ino(), fs::metadata(&extent).unwrap().ino());
+    let mut full = first.prepared()[0].source.open().unwrap();
+    let mut actual = Vec::new();
+    full.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, expected);
+    // Reopening uses a fresh held-directory FD, not a shared cursor left at EOF.
+    let mut again = first.prepared()[0].source.open().unwrap();
+    let mut repeated = Vec::new();
+    again.read_to_end(&mut repeated).unwrap();
+    assert_eq!(repeated, expected);
+    drop(again);
+    drop(full);
+    engine.state = Arc::new(engine.state().clone());
+    assert!(matches!(first.require_context(&engine.planning_context()),
+        Err(crate::Error::FileDraft(DraftError::SourceChanged))));
+    engine.state = Arc::clone(&original);
+    first.require_context(&engine.planning_context()).unwrap();
+    let parked_full = temporary.path().join("independent-unborn-full");
+    fs::rename(&full_path, &parked_full).unwrap();
+    fs::copy(&parked_full, &full_path).unwrap();
+    assert_ne!(fs::metadata(&full_path).unwrap().ino(), full_identity.ino());
+    assert!(first.prepared()[0].source.open().is_err());
+    assert!(first.require_context(&engine.planning_context()).is_err());
+    assert!(Arc::ptr_eq(&original, engine.planning_context().state));
+    assert!(!engine.state().operations.contains_key(&commit_operation));
+    fs::remove_file(&full_path).unwrap();
+    fs::rename(&parked_full, &full_path).unwrap();
+    drop(first);
+    drop(original);
+    // A failed or abandoned FULL cannot clear the saved row or acquire a node.
+    // Cold opening continues from the actual Save receipt, not an orphan name.
+    drop(engine);
+    engine = Engine::open(&system).unwrap();
+    read_working(&engine, &target, expected);
+    assert_eq!(engine.state().versions, before.versions);
+    assert_eq!(engine.state().branches, before.branches);
+    assert_eq!(engine.state().commits, before.commits);
+
+    #[cfg(feature = "fault-injection")]
+    {
+        let operation = OperationId::generate().unwrap();
+        let mut writer = engine.begin_unborn_write(&target, operation).unwrap();
+        writer.write_at(&engine.planning_context(), 2, b"COLD").unwrap();
+        let prepared = Arc::new(writer.prepare(&engine.planning_context()).unwrap().unwrap());
+        let request = prepared.request(&target);
+        let original = Arc::clone(engine.planning_context().state);
+        engine.inject_fault_once("after_accept_1");
+        let error = engine.save_unborn_working(&request, &principal, Some(prepared)).unwrap_err();
+        assert_eq!(error.code(), storage_contract::ErrorCode::InDoubt);
+        let mut cause: &dyn std::error::Error = &error;
+        let mut actual_cut = false;
+        while let Some(source) = cause.source() {
+            actual_cut |= source.to_string().contains("after_accept_1");
+            cause = source;
+        }
+        assert!(actual_cut, "the actual native Accept cut must have been reached");
+        assert!(Arc::ptr_eq(&original, engine.planning_context().state));
+        drop(original);
+        drop(engine);
+        let extent = container.join(crate::persist::layout::container::working_extent(
+            request.manifest.blocks()[0].extent().id(),
+        ).as_path());
+        let identity = fs::metadata(&extent).unwrap();
+        let parked = temporary.path().join("accepted-unborn-extent");
+        fs::rename(&extent, &parked).unwrap();
+        assert!(Engine::open(&system).is_err(), "a decided missing extent is not an empty file");
+        fs::rename(&parked, &extent).unwrap();
+        let restored = fs::metadata(&extent).unwrap();
+        assert_eq!((restored.dev(), restored.ino()), (identity.dev(), identity.ino()));
+        engine = Engine::open(&system).unwrap();
+        read_working(&engine, &target, b"drCOLD\0");
+        let receipt = engine.state().operations[&operation].clone();
+        assert_eq!(engine.save_unborn_working(&request, &principal, None).unwrap(), receipt);
+        assert_eq!(engine.state().versions, before.versions);
+        assert_eq!(engine.state().branches, before.branches);
+        assert_eq!(engine.state().commits, before.commits);
+    }
+
+    // Only this explicit command may publish the first historical FILE node.
+    // The original immutable extents remain required for exact native recovery;
+    // the materialized full hash cannot reconstruct their clipped visible prefix.
+    let selected = WorkingSelection {
+        target: target.clone(),
+        expected: WorkingExpectation::from_working(
+            &engine.state().file_containers[&target.file].working,
+        ).unwrap(),
+    };
+    let prior = engine.state().clone();
+    let reader = engine.open_unborn_working(&target).unwrap();
+    let mut committed_bytes = vec![0; reader.logical_size() as usize];
+    assert_eq!(reader.read_at(&mut committed_bytes, 0).unwrap(), committed_bytes.len());
+    drop(reader);
+    let operation = OperationId::generate().unwrap();
+    let message = "explicit first node after durable saves";
+    #[cfg(feature = "fault-injection")]
+    {
+        engine.inject_fault_once("after_accept_1");
+        let error = engine.commit_unborn_working(&selected, &principal, operation, message)
+            .unwrap_err();
+        assert_eq!(error.code(), storage_contract::ErrorCode::InDoubt);
+        let mut cause: &dyn std::error::Error = &error;
+        let mut actual_cut = false;
+        while let Some(source) = cause.source() {
+            actual_cut |= source.to_string().contains("after_accept_1");
+            cause = source;
+        }
+        assert!(actual_cut, "first-commit must reach the real native Accept cut");
+        assert_eq!(engine.state(), &prior);
+        drop(engine);
+        let working = prior.file_containers[&target.file].working.unborn().unwrap();
+        let storage_contract::file_draft::UnbornBody::Saved { manifest } = working.body() else {
+            panic!("the real earlier saves provide the accepted source manifest");
+        };
+        let original_extent = container.join(crate::persist::layout::container::working_extent(
+            manifest.blocks()[0].extent().id(),
+        ).as_path());
+        let identity = fs::metadata(&original_extent).unwrap();
+        let parked = temporary.path().join("first-commit-original-extent");
+        fs::rename(&original_extent, &parked).unwrap();
+        fs::copy(&parked, &original_extent).unwrap();
+        assert_ne!(fs::metadata(&original_extent).unwrap().ino(), identity.ino());
+        assert!(Engine::open(&system).is_err(), "equal bytes cannot replace the saved source");
+        fs::remove_file(&original_extent).unwrap();
+        assert!(Engine::open(&system).is_err(), "an accepted first node cannot infer source bytes");
+        fs::rename(&parked, &original_extent).unwrap();
+        let restored = fs::metadata(&original_extent).unwrap();
+        assert_eq!((restored.dev(), restored.ino()), (identity.dev(), identity.ino()));
+        engine = Engine::open(&system).unwrap();
+    }
+    let published = engine.commit_unborn_working(&selected, &principal, operation, message)
+        .unwrap();
+    let first = crate::persist::file_draft::unborn_first::decode(&prior, &published).unwrap();
+    let version = first.content().version.clone();
+    assert_eq!(version.file_id, target.file.to_string());
+    assert_eq!(version.logical_size, committed_bytes.len() as u64);
+    assert_eq!(version.content_hash, ContentHash::from_digest(blake3::hash(&committed_bytes)));
+    assert_eq!(engine.state().versions.len(), before.versions.len() + 1);
+    assert_eq!(engine.state().file_containers[&target.file].replicas, record.replicas);
+    assert_eq!(engine.state().file_containers[&target.file].namespace, record.namespace);
+    assert!(matches!(engine.state().file_containers[&target.file].working,
+        FileWorkingState::ManualClean { .. }));
+    let current = resolve(engine.state(), &target).unwrap();
+    assert_eq!(current.base.version_id().to_string(), version.version_id);
+    assert_eq!(current.base.node_id(), FileNodeId::Version(current.base.version_id()));
+    assert!(engine.open_unborn_working(&target).is_err());
+    let mut opened = engine.open_content(&version.version_id).unwrap();
+    let mut bytes = Vec::new();
+    opened.file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, committed_bytes);
+    drop(opened);
+    let mut bad = published.clone();
+    bad.result["request"]["body"]["unexpected"] = json_codec::json!(true);
+    assert!(crate::persist::file_draft::unborn_first::decode(&prior, &bad).is_err());
+    drop(engine);
+    engine = Engine::open(&system).unwrap();
+    let stable = Arc::clone(engine.planning_context().state);
+    let slot = engine.planning_context().next_slot;
+    assert_eq!(engine.commit_unborn_working(&selected, &principal, operation, message)
+        .unwrap(), published);
+    assert!(Arc::ptr_eq(&stable, engine.planning_context().state));
+    assert_eq!(engine.planning_context().next_slot, slot);
+    assert_eq!(engine.state().versions.len(), before.versions.len() + 1);
+    let new_operation = OperationId::generate().unwrap();
+    assert!(engine.commit_unborn_working(&selected, &principal, new_operation, message).is_err());
+    assert!(Arc::ptr_eq(&stable, engine.planning_context().state));
+    assert!(!engine.state().operations.contains_key(&new_operation));
+    let mut opened = engine.open_content(&version.version_id).unwrap();
+    let mut bytes = Vec::new();
+    opened.file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, committed_bytes);
+    drop(opened);
+    drop(stable);
+
+    // A later genuine namespace decision changes only the location of this
+    // container. First-commit replay must still consume its original saved
+    // extents, not reopen the old spelling or infer the FULL from its hash.
+    let versions = engine.state().versions.clone();
+    let renamed = engine.file_namespace(
+        &repository.repository_id,
+        crate::NamespaceOperation::parse(
+            crate::NamespaceOperationKind::Rename, "unborn.txt", Some("renamed.txt"),
+        ).unwrap(),
+        "admin", OperationId::generate().unwrap(),
+    ).unwrap();
+    let renamed_record = engine.state().file_containers[&target.file].clone();
+    assert_eq!(renamed_record.namespace.name.as_str(), "renamed.txt");
+    assert_eq!(renamed_record.replicas, record.replicas);
+    assert_eq!(engine.state().versions, versions);
+    assert!(!container.exists());
+    // Reusing the vacant old spelling gives a distinct real Unborn identity.
+    // That empty owner cannot stand in for the earlier nonempty saved source.
+    let replacement_request = BirthRequest {
+        repository: target.repository,
+        path: target.path.clone(),
+        expected_namespace_head: engine.state().branches[&repository.main_branch_id]
+            .head_commit_id.parse().unwrap(),
+    };
+    let replacement = engine.create_unborn_file(
+        &replacement_request, &principal, OperationId::generate().unwrap(),
+    ).unwrap();
+    let replacement = crate::persist::file_draft::birth::decode(&replacement).unwrap();
+    assert_ne!(replacement.target().file, target.file);
+    assert_eq!(engine.open_unborn_working(replacement.target()).unwrap().logical_size(), 0);
+    assert_eq!(engine.state().versions, versions);
+    let renamed_container = crate::persist::layout::histories(&disk).join(
+        crate::persist::layout::namespace::directory(&renamed_record.namespace.name).as_path(),
+    );
+    let renamed_identity = fs::metadata(&renamed_container).unwrap();
+    let replacement_identity = fs::metadata(&container).unwrap();
+    drop(engine);
+    let parked = temporary.path().join("renamed-first-container");
+    fs::rename(&renamed_container, &parked).unwrap();
+    copy_tree(&parked, &renamed_container);
+    assert_ne!(fs::metadata(&renamed_container).unwrap().ino(), renamed_identity.ino());
+    assert!(Engine::open(&system).is_err(), "a published name cannot adopt a replacement inode");
+    assert_eq!(fs::metadata(&container).unwrap().ino(), replacement_identity.ino());
+    fs::remove_dir_all(&renamed_container).unwrap();
+    fs::rename(&parked, &renamed_container).unwrap();
+    let restored = fs::metadata(&renamed_container).unwrap();
+    assert_eq!((restored.dev(), restored.ino()),
+        (renamed_identity.dev(), renamed_identity.ino()));
+    engine = Engine::open(&system).unwrap();
+    assert_eq!(engine.state().file_containers[&target.file], renamed_record);
+    assert_eq!(engine.operation(renamed.operation_id).unwrap(), renamed);
+    assert_eq!(engine.commit_unborn_working(&selected, &principal, operation, message)
+        .unwrap(), published);
+    assert_eq!(engine.state().versions, versions);
+    assert_eq!(engine.open_unborn_working(replacement.target()).unwrap().logical_size(), 0);
+    let mut opened = engine.open_content(&version.version_id).unwrap();
+    let mut bytes = Vec::new();
+    opened.file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, committed_bytes);
+    drop(opened);
+
+    #[cfg(feature = "fault-injection")]
+    {
+        // This cut has genuinely finalized and moved the same container, but
+        // has not published the new name. Its existing replay locator alone
+        // can allow the original first-commit source to follow that decision.
+        let rename_operation = OperationId::generate().unwrap();
+        engine.inject_fault_once("after_container_names");
+        let error = engine.file_namespace(
+            &repository.repository_id,
+            crate::NamespaceOperation::parse(
+                crate::NamespaceOperationKind::Rename, "renamed.txt", Some("final.txt"),
+            ).unwrap(),
+            "admin", rename_operation,
+        ).unwrap_err();
+        assert_eq!(error.code(), storage_contract::ErrorCode::InDoubt);
+        let crate::Error::Context { source, .. } = error else {
+            panic!("a finalized rename retains its actual cut cause");
+        };
+        assert_eq!(source.code(), storage_contract::ErrorCode::InjectedFailure);
+        assert!(source.to_string().contains("after_container_names"));
+        drop(engine);
+        engine = Engine::open(&system).unwrap();
+        assert!(!engine.is_read_only());
+        assert_eq!(engine.state().file_containers[&target.file].namespace.name.as_str(),
+            "final.txt");
+        assert_eq!(engine.state().file_containers[&target.file].replicas, record.replicas);
+        assert_eq!(engine.state().versions, versions);
+        assert_eq!(engine.commit_unborn_working(&selected, &principal, operation, message)
+            .unwrap(), published);
+        let mut opened = engine.open_content(&version.version_id).unwrap();
+        let mut bytes = Vec::new();
+        opened.file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, committed_bytes);
+    }
+}
+
 fn revision(value: u64) -> WorkingRevision {
     WorkingRevision::new(Generation::new(value))
 }
@@ -174,4 +765,200 @@ fn exhausted_working_revision_never_wraps_or_clears_a_dirty_body() {
         Err(DraftError::RevisionExhausted(GenerationExhausted))
     ));
     assert_eq!(dirty, before);
+}
+
+#[test]
+fn whole_working_selection_checks_all_cas_before_open_and_retains_real_published_drafts() {
+    use crate::{CommitRequest, Config, Engine, ReadFile};
+    use name_policy::{Name, PortablePath};
+    use std::fs;
+    use std::io::Write;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::sync::Arc;
+    use storage_contract::file_draft::{
+        DraftCommand, DraftLocation, WorkingContentExpectation, WorkingExpectation,
+        WorkingSelection,
+    };
+    use storage_contract::{Mode, OperationId, Principal};
+
+    fn input(bytes: &[u8]) -> ReadFile {
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(bytes).unwrap();
+        file.sync_all().unwrap();
+        ReadFile::from(file)
+    }
+
+    let temporary = tempfile::tempdir().unwrap();
+    let system = temporary.path().join("system");
+    let disk = temporary.path().join("primary");
+    for path in [&system, &disk] {
+        fs::create_dir(path).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = Config::independent_roots(
+        Mode::Development,
+        [(Name::parse("Primary").unwrap(), disk.clone())],
+    ).unwrap();
+    let slot = config.disks[0].slot_id.clone();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let repository = engine.create_disk_root(
+        &slot, "admin", OperationId::generate().unwrap(),
+    ).unwrap();
+    let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
+    for name in ["first.txt", "second.txt"] {
+        engine.stage_bytes(&workspace.workspace_id, name, b"real historical body").unwrap();
+    }
+    engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id.clone(),
+        operation_id: OperationId::generate().unwrap(),
+        principal: "admin".into(),
+        expected_head: workspace.base_head.clone(),
+        fencing_token: workspace.fencing_token,
+        message: "two actually owned FILEs".into(),
+        request_digest: None,
+    }).unwrap();
+    let principal: Principal = "admin".parse().unwrap();
+    let bytes: [&[u8]; 2] = [b"selected first draft", b"selected second draft"];
+    let mut requests = Vec::new();
+    for (name, body) in ["first.txt", "second.txt"].into_iter().zip(bytes) {
+        let entry = engine.list_tree(&repository.main_branch_id).unwrap().into_iter()
+            .find(|entry| entry.path() == name).unwrap();
+        let target = DraftLocation {
+            repository: repository.repository_id.parse().unwrap(),
+            path: PortablePath::parse(name).unwrap(),
+            entry: entry.entry_id.parse().unwrap(),
+            file: entry.file_id.parse().unwrap(),
+        };
+        engine.change_file_working(&DraftCommand::SetMode {
+            expected: engine.file_working_state(&target).unwrap().revision(),
+            target: target.clone(), mode: CommitMode::Manual,
+        }, &principal, OperationId::generate().unwrap()).unwrap();
+        let write = DraftCommand::Write {
+            expected: engine.file_working_state(&target).unwrap().revision(),
+            base: engine.file_draft_base(&target).unwrap(),
+            target: target.clone(),
+            content_hash: ContentHash::from_digest(blake3::hash(body)),
+            logical_size: body.len() as u64,
+        };
+        engine.write_file_draft(
+            &write, &principal, OperationId::generate().unwrap(), input(body),
+        ).unwrap();
+        let working = engine.file_working_state(&target).unwrap();
+        requests.push(WorkingSelection {
+            target, expected: WorkingExpectation::from_working(&working).unwrap(),
+        });
+    }
+    let state = Arc::clone(engine.planning_context().state);
+    let selected = engine.select_working_sources(&requests).unwrap();
+    assert_eq!(selected.sources().len(), 2);
+    for ((source, expected), bytes) in selected.sources().iter().zip(&requests).zip(bytes) {
+        assert_eq!(source.target(), &expected.target);
+        assert_eq!(source.expected(), expected.expected);
+        let mut actual = vec![0; bytes.len() + 1];
+        let count = source.read_at(&mut actual, 0).unwrap();
+        assert_eq!(&actual[..count], bytes);
+        assert_eq!(source.read_at(&mut actual, bytes.len() as u64).unwrap(), 0);
+    }
+    assert!(Arc::ptr_eq(&state, engine.planning_context().state));
+    let WorkingContentExpectation::Born { base, payload } = requests[0].expected.content else {
+        panic!("this test deliberately uses the existing Published draft producer");
+    };
+    let mut changed_payload = requests.clone();
+    changed_payload[0].expected.content = WorkingContentExpectation::Born {
+        base,
+        payload: DraftPayload::new(
+            DraftPayloadId::generate().unwrap(), payload.content_hash(), payload.logical_size(),
+        ),
+    };
+    assert!(matches!(engine.select_working_sources(&changed_payload),
+        Err(crate::Error::FileDraft(DraftError::WorkingBodyChanged))));
+    assert!(matches!(engine.select_working_sources(&[requests[0].clone(), requests[0].clone()]),
+        Err(crate::Error::FileDraft(DraftError::WorkingSelection))));
+
+    let record = &engine.state().file_containers[&requests[0].target.file];
+    let path = crate::persist::layout::histories(&disk)
+        .join(crate::persist::layout::namespace::directory(&record.namespace.name).as_path())
+        .join(crate::persist::layout::container::DRAFTS.as_path())
+        .join(crate::persist::layout::container::draft_payload(payload.payload_id()).as_path());
+    let identity = fs::metadata(&path).unwrap();
+    let parked = temporary.path().join("held-first-draft");
+    fs::rename(&path, &parked).unwrap();
+    let mut stale = requests.clone();
+    stale[1].expected.revision = stale[1].expected.revision.next().unwrap();
+    // A stale later item wins before the first missing payload can be opened.
+    assert!(matches!(engine.select_working_sources(&stale),
+        Err(crate::Error::FileDraft(DraftError::RevisionChanged { .. }))));
+    assert!(selected.sources()[0].require_source().is_err());
+    assert!(Arc::ptr_eq(&state, engine.planning_context().state));
+    drop(selected);
+    fs::rename(&parked, &path).unwrap();
+    let restored = fs::metadata(&path).unwrap();
+    assert_eq!((restored.dev(), restored.ino()), (identity.dev(), identity.ino()));
+    engine.select_working_sources(&requests).unwrap().require_engine(&engine).unwrap();
+    assert_eq!(engine.state(), state.as_ref());
+    drop(state);
+    drop(engine);
+    let engine = Engine::open(&system).unwrap();
+    let selected = engine.select_working_sources(&requests).unwrap();
+    selected.require_engine(&engine).unwrap();
+    for (source, bytes) in selected.sources().iter().zip(bytes) {
+        let mut actual = vec![0; bytes.len()];
+        assert_eq!(source.read_at(&mut actual, 0).unwrap(), bytes.len());
+        assert_eq!(actual, bytes);
+    }
+}
+
+#[test]
+fn fresh_pool_format_refuses_unmarked_system_and_disk_before_recovery_writes() {
+    use crate::{Config, Engine, ErrorCode, Mode};
+    use name_policy::Name;
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let disk = temp.path().join("disk");
+    let replacement_system = temp.path().join("replacement-system");
+    for root in [&system, &disk] {
+        fs::create_dir(root).unwrap();
+        fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config =
+        Config::independent_roots(Mode::Development, [(Name::parse("Primary").unwrap(), disk.clone())])
+            .unwrap();
+    drop(Engine::initialize(&system, config).unwrap());
+
+    let config_path = system.join("config.json");
+    let seal_path = disk.join(crate::persist::layout::DISK_IDENTITY.as_path());
+    let unmark = |bytes: &[u8]| {
+        let mut value: json_codec::Value = json_codec::from_slice(bytes).unwrap();
+        let original = value.as_object_mut().unwrap().remove("pool_semantic_format");
+        assert_eq!(original.unwrap(), "manual-directory-v1");
+        json_codec::to_vec(&value).unwrap()
+    };
+    let config = fs::read(&config_path).unwrap();
+    let seal = fs::read(&seal_path).unwrap();
+
+    let without_config_marker = unmark(&config);
+    fs::write(&config_path, &without_config_marker).unwrap();
+    let inode = fs::metadata(&config_path).unwrap().ino();
+    let error = Engine::open(&system).err().expect("unmarked SYSTEM must reject");
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert_eq!(fs::metadata(&config_path).unwrap().ino(), inode);
+    assert_eq!(fs::read(&config_path).unwrap(), without_config_marker);
+    assert_eq!(fs::read(&seal_path).unwrap(), seal);
+    fs::write(&config_path, config).unwrap();
+
+    let without_disk_marker = unmark(&seal);
+    fs::write(&seal_path, &without_disk_marker).unwrap();
+    let inode = fs::metadata(&seal_path).unwrap().ino();
+    let error = Engine::restore_from_disks(&replacement_system, &[disk])
+        .err()
+        .expect("unmarked disk must reject explicit recovery");
+    assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch);
+    assert!(!replacement_system.exists());
+    assert_eq!(fs::metadata(&seal_path).unwrap().ino(), inode);
+    assert_eq!(fs::read(&seal_path).unwrap(), without_disk_marker);
+    fs::write(&seal_path, seal).unwrap();
+    drop(Engine::open(&system).unwrap());
 }

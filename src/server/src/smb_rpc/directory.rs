@@ -47,7 +47,7 @@ impl Session {
         let after = page
             .entries
             .last()
-            .map(|node| node.entry.lookup_key().to_owned())
+            .map(|node| node.path().key().to_owned())
             .or_else(|| cursor.and_then(|cursor| cursor.after.clone()));
         directory.cursor = Some(DirectoryCursor { snapshot, after });
         Ok(page)

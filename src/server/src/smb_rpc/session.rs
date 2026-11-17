@@ -57,13 +57,15 @@ impl Session {
     ) -> Result<Reply, DispatchError> {
         let is_namespace = matches!(&request, Request::Namespace { .. });
         let dirty_handle = match &request {
-            Request::Dirty { handle } => Some(*handle),
+            Request::Dirty { handle } | Request::WorkingWrite { handle, .. }
+            | Request::WorkingResize { handle, .. } => Some(*handle),
             _ => None,
         };
         let mut operation_id = match &request {
             Request::Namespace { operation_id, .. } => Some(operation_id.to_string()),
             Request::Flush { handle } | Request::Close { handle } | Request::Dirty { handle } => {
                 match self.handles.get(handle) {
+                    Some(Handle::Native(file)) => file.file.operation().map(|id| id.to_string()),
                     Some(Handle::Write(writer, _)) => Some(writer.operation_id.to_string()),
                     Some(Handle::ManualWrite(writer, _)) => Some(writer.operation().to_string()),
                     _ => None,
@@ -81,6 +83,9 @@ impl Session {
         // Report that generation, not the previously published operation.
         if let Some(handle) = dirty_handle {
             match self.handles.get(&handle) {
+                Some(Handle::Native(file)) => {
+                    operation_id = file.file.operation().map(|id| id.to_string());
+                }
                 Some(Handle::Write(writer, _)) => {
                     operation_id = Some(writer.operation_id.to_string());
                 }
@@ -134,6 +139,16 @@ impl Session {
                 length,
             } => {
                 return self.read(handle, offset, length).map(Reply::Read);
+            }
+            Request::WorkingWrite { handle, position, bytes } => {
+                return self.working_write(handle, position, &bytes).map(Reply::WorkingWrite);
+            }
+            Request::WorkingResize { handle, length } => {
+                self.working_resize(handle, length)?;
+                json!({"changed": true})
+            }
+            Request::WorkingStat { handle } => {
+                return self.working_stat(handle).map(Reply::WorkingStat);
             }
             Request::PrepareWrite { handle, end, bytes } => {
                 self.prepare_write(handle, end, bytes)?

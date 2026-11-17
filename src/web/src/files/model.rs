@@ -31,6 +31,7 @@ pub(crate) enum Navigation {
 
 #[derive(Clone, Default)]
 pub(crate) struct Model {
+    pub unborn: super::unborn::Model,
     pub deletion: super::deletion::Model,
     pub mkdir: super::mkdir::Model,
     pub disks: Vec<Disk>,
@@ -203,6 +204,7 @@ impl Model {
     }
 
     pub(crate) fn clear_selection(&mut self) {
+        self.unborn.clear_review();
         self.cancel_history();
         self.merge = None;
         self.backup = None;

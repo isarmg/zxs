@@ -1,0 +1,167 @@
+//! Full-set working selection, followed by the original held-source admission.
+//! Nothing here prepares a Version, clears a draft or acknowledges a save.
+use crate::business::file_draft::{DraftError as Failure, selected};
+use crate::container_storage::{HeldUnbornReader, ObservedContainerReplica};
+use crate::engine::file_draft::require_initial;
+use crate::engine::fresh_layout::containers::published_source;
+use crate::{Engine, Error, ReadFile, Result, State, ValidatedConfig};
+use std::os::unix::fs::FileExt;
+use std::sync::Arc;
+use storage_contract::file_container::FileContainerRecord;
+use storage_contract::file_draft::{
+    DraftLocation, DraftPayload, WorkingContentExpectation, WorkingExpectation, WorkingSelection,
+};
+
+enum HeldWorkingBody {
+    Born {
+        scope: Arc<ObservedContainerReplica>,
+        file: ReadFile,
+        payload: DraftPayload,
+    },
+    Unborn(Arc<HeldUnbornReader>),
+}
+
+pub(crate) struct SelectedWorkingSource {
+    request: WorkingSelection,
+    record: FileContainerRecord,
+    body: HeldWorkingBody,
+}
+
+impl SelectedWorkingSource {
+    pub(crate) fn target(&self) -> &DraftLocation { &self.request.target }
+    pub(crate) fn expected(&self) -> WorkingExpectation { self.request.expected }
+    pub(crate) fn record(&self) -> &FileContainerRecord { &self.record }
+
+    pub(crate) fn unborn_reader(&self) -> Result<&Arc<HeldUnbornReader>> {
+        match &self.body {
+            HeldWorkingBody::Unborn(reader) => Ok(reader),
+            HeldWorkingBody::Born { .. } => Err(Error::FileDraft(Failure::UnbornRequired)),
+        }
+    }
+
+    pub(crate) fn logical_size(&self) -> u64 {
+        match &self.body {
+            HeldWorkingBody::Born { payload, .. } => payload.logical_size(),
+            HeldWorkingBody::Unborn(source) => source.logical_size(),
+        }
+    }
+
+    pub(crate) fn require_source(&self) -> Result<()> {
+        match &self.body {
+            HeldWorkingBody::Born { scope, file, .. } => {
+                file.check_running()?;
+                scope.verify()
+            }
+            HeldWorkingBody::Unborn(source) => {
+                source.require_record(self.request.target.file, &self.record)
+            }
+        }
+    }
+
+    /// Only the selected immutable body is readable. No FD or path escapes to
+    /// a caller which could mistake sparse holes for a complete base version.
+    pub(crate) fn read_at(&self, output: &mut [u8], offset: u64) -> Result<usize> {
+        self.require_source()?;
+        let read = match &self.body {
+            HeldWorkingBody::Born { file, payload, .. } => {
+                if offset >= payload.logical_size() || output.is_empty() {
+                    return Ok(0);
+                }
+                let count = (payload.logical_size() - offset).min(output.len() as u64) as usize;
+                file.read_exact_at(&mut output[..count], offset)?;
+                count
+            }
+            HeldWorkingBody::Unborn(source) => source.read_at(output, offset)?,
+        };
+        self.require_source()?;
+        Ok(read)
+    }
+}
+
+/// A local, owned read set from one actual Engine occurrence. It is not a
+/// serializable receipt and cannot be reconstructed from identities or hashes.
+pub(crate) struct SelectedWorkingSources {
+    state: Arc<State>,
+    config: ValidatedConfig,
+    resources: Arc<crate::disk::DiskResources>,
+    snapshot: Option<String>,
+    slot: u64,
+    sources: Vec<SelectedWorkingSource>,
+}
+
+impl SelectedWorkingSources {
+    pub(crate) fn sources(&self) -> &[SelectedWorkingSource] { &self.sources }
+
+    pub(crate) fn require_engine(&self, engine: &Engine) -> Result<()> {
+        self.require_context(&engine.planning_context())
+    }
+
+    pub(crate) fn require_context(
+        &self, context: &crate::engine::PlanningContext<'_>,
+    ) -> Result<()> {
+        if !Arc::ptr_eq(&self.state, context.state)
+            || !self.config.same_admission(context.config)
+            || !Arc::ptr_eq(&self.resources, context.disk_resources)
+            || self.snapshot != *context.snapshot || self.slot != context.next_slot
+        {
+            return Err(Error::FileDraft(Failure::SourceChanged));
+        }
+        for source in &self.sources {
+            source.require_source()?;
+        }
+        Ok(())
+    }
+}
+
+impl Engine {
+    /// The caller separately admits the directory's Published host/node and its
+    /// selected path set. That source cannot grant FILE authority to this method.
+    pub(crate) fn select_working_sources(
+        &self,
+        requests: &[WorkingSelection],
+    ) -> Result<SelectedWorkingSources> {
+        let context = self.planning_context();
+        if context.current_namespaces.is_some() || context.config.generation().is_some() {
+            return Err(Error::FileDraft(Failure::UnsupportedScope));
+        }
+        // Complete every selected CAS before opening even the first payload.
+        // In particular a later stale item cannot follow an earlier clear/save.
+        let checked = selected::require_all(
+            context.state, requests, context.config.max_entries, context.config.max_file_bytes,
+        )?;
+        let mut sources = Vec::with_capacity(checked.len());
+        for item in checked {
+            let request = item.request();
+            let record = item.record();
+            require_initial(&context, &request.target)?;
+            let owner = record.owner_disk.to_string();
+            let disk = context.config.disks.iter().find(|disk| disk.disk_id == owner)
+                .ok_or(Error::FileDraft(Failure::UnsupportedScope))?;
+            let source = published_source(
+                context.config, context.disk_resources, context.state, request.target.file, disk,
+            )?;
+            let scope = Arc::new(ObservedContainerReplica::observe(source)?);
+            let body = match request.expected.content {
+                WorkingContentExpectation::Born { payload, .. } => HeldWorkingBody::Born {
+                    file: scope.open_working_draft()?, scope, payload,
+                },
+                WorkingContentExpectation::UnbornEmpty
+                | WorkingContentExpectation::UnbornSaved { .. } => {
+                    HeldWorkingBody::Unborn(Arc::new(
+                        scope.open_unborn_working(context.config.max_file_bytes)?,
+                    ))
+                }
+            };
+            sources.push(SelectedWorkingSource {
+                request: request.clone(), record: record.clone(), body,
+            });
+        }
+        let result = SelectedWorkingSources {
+            state: Arc::clone(context.state), config: context.config.clone(),
+            resources: Arc::clone(context.disk_resources), snapshot: context.snapshot.clone(),
+            slot: context.next_slot, sources,
+        };
+        result.require_engine(self)?;
+        Ok(result)
+    }
+}

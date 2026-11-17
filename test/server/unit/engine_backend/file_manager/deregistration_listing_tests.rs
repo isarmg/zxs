@@ -591,7 +591,7 @@ fn smb_current_directory_rebinds_after_d3_and_keeps_projected_owner_across_norma
         pinned
             .entries
             .iter()
-            .map(|entry| entry.entry.name())
+            .map(|entry| entry.path().file_name())
             .collect::<Vec<_>>(),
         ["b"]
     );
@@ -605,7 +605,7 @@ fn smb_current_directory_rebinds_after_d3_and_keeps_projected_owner_across_norma
         current
             .entries
             .iter()
-            .map(|entry| entry.entry.name())
+            .map(|entry| entry.path().file_name())
             .collect::<Vec<_>>(),
         ["b", "c"]
     );

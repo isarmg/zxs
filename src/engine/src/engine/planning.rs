@@ -136,7 +136,7 @@ impl<'a> PlanningContext<'a> {
             record.replicas.keys().any(|id| self.config.disks.iter().any(|disk| {
                 disk.slot_id == slot && disk.disk_id == id.to_string()
             }))
-        }).filter_map(|record| record.working.draft().map(|(_, payload)| payload.logical_size()))
+        }).map(|record| record.working.material_bytes())
             .fold(0u64, |sum, bytes| sum.saturating_add(bytes));
         self.state
             .placements

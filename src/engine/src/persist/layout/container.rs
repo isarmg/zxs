@@ -37,3 +37,25 @@ pub(crate) fn draft_payload(id: storage_contract::file_draft::DraftPayloadId) ->
     EntryName::new(id.to_string())
         .expect("invariant: typed draft identity is one relative entry")
 }
+
+/// An extent is directly inside its already admitted container. There is no
+/// unrecorded intermediate directory whose replacement could rebind the source.
+pub(crate) fn working_extent(
+    id: storage_contract::file_draft::manifest::WorkingExtentId,
+) -> EntryName {
+    EntryName::new(id.to_string())
+        .expect("invariant: typed working extent identity is one relative entry")
+}
+
+/// A private full materialization is not a Version, draft payload or extent.
+/// Its identity is never accepted as published state or reconstructed by name.
+pub(crate) enum WorkingFull {}
+impl storage_contract::IdKind for WorkingFull {
+    const PREFIX: &'static str = "wfull";
+}
+pub(crate) type WorkingFullId = storage_contract::Id<WorkingFull>;
+
+pub(crate) fn working_full(id: WorkingFullId) -> EntryName {
+    EntryName::new(id.to_string())
+        .expect("invariant: private materialization identity is one relative entry")
+}

@@ -22,6 +22,10 @@ pub(crate) enum ReadSource {
         version: crate::FileVersion,
         path: PathBuf,
     },
+    WorkingFull {
+        source: Arc<crate::container_storage::PreparedUnbornFull>,
+        path: PathBuf,
+    },
     VerifiedDraft {
         source: Arc<super::fresh_layout::draft_source::PublishedDraftSource>,
         path: PathBuf,
@@ -55,6 +59,22 @@ impl ReadSource {
         Ok(Self::Container { scope, version: version.clone(), path })
     }
 
+    /// Only an actual independently copied FULL can enter the Version builder.
+    /// A sparse working FD, manifest or raw path cannot construct this input.
+    pub(crate) fn working_full(source: Arc<crate::container_storage::PreparedUnbornFull>) -> Self {
+        let path = source.path().to_owned();
+        Self::WorkingFull { source, path }
+    }
+
+    pub(crate) fn require_working_full(
+        &self,
+    ) -> Result<&Arc<crate::container_storage::PreparedUnbornFull>> {
+        match self {
+            Self::WorkingFull { source, path } if path == source.path() => Ok(source),
+            _ => Err(crate::business::file_draft::invalid()),
+        }
+    }
+
     /// Every managed copy/sealing source retains its producer's I/O ownership.
     /// This entry point must not be a raw-file alternative to leased reads.
     pub(crate) fn open(&self) -> Result<ReadFile> {
@@ -67,6 +87,7 @@ impl ReadSource {
         match self {
             Self::External(path) => open_regular(path).map(ReadFile::from),
             Self::VerifiedDraft { source, path } => source.open(path),
+            Self::WorkingFull { source, path } => source.open(path),
             Self::VerifiedReplica(source) => source.open(),
             Self::Container { scope, version, path } => {
                 if path != &scope.body_path(version)? {
@@ -85,7 +106,8 @@ impl ReadSource {
     pub(crate) fn path(&self) -> &Path {
         match self {
             Self::External(path) | Self::Disk { path, .. }
-            | Self::VerifiedDraft { path, .. } | Self::Container { path, .. } => path,
+            | Self::VerifiedDraft { path, .. } | Self::Container { path, .. }
+            | Self::WorkingFull { path, .. } => path,
             Self::VerifiedReplica(source) => source.path(),
         }
     }
@@ -96,6 +118,9 @@ impl ReadSource {
             Self::External(_) => Self::External(path),
             // Joining is not authority over another draft or a child path.
             // The retained source's exact-path gate rejects it on open.
+            Self::WorkingFull { source, .. } => Self::WorkingFull {
+                source: Arc::clone(source), path,
+            },
             Self::VerifiedDraft { source, .. } => Self::VerifiedDraft {
                 source: Arc::clone(source), path,
             },
@@ -118,6 +143,11 @@ pub struct ReadFile(ReadFileSource);
 enum ReadFileSource {
     Local(File),
     Managed(DiskFile),
+    WorkingFull {
+        file: DiskFile,
+        source: Arc<crate::container_storage::PreparedUnbornFull>,
+        _reservation: super::PayloadProofReservation,
+    },
     Container {
         file: DiskFile,
         scope: Arc<crate::container_storage::ObservedContainerReplica>,
@@ -144,7 +174,8 @@ impl ReadFile {
             ReadFileSource::Local(file) => {
                 platform_io::fs_safety::linux::try_clone_working_file(file, target, bytes)
             }
-            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. } => {
+            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
+            | ReadFileSource::WorkingFull { file, .. } => {
                 file.try_clone_working_file(target, bytes)
             }
         }
@@ -158,13 +189,22 @@ impl ReadFile {
         Self(ReadFileSource::Container { file, scope })
     }
 
+    pub(crate) fn working_full(
+        file: DiskFile,
+        source: Arc<crate::container_storage::PreparedUnbornFull>,
+        reservation: super::PayloadProofReservation,
+    ) -> Self {
+        Self(ReadFileSource::WorkingFull { file, source, _reservation: reservation })
+    }
+
     pub(crate) fn verify_full(
         &mut self,
         expectation: platform_io::payload::Expectation,
     ) -> std::result::Result<platform_io::payload::Receipt, platform_io::payload::Error> {
         match &mut self.0 {
             ReadFileSource::Local(file) => platform_io::payload::verify_full(file, expectation),
-            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. } => {
+            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
+            | ReadFileSource::WorkingFull { file, .. } => {
                 file.verify_full(expectation)
             }
         }
@@ -175,13 +215,15 @@ impl ReadFile {
             ReadFileSource::Local(_) => Ok(()),
             ReadFileSource::Managed(file) => file.check_running(),
             ReadFileSource::Container { file, .. } => file.check_running(),
+            ReadFileSource::WorkingFull { file, .. } => file.check_running(),
         }
     }
 
     pub fn metadata(&self) -> io::Result<std::fs::Metadata> {
         match &self.0 {
             ReadFileSource::Local(file) => file.metadata(),
-            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. } => {
+            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
+            | ReadFileSource::WorkingFull { file, .. } => {
                 file.metadata()
             }
         }
@@ -190,7 +232,8 @@ impl ReadFile {
     pub fn sync_all(&self) -> io::Result<()> {
         match &self.0 {
             ReadFileSource::Local(file) => file.sync_all(),
-            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. } => {
+            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
+            | ReadFileSource::WorkingFull { file, .. } => {
                 file.sync_all()
             }
         }
@@ -203,6 +246,14 @@ impl ReadFile {
             ReadFileSource::Container { file, scope } => {
                 file.try_clone().map(|file| Self::in_container(file, Arc::clone(scope)))
             }
+            ReadFileSource::WorkingFull { file, source, .. } => {
+                let reservation = super::payload_proof_budget().reserve(1).ok_or_else(|| {
+                    io::Error::other(crate::business::file_draft::DraftError::Size)
+                })?;
+                file.try_clone().map(|file| {
+                    Self::working_full(file, Arc::clone(source), reservation)
+                })
+            }
         }
     }
 }
@@ -211,7 +262,8 @@ impl Read for ReadFile {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         match &mut self.0 {
             ReadFileSource::Local(file) => file.read(buffer),
-            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. } => {
+            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
+            | ReadFileSource::WorkingFull { file, .. } => {
                 file.read(buffer)
             }
         }
@@ -222,7 +274,8 @@ impl Seek for ReadFile {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         match &mut self.0 {
             ReadFileSource::Local(file) => file.seek(position),
-            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. } => {
+            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
+            | ReadFileSource::WorkingFull { file, .. } => {
                 file.seek(position)
             }
         }
@@ -233,7 +286,8 @@ impl FileExt for ReadFile {
     fn read_at(&self, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
         match &self.0 {
             ReadFileSource::Local(file) => file.read_at(buffer, offset),
-            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. } => {
+            ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
+            | ReadFileSource::WorkingFull { file, .. } => {
                 file.read_at(buffer, offset)
             }
         }

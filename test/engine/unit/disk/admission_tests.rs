@@ -232,3 +232,31 @@ fn cold_directory_admission_keeps_held_identity_after_mount_replacement() {
         },
     );
 }
+
+#[test]
+fn disk_seal_rejects_missing_and_unknown_semantic_format() {
+    let temporary = tempfile::tempdir().unwrap();
+    let address = temporary.path().join("primary");
+    private_dir(&address).unwrap();
+    let root = DiskRoot::open(&address).unwrap();
+    let held = root.directory(&address).unwrap();
+    let config = Config::development(crate::test_disks([address])).unwrap();
+    let config = ValidatedConfig::try_from(config).unwrap();
+    let seal = identity_at(&config, &config.disks[0], &held).unwrap();
+
+    let body = json_codec::to_vec(&seal).unwrap();
+    let decoded = decode_seal(&body).unwrap();
+    validate_stored_seal(&decoded, &seal).unwrap();
+
+    let mut fields: json_codec::Value = json_codec::from_slice(&body).unwrap();
+    fields.as_object_mut().unwrap().remove("pool_semantic_format");
+    assert_eq!(
+        decode_seal(&json_codec::to_vec(&fields).unwrap()).unwrap_err().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    fields["pool_semantic_format"] = json_codec::json!("manual-directory-v2");
+    assert_eq!(
+        decode_seal(&json_codec::to_vec(&fields).unwrap()).unwrap_err().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+}

@@ -22320,6 +22320,350 @@
         ],
         "additionalProperties": false,
         "description": "Initial普通目录显式保护请求。实际EntryId、路径、原策略代数及原op共同绑定，独立子策略不继承。操作种类backup.configure-automatic-directory；不是旧手工前缀请求或Current/terminal授权。"
+      },
+      "PoolSemanticFormat": {
+        "type": "string",
+        "const": "manual-directory-v1",
+        "description": "唯一新池语义标识。Config 和持有盘 seal 均必需；缺失、未知值或对象别名不补值、不迁移。"
+      },
+      "PoolLocalEntityIdentity": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "inode": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "device",
+          "inode"
+        ],
+        "additionalProperties": false
+      },
+      "PoolLocalDirectoryBinding": {
+        "type": "object",
+        "properties": {
+          "directory_id": {
+            "$ref": "#/components/schemas/WorkingTreeDirectoryId"
+          },
+          "entity": {
+            "$ref": "#/components/schemas/PoolLocalEntityIdentity"
+          }
+        },
+        "required": [
+          "directory_id",
+          "entity"
+        ],
+        "additionalProperties": false
+      },
+      "PoolZxsLifecycleBindings": {
+        "type": "object",
+        "properties": {
+          "common_data": {
+            "$ref": "#/components/schemas/PoolLocalDirectoryBinding"
+          },
+          "deleted_data": {
+            "$ref": "#/components/schemas/PoolLocalDirectoryBinding"
+          }
+        },
+        "required": [
+          "common_data",
+          "deleted_data"
+        ],
+        "additionalProperties": false
+      },
+      "PoolRootAreas": {
+        "type": "object",
+        "properties": {
+          "common_data": {
+            "$ref": "#/components/schemas/PoolLocalDirectoryBinding"
+          },
+          "deleted_data": {
+            "$ref": "#/components/schemas/PoolLocalDirectoryBinding"
+          },
+          "zxs_data": {
+            "$ref": "#/components/schemas/PoolLocalDirectoryBinding"
+          },
+          "zxs_lifecycles": {
+            "$ref": "#/components/schemas/PoolZxsLifecycleBindings"
+          }
+        },
+        "required": [
+          "common_data",
+          "deleted_data",
+          "zxs_data",
+          "zxs_lifecycles"
+        ],
+        "additionalProperties": false
+      },
+      "PoolRootBinding": {
+        "type": "object",
+        "properties": {
+          "layout": {
+            "type": "string",
+            "const": "unified_working_tree_v1"
+          },
+          "root_id": {
+            "$ref": "#/components/schemas/WorkingTreeRootId"
+          },
+          "registration": {
+            "$ref": "#/components/schemas/OrdinaryDiskRegistration"
+          },
+          "source_chain": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrdinaryDiskRegistration"
+            }
+          },
+          "root_entity": {
+            "$ref": "#/components/schemas/PoolLocalEntityIdentity"
+          },
+          "roots": {
+            "$ref": "#/components/schemas/PoolRootAreas"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "layout",
+          "root_id",
+          "registration",
+          "source_chain",
+          "root_entity",
+          "roots",
+          "operation_id",
+          "generation"
+        ],
+        "additionalProperties": false,
+        "description": "完整持久五区反馈形状；来源链为直接上游在先。字段本身不是根、初始化或当前写权限，须由真实固定 Genesis、登记与 held 实体准入。"
+      },
+      "PoolDiskConfiguration": {
+        "type": "object",
+        "properties": {
+          "slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "disk_id": {
+            "$ref": "#/components/schemas/DiskId"
+          },
+          "name": {
+            "$ref": "#/components/schemas/StorageDiskName"
+          },
+          "root": {
+            "type": "string"
+          },
+          "level": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "upstream_slot_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SlotId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata_member": {
+            "type": "boolean"
+          },
+          "binding_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "capacity_bytes": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "slot_id",
+          "disk_id",
+          "name",
+          "root",
+          "level",
+          "metadata_member",
+          "binding_generation"
+        ],
+        "additionalProperties": false,
+        "description": "Config 的序列化盘项；路径、层级、容量、拓扑和名字唯一性还须通过 ValidatedConfig，不从挂载点补名。"
+      },
+      "PoolConfiguration": {
+        "type": "object",
+        "properties": {
+          "pool_id": {
+            "$ref": "#/components/schemas/PoolId"
+          },
+          "pool_semantic_format": {
+            "$ref": "#/components/schemas/PoolSemanticFormat"
+          },
+          "storage_roots": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/DiskId"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PoolRootBinding"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "production",
+              "development"
+            ]
+          },
+          "disks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PoolDiskConfiguration"
+            }
+          },
+          "checksum_chunk_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "max_file_bytes": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "max_workspace_bytes": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "max_workspaces": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 18446744073709551615
+          },
+          "max_retained_workspaces": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 18446744073709551615
+          },
+          "max_retained_workspaces_per_principal": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 18446744073709551615
+          },
+          "max_retained_workspace_metadata_bytes": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "max_retained_workspace_metadata_bytes_per_principal": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "max_entries": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 18446744073709551615
+          },
+          "metadata_reserve_bytes": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "workspace_ttl_seconds": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "pool_id",
+          "pool_semantic_format",
+          "storage_roots",
+          "mode",
+          "disks",
+          "checksum_chunk_bytes",
+          "max_file_bytes",
+          "max_workspace_bytes",
+          "max_workspaces",
+          "max_entries",
+          "metadata_reserve_bytes",
+          "workspace_ttl_seconds"
+        ],
+        "additionalProperties": false,
+        "description": "实际 Config JSON 形状及唯一必需新池标识，不是 TOML 资源投影。storage_roots 只在未初始化请求中可为空；真正 Genesis 要求全部同锁五区反馈。既有四个可缺省资源限额不构成格式标识兜底。跨字段、物理身份和权限由原初始化/恢复边界验证。"
+      },
+      "PoolDiskSeal": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "unified-working-tree-managed-directory-v1"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "unified-working-tree-membership-generation-v1": {
+                    "type": "object",
+                    "properties": {
+                      "authority_hash": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "authority_hash"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "unified-working-tree-membership-generation-v1"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "pool_semantic_format": {
+            "$ref": "#/components/schemas/PoolSemanticFormat"
+          },
+          "pool_id": {
+            "$ref": "#/components/schemas/PoolId"
+          },
+          "disk_id": {
+            "$ref": "#/components/schemas/DiskId"
+          },
+          "slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "binding_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "device": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "inode": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "simulation": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "format",
+          "pool_semantic_format",
+          "pool_id",
+          "disk_id",
+          "slot_id",
+          "binding_generation",
+          "device",
+          "inode",
+          "simulation"
+        ],
+        "additionalProperties": false,
+        "description": "当前 DiskSeal 的规范输出形状：Initial 与已准入 membership generation 两种物理身份形式共用同一个必需池语义标识。不是接受旧池的别名；schema 不证明实际持有根或代际权威。"
       }
     }
   }

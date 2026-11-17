@@ -1,5 +1,52 @@
 {
   "groups": {
+    "native-first-manual-save": {
+      "reason": "Real default-share native writes and ordered saves, cold authenticated first commit, and explicit protocol data mode without synthetic versions.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "isolate": true,
+          "name": "phase1_smb_rpc",
+          "exact": [
+            "native_working::native_default_share_ordered_io_stays_unborn_until_cold_http_first_commit"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "isolate": true,
+          "name": "phase1_save_tags",
+          "exact": [
+            "unborn_first::authenticated_unborn_empty_first_commit_is_explicit_and_cold_idempotent"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "smb-protocol",
+          "manifest": "src/smb/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "protocol::tests::native_working_io_has_explicit_mode_and_never_requires_a_fake_version"
+          ],
+          "max_tests": 1
+        }
+      ]
+    },
     "backup-snapshot-scope": {
       "reason": "Deny whole Backup before task/target writes when the actual permanent snapshot index contains immutable .zxs nodes that its transfer does not yet copy. Distinguish reserved from completed nodes; preserve invalid-registration causes and all original no-snapshot backup gates. Genuine registered BODY, exact snapshot replay and cold negative coverage; no new transfer authority.",
       "python_tests": [
@@ -425,9 +472,11 @@
           "exact": [
             "snapshot_worktree::tests::actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node",
             "engine::publication::cache_budget_tests::cache_encoder_rejects_before_accept_and_reopens_cleanly",
-            "engine::publication::cache_budget_tests::payload_cache_rejection_preserves_names_and_retries_installed_payloads"
+            "engine::publication::cache_budget_tests::payload_cache_rejection_preserves_names_and_retries_installed_payloads",
+            "business::file_draft::tests::unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node",
+            "business::file_draft::tests::fresh_pool_format_refuses_unmarked_system_and_disk_before_recovery_writes"
           ],
-          "max_tests": 3,
+          "max_tests": 5,
           "default_features": true
         },
         {
@@ -5147,7 +5196,7 @@
       ]
     },
     "smb-vfs-manual-fd": {
-      "reason": "Real writable Manual FDs have no WorkspaceId. Preserve authorized local read/stat/seek, old immutable placeholder RPCs and terminal detach. Generic runners execute routing regressions only; the same admitted group also requires the separate exact Debian 13 SDK job and seven actual current-build VFS tests. No Server or incremental storage acceptance claim.",
+      "reason": "Real writable Manual FDs have no WorkspaceId. Preserve authorized local read/stat/seek, old immutable placeholder RPCs and terminal detach. Generic runners execute routing regressions only; the same admitted group also requires the separate exact Debian 13 SDK job and eight actual current-build VFS tests. No Server or incremental storage acceptance claim.",
       "python_tests": [
         "test_smb_vfs_manual_ci"
       ],
@@ -5347,6 +5396,49 @@
     }
   },
   "rules": [
+    {
+      "path": "src/server/src/smb_rpc/native.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/smb_native.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/server/src/http_unborn.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_smb_rpc/native_working.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/unborn_first.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/smb/src/protocol.rs",
+      "groups": [
+        "native-first-manual-save",
+        "smb-vfs-manual-fd"
+      ]
+    },
+    {
+      "path": ".github/scripts/check-smb-manual-descriptors.py",
+      "groups": [
+        "smb-vfs-manual-fd"
+      ]
+    },
     {
       "path": "src/engine/src/engine/backup_preparation.rs",
       "groups": [

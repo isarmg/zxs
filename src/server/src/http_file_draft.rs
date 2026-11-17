@@ -18,7 +18,7 @@ pub(crate) struct LocationQuery {
     entry_id: EntryId,
 }
 impl LocationQuery {
-    fn target(self, file: FileId) -> DraftLocation {
+    pub(super) fn target(self, file: FileId) -> DraftLocation {
         DraftLocation { repository: self.repository_id, path: self.path,
             entry: self.entry_id, file }
     }

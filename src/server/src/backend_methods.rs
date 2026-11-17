@@ -465,6 +465,45 @@ macro_rules! methods {
                 ) -> Result<storage_contract::StagedFile, $crate::ApiError>;
             }
             optional {
+                fn smb_native_open(
+                    &self, identity: &$crate::Identity, request: $crate::SmbNativeOpen<'_>,
+                ) -> Result<Option<$crate::SmbNativeHandle>, $crate::ApiError> {
+                    let _ = (identity, request);
+                    Ok(None)
+                }
+                fn smb_native_stat(
+                    &self, identity: &$crate::Identity, branch: &str,
+                    path: &name_policy::LookupPath,
+                ) -> Result<Option<smb_protocol::protocol::StatResult>, $crate::ApiError> {
+                    let _ = (identity, branch, path);
+                    Ok(None)
+                }
+                fn smb_native_size(
+                    &self, identity: &$crate::Identity, file: &$crate::SmbNativeHandle,
+                ) -> Result<u64, $crate::ApiError> {
+                    let _ = (identity, file);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn smb_native_read(
+                    &self, identity: &$crate::Identity, file: &$crate::SmbNativeHandle,
+                    offset: u64, length: u32,
+                ) -> Result<bytes::Bytes, $crate::ApiError> {
+                    let _ = (identity, file, offset, length);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn smb_native_edit(
+                    &self, identity: &$crate::Identity, file: &mut $crate::SmbNativeHandle,
+                    edit: $crate::SmbNativeEdit<'_>,
+                ) -> Result<usize, $crate::ApiError> {
+                    let _ = (identity, file, edit);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn smb_native_flush(
+                    &self, identity: &$crate::Identity, file: &mut $crate::SmbNativeHandle,
+                ) -> Result<Option<storage_contract::OperationResult>, $crate::ApiError> {
+                    let _ = (identity, file);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn smb_file_working(
                     &self, identity: &$crate::Identity, branch: &str,
                     entry: &storage_contract::Entry,
@@ -491,6 +530,19 @@ macro_rules! methods {
                     source: &$crate::UploadSource,
                 ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
                     let _ = (identity, request, source);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn unborn_file_working(
+                    &self, identity: &$crate::Identity,
+                    target: storage_contract::file_draft::DraftLocation,
+                ) -> Result<$crate::UnbornFileSnapshot, $crate::ApiError> {
+                    let _ = (identity, target);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn commit_unborn_file(
+                    &self, identity: &$crate::Identity, request: $crate::CommitUnbornFile,
+                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
+                    let _ = (identity, request);
                     Err($crate::ApiError::unsupported())
                 }
                 fn file_working(

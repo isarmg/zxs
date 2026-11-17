@@ -56,6 +56,10 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid first-commit response or request: {0}")]
+    FirstCommitWire(#[source] json_codec::Error),
+    #[error("invalid first-commit recovery record: {0}")]
+    FirstCommitRecord(#[source] storage_contract::Error),
     #[error("invalid configured disk name: {0}")]
     DiskNameInput(#[source] name_policy::Error),
     #[error("invalid foreign plan input: {0}")]

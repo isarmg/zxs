@@ -29,7 +29,7 @@ struct BudgetedPhysicalPreparation<'context, 'source, 'payload> {
     payloads: &'payload [Prepared],
     existing: Vec<std::sync::Mutex<Option<ExistingCopies<'payload>>>>,
     containers: super::fresh_layout::containers::ContainerPreparation,
-    draft: Option<super::file_draft::DraftPublicationInput>,
+    working: Option<super::file_draft::WorkingPublicationInput>,
 }
 
 struct PreparedPhysicalPublication {
@@ -52,11 +52,20 @@ impl<'context, 'source> BudgetedPhysicalPreparation<'context, 'source, '_> {
             &self.decision.versions,
             std::sync::Arc::clone(self.context.metadata_integrity),
         )?;
+        if let Some(input) = &self.working {
+            input.require_context(self.context)?;
+        }
         let containers = std::sync::Arc::new(
             crate::container_storage::PreparedContainerEntities::prepare_with_draft(
-                self.context, &self.containers, self.draft.as_mut(),
+                self.context, &self.containers,
+                self.working.as_mut().and_then(|input| input.draft_mut()),
             )?,
         );
+        // The newly observed occurrence owns its full extent proof. Do not drop
+        // the original preparation until both source and new capture agree.
+        if let Some(input) = &self.working {
+            input.require_context(self.context)?;
+        }
         let next = self.containers.finish(&containers)?;
         let projection = crate::state_projection::ProjectionTransition::new(
             self.context.state, &next, None,
@@ -445,7 +454,18 @@ impl Engine {
         result: OperationResult,
         input: super::file_draft::DraftPublicationInput,
     ) -> Result<()> {
-        let detached = self.planning_context().prepare_publication_with_draft(
+        self.persist_working_publication(
+            next, result, super::file_draft::WorkingPublicationInput::Born(input),
+        )
+    }
+
+    pub(in crate::engine) fn persist_working_publication(
+        &mut self,
+        next: State,
+        result: OperationResult,
+        input: super::file_draft::WorkingPublicationInput,
+    ) -> Result<()> {
+        let detached = self.planning_context().prepare_publication_with_working(
             next, Vec::new(), result, MAX_METADATA, MAX_METADATA, Some(input),
         )?;
         self.decide_publication(detached).map(|_| ())
@@ -1566,50 +1586,25 @@ impl crate::engine::PlanningContext<'_> {
         maximum: usize,
         cache_maximum: usize,
     ) -> Result<DetachedPublication> {
-        self.prepare_publication_with_draft(next, prepared, result, maximum, cache_maximum, None)
+        self.prepare_publication_with_working(next, prepared, result, maximum, cache_maximum, None)
     }
 
-    fn prepare_publication_with_draft(
+    fn prepare_publication_with_working(
         &self,
         next: State,
         prepared: Vec<Prepared>,
         result: OperationResult,
         maximum: usize,
         cache_maximum: usize,
-        draft: Option<super::file_draft::DraftPublicationInput>,
+        working: Option<super::file_draft::WorkingPublicationInput>,
     ) -> Result<DetachedPublication> {
-        let mut introduced_draft = None;
-        let mut inspect_draft = |file: &storage_contract::FileId| -> Result<()> {
-            let after = next.file_containers.get(file)
-                .and_then(|record| record.working.draft()).map(|(_, payload)| payload);
-            let before = self.state.file_containers.get(file)
-                .and_then(|record| record.working.draft()).map(|(_, payload)| payload);
-            if after.is_some() && before != after
-                && introduced_draft.replace(*file).is_some()
-            {
-                return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
-            }
-            Ok(())
-        };
-        match next.file_containers.changes_since(&self.state.file_containers) {
-            storage_contract::MapChanges::Keys(keys) => {
-                for file in keys.iter() { inspect_draft(file)?; }
-            }
-            storage_contract::MapChanges::All => {
-                for file in next.file_containers.keys() { inspect_draft(file)?; }
-            }
-        }
-        if introduced_draft != draft.as_ref().map(|input| input.file()) {
+        super::file_draft::WorkingPublicationInput::require_input(
+            working.as_ref(), self, &next, &result,
+        )?;
+        if working.is_some() && (!prepared.is_empty() || self.current_namespaces.is_some()
+            || self.config.generation().is_some())
+        {
             return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
-        }
-        if let Some(input) = &draft {
-            input.require_context(self)?;
-            input.require_next(&next, &result)?;
-            if !prepared.is_empty() || self.current_namespaces.is_some()
-                || self.config.generation().is_some()
-            {
-                return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
-            }
         }
         crate::business::reject_unclosed_file_history_move(self.state, &next, &result)?;
         let next_current_namespaces = match self.current_namespaces {
@@ -1706,8 +1701,8 @@ impl crate::engine::PlanningContext<'_> {
             }
             existing.push(std::sync::Mutex::new(Some(copies)));
         }
-        if let Some(input) = &draft {
-            let record = next.file_containers.get(&input.file())
+        if let Some((file, payload)) = working.as_ref().and_then(|input| input.new_draft()) {
+            let record = next.file_containers.get(&file)
                 .ok_or(super::fresh_layout::FreshLayoutError::ContainerScope)?;
             if record.replicas.len() != 1 {
                 return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
@@ -1715,10 +1710,10 @@ impl crate::engine::PlanningContext<'_> {
             let disk = self.config.disks.iter()
                 .find(|disk| disk.disk_id == record.owner_disk.to_string())
                 .ok_or(super::fresh_layout::FreshLayoutError::Registration)?;
-            if input.payload().logical_size() > self.config.max_file_bytes {
+            if payload.logical_size() > self.config.max_file_bytes {
                 return Err(super::fresh_layout::FreshLayoutError::DraftTooLarge.into());
             }
-            required.insert(disk.slot_id.clone(), input.payload().logical_size());
+            required.insert(disk.slot_id.clone(), payload.logical_size());
         }
         for (slot, bytes) in &required {
             let d = self.disk(slot)?;
@@ -1853,7 +1848,7 @@ impl crate::engine::PlanningContext<'_> {
         )?;
         let metadata_shape = snapshot.encoding_shape();
         drop(budget_candidate);
-        crate::container_storage::validate_new_projection_paths(&projection)?;
+        crate::container_storage::validate_new_projection_paths(self.config, &projection)?;
         crate::protection::preflight_backup_directories(self, &result)?;
         // Container identity is excluded from history material. End this budget
         // projection before the owning plan accepts physical observations.
@@ -1864,7 +1859,7 @@ impl crate::engine::PlanningContext<'_> {
             payloads: &prepared,
             existing,
             containers,
-            draft,
+            working,
         }.prepare(cache_maximum)?;
         let (mut data, verified, names, history_owners, entities, next) = physical.into_parts();
         // Only actual mkdir/open observations fill the native entity field. The

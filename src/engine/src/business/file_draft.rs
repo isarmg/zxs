@@ -8,6 +8,8 @@ mod allocations;
 mod content;
 pub(crate) use content::{PublishedContent, build as build_content, trace_limit};
 mod selection;
+pub(crate) mod selected;
+pub(crate) mod unborn;
 pub(crate) use selection::{resolve, validate as validate_working_record};
 mod publication;
 pub(crate) use publication::{
@@ -19,6 +21,28 @@ use storage_contract::file_draft::{
 
 #[derive(Debug, error_definition::Error)]
 pub enum DraftError {
+    #[error("this operation requires the canonical unborn-container transition")]
+    UnbornRequired,
+    #[error("unborn working material is invalid")]
+    WorkingManifest(#[source] storage_contract::file_draft::manifest::ManifestError),
+    #[error("the current namespace has conflicting or unbound container identities")]
+    WorkingNamespace,
+    #[error("unborn working material changed its named entity or immutable bytes")]
+    WorkingMaterialChanged,
+    #[error("the private working edit batch failed and cannot be published")]
+    WorkingEditFailed,
+    #[error("the working edit does not name its current visible length")]
+    WorkingLength,
+    #[error("working material block count exceeds this platform's bounded domain")]
+    WorkingCount(#[source] std::num::TryFromIntError),
+    #[error("the admitted owner cannot reserve working extents and its metadata tail")]
+    WorkingCapacity,
+    #[error("unborn FILE material must contain only its one current container row")]
+    WorkingFileGraph,
+    #[error("the explicit working selection is empty, repeated or over budget")]
+    WorkingSelection,
+    #[error("the selected working body differs from the exact expected save")]
+    WorkingBodyChanged,
     #[error("manual draft is outside its exact selected root-level FILE occurrence")]
     Selection,
     #[error("this manual draft operation requires an Initial single-owner container")]
@@ -58,6 +82,16 @@ impl DraftError {
     pub(crate) fn code(&self) -> storage_contract::ErrorCode {
         use storage_contract::ErrorCode;
         match self {
+            Self::UnbornRequired => ErrorCode::UnsupportedOperation,
+            Self::WorkingManifest(_) | Self::WorkingNamespace => ErrorCode::StateInvalid,
+            Self::WorkingMaterialChanged => ErrorCode::ContainerLayoutInvalid,
+            Self::WorkingEditFailed => ErrorCode::RecoveryRequired,
+            Self::WorkingLength => ErrorCode::FileVersionConflict,
+            Self::WorkingCount(_) => ErrorCode::ResourceLimit,
+            Self::WorkingCapacity => ErrorCode::NoSpace,
+            Self::WorkingFileGraph => ErrorCode::ContainerLayoutInvalid,
+            Self::WorkingSelection => ErrorCode::InvalidRequest,
+            Self::WorkingBodyChanged => ErrorCode::FileBranchConflict,
             Self::Selection => ErrorCode::FileBranchConflict,
             Self::UnsupportedScope => ErrorCode::UnsupportedOperation,
             Self::SourceChanged => ErrorCode::PreparationStale,
@@ -183,6 +217,7 @@ pub(crate) fn write(
 ) -> Result<WorkingChange<'_>, DraftError> {
     require_revision(current, expected)?;
     match current {
+        FileWorkingState::Unborn { .. } => return Err(DraftError::UnbornRequired),
         FileWorkingState::Automatic { .. } => return Err(DraftError::ManualRequired),
         FileWorkingState::ManualClean { .. } => {}
         FileWorkingState::ManualDirty { base: original, .. } => {
@@ -208,6 +243,7 @@ pub(crate) fn discard(
 ) -> Result<WorkingChange<'_>, DraftError> {
     require_revision(current, expected)?;
     let next = match current {
+        FileWorkingState::Unborn { .. } => return Err(DraftError::UnbornRequired),
         FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => {
             current.clone()
         }
@@ -227,6 +263,7 @@ pub(crate) fn commit(
 ) -> Result<ManualCommit<'_>, DraftError> {
     require_revision(current, expected)?;
     match current {
+        FileWorkingState::Unborn { .. } => Err(DraftError::UnbornRequired),
         FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => {
             Err(DraftError::DraftRequired)
         }
@@ -241,6 +278,7 @@ pub(crate) fn commit(
 
 pub(crate) fn require_clean(current: &FileWorkingState) -> Result<(), DraftError> {
     match current {
+        FileWorkingState::Unborn { .. } => Err(DraftError::UnbornRequired),
         FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => Ok(()),
         FileWorkingState::ManualDirty { .. } => Err(DraftError::Dirty),
     }

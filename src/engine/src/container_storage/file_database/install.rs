@@ -47,6 +47,7 @@ impl<'a> CapturedTarget<'a> {
         container: &'a DiskRoot,
         file: &str,
         view: StateProjection<'_>,
+        birth: Option<&crate::container_storage::ordinary_preparation::UnbornBirthFile<'_>>,
     ) -> Result<Self> {
         validate_owner(view, file, history.1)?;
         let record = view.state().file_containers.get(&file.parse::<storage_contract::FileId>()?)
@@ -58,7 +59,7 @@ impl<'a> CapturedTarget<'a> {
             return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerIdentity.into());
         }
         let held = container.private_child_matching(container.path(), inode)?;
-        verify_entity_contents(&held, file, view, false, Some(&record.namespace.name))?;
+        verify_entity_contents(&held, file, view, false, Some(&record.namespace.name), birth)?;
         Ok(Self {
             root, scoped: true, history: history.0, container: container.path(), held, inode,
         })
@@ -160,7 +161,24 @@ impl<'a> PreparedFileCopies<'a> {
         view: StateProjection<'a>,
         admission: InstallAdmission,
     ) -> Result<(Self, PreparedFile)> {
-        let target = CapturedTarget::capture_container(root, history, container, file, view)?;
+        let target = CapturedTarget::capture_container(root, history, container, file, view, None)?;
+        let database = CapturedMaterial::from_projection(view, file, history.1)?.encode()?;
+        let prepared = target.prepare(&database, admission)?;
+        Ok((Self { view, database }, prepared))
+    }
+
+    pub(in crate::container_storage) fn capture_unborn_birth(
+        root: &DiskRoot,
+        history: (&Path, &str),
+        container: &DiskRoot,
+        file: &str,
+        view: StateProjection<'a>,
+        admission: InstallAdmission,
+        birth: &crate::container_storage::ordinary_preparation::UnbornBirthFile<'_>,
+    ) -> Result<(Self, PreparedFile)> {
+        let target = CapturedTarget::capture_container(
+            root, history, container, file, view, Some(birth),
+        )?;
         let database = CapturedMaterial::from_projection(view, file, history.1)?.encode()?;
         let prepared = target.prepare(&database, admission)?;
         Ok((Self { view, database }, prepared))
@@ -174,7 +192,7 @@ impl<'a> PreparedFileCopies<'a> {
         admission: InstallAdmission,
     ) -> Result<PreparedFile> {
         CapturedTarget::capture_container(
-            root, history, container, &self.database.file, self.view,
+            root, history, container, &self.database.file, self.view, None,
         )?.prepare(&self.database, admission)
     }
 
@@ -318,7 +336,7 @@ fn capture_entity(
         }
         root.private_child(current)?
     };
-    verify_entity_contents(&held, file, view, indexed, None)?;
+    verify_entity_contents(&held, file, view, indexed, None, None)?;
     Ok(held)
 }
 
@@ -330,7 +348,7 @@ pub(in crate::container_storage) fn verify_held_container(
     let record = view.state().file_containers.get(&file.parse::<storage_contract::FileId>()?)
         .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerShape)?;
     validate_owner(view, file, &record.history_tree_id.to_string())?;
-    verify_entity_contents(held, file, view, false, Some(&record.namespace.name))
+    verify_entity_contents(held, file, view, false, Some(&record.namespace.name), None)
 }
 
 fn verify_entity_contents(
@@ -339,6 +357,7 @@ fn verify_entity_contents(
     view: StateProjection<'_>,
     indexed: bool,
     name: Option<&name_policy::LookupName>,
+    birth: Option<&crate::container_storage::ordinary_preparation::UnbornBirthFile<'_>>,
 ) -> Result<()> {
     use super::super::{OWNER_MARKER, marker_matches_at, reject_unsupported_container, verify_body};
     reject_unsupported_container(&held, held.path())?;
@@ -352,6 +371,13 @@ fn verify_entity_contents(
     )? {
         if indexed {
             return Err(invalid("indexed file container lost its owner marker"));
+        }
+        if let Some(birth) = birth {
+            birth.require(view, file.parse()?, held)?;
+            if held.entries(&versions)?.next().transpose()?.is_some() {
+                return Err(crate::Error::FileDraft(crate::DraftError::WorkingFileGraph));
+            }
+            return Ok(());
         }
         // The first payload is installed before the publication decision; its
         // owner marker is only published with names after Finalize. An unmarked

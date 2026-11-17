@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use storage_contract::file_draft::{DraftCommand, DraftLocation};
 use storage_server::{ChangeFileWorking, ServerConfig, UploadSource};
 
-struct Management {
+pub(super) struct Management {
     runtime: tokio::runtime::Runtime,
     root: tempfile::TempDir,
     app: Router,
@@ -16,7 +16,7 @@ struct Management {
 }
 
 impl Management {
-    fn open(
+    pub(super) fn open(
         root: tempfile::TempDir, engine: Engine, credentials: &TestCredentials,
     ) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -39,7 +39,7 @@ impl Management {
         result
     }
 
-    fn json(&self, method: &str, route: &str, body: Option<Value>) -> Value {
+    pub(super) fn json(&self, method: &str, route: &str, body: Option<Value>) -> Value {
         self.runtime.block_on(async {
             let mut request = HttpRequest::builder().method(method).uri(route);
             if !self.token.is_empty() {
@@ -62,7 +62,7 @@ impl Management {
         })
     }
 
-    fn cold_open(self) -> (tempfile::TempDir, Engine) {
+    pub(super) fn cold_open(self) -> (tempfile::TempDir, Engine) {
         let Self { runtime, root, app, token: _ } = self;
         drop(app);
         // Match the actual embedded HTTP shutdown contract. Retry only its
@@ -273,10 +273,10 @@ fn public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_c
     }).unwrap()).unwrap();
     assert!(!listing.more);
     assert_eq!(listing.entries.len(), 1);
-    assert_eq!(listing.entries[0].entry.size, final_bytes.len() as u64);
-    assert_eq!(listing.entries[0].entry.entry_id, entry.entry_id);
-    assert_eq!(listing.entries[0].entry.file_id, entry.file_id);
-    assert_eq!(listing.entries[0].entry.version_id, entry.version_id);
+    assert_eq!(listing.entries[0].published().unwrap().size, final_bytes.len() as u64);
+    assert_eq!(listing.entries[0].published().unwrap().entry_id, entry.entry_id);
+    assert_eq!(listing.entries[0].published().unwrap().file_id, entry.file_id);
+    assert_eq!(listing.entries[0].published().unwrap().version_id, entry.version_id);
     close(&client, directory.handle);
     drop(directory_fd);
     require_history(&fixture, &repository, &entry, &head);

@@ -386,6 +386,7 @@ fn open_reply_owns_its_descriptor_through_delivery_size_rejection_and_send_failu
         peer.set_read_timeout(Some(std::time::Duration::from_secs(2)))
             .unwrap();
         let metadata = OpenResult {
+            data_io: smb_protocol::protocol::OpenIo::Directory,
             entry_id: "directory".into(),
             kind: storage_contract::NamespaceEntryKind::Directory,
             path: if oversized {

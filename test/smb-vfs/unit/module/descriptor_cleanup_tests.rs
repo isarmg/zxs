@@ -70,6 +70,7 @@ fn close_retains_authentication_sources_and_detach_failure_without_saving() {
                 .unwrap();
             let opened = Open {
                 info: Arc::new(OpenResult {
+                    data_io: smb_protocol::protocol::OpenIo::Descriptor,
                     entry_id: "entry".into(),
                     kind: storage_contract::NamespaceEntryKind::File,
                     path: "file".into(),

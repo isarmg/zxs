@@ -20,6 +20,12 @@ pub(crate) use backup::{
 };
 mod areas;
 mod draft;
+mod birth;
+pub(in crate::container_storage) use birth::UnbornBirthFile;
+mod working;
+pub(crate) use working::{
+    HeldUnbornReader, PreparedUnbornFull, PreparedUnbornSave, ReadWorkingDigest, UnbornWriteSession,
+};
 mod directories;
 mod rename;
 use directories::HeldDirectories;
@@ -35,6 +41,8 @@ pub(crate) struct ObservedContainerReplica {
     held: Arc<DiskRoot>,
     entity: ContainerEntity,
     draft: Option<draft::HeldDraft>,
+    unborn: Option<Arc<working::HeldUnbornMaterial>>,
+    first: Option<Arc<crate::engine::fresh_layout::containers::VerifiedUnbornFirst>>,
     rename: Option<rename::Rename>,
     // Initial publication and actual recovery may observe the same inode at
     // either end of the one decided rename. A published-only reader cannot.
@@ -44,6 +52,19 @@ pub(crate) struct ObservedContainerReplica {
     _reservation: Arc<crate::engine::PayloadProofReservation>,
 }
 impl ObservedContainerReplica {
+    pub(crate) fn open_working_draft(self: &Arc<Self>) -> Result<ReadFile> {
+        self.verify()?;
+        self.draft.as_ref().ok_or(Failure::ContainerScope)?.open(self)
+    }
+
+    /// Opening authority remains the actual observed source. A manifest or a
+    /// caller-supplied FileId cannot construct a reader on another container.
+    pub(crate) fn open_unborn_working(
+        self: &Arc<Self>, maximum: u64,
+    ) -> Result<HeldUnbornReader> {
+        HeldUnbornReader::capture(Arc::clone(self), maximum)
+    }
+
     pub(crate) fn observe(
         source: crate::engine::fresh_layout::containers::PublishedReplicaSource<'_>,
     ) -> Result<Self> {
@@ -104,10 +125,16 @@ impl ObservedContainerReplica {
         let mut result = Self {
             file, _reservation: reservation,
             disk: Arc::clone(disk), record: record.clone(), observed_name, parent,
-            held: Arc::new(held), entity: replica.entity, draft: None, rename, installed,
+            held: Arc::new(held), entity: replica.entity,
+            draft: None, unborn: None, first: None, rename, installed,
         };
         if let Some((_, payload)) = record.working.draft() {
             result.draft = Some(draft::HeldDraft::capture(&result, *payload)?);
+        }
+        if record.working.unborn().is_some() {
+            result.unborn = Some(Arc::new(working::HeldUnbornMaterial::capture(
+                &result, config.max_file_bytes,
+            )?));
         }
         result.verify()?;
         Ok(result)
@@ -270,7 +297,16 @@ impl ObservedContainerReplica {
             (Some(draft), Some(_)) => draft.validate(self),
             (None, None) => Ok(()),
             (Some(_), None) | (None, Some(_)) => Err(Failure::ContainerScope.into()),
+        }?;
+        match (&self.unborn, self.record.working.unborn()) {
+            (Some(material), Some(_)) => material.validate(self),
+            (None, None) => Ok(()),
+            (Some(_), None) | (None, Some(_)) => Err(Failure::ContainerScope.into()),
+        }?;
+        if let Some(first) = &self.first {
+            first.require_record(self.file, &self.record)?;
         }
+        Ok(())
     }
 
     /// Only PreparedNames consumes this after the real Accept/Finalize gate.
@@ -318,6 +354,7 @@ pub(crate) struct PreparedContainerEntities {
     directories: HeldDirectories,
     config: ValidatedConfig,
     resources: Arc<DiskResources>,
+    birth: Option<Arc<crate::engine::fresh_layout::containers::VerifiedUnbornBirth>>,
     _reservation: Arc<crate::engine::PayloadProofReservation>,
 }
 /// Best-effort local-proof discovery is not a complete installation set. This
@@ -466,14 +503,18 @@ impl PreparedContainerEntities {
                 file: *file, _reservation: Arc::clone(&reservation),
                 disk: Arc::clone(handle), record: record.clone(),
                     observed_name: record.namespace.name.clone(), parent,
-                held: Arc::new(directory), entity, draft: None, rename, installed,
+                held: Arc::new(directory), entity, draft: None, unborn: None,
+                first: None, rename, installed,
             });
         }
         draft::populate(&mut held, input, context.config.max_file_bytes)?;
+        working::populate(&mut held, context.config.max_file_bytes)?;
+        retain_first_source(&mut held, plan.first())?;
         let result = Self {
             held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
             prefixes, directories, config: context.config.clone(),
-            resources: Arc::clone(context.disk_resources), _reservation: reservation,
+            resources: Arc::clone(context.disk_resources),
+            birth: plan.birth().map(Arc::clone), _reservation: reservation,
         };
         result.verify()?;
         Ok(result)
@@ -554,9 +595,10 @@ impl PreparedContainerEntities {
         {
             return Err(Failure::ContainerScope.into());
         }
-        crate::engine::fresh_layout::containers::verify_transition(
-            config, previous, next, candidate,
-        )?;
+        let transition =
+            crate::engine::fresh_layout::containers::verify_transition_with_working_source(
+                config, resources, previous, next, candidate, locations,
+            )?;
         let targets = match availability {
             CandidateAvailability::Required => None,
             CandidateAvailability::Available => {
@@ -663,16 +705,18 @@ impl PreparedContainerEntities {
                     disk: Arc::clone(handle), record: record.clone(),
                     observed_name: record.namespace.name.clone(), parent,
                     held: Arc::new(directory), entity: replica.entity,
-                    draft: None, rename, installed,
+                    draft: None, unborn: None, first: None, rename, installed,
                 });
             }
         }
         draft::populate(&mut held, None, config.max_file_bytes)?;
+        working::populate(&mut held, config.max_file_bytes)?;
+        retain_first_source(&mut held, transition.first())?;
         let result = Self {
             held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
             prefixes, directories, config: config.clone(),
             resources: Arc::clone(resources),
-            _reservation: reservation,
+            birth: transition.birth().map(Arc::clone), _reservation: reservation,
         };
         result.verify()?;
         Ok(result)
@@ -742,15 +786,16 @@ impl PreparedContainerEntities {
                     disk: Arc::clone(handle), record: record.clone(),
                     observed_name: record.namespace.name.clone(), parent,
                     held: Arc::new(directory), entity: replica.entity,
-                    draft: None, rename: None, installed,
+                    draft: None, unborn: None, first: None, rename: None, installed,
                 });
             }
         }
         draft::populate(&mut held, None, config.max_file_bytes)?;
+        working::populate(&mut held, config.max_file_bytes)?;
         let result = Self {
             held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
             prefixes, directories, config: config.clone(), resources: Arc::clone(resources),
-            _reservation: reservation,
+            birth: None, _reservation: reservation,
         };
         result.verify()?;
         Ok(result)
@@ -799,6 +844,17 @@ impl PreparedContainerEntities {
         &self, disk: DiskId, source: DiskId,
     ) -> Result<storage_contract::file_container::ContainerPrefix> {
         prefix::record(&self.prefixes, disk, source)
+    }
+
+    pub(in crate::container_storage) fn birth_file(
+        &self, file: FileId, disk: DiskId,
+    ) -> Result<Option<UnbornBirthFile<'_>>> {
+        let Some(proof) = self.birth.as_ref().filter(|proof| proof.file() == file) else {
+            return Ok(None);
+        };
+        if disk != proof.owner() { return Err(Failure::ContainerScope.into()); }
+        let scope = self.scope(file, disk)?;
+        Ok(Some(UnbornBirthFile::observe(proof, scope)?))
     }
 
     pub(crate) fn scope(&self, file: FileId, disk: DiskId) -> Result<&ObservedContainerReplica> {
@@ -884,7 +940,7 @@ impl PreparedContainerEntities {
             return Err(Failure::ContainerScope.into());
         }
         self.verify()?;
-        container.draft.as_ref().ok_or(Failure::ContainerScope)?.open(container)
+        container.open_working_draft()
     }
 
     pub(crate) fn body_path(
@@ -1090,5 +1146,21 @@ pub(crate) fn verify_namespace_directory(
     directories::bind(config, resources, state, state, entry, disk,
         Observation::Published, &reservation, &mut HeldDirectories::new(),
         &mut HeldPrefixes::new())?.root()?;
+    Ok(())
+}
+
+/// Retain the actual predecessor material on the same one-owner occurrence.
+/// Every existing payload/name verification therefore keeps it alive through
+/// the native decision. Available-only discovery cannot manufacture a full set.
+fn retain_first_source(
+    held: &mut BTreeMap<(FileId, DiskId), ObservedContainerReplica>,
+    first: Option<&Arc<crate::engine::fresh_layout::containers::VerifiedUnbornFirst>>,
+) -> Result<()> {
+    if let Some(first) = first {
+        let scope = held.get_mut(&(first.file(), first.owner()))
+            .ok_or(Failure::ContainerScope)?;
+        first.require_record(scope.file, &scope.record)?;
+        scope.first = Some(Arc::clone(first));
+    }
     Ok(())
 }

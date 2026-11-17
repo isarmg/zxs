@@ -3,6 +3,14 @@ use crate::*;
 pub(crate) fn routes() -> Router<AppState> {
     let routes = Router::new()
         .route(
+            "/api/file-manager/files/{file}/unborn-working",
+            get(http_unborn::status),
+        )
+        .route(
+            "/api/file-manager/files/{file}/first-commit",
+            post(http_unborn::commit),
+        )
+        .route(
             "/api/file-manager/files/{file}/working",
             get(http_file_draft::status).post(http_file_draft::change),
         )

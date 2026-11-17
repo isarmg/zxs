@@ -61,6 +61,7 @@ fn sync_and_async_immutable_reads_use_verified_rpc_bytes_with_a_directory_placeh
         let mut fsp: sdk::files_struct = Default::default();
         let opened = Open {
             info: Arc::new(OpenResult {
+                data_io: smb_protocol::protocol::OpenIo::VerifiedRanges,
                 entry_id: "file".into(),
                 kind: NamespaceEntryKind::File,
                 path: "file".into(),
@@ -261,6 +262,7 @@ fn removed_open_descriptor_is_closed_on_poisoned_lock_and_remote_save_failure() 
         }
         let opened = Open {
             info: Arc::new(OpenResult {
+                data_io: smb_protocol::protocol::OpenIo::Descriptor,
                 entry_id: "entry".into(),
                 kind: storage_contract::NamespaceEntryKind::File,
                 path: "file.txt".into(),
@@ -418,6 +420,7 @@ fn readdir_keeps_one_page_and_rewind_requests_a_fresh_snapshot() {
     let descriptor = std::fs::File::open("/dev/null").unwrap().into();
     let opened = Open {
         info: Arc::new(OpenResult {
+            data_io: smb_protocol::protocol::OpenIo::Directory,
             entry_id: "directory".into(),
             kind: storage_contract::NamespaceEntryKind::Directory,
             path: "".into(),
@@ -594,6 +597,7 @@ fn directory_cleanup_preserves_admission_failure_and_is_terminal_after_errors() 
         let key = &mut fsp as *mut sdk::files_struct as usize;
         let opened = Open {
             info: Arc::new(OpenResult {
+                data_io: smb_protocol::protocol::OpenIo::Directory,
                 entry_id: "directory".into(),
                 kind: storage_contract::NamespaceEntryKind::Directory,
                 path: "".into(),
@@ -720,6 +724,7 @@ fn revoked_close_detaches_without_publishing_and_releases_descriptor() {
         .unwrap();
     let opened = Open {
         info: Arc::new(OpenResult {
+            data_io: smb_protocol::protocol::OpenIo::Descriptor,
             entry_id: "entry".into(),
             kind: storage_contract::NamespaceEntryKind::File,
             path: "file".into(),
@@ -765,6 +770,7 @@ fn removed_open_owns_descriptor_through_success_and_unwind() {
             .unwrap();
         let opened = Open {
             info: Arc::new(OpenResult {
+                data_io: smb_protocol::protocol::OpenIo::Descriptor,
                 entry_id: "entry".into(),
                 kind: NamespaceEntryKind::File,
                 path: "file".into(),
@@ -843,6 +849,7 @@ fn context_cleanup_closes_owned_records_without_publishing_and_snapshot_outlives
             key,
             Open {
                 info: Arc::new(OpenResult {
+                    data_io: smb_protocol::protocol::OpenIo::Descriptor,
                     entry_id: format!("entry-{key}"),
                     kind: NamespaceEntryKind::File,
                     path: format!("file-{key}"),

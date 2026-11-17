@@ -24,22 +24,18 @@ pub(super) struct Snapshot {
 pub(super) enum DescriptorRole {
     PrivateWork,
     VerifiedContent,
+    NativeWorking,
     Directory,
 }
 
 impl DescriptorRole {
     pub(super) fn for_open(info: &OpenResult, writable: bool) -> Self {
-        match info.kind {
-            storage_contract::NamespaceEntryKind::Directory => Self::Directory,
-            // Manual opens own a real private FD without a WorkspaceId. The
-            // workspace case also preserves O_RDONLY | O_CREAT private files;
-            // neither classification grants data-write permission.
-            storage_contract::NamespaceEntryKind::File
-                if writable || info.workspace_id.is_some() =>
-            {
-                Self::PrivateWork
-            }
-            storage_contract::NamespaceEntryKind::File => Self::VerifiedContent,
+        let _ = writable; // Permission is independent of the negotiated I/O source.
+        match info.data_io {
+            smb_protocol::protocol::OpenIo::Directory => Self::Directory,
+            smb_protocol::protocol::OpenIo::Descriptor => Self::PrivateWork,
+            smb_protocol::protocol::OpenIo::VerifiedRanges => Self::VerifiedContent,
+            smb_protocol::protocol::OpenIo::NativeWorking => Self::NativeWorking,
         }
     }
 }

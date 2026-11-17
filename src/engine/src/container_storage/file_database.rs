@@ -60,8 +60,22 @@ fn validated_records(
 }
 
 fn validate_owner(view: StateProjection<'_>, file: &str, history: &str) -> Result<()> {
-    storage_contract::validate_id(file, "file")?;
-    storage_contract::validate_id(history, "history")?;
+    let file_id = file.parse::<storage_contract::FileId>()?;
+    let history_id = history.parse::<storage_contract::HistoryTreeId>()?;
+    if let Some(record) = view.state().file_containers.get(&file_id)
+        && record.working.unborn().is_some()
+    {
+        let namespace = crate::business::namespace::working::WorkingNamespace::from_main_state(
+            view.state(), record.namespace.repository, usize::MAX,
+        )?;
+        if namespace.unborn_file(file_id)? != record
+            || record.history_tree_id != history_id
+            || view.owners().file_histories(file).next().is_some()
+        {
+            return Err(crate::Error::FileDraft(crate::DraftError::WorkingFileGraph));
+        }
+        return Ok(());
+    }
     if !view
         .owners()
         .file_histories(file)

@@ -30,6 +30,10 @@ fn registering_a_disk_keeps_an_exact_backup_and_atomically_replaces_the_draft() 
     run(registration(root.path(), path.clone())).unwrap();
     let saved: Config = storage_engine::decode_strict(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved.disks.len(), 4);
+    assert_eq!(
+        json_codec::to_value(&saved).unwrap()["pool_semantic_format"],
+        "manual-directory-v1"
+    );
     assert_eq!(saved.disks.last().unwrap().slot_id, "D01");
     assert_eq!(saved.disks.last().unwrap().name.as_str(), "Additional primary");
     assert_eq!(
@@ -37,6 +41,46 @@ fn registering_a_disk_keeps_an_exact_backup_and_atomically_replaces_the_draft() 
         original
     );
 }
+#[test]
+fn unsupported_pool_format_draft_is_rejected_without_backup_or_device_access() {
+    use std::os::unix::fs::MetadataExt;
+
+    for marker in [
+        None,
+        Some(json_codec::Value::Null),
+        Some(json!("manual-directory-v2")),
+        Some(json!({"manual-directory-v1": null})),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let draft = Config::development(named_roots(root.path())).unwrap();
+        let mut value = json_codec::to_value(&draft).unwrap();
+        let fields = value.as_object_mut().unwrap();
+        match marker {
+            None => {
+                fields.remove("pool_semantic_format");
+            }
+            Some(marker) => {
+                fields.insert("pool_semantic_format".into(), marker);
+            }
+        }
+        let path = root.path().join("config.json");
+        let original = json_codec::to_vec(&value).unwrap();
+        private_io::write_new(&path, &original).unwrap();
+        let before = std::fs::symlink_metadata(&path).unwrap();
+        assert!(run(registration(root.path(), path.clone())).is_err());
+        let after = std::fs::symlink_metadata(&path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(
+            (after.dev(), after.ino(), after.mode(), after.nlink(), after.len()),
+            (before.dev(), before.ino(), before.mode(), before.nlink(), before.len())
+        );
+        assert!(!registration_backup(&path).unwrap().exists());
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+        assert!(draft.disks.iter().all(|disk| !disk.root.exists()));
+        assert!(!root.path().join("fourth").exists());
+    }
+}
+
 #[test]
 fn different_configuration_extensions_keep_independent_registration_backups() {
     let root = tempfile::tempdir().unwrap();
@@ -163,6 +207,10 @@ fn templates_accept_one_or_many_disks_without_initializing_them() {
         let config: Config =
             storage_engine::decode_strict(&std::fs::read(output).unwrap()).unwrap();
         assert_eq!(config.disks.len(), count);
+        assert_eq!(
+            json_codec::to_value(&config).unwrap()["pool_semantic_format"],
+            "manual-directory-v1"
+        );
         let config = ValidatedConfig::try_from(config).unwrap();
         assert!(config.disks.iter().all(|disk| !disk.root.exists()));
     }

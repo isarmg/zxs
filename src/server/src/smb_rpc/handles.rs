@@ -71,6 +71,13 @@ impl Session {
         if self.handles.len() >= MAX_HANDLES {
             return Err(ApiError::limit("too many SMB handles"));
         }
+        if let Some(path) = &lookup
+            && let Some(opened) = self.open_native(
+                path, writable, create, truncate, exclusive, write_through,
+            )?
+        {
+            return Ok(opened);
+        }
         let existing = lookup
             .as_ref()
             .map(|path| self.find(path))
@@ -154,6 +161,7 @@ impl Session {
                 }),
             );
             let result = OpenResult {
+                data_io: smb_protocol::protocol::OpenIo::Directory,
                 entry_id,
                 kind: storage_contract::NamespaceEntryKind::Directory,
                 path: canonical_path,
@@ -361,8 +369,12 @@ impl Session {
             );
             (Handle::Read(content, version_id.to_owned()), fd, size, None)
         };
+        let descriptor_work = matches!(&handle, Handle::Write(..));
         self.handles.insert(handle_id, handle);
         let result = OpenResult {
+            data_io: if descriptor_work {
+                smb_protocol::protocol::OpenIo::Descriptor
+            } else { smb_protocol::protocol::OpenIo::VerifiedRanges },
             entry_id,
             kind: storage_contract::NamespaceEntryKind::File,
             path: path.into_string(),
@@ -391,6 +403,11 @@ impl Session {
             return Err(ApiError::limit("SMB read exceeds bounded reply size"));
         }
         let opened = self.handles.get_mut(&handle).ok_or_else(missing_handle)?;
+        if let Handle::Native(file) = opened {
+            return self.shared.backend.smb_native_read(
+                &self.identity, &file.file, offset, length,
+            );
+        }
         opened.authorize_read(&self.shared, &self.identity, &self.branch)?;
         let content = match opened {
             Handle::Read(content, _) | Handle::ReadDraft(content, _) => content,
@@ -401,7 +418,7 @@ impl Session {
                     "directory data is not readable",
                 ));
             }
-            Handle::Write(_, _) | Handle::ManualWrite(_, _) => {
+            Handle::Native(_) | Handle::Write(_, _) | Handle::ManualWrite(_, _) => {
                 return Err(ApiError::unsupported());
             }
         };
@@ -472,6 +489,7 @@ impl Handle {
         branch: &str,
     ) -> Result<(), ApiError> {
         match self {
+            Self::Native(file) => shared.backend.smb_native_size(identity, &file.file).map(|_| ()),
             Self::Read(_, version) => shared.backend.authorize_version(identity, version),
             Self::ReadDraft(_, file) => {
                 shared.backend.authorize_smb_draft(identity, file, crate::SmbDraftAccess::Read)

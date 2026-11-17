@@ -535,6 +535,7 @@ fn original_journals(
             || seal.disk_id != disk.disk_id
             || seal.slot_id != disk.slot_id
             || seal.pool_id != manifest.config.pool_id
+            || seal.pool_semantic_format != manifest.config.pool_semantic_format
             || seal.binding_generation != disk.binding_generation
             || seal.format != DiskSealFormat::ManagedDirectory
             || seal.simulation != (manifest.config.mode == Mode::Development)

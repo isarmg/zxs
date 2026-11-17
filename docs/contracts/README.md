@@ -242,3 +242,26 @@ FILE 父引用、Snapshot 及 SYSTEM family 41 必须出自同一 Candidate 决�
 父类型混淆、缺来源链、错误登记代数编码和伪路径字段；实际 inode、来源、前后 State 关系与
 预算仍由核心生产链核验。保留所有原 canonical 字节/摘要向量，不重算旧材料来冒充新格式。
 本批有意不读缺字段的旧快照，也不写入旧池，不提供迁移或双路径回退。
+
+
+## 单一新池语义准入（私有格式候选）
+
+`PoolConfiguration` 对应真正 Config JSON，`PoolRootBinding` 描述同锁反馈的五区实体，
+`PoolDiskSeal` 描述 Initial／已准入 generation 两种当前 seal 的规范输出形状。
+Config、固定 Genesis 中的 Config 和实际 held disk seal 都要求唯一字符串
+`pool_semantic_format = "manual-directory-v1"`。缺失、null、未知值和对象别名拒绝，
+不补值、不迁移、不让当前名字或路径代替原登记。此标识不由 HTTP/CLI 客户端选择；
+真实初始化构造器固定它。已有明确模式也不因读取而改变。
+
+这些定义不改变 `config-constraints.schema.json` 的文档 TOML 投影，也不声明 schema
+能证明根归属：初始化请求的空 `storage_roots` 只有实际排他生产、固定 Genesis 与
+held 五区完整读回才能变为持久配置。已有四项资源限额的合法可缺省行为保持，不能用来
+给必需语义标识或根反馈补默认值。Config 仍须原 ValidatedConfig、拓扑、额度、固定
+注册和当前 I/O 门；seal 仍须真实 held FD 与同 Config 验证，非 JSON 成功即准入。
+
+新增向量为合成字段样例。contract-check 对 Config/RootBinding 正例另走真实共享 Rust
+反序列化；DiskSeal 的 schema 形状不能替代 Engine 私有 codec/held 准入测试。Server
+原双根首启与未完成 Genesis 恢复夹具覆盖缺/未知标识拒绝、媒体零进展和恢复原字节后的
+真实完成；helper 原 Template/RegisterDisk 夹具覆盖显式新标识、不初始化设备及拒绝
+不受支持草案时不备份或替换。所有新增验收尚未执行，不据此声称整格式可上线。
+原 canonical、binary、strict-json 固定向量逐项原样保留，不重写旧池或旧成功收据。

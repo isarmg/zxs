@@ -494,6 +494,35 @@ impl Client {
         }
         self.exchange(request, |value: Value, _| Ok(value))
     }
+    /// The connection serializes frames; no write frame is replayed after a
+    /// lost response. Only Flush/Close acknowledges a native save publication.
+    pub fn write_working(
+        &self, handle: u64, position: crate::protocol::WorkingPosition, bytes: &[u8],
+    ) -> io::Result<usize> {
+        if bytes.len() > MAX_READ_BYTES {
+            return Err(io::Error::from_raw_os_error(libc::EFBIG));
+        }
+        self.exchange(
+            Request::WorkingWrite { handle, position, bytes: bytes.to_vec() },
+            |result: crate::protocol::WorkingWriteResult, _| {
+                if result.written as usize != bytes.len() {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,
+                        "native write reply differs from the complete bounded frame"));
+                }
+                Ok(result.written as usize)
+            },
+        )
+    }
+
+    pub fn resize_working(&self, handle: u64, length: u64) -> io::Result<()> {
+        self.call(Request::WorkingResize { handle, length }).map(|_| ())
+    }
+
+    pub fn stat_working(&self, handle: u64) -> io::Result<crate::protocol::WorkingStat> {
+        self.exchange(Request::WorkingStat { handle },
+            |result: crate::protocol::WorkingStat, _| Ok(result))
+    }
+
     /// Read path metadata without an intermediate JSON value tree.
     pub fn stat(&self, path: String) -> io::Result<StatResult> {
         self.exchange(Request::Stat { path }, |result: StatResult, _| Ok(result))
@@ -609,6 +638,19 @@ impl Client {
             ));
         }
         self.exchange(request, |result: OpenResult, descriptor| {
+            let file = result.kind == storage_contract::NamespaceEntryKind::File;
+            let valid = match result.data_io {
+                crate::protocol::OpenIo::Directory => !file,
+                crate::protocol::OpenIo::Descriptor
+                | crate::protocol::OpenIo::VerifiedRanges => file,
+                crate::protocol::OpenIo::NativeWorking => file && result.version_id.is_none()
+                    && result.workspace_id.is_none()
+                    && result.mtime == crate::protocol::FileMtime::Unpublished {},
+            };
+            if !valid {
+                return Err(io::Error::new(io::ErrorKind::InvalidData,
+                    "Open mode contradicts the admitted handle metadata"));
+            }
             Ok((
                 result,
                 descriptor.expect("invariant: successful open response has a descriptor"),

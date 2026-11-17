@@ -1,0 +1,330 @@
+//! First explicit historical node. It uses the existing Version constructor
+//! and FILE branch initializer, never an empty VersionId or synthetic base.
+use crate::business::file_draft::allocations::{Allocation, Replay};
+use crate::business::file_draft::{DraftError as Failure, PublishedContent, invalid};
+use crate::business::file_draft::unborn::selected;
+use crate::business::namespace::working::WorkingNamespace;
+use crate::business::workspace::version_build::{self, Content, Effects, Input};
+use crate::container_storage::{PreparedUnbornFull, ReadWorkingDigest};
+use crate::{Commit, Entry, Error, FileContext, NamespaceEntryKind, Result, State, ValidatedConfig};
+use std::borrow::Cow;
+use std::sync::Arc;
+use storage_contract::file_draft::{DraftLocation, WorkingRevision};
+use storage_contract::{Generation, OperationId, Principal, Sequence, VersionId};
+
+pub(crate) struct FirstCommit<'a> {
+    pub(crate) target: &'a DraftLocation,
+    pub(crate) expected: WorkingRevision,
+    pub(crate) message: &'a str,
+    pub(crate) principal: &'a Principal,
+    pub(crate) content: &'a PublishedContent,
+    pub(crate) read: &'a ReadWorkingDigest<'a>,
+}
+
+struct VersionFacts<'a> {
+    previous: &'a State,
+    content: &'a PublishedContent,
+    disk: &'a crate::DiskConfig,
+    consumed: bool,
+}
+
+impl Effects for VersionFacts<'_> {
+    fn version_id(&mut self) -> Result<VersionId> {
+        if self.consumed {
+            return Err(invalid());
+        }
+        self.consumed = true;
+        Ok(self.content.version.version_id.parse()?)
+    }
+
+    fn created_at(&mut self) -> Result<String> {
+        Ok(self.content.version.created_at.clone())
+    }
+
+    fn manifest_hash(&self) -> Result<String> {
+        Ok(self.content.version.checksum_manifest_hash.clone())
+    }
+
+    fn route(&self, primary: &str, copies: u32) -> Result<Vec<String>> {
+        if primary != self.disk.slot_id || copies != 1 {
+            return Err(invalid());
+        }
+        Ok(vec![self.disk.slot_id.clone()])
+    }
+
+    fn main_entries(&self, branch: &str) -> Result<Cow<'_, [Entry]>> {
+        let branch = self.previous.branches.get(branch).ok_or_else(invalid)?;
+        let current = self.previous.commits.get(&branch.head_commit_id).ok_or_else(invalid)?;
+        let mut entries = current.entries.clone();
+        let names = crate::business::namespace::container_name::current_names(
+            self.previous, &entries,
+        )?;
+        crate::business::namespace::container_name::apply_file_names(&mut entries, &names)?;
+        Ok(Cow::Owned(entries))
+    }
+
+    fn binding_generation(&self, slot: &str) -> Result<u64> {
+        if slot != self.disk.slot_id {
+            return Err(invalid());
+        }
+        Ok(self.disk.binding_generation)
+    }
+
+    fn current(&self) -> Option<&crate::engine::CurrentNamespaces> {
+        None
+    }
+}
+
+fn publish_first_namespace(
+    namespace: &WorkingNamespace<'_>,
+    next: &mut State,
+    operation: OperationId,
+    target: &DraftLocation,
+    version: &crate::FileVersion,
+    message: &str,
+    principal: &Principal,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<()> {
+    let branch_id = namespace.branch().to_string();
+    let previous_branch = namespace.state().branches.get(&branch_id).ok_or_else(invalid)?;
+    let previous = namespace.state().commits.get(&previous_branch.head_commit_id)
+        .ok_or_else(invalid)?;
+    let first = Entry {
+        entry_id: target.entry.to_string(),
+        path: target.path.clone(),
+        kind: NamespaceEntryKind::File,
+        file_id: target.file.to_string(),
+        version_id: version.version_id.clone(),
+        size: version.logical_size,
+    };
+    // Only this explicit file enters history. Other current Unborn owner rows
+    // remain current-only and cannot leak through a directory snapshot/export.
+    let mut entries = previous.entries.clone();
+    let names = crate::business::namespace::container_name::current_names(
+        namespace.state(), &entries,
+    )?;
+    crate::business::namespace::container_name::apply_file_names(&mut entries, &names)?;
+    entries.push(first.clone());
+    let count = entries.len();
+    crate::business::namespace::validate_entries(&mut entries, count)?;
+    let id = ids("commit")?;
+    let main = Commit {
+        namespace_deletions: None,
+        commit_id: id.clone(),
+        history_tree_id: namespace.history().to_string(),
+        kind: "content".into(),
+        parent_commit_ids: vec![previous.commit_id.clone()],
+        tree_id: ids("tree")?,
+        sequence: next.sequence,
+        operation_id: operation,
+        author: principal.as_str().into(),
+        message: message.into(),
+        entries,
+        pending_file_versions: previous.pending_file_versions.clone(),
+        provenance: None,
+    };
+    next.commits.insert(id.clone(), main.clone());
+    let branch = next.branches.get_mut(&branch_id).ok_or_else(invalid)?;
+    branch.head_commit_id = id;
+    branch.generation = Generation::new(branch.generation).next()
+        .map_err(|source| Error::FileDraft(Failure::PublicationGeneration(source)))?.get();
+    branch.file_node_id = None;
+    let file_branch = crate::business::file::ensure_shared_file_branch_with_ids(
+        next, &main, &first, ids,
+    )?;
+    next.file_contexts.insert(
+        crate::business::directory::context_key_from_key(
+            &target.repository.to_string(), target.path.key(),
+        ),
+        FileContext {
+            node_id: None,
+            selection_generation: 1,
+            branch_id: file_branch,
+            inherited_from: None,
+        },
+    );
+    next.file_locations.insert(target.file.to_string(), target.path.as_str().into());
+    next.file_names.insert(target.file.to_string(), target.path.file_name().into());
+    crate::business::directory::record_projected_directory_edits_with_ids(
+        next,
+        &target.repository.to_string(),
+        &[target.path.as_str().into()],
+        None,
+        None,
+        ids,
+    )?;
+    Ok(())
+}
+
+fn require_first_source(
+    config: &ValidatedConfig,
+    record: &storage_contract::file_container::FileContainerRecord,
+    target: &DraftLocation,
+    read: &ReadWorkingDigest<'_>,
+) -> Result<()> {
+    // Current and directory-wide publication need their own complete native
+    // transaction. This root-level first-file producer cannot mint either.
+    if config.generation().is_some() || target.path.parent().is_some() {
+        return Err(Error::FileDraft(Failure::UnsupportedScope));
+    }
+    let working = record.working.unborn().ok_or_else(invalid)?;
+    read.require_source()?;
+    let source = read.source();
+    source.require_record(target.file, record)?;
+    let manifest = match working.body() {
+        storage_contract::file_draft::UnbornBody::Empty {} => None,
+        storage_contract::file_draft::UnbornBody::Saved { manifest } => Some(manifest),
+    };
+    if source.file() != target.file
+        || source.commitment() != manifest.map(|manifest| manifest.commitment())
+        || source.generation() != manifest.map(|manifest| manifest.generation())
+        || source.logical_size() != working.logical_size()
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+pub(super) fn project(
+    previous: &State,
+    config: &ValidatedConfig,
+    namespace: &WorkingNamespace<'_>,
+    next: &mut State,
+    operation: OperationId,
+    commit: &FirstCommit<'_>,
+) -> Result<()> {
+    let record = selected(namespace, commit.target, commit.expected)?;
+    require_first_source(config, record, commit.target, commit.read)?;
+    let working = record.working.unborn().ok_or_else(invalid)?;
+    let source = commit.read.source();
+    if commit.content.version.content_hash != commit.read.content_hash()
+        || commit.content.version.logical_size != source.logical_size()
+        || previous.versions.contains_key(&commit.content.version.version_id)
+        || previous.placements.contains_key(&commit.content.version.version_id)
+        || commit.content.allocations.len()
+            > crate::business::file_draft::trace_limit(previous, commit.target)?
+    {
+        return Err(invalid());
+    }
+    let owner = record.owner_disk.to_string();
+    let disk = config.disks.iter().find(|disk| disk.disk_id == owner).ok_or_else(invalid)?;
+    if disk.level != 1 || disk.upstream_slot_id.is_some() {
+        return Err(Error::FileDraft(Failure::UnsupportedScope));
+    }
+    let mut facts = VersionFacts { previous, content: commit.content, disk, consumed: false };
+    let (version, placement) = version_build::construct(
+        next,
+        Input {
+            history: &record.history_tree_id.to_string(),
+            file: &commit.target.file.to_string(),
+            path: &commit.target.path,
+            primary: &disk.slot_id,
+            copies: 1,
+            sources: Vec::new(),
+            checkpoint: false,
+        },
+        Content {
+            size: source.logical_size(),
+            hash: commit.read.content_hash(),
+            chunk_bytes: commit.content.version.checksum_chunk_bytes,
+        },
+        &mut facts,
+    )?;
+    if version != commit.content.version || placement != commit.content.placement {
+        return Err(invalid());
+    }
+    let mut replay = Replay::new(previous, &commit.content.allocations)?;
+    publish_first_namespace(
+        namespace, next, operation, commit.target, &commit.content.version,
+        commit.message, commit.principal, &mut |prefix| replay.next(prefix),
+    )?;
+    replay.finish()?;
+    next.file_containers.get_mut(&commit.target.file).ok_or_else(invalid)?.working =
+        working.after_first_commit()
+            .map_err(|source| Error::FileDraft(Failure::RevisionExhausted(source)))?;
+    commit.read.require_source()
+}
+
+/// Real Version construction from the private independently materialized FULL.
+/// The output is still a plan: it does not install a FILE, clear a saved State
+/// or issue a permanent operation receipt. Cold native publication remains a
+/// separate consumer of the exact full logical construction.
+pub(crate) fn build(
+    context: &crate::engine::PlanningContext<'_>,
+    target: &DraftLocation,
+    expected: WorkingRevision,
+    message: &str,
+    principal: &Principal,
+    operation: OperationId,
+    material: &Arc<PreparedUnbornFull>,
+) -> Result<(super::Projection, Vec<crate::engine::Prepared>, PublishedContent)> {
+    context.require_write()?;
+    material.require_context(context)?;
+    if context.current_namespaces.is_some() || context.state.operations.contains_key(&operation) {
+        return Err(invalid());
+    }
+    crate::directory_conversion::require_import_not_stopped(context.state, operation)?;
+    let namespace = WorkingNamespace::from_main_state(
+        context.state, target.repository, context.config.max_entries,
+    )?;
+    let record = selected(&namespace, target, expected)?;
+    let read = material.digest()?;
+    require_first_source(context.config, record, target, &read)?;
+    let (primary, copies) = context.new_file_placement_for_file(
+        &target.repository.to_string(), Some(&target.file.to_string()), target.path.as_str(),
+    )?;
+    let disk = context.disk(&primary)?;
+    if copies != 1 || disk.level != 1 || disk.upstream_slot_id.is_some()
+        || disk.disk_id.parse::<storage_contract::DiskId>()? != record.owner_disk
+    {
+        return Err(Error::FileDraft(Failure::UnsupportedScope));
+    }
+    let mut next = super::begin(context.state, Sequence::new(context.next_slot))?;
+    let source = crate::engine::ReadSource::working_full(Arc::clone(material));
+    let mut prepared = Vec::new();
+    let version = context.build_version(
+        &mut next, &mut prepared,
+        crate::business::VersionBuild {
+            history: &record.history_tree_id.to_string(), file_id: &target.file.to_string(),
+            path: &target.path, source: &source, primary: &primary, copies: 1,
+            source_ids: Vec::new(), checkpoint: false,
+        },
+    )?;
+    if version.logical_size != read.source().logical_size()
+        || version.content_hash != read.content_hash()
+    {
+        return Err(Error::FileDraft(Failure::Body));
+    }
+    let placement = next.placements.get(&version.version_id).cloned().ok_or_else(invalid)?;
+    let limit = crate::business::file_draft::trace_limit(context.state, target)?;
+    let mut allocations = Vec::new();
+    publish_first_namespace(
+        &namespace, &mut next, operation, target, &version, message, principal,
+        &mut |prefix| {
+            if allocations.len() == limit { return Err(Error::FileDraft(Failure::Size)); }
+            let allocation = Allocation::generate(prefix)?;
+            let text = allocation.text(prefix)?;
+            allocations.push(allocation);
+            Ok(text)
+        },
+    )?;
+    next.file_containers.get_mut(&target.file).ok_or_else(invalid)?.working =
+        record.working.unborn().ok_or_else(invalid)?.after_first_commit()
+            .map_err(|source| Error::FileDraft(Failure::RevisionExhausted(source)))?;
+    crate::container_storage::capture_changed_names(context.state, &mut next);
+    let content = PublishedContent { version, placement, allocations };
+    // The original constructor facts and allocator trace must reproduce the
+    // complete result through the one canonical Unborn transition kernel.
+    let projected = super::project(
+        context.state, context.config, operation, Sequence::new(context.next_slot),
+        super::Edit::FirstCommit(FirstCommit {
+            target, expected, message, principal, content: &content, read: &read,
+        }),
+        context.config.max_entries, context.config.max_file_bytes,
+    )?;
+    if projected.state() != &next { return Err(invalid()); }
+    crate::file_deletion::freeze::verify(context.state, &next)?;
+    crate::business::file_tags::preserve_existing(context.state, &next)?;
+    material.require_context(context)?;
+    Ok((projected, prepared, content))
+}
