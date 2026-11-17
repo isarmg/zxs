@@ -6708,7 +6708,7 @@
       ]
     },
     "automatic-management-observation": {
-      "reason": "Admit the original bounded directory/UTC observation and actual rolling controller, enforce private continuation, real Unborn-only action and stale/partial results; these sources do not prove Chrome or the immutable node writer.",
+      "reason": "Exercise real ordinary FILE native publication and original-receipt reads, private HTTP directory/UTC observations and source-bound browser counts, plus actual rolling warnings. This does not validate external Chrome/Samba, multi-owner, Worktree or maximum-scale latency.",
       "python_tests": [
         "test_current_branch_slices_targeted_ci"
       ],
@@ -6764,9 +6764,25 @@
           ],
           "isolate": true,
           "exact": [
-            "unborn_first::real_unborn_mode_route_rejects_other_commands_and_replays_only_its_original_after_birth"
+            "unborn_first::real_unborn_mode_route_rejects_other_commands_and_replays_only_its_original_after_birth",
+            "unborn_first::genuine_automatic_publication_is_read_only_in_its_original_private_window_after_reopen"
           ],
-          "max_tests": 1,
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "snapshot_worktree::drafts::native_tests::automatic_nodes::native_save_preparation_does_not_hold_manual_switch_and_a_stale_worker_has_no_node",
+            "snapshot_worktree::drafts::native_tests::automatic_nodes::actual_automatic_nodes_bind_original_save_cause_stable_parent_and_half_open_time_after_cold_open"
+          ],
+          "max_tests": 2,
+          "isolate": true,
           "timeout_seconds": 900
         }
       ]
@@ -20539,6 +20555,48 @@
       "path": "test/ci/test_release_acceptance.py",
       "groups": [
         "real-browser-first-commit-delivery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/observation.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/automatic.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/automatic/fence.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/automatic/frozen.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/automatic_full.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/server/src/management/automatic_files.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/draft_gateway/automatic_nodes.rs",
+      "groups": [
+        "automatic-management-observation"
       ]
     }
   ],

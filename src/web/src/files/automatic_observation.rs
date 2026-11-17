@@ -58,6 +58,17 @@ impl Target {
         {
             return None;
         }
+        // A named repository listing has a display prefix outside its own
+        // repository-relative path. It is not the ordinary FILE holder.
+        if files.directory.is_empty() != files.repository_path.is_empty()
+            || (!files.directory.is_empty()
+                && name_policy::LookupPath::parse(&files.directory).ok()?.key()
+                    != name_policy::LookupPath::parse(&files.repository_path)
+                        .ok()?
+                        .key())
+        {
+            return None;
+        }
         Some(Self {
             principal: state.principal.clone()?,
             epoch: state.session_epoch,

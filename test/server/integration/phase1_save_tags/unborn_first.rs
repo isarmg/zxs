@@ -24,6 +24,9 @@ async fn post(fixture: &Fixture, route: &str, token: bool, body: Value)
 }
 
 async fn native_unborn_fixture()->(Fixture,DraftLocation,String){
+    let (server,target,slot,())=native_unborn_fixture_with(|_,_|()).await;(server,target,slot)
+}
+async fn native_unborn_fixture_with<T>(prepare:impl FnOnce(&mut Engine,&DraftLocation)->T)->(Fixture,DraftLocation,String,T){
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
     let primary = root.path().join("primary");
@@ -58,6 +61,7 @@ async fn native_unborn_fixture()->(Fixture,DraftLocation,String){
     };
     assert_eq!(engine.unborn_working_state(&target).unwrap().logical_size(), 0);
     assert!(record.working.unborn().is_some());
+    let original=prepare(&mut engine,&target);
     let password = authentication::random_token().unwrap();
     let auth = AuthStore::initialize(&system, "admin", &password).unwrap();
     let app = router(engine, auth, &system);
@@ -65,7 +69,7 @@ async fn native_unborn_fixture()->(Fixture,DraftLocation,String){
         "username": "admin", "password": password,
     }))).await;
     let fixture = Fixture { root, app, token: login["token"].as_str().unwrap().into() };
-    (fixture,target,slot)
+    (fixture,target,slot,original)
 }
 fn status_route(target:&DraftLocation)->String {
     let query = url_encoding::form::Serializer::new(String::new())
@@ -155,4 +159,51 @@ async fn real_unborn_mode_route_rejects_other_commands_and_replays_only_its_orig
     assert_eq!(json_response(post(&fixture,&change,true,enable.clone()).await).await,receipt);
     enable["operation_id"]=json!(OperationId::generate().unwrap());
     assert!(!post(&fixture,&change,true,enable).await.status().is_success());
+}
+
+// Authenticated HTTP reads the immutable native publication itself, not the
+// similarly named current node, 'saved' status or an operation-name guess.
+#[tokio::test]
+async fn genuine_automatic_publication_is_read_only_in_its_original_private_window_after_reopen() {
+    use storage_contract::automatic_observation::{Binding,NodeKey,Position,Reply,Request as WindowRequest};
+    use storage_contract::file_draft::{DraftCommand,CommitMode};
+    let (fixture,target,_,node)=native_unborn_fixture_with(|engine,target|{
+        let actor="admin".parse().unwrap();
+        let working=engine.unborn_working_state(target).unwrap();
+        let enable=DraftCommand::SetMode{target:target.clone(),expected:working.revision(),mode:CommitMode::Automatic.into()};
+        engine.change_unborn_working_mode(&enable,&actor,OperationId::generate().unwrap()).unwrap();
+        let mut writer=engine.open_native_working(target,&actor,true).unwrap();
+        let bytes=b"actual publication, not a save observation";
+        assert_eq!(engine.write_native_working(&mut writer,&actor,0,bytes).unwrap(),bytes.len());
+        let save=engine.flush_native_working(&mut writer,&actor).unwrap().unwrap();drop(writer);
+        let prep=engine.prepare_automatic_file(target.file).unwrap().execute().unwrap();
+        let node=engine.finish_automatic_file(prep).unwrap();
+        let working=engine.file_working_state(target).unwrap();
+        let decision=*working.automatic_controller().unwrap().last_node().unwrap();
+        assert_eq!(decision.operation,node.operation_id);assert_eq!(decision.save.operation,save.operation_id);
+        decision
+    }).await;
+    let base=format!("/api/file-manager/repositories/{}/automatic-nodes",target.repository);
+    let second=node.published_at.unix_seconds();
+    let path=format!("{base}?start={second}&end={}",second+1);
+    let no_login=fixture.app.clone().oneshot(Request::builder().method("GET").uri(&path).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(no_login.status(),StatusCode::UNAUTHORIZED);
+    let read=|value:Value|json_codec::from_value::<Reply>(value).unwrap();
+    let first=read(fixture.json("GET",&path,None).await);
+    assert_eq!(first.path,None);assert_eq!(first.page.rows.len(),1);
+    let row=&first.page.rows[0];
+    assert_eq!(row.key,NodeKey{file:target.file,node:node.node});assert_eq!(row.operation,node.operation);
+    assert_eq!(row.sequence,node.sequence);assert_eq!(row.published_at,node.published_at);
+    assert!(first.next_binding.is_none()&&first.page.next.is_none());
+    let fake=WindowRequest{scope:first.page.request.scope,position:Position::After{observed:first.page.observed,last:row.key}};
+    let guessed=Binding::for_session(&"admin".parse().unwrap(),"not-the-admitted-login",&fake).unwrap();
+    let forged=format!("{path}&observed={}&last_file={}&last_node={}&binding={guessed}",first.page.observed,row.key.file,row.key.node);
+    let rejected=fixture.app.clone().oneshot(Request::builder().method("GET").uri(forged)
+        .header("authorization",format!("Bearer {}",fixture.token)).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(rejected.status(),StatusCode::BAD_REQUEST);
+    let older=read(fixture.json("GET",&format!("{base}?start=0&end={second}"),None).await);
+    assert!(older.page.rows.is_empty()&&older.page.next.is_none());
+    let fixture=fixture.reopen().await;
+    let cold=read(fixture.json("GET",&path,None).await);
+    assert_eq!(cold.page.rows,first.page.rows);
 }

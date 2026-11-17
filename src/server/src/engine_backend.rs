@@ -25,6 +25,7 @@ mod disk_monitor;
 mod error_registry;
 mod file_deletion;
 mod file_draft;
+mod automatic_observation;
 mod unborn;
 mod smb_draft;
 mod smb_native;
@@ -793,6 +794,12 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         smb_draft::write(self, identity, request, source)
     }
+    fn automatic_node_observation(
+        &self, identity: &Identity, input: crate::AutomaticWindowRead,
+    ) -> Result<storage_contract::automatic_observation::Reply, ApiError> {
+        automatic_observation::read(self, identity, input)
+    }
+
     fn unborn_file_working(
         &self, identity: &Identity, target: storage_contract::file_draft::DraftLocation,
     ) -> Result<crate::UnbornFileSnapshot, ApiError> {
