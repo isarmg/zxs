@@ -798,3 +798,79 @@ fn lifecycle_audit_cache_keys_exact_state_and_keeps_only_one_file() {
     assert!(cache.lookup(&second).is_some());
     assert_eq!(Arc::strong_count(&state), 1);
 }
+
+#[test]
+fn lifecycle_switch_reuses_memberships_but_changed_capture_readmits_full_ledger() {
+    use std::sync::Arc;
+
+    let (_temp, mut engine, file, version) = actual();
+    initialize_file_branch_owner(&mut engine, &version);
+    let history = engine.state.versions[version.as_str()].history_tree_id.clone();
+    let repository = engine.state.repositories[&engine.state.histories[&history].repository_id].clone();
+    let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "second.txt", b"second committed file").unwrap();
+    engine.commit_workspace(crate::CommitRequest {
+        workspace_id: workspace.workspace_id, operation_id: OperationId::generate().unwrap(),
+        principal: "admin".into(), expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token, message: "second lifecycle target".into(),
+        request_digest: None,
+    }).unwrap();
+    let second = engine.list_tree(&repository.main_branch_id).unwrap().into_iter()
+        .find(|entry| entry.path() == "second.txt").unwrap();
+    let second = HistoryFileId::parse(&second.file_id).unwrap();
+    let first_read = engine.capture_file_lifecycle(
+        request_for(&engine, &file, 64), HistoryWindowCancellation::new(),
+    ).unwrap();
+    assert!(first_read.source_is_original());
+    assert!(first_read.page().unwrap().events.is_empty());
+    let index = first_read.cache.membership_index(&first_read.key).unwrap();
+    let mut second_read = engine.capture_file_lifecycle(
+        request_for(&engine, &second, 64), HistoryWindowCancellation::new(),
+    ).unwrap();
+    assert!(second_read.cache.lookup(&second_read.key).is_none());
+    assert!(Arc::ptr_eq(&index, &second_read.cache.membership_index(&second_read.key).unwrap()));
+    assert!(second_read.page().unwrap().events.is_empty());
+    // A fresh ownership scan would have replaced this Arc after successful
+    // admission. Switching used its memberships, not first_read's event list.
+    assert!(Arc::ptr_eq(&index, &second_read.cache.membership_index(&second_read.key).unwrap()));
+    assert!(first_read.cache.lookup(&first_read.key).is_none());
+    let before = storage_contract::canonical_json(engine.state()).unwrap();
+    let mut malformed = engine.state.operations.values().next().unwrap().clone();
+    malformed.operation_id = OperationId::generate().unwrap();
+    malformed.kind = "file.delete".into();
+    malformed.result = json_codec::json!({});
+    second_read.source.operations.insert(malformed.operation_id, malformed);
+    assert!(!second_read.source_is_original());
+    assert_eq!(second_read.page().unwrap_err().code(), storage_contract::ErrorCode::PublicationInvalid);
+    assert!(Arc::ptr_eq(&index, &second_read.cache.membership_index(&second_read.key).unwrap()));
+    assert_eq!(storage_contract::canonical_json(engine.state()).unwrap(), before);
+}
+
+#[test]
+fn lifecycle_membership_cache_uses_exact_state_and_never_holds_its_authority() {
+    use super::{AuditKey, LifecycleCache, LifecycleMembershipIndex};
+    use std::sync::Arc;
+    use storage_contract::history_window::HistoryTreeId;
+
+    let cache = LifecycleCache::default();
+    let state = Arc::new(crate::State::default());
+    let equal = Arc::new(state.as_ref().clone());
+    let first = AuditKey {
+        state: Arc::downgrade(&state),
+        file: HistoryFileId::parse("file_00000000000000000000000000000001").unwrap(),
+        history: HistoryTreeId::parse("history_00000000000000000000000000000001").unwrap(),
+    };
+    cache.remember_memberships(&first, LifecycleMembershipIndex::default());
+    let another_file = AuditKey {
+        state: Arc::downgrade(&state),
+        file: HistoryFileId::parse("file_00000000000000000000000000000002").unwrap(),
+        history: first.history.clone(),
+    };
+    assert!(Arc::ptr_eq(&cache.membership_index(&first).unwrap(),
+        &cache.membership_index(&another_file).unwrap()));
+    let replacement = AuditKey { state: Arc::downgrade(&equal), ..another_file };
+    assert!(cache.membership_index(&replacement).is_none());
+    assert_eq!(Arc::strong_count(&state), 1);
+    drop(state);
+    assert!(first.state.upgrade().is_none());
+}

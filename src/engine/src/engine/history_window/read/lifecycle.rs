@@ -2,6 +2,7 @@
 use crate::engine::history_window::HistoryCancellationCheckpoint;
 use crate::engine::history_window::read::HistoryWindowRead;
 use crate::{Engine, Result, State};
+use crate::state_projection::lifecycles::{LifecycleMembershipIndex, LifecycleSource};
 use std::sync::{Arc, Mutex, Weak};
 use storage_contract::file_lifecycle::{
     Cursor, Detail, Event, LifecycleError, Page, Request, Timestamp,
@@ -33,12 +34,13 @@ impl EventBudget {
     }
 }
 
-/// Only one complete, budget-checked audit is resident per Engine. Cache keys
-/// own no authoritative State and exclude cursor/page size; those remain
-/// request-specific and are checked after looking up the same immutable audit.
+/// One complete budget-checked audit plus one bounded membership index per
+/// Engine. Keys own no authoritative State and exclude cursor/page size; those
+/// remain request-specific. Membership reuse never replaces ledger admission.
 #[derive(Default)]
 pub(in crate::engine) struct LifecycleCache {
     slot: Mutex<Option<CachedAudit>>,
+    memberships: Mutex<Option<CachedMemberships>>,
 }
 
 struct AuditKey {
@@ -50,6 +52,11 @@ struct AuditKey {
 struct CachedAudit {
     key: AuditKey,
     events: Arc<[Event]>,
+}
+
+struct CachedMemberships {
+    state: Weak<State>,
+    index: Arc<LifecycleMembershipIndex>,
 }
 
 impl AuditKey {
@@ -65,6 +72,22 @@ impl LifecycleCache {
         self.slot.lock().ok()?.as_ref()
             .filter(|cached| cached.key.matches(key))
             .map(|cached| Arc::clone(&cached.events))
+    }
+
+    fn membership_index(&self, key: &AuditKey) -> Option<Arc<LifecycleMembershipIndex>> {
+        self.memberships.lock().ok()?.as_ref()
+            .filter(|cached| Weak::ptr_eq(&cached.state, &key.state))
+            .map(|cached| Arc::clone(&cached.index))
+    }
+
+    fn remember_memberships(&self, key: &AuditKey, index: LifecycleMembershipIndex) {
+        if let Ok(mut slot) = self.memberships.lock()
+            && key.state.strong_count() != 0
+        {
+            *slot = Some(CachedMemberships {
+                state: key.state.clone(), index: Arc::new(index),
+            });
+        }
     }
 
     fn remember(&self, key: &AuditKey, events: Arc<[Event]>) {
@@ -110,12 +133,13 @@ impl FileLifecycleRead {
         {
             return Err(LifecycleError::Changed.into_error().into());
         }
-        let events = match self.cache.lookup(&self.key) {
+        let reusable = self.source_is_original();
+        let events = match reusable.then(|| self.cache.lookup(&self.key)).flatten() {
             Some(events) => events,
             None => {
                 let events: Arc<[Event]> = self.admit_events()?.into();
                 self.read.cancellation.checkpoint()?;
-                self.cache.remember(&self.key, Arc::clone(&events));
+                if reusable { self.cache.remember(&self.key, Arc::clone(&events)); }
                 events
             }
         };
@@ -166,11 +190,14 @@ impl FileLifecycleRead {
     }
 
     fn admit_events(&self) -> Result<Vec<Event>> {
-        let source = crate::state_projection::lifecycles::LifecycleSource::capture(
-            &self.source,
-            &self.request.file_id,
-            || self.read.cancellation.checkpoint(),
-        )?;
+        let reusable = self.source_is_original();
+        let index = reusable.then(|| self.cache.membership_index(&self.key)).flatten();
+        let source = match index {
+            Some(index) => LifecycleSource::from_index(&self.source, &self.request.file_id, &index),
+            None => LifecycleSource::capture(
+                &self.source, &self.request.file_id, || self.read.cancellation.checkpoint(),
+            )?,
+        };
         self.read.cancellation.checkpoint()?;
         let mut budget = EventBudget::new();
         let mut events = crate::file_deletion::retained::events_from_source(
@@ -225,7 +252,27 @@ impl FileLifecycleRead {
                 return Err(LifecycleError::Response.into_error().into());
             }
         }
+        if reusable && let Some(index) = source.into_index() {
+            self.cache.remember_memberships(&self.key, index);
+        }
         Ok(events)
+    }
+
+    /// The State key is weak and gives no read permission. Briefly borrow its
+    /// original immutable tables to verify this private projection's lineage;
+    /// no State or operation map is kept by either cache. A replaced capture
+    /// (even value-equal) must re-admit its own source rather than reuse proof.
+    fn source_is_original(&self) -> bool {
+        let Some(state) = self.key.state.upgrade() else { return false; };
+        macro_rules! unchanged {
+            ($($field:ident),+ $(,)?) => {
+                $(self.source.$field.changes_since(&state.$field).is_empty())&&+
+            };
+        }
+        self.source.sequence == state.sequence && unchanged!(
+            operations, operation_principals, histories, branches, commits,
+            versions, file_deletions, directory_git_repositories,
+        )
     }
 
     fn append_path_events(

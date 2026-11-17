@@ -3,6 +3,8 @@
 //! lifecycle verifier's responsibility; malformed ownership is never omitted.
 use super::{DerivedOwners, FileRows, State, Writes};
 use storage_contract::{OperationId, OperationResult, SharedRecords};
+mod membership;
+pub(crate) use membership::LifecycleMembershipIndex;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DeletionOwner<'a> {
@@ -363,8 +365,9 @@ impl DerivedOwners {
 // A typed operation key avoids stringify/reparse at every file materialization.
 pub(crate) type DeletionOperations = SharedRecords<(), OperationId>;
 
-/// Only lifecycle membership for one file, not a general State projection.
-/// All receipts are classified so malformed unrelated ownership still fails closed.
+/// Lifecycle membership for one file, not a general State projection. A cold
+/// capture classifies all receipts; optional bounded membership memoization is
+/// exported only for a later exact-State read after complete audit admission.
 pub(crate) struct LifecycleSource<'a> {
     state: &'a State,
     file: &'a storage_contract::history_window::HistoryFileId,
@@ -372,6 +375,7 @@ pub(crate) struct LifecycleSource<'a> {
     copies: DeletionOperations,
     malformed: bool,
     moves: crate::state_projection::move_receipts::MoveReceipts<'a>,
+    index: Option<LifecycleMembershipIndex>,
 }
 
 impl<'a> LifecycleSource<'a> {
@@ -388,13 +392,21 @@ impl<'a> LifecycleSource<'a> {
             copies: DeletionOperations::new(),
             malformed: false,
             moves: crate::state_projection::move_receipts::MoveReceipts::new(state),
+            index: Some(LifecycleMembershipIndex::default()),
         };
         for (id, receipt) in state.operations.iter() {
             checkpoint()?;
-            for (members, owner) in [
-                (&mut source.deletions, owner(receipt)),
-                (&mut source.copies, history_copy_owner(receipt)),
+            for (members, owner, copy) in [
+                (&mut source.deletions, owner(receipt), false),
+                (&mut source.copies, history_copy_owner(receipt), true),
             ] {
+                if let Some(index) = &mut source.index
+                    && !index.observe(*id, &owner, copy)?
+                {
+                    // Cache overflow does not narrow the supported audit or
+                    // omit any target member. Continue this complete scan.
+                    source.index = None;
+                }
                 let included = match owner {
                     DeletionOwner::Other => false,
                     DeletionOwner::Malformed => {
@@ -411,6 +423,27 @@ impl<'a> LifecycleSource<'a> {
         }
         checkpoint()?;
         Ok(source)
+    }
+
+    /// Only the read cache's exact immutable-State match can select this path.
+    /// Membership is still followed by target decoding and full ledger admission.
+    pub(crate) fn from_index(
+        state: &'a State,
+        file: &'a storage_contract::history_window::HistoryFileId,
+        index: &LifecycleMembershipIndex,
+    ) -> Self {
+        let members = index.for_file(file);
+        Self {
+            state, file, deletions: members.deletions, copies: members.copies,
+            malformed: false,
+            moves: crate::state_projection::move_receipts::MoveReceipts::new(state),
+            index: None,
+        }
+    }
+
+    /// A caller may retain this only after the complete audit succeeded.
+    pub(crate) fn into_index(self) -> Option<LifecycleMembershipIndex> {
+        if self.malformed { None } else { self.index }
     }
 
     pub(crate) fn view(&self) -> LifecycleView<'_> {
