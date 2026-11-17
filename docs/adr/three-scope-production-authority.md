@@ -1,8 +1,9 @@
-# 新池三范围：同一决定与逐盘只读闭包（第一阶段提案）
+# 全新空池的唯一三范围布局：同一决定与逐盘只读闭包
 
 **状态：待确认，尚未实施或冻结。** 本次只请求确认下列三项：
 
-1. 仅显式新建空池采用 `three-scope-directory-v2`；旧池、缺标记和不一致标记在改写前拒绝。
+1. 假定不存在需要支持的旧版本。只定义一种格式、一套编码和一条正常路径；只能显式
+   初始化全新的空池。普通打开用真实 genesis、封印、登记与闭包准入，不发明新版标记。
 2. FILE、DISK、SYSTEM 和目录本地材料由**现有同一次**原生决定绑定，新增有界、闭集的
    scope 根、逐盘清单和局部材料引用。SQLite 不是第二个决定点。
 3. 每块登记盘能从**本盘材料**，按指定的已证明决定，只读核验自己的目录、容器、
@@ -22,40 +23,41 @@ ADR 的持久字段、协议或行为。第一阶段不会赋予 data-only 盘�
 保留[现有全配置成员发布](0002-publication.md)及[代际交接](0013-generation-bound-membership.md)：
 正常发布要求原配置全部 N 成员；既有决定和恢复按原固定成员及代际的
 Q=floor(N/2)+1 验证，不按在线数重算。局部 material 和[离线盘日志](0015-independent-disk-journal.md)
-均不选举全池权威。旧 Candidate、永久回执及原哈希字节不改写。
+均不选举全池权威。已有 Candidate、永久回执及其原哈希字节不改写。
 
 ## 新池入口和拒绝边界
 
-- 新池 Config 的必需枚举值为 `pool_semantic_format = "three-scope-directory-v2"`，
-  固定地址的原始配置锚、封印及成员／注册代际必须绑定同一配置。物理五区域与
-  `RootBinding` 仍表示实际布局，不充当语义标记。对外 Config DTO 只替换这一枚举值；
-  不引入第二套公开读写命令，不改其他 HTTP／SMB wire 或已有原请求的含义。
+- 保留现有 Config DTO、单值语义字段、盘封印及 Snapshot 的既有格式字段；不改枚举值、
+  不增加版本号、第二个 marker 或版本选择器。单靠原有标签不能证明布局：原固定地址的
+  genesis 必须含准确初始化意图、同一 Config 和完整 scope 根；封印、成员／注册代际及
+  五区域的 `RootBinding` 必须匹配。对外 HTTP／SMB wire 与现有原请求不变。
 - 仅明确的初始化请求能对**全部**原选定根操作。在已有互斥和 held 句柄下核对
   named/held 身份、根互不别名、与既有登记不冲突、每个根确实空。空目录本身不能
   证明它是新盘，特别不能重置已登记但失去标记的根。genesis 含全部原盘的注册与
   五区域绑定、真实空库存和同一初始化 operation；各原根落盘、同步、读验后才成功。
 - 普通 open、显式 restore、管理打开及成员激活均在创建持久写锁文件、重建数据库、
-  补锚或改封印之前拒绝旧／缺失／未知标记、未保存绑定、身份冲突。部分初始化只能
-  凭已保存的原 bootstrap 意图及原绑定显式续作；绑定不全保留拒绝。无双读、无迁移、
-  不给旧池补字段，离线、权限失败、根被换绑均不是空、损坏或已销毁。
+  补锚或改封印之前拒绝缺件、实际编码或封印不符、未保存绑定、身份冲突。部分初始化只能
+  凭已保存的原 bootstrap 意图及原绑定显式续作；绑定不全保留拒绝。既不鉴别历史版本
+  也不读取、迁移或重写不符材料。离线、权限失败、根被换绑均不是空、损坏或已销毁。
 
 ## 接线和编码
 
-`format` 均为下表首列的单值标记。除该列外，各行只含列出的字段，均必需。只用
+每一行都是唯一的规范结构。首列是既有锚位置、既有对象或新增不可变对象的**类型域**，
+不是额外的版本字段。对象只含列出的必需字段；行内记录由所属 map 决定类型。只用
 下述显式联合表达不适用；不得以缺项、空字符串或任意 JSON 作为分支。所有 ID、根、
 代数、哈希沿对应 contract 类型和原规范编码。严格读取拒绝重复键、未知字段、非规范
 十进制 u64／摘要和多余证明节点。对象采用各自有域的 BLAKE3 规范 JSON；引用不能跨域。
 
-| 格式 | 其余必需字段和含义 |
+| 位置／类型域 | 必需字段和含义 |
 | --- | --- |
-| `pool-genesis-three-scope-v2` | `config,initialization_operation_id,scope_closure`。只在新池原固定 genesis 地址写入；scope 内引用 Config 自身摘要，不能引用包含自己的 anchor 摘要。 |
-| `state-three-scope-v2` | 原 Snapshot 的 `sequence,business_generation,topology_generation,maps,events,control_auth` 及新增的 `scope_closure` 摘要。原受保护引用仅沿原权威路径使用，不新增其正文的落盘位置。 |
-| `three-scope-closure-v1` | `pool_id,semantic_format,origin,sequence,membership,system_material,disks,counts`。`disks` 是登记身份到逐盘清单摘要的有界 map；不是“现在可见”的盘列表。`system_material` 指向原系统目标上的非秘密 SYSTEM 业务投影描述。 |
-| `system-scope-material-v1` | `pool_id,sequence,business_generation,topology_generation,configuration_hash,material`。`material` 只能是下述 SYSTEM 业务 SQLite 引用。原 Snapshot、Candidate 和原成员权威继续独自负责完整全局状态及控制权限。 |
-| `disk-scope-manifest-v1` | `registration,root_binding,origin,sequence,inventory,disk_current,disk_history,local_changes,retirement_obligations,counts`。后两张业务表分别绑定本盘准确变化链、已有原生终态决定的义务；空表也有根。DISK 两个 SQLite 引用分别核对其准确登记与逻辑内容。 |
-| `scope-material-ref-v1` | `scope,identity,logical_root,representation,body_inventory`。`scope` 仅 `file,directory,worktree,disk_current,disk_history,system`。身份分别为 FileId、仓库/根目录身份、WorktreeId、准确盘登记或 PoolId。`representation` 为 `sqlite{schema,image_hash,image_bytes}` 或 `native{root_hash}`；native 只供已定义原生材料的目录仓库／worktree。 |
-| `disk-scope-inventory-entry-v1` | `object,ownership,location,lifecycle,entity,operation_id`。`object` 为下列按 kind 分派的严格记录；`ownership` 为 `original{registration}` 或 `replica{owner,replica_id,source_chain}`；`location` 为 `anchor{root_id,directory_id}` 或 `entry{root_id,parent_directory_id,name}`。登记根、五区域及实际实体均独立核验。 |
-| `scope-body-entry-v1` | `kind,source,relative_name,bytes,content_hash`。`kind` 仅 `full,draft_extent,draft_base,directory_snapshot,worktree_delta`；`source` 分别使用该类型已获批的版本、稿代数或快照原条目身份。文件相同字节不能合并不同来源。 |
+| 现有固定 genesis 配置锚 | `config,initialization_operation_id,scope_closure`。只在新池原固定 genesis 地址写入；scope 内引用 Config 自身摘要，不能引用包含自己的 anchor 摘要。 |
+| 既有 Snapshot 对象 | 原 Snapshot 的 `format,sequence,business_generation,topology_generation,maps,events,control_auth` 及新增的 `scope_closure` 摘要。原受保护引用仅沿原权威路径使用，不新增其正文的落盘位置。 |
+| `scope-closure` | `pool_id,origin,sequence,membership,system_material,disks,counts`。`disks` 是登记身份到逐盘清单摘要的有界 map；不是“现在可见”的盘列表。`system_material` 指向原系统目标上的非秘密 SYSTEM 业务投影描述。 |
+| `system-scope-material` | `pool_id,sequence,business_generation,topology_generation,configuration_hash,material`。`material` 只能是下述 SYSTEM 业务 SQLite 引用。原 Snapshot、Candidate 和原成员权威继续独自负责完整全局状态及控制权限。 |
+| `disk-scope-manifest` | `registration,root_binding,origin,sequence,inventory,disk_current,disk_history,local_changes,retirement_obligations,counts`。后两张业务表分别绑定本盘准确变化链、已有原生终态决定的义务；空表也有根。DISK 两个 SQLite 引用分别核对其准确登记与逻辑内容。 |
+| scope 内的 material 引用 | `scope,identity,logical_root,representation,body_inventory`。`scope` 仅 `file,directory,worktree,disk_current,disk_history,system`。身份分别为 FileId、仓库/根目录身份、WorktreeId、准确盘登记或 PoolId。`representation` 为 `sqlite{schema,image_hash,image_bytes}` 或 `native{root_hash}`；native 只供已定义原生材料的目录仓库／worktree。 |
+| 逐盘 inventory 行 | `object,ownership,location,lifecycle,entity,operation_id`。`object` 为下列按 kind 分派的严格记录；`ownership` 为 `original{registration}` 或 `replica{owner,replica_id,source_chain}`；`location` 为 `anchor{root_id,directory_id}` 或 `entry{root_id,parent_directory_id,name}`。登记根、五区域及实际实体均独立核验。 |
+| 局部正文 inventory 行 | `kind,source,relative_name,bytes,content_hash`。`kind` 仅 `full,draft_extent,draft_base,directory_snapshot,worktree_delta`；`source` 分别使用该类型已获批的版本、稿代数或快照原条目身份。文件相同字节不能合并不同来源。 |
 
 - `origin` 在 sequence=0 为 `genesis{initialization_operation_id,config_hash}`；发布为
   `publication{operation_id,request_digest,predecessor}`。第一笔若原 Candidate 的
@@ -116,7 +118,7 @@ H05 最终必须能从**任意一块已登记盘**（包括 data-only）离线�
 
 ## 集成后分别验收
 
-- 真实新池首启、空 scope、首次无前驱快照的发布与冷重开；旧/空标记、部分初始化、
+- 真实新池首启、空 scope、首次无前驱快照的发布与冷重开；缺少必需字段、错误封印、部分初始化、
   离线与换根均不产生修复写入，保留原材料与准确错误。
 - 同一操作的 FILE／DISK／SYSTEM 和真实物理对象对应；正常写入、改名、零节点稿、
   稀疏 worktree、保留区、独立备份；在决定前后中断，只查／重试原 ID。
