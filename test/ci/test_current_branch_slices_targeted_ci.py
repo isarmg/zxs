@@ -40,7 +40,7 @@ class CurrentBranchSelection(unittest.TestCase):
             'foreign-original-material': ['src/server/src/offline/foreign_chain/delivery.rs',
                                          'src/server/src/offline/service_worker.rs'],
             'automatic-management-observation': [
-                'src/web/src/files/commit_mode.rs',
+                'src/web/src/files/commit_mode.rs', 'src/server/src/engine_backend/application/file_reads.rs',
                 'src/web/src/files/commit_mode/warning.rs', 'src/web/src/files/automatic_observation/calendar.rs',
                 'test/server/unit/http_automatic_observation.rs', 'src/contract/src/file_draft/automatic.rs',
             ],

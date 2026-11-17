@@ -103,16 +103,9 @@ pub(super) fn read(
     }
     // Verify the actual rows (not the remembered names/paths), under the same
     // engine ownership interval. On denial return no IDs, count or continuation.
-    let app = Application::new(&mut engine, &current);
-    let mut previous = None;
-    for file in page.rows.iter().map(|row| row.key.file).chain(lookahead) {
-        if previous == Some(file) {
-            continue;
-        }
-        previous = Some(file);
-        app.authorize_file(&file.to_string())
-            .map_err(|_| ApiError::forbidden())?;
-    }
+    Application::new(&mut engine, &current)
+        .authorize_automatic_page(&page, lookahead)
+        .map_err(|_| ApiError::forbidden())?;
     let next_binding = page
         .continuation()
         .as_ref()

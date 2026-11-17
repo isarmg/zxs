@@ -4,6 +4,7 @@
 //! admission happens at the backend entrance; domain and workspace ownership checks precede
 //! delegating durable state changes to the core. Results remain domain records;
 //! presentation/redaction belongs to the transport adapter.
+mod file_reads;
 use super::{error, repo_for_branch, repo_for_history, repository, workspace_authorize};
 use crate::{ApiError, auth::Identity};
 use storage_engine::{CommitRequest, Engine};
@@ -263,24 +264,6 @@ impl<'a> Application<'a> {
                 command.operation_id,
             )
             .map_err(error)
-    }
-
-    pub(crate) fn authorize_file(&self, file: &str) -> Result<(), ApiError> {
-        let version = self
-            .engine
-            .state()
-            .versions
-            .values()
-            .find(|version| version.file_id == file)
-            .ok_or_else(|| {
-                ApiError::new(
-                    ::http::StatusCode::NOT_FOUND,
-                    storage_contract::ErrorCode::FileNotFound,
-                    "file not found",
-                )
-            })?;
-        repo_for_history(self.engine, &version.history_tree_id)?;
-        Ok(())
     }
 
     pub fn merge_file_branches(
