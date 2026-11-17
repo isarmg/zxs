@@ -148,6 +148,7 @@ dependencies = [
  "http",
  "json-codec",
  "name-policy",
+ "storage-contract",
  "storage-engine",
  "storage-server",
  "tempfile",

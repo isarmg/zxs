@@ -6888,6 +6888,22 @@
           "max_tests": 1
         }
       ]
+    },
+    "real-browser-first-commit-delivery": {
+      "reason": "Compile the actual two-tab independent-root harness and retain the packaged acceptance wiring. A targeted check is not execution in Chrome or a substitute for the complete release candidate.",
+      "python_tests": [
+        "test_release_acceptance",
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "mode": "check",
+          "package": "browser-smoke",
+          "manifest": "tools/browser-smoke/Cargo.toml",
+          "kind": "bin",
+          "name": "browser-smoke"
+        }
+      ]
     }
   },
   "rules": [
@@ -6900,7 +6916,8 @@
         "permanent-removal-exact-leaves",
         "automatic-management-observation",
         "original-holder-recovery",
-        "same-payload-repair-originals"
+        "same-payload-repair-originals",
+        "real-browser-first-commit-delivery"
       ]
     },
     {
@@ -9245,7 +9262,8 @@
     {
       "path": "src/web/src/files/unborn/storage.rs",
       "groups": [
-        "native-first-manual-save"
+        "native-first-manual-save",
+        "real-browser-first-commit-delivery"
       ]
     },
     {
@@ -9925,7 +9943,8 @@
     {
       "path": "tools/browser-smoke/Cargo.toml",
       "groups": [
-        "named-disk-verification-tools"
+        "named-disk-verification-tools",
+        "real-browser-first-commit-delivery"
       ]
     },
     {
@@ -13230,7 +13249,8 @@
     {
       "path": "test/tools/browser-smoke/runner/main.rs",
       "groups": [
-        "legacy-directory-branch-web-retirement"
+        "legacy-directory-branch-web-retirement",
+        "real-browser-first-commit-delivery"
       ]
     },
     {
@@ -15870,7 +15890,8 @@
     {
       "path": "test/tools/browser-smoke/runner/fixture.rs",
       "groups": [
-        "browser-smoke-fixture"
+        "browser-smoke-fixture",
+        "real-browser-first-commit-delivery"
       ]
     },
     {
@@ -20219,14 +20240,16 @@
       "path": "src/web/src/browser_lock.rs",
       "groups": [
         "native-first-manual-save",
-        "browser-identity-generation"
+        "browser-identity-generation",
+        "real-browser-first-commit-delivery"
       ]
     },
     {
       "path": "src/web/src/files/unborn/recovery.rs",
       "groups": [
         "native-first-manual-save",
-        "browser-identity-generation"
+        "browser-identity-generation",
+        "real-browser-first-commit-delivery"
       ]
     },
     {
@@ -20492,6 +20515,30 @@
       "path": "test/platform/unit/publication_tests.rs",
       "groups": [
         "same-payload-repair-originals"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/first_commit_tabs.rs",
+      "groups": [
+        "real-browser-first-commit-delivery"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/first_commit_tabs.js",
+      "groups": [
+        "real-browser-first-commit-delivery"
+      ]
+    },
+    {
+      "path": ".github/scripts/release-acceptance.sh",
+      "groups": [
+        "real-browser-first-commit-delivery"
+      ]
+    },
+    {
+      "path": "test/ci/test_release_acceptance.py",
+      "groups": [
+        "real-browser-first-commit-delivery"
       ]
     }
   ],

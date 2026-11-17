@@ -8,6 +8,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ReleaseAcceptance(unittest.TestCase):
+    def test_real_cross_tab_first_commit_has_an_independent_native_pool_and_packaged_binary(self):
+        script = (ROOT / '.github/scripts/release-acceptance.sh').read_text()
+        self.assertIn('--server-container-image zxs-debian13-service-runtime --first-commit-only', script)
+        runner = (ROOT / 'test/tools/browser-smoke/runner/main.rs').read_text()
+        self.assertIn('fixture::seed_first_commit', runner)
+        self.assertIn('first_commit_tabs::run', runner)
+
     def test_release_checks_extracted_archives_before_upload(self):
         workflow = (ROOT / '.github/workflows/release.yml').read_text()
         self.assertLess(workflow.index('release-package.sh'), workflow.index('release-acceptance.sh'))

@@ -24,6 +24,11 @@ fi
 cargo run --locked --offline --release -p browser-smoke -- \
   --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-service-runtime "${screenshot_args[@]}"
 
+# The cross-tab acceptance needs an independent ordinary root and two real
+# Unborn files, rather than the main suite's three-tier, named-repository graph.
+cargo run --locked --offline --release -p browser-smoke -- \
+  --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-service-runtime --first-commit-only
+
 # CI explicitly opts into a separate review-only scenario after the full suite.
 # Keep the same copied ELF and do not pass incompatible screenshot arguments.
 if [[ "$foreign_review" == 1 ]]; then

@@ -13,7 +13,7 @@ pub(super) const NAMING_REPOSITORY: &str = "browser-naming";
 /// Build a declared three-tier test pool and publish a real management authority.
 /// First activation now creates independent roots, so it must not be repurposed
 /// or have its durable configuration rewritten to manufacture this graph.
-pub(super) fn initialize_management(temporary: &tempfile::TempDir, password: &str) -> Result<()> {
+pub(super) fn initialize_management(temporary: &tempfile::TempDir, password: &str, independent:bool) -> Result<()> {
     use super::{Write, fs, wait_for, with_cleanup};
     use std::{
         os::unix::fs::{DirBuilderExt, OpenOptionsExt},
@@ -64,7 +64,12 @@ pub(super) fn initialize_management(temporary: &tempfile::TempDir, password: &st
         (Name::parse("Fixture backup")?, discovery.join("B01")),
         (Name::parse("Fixture archive")?, discovery.join("C01")),
     ];
-    let mut engine = Engine::initialize(&pool, storage_engine::Config::development(paths)?)?;
+    let config=if independent {
+        let path=discovery.join("independent-primary");
+        fs::DirBuilder::new().mode(0o700).create(&path)?;
+        storage_engine::Config::independent_roots(storage_contract::Mode::Development,[(Name::parse("Fixture primary")?,path)])?
+    }else{storage_engine::Config::development(paths)?};
+    let mut engine=Engine::initialize(&pool,config)?;
     let management = pool.join("management");
     fs::DirBuilder::new().mode(0o700).create(&management)?;
     let mut credentials = fs::OpenOptions::new()
@@ -246,3 +251,17 @@ pub(super) fn commit_directory_fixture(
 #[cfg(test)]
 #[path = "../unit/fixture_tests.rs"]
 mod tests;
+
+/// A separate native ordinary root keeps positional assumptions of the standard
+/// three-tier browser suite unchanged. Only this per-run private pool is seeded.
+pub(super) fn seed_first_commit(temporary:&tempfile::TempDir)->Result<String>{
+    let mut engine=Engine::open(&temporary.path().join("pool"))?;
+    let slot=engine.config().disks[0].slot_id.clone();
+    let repo=engine.create_disk_root(&slot,PRINCIPAL,storage_contract::OperationId::generate()?)?;
+    for name in ["tab-one.txt","tab-two.txt"]{
+        let head=engine.state().branches[&repo.main_branch_id].head_commit_id.parse()?;
+        engine.create_unborn_file(&storage_contract::file_draft::BirthRequest{repository:repo.repository_id.parse()?,
+            path:name_policy::PortablePath::parse(name)?,expected_namespace_head:head},&PRINCIPAL.parse()?,storage_contract::OperationId::generate()?)?;
+    }
+    Ok(slot)
+}

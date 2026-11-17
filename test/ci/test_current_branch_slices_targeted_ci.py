@@ -34,6 +34,8 @@ class CurrentBranchSelection(unittest.TestCase):
             ],
             'same-payload-repair-originals': ['helper/src/installation/repair.rs',
                                               'src/platform/src/publication/bundle.rs'],
+            'real-browser-first-commit-delivery': ['test/tools/browser-smoke/runner/first_commit_tabs.rs',
+                                                  'test/tools/browser-smoke/runner/first_commit_tabs.js'],
             'helper-stop-handoff': ['helper/src/console/shutdown.rs', 'helper/src/console/http.rs'],
             'cold-lifecycle-receipt-rows': ['test/engine/unit/path_changes_tests.rs'],
             'permanent-removal-exact-leaves': ['src/engine/src/disk/version_material.rs'],

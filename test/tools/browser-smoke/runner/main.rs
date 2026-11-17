@@ -37,6 +37,7 @@ mod file_pagination;
 mod file_row_visual;
 mod file_rows;
 mod fixture;
+mod first_commit_tabs;
 use fixture::seed_files;
 mod feedback_lifecycle;
 mod fonts;
@@ -527,6 +528,7 @@ fn run() -> Result<()> {
     let mut server_container_image = None;
     let mut screenshot: Option<PathBuf> = None;
     let mut contour_evidence: Option<PathBuf> = None;
+    let mut first_commit_only = false;
     let mut placement_only = false;
     let mut foreign_review_only = false;
     while let Some(arg) = args.next() {
@@ -534,6 +536,7 @@ fn run() -> Result<()> {
             "--cli-bin" => cli_binary = args.next().ok_or("--cli-bin requires a path")?.into(),
             "--embedded-web" => embedded_web = true,
             "--placement-only" => placement_only = true,
+            "--first-commit-only" => first_commit_only = true,
             "--foreign-review-only" => foreign_review_only = true,
             "--server-container-image" => {
                 server_container_image = Some(
@@ -554,12 +557,13 @@ fn run() -> Result<()> {
             }
             _ => {
                 return Err(format!(
-                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--server-container-image IMAGE] [--screenshot PNG] [--contour-evidence DIR] [--placement-only] [--foreign-review-only]"
+                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--server-container-image IMAGE] [--screenshot PNG] [--contour-evidence DIR] [--placement-only] [--foreign-review-only] [--first-commit-only]"
                 )
                 .into());
             }
         }
     }
+    if first_commit_only && (placement_only || foreign_review_only || contour_evidence.is_some() || screenshot.is_some()) {return Err("--first-commit-only requires its own isolated native pool".into());}
     if contour_evidence.is_some() && screenshot.is_some() {
         return Err("--contour-evidence and --screenshot are separate validation modes".into());
     }
@@ -588,8 +592,8 @@ fn run() -> Result<()> {
     let mut entropy = [0u8; 24];
     File::open("/dev/urandom")?.read_exact(&mut entropy)?;
     let password: String = entropy.iter().map(|b| format!("{b:02x}")).collect();
-    fixture::initialize_management(&temp, &password)?;
-    seed_files(&temp)?;
+    fixture::initialize_management(&temp,&password,first_commit_only)?;
+    let first_commit_slot=if first_commit_only{Some(fixture::seed_first_commit(&temp)?)}else{seed_files(&temp)?;None};
     let server_port = port()?;
     let driver_port = port()?;
     let origin = format!("http://127.0.0.1:{server_port}");
@@ -668,7 +672,7 @@ fn run() -> Result<()> {
                 .ok_or("missing WebDriver session")?
                 .to_owned(),
         };
-        let result = if placement_only {
+        let result = if let Some(slot)=first_commit_slot.as_deref(){first_commit_tabs::run(&browser,&origin,&password,slot)}else if placement_only {
             placement_configuration::run(&browser, &cli_binary, server_assets, &pool, root, &password)
         } else if foreign_review_only {
             foreign_review::run(&browser, &cli_binary, server_assets, &pool, root, &password)

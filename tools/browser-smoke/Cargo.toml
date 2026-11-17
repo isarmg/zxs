@@ -11,6 +11,7 @@ path = "../../test/tools/browser-smoke/runner/main.rs"
 
 [dependencies]
 http = { version = "1", path = "../../src/foundation/networking/http" }
+storage-contract.workspace = true
 storage-engine.workspace = true
 name-policy.workspace = true
 storage-server.workspace = true
