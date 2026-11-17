@@ -17,6 +17,7 @@ pub(crate) fn record_receipt(state: RwSignal<State>, id: &str, value: Value) -> 
             && crate::files::node_retirement::receipt_matches(s, id, &value)
             && crate::files::deletion::receipt_matches(s, id, &value)
             && crate::files::mkdir::receipt_matches(s, id, &value)
+            && crate::files::commit_mode::receipt_matches(s, id, &value)
     }) {
         FileOperation::from_receipt(id, &value)
     } else {
@@ -53,6 +54,7 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
         crate::files::review::settle(&mut s.files, &id, status);
         crate::files::deletion::settle(&mut s.files, &id, status);
         crate::files::mkdir::settle(&mut s.files.mkdir, &id, status);
+        crate::files::commit_mode::settle(&mut s.files.commit_mode, &id, status);
         s.notices.record_operation(s.session_epoch, &id, status);
         if s.files.default_operation.as_deref() == Some(&id) {
             if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {

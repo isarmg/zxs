@@ -32,6 +32,7 @@ pub(crate) enum Navigation {
 #[derive(Clone, Default)]
 pub(crate) struct Model {
     pub unborn: super::unborn::Model,
+    pub commit_mode: super::commit_mode::Model,
     pub directory_snapshot: super::directory_snapshot::Model,
     pub deletion: super::deletion::Model,
     pub mkdir: super::mkdir::Model,
@@ -206,6 +207,7 @@ impl Model {
 
     pub(crate) fn clear_selection(&mut self) {
         self.unborn.clear_review();
+        self.commit_mode.clear_review();
         self.directory_snapshot.clear_review();
         self.cancel_history();
         self.merge = None;

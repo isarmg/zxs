@@ -292,3 +292,6 @@ async fn manual_file_first_versions_and_pending_branch_edit() {
     assert_eq!(version_bytes(&app, &token, &third_version).await, branched);
     assert_eq!(heads(&app, &token, &file, 3).await, after_heads);
 }
+
+#[path = "fresh_file_manual/commit_mode.rs"]
+mod commit_mode;

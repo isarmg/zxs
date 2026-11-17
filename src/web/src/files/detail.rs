@@ -287,6 +287,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                 <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录上下文","Folder context")}</h3><p class="zxs-row">{t("进入此目录详情，查看已有目录上下文并管理布局、放置与备份。", "Open this folder's Details for existing context, layout, placement and backups.")}</p><div class="zxs-file-toolbar zxs-flow"><button class="zxs-button" disabled=move ||folder_navigation_disabled.get()||state.with(actions::pending) on:click=move |_|if let Some(path)=state.with_untracked(|s|selection.with_value(|key|key.directory_path(s).map(str::to_owned))){actions::go_directory(state,path);crate::ui::navigate(state,crate::ui::Page::Details);}>{t("打开此目录详情", "Open this folder's Details")}</button></div></section>
             })}
             {super::unborn::view(state)}
+            {super::commit_mode::view(state)}
             <Show when=move ||is_file && entry.with(|entry| {
                 entry.as_ref().is_some_and(|entry| entry.unborn().is_none())
             })>

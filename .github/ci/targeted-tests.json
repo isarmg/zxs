@@ -1,5 +1,40 @@
 {
   "groups": {
+    "file-commit-mode-web-http": {
+      "reason": "Explicit per-file Manual/Automatic Web controls and the authenticated normal mode-switch flow. Tests retain manual drafts and immutable bytes across two automatic saves; no high-frequency protection, browser or Samba acceptance is claimed.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "files::commit_mode::tests::"
+          ],
+          "max_tests": 3
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "http_engine",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "fresh_file_manual::commit_mode::manual_default_explicit_automatic_saves_and_switch_back_keep_history_and_draft"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "directory-web-selection": {
       "reason": "Check the real directory head and draft selection UI and product Wasm compile. Native state tests and Wasm build do not assert that Chromium or Samba ran.",
       "python_tests": [],
@@ -5759,6 +5794,72 @@
     {
       "path": "src/web/src/api.rs",
       "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "src/web/src/files/actions/operation.rs",
+      "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "src/web/src/files/commit_mode.rs",
+      "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "src/web/src/files/commit_mode/view.rs",
+      "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "src/web/src/files/commit_mode/wire.rs",
+      "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "src/web/src/files/detail.rs",
+      "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "src/web/src/files/mod.rs",
+      "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "src/web/src/files/model.rs",
+      "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/commit_mode_tests.rs",
+      "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/fresh_file_manual.rs",
+      "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/fresh_file_manual/commit_mode.rs",
+      "groups": [
+        "file-commit-mode-web-http"
+      ]
+    },
+    {
+      "path": "src/web/src/api.rs",
+      "groups": [
         "directory-web-selection"
       ]
     },
@@ -6748,12 +6849,46 @@
         "backup-snapshot-scope"
       ]
     },
-    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_publication.rs", "groups": ["backup-scoped-encoding-memo", "terminal-backup-source-layout"]},
-    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/configuration.rs", "groups": ["backup-scoped-encoding-memo", "terminal-backup-source-layout"]},
-    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving.rs", "groups": ["terminal-backup-source-layout"]},
-    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving/reads.rs", "groups": ["backup-scoped-encoding-memo", "terminal-backup-source-layout"]},
-    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_scopes.rs", "groups": ["terminal-backup-source-layout"]},
-    {"path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/common_databases.rs", "groups": ["backup-scoped-encoding-memo", "terminal-backup-source-layout"]},
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_publication.rs",
+      "groups": [
+        "backup-scoped-encoding-memo",
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/configuration.rs",
+      "groups": [
+        "backup-scoped-encoding-memo",
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving/reads.rs",
+      "groups": [
+        "backup-scoped-encoding-memo",
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_scopes.rs",
+      "groups": [
+        "terminal-backup-source-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/common_databases.rs",
+      "groups": [
+        "backup-scoped-encoding-memo",
+        "terminal-backup-source-layout"
+      ]
+    },
     {
       "path": "src/server/src/smb_rpc/default_share.rs",
       "groups": [
@@ -16651,8 +16786,7 @@
         "backup-scoped-encoding-memo",
         "terminal-backup-source-layout"
       ]
-    }
-,
+    },
     {
       "path": "src/engine/src/disk/admission.rs",
       "groups": [

@@ -59,6 +59,7 @@ fn navigation_resets_only_location_owned_state() {
         let mut model = Model {
             unborn: Default::default(),
             directory_snapshot: Default::default(),
+            commit_mode: Default::default(),
             deletion: Default::default(),
             mkdir: Default::default(),
             disks: disks.clone(),

@@ -3,6 +3,8 @@ mod backup;
 mod batch;
 mod branch;
 mod content_matches;
+mod commit_mode;
+pub use commit_mode::DecodeError as FileCommitModeError;
 mod deletion;
 mod detached_history;
 mod detail;

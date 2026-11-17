@@ -770,7 +770,7 @@ class TargetedSelection(unittest.TestCase):
             'legacy-directory-branch-web-retirement',
             'legacy-directory-staging-web-retirement', 'paged-deletion-review',
             'web-directory-history-retirement', 'web-recovery-principals',
-        ], ['directory-web-selection'])
+        ], ['directory-web-selection', 'file-commit-mode-web-http'])
         self.assertEqual(len(plan['rust_targets']), 8)
         self.assertEqual(plan['python_tests'],
                          sorted(set(self.policy['groups']['ci-selection']['python_tests'])
@@ -983,7 +983,7 @@ class TargetedSelection(unittest.TestCase):
             'historical-directory-web', 'legacy-directory-branch-web-retirement',
             'legacy-directory-staging-web-retirement',
             'paged-deletion-review', 'web-directory-history-retirement',
-        ], ['directory-web-selection'])
+        ], ['directory-web-selection', 'file-commit-mode-web-http'])
         self.assertEqual(len(plan['rust_targets']), 8)
         self.assertEqual(plan['python_tests'],
                          sorted(set(self.policy['groups']['ci-selection']['python_tests'])
