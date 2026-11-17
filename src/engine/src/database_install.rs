@@ -12,6 +12,9 @@ use std::{
     sync::Arc,
 };
 
+mod existing;
+pub(crate) use existing::ExistingExchange;
+
 pub(crate) const DISK_DATABASE_NAME: &str = ".zxs-disk.sqlite";
 pub(crate) const DISK_HISTORY_DATABASE_NAME: &str = ".zxs-disk-history.sqlite";
 
@@ -264,10 +267,10 @@ impl PreparedInstall {
                     "completed installation intent changed before its durability tail",
                 ));
             }
-            self.finish(stage, envelope, observe)?;
+            self.finish(&stage, &envelope, observe)?;
         }
         match self.resume.take() {
-            Some((stage, envelope)) => self.finish(stage, envelope, observe),
+            Some((stage, envelope)) => self.finish(&stage, &envelope, observe),
             None => Ok(()),
         }
     }
@@ -482,12 +485,12 @@ impl PreparedInstall {
 
     fn finish(
         &self,
-        stage: DiskRoot,
-        envelope: Envelope,
+        stage: &DiskRoot,
+        envelope: &Envelope,
         observe: &mut impl FnMut(&'static str) -> Result<()>,
     ) -> Result<()> {
         let target = HeldRegular::capture(&self.entity, self.source.scope.leaf(), self.maximum)?;
-        let payload = HeldRegular::capture(&stage, "payload", self.maximum)?;
+        let payload = HeldRegular::capture(stage, "payload", self.maximum)?;
         let actual_target = target.as_ref().map(HeldRegular::stamp);
         let actual_payload = payload.as_ref().map(HeldRegular::stamp);
         if actual_target == Some(&envelope.new) && actual_payload == envelope.old.as_ref() {
@@ -503,7 +506,7 @@ impl PreparedInstall {
             ));
         }
         self.entity.publish_install_preserving(
-            &stage,
+            stage,
             &EntryName::new(self.source.scope.leaf())
                 .expect("invariant: every database scope selects one canonical entry"),
             InstallExchange {

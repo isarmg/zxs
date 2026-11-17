@@ -4,6 +4,25 @@ use crate::container_storage::object_database::{
     ObjectDatabaseMaterial, ObjectDatabaseRecord, ObjectDatabaseScope,
 };
 
+/// Re-admit a physical FILE predecessor and compare all its local rows with
+/// the frozen original. An unrelated publication can advance State without
+/// rewriting this FILE; the scalar bound alone is not a native FILE frontier.
+pub(in crate::container_storage) fn require_backup_predecessor(
+    actual: &[u8], view: StateProjection<'_>, file: &str, history: &str,
+) -> Result<()> {
+    let observed = verify_snapshot(actual)?;
+    if observed.file != file || observed.history != history || observed.sequence == 0
+        || observed.sequence > view.state().sequence
+    {
+        return Err(invalid("physical Backup FILE is not a predecessor in the original scope"));
+    }
+    let original = CapturedMaterial::from_projection(view, file, history)?;
+    if original.records_hash != observed.records_hash {
+        return Err(invalid("physical Backup FILE differs from the original published rows"));
+    }
+    Ok(())
+}
+
 pub(in crate::container_storage) fn read_material(bytes: &[u8]) -> Result<ObjectDatabaseMaterial> {
     let captured = verify_snapshot(bytes)?;
     Ok(ObjectDatabaseMaterial::new(

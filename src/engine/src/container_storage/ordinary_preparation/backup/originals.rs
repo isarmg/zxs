@@ -3,7 +3,7 @@
 //! replicas, current Config guesses and legacy locators cannot supply it.
 use super::*;
 use crate::container_storage::{backup_databases, file_database};
-use crate::database_install::{InstallAdmission, PreparedInstall, Scope};
+use crate::database_install::{ExistingExchange, InstallAdmission, Scope};
 use crate::disk::{FileStamp, HeldRegular};
 use crate::engine::fresh_layout::directory_error;
 use crate::engine::membership_transition::{PublishedBackupOriginal, PublishedBackupPayload};
@@ -181,6 +181,7 @@ struct Object {
     file: File,
     bytes: u64,
     digest: String,
+    exchange: ExistingExchange,
 }
 
 pub(crate) struct BackupOriginalCompletion(Vec<u8>);
@@ -228,7 +229,6 @@ pub(crate) struct BackupOriginalImage<'a> {
     source: &'a PublishedBackupOriginal<'a>,
     projection: ProjectionSnapshot<'a>,
     objects: Vec<Object>,
-    installs: Vec<PreparedInstall>,
     recipe_hash: String,
     _reservation: crate::engine::PayloadProofReservation,
 }
@@ -254,13 +254,15 @@ impl<'a> BackupOriginalImage<'a> {
                     crate::engine::fresh_layout::directories::chain(state, entry)?.len()
                 }
             };
-            descriptors = descriptors.checked_add(replica.prefixes.len() * 6 + depth + 4)
+            // File holds its container, common/current roots and ancestry.
+            // The exchange can simultaneously retain its entity, named old
+            // database and own attempt directory. Transient reads are separate.
+            descriptors = descriptors.checked_add(replica.prefixes.len() * 6 + depth + 6)
                 .ok_or(Failure::ContainerBudget)?;
         }
         let reservation = reserve(descriptors)?;
         let projection = ProjectionSnapshot::new(state);
         let mut objects = Vec::with_capacity(selected.len());
-        let mut installs = Vec::with_capacity(selected.len());
         for database in backup_databases::PreparedDatabases::capture(source.published(), stop)?
             .into_databases()
         {
@@ -278,16 +280,16 @@ impl<'a> BackupOriginalImage<'a> {
             require_database_names(&held.root, stop)?;
             let length = bytes.len() as u64;
             let digest = blake3::hash(&bytes).to_hex().to_string();
-            let install = PreparedInstall::capture_held(
-                &held.current, &held.history, &held.root,
-                (Scope::file(&history, &file)?, InstallAdmission::DecidedRecovery),
+            let exchange = ExistingExchange::capture(
+                &held.current, &held.history, &held.root, Scope::file(&history, &file)?,
                 Arc::new(bytes), file_database::MAX_BYTES,
-                |old| file_database::verify_scope(old, &file, &history),
+                |old| file_database::require_backup_predecessor(
+                    old, projection.view(), &file, &history,
+                ),
             )?;
             objects.push(Object {
-                file: held, bytes: length, digest,
+                file: held, bytes: length, digest, exchange,
             });
-            installs.push(install);
         }
         if !selected.is_empty() {
             return Err(Failure::BackupLayoutEvidence.into());
@@ -320,7 +322,7 @@ impl<'a> BackupOriginalImage<'a> {
         }
         source.require(stop)?;
         Ok(Self {
-            source, projection, objects, installs,
+            source, projection, objects,
             recipe_hash: blake3::hash(&recipe).to_hex().to_string(),
             _reservation: reservation,
         })
@@ -336,10 +338,10 @@ impl<'a> BackupOriginalImage<'a> {
         self.source.require(stop)?;
         let mut total = COMPLETION_RESERVE.checked_add(reserve).ok_or(Failure::ContainerBudget)?;
         let mut histories = BTreeMap::new();
-        for (object, install) in self.objects.iter().zip(&self.installs) {
+        for object in &self.objects {
             preparation_checkpoint(stop)?;
             object.file.verify(self.source.root())?;
-            let (bytes, entries) = install.reservation();
+            let (bytes, entries) = object.exchange.reservation();
             let entry = histories.entry(&object.file.history)
                 .or_insert((&object.file.current, 0u64, 0usize));
             entry.1 = entry.1.checked_add(bytes).ok_or(Failure::ContainerBudget)?;
@@ -385,6 +387,7 @@ impl<'a> BackupOriginalImage<'a> {
         {
             return Err(Failure::BackupLayoutEvidence.into());
         }
+        object.exchange.require_installed(&object.file.current, actual.stamp())?;
         object.file.verify(self.source.root())?;
         let stamp = actual.stamp().clone();
         actual.release_bytes();
@@ -395,12 +398,13 @@ impl<'a> BackupOriginalImage<'a> {
     pub(crate) fn apply_preserving(mut self, stop: &AtomicBool)
         -> Result<BackupOriginalCompletion>
     {
-        for (object, install) in self.objects.iter().zip(std::mem::take(&mut self.installs)) {
+        for index in 0..self.objects.len() {
+            let object = &mut self.objects[index];
             self.source.require(stop)?;
             object.file.verify(self.source.root())?;
             require_database_names(&object.file.root, stop)?;
-            install.apply(&object.file.current, &mut |_| preparation_checkpoint(stop))?;
-            self.read(object, stop)?;
+            object.exchange.apply(&object.file.current, &mut |_| preparation_checkpoint(stop))?;
+            self.read(&self.objects[index], stop)?;
         }
         self.verify(stop)
     }

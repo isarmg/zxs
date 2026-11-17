@@ -281,7 +281,34 @@ fn published_original_files_keep_no_clobber_readback_and_same_decision_retry() -
         });
         drop(plan);
 
-        let (database, original_bytes, _) = &databases[0];
+        let (database, original_bytes, next_bytes) = &databases[0];
+        let parked_before = temporary.join("parked-before-selection");
+        fs::rename(database, &parked_before)?;
+        expect_rejected(temporary, || BackupOriginalImage::capture(source, &stop).map(|_| ()));
+        assert!(!database.exists());
+        fs::rename(&parked_before, database)?;
+
+        // The correct successor SQLite, with no local exchanged pair, cannot
+        // replace this root's own registered predecessor or create a receipt.
+        fs::write(database, next_bytes)?;
+        expect_rejected(temporary, || BackupOriginalImage::capture(source, &stop).map(|_| ()));
+        fs::write(database, original_bytes)?;
+
+        // Valid SQL and the correct FILE/history alone do not authorize a
+        // different local row set. The actual original snapshot is immutable.
+        let mut other = source.original().state().clone();
+        let path = original.databases()[0].path();
+        let file = path.parent().unwrap().file_name().unwrap().to_str().unwrap();
+        other.file_notes.insert(file.to_owned(), "unpublished changed note".to_owned());
+        let other = crate::history_package::AdmittedState::admit_replayed(other)?;
+        let other = PreparedDatabases::capture(&other, &stop)?;
+        let wrong = other.databases().iter().find(|db| db.path() == path).unwrap();
+        wrong.verify(wrong.bytes())?;
+        assert_ne!(wrong.bytes(), original_bytes.as_slice());
+        fs::write(database, wrong.bytes())?;
+        expect_rejected(temporary, || BackupOriginalImage::capture(source, &stop).map(|_| ()));
+        fs::write(database, original_bytes)?;
+
         for suffix in ["-wal", "-shm", "-journal", ".unknown"] {
             let sibling = database.with_file_name(format!(
                 "{}{suffix}", database.file_name().unwrap().to_str().unwrap(),
@@ -344,37 +371,45 @@ fn published_original_files_keep_no_clobber_readback_and_same_decision_retry() -
             assert_eq!(fs::read(path)?, *expected);
         }
         let installed_media = media(temporary);
-        for ((active, before, _), identity) in databases.iter().zip(old_identities) {
-            let retained = installed_media.iter().filter(|(_, (found, _))| *found == identity)
+        for ((active, before, _), identity) in databases.iter().zip(&old_identities) {
+            let retained = installed_media.iter().filter(|(_, (found, _))| found == identity)
                 .collect::<Vec<_>>();
             assert_eq!(retained.len(), 1);
             assert_ne!(retained[0].0, active);
             assert_eq!(retained[0].1.1.as_deref(), Some(before.as_slice()));
         }
 
-        // Completion binds the SQLite inode even when replacement bytes match.
+        // Missing displaced material invalidates even an already captured
+        // proof; neither the new live file nor another original can refill it.
+        let original_inode = identity(&databases[0].0);
+        let retained = installed_media.iter().find(|(_, (inode, _))| *inode == old_identities[0])
+            .unwrap().0;
+        let parked = temporary.join("parked-retained-FILE");
+        fs::rename(retained, &parked)?;
+        expect_rejected(temporary, || cold.verify(&stop).map(|_| ()));
+        expect_rejected(temporary, || BackupOriginalImage::capture(source, &stop).map(|_| ()));
+        assert_eq!(identity(&databases[0].0), original_inode);
+        fs::rename(&parked, retained)?;
+
+        // Not even a new completion with the same logical bytes is allowed for
+        // a substituted inode: restore only the actual old/new exchanged pair.
         let path = &databases[0].0;
         let held = fs::File::open(path)?;
         let replacement = temporary.join("same-byte-FILE");
         fs::write(&replacement, &databases[0].2)?;
         fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600))?;
+        let exact = temporary.join("parked-exact-installed-FILE");
+        fs::rename(path, &exact)?;
         fs::rename(&replacement, path)?;
         assert_ne!(held.metadata()?.ino(), fs::metadata(path)?.ino());
-        let replaced = BackupOriginalImage::capture(source, &stop)?;
-        assert_eq!(replaced.recipe_hash(), recipe);
-        let replacement_completion = replaced.verify(&stop)?;
-        assert_ne!(replacement_completion.bytes(), completion.bytes());
-
-        // Read-only verification never repairs a completed missing database.
-        let parked = temporary.join("parked-completed-FILE");
-        fs::rename(path, &parked)?;
-        expect_rejected(temporary, || replaced.verify(&stop).map(|_| ()));
+        expect_rejected(temporary, || cold.verify(&stop).map(|_| ()));
+        expect_rejected(temporary, || BackupOriginalImage::capture(source, &stop).map(|_| ()));
+        fs::rename(path, &replacement)?;
+        expect_rejected(temporary, || cold.verify(&stop).map(|_| ()));
         assert!(!path.exists());
-        fs::rename(&parked, path)?;
-        assert_eq!(
-            BackupOriginalImage::capture(source, &stop)?.verify(&stop)?.bytes(),
-            replacement_completion.bytes(),
-        );
+        fs::rename(&exact, path)?;
+        assert_eq!(BackupOriginalImage::capture(source, &stop)?.verify(&stop)?.bytes(),
+            completion.bytes());
 
         // A late SQLite sibling invalidates completed readback without cleanup.
         let sidecar = path.with_file_name(format!(
@@ -382,14 +417,12 @@ fn published_original_files_keep_no_clobber_readback_and_same_decision_retry() -
         ));
         fs::write(&sidecar, b"late completed companion")?;
         assert_eq!(
-            expect_rejected(temporary, || replaced.verify(&stop).map(|_| ())).code(),
+            expect_rejected(temporary, || cold.verify(&stop).map(|_| ())).code(),
             ErrorCode::ContainerLayoutInvalid,
         );
         fs::remove_file(sidecar)?;
-        assert_eq!(
-            BackupOriginalImage::capture(source, &stop)?.verify(&stop)?.bytes(),
-            replacement_completion.bytes(),
-        );
+        assert_eq!(BackupOriginalImage::capture(source, &stop)?.verify(&stop)?.bytes(),
+            completion.bytes());
         Ok(())
     })
 }

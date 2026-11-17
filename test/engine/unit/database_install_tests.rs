@@ -283,3 +283,39 @@ fn duplicate_unpublished_pairs_still_fail_closed_without_exchanging_either() {
         assert!(path.join("intent.json").is_file());
     }
 }
+
+#[test]
+fn required_exchange_does_not_adopt_empty_or_matching_successors_from_another_root() {
+    let (_a, a, history, file) = install_fixture();
+    let (_b, b, _, _) = install_fixture();
+    let leaf = crate::container_storage::file_database::NAME;
+    let capture = |root: &DiskRoot| {
+        ExistingExchange::capture(
+            root, root.path(), root, Scope::file(&history, &file).unwrap(),
+            Arc::new(b"successor".to_vec()), 1024,
+            |old| {
+                if old != b"original" {
+                    return Err(invalid("not the authenticated previous image"));
+                }
+                Ok(())
+            },
+        )
+    };
+    a.write_atomic(&a.path().join(leaf), b"original", false).unwrap();
+    let mut first = capture(&a).unwrap();
+    first.apply(&a, &mut |_| Ok(())).unwrap();
+    let current = HeldRegular::capture(&a, leaf, 1024).unwrap().unwrap();
+    first.require_installed(&a, current.stamp()).unwrap();
+    capture(&a).unwrap().require_installed(&a, current.stamp()).unwrap();
+
+    assert!(capture(&b).is_err());
+    assert!(!b.path().join(".zxs-layout").exists());
+    b.write_atomic(&b.path().join(leaf), current.bytes(), false).unwrap();
+    // Even an identical visible SQLite payload needs this root's retained old
+    // inode, stage and exact exchange; the first root's proof cannot be reused.
+    assert!(capture(&b).is_err());
+    assert!(!b.path().join(".zxs-layout").exists());
+    assert_eq!(b.read_bytes(&b.path().join(leaf), 1024).unwrap(), current.bytes());
+    assert!(first.require_installed(&b, current.stamp()).is_err());
+    first.require_installed(&a, current.stamp()).unwrap();
+}

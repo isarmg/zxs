@@ -11,7 +11,7 @@ pub(super) mod install;
 mod material;
 mod projection;
 mod rows;
-pub(super) use material::{read_material, reconstruct_material};
+pub(super) use material::{read_material, reconstruct_material, require_backup_predecessor};
 
 pub(crate) const NAME: &str = ".zxs-file.sqlite";
 const FORMAT: &str = "file-container-working-state-v1";
