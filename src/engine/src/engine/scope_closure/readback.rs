@@ -2,7 +2,7 @@
 //! frontier. This module never chooses a frontier and never repairs material.
 use super::{
     ScopeClosureError as Failure,
-    genesis::{PAGE_LIMIT, registration_key, system_logical_root},
+    genesis::{PAGE_LIMIT, registration_key},
     objects::{self, Domain},
     schema::{Closure, Counts, DiskManifest, Membership, Origin, Scope, SystemMaterial},
 };
@@ -159,7 +159,6 @@ impl<'a> Original<'a> {
             || system.topology_generation != Generation::new(1)
             || material.scope != Scope::System
             || material.identity != self.pool
-            || material.logical_root != system_logical_root()?
             || &material.body_inventory != empty.reference()
         {
             return Err(Failure::GenesisMismatch.into());
@@ -180,8 +179,12 @@ impl<'a> Original<'a> {
             crate::engine::index::preparation::MAX_BYTES,
         )?;
         let state = crate::history_package::AdmittedState::admit_replayed(super::initial_state())?;
-        crate::engine::index::preparation::SystemEncodingInput::new(&state, &|| Ok(()))?
-            .verify(&bytes, &|| Ok(()))?;
+        let actual =
+            crate::engine::index::preparation::SystemEncodingInput::new(&state, &|| Ok(()))?
+                .verified_scope_root(&bytes, &|| Ok(()))?;
+        if actual != material.logical_root {
+            return Err(Failure::GenesisMismatch.into());
+        }
         Ok((
             storage_contract::canonical_json(material)?.len() as u64,
             closure.counts.canonical_metadata_bytes,

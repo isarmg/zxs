@@ -6,6 +6,7 @@ use sqlite_access::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use std::sync::atomic::AtomicBool;
 
 pub(super) mod readback;
+pub(in crate::engine::index) mod logical;
 
 pub(in crate::engine) const MAX_BYTES: usize = 64 * 1024 * 1024;
 
@@ -86,6 +87,14 @@ impl<'a> SystemEncodingInput<'a> {
     ) -> Result<Vec<u8>> {
         checkpoint()?;
         encode_sql(self.state, checkpoint)
+    }
+
+    pub(in crate::engine) fn verified_scope_root(
+        &self, bytes: &[u8], checkpoint: &impl Fn() -> Result<()>,
+    ) -> Result<storage_contract::working_tree::MaterialCommitment> {
+        checkpoint()?;
+        require_output_size(bytes.len())?;
+        readback::verified_scope_root(bytes, self.state, checkpoint)
     }
 
     pub(in crate::engine) fn verify(

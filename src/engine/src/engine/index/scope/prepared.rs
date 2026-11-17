@@ -5,6 +5,7 @@ pub(in crate::engine::index) async fn verify_prepared(
     connection: &mut sqlite_access::SqliteConnection,
     state: &State,
     checkpoint: &impl Fn() -> Result<()>,
+    mut rows: Option<&mut super::super::preparation::logical::LogicalRows>,
 ) -> Result<()> {
     let delta = Delta::between(None, state);
     let mut expected = 0usize;
@@ -17,7 +18,7 @@ pub(in crate::engine::index) async fn verify_prepared(
                 )
                 .bind(kind as i64)
                 .bind(id)
-                .bind(position)
+                .bind(&position)
                 .bind(file)
                 .bind(history)
                 .fetch_one(&mut *connection)
@@ -27,6 +28,9 @@ pub(in crate::engine::index) async fn verify_prepared(
                         ErrorCode::ContainerLayoutInvalid,
                         "prepared SYSTEM membership differs from its source State",
                     ));
+                }
+                if let Some(rows) = rows.as_deref_mut() {
+                    rows.member(kind, id, &position, file, history)?;
                 }
                 expected += 1;
             }

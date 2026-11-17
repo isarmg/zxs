@@ -17,7 +17,6 @@ use crate::history_package::AdmittedState;
 use crate::journal::PreparedMetadataObject;
 use crate::metadata_map::{Encoder, ProofMeasure, Reference};
 use crate::{Result, State, ValidatedConfig};
-use data_serialization::Serialize;
 use std::{borrow::Cow, collections::BTreeMap};
 use storage_contract::working_tree::{DiskRegistrationIdentity, MaterialCommitment, RootBinding};
 use storage_contract::{DiskId, Generation, OperationId, PoolId, Sequence};
@@ -271,8 +270,9 @@ fn prepare_system(
     state: &AdmittedState,
 ) -> Result<(PreparedObject, PreparedImage, usize)> {
     let input = SystemEncodingInput::new(state, &|| Ok(()))?;
-    let image = PreparedImage::new(Schema::System, input.encode(&|| Ok(()))?);
-    let logical_root = system_logical_root()?;
+    let bytes = input.encode(&|| Ok(()))?;
+    let logical_root = input.verified_scope_root(&bytes, &|| Ok(()))?;
+    let image = PreparedImage::new(Schema::System, bytes);
     let material = Material {
         scope: Scope::System,
         identity: pool_id,
@@ -293,28 +293,4 @@ fn prepare_system(
         },
     )?;
     Ok((object, image, bytes))
-}
-
-pub(super) fn system_logical_root() -> Result<MaterialCommitment> {
-    // These are all logical rows of the genesis SYSTEM projection. Reading
-    // the installed image independently verifies each table against the same
-    // admitted empty State, not against a hash of raw State/control_auth.
-    #[derive(Serialize)]
-    struct EmptySystemRows {
-        sequence: Sequence,
-        history_versions: [(); 0],
-        scope_members: [(); 0],
-        system_changes: [(); 0],
-    }
-    Ok(MaterialCommitment::from_digest(
-        storage_contract::canonical_object_digest(
-            "system-scope-rows",
-            &EmptySystemRows {
-                sequence: Sequence::new(0),
-                history_versions: [],
-                scope_members: [],
-                system_changes: [],
-            },
-        )?,
-    ))
 }

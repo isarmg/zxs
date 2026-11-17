@@ -149,11 +149,25 @@ fn every_present_global_family_and_exact_original_principal_must_survive() {
             "fixture must actually contain family {kind}"
         );
     }
-    assert!(!kinds.contains(&1), "rename facts must not manufacture path nodes");
-    assert_eq!(engine.state().operations.values().filter(|receipt| {
-        receipt.result.get("path_changes").and_then(|facts| facts.as_array())
-            .is_some_and(|facts| !facts.is_empty())
-    }).count(), 1);
+    assert!(
+        !kinds.contains(&1),
+        "rename facts must not manufacture path nodes"
+    );
+    assert_eq!(
+        engine
+            .state()
+            .operations
+            .values()
+            .filter(|receipt| {
+                receipt
+                    .result
+                    .get("path_changes")
+                    .and_then(|facts| facts.as_array())
+                    .is_some_and(|facts| !facts.is_empty())
+            })
+            .count(),
+        1
+    );
     for kind in kinds {
         reject(
             &change(
@@ -389,7 +403,9 @@ fn reusable_system_input_keeps_exact_bytes_and_distinguishes_same_sequence_rows(
 
     let mut changed = engine.state().clone();
     let file = changed.versions.values().next().unwrap().file_id.clone();
-    changed.file_notes.insert(file, "different encoding input".into());
+    changed
+        .file_notes
+        .insert(file, "different encoding input".into());
     let changed = admitted_encoding_state(&changed);
     let other = SystemEncodingInput::new(&changed, &|| Ok(())).unwrap();
     assert_ne!(input.input_hash(), other.input_hash());
@@ -417,6 +433,50 @@ fn reusable_system_input_checks_cancellation_at_construction_encoding_and_readba
     let checkpoint = || preparation_checkpoint(&stopped);
     assert!(SystemEncodingInput::new(&admitted, &checkpoint).is_err());
     let input = SystemEncodingInput::new(&admitted, &|| Ok(())).unwrap();
-    assert_eq!(input.encode(&checkpoint).unwrap_err().code(), ErrorCode::OperationAborted);
-    assert_eq!(input.verify(&bytes, &checkpoint).unwrap_err().code(), ErrorCode::OperationAborted);
+    assert_eq!(
+        input.encode(&checkpoint).unwrap_err().code(),
+        ErrorCode::OperationAborted
+    );
+    assert_eq!(
+        input.verify(&bytes, &checkpoint).unwrap_err().code(),
+        ErrorCode::OperationAborted
+    );
+}
+
+#[test]
+fn genesis_system_logical_digest_includes_native_scalar_audit_row() {
+    use storage_contract::{ContentHash, Sequence, working_tree::MaterialCommitment};
+    let state = crate::history_package::AdmittedState::admit_replayed(
+        crate::engine::scope_closure::initial_state(),
+    )
+    .unwrap();
+    let input = SystemEncodingInput::new(&state, &|| Ok(())).unwrap();
+    let bytes = input.encode(&|| Ok(())).unwrap();
+    let actual = input.verified_scope_root(&bytes, &|| Ok(())).unwrap();
+    let empty: [(); 0] = [];
+    let hash = |domain, value: &json_codec::Value| {
+        MaterialCommitment::from_digest(
+            storage_contract::canonical_object_digest(domain, value).unwrap(),
+        )
+    };
+    let empty = json_codec::to_value(empty).unwrap();
+    let marker = storage_contract::canonical_json(&json_codec::json!({
+        "sequence":"0", "business_generation":"0", "topology_generation":"1",
+    }))
+    .unwrap();
+    let payload = ContentHash::from_digest(blake3::hash(&marker));
+    let changes = json_codec::json!([[38, "state", "0", payload]]);
+    let make_root = |changes: &json_codec::Value| {
+        hash(
+            "system-scope-rows",
+            &json_codec::json!({
+                "sequence":Sequence::new(0),
+                "history_versions":hash("system-history-versions", &empty),
+                "scope_members":hash("system-scope-members", &empty),
+                "system_changes":hash("system-business-changes", changes),
+            }),
+        )
+    };
+    assert_eq!(actual, make_root(&changes));
+    assert_ne!(actual, make_root(&empty));
 }

@@ -20,6 +20,18 @@ pub(super) fn verify(
     })
 }
 
+pub(super) fn verified_scope_root(
+    bytes: &[u8],
+    state: &State,
+    checkpoint: &impl Fn() -> Result<()>,
+) -> Result<storage_contract::working_tree::MaterialCommitment> {
+    let mut rows = super::logical::LogicalRows::new()?;
+    crate::sqlite_connection::read_image(bytes, MAX_BYTES as u32, async |connection| {
+        verify_rows(connection, state, checkpoint, Some(&mut rows)).await
+    })?;
+    rows.finish(state.sequence)
+}
+
 /// The caller owns the snapshot: an immutable decoded image or a read
 /// transaction on the installed writer. This does not change writer limits.
 pub(in crate::engine::index) async fn verify_connection(
@@ -27,13 +39,22 @@ pub(in crate::engine::index) async fn verify_connection(
     state: &State,
     checkpoint: &impl Fn() -> Result<()>,
 ) -> Result<()> {
+    verify_rows(connection, state, checkpoint, None).await
+}
+
+async fn verify_rows(
+    connection: &mut SqliteConnection,
+    state: &State,
+    checkpoint: &impl Fn() -> Result<()>,
+    mut rows: Option<&mut super::logical::LogicalRows>,
+) -> Result<()> {
     schema(connection).await?;
     crate::sqlite_integrity::verify(connection).await?;
     checkpoint()?;
     marker(connection, state.sequence).await?;
-    versions(connection, state, checkpoint).await?;
-    scope::verify_prepared(connection, state, checkpoint).await?;
-    system_changes::verify_prepared(connection, state, checkpoint).await?;
+    versions(connection, state, checkpoint, rows.as_deref_mut()).await?;
+    scope::verify_prepared(connection, state, checkpoint, rows.as_deref_mut()).await?;
+    system_changes::verify_prepared(connection, state, checkpoint, rows).await?;
     checkpoint()
 }
 
@@ -122,6 +143,7 @@ async fn versions(
     connection: &mut SqliteConnection,
     state: &State,
     checkpoint: &impl Fn() -> Result<()>,
+    mut rows: Option<&mut super::logical::LogicalRows>,
 ) -> Result<()> {
     for (id, version) in state.versions.iter() {
         checkpoint()?;
@@ -138,6 +160,14 @@ async fn versions(
             return Err(invalid(
                 "prepared SYSTEM history row differs from its source State",
             ));
+        }
+        if let Some(rows) = rows.as_deref_mut() {
+            rows.version(
+                id,
+                &version.file_id,
+                &version.history_tree_id,
+                version.version_sequence,
+            )?;
         }
     }
     let count: i64 =

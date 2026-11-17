@@ -5,10 +5,11 @@ pub(in crate::engine::index) async fn verify_prepared(
     connection: &mut sqlite_access::SqliteConnection,
     state: &State,
     checkpoint: &impl Fn() -> Result<()>,
+    mut rows: Option<&mut super::super::preparation::logical::LogicalRows>,
 ) -> Result<()> {
     let mut order = Order::default();
     order.update(None, state);
-    let kinds = [Kind::Operation, Kind::FilePath]
+    let mut kinds: Vec<_> = [Kind::Operation, Kind::FilePath]
         .into_iter()
         .chain(SystemCatalogKind::ALL.iter().copied().map(Kind::Catalog))
         .chain(
@@ -19,7 +20,9 @@ pub(in crate::engine::index) async fn verify_prepared(
             ]
             .into_iter()
             .map(Kind::Audit),
-        );
+        )
+        .collect();
+    kinds.sort_by_key(|kind| kind.sql());
     let mut expected = 0usize;
     for kind in kinds {
         for (sequence, id) in order.rows(kind) {
@@ -36,6 +39,9 @@ pub(in crate::engine::index) async fn verify_prepared(
                 Kind::Audit(kind) => kind.payload(state, id)?,
             };
             verify_payload(connection, kind.sql(), id, *sequence, &payload).await?;
+            if let Some(rows) = rows.as_deref_mut() {
+                rows.change(kind.sql(), id, *sequence, &payload)?;
+            }
             expected += 1;
         }
     }

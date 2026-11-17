@@ -90,6 +90,12 @@ Q=floor(N/2)+1 验证，不按在线数重算。局部 material 和[离线盘日
 包预算。SQLite 原始页按 `metadata/objects/scope-sqlite-image/HH/HASH.sqlite` 的
 原始内容摘要取回，不把 JSON 摘要当正文摘要。原池空库存也必须读到真实规范空页。
 
+SYSTEM 逻辑根域 `system-scope-rows` 绑定序号及三类完整业务行数组的域摘要：
+`system-history-versions`、`system-scope-members`、`system-business-changes`。
+按原生校验的确定顺序逐行累加；业务变化含其原规范 payload 的完整字节摘要，不用
+整份 State 或控制认证资料。空池也含已有的 `state` 标量审计行（序号和两种代数），
+不能把“空文件库存”误写为“所有 SYSTEM 表无行”。
+
 原配置的域仍为 `pool-config`；固定锚的规范字节属于 `fixed-genesis` 域，成员票按
 整份锚而非裸 Config 分组。Add／Backup 目标从已认证原生归档携带原样字节，不从
 当前配置生成另一个 genesis。普通打开只读核验并保留损坏材料。已有显式多成员恢复的

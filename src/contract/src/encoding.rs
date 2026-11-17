@@ -294,9 +294,40 @@ pub fn encode_canonical_object_digest<T: Serialize + ?Sized>(
     Ok((bytes, hash))
 }
 
-fn canonical_bytes_digest(kind: &str, bytes: &[u8]) -> blake3::Hash {
+/// Streaming equivalent of `canonical_object_digest(kind, &rows)`. Array
+/// order belongs to the originating schema. No intermediate full array is
+/// retained, and every element uses the exact existing canonical encoder.
+pub struct CanonicalArrayDigest {
+    hasher: blake3::Hasher,
+    first: bool,
+}
+impl CanonicalArrayDigest {
+    pub fn new(kind: &str) -> Result<Self> {
+        validate_object_domain(kind)?;
+        let mut hasher = object_hasher(kind);
+        hasher.update(b"[");
+        Ok(Self { hasher, first: true })
+    }
+    pub fn push<T: Serialize + ?Sized>(&mut self, row: &T) -> Result<()> {
+        let bytes = canonical_json(row)?;
+        if !self.first { self.hasher.update(b","); }
+        self.first = false;
+        self.hasher.update(&bytes);
+        Ok(())
+    }
+    pub fn finish(mut self) -> blake3::Hash {
+        self.hasher.update(b"]");
+        self.hasher.finalize()
+    }
+}
+fn object_hasher(kind: &str) -> blake3::Hasher {
     let mut h = blake3::Hasher::new();
     h.update(format!("zxs:{kind}\0").as_bytes());
+    h
+}
+
+fn canonical_bytes_digest(kind: &str, bytes: &[u8]) -> blake3::Hash {
+    let mut h = object_hasher(kind);
     h.update(bytes);
     h.finalize()
 }
