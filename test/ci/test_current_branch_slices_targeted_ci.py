@@ -18,6 +18,8 @@ class CurrentBranchSelection(unittest.TestCase):
         for group, files in {
             'setup-and-browser-secret-ownership': ['src/web/src/api/session.rs', 'src/server/src/setup_recovery.rs',
                                                    'test/tools/browser-smoke/runner/error_feedback.js'],
+            'ordinary-serving-tail-and-frame-bounds': ['test/engine/unit/backup_ordinary_tail_tests.rs',
+                                                       'test/server/unit/offline/worker_frame_tests.rs'],
             'normal-startup-tail-join': ['src/server/src/startup_tail.rs', 'test/server/unit/smb_rpc/startup_tests.rs'],
             'ordinary-exact-base-range': ['src/engine/src/container_storage/ordinary_preparation/draft/base_range.rs'],
             'original-ordinary-serving-selection': ['test/engine/unit/backup_ordinary_selection_barrier_tests.rs',

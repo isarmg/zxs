@@ -7270,6 +7270,43 @@
           "compile_target": "wasm32-unknown-unknown"
         }
       ]
+    },
+    "ordinary-serving-tail-and-frame-bounds": {
+      "reason": "Separately select actual per-held-root allocation and exact retained marker tail, and bounded service-worker count/encode/delivery. Original ordinary selection, execution+inspection, large specialized archive cap, shared lease and Foreign full success reply remain independently necessary. Not full-system capacity, live helper or multi-target acceptance.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::ordinary_serving::tail::tests::ordinary_tail_fills_only_missing_copies_regardless_of_participant_write_order",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::ordinary_serving::tail::tests::ordinary_tail_does_not_recreate_a_lost_or_equal_replaced_observed_receipt",
+            "engine::backup_preparation::capacity::serving::tests::ordinary_pending_allocation_rounds_every_file_and_counts_distinct_directories_and_controls",
+            "engine::backup_preparation::capacity::serving::tests::partial_serving_keeps_original_scratch_metadata_and_small_block_floors",
+            "engine::backup_preparation::capacity::serving::tests::ordinary_root_records_charge_only_this_held_target_and_never_adopt_linked_material"
+          ],
+          "max_tests": 5
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "offline::service_worker::encoding::tests::real_success_envelope_has_exact_compact_bytes_and_the_original_ceiling",
+            "offline::service_worker::encoding::tests::counting_and_collecting_stop_the_serializer_before_visiting_the_full_reply",
+            "offline::service_worker::encoding::tests::original_codec_failure_is_not_a_size_error",
+            "offline::service_worker::encoding::tests::long_service_failure_does_not_allocate_a_full_display_or_return_its_partial_prefix"
+          ],
+          "max_tests": 4
+        }
+      ]
     }
   },
   "rules": [
@@ -21624,6 +21661,54 @@
       "path": "test/web/unit/files/directory_snapshot_picks.rs",
       "groups": [
         "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/capacity/serving.rs",
+      "groups": [
+        "ordinary-serving-tail-and-frame-bounds"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/ordinary_serving/tail.rs",
+      "groups": [
+        "ordinary-serving-tail-and-frame-bounds"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_ordinary_tail_tests.rs",
+      "groups": [
+        "ordinary-serving-tail-and-frame-bounds"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_serving_space_tests.rs",
+      "groups": [
+        "ordinary-serving-tail-and-frame-bounds"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/service_worker.rs",
+      "groups": [
+        "ordinary-serving-tail-and-frame-bounds"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/service_worker/encoding.rs",
+      "groups": [
+        "ordinary-serving-tail-and-frame-bounds"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/service_worker/failure.rs",
+      "groups": [
+        "ordinary-serving-tail-and-frame-bounds"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/worker_frame_tests.rs",
+      "groups": [
+        "ordinary-serving-tail-and-frame-bounds"
       ]
     }
   ],
