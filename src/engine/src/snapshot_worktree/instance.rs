@@ -74,6 +74,9 @@ fn prepare(
         .require_root_mount(
             request.parent_directory_id, request.expected_root_generation, &request.name,
         ).map_err(RegistrationError::NamespaceHost)?;
+    crate::directory_worktree::names::require_mounted_paths(
+        &request.name, source.manifest().entries().iter().map(|entry| &entry.path),
+    ).map_err(RegistrationError::WorktreeName)?;
     let plan = WorktreeReservation {
         request: request.clone(), host: registered.host().clone(),
         allocated: WorktreeAllocation {

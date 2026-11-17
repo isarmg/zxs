@@ -64,7 +64,8 @@ impl SnapshotWorktreeError {
                     ErrorCode::ResourceLimitExceeded
                 }
                 crate::directory_worktree::names::NameError::TooLong => ErrorCode::NameTooLong,
-                crate::directory_worktree::names::NameError::Invalid(source) => {
+                crate::directory_worktree::names::NameError::Invalid(source)
+                | crate::directory_worktree::names::NameError::MountedPath(source) => {
                     ErrorCode::from(source)
                 }
             },

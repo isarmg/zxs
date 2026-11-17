@@ -1,6 +1,6 @@
 //! Allocation is a plan over the caller's fenced complete parent namespace.
 //! The publisher reserves the result durably and uses no-replace installation.
-use name_policy::{LookupName, Name};
+use name_policy::{LookupName, Name, PortablePath};
 use storage_contract::BranchName;
 
 const FIRST: u16 = 1;
@@ -28,6 +28,20 @@ pub(crate) enum NameError {
     TooLong,
     #[error("worktree name is invalid: {0}")]
     Invalid(#[source] name_policy::Error),
+    #[error("a source entry cannot be served under this worktree mount: {0}")]
+    MountedPath(#[source] name_policy::Error),
+}
+
+/// Ordinary entries already have canonical portable components. Mounting
+/// adds one component to their public path; only the aggregate budget changes.
+pub(crate) fn require_mounted_paths<'a>(
+    name: &Name, source_paths: impl Iterator<Item = &'a PortablePath>,
+) -> Result<(), NameError> {
+    let root = PortablePath::from_name(name).map_err(NameError::MountedPath)?;
+    for path in source_paths {
+        path.rebase(0, &root).map_err(NameError::MountedPath)?;
+    }
+    Ok(())
 }
 
 /// Include ordinary entries, live worktrees and in-flight durable reservations.

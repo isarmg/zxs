@@ -34,6 +34,10 @@ impl Fixture {
     }
 
     pub(super) fn with_nested_directory(nested: bool) -> (Self, Engine) {
+        Self::with_entry_parent(nested.then_some("Folder/Child"))
+    }
+
+    pub(super) fn with_entry_parent(parent: Option<&str>) -> (Self, Engine) {
         let temporary = tempfile::tempdir().unwrap();
         let system = temporary.path().join("system");
         let disks = [temporary.path().join("owner"), temporary.path().join("other")];
@@ -51,11 +55,11 @@ impl Fixture {
         let repository = engine.create_disk_root(
             &slot, "admin", OperationId::generate().unwrap(),
         ).unwrap();
-        if nested {
+        if let Some(parent) = parent {
             engine.file_namespace(
                 &repository.repository_id,
                 crate::NamespaceOperation::Mkdir {
-                    path: PortablePath::parse("Folder/Child").unwrap(),
+                    path: PortablePath::parse(parent).unwrap(),
                 },
                 "admin",
                 OperationId::generate().unwrap(),
@@ -65,9 +69,9 @@ impl Fixture {
         for (path, body) in PATHS.into_iter().zip([FIRST_ORIGINAL, SECOND_ORIGINAL]) {
             engine.stage_bytes(&workspace.workspace_id, path, body).unwrap();
         }
-        if nested {
+        if let Some(parent) = parent {
             engine.stage_bytes(
-                &workspace.workspace_id, "Folder/Child/existing.txt", b"unchanged nested original",
+                &workspace.workspace_id, &format!("{parent}/existing.txt"), b"unchanged nested original",
             ).unwrap();
         }
         engine.commit_workspace(CommitRequest {

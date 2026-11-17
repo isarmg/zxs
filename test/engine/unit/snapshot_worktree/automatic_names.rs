@@ -18,6 +18,9 @@ use storage_contract::{OperationId, Principal};
 mod fixture;
 use fixture::{FIRST_ORIGINAL, Fixture, inventory};
 
+#[path = "mounted_path_budget.rs"]
+mod mounted_path_budget;
+
 fn principal() -> Principal {
     "admin".parse().unwrap()
 }
