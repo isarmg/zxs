@@ -14,7 +14,7 @@ pub use automatic::{
     AutomaticBackupConfigurationRequest, AutomaticBackupError, AutomaticDirectoryBackupRequest,
     AutomaticFileBackupRequest,
 };
-pub use directory_namespaces::PublishedBackupDirectory;
+pub use directory_namespaces::{PublishedBackupDirectory, PublishedBackupFilePath};
 pub(crate) use recursive::RecursiveBackupMode;
 pub use recursive::{RecursiveBackupCapture, RecursiveBackupConfigurationRequest};
 

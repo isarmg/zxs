@@ -211,12 +211,99 @@ async fn rejected_scope(fixture: &Fixture, endpoint: &str, original: &Value) {
     assert_eq!(error["error"]["code"], "SCOPE_CHANGED");
 }
 
+async fn native_listing(fixture: &Fixture, slot: &str, path: &str) -> Value {
+    let route = format!(
+        "/api/file-manager/disks/{slot}/entries?{}",
+        path_query(path)
+    );
+    let tree = fixture.json("GET", &route, None).await;
+    assert_eq!(tree["backup"], true);
+    assert_eq!(tree["writable"], false);
+    assert!(tree["context"].is_null());
+    for row in tree["entries"].as_array().unwrap() {
+        assert_eq!(row["backup"], true);
+        assert_eq!(row["read_only"], true);
+    }
+    tree
+}
+
+async fn assert_native_listing(
+    fixture: &Fixture,
+    config: &Config,
+    files: &[&Value],
+    docs: &Value,
+    empty: &Value,
+) {
+    let disks = fixture.json("GET", "/api/file-manager/disks", None).await;
+    for tier in 1..3 {
+        let disk = &config.disks[tier];
+        let row = disks["disks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["slot_id"] == disk.slot_id)
+            .unwrap();
+        assert_eq!(row["level"], disk.level);
+        assert_eq!(row["writable"], false);
+        let mut path = String::new();
+        for source in config.disks[..tier].iter().rev() {
+            let tree = native_listing(fixture, &disk.slot_id, &path).await;
+            let uuid = source.disk_id.strip_prefix("disk_").unwrap();
+            let component = format!("{}--{uuid}", source.name);
+            let entries = tree["entries"].as_array().unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0]["name"], component);
+            assert_eq!(entries[0]["kind"], "directory");
+            if !path.is_empty() {
+                path.push('/');
+            }
+            path.push_str(&component);
+            assert_eq!(entries[0]["path"], path);
+        }
+        let tree = native_listing(fixture, &disk.slot_id, &path).await;
+        let directory = tree["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "docs")
+            .unwrap();
+        assert_eq!(directory["entry_id"], docs["entry_id"]);
+        let path = format!("{path}/docs");
+        let tree = native_listing(fixture, &disk.slot_id, &path).await;
+        let entries = tree["entries"].as_array().unwrap();
+        let directory = entries.iter().find(|row| row["name"] == "empty").unwrap();
+        assert_eq!(directory["entry_id"], empty["entry_id"]);
+        assert_eq!(directory["kind"], "directory");
+        for file in files {
+            let row = entries
+                .iter()
+                .find(|row| row["file_id"] == file["file_id"])
+                .unwrap();
+            assert_eq!(row["entry_id"], file["entry_id"]);
+            assert_eq!(row["version_id"], file["version_id"]);
+            assert_eq!(
+                row["path"],
+                format!("{path}/{}", file["name"].as_str().unwrap())
+            );
+            assert_eq!(
+                row["repository_path"],
+                format!("docs/{}", file["name"].as_str().unwrap())
+            );
+        }
+        assert_eq!(entries.len(), files.len() + 1);
+        let tree = native_listing(fixture, &disk.slot_id, &format!("{path}/empty")).await;
+        assert!(tree["entries"].as_array().unwrap().is_empty());
+    }
+}
+
 #[tokio::test]
 async fn automatic_directory_http_backfills_and_inherits_after_real_add_chain() {
     let (fixture, config, repository) = added_chain().await;
     let before_bytes = b"existing file before automatic directory configuration";
     fixture.save("P01", "docs/before.txt", before_bytes).await;
     let before = fixture.entry("P01", "docs/before.txt").await;
+    let docs = fixture.entry("P01", "docs").await;
+    let empty = fixture.entry("P01", "docs/empty").await;
     let read = format!(
         "/api/repositories/{}/backup-configuration?path=docs",
         repository.repository_id,
@@ -268,7 +355,9 @@ async fn automatic_directory_http_backfills_and_inherits_after_real_add_chain() 
     for tier in 0..3 {
         assert!(area(&config, tier).join("docs/empty").is_dir());
     }
+    assert_native_listing(&fixture, &config, &[&before, &after], &docs, &empty).await;
     let fixture = fixture.reopen().await;
+    assert_native_listing(&fixture, &config, &[&before, &after], &docs, &empty).await;
     assert_eq!(
         fixture.json("PUT", &endpoint, Some(original)).await,
         receipt

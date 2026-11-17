@@ -3,8 +3,8 @@
 use super::pagination::{Page, PageRequest, PageSelector};
 use super::*;
 use crate::backend_listing::SortKey;
-use storage_contract::State;
-use storage_engine::{Entry, FileVersion, PublishedBackupDirectory};
+use storage_contract::{FileId, State};
+use storage_engine::{Entry, FileVersion, PublishedBackupDirectory, PublishedBackupFilePath};
 
 fn available_on(state: &BackupListingMetadata, slot: &str, version: &str) -> bool {
     state
@@ -319,6 +319,7 @@ struct ListingScope {
     maximum: usize,
     namespaces: BTreeMap<String, NamespaceCapture>,
     directories: Vec<PublishedBackupDirectory>,
+    native_files: BTreeMap<FileId, PublishedBackupFilePath>,
 }
 
 pub(in crate::engine_backend) struct BackupListingRead {
@@ -386,6 +387,11 @@ impl BackupListingRead {
                 maximum: engine.config().max_entries,
                 namespaces,
                 directories: engine.published_backup_directories(slot).map_err(error)?,
+                native_files: engine
+                    .published_backup_file_paths(
+                        &name_policy::SlotId::parse(slot).map_err(ApiError::invalid_source)?,
+                    )
+                    .map_err(error)?,
             },
             request,
         })
@@ -572,7 +578,33 @@ impl ListingScope {
             )?;
         }
         for (file, (repo, newest)) in latest {
-            let current = canonical.get(file).copied();
+            let native = if self.native_files.is_empty() {
+                None
+            } else {
+                self.native_files
+                    .get(&file.parse::<FileId>().map_err(ApiError::invalid_source)?)
+            };
+            let current = match native {
+                Some(native) => {
+                    let namespace = &self.namespaces[&repo.history_tree_id];
+                    if native.repository().to_string() != namespace.repository_id {
+                        return Err(changed());
+                    }
+                    let actual = namespace
+                        .namespace
+                        .entries()
+                        .iter()
+                        .enumerate()
+                        .find(|(_, entry)| {
+                            entry.entry_id == native.entry().to_string()
+                                && entry.file_id == file
+                                && entry.path == *native.source()
+                        })
+                        .ok_or_else(changed)?;
+                    Some(actual)
+                }
+                None => canonical.get(file).copied(),
+            };
             let version = current
                 .filter(|(_, entry)| available_on(state, &self.slot_id, &entry.version_id))
                 .and_then(|(_, entry)| state.versions.get(&entry.version_id))
@@ -582,6 +614,7 @@ impl ListingScope {
                 .get(file)
                 .and_then(|paths| paths.get(&self.slot_id))
                 .cloned()
+                .or_else(|| native.map(|native| native.display().to_string()))
                 .unwrap_or_else(|| {
                     default_backup_path(repo, current.map(|(_, entry)| entry), version, state)
                 });

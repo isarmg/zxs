@@ -22,7 +22,8 @@ pub(crate) use backup_paths::directory_namespaces::{
 pub use backup_paths::{
     AutomaticBackupConfigurationRequest, AutomaticBackupError, AutomaticDirectoryBackupRequest,
     AutomaticFileBackupRequest,
-    BackupConfigurationRequest, PublishedBackupDirectory, RecursiveBackupCapture,
+    BackupConfigurationRequest, PublishedBackupDirectory, PublishedBackupFilePath,
+    RecursiveBackupCapture,
     RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,
 };
 pub(crate) use backup_paths::{RecursiveBackupMode, apply_backup_paths, prune_retained_policies};

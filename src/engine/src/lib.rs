@@ -230,7 +230,8 @@ pub use protection::{
     AutomaticBackupConfigurationRequest, AutomaticBackupError, AutomaticDirectoryBackupRequest,
     AutomaticFileBackupRequest,
     BackupConfigurationRequest, PlacementConfigurationRequest, PlacementRuleUpdate,
-    ProtectionPolicyUpdate, PublishedBackupDirectory, RecursiveBackupCapture,
+    ProtectionPolicyUpdate, PublishedBackupDirectory, PublishedBackupFilePath,
+    RecursiveBackupCapture,
     RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,
 };
 pub use storage_contract::*;

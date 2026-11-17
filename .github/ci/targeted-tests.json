@@ -124,6 +124,26 @@
         }
       ]
     },
+    "ordinary-backup-listing-regression": {
+      "reason": "Keep existing Current recursive paths, custom fixed-prefix history and selected identities, and snapshot-bound pagination unchanged when ordinary published Name+UUID geometry joins the existing backup reader. Only three existing lib exacts; the real Add A-to-B-to-C automatic PUT flow remains in automatic-backup-entry.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "engine_backend::file_manager::backup_namespace::tests::recursive_native_paths_feed_the_existing_backup_reader_at_each_tier",
+            "engine_backend::file_manager::backup_namespace::entry_tests::backend_backup_listing_preserves_fixed_prefix_history_and_filtered_selection",
+            "engine_backend::file_manager::backup_namespace::tests::backup_pages_preserve_directory_order_cursors_and_filtered_selection"
+          ],
+          "max_tests": 3
+        }
+      ]
+    },
     "directory-web-worktree-management": {
       "reason": "Check the Web controls for creating, listing, reopening and explicitly committing a selected exact registered worktree and original-operation recovery. Complete bounded lists and fresh status admission run native Web and Wasm, not a browser or external SMB.",
       "python_tests": [],
@@ -6469,9 +6489,52 @@
       ]
     },
     {
+      "path": "src/engine/src/lib.rs",
+      "groups": [
+        "automatic-backup-entry",
+        "ordinary-backup-listing-regression"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection.rs",
+      "groups": [
+        "automatic-backup-entry",
+        "ordinary-backup-listing-regression"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths.rs",
+      "groups": [
+        "automatic-backup-entry",
+        "ordinary-backup-listing-regression"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths/directory_namespaces.rs",
+      "groups": [
+        "automatic-backup-entry",
+        "ordinary-backup-listing-regression"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths/directory_namespaces/ordinary.rs",
+      "groups": [
+        "automatic-backup-entry",
+        "ordinary-backup-listing-regression"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager/backup_namespace.rs",
+      "groups": [
+        "automatic-backup-entry",
+        "ordinary-backup-listing-regression"
+      ]
+    },
+    {
       "path": "test/server/integration/phase1_save_tags/automatic_backups.rs",
       "groups": [
-        "automatic-backup-entry"
+        "automatic-backup-entry",
+        "ordinary-backup-listing-regression"
       ]
     },
     {

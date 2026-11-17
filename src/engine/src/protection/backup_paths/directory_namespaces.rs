@@ -8,6 +8,9 @@ use data_serialization::{Deserialize, Serialize};
 use name_policy::PortablePath;
 use std::path::PathBuf;
 
+mod ordinary;
+pub use ordinary::PublishedBackupFilePath;
+
 const FORMAT: &str = "recursive-backup-directory-namespace";
 const FOLLOW_FORMAT: &str = "recursive-directory-namespace-follow";
 pub(crate) const FILE_FOLLOW_KIND: &str = "file.namespace.recursive-directories";
@@ -495,18 +498,18 @@ impl Engine {
     /// # Errors
     /// Fails while current registry admission is unavailable, or if stored
     /// directory evidence uses an unsupported format or exceeds the read budget.
-    /// An admitted initial pool has no native directory publications and returns
-    /// no rows; an awaiting current publication remains an error.
+    /// Initial ordinary replicas use their actual published Name+UUID chain;
+    /// an awaiting current publication remains an error.
     pub fn published_backup_directories(
         &self,
         slot: &str,
     ) -> Result<Vec<PublishedBackupDirectory>> {
         let current = self.admitted_current_namespaces()?;
         let disk = self.disk(slot)?;
-        // Native recursive publication requires CurrentNamespaces. Initial is
-        // a distinct admitted state, not a fallback for pending/corrupt current.
+        // Initial is a distinct admitted source, never a fallback for a
+        // pending/corrupt Current publication or an unrecorded local directory.
         if current.is_none() {
-            return Ok(Vec::new());
+            return ordinary::published_directories(self, disk.disk_id.parse()?);
         }
         let identity = crate::DiskRegistrationIdentity {
             pool_id: self.config().pool_id.clone(),
