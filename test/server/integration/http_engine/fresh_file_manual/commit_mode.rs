@@ -184,6 +184,38 @@ async fn manual_default_explicit_automatic_saves_and_switch_back_keep_history_an
     assert_eq!(blocked.0, StatusCode::CONFLICT);
     assert_eq!(blocked.1["error"]["code"], "FILE_BRANCH_CONFLICT");
     assert_eq!(success(&app, &token, "GET", &read, None).await, dirty);
+
+    let listing = format!("/api/file-manager/disks/{slot}/entries?path=");
+    let before = success(&app, &token, "GET", &listing, None).await;
+    let relocation = format!("/api/file-manager/disks/{slot}/file-relocation");
+    let rename_request = |head: &Value| {
+        json!({
+            "operation_id": OperationId::generate().unwrap(),
+            "relocation": {
+                "repository_id": target.repository,
+                "expected_head": head,
+                "entry_id": target.entry,
+                "file_id": target.file,
+                "source": target.path,
+                "destination": "renamed-after-commit.txt",
+            }
+        })
+    };
+    let (status, rejected) = send(
+        &app,
+        Some(&token),
+        "POST",
+        &relocation,
+        Some(rename_request(&before["context"]["base_head"])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
+    assert_eq!(rejected["error"]["code"], "FILE_BRANCH_CONFLICT");
+    let after = success(&app, &token, "GET", &listing, None).await;
+    assert_eq!(after["context"], before["context"]);
+    assert_eq!(after["entries"], before["entries"]);
+    assert_eq!(success(&app, &token, "GET", &read, None).await, dirty);
+
     let clean = commit(&app, &token, &target, &query, &dirty).await;
     assert_eq!(
         version_bytes(&app, &token, clean["base"]["version_id"].as_str().unwrap()).await,
@@ -199,4 +231,24 @@ async fn manual_default_explicit_automatic_saves_and_switch_back_keep_history_an
     for (version, bytes) in retained {
         assert_eq!(version_bytes(&app, &token, &version).await, bytes);
     }
+    let committed = success(&app, &token, "GET", &listing, None).await;
+    success(
+        &app,
+        &token,
+        "POST",
+        &relocation,
+        Some(rename_request(&committed["context"]["base_head"])),
+    )
+    .await;
+    let renamed = success(&app, &token, "GET", &listing, None).await;
+    let entries = renamed["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["name"], "renamed-after-commit.txt");
+    assert_eq!(entries[0]["file_id"], target.file.to_string());
+    assert_eq!(entries[0]["entry_id"], target.entry.to_string());
+    assert_eq!(entries[0]["version_id"], clean["base"]["version_id"]);
+    assert_eq!(
+        version_bytes(&app, &token, entries[0]["version_id"].as_str().unwrap()).await,
+        draft
+    );
 }
