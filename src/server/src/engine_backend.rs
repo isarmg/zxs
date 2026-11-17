@@ -1416,6 +1416,13 @@ impl Backend for EngineBackend {
                 _ => error(failure),
             })
     }
+    fn configure_automatic_file_backups(
+        &self,
+        identity: &Identity,
+        request: crate::ConfigureAutomaticFileBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        automatic_backups::configure_file(self, identity, request)
+    }
     fn configure_automatic_directory_backups(
         &self,
         identity: &Identity,

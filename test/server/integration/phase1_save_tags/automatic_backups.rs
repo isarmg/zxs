@@ -1,4 +1,4 @@
-//! The management command protects an ordinary directory on a real Add chain.
+//! Management commands protect exact ordinary scopes on a real Add chain.
 use super::*;
 use std::{
     collections::BTreeSet,
@@ -318,4 +318,132 @@ async fn automatic_directory_http_backfills_and_inherits_after_real_add_chain() 
     let _root = stop_writers(fixture).await;
     assert_local_copies(&config, &repository, &before, before_bytes);
     assert_local_copies(&config, &repository, &after, after_bytes);
+}
+
+async fn rejected_file_request(fixture: &Fixture, endpoint: &str, body: Value, code: &str) {
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(endpoint)
+                .header("authorization", format!("Bearer {}", fixture.token))
+                .header("content-type", "application/json")
+                .body(Body::from(json_codec::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = http_routing::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let error: Value = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(error["error"]["code"], code);
+}
+
+#[tokio::test]
+async fn automatic_file_http_pins_occurrence_and_replays_after_real_add_chain() {
+    let (fixture, config, repository) = added_chain().await;
+    let bytes = b"one exact file becomes independently readable on A B and C";
+    let peer_bytes = b"the neighboring file keeps its own one-copy policy";
+    fixture.save("P01", "docs/report.txt", bytes).await;
+    fixture.save("P01", "docs/peer.txt", peer_bytes).await;
+    let entry = fixture.entry("P01", "docs/report.txt").await;
+    let peer = fixture.entry("P01", "docs/peer.txt").await;
+    let read = format!(
+        "/api/repositories/{}/backup-configuration?path=docs/report.txt",
+        repository.repository_id,
+    );
+    let before = fixture.json("GET", &read, None).await;
+    assert_eq!(before["target_copies"], 1);
+    assert_eq!(before["scope"]["id"], entry["file_id"]);
+    let endpoint = format!(
+        "/api/repositories/{}/automatic-file-backup-configuration",
+        repository.repository_id,
+    );
+    let original = json!({
+        "path": "docs/report.txt",
+        "entry_id": entry["entry_id"],
+        "file_id": entry["file_id"],
+        "target_copies": 3,
+        "expected_generation": before["generation"],
+        "operation_id": new_id("op").unwrap(),
+    });
+    let mut wrong_entry = original.clone();
+    wrong_entry["entry_id"] = peer["entry_id"].clone();
+    rejected_file_request(&fixture, &endpoint, wrong_entry.clone(), "SCOPE_CHANGED").await;
+    assert_eq!(fixture.json("GET", &read, None).await, before);
+
+    let receipt = fixture.json("PUT", &endpoint, Some(original.clone())).await;
+    assert_eq!(receipt["operation_kind"], "backup.configure-automatic-file");
+    assert_eq!(receipt["commit_state"], "PUBLISHED");
+    assert_eq!(receipt["protection_at_publish"], "TARGET_MET");
+    assert_eq!(receipt["result"]["version_count"], "1");
+    let mut encoded = original.clone();
+    encoded.as_object_mut().unwrap().remove("operation_id");
+    encoded["repository_id"] = repository.repository_id.clone().into();
+    assert_eq!(receipt["result"]["automatic_request"], encoded);
+    let configured = fixture.json("GET", &read, None).await;
+    assert_eq!(configured["target_copies"], 3);
+    for path in ["docs", "docs/peer.txt"] {
+        let read = format!(
+            "/api/repositories/{}/backup-configuration?{}",
+            repository.repository_id,
+            path_query(path)
+        );
+        assert_eq!(fixture.json("GET", &read, None).await["target_copies"], 1);
+    }
+    // Once published, even a same-path/same-FileId request with another EntryId
+    // is a different native request. It must not receive the original receipt.
+    rejected_file_request(&fixture, &endpoint, wrong_entry, "IDEMPOTENCY_KEY_REUSED").await;
+    let mut wrong_file = original.clone();
+    wrong_file["file_id"] = peer["file_id"].clone();
+    rejected_file_request(&fixture, &endpoint, wrong_file, "IDEMPOTENCY_KEY_REUSED").await;
+    assert_eq!(fixture.json("GET", &read, None).await, configured);
+
+    let fixture = fixture.reopen().await;
+    assert_eq!(
+        fixture.json("PUT", &endpoint, Some(original)).await,
+        receipt
+    );
+    let operation = receipt["operation_id"].as_str().unwrap();
+    assert_eq!(
+        fixture
+            .json("GET", &format!("/api/operations/{operation}/outcome"), None)
+            .await,
+        receipt
+    );
+    let file = entry["file_id"].as_str().unwrap();
+    let history = fixture.history(file).await;
+    assert_eq!(current_node(&history)["version_id"], entry["version_id"]);
+    assert_eq!(
+        fixture
+            .versions(file, &history)
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        fixture.body(entry["version_id"].as_str().unwrap()).await,
+        bytes
+    );
+    assert_eq!(
+        fixture.body(peer["version_id"].as_str().unwrap()).await,
+        peer_bytes
+    );
+    let _root = stop_writers(fixture).await;
+    assert_local_copies(&config, &repository, &entry, bytes);
+    for tier in 1..3 {
+        assert!(!area(&config, tier).join("docs/peer.txt").exists());
+    }
 }

@@ -20,8 +20,16 @@ pub(super) fn select(
     state: &State,
     request: ScopedBackupConfigurationRequest<'_>,
 ) -> Result<(Scope, Option<ProtectionPolicy>)> {
+    let scope = source_scope(state, None, request.repository_id, request.path)?;
+    select_scope(state, request, scope)
+}
+
+pub(super) fn select_scope(
+    state: &State,
+    request: ScopedBackupConfigurationRequest<'_>,
+    mut scope: Scope,
+) -> Result<(Scope, Option<ProtectionPolicy>)> {
     let repository = request.repository_id;
-    let mut scope = source_scope(state, None, repository, request.path)?;
     if request.expected_scope_id.is_some_and(|expected| expected != scope.id) {
         return Err(Error::new(ErrorCode::ScopeChanged,
             "backup path now describes a different file or directory"));

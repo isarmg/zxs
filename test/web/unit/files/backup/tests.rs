@@ -27,6 +27,7 @@ fn backup_configuration_rejects_lossy_prefix_projection_before_save() {
                     id: "draft".into(),
                     repository: "repo".into(),
                     path: "docs".into(),
+                    automatic_file: None,
                     configuration: None,
                     loading: true,
                 });
@@ -121,6 +122,7 @@ fn backup_configuration_preserves_valid_prefixes_and_allows_explicit_capacity_re
             id: "draft".into(),
             repository: "repo".into(),
             path: "docs".into(),
+            automatic_file: None,
             configuration: Some(configuration),
             loading: false,
         };
@@ -161,6 +163,7 @@ fn navigation_discards_an_open_backup_review() {
                 id: "draft".into(),
                 repository: "repo".into(),
                 path: "old-path".into(),
+                automatic_file: None,
                 configuration: None,
                 loading: true,
             }),
@@ -243,6 +246,7 @@ fn replaced_backup_panel_ignores_old_data_but_not_a_current_session_revocation()
                 id: "new-draft".into(),
                 repository: "repo".into(),
                 path: "new-path".into(),
+                automatic_file: None,
                 configuration: None,
                 loading: true,
             });
@@ -298,6 +302,7 @@ fn multi_primary_routes_use_each_selected_prefix_and_the_shortest_capacity() {
         id: "draft".into(),
         repository: "repo".into(),
         path: "docs".into(),
+        automatic_file: None,
         configuration: Some(configuration),
         loading: false,
     };
@@ -324,6 +329,7 @@ fn independent_prefixes_are_relative_to_a_stable_scope_and_route() {
         id: "draft".into(),
         repository: "repo".into(),
         path: "docs".into(),
+        automatic_file: None,
         configuration: Some(configuration),
         loading: false,
     };
@@ -419,6 +425,7 @@ fn backup_submission_keeps_session_and_storage_guards_without_role_fields() {
                     id: "draft".into(),
                     repository: "repo".into(),
                     path: "docs".into(),
+                    automatic_file: None,
                     configuration: Some(read_configuration(configuration_response()).unwrap()),
                     loading: false,
                 });

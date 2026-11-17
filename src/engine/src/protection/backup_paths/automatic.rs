@@ -4,16 +4,18 @@
 use crate::engine::{PlanningContext, Prepared, ReadSource};
 use crate::engine::fresh_layout::containers::VerifiedContainerTransition;
 use crate::persist::automatic_backup::{
-    self as codec, Input, NamedDisk, PolicyId, Selection, Source,
+    self as codec, FileSelection, Input, NamedDisk, PolicyId, Selection, Source,
 };
 use crate::protection::backup_paths::{
-    Scope, backup_primaries_in, effective_policy_in, exact_policy, inherited_by_scope,
-    initial, namespace, within,
+    Scope, ScopedBackupConfigurationRequest, backup_primaries_in, effective_policy_in,
+    exact_policy, inherited_by_scope, initial, namespace, within,
 };
 use crate::{Engine, Error, ErrorCode, Event, FileVersion, OperationResult, Placement, Result, State};
 use name_policy::PortablePath;
 use std::collections::{BTreeMap, BTreeSet};
-use storage_contract::{BranchId, DiskId, EntryId, Generation, OperationId, Principal, RepositoryId};
+use storage_contract::{
+    BranchId, DiskId, EntryId, FileId, Generation, OperationId, Principal, RepositoryId,
+};
 
 #[derive(Debug, error_definition::Error)]
 pub enum AutomaticBackupError {
@@ -27,6 +29,8 @@ pub enum AutomaticBackupError {
     Encoding(#[source] json_codec::Error),
     #[error("automatic container backup exhausted the business generation")]
     Generation,
+    #[error("automatic file backup no longer names its exact repository occurrence")]
+    FileScope,
 }
 impl AutomaticBackupError {
     pub fn code(&self) -> ErrorCode {
@@ -34,6 +38,7 @@ impl AutomaticBackupError {
             Self::InitialOnly => ErrorCode::UnsupportedOperation,
             Self::Source | Self::Publication | Self::Encoding(_) => ErrorCode::PublicationInvalid,
             Self::Generation => ErrorCode::ResourceLimit,
+            Self::FileScope => ErrorCode::ScopeChanged,
         }
     }
 }
@@ -64,6 +69,20 @@ pub struct AutomaticDirectoryBackupRequest<'a> {
     pub repository_id: RepositoryId,
     pub path: &'a PortablePath,
     pub directory_id: EntryId,
+    pub target_copies: u32,
+    pub expected_generation: Generation,
+    pub principal: &'a Principal,
+    pub operation_id: OperationId,
+}
+
+/// Protect one exact current occurrence; every retained version of its file
+/// remains part of the same ordinary full-copy transaction and permanent receipt.
+#[derive(Clone, Copy, Debug)]
+pub struct AutomaticFileBackupRequest<'a> {
+    pub repository_id: RepositoryId,
+    pub path: &'a PortablePath,
+    pub entry_id: EntryId,
+    pub file_id: FileId,
     pub target_copies: u32,
     pub expected_generation: Generation,
     pub principal: &'a Principal,
@@ -111,6 +130,25 @@ impl Engine {
             request.principal, request.operation_id)
     }
 
+    pub fn configure_automatic_file_backups(
+        &mut self,
+        request: AutomaticFileBackupRequest<'_>,
+    ) -> Result<OperationResult> {
+        let input = Input {
+            repository_id: request.repository_id,
+            path: Some(request.path.clone()),
+            target_copies: request.target_copies,
+            expected_generation: request.expected_generation,
+        };
+        let selection = Selection::File(FileSelection {
+            entry_id: request.entry_id,
+            file_id: request.file_id,
+        });
+        self.configure_automatic_backup_input(
+            input, selection, request.principal, request.operation_id,
+        )
+    }
+
     fn configure_automatic_backup_input(
         &mut self, input: Input, selection: Selection,
         principal: &Principal, operation_id: OperationId,
@@ -124,7 +162,7 @@ impl Engine {
                 let mut scoped = input.scoped(&repository, &prefixes,
                     principal.as_str(), operation_id);
                 scoped.expected_scope_id = expected_scope.as_deref();
-                let (scope, previous) = initial::select(next, scoped)?;
+                let (scope, previous) = select_scope(next, &input, selection, scoped)?;
                 let source = source(&context, &input, &scope)?;
                 directory_selection(context.config, next, &input, selection, &source,
                     &scope, previous.as_ref())?;
@@ -152,6 +190,36 @@ impl Engine {
                     &configured, crate::business::now()?)
             })
     }
+}
+
+fn select_scope(
+    state: &State,
+    input: &Input,
+    selection: Selection,
+    request: ScopedBackupConfigurationRequest<'_>,
+) -> Result<(Scope, Option<crate::ProtectionPolicy>)> {
+    let Selection::File(selected) = selection else {
+        return initial::select(state, request);
+    };
+    let path = input.path.as_ref().ok_or_else(invalid)?;
+    let current = namespace(state, request.repository_id)?;
+    // Resolve the requested key once. Do not use source_scope's per-FileId
+    // preferred-occurrence reduction to manufacture this entry proof.
+    let entry = current.entries.iter()
+        .find(|entry| entry.lookup_key() == path.key())
+        .filter(|entry| {
+            entry.kind == crate::NamespaceEntryKind::File
+                && entry.entry_id == selected.entry_id.to_string()
+                && entry.file_id == selected.file_id.to_string()
+        })
+        .ok_or(Error::AutomaticBackup(AutomaticBackupError::FileScope))?;
+    let scope = Scope {
+        id: entry.file_id.clone(),
+        kind: entry.kind,
+        path: entry.path().to_owned(),
+        files: BTreeMap::from([(entry.file_id.clone(), entry.clone())]),
+    };
+    initial::select_scope(state, request, scope)
 }
 
 fn source(context: &PlanningContext<'_>, input: &Input, scope: &Scope) -> Result<Source> {
@@ -314,7 +382,7 @@ pub(crate) fn candidate_directory_selection(
     let expected_scope = decoded.selection.directory().map(|entry| entry.to_string());
     let mut scoped = decoded.input.scoped(&repository, &prefixes, principal, result.operation_id);
     scoped.expected_scope_id = expected_scope.as_deref();
-    let (scope, old) = initial::select(previous, scoped)?;
+    let (scope, old) = select_scope(previous, &decoded.input, decoded.selection, scoped)?;
     directory_selection(config, previous, &decoded.input, decoded.selection,
         &decoded.source, &scope, old.as_ref())
 }
@@ -346,7 +414,7 @@ fn reconstruct(
     expected.sequence = next.sequence;
     expected.business_generation = expected.business_generation.checked_add(1)
         .ok_or(Error::AutomaticBackup(AutomaticBackupError::Generation))?;
-    let (scope, previous) = initial::select(&expected, scoped)?;
+    let (scope, previous) = select_scope(&expected, &decoded.input, decoded.selection, scoped)?;
     if source_for_replay(context, &decoded.input, &scope, readonly)? != decoded.source {
         return Err(wrong_source());
     }

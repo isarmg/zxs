@@ -20,6 +20,7 @@ pub(crate) struct Draft {
     path: String,
     configuration: Option<Configuration>,
     loading: bool,
+    automatic_file: Option<automatic::FileTarget>,
 }
 
 // Only the projection used by this editor is decoded here. Unused server
@@ -73,7 +74,17 @@ pub(crate) fn start_entry(state: RwSignal<State>, entry: super::page::Entry) {
     let Some((repository, path)) = file_context(&entry) else {
         return;
     };
-    start(state, repository, path);
+    if state.with_untracked(|s| !s.session_active() || actions::pending(s)) {
+        return;
+    }
+    let file = match automatic::FileTarget::capture(&entry) {
+        Ok(file) => file,
+        Err(error) => {
+            review::error(state, review::Kind::Backup, error);
+            return;
+        }
+    };
+    start_target(state, repository, path, file);
 }
 pub(crate) fn start_current(state: RwSignal<State>) {
     let (repository, path) = state.with_untracked(|s| {
@@ -87,6 +98,13 @@ pub(crate) fn start_current(state: RwSignal<State>) {
     }
 }
 fn start(state: RwSignal<State>, repository: String, path: String) {
+    start_target(state, repository, path, None);
+}
+
+fn start_target(
+    state: RwSignal<State>, repository: String, path: String,
+    automatic_file: Option<automatic::FileTarget>,
+) {
     if state.with_untracked(|s| !s.session_active() || actions::pending(s)) {
         return;
     }
@@ -103,6 +121,7 @@ fn start(state: RwSignal<State>, repository: String, path: String) {
             path: path.clone(),
             configuration: None,
             loading: true,
+            automatic_file,
         })
     });
     spawn_local(async move {

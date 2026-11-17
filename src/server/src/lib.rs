@@ -96,7 +96,9 @@ mod backend_backup_configuration;
 mod http_backup_configuration;
 pub use backend_backup_configuration::{ConfigureBackups, ReadBackupConfiguration};
 #[cfg(feature = "core")]
-pub use backend_backup_configuration::ConfigureAutomaticDirectoryBackups;
+pub use backend_backup_configuration::{
+    ConfigureAutomaticDirectoryBackups, ConfigureAutomaticFileBackups,
+};
 #[cfg(feature = "core")]
 pub use backend_backup_configuration::{ConfigureRecursiveBackups, RecursiveBackupConfiguration};
 mod backend_archive;

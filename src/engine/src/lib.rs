@@ -228,6 +228,7 @@ pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_h
 pub use name_policy::validate_slot;
 pub use protection::{
     AutomaticBackupConfigurationRequest, AutomaticBackupError, AutomaticDirectoryBackupRequest,
+    AutomaticFileBackupRequest,
     BackupConfigurationRequest, PlacementConfigurationRequest, PlacementRuleUpdate,
     ProtectionPolicyUpdate, PublishedBackupDirectory, RecursiveBackupCapture,
     RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,

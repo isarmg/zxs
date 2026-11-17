@@ -208,6 +208,10 @@ pub(crate) fn routes() -> Router<AppState> {
     {
         routes
             .route(
+                "/api/repositories/{repository}/automatic-file-backup-configuration",
+                http_routing::routing::put(http_backup_configuration::automatic::configure_file),
+            )
+            .route(
                 "/api/repositories/{repository}/automatic-directory-backup-configuration",
                 http_routing::routing::put(http_backup_configuration::automatic::configure),
             )

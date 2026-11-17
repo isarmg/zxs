@@ -7,23 +7,31 @@ use data_serialization::{Deserialize, Serialize};
 use name_policy::{Name, PortablePath};
 use std::collections::BTreeMap;
 use storage_contract::{
-    CommitState, CurrentHealth, DiskId, EntryId, Generation, HistoryTreeId, Id, IdKind, OperationId,
-    ProtectionAtPublish, RepositoryId,
+    CommitState, CurrentHealth, DiskId, EntryId, FileId, Generation, HistoryTreeId, Id, IdKind,
+    OperationId, ProtectionAtPublish, RepositoryId,
 };
 use storage_contract::working_tree::{DiskRegistrationIdentity, RootBinding};
 
 pub(crate) const KIND: &str = "backup.configure-automatic";
 pub(crate) const DIRECTORY_KIND: &str = "backup.configure-automatic-directory";
+pub(crate) const FILE_KIND: &str = "backup.configure-automatic-file";
+
+#[derive(Clone, Copy)]
+pub(crate) struct FileSelection {
+    pub(crate) entry_id: EntryId,
+    pub(crate) file_id: FileId,
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum Selection {
     RetainedFiles,
     DirectoryTree(EntryId),
+    File(FileSelection),
 }
 impl Selection {
     pub(crate) fn directory(self) -> Option<EntryId> {
         match self {
-            Self::RetainedFiles => None,
+            Self::RetainedFiles | Self::File(_) => None,
             Self::DirectoryTree(entry) => Some(entry),
         }
     }
@@ -32,6 +40,7 @@ impl Selection {
         match self {
             Self::RetainedFiles => KIND,
             Self::DirectoryTree(_) => DIRECTORY_KIND,
+            Self::File(_) => FILE_KIND,
         }
     }
 }
@@ -79,6 +88,17 @@ struct DirectoryInput {
     repository_id: RepositoryId,
     path: PortablePath,
     directory_id: EntryId,
+    target_copies: u32,
+    expected_generation: Generation,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct FileInput {
+    repository_id: RepositoryId,
+    path: PortablePath,
+    entry_id: EntryId,
+    file_id: FileId,
     target_copies: u32,
     expected_generation: Generation,
 }
@@ -140,6 +160,17 @@ pub(crate) fn selected_request(input: &Input, selection: Selection) -> Result<js
                 expected_generation: input.expected_generation,
             }).map_err(encode_error)
         }
+        Selection::File(file) => {
+            let path = input.path.clone().ok_or_else(invalid)?;
+            json_codec::to_value(FileInput {
+                repository_id: input.repository_id,
+                path,
+                entry_id: file.entry_id,
+                file_id: file.file_id,
+                target_copies: input.target_copies,
+                expected_generation: input.expected_generation,
+            }).map_err(encode_error)
+        }
     }
 }
 
@@ -183,7 +214,7 @@ pub(crate) struct Decoded {
 pub(crate) fn recognizes(result: &OperationResult) -> Result<bool> {
     let encoded = ["automatic_request", "automatic_source", "generated_policy_ids"]
         .iter().any(|key| result.result.get(*key).is_some());
-    if result.kind == KIND || result.kind == DIRECTORY_KIND {
+    if result.kind == KIND || result.kind == DIRECTORY_KIND || result.kind == FILE_KIND {
         Ok(true)
     } else if encoded {
         Err(invalid())
@@ -192,7 +223,9 @@ pub(crate) fn recognizes(result: &OperationResult) -> Result<bool> {
     }
 }
 pub(crate) fn decode(result: &OperationResult) -> Result<Decoded> {
-    if result.kind != KIND && result.kind != DIRECTORY_KIND { return Err(invalid()); }
+    if result.kind != KIND && result.kind != DIRECTORY_KIND && result.kind != FILE_KIND {
+        return Err(invalid());
+    }
     let object = result.result.as_object().ok_or_else(invalid)?;
     let required = ["history_tree_id", "policy", "scope", "file_count", "version_count",
         "target_copies", "backup_prefixes", "configured_at", "automatic_request",
@@ -216,6 +249,21 @@ pub(crate) fn decode(result: &OperationResult) -> Result<Decoded> {
             repository_id: input.repository_id, path: Some(input.path),
             target_copies: input.target_copies, expected_generation: input.expected_generation,
         }, Selection::DirectoryTree(input.directory_id))
+    } else if result.kind == FILE_KIND {
+        let input: FileInput = json_codec::from_value(object["automatic_request"].clone())
+            .map_err(encode_error)?;
+        (
+            Input {
+                repository_id: input.repository_id,
+                path: Some(input.path),
+                target_copies: input.target_copies,
+                expected_generation: input.expected_generation,
+            },
+            Selection::File(FileSelection {
+                entry_id: input.entry_id,
+                file_id: input.file_id,
+            }),
+        )
     } else {
         (json_codec::from_value(object["automatic_request"].clone()).map_err(encode_error)?,
             Selection::RetainedFiles)
@@ -278,3 +326,7 @@ pub(crate) fn receipt(
         sequence, result,
     })
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/persist/automatic_backup.rs"]
+mod tests;

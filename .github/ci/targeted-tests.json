@@ -35,8 +35,8 @@
         }
       ]
     },
-    "automatic-directory-backup-entry": {
-      "reason": "Run the authenticated automatic directory backup configuration through real three-tier roots and verify the typed Web control without claiming a browser, Samba, or backup switch.",
+    "automatic-backup-entry": {
+      "reason": "Run authenticated automatic file and directory backup configuration on real three-tier roots and check the shared Web controls. Exact file occurrences, original receipts and earlier directory behavior are retained; external browser, SMB and whole-disk switch are not exercised.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -48,9 +48,10 @@
             "core"
           ],
           "exact": [
-            "automatic_backups::automatic_directory_http_backfills_and_inherits_after_real_add_chain"
+            "automatic_backups::automatic_directory_http_backfills_and_inherits_after_real_add_chain",
+            "automatic_backups::automatic_file_http_pins_occurrence_and_replays_after_real_add_chain"
           ],
-          "max_tests": 1,
+          "max_tests": 2,
           "timeout_seconds": 900
         },
         {
@@ -60,10 +61,10 @@
           "features": [
             "core"
           ],
-          "exact": [
-            "http_backup_configuration::automatic::tests::automatic_directory_body_is_typed_and_excludes_caller_authority_or_prefixes"
-          ],
-          "max_tests": 1
+          "max_tests": 2,
+          "prefixes": [
+            "http_backup_configuration::automatic::tests::"
+          ]
         },
         {
           "package": "web-app",
@@ -75,13 +76,22 @@
           "exact": [
             "files::backup::tests::backup_configuration_preserves_valid_prefixes_and_allows_explicit_capacity_reduction"
           ],
-          "max_tests": 3
+          "max_tests": 4
         },
         {
           "package": "web-app",
           "manifest": "src/web/Cargo.toml",
           "mode": "check",
           "compile_target": "wasm32-unknown-unknown"
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "persist::automatic_backup::tests::automatic_request_scopes_preserve_bytes_and_bind_file_occurrence"
+          ],
+          "max_tests": 1
         }
       ]
     },
@@ -6074,57 +6084,69 @@
       ]
     },
     {
+      "path": "test/engine/unit/persist/automatic_backup.rs",
+      "groups": [
+        "automatic-backup-entry"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/backup/tests.rs",
+      "groups": [
+        "automatic-backup-entry"
+      ]
+    },
+    {
       "path": "src/server/src/backend_backup_configuration.rs",
       "groups": [
-        "automatic-directory-backup-entry"
+        "automatic-backup-entry"
       ]
     },
     {
       "path": "src/server/src/http_backup_configuration.rs",
       "groups": [
-        "automatic-directory-backup-entry"
+        "automatic-backup-entry"
       ]
     },
     {
       "path": "src/web/src/files/backup.rs",
       "groups": [
-        "automatic-directory-backup-entry"
+        "automatic-backup-entry"
       ]
     },
     {
       "path": "src/server/src/engine_backend/automatic_backups.rs",
       "groups": [
-        "automatic-directory-backup-entry"
+        "automatic-backup-entry"
       ]
     },
     {
       "path": "src/server/src/http_backup_configuration/automatic.rs",
       "groups": [
-        "automatic-directory-backup-entry"
+        "automatic-backup-entry"
       ]
     },
     {
       "path": "src/web/src/files/backup/automatic.rs",
       "groups": [
-        "automatic-directory-backup-entry"
+        "automatic-backup-entry"
       ]
     },
     {
       "path": "test/server/integration/phase1_save_tags/automatic_backups.rs",
       "groups": [
-        "automatic-directory-backup-entry"
+        "automatic-backup-entry"
       ]
     },
     {
       "path": "test/server/unit/http_backup_configuration/automatic.rs",
       "groups": [
-        "automatic-directory-backup-entry"
+        "automatic-backup-entry"
       ]
     },
     {
       "path": "test/web/unit/files/backup/automatic_tests.rs",
       "groups": [
-        "automatic-directory-backup-entry"
+        "automatic-backup-entry"
       ]
     },
     {

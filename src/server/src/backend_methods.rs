@@ -842,6 +842,15 @@ macro_rules! methods {
                 }
 
                 #[cfg(feature = "core")]
+                fn configure_automatic_file_backups(
+                    &self,
+                    _identity: &$crate::Identity,
+                    _request: $crate::ConfigureAutomaticFileBackups,
+                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
+                    Err($crate::ApiError::unsupported())
+                }
+
+                #[cfg(feature = "core")]
                 fn configure_automatic_directory_backups(
                     &self,
                     _identity: &$crate::Identity,

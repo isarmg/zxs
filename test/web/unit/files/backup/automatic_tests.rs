@@ -6,6 +6,7 @@ fn draft() -> backup::Draft {
         id: "loaded-editor".into(),
         repository: "repo_11111111111111111111111111111111".into(),
         path: "docs".into(),
+        automatic_file: None,
         configuration: Some(
             backup::read_configuration(json!({
                 "scope": {
@@ -87,4 +88,48 @@ fn automatic_directory_action_keeps_scope_copy_and_current_session_gates() {
             assert!(s.files.publications.is_empty());
         });
     });
+}
+
+#[test]
+fn native_file_request_keeps_the_captured_occurrence_and_rejects_a_different_scope() {
+    let mut draft = draft();
+    let target = FileTarget {
+        repository: draft.repository.parse().unwrap(),
+        path: PortablePath::parse("docs/report.txt").unwrap(),
+        entry: "entry_33333333333333333333333333333333".parse().unwrap(),
+        file: "file_44444444444444444444444444444444".parse().unwrap(),
+    };
+    draft.path = target.path.to_string();
+    let configuration = draft.configuration.as_mut().unwrap();
+    configuration.scope.kind = NamespaceEntryKind::File;
+    configuration.scope.id = target.file.to_string();
+    draft.automatic_file = Some(target.clone());
+    let frozen = request(&draft).unwrap();
+    assert!(
+        frozen
+            .endpoint()
+            .ends_with("/automatic-file-backup-configuration")
+    );
+    let body = json_codec::to_value(frozen.body).unwrap();
+    assert_eq!(
+        body,
+        json!({
+            "path": "docs/report.txt",
+            "entry_id": "entry_33333333333333333333333333333333",
+            "file_id": "file_44444444444444444444444444444444",
+            "target_copies": 3,
+            "expected_generation": "7",
+        })
+    );
+    draft.configuration.as_mut().unwrap().scope.id = "file_55555555555555555555555555555555".into();
+    assert!(request(&draft).is_err());
+    draft.configuration.as_mut().unwrap().scope.id = target.file.to_string();
+    draft.path = "docs/other.txt".into();
+    assert!(request(&draft).is_err());
+    draft.path = target.path.to_string();
+    draft.repository = "repo_66666666666666666666666666666666".into();
+    assert!(request(&draft).is_err());
+    draft.repository = target.repository.to_string();
+    draft.automatic_file = None;
+    assert!(request(&draft).is_err());
 }
