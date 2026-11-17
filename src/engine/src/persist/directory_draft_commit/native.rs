@@ -5,7 +5,7 @@ use super::{
     FileOutcome, SelectedOutcome, UnchangedDescription, UnchangedFormat,
 };
 use crate::business::file_draft::{PublishedContent, batch};
-use crate::engine::file_draft::WorkingBatchHandoff;
+use crate::engine::file_draft::{PreparedWorkingBatch, WorkingBatchHandoff};
 use crate::persist::file_draft::{Protection, content_protection};
 use crate::snapshot_worktree::drafts::DirectoryPhysicalInput;
 use crate::working_tree::snapshot::{SnapshotEntry, SnapshotNodeBinding, SnapshotReference};
@@ -82,11 +82,33 @@ impl DirectoryEnvelopeBudget {
     pub(crate) fn maximum_bytes(&self) -> usize { self.bytes.len() }
 }
 
+/// The canonical envelope reads only original allocation/output facts. Both
+/// genuinely measured and materialized batches expose these same facts; neither
+/// receives any physical or publication authority by satisfying the encoder.
+pub(crate) trait NativeBatchFacts {
+    fn request(&self) -> &batch::WorkingBatchRequest;
+    fn items(&self) -> &[batch::WorkingBatchItem];
+    fn trace(&self) -> &batch::WorkingBatchTrace;
+    fn state(&self) -> &State;
+}
+impl NativeBatchFacts for PreparedWorkingBatch {
+    fn request(&self) -> &batch::WorkingBatchRequest { self.request() }
+    fn items(&self) -> &[batch::WorkingBatchItem] { self.items() }
+    fn trace(&self) -> &batch::WorkingBatchTrace { self.trace() }
+    fn state(&self) -> &State { self.state() }
+}
+impl NativeBatchFacts for WorkingBatchHandoff {
+    fn request(&self) -> &batch::WorkingBatchRequest { self.request() }
+    fn items(&self) -> &[batch::WorkingBatchItem] { self.items() }
+    fn trace(&self) -> &batch::WorkingBatchTrace { self.trace() }
+    fn state(&self) -> &State { self.state() }
+}
+
 impl NativePlan {
     pub(crate) fn from_batch(
         previous: &State,
         construction: ConstructionDescription,
-        batch: &WorkingBatchHandoff,
+        batch: &impl NativeBatchFacts,
         timestamp: u64,
         epoch: u64,
         maximum_entries: usize,

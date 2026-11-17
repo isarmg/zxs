@@ -4,7 +4,7 @@ use crate::engine::file_draft::{SelectedWorkingSources, require_initial};
 use crate::business::file_draft::{DraftError as Failure, batch, invalid};
 use crate::engine::{PlanningContext, Prepared};
 use crate::{Error, Result, State};
-use crate::container_storage::{PreparedUnbornFull, ReadWorkingDigest, ReadDraftDigest};
+use crate::container_storage::{MeasuredUnbornFull, PreparedUnbornFull, ReadWorkingDigest, ReadDraftDigest};
 use std::sync::Arc;
 use storage_contract::{FileId, OperationId, Principal, Sequence};
 
@@ -13,6 +13,7 @@ pub(crate) use batch::{
     WorkingBatchTrace,
 };
 
+/// Logical preparation only. No named first FULL or physical permit exists here.
 /// Neither descriptive trace replay nor independent singleton plans construct
 /// this product. All items retain one complete selected occurrence until the
 /// eventual physical preparation and combined decision finish.
@@ -20,7 +21,7 @@ pub(crate) struct PreparedWorkingBatch {
     sources: Arc<SelectedWorkingSources>,
     request: WorkingBatchRequest,
     projection: batch::WorkingBatchProjection,
-    first: Vec<Option<Arc<PreparedUnbornFull>>>,
+    first: Vec<Option<Arc<MeasuredUnbornFull>>>,
     drafts: Vec<Option<Arc<ReadDraftDigest>>>,
     prepared: Vec<Prepared>,
 }
@@ -71,7 +72,11 @@ impl PreparedWorkingBatch {
         self.first.iter().map(|material| material.as_ref().map(|full| full.digest()).transpose())
             .collect()
     }
+    /// Born payloads already have actual held sources; first FILEs do not.
     pub(crate) fn prepared(&self) -> &[Prepared] { &self.prepared }
+    pub(crate) fn first_measurements(&self) -> impl Iterator<Item = &Arc<MeasuredUnbornFull>> {
+        self.first.iter().flatten()
+    }
 
     pub(crate) fn require_context(&self, context: &PlanningContext<'_>) -> Result<()> {
         context.require_write()?;
@@ -99,7 +104,30 @@ impl PreparedWorkingBatch {
     /// The later physical gate consumes precisely these Version obligations,
     /// not equal-byte files, a second picker, or an external path substitution.
     pub(crate) fn require_prepared(&self, prepared: &[Prepared]) -> Result<()> {
-        require_prepared(self.items(), &self.sources, &self.first, prepared)
+        let mut born = prepared.iter();
+        for (index, item) in self.items().iter().enumerate() {
+            match (item.origin(), item.result(), &self.first[index]) {
+                (WorkingBatchOrigin::Born(_), WorkingBatchResult::Retained(_), None) => {}
+                (WorkingBatchOrigin::Born(_), WorkingBatchResult::Published(content), None) => {
+                    let payload = born.next().ok_or_else(invalid)?;
+                    if payload.version != content.version || payload.placement != content.placement {
+                        return Err(invalid());
+                    }
+                    payload.source.require_selected_working(&self.sources, index)?;
+                }
+                (WorkingBatchOrigin::First { .. }, WorkingBatchResult::Published(content), Some(first)) => {
+                    let read = first.digest()?;
+                    if read.source().file() != item.target().file
+                        || read.content_hash() != content.version.content_hash
+                        || read.source().logical_size() != content.version.logical_size
+                        || first.manifest_hash().to_hex().as_str() != content.version.checksum_manifest_hash
+                    { return Err(invalid()); }
+                }
+                _ => return Err(invalid()),
+            }
+        }
+        if born.next().is_some() { return Err(invalid()); }
+        Ok(())
     }
 
     /// A deterministic replay check of this same still-held product. It is not
@@ -137,11 +165,50 @@ impl PreparedWorkingBatch {
         self,
         context: &PlanningContext<'_>,
     ) -> Result<(State, Vec<Prepared>, WorkingBatchHandoff)> {
-        self.require_reconstruction(context)?;
-        let Self { sources, request, projection, first, drafts, prepared } = self;
-        let next = projection.state().clone();
-        let source = WorkingBatchHandoff { sources, request, projection, first, drafts };
+        // A Born-only batch has no new independent working material. A caller
+        // cannot get past this boundary for any first FILE without its permit.
+        let next = self.state().clone();
+        let (prepared, source) = self.realize(context, Vec::new())?;
         Ok((next, prepared, source))
+    }
+
+    pub(crate) fn realize(
+        self, context: &PlanningContext<'_>, permits: Vec<crate::engine::BudgetedDirectoryFirst>,
+    ) -> Result<(Vec<Prepared>, WorkingBatchHandoff)> {
+        self.require_reconstruction(context)?;
+        if self.first_measurements().count() != permits.len() { return Err(invalid()); }
+        for (first, permit) in self.first_measurements().zip(&permits) {
+            permit.require_measurement(first)?;
+        }
+        let Self { sources, request, projection, first, drafts, prepared } = self;
+        let mut permits = permits.into_iter();
+        let mut born = prepared.into_iter();
+        let mut frozen = Vec::with_capacity(first.len());
+        let mut prepared = Vec::with_capacity(projection.trace().contents.iter().flatten().count());
+        for (item, measured) in projection.items().iter().zip(first) {
+            let full = match (item.origin(), item.result(), measured) {
+                (WorkingBatchOrigin::Born(_), WorkingBatchResult::Retained(_), None) => None,
+                (WorkingBatchOrigin::Born(_), WorkingBatchResult::Published(_), None) => {
+                    prepared.push(born.next().ok_or_else(invalid)?);
+                    None
+                }
+                (WorkingBatchOrigin::First { .. }, WorkingBatchResult::Published(content), Some(measured)) => {
+                    let full = measured.realize(context, permits.next().ok_or_else(invalid)?)?;
+                    prepared.push(Prepared {
+                        version: content.version.clone(), placement: content.placement.clone(),
+                        source: crate::engine::ReadSource::working_full(Arc::clone(&full)),
+                    });
+                    Some(full)
+                }
+                _ => return Err(invalid()),
+            };
+            frozen.push(full);
+        }
+        if permits.next().is_some() || born.next().is_some() { return Err(invalid()); }
+        let source = WorkingBatchHandoff { sources, request, projection, first: frozen, drafts };
+        source.require_prepared(&prepared)?;
+        source.require_context(context)?;
+        Ok((prepared, source))
     }
 }
 

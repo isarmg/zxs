@@ -17,6 +17,9 @@ use storage_contract::working_tree::SnapshotNodeId;
 mod fixture;
 use fixture::{Fixture, inventory, read_draft, read_view, selection, write_draft};
 
+#[path = "draft_gateway/first_preflight.rs"]
+mod first_preflight;
+
 fn read_plan(plan: &DirectoryWorkingPlan) -> Vec<(name_policy::PortablePath, Vec<u8>)> {
     let bodies = plan.bodies().unwrap();
     plan.manifest().entries().iter().filter_map(|entry| {

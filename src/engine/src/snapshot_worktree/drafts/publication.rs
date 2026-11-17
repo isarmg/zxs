@@ -5,8 +5,8 @@ use super::{
     DirectoryWorkingError, DirectoryWorkingPlan, PendingDirectoryDrafts,
     PreparedDirectoryMaterial,
 };
-use crate::engine::file_draft::WorkingBatchHandoff;
-use crate::engine::{PlanningContext, Prepared};
+use crate::engine::file_draft::{PreparedWorkingBatch, WorkingBatchHandoff};
+use crate::engine::PlanningContext;
 use crate::persist::directory_draft_commit::native::{
     DirectoryEnvelopeBudget, Envelope, NativeError, NativePlan,
 };
@@ -79,8 +79,7 @@ type Result<T> = std::result::Result<T, DirectoryPublicationError>;
 
 pub(crate) struct DirectoryPublicationInput {
     decision: DirectoryDecisionInput,
-    files: WorkingBatchHandoff,
-    prepared: Vec<Prepared>,
+    files: PreparedWorkingBatch,
     budget: DirectoryEnvelopeBudget,
 }
 
@@ -101,26 +100,19 @@ impl DirectoryWorkingPlan {
         self.require_context(context).map_err(DirectoryPublicationError::Working)?;
         let Self { input, batch, construction, projection } = self;
         let source = Arc::clone(input.source());
-        let (next, prepared, files) = batch.into_publication(context)
-            .map_err(DirectoryPublicationError::Engine)?;
-        // The transferred State is the very same complete projection, not a
-        // replacement produced from selected IDs or the future physical result.
-        if !crate::publication_shape::same_transition(context.state, files.state(), &next) {
-            return Err(DirectoryPublicationError::Projection);
-        }
+        batch.require_reconstruction(context).map_err(DirectoryPublicationError::Engine)?;
         let physical = Arc::new(DirectoryPhysicalInput::new(
             input, projection.into_manifest(), context,
         ).map_err(DirectoryPublicationError::Physical)?);
         let native = NativePlan::from_batch(
-            context.state, construction, &files,
+            context.state, construction, &batch,
             crate::business::now().map_err(DirectoryPublicationError::Engine)?,
             context.config.membership_epoch(), context.config.max_entries,
         ).map_err(DirectoryPublicationError::Native)?;
         let budget = native.budget(&physical, maximum).map_err(DirectoryPublicationError::Native)?;
         let decision = DirectoryDecisionInput { source, physical, native, maximum };
-        decision.require_context(context, &files)?;
-        files.require_prepared(&prepared).map_err(DirectoryPublicationError::Engine)?;
-        Ok(DirectoryPublicationInput { decision, files, prepared, budget })
+        batch.require_selection(decision.source.selected()).map_err(DirectoryPublicationError::Engine)?;
+        Ok(DirectoryPublicationInput { decision, files: batch, budget })
     }
 }
 
@@ -130,13 +122,15 @@ impl DirectoryPublicationInput {
     pub(crate) fn into_material(
         self, context: &PlanningContext<'_>,
     ) -> Result<(
-        DirectoryDecisionInput, WorkingBatchHandoff, Vec<Prepared>,
+        DirectoryDecisionInput, PreparedWorkingBatch,
         Arc<DirectoryPhysicalInput>, DirectoryEnvelopeBudget,
     )> {
-        self.decision.require_context(context, &self.files)?;
-        self.files.require_prepared(&self.prepared).map_err(DirectoryPublicationError::Engine)?;
+        self.files.require_context(context).map_err(DirectoryPublicationError::Engine)?;
+        self.files.require_selection(self.decision.source.selected()).map_err(DirectoryPublicationError::Engine)?;
+        self.decision.source.require_context(context).map_err(DirectoryPublicationError::Source)?;
+        self.decision.physical.require_context(context).map_err(DirectoryPublicationError::Physical)?;
         let physical = Arc::clone(&self.decision.physical);
-        Ok((self.decision, self.files, self.prepared, physical, self.budget))
+        Ok((self.decision, self.files, physical, self.budget))
     }
 }
 

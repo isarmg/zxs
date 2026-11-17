@@ -34,6 +34,10 @@ impl Fixture {
     }
 
     pub(super) fn with_nested_directory(nested: bool) -> (Self, Engine) {
+        Self::configured(nested, None)
+    }
+
+    pub(super) fn configured(nested: bool, owner_capacity: Option<u64>) -> (Self, Engine) {
         let temporary = tempfile::tempdir().unwrap();
         let system = temporary.path().join("system");
         let disks = [temporary.path().join("owner"), temporary.path().join("other")];
@@ -42,10 +46,11 @@ impl Fixture {
             fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
             assert_eq!(fs::read_dir(path).unwrap().count(), 0);
         }
-        let config = Config::independent_roots(Mode::Development, [
+        let mut config = Config::independent_roots(Mode::Development, [
             (Name::parse("Draft gateway owner").unwrap(), disks[0].clone()),
             (Name::parse("Draft gateway other").unwrap(), disks[1].clone()),
         ]).unwrap();
+        config.disks[0].capacity_bytes = owner_capacity;
         let slot = config.disks[0].slot_id.clone();
         let mut engine = Engine::initialize(&system, config).unwrap();
         let repository = engine.create_disk_root(

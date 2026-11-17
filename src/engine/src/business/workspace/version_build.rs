@@ -35,9 +35,14 @@ pub(in crate::business) trait Effects {
     fn current(&self) -> Option<&crate::engine::CurrentNamespaces>;
 }
 
+enum ManifestEvidence<'a> {
+    Complete(&'a ChecksumManifest),
+    MeasuredFirst(&'a crate::container_storage::MeasuredUnbornFull),
+}
+
 pub(super) struct Live<'a, 'context> {
     context: &'a crate::engine::PlanningContext<'context>,
-    manifest: &'a ChecksumManifest,
+    manifest: ManifestEvidence<'a>,
     reserved: Option<&'a mut crate::snapshot_worktree::ReservedFileVersion>,
 }
 
@@ -46,7 +51,7 @@ impl<'a, 'context> Live<'a, 'context> {
         context: &'a crate::engine::PlanningContext<'context>,
         manifest: &'a ChecksumManifest,
     ) -> Self {
-        Self { context, manifest, reserved: None }
+        Self { context, manifest: ManifestEvidence::Complete(manifest), reserved: None }
     }
 
     pub(super) fn for_reserved(
@@ -54,7 +59,7 @@ impl<'a, 'context> Live<'a, 'context> {
         manifest: &'a ChecksumManifest,
         reserved: &'a mut crate::snapshot_worktree::ReservedFileVersion,
     ) -> Self {
-        Self { context, manifest, reserved: Some(reserved) }
+        Self { context, manifest: ManifestEvidence::Complete(manifest), reserved: Some(reserved) }
     }
 }
 
@@ -71,7 +76,10 @@ impl Effects for Live<'_, '_> {
     }
 
     fn manifest_hash(&self) -> Result<String> {
-        Ok(blake3::hash(&self.manifest.encode()?).to_hex().to_string())
+        Ok(match &self.manifest {
+            ManifestEvidence::Complete(manifest) => blake3::hash(&manifest.encode()?),
+            ManifestEvidence::MeasuredFirst(measured) => measured.manifest_hash(),
+        }.to_hex().to_string())
     }
 
     fn route(&self, primary: &str, copies: u32) -> Result<Vec<String>> {
@@ -89,6 +97,25 @@ impl Effects for Live<'_, '_> {
     fn current(&self) -> Option<&crate::engine::CurrentNamespaces> {
         self.context.current_namespaces.map(AsRef::as_ref)
     }
+}
+
+/// Allocate once from the bytes of a held, merged first FILE. This describes a
+/// future Version; there is no Prepared/ReadSource until the independent FULL
+/// has actually been created and verified after directory capacity admission.
+pub(in crate::business) fn construct_measured_first(
+    context: &crate::engine::PlanningContext<'_>, state: &mut State,
+    input: Input<'_>, measured: &crate::container_storage::MeasuredUnbornFull,
+) -> Result<FileVersion> {
+    measured.require_context(context)?;
+    let read = measured.digest()?;
+    let content = Content {
+        size: read.source().logical_size(), hash: read.content_hash(),
+        chunk_bytes: context.config.checksum_chunk_bytes,
+    };
+    let mut effects = Live { context, manifest: ManifestEvidence::MeasuredFirst(measured), reserved: None };
+    let (version, _) = construct(state, input, content, &mut effects)?;
+    measured.require_context(context)?;
+    Ok(version)
 }
 
 pub(in crate::business) fn construct(

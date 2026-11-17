@@ -5,7 +5,7 @@ use crate::business::file_draft::{DraftError as Failure, PublishedContent, inval
 use crate::business::file_draft::unborn::selected;
 use crate::business::namespace::working::WorkingNamespace;
 use crate::business::workspace::version_build::{self, Content, Effects, Input};
-use crate::container_storage::{PreparedUnbornFull, ReadWorkingDigest};
+use crate::container_storage::{MeasuredUnbornFull, PreparedUnbornFull, ReadWorkingDigest};
 use crate::{Commit, Entry, Error, FileContext, NamespaceEntryKind, Result, State, ValidatedConfig};
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -261,9 +261,30 @@ pub(crate) fn replay_version(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::business::file_draft) enum ConstructionMaterial<'a> {
+    Physical(&'a Arc<PreparedUnbornFull>),
+    Measured(&'a MeasuredUnbornFull),
+}
+impl<'a> ConstructionMaterial<'a> {
+    fn require_context(self, context: &crate::engine::PlanningContext<'_>) -> Result<()> {
+        match self {
+            Self::Physical(full) => full.require_context(context),
+            Self::Measured(measured) => measured.require_context(context),
+        }
+    }
+    fn digest(self) -> Result<ReadWorkingDigest<'a>> {
+        match self {
+            Self::Physical(full) => full.digest(),
+            Self::Measured(measured) => measured.digest(),
+        }
+    }
+}
+
 /// The original first-file policy and material checks, before beginning a
-/// projection. It borrows real prepared material; no digest/identity constructor
-/// can replace its held source. This is not a receipt or publication proof.
+/// projection. The actual selected merged reader, not a caller-supplied digest,
+/// backs a directory measurement. Neither measurement nor a separately frozen
+/// standalone FULL is a receipt or publication proof.
 pub(in crate::business::file_draft) struct FirstContentConstruction<'source> {
     namespace: WorkingNamespace<'source>,
     record: &'source FileContainerRecord,
@@ -272,7 +293,7 @@ pub(in crate::business::file_draft) struct FirstContentConstruction<'source> {
     message: &'source str,
     principal: &'source Principal,
     operation: OperationId,
-    material: &'source Arc<PreparedUnbornFull>,
+    material: ConstructionMaterial<'source>,
     read: ReadWorkingDigest<'source>,
     primary: name_policy::SlotId,
 }
@@ -285,7 +306,7 @@ impl<'source> FirstContentConstruction<'source> {
         message: &'source str,
         principal: &'source Principal,
         operation: OperationId,
-        material: &'source Arc<PreparedUnbornFull>,
+        material: ConstructionMaterial<'source>,
     ) -> Result<Self> {
         context.require_write()?;
         material.require_context(context)?;
@@ -332,16 +353,25 @@ impl<'source> FirstContentConstruction<'source> {
         {
             return Err(invalid());
         }
-        let source = crate::engine::ReadSource::working_full(Arc::clone(self.material));
-        let version = context.build_version(
-            next, prepared,
-            crate::business::VersionBuild {
-                history: &self.record.history_tree_id.to_string(),
-                file_id: &self.target.file.to_string(),
-                path: &self.target.path, source: &source, primary: self.primary.as_str(), copies: 1,
-                source_ids: Vec::new(), checkpoint: false,
-            },
-        )?;
+        let version = match self.material {
+            ConstructionMaterial::Physical(full) => {
+                let source = crate::engine::ReadSource::working_full(Arc::clone(full));
+                context.build_version(next, prepared, crate::business::VersionBuild {
+                    history: &self.record.history_tree_id.to_string(),
+                    file_id: &self.target.file.to_string(), path: &self.target.path,
+                    source: &source, primary: self.primary.as_str(), copies: 1,
+                    source_ids: Vec::new(), checkpoint: false,
+                })?
+            }
+            ConstructionMaterial::Measured(measured) => version_build::construct_measured_first(
+                context, next, version_build::Input {
+                    history: &self.record.history_tree_id.to_string(),
+                    file: &self.target.file.to_string(), path: &self.target.path,
+                    primary: self.primary.as_str(), copies: 1,
+                    sources: Vec::new(), checkpoint: false,
+                }, measured,
+            )?,
+        };
         if version.logical_size != self.read.source().logical_size()
             || version.content_hash != self.read.content_hash()
         {
@@ -389,7 +419,7 @@ pub(crate) fn build(
     material: &Arc<PreparedUnbornFull>,
 ) -> Result<(super::Projection, Vec<crate::engine::Prepared>, PublishedContent)> {
     let construction = FirstContentConstruction::prepare(
-        context, target, expected, message, principal, operation, material,
+        context, target, expected, message, principal, operation, ConstructionMaterial::Physical(material),
     )?;
     let mut next = super::begin(context.state, Sequence::new(context.next_slot))?;
     let mut prepared = Vec::new();

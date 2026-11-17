@@ -14,6 +14,8 @@ use storage_contract::file_draft::manifest::{
 };
 use storage_contract::{ContentHash, FileId};
 
+mod measurement;
+pub(crate) use measurement::MeasuredUnbornFull;
 mod full;
 pub(crate) use full::PreparedUnbornFull;
 mod write;

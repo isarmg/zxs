@@ -6,8 +6,8 @@ use crate::business::file_draft::{
 use crate::engine::file_draft::SelectedWorkingSources;
 use crate::engine::{PlanningContext, Prepared, ReadSource};
 use crate::{Error, FileVersion, Result, State, ValidatedConfig};
-use crate::container_storage::{PreparedUnbornFull, ReadWorkingDigest, ReadDraftDigest};
-use crate::business::file_draft::unborn::first::{FirstContentConstruction, FirstCommit};
+use crate::container_storage::{MeasuredUnbornFull, ReadWorkingDigest, ReadDraftDigest};
+use crate::business::file_draft::unborn::first::{ConstructionMaterial, FirstContentConstruction, FirstCommit};
 use crate::business::namespace::working::WorkingNamespace;
 use std::sync::Arc;
 use storage_contract::file_draft::{
@@ -291,7 +291,7 @@ enum Construction<'a> {
 pub(crate) fn build(
     context: &PlanningContext<'_>, selection: &Arc<SelectedWorkingSources>,
     request: &WorkingBatchRequest,
-) -> Result<(WorkingBatchProjection, Vec<Prepared>, Vec<Option<Arc<PreparedUnbornFull>>>,
+) -> Result<(WorkingBatchProjection, Vec<Prepared>, Vec<Option<Arc<MeasuredUnbornFull>>>,
     Vec<Option<Arc<ReadDraftDigest>>>)> {
     selection.require_context(context)?;
     if request.selected.len() != selection.sources().len()
@@ -311,7 +311,7 @@ pub(crate) fn build(
     let materials = planned.iter().enumerate().map(|(index, item)| match item {
         PlannedItem::Born { .. } => Ok(None),
         PlannedItem::First { .. } => {
-            PreparedUnbornFull::prepare(context, Arc::clone(selection), index).map(Some)
+            MeasuredUnbornFull::capture(context, selection, index).map(Some)
         }
     }).collect::<Result<Vec<_>>>()?;
     // All policies and held source checks complete before constructing a Version.
@@ -323,7 +323,7 @@ pub(crate) fn build(
         PlannedItem::First { target, expected, .. } => {
             FirstContentConstruction::prepare(
                 context, target, *expected, &request.message, &request.principal,
-                request.operation, material.as_ref().ok_or_else(invalid)?,
+                request.operation, ConstructionMaterial::Measured(material.as_deref().ok_or_else(invalid)?),
             ).map(Construction::First)
         }
     }).collect::<Result<Vec<_>>>()?;

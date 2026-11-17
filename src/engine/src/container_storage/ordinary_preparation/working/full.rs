@@ -66,6 +66,13 @@ impl PreparedUnbornFull {
         selection: Arc<SelectedWorkingSources>,
         selected_index: usize,
     ) -> Result<Arc<Self>> {
+        Self::prepare_ordinary(context, selection, selected_index, None)
+    }
+
+    pub(super) fn prepare_ordinary(
+        context: &PlanningContext<'_>, selection: Arc<SelectedWorkingSources>,
+        selected_index: usize, measured: Option<(ContentHash, PayloadProofReservation)>,
+    ) -> Result<Arc<Self>> {
         context.require_write()?;
         selection.require_context(context)?;
         let selected = selection.sources().get(selected_index)
@@ -75,7 +82,7 @@ impl PreparedUnbornFull {
         }
         let source = Arc::clone(selected.unborn_reader()?);
         source.require_record(selected.target().file, selected.record())?;
-        Self::prepare_source(context, FullSelection::Ordinary(selection), source)
+        Self::prepare_source(context, FullSelection::Ordinary(selection), source, measured)
     }
 
     pub(crate) fn prepare_worktree(
@@ -84,11 +91,12 @@ impl PreparedUnbornFull {
     ) -> Result<Arc<Self>> {
         selection.require_context(context)?;
         let source = Arc::clone(selection.reader());
-        Self::prepare_source(context, FullSelection::Worktree(selection), source)
+        Self::prepare_source(context, FullSelection::Worktree(selection), source, None)
     }
 
     fn prepare_source(
         context: &PlanningContext<'_>, selection: FullSelection, source: Arc<HeldUnbornReader>,
+        measured: Option<(ContentHash, PayloadProofReservation)>,
     ) -> Result<Arc<Self>> {
         context.require_write()?;
         selection.require_context(context)?;
@@ -115,8 +123,11 @@ impl PreparedUnbornFull {
         {
             return Err(Error::FileDraft(Failure::WorkingCapacity));
         }
-        let reservation = crate::engine::payload_proof_budget().reserve(2)
-            .ok_or(Error::FileDraft(Failure::Size))?;
+        let (expected, reservation) = match measured {
+            Some((hash, reservation)) => (Some(hash.digest()), reservation),
+            None => (None, crate::engine::payload_proof_budget().reserve(2)
+                .ok_or(Error::FileDraft(Failure::Size))?),
+        };
         let id = WorkingFullId::generate()?;
         let name = layout::working_full(id);
         let scope = &source.scope;
@@ -125,7 +136,7 @@ impl PreparedUnbornFull {
         let receipt = scope.held.copy_new_entry_verified_synced(
             &name,
             &mut Merged { source: &source, offset: 0 },
-            platform_io::payload::Expectation { bytes, blake3: None },
+            platform_io::payload::Expectation { bytes, blake3: expected },
         ).map_err(|error| match error {
             NewEntryCopyError::Admission(source) | NewEntryCopyError::Published { source, .. } => {
                 source

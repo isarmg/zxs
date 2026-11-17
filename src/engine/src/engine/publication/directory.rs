@@ -1,13 +1,36 @@
 //! Combined physical preparation without a provisional node receipt.
 //! The old ordinary decision path remains closed to this private native mode.
 use super::*;
-use crate::engine::file_draft::WorkingBatchHandoff;
+use crate::engine::file_draft::{PreparedWorkingBatch, WorkingBatchHandoff, WorkingBatchResult};
 use crate::engine::fresh_layout::{FreshLayoutError as Failure, containers::ContainerPreparation};
 use crate::snapshot_worktree::drafts::{
     DirectoryDecisionInput, DirectoryPhysicalInput, DirectoryPublicationError,
     DirectoryPublicationInput, PreparedDirectoryMaterial, PreparedDirectoryProposal,
 };
 use crate::working_tree::snapshot::{SnapshotNodeBinding, SnapshotReference};
+
+/// Unique permit for one specifically measured occurrence, issued after all
+/// selected temps, copies, directory and metadata have passed one disk budget.
+pub(crate) struct BudgetedDirectoryFirst {
+    measured: Arc<crate::container_storage::MeasuredUnbornFull>,
+    reservation: PayloadProofReservation,
+}
+impl BudgetedDirectoryFirst {
+    pub(crate) fn require_measurement(
+        &self, measured: &crate::container_storage::MeasuredUnbornFull,
+    ) -> Result<()> {
+        if !std::ptr::eq(self.measured.as_ref(), measured) {
+            return Err(Failure::ContainerScope.into());
+        }
+        Ok(())
+    }
+    pub(crate) fn into_reservation(
+        self, measured: &crate::container_storage::MeasuredUnbornFull,
+    ) -> Result<PayloadProofReservation> {
+        self.require_measurement(measured)?;
+        Ok(self.reservation)
+    }
+}
 
 /// The constructor below binds one actually admitted aggregate preparation to
 /// its exact directory input. This is not a persistent allocation reservation.
@@ -92,23 +115,14 @@ impl crate::engine::PlanningContext<'_> {
     pub(crate) fn prepare_directory_material(
         &self, input: DirectoryPublicationInput, maximum: usize,
     ) -> Result<(DirectoryDecisionInput, PreparedDirectoryFiles)> {
-        let (decision, source, prepared, directory, envelope) = input.into_material(self)
+        let (decision, measured, directory, envelope) = input.into_material(self)
             .map_err(DirectoryPublicationError::into_engine)?;
-        let containers = ContainerPreparation::for_working_batch(self, &source, &prepared)?;
-        let metadata_epoch = self.metadata_integrity.capture();
-        let mut required = PhysicalRequirements::new(self);
-        let existing = self.observe_existing_payloads(&prepared, &mut required)?;
-        let owner = self.config.disks.iter()
-            .find(|disk| disk.disk_id == directory.owner().to_string())
-            .ok_or(Failure::Registration)?;
-        required.add(owner, directory.cost().total_bytes())?;
-
+        let snapshot = prepare_snapshot(measured.state(), maximum)?;
         // This is real prospective FILE metadata and an encode-only upper
         // envelope, not a fake OperationResult/Binding. The final radix graph
         // can differ after feedback and must pass the full preflight again.
-        let snapshot = prepare_snapshot(source.state(), maximum)?;
         let (_, histories) = crate::history_package::prepare_history_manifests(
-            source.state(), maximum,
+            measured.state(), maximum,
         )?;
         if envelope.maximum_bytes() > maximum {
             return Err(Failure::ContainerBudget.into());
@@ -119,21 +133,38 @@ impl crate::engine::PlanningContext<'_> {
                 .ok_or(Failure::PhysicalBytesOverflow)?;
             Ok(())
         })?;
+        drop(snapshot);
         for history in histories {
             metadata_bytes = metadata_bytes.checked_add(history.bytes().len() as u64)
                 .ok_or(Failure::PhysicalBytesOverflow)?;
         }
-        for disk in self.members() {
-            required.add(&disk, metadata_bytes)?;
-        }
-        required.check()?;
-        source.require_context(self)?;
-        directory.require_context(self).map_err(physical_error)?;
+        let owner = self.config.disks.iter()
+            .find(|disk| disk.disk_id == directory.owner().to_string())
+            .ok_or(Failure::Registration)?;
+        let fixed = |required: &mut PhysicalRequirements<'_, '_>| -> Result<()> {
+            required.add(owner, directory.cost().total_bytes())?;
+            for disk in self.members() { required.add(&disk, metadata_bytes)?; }
+            Ok(())
+        };
+        let permits = self.admit_directory_firsts(&measured, &directory, &fixed)?;
         let descriptors = payload_proof_budget().reserve(directory.cost().retained_descriptors())
             .ok_or(Failure::ContainerBudget)?;
         let permit = BudgetedDirectoryPreparation {
             input: Arc::clone(&directory), _descriptors: descriptors,
         };
+        // Only now can a merged first FILE be copied to a named inode. Born
+        // entries have no new working temp; the all-Born path takes no extra
+        // existing-BODY read before its normal capacity check below.
+        let (prepared, source) = measured.realize(self, permits)?;
+        decision.require_context(self, &source).map_err(DirectoryPublicationError::into_engine)?;
+        let containers = ContainerPreparation::for_working_batch(self, &source, &prepared)?;
+        let metadata_epoch = self.metadata_integrity.capture();
+        let mut required = PhysicalRequirements::new(self);
+        let existing = self.observe_existing_payloads(&prepared, &mut required)?;
+        fixed(&mut required)?;
+        required.check()?;
+        source.require_context(self)?;
+        directory.require_context(self).map_err(physical_error)?;
         let versions = prepared.iter().map(|payload| VersionEvidence {
             version: payload.version.clone(), placement: payload.placement.clone(),
         }).collect::<Vec<_>>();
@@ -160,6 +191,49 @@ impl crate::engine::PlanningContext<'_> {
         };
         result.require_context(self)?;
         Ok((decision, result))
+    }
+}
+
+impl crate::engine::PlanningContext<'_> {
+    fn admit_directory_firsts(
+        &self, measured: &PreparedWorkingBatch, directory: &DirectoryPhysicalInput,
+        fixed: &impl Fn(&mut PhysicalRequirements<'_, '_>) -> Result<()>,
+    ) -> Result<Vec<BudgetedDirectoryFirst>> {
+        if measured.first_measurements().next().is_none() { return Ok(Vec::new()); }
+        let mut required = PhysicalRequirements::new(self);
+        for item in measured.items() {
+            if let WorkingBatchResult::Published(content) = item.result() {
+                // Discard pre-admission observations here; a new named source
+                // does not prolong the old target FD proof into the copy stage.
+                self.observe_planned_version(&content.version, &content.placement, &mut required)?;
+                let checksum_bytes = content.version.logical_size
+                    .div_ceil(u64::from(content.version.checksum_chunk_bytes))
+                    .checked_mul(32)
+                    .and_then(|n| n.checked_add(storage_contract::CHECKSUM_HEADER_BYTES as u64))
+                    .ok_or(Failure::PhysicalBytesOverflow)?;
+                for slot in &content.placement.route_slot_ids {
+                    required.add(self.disk(slot)?, checksum_bytes)?;
+                }
+            }
+        }
+        for first in measured.first_measurements() {
+            let read = first.digest()?;
+            let record = self.state.file_containers.get(&read.source().file())
+                .ok_or(Failure::ContainerScope)?;
+            let disk = self.config.disks.iter()
+                .find(|disk| disk.disk_id == record.owner_disk.to_string())
+                .ok_or(Failure::Registration)?;
+            required.add(disk, read.source().logical_size())?;
+        }
+        fixed(&mut required)?;
+        required.check()?;
+        measured.require_context(self)?;
+        directory.require_context(self).map_err(physical_error)?;
+        let descriptors = payload_proof_budget();
+        measured.first_measurements().map(|first| {
+            let reservation = descriptors.reserve(2).ok_or(Failure::ContainerBudget)?;
+            Ok(BudgetedDirectoryFirst { measured: Arc::clone(first), reservation })
+        }).collect()
     }
 }
 
@@ -375,6 +449,9 @@ impl Engine {
             .map_err(DirectoryPublicationError::into_engine)?;
         let context = self.planning_context();
         context.require_manual_directory_pool()?;
+        pending.check_logical_budget(context.config.max_entries)
+            .map_err(DirectoryPublicationError::Source)
+            .map_err(DirectoryPublicationError::into_engine)?;
         let directory = pending.directory();
         let batch = PreparedWorkingBatch::prepare(
             &context,

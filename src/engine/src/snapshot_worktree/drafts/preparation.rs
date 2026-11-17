@@ -24,19 +24,25 @@ pub(crate) struct DirectoryNodeInput {
 }
 
 impl PendingDirectoryDrafts {
+    /// Reject the aggregate directory/selection cost before measuring (reading)
+    /// its first future FULL, independently of later actual manifest encoding.
+    pub(crate) fn check_logical_budget(&self, maximum_entries: usize) -> Result<u64> {
+        if self.directory().projection().len() > maximum_entries {
+            return Err(Failure::NodeBudget);
+        }
+        self.files().try_fold(0u64, |sum, file| {
+            sum.checked_add(file.logical_size())
+                .filter(|bytes| *bytes <= MAX_LOGICAL_BYTES)
+                .ok_or(Failure::NodeBudget)
+        })
+    }
+
     pub(crate) fn node_input(
         self: &Arc<Self>,
         context: &PlanningContext<'_>,
     ) -> Result<DirectoryNodeInput> {
         self.require_context(context)?;
-        if self.directory().projection().len() > context.config.max_entries {
-            return Err(Failure::NodeBudget);
-        }
-        let logical_bytes = self.files().try_fold(0u64, |sum, file| {
-            sum.checked_add(file.logical_size())
-                .filter(|bytes| *bytes <= MAX_LOGICAL_BYTES)
-                .ok_or(Failure::NodeBudget)
-        })?;
+        let logical_bytes = self.check_logical_budget(context.config.max_entries)?;
         let host = self.directory().host();
         let root = context.namespace_host_root(
             host.namespace.repository_id, host.namespace.branch_id,

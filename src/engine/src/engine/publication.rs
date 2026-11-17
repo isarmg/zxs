@@ -12,7 +12,7 @@ mod physical_budget;
 use physical_budget::PhysicalRequirements;
 mod directory;
 pub(crate) use directory::{
-    BudgetedDirectoryPreparation, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
+    BudgetedDirectoryFirst, BudgetedDirectoryPreparation, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
 };
 
 pub(crate) use verified_payloads::{PayloadProofReservation, payload_proof_budget};
@@ -1946,67 +1946,74 @@ impl crate::engine::PlanningContext<'_> {
         prepared: &'payload [Prepared],
         required: &mut PhysicalRequirements<'_, '_>,
     ) -> Result<Vec<std::sync::Mutex<Option<ExistingCopies<'payload>>>>> {
-        // Preserve the same held read, missing-leaf policy and retained-FD
-        // budget for both ordinary and combined directory preparations.
+        prepared.iter().map(|p| {
+            self.observe_planned_version(&p.version, &p.placement, required)
+                .map(|copies| std::sync::Mutex::new(Some(copies)))
+        }).collect()
+    }
+
+    /// A held existing copy proves the immutable Version, not the origin of its
+    /// future source. This read-only cost calculation can also precede the
+    /// first directory FULL without fabricating a Prepared or opening its BODY.
+    fn observe_planned_version<'payload>(
+        &self, version: &'payload FileVersion, placement: &crate::Placement,
+        required: &mut PhysicalRequirements<'_, '_>,
+    ) -> Result<ExistingCopies<'payload>> {
         let proof_budget = payload_proof_budget();
-        let mut existing = Vec::with_capacity(prepared.len());
-        for p in prepared {
-            let mut copies = Vec::with_capacity(p.placement.route_slot_ids.len());
-            for slot in &p.placement.route_slot_ids {
-                let disk = self.disk(slot)?;
-                let reservation = proof_budget.reserve(1);
-                let disk_id = disk.disk_id.parse::<storage_contract::DiskId>()?;
-                let published = self.state.file_containers
-                    .get(&p.version.file_id.parse::<storage_contract::FileId>()?)
-                    .filter(|record| record.replicas.contains_key(&disk_id));
-                let observed = match published {
-                    Some(record) => {
-                        let scope = super::fresh_layout::containers::observe_replica(
-                            self.config, self.disk_resources, self.state,
-                            p.version.file_id.parse()?, disk,
-                        )?;
-                        let material = VersionMaterial::current(&scope, &p.version)?;
-                        // Only a missing version leaf permits a full new copy.
-                        // A failed source/container identity observation above
-                        // is not converted to missing content.
-                        VerifiedExisting::read_container(
-                            material.root()?, &material.directory()?, &p.version,
-                            scope.container()?, &record.namespace.name,
-                        ).map(Some)
-                    }
-                    None => {
-                        // No source area exists yet for this replica. Charge
-                        // the complete payload before exclusive preparation;
-                        // do not probe an unrelated disk-global directory.
-                        Ok(None)
-                    }
-                };
-                match observed {
-                    Ok(Some(proof)) => {
-                        if let Some(reservation) = reservation {
-                            copies.push(Some(RetainedExisting { proof, reservation }));
-                        } else {
-                            // Large requests retain the bounded-memory reread path.
-                            copies.push(None);
-                        }
-                        continue;
-                    }
-                    Ok(None) => copies.push(None),
-                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
-                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
-                        if error.kind() == std::io::ErrorKind::NotFound =>
-                    {
+        let mut copies = Vec::with_capacity(placement.route_slot_ids.len());
+        for slot in &placement.route_slot_ids {
+            let disk = self.disk(slot)?;
+            let reservation = proof_budget.reserve(1);
+            let disk_id = disk.disk_id.parse::<storage_contract::DiskId>()?;
+            let published = self.state.file_containers
+                .get(&version.file_id.parse::<storage_contract::FileId>()?)
+                .filter(|record| record.replicas.contains_key(&disk_id));
+            let observed = match published {
+                Some(record) => {
+                    let scope = super::fresh_layout::containers::observe_replica(
+                        self.config, self.disk_resources, self.state,
+                        version.file_id.parse()?, disk,
+                    )?;
+                    let material = VersionMaterial::current(&scope, version)?;
+                    // Only a missing version leaf permits a full new copy.
+                    // A failed source/container identity observation above
+                    // is not converted to missing content.
+                    VerifiedExisting::read_container(
+                        material.root()?, &material.directory()?, version,
+                        scope.container()?, &record.namespace.name,
+                    ).map(Some)
+                }
+                None => {
+                    // No source area exists yet for this replica. Charge
+                    // the complete payload before exclusive preparation;
+                    // do not probe an unrelated disk-global directory.
+                    Ok(None)
+                }
+            };
+            match observed {
+                Ok(Some(proof)) => {
+                    if let Some(reservation) = reservation {
+                        copies.push(Some(RetainedExisting { proof, reservation }));
+                    } else {
+                        // Large requests retain the bounded-memory reread path.
                         copies.push(None);
                     }
-                    // Existing corrupt/unreadable bodies were never repairable by
-                    // preparation. Preserve that cause instead of reporting NoSpace.
-                    Err(error) => return Err(error),
+                    continue;
                 }
-                required.add(disk, p.version.logical_size)?;
+                Ok(None) => copies.push(None),
+                Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    copies.push(None);
+                }
+                // Existing corrupt/unreadable bodies were never repairable by
+                // preparation. Preserve that cause instead of reporting NoSpace.
+                Err(error) => return Err(error),
             }
-            existing.push(std::sync::Mutex::new(Some(copies)));
+            required.add(disk, version.logical_size)?;
         }
-        Ok(existing)
+        Ok(copies)
     }
 
     fn prepare_payloads<'a>(

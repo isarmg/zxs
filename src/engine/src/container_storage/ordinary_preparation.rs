@@ -25,7 +25,7 @@ mod birth;
 pub(in crate::container_storage) use birth::UnbornBirthFile;
 mod working;
 pub(crate) use working::{
-    HeldUnbornReader, PreparedUnbornFull, PreparedWorkingSave,
+    HeldUnbornReader, MeasuredUnbornFull, PreparedUnbornFull, PreparedWorkingSave,
     ReadWorkingDigest, WorkingWriteSession,
 };
 mod directories;
