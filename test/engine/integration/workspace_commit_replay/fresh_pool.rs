@@ -612,10 +612,10 @@ fn fresh_container_preparation_survives_exact_decision_cuts_without_adopting_nam
 }
 
 #[test]
-fn fresh_deep_backup_reads_the_exact_fourth_and_fifth_disk_after_reopen() {
+fn fresh_deep_backup_reads_the_exact_tail_through_thirty_two_disks() {
     use storage_contract::{DiskId, FileId, VersionId};
 
-    for count in [4, 5] {
+    for count in [4, 5, 6, 16, 32] {
         let temp = tempfile::tempdir().unwrap();
         let system = temp.path().join("system");
         let config = Config::development((1..=count).map(|tier| {

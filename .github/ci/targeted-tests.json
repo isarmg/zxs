@@ -1001,7 +1001,7 @@
             "fresh_pool::empty_held_pool_stages_reopens_commits_and_selects_real_file_history",
             "fresh_pool::fresh_container_preparation_survives_exact_decision_cuts_without_adopting_names",
             "fresh_pool::fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparation",
-            "fresh_pool::fresh_deep_backup_reads_the_exact_fourth_and_fifth_disk_after_reopen",
+            "fresh_pool::fresh_deep_backup_reads_the_exact_tail_through_thirty_two_disks",
             "automatic_backfill::automatic_backfill_keeps_retained_versions_and_reads_real_b_then_c_after_cold_open"
           ],
           "max_tests": 5,

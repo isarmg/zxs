@@ -4,9 +4,8 @@ use crate::disk_names::configuration::ConfiguredDiskNames;
 use storage_contract::file_container::{ContainerAreas, ContainerNamespace, ContainerPrefix};
 use storage_contract::working_tree::DirectoryId;
 
-/// Fresh ordinary publication is admitted through the fifth disk. The owner
-/// itself is not a prefix; deeper routes still need scale and recovery evidence.
-const MAX_ORDINARY_SOURCE_PREFIXES: usize = 4;
+/// A fresh pool admits at most 32 disks. The owner itself is not a prefix.
+const MAX_ORDINARY_SOURCE_PREFIXES: usize = 31;
 
 /// Structural address only. Names are deliberately absent: changing a Config
 /// string cannot change a source area's target, direct parent or owned entities.
