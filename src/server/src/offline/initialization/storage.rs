@@ -218,6 +218,15 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     if digest(&input.plan)? != input.input.request_digest {
         return Err("first-storage plan differs from the exact preview digest".into());
     }
+    let bytes = json_codec::to_vec(&input.plan)?;
+    if bytes.len() > MAX_RECORD_BYTES {
+        return Err("first-storage plan exceeds its retained-record budget".into());
+    }
+    // The only worker envelope repeats the plan's admitted context. Verify its
+    // existing IPC bound before retaining an intent that cannot be executed.
+    // Already saved over-budget plans remain unchanged; this does not allocate
+    // another identity, trim the original plan or silently retry a smaller batch.
+    let request = execution_request(&input.plan)?;
     let root = Root::open(input.input.service_user.clone())?;
     root.check(&input.plan)?;
     if let Some(original) = load(&root, &input.input.request_digest)?
@@ -225,25 +234,26 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     {
         return Err("retained first-storage operation differs; no material was replaced".into());
     }
-    let bytes = json_codec::to_vec(&input.plan)?;
-    if bytes.len() > MAX_RECORD_BYTES {
-        return Err("first-storage plan exceeds its retained-record budget".into());
-    }
     root.host.publish(
         &format!(".zxs-helper-first-storage-{}", input.input.request_digest),
         &[("plan.json", bytes.as_slice())],
     )?;
-    let context = root.into_context();
-    finish(input, context).map_err(coordinator::pending::<Plan>)
+    drop(root);
+    finish(input, request).map_err(coordinator::pending::<Plan>)
 }
-fn finish(input: Commit, context: layout::Context) -> Result<json_codec::Value> {
+fn execution_request(plan: &Plan) -> Result<WorkerRequest> {
+    let request = WorkerRequest {
+        context: plan.context.clone(),
+        action: Action::Execute { plan: plan.clone() },
+    };
+    if json_codec::to_vec(&request)?.len() > MAX_RECORD_BYTES {
+        return Err("first-storage execution envelope exceeds its IPC budget; no intent was written or changed by this attempt; preserve any original plan and digest".into());
+    }
+    Ok(request)
+}
+fn finish(input: Commit, request: WorkerRequest) -> Result<json_codec::Value> {
     let WorkerOutput::Initialized { report } =
-        crate::offline::service_worker::run(WorkerRequest {
-            context,
-            action: Action::Execute {
-                plan: input.plan.clone(),
-            },
-        })?
+        crate::offline::service_worker::run(request)?
     else {
         return Err("unexpected first-storage execution reply".into());
     };

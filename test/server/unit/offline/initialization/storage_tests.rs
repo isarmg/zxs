@@ -172,3 +172,33 @@ fn first_storage_dto_cannot_override_uid_mode_or_start_services() {
     assert_eq!(encoded["complete_installation_ready"], false);
     assert_eq!(encoded["formats_or_mounts_devices"], false);
 }
+
+#[test]
+fn first_storage_execution_budget_precedes_host_access_and_retained_intent() {
+    let original = plan();
+    let request = execution_request(&original).unwrap();
+    assert!(request.context == original.context);
+    let Action::Execute { plan: exact } = request.action else {
+        panic!("first-storage execution must retain the original action");
+    };
+    assert_eq!(digest(&exact).unwrap(), digest(&original).unwrap());
+
+    // Codec-only boundary case, not an admitted filesystem or fake worker.
+    // The stored Plan fits exactly, while its repeated-context envelope cannot.
+    let mut large = original;
+    let length = json_codec::to_vec(&large).unwrap().len();
+    large.selections[0].selection.mount_identity.filesystem
+        .push_str(&"x".repeat(MAX_RECORD_BYTES - length));
+    assert_eq!(json_codec::to_vec(&large).unwrap().len(), MAX_RECORD_BYTES);
+    assert!(execution_request(&large).is_err());
+    let input = Commit {
+        input: Original {
+            service_user: "zxs".into(),
+            request_digest: digest(&large).unwrap(),
+        },
+        confirmation: "initialize-first-storage-batch".into(),
+        external_writers_stopped: true,
+        plan: large,
+    };
+    assert!(commit(input).unwrap_err().to_string().contains("IPC budget"));
+}
