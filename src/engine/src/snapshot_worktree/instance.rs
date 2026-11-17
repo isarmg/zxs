@@ -170,9 +170,7 @@ pub(crate) fn with_worktree<R>(
     handle: WorktreeHandle,
     read: impl for<'node, 'session> FnOnce(&'session WorktreeSession<'node>) -> Result<R>,
 ) -> Result<R> {
-    let index = engine.snapshot_receipts()?;
-    let registered = index.worktree(handle)?;
-    let source = index.reopen_node(engine, registered.source().handle())?;
-    let session = registered.reopen(&source)?;
-    read(&session)
+    engine.snapshot_receipts()?.with_worktree(engine, handle, |_, session| {
+        read(session)
+    })
 }

@@ -3,15 +3,31 @@ use crate::directory_worktree::session::{ReopenedWorktree, WorktreeSession};
 use crate::snapshot_worktree::registry::{PublishedWorktree, ReceiptIndex};
 use crate::snapshot_worktree::{RegistrationError, Result};
 use crate::working_tree::snapshot::HeldSnapshotNode;
+use storage_contract::snapshot_worktree::{SnapshotHandle, WorktreeHandle};
 
 impl ReceiptIndex<'_> {
+    /// Receipt evidence can be shared within one Engine read. Neither it nor a
+    /// successful sibling mount replaces the original node or instance proof.
+    pub(super) fn with_worktree<R>(
+        &self,
+        engine: &crate::Engine,
+        target: WorktreeHandle,
+        read: impl for<'n, 's> FnOnce(SnapshotHandle, &'s WorktreeSession<'n>) -> Result<R>,
+    ) -> Result<R> {
+        let registered = self.worktree(target)?;
+        let original = registered.source().handle();
+        let source = self.reopen_node(engine, original)?;
+        let session = registered.reopen(&source)?;
+        read(original, &session)
+    }
+
     /// Only this exact Engine's admitted receipts may name an existing node.
     /// Pending reserves fail before host I/O; neither a complete local manifest
     /// nor a matching pathname can upgrade an incomplete SYSTEM decision.
     pub(super) fn reopen_node(
         &self,
         engine: &crate::Engine,
-        handle: storage_contract::snapshot_worktree::SnapshotHandle,
+        handle: SnapshotHandle,
     ) -> Result<HeldSnapshotNode> {
         if !std::ptr::eq(self.source(), engine.state()) {
             return Err(RegistrationError::Source);

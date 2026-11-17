@@ -13,6 +13,7 @@ pub use namespace::{
 
 use super::RegistrationError;
 use crate::Engine;
+use crate::snapshot_worktree::registry::ReceiptIndex;
 use storage_contract::{ErrorCode, Generation, Principal, RepositoryId};
 use storage_contract::snapshot_worktree::{
     CreateWorktree, InitializeSnapshot, SnapshotHandle, SnapshotHost, SnapshotNamespace,
@@ -166,9 +167,13 @@ impl Engine {
     }
 
     pub fn directory_worktree_status(&self, target: WorktreeHandle) -> Result<WorktreeStatus> {
-        let index = self.snapshot_receipts()?;
-        let original = index.worktree(target)?.source().handle();
-        super::with_worktree(self, target, |session| {
+        self.snapshot_receipts()?.status(self, target)
+    }
+}
+
+impl ReceiptIndex<'_> {
+    fn status(&self, engine: &Engine, target: WorktreeHandle) -> Result<WorktreeStatus> {
+        self.with_worktree(engine, target, |original, session| {
             let worktree = session.worktree();
             Ok(WorktreeStatus {
                 target, original,

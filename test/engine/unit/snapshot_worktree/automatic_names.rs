@@ -70,6 +70,48 @@ fn assert_original(
 }
 
 #[test]
+fn mount_inventory_requires_each_selected_instance_even_after_a_successful_read() {
+    let (fixture, mut engine) = Fixture::new();
+    let repository = fixture.targets[0].repository;
+    let first = request(&fixture, &engine);
+    let one = engine.allocate_directory_worktree(&first, &principal()).unwrap();
+    let second = request(&fixture, &engine);
+    let two = engine.allocate_directory_worktree(&second, &principal()).unwrap();
+    let first_status = engine.directory_worktree_status(one).unwrap();
+    let second_status = engine.directory_worktree_status(two).unwrap();
+    let expected = vec![first_status.clone(), second_status.clone()];
+    assert_eq!(engine.directory_worktree_mounts(repository).unwrap(), expected);
+
+    let instance = {
+        let index = engine.snapshot_receipts().unwrap();
+        let node = index.reopen_node(&engine, fixture.source).unwrap();
+        node.worktrees_directory().path().join(
+            crate::persist::layout::worktree::instance(two.worktree_id).as_path(),
+        )
+    };
+    let displaced = fixture.temporary.path().join("displaced-instance");
+    fs::rename(&instance, &displaced).unwrap();
+    fs::create_dir(&instance).unwrap();
+    fs::set_permissions(&instance, fs::metadata(&displaced).unwrap().permissions()).unwrap();
+    let media = fixture.media();
+    assert_eq!(engine.directory_worktree_mounts_bounded(
+        repository, std::num::NonZeroU16::new(1).unwrap(),
+    ).unwrap_err().code(), storage_contract::ErrorCode::ResourceLimitExceeded);
+    assert!(engine.directory_worktree_mounts(repository).is_err());
+    assert!(engine.directory_worktree_status(two).is_err());
+    assert!(engine.directory_worktree_mount(repository, &second_status.name).is_err());
+    let unaffected = engine.directory_worktree_mount(repository, &first_status.name).unwrap();
+    assert_eq!(unaffected, Some(first_status));
+    assert_eq!(fixture.media(), media);
+
+    fs::remove_dir(&instance).unwrap();
+    fs::rename(&displaced, &instance).unwrap();
+    drop(engine);
+    let engine = Engine::open(&fixture.system).unwrap();
+    assert_eq!(engine.directory_worktree_mounts(repository).unwrap(), expected);
+}
+
+#[test]
 fn automatic_worktrees_allocate_real_parent_names_and_cold_retry_original_intent() {
     let (fixture, mut engine) = Fixture::new();
     let first = request(&fixture, &engine);

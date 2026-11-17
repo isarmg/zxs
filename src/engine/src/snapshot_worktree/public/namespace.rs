@@ -152,7 +152,7 @@ impl Engine {
             .map_err(RegistrationError::Publication)?;
         let mut mounts = Vec::with_capacity(handles.len());
         for handle in handles {
-            let status = self.directory_worktree_status(handle)?;
+            let status = index.status(self, handle)?;
             let mount_key = status.name.key();
             let owner = self
                 .state
