@@ -8,7 +8,7 @@ use crate::{Engine, Error, OperationResult, Result, State};
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::file_draft::{DraftCommand, FileWorkingState};
 mod request;
-pub(crate) use request::{Request, RangeSaveRequest};
+pub(crate) use request::{Request, RangeSaveRequest, AutomaticRequest};
 use storage_contract::{CommitState, CurrentHealth, DiskId, OperationId, ProtectionAtPublish};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -170,7 +170,7 @@ pub(crate) fn decode(previous: &State, receipt: &OperationResult) -> Result<Deco
     if request.kind() != receipt.kind { return Err(invalid()); }
     let content = &object["content"];
     let has_content = !content.is_null();
-    if has_content && !matches!(&request, Request::Command(DraftCommand::Commit { .. })) { return Err(invalid()); }
+    if has_content && !matches!(&request, Request::Command(DraftCommand::Commit { .. }) | Request::Automatic(_)) { return Err(invalid()); }
     let protection = object["version_protection"].as_array().ok_or_else(invalid)?;
     if protection.len() != usize::from(has_content) { return Err(invalid()); }
     if has_content {
@@ -222,4 +222,35 @@ pub(crate) fn payload_was_published(
         if old.payload_id() == payload { return Ok(true); }
     }
     Ok(false)
+}
+
+/// Project only a previously admitted original. Unlike transition replay this
+/// must not resolve the saved path in today's (possibly moved) namespace.
+pub(crate) fn observed_node(original: &OperationResult) -> Result<Option<NodeOrigin>> {
+    let object = original.result.as_object().ok_or_else(invalid)?;
+    let value = object.get("request").ok_or_else(invalid)?;
+    let (target, reason) = match original.kind.as_str() {
+        "file.draft.commit" => {
+            let req: Request = json_codec::from_value(value.clone()).map_err(codec)?;
+            (req.target().clone(), req.reason()?)
+        }
+        unborn_first::KIND => unborn_first::read_reason(value)?,
+        _ => return Err(invalid()),
+    };
+    let content = object.get("content").ok_or_else(invalid)?;
+    let raw = object.get("origin").ok_or_else(invalid)?;
+    if raw.is_null() && content.is_null() && original.kind == "file.draft.commit" { return Ok(None); }
+    if content.is_null() || raw.get("ancestors").and_then(json_codec::Value::as_array)
+        .is_none_or(|ids| ids.len() > 31)
+    { return Err(invalid()); }
+    let origin: NodeOrigin = json_codec::from_value(raw.clone()).map_err(codec)?;
+    let version = content.get("version").ok_or_else(invalid)?;
+    let timestamp: storage_contract::Timestamp = json_codec::from_value(object.get("timestamp")
+        .ok_or_else(invalid)?.clone()).map_err(codec)?;
+    if origin.operation != original.operation_id || origin.sequence.get() != original.sequence
+        || origin.published_at != timestamp || origin.target != target || origin.reason != reason
+        || version.get("version_id").and_then(json_codec::Value::as_str) != Some(origin.node.to_string().as_str())
+        || version.get("file_id").and_then(json_codec::Value::as_str) != Some(origin.target.file.to_string().as_str())
+    { return Err(invalid()); }
+    Ok(Some(origin))
 }

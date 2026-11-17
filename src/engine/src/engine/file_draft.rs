@@ -12,6 +12,9 @@ use storage_contract::{FileId, OperationId, Principal};
 
 mod unborn;
 mod native_io;
+mod observation;
+mod automatic;
+pub use automatic::{AutomaticFilePreparation, PreparedAutomaticFile};
 pub(crate) mod worktree;
 mod incremental;
 pub use native_io::{NativeCurrentEntry, NativeWorkingFile, NativeWorkingTarget};
@@ -181,8 +184,15 @@ impl Engine {
         if context.current_namespaces.is_some() || context.config.generation().is_some() {
             return Err(Error::FileDraft(Failure::UnsupportedScope));
         }
-        context.prepare_new_mutation_at(kind, principal.as_str(), operation, digest,
-            |_, next, prepared, timestamp| change(self, next, prepared, timestamp))
+        let plan = context.prepare_new_mutation_at(kind, principal.as_str(), operation, digest,
+            |_, next, prepared, timestamp| change(self, next, prepared, timestamp))?;
+        if let MutationPlan::Prepared { next, .. } = &plan {
+            // Cancel only before a genuinely different native working row. A
+            // later failed foreground attempt may waste work, never a saved
+            // revision; only actual native publication changes durable state.
+            automatic::invalidate_changed(context.config.pool_id.parse()?, context.state, next);
+        }
+        Ok(plan)
     }
 
     pub fn file_draft_base(&self, target: &DraftLocation) -> Result<DraftBase> {

@@ -340,3 +340,6 @@ fn automatic_save_is_durable_without_history_and_emergency_manual_switch_keeps_i
     assert_eq!(retry, receipt);
     assert_eq!(engine.state().versions.len(), original_versions);
 }
+
+#[path = "automatic_nodes.rs"]
+mod automatic_nodes;

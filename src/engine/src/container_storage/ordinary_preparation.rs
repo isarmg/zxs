@@ -23,6 +23,8 @@ mod draft;
 pub(crate) use draft::{HeldManualReader, ReadDraftDigest};
 mod birth;
 pub(in crate::container_storage) use birth::UnbornBirthFile;
+mod automatic_full;
+pub(crate) use automatic_full::PreparedAutomaticFull;
 mod working;
 pub(crate) use working::{
     HeldUnbornReader, PreparedUnbornFull, PreparedWorkingSave,

@@ -82,7 +82,7 @@ pub(crate) fn first(
     crate::business::file_draft::selected::require_all(
         previous, std::slice::from_ref(&selection), config.max_entries, config.max_file_bytes,
     )?;
-    let projected = project(
+    let mut projected = project(
         previous, config, receipt.operation_id, Sequence::new(receipt.sequence),
         Edit::FirstCommit(super::FirstCommit {
             target: &selection.target, expected: selection.expected.revision,
@@ -90,6 +90,9 @@ pub(crate) fn first(
         }),
         config.max_entries, config.max_file_bytes,
     )?;
+    if let crate::persist::file_draft::unborn_first::FirstPublication::Automatic { saved } = decoded.publication() {
+        projected.bind_automatic_first(previous, saved, decoded.content(), principal, receipt.operation_id, decoded.time())?;
+    }
     finish(previous, projected, receipt, principal)
 }
 

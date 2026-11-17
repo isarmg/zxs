@@ -51,6 +51,12 @@ impl SelectedWorkingSource {
         crate::container_storage::ReadDraftDigest::capture(Arc::new(reader), chunk_bytes).map(Some)
     }
 
+    pub(crate) fn born_scope(&self) -> Result<&Arc<ObservedContainerReplica>> {
+        match &self.body {
+            HeldWorkingBody::Born { scope, .. } => Ok(scope),
+            HeldWorkingBody::Unborn(_) => Err(Error::FileDraft(Failure::WorkingBodyChanged)),
+        }
+    }
     pub(crate) fn unborn_reader(&self) -> Result<&Arc<HeldUnbornReader>> {
         match &self.body {
             HeldWorkingBody::Unborn(reader) => Ok(reader),
@@ -109,6 +115,10 @@ pub(crate) struct SelectedWorkingSources {
 }
 
 impl SelectedWorkingSources {
+    pub(crate) fn open_sole_born(&self) -> Result<ReadFile> {
+        if self.sources.len() != 1 { return Err(crate::business::file_draft::invalid()); }
+        self.open_born(0, &self.born_path(0)?)
+    }
     pub(crate) fn sources(&self) -> &[SelectedWorkingSource] { &self.sources }
 
     /// The path is diagnostic input to ReadSource, not another source issuer.
@@ -174,7 +184,14 @@ impl Engine {
         &self,
         requests: &[WorkingSelection],
     ) -> Result<SelectedWorkingSources> {
-        let context = self.planning_context();
+        SelectedWorkingSources::capture(&self.planning_context(), requests)
+    }
+}
+
+impl SelectedWorkingSources {
+    pub(crate) fn capture(context: &crate::engine::PlanningContext<'_>,
+        requests: &[WorkingSelection]) -> Result<Self>
+    {
         if context.current_namespaces.is_some() || context.config.generation().is_some() {
             return Err(Error::FileDraft(Failure::UnsupportedScope));
         }
@@ -215,7 +232,7 @@ impl Engine {
             resources: Arc::clone(context.disk_resources), snapshot: context.snapshot.clone(),
             slot: context.next_slot, sources,
         };
-        result.require_engine(self)?;
+        result.require_context(context)?;
         Ok(result)
     }
 }

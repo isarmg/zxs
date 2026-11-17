@@ -26,6 +26,9 @@ pub(crate) enum ReadSource {
         source: Arc<crate::container_storage::PreparedUnbornFull>,
         path: PathBuf,
     },
+    AutomaticFull {
+        source: Arc<crate::container_storage::PreparedAutomaticFull>, path: PathBuf,
+    },
     SelectedWorking {
         selection: Arc<super::file_draft::SelectedWorkingSources>,
         index: usize,
@@ -80,6 +83,20 @@ impl ReadSource {
         }
     }
 
+    pub(crate) fn automatic_full(source: Arc<crate::container_storage::PreparedAutomaticFull>) -> Self {
+        Self::AutomaticFull { path: source.path().to_owned(), source }
+    }
+    pub(crate) fn independent_automatic(&self, context: &super::PlanningContext<'_>,
+        target: &storage_contract::file_draft::DraftLocation, payload: storage_contract::file_draft::DraftPayload,
+    ) -> Result<bool> {
+        if let Self::AutomaticFull { source, path } = self {
+            if path != source.path() { return Err(crate::business::file_draft::invalid()); }
+            source.require(context, target, payload)?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     /// One source from the already admitted complete selected set. No raw
     /// path, independent singleton picker or reissued container can replace it.
     pub(crate) fn selected_working(
@@ -114,6 +131,7 @@ impl ReadSource {
             Self::VerifiedDraft { source, path } => source.open(path),
             Self::SelectedWorking { selection, index, path } => selection.open_born(*index, path),
             Self::WorkingFull { source, path } => source.open(path),
+            Self::AutomaticFull { source, path } => source.open(path),
             Self::VerifiedReplica(source) => source.open(),
             Self::Container { scope, version, path } => {
                 if path != &scope.body_path(version)? {
@@ -133,7 +151,7 @@ impl ReadSource {
         match self {
             Self::External(path) | Self::Disk { path, .. }
             | Self::VerifiedDraft { path, .. } | Self::Container { path, .. }
-            | Self::WorkingFull { path, .. } | Self::SelectedWorking { path, .. } => path,
+            | Self::AutomaticFull { path, .. } | Self::WorkingFull { path, .. } | Self::SelectedWorking { path, .. } => path,
             Self::VerifiedReplica(source) => source.path(),
         }
     }
@@ -144,6 +162,7 @@ impl ReadSource {
             Self::External(_) => Self::External(path),
             // Joining is not authority over another draft or a child path.
             // The retained source's exact-path gate rejects it on open.
+            Self::AutomaticFull { source, .. } => Self::AutomaticFull { source: Arc::clone(source), path },
             Self::WorkingFull { source, .. } => Self::WorkingFull {
                 source: Arc::clone(source), path,
             },

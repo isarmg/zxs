@@ -8,9 +8,19 @@ mod allocations;
 pub(crate) mod trace;
 pub(crate) mod ordinary;
 pub(crate) mod origin;
+pub(crate) mod automatic;
 mod content;
 pub(crate) mod batch;
 pub(crate) use content::{PublishedContent, build as build_content, trace_limit};
+pub(crate) fn build_automatic_content(context: &crate::engine::PlanningContext<'_>, next: &mut crate::State,
+    prepared: &mut Vec<crate::engine::Prepared>, command: &storage_contract::file_draft::DraftCommand,
+    principal: &storage_contract::Principal, operation: storage_contract::OperationId,
+    full: std::sync::Arc<crate::container_storage::PreparedAutomaticFull>, read: Option<&crate::container_storage::ReadDraftDigest>,
+) -> crate::Result<PublishedContent> {
+    let plan = content::plan(context, command)?;
+    let source = crate::engine::ReadSource::automatic_full(full);
+    content::build_planned(context, next, prepared, command, principal.as_str(), operation, &plan, &source, read)
+}
 mod selection;
 pub(crate) mod selected;
 pub(crate) mod unborn;

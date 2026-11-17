@@ -11,7 +11,7 @@ pub(crate) use ordinary_preparation::{
     BackupLayoutPlan, BackupOriginalImage, BackupPayloadVersion, BackupServingImage,
     BackupServingVersion, BackupTargetLayout, ObservedContainerReplica, PreparedContainerEntities,
     HeldManualReader, ReadDraftDigest, HeldUnbornReader, PreparedUnbornFull, PreparedWorkingSave,
-    ReadWorkingDigest, WorkingWriteSession,
+    ReadWorkingDigest, WorkingWriteSession, PreparedAutomaticFull,
     open_published_container,
     ordinary_body_path,
 };

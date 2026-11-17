@@ -252,17 +252,25 @@ pub(crate) fn verify_working_transition(
             Some(*payload)
         }
         Request::Command(DraftCommand::SetMode { .. } | DraftCommand::ResumeAutomatic { .. } | DraftCommand::Discard { .. }
-            | DraftCommand::Commit { .. }) => None,
+            | DraftCommand::Commit { .. }) | Request::Automatic(_) => None,
     };
     let stamp = SaveStamp::new(result.operation_id, result.sequence, decoded.timestamp());
     let working = match &outcome.request {
+        Request::Automatic(request) => {
+            request.require_body(previous)?;
+            if selection::resolve(previous, &request.target)?.base != request.base { return Err(invalid()); }
+            let (working, origin) = request.saved.after(previous, &request.target, outcome.content.as_ref(),
+                principal, result.operation_id, storage_contract::Sequence::new(result.sequence), decoded.timestamp())?;
+            if origin != outcome.origin { return Err(invalid()); }
+            working
+        }
         Request::Ranges(request) => plan_incremental(previous, request,
             payload.ok_or_else(invalid)?, outcome.working.incremental().ok_or_else(invalid)?,
             stamp)?,
         Request::Command(request) => plan_change(previous, request, payload, stamp)?,
     };
     if read.is_some() && !matches!(outcome.request,
-        Request::Command(DraftCommand::Commit { .. }))
+        Request::Command(DraftCommand::Commit { .. }) | Request::Automatic(_))
     {
         return Err(invalid());
     }
@@ -277,8 +285,16 @@ pub(crate) fn verify_working_transition(
     expected.sequence = next.sequence;
     expected.business_generation = Generation::new(previous.business_generation).next()
         .map_err(|source| Error::FileDraft(Failure::PublicationGeneration(source)))?.get();
-    match (&outcome.request, &outcome.content) {
+    // The automatic command cannot be submitted as manual ingress. Only the
+    // material/version kernel is shared after the original automatic fence.
+    let automatic;
+    let kernel = if let Request::Automatic(req) = &outcome.request {
+        automatic = Request::Command(req.command()); &automatic
+    } else { &outcome.request };
+    match (kernel, &outcome.content) {
         (Request::Command(DraftCommand::Commit { target, message, .. }), Some(content)) => {
+            if let Request::Command(cmd) = kernel
+                && draft_matches_base(previous, cmd, read)? { return Err(invalid()); }
             let selection = selection::resolve(previous, target)?;
             let record = previous.file_containers.get(&file).ok_or_else(invalid)?;
             let (_, payload) = record.working.draft().ok_or_else(invalid)?;

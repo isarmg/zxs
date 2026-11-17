@@ -203,7 +203,11 @@ pub(super) fn build_planned(
         path: &target.path, source, primary, copies: 1,
         source_ids: vec![base.version_id().to_string()], checkpoint: false,
     };
+    // An independent automatic FULL proves the same exact held source and is
+    // reread by the ordinary constructor. A hash or raw path cannot enter here.
+    let independent = source.independent_automatic(context, target, payload)?;
     let version = match read {
+        Some(_) if independent => context.build_version(next, prepared, input)?,
         Some(read) => context.build_draft_version(next, prepared, input, read)?,
         None => context.build_version(next, prepared, input)?,
     };

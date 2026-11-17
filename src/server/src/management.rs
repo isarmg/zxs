@@ -22,6 +22,7 @@ use std::{
 };
 
 mod backup_transaction;
+mod automatic_files;
 mod discovery;
 mod disk_notes;
 mod foreign_plan;
@@ -86,6 +87,7 @@ pub struct ManagementBackend {
     // Fields drop in declaration order: join scrub before releasing Inner/auth.
     scrub: IntegrityScrubService,
     observer: crate::periodic_worker::PeriodicWorker,
+    automatic_files: crate::periodic_worker::PeriodicWorker,
     drain: Mutex<()>,
     inner: Arc<Inner>,
 }
@@ -297,6 +299,7 @@ fn open_service_inner(
     let backend = Arc::new(ManagementBackend {
         scrub: IntegrityScrubService::new(scrub_policy),
         observer: crate::periodic_worker::PeriodicWorker::new(),
+        automatic_files: crate::periodic_worker::PeriodicWorker::new(),
         drain: Mutex::new(()),
         inner: Arc::new(Inner {
             data_root: data_root.into(),
@@ -1656,6 +1659,9 @@ impl Backend for ManagementBackend {
         if let Err(error) = self.scrub.start(Arc::downgrade(&self.inner), reader) {
             tracing::error!(error = ?error, "integrity scrub scheduler could not start");
         }
+        if let Err(error) = automatic_files::start(&self.automatic_files, Arc::downgrade(&self.inner)) {
+            tracing::warn!(error = ?error, "automatic FILE scheduler could not start");
+        }
         let inner = Arc::clone(&self.inner);
         if let Err(error) = self.observer.start(
             std::thread::Builder::new().name("zxs-disk-observation".into()),
@@ -1677,6 +1683,7 @@ impl Backend for ManagementBackend {
     }
     fn stop_management(&self) {
         self.scrub.stop();
+        self.automatic_files.stop();
         self.inner.stop();
         self.observer.stop();
     }
@@ -1689,6 +1696,7 @@ impl Backend for ManagementBackend {
             Err(poisoned) => poisoned.into_inner(),
         };
         // All native owners must drain, even if any reports failure.
+        let auto = self.automatic_files.drain();
         let observer = self.observer.drain();
         let scrub = self.scrub.drain();
         let recovery = self.inner.drain();
@@ -1701,6 +1709,11 @@ impl Backend for ManagementBackend {
                     recovery,
                 })))
             }
+        };
+        let management = match (auto, management) {
+            (Ok(()), result) | (result, Ok(())) => result,
+            (Err(automatic), Err(other)) => Err(ApiError::io(std::io::Error::other(
+                AutomaticDrainErrors { automatic, other }))),
         };
         match (management, observer) {
             (Ok(()), result) | (result, Ok(())) => result,
@@ -1831,4 +1844,11 @@ impl Drop for ManagementBackend {
             tracing::error!(error = ?error, "management backend shutdown failed");
         }
     }
+}
+
+#[derive(Debug, error_definition::Error)]
+#[error("automatic FILE worker drain failed: {automatic}; management drain failed: {other}")]
+struct AutomaticDrainErrors {
+    automatic: ApiError,
+    other: ApiError,
 }

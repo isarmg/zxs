@@ -45,7 +45,7 @@ impl Engine {
     ) -> Result<OperationResult> {
         use crate::persist::file_draft::unborn_first as codec;
         let plan = self.plan_draft_at(
-            codec::KIND, principal, operation, codec::request(request, message)?,
+            codec::KIND, principal, operation, codec::request(request, message, &codec::FirstPublication::Manual {})?,
             |engine, next, versions, time| {
                 let first = engine.prepare_unborn_first_file(
                     request, principal, operation, message,
@@ -54,7 +54,7 @@ impl Engine {
                 let origin = business::origin::NodeOrigin::from_content(engine.state(), &request.target,
                     &first.content, business::origin::Reason::ManualFile {}, operation,
                     storage_contract::Sequence::new(next.sequence), time)?;
-                let encoded = codec::encode(request, message, &first.content, &origin)?;
+                let encoded = codec::encode(request, message, &codec::FirstPublication::Manual {}, &first.content, &origin)?;
                 *next = first.projection.into_state();
                 versions.extend(first.prepared);
                 Ok(encoded)

@@ -62,6 +62,20 @@ impl Projection {
         &self.target
     }
 
+    pub(crate) fn bind_automatic_first(&mut self, previous: &State,
+        saved: &super::automatic::Saved, content: &super::PublishedContent,
+        principal: &storage_contract::Principal, operation: OperationId, time: storage_contract::Timestamp) -> Result<()> {
+        let before = previous.file_containers.get(&self.target.file).ok_or_else(invalid)?
+            .working.unborn().ok_or_else(invalid)?;
+        let row = self.state.file_containers.get_mut(&self.target.file).ok_or_else(invalid)?;
+        if row.working != before.after_first_commit()
+            .map_err(|e| Error::FileDraft(Failure::RevisionExhausted(e)))?
+        { return Err(invalid()); }
+        let (working, _) = saved.after(previous, &self.target, Some(content), principal.as_str(),
+            operation, Sequence::new(self.state.sequence), time)?;
+        row.working = working;
+        Ok(())
+    }
     pub(crate) fn into_state(self) -> State {
         self.state
     }

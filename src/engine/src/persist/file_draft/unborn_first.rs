@@ -24,14 +24,27 @@ enum ExpectedBody {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Request {
+    publication: FirstPublication,
     target: DraftLocation,
     expected: WorkingRevision,
     body: ExpectedBody,
     message: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum FirstPublication {
+    Manual {},
+    Automatic { saved: crate::business::file_draft::automatic::Saved },
+}
+impl FirstPublication {
+    pub(crate) fn reason(&self) -> Reason {
+        match self { Self::Manual {} => Reason::ManualFile {}, Self::Automatic { saved } => saved.reason() }
+    }
+}
+
 impl Request {
-    fn from_selection(selection: &WorkingSelection, message: &str) -> Result<Self> {
+    fn from_selection(selection: &WorkingSelection, message: &str, publication: &FirstPublication) -> Result<Self> {
         let body = match selection.expected.content {
             WorkingContentExpectation::UnbornEmpty => ExpectedBody::Empty {},
             WorkingContentExpectation::UnbornSaved { generation, commitment } => {
@@ -40,7 +53,7 @@ impl Request {
             WorkingContentExpectation::Born { .. } => return Err(invalid()),
         };
         Ok(Self {
-            target: selection.target.clone(), expected: selection.expected.revision,
+            publication: publication.clone(), target: selection.target.clone(), expected: selection.expected.revision,
             body, message: message.into(),
         })
     }
@@ -81,15 +94,15 @@ struct Envelope {
     version_protection: [Protection; 1],
 }
 
-pub(crate) fn request(selection: &WorkingSelection, message: &str) -> Result<json_codec::Value> {
-    json_codec::to_value(Request::from_selection(selection, message)?).map_err(codec)
+pub(crate) fn request(selection: &WorkingSelection, message: &str, publication: &FirstPublication) -> Result<json_codec::Value> {
+    json_codec::to_value(Request::from_selection(selection, message, publication)?).map_err(codec)
 }
 
 pub(crate) fn encode(
-    selection: &WorkingSelection, message: &str, content: &PublishedContent, origin: &NodeOrigin,
+    selection: &WorkingSelection, message: &str, publication: &FirstPublication, content: &PublishedContent, origin: &NodeOrigin,
 ) -> Result<json_codec::Value> {
     json_codec::to_value(Outcome {
-        request: Request::from_selection(selection, message)?, content, origin,
+        request: Request::from_selection(selection, message, publication)?, content, origin,
     }).map_err(codec)
 }
 
@@ -99,6 +112,8 @@ impl Decoded {
     pub(crate) fn selection(&self) -> WorkingSelection { self.0.request.selection() }
     pub(crate) fn content(&self) -> &PublishedContent { &self.0.content }
     pub(crate) fn message(&self) -> &str { &self.0.request.message }
+    pub(crate) fn publication(&self) -> &FirstPublication { &self.0.request.publication }
+    pub(crate) fn time(&self) -> storage_contract::Timestamp { storage_contract::Timestamp::from_unix_seconds(self.0.timestamp) }
     pub(crate) fn epoch(&self) -> u64 { self.0.membership_epoch }
 
     pub(crate) fn receipt(
@@ -106,8 +121,12 @@ impl Decoded {
     ) -> Result<OperationResult> {
         let protection = content_protection(previous, &self.0.request.target, &self.0.content)?;
         let origin = NodeOrigin::from_content(previous, &self.0.request.target, &self.0.content,
-            Reason::ManualFile {}, operation, sequence,
+            self.publication().reason(), operation, sequence,
             storage_contract::Timestamp::from_unix_seconds(self.0.timestamp))?;
+        if let FirstPublication::Automatic { saved } = self.publication() {
+            saved.require_fence(previous, &self.0.request.target, principal.as_str(), operation)?;
+            if self.message() != crate::business::file_draft::automatic::MESSAGE { return Err(invalid()); }
+        }
         if self.0.version_protection != [protection] || self.0.origin != origin { return Err(invalid()); }
         Ok(OperationResult {
             operation_id: operation, kind: KIND.into(),
@@ -117,7 +136,7 @@ impl Decoded {
             current_health: CurrentHealth::Healthy,
             request_digest: Engine::native_request_digest(
                 KIND, principal.as_str(),
-                &request(&self.selection(), &self.0.request.message)?,
+                &request(&self.selection(), &self.0.request.message, self.publication())?,
             )?,
             sequence: sequence.get(), result: json_codec::to_value(&self.0).map_err(codec)?,
         })
@@ -158,4 +177,11 @@ pub(crate) fn decode(previous: &State, receipt: &OperationResult) -> Result<Deco
         return Err(invalid());
     }
     Ok(Decoded(json_codec::from_value(receipt.result.clone()).map_err(codec)?))
+}
+
+
+/// Only a read projection of the previously verified original.
+pub(super) fn read_reason(value: &json_codec::Value) -> Result<(DraftLocation, Reason)> {
+    let request: Request = json_codec::from_value(value.clone()).map_err(codec)?;
+    Ok((request.target, request.publication.reason()))
 }

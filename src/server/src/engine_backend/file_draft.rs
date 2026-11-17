@@ -213,3 +213,25 @@ impl FullProof {
         })
     }
 }
+
+
+impl EngineBackend {
+    /// No pending task carries a live HTTP session. Publication is bound in
+    /// the engine to the original authorized save/principal and enabled FILE
+    /// policy. No name lookup or service-account credential is introduced.
+    pub(crate) fn run_automatic_file(&self, cursor: &mut Option<storage_contract::FileId>,
+        still_active: impl FnOnce() -> bool) -> Result<(), ApiError> {
+        let preparation = {
+            let engine = crate::lock(&self.engine);
+            let (next, candidate) = engine.automatic_file_candidate(*cursor);
+            *cursor = next;
+            let Some(file) = candidate else { return Ok(()); };
+            engine.prepare_automatic_file(file).map_err(error)?
+        };
+        let prepared = preparation.execute().map_err(error)?;
+        let mut engine = crate::lock(&self.engine);
+        if !still_active() { return Ok(()); }
+        engine.finish_automatic_file(prepared).map_err(error)?;
+        Ok(())
+    }
+}
