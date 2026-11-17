@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 mod admin;
 mod api;
+mod browser_lock;
 mod files;
 mod format;
 mod history;

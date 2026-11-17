@@ -97,6 +97,9 @@ async fn authenticated_unborn_empty_first_commit_is_explicit_and_cold_idempotent
     let fixture = fixture.reopen().await;
     assert_eq!(fixture.json("GET", &status_route, None).await, before);
     let receipt = json_response(post(&fixture, &route, true, command.clone()).await).await;
+    // Browser refresh queries this authorized endpoint; it never replays the POST.
+    let outcome = format!("/api/operations/{}/outcome", command["operation_id"].as_str().unwrap());
+    assert_eq!(fixture.json("GET", &outcome, None).await, receipt);
     let entry = fixture.entry(&slot, "first-empty.txt").await;
     assert_eq!(entry["file_id"], target.file.to_string());
     assert_eq!(entry["entry_id"], target.entry.to_string());
@@ -104,6 +107,7 @@ async fn authenticated_unborn_empty_first_commit_is_explicit_and_cold_idempotent
     let history = fixture.history(&target.file.to_string()).await;
     assert_eq!(history["nodes"].as_array().unwrap().len(), 1);
     let fixture = fixture.reopen().await;
+    assert_eq!(fixture.json("GET", &outcome, None).await, receipt);
     assert_eq!(json_response(post(&fixture, &route, true, command.clone()).await).await, receipt);
     assert_eq!(fixture.history(&target.file.to_string()).await, history);
     let mut second = command;

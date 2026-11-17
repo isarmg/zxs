@@ -1,5 +1,6 @@
 use super::{
-    Phase, Target, can_review, can_submit, cleanup, load, restore, retry, retry_record, submit,
+    Phase, Target, can_review, can_submit, load, submit,
+    recovery::{cleanup, lookup, restore, retry, retry_record},
 };
 use crate::ui::State;
 use storage_contract::file_draft::CommitMode;
@@ -40,7 +41,9 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                         {t("首个提交备注", "First commit message")}
                         <input type="text" maxlength="128"
                             prop:value=move ||state.with(|s| s.files.unborn.message.clone())
-                            disabled=move ||state.with(|s| s.files.unborn.pending.is_some())
+                            disabled=move ||state.with(|s| {
+                                s.files.unborn.pending.is_some()
+                            })
                             on:input=move |event|state.update(|s| {
                                 if s.files.unborn.pending.is_none() {
                                     s.files.unborn.message = event_target_value(&event);
@@ -78,30 +81,52 @@ pub(crate) fn recovery_view(state: RwSignal<State>) -> impl IntoView {
                 <p class="zxs-row">{move ||state.with(|s| {
                     s.files.unborn.pending.as_ref().map(|p| format!(
                         "{} · {}",
-                        p.record.command.target.path.as_str(), p.record.command.operation_id,
+                        p.original.request.command.target.path.as_str(), p.original.request.command.operation_id,
                     )).unwrap_or_default()
                 })}</p>
+                <button class="zxs-button" data-zxs-lookup-first-commit=""
+                    disabled=move ||!state.with(|s| s.files.unborn.pending.as_ref()
+                        .is_some_and(|p| p.phase == Phase::Pending))
+                    on:click=move |_|lookup(state)>
+                    {t("只查询原提交结果", "Look up the original commit without retrying")}
+                </button>
+                <Show when=move ||state.with(|s| s.files.unborn.pending.as_ref()
+                    .is_some_and(|p| p.phase == Phase::LookingUp))>
+                    <p role="status">{t("正在查询原回执；未发送提交。", "Looking up the receipt; no commit was sent.")}</p>
+                </Show>
                 <button class="zxs-button" data-zxs-retry-first-commit=""
                     disabled=move ||state.with(|s| retry_record(s).is_none())
                     on:click=move |_|retry(state)>
                     {t("确认重试原提交", "Confirm retry of the original commit")}
                 </button>
                 <Show when=move ||state.with(|s| {
-                    s.files.unborn.pending.as_ref().is_some_and(|p| p.phase == Phase::Settled)
+                    s.files.unborn.pending.as_ref().is_some_and(|p| matches!(p.phase, Phase::Settled | Phase::Removing))
                 })>
                     <p role="status">{t(
                         "原结果已确认，仅本机记录清理待完成。",
                         "The original result is confirmed; only local record cleanup remains.",
                     )}</p>
-                    <button class="zxs-button" on:click=move |_|cleanup(state)>
+                    <button class="zxs-button"
+                        disabled=move ||state.with(|s| s.files.unborn.changing_storage())
+                        on:click=move |_|cleanup(state)>
                         {t("重试本机记录清理", "Retry local record cleanup")}
                     </button>
                 </Show>
                 <button class="zxs-button"
-                    disabled=move ||state.with(|s| s.files.mutation_pending)
+                    disabled=move ||state.with(|s| {
+                        s.files.mutation_pending || s.files.unborn.pending.as_ref().is_some_and(|p| {
+                            !matches!(p.phase, Phase::Pending | Phase::Settled)
+                        })
+                    })
                     on:click=move |_|restore(state)>
                     {t("重新读取本机原请求", "Reload local original request")}
                 </button>
+                <Show when=move ||state.with(|s| s.files.unborn.changing_storage())>
+                    <p role="status">{t(
+                        "正在等待或核对本机原请求，请保留本页。",
+                        "Waiting for or verifying the local original request. Keep this page open.",
+                    )}</p>
+                </Show>
                 {move ||state.with(|s| s.files.unborn.error.clone())
                     .map(|error|view! { <p role="alert">{error.to_string()}</p> })}
             </aside>

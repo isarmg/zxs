@@ -1,9 +1,7 @@
 //! Same-origin/account recovery input.
 use super::*;
 use data_serialization::{Deserialize, Serialize};
-use std::{cell::RefCell, rc::Rc};
 use storage_contract::Principal;
-use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 
 const MAX_RECORD_BYTES: usize = wire::MAX_REQUEST_BYTES + 512;
 
@@ -220,47 +218,7 @@ fn apply_locked(key: &str, action: Action) -> Result<(), api::Error> {
 /// The same origin/account lock covers every writer and compare-and-remove.
 /// A missing lock facility is a hard admission failure, never an unlocked fallback.
 async fn exclusive(principal: &Principal, action: Action) -> Result<(), api::Error> {
-    let window = web_sys::window().ok_or_else(failure)?;
-    let navigator = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("navigator"))
-        .map_err(api::js_error)?;
-    let locks =
-        js_sys::Reflect::get(&navigator, &JsValue::from_str("locks")).map_err(api::js_error)?;
-    if locks.is_null() || locks.is_undefined() {
-        return Err(api::error(
-            storage_contract::ErrorCode::RecoveryRequired,
-            t(
-                "此浏览器必须支持 Web Locks 才能保存或清理原备份请求；未修改本机记录或提交服务请求。",
-                "Web Locks are required to retain or clean up the original backup request. No local record or service mutation was changed.",
-            ),
-        ));
-    }
-    let request = js_sys::Reflect::get(&locks, &JsValue::from_str("request"))
-        .map_err(api::js_error)?
-        .dyn_into::<js_sys::Function>()
-        .map_err(api::js_error)?;
-    let key = key(principal);
-    let name = JsValue::from_str(&key);
-    let result = Rc::new(RefCell::new(None));
-    let completed = Rc::clone(&result);
-    let mut action = Some(action);
-    let callback = Closure::wrap(Box::new(move |_lock: JsValue| {
-        let action = action
-            .take()
-            .expect("invariant: Web Locks invokes its granted callback once");
-        *completed.borrow_mut() = Some(apply_locked(&key, action));
-        JsValue::UNDEFINED
-    }) as Box<dyn FnMut(JsValue) -> JsValue>);
-    let promise = request
-        .call2(&locks, &name, callback.as_ref())
-        .map_err(api::js_error)?
-        .dyn_into::<js_sys::Promise>()
-        .map_err(api::js_error)?;
-    let granted = js_sys::futures::JsFuture::from(promise).await;
-    drop(callback);
-    granted.map_err(api::js_error)?;
-    result
-        .take()
-        .expect("invariant: resolved Web Lock request completed its callback")
+    crate::browser_lock::exclusive(key(principal), move |key| apply_locked(key, action)).await
 }
 
 #[cfg(test)]

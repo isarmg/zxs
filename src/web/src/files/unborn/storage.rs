@@ -7,30 +7,63 @@ use storage_contract::Principal;
 fn key(principal: &Principal) -> String {
     format!("zxs:first-file-commit:{}", api::segment(principal.as_str()))
 }
-pub(super) fn load(principal: &Principal) -> Result<Option<Record>, api::Error> {
+
+/// Retain the actual UTF-8 text as well as its admitted meaning: compare-and-remove
+/// must not consume externally replaced bytes, even when the new encoding is equivalent.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct Original {
+    pub(super) request: Record,
+    bytes: Box<str>,
+}
+impl Original {
+    pub(super) fn create(request: Record) -> Result<Self, api::Error> {
+        let bytes = request.encode()?.into_boxed_str();
+        Ok(Self { request, bytes })
+    }
+
+    pub(super) fn read(bytes: &str, principal: &Principal) -> Result<Self, api::Error> {
+        Ok(Self {
+            request: Record::parse(bytes, principal)?,
+            bytes: bytes.into(),
+        })
+    }
+}
+
+pub(super) fn load(principal: &Principal) -> Result<Option<Original>, api::Error> {
     let key = key(principal);
-    let mut record = None;
+    let mut original = None;
     Store::open()?.scan(&key, |found, bytes| {
         if found == key {
-            record = Some(Record::parse(bytes, principal)?);
+            original = Some(Original::read(bytes, principal)?);
         }
         Ok(())
     })?;
-    Ok(record)
+    Ok(original)
 }
-pub(super) fn save(record: &Record) -> Result<(), api::Error> {
-    let bytes = record.encode()?;
-    Store::open()?.save(&key(&record.principal), &bytes, |stored| {
-        Ok(Record::parse(stored, &record.principal)? == *record)
-    })
+
+/// Constructed only by the same-origin lock callback for this exact account key.
+pub(super) struct Slot(String);
+
+pub(super) async fn while_held<F>(
+    principal: &Principal,
+    action: impl FnOnce(Slot) -> F + 'static,
+) -> Result<(), api::Error>
+where
+    F: std::future::Future<Output = Result<(), api::Error>> + 'static,
+{
+    crate::browser_lock::while_held(key(principal), |key| action(Slot(key))).await
 }
-pub(super) fn verify(record: &Record) -> Result<(), api::Error> {
-    Store::open()?.verify(&key(&record.principal), |stored| {
-        Ok(Record::parse(stored, &record.principal)? == *record)
-    })
-}
-pub(super) fn remove(record: &Record) -> Result<(), api::Error> {
-    Store::open()?.remove(&key(&record.principal), |stored| {
-        Ok(Record::parse(stored, &record.principal)? == *record)
-    })
+
+impl Slot {
+    pub(super) fn save(&self, original: &Original) -> Result<(), api::Error> {
+        Store::open()?.save(&self.0, &original.bytes, |stored| {
+            Ok(stored == original.bytes.as_ref())
+        })
+    }
+    pub(super) fn verify(&self, original: &Original) -> Result<(), api::Error> {
+        Store::open()?.verify(&self.0, |stored| Ok(stored == original.bytes.as_ref()))
+    }
+    pub(super) fn remove(&self, original: &Original) -> Result<(), api::Error> {
+        Store::open()?.remove(&self.0, |stored| Ok(stored == original.bytes.as_ref()))
+    }
 }
