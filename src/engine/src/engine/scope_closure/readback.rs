@@ -173,15 +173,16 @@ impl<'a> Original<'a> {
         if !actual_empty.is_empty() {
             return Err(Failure::GenesisMismatch.into());
         }
-        let bytes = material.representation.read(
+        let state = crate::history_package::AdmittedState::admit_replayed(super::initial_state())?;
+        let actual = material.representation.verify(
             root,
             super::Schema::System,
             crate::engine::index::preparation::MAX_BYTES,
+            |bytes| {
+                crate::engine::index::preparation::SystemEncodingInput::new(&state, &|| Ok(()))?
+                    .verified_scope_root(bytes, &|| Ok(()))
+            },
         )?;
-        let state = crate::history_package::AdmittedState::admit_replayed(super::initial_state())?;
-        let actual =
-            crate::engine::index::preparation::SystemEncodingInput::new(&state, &|| Ok(()))?
-                .verified_scope_root(&bytes, &|| Ok(()))?;
         if actual != material.logical_root {
             return Err(Failure::GenesisMismatch.into());
         }

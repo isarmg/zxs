@@ -88,6 +88,13 @@ fn actual_empty_pool_keeps_system_image_on_system_and_two_checked_images_on_each
     let bad_path = files(&disk.root.join("metadata/objects/scope-sqlite-image"))
         .pop()
         .unwrap();
+    for extension in ["sqlite-wal", "sqlite-shm", "sqlite-journal"] {
+        let unknown = bad_path.with_extension(extension);
+        fs::write(&unknown, b"unadmitted companion").unwrap();
+        assert!(original.disk(disk, held).is_err());
+        assert_eq!(fs::read(&unknown).unwrap(), b"unadmitted companion");
+        fs::remove_file(&unknown).unwrap();
+    }
     let mut bad = fs::read(&bad_path).unwrap();
     bad[0] ^= 1;
     fs::write(&bad_path, &bad).unwrap();
@@ -191,4 +198,26 @@ fn previously_admitted_frontier_reads_only_the_selected_original_disk_without_wr
     );
     assert!(!manifest.exists());
     assert!(!paths[1].exists() && !system.exists());
+}
+
+#[test]
+fn frozen_image_remains_named_while_its_logical_rows_are_admitted() {
+    let temporary = tempfile::tempdir().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let root = DiskRoot::open(temporary.path()).unwrap();
+    let image = PreparedImage::new(Schema::DiskHistory, b"frozen bytes".to_vec());
+    image.install_verified(&root, |_| Ok(())).unwrap();
+    let representation = image.representation();
+    let Representation::Sqlite { image_hash, .. } = representation;
+    let path = temporary.path().join(layout::scope_image(image_hash).as_path());
+    let parked = path.with_extension("saved");
+    // Isolate the physical image guard; production callbacks actually decode SQLite.
+    let result = representation.verify(&root, Schema::DiskHistory, image.bytes(), |bytes| {
+        fs::rename(&path, &parked)?;
+        fs::write(&path, bytes)?;
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read(&parked).unwrap(), fs::read(&path).unwrap());
 }

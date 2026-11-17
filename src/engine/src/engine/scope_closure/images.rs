@@ -36,12 +36,13 @@ impl Representation {
         }
     }
 
-    pub(in crate::engine) fn read(
+    pub(in crate::engine) fn verify<T>(
         self,
         root: &DiskRoot,
         required: Schema,
         maximum: usize,
-    ) -> Result<Vec<u8>> {
+        inspect: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<T> {
         let Self::Sqlite {
             schema,
             image_hash,
@@ -55,15 +56,65 @@ impl Representation {
             return Err(ScopeClosureError::Budget.into());
         }
         let path = layout::scope_image(image_hash);
+        reject_companions(root, &path)?;
         let file = root
             .open_optional_read_relative(&path)?
             .ok_or(ScopeClosureError::ImageMismatch)?;
-        let bytes = read_file_bytes(file, length)?;
+        let stamp = crate::file_stamp::FileStamp::from_metadata(&file.metadata()?);
+        let bytes = read_file_bytes(file.try_clone()?, length)?;
         if Self::new(schema, &bytes) != self {
             return Err(ScopeClosureError::ImageMismatch.into());
         }
-        Ok(bytes)
+        // Keep the admitted FD through the SQLite schema and row read, then
+        // recheck that neither the selected image nor its actual name moved.
+        let result = inspect(&bytes)?;
+        let named = root
+            .open_optional_read_relative(&path)?
+            .ok_or(ScopeClosureError::ImageMismatch)?;
+        if crate::file_stamp::FileStamp::from_metadata(&file.metadata()?) != stamp
+            || crate::file_stamp::FileStamp::from_metadata(&named.metadata()?) != stamp
+        {
+            return Err(ScopeClosureError::ImageMismatch.into());
+        }
+        reject_companions(root, &path)?;
+        file.check_running()?;
+        Ok(result)
     }
+}
+
+// A frozen standalone image has no WAL, SHM or rollback journal. Never open,
+// checkpoint, truncate or delete unexpected siblings to make it readable.
+fn preflight_destination(
+    root: &DiskRoot,
+    path: &platform_io::fs_safety::RelativePath,
+) -> Result<()> {
+    // On first installation the hash-prefix directory need not exist yet.
+    // Only an absent child under an already verified parent proves absence.
+    let mut parent = root.path().to_owned();
+    for component in path
+        .as_path()
+        .parent()
+        .expect("scope image has a fixed private parent")
+    {
+        parent.push(component);
+        if root.optional_metadata(&parent)?.is_none() {
+            return Ok(());
+        }
+        root.directory_identity(&parent)?;
+    }
+    reject_companions(root, path)
+}
+fn reject_companions(root: &DiskRoot, path: &platform_io::fs_safety::RelativePath) -> Result<()> {
+    let image = root.path().join(path.as_path());
+    for extension in ["sqlite-wal", "sqlite-shm", "sqlite-journal"] {
+        if root
+            .optional_metadata(&image.with_extension(extension))?
+            .is_some()
+        {
+            return Err(ScopeClosureError::ImageMismatch.into());
+        }
+    }
+    Ok(())
 }
 
 pub(in crate::engine) struct PreparedImage {
@@ -96,8 +147,10 @@ impl PreparedImage {
         } = self.representation;
         // Existing immutable material is compared, never exchanged; both a new
         // and a previously completed install synchronize file and parent.
-        root.write_relative_atomic(&layout::scope_image(image_hash), &self.bytes, false)?;
-        let actual = self.representation.read(root, schema, self.bytes.len())?;
-        inspect_logical(&actual)
+        let path = layout::scope_image(image_hash);
+        preflight_destination(root, &path)?;
+        root.write_relative_atomic(&path, &self.bytes, false)?;
+        self.representation
+            .verify(root, schema, self.bytes.len(), inspect_logical)
     }
 }

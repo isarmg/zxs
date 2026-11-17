@@ -103,14 +103,26 @@ pub(in crate::engine) fn verify_original(
     {
         return Err(ScopeClosureError::ImageMismatch.into());
     }
-    let bytes = current_image.read(root, Schema::DiskCurrent, super::MAX_DATABASE_BYTES)?;
-    if database::read(&bytes, identity)? != current {
-        return Err(ScopeClosureError::ImageMismatch.into());
-    }
-    drop(bytes);
-    let bytes = history_image.read(root, Schema::DiskHistory, super::MAX_DATABASE_BYTES)?;
-    if history::read_for_root_install(&bytes, identity)? != history {
-        return Err(ScopeClosureError::ImageMismatch.into());
-    }
-    Ok(())
+    current_image.verify(
+        root,
+        Schema::DiskCurrent,
+        super::MAX_DATABASE_BYTES,
+        |bytes| {
+            if database::read(bytes, identity)? != current {
+                return Err(ScopeClosureError::ImageMismatch.into());
+            }
+            Ok(())
+        },
+    )?;
+    history_image.verify(
+        root,
+        Schema::DiskHistory,
+        super::MAX_DATABASE_BYTES,
+        |bytes| {
+            if history::read_for_root_install(bytes, identity)? != history {
+                return Err(ScopeClosureError::ImageMismatch.into());
+            }
+            Ok(())
+        },
+    )
 }
