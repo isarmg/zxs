@@ -2024,28 +2024,14 @@ pub(crate) fn verify_move_files<O: crate::engine::move_execution::MoveOutcome>(
         let history = crate::persist::layout::histories(&disk.root).join(history_id);
         let container = container_at(root, &history, Some(history_id), file, &mut |_| Ok(()))?
             .ok_or_else(|| invalid("published move FILE container is absent"))?;
-        let expected = file_database::prepare(transition.next(), file, history_id)?;
+        let expected = file_database::capture_image(transition.next(), file, history_id)?;
         let held = root.private_child(&container)?;
-        for suffix in ["-wal", "-shm", "-journal"] {
-            if held
-                .optional_metadata(&container.join(format!("{}{suffix}", file_database::NAME)))?
-                .is_some()
-            {
-                return Err(invalid("move FILE has an unknown SQLite sidecar"));
-            }
-        }
-        let actual = crate::disk::HeldRegular::capture(
-            &held,
-            file_database::NAME,
-            file_database::MAX_BYTES,
-        )?
-        .ok_or_else(|| invalid("published move FILE database is missing"))?;
-        if actual.bytes() != expected.bytes {
-            return Err(invalid(
-                "published move FILE differs from the complete retained graph",
-            ));
-        }
-        actual.check_running()?;
+        let actual = file_database::physical::HeldFileImage::read(&held, &expected)?;
+        let identity = held.directory_identity(held.path())?;
+        // Re-open the originally selected FILE name beneath the same disk, not
+        // an equal-looking image in a replacement container.
+        let named = root.private_child_matching(&container, identity)?;
+        actual.require_named(&named)?;
     }
     Ok(())
 }

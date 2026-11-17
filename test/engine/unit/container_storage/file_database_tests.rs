@@ -1219,3 +1219,28 @@ fn unmarked_file_database_capture_binds_interrupted_rename_before_verifying_body
         assert!(!container.join(".zxs-container-owner.json").exists());
     }
 }
+
+#[test]
+fn held_file_scope_preserves_unknown_sidecars_and_rejects_byte_equal_replacement() {
+    let f = Fixture::new();
+    let snapshot = crate::state_projection::ProjectionSnapshot::new(f.engine.state());
+    let expected = capture_image(snapshot.view(), &f.file.file_id, &f.repo.history_tree_id).unwrap();
+    let dir = f.temp.path().join("original-file-image");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let held = crate::disk::DiskRoot::open(&dir).unwrap();
+    let name = dir.join(NAME);
+    held.write_atomic(&name, expected.bytes(), false).unwrap();
+    let proved = physical::HeldFileImage::read(&held, &expected).unwrap();
+    let sidecar = dir.join(format!("{NAME}-wal"));
+    std::fs::write(&sidecar, b"unknown").unwrap();
+    assert!(proved.require_named(&held).is_err());
+    assert!(physical::HeldFileImage::read(&held, &expected).is_err());
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"unknown");
+    std::fs::rename(&sidecar, dir.join("preserved-sidecar")).unwrap();
+    let preserved = dir.join("original.sqlite");
+    std::fs::rename(&name, &preserved).unwrap();
+    held.write_atomic(&name, expected.bytes(), false).unwrap();
+    assert!(proved.require_named(&held).is_err());
+    assert_eq!(std::fs::read(preserved).unwrap(), expected.bytes());
+}

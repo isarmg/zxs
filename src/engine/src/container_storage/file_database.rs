@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub(super) mod changes;
 pub(super) mod install;
 mod material;
+pub(in crate::container_storage) mod physical;
 mod projection;
 mod rows;
 pub(super) use material::{read_material, reconstruct_material};
@@ -129,10 +130,17 @@ pub(crate) fn capture_projected_copy(
 }
 
 pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> Result<Prepared> {
-    let prepared = CapturedMaterial::from_projection(view, file, history)?.encode()?;
+    let prepared = capture_image(view, file, history)?;
     Ok(Prepared {
         bytes: Arc::unwrap_or_clone(prepared.bytes),
     })
+}
+
+/// Exact bounded SQLite bytes and strict FILE rows for this frozen projection.
+pub(super) fn capture_image(
+    view: StateProjection<'_>, file: &str, history: &str,
+) -> Result<PreparedFileMaterial> {
+    CapturedMaterial::from_projection(view, file, history)?.encode()
 }
 
 /// An encoded logical material, not publication or installation authority.
