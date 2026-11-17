@@ -376,6 +376,7 @@ pub(crate) struct LifecycleSource<'a> {
     malformed: bool,
     moves: crate::state_projection::move_receipts::MoveReceipts<'a>,
     index: Option<LifecycleMembershipIndex>,
+    path_ledger: crate::persist::path_changes::LedgerRead<'a>,
 }
 
 impl<'a> LifecycleSource<'a> {
@@ -393,36 +394,41 @@ impl<'a> LifecycleSource<'a> {
             malformed: false,
             moves: crate::state_projection::move_receipts::MoveReceipts::new(state),
             index: Some(LifecycleMembershipIndex::default()),
+            path_ledger: crate::persist::path_changes::LedgerRead::all(state),
         };
-        for (id, receipt) in state.operations.iter() {
-            checkpoint()?;
-            for (members, owner, copy) in [
-                (&mut source.deletions, owner(receipt), false),
-                (&mut source.copies, history_copy_owner(receipt), true),
-            ] {
-                if let Some(index) = &mut source.index
-                    && !index.observe(*id, &owner, copy)?
-                {
-                    // Cache overflow does not narrow the supported audit or
-                    // omit any target member. Continue this complete scan.
-                    source.index = None;
-                }
-                let included = match owner {
-                    DeletionOwner::Other => false,
-                    DeletionOwner::Malformed => {
-                        source.malformed = true;
-                        false
-                    }
-                    DeletionOwner::File(owner) => owner == file.as_str(),
-                    DeletionOwner::Files(owners) => owners.contains(&file.as_str()),
-                };
-                if included {
-                    members.insert(*id, ());
-                }
-            }
-        }
+        source.path_ledger = crate::persist::path_changes::LedgerRead::with_memberships(
+            state, &mut checkpoint, |id, receipt| source.observe(id, receipt),
+        )?;
         checkpoint()?;
         Ok(source)
+    }
+
+    fn observe(&mut self, id: OperationId, receipt: &OperationResult) -> crate::Result<()> {
+        for (members, owner, copy) in [
+            (&mut self.deletions, owner(receipt), false),
+            (&mut self.copies, history_copy_owner(receipt), true),
+        ] {
+            if let Some(index) = &mut self.index
+                && !index.observe(id, &owner, copy)?
+            {
+                // Cache overflow does not narrow the supported audit or omit
+                // any target member. Continue this complete scan.
+                self.index = None;
+            }
+            let included = match owner {
+                DeletionOwner::Other => false,
+                DeletionOwner::Malformed => {
+                    self.malformed = true;
+                    false
+                }
+                DeletionOwner::File(owner) => owner == self.file.as_str(),
+                DeletionOwner::Files(owners) => owners.contains(&self.file.as_str()),
+            };
+            if included {
+                members.insert(id, ());
+            }
+        }
+        Ok(())
     }
 
     /// Only the read cache's exact immutable-State match can select this path.
@@ -438,7 +444,12 @@ impl<'a> LifecycleSource<'a> {
             malformed: false,
             moves: crate::state_projection::move_receipts::MoveReceipts::new(state),
             index: None,
+            path_ledger: crate::persist::path_changes::LedgerRead::all(state),
         }
+    }
+
+    pub(crate) fn path_ledger(&self) -> &crate::persist::path_changes::LedgerRead<'a> {
+        &self.path_ledger
     }
 
     /// A caller may retain this only after the complete audit succeeded.

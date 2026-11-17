@@ -243,7 +243,7 @@ impl FileLifecycleRead {
         {
             return Err(LifecycleError::SourceIncomplete.into_error().into());
         }
-        self.append_path_events(&mut events, &mut budget)?;
+        self.append_path_events(source.path_ledger(), &mut events, &mut budget)?;
         events.sort_by_key(Event::order_key);
         self.read.cancellation.checkpoint()?;
         for pair in events.windows(2) {
@@ -277,11 +277,11 @@ impl FileLifecycleRead {
 
     fn append_path_events(
         &self,
+        ledger: &crate::persist::path_changes::LedgerRead<'_>,
         events: &mut Vec<Event>,
         budget: &mut EventBudget,
     ) -> Result<()> {
-        crate::persist::path_changes::visit_ledger(
-            &self.source,
+        ledger.visit(
             || self.read.cancellation.checkpoint(),
             |fact| {
                 if fact.file_id.to_string() != self.request.file_id.as_str() {

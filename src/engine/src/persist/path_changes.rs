@@ -13,7 +13,7 @@ const MAX_BYTES: usize = storage_contract::file_lifecycle::MAX_AUDIT_BYTES;
 
 mod ledger;
 mod references;
-pub(crate) use ledger::{admit as admit_ledger, visit as visit_ledger};
+pub(crate) use ledger::{LedgerRead, admit as admit_ledger, visit as visit_ledger};
 
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]

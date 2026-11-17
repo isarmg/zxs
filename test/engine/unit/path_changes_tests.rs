@@ -100,3 +100,64 @@ fn path_facts_reject_missing_unknown_duplicate_and_noncanonical_records() {
     ).unwrap();
     assert!(attach(json_codec::json!({}), vec![unchanged]).is_err());
 }
+
+// This fixture exercises the ledger boundary, not an entire published State.
+fn mixed_ledger(carriers: usize) -> crate::State {
+    let mut state = crate::State::default();
+    state.sequence = 32;
+    let template = receipt(fact());
+    for number in 1..=32 {
+        let id = format!("op_{number:032x}").parse().unwrap();
+        let mut row = template.clone();
+        row.operation_id = id;
+        row.sequence = number;
+        if number as usize <= carriers {
+            row.result = attach(json_codec::json!({}), Vec::new()).unwrap();
+            state.operation_principals.insert(id, "admin".into());
+        } else {
+            row.kind = "file.delete".into();
+        }
+        state.operations.insert(id, row);
+    }
+    state
+}
+
+#[test]
+fn cold_ledger_classifies_every_receipt_without_rewalking_a_sparse_map() {
+    use crate::persist::path_changes::LedgerRead;
+
+    for (carriers, second_walk) in [(0, 0), (3, 3), (8, 8), (9, 32)] {
+        let state = mixed_ledger(carriers);
+        let mut classified = Vec::new();
+        let ledger = LedgerRead::with_memberships(&state, || Ok(()), |id, _| {
+            classified.push(id);
+            Ok(())
+        }).unwrap();
+        assert_eq!(classified, state.operations.keys().copied().collect::<Vec<_>>());
+        let mut checked = 0;
+        ledger.visit(|| { checked += 1; Ok(()) }, |_| panic!("no path facts")).unwrap();
+        assert_eq!(checked, second_walk);
+        crate::persist::path_changes::admit_ledger(&state).unwrap();
+    }
+}
+
+#[test]
+fn sparse_cold_ledger_admits_unrelated_copy_move_restore_and_path_envelopes() {
+    use crate::persist::path_changes::{admit_ledger, LedgerRead};
+    use crate::business::history_copy;
+
+    for kind in [
+        history_copy::KIND, history_copy::RETAINED_KIND, history_copy::DIRECTORY_EXPORT_KIND,
+        crate::business::FILE_HISTORY_MOVE_KIND, storage_contract::file_relocation::OBJECT_MOVE_KIND,
+        crate::history_package::path_audit::RESTORE_KIND, "file.namespace",
+    ] {
+        let mut state = mixed_ledger(1);
+        let id = *state.operations.keys().next().unwrap();
+        let row = state.operations.get_mut(&id).unwrap();
+        row.kind = kind.into();
+        row.result = json_codec::json!({});
+        let cold = LedgerRead::with_memberships(&state, || Ok(()), |_, _| Ok(())).unwrap();
+        let failure = cold.visit(|| Ok(()), |_| Ok(())).unwrap_err();
+        assert_eq!(failure.code(), admit_ledger(&state).unwrap_err().code(), "{kind}");
+    }
+}
