@@ -7,7 +7,9 @@ fn only_the_original_empty_versions_is_unstarted_on_the_exact_held_root() {
         .tempdir().unwrap();
     let held = DiskRoot::open(temporary.path()).unwrap();
     let versions = held.path().join(layout::VERSIONS.as_path());
-    let expected = BTreeSet::from([PathBuf::from("versions"), PathBuf::from("history")]);
+    let expected = Paths::from([
+        (PathBuf::from("versions"), Kind::Directory), (PathBuf::from("history"), Kind::Directory),
+    ]);
     let stop = AtomicBool::new(false);
     let inspect = || {
         let mut read = Inventory::default();
@@ -28,4 +30,22 @@ fn only_the_original_empty_versions_is_unstarted_on_the_exact_held_root() {
     fs::write(&temporary_leaf, b"unresolved").unwrap();
     assert!(inspect().unwrap());
     assert_eq!(fs::read(temporary_leaf).unwrap(), b"unresolved");
+}
+
+#[test]
+fn an_empty_directory_cannot_stand_in_for_a_regular_or_a_file_for_an_ancestor() {
+    let temporary = tempfile::Builder::new().permissions(fs::Permissions::from_mode(0o700))
+        .tempdir().unwrap();
+    let root = DiskRoot::open(temporary.path()).unwrap();
+    let stop = AtomicBool::new(false);
+    let path = root.path().join("expected");
+    root.private_dir(&path).unwrap();
+    let file = Paths::from([(PathBuf::from("expected"), Kind::File)]);
+    assert!(Inventory::default().read(&root, &file, None, &stop).is_err());
+    assert!(path.is_dir());
+    fs::remove_dir(&path).unwrap();
+    fs::write(&path, b"not an ancestor").unwrap();
+    let dir = Paths::from([(PathBuf::from("expected"), Kind::Directory)]);
+    assert!(Inventory::default().read(&root, &dir, None, &stop).is_err());
+    assert_eq!(fs::read(path).unwrap(), b"not an ancestor");
 }

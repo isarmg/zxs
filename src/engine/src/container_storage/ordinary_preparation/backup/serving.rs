@@ -13,6 +13,9 @@ use std::{
 };
 use storage_contract::{HistoryTreeId, VersionId};
 
+mod paths;
+use paths::{Expected, Kind, Paths};
+
 const MAX_METADATA: usize = 96 * 1024 * 1024;
 const MAX_MANIFEST: usize = 32 * 1024 * 1024;
 
@@ -88,7 +91,10 @@ pub(crate) struct BackupServingImage<'a> {
     stop: &'a AtomicBool,
     held: Observed,
     files: BTreeMap<Key, Data<'a>>,
-    manifest: Vec<u8>,
+    // Only immutable recipe geometry is retained. Every inventory still walks
+    // this target's actual held directories, and every material is reread.
+    expected: Expected,
+    recipe_hash: String,
     metadata_bytes: usize,
     pub(crate) bodies: u64,
     pub(crate) body_bytes: u64,
@@ -127,8 +133,9 @@ impl<'a> BackupServingImage<'a> {
     {
         source.require(stop)?;
         let held = source.layout().hold(source.source(), stop)?;
-        let mut image = Self { source, stop, held, files: BTreeMap::new(), manifest: Vec::new(),
-            metadata_bytes: 0, bodies: 0, body_bytes: 0, directory_repositories: 0 };
+        let expected = Expected::new(&held._files, stop)?;
+        let mut image = Self { source, stop, held, files: BTreeMap::new(), expected,
+            recipe_hash: String::new(), metadata_bytes: 0, bodies: 0, body_bytes: 0, directory_repositories: 0 };
         for database in PreparedDatabases::capture(source.published(), stop)?.into_databases() {
             let (scope, bytes) = database.into_parts();
             match scope {
@@ -235,34 +242,40 @@ impl<'a> BackupServingImage<'a> {
             layout: &'b BackupTargetLayout,
             files: Vec<Descriptor<'b>>,
         }
-        image.manifest = crate::canonical_json(&Manifest {
+        let manifest = crate::canonical_json(&Manifest {
             publication: source.publication_hash(), layout: source.layout(),
             files: image.files.iter().map(|(key, value)| Descriptor {
                 key, bytes: value.length(), hash: value.hash(),
             }).collect(),
         })?;
-        if image.manifest.len() > MAX_MANIFEST {
+        if manifest.len() > MAX_MANIFEST {
             return Err(Failure::ContainerBudget.into());
         }
+        image.recipe_hash = blake3::hash(&manifest).to_hex().to_string();
+        drop(manifest);
         image.inventory(stop)?;
         source.require(stop)?;
         Ok(image)
     }
 
     fn add(&mut self, key: Key, value: Data<'a>) -> Result<()> {
+        preparation_checkpoint(self.stop)?;
         if let Data::Bytes(bytes) = &value {
             self.metadata_bytes = self.metadata_bytes.checked_add(bytes.len())
                 .ok_or(Failure::ContainerBudget)?;
         }
-        if self.metadata_bytes > MAX_METADATA || self.files.len() >= MAX_ENTITIES
-            || self.files.insert(key, value).is_some()
-        {
+        if self.metadata_bytes > MAX_METADATA || self.files.len() >= MAX_ENTITIES {
+            return Err(Failure::ContainerBudget.into());
+        }
+        let relative = self.relative(&key)?;
+        self.expected.add(&key, &relative)?;
+        if self.files.insert(key, value).is_some() {
             return Err(Failure::ContainerBudget.into());
         }
         Ok(())
     }
     pub(crate) fn hash(&self) -> String {
-        blake3::hash(&self.manifest).to_hex().to_string()
+        self.recipe_hash.clone()
     }
     pub(crate) fn whole_files(&self) -> usize {
         self.held._files.len()
@@ -392,27 +405,13 @@ impl<'a> BackupServingImage<'a> {
     // or an atomic temporary is evidence that ordinary installation started;
     // neither is a receipt or permission to recreate a missing selector.
     fn inventory(&self, stop: &AtomicBool) -> Result<bool> {
-        let mut management = BTreeSet::new();
-        let mut files: BTreeMap<FileId, BTreeSet<PathBuf>> = self.held._files.keys()
-            .map(|file| (*file, BTreeSet::from([layout::VERSIONS.as_path().to_owned()])))
-            .collect();
-        for key in self.files.keys() {
-            let paths = match key {
-                Key::Metadata { .. } => &mut management,
-                _ => files.get_mut(&key.file()).ok_or(Failure::BackupLayoutEvidence)?,
-            };
-            let relative = self.relative(key)?;
-            paths.insert(relative.clone());
-            for parent in relative.ancestors().skip(1).filter(|p| !p.as_os_str().is_empty()) {
-                paths.insert(parent.to_owned());
-            }
-        }
         let mut observed = Inventory::default();
-        observed.read(self.current_zxs()?, &management, None, stop)?;
-        for (file, paths) in files {
-            let root = &self.held._files[&file].root;
-            observed.read(root, &paths, Some(&layout::VERSIONS), stop)?;
+        observed.read(self.current_zxs()?, &self.expected.management, None, stop)?;
+        for (file, paths) in &self.expected.files {
+            let root = &self.held._files[file].root;
+            observed.read(root, paths, Some(&layout::VERSIONS), stop)?;
         }
+        self.expected.require_room_for(observed.temporaries)?;
         let named = self.held._prefixes.iter().any(|(node, _)| node.installed)
             || self.held._directories.values().any(|node| node.installed)
             || self.held._files.values().any(|node| node.installed);
@@ -670,7 +669,7 @@ struct Inventory {
 }
 impl Inventory {
     fn read(
-        &mut self, root: &DiskRoot, expected: &BTreeSet<PathBuf>, baseline: Option<&EntryName>,
+        &mut self, root: &DiskRoot, expected: &Paths, baseline: Option<&EntryName>,
         stop: &AtomicBool,
     ) -> Result<()> {
         let mut baseline_present = baseline.is_none();
@@ -696,11 +695,11 @@ impl Inventory {
                 } else {
                     self.started = true;
                 }
-                if expected.contains(&child) {
-                    if metadata.is_dir() {
-                        pending.push(child);
-                    } else if !metadata.is_file() || metadata.nlink() != 1 {
-                        return Err(Failure::BackupLayoutEvidence.into());
+                if let Some(kind) = expected.get(&child) {
+                    match kind {
+                        Kind::Directory if metadata.is_dir() => pending.push(child),
+                        Kind::File if metadata.is_file() && metadata.nlink() == 1 => {}
+                        _ => return Err(Failure::BackupLayoutEvidence.into()),
                     }
                 } else if platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
                     && metadata.is_file() && metadata.nlink() == 1
