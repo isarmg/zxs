@@ -468,6 +468,16 @@ fn fresh_inventory_discards_only_a_confirmed_unpublished_upload_prefix() {
     let (partial_item, discarded) = make(b"partial", false);
     let (full_item, full) = make(&[0; 20], false);
     let (retained_item, retained_name) = make(b"retained", true);
+    let (late_full_item, late_full) = make(b"part", false);
+    fs::write(root.path().join(&late_full), [0; 20]).unwrap();
+    let (late_part_item, late_part) = make(b"prefix", false);
+    fs::write(root.path().join(&late_part), b"prefix plus").unwrap();
+    let (wrong_item, wrong) = make(b"abc", false);
+    fs::write(root.path().join(&wrong), b"xyz").unwrap();
+    let (short_item, short) = make(b"checkpoint", false);
+    fs::write(root.path().join(&short), b"check").unwrap();
+    let (absent_item, absent) = make(b"keep record", false);
+    fs::remove_file(root.path().join(&absent)).unwrap();
     let one_shot = format!("complete-upload-{}.data", authentication::random_token().unwrap());
     retained(&budget, "alice", &one_shot, 20, b"one-shot draft body");
     drop(budget);
@@ -482,4 +492,17 @@ fn fresh_inventory_discards_only_a_confirmed_unpublished_upload_prefix() {
     assert_eq!(std::fs::read(root.path().join(retained_name)).unwrap(), b"retained");
     assert!(uploads::load(root.path(), workspace, &full_item).unwrap().is_some());
     assert!(uploads::load(root.path(), workspace, &retained_item).unwrap().is_some());
+    for (item, name, expected) in [
+        (&late_full_item, &late_full, Some(&[0u8; 20][..])),
+        (&late_part_item, &late_part, Some(&b"prefix plus"[..])),
+        (&wrong_item, &wrong, Some(&b"xyz"[..])),
+        (&short_item, &short, Some(&b"check"[..])),
+        (&absent_item, &absent, None),
+    ] {
+        assert!(uploads::load(root.path(), workspace, item).unwrap().is_some());
+        assert!(root.path().join(format!("{name}.owner.json")).is_file());
+        let path = root.path().join(name);
+        if let Some(expected) = expected { assert_eq!(fs::read(path).unwrap(), expected); }
+        else { assert!(!path.exists()); }
+    }
 }

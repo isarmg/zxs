@@ -20,6 +20,8 @@ use std::{
 /// not a claim about filesystem allocation, compression or sparse extents.
 pub(crate) const METADATA_ALLOWANCE: u64 = 64 * 1024;
 const MAX_METADATA: u64 = 16 * 1024;
+mod restart;
+use restart::{InterruptedPrefix, discard_restart_uploads};
 
 #[derive(Clone, Debug)]
 pub struct SpoolLimits {
@@ -182,10 +184,18 @@ fn metadata<T: data_serialization::de::DeserializeOwned>(path: &Path) -> Result<
             .expect("invariant: spool entries have a filename"),
     )
     .map_err(crate::upload_fs_error)?;
-    let bytes = directory
-        .read_bounded(&name, MAX_METADATA as usize)
-        .map_err(crate::upload_fs_error)?;
-    storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)
+    metadata_at(&directory, &name)
+}
+fn metadata_at<T: data_serialization::de::DeserializeOwned>(
+    directory: &PrivateDirectory, name: &EntryName,
+) -> Result<T, ApiError> {
+    Ok(metadata_and_hash_at(directory, name)?.0)
+}
+fn metadata_and_hash_at<T: data_serialization::de::DeserializeOwned>(
+    directory: &PrivateDirectory, name: &EntryName,
+) -> Result<(T, blake3::Hash), ApiError> {
+    let bytes = directory.read_bounded(name, MAX_METADATA as usize).map_err(crate::upload_fs_error)?;
+    Ok((storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)?, blake3::hash(&bytes)))
 }
 
 fn charge_bytes(bytes: u64) -> Result<u64, ApiError> {
@@ -219,76 +229,6 @@ fn set_owner(
     Ok(())
 }
 
-/// The upload producer checkpoints a complete length before it can hand the
-/// descriptor to the backend. An earlier checkpoint proves no such handoff;
-/// full-length Incomplete and unknown records cannot make that claim.
-fn incomplete_before_publication(name: &str, record: &PersistedUploadRecord) -> bool {
-    record.state == crate::uploads::UploadState::Incomplete
-        && record.persisted_bytes < record.logical_size
-        && record.generation != 0
-        && upload_data_name(&record.data_file, "upload-")
-        && storage_contract::validate_id(&record.workspace_id, "ws").is_ok()
-        && storage_contract::validate_id(&record.item_id, "entry").is_ok()
-        && name_policy::PortablePath::parse(&record.path).is_ok()
-        && record.persisted_hash.len() == 64
-        && record.persisted_hash.bytes().all(|byte|
-            byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        && name == format!("{}.json", crate::uploads::key(&record.workspace_id, &record.item_id))
-}
-
-fn upload_data_name(name: &str, prefix: &str) -> bool {
-    name.strip_prefix(prefix)
-        .and_then(|name| name.strip_suffix(".data"))
-        .is_some_and(|token| token.len() == 43 && token.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
-        }))
-}
-
-fn discard_restart_uploads(
-    directory: &PrivateDirectory,
-    files: &mut BTreeMap<String, u64>,
-    owners: &mut BTreeMap<String, String>,
-    covered: &mut BTreeMap<String, String>,
-    mut interrupted: Vec<(Option<String>, String)>,
-) -> Result<(), ApiError> {
-    let mut references = BTreeMap::<String, usize>::new();
-    for data in covered.values() {
-        *references.entry(data.clone()).or_default() += 1;
-    }
-    // One-shot draft/worktree HTTP bodies are only descriptor inputs. The
-    // storage engine copies them into its own independently admitted material
-    // and never references a spool name. After exclusive restart, an isolated
-    // owner sidecar proves this isn't a retained resumable transfer.
-    interrupted.extend(covered.iter().filter_map(|(metadata, data)| {
-        (upload_data_name(data, "complete-upload-")
-            && metadata == &format!("{data}.owner.json"))
-            .then(|| (None, data.clone()))
-    }));
-    for (record, data) in interrupted {
-        let owner = format!("{data}.owner.json");
-        let owner_confirmed = covered.get(&owner) == Some(&data);
-        let expected = usize::from(record.is_some()) + usize::from(owner_confirmed);
-        if references.get(&data).copied() != Some(expected)
-            || (files.contains_key(&data) && !owner_confirmed)
-        {
-            // A retained generation or missing attribution is not safe to drop.
-            continue;
-        }
-        directory.verify_identity().map_err(crate::upload_fs_error)?;
-        // Record last: another interrupted cleanup can resume from the same
-        // incomplete evidence even if the data or owner is already absent.
-        for name in [&data, &owner].into_iter().chain(record.as_ref()) {
-            if files.contains_key(name) {
-                let entry = EntryName::new(name).map_err(crate::upload_fs_error)?;
-                directory.remove_file(&entry).map_err(crate::upload_fs_error)?;
-                files.remove(name);
-                covered.remove(name);
-            }
-        }
-        owners.remove(&data);
-    }
-    Ok(())
-}
 
 impl SpoolBudget {
     pub(crate) fn recover(root: &Path, limits: SpoolLimits) -> Result<Arc<Self>, ApiError> {
@@ -343,10 +283,11 @@ impl SpoolBudget {
                     }
                 }
             } else if name.contains(".json") {
-                match metadata::<PersistedUploadRecord>(&entry.path()) {
-                    Ok(record) => {
-                        if incomplete_before_publication(&name, &record) {
-                            interrupted.push((Some(name.clone()), record.data_file.clone()));
+                let record_name = EntryName::new(&name).map_err(crate::upload_fs_error)?;
+                match metadata_and_hash_at::<PersistedUploadRecord>(&directory, &record_name) {
+                    Ok((record, observed_record)) => {
+                        if let Some(prefix) = InterruptedPrefix::observe(&name, &record, observed_record) {
+                            interrupted.push((Some(prefix), record.data_file.clone()));
                         }
                         covered_metadata.insert(name, record.data_file.clone());
                         set_owner(&mut owners, record.data_file, record.principal)?;
