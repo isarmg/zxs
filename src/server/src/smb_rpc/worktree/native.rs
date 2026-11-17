@@ -58,10 +58,10 @@ impl Session {
             PortablePath::try_from(path.clone()).map_err(ApiError::invalid_source)?
         };
         let display = display_path(&status.name, Some(&path))?;
-        let paths = path_reservation::PathReservation::acquire(
+        let mut birth_path = Some(path_reservation::PathReservation::acquire(
             &self.shared,
             [(self.branch.as_str(), display.key())],
-        )?;
+        )?);
         let principal = self
             .identity
             .principal
@@ -97,7 +97,10 @@ impl Session {
                     truncate,
                 },
             )?;
-            self.install_native(file, &display, writable, write_through, Some(paths))
+            // Every birth owns its path until admission is finished. Only a
+            // writable open continues to own that writer slot until close.
+            let writer_path = if writable { birth_path.take() } else { None };
+            self.install_native(file, &display, writable, write_through, writer_path)
         })();
         match result {
             Ok(opened) => {

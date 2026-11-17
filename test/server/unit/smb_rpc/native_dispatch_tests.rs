@@ -23,6 +23,7 @@ mod incremental_manual;
 struct Direct {
     backend: Arc<EngineBackend>,
     share: DefaultShare,
+    shared: Arc<Shared>,
     // AuthReader is weak: retain the real store and its lock until dispatch ends.
     _auth: AuthStore,
 }
@@ -66,8 +67,8 @@ impl Direct {
             namespace_operations: Mutex::new(BTreeSet::new()),
         });
         let share =
-            DefaultShare::new(shared, identity, account_generation, max_file_bytes).unwrap();
-        Self { backend, share, _auth: auth }
+            DefaultShare::new(Arc::clone(&shared), identity, account_generation, max_file_bytes).unwrap();
+        Self { backend, share, shared, _auth: auth }
     }
 
     fn call(&mut self, request: Request) -> Reply {

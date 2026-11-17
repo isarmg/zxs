@@ -62,6 +62,44 @@ fn added_metadata(engine: &Engine, target: WorktreeHandle) -> (WorktreeFileTarge
     added_metadata_at(engine, target, "added.txt")
 }
 
+fn check_readonly_birth_open(
+    direct: &mut Direct, slot: &str, path: &str, opened: &OpenResult, target: &WorktreeFileTarget,
+) {
+    use storage_contract::ErrorCode;
+
+    let generation = direct.shared.account.read().unwrap().selection().generation;
+    let mut peer = DefaultShare::new(
+        Arc::clone(&direct.shared), direct._auth.sole_identity().unwrap(),
+        generation, direct.shared.max_file_bytes,
+    ).unwrap();
+    let snapshot = |engine: &Engine| (
+        engine.directory_worktree_status(target.worktree).unwrap().revision,
+        engine.state().file_containers.len(), engine.state().versions.len(),
+    );
+    let before = observe(direct, slot, snapshot);
+    let open = |exclusive| Request::Open {
+        path: path.replace("added.txt", "ADDED.TXT"), writable: true, create: true,
+        truncate: false, exclusive, write_through: false,
+    };
+    // A second SMB connection opens the existing occurrence for write while
+    // the read-only creator still has its handle. Neither operation is a save.
+    let Reply::Open { metadata: writer, descriptor: _fd } = peer.dispatch(open(false)).unwrap()
+        else { panic!("native working writer"); };
+    assert_eq!(writer.data_io, OpenIo::NativeWorking);
+    assert_eq!(writer.entry_id, opened.entry_id);
+    assert_eq!(writer.entry_id, target.entry.to_string());
+    assert_eq!(writer.size, 0);
+    assert_eq!(direct.share.dispatch(open(false)).unwrap_err().code, ErrorCode::FileWriteBusy);
+    assert_eq!(direct.share.dispatch(open(true)).unwrap_err().code, ErrorCode::NameConflict);
+    assert_eq!(direct.share.dispatch(Request::WorkingResize {
+        handle: opened.handle, length: 1,
+    }).unwrap_err().code, ErrorCode::Forbidden);
+    assert!(direct.read(opened.handle).is_empty());
+    assert_eq!(direct.flush(opened.handle)["changed"], false);
+    peer.dispatch(Request::Close { handle: writer.handle }).unwrap();
+    assert_eq!(observe(direct, slot, snapshot), before);
+}
+
 fn added_metadata_at(
     engine: &Engine,
     target: WorktreeHandle,
@@ -231,6 +269,7 @@ fn assert_native_worktree_birth(nested: bool) {
     let second_file = listed(&mut direct, &second_mount, 0);
     assert_ne!(first_file.file, second_file.file);
     assert_ne!(first_file.entry, second_file.entry);
+    check_readonly_birth_open(&mut direct, &slot, &second_path, &other, &second_file);
     direct.call(Request::Close {
         handle: other.handle,
     });
