@@ -91,6 +91,14 @@ impl<T, K: Ord + Clone> SharedRecords<T, K> {
             .map(|(key, value)| (key, value.as_ref()))
     }
 
+    /// Seek past a typed stable key instead of visiting the preceding records
+    /// on every bounded scan. Nothing is cloned or granted writable access.
+    pub fn after(&self, key: Option<K>) -> impl DoubleEndedIterator<Item = (&K, &T)> {
+        use std::ops::Bound;
+        self.records.range((key.map_or(Bound::Unbounded, Bound::Excluded), Bound::Unbounded))
+            .map(|(id, value)| (id, value.as_ref()))
+    }
+
     pub fn values(&self) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator {
         self.records.values().map(Arc::as_ref)
     }

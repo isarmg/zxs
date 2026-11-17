@@ -6,7 +6,7 @@ use business::automatic::{MESSAGE, Saved, stale};
 use crate::container_storage::{PreparedAutomaticFull, PreparedUnbornFull, ReadDraftDigest};
 use crate::engine::{MutationPlan, Prepared};
 use crate::{Engine, OperationResult, Result, State};
-use std::{ops::Bound, sync::Arc};
+use std::sync::Arc;
 use storage_contract::file_draft::{WorkingContentExpectation, WorkingExpectation, WorkingSelection};
 use storage_contract::{FileId, OperationId, Principal, Sequence};
 
@@ -44,8 +44,7 @@ impl Engine {
     /// volatile scan position is for fairness only and can restart at the root.
     pub fn automatic_file_candidate(&self, after: Option<FileId>) -> (Option<FileId>, Option<FileId>) {
         if self.config.generation().is_some() || self.current_namespaces.is_some() { return (None, None); }
-        let start = after.map_or(Bound::Unbounded, Bound::Excluded);
-        let mut it = self.state.file_containers.range((start, Bound::Unbounded));
+        let mut it = self.state.file_containers.after(after);
         let mut last = None;
         for _ in 0..64 {
             let Some((&id, record)) = it.next() else { return (None, None); };

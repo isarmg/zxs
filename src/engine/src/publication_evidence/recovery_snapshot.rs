@@ -87,6 +87,19 @@ impl OriginalReceiptProjection {
         )
     }
 
+    /// A search key only from the authentic originally published receipt, never
+    /// from a visible recovery overlay or the current FILE controller.
+    pub(crate) fn automatic_key(&self) -> Result<Option<storage_contract::automatic_observation::NodeKey>> {
+        use crate::business::file_draft::origin::Reason;
+        if !matches!(self.original.kind.as_str(), "file.draft.commit" | crate::persist::file_draft::unborn_first::KIND) {
+            return Ok(None);
+        }
+        Ok(crate::persist::file_draft::observed_node(&self.original)?.and_then(|node| {
+            matches!(node.reason, Reason::AutomaticSave { .. }).then_some(
+                storage_contract::automatic_observation::NodeKey { file: node.target.file, node: node.node })
+        }))
+    }
+
     pub(crate) fn operation(&self) -> OperationId {
         self.original.operation_id
     }

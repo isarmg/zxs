@@ -106,6 +106,18 @@ impl InstalledOriginalReceipts {
         self.cursor.receipt(context.state, operation)
     }
 
+    pub(in crate::engine) fn automatic_after<'a>(
+        &'a self, context: &PlanningContext<'_>, after: Option<storage_contract::automatic_observation::NodeKey>,
+    ) -> Result<impl Iterator<Item = (storage_contract::automatic_observation::NodeKey, storage_contract::OperationId)> + 'a> {
+        use std::ops::Bound;
+        self.require_context(context)?;
+        let limit = context.state.sequence;
+        // Include the cursor row itself: the caller must verify it is an
+        // authentic member of the original window, not just an ordered key.
+        Ok(self.cursor.automatic.range((after.map_or(Bound::Unbounded, Bound::Included), Bound::Unbounded))
+            .filter(move |(_, (seq, _))| *seq <= limit).map(|(key, (_, op))| (*key, *op)))
+    }
+
     pub(in crate::engine) fn replay_cursor(
         &self, context: &PlanningContext<'_>,
     ) -> Result<OriginalReceiptCursor> {
@@ -115,7 +127,13 @@ impl InstalledOriginalReceipts {
         let records = self.cursor.records.iter().filter(|(_, pair)| {
             pair.sequence().get() <= context.state.sequence
         }).map(|(operation, pair)| (*operation, Arc::clone(pair))).collect();
-        Ok(OriginalReceiptCursor { environment: Some(self.environment.clone()), records })
+        let automatic = if self.cursor.automatic.values().all(|(seq, _)| *seq <= context.state.sequence) {
+            Arc::clone(&self.cursor.automatic)
+        } else {
+            Arc::new(self.cursor.automatic.iter().filter(|(_, (seq, _))| *seq <= context.state.sequence)
+                .map(|(key, value)| (*key, *value)).collect())
+        };
+        Ok(OriginalReceiptCursor { environment: Some(self.environment.clone()), records, automatic })
     }
 
     pub(crate) fn index<'a>(

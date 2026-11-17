@@ -76,6 +76,9 @@ pub(super) struct PreparedCandidate {
 #[derive(Clone, Default)]
 pub(crate) struct OriginalReceiptCursor {
     environment: Option<ReceiptEnvironment>,
+    // No body, ancestry, row payload or pathname is duplicated. A page must
+    // still reborrow each exact original from this same installation.
+    automatic: Arc<BTreeMap<storage_contract::automatic_observation::NodeKey, (u64, OperationId)>>,
     records: BTreeMap<OperationId, Arc<crate::publication_evidence::OriginalReceiptProjection>>,
 }
 
@@ -108,9 +111,8 @@ impl OriginalReceiptCursor {
             // A generation installer changes the admitted resources as well
             // as its State. Reobserve its authentic retained archive, not the
             // previous environment's installed cursor or a State-only index.
-            let indexed = engine.state.operations.values().any(
-                crate::snapshot_worktree::ReceiptIndex::requires_original,
-            );
+            let indexed = engine.state.operations.values().any(|r|
+                crate::snapshot_worktree::ReceiptIndex::requires_original(r) || Self::file_original(r));
             let cursor = if indexed {
                 engine.replay_generation_original_receipts(generation)?
             } else {
@@ -156,12 +158,16 @@ impl OriginalReceiptCursor {
         }
     }
 
+    fn file_original(result: &OperationResult) -> bool {
+        crate::persist::file_draft::is_kind(&result.kind)
+            || result.kind == crate::persist::file_draft::unborn_save::KIND
+            || result.kind == crate::persist::file_draft::unborn_first::KIND
+    }
+
     pub(in crate::engine) fn needs_projection(&self, result: &OperationResult) -> bool {
         self.records.is_empty()
             || result.commit_state == storage_contract::CommitState::PublishedDegraded
-            || crate::persist::file_draft::is_kind(&result.kind)
-            || result.kind == crate::persist::file_draft::unborn_save::KIND
-            || result.kind == crate::persist::file_draft::unborn_first::KIND
+            || Self::file_original(result)
             || crate::snapshot_worktree::ReceiptIndex::requires_original(result)
     }
 
@@ -195,6 +201,12 @@ impl OriginalReceiptCursor {
         match &self.environment {
             Some(environment) => environment.require(config, resources)?,
             None => self.environment = Some(ReceiptEnvironment::capture(config, resources)),
+        }
+        if let Some(key) = projection.automatic_key()? {
+            if self.automatic.contains_key(&key) {
+                return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+            }
+            Arc::make_mut(&mut self.automatic).insert(key, (projection.sequence().get(), operation));
         }
         self.records.insert(operation, Arc::new(projection));
         Ok(())
@@ -237,6 +249,10 @@ impl OriginalReceiptCursor {
     }
 
     fn require_directory_index(&self, prefix: &State) -> Result<()> {
+        for (op, visible) in prefix.operations.iter().filter(|(_, r)| Self::file_original(r)) {
+            self.receipt(prefix, *op)?;
+            if visible.operation_id != *op { return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix)); }
+        }
         let indexed = prefix.operations.values().any(
             crate::snapshot_worktree::ReceiptIndex::requires_original,
         );
