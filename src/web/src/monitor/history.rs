@@ -1,7 +1,12 @@
 //! One current-window projection shared by every chart. No wire JSON survives ingress.
 use super::{Metric, ratio, wire};
 use crate::api;
+use date_time::OffsetDateTime;
 use std::collections::HashMap;
+
+// The current ranges expose at most 360 buckets plus the inclusive endpoint.
+// This is the browser's projection budget, separate from the response-byte cap.
+const MAX_HISTORY_SAMPLES: usize = 361;
 
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum Error {
@@ -22,7 +27,7 @@ pub(super) struct History {
 }
 #[derive(Clone, Debug, PartialEq)]
 struct Sample {
-    time: f64,
+    time: OffsetDateTime,
     cpu: Option<f64>,
     cpu_power: Option<f64>,
     memory: Option<f64>,
@@ -48,7 +53,7 @@ impl History {
                         .get(id)
                         .and_then(|disk| if *power { disk.power } else { disk.usage }),
                 };
-                (sample.time, value)
+                (seconds(sample.time), value)
             })
             .collect()
     }
@@ -69,7 +74,7 @@ pub(super) fn decode(value: json_codec::Value, range: &str) -> Result<History, a
         error
     })
 }
-fn timestamp(value: &str) -> Result<f64, Error> {
+fn timestamp(value: &str) -> Result<OffsetDateTime, Error> {
     let parsed = date_time::OffsetDateTime::parse(
         value,
         &date_time::format_description::well_known::Rfc3339,
@@ -78,7 +83,11 @@ fn timestamp(value: &str) -> Result<f64, Error> {
     if !value.ends_with('Z') {
         return Err(Error::Field("UTC timestamp"));
     }
-    Ok(parsed.unix_timestamp_nanos() as f64 / 1_000_000_000.)
+    Ok(parsed)
+}
+
+fn seconds(timestamp: OffsetDateTime) -> f64 {
+    timestamp.unix_timestamp_nanos() as f64 / 1_000_000_000.
 }
 fn project(value: json_codec::Value, range: &str) -> Result<History, Error> {
     let response: wire::Response = json_codec::from_value(value).map_err(Error::Decode)?;
@@ -90,19 +99,27 @@ fn project(value: json_codec::Value, range: &str) -> Result<History, Error> {
     if from >= to || response.interval_seconds <= 0 {
         return Err(Error::Field("history window"));
     }
-    let samples = response
-        .samples
-        .into_iter()
-        .map(project_sample)
-        .collect::<Result<_, _>>()?;
+    if response.samples.len() > MAX_HISTORY_SAMPLES {
+        return Err(Error::Field("history sample budget"));
+    }
+    let mut previous = None;
+    let mut samples = Vec::with_capacity(response.samples.len());
+    for sample in response.samples {
+        let time = timestamp(&sample.collected_at)?;
+        if time < from || time > to || previous.is_some_and(|previous| time <= previous) {
+            return Err(Error::Field("sample order or history window"));
+        }
+        previous = Some(time);
+        samples.push(project_sample(sample, time)?);
+    }
     Ok(History {
-        from,
-        to,
+        from: seconds(from),
+        to: seconds(to),
         interval: response.interval_seconds as f64,
         samples,
     })
 }
-fn project_sample(sample: wire::Sample) -> Result<Sample, Error> {
+fn project_sample(sample: wire::Sample, time: OffsetDateTime) -> Result<Sample, Error> {
     let mut disks = HashMap::with_capacity(sample.disks.len());
     for disk in sample.disks {
         // Bucket capacity averages remain valid even if its last observation is offline.
@@ -126,7 +143,7 @@ fn project_sample(sample: wire::Sample) -> Result<Sample, Error> {
         }
     }
     Ok(Sample {
-        time: timestamp(&sample.collected_at)?,
+        time,
         cpu: sample.cpu.usage_percent,
         cpu_power: sample.cpu.power_watts,
         memory: ratio(sample.memory.used_bytes, sample.memory.total_bytes),

@@ -303,3 +303,52 @@ fn history_power_reasons_require_current_strings_not_object_aliases() {
         }
     }
 }
+
+#[test]
+fn response_samples_must_be_ordered_unique_and_within_the_requested_window() {
+    for replacement in [
+        "2025-12-31T23:59:59Z",
+        "2026-01-01T01:00:00.000000001Z",
+        "2026-01-01T00:00:10Z",
+        "2026-01-01T00:00:20Z",
+    ] {
+        let mut value = fixture(2, 0);
+        value["samples"][0]["collected_at"] = json!(replacement);
+        assert!(decode(value, "1h").is_err(), "{replacement}");
+    }
+    let mut inclusive = fixture(2, 0);
+    inclusive["samples"][1]["collected_at"] = json!("2026-01-01T01:00:00Z");
+    assert!(decode(inclusive, "1h").is_ok());
+}
+
+#[test]
+fn temporal_admission_uses_exact_timestamps_before_chart_float_projection() {
+    let mut value = fixture(2, 0);
+    value["samples"][0]["collected_at"] = json!("2026-01-01T00:00:00.000000001Z");
+    value["samples"][1]["collected_at"] = json!("2026-01-01T00:00:00.000000002Z");
+    let history = project(value.clone(), "1h").unwrap();
+    assert!(history.samples[0].time < history.samples[1].time);
+    value["samples"].as_array_mut().unwrap().swap(0, 1);
+    assert!(project(value, "1h").is_err());
+}
+
+#[test]
+fn excessive_or_mismatched_history_preserves_the_last_admitted_snapshot() {
+    let mut model = super::super::Model::default();
+    let valid = fixture(2, 0);
+    super::super::accept_history_response(&mut model, valid.clone(), "1h");
+    let previous = model.history.clone();
+    let mut excessive = valid.clone();
+    excessive["samples"] = json!(vec![valid["samples"][0].clone(); MAX_HISTORY_SAMPLES + 1]);
+    assert!(matches!(
+        project(excessive.clone(), "1h"),
+        Err(Error::Field("history sample budget"))
+    ));
+    super::super::accept_history_response(&mut model, excessive, "1h");
+    assert_eq!(model.history, previous);
+    assert!(model.history_failure.is_some());
+    let mut outside = valid;
+    outside["samples"][0]["collected_at"] = json!("2025-12-31T23:00:00Z");
+    super::super::accept_history_response(&mut model, outside, "1h");
+    assert_eq!(model.history, previous);
+}
