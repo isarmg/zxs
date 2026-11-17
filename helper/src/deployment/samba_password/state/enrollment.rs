@@ -12,6 +12,13 @@ pub(in crate::deployment::samba_password) struct Baseline {
     database: Option<FileStamp>,
     accounts_digest: String,
 }
+impl Baseline {
+    pub(in crate::deployment::samba_password) fn accepts_after(&self, after: &Revision) -> bool {
+        // A genuinely absent database has no prior inode to compare. The
+        // root-owned single-link result still belongs to the exact same parent.
+        after.under_original(&self.parent_device, &self.parent_inode, self.database.as_ref())
+    }
+}
 #[derive(PartialEq, Eq, Serialize)]
 struct Account {
     uid: u32,

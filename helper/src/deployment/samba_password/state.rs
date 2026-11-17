@@ -52,6 +52,24 @@ pub(super) struct Revision {
     parent_inode: String,
     file: FileStamp,
 }
+impl Revision {
+    /// Compare only facts the native writer actually held. The successful
+    /// command may change bytes and times; it may not replace the selected
+    /// directory or a previously existing database with another inode.
+    fn under_original(
+        &self, parent_device: &str, parent_inode: &str, before: Option<&FileStamp>,
+    ) -> bool {
+        let Some(parent) = crate::system_program::recorded_identity(parent_device, parent_inode)
+            else { return false };
+        let Some(file) = self.file.root_private_data_identity() else { return false };
+        crate::system_program::recorded_identity(&self.parent_device, &self.parent_inode) == Some(parent)
+            && before.is_none_or(|old| old.root_private_data_identity() == Some(file))
+    }
+
+    pub(super) fn accepts_after(&self, after: &Revision) -> bool {
+        after.under_original(&self.parent_device, &self.parent_inode, Some(&self.file))
+    }
+}
 struct Parent {
     path: &'static str,
     root: OpenAt2Root,

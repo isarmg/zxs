@@ -65,6 +65,37 @@ impl FileStamp {
         }
     }
 }
+/// A serialized stamp can describe programs and other files as well. This
+/// projection accepts only the fixed private-data policy used by native
+/// passdb observation; it is historical metadata, not an opened descriptor.
+pub(crate) fn recorded_identity(device: &str, inode: &str)
+    -> Option<platform_io::fs_safety::linux::FileIdentity>
+{
+    Some(platform_io::fs_safety::linux::FileIdentity {
+        device: canonical_u64(device)?, inode: canonical_u64(inode)?,
+    })
+}
+fn canonical_u64(value: &str) -> Option<u64> {
+    value.parse::<u64>().ok().filter(|number| number.to_string() == value)
+}
+fn canonical_seconds(value: &str) -> bool {
+    value.parse::<i64>().is_ok_and(|number| number.to_string() == value)
+}
+impl FileStamp {
+    pub(crate) fn root_private_data_identity(&self)
+        -> Option<platform_io::fs_safety::linux::FileIdentity>
+    {
+        if self.uid != 0 || self.mode != 0o100600 || self.links != "1"
+            || canonical_u64(&self.bytes)? == 0
+            || !canonical_seconds(&self.modified_seconds) || !canonical_seconds(&self.changed_seconds)
+            || canonical_u64(&self.modified_nanos)? >= 1_000_000_000
+            || canonical_u64(&self.changed_nanos)? >= 1_000_000_000
+        {
+            return None;
+        }
+        recorded_identity(&self.device, &self.inode)
+    }
+}
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Snapshot {

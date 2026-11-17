@@ -221,6 +221,7 @@ pub(crate) fn status(input: Original) -> Result<Status> {
         .map_err(|_| "retained Samba enrollment receipt is malformed; preserve it")?;
     if receipt.request_digest != input.request_digest
         || receipt.account != plan.account.name.as_str()
+        || !plan.database.accepts_after(&receipt.after)
         || !receipt.smbpasswd_reported_success
         || !receipt.created_account_read_back
         || !receipt.other_account_listing_unchanged
