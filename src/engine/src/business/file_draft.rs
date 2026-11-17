@@ -6,6 +6,7 @@
 use storage_contract::GenerationExhausted;
 mod allocations;
 mod content;
+pub(crate) mod batch;
 pub(crate) use content::{PublishedContent, build as build_content, trace_limit};
 mod selection;
 pub(crate) mod selected;

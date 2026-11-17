@@ -1,4 +1,5 @@
 //! Full upload generations, working files and atomic content publication.
+pub(super) mod directory_source;
 pub(super) mod file_location;
 pub(super) mod input;
 use crate::business::workspace::input::WorkspaceInput;
@@ -1479,6 +1480,11 @@ impl crate::engine::PlanningContext<'_> {
                     (current_entries, base_entries)
                 };
                 let mut draft = namespace::NamespaceDraft::new(current_entries.to_vec());
+                let mut directory_ids =
+                    crate::persist::namespace_directory::workspace::Allocations::new(
+                        wire.is_none() && repo.file_manager_root
+                            && repo.main_branch_id == w.branch_id,
+                    );
                 if let Some(view) = engine.current_namespaces {
                     view.remove_hidden_contexts(state, &repo.repository_id, &w.branch_id);
                 }
@@ -1550,7 +1556,10 @@ impl crate::engine::PlanningContext<'_> {
                     let file_context = existing.as_ref().and_then(|_| directory::branch_context_at_key(state,&w.branch_id,location.key()));
                     let pending_source = file_context.as_ref().and_then(|c|state.branches.get(&c.branch_id)).and_then(|b|b.pending_file_versions.get(&file_id)).cloned()
                         .or_else(||existing.as_ref().and_then(|_| directory::unwritten_source_at(state,&w.branch_id,location.key()).map(str::to_owned)));
-                    draft.ensure_parents(existing.as_ref().map(|entry| entry.location()).unwrap_or(&file.path))?;
+                    draft.ensure_parents_with_ids(
+                        existing.as_ref().map(|entry| entry.location()).unwrap_or(&file.path),
+                        &mut |prefix| directory_ids.next(prefix),
+                    )?;
                     let source_ids:Vec<String> = pending_source.as_ref().cloned()
                         .or_else(|| existing.as_ref().map(|entry| entry.version_id.clone()))
                         .into_iter().collect();
@@ -1589,7 +1598,10 @@ impl crate::engine::PlanningContext<'_> {
                     written_files.insert(file_id);
                 }
                 let mut entries = draft.into_entries();
-                let deleted = apply_workspace_namespace(&mut entries, current_entries, &w.namespace_operations)?;
+                let deleted = namespace::apply_workspace_namespace_with_ids(
+                    &mut entries, current_entries, &w.namespace_operations,
+                    &mut |prefix| directory_ids.next(prefix),
+                )?;
                 let renamed_directories=directory::prepare_current_renamed_directories(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations)?;
                 let path_changes = super::directory::namespace_locations(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
                 validate_entries(&mut entries, engine.config.max_entries)?;
@@ -1628,7 +1640,13 @@ impl crate::engine::PlanningContext<'_> {
                         .collect::<Vec<_>>();
                     super::directory::record_projected_directory_edits(state, &repo.repository_id, &changed_paths, None, engine.current_namespaces.map(std::sync::Arc::as_ref))?;
                 }
-                crate::persist::path_changes::attach(json!({"commit_id":commit_id,"branch_id":w.branch_id,"history_tree_id":branch.history_tree_id}), path_changes)
+                let mut result = crate::persist::path_changes::attach(
+                    json!({"commit_id":commit_id,"branch_id":w.branch_id,
+                        "history_tree_id":branch.history_tree_id}),
+                    path_changes,
+                )?;
+                directory_ids.attach(&mut result, &w, &request)?;
+                Ok(result)
             },
         )?;
         if let Some(reserved) = reserved {

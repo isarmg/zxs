@@ -15,9 +15,12 @@ import signal
 import subprocess
 import tempfile
 import time
+import urllib.parse
+import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST = "smb_rpc::tests::system_samba_tests::system_samba_real_engine_fixture"
+NATIVE_TEST = "smb_rpc::tests::system_samba_native_tests::system_samba_native_working_fixture"
 
 
 def publish_marker(work, name):
@@ -40,7 +43,7 @@ def wait_file(path, process, timeout=120):
     raise TimeoutError(path)
 
 
-def nonroot_io_evidence(logs, uid):
+def nonroot_io_evidence(logs, uid, *, read_name="report.txt", write_name="upload.txt"):
     """Bind each I/O record to its own debug-uid header, including rotation."""
     evidence = {}
     for log in logs:
@@ -51,8 +54,8 @@ def nonroot_io_evidence(logs, uid):
             if line.startswith("["):
                 header = line
             elif header is not None:
-                for operation, message in (("read-existing", "smbd_smb2_read: report.txt -"),
-                                           ("write-new", "smbd_smb2_write: upload.txt -")):
+                for operation, message in (("read-existing", f"smbd_smb2_read: {read_name} -"),
+                                           ("write-new", f"smbd_smb2_write: {write_name} -")):
                     if message in line and re.search(rf"effective\({uid}, [0-9]+\)", header):
                         evidence[operation] = {"header": header, "request": line.strip()}
                 header = None
@@ -238,10 +241,202 @@ def default_share_case_path(ready):
     return f"{alternate}/{within}/report.txt"
 
 
+def native_http(ready, method, path, payload=None):
+    """Bounded real loopback HTTP; secrets and request bodies never enter diagnostics."""
+    connection = http.client.HTTPConnection("127.0.0.1", ready["password_http_port"], timeout=25)
+    try:
+        body = None if payload is None else json.dumps(payload)
+        connection.request(method, path, body, {
+            "Authorization": "Bearer " + ready["password_http_token"],
+            "Content-Type": "application/json",
+        })
+        response = connection.getresponse()
+        data = response.read(65537)
+        if len(data) > 65536 or response.status != 200:
+            raise RuntimeError(f"native API failed: HTTP {response.status}, bytes {len(data)}")
+        return json.loads(data)
+    finally:
+        connection.close()
+
+
+def native_client_success(output):
+    # smbclient -c can exit zero even if an individual command failed.
+    statuses = re.findall(r"\bNT_STATUS_[A-Z_]+\b", output)
+    if statuses:
+        raise RuntimeError(f"native SMB command failed: {statuses}")
+
+
+def native_listing_target(ready, size):
+    listing = native_http(ready, "GET",
+                          f"/api/file-manager/disks/{ready['slot_id']}/entries?path=")
+    entries = listing["entries"]
+    if len(entries) != 1 or entries[0]["name"] != "native-first.txt":
+        raise RuntimeError("native file listing differs from the sole created file")
+    entry = entries[0]
+    if entry.get("working_state") != "unborn" or entry["size"] != str(size):
+        raise RuntimeError("ordinary SMB save did not remain an Unborn current file")
+    if any(key in entry for key in ("version_id", "file_node_id", "file_branch_id")):
+        raise RuntimeError("Unborn file listing manufactured historical identity")
+    return {"repository": entry["repository_id"], "path": entry["repository_path"],
+            "file": entry["file_id"], "entry": entry["entry_id"]}
+
+
+def native_snapshot(ready, target, size):
+    query = urllib.parse.urlencode({"repository_id": target["repository"],
+                                   "path": target["path"], "entry_id": target["entry"]})
+    snapshot = native_http(ready, "GET",
+                          f"/api/file-manager/files/{target['file']}/unborn-working?{query}")
+    if snapshot["target"] != target or snapshot["mode"] != "manual" \
+            or snapshot["logical_size"] != str(size):
+        raise RuntimeError("native working snapshot differs from the actual file")
+    if any(key in snapshot for key in ("version_id", "base", "file_node_id")):
+        raise RuntimeError("native working snapshot manufactured a historical base")
+    return snapshot
+
+
+def native_offset_evidence(logs, uid):
+    """Pair exact completed offset I/O with the non-root request in the same smbd log."""
+    for log in logs:
+        requests = set()
+        header = None
+        for line in log.splitlines():
+            if line.startswith("["):
+                header = samba_header(line)
+                continue
+            if header is None:
+                continue
+            pid, effective, function = header
+            if effective == uid and function == "smbd_smb2_write_send" \
+                    and line.startswith("  smbd_smb2_write: p/native-first.txt - "):
+                requests.add(pid)
+            if pid in requests and function == "smb2_write_complete_internal" and re.fullmatch(
+                    r"  smb2: [^,]+, file p/native-first\.txt, length=2 offset=8 wrote=2", line):
+                return {"pid": pid, "completion_uid": effective, "request": line.strip()}
+            header = None
+    raise RuntimeError("missing native completed non-zero-offset write evidence")
+
+
+def exercise_native(args, work, engine_work, environment, engine_user, smb_user,
+                    fixture, ready, engine_log, children, client, result, tokens):
+    """Actual smbd/client + HTTP + three distinct Engine processes, never a Backend double."""
+    def invoke(command):
+        native_client_success(client(command, share="default"))
+
+    def body(expected, label):
+        downloaded = work / f"native-{label}.bin"
+        invoke(f'get "p/native-first.txt" "{downloaded}"')
+        if downloaded.read_bytes() != expected:
+            raise RuntimeError(f"native {label} SMB body differs")
+
+    def stop(phase, process):
+        publish_marker(engine_work, f"native-stop-{phase}")
+        wait_file(engine_work / f"native-stopped-{phase}", process, timeout=30)
+        if process.wait(timeout=30) != 0:
+            raise RuntimeError(f"native phase {phase} authoritative engine checks failed")
+
+    def restart(phase, target):
+        process = subprocess.Popen(
+            [str(args.fixture.resolve()), NATIVE_TEST, "--ignored", "--exact", "--nocapture"],
+            env={**environment, "ZXS_SMB_NATIVE_PHASE": str(phase)}, stdout=engine_log,
+            stderr=subprocess.STDOUT, start_new_session=True, user=engine_user.pw_uid,
+            group=engine_user.pw_gid, extra_groups=[],
+        )
+        children.append(process)
+        path = engine_work / f"native-ready-{phase}.json"
+        wait_file(path, process)
+        observed = json.loads(path.read_text())
+        tokens.append(observed["password_http_token"])
+        if observed["target"] != target or observed["phase"] != phase \
+                or observed["engine_uid"] != engine_user.pw_uid \
+                or observed["allowed_peer_uid"] != 0 or observed["socket"] != ready["socket"]:
+            raise RuntimeError("cold fixture identity differs")
+        assert_owner_mode(Path(observed["socket"]), engine_user.pw_uid, 0o600)
+        assert_owner_mode(Path(observed["socket"]).parent, engine_user.pw_uid, 0o700)
+        return process, observed
+
+    tokens.append(ready["password_http_token"])
+    if ready["phase"] != 0 or ready["cold_state"] != "empty" or ready["target"] is not None:
+        raise RuntimeError("native smoke must start from a genuinely empty pool")
+    empty = work / "native-empty.bin"
+    empty.write_bytes(b"")
+    invoke(f'put "{empty}" "p/native-first.txt"')
+    body(b"", "empty")
+    target = native_listing_target(ready, 0)
+    native_snapshot(ready, target, 0)
+    payload = work / "native-upload.bin"
+    payload.write_bytes(b"abcdefgh")
+    invoke(f'put "{payload}" "p/native-first.txt"')
+    body(b"abcdefgh", "written")
+    payload.write_bytes(b"abcdefghIJ")
+    # reput resumes at the real remote size; this proves non-zero-offset
+    # pwrite, not O_APPEND or explicit SMB FLUSH support.
+    invoke(f'reput "{payload}" "p/native-first.txt"')
+    body(b"abcdefghIJ", "resumed-offset")
+    payload.write_bytes(b"xyz")
+    invoke(f'put "{payload}" "p/native-first.txt"')
+    body(b"xyz", "truncated")
+    if native_listing_target(ready, 3) != target:
+        raise RuntimeError("overwrite changed the file identity")
+    saved = native_snapshot(ready, target, 3)
+    if saved["expected"]["content"]["state"] != "saved":
+        raise RuntimeError("successful smbclient close did not publish native working content")
+    stop(0, fixture)
+    fixture, ready = restart(1, target)
+    if ready["cold_state"] != "unborn" or native_snapshot(ready, target, 3) != saved:
+        raise RuntimeError("cold open did not retain the same no-history save")
+    body(b"xyz", "cold-unborn")
+    route = f"/api/file-manager/files/{target['file']}/first-commit"
+    command = {"operation_id": "op_" + uuid.uuid4().hex, "target": target,
+               "expected": saved["expected"], "message": "real Samba first explicit node"}
+    committed = native_http(ready, "POST", route, command)
+    if committed["operation_id"] != command["operation_id"] \
+            or committed["operation_kind"] != "file.working.first_commit" \
+            or committed["commit_state"] not in ("PUBLISHED", "ACKED"):
+        raise RuntimeError("first explicit commit did not publish the original operation")
+    history_route = f"/api/file-manager/files/{target['file']}/history"
+    history = native_http(ready, "GET", history_route)
+    if len(history["nodes"]) != 1:
+        raise RuntimeError("first explicit commit did not create exactly one node")
+    body(b"xyz", "committed")
+    stop(1, fixture)
+    fixture, ready = restart(2, target)
+    if ready["cold_state"] != "one_history_node" \
+            or native_http(ready, "POST", route, command) != committed \
+            or native_http(ready, "GET", history_route) != history:
+        raise RuntimeError("cold exact first-commit retry changed the permanent history")
+    body(b"xyz", "cold-committed")
+    stop(2, fixture)
+    result["engine"] = {"cold_phases": ["empty", "unborn", "one_history_node"],
+                        "target": target, "first_commit": committed}
+    result["checks"].extend([
+        "native-empty-create-read", "native-put-offset-reput-truncate-close",
+        "native-cold-unborn-no-history", "authenticated-first-history-commit",
+        "native-cold-exact-commit-retry", "native-cold-committed-smb-read",
+    ])
+    result["nonroot_io"] = nonroot_io_evidence(
+        [path.read_text() for path in identity_log_files(work)], smb_user.pw_uid,
+        read_name="p/native-first.txt", write_name="p/native-first.txt",
+    )
+    result["native_offset_write"] = native_offset_evidence(
+        [path.read_text() for path in identity_log_files(work)], smb_user.pw_uid,
+    )
+    if list((work / "empty").iterdir()):
+        raise RuntimeError("native VFS wrote into host export instead of the engine")
+    result["checks"].append("nonroot-engine-and-samba-io-private-socket")
+
+
 def run(args):
     args.output.unlink(missing_ok=True)  # A failed rerun must not retain a prior success receipt.
+    # Publish only after every process has ended and the private fixture has
+    # been removed. Neither mode may leave a success receipt on cleanup failure.
+    result = exercise(args)
+    args.output.write_text(json.dumps(result, indent=2) + "\n")
+
+
+def exercise(args):
     if os.geteuid() != 0 or os.environ.get("ZXS_ISOLATED_SAMBA_TEST") != "1":
         raise RuntimeError("requires explicit isolated Debian fixture, never a user host")
+    native_working = getattr(args, "native_working", False)
     engine_user = pwd.getpwnam("zxs-engine-test")
     smb_user = pwd.getpwnam("zxs-smb-test")
     next_user = pwd.getpwnam("zxs-smb-next-test")
@@ -278,6 +473,8 @@ def run(args):
         new_password = secrets.token_hex(24)
         next_password = secrets.token_hex(24)
         web_token = ""
+        web_password = secrets.token_hex(24)
+        native_tokens = []
         auth = work / "auth"
         auth.write_text(f"username = {smb_user.pw_name}\npassword = {password}\n")
         auth.chmod(0o600)
@@ -289,17 +486,33 @@ def run(args):
         bad_auth.chmod(0o600)
         environment = {**os.environ, "ZXS_SMB_E2E_DIR": str(engine_work), "ZXS_SMB_E2E_USER": smb_user.pw_name,
                        "ZXS_SMB_E2E_NEXT_USER": next_user.pw_name}
+        if native_working:
+            environment.update({"ZXS_SMB_NATIVE_PHASE": "0",
+                                "ZXS_SMB_NATIVE_WEB_PASSWORD": web_password})
         for stale in ("LD_LIBRARY_PATH", "ZXS_SAMBA_ROOT", "ZXS_SMB_SDK_SOURCE", "ZXS_SMB_SDK_BUILD"):
             environment.pop(stale, None)
         children = []
         with (work / "engine.log").open("wb") as engine_log, (work / "smbd.log").open("wb") as daemon_log:
             try:
-                fixture = subprocess.Popen([str(args.fixture.resolve()), TEST, "--ignored", "--exact", "--nocapture"],
+                if native_working:
+                    listed = subprocess.run(
+                        [str(args.fixture.resolve()), NATIVE_TEST,
+                         "--ignored", "--exact", "--list"],
+                        env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, timeout=30, user=engine_user.pw_uid,
+                        group=engine_user.pw_gid, extra_groups=[],
+                    )
+                    if listed.returncode != 0 or listed.stdout.splitlines().count(
+                            NATIVE_TEST + ": test") != 1:
+                        raise RuntimeError("native Samba fixture was not listed exactly once")
+                fixture = subprocess.Popen([str(args.fixture.resolve()),
+                    NATIVE_TEST if native_working else TEST, "--ignored", "--exact", "--nocapture"],
                     env=environment, stdout=engine_log, stderr=subprocess.STDOUT, start_new_session=True,
                     user=engine_user.pw_uid, group=engine_user.pw_gid, extra_groups=[])
                 children.append(fixture)
-                wait_file(engine_work / "ready.json", fixture)
-                ready = json.loads((engine_work / "ready.json").read_text())
+                ready_name = "native-ready-0.json" if native_working else "ready.json"
+                wait_file(engine_work / ready_name, fixture)
+                ready = json.loads((engine_work / ready_name).read_text())
                 web_token = ready["password_http_token"]
                 for name in ("empty", "private", "state", "cache", "lock", "pid", "ncalrpc"):
                     (work / name).mkdir(mode=0o700)
@@ -315,6 +528,8 @@ def run(args):
                                       "samba_uid": smb_user.pw_uid, "allowed_peer_uid": 0,
                                       "socket_mode": "0600", "socket_directory_mode": "0700",
                                       "export_owner_uid": 0, "export_mode": "0555"}
+                repository_setting = "" if native_working else (
+                    f"zxs:repository = {ready['repository_id']}")
                 config = work / "smb.conf"
                 config.write_text(f'''[global]
 server role = standalone server
@@ -347,7 +562,7 @@ printcap name = /dev/null
 path = {work}/empty
 vfs objects = zxs
 zxs:socket = {ready['socket']}
-zxs:repository = {ready['repository_id']}
+{repository_setting}
 valid users = {smb_user.pw_name} {next_user.pw_name}
 guest ok = no
 read only = no
@@ -418,6 +633,17 @@ force user = {smb_user.pw_name}
                         raise RuntimeError("apt smbd/VFS handshake failed:\n" + probe.stdout)
                     time.sleep(0.2)
                 result["checks"].append("authenticated-encrypted-signed-handshake")
+                if native_working:
+                    result["mode"] = "native-working"
+                    with args.fixture.open("rb") as source:
+                        result["fixture_sha256"] = hashlib.file_digest(source, "sha256").hexdigest()
+                    client("ls", credential=bad_auth, succeeds=False, share="default")
+                    client("ls", credential=None, succeeds=False, share="default")
+                    result["checks"].extend(["wrong-password-rejected", "guest-rejected"])
+                    exercise_native(args, work, engine_work, environment, engine_user, smb_user,
+                                    fixture, ready, engine_log, children, client, result,
+                                    native_tokens)
+                    return result
                 account = password_request(ready["password_http_port"], web_token, "GET", "/api/smb/account")
                 if account != {"state": "configured", "username": smb_user.pw_name,
                                "generation": "1", "candidates": [smb_user.pw_name, next_user.pw_name], "password_change": "available"}:
@@ -617,14 +843,19 @@ force user = {smb_user.pw_name}
                     text = (work / name).read_text(errors="replace").replace(password, "[redacted]")
                     text = text.replace(new_password, "[redacted]").replace(next_password, "[redacted]")
                     text = text.replace("synthetic-web-test-password", "[redacted]")
+                    text = text.replace(web_password, "[redacted]")
+                    for token in native_tokens:
+                        text = text.replace(token, "[redacted]")
                     if web_token:
                         text = text.replace(web_token, "[redacted]")
                     (args.output.parent / name).write_text(text)
-    args.output.write_text(json.dumps(result, indent=2) + "\n")
+    return result
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--native-working", action="store_true",
+                        help="fresh default-share Manual save/cold/Web-first-commit smoke only")
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--module", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

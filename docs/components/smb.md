@@ -45,6 +45,24 @@ Web 仅浏览其他目录／文件分支不会改变 SMB。用户执行“设为
 共享根及主盘根是只读的目录边界，内容可在主盘根内创建；不能删除、改名或把字节写进这些边界。根目录页保留拓扑代际，主盘目录页复用文件页游标；每连接最多保留 8 份打开后尚未读取的主盘根页面，编码大小合计不超过 2 MiB，读取或关闭即释放该额度；拓扑、目录内容或名称归属改变导致游标失效时须重新枚举，不拼接不同快照。已有命名空间内部目录继续使用冻结提交的原分页协议。
 
 拆分／恢复后明确禁用的 SMB 绑定不会被自动重新启用，仍须核对历史代际后恢复。原有后台显式绑定／恢复接口保留活动工作区、会话撤销和代数检查。默认目录路由不替代主机的 Samba 安装、账户密码、可信 UID、socket 权限和服务启动配置，也不表示基础 systemd 示例已启用 SMB。账户及密码设置独立保留。
+## 新文件：无历史工作稿与显式首节点
+
+默认共享在实际主盘根内首次创建文件时，使用 `native_working` 打开模式。
+这条路径立即建立 FILE／容器身份，默认手动，从无历史开始；零字节文件也不伪造
+VersionId、文件分支或内容节点。Open 返回 `version_id: null`、`workspace_id: null`
+及非正文占位 FD，不先复制完整正文。真实有序写、非零偏移、追加、截短和读取经
+已认证 RPC 操作服务端持有的 native working source，不能写占位 FD 来绕过它。
+
+普通 WRITE 的成功只确认本次编辑被接纳，不是掉电耐久保存。FLUSH、write-through
+或成功的最后 CLOSE 经原生工作稿发布后才确认保存；手动保存仍不生成历史节点。
+错误／未知结果不能当作保存成功，也不能由客户端另造操作号重放。首次历史须由
+Web 明确提交当前 FILE，使用 `unborn-working` 返回的准确身份与 expectation，经
+`first-commit` 发布首节点；相同请求冷重试保留原收据。已有历史的文件继续走其
+明确选中内容／模式的原入口，不以缺少 VersionId 猜测或补造历史身份。
+
+以下完整 FD／工作区条目只描述 `private_work` 路径，不适用于上述 native 工作稿。
+读取占位 FD、普通 WRITE ACK、进程内 dispatch 成功均不是实际 Samba 验收。
+
 ## 已实现的桥接语义
 
 - 只允许受信任的本机 Samba 进程 UID 连接，使用 Linux `SO_PEERCRED` 校验；JSON 中没有远程客户端可以自行声明的 ACL、管理员权限或任意核心命令。
@@ -52,10 +70,16 @@ Web 仅浏览其他目录／文件分支不会改变 SMB。用户执行“设为
 - 默认共享聚合各主盘的当前命名空间；显式仓库共享固定到该仓库主分支。只读打开固定具体版本，正文 FD 和核心读租约留在服务端；VFS 取得既有空目录的非正文占位 FD，文件属性仍由逻辑打开元数据提供。后续提交不会改变旧句柄读到的版本。每次 VFS 操作（含缓存 readdir）在本地复核真实 Samba token 与同一 account_name，guest、anonymous 或 force-user 立即拒绝。ZXS 唯一身份与共享绑定在每次实际 RPC 目录页请求、读取授权和写入发布中复核；同一已返回目录页的逐项缓存访问不增加逐条 RPC，也不声称能撤回已经返回的数据。既有 FD 不允许绕过后续受支持 I/O 的身份与绑定检查。
 - 普通文件的 `mtime` 来自已发布 `FileVersion.created_at`，按该版本的 UTC 秒投影到 SDK `st_ex_mtime`；视频、照片和文档使用相同规则。路径 Stat 取本次可见版本，只读句柄保留打开版本，继承文件取实际可见父版本。它不表示拍摄时间、导入前时间或安装／修复副本的 inode 时间；同一秒保存的不同版本可以有相同 mtime。
 - NT ACL 查询复用逻辑 `fstat` 的真实会话与当前 RPC 授权，再由固定 Samba SDK 将逻辑目录 `0700`／文件 `0600` 转为 owner/group SID 与访问掩码。不会读取宿主空导出目录或私有占位 FD 的 POSIX ACL：普通用户创建文件时，宿主 `0555` 不能覆盖逻辑目录的可写投影。`SECINFO_OWNER`、`SECINFO_GROUP`、`SECINFO_DACL` 按请求投影；其他信息位明确拒绝，ACL 设置仍不支持。查询授权失败不生成 descriptor；随后创建／发布仍在核心重新授权，查询结果不成为持久写权限。
-- 写打开使用服务端私有目录中的完整独立工作文件，FD 通过 SCM_RIGHTS 转交；RPC 不返回磁盘内部路径。
+- `private_work` 写打开使用服务端私有目录中的完整独立工作文件，FD 通过 SCM_RIGHTS 转交；RPC 不返回磁盘内部路径。
 - `Stat`、已有文件或目录的 `Open`、`rename` 源及 `unlink` / `rmdir` 源允许 NFC 名称的规范等价输入，例如以 NFD 查询已保存的 NFC 条目；查找仍受原始输入的字符、保留名、结构及长度预算限制。命中的打开句柄保留条目现有显示路径，可写句柄后续上传也使用此路径，不隐式改名。带创建意图的打开未命中时，先严格校验 NFC 新名称，再分配工作区或工作文件；独占创建遇到已有等价名称仍冲突。`mkdir` 和 `rename` 目标始终严格校验新名称。此入口区分不改变 Unicode 折叠、允许字符或持久化命名策略。
 - 选中的未写入分支继承父版本的内容和大小。只读打开取得父版本的只读描述符，写打开从父内容建立私有工作副本；仅打开后关闭不创建版本，实际写入或显式截断并成功发布后才形成自己的分支版本，父版本不变。目录分支中各个文件分别保留继承或自己的版本。
-- `pwrite` 与 `truncate` 修改前都调用 `PrepareWrite`：它是每次修改的准入点，重新校验当前身份、分支准入、工作区归属与目录／文件选择，未发布代还要求工作区仍为 Open 且租约未过期，再检查文件上限、额度增长和本次字节的恢复空间；任一失败时不修改 FD。修改成功后，同一句柄的 `smb_protocol::client::WriteSequence` 只在开启一个保存代时发送 `Dirty`：打开后或上一次 `FLUSH` 后的首次修改，以及 write-through 句柄的每次修改（其 `Dirty` 同步触发保存）。`Dirty` 失败或结果未知时该代保持未通告，下一次修改重新发送。VFS 的 `FLUSH` 和最后 `CLOSE` 经完整文件上传及核心事务提交后才返回保存成功；发送 `FLUSH` 前即结束当前代，即使 `FLUSH` 失败也不会省略之后的 `Dirty`。详见 [ADR 0010](../adr/0010-smb-write-generations-and-extent-grants.md)。
+- `private_work` 的 `pwrite` 与 `truncate` 修改前都调用 `PrepareWrite`：它是每次修改的准入点，
+  重新校验当前身份、分支准入、工作区归属与目录／文件选择，未发布代还要求工作区仍为 Open 且租约未过期，再检查文件上限、额度增长和本次字节的恢复空间；任一失败时不修改 FD。
+  修改成功后，同一句柄的 `smb_protocol::client::WriteSequence` 只在开启一个保存代时发送 `Dirty`：打开后或上一次 `FLUSH` 后的首次修改，
+  以及 write-through 句柄的每次修改（其 `Dirty` 同步触发保存）。
+  `Dirty` 失败或结果未知时该代保持未通告，下一次修改重新发送。
+  VFS 的 `FLUSH` 和最后 `CLOSE` 经完整文件上传及核心事务提交后才返回保存成功；发送 `FLUSH` 前即结束当前代，即使 `FLUSH` 失败也不会省略之后的 `Dirty`。
+  详见 [ADR 0010](../adr/0010-smb-write-generations-and-extent-grants.md)。
 - `Dirty` 先保留当前工作区和操作号的恢复记录，再重新授权；同代记录及持久身份未变时复用已完成的记录屏障，不随每次 Dirty 重写相同内容。已发布句柄建立新工作区后仍再次记录新的关联。普通 `Dirty` 不同步正文 FD，不等同于 FLUSH／write-through／最终 CLOSE 的持久保存回执。服务端 dirty 状态只由保存路径清除、只由 `Dirty` 置位，因此同一未发布代省略的后续 `Dirty` 不改变 Flush／Close 发布的字节；恢复记录始终带 `descriptor_changes_unconfirmed: true`，崩溃恢复不依赖 `Dirty`。
 - 写锁按分支和规范化路径绑定。不同文件允许并发写入，最终由核心检查各自文件版本并串行发布；同文件跨会话写打开明确拒绝。目录改名、删除和替换目标只与路径覆盖范围内的活动写句柄冲突，读句柄仍固定原版本。
 - 重试先查询原 `operation_id`；已发布结果还须由核心核对原生请求摘要、actor、工作区和终态围栏，再比较当前 FD 的完整字节。工作区镜像尚未核对完成时，重复 `Flush`／`Close` 仍返回 `503 RECOVERY_REQUIRED`、`retryable:false`，保留原操作和完整工作文件，不以收据存在为清理许可。核心允许已完成发布后显式 Abort（含重复关闭）的原收据核对；不使用全局 ready 探针阻断无关的已完成工作区。未决结果要求恢复，不重新生成操作或再次推进上传代际。
@@ -281,9 +305,41 @@ bash .github/scripts/smb-sdk.sh
 
 上线前另行验证真实客户端 write-through/FLUSH、不同系统/编辑器的临时文件与多句柄保存、断网重连、故障注入、真实设备断电，以及唯一账户成功认证、匿名/guest/force-user拒绝和身份失效。活动写句柄覆盖的路径拒绝命名空间变更，关闭后改名成功不代表所有编辑器保存模式可用。文件系统时间戳未完整建模；剩余空间来自宿主文件系统，不等于保护路由可用容量。
 
+### 独立 native 默认共享客户端 smoke
+
+现有 `check-system-samba.py` 的默认矩阵仍验证命名仓库及原完整 FD 路径。
+新增 `--native-working` 模式使用另一条**真实 EngineBackend** fixture，不使用
+`LostCommitReply` 或包层模拟。它只接受原隔离 Debian 13 runtime、精确包／VFS
+摘要、独立非 root 引擎及 Samba 账户、原私有 socket、空只读导出目录和加密 SMB。
+运行前列举并核对本次 libtest 的唯一精确 fixture，失败／清理失败不留下成功收据。
+
+在已有匹配 VFS、Server libtest 与隔离 runtime 镜像的构建环境中，沿现工作流的
+`docker run --rm --init --network none`、仓库挂载、只读 `zxs.so` 挂载和
+`ZXS_ISOLATED_SAMBA_TEST=1` 执行以下容器内命令；不要在用户宿主直接运行：
+
+```sh
+python3 .github/scripts/check-system-samba.py --native-working \
+  --fixture "$(cat target/smb-debian13/fixture-path.txt)" \
+  --module target/smb-debian13/product/zxs.so \
+  --output target/smb-debian13/product/native/system-samba.json
+```
+
+该模式的观测顺序为：空池真实默认共享创建空文件并读取 → `put` 保存 → `reput`
+从实际远端长度非零偏移续写 → 缩短覆盖 → 关闭后读取 → **引擎进程退出重开**仍
+只有工作稿 → 实际认证 HTTP 显式首节点 → 第二次进程重开原请求幂等及 SMB 正文读取。
+每阶段核同 FILE／entry 身份；核心冷开核无隐造版本，首提交后只有一个文件历史节点。
+同时核真实 smbd 非 root I/O 日志与空宿主导出目录，不能由日志单独宣布内容通过。
+
+这不是默认矩阵的替代，也不代表 rename/delete、断电、断网、跨平台编辑器、
+O_APPEND 或显式客户端 FLUSH 已验收；`reput` 只证明非零偏移续写，成功 close
+才是本 smoke 的保存边界。受限云环境的 direct dispatcher／协议／HTTP／Web
+用例通过不等于本模式已运行；Unix listener 被环境拒绝时须如实保留未验状态。
+新增源码和命令不是运行收据。真实 Samba 支持仍以精确构建对应的成功 runtime
+`system-samba.json` 为证，本修改不自动安装 SDK 或启动宿主服务。
+
 ## 工作区记录与 spool 分开计费
 
-可写 Open 仍立即分配核心工作区、冻结基线/选择并开始租约，workspace ID 和恢复记录不延迟到 Dirty。
+`private_work` 可写 Open 立即分配核心工作区、冻结基线/选择并开始租约，workspace ID 和恢复记录不延迟到 Dirty。
 无修改 Close 的正常中止可将无核心请求/正文的普通空清单转为原路径冷存，归还驻留记录名额；
 完整清单仍可查询、重复 abort 仍推进 fence，所有清单元数据仍计费。成功保存、含核心材料或在途准备
 的记录不会因此释放名额。它只缓解记录轴耗尽，不代表无限保存或免费元数据。

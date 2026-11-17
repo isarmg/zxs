@@ -142,6 +142,14 @@ impl PlanningContext<'_> {
     }
 }
 
+impl crate::engine::DirectoryReplayPrefix<'_> {
+    pub(crate) fn namespace_host_root(
+        &self, repository: RepositoryId, branch: BranchId,
+    ) -> Result<RegisteredNamespaceRoot<'_>> {
+        registered_root(self.previous(), self.config(), self.resources(), repository, branch)
+    }
+}
+
 // The public adapters above borrow the actual Engine/PlanningContext input.
 // Sibling ordinary FILE admission uses this same kernel on its actual input.
 // No caller outside this source module family can mint from a decoded record.

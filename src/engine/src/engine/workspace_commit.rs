@@ -22,6 +22,7 @@ struct PlanningSnapshot {
     config: ValidatedConfig,
     disk_resources: Arc<crate::disk::DiskResources>,
     state: Arc<State>,
+    original_receipts: Option<Arc<super::InstalledOriginalReceipts>>,
     named_namespaces: super::named_namespaces::NameCache,
     current_namespaces: Option<Arc<super::CurrentNamespaces>>,
     workspace_namespace_baselines:
@@ -43,6 +44,7 @@ impl PlanningSnapshot {
             config: &self.config,
             disk_resources: &self.disk_resources,
             state: &self.state,
+            original_receipts: self.original_receipts.as_ref(),
             named_namespaces: &self.named_namespaces,
             current_namespaces: self.current_namespaces.as_ref(),
             workspace_namespace_baselines: &self.workspace_namespace_baselines,
@@ -179,6 +181,7 @@ impl Engine {
             config: self.config.clone(),
             disk_resources: Arc::clone(&self.disk_resources),
             state: Arc::clone(&self.state),
+            original_receipts: self.original_receipts.clone(),
             named_namespaces: self.named_namespaces.seed(),
             current_namespaces: self.current_namespaces.clone(),
             workspace_namespace_baselines: self

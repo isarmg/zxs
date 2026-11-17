@@ -26,6 +26,11 @@ pub(crate) enum ReadSource {
         source: Arc<crate::container_storage::PreparedUnbornFull>,
         path: PathBuf,
     },
+    SelectedWorking {
+        selection: Arc<super::file_draft::SelectedWorkingSources>,
+        index: usize,
+        path: PathBuf,
+    },
     VerifiedDraft {
         source: Arc<super::fresh_layout::draft_source::PublishedDraftSource>,
         path: PathBuf,
@@ -75,6 +80,26 @@ impl ReadSource {
         }
     }
 
+    /// One source from the already admitted complete selected set. No raw
+    /// path, independent singleton picker or reissued container can replace it.
+    pub(crate) fn selected_working(
+        selection: Arc<super::file_draft::SelectedWorkingSources>, index: usize,
+    ) -> Result<Self> {
+        let path = selection.born_path(index)?;
+        Ok(Self::SelectedWorking { selection, index, path })
+    }
+
+    pub(crate) fn require_selected_working(
+        &self, expected: &Arc<super::file_draft::SelectedWorkingSources>, index: usize,
+    ) -> Result<()> {
+        match self {
+            Self::SelectedWorking { selection, index: actual, path }
+                if Arc::ptr_eq(selection, expected) && *actual == index
+                    && *path == selection.born_path(index)? => Ok(()),
+            _ => Err(crate::business::file_draft::invalid()),
+        }
+    }
+
     /// Every managed copy/sealing source retains its producer's I/O ownership.
     /// This entry point must not be a raw-file alternative to leased reads.
     pub(crate) fn open(&self) -> Result<ReadFile> {
@@ -87,6 +112,7 @@ impl ReadSource {
         match self {
             Self::External(path) => open_regular(path).map(ReadFile::from),
             Self::VerifiedDraft { source, path } => source.open(path),
+            Self::SelectedWorking { selection, index, path } => selection.open_born(*index, path),
             Self::WorkingFull { source, path } => source.open(path),
             Self::VerifiedReplica(source) => source.open(),
             Self::Container { scope, version, path } => {
@@ -107,7 +133,7 @@ impl ReadSource {
         match self {
             Self::External(path) | Self::Disk { path, .. }
             | Self::VerifiedDraft { path, .. } | Self::Container { path, .. }
-            | Self::WorkingFull { path, .. } => path,
+            | Self::WorkingFull { path, .. } | Self::SelectedWorking { path, .. } => path,
             Self::VerifiedReplica(source) => source.path(),
         }
     }
@@ -120,6 +146,9 @@ impl ReadSource {
             // The retained source's exact-path gate rejects it on open.
             Self::WorkingFull { source, .. } => Self::WorkingFull {
                 source: Arc::clone(source), path,
+            },
+            Self::SelectedWorking { selection, index, .. } => Self::SelectedWorking {
+                selection: Arc::clone(selection), index: *index, path,
             },
             Self::VerifiedDraft { source, .. } => Self::VerifiedDraft {
                 source: Arc::clone(source), path,

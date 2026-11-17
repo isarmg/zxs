@@ -11,7 +11,7 @@ use crate::directory_worktree::store::HeldSparseWorktree;
 use crate::persist::snapshot_worktree::{
     CommitCompletion, CommitNode, CommitReservation, FileRequestCommitment, Record,
 };
-use crate::snapshot_worktree::registry::{CommitRetry, ReceiptIndex};
+use crate::snapshot_worktree::registry::CommitRetry;
 use crate::snapshot_worktree::{RegistrationError, Result, publication, with_worktree};
 use crate::working_tree::snapshot::{
     AdmittedSnapshotManifest, HeldSnapshotNode, SnapshotFile, SnapshotFileSource,
@@ -26,8 +26,8 @@ use storage_contract::{OperationId, Principal, Sequence};
 pub(crate) fn commit_worktree(
     engine: &mut Engine, request: &CommitWorktree, principal: &Principal,
 ) -> Result<SnapshotHandle> {
-    let source = Arc::clone(&engine.state);
-    let index = ReceiptIndex::capture(&source)?;
+    let source = engine.snapshot_receipt_source()?;
+    let index = source.index()?;
     if let Some(retry) = index.retry_commit(request, principal)? {
         return match retry {
             CommitRetry::Complete(handle) => {
@@ -184,7 +184,7 @@ fn complete(
     commitment: MaterialCommitment, original: &HeldSnapshotNode,
     instance: HeldSparseWorktree, ledger: &mut HeldWorktreeLedger<'_>,
 ) -> Result<SnapshotHandle> {
-    let index = ReceiptIndex::capture(engine.state())?;
+    let index = engine.snapshot_receipts()?;
     let host = index.node(plan.source)?.host().clone();
     let manifest = index.into_commit_manifest(plan.request.operation_id)?;
     let root = engine.namespace_host_root(host.namespace.repository_id, host.namespace.branch_id)
@@ -206,7 +206,7 @@ fn complete(
         }))?;
     #[cfg(feature = "fault-injection")]
     engine.failpoint("after_worktree_node_publication").map_err(RegistrationError::Publication)?;
-    let index = ReceiptIndex::capture(engine.state())?;
+    let index = engine.snapshot_receipts()?;
     let files = vec![plan.file_result()?];
     let checkpoint = ledger.append(Event::Completed {
         publication: plan.publication(), files,
@@ -227,7 +227,7 @@ fn publish_completion(
             reserve: plan.request.operation_id, reservation: commitment, checkpoint,
         }))?;
     let handle = plan.handle();
-    ReceiptIndex::capture(engine.state())?.reopen_node(engine, handle)?;
+    engine.snapshot_receipts()?.reopen_node(engine, handle)?;
     with_worktree(engine, plan.request.target, |_| Ok(()))?;
     Ok(handle)
 }

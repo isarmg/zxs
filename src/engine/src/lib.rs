@@ -8,7 +8,7 @@ pub use storage_contract::offline_maintenance;
 mod error;
 pub use business::file_draft::DraftError;
 pub use error::{
-    ContainerTagsError, FileMetadataError, PathChangeError,
+    ContainerTagsError, FileMetadataError, OriginalReceiptError, PathChangeError,
     CheckpointError, Error, PublishedRecoveryReconciliation, PublishedWorkspaceReconciliation,
     RecoveryReconciliationStage,
 };

@@ -3,7 +3,6 @@
 use crate::directory_worktree::ledger::LedgerError;
 use crate::persist::layout::worktree as layout;
 use crate::persist::snapshot_worktree::{self as codec, Record};
-use crate::snapshot_worktree::registry::ReceiptIndex;
 use crate::snapshot_worktree::{RegistrationError, commit_worktree};
 use crate::Engine;
 use std::collections::BTreeMap;
@@ -108,7 +107,7 @@ pub(super) fn interrupt_and_resume(
     let versions = engine.state().versions.clone();
     let branches = engine.state().branches.clone();
     let (ledger, node_path, node_binding) = {
-        let index = ReceiptIndex::capture(engine.state()).unwrap();
+        let index = engine.snapshot_receipts().unwrap();
         let original = index.reopen_node(&engine, plan.source).unwrap();
         let published = index.reopen_node(&engine, plan.handle()).unwrap();
         (
@@ -225,7 +224,7 @@ pub(super) fn interrupt_and_resume(
     assert_eq!(engine.state().branches, branches);
     assert_eq!(inventory(&node_path), node_before);
     assert_eq!(inventory(&ledger), completed_ledger);
-    assert_eq!(ReceiptIndex::capture(engine.state()).unwrap()
+    assert_eq!(engine.snapshot_receipts().unwrap()
         .reopen_node(&engine, result).unwrap().binding(), node_binding);
     let source = Arc::clone(&engine.state);
     let slot = engine.next_slot;

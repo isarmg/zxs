@@ -363,3 +363,46 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     assert_eq!(engine.snapshot, snapshot);
     assert_eq!(engine.next_slot, slot);
 }
+
+
+#[test]
+fn complete_physical_requirements_accumulate_on_the_same_admitted_disk() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("state");
+    let mut config = Config::independent_roots(
+        storage_contract::Mode::Development,
+        [(name_policy::Name::parse("Primary").unwrap(), temp.path().join("a"))],
+    ).unwrap();
+    config.disks[0].capacity_bytes = Some(128 * 1024);
+    let slot = config.disks[0].slot_id.clone();
+    let mut engine = Engine::initialize(&root, config).unwrap();
+    engine.create_disk_root(&slot, "alice", storage_contract::OperationId::generate().unwrap())
+        .unwrap();
+    let before = canonical_json(engine.state()).unwrap();
+    let logs = engine.members().iter()
+        .map(|disk| std::fs::read(log_path(disk)).unwrap()).collect::<Vec<_>>();
+    let context = engine.planning_context();
+    let disk = &context.config.disks[0];
+    let mut first = PhysicalRequirements::new(&context);
+    first.add(disk, 80 * 1024).unwrap();
+    first.check().unwrap();
+    let mut second = PhysicalRequirements::new(&context);
+    second.add(disk, 80 * 1024).unwrap();
+    second.check().unwrap();
+    first.add(disk, 80 * 1024).unwrap();
+    assert!(matches!(first.check(),
+        Err(Error::FreshLayout(super::super::fresh_layout::FreshLayoutError::PhysicalCapacity {
+            ..
+        }))));
+    let mut overflow = PhysicalRequirements::new(&context);
+    overflow.add(disk, u64::MAX).unwrap();
+    assert!(matches!(overflow.add(disk, 1),
+        Err(Error::FreshLayout(
+            super::super::fresh_layout::FreshLayoutError::PhysicalBytesOverflow,
+        ))));
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert_eq!(engine.members().iter()
+        .map(|disk| std::fs::read(log_path(disk)).unwrap()).collect::<Vec<_>>(), logs);
+    // These are the same live free-space/configured-limit gates as ordinary
+    // publication. This does not prove cross-session quota or census coverage.
+}

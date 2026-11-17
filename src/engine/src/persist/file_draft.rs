@@ -24,7 +24,7 @@ struct Envelope {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct Protection {
+pub(crate) struct Protection {
     version_id: storage_contract::VersionId,
     primary_slot_id: name_policy::SlotId,
     target_copies: u32,
@@ -70,7 +70,7 @@ pub(crate) fn encode(outcome: Outcome) -> Result<json_codec::Value> {
     json_codec::to_value(outcome).map_err(codec)
 }
 
-fn content_protection(
+pub(crate) fn content_protection(
     previous: &State,
     target: &storage_contract::file_draft::DraftLocation,
     content: &crate::business::file_draft::PublishedContent,

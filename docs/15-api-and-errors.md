@@ -551,3 +551,32 @@ Delete 与 PathChanged 携带记录中的 Unix 整秒时间；Undo／Import 必�
 1 MiB 上限约束，保留原 `commit_state`、`publication_sequence` 和未确定发布状态。
 响应丢失后查询原操作即可恢复确认，无需重发撤销或按路径猜测当前 D。原操作重试保持
 永久幂等；新操作仍须重新检查当前准确 D、路径、所有者和目录整批恢复围栏。
+
+
+### 已选 Born 草稿的显式目录提交
+
+此接口只消费已有历史节点（Born）的已选手动草稿。它不启用 SMB 提交、不创建隐式
+工作区，也不把零历史首稿伪装成已有 Version；Unborn 目录批量提交仍未开放。
+
+- `POST /api/directory-snapshots/commits`：严格请求字段为 `source`（原已发表
+  `SnapshotHandle`）、`selected`、`message`、`operation_id`。每个选择项为
+  `{target, expected:{revision, base, payload}}`，三个原稿字段来自同一已读取工作状态；
+  客户端不能提供 principal、root、inode、FILE trace 或完成证明。
+- `GET /api/directory-snapshots/commits/{operation}`：查询必须同时给出
+  `source_publication`、`repository_id`、`branch_id`、`node_id`，它们完整标识提交请求中
+  的原目录节点，不是后继新节点。当前管理认证、原操作主体和目录范围必须同时成立。
+- 两者返回相同 typed 回执：`operation_id`、`publication_sequence`、`commit_state`、
+  `protection_at_publish` 及 `result:{outcome:"changed"|"unchanged", snapshot}`。
+  `changed` 的 handle 指向新节点；`unchanged` 返回原 handle，只清除本次已验证选中稿，
+  不产生 FILE 或目录节点。状态来自真实可见结果，不拿 original 的承诺替换 degraded 结果。
+- 精确重试保留原 source、选集、代数、正文承诺、说明、主体和 operation ID。先校验当前
+  认证及所选资源，再查询同一永久回执；成功旧请求不重新打开稿，也不因旧 CAS 被拒。
+  未选择的稿保持原实体、内容及代数，跨 owner／repository 的选集拒绝。
+- 两个通用 operation GET 继续返回原公开外壳及摘要，但此 kind 的 `result` 为 `null`；
+  完整且经过净化的目录结果仅在上述 scoped GET 返回。任何入口均不返回 native envelope、
+  root/entity/inode、内部准备 trace 或整批 working-after。
+- 现有逻辑快照上限不变：64 MiB 按每条路径 occurrence 计算，最多 2048 条目及既有
+  manifest／metadata 预算；不等于 SMB 大文件工作保存的容量。决定前失败不清稿，已有决定
+  后失败须保留同一请求并按真实恢复结果收尾，不重新分配操作。
+
+本接口的实现与针对性测试不等于真实 SMB、浏览器或所有故障场景已完成验收。

@@ -856,7 +856,7 @@ fn membership_registry_current_batch_recovery_rejects_hidden_or_duplicate_occurr
         assert_eq!(
             fixture
                 .engine
-                .install_recovered_namespace_state(forged, snapshot.clone())
+                .install_recovered_namespace_state(forged, snapshot.clone(), &std::sync::Arc::default())
                 .unwrap_err()
                 .code(),
             ErrorCode::WorkspaceChanged
@@ -884,13 +884,13 @@ fn membership_registry_current_batch_recovery_rejects_hidden_or_duplicate_occurr
     assert!(
         fixture
             .engine
-            .install_recovered_namespace_state(forged, snapshot.clone())
+            .install_recovered_namespace_state(forged, snapshot.clone(), &std::sync::Arc::default())
             .is_err()
     );
     assert_eq!(fixture.engine.snapshot, before_snapshot);
     fixture
         .engine
-        .install_recovered_namespace_state(published, snapshot)
+        .install_recovered_namespace_state(published, snapshot, &std::sync::Arc::default())
         .unwrap();
     assert_eq!(current(&fixture, "dir/copied"), copied);
     assert_clean(&fixture);

@@ -14,6 +14,8 @@ mod unborn;
 mod native_io;
 pub use native_io::{NativeCurrentEntry, NativeWorkingFile};
 mod selected;
+mod batch;
+pub(crate) use batch::{PreparedWorkingBatch, WorkingBatchHandoff, WorkingBatchResult};
 mod input;
 pub(super) use input::WorkingPublicationInput;
 pub(crate) use selected::{SelectedWorkingSource, SelectedWorkingSources};

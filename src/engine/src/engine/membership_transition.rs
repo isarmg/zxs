@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 mod abort;
 mod archive;
+pub(crate) use archive::persistent::namespace_replay::VerifiedArchivePublication;
 pub(in crate::engine) use archive::PreparedBackupControl;
 mod backup;
 pub(crate) use backup::{

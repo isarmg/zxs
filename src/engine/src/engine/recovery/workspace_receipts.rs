@@ -3,6 +3,14 @@ use super::*;
 use crate::engine::disk_registry::current::CurrentNamespaces;
 use std::sync::Arc;
 
+mod directory;
+pub(crate) use directory::DirectoryReplayPrefix;
+pub(super) use directory::CheckpointDirectoryObservation;
+
+mod installed;
+pub(crate) use installed::InstalledOriginalReceipts;
+use installed::ReceiptEnvironment;
+
 /// A loan of the actual no-repair replay branch's original snapshot and complete
 /// Publication barrier. It has no constructor, writer, installer or Current
 /// conversion outside this module. It only permits logical source reconstruction
@@ -58,12 +66,200 @@ pub(super) struct PreparedCandidate {
     pub snapshot: Option<crate::publication_evidence::SharedAdmittedSnapshot>,
     // A pure next view for this preflight slot, never an Engine installation.
     next_namespaces: Option<CurrentNamespaces>,
+    directory_admission: Option<directory::DirectoryCandidateAdmission>,
+}
+
+/// The one source-backed directory index needs the original for every indexed
+/// receipt, not just its latest kind. This cache contains no State, material,
+/// format or writer authority; each entry came from the actual barrier below
+/// and must still match the requested visible prefix.
+#[derive(Clone, Default)]
+pub(crate) struct OriginalReceiptCursor {
+    environment: Option<ReceiptEnvironment>,
+    records: BTreeMap<OperationId, Arc<crate::publication_evidence::OriginalReceiptProjection>>,
+}
+
+/// A read-only reborrow after every reached original/outcome pair was checked
+/// against this prefix. Missing entries remain missing; this is not a State or
+/// publication issuer and cannot supply archived originals by decoding State.
+pub(crate) struct OriginalReceiptPrefix<'a> {
+    source: &'a State,
+    records: BTreeMap<OperationId, (&'a OperationResult, &'a storage_contract::Principal)>,
+}
+
+impl<'a> OriginalReceiptPrefix<'a> {
+    pub(crate) fn source(&self) -> &'a State { self.source }
+
+    pub(crate) fn receipt(
+        &self, operation: OperationId,
+    ) -> Option<(&'a OperationResult, &'a storage_contract::Principal)> {
+        self.records.get(&operation).copied()
+    }
+}
+
+impl OriginalReceiptCursor {
+    pub(in crate::engine) fn for_recovery(engine: &Engine) -> Result<Self> {
+        if let Some(generation) = engine.config.generation()
+            && Arc::ptr_eq(&engine.state, &generation.base)
+        {
+            if engine.snapshot != generation.snapshot() {
+                return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+            }
+            // A generation installer changes the admitted resources as well
+            // as its State. Reobserve its authentic retained archive, not the
+            // previous environment's installed cursor or a State-only index.
+            let indexed = engine.state.operations.values().any(
+                crate::snapshot_worktree::ReceiptIndex::requires_original,
+            );
+            let cursor = if indexed {
+                engine.replay_generation_original_receipts(generation)?
+            } else {
+                Self::default()
+            };
+            cursor.require_directory_index(&engine.state)?;
+            return Ok(cursor);
+        }
+        // Preserve the ordinary replay ordering: preflight validates missing
+        // originals before any writer conversion. An empty cursor cannot be
+        // installed when that prefix contains indexed duties.
+        match &engine.original_receipts {
+            Some(source) => source.replay_cursor(&engine.planning_context()),
+            None => Ok(Self::default()),
+        }
+    }
+
+    pub(in crate::engine) fn retain_archive(
+        &mut self,
+        source: &crate::engine::membership_transition::VerifiedArchivePublication,
+        visible: &State,
+        config: &ValidatedConfig,
+        resources: &Arc<DiskResources>,
+    ) -> Result<()> {
+        let projection = crate::publication_evidence::OriginalReceiptProjection::from_archive(
+            source, visible,
+        )?;
+        // Unlike an observation of the same live barrier, two archive slots
+        // may not repeat an operation, even with an equal result.
+        self.retain(projection, config, resources)
+    }
+
+    pub(crate) fn for_context(context: &crate::engine::PlanningContext<'_>)
+        -> Result<Self>
+    {
+        match context.original_receipts {
+            Some(source) => source.replay_cursor(context),
+            None => {
+                let empty = Self::default();
+                empty.require_directory_index(context.state)?;
+                Ok(empty)
+            }
+        }
+    }
+
+    pub(in crate::engine) fn needs_projection(&self, result: &OperationResult) -> bool {
+        self.records.is_empty()
+            || result.commit_state == storage_contract::CommitState::PublishedDegraded
+            || crate::snapshot_worktree::ReceiptIndex::requires_original(result)
+    }
+
+    pub(in crate::engine) fn retain_completed(
+        &mut self, projection: crate::publication_evidence::OriginalReceiptProjection,
+        config: &ValidatedConfig, resources: &Arc<DiskResources>,
+    ) -> Result<()> {
+        if let Some(prior) = self.records.get(&projection.operation()) {
+            self.environment.as_ref()
+                .ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix))?
+                .require(config, resources)?;
+            // The actual barrier/completion projected this pair again. A
+            // repeated observation may retain it, but cannot replace either
+            // its original receipt, actor or visible recovery outcome.
+            if prior.as_ref() != &projection {
+                return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+            }
+            return Ok(());
+        }
+        self.retain(projection, config, resources)
+    }
+
+    fn retain(
+        &mut self, projection: crate::publication_evidence::OriginalReceiptProjection,
+        config: &ValidatedConfig, resources: &Arc<DiskResources>,
+    ) -> Result<()> {
+        let operation = projection.operation();
+        if self.records.contains_key(&operation) {
+            return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+        }
+        match &self.environment {
+            Some(environment) => environment.require(config, resources)?,
+            None => self.environment = Some(ReceiptEnvironment::capture(config, resources)),
+        }
+        self.records.insert(operation, Arc::new(projection));
+        Ok(())
+    }
+
+    pub(crate) fn receipt<'a>(
+        &'a self, prefix: &State, operation: OperationId,
+    ) -> Result<(&'a OperationResult, &'a storage_contract::Principal)> {
+        self.records.get(&operation)
+            .ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix))?
+            .in_prefix(prefix)
+    }
+
+    /// Recovery streams the prefix a second time after preflight. Projections
+    /// for later slots are not part of an earlier prefix; every reached slot
+    /// must still contain exactly the retained visible outcome and actor.
+    pub(crate) fn require_prefix(&self, prefix: &State) -> Result<()> {
+        self.visit_prefix(prefix, |_, _, _| {})
+    }
+
+    pub(crate) fn reborrow<'a>(&'a self, prefix: &'a State) -> Result<OriginalReceiptPrefix<'a>> {
+        let mut records = BTreeMap::new();
+        self.visit_prefix(prefix, |operation, original, principal| {
+            records.insert(operation, (original, principal));
+        })?;
+        Ok(OriginalReceiptPrefix { source: prefix, records })
+    }
+
+    fn visit_prefix<'a>(
+        &'a self, prefix: &State,
+        mut visit: impl FnMut(OperationId, &'a OperationResult, &'a storage_contract::Principal),
+    ) -> Result<()> {
+        for projection in self.records.values().filter(|projection| {
+            projection.sequence().get() <= prefix.sequence
+        }) {
+            let (original, principal) = projection.in_prefix(prefix)?;
+            visit(projection.operation(), original, principal);
+        }
+        Ok(())
+    }
+
+    fn require_directory_index(&self, prefix: &State) -> Result<()> {
+        let indexed = prefix.operations.values().any(
+            crate::snapshot_worktree::ReceiptIndex::requires_original,
+        );
+        let retained = self.records.values().any(|projection| {
+            projection.sequence().get() <= prefix.sequence
+        });
+        if !indexed && !retained {
+            // There are no directory records to index. This is absence of the
+            // feature, not a fallback decoder for a different pool format.
+            return Ok(());
+        }
+        crate::snapshot_worktree::ReceiptIndex::capture_with_originals(prefix, self)
+            .map(|_| ())
+            .map_err(|source| {
+                crate::snapshot_worktree::drafts::DirectoryPublicationError::ReceiptIndex(
+                    source.into(),
+                ).into_engine()
+            })
+    }
 }
 
 pub(super) struct ReceiptPrefix<'a> {
     pub snapshot: &'a Option<String>,
     pub state: &'a State,
     pub namespaces: Option<&'a CurrentNamespaces>,
+    pub originals: &'a OriginalReceiptCursor,
 }
 
 impl Engine {
@@ -75,6 +271,10 @@ impl Engine {
         let mut previous_state = Arc::clone(&self.state);
         let mut namespaces = self.current_namespaces.as_deref().cloned();
         let mut published = None;
+        // Any archive seed carrying indexed directory records must also carry
+        // their real originals. Visible words or Config equality cannot
+        // recreate them, even for an earlier operation kind.
+        prepared.original_receipts.require_directory_index(&previous_state)?;
         for (sequence, candidates) in &prepared.records {
             let mut active = candidates.iter().filter(|(hash, receipts)| {
                 self.move_completion.as_ref().is_some_and(|selected| {
@@ -104,6 +304,7 @@ impl Engine {
                     snapshot: &previous,
                     state: &previous_state,
                     namespaces: namespaces.as_ref(),
+                    originals: &prepared.original_receipts,
                 },
             )?;
             if self.move_completion.as_ref().is_some_and(|selected| {
@@ -226,6 +427,10 @@ impl Engine {
                 &self.config, &previous_state, &admitted, &candidate.candidate,
                 candidate.publication.as_ref().expect("invariant: published barrier"), &seal,
             )?;
+            let retain_original = original.state().operations
+                .get(&candidate.candidate.operation_id)
+                .is_some_and(|result| prepared.original_receipts.needs_projection(result))
+                || candidate.publication.as_ref().is_some_and(|p| p.recovery.is_some());
             let shared = admitted.into_shared();
             previous_state = shared.share_state();
             // The original proof remains unmodified for this candidate.
@@ -238,6 +443,31 @@ impl Engine {
                     .operations
                     .insert(candidate.candidate.operation_id, publication.result.clone());
             }
+            if retain_original {
+                // This is deliberately after the actual held journal barrier
+                // and the legacy original/visible construction above. Never
+                // infer an original by stripping fields from visible results.
+                let projection = shared.project_original_receipt(
+                    &candidate.candidate,
+                    candidate.publication.as_ref().expect("invariant: published barrier"),
+                    &seal,
+                    &previous_state,
+                )?;
+                prepared.original_receipts.retain_completed(
+                    projection, &self.config, &self.disk_resources,
+                )?;
+            }
+            // Retain only the compact already-admitted native observation.
+            // A checkpoint may skip installing historical predecessor States;
+            // it must not replay this transition against that stale Engine State.
+            if let Some(admission) = candidate.directory_admission.take() {
+                let observed = admission.into_checkpoint(
+                    self, &candidate.candidate,
+                    candidate.publication.as_ref().expect("invariant: published barrier"),
+                    &seal,
+                )?;
+                prepared.directory_checkpoints.insert(*sequence, observed);
+            }
             candidate.snapshot = Some(shared);
             previous = Some(candidate.candidate.snapshot_hash.clone());
             published = Some(*sequence);
@@ -246,6 +476,9 @@ impl Engine {
             prepared.candidates.clear();
             prepared.candidates.insert(*sequence, candidate);
         }
+        // Build the complete relation once over the last verified visible
+        // prefix. Scoped head/retry lookups cannot skip unrelated bad records.
+        prepared.original_receipts.require_directory_index(&previous_state)?;
         // End the cursor's snapshot loan before reclaiming the latest cached
         // admitted State below (SharedAdmittedState requires unique ownership).
         drop(previous_state);
@@ -329,77 +562,77 @@ impl Engine {
                 "candidate does not extend the verified publication prefix",
             ));
         }
+        prefix.originals.require_prefix(prefix.state)?;
+        let registry = candidate.registry().is_some() || self.is_backup_first_candidate(&candidate)?;
+        let read_publication = || -> Result<Option<Publication>> {
+            receipts.iter().find(|receipt| {
+                receipt.record.record_type == RecordType::Publication
+            }).map(|receipt| verified_object_at(
+                &self.disk_resources, online, "publication", &receipt.record.object_hash,
+            )).transpose()
+        };
+        // Ordinary published slots historically read this global object before
+        // their snapshot. Preserve that failure precedence; no material source
+        // or visible-state authority is obtained from the object by itself.
+        let journal_publication = if registry { None } else { read_publication()? };
+        let admitted = verified_recovery_snapshot_at(
+            &self.disk_resources, online, &candidate.snapshot_hash,
+        )?;
+        if admitted.for_candidate(&candidate)?.state().operations
+            .get(&candidate.operation_id).is_some_and(|result| {
+                result.kind == crate::persist::directory_draft_commit::native::KIND
+            })
+        {
+            return self.read_directory_receipt_candidate(
+                candidate, admitted, journal_publication, hash, prefix,
+            );
+        }
         // Even ACCEPT-only discovery may open a data-only local proof. Prove
         // this slot against its exact admitted predecessor before that search;
         // receipt labels alone cannot grant permission to inspect payloads.
         let mut next_namespaces = None;
-        let mut snapshot =
-            if candidate.registry().is_some() || self.is_backup_first_candidate(&candidate)? {
-                let admitted = verified_recovery_snapshot_at(
-                    &self.disk_resources,
-                    online,
-                    &candidate.snapshot_hash,
-                )?;
-                let original = admitted.for_candidate(&candidate)?;
-                crate::history_package::bound_history_objects_at(
-                    &self.disk_resources,
-                    online,
-                    &candidate,
-                    Some(original),
-                )?;
-                if let Some(view) = prefix.namespaces {
-                    next_namespaces = Some(verify_current_candidate_transition(
-                        view,
-                        prefix.state,
-                        original.state(),
-                        &candidate,
-                    )?);
-                } else {
-                    // The exact prescribed activation has no payload vector. Only
-                    // its verified publication barrier can establish the pure view
-                    // used to check following slots. Pending activation grants none.
-                    let generation = self.config.generation().ok_or_else(|| {
-                        Error::new(
-                            ErrorCode::PublicationInvalid,
-                            "registry candidate has no generation",
-                        )
-                    })?;
-                    if prefix.snapshot != &generation.snapshot() {
-                        return Err(Error::new(
-                            ErrorCode::PublicationInvalid,
-                            "registry candidate precedes its verified activation",
-                        ));
-                    }
-                    generation.verify_activation_candidate(&candidate)?;
-                }
-                Some(admitted.into_shared())
-            } else {
-                None
-            };
-        let publication = match receipts
-            .iter()
-            .find(|receipt| receipt.record.record_type == RecordType::Publication)
-        {
-            Some(receipt) => Some(verified_object_at(
+        if registry {
+            let original = admitted.for_candidate(&candidate)?;
+            crate::history_package::bound_history_objects_at(
                 &self.disk_resources,
                 online,
-                "publication",
-                &receipt.record.object_hash,
-            )?),
-            None => {
-                let original = match snapshot.take() {
-                    Some(shared) => shared.into_admitted(),
-                    None => verified_recovery_snapshot_at(
-                        &self.disk_resources, online, &candidate.snapshot_hash,
-                    )?,
-                };
-                let publication = crate::degraded_recovery::discover_publication(
-                    self, &candidate, hash, prefix.state, prefix.snapshot, &original,
-                )?;
-                snapshot = Some(original.into_shared());
-                publication
-            },
+                &candidate,
+                Some(original),
+            )?;
+            if let Some(view) = prefix.namespaces {
+                next_namespaces = Some(verify_current_candidate_transition(
+                    view,
+                    prefix.state,
+                    original.state(),
+                    &candidate,
+                )?);
+            } else {
+                // The exact prescribed activation has no payload vector. Only
+                // its verified publication barrier can establish the pure view
+                // used to check following slots. Pending activation grants none.
+                let generation = self.config.generation().ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "registry candidate has no generation",
+                    )
+                })?;
+                if prefix.snapshot != &generation.snapshot() {
+                    return Err(Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "registry candidate precedes its verified activation",
+                    ));
+                }
+                generation.verify_activation_candidate(&candidate)?;
+            }
+        }
+        let journal_publication = if registry { read_publication()? } else { journal_publication };
+        let publication = match journal_publication {
+            Some(publication) => Some(publication),
+            None => crate::degraded_recovery::discover_publication(
+                self, &candidate, hash, prefix.state, prefix.snapshot, &admitted,
+            )?,
         };
+        let snapshot = Some(admitted.into_shared());
         if publication
             .as_ref()
             .is_some_and(|publication| publication.recovery.is_some())
@@ -415,6 +648,7 @@ impl Engine {
             barrier_failure: None,
             snapshot,
             next_namespaces,
+            directory_admission: None,
         })
     }
 
@@ -716,3 +950,7 @@ pub(super) fn verify_current_candidate_receipt(candidate: &Candidate, next: &Sta
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/recovery/original_receipt_tests.rs"]
+mod original_receipt_tests;

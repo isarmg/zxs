@@ -5,29 +5,41 @@ use std::sync::Arc;
 
 /// Created only after the complete frozen journals, fixed-member seals, source
 /// snapshots and prescribed first publications have passed archive verification.
-pub(in crate::engine::membership_transition) struct VerifiedArchivePublication {
+pub(crate) struct VerifiedArchivePublication {
     candidate: Candidate,
     original: Arc<State>,
-    recovered_result: Option<OperationResult>,
+    publication: Publication,
+    seal: PublicationSeal,
     activation: Option<PortableAuthority>,
 }
 impl VerifiedArchivePublication {
-    pub(in crate::engine::membership_transition) fn candidate(&self) -> &Candidate {
+    pub(crate) fn candidate(&self) -> &Candidate {
         &self.candidate
     }
-    pub(in crate::engine::membership_transition) fn original_state(&self) -> &Arc<State> {
+    pub(crate) fn original_state(&self) -> &Arc<State> {
         &self.original
+    }
+
+    pub(crate) fn publication(&self) -> &Publication {
+        &self.publication
+    }
+
+    pub(crate) fn seal(&self) -> &PublicationSeal {
+        &self.seal
     }
 
     // The one successful business transition consumes original_state first.
     // Only its next visible prefix includes the independently verified recovery
     // outcome. No original snapshot or receipt is modified in place.
-    pub(in crate::engine::membership_transition) fn visible_state(&self) -> Arc<State> {
-        let Some(result) = &self.recovered_result else {
+    pub(crate) fn visible_state(&self) -> Arc<State> {
+        if self.publication.recovery.is_none() {
             return Arc::clone(&self.original);
-        };
+        }
         let mut visible = self.original.as_ref().clone();
-        visible.operations.insert(self.candidate.operation_id, result.clone());
+        visible.operations.insert(
+            self.candidate.operation_id,
+            self.publication.result.clone(),
+        );
         Arc::new(visible)
     }
     pub(in crate::engine::membership_transition) fn activation(
@@ -94,7 +106,6 @@ impl PendingControlArchive {
                 let original =
                     resolve_admitted_snapshot(snapshot, |kind, hash| self.store.load(kind, hash))?
                         .into_state();
-                let recovered_result = publication.recovery.is_some().then_some(publication.result);
                 let activation = match &authority {
                     Some(authority)
                         if sequence
@@ -116,7 +127,8 @@ impl PendingControlArchive {
                 visit(&VerifiedArchivePublication {
                     candidate,
                     original: Arc::new(original),
-                    recovered_result,
+                    publication,
+                    seal,
                     activation,
                 })?;
                 previous_sequence = Some(sequence);
@@ -134,3 +146,7 @@ pub(in crate::engine::membership_transition) fn replay_installed_publications(
 ) -> Result<()> {
     PendingControlArchive::from_installed(root, expected, transition)?.replay_publications(visit)
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/engine/archive_original_receipt_tests.rs"]
+mod original_receipt_tests;

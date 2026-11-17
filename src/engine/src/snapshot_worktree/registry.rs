@@ -1,4 +1,5 @@
 use crate::directory_worktree::ledger::{Binding, Checkpoint};
+use crate::engine::{OriginalReceiptCursor, OriginalReceiptPrefix};
 use crate::persist::snapshot_worktree::{
     self, Decoded, HostEvidence, NamespaceDirectoryBinding, NodeAllocation, NodeCompletion,
     NodeReservation, Record,
@@ -10,6 +11,7 @@ use crate::working_tree::snapshot::{
 };
 use crate::{OperationResult, State};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use storage_contract::snapshot_worktree::{
     CreateWorktree, InitializeSnapshot, NamespaceDirectoryId, SnapshotHandle,
     WorktreeHandle, WorktreeId,
@@ -24,6 +26,9 @@ mod backup;
 pub(crate) use backup::require_backup_snapshot_scope;
 mod edits;
 mod commits;
+mod drafts;
+mod working;
+use working::WorkingRecord;
 use commits::CommitRecord;
 pub(super) use commits::{CommitRetry, verify_file_publication};
 pub(crate) use commits::PublishedCommitTail;
@@ -32,8 +37,9 @@ use edits::{EditRecordEntry, LedgerHead};
 /// This is a relation among independently admitted SYSTEM receipts. It holds
 /// neither a directory handle nor namespace/write authority. Uncompleted
 /// reservations remain occupied and cannot be replaced by local observations.
-pub(super) struct ReceiptIndex<'a> {
+pub(crate) struct ReceiptIndex<'a> {
     source: &'a State,
+    originals: &'a OriginalReceiptCursor,
     nodes: BTreeMap<OperationId, NodeRecord<'a>>,
     worktrees: BTreeMap<OperationId, WorktreeRecord<'a>>,
     completions: BTreeMap<OperationId, CompletionOwner>,
@@ -44,6 +50,7 @@ pub(super) struct ReceiptIndex<'a> {
     heads: BTreeMap<WorktreeId, LedgerHead>,
     pending_edits: BTreeMap<WorktreeId, OperationId>,
     commits: BTreeMap<OperationId, CommitRecord<'a>>,
+    working: BTreeMap<OperationId, WorkingRecord<'a>>,
     branch_heads: BTreeMap<(SnapshotRepositoryId, SnapshotBranchId), SnapshotNodeId>,
     pending_branches: BTreeMap<(SnapshotRepositoryId, SnapshotBranchId), OperationId>,
     planned_files: BTreeSet<OperationId>,
@@ -252,7 +259,60 @@ impl PublishedWorktree<'_> {
     }
 }
 
+/// An owned loan of the exact already installed prefix. This lets a caller
+/// retain immutable receipt evidence while mutably using Engine; physical and
+/// writer checks still use the actual Engine, never this loan.
+pub(crate) struct SnapshotReceiptSource {
+    prefix: Arc<State>,
+    installed: Arc<crate::engine::InstalledOriginalReceipts>,
+}
+
+impl SnapshotReceiptSource {
+    pub(crate) fn index(&self) -> Result<ReceiptIndex<'_>> {
+        self.installed.retained_index(&self.prefix)
+    }
+}
+
+impl<'a> crate::engine::PlanningContext<'a> {
+    pub(crate) fn snapshot_receipts(&self) -> Result<ReceiptIndex<'a>> {
+        match self.original_receipts {
+            Some(source) => {
+                let installed: &'a crate::engine::InstalledOriginalReceipts = source.as_ref();
+                installed.index(self)
+            }
+            None => Err(RegistrationError::Source),
+        }
+    }
+}
+
+impl crate::Engine {
+    pub(crate) fn snapshot_receipts(&self) -> Result<ReceiptIndex<'_>> {
+        self.planning_context().snapshot_receipts()
+    }
+
+    pub(crate) fn snapshot_receipt_source(&self) -> Result<SnapshotReceiptSource> {
+        let context = self.planning_context();
+        let installed = context.original_receipts.ok_or(RegistrationError::Source)?;
+        installed.require_context(&context).map_err(RegistrationError::OriginalReceipt)?;
+        Ok(SnapshotReceiptSource {
+            prefix: Arc::clone(context.state), installed: Arc::clone(installed),
+        })
+    }
+}
+
 impl<'a> ReceiptIndex<'a> {
+    /// Exact indexed kinds and malformed aliases must obtain their original
+    /// from the same observed publication. This classification grants nothing.
+    pub(crate) fn requires_original(receipt: &OperationResult) -> bool {
+        receipt.kind == crate::persist::directory_draft_commit::native::KIND
+            || snapshot_worktree::requires_original(receipt)
+    }
+
+    pub(in crate::snapshot_worktree) fn require_source(&self, source: &State) -> Result<()> {
+        if !std::ptr::eq(self.source, source) { return Err(RegistrationError::Source); }
+        Ok(())
+    }
+
     pub(super) fn retry_worktree(
         &self,
         request: &CreateWorktree,
@@ -301,11 +361,62 @@ impl<'a> ReceiptIndex<'a> {
         }))
     }
 
-    pub(super) fn capture(source: &'a State) -> Result<Self> {
-        let records = ordered_records(source)?;
+    /// The source-backed index decodes every indexed record from the same
+    /// real replay cursor, including snapshot initialization and worktree
+    /// records. Visible outcomes are never substituted for their originals.
+    pub(crate) fn capture_with_originals(
+        source: &'a State, originals: &'a OriginalReceiptCursor,
+    ) -> Result<Self> {
+        Self::capture_inner(source, originals, None)
+    }
+
+    /// Validate one real planner's typed record against the prior authenticated
+    /// index. The prospective index is discarded: it cannot become a published
+    /// source, reopen material, or supply a missing original on retry.
+    pub(super) fn require_planned(
+        &self, next: &State, result: &OperationResult, principal: &Principal, record: &Record,
+    ) -> Result<()> {
+        let operation = result.operation_id;
+        if self.source.operations.contains_key(&operation)
+            || next.operations.get(&operation) != Some(result)
+            || next.operation_principals.get(&operation).map(String::as_str)
+                != Some(principal.as_str())
+            || result.sequence != next.sequence || next.sequence <= self.source.sequence
+            || next.operations.len() != self.source.operations.len() + 1
+            || next.operation_principals.len() != self.source.operation_principals.len() + 1
+            || next.events.len() != self.source.events.len() + 1
+            || next.events.iter().take(self.source.events.len()).ne(self.source.events.iter())
+            || self.source.operations.iter().any(|(key, value)| {
+                next.operations.get(key) != Some(value)
+            })
+            || self.source.operation_principals.iter().any(|(key, value)| {
+                next.operation_principals.get(key) != Some(value)
+            })
+            || result.kind != record.kind()
+            || result.request_digest != record.digest(principal).map_err(RegistrationError::Codec)?
+        {
+            return Err(RegistrationError::PublicationChanged);
+        }
+        let decoded = snapshot_worktree::decode(result).map_err(RegistrationError::Codec)?
+            .ok_or(RegistrationError::Operation(operation))?;
+        if &decoded.record != record {
+            return Err(RegistrationError::PublicationChanged);
+        }
+        ReceiptIndex::capture_inner(
+            next, self.originals, Some(PlannedReceipt { result, principal }),
+        )?;
+        Ok(())
+    }
+
+    fn capture_inner(
+        source: &'a State, originals: &'a OriginalReceiptCursor,
+        planned: Option<PlannedReceipt<'a>>,
+    ) -> Result<Self> {
+        let prefix = originals.reborrow(source).map_err(RegistrationError::OriginalReceipt)?;
+        let records = ordered_records(source, &prefix, planned)?;
         require_events(source, &records)?;
         let mut index = Self {
-            source,
+            source, originals,
             nodes: BTreeMap::new(),
             worktrees: BTreeMap::new(),
             completions: BTreeMap::new(),
@@ -316,6 +427,7 @@ impl<'a> ReceiptIndex<'a> {
             heads: BTreeMap::new(),
             pending_edits: BTreeMap::new(),
             commits: BTreeMap::new(),
+            working: BTreeMap::new(),
             branch_heads: BTreeMap::new(),
             pending_branches: BTreeMap::new(),
             planned_files: BTreeSet::new(),
@@ -344,16 +456,24 @@ impl<'a> ReceiptIndex<'a> {
         }
         let mut allocations = Allocations::default();
         for (_, (receipt, decoded)) in records {
-            let author = source.operation_principals.get(&receipt.operation_id)
-                .ok_or(RegistrationError::MissingPrincipal(receipt.operation_id))?;
-            let principal: Principal = author.parse().map_err(RegistrationError::Principal)?;
+            let (original, principal, decoded) = match decoded {
+                IndexedRecord::Snapshot { original, principal, decoded } => {
+                    (original, principal, decoded)
+                }
+                IndexedRecord::Working { original, principal, envelope } => {
+                    index.publish_working(
+                        Receipt { original, principal }, receipt, envelope, &mut allocations,
+                    )?;
+                    continue;
+                }
+            };
             if decoded.record.digest(&principal).map_err(RegistrationError::Codec)?
-                != receipt.request_digest
+                != original.request_digest
             {
-                return Err(RegistrationError::Digest(receipt.operation_id));
+                return Err(RegistrationError::Digest(original.operation_id));
             }
             let commitment = decoded.record.commitment().map_err(RegistrationError::Codec)?;
-            let receipt = Receipt { original: receipt, principal };
+            let receipt = Receipt { original, principal };
             match decoded.record {
                 Record::ReserveNode(plan) => {
                     index.reserve_node(receipt, plan, commitment, &mut allocations)?;
@@ -390,6 +510,9 @@ impl<'a> ReceiptIndex<'a> {
     }
 
     pub(super) fn node(&self, handle: SnapshotHandle) -> Result<PublishedNode<'_>> {
+        if self.working.contains_key(&handle.publication) {
+            return self.working_node(handle);
+        }
         if let Some(CompletionOwner::CommitNode(reserve)) =
             self.completions.get(&handle.publication)
         {
@@ -694,12 +817,47 @@ fn require_completion(
     Ok(())
 }
 
-fn ordered_records(source: &State) -> Result<BTreeMap<Sequence, (&OperationResult, Decoded)>> {
+enum IndexedRecord<'a> {
+    Snapshot {
+        original: &'a OperationResult,
+        principal: Principal,
+        decoded: Decoded,
+    },
+    Working {
+        original: &'a OperationResult,
+        principal: Principal,
+        envelope: crate::persist::directory_draft_commit::native::Envelope,
+    },
+}
+
+struct PlannedReceipt<'a> {
+    result: &'a OperationResult,
+    principal: &'a Principal,
+}
+
+fn ordered_records<'a>(
+    source: &'a State, originals: &OriginalReceiptPrefix<'a>,
+    planned: Option<PlannedReceipt<'a>>,
+) -> Result<BTreeMap<Sequence, (&'a OperationResult, IndexedRecord<'a>)>> {
     let mut records = BTreeMap::new();
     for (operation, receipt) in source.operations.iter() {
-        let Some(decoded) = snapshot_worktree::decode(receipt).map_err(RegistrationError::Codec)?
-        else {
-            continue;
+        if !ReceiptIndex::requires_original(receipt) { continue; }
+        let (original, principal) = match &planned {
+            Some(planned) if planned.result.operation_id == *operation => {
+                (planned.result, planned.principal)
+            }
+            Some(_) | None => originals.receipt(*operation)
+                .ok_or(RegistrationError::OriginalReceiptUnavailable(*operation))?,
+        };
+        let decoded = if original.kind == crate::persist::directory_draft_commit::native::KIND {
+            let envelope = crate::persist::directory_draft_commit::native::decode_record(
+                original, crate::disk::MAX_METADATA, crate::working_tree::snapshot::MAX_ENTRIES,
+            ).map_err(|source| RegistrationError::DirectoryRecord(Box::new(source)))?;
+            IndexedRecord::Working { original, principal: principal.clone(), envelope }
+        } else {
+            let decoded = snapshot_worktree::decode(original).map_err(RegistrationError::Codec)?
+                .ok_or(RegistrationError::Operation(*operation))?;
+            IndexedRecord::Snapshot { original, principal: principal.clone(), decoded }
         };
         if operation != &receipt.operation_id {
             return Err(RegistrationError::Operation(*operation));
@@ -715,7 +873,7 @@ fn ordered_records(source: &State) -> Result<BTreeMap<Sequence, (&OperationResul
 
 fn require_events(
     source: &State,
-    records: &BTreeMap<Sequence, (&OperationResult, Decoded)>,
+    records: &BTreeMap<Sequence, (&OperationResult, IndexedRecord<'_>)>,
 ) -> Result<()> {
     let mut pending = records.values().map(|(receipt, _)| {
         (receipt.operation_id, *receipt)

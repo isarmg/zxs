@@ -7,7 +7,6 @@ use crate::engine::MutationPlan;
 use crate::persist::snapshot_worktree::{
     HostEvidence, NodeAllocation, NodeCompletion, NodeReservation, PublicationEncoding, Record,
 };
-use crate::snapshot_worktree::registry::ReceiptIndex;
 use crate::snapshot_worktree::{RegistrationError, Result, source};
 use crate::working_tree::snapshot::{
     AdmittedSnapshotManifest, SnapshotEntryContent, SnapshotFile, SnapshotStoreError,
@@ -129,7 +128,10 @@ pub(super) fn reserve(
     let (plan, manifest) = constructed.ok_or(RegistrationError::Operation(request.operation_id))?;
     let commitment = Record::ReserveNode(plan.clone()).commitment()
         .map_err(RegistrationError::Codec)?;
-    publish_planned(engine, &before, request.operation_id, planned)?;
+    publish_planned(
+        engine, &before, request.operation_id, principal,
+        &Record::ReserveNode(plan.clone()), planned,
+    )?;
     let after_namespace = engine.namespace_snapshot(&request.source.branch_id.to_string())
         .map_err(RegistrationError::Publication)?;
     if before_namespace.entries() != after_namespace.entries() {
@@ -162,7 +164,7 @@ pub(super) fn complete(
     };
     // Reopen through the permanent index and actual current root, not the
     // still-held writer's success value. Failure never undoes the publication.
-    ReceiptIndex::capture(engine.state())?.reopen_node(engine, handle)?;
+    engine.snapshot_receipts()?.reopen_node(engine, handle)?;
     Ok(handle)
 }
 
@@ -178,13 +180,15 @@ pub(super) fn publish_new(
         record.kind(), principal.as_str(), operation, encoded.request(), None,
         |_, _, _| Ok(encoded.result()),
     ).map_err(RegistrationError::Publication)?;
-    publish_planned(engine, &before, operation, planned)
+    publish_planned(engine, &before, operation, principal, record, planned)
 }
 
 fn publish_planned(
     engine: &mut Engine,
     before: &Arc<State>,
     operation: OperationId,
+    principal: &Principal,
+    record: &Record,
     planned: MutationPlan,
 ) -> Result<()> {
     let MutationPlan::Prepared { next, prepared, result } = planned else {
@@ -195,7 +199,7 @@ fn publish_planned(
     }
     // This closes the original typed reserve/completion relationship before a
     // decision is written, including all fresh allocations and pending hosts.
-    ReceiptIndex::capture(&next)?;
+    engine.snapshot_receipts()?.require_planned(&next, &result, principal, record)?;
     let expected = next.as_ref().clone();
     engine.persist(*next, prepared, result).map_err(RegistrationError::Publication)?;
     if !crate::publication_shape::same_transition(before, &expected, engine.state()) {

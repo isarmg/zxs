@@ -887,7 +887,7 @@ impl Engine {
         // bodies. Their actual permanent index must pass before any task or
         // target write; neither a directory name nor an allocated node is proof
         // of a completed snapshot. The target-bound transfer is not implemented.
-        crate::snapshot_worktree::require_backup_snapshot_scope(self.state())
+        self.require_backup_snapshot_scope()
     }
 
     fn backup_history_plans(&self) -> Result<Vec<PreparedHistoryPackage>> {

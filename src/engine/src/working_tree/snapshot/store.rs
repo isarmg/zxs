@@ -12,6 +12,9 @@ use std::{collections::BTreeSet, io::{Read, Seek}};
 use storage_contract::VersionId;
 use storage_contract::working_tree::LocalEntityIdentity;
 
+mod preparation_input;
+pub(crate) use preparation_input::PinnedSnapshotRepository;
+
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum SnapshotStoreError {
     #[error("directory snapshot manifest admission failed")]
@@ -24,6 +27,8 @@ pub(crate) enum SnapshotStoreError {
     Io(#[source] std::io::Error),
     #[error("directory snapshot payload verification failed")]
     Payload(#[source] platform_io::payload::Error),
+    #[error("reading the exact selected working-file or original-node source")]
+    WorkingSource(#[source] Box<crate::snapshot_worktree::drafts::DirectoryDraftError>),
     #[error("directory snapshot inventory access failed")]
     Inventory(#[source] platform_io::fs_safety::Error),
     #[error("directory snapshot repository entity differs from its permanent binding")]
@@ -68,6 +73,11 @@ pub(crate) struct SnapshotNodeBinding {
 impl SnapshotNodeBinding {
     pub(crate) fn reference(self) -> SnapshotReference {
         self.reference
+    }
+    pub(crate) fn shares_node_entities(self, source: Self) -> bool {
+        self.node_entity == source.node_entity
+            || self.files_entity == source.files_entity
+            || self.worktrees_entity == source.worktrees_entity
     }
     pub(crate) fn same_repository(self, source: Self) -> bool {
         self.reference.repository == source.reference.repository

@@ -194,6 +194,20 @@ fn published_contents(engine: &Engine, request: &CommitRequest, source: &Path) {
         ("旅行/notes.txt".to_owned(), File),
     ]);
     assert_eq!(actual, expected);
+    let owner: storage_contract::DiskId = engine.config().disks[0].disk_id.parse().unwrap();
+    for entry in entries.iter().filter(|entry| entry.kind == Directory) {
+        let record = &engine.state().namespace_directories[&entry.entry_id];
+        assert_eq!(record.created_by, request.operation_id);
+        assert_eq!(record.branch.to_string(), workspace.branch_id);
+        assert_eq!(record.entry.to_string(), entry.entry_id);
+        let replica = &record.replicas[&owner];
+        let actual = witness(&engine.config().disks[0].root.join("common-data").join(entry.path()));
+        assert_eq!((actual.device, actual.inode),
+            (replica.entity.device(), replica.entity.inode()));
+        assert!(actual.bytes.is_empty());
+    }
+    assert!(engine.operation(request.operation_id).unwrap().result
+        .get("workspace_directory_source").is_some());
     for entry in entries
         .iter()
         .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)

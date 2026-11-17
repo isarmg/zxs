@@ -1,35 +1,25 @@
 use super::*;
-use crate::directory_worktree::lifecycle::Mount;
-use crate::directory_worktree::session::{PreparedWorktree, ReadMaterial};
-use crate::disk::DiskRoot;
+use crate::directory_worktree::session::ReadMaterial;
 use crate::persist::snapshot_worktree::{
-    self as codec, HostEvidence, NodeAllocation, NodeCompletion, NodeReservation, Record,
-    WorktreeAllocation, WorktreeCompletion, WorktreeReservation,
+    self as codec, NodeAllocation, NodeCompletion, NodeReservation, Record,
 };
-use crate::snapshot_worktree::registry::ReceiptIndex;
-use crate::working_tree::records::local_entity;
 use crate::working_tree::snapshot::{
-    AdmittedSnapshotManifest, HeldSnapshotNode, SnapshotEntry, SnapshotEntryContent,
-    SnapshotFile, SnapshotFileSource,
+    SnapshotEntryContent, SnapshotFileSource,
 };
-use crate::{Event, OperationResult, State};
-use name_policy::{LookupName, LookupPath, Name, PortablePath};
-use platform_io::fs_safety::PrivateDirectory;
-use std::{fs, io::{Cursor, Read}, num::NonZeroU16};
+use crate::{OperationResult, State};
+use name_policy::{LookupPath, Name, PortablePath};
+use std::{fs, io::Read, num::NonZeroU16, sync::Arc};
 use storage_contract::snapshot_worktree::{
-    CommitWorktree, CreateWorktree, EditWorktree, InitializeSnapshot, NamespaceDirectoryId,
-    NamespaceHostAddress,
+    CommitWorktree, CreateWorktree, EditWorktree, InitializeSnapshot,
     SnapshotHandle, SnapshotHost, SnapshotNamespace,
     WorktreeHandle, WorktreeId,
 };
 use storage_contract::working_tree::{
-    DirectoryId, DiskRegistrationIdentity, LocalDirectoryBinding, RootId,
     SnapshotBranchId, SnapshotNodeId,
     SnapshotRepositoryId,
 };
 use storage_contract::{
-    BranchId, BranchName, CommitState, ContentHash, CurrentHealth, DiskId, FileId, Generation,
-    OperationId, PoolId, Principal, ProtectionAtPublish, RepositoryId, Sequence, VersionId,
+    CommitState, ContentHash, FileId, Generation, OperationId, Principal,
 };
 
 const BODY: &[u8] = b"complete source, never a copied worktree";
@@ -172,7 +162,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     assert_eq!(reserve.kind, codec::NODE_RESERVE);
     assert_eq!(complete.kind, codec::NODE_COMPLETE);
     {
-        let index = ReceiptIndex::capture(engine.state()).unwrap();
+        let index = engine.snapshot_receipts().unwrap();
         let original = index.reopen_node(&engine, handle).unwrap();
         let captured = &original.manifest().entries()[0];
         assert_eq!(original.manifest().entries().len(), 1);
@@ -257,7 +247,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         Ok((session.instance(), session.worktree().clone(), view.stamp()))
     }).unwrap();
     {
-        let index = ReceiptIndex::capture(engine.state()).unwrap();
+        let index = engine.snapshot_receipts().unwrap();
         let original = index.reopen_node(&engine, handle).unwrap();
         assert_eq!(original.manifest().reference(), observed.0.source());
         let instance = original.worktrees_directory().path().join(
@@ -336,7 +326,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
             assert_eq!(bytes, edited_body);
             Ok(())
         }).unwrap();
-        let index = ReceiptIndex::capture(engine.state()).unwrap();
+        let index = engine.snapshot_receipts().unwrap();
         let original = index.reopen_node(engine, handle).unwrap();
         let mut bytes = Vec::new();
         original.open_payload(entry.version_id.parse().unwrap()).unwrap()
@@ -364,7 +354,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     // The edited inode must MOVE, not be copied back into the sparse instance.
     let (edited_version, edited_inode, edited_path) = {
         use std::os::unix::fs::MetadataExt;
-        let index = ReceiptIndex::capture(engine.state()).unwrap();
+        let index = engine.snapshot_receipts().unwrap();
         let (_, completed) = index.completed_edit(worktree).unwrap();
         let original = index.reopen_node(&engine, handle).unwrap();
         let path = original.worktrees_directory().path().join(
@@ -497,7 +487,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     assert!(!edited_path.exists());
     let read_committed = |engine: &Engine| {
         use std::os::unix::fs::MetadataExt;
-        let index = ReceiptIndex::capture(engine.state()).unwrap();
+        let index = engine.snapshot_receipts().unwrap();
         let original = index.reopen_node(engine, handle).unwrap();
         let successor = index.reopen_node(engine, updated).unwrap();
         let session = index.worktree(worktree).unwrap().reopen(&original).unwrap();
@@ -822,220 +812,121 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     assert_eq!(inventory(&disks[1].join("common-data")), pending_material);
 }
 
-// Component evidence only: these fixtures construct receipt bytes to exercise
-// the strict SYSTEM relationship decoder, while node/ledger identities come
-// from their real storage producers. They do not issue Engine host/namespace
-// authority and are not an end-to-end initialization or writable API test.
-struct Fixture {
+// These controls use ordinary SYSTEM publications, not constructed receipt
+// bytes as a source. Candidate mutations below are never installed or written.
+struct LiveFixture {
     _temp: tempfile::TempDir,
-    root: DiskRoot,
-    source: HeldSnapshotNode,
-    node: NodeReservation,
-    state: State,
-}
-
-fn operation(value: u8) -> OperationId {
-    OperationId::from_random([value; 16])
+    system: std::path::PathBuf,
+    engine: crate::Engine,
+    request: InitializeSnapshot,
 }
 
 fn principal() -> Principal {
     "admin".parse().unwrap()
 }
 
-fn append(state: &mut State, operation: OperationId, principal: &Principal, record: &Record) {
-    let sequence = Sequence::new(state.sequence).next().unwrap().get();
-    let mut result = record.result().unwrap();
-    result["timestamp"] = json_codec::json!("10");
-    result["membership_epoch"] = json_codec::json!("0");
-    result["version_protection"] = json_codec::json!([]);
-    let receipt = OperationResult {
-        operation_id: operation,
-        kind: record.kind().into(),
-        commit_id: None,
-        history_tree_id: None,
-        branch_id: None,
-        commit_state: CommitState::Published,
-        protection_at_publish: ProtectionAtPublish::NotApplicable,
-        current_health: CurrentHealth::Healthy,
-        request_digest: record.digest(principal).unwrap(),
-        sequence,
-        result,
-    };
-    state.sequence = sequence;
-    state.operations.insert(operation, receipt);
-    state.operation_principals.insert(operation, principal.to_string());
-    state.events.push(Event {
-        sequence,
-        operation_id: operation,
-        kind: record.kind().into(),
-        object_id: operation.to_string(),
-    });
-}
-
-impl Fixture {
+impl LiveFixture {
     fn new() -> Self {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("repository");
-        PrivateDirectory::create(&path).unwrap();
-        let root = DiskRoot::open(&path).unwrap();
-        let entries = vec![
-            SnapshotEntry {
-                path: PortablePath::parse("empty").unwrap(),
-                content: SnapshotEntryContent::Directory {},
-            },
-            SnapshotEntry {
-                path: PortablePath::parse("original.txt").unwrap(),
-                content: SnapshotEntryContent::File {
-                    material: SnapshotFile {
-                        file_id: FileId::from_random([20; 16]),
-                        version_id: VersionId::from_random([21; 16]),
-                        size: BODY.len() as u64,
-                        content_hash: ContentHash::from_digest(blake3::hash(BODY)),
-                    },
-                    source: SnapshotFileSource::SnapshotOnly,
-                },
-            },
-        ];
-        let allocated = NodeAllocation {
-            repository: SnapshotRepositoryId::from_random([2; 16]),
-            branch: SnapshotBranchId::from_random([3; 16]),
-            node: SnapshotNodeId::from_random([4; 16]),
-            completion: operation(11),
-        };
-        let manifest = AdmittedSnapshotManifest::prepare(
-            allocated.repository, allocated.node, operation(10), entries.clone(),
+        let system = temporary.path().join("system");
+        let mut engine = crate::Engine::initialize(&system, crate::Config::development(
+            crate::test_disks([temporary.path().join("primary")]),
+        ).unwrap()).unwrap();
+        let repository = engine.create_disk_root(
+            "P01", "admin", OperationId::generate().unwrap(),
         ).unwrap();
-        let material = manifest.reference();
-        let source = HeldSnapshotNode::prepare(&root, manifest, |_| Ok(Cursor::new(BODY)))
+        let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
+        engine.stage_bytes(&workspace.workspace_id, "original.txt", BODY).unwrap();
+        engine.stage_bytes(&workspace.workspace_id, "second.txt", b"independent root file")
             .unwrap();
-        let entity = local_entity(root.held_identity().unwrap());
-        let node = NodeReservation {
-            request: InitializeSnapshot {
-                host: SnapshotHost {
-                    root_id: RootId::from_random([5; 16]),
-                    directory_id: DirectoryId::from_random([6; 16]),
-                    expected_root_generation: Generation::new(0),
-                },
-                source: SnapshotNamespace {
-                    branch_id: BranchId::from_random([7; 16]),
-                    root: None,
-                    expected_branch_generation: Generation::new(1),
-                },
-                operation_id: operation(10),
-            },
-            host: HostEvidence {
-                namespace: NamespaceHostAddress {
-                    repository_id: RepositoryId::from_random([22; 16]),
-                    branch_id: BranchId::from_random([7; 16]),
-                    directory: NamespaceDirectoryId::Repository(
-                        RepositoryId::from_random([22; 16]),
-                    ),
-                },
-                registration: DiskRegistrationIdentity {
-                    pool_id: PoolId::from_random([8; 16]).to_string(),
-                    disk_id: DiskId::from_random([9; 16]).to_string(),
-                    slot_id: "P01".into(),
-                    binding_generation: 1,
-                },
-                root_entity: entity,
-                common_data: LocalDirectoryBinding {
-                    directory_id: DirectoryId::from_random([6; 16]),
-                    entity,
-                },
-                directories: Vec::new(),
-            },
-            allocated,
-            branch_name: BranchName::parse("main").unwrap(),
-            entries,
-            material,
+        engine.commit_workspace(crate::CommitRequest {
+            workspace_id: workspace.workspace_id, operation_id: OperationId::generate().unwrap(),
+            principal: "admin".into(), expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token, message: "real receipt source".into(),
+            request_digest: None,
+        }).unwrap();
+        let root = engine.snapshot_root_context(repository.repository_id.parse().unwrap()).unwrap();
+        let request = InitializeSnapshot {
+            host: root.host, source: root.source, operation_id: OperationId::generate().unwrap(),
         };
-        let record = Record::ReserveNode(node.clone());
-        let mut state = State::default();
-        append(&mut state, operation(10), &principal(), &record);
-        Self { _temp: temporary, root, source, node, state }
+        Self { _temp: temporary, system, engine, request }
     }
 
-    fn complete_node(&mut self) -> SnapshotHandle {
-        let completion = NodeCompletion {
-            reserve: operation(10),
-            reservation: Record::ReserveNode(self.node.clone()).commitment().unwrap(),
-            binding: self.source.binding(),
-        };
-        append(&mut self.state, operation(11), &principal(), &Record::CompleteNode(completion));
-        SnapshotHandle {
-            publication: operation(11),
-            repository_id: self.node.allocated.repository,
-            branch_id: self.node.allocated.branch,
-            node_id: self.node.allocated.node,
-        }
-    }
-
-    fn prepare_worktree(&self, handle: SnapshotHandle, mount: &str) -> (
-        WorktreeReservation, PreparedWorktree,
+    fn reserve(&mut self) -> (
+        crate::container_storage::namespace_host::PreparedNamespaceNode, NodeReservation,
     ) {
-        let plan = WorktreeReservation {
-            request: CreateWorktree {
-                source: handle,
-                parent_directory_id: self.node.request.host.directory_id,
-                name: Name::parse("worktree-main-001").unwrap(),
-                expected_root_generation: Generation::new(0),
-                operation_id: operation(12),
-            },
-            host: self.node.host.clone(),
-            allocated: WorktreeAllocation {
-                worktree: WorktreeId::from_random([31; 16]),
-                completion: operation(13),
-            },
-            material: self.node.material,
-        };
-        let prepared = PreparedWorktree::prepare(
-            &self.source,
-            plan.allocated.worktree,
-            plan.request.operation_id,
-            handle.branch_id,
-            Mount {
-                parent: plan.request.parent_directory_id,
-                name: LookupName::parse(mount).unwrap(),
-            },
+        let host = prepare_namespace_host(
+            &mut self.engine, &self.request.source, self.request.host.root_id,
+            self.request.host.expected_root_generation, self.request.operation_id,
         ).unwrap();
-        (plan, prepared)
+        let allocated = NodeAllocation {
+            repository: SnapshotRepositoryId::generate().unwrap(),
+            branch: SnapshotBranchId::generate().unwrap(),
+            node: SnapshotNodeId::generate().unwrap(),
+            completion: OperationId::generate().unwrap(),
+        };
+        let (reserved, manifest) = publication::reserve(
+            &mut self.engine, &host, &self.request, allocated, &principal(),
+        ).unwrap();
+        let result = self.engine.operation(self.request.operation_id).unwrap();
+        let Record::ReserveNode(plan) = codec::decode(&result).unwrap().unwrap().record else {
+            panic!("the actual producer published the node reservation");
+        };
+        let node = host.prepare_node(&mut self.engine, reserved, manifest).unwrap();
+        (node, plan)
     }
 
-    fn register_worktree(
-        &mut self,
-        plan: WorktreeReservation,
-        prepared: &PreparedWorktree,
-    ) -> WorktreeHandle {
-        let record = Record::ReserveWorktree(plan.clone());
-        append(&mut self.state, operation(12), &principal(), &record);
-        let completion = WorktreeCompletion {
-            reserve: operation(12),
-            reservation: record.commitment().unwrap(),
-            binding: prepared.binding(),
-            checkpoint: prepared.checkpoint(),
-        };
-        append(&mut self.state, operation(13), &principal(), &Record::CompleteWorktree(completion));
-        WorktreeHandle {
-            publication: operation(13),
-            worktree_id: plan.allocated.worktree,
-        }
+    fn publish_node(&mut self) -> SnapshotHandle {
+        initialize_root(&mut self.engine, &self.request, &principal()).unwrap()
     }
+
+    fn create(&mut self, node: SnapshotHandle) -> (CreateWorktree, WorktreeHandle) {
+        let request = CreateWorktree {
+            source: node, parent_directory_id: self.request.host.directory_id,
+            name: Name::parse("worktree-main-001").unwrap(),
+            expected_root_generation: self.request.host.expected_root_generation,
+            operation_id: OperationId::generate().unwrap(),
+        };
+        let tree = create_worktree(&mut self.engine, &request, &principal()).unwrap();
+        (request, tree)
+    }
+
+    fn cold(self) -> Self {
+        let Self { _temp, system, engine, request } = self;
+        drop(engine);
+        let engine = crate::Engine::open(&system).unwrap();
+        Self { _temp, system, engine, request }
+    }
+}
+
+fn planned_record(
+    engine: &crate::Engine, operation: OperationId, actor: &Principal, record: &Record,
+) -> (State, OperationResult) {
+    let encoded = codec::PublicationEncoding::new(record).unwrap();
+    let plan = engine.plan_mutation_digest(
+        record.kind(), actor.as_str(), operation, encoded.request(), None,
+        |_, _, _| Ok(encoded.result()),
+    ).unwrap();
+    let crate::engine::MutationPlan::Prepared { next, prepared, result } = plan else {
+        panic!("the actual fresh planner produced one prospective record");
+    };
+    assert!(prepared.is_empty());
+    (*next, result)
 }
 
 #[test]
 fn exact_receipt_chain_reopens_actual_empty_instance_and_original_material() {
-    let mut fixture = Fixture::new();
-    let node = fixture.complete_node();
-    let (plan, prepared) = fixture.prepare_worktree(node, "worktree-main-001");
-    let handle = fixture.register_worktree(plan, &prepared);
-    let bytes = storage_contract::canonical_json(&fixture.state).unwrap();
-    let decoded: State = storage_contract::decode_strict(&bytes).unwrap();
-    let index = ReceiptIndex::capture(&decoded).unwrap();
-    assert!(std::ptr::eq(index.source(), &decoded));
+    let mut fixture = LiveFixture::new();
+    let node = fixture.publish_node();
+    let (request, handle) = fixture.create(node);
+    let receipts = fixture.engine.state().operations.clone();
+    let mut fixture = fixture.cold();
+    let index = fixture.engine.snapshot_receipts().unwrap();
+    assert!(std::ptr::eq(index.source(), fixture.engine.state()));
     let registered = index.worktree(handle).unwrap();
     assert_eq!(registered.handle(), handle);
     assert_eq!(registered.source().handle(), node);
-    let reopened = HeldSnapshotNode::reopen(&fixture.root, registered.source().binding()).unwrap();
+    let reopened = index.reopen_node(&fixture.engine, node).unwrap();
     let session = registered.reopen(&reopened).unwrap();
     let instance = reopened.worktrees_directory().path().join(
         crate::persist::layout::worktree::instance(handle.worktree_id).as_path(),
@@ -1049,98 +940,180 @@ fn exact_receipt_chain_reopens_actual_empty_instance_and_original_material() {
     view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap()
         .read_to_end(&mut actual).unwrap();
     assert_eq!(actual, BODY);
+    drop(view);
+    drop(session);
+    drop(registered);
+    drop(index);
+    assert_eq!(create_worktree(&mut fixture.engine, &request, &principal()).unwrap(), handle);
+    assert_eq!(fixture.engine.state().operations, receipts);
 }
 
 #[test]
 fn existing_physical_material_does_not_complete_a_reservation_or_rebind_its_ledger() {
-    let mut fixture = Fixture::new();
+    let mut pending = LiveFixture::new();
+    let (physical, plan) = pending.reserve();
     let handle = SnapshotHandle {
-        publication: operation(11),
-        repository_id: fixture.node.allocated.repository,
-        branch_id: fixture.node.allocated.branch,
-        node_id: fixture.node.allocated.node,
+        publication: plan.allocated.completion, repository_id: plan.allocated.repository,
+        branch_id: plan.allocated.branch, node_id: plan.allocated.node,
     };
-    let pending = ReceiptIndex::capture(&fixture.state).unwrap();
-    assert!(matches!(
-        pending.node(handle),
-        Err(RegistrationError::Pending(reserve)) if reserve == operation(10)
-    ));
-    drop(pending);
-    let handle = fixture.complete_node();
-    // A real ledger with another logical mount still cannot acquire the
-    // published reservation merely because all IDs and payload bytes match.
-    let (plan, prepared) = fixture.prepare_worktree(handle, "worktree-main-002");
-    let tree = fixture.register_worktree(plan, &prepared);
-    let index = ReceiptIndex::capture(&fixture.state).unwrap();
+    physical.require_engine(&pending.engine).unwrap();
+    assert!(matches!(pending.engine.snapshot_receipts().unwrap().node(handle),
+        Err(RegistrationError::Pending(operation)) if operation == pending.request.operation_id));
+    let receipts = pending.engine.state().operations.clone();
+    drop(physical);
+    let mut pending = pending.cold();
+    assert!(matches!(initialize_root(&mut pending.engine, &pending.request, &principal()),
+        Err(RegistrationError::Pending(operation)) if operation == pending.request.operation_id));
+    assert_eq!(pending.engine.state().operations, receipts);
+    assert!(!pending.engine.state().operations.contains_key(&handle.publication));
+
+    let mut published = LiveFixture::new();
+    let original = published.publish_node();
+    let (_, tree) = published.create(original);
+    let published = published.cold();
+    let mut foreign = LiveFixture::new();
+    let foreign_handle = foreign.publish_node();
+    let foreign_index = foreign.engine.snapshot_receipts().unwrap();
+    let foreign_node = foreign_index.reopen_node(&foreign.engine, foreign_handle).unwrap();
+    let index = published.engine.snapshot_receipts().unwrap();
     let registered = index.worktree(tree).unwrap();
-    assert!(matches!(registered.reopen(&fixture.source), Err(RegistrationError::Source)));
-    let current = prepared.binding();
-    assert_eq!(current.initial_checkpoint(), prepared.checkpoint());
-    assert_eq!(current.worktree(), tree.worktree_id);
+    // Both nodes hold the same complete BODY bytes, but their actual creation,
+    // source binding and ledger ownership are independent permanent decisions.
+    assert!(matches!(registered.reopen(&foreign_node), Err(RegistrationError::Source)));
+    let actual = index.reopen_node(&published.engine, original).unwrap();
+    registered.reopen(&actual).unwrap();
 }
 
 #[test]
 fn completion_owner_digest_events_and_allocated_identity_are_not_replaceable() {
-    let mut fixture = Fixture::new();
-    fixture.complete_node();
-    let original = fixture.state.clone();
-    let raw = codec::decode(&original.operations[&operation(11)]).unwrap().unwrap().record;
-    let Record::CompleteNode(mut completion) = raw else {
-        panic!("fixture uses a node completion");
+    #[cfg(feature = "fault-injection")]
+    {
+        // This reserve and EXCL node are actual publications/material. Only
+        // its metadata completion is cut at ACCEPT; no local success is used
+        // to manufacture a missing original or installed receipt source.
+        let mut pending = LiveFixture::new();
+        let (physical, plan) = pending.reserve();
+        let before = Arc::clone(&pending.engine.state);
+        pending.engine.inject_fault_once("after_accept_1");
+        let error = publication::complete(&mut pending.engine, &physical).unwrap_err();
+        assert!(matches!(error, RegistrationError::Publication(crate::Error::Context {
+            code: storage_contract::ErrorCode::InDoubt, source, ..
+        }) if source.code() == storage_contract::ErrorCode::InjectedFailure));
+        assert!(Arc::ptr_eq(&before, &pending.engine.state));
+        assert!(!pending.engine.state().operations.contains_key(&plan.allocated.completion));
+        drop(physical);
+        let mut pending = pending.cold();
+        let node = pending.publish_node();
+        assert_eq!(node.publication, plan.allocated.completion);
+        let index = pending.engine.snapshot_receipts().unwrap();
+        index.reopen_node(&pending.engine, node).unwrap();
+        assert_eq!(pending.engine.state().versions, before.versions);
+        assert_eq!(pending.engine.state().operations.len(), before.operations.len() + 1);
+        let published = Arc::clone(&pending.engine.state);
+        assert_eq!(pending.publish_node(), node);
+        assert!(Arc::ptr_eq(&published, &pending.engine.state));
+    }
+    let mut fixture = LiveFixture::new();
+    let (physical, plan) = fixture.reserve();
+    let completion = NodeCompletion {
+        reserve: plan.request.operation_id,
+        reservation: Record::ReserveNode(plan.clone()).commitment().unwrap(),
+        binding: physical.binding(),
     };
-    completion.reserve = operation(99);
-    let mut wrong = original.clone();
-    wrong.operations.remove(&operation(11));
-    wrong.operation_principals.remove(&operation(11));
-    wrong.events.retain(|event| event.operation_id != operation(11));
-    append(&mut wrong, operation(11), &principal(), &Record::CompleteNode(completion));
-    assert!(matches!(ReceiptIndex::capture(&wrong), Err(RegistrationError::Completion(_))));
+    let record = Record::CompleteNode(completion);
+    let receipts = fixture.engine.snapshot_receipt_source().unwrap();
+    let index = receipts.index().unwrap();
+    let before = fixture.engine.state().clone();
+    let (next, result) = planned_record(
+        &fixture.engine, plan.allocated.completion, &principal(), &record,
+    );
+    index.require_planned(&next, &result, &principal(), &record).unwrap();
 
-    let mut wrong = original.clone();
-    wrong.operation_principals.insert(operation(11), "another author".into());
-    assert!(matches!(ReceiptIndex::capture(&wrong), Err(RegistrationError::Digest(_))));
+    let mut wrong_completion = completion;
+    wrong_completion.reserve = OperationId::generate().unwrap();
+    let wrong_record = Record::CompleteNode(wrong_completion);
+    let (wrong, result) = planned_record(
+        &fixture.engine, plan.allocated.completion, &principal(), &wrong_record,
+    );
+    assert!(matches!(index.require_planned(&wrong, &result, &principal(), &wrong_record),
+        Err(RegistrationError::Completion(_))));
     let other: Principal = "another author".parse().unwrap();
-    let completion = codec::decode(&original.operations[&operation(11)])
-        .unwrap().unwrap().record;
-    wrong.operations.get_mut(&operation(11)).unwrap().request_digest =
-        completion.digest(&other).unwrap();
-    assert!(matches!(ReceiptIndex::capture(&wrong), Err(RegistrationError::Completion(_))));
+    let (wrong, result) = planned_record(
+        &fixture.engine, plan.allocated.completion, &other, &record,
+    );
+    assert!(matches!(index.require_planned(&wrong, &result, &other, &record),
+        Err(RegistrationError::Completion(_))));
 
-    let mut wrong = original.clone();
-    wrong.events.retain(|event| event.operation_id != operation(10));
-    assert!(matches!(ReceiptIndex::capture(&wrong), Err(RegistrationError::Event(_))));
+    let (mut wrong, mut result) = planned_record(
+        &fixture.engine, plan.allocated.completion, &principal(), &record,
+    );
+    result.request_digest = before.operations[&plan.request.operation_id].request_digest.clone();
+    wrong.operations.insert(result.operation_id, result.clone());
+    assert!(matches!(index.require_planned(&wrong, &result, &principal(), &record),
+        Err(RegistrationError::PublicationChanged)));
+    let (mut wrong, result) = planned_record(
+        &fixture.engine, plan.allocated.completion, &principal(), &record,
+    );
+    wrong.events.retain(|event| event.operation_id != plan.request.operation_id);
+    assert!(matches!(index.require_planned(&wrong, &result, &principal(), &record),
+        Err(RegistrationError::PublicationChanged)));
 
-    let mut wrong = original.clone();
-    let mut duplicate = fixture.node.clone();
-    duplicate.request.operation_id = operation(40);
-    duplicate.request.host.directory_id = DirectoryId::from_random([41; 16]);
-    duplicate.allocated.completion = operation(42);
-    append(&mut wrong, operation(40), &principal(), &Record::ReserveNode(duplicate));
-    assert!(matches!(ReceiptIndex::capture(&wrong), Err(RegistrationError::Identity)));
-    assert!(ReceiptIndex::capture(&original).is_ok());
-
-    let handle = ReceiptIndex::capture(&original).unwrap().node(SnapshotHandle {
-        publication: operation(11),
-        repository_id: fixture.node.allocated.repository,
-        branch_id: fixture.node.allocated.branch,
-        node_id: fixture.node.allocated.node,
-    }).unwrap().handle();
-    let (plan, prepared) = fixture.prepare_worktree(handle, "worktree-main-001");
-    fixture.register_worktree(plan.clone(), &prepared);
-    let mut duplicate = plan;
-    duplicate.request.operation_id = operation(43);
-    duplicate.allocated.completion = operation(44);
-    duplicate.allocated.worktree = WorktreeId::from_random([45; 16]);
+    let mut duplicate = plan.clone();
+    duplicate.request.operation_id = OperationId::generate().unwrap();
+    duplicate.allocated.completion = OperationId::generate().unwrap();
+    let duplicate = Record::ReserveNode(duplicate);
+    let Record::ReserveNode(ref duplicate_plan) = duplicate else { panic!("node plan"); };
+    let (wrong, result) = planned_record(
+        &fixture.engine, duplicate_plan.request.operation_id, &principal(), &duplicate,
+    );
+    assert!(matches!(index.require_planned(&wrong, &result, &principal(), &duplicate),
+        Err(RegistrationError::Identity)));
+    assert_eq!(fixture.engine.state(), &before);
+    physical.require_engine(&fixture.engine).unwrap();
+    #[cfg(not(feature = "fault-injection"))]
+    let node = publication::complete(&mut fixture.engine, &physical).unwrap();
+    #[cfg(feature = "fault-injection")]
+    let node = {
+        let state = std::sync::Arc::clone(&fixture.engine.state);
+        fixture.engine.inject_fault_once("after_local_publications");
+        let error = publication::complete(&mut fixture.engine, &physical).unwrap_err();
+        assert!(matches!(error, RegistrationError::Publication(crate::Error::Context {
+            code: storage_contract::ErrorCode::InDoubt, source, ..
+        }) if source.code() == storage_contract::ErrorCode::InjectedFailure));
+        assert!(fixture.engine.blocked);
+        assert!(std::sync::Arc::ptr_eq(&state, &fixture.engine.state));
+        assert!(!fixture.engine.state().operations.contains_key(&plan.allocated.completion));
+        // It is already durably published, not a no-write failure. A fresh
+        // journal/barrier traversal supplies the original and visible result.
+        drop(physical);
+        fixture = fixture.cold();
+        let handle = initialize_root(&mut fixture.engine, &fixture.request, &principal()).unwrap();
+        assert_eq!(handle.publication, plan.allocated.completion);
+        assert_eq!(fixture.engine.state().versions, before.versions);
+        assert_eq!(fixture.engine.state().operations.len(), before.operations.len() + 1);
+        handle
+    };
+    let (request, _) = fixture.create(node);
+    let published = fixture.engine.operation(request.operation_id).unwrap();
+    let Record::ReserveWorktree(mut duplicate) = codec::decode(&published).unwrap().unwrap().record
+    else { panic!("actual worktree reservation"); };
+    duplicate.request.operation_id = OperationId::generate().unwrap();
+    duplicate.allocated.completion = OperationId::generate().unwrap();
+    duplicate.allocated.worktree = WorktreeId::generate().unwrap();
     duplicate.request.name = Name::parse("WORKTREE-MAIN-001").unwrap();
-    append(&mut fixture.state, operation(43), &principal(), &Record::ReserveWorktree(duplicate));
-    assert!(matches!(ReceiptIndex::capture(&fixture.state), Err(RegistrationError::Mount)));
+    let operation = duplicate.request.operation_id;
+    let record = Record::ReserveWorktree(duplicate);
+    let (wrong, result) = planned_record(&fixture.engine, operation, &principal(), &record);
+    assert!(matches!(fixture.engine.snapshot_receipts().unwrap()
+        .require_planned(&wrong, &result, &principal(), &record), Err(RegistrationError::Mount)));
 }
 
 #[test]
 fn typed_receipt_rejects_retag_unknown_fields_oversize_and_unverified_recovery_overlay() {
-    let mut fixture = Fixture::new();
-    fixture.complete_node();
-    let receipt = fixture.state.operations[&operation(10)].clone();
+    let mut fixture = LiveFixture::new();
+    let node = fixture.publish_node();
+    fixture.engine.snapshot_receipts().unwrap().reopen_node(&fixture.engine, node).unwrap();
+    let receipt = fixture.engine.operation(fixture.request.operation_id).unwrap();
     let mut wrong = receipt.clone();
     wrong.kind = "file.note".into();
     assert!(matches!(codec::decode(&wrong), Err(codec::CodecError::Kind)));
@@ -1156,8 +1129,8 @@ fn typed_receipt_rejects_retag_unknown_fields_oversize_and_unverified_recovery_o
     wrong.commit_state = CommitState::PublishedDegraded;
     assert!(matches!(codec::decode(&wrong), Err(codec::CodecError::Publication)));
     let decoded = codec::decode(&receipt).unwrap().unwrap();
-    let body = Record::ReserveNode(fixture.node.clone());
-    assert_eq!(decoded.record, body);
-    assert_eq!(decoded.timestamp, 10);
-    assert_eq!(decoded.membership_epoch, 0);
+    let Record::ReserveNode(plan) = decoded.record else { panic!("actual node reservation"); };
+    assert_eq!(plan.request, fixture.request);
+    assert_eq!(decoded.timestamp.to_string(), receipt.result["timestamp"].as_str().unwrap());
+    assert_eq!(decoded.membership_epoch, fixture.engine.config.membership_epoch());
 }

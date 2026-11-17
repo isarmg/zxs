@@ -47,6 +47,7 @@ fn retained_snapshot_mismatch_rejects_before_repair_or_visible_state_change() {
                     snapshot: &engine.snapshot,
                     state: &engine.state,
                     namespaces: engine.current_namespaces.as_deref(),
+                    originals: &prepared.original_receipts,
                 },
             )
             .unwrap();

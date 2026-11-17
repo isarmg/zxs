@@ -499,7 +499,7 @@ fn membership_registry_current_initialize_recovery_revalidates_exact_owner_entri
         assert_eq!(
             fixture
                 .engine
-                .install_recovered_namespace_state(forged, snapshot.clone())
+                .install_recovered_namespace_state(forged, snapshot.clone(), &std::sync::Arc::default())
                 .unwrap_err()
                 .code(),
             ErrorCode::WorkspaceChanged
@@ -508,7 +508,7 @@ fn membership_registry_current_initialize_recovery_revalidates_exact_owner_entri
     }
     fixture
         .engine
-        .install_recovered_namespace_state(state, snapshot)
+        .install_recovered_namespace_state(state, snapshot, &std::sync::Arc::default())
         .unwrap();
     assert_current_tree(&fixture, initialized_tree(&fixture.engine, &result));
     let before_rejections = canonical_json(fixture.engine.state()).unwrap();

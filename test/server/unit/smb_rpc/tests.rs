@@ -3134,3 +3134,6 @@ fn account_authority(spool: &Path) -> Arc<crate::smb_account_binding::Authority>
     })
     .unwrap()
 }
+
+#[path = "system_samba_native_tests.rs"]
+mod system_samba_native_tests;

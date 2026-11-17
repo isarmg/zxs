@@ -48,6 +48,7 @@ impl<'a> CapturedTarget<'a> {
         file: &str,
         view: StateProjection<'_>,
         birth: Option<&crate::container_storage::ordinary_preparation::UnbornBirthFile<'_>>,
+        loss: Option<&crate::degraded_recovery::AcknowledgedContainerLoss>,
     ) -> Result<Self> {
         validate_owner(view, file, history.1)?;
         let record = view.state().file_containers.get(&file.parse::<storage_contract::FileId>()?)
@@ -59,7 +60,9 @@ impl<'a> CapturedTarget<'a> {
             return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerIdentity.into());
         }
         let held = container.private_child_matching(container.path(), inode)?;
-        verify_entity_contents(&held, file, view, false, Some(&record.namespace.name), birth)?;
+        verify_entity_contents(
+            &held, file, view, false, Some(&record.namespace.name), birth, loss,
+        )?;
         Ok(Self {
             root, scoped: true, history: history.0, container: container.path(), held, inode,
         })
@@ -160,8 +163,11 @@ impl<'a> PreparedFileCopies<'a> {
         file: &str,
         view: StateProjection<'a>,
         admission: InstallAdmission,
+        loss: Option<&crate::degraded_recovery::AcknowledgedContainerLoss>,
     ) -> Result<(Self, PreparedFile)> {
-        let target = CapturedTarget::capture_container(root, history, container, file, view, None)?;
+        let target = CapturedTarget::capture_container(
+            root, history, container, file, view, None, loss,
+        )?;
         let database = CapturedMaterial::from_projection(view, file, history.1)?.encode()?;
         let prepared = target.prepare(&database, admission)?;
         Ok((Self { view, database }, prepared))
@@ -177,7 +183,7 @@ impl<'a> PreparedFileCopies<'a> {
         birth: &crate::container_storage::ordinary_preparation::UnbornBirthFile<'_>,
     ) -> Result<(Self, PreparedFile)> {
         let target = CapturedTarget::capture_container(
-            root, history, container, file, view, Some(birth),
+            root, history, container, file, view, Some(birth), None,
         )?;
         let database = CapturedMaterial::from_projection(view, file, history.1)?.encode()?;
         let prepared = target.prepare(&database, admission)?;
@@ -190,9 +196,10 @@ impl<'a> PreparedFileCopies<'a> {
         history: (&Path, &str),
         container: &DiskRoot,
         admission: InstallAdmission,
+        loss: Option<&crate::degraded_recovery::AcknowledgedContainerLoss>,
     ) -> Result<PreparedFile> {
         CapturedTarget::capture_container(
-            root, history, container, &self.database.file, self.view, None,
+            root, history, container, &self.database.file, self.view, None, loss,
         )?.prepare(&self.database, admission)
     }
 
@@ -336,7 +343,7 @@ fn capture_entity(
         }
         root.private_child(current)?
     };
-    verify_entity_contents(&held, file, view, indexed, None, None)?;
+    verify_entity_contents(&held, file, view, indexed, None, None, None)?;
     Ok(held)
 }
 
@@ -348,7 +355,7 @@ pub(in crate::container_storage) fn verify_held_container(
     let record = view.state().file_containers.get(&file.parse::<storage_contract::FileId>()?)
         .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerShape)?;
     validate_owner(view, file, &record.history_tree_id.to_string())?;
-    verify_entity_contents(held, file, view, false, Some(&record.namespace.name), None)
+    verify_entity_contents(held, file, view, false, Some(&record.namespace.name), None, None)
 }
 
 fn verify_entity_contents(
@@ -358,6 +365,7 @@ fn verify_entity_contents(
     indexed: bool,
     name: Option<&name_policy::LookupName>,
     birth: Option<&crate::container_storage::ordinary_preparation::UnbornBirthFile<'_>>,
+    loss: Option<&crate::degraded_recovery::AcknowledgedContainerLoss>,
 ) -> Result<()> {
     use super::super::{OWNER_MARKER, marker_matches_at, reject_unsupported_container, verify_body};
     reject_unsupported_container(&held, held.path())?;
@@ -377,6 +385,18 @@ fn verify_entity_contents(
             if held.entries(&versions)?.next().transpose()?.is_some() {
                 return Err(crate::Error::FileDraft(crate::DraftError::WorkingFileGraph));
             }
+            return Ok(());
+        }
+        if let Some(loss) = loss
+            && loss.permits_unmarked(view.state(), file.parse()?, held)?
+        {
+            // Absence is the first-publication case. An occupied malformed
+            // marker is not covered by the acknowledged BODY loss.
+            if held.optional_metadata(&held.path().join(OWNER_MARKER))?.is_some() {
+                return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerIdentity.into());
+            }
+            // The exact new Candidate inode survives; only its BODY was
+            // explicitly acknowledged lost. This is not a payload receipt.
             return Ok(());
         }
         // The first payload is installed before the publication decision; its

@@ -1,5 +1,8 @@
 //! Explicit loss acknowledgement for an already decided, unpublished candidate.
 //! This path never authorizes a new business write with fewer required copies.
+mod container_loss;
+pub(crate) use container_loss::AcknowledgedContainerLoss;
+
 use crate::container_storage::PreparedContainerEntities;
 use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
@@ -148,6 +151,32 @@ pub(crate) fn discover_publication(
     previous_snapshot: &Option<String>,
     original: &crate::publication_evidence::AdmittedSnapshot,
 ) -> Result<Option<Publication>> {
+    let found = discover_metadata_publication(engine, hash)?;
+    if candidate.versions.is_empty() {
+        return Ok(found);
+    }
+    let sources = PreparedContainerEntities::observe_available_candidate_from_prefix(
+        &engine.config, &engine.disk_resources, previous, previous_snapshot,
+        candidate, original,
+    )?;
+    discover_local_publication(engine, candidate, hash, found, |file, disk| {
+        sources.scope(file, disk)
+    })
+}
+
+/// Only the native directory scanner supplies these already observed exact
+/// Candidate scopes. It retains the original/node proof across this read.
+pub(crate) fn discover_directory_publication(
+    engine: &Engine, candidate: &Candidate, hash: &str,
+    sources: &PreparedContainerEntities,
+) -> Result<Option<Publication>> {
+    let found = discover_metadata_publication(engine, hash)?;
+    discover_local_publication(engine, candidate, hash, found, |file, disk| {
+        sources.scope(file, disk)
+    })
+}
+
+fn discover_metadata_publication(engine: &Engine, hash: &str) -> Result<Option<Publication>> {
     let mut found: Option<Publication> = None;
     for disk in engine.members() {
         let Some(handle) = engine.disk_resources.available(&disk) else {
@@ -172,23 +201,21 @@ pub(crate) fn discover_publication(
             }
         }
     }
-    if candidate.versions.is_empty() {
-        return Ok(found);
-    }
-    // Local evidence is not a global object lookup. Admit the exact original
-    // candidate and scanner prefix before opening its staged/final source area.
-    let sources =
-        PreparedContainerEntities::observe_available_candidate_from_prefix(
-            &engine.config, &engine.disk_resources, previous, previous_snapshot,
-            candidate, original,
-        )?;
+    Ok(found)
+}
+
+fn discover_local_publication<'source>(
+    engine: &Engine, candidate: &Candidate, hash: &str, mut found: Option<Publication>,
+    source: impl Fn(storage_contract::FileId, storage_contract::DiskId)
+        -> Result<&'source crate::container_storage::ObservedContainerReplica>,
+) -> Result<Option<Publication>> {
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
             let disk = engine.disk(slot)?;
             let Some(_) = engine.disk_resources.available(disk) else {
                 continue;
             };
-            let scope = sources.scope(evidence.version.file_id.parse()?, disk.disk_id.parse()?)?;
+            let scope = source(evidence.version.file_id.parse()?, disk.disk_id.parse()?)?;
             let material = VersionMaterial::current(scope, &evidence.version)?;
             let root = material.root()?;
             let directory = material.directory()?;
@@ -839,30 +866,16 @@ impl Engine {
             &candidate,
             Some(admitted.for_candidate(&candidate)?),
         )?;
-        let mut next = admitted.into_visible_state(candidate.operation_id, None);
-        let mut result = next
+        let original = admitted.into_shared();
+        let next = original.share_state();
+        let result = next
             .operations
             .get(&candidate.operation_id)
             .cloned()
             .ok_or_else(|| required("candidate result missing"))?;
-        result.commit_state = storage_contract::CommitState::PublishedDegraded;
-        result.protection_at_publish = storage_contract::ProtectionAtPublish::BelowTarget;
-        result.current_health = if plan.version_protection.iter().any(|v| {
-            !v["slots"]
-                .as_array()
-                .expect("slots")
-                .iter()
-                .any(|s| s["state"] == "COMPLETE_VERIFIED")
-        }) {
-            storage_contract::CurrentHealth::Unavailable
-        } else {
-            storage_contract::CurrentHealth::Degraded
-        };
-        result.result["recovery_id"] = json!(id);
-        result.result["recovery_plan_digest"] = json!(plan.digest);
-        result.result["isolation_generation"] = json!(plan.isolation_generation);
-        result.result["outcome"] = json!("COMMITTED_DEGRADED");
-        result.result["version_protection"] = json!(plan.version_protection);
+        // recovery_plan(id) already binds the exact id and frozen plan digest.
+        // Keep the outcome overlay before the original budget and first write.
+        let result = crate::persist::degraded_result::apply(result, &plan);
         crate::metadata_budget::preflight_bound_publication(
             self,
             &candidate,
@@ -874,7 +887,28 @@ impl Engine {
             }),
             MAX_METADATA,
         )?;
+        // Capture the installed predecessor before Candidate repair/Reprotect.
+        // The existing recovery-plan cache lookup above is unchanged; missing
+        // original evidence cannot be repaired from next/visible.
+        let originals = crate::engine::OriginalReceiptCursor::for_context(
+            &self.planning_context(),
+        )?;
+        // Retain the actual candidate entities across the loss decision. The
+        // ordinary name installer does not certify BODY availability: only the
+        // verified slots below receive payload receipts. A new container may
+        // still have its original preparation name until Recovery FINALIZE.
+        let sources = std::sync::Arc::new(sources);
+        let loss = AcknowledgedContainerLoss::new(
+            &self.state, &next, &candidate, &plan, std::sync::Arc::clone(&sources),
+        )?;
+        let projection = crate::state_projection::ProjectionTransition::new(
+            &self.state, &next, None,
+        )?;
         // All graph and combined proof checks precede any recovery writes.
+        self.blocked = true;
+        let names = crate::container_storage::prepare_recovered_degraded_names(
+            &self.config, &self.disk_resources, &projection, MAX_METADATA, &loss,
+        )?;
         self.repair_bound_snapshot(&candidate.snapshot_hash)?;
         crate::history_package::repair_history_objects_at(
             &self.disk_resources,
@@ -922,6 +956,10 @@ impl Engine {
         }
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_recovery_finalize")?;
+        // Complete the same decided inode's EXCL install and FILE image before
+        // Publication can expose it to published-only readers. On a restart the
+        // original Candidate admits exactly its preparation or installed name.
+        names.apply()?;
         let mut payload_receipts = Vec::new();
         for evidence in &candidate.versions {
             let health = plan
@@ -980,12 +1018,13 @@ impl Engine {
             .as_ref()
             .expect("recovery")
             .verify(&candidate, &publication)?;
-        self.complete_candidate(&candidate, &plan.candidate_hash, &next, Some(publication))?;
-        next.operations
-            .insert(candidate.operation_id, result.clone());
-        self.named_namespaces.install_state(&mut self.state, std::sync::Arc::new(next));
+        let mut visible = next.as_ref().clone();
+        visible.operations.insert(candidate.operation_id, result.clone());
+        let visible = std::sync::Arc::new(visible);
+        self.complete_candidate(
+            &candidate, &plan.candidate_hash, &original, &visible, publication, originals,
+        )?;
         self.bind_recovered_history_roots(roots);
-        self.snapshot = Some(candidate.snapshot_hash.clone());
         self.next_slot = self.next_slot.max(
             candidate
                 .sequence

@@ -114,6 +114,7 @@ pub(crate) fn chain(state: &State, leaf: EntryId) -> Result<Vec<&Record>> {
 }
 
 pub(crate) fn validate_state(state: &State) -> Result<()> {
+    let mut workspace_creations = BTreeMap::new();
     let mut indexed = BranchEntries::new(state);
     let mut ids = BTreeSet::new();
     let mut entities = BTreeSet::new();
@@ -137,7 +138,7 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
         if !crate::container_storage::namespace_host::ordinary_path(&entry.path) {
             return Err(Failure::NamespaceSource.into());
         }
-        require_creation(state, record)?;
+        require_creation(state, record, &mut workspace_creations)?;
         for (disk, replica) in &record.replicas {
             if replica.entity.inode() == 0 || replica.parent_entity.inode() == 0
                 || replica.entity.device() != replica.parent_entity.device()
@@ -189,8 +190,40 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
     Ok(())
 }
 
-fn require_creation(state: &State, record: &Record) -> Result<()> {
+fn require_creation(
+    state: &State,
+    record: &Record,
+    workspace_creations: &mut BTreeMap<
+        storage_contract::OperationId, (RepositoryId, BTreeSet<EntryId>),
+    >,
+) -> Result<()> {
     let result = state.operations.get(&record.created_by).ok_or(Failure::NamespaceSource)?;
+    if result.kind == "workspace.commit" {
+        // One original receipt may introduce many directories. Cache only this
+        // invocation's verified logical EntryIds, never workspace/runtime I/O.
+        if !workspace_creations.contains_key(&record.created_by) {
+            let after = state.commits.get(result.commit_id.as_deref()
+                .ok_or(Failure::NamespaceSource)?).ok_or(Failure::NamespaceSource)?;
+            let [parent] = after.parent_commit_ids.as_slice() else {
+                return Err(Failure::NamespaceSource.into());
+            };
+            let before = state.commits.get(parent).ok_or(Failure::NamespaceSource)?;
+            let (repository, introduced) = crate::business::workspace_directory_entries(
+                state, result, before, after, after.entries.len(),
+            )?;
+            let ids = introduced.iter().map(|entry| entry.entry_id.parse::<EntryId>())
+                .collect::<std::result::Result<BTreeSet<_>, _>>()?;
+            workspace_creations.insert(record.created_by, (repository, ids));
+        }
+        let (repository, introduced) = workspace_creations.get(&record.created_by)
+            .ok_or(Failure::NamespaceSource)?;
+        if *repository != record.repository || !introduced.contains(&record.entry)
+            || result.branch_id.as_deref() != Some(record.branch.to_string().as_str())
+        {
+            return Err(Failure::NamespaceSource.into());
+        }
+        return Ok(());
+    }
     let (repository, change) = crate::persist::namespace_directory::mkdir_request(state, result)?;
     let commit = state.commits.get(result.commit_id.as_deref()
         .ok_or(Failure::NamespaceSource)?).ok_or(Failure::NamespaceSource)?;
@@ -214,7 +247,24 @@ fn new_entries(
     next: &State,
     result: &OperationResult,
     maximum: usize,
-) -> Result<Vec<Entry>> {
+) -> Result<(RepositoryId, Vec<Entry>)> {
+    if result.kind == "workspace.commit" {
+        let history = next.histories.get(result.history_tree_id.as_deref()
+            .ok_or(Failure::NamespaceSource)?).ok_or(Failure::NamespaceSource)?;
+        let repo = previous.repositories.get(&history.repository_id)
+            .filter(|repo| repo.file_manager_root).ok_or(Failure::NamespaceUnmapped)?;
+        let branch = previous.branches.get(&repo.main_branch_id)
+            .ok_or(Failure::NamespaceSource)?;
+        let before = previous.commits.get(&branch.head_commit_id)
+            .ok_or(Failure::NamespaceSource)?;
+        let next_branch = next.branches.get(&repo.main_branch_id)
+            .ok_or(Failure::NamespaceSource)?;
+        let after = next.commits.get(&next_branch.head_commit_id)
+            .ok_or(Failure::NamespaceSource)?;
+        return crate::business::workspace_directory_entries(
+            next, result, before, after, maximum,
+        );
+    }
     let (repository, change) = crate::persist::namespace_directory::mkdir_request(next, result)?;
     let repo = previous.repositories.get(&repository.to_string())
         .filter(|repo| repo.file_manager_root).ok_or(Failure::NamespaceUnmapped)?;
@@ -250,7 +300,7 @@ fn new_entries(
     if ids.next().is_some() || expected != after.entries {
         return Err(Failure::NamespaceSource.into());
     }
-    Ok(added)
+    Ok((repository, added))
 }
 
 /// Hot allocates preparation IDs; cold supplies only the IDs and observations
@@ -284,13 +334,12 @@ pub(super) fn project(
     if additions.is_empty() {
         return Ok((records, additions));
     }
-    let introduced = new_entries(previous, next, result, config.max_entries)?;
+    let (repository, introduced) = new_entries(previous, next, result, config.max_entries)?;
     let introduced_ids = introduced.iter().map(|entry| entry.entry_id.parse::<EntryId>())
         .collect::<std::result::Result<BTreeSet<_>, _>>()?;
     if introduced_ids != additions {
         return Err(Failure::NamespaceSource.into());
     }
-    let (repository, _) = crate::persist::namespace_directory::mkdir_request(next, result)?;
     let repo = previous.repositories.get(&repository.to_string()).ok_or(Failure::NamespaceSource)?;
     let branch = repo.main_branch_id.parse::<BranchId>()?;
     let origin = super::namespace::root_origin(previous, repository, branch)?;

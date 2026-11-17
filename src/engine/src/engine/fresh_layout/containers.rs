@@ -11,6 +11,8 @@ use storage_contract::file_draft::{FileWorkingState, WorkingRevision};
 pub(super) mod prefixes;
 mod rename;
 mod unborn;
+mod working_batch;
+pub(crate) use working_batch::verify_directory_transition;
 pub(crate) use unborn::{VerifiedUnbornBirth, VerifiedUnbornFirst};
 pub(crate) use rename::ContainerNameChange;
 

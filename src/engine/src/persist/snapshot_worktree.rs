@@ -328,13 +328,23 @@ impl PublicationEncoding {
     }
 }
 
+fn indexed_kind(kind: &str) -> bool {
+    matches!(kind,
+        NODE_RESERVE | NODE_COMPLETE | WORKTREE_RESERVE | WORKTREE_COMPLETE
+            | EDIT_RESERVE | EDIT_COMPLETE | COMMIT_RESERVE | COMMIT_NODE | COMMIT_COMPLETE)
+}
+
+/// A malformed record alias also needs its actual original before indexing.
+/// Classification alone is not decoding, admission or publication evidence.
+pub(crate) fn requires_original(receipt: &OperationResult) -> bool {
+    indexed_kind(&receipt.kind) || receipt.result.get("snapshot_worktree").is_some()
+}
+
 /// This decoder handles the original ordinary receipt, not an unverified
 /// recovery overlay. Degraded publication support must supply its authenticated
 /// original/outcome pair at the real recovery boundary rather than ignore keys.
 pub(crate) fn decode(receipt: &OperationResult) -> Result<Option<Decoded>, CodecError> {
-    let selected = matches!(receipt.kind.as_str(),
-        NODE_RESERVE | NODE_COMPLETE | WORKTREE_RESERVE | WORKTREE_COMPLETE
-            | EDIT_RESERVE | EDIT_COMPLETE | COMMIT_RESERVE | COMMIT_NODE | COMMIT_COMPLETE);
+    let selected = indexed_kind(&receipt.kind);
     if !selected && receipt.result.get("snapshot_worktree").is_none() {
         return Ok(None);
     }

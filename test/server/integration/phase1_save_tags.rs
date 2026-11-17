@@ -4,6 +4,8 @@
 mod unborn_first;
 #[path = "phase1_save_tags/fresh_working.rs"]
 mod fresh_working;
+#[path = "phase1_save_tags/directory_drafts.rs"]
+mod directory_drafts;
 #[path = "phase1_save_tags/content_matches.rs"]
 mod content_matches;
 #[path = "phase1_save_tags/directory_git.rs"]
@@ -90,7 +92,7 @@ impl Fixture {
                     assert!(!remaining.is_zero(), "router retained writer lock: {error}");
                     tokio::time::sleep(remaining.min(Duration::from_millis(10))).await;
                 }
-                Err(error) => panic!("cold reopen failed: {error}"),
+                Err(error) => panic!("cold reopen failed: {error:?}"),
             }
         };
         let auth = AuthStore::open(&system).unwrap();

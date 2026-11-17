@@ -14,9 +14,10 @@ mod instance;
 mod source;
 mod edit;
 mod commit;
+pub(crate) mod drafts;
 pub use source::SnapshotSourceError;
 pub(crate) use registry::{
-    DirectoryRegistration, PublishedCommitTail, RegisteredNamespaceDirectories,
+    DirectoryRegistration, PublishedCommitTail, ReceiptIndex, RegisteredNamespaceDirectories,
     require_backup_snapshot_scope,
 };
 pub(crate) use prepare::prepare_namespace_host;
@@ -28,6 +29,20 @@ pub(crate) use publication::PublishedNodeReservation;
 
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum RegistrationError {
+    #[error("directory operation {operation} is published; reconcile its public result")]
+    DirectoryResponse {
+        operation: storage_contract::OperationId,
+        #[source]
+        source: Box<RegistrationError>,
+    },
+    #[error("directory receipt has no admitted original outcome in this prefix: {0}")]
+    OriginalReceiptUnavailable(storage_contract::OperationId),
+    #[error("checking the directory receipt against its admitted original and visible outcome")]
+    OriginalReceipt(#[source] crate::Error),
+    #[error("decoding the permanent combined directory receipt")]
+    DirectoryRecord(#[source] Box<crate::persist::directory_draft_commit::native::NativeError>),
+    #[error("checking the indexed original directory result")]
+    DirectoryResult(#[source] Box<drafts::DirectoryPublicationError>),
     #[error("snapshot initialization has no complete live Current publication mode")]
     InitialOnly,
     #[error("snapshot operation requires the explicitly registered root as its parent")]

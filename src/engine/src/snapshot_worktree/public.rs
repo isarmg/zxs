@@ -1,6 +1,8 @@
 //! Public commands retain the existing independent reservation/completion
 //! publishers. No transport input constructs a host, session or local anchor.
-use super::{RegistrationError, registry::ReceiptIndex};
+mod drafts;
+
+use super::RegistrationError;
 use crate::Engine;
 use storage_contract::{ErrorCode, Generation, Principal, RepositoryId};
 use storage_contract::snapshot_worktree::{
@@ -23,14 +25,23 @@ impl From<RegistrationError> for SnapshotWorktreeError {
 
 impl SnapshotWorktreeError {
     pub fn code(&self) -> ErrorCode {
-        match &self.source {
+        Self::code_for_registration(&self.source)
+    }
+
+    pub(crate) fn code_for_registration(source: &RegistrationError) -> ErrorCode {
+        match source {
             RegistrationError::Publication(source) => source.code(),
+            RegistrationError::OriginalReceipt(source) => source.code(),
             RegistrationError::Allocation(source) => source.code(),
+            RegistrationError::DirectoryRecord(source) => source.code(),
+            RegistrationError::DirectoryResult(source) => source.code(),
             RegistrationError::InitialOnly | RegistrationError::RootOnly
             | RegistrationError::EditScope | RegistrationError::CommitScope => {
                 ErrorCode::UnsupportedOperation
             }
-            RegistrationError::Pending(_) | RegistrationError::CommitWorkspaceRelease { .. } => {
+            RegistrationError::DirectoryResponse { .. }
+            | RegistrationError::Pending(_) | RegistrationError::OriginalReceiptUnavailable(_)
+            | RegistrationError::CommitWorkspaceRelease { .. } => {
                 ErrorCode::RecoveryRequired
             }
             RegistrationError::Operation(_) | RegistrationError::Digest(_) => {
@@ -47,6 +58,7 @@ impl SnapshotWorktreeError {
     /// Adapters must not turn this into permission to start another operation.
     pub fn published_operation(&self) -> Option<storage_contract::OperationId> {
         match &self.source {
+            RegistrationError::DirectoryResponse { operation, .. } => Some(*operation),
             RegistrationError::Publication(source) => {
                 source.published_result().map(|result| result.operation_id)
             }
@@ -104,7 +116,7 @@ impl Engine {
     }
 
     pub fn directory_worktree_status(&self, target: WorktreeHandle) -> Result<WorktreeStatus> {
-        let index = ReceiptIndex::capture(self.state())?;
+        let index = self.snapshot_receipts()?;
         let original = index.worktree(target)?.source().handle();
         super::with_worktree(self, target, |session| {
             let worktree = session.worktree();

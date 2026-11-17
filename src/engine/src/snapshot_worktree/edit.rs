@@ -6,7 +6,6 @@ use crate::directory_worktree::store::HeldSparseWorktree;
 use crate::persist::snapshot_worktree::{
     EditCompletion, EditReservation, Record, WorktreeReservation,
 };
-use crate::snapshot_worktree::registry::ReceiptIndex;
 use crate::snapshot_worktree::{RegistrationError, Result, publication, with_worktree};
 use crate::working_tree::records::local_entity;
 use crate::working_tree::snapshot::{HeldSnapshotNode, SnapshotEntryContent, SnapshotFile};
@@ -40,7 +39,8 @@ pub(crate) fn edit_worktree(
     {
         return Err(RegistrationError::EditBody);
     }
-    let index = ReceiptIndex::capture(engine.state())?;
+    let receipts = engine.snapshot_receipt_source()?;
+    let index = receipts.index()?;
     if let Some(revision) = index.retry_edit(request, principal)? {
         with_worktree(engine, request.target, |_| Ok(()))?;
         return Ok(revision);

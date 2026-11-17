@@ -542,7 +542,7 @@ impl PreparedContainerEntities {
     ) -> Result<Self> {
         Self::observe_candidate_inner(
             context.config, context.disk_resources, context.state, context.snapshot,
-            candidate, original, CandidateAvailability::Required, Some(locations),
+            candidate, original, CandidateAvailability::Required, Some(locations), None,
         )
     }
 
@@ -558,7 +558,7 @@ impl PreparedContainerEntities {
     ) -> Result<Self> {
         Self::observe_candidate_inner(
             config, resources, previous, previous_snapshot, candidate, original,
-            CandidateAvailability::Required, None,
+            CandidateAvailability::Required, None, None,
         )
     }
 
@@ -574,9 +574,35 @@ impl PreparedContainerEntities {
     ) -> Result<AvailableCandidateContainers> {
         let observed = Self::observe_candidate_inner(
             config, resources, previous, previous_snapshot, candidate, original,
-            CandidateAvailability::Available, None,
+            CandidateAvailability::Available, None, None,
         )?;
         Ok(AvailableCandidateContainers { observed })
+    }
+
+    /// The same original-snapshot observer, with the independently completed
+    /// directory native replay instead of an unrecognized ordinary working mode.
+    pub(crate) fn observe_directory_candidate(
+        context: &crate::engine::PlanningContext<'_>,
+        candidate: &crate::journal::Candidate,
+        original: &crate::publication_evidence::AdmittedSnapshot,
+        proof: &crate::snapshot_worktree::drafts::VerifiedDirectoryDraft<'_>,
+    ) -> Result<Self> {
+        Self::observe_candidate_inner(
+            context.config, context.disk_resources, context.state, context.snapshot,
+            candidate, original, CandidateAvailability::Required, None, Some(proof),
+        )
+    }
+
+    pub(crate) fn observe_directory_candidate_from_prefix(
+        source: &crate::engine::DirectoryReplayPrefix<'_>,
+        candidate: &crate::journal::Candidate,
+        original: &crate::publication_evidence::AdmittedSnapshot,
+        proof: &crate::snapshot_worktree::drafts::VerifiedDirectoryDraft<'_>,
+    ) -> Result<Self> {
+        Self::observe_candidate_inner(
+            source.config(), source.resources(), source.previous(), source.snapshot(),
+            candidate, original, CandidateAvailability::Required, None, Some(proof),
+        )
     }
 
     fn observe_candidate_inner(
@@ -588,6 +614,7 @@ impl PreparedContainerEntities {
         original: &crate::publication_evidence::AdmittedSnapshot,
         availability: CandidateAvailability,
         locations: Option<&crate::engine::fresh_layout::containers::RecoveryRenameLocations<'_>>,
+        directory: Option<&crate::snapshot_worktree::drafts::VerifiedDirectoryDraft<'_>>,
     ) -> Result<Self> {
         let next = original.for_candidate(candidate)?.state();
         if &candidate.previous_snapshot != previous_snapshot
@@ -595,10 +622,14 @@ impl PreparedContainerEntities {
         {
             return Err(Failure::ContainerScope.into());
         }
-        let transition =
-            crate::engine::fresh_layout::containers::verify_transition_with_working_source(
+        let transition = match directory {
+            Some(proof) => crate::engine::fresh_layout::containers::verify_directory_transition(
+                previous, next, candidate, proof,
+            )?,
+            None => crate::engine::fresh_layout::containers::verify_transition_with_working_source(
                 config, resources, previous, next, candidate, locations,
-            )?;
+            )?,
+        };
         let targets = match availability {
             CandidateAvailability::Required => None,
             CandidateAvailability::Available => {

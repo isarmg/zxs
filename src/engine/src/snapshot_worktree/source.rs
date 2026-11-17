@@ -12,6 +12,8 @@ use storage_contract::{FileId, OperationId, VersionId};
 
 #[derive(Debug, error_definition::Error)]
 pub enum SnapshotSourceError {
+    #[error("preparing the complete selected directory publication")]
+    DirectoryPublication(#[source] DirectoryPublicationFailure),
     #[error("snapshot source no longer names the admitted current root namespace")]
     Namespace,
     #[error("this snapshot mode requires root-level ordinary files")]
@@ -39,6 +41,7 @@ pub enum SnapshotSourceError {
 impl SnapshotSourceError {
     pub(crate) fn code(&self) -> ErrorCode {
         match self {
+            Self::DirectoryPublication(source) => source.0.code(),
             Self::Namespace | Self::File(_) | Self::Selection(_) | Self::ReservedVersion(_) => {
                 ErrorCode::StateInvalid
             }
@@ -159,4 +162,20 @@ pub(super) fn construct(
 
 pub(super) fn encoding(error: crate::persist::snapshot_worktree::CodecError) -> Error {
     reject(SnapshotSourceError::Encoding(error))
+}
+
+/// The private pipeline's complete typed cause, without exposing a constructor
+/// for its internal working-source or physical products in the public API.
+#[derive(Debug, error_definition::Error)]
+#[error("{0}")]
+pub struct DirectoryPublicationFailure(
+    #[source] Box<crate::snapshot_worktree::drafts::DirectoryPublicationError>,
+);
+
+pub(super) fn directory_publication(
+    source: crate::snapshot_worktree::drafts::DirectoryPublicationError,
+) -> crate::Error {
+    reject(SnapshotSourceError::DirectoryPublication(
+        DirectoryPublicationFailure(Box::new(source)),
+    ))
 }

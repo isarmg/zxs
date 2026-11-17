@@ -1,7 +1,6 @@
 //! Root-file capture under an actually registered Initial root. This is private
 //! until the full writable lifecycle and its recovery modes are implemented.
 use crate::persist::snapshot_worktree::NodeAllocation;
-use crate::snapshot_worktree::registry::ReceiptIndex;
 use crate::snapshot_worktree::{RegistrationError, Result, prepare_namespace_host, publication};
 use crate::Engine;
 use storage_contract::snapshot_worktree::{InitializeSnapshot, SnapshotHandle};
@@ -15,7 +14,7 @@ pub(crate) fn initialize_root(
 ) -> Result<SnapshotHandle> {
     // Idempotent completed reads need no live writer. Pending always stops here,
     // before opening or adopting any unregistered .zxs/node material.
-    let index = ReceiptIndex::capture(engine.state())?;
+    let index = engine.snapshot_receipts()?;
     if let Some(handle) = index.retry_initialization(request, principal)? {
         index.reopen_node(engine, handle)?;
         return Ok(handle);

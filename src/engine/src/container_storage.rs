@@ -1476,6 +1476,26 @@ pub(crate) fn prepare_recovered_ordinary_names(
     )
 }
 
+pub(crate) fn prepare_recovered_degraded_names(
+    config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
+    projection: &ProjectionTransition<'_>,
+    maximum: usize,
+    loss: &crate::degraded_recovery::AcknowledgedContainerLoss,
+) -> Result<PreparedNames> {
+    loss.require_pair(projection.previous().state(), projection.next().state())?;
+    let containers = loss.containers();
+    containers.verify()?;
+    let layouts = shared_layout::prepare(
+        config, resources, projection.previous().state(), projection.next().state(),
+        None, false, crate::database_install::InstallAdmission::DecidedRecovery,
+    )?;
+    prepare_names_inner(
+        config, resources, projection, maximum, NamePreparation::AcknowledgedLoss(loss),
+        layouts, Some(containers),
+    )
+}
+
 pub(crate) fn prepare_recovered_names(
     config: &ValidatedConfig,
     resources: &Arc<DiskResources>,
@@ -1630,7 +1650,8 @@ pub(crate) fn validate_new_projection_paths(
     Ok(())
 }
 
-enum NamePreparation {
+enum NamePreparation<'a> {
+    AcknowledgedLoss(&'a crate::degraded_recovery::AcknowledgedContainerLoss),
     Candidate(crate::database_install::InstallAdmission),
     HistoricalPrefix,
     CurrentStateRepair(crate::database_install::InstallAdmission),
@@ -1641,18 +1662,22 @@ fn prepare_names_inner(
     resources: &Arc<DiskResources>,
     projection: &ProjectionTransition<'_>,
     maximum: usize,
-    mode: NamePreparation,
+    mode: NamePreparation<'_>,
     layouts: shared_layout::PreparedLayouts,
     containers: Option<Arc<PreparedContainerEntities>>,
 ) -> Result<PreparedNames> {
-    let (historical, skip_shared, admission) = match mode {
-        NamePreparation::Candidate(admission) => (false, false, admission),
+    let (historical, skip_shared, admission, loss) = match mode {
+        NamePreparation::AcknowledgedLoss(loss) => (
+            false, false, crate::database_install::InstallAdmission::DecidedRecovery, Some(loss),
+        ),
+        NamePreparation::Candidate(admission) => (false, false, admission, None),
         NamePreparation::HistoricalPrefix => (
             true,
             true,
             crate::database_install::InstallAdmission::DecidedRecovery,
+            None,
         ),
-        NamePreparation::CurrentStateRepair(admission) => (true, false, admission),
+        NamePreparation::CurrentStateRepair(admission) => (true, false, admission, None),
     };
     let previous = projection.previous();
     let view = projection.next();
@@ -1826,7 +1851,7 @@ fn prepare_names_inner(
                 let database = match &prepared_copies {
                     Some(copies) => match &container {
                         Some(container) => copies.prepare_container(
-                            database_root, (&history, &history_id), container, admission,
+                            database_root, (&history, &history_id), container, admission, loss,
                         )?,
                         None => copies.prepare(
                             root, (&history, &history_id), &current, admission,
@@ -1845,7 +1870,7 @@ fn prepare_names_inner(
                                 None => {
                                     file_database::install::PreparedFileCopies::capture_container(
                                         database_root, (&history, &history_id),
-                                        container, &file, view, admission,
+                                        container, &file, view, admission, loss,
                                     )?
                                 }
                             }

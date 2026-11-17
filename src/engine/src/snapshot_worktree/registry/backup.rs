@@ -9,8 +9,32 @@ fn registration(source: RegistrationError) -> Error {
     Error::SnapshotSource(Box::new(SnapshotSourceError::BackupRegistration(source.into())))
 }
 
+/// A standalone admitted snapshot has no observed original/outcome cursor.
+/// Absence of snapshot duties is usable; indexed records require their actual
+/// publication source, never a successful decode of visible receipt words.
 pub(crate) fn require_backup_snapshot_scope(state: &State) -> crate::Result<()> {
-    let index = ReceiptIndex::capture(state).map_err(registration)?;
+    match state.operations.values().find(|receipt| ReceiptIndex::requires_original(receipt)) {
+        Some(receipt) => Err(registration(
+            RegistrationError::OriginalReceiptUnavailable(receipt.operation_id),
+        )),
+        None => Ok(()),
+    }
+}
+
+impl crate::Engine {
+    pub(crate) fn require_backup_snapshot_scope(&self) -> crate::Result<()> {
+        let context = self.planning_context();
+        match context.original_receipts {
+            Some(_) => {
+                let index = context.snapshot_receipts().map_err(registration)?;
+                require_index(&index)
+            }
+            None => require_backup_snapshot_scope(context.state),
+        }
+    }
+}
+
+fn require_index(index: &ReceiptIndex<'_>) -> crate::Result<()> {
     // Completion IDs are reserved before their publications exist. Inspect
     // the actual validated state of each node, not `completions` membership.
     for node in index.nodes.values() {

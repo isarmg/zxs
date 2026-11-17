@@ -1063,7 +1063,10 @@ fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedS
     snapshot::prepare_reference(state, maximum)
 }
 #[cfg(test)]
-thread_local! { pub(crate) static SNAPSHOT_LOAD_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[path = "../../../test/engine/support/snapshot_decodes.rs"]
+pub(crate) mod snapshot_decodes;
+#[cfg(test)]
+pub(crate) use snapshot_decodes::SNAPSHOT_LOAD_COUNT;
 #[cfg(test)]
 pub(crate) fn load_snapshot(d: &DiskConfig, hash: &str) -> Result<State> {
     let snapshot: Snapshot = load_object(d, "snapshot", hash)?;
@@ -1097,7 +1100,7 @@ fn resolve_raw_snapshot(
     mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<crate::history_package::RawState> {
     #[cfg(test)]
-    SNAPSHOT_LOAD_COUNT.with(|count| count.set(count.get() + 1));
+    snapshot_decodes::record(&snapshot);
     validate_snapshot_schema(&snapshot)?;
     let auth = load("state-control-auth", snapshot.control_auth.hash())?;
 

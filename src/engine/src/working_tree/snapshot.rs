@@ -9,10 +9,11 @@ mod store;
 pub(crate) use manifest::{
     AdmittedSnapshotManifest, SnapshotEntry, SnapshotEntryContent, SnapshotFile,
     SnapshotFileSource, SnapshotManifestError, SnapshotPayload, SnapshotReference,
-    MAX_ENTRIES,
+    MAX_ENTRIES, MAX_LOGICAL_BYTES,
 };
 pub(crate) use store::{
-    HeldSnapshotNode, SnapshotNodeBinding, SnapshotPreparationError, SnapshotStoreError,
+    HeldSnapshotNode, PinnedSnapshotRepository, SnapshotNodeBinding,
+    SnapshotPreparationError, SnapshotStoreError,
 };
 
 /// A stable registered disk identity, not a device number, slot spelling, path

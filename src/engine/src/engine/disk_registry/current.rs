@@ -900,14 +900,21 @@ impl Engine {
         &mut self,
         next: State,
         snapshot: String,
+        originals: &Arc<crate::engine::OriginalReceiptCursor>,
     ) -> Result<()> {
         let next_view = self
             .current_namespaces
             .as_ref()
             .map(|view| view.advance(&self.state, &next).map(Arc::new))
             .transpose()?;
-        self.named_namespaces.install_state(&mut self.state, Arc::new(next));
-        self.snapshot = Some(snapshot);
+        let next = Arc::new(next);
+        let snapshot = Some(snapshot);
+        let original_receipts = originals.install(
+            &self.config, &self.disk_resources, &next, &snapshot,
+        )?;
+        self.named_namespaces.install_state(&mut self.state, next);
+        self.original_receipts = original_receipts;
+        self.snapshot = snapshot;
         self.named_namespaces.install_current(&mut self.current_namespaces, next_view);
         // The lifecycle verifier alone can establish the first active view.
         self.restore_current_disk_exit()?;

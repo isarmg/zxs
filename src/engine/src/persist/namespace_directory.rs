@@ -4,6 +4,8 @@ use crate::engine::FreshLayoutError as Failure;
 use crate::{OperationResult, Result, State};
 use storage_contract::RepositoryId;
 
+pub(crate) mod workspace;
+
 pub(crate) fn mkdir_request(
     state: &State, result: &OperationResult,
 ) -> Result<(RepositoryId, crate::NamespaceOperation)> {

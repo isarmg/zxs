@@ -29,6 +29,76 @@ class SystemSambaGate(unittest.TestCase):
             accounts.assert_not_called()
             processes.assert_not_called()
 
+    def test_native_smoke_rejects_command_errors_even_with_client_exit_zero(self):
+        GATE.native_client_success("putting file native-first.txt\n")
+        for output in ("NT_STATUS_ACCESS_DENIED opening remote file native-first.txt",
+                       "NT_STATUS_IO_DEVICE_ERROR closing remote file native-first.txt"):
+            with self.subTest(output=output), \
+                    self.assertRaisesRegex(RuntimeError, "command failed"):
+                GATE.native_client_success(output)
+
+    def test_native_listing_uses_real_unborn_identity_not_a_version(self):
+        entry = {"name": "native-first.txt", "working_state": "unborn", "size": "3",
+                 "repository_id": "real-repo-from-response", "repository_path": "native-first.txt",
+                 "file_id": "real-file-from-response", "entry_id": "real-entry-from-response"}
+        with patch.object(GATE, "native_http", return_value={"entries": [entry]}):
+            self.assertEqual(GATE.native_listing_target({"slot_id": "P01"}, 3), {
+                "repository": entry["repository_id"], "path": "native-first.txt",
+                "file": entry["file_id"], "entry": entry["entry_id"],
+            })
+        for altered in ({**entry, "version_id": "must-not-exist"},
+                        {**entry, "size": "2"}, {**entry, "working_state": "published"}):
+            with self.subTest(entry=altered), \
+                    patch.object(GATE, "native_http", return_value={"entries": [altered]}), \
+                    self.assertRaises(RuntimeError):
+                GATE.native_listing_target({"slot_id": "P01"}, 3)
+
+    def test_native_named_io_evidence_remains_bound_to_nonroot_requests(self):
+        header = "[timestamp, 10, pid=47, effective(21002, 21002), real(0, 0)] source\n"
+        read = "  smbd_smb2_read: p/native-first.txt - fnum 1\n"
+        write = "  smbd_smb2_write: p/native-first.txt - fnum 1\n"
+        self.assertEqual(set(GATE.nonroot_io_evidence(
+            [header + read + header + write], 21002,
+            read_name="p/native-first.txt", write_name="p/native-first.txt")),
+            {"read-existing", "write-new"})
+        with self.assertRaises(RuntimeError):
+            GATE.nonroot_io_evidence([header + read, header + write], 21001,
+                                    read_name="p/native-first.txt", write_name="p/native-first.txt")
+
+    def test_native_offset_evidence_requires_exact_completion_and_same_process(self):
+        request = (
+            "[timestamp, 10, pid=47, effective(21002, 21002), real(0, 0)] "
+            "source(smbd_smb2_write_send)\n"
+            "  smbd_smb2_write: p/native-first.txt - fnum 7\n"
+        )
+        completion = (
+            "[timestamp, 3, pid=47, effective(0, 0), real(0, 0)] "
+            "source(smb2_write_complete_internal)\n"
+            "  smb2: fnum 7, file p/native-first.txt, length=2 offset=8 wrote=2\n"
+        )
+        observed = GATE.native_offset_evidence([request + completion], 21002)
+        self.assertEqual(observed["pid"], 47)
+        for logs in ([request, completion], [completion],
+                     [request + completion.replace("offset=8", "offset=0")],
+                     [request + completion.replace("wrote=2", "wrote=1")],
+                     [request + completion.replace("pid=47", "pid=48")]):
+            with self.subTest(logs=logs), self.assertRaisesRegex(RuntimeError, "offset.*evidence"):
+                GATE.native_offset_evidence(logs, 21002)
+
+    def test_receipt_is_published_only_after_complete_exercise_returns(self):
+        # A driver-oracle unit, not evidence that Samba was run by this test.
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "receipt.json"
+            output.write_text("old receipt")
+            args = SimpleNamespace(output=output, native_working=True)
+            with patch.object(GATE, "exercise", side_effect=RuntimeError("cleanup failed")), \
+                    self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+                GATE.run(args)
+            self.assertFalse(output.exists())
+            with patch.object(GATE, "exercise", return_value={"mode": "native-working"}):
+                GATE.run(args)
+            self.assertEqual(json.loads(output.read_text()), {"mode": "native-working"})
+
     def test_phase_markers_publish_complete_expected_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

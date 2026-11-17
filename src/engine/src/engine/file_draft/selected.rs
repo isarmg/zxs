@@ -6,6 +6,7 @@ use crate::engine::file_draft::require_initial;
 use crate::engine::fresh_layout::containers::published_source;
 use crate::{Engine, Error, ReadFile, Result, State, ValidatedConfig};
 use std::os::unix::fs::FileExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use storage_contract::file_container::FileContainerRecord;
 use storage_contract::file_draft::{
@@ -28,6 +29,7 @@ pub(crate) struct SelectedWorkingSource {
 }
 
 impl SelectedWorkingSource {
+    pub(crate) fn selection(&self) -> &WorkingSelection { &self.request }
     pub(crate) fn target(&self) -> &DraftLocation { &self.request.target }
     pub(crate) fn expected(&self) -> WorkingExpectation { self.request.expected }
     pub(crate) fn record(&self) -> &FileContainerRecord { &self.record }
@@ -91,6 +93,41 @@ pub(crate) struct SelectedWorkingSources {
 
 impl SelectedWorkingSources {
     pub(crate) fn sources(&self) -> &[SelectedWorkingSource] { &self.sources }
+
+    /// The path is diagnostic input to ReadSource, not another source issuer.
+    /// Its open method below accepts only this same selection and held payload.
+    pub(in crate::engine) fn born_path(&self, index: usize) -> Result<PathBuf> {
+        let source = self.sources.get(index)
+            .ok_or(Error::FileDraft(Failure::WorkingSelection))?;
+        match &source.body {
+            HeldWorkingBody::Born { scope, payload, .. } => {
+                let layout = crate::persist::layout::container::draft_payload(payload.payload_id());
+                Ok(scope.container()?.path()
+                    .join(crate::persist::layout::container::DRAFTS.as_path())
+                    .join(layout.as_path()))
+            }
+            HeldWorkingBody::Unborn(_) => Err(Error::FileDraft(Failure::UnsupportedScope)),
+        }
+    }
+
+    pub(in crate::engine) fn open_born(&self, index: usize, path: &Path) -> Result<ReadFile> {
+        if path != self.born_path(index)? {
+            return Err(Error::FileDraft(Failure::SourceChanged));
+        }
+        for source in &self.sources { source.require_source()?; }
+        let source = self.sources.get(index)
+            .ok_or(Error::FileDraft(Failure::WorkingSelection))?;
+        let file = match &source.body {
+            // HeldDraft::open clones the actual admitted descriptor, retains
+            // its container and resets its cursor. It does not adopt by name.
+            HeldWorkingBody::Born { scope, .. } => scope.open_working_draft()?,
+            HeldWorkingBody::Unborn(_) => {
+                return Err(Error::FileDraft(Failure::UnsupportedScope));
+            }
+        };
+        source.require_source()?;
+        Ok(file)
+    }
 
     pub(crate) fn require_engine(&self, engine: &Engine) -> Result<()> {
         self.require_context(&engine.planning_context())

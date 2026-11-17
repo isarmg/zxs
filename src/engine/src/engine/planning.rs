@@ -20,6 +20,7 @@ pub(crate) struct PlanningContext<'a> {
     pub(crate) config: &'a ValidatedConfig,
     pub(crate) disk_resources: &'a Arc<DiskResources>,
     pub(crate) state: &'a Arc<State>,
+    pub(crate) original_receipts: Option<&'a Arc<super::InstalledOriginalReceipts>>,
     pub(crate) named_namespaces: &'a super::named_namespaces::NameCache,
     pub(crate) current_namespaces: Option<&'a Arc<super::CurrentNamespaces>>,
     pub(crate) workspace_namespace_baselines:
@@ -40,6 +41,7 @@ impl Engine {
             config: &self.config,
             disk_resources: &self.disk_resources,
             state: &self.state,
+            original_receipts: self.original_receipts.as_ref(),
             named_namespaces: &self.named_namespaces,
             current_namespaces: self.current_namespaces.as_ref(),
             workspace_namespace_baselines: &self.workspace_namespace_baselines,
@@ -156,6 +158,15 @@ impl<'a> PlanningContext<'a> {
             })
             .fold(drafts, |sum, v| sum.saturating_add(v.logical_size))
     }
+    /// Reborrow the same format check used by the read-only recovery cursor.
+    /// This is not write admission and does not replace require_write().
+    pub(crate) fn require_manual_directory_pool(&self) -> Result<()> {
+        require_manual_directory_pool(
+            self.config, self.disk_resources,
+            self.current_namespaces.map(Arc::as_ref),
+        )
+    }
+
     pub(crate) fn require_write(&self) -> Result<()> {
         match self.admission {
             Admission::Live(active) if active.load(Ordering::Acquire) => {
@@ -664,4 +675,40 @@ impl<'a> PlanningContext<'a> {
             result: op,
         })
     }
+}
+
+/// The one held Genesis format check. Startup passes its actual admitted
+/// prefix, not a fabricated live PlanningContext. This grants no writer.
+pub(super) fn require_manual_directory_pool(
+    config: &ValidatedConfig,
+    resources: &DiskResources,
+    current: Option<&super::CurrentNamespaces>,
+) -> Result<()> {
+    if config.generation().is_some() || current.is_some() {
+        return Err(Error::new(
+            ErrorCode::UnsupportedOperation,
+            "native directory drafts require an admitted Genesis pool",
+        ));
+    }
+    let mut verified_members = 0;
+    for disk in config.metadata_members() {
+        let Some(held) = resources.available(disk) else {
+            continue;
+        };
+        let root = &held.root;
+        let path = root.path().join(crate::persist::layout::DISK_IDENTITY.as_path());
+        let stored = crate::disk::decode_seal(&root.read_bytes(&path, MAX_METADATA)?)?;
+        let live = crate::disk::identity_at(
+            config, disk, &root.directory(root.path())?,
+        )?;
+        crate::disk::validate_stored_seal(&stored, &live)?;
+        verified_members += 1;
+    }
+    if verified_members < config.metadata_quorum() {
+        return Err(Error::new(
+            ErrorCode::MetadataQuorumUnavailable,
+            "native directory format needs its fixed Genesis metadata quorum",
+        ));
+    }
+    Ok(())
 }

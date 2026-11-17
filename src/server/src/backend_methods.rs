@@ -594,6 +594,27 @@ macro_rules! methods {
                     let _ = (identity, request);
                     Err($crate::ApiError::unsupported())
                 }
+                fn commit_directory_drafts(
+                    &self, identity: &$crate::Identity,
+                    request:
+                        storage_contract::snapshot_worktree::draft_commit::CommitDirectoryDrafts,
+                ) -> Result<
+                    storage_contract::snapshot_worktree::draft_commit::DirectoryDraftReceipt,
+                    $crate::ApiError,
+                > {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn directory_draft_receipt(
+                    &self, identity: &$crate::Identity,
+                    lookup: storage_contract::snapshot_worktree::draft_commit::DirectoryDraftLookup,
+                ) -> Result<
+                    storage_contract::snapshot_worktree::draft_commit::DirectoryDraftReceipt,
+                    $crate::ApiError,
+                > {
+                    let _ = (identity, lookup);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn create_directory_worktree(
                     &self,
                     identity: &$crate::Identity,

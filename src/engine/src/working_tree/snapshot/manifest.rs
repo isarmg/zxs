@@ -129,6 +129,7 @@ pub(crate) struct SnapshotReference {
 
 /// Syntax, complete parent closure, bounded inventory and canonical commitment.
 /// Its construction does not prove source authorization or file-body availability.
+#[derive(Clone)]
 pub(crate) struct AdmittedSnapshotManifest {
     record: ManifestRecord,
     reference: SnapshotReference,
@@ -203,6 +204,9 @@ impl AdmittedSnapshotManifest {
     pub(crate) fn node_id(&self) -> SnapshotNodeId {
         self.reference.node
     }
+    pub(crate) fn operation_id(&self) -> OperationId {
+        self.record.operation_id
+    }
     pub(crate) fn commitment(&self) -> MaterialCommitment {
         self.reference.manifest
     }
@@ -264,7 +268,10 @@ impl AdmittedSnapshotManifest {
         }
         Ok(())
     }
-    pub(super) fn bytes(&self) -> &[u8] {
+    pub(crate) fn encoded_len(&self) -> usize {
+        self.bytes.len()
+    }
+    pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 }

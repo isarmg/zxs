@@ -5,7 +5,7 @@ use crate::auth::Identity;
 use std::io::{Read, Seek, SeekFrom};
 use storage_contract::file_draft::{DraftCommand, DraftLocation};
 
-fn authorize(
+pub(super) fn authorize(
     engine: &mut storage_engine::Engine, current: &Identity, target: &DraftLocation,
 ) -> Result<(), ApiError> {
     if current.smb_binding.is_some() { return Err(ApiError::forbidden()); }

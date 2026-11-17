@@ -133,6 +133,7 @@ pub(crate) mod provenance;
 mod publication;
 pub(crate) use publication::{
     DetachedPublication, PublishedDependencyReuse, PayloadProofReservation, payload_proof_budget,
+    BudgetedDirectoryPreparation, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
 };
 mod workspace_commit;
 #[cfg(test)]
@@ -185,7 +186,10 @@ pub use membership_transition::{
     TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,
 };
 mod recovery;
-pub(crate) use recovery::ReadOnlyPublishedCandidate;
+pub(crate) use recovery::{
+    InstalledOriginalReceipts, OriginalReceiptCursor, OriginalReceiptPrefix,
+    ReadOnlyPublishedCandidate, DirectoryReplayPrefix,
+};
 use recovery::RecoveryMode;
 mod recovery_checkpoint;
 mod workspace_budget;
@@ -265,6 +269,7 @@ pub struct Engine {
     pub(crate) config: ValidatedConfig,
     pub(crate) disk_resources: Arc<DiskResources>,
     pub(crate) state: Arc<State>,
+    original_receipts: Option<Arc<InstalledOriginalReceipts>>,
     pub(crate) named_namespaces: named_namespaces::NameCache,
     pub(crate) workspaces: BTreeMap<String, Workspace>,
     // Derived lookup only: the published State still proves every historical
@@ -705,6 +710,7 @@ impl Engine {
             config,
             disk_resources,
             state: Arc::new(state),
+            original_receipts: None,
             named_namespaces: named_namespaces::NameCache::default(),
             workspaces: BTreeMap::new(),
             current_namespaces: None,
@@ -910,6 +916,7 @@ impl Engine {
                 topology_generation: 1,
                 ..State::default()
             }),
+            original_receipts: None,
             named_namespaces: named_namespaces::NameCache::default(),
             workspaces: BTreeMap::new(),
             current_namespaces: None,

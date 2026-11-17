@@ -11,7 +11,23 @@ pub use published::{
 };
 
 #[derive(Debug, error_definition::Error)]
+pub enum OriginalReceiptError {
+    #[error("the original receipt does not bind its admitted candidate")]
+    Candidate,
+    #[error("the original receipt has no recorded principal")]
+    MissingPrincipal,
+    #[error("the original receipt principal is invalid")]
+    Principal(#[source] storage_contract::EmptyPrincipal),
+    #[error("the visible result is not the exact original publication overlay")]
+    Visible,
+    #[error("the replay prefix does not retain this original receipt")]
+    Prefix,
+}
+
+#[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error(transparent)]
+    OriginalReceipt(OriginalReceiptError),
     #[error(transparent)]
     FreshLayout(#[from] crate::engine::FreshLayoutError),
     #[error(transparent)]
@@ -128,6 +144,7 @@ impl Error {
             | Self::FreshLayout(_)
             | Self::AutomaticBackup(_)
             | Self::ConfiguredDiskName(_)
+            | Self::OriginalReceipt(_)
             | Self::SnapshotSource(_)
             | Self::FileDraft(_)
             | Self::FileMetadata(_)
@@ -169,6 +186,7 @@ impl Error {
             | Self::FreshLayout(_)
             | Self::AutomaticBackup(_)
             | Self::ConfiguredDiskName(_)
+            | Self::OriginalReceipt(_)
             | Self::SnapshotSource(_)
             | Self::FileDraft(_)
             | Self::FileMetadata(_)
@@ -205,6 +223,7 @@ impl Error {
             Self::FreshLayout(error) => error.code(),
             Self::AutomaticBackup(error) => error.code(),
             Self::ConfiguredDiskName(error) => error.code(),
+            Self::OriginalReceipt(_) => ErrorCode::PublicationInvalid,
             Self::SnapshotSource(error) => error.code(),
             Self::FileDraft(error) => error.code(),
             Self::FileMetadata(error) => error.code(),
@@ -267,6 +286,7 @@ impl Error {
             Self::FreshLayout(error) => error.to_string().into(),
             Self::AutomaticBackup(error) => error.to_string().into(),
             Self::ConfiguredDiskName(error) => error.to_string().into(),
+            Self::OriginalReceipt(error) => error.to_string().into(),
             Self::SnapshotSource(error) => error.to_string().into(),
             Self::FileDraft(error) => error.to_string().into(),
             Self::FileMetadata(error) => error.to_string().into(),
@@ -331,6 +351,7 @@ impl Error {
             | Self::FreshLayout(_)
             | Self::AutomaticBackup(_)
             | Self::ConfiguredDiskName(_)
+            | Self::OriginalReceipt(_)
             | Self::SnapshotSource(_)
             | Self::FileDraft(_)
             | Self::FileMetadata(_)

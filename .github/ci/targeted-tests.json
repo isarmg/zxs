@@ -1,5 +1,140 @@
 {
   "groups": {
+    "degraded-current-format-recovery": {
+      "reason": "Exercise the existing two-ACCEPT degraded recovery oracle on a real disk-root namespace and three actual replicas. Preserve surviving-source rejection, per-target healthy BODY verification, exact publication byte budgets, cold replay and decode-count expectations.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "degraded_recovery::tests::explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_after_restart",
+            "degraded_recovery::tests::loss_classification_rejects_io_and_authority_failures"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900,
+          "kind": "lib",
+          "default_features": true,
+          "isolate": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
+    },
+    "native-workspace-directory-source": {
+      "reason": "Authenticate native workspace-created ordinary parents from the exact original request and sealed manifest in the same content decision. Replay original directory allocations through the existing namespace constructors; retain physical EXCL/Candidate admission and missing saved-request failure. No pre-mkdir, migration, workspace-completion synthesis or wire workspace authorization.",
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [],
+          "isolate": true,
+          "timeout_seconds": 900,
+          "exact": [
+            "business::workspace::directory_source::tests::native_directory_source_replays_original_request_and_rejects_forged_rows"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "timeout_seconds": 900,
+          "exact": [
+            "setup_recovery::activation::tests::primary_import_recovery::single_primary_initialization_and_import_recover_without_replacing_identities",
+            "setup_recovery::activation::tests::primary_import_recovery::missing_import_requests_preserve_published_data_without_fabricating_completion"
+          ],
+          "max_tests": 2
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": [
+            "core"
+          ]
+        }
+      ],
+      "python_tests": []
+    },
+    "directory-working-publication": {
+      "reason": "Exercise exact file selection and no-node identical commits, real selected publication, original source retention across installed and archived recovery, and separate Engine compilation. This does not establish a production HTTP/SMB route.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "snapshot_worktree::drafts::",
+            "engine::recovery::workspace_receipts::directory::tests::",
+            "engine::recovery::workspace_receipts::original_receipt_tests::",
+            "engine::membership_transition::archive::persistent::namespace_replay::original_receipt_tests::"
+          ],
+          "max_tests": 24,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
+    "native-samba-smoke-driver": {
+      "reason": "Validate isolated native Samba driver oracles and success-receipt lifecycle, not Samba runtime acceptance. The real external fixture requires explicit check-system-samba.py --native-working in the exact isolated runtime.",
+      "python_tests": [
+        "test_system_samba_gate",
+        "test_runtime_acceptance_receipts",
+        "test_samba_rejection_evidence"
+      ],
+      "rust_targets": []
+    },
     "native-first-manual-save": {
       "reason": "Real default-share native writes and ordered saves, cold authenticated first commit, and explicit protocol data mode without synthetic versions.",
       "python_tests": [],
@@ -5419,9 +5554,314 @@
           "features": []
         }
       ]
+    },
+    "directory-draft-http": {
+      "reason": "Real authenticated Born-only directory working-set commit and exact scoped receipt. Preserve unselected drafts, original bytes, cold retry and Changed/Unchanged; redact native envelopes from both generic operation endpoints. No SMB or Unborn batch activation.",
+      "python_tests": [
+        "test_directory_draft_http_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [],
+          "isolate": true,
+          "exact": [
+            "snapshot_worktree::draft_commit::tests::born_selection_wire_is_strict_and_public_outcome_has_no_native_material"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "exact": [
+            "directory_drafts::authenticated_directory_draft_commit_is_scoped_selected_and_cold_idempotent"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
+    {
+      "path": "test/engine/unit/engine/recovery/directory_checkpoint.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "test/engine/support/snapshot_decodes.rs",
+      "groups": [
+        "degraded-current-format-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal.rs",
+      "groups": [
+        "degraded-current-format-recovery"
+      ]
+    },
+    {
+      "path": "test/engine/unit/degraded_recovery/current_layout.rs",
+      "groups": [
+        "degraded-current-format-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/workspace_receipts/directory.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/draft_gateway/cold.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/mod.rs",
+      "groups": [
+        "native-workspace-directory-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "native-workspace-directory-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace/directory_source.rs",
+      "groups": [
+        "native-workspace-directory-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/namespace_directory.rs",
+      "groups": [
+        "native-workspace-directory-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/namespace_directory/workspace.rs",
+      "groups": [
+        "native-workspace-directory-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/directories.rs",
+      "groups": [
+        "native-workspace-directory-source"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/workspace_directory_source_tests.rs",
+      "groups": [
+        "native-workspace-directory-source"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery/primary_import_recovery_tests.rs",
+      "groups": [
+        "native-workspace-directory-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/batch.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/batch.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers/working_batch.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/publication/directory.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/publication/physical_budget.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/workspace_receipts/installed.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/degraded_result.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/directory_draft_commit.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/directory_draft_commit/native.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/publication_evidence/recovery_snapshot.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts/batch.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts/decision.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts/original.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts/physical.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts/preparation.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts/publication.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts/reconstruction.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts/scope.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/drafts/view.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/drafts.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/working.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/archive_original_receipt_tests.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery/original_receipt_tests.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/draft_gateway.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/draft_gateway/codec.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/draft_gateway/fixture.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/draft_gateway/native.rs",
+      "groups": [
+        "directory-working-publication"
+      ]
+    },
     {
       "path": "src/contract/src/file_draft/manifest.rs",
       "groups": [
@@ -7133,7 +7573,8 @@
     {
       "path": "test/engine/unit/degraded_recovery/tests.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "degraded-current-format-recovery"
       ]
     },
     {
@@ -10680,6 +11121,25 @@
       ]
     },
     {
+      "path": "test/server/unit/smb_rpc/system_samba_native_tests.rs",
+      "groups": [
+        "native-first-manual-save",
+        "native-samba-smoke-driver"
+      ]
+    },
+    {
+      "path": ".github/scripts/check-system-samba.py",
+      "groups": [
+        "native-samba-smoke-driver"
+      ]
+    },
+    {
+      "path": "test/ci/test_system_samba_gate.py",
+      "groups": [
+        "native-samba-smoke-driver"
+      ]
+    },
+    {
       "path": "test/server/unit/smb_rpc/system_samba_tests.rs",
       "groups": [
         "portable-path-consumers"
@@ -14179,7 +14639,16 @@
       "path": "src/engine/src/degraded_recovery.rs",
       "groups": [
         "current-name-namespace-consumers",
-        "container-current-name"
+        "container-current-name",
+        "directory-working-publication",
+        "degraded-current-format-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/degraded_recovery/container_loss.rs",
+      "groups": [
+        "directory-working-publication",
+        "degraded-current-format-recovery"
       ]
     },
     {
@@ -15870,6 +16339,48 @@
       "path": "test/engine/unit/engine/recovery_checkpoint/tests.rs",
       "groups": [
         "generation-anchor-restore"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree/draft_commit.rs",
+      "groups": [
+        "directory-draft-http"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/public/drafts.rs",
+      "groups": [
+        "directory-draft-http"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/snapshot_worktree/drafts.rs",
+      "groups": [
+        "directory-draft-http"
+      ]
+    },
+    {
+      "path": "src/server/src/http_snapshot_worktree/drafts.rs",
+      "groups": [
+        "directory-draft-http"
+      ]
+    },
+    {
+      "path": "test/contract/unit/directory_draft_commit.rs",
+      "groups": [
+        "directory-draft-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/directory_drafts.rs",
+      "groups": [
+        "directory-draft-http"
+      ]
+    },
+    {
+      "path": "test/ci/test_directory_draft_http_ci.py",
+      "groups": [
+        "directory-draft-http"
       ]
     }
   ],

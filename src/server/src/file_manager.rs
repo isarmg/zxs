@@ -23,6 +23,11 @@ pub(crate) fn routes() -> Router<AppState> {
             get(http_snapshot_worktree::context),
         )
         .route("/api/directory-snapshots", post(http_snapshot_worktree::initialize))
+        .route("/api/directory-snapshots/commits", post(http_snapshot_worktree::drafts::commit))
+        .route(
+            "/api/directory-snapshots/commits/{operation}",
+            get(http_snapshot_worktree::drafts::receipt),
+        )
         .route("/api/directory-worktrees", post(http_snapshot_worktree::create))
         .route(
             "/api/directory-worktrees/{worktree}",

@@ -95,6 +95,10 @@ pub enum FreshLayoutError {
     ContainerArea(#[source] std::io::Error),
     #[error("completed physical metadata differs from its exact budget shape")]
     ContainerBudget,
+    #[error("complete physical preparation bytes exceed the bounded size domain")]
+    PhysicalBytesOverflow,
+    #[error("disk {disk} cannot admit the complete physical preparation and metadata tail")]
+    PhysicalCapacity { disk: DiskId },
     #[error("the verified draft body changed before publication")]
     DraftChanged,
     #[error("the draft body exceeds the configured file limit")]
@@ -144,7 +148,8 @@ impl FreshLayoutError {
             }
             Self::ContainerScope => ErrorCode::PublicationInvalid,
             Self::ContainerIdentity | Self::ContainerArea(_) => ErrorCode::ContainerLayoutInvalid,
-            Self::ContainerBudget => ErrorCode::ResourceLimit,
+            Self::ContainerBudget | Self::PhysicalBytesOverflow => ErrorCode::ResourceLimit,
+            Self::PhysicalCapacity { .. } => ErrorCode::NoSpace,
         }
     }
 }

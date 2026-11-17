@@ -1,6 +1,9 @@
 use super::*;
 use crate::{r29_local_publication, repair_io_tail_support as io_tail_support};
 
+#[path = "current_layout.rs"]
+mod current_layout;
+
 fn pending_container_sources(
     engine: &Engine,
     candidate: &Candidate,
@@ -480,8 +483,7 @@ fn lose(engine: &Engine, candidate: &Candidate, all_copies: bool) {
 }
 #[test]
 fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_after_restart() {
-    let (temp, engine, operation, candidate) = fixture("after_accept_2");
-    lose(&engine, &candidate, true);
+    let (temp, engine, operation, candidate) = current_layout::mixed_pending();
     drop(engine);
     let mut engine = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
     assert!(engine.is_read_only());
@@ -493,6 +495,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
         )
         .unwrap();
     assert_eq!(plan.original_accepts.len(), 2);
+    current_layout::assert_loss_plan(&candidate, &plan);
     assert_eq!(
         engine
             .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", false)
@@ -547,15 +550,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
         .filter(|e| e.version.creation_name == "healthy.txt")
         .flat_map(|e| e.placement.route_slot_ids.iter().map(move |slot| (e, slot)))
         .map(|(e, slot)| {
-            let bytes = fs::read(
-                version_dir(
-                    engine.disk(slot).unwrap(),
-                    &e.version.history_tree_id,
-                    &e.version.version_id,
-                )
-                .join("publication-proof.json"),
-            )
-            .unwrap();
+            let bytes = current_layout::published_proof(&engine, e, slot);
             let local: LocalPublication = decode_strict(&bytes).unwrap();
             assert!(local.publication.recovery.is_some());
             let expected = r29_local_publication::encode(&local, MAX_METADATA).unwrap();
@@ -607,6 +602,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
         .iter()
         .find(|v| v.version.creation_name == "healthy.txt")
         .unwrap();
+    current_layout::assert_published_materials(&engine, &candidate);
     assert!(engine.open_content(&healthy.version.version_id).is_ok());
     let lost = candidate
         .versions
@@ -625,6 +621,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
         replay.protection_at_publish,
         storage_contract::ProtectionAtPublish::BelowTarget
     );
+    current_layout::assert_published_materials(&engine, &candidate);
     assert!(engine.open_content(&healthy.version.version_id).is_ok());
     for disk in engine.members() {
         let same: Candidate = load_object(&disk, "candidate", &plan.candidate_hash).unwrap();
@@ -633,15 +630,16 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
             plan.candidate_hash
         );
     }
-    // The next clean restart may skip historical snapshot decoding, but it
-    // must preserve the degraded-publication result overlay exactly.
+    // Whole startup also rebuilds each disk's authenticated publication history.
+    // Count this exact candidate separately, without hiding a repeated recovery
+    // decode among unrelated preflight or history snapshots.
     drop(engine);
     crate::journal::SNAPSHOT_LOAD_COUNT.with(|count| count.set(0));
+    let decoded = crate::journal::snapshot_decodes::Watch::new(&candidate.snapshot_hash);
+    assert_eq!(decoded.count(), 0);
     let engine = Engine::open(&temp.path().join("state")).unwrap();
-    assert_eq!(
-        crate::journal::SNAPSHOT_LOAD_COUNT.with(|count| count.get()),
-        1
-    );
+    current_layout::assert_recovered_snapshot_once(&engine, &candidate, decoded.count());
+    drop(decoded);
     let replay = engine.operation(operation).unwrap();
     assert_eq!(
         replay.commit_state,
@@ -651,6 +649,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
         replay.protection_at_publish,
         storage_contract::ProtectionAtPublish::BelowTarget
     );
+    current_layout::assert_published_materials(&engine, &candidate);
     assert!(engine.open_content(&healthy.version.version_id).is_ok());
     assert!(engine.open_content(&lost.version.version_id).is_err());
 }

@@ -106,9 +106,9 @@ pub(super) fn replay(
     principal: &str,
     operation: OperationId,
 ) -> Result<()> {
-    if previous.versions.contains_key(&facts.version.version_id)
-        || previous.placements.contains_key(&facts.version.version_id)
-        || previous.content_states.contains_key(&facts.version.version_id)
+    if expected.versions.contains_key(&facts.version.version_id)
+        || expected.placements.contains_key(&facts.version.version_id)
+        || expected.content_states.contains_key(&facts.version.version_id)
         || facts.version.logical_size != payload.logical_size()
         || facts.version.content_hash != payload.content_hash()
         || facts.allocations.len() > trace_limit(previous, target)?
@@ -135,7 +135,9 @@ pub(super) fn replay(
     if version != facts.version || placement != facts.placement {
         return Err(invalid());
     }
-    let mut replay = Replay::new(previous, &facts.allocations)?;
+    // In a combined publication earlier items already occupy their real IDs.
+    // Check this accumulating projection, not only the original source table.
+    let mut replay = Replay::new(expected, &facts.allocations)?;
     publish(
         expected, target, selection.base, version.version_id.parse()?, message, principal,
         operation, &mut |prefix| replay.next(prefix),
@@ -143,15 +145,18 @@ pub(super) fn replay(
     replay.finish()
 }
 
-pub(crate) fn build(
+/// One selected Born content policy. A descriptor alone cannot build it;
+/// the exact admitted context still supplies the actual placement constraints.
+pub(super) struct PlannedContent {
+    selection: Selection,
+    payload: DraftPayload,
+}
+
+pub(super) fn plan(
     context: &crate::engine::PlanningContext<'_>,
-    next: &mut State,
-    prepared: &mut Vec<crate::engine::Prepared>,
     request: &storage_contract::file_draft::DraftCommand,
-    principal: &str,
-    operation: OperationId,
-) -> Result<PublishedContent> {
-    let storage_contract::file_draft::DraftCommand::Commit { target, base, message, .. } = request
+) -> Result<PlannedContent> {
+    let storage_contract::file_draft::DraftCommand::Commit { target, base, .. } = request
     else {
         return Err(invalid());
     };
@@ -172,12 +177,32 @@ pub(crate) fn build(
     {
         return Err(Error::FileDraft(Failure::UnsupportedScope));
     }
-    let source = context.draft_payload_source(target.file)?;
+    Ok(PlannedContent { selection, payload: *payload })
+}
+
+pub(super) fn build_planned(
+    context: &crate::engine::PlanningContext<'_>,
+    next: &mut State,
+    prepared: &mut Vec<crate::engine::Prepared>,
+    request: &storage_contract::file_draft::DraftCommand,
+    principal: &str,
+    operation: OperationId,
+    plan: &PlannedContent,
+    source: &crate::engine::ReadSource,
+) -> Result<PublishedContent> {
+    let storage_contract::file_draft::DraftCommand::Commit { target, base, message, .. } = request
+    else {
+        return Err(invalid());
+    };
+    let selection = &plan.selection;
+    let payload = plan.payload;
+    if selection.base != *base { return Err(Error::FileDraft(Failure::BaseChanged)); }
+    let primary = selection.placement.route_slot_ids.first().ok_or_else(invalid)?;
     let version = context.build_version(
         next, prepared,
         crate::business::VersionBuild {
             history: &selection.history.to_string(), file_id: &target.file.to_string(),
-            path: &target.path, source: &source, primary, copies: 1,
+            path: &target.path, source, primary, copies: 1,
             source_ids: vec![base.version_id().to_string()], checkpoint: false,
         },
     )?;
@@ -202,4 +227,18 @@ pub(crate) fn build(
         },
     )?;
     Ok(PublishedContent { version, placement, allocations })
+}
+
+/// Existing single-file callers keep their original policy/source ordering.
+pub(crate) fn build(
+    context: &crate::engine::PlanningContext<'_>,
+    next: &mut State,
+    prepared: &mut Vec<crate::engine::Prepared>,
+    request: &storage_contract::file_draft::DraftCommand,
+    principal: &str,
+    operation: OperationId,
+) -> Result<PublishedContent> {
+    let plan = plan(context, request)?;
+    let source = context.draft_payload_source(request.target().file)?;
+    build_planned(context, next, prepared, request, principal, operation, &plan, &source)
 }

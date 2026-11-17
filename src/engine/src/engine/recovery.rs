@@ -10,7 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod payload_admission;
 mod workspace_receipts;
-pub(crate) use workspace_receipts::ReadOnlyPublishedCandidate;
+pub(crate) use workspace_receipts::{
+    InstalledOriginalReceipts, OriginalReceiptCursor, OriginalReceiptPrefix,
+    ReadOnlyPublishedCandidate, DirectoryReplayPrefix,
+};
 pub(in crate::engine) mod container_locations;
 
 /// Read-only journal admission, retained with its held descriptors until apply.
@@ -23,6 +26,8 @@ pub(super) struct PreparedRecovery {
     torn_tail: bool,
     candidates: BTreeMap<u64, workspace_receipts::PreparedCandidate>,
     container_locations: container_locations::ReplayContainerLocations,
+    original_receipts: workspace_receipts::OriginalReceiptCursor,
+    directory_checkpoints: BTreeMap<u64, workspace_receipts::CheckpointDirectoryObservation>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -289,7 +294,9 @@ impl Engine {
             records,
             torn_tail,
             candidates: BTreeMap::new(),
+            directory_checkpoints: BTreeMap::new(),
             container_locations: container_locations::ReplayContainerLocations::default(),
+            original_receipts: workspace_receipts::OriginalReceiptCursor::for_recovery(self)?,
         })
     }
 
@@ -339,7 +346,16 @@ impl Engine {
             torn_tail,
             mut candidates,
             container_locations,
+            original_receipts,
+            mut directory_checkpoints,
         } = prepared;
+        let mut original_receipts = std::sync::Arc::new(original_receipts);
+        // Preflight retained these originals under these exact held resources.
+        // An archived seed must have supplied its actual original/outcome
+        // stream. The frozen visible State alone cannot fill missing pairs.
+        self.original_receipts = original_receipts.install(
+            &self.config, &self.disk_resources, &self.state, &self.snapshot,
+        )?;
         let fenced = self.membership_fence.is_some();
         let members_ready = online.len() == members.len() && !fenced;
         let can_repair = members_ready && !move_retained;
@@ -407,9 +423,16 @@ impl Engine {
             let Some((hash, rs)) = active.into_iter().next() else {
                 continue;
             };
-            let prepared = match candidates.remove(&sequence) {
-                Some(prepared) => prepared,
-                None => self.read_workspace_receipt_candidate(
+            let covered_directory = checkpoint.as_ref()
+                .filter(|checkpoint| sequence <= checkpoint.sequence)
+                .and_then(|checkpoint| directory_checkpoints.remove(&sequence)
+                    .map(|observation| (checkpoint, observation)));
+            let prepared = match (candidates.remove(&sequence), covered_directory) {
+                (Some(prepared), _) => prepared,
+                (None, Some((checkpoint, observed))) => observed.read_covered(
+                    self, &online, sequence, &hash, &rs, &self.snapshot, checkpoint,
+                )?,
+                (None, None) => self.read_workspace_receipt_candidate(
                     &online,
                     sequence,
                     &hash,
@@ -418,6 +441,7 @@ impl Engine {
                         snapshot: &self.snapshot,
                         state: &self.state,
                         namespaces: self.current_namespaces.as_deref(),
+                        originals: original_receipts.as_ref(),
                     },
                 )?,
             };
@@ -506,6 +530,7 @@ impl Engine {
                     self.install_recovered_namespace_state(
                         admitted.into_visible_state(candidate.operation_id, recovered_result),
                         candidate.snapshot_hash.clone(),
+                        &original_receipts,
                     )?;
                     self.bind_recovered_history_roots(roots);
                 }
@@ -565,37 +590,48 @@ impl Engine {
             } else {
                 None
             };
-            if self.current_namespaces.is_none() && self.is_backup_first_candidate(&candidate)? {
-                // A cold selected Backup has the completed native first
-                // barrier, but Current cannot be installed before this exact
-                // first publication is replayed. Do not ask ordinary Current to
-                // authorize the operation that establishes it.
-                let generation = self.config.generation()
-                    .ok_or_else(super::disk_registry::current::pending_publication)?;
-                if self.snapshot != generation.snapshot()
-                    || self.state.as_ref() != generation.base.as_ref()
+            let directory_kind = next.operations.get(&candidate.operation_id)
+                .is_some_and(|result| {
+                    result.kind == crate::persist::directory_draft_commit::native::KIND
+                });
+            if !directory_kind {
+                // Native directory originals were fully admitted by the scanner;
+                // apply re-observes their exact material below, before repairs.
+                if self.current_namespaces.is_none()
+                    && self.is_backup_first_candidate(&candidate)?
                 {
-                    return Err(super::disk_registry::current::pending_publication());
+                    // A cold selected Backup has the completed native first
+                    // barrier, but Current cannot be installed before this exact
+                    // first publication is replayed. Do not ask ordinary Current to
+                    // authorize the operation that establishes it.
+                    let generation = self.config.generation()
+                        .ok_or_else(super::disk_registry::current::pending_publication)?;
+                    if self.snapshot != generation.snapshot()
+                        || self.state.as_ref() != generation.base.as_ref()
+                    {
+                        return Err(super::disk_registry::current::pending_publication());
+                    }
+                    generation.verify_activation_candidate(&candidate)?;
+                    let published = publication.as_ref().ok_or_else(|| {
+                        Error::new(ErrorCode::RecoveryRequired,
+                            "selected Backup first replay lacks its verified publication")
+                    })?;
+                    let seal = match readonly_seal {
+                        Some(seal) => seal,
+                        None => verified_publication_seal_at(
+                            &self.disk_resources, &online, &candidate, published,
+                        )?,
+                    };
+                    self.preflight_backup_first_current(&candidate, original, published, &seal)?;
+                } else {
+                    let locations = super::fresh_layout::containers::recovery_rename_locations(
+                        &self.state, next, &candidate, &container_locations,
+                    );
+                    self.verify_replay_namespace_at_locations(
+                        &candidate, original, publication.as_ref(),
+                        readonly_seal.as_ref(), &locations,
+                    )?;
                 }
-                generation.verify_activation_candidate(&candidate)?;
-                let published = publication.as_ref().ok_or_else(|| {
-                    Error::new(ErrorCode::RecoveryRequired,
-                        "selected Backup first replay lacks its verified publication")
-                })?;
-                let seal = match readonly_seal {
-                    Some(seal) => seal,
-                    None => verified_publication_seal_at(
-                        &self.disk_resources, &online, &candidate, published,
-                    )?,
-                };
-                self.preflight_backup_first_current(&candidate, original, published, &seal)?;
-            } else {
-                let locations = super::fresh_layout::containers::recovery_rename_locations(
-                    &self.state, next, &candidate, &container_locations,
-                );
-                self.verify_replay_namespace_at_locations(
-                    &candidate, original, publication.as_ref(), readonly_seal.as_ref(), &locations,
-                )?;
             }
             if self.move_completion.as_ref().is_some_and(|selected| {
                 selected.sequence() == candidate.sequence && selected.candidate_hash() == hash
@@ -656,7 +692,8 @@ impl Engine {
             // PreservePending and the independently selected move consumers
             // above do not borrow ordinary future-body/install authority.
             let mut pending_containers = None;
-            if publication.is_some() {
+            let mut directory_payloads = None;
+            if publication.is_some() && !directory_kind {
                 crate::engine::fresh_layout::containers::verify_historical_available(
                     &self.config, &self.disk_resources, next, &container_locations,
                 )?;
@@ -682,8 +719,18 @@ impl Engine {
                 // Metadata admission remains before BODY observation. Only this
                 // exact original preparation may reach the decided installer;
                 // there is no matching-byte search or unbound repair fallback.
-                pending_containers = Some(self.observe_ordinary_pending(
-                    &candidate, &admitted, &container_locations,
+                if !directory_kind {
+                    pending_containers = Some(self.observe_ordinary_pending(
+                        &candidate, &admitted, &container_locations,
+                    )?);
+                }
+            }
+            if directory_kind {
+                // The same already-decided node and FILEs must be present.
+                // This read is before snapshot repair, journal append, FILE
+                // image update or names installation, including Published replay.
+                directory_payloads = Some(self.observe_directory_pending(
+                    &candidate, &admitted, MAX_METADATA,
                 )?);
             }
             if can_repair {
@@ -726,7 +773,7 @@ impl Engine {
                     .as_ref()
                     .filter(|p| p.recovery.is_some())
                     .map(|p| p.result.clone());
-                if let Some(publication) = publication {
+                let completed = if let Some(publication) = publication {
                     self.complete_historical_candidate(
                         &candidate,
                         &hash,
@@ -761,7 +808,9 @@ impl Engine {
                                 }
                             }
                         },
-                    )?;
+                    )?
+                } else if let Some(observed) = directory_payloads.take() {
+                    self.complete_observed_directory_candidate(&candidate, &hash, next, observed)?
                 } else {
                     match pending_containers {
                         Some(observed) => self.complete_observed_ordinary_candidate(
@@ -771,14 +820,33 @@ impl Engine {
                             super::fresh_layout::FreshLayoutError::ContainerScope.into(),
                         ),
                     }
+                };
+                if let Some(observed) = &directory_payloads {
+                    observed.require_candidate(&candidate)?;
                 }
+                drop(directory_payloads);
+                // Retain the exact original already admitted before repairs.
+                // The returned completion is the actual member/barrier tail,
+                // not a presumed success inferred from its visible State.
+                let original = admitted.into_shared();
+                let mut visible = original.share_state().as_ref().clone();
+                if let Some(result) = recovered_result {
+                    visible.operations.insert(candidate.operation_id, result);
+                }
+                completed.retain_original(
+                    self, &candidate, &original, &visible,
+                    std::sync::Arc::make_mut(&mut original_receipts),
+                )?;
                 self.install_recovered_namespace_state(
-                    admitted.into_visible_state(candidate.operation_id, recovered_result),
-                    candidate.snapshot_hash.clone(),
+                    visible, candidate.snapshot_hash.clone(), &original_receipts,
                 )?;
                 self.bind_recovered_history_roots(roots);
                 self.snapshot = Some(candidate.snapshot_hash.clone());
             } else if let Some(p) = publication {
+                if let Some(observed) = &directory_payloads {
+                    observed.require_candidate(&candidate)?;
+                }
+                drop(directory_payloads);
                 // This is the same no-repair branch whose complete actual
                 // barrier and exact Candidate were required above. A failed
                 // observation breaks the replay loop before visible installation.
@@ -786,6 +854,7 @@ impl Engine {
                 self.install_recovered_namespace_state(
                     admitted.into_visible_state(candidate.operation_id, recovered_result),
                     candidate.snapshot_hash.clone(),
+                    &original_receipts,
                 )?;
                 self.bind_recovered_history_roots(roots);
                 self.snapshot = Some(candidate.snapshot_hash.clone());

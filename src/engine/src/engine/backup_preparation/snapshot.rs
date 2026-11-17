@@ -201,7 +201,7 @@ impl PreparedSnapshot {
                 "published snapshot differs from the complete current State",
             ));
         }
-        crate::snapshot_worktree::require_backup_snapshot_scope(admitted.state())?;
+        engine.require_backup_snapshot_scope()?;
         Ok(prepared)
     }
 

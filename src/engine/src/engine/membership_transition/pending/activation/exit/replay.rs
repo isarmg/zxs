@@ -184,6 +184,65 @@ impl Engine {
         &self,
         generation: &Generation,
     ) -> Result<Option<CurrentNamespaces>> {
+        let mut replay = NamespaceReplay::new();
+        self.replay_generation_publications(generation, |publication| replay.advance(publication))?;
+        replay.finish(generation)
+    }
+
+    /// Only the actual installed generation base can seed a new environment's
+    /// receipt index. This does not install Current, admit a write, or claim
+    /// that an archived publication was voted by the new member set.
+    pub(in crate::engine) fn replay_generation_original_receipts(
+        &self,
+        generation: &Generation,
+    ) -> Result<crate::engine::OriginalReceiptCursor> {
+        if !self.config.generation().is_some_and(|actual| {
+            std::ptr::eq(actual.as_ref(), generation)
+        })
+            || !Arc::ptr_eq(&self.state, &generation.base)
+            || self.snapshot != generation.snapshot()
+        {
+            return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+        }
+        let mut cursor = crate::engine::OriginalReceiptCursor::default();
+        let mut previous = None;
+        let mut terminal = None;
+        self.replay_generation_publications(generation, |publication| {
+            let candidate = publication.candidate();
+            if candidate.previous_snapshot != previous {
+                return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+            }
+            let visible = publication.visible_state();
+            let original = publication.original_state().operations.get(&candidate.operation_id)
+                .ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
+            if cursor.needs_projection(original) || publication.publication().recovery.is_some() {
+                cursor.retain_archive(
+                    publication, &visible, &self.config, &self.disk_resources,
+                )?;
+            }
+            previous = Some(candidate.snapshot_hash.clone());
+            terminal = Some(visible);
+            Ok(())
+        })?;
+        // Do not accept a scoped lookup that happened to find its one receipt.
+        // Every archived slot was read; the complete terminal visible State
+        // must be the same genuine base the generation installer selected.
+        if previous != self.snapshot
+            || !terminal.as_ref().is_some_and(|visible| visible.as_ref() == self.state.as_ref())
+        {
+            return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+        }
+        cursor.require_prefix(&self.state)?;
+        Ok(cursor)
+    }
+
+    /// Both read-only consumers use the same retained archive location and
+    /// verification path. No historical disk or new source locator is opened.
+    pub(in crate::engine) fn replay_generation_publications(
+        &self,
+        generation: &Generation,
+        visit: impl FnMut(&VerifiedArchivePublication) -> Result<()>,
+    ) -> Result<()> {
         let disk = self
             .config
             .metadata_members()
@@ -199,14 +258,12 @@ impl Engine {
             self.disk_resources.get(disk)?.root.private_child(
                 &member_directory(disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY),
             )?;
-        let mut replay = NamespaceReplay::new();
         replay_installed_publications(
             directory,
             &generation.portable.archive_hash()?,
             &generation.portable.archive_transition()?,
-            |publication| replay.advance(publication),
-        )?;
-        replay.finish(generation)
+            visit,
+        )
     }
 }
 

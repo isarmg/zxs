@@ -662,7 +662,7 @@ fn membership_registry_current_rename_recovery_revalidates_deserialized_next_sta
     assert_eq!(
         fixture
             .engine
-            .install_recovered_namespace_state(forged, snapshot.clone())
+            .install_recovered_namespace_state(forged, snapshot.clone(), &std::sync::Arc::default())
             .unwrap_err()
             .code(),
         ErrorCode::WorkspaceChanged
@@ -670,7 +670,7 @@ fn membership_registry_current_rename_recovery_revalidates_deserialized_next_sta
     assert_eq!(fixture.engine.snapshot, before_snapshot);
     fixture
         .engine
-        .install_recovered_namespace_state(state, snapshot)
+        .install_recovered_namespace_state(state, snapshot, &std::sync::Arc::default())
         .unwrap();
     assert_eq!(current(&fixture, "recovered/b"), moved);
     assert_hidden_absent(&fixture);

@@ -251,7 +251,7 @@ fn membership_registry_workspace_overlap_recovery_rejects_duplicate_and_reused_b
         assert_eq!(
             fixture
                 .engine
-                .install_recovered_namespace_state(forged, snapshot.clone())
+                .install_recovered_namespace_state(forged, snapshot.clone(), &std::sync::Arc::default())
                 .unwrap_err()
                 .code(),
             ErrorCode::WorkspaceChanged
@@ -260,7 +260,7 @@ fn membership_registry_workspace_overlap_recovery_rejects_duplicate_and_reused_b
     }
     fixture
         .engine
-        .install_recovered_namespace_state(state, snapshot)
+        .install_recovered_namespace_state(state, snapshot, &std::sync::Arc::default())
         .unwrap();
     assert_eq!(entry(&fixture, "moved"), moved);
     assert_eq!(

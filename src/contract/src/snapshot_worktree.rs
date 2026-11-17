@@ -2,6 +2,8 @@
 //!
 //! A handle names the independently published completion, not a local marker.
 //! Decoding these values does not admit a root, node, worktree or publication.
+pub mod draft_commit;
+
 use crate::working_tree::{
     DirectoryId, RootId, SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId,
 };

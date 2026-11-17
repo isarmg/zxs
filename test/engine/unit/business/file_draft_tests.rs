@@ -909,56 +909,257 @@ fn whole_working_selection_checks_all_cas_before_open_and_retains_real_published
 }
 
 #[test]
-fn fresh_pool_format_refuses_unmarked_system_and_disk_before_recovery_writes() {
-    use crate::{Config, Engine, ErrorCode, Mode};
-    use name_policy::Name;
+fn born_working_batch_uses_one_prior_and_exact_sources_without_independent_clears() {
+    use crate::engine::file_draft::PreparedWorkingBatch;
+    use crate::{CommitRequest, Config, Engine, ReadFile};
+    use name_policy::{Name, PortablePath};
     use std::fs;
+    use std::io::{Read, Write};
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-    let temp = tempfile::tempdir().unwrap();
-    let system = temp.path().join("system");
-    let disk = temp.path().join("disk");
-    let replacement_system = temp.path().join("replacement-system");
-    for root in [&system, &disk] {
-        fs::create_dir(root).unwrap();
-        fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    let config =
-        Config::independent_roots(Mode::Development, [(Name::parse("Primary").unwrap(), disk.clone())])
-            .unwrap();
-    drop(Engine::initialize(&system, config).unwrap());
-
-    let config_path = system.join("config.json");
-    let seal_path = disk.join(crate::persist::layout::DISK_IDENTITY.as_path());
-    let unmark = |bytes: &[u8]| {
-        let mut value: json_codec::Value = json_codec::from_slice(bytes).unwrap();
-        let original = value.as_object_mut().unwrap().remove("pool_semantic_format");
-        assert_eq!(original.unwrap(), "manual-directory-v1");
-        json_codec::to_vec(&value).unwrap()
+    use std::sync::Arc;
+    use storage_contract::file_draft::{
+        DraftCommand, DraftLocation, WorkingContentExpectation, WorkingExpectation,
+        WorkingSelection,
     };
-    let config = fs::read(&config_path).unwrap();
-    let seal = fs::read(&seal_path).unwrap();
+    use storage_contract::{Mode, OperationId, Principal, Sequence};
 
-    let without_config_marker = unmark(&config);
-    fs::write(&config_path, &without_config_marker).unwrap();
-    let inode = fs::metadata(&config_path).unwrap().ino();
-    let error = Engine::open(&system).err().expect("unmarked SYSTEM must reject");
-    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
-    assert_eq!(fs::metadata(&config_path).unwrap().ino(), inode);
-    assert_eq!(fs::read(&config_path).unwrap(), without_config_marker);
-    assert_eq!(fs::read(&seal_path).unwrap(), seal);
-    fs::write(&config_path, config).unwrap();
+    fn input(bytes: &[u8]) -> ReadFile {
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(bytes).unwrap();
+        file.sync_all().unwrap();
+        ReadFile::from(file)
+    }
 
-    let without_disk_marker = unmark(&seal);
-    fs::write(&seal_path, &without_disk_marker).unwrap();
-    let inode = fs::metadata(&seal_path).unwrap().ino();
-    let error = Engine::restore_from_disks(&replacement_system, &[disk])
-        .err()
-        .expect("unmarked disk must reject explicit recovery");
-    assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch);
-    assert!(!replacement_system.exists());
-    assert_eq!(fs::metadata(&seal_path).unwrap().ino(), inode);
-    assert_eq!(fs::read(&seal_path).unwrap(), without_disk_marker);
-    fs::write(&seal_path, seal).unwrap();
-    drop(Engine::open(&system).unwrap());
+    let temporary = tempfile::tempdir().unwrap();
+    let system = temporary.path().join("system");
+    let disk = temporary.path().join("primary");
+    for path in [&system, &disk] {
+        fs::create_dir(path).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = Config::independent_roots(
+        Mode::Development, [(Name::parse("Primary").unwrap(), disk.clone())],
+    ).unwrap();
+    let slot = config.disks[0].slot_id.clone();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let repository = engine.create_disk_root(
+        &slot, "admin", OperationId::generate().unwrap(),
+    ).unwrap();
+    let names = ["first.txt", "same.txt", "second.txt", "unselected.txt"];
+    let original = b"real original version";
+    let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
+    for name in names {
+        engine.stage_bytes(&workspace.workspace_id, name, original).unwrap();
+    }
+    engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id.clone(),
+        operation_id: OperationId::generate().unwrap(), principal: "admin".into(),
+        expected_head: workspace.base_head.clone(), fencing_token: workspace.fencing_token,
+        message: "four actually owned versions".into(), request_digest: None,
+    }).unwrap();
+    let principal: Principal = "admin".parse().unwrap();
+    let bodies: [&[u8]; 4] = [
+        b"first selected change", original, b"second selected change", b"leave this dirty",
+    ];
+    let mut requests = Vec::new();
+    for (name, bytes) in names.into_iter().zip(bodies) {
+        let entry = engine.list_tree(&repository.main_branch_id).unwrap().into_iter()
+            .find(|entry| entry.path() == name).unwrap();
+        let target = DraftLocation {
+            repository: repository.repository_id.parse().unwrap(),
+            path: PortablePath::parse(name).unwrap(),
+            entry: entry.entry_id.parse().unwrap(), file: entry.file_id.parse().unwrap(),
+        };
+        engine.change_file_working(&DraftCommand::SetMode {
+            target: target.clone(),
+            expected: engine.file_working_state(&target).unwrap().revision(),
+            mode: CommitMode::Manual,
+        }, &principal, OperationId::generate().unwrap()).unwrap();
+        engine.write_file_draft(&DraftCommand::Write {
+            target: target.clone(),
+            expected: engine.file_working_state(&target).unwrap().revision(),
+            base: engine.file_draft_base(&target).unwrap(),
+            logical_size: bytes.len() as u64,
+            content_hash: ContentHash::from_digest(blake3::hash(bytes)),
+        }, &principal, OperationId::generate().unwrap(), input(bytes)).unwrap();
+        let working = engine.file_working_state(&target).unwrap();
+        requests.push(WorkingSelection {
+            target, expected: WorkingExpectation::from_working(&working).unwrap(),
+        });
+    }
+    // Sources are obtained after a genuine cold read of the saved drafts.
+    // This fixture does not claim a combined directory receipt was published.
+    drop(engine);
+    let mut engine = Engine::open(&system).unwrap();
+    let before = Arc::clone(engine.planning_context().state);
+    let unselected = before.file_containers[&requests[3].target.file].clone();
+    let selected = Arc::new(engine.select_working_sources(&requests[..3]).unwrap());
+    let operation = OperationId::generate().unwrap();
+    let batch = PreparedWorkingBatch::prepare(
+        &engine.planning_context(), Arc::clone(&selected), operation, &principal,
+        "one combined selected-set construction",
+    ).unwrap();
+    batch.require_reconstruction(&engine.planning_context()).unwrap();
+    assert!(Arc::ptr_eq(&before, engine.planning_context().state));
+    assert_eq!(engine.state(), before.as_ref());
+    assert_eq!(batch.items().len(), 3);
+    assert_eq!(batch.prepared().len(), 2);
+    assert_eq!(batch.state().sequence, engine.planning_context().next_slot);
+    assert_eq!(batch.state().business_generation, before.business_generation + 1);
+    assert_eq!(batch.state().versions.len(), before.versions.len() + 2);
+    assert_eq!(batch.state().operations, before.operations);
+    assert_eq!(batch.state().operation_principals, before.operation_principals);
+    assert_eq!(batch.state().events, before.events);
+    assert_eq!(batch.state().file_containers[&requests[3].target.file], unselected);
+    assert!(batch.state().file_containers[&requests[3].target.file].working.draft().is_some());
+    for (index, item) in batch.items().iter().enumerate() {
+        assert_eq!(item.target(), &requests[index].target);
+        assert_eq!(item.version().logical_size, bodies[index].len() as u64);
+        assert_eq!(
+            item.version().content_hash, ContentHash::from_digest(blake3::hash(bodies[index])),
+        );
+        assert_eq!(item.working_after(),
+            &batch.state().file_containers[&requests[index].target.file].working);
+        assert!(matches!(item.working_after(), FileWorkingState::ManualClean { .. }));
+        assert!(engine.file_working_state(item.target()).unwrap().draft().is_some());
+        let projected = resolve(batch.state(), item.target()).unwrap();
+        assert_eq!(projected.base.version_id().to_string(), item.version().version_id);
+        assert_eq!(projected.base.node_id(), item.node().unwrap());
+        if index == 1 {
+            assert!(matches!(item.result(), batch::WorkingBatchResult::Retained(_)));
+            let WorkingContentExpectation::Born { base, .. } = requests[index].expected.content
+            else { panic!("real Born fixture"); };
+            assert_eq!(item.version().version_id, base.version_id().to_string());
+            assert_eq!(item.node().unwrap(), base.node_id());
+        } else {
+            assert!(matches!(item.result(), batch::WorkingBatchResult::Published(_)));
+            assert!(!before.versions.contains_key(&item.version().version_id));
+        }
+    }
+    for (prepared, index) in batch.prepared().iter().zip([0, 2]) {
+        let mut source = prepared.source.open().unwrap();
+        let mut actual = Vec::new();
+        source.read_to_end(&mut actual).unwrap();
+        assert_eq!(actual, bodies[index]);
+        assert_eq!(prepared.version.version_sequence, batch.state().sequence);
+    }
+
+    let replay = batch::replay(
+        &before, batch.request(), Sequence::new(batch.state().sequence), batch.trace(),
+        engine.planning_context().config.max_entries,
+        engine.planning_context().config.max_file_bytes,
+    ).unwrap();
+    assert_eq!(replay.state(), batch.state());
+    let evidence = batch.prepared().iter().map(|item| crate::journal::VersionEvidence {
+        version: item.version.clone(), placement: item.placement.clone(),
+    }).collect::<Vec<_>>();
+    replay.require_versions(&evidence).unwrap();
+    assert!(replay.require_versions(&evidence[..1]).is_err());
+    let mut repeated = evidence.clone();
+    repeated.push(evidence[0].clone());
+    assert!(replay.require_versions(&repeated).is_err());
+    let mut reversed = evidence.clone();
+    reversed.reverse();
+    assert!(replay.require_versions(&reversed).is_err());
+    let mut wrong = batch.trace().clone();
+    wrong.contents[2] = wrong.contents[0].clone();
+    assert!(batch::replay(
+        &before, batch.request(), Sequence::new(batch.state().sequence), &wrong,
+        engine.planning_context().config.max_entries,
+        engine.planning_context().config.max_file_bytes,
+    ).is_err());
+    let mut wrong = batch.trace().clone();
+    wrong.contents[1] = wrong.contents[0].clone();
+    assert!(batch::replay(
+        &before, batch.request(), Sequence::new(batch.state().sequence), &wrong,
+        engine.planning_context().config.max_entries,
+        engine.planning_context().config.max_file_bytes,
+    ).is_err());
+    let mut wrong = batch.trace().clone();
+    let earlier_ids = wrong.contents[0].as_ref().unwrap().allocations.clone();
+    wrong.contents[2].as_mut().unwrap().allocations = earlier_ids;
+    assert!(batch::replay(
+        &before, batch.request(), Sequence::new(batch.state().sequence), &wrong,
+        engine.planning_context().config.max_entries,
+        engine.planning_context().config.max_file_bytes,
+    ).is_err());
+    // A fresh picker on identical values is not the same retained selection.
+    let other = Arc::new(engine.select_working_sources(&requests[..3]).unwrap());
+    assert!(matches!(batch.require_selection(&other),
+        Err(crate::Error::FileDraft(DraftError::SourceChanged))));
+    let mut substituted: Vec<_> = batch.prepared().iter().map(|prepared| {
+        crate::engine::Prepared {
+            version: prepared.version.clone(), placement: prepared.placement.clone(),
+            source: prepared.source.clone(),
+        }
+    }).collect();
+    substituted[0].source = crate::engine::ReadSource::selected_working(other, 0).unwrap();
+    assert!(batch.require_prepared(&substituted).is_err());
+
+    // Even value-equal State cannot reissue the actual source occurrence.
+    let original_state = Arc::clone(&engine.state);
+    engine.state = Arc::new(original_state.as_ref().clone());
+    assert!(matches!(batch.require_context(&engine.planning_context()),
+        Err(crate::Error::FileDraft(DraftError::SourceChanged))));
+    engine.state = original_state;
+    batch.require_context(&engine.planning_context()).unwrap();
+
+    let WorkingContentExpectation::Born { payload, .. } = requests[2].expected.content
+    else { panic!("real Born fixture"); };
+    let record = &before.file_containers[&requests[2].target.file];
+    let path = crate::persist::layout::histories(&disk)
+        .join(crate::persist::layout::namespace::directory(&record.namespace.name).as_path())
+        .join(crate::persist::layout::container::DRAFTS.as_path())
+        .join(crate::persist::layout::container::draft_payload(payload.payload_id()).as_path());
+    let identity = fs::metadata(&path).unwrap();
+    let parked = temporary.path().join("last-selected-original");
+    fs::rename(&path, &parked).unwrap();
+    fs::copy(&parked, &path).unwrap();
+    assert!(batch.require_context(&engine.planning_context()).is_err());
+    assert!(PreparedWorkingBatch::prepare(
+        &engine.planning_context(), Arc::clone(&selected), operation, &principal, "same request",
+    ).is_err());
+    assert_eq!(engine.state(), before.as_ref());
+    // Restore only this test's replacement, not any production cleanup path.
+    fs::remove_file(&path).unwrap();
+    fs::rename(&parked, &path).unwrap();
+    let restored = fs::metadata(&path).unwrap();
+    assert_eq!((restored.dev(), restored.ino()), (identity.dev(), identity.ino()));
+    // Renaming changes the inode's change time. The old admission remains
+    // stale even after restoration; only a new actual full readback can retry.
+    assert!(batch.require_context(&engine.planning_context()).is_err());
+    let renewed = Arc::new(engine.select_working_sources(&requests[..3]).unwrap());
+    let retry = PreparedWorkingBatch::prepare(
+        &engine.planning_context(), renewed, operation, &principal,
+        "one combined selected-set construction",
+    ).unwrap();
+    retry.require_reconstruction(&engine.planning_context()).unwrap();
+    let expected = retry.state().clone();
+    let trace = retry.trace().clone();
+    let (next, prepared, handoff) = retry.into_publication(&engine.planning_context()).unwrap();
+    assert_eq!(next, expected);
+    assert_eq!(handoff.state(), &next);
+    assert_eq!(handoff.trace(), &trace);
+    assert_eq!(handoff.request().operation(), operation);
+    handoff.require_context(&engine.planning_context()).unwrap();
+    handoff.require_prepared(&prepared).unwrap();
+    handoff.require_material().unwrap();
+    assert_eq!(prepared.len(), 2);
+    assert_eq!(next.file_containers[&requests[3].target.file], unselected);
+    let source = Arc::clone(&engine.state);
+    engine.state = Arc::new(source.as_ref().clone());
+    assert!(matches!(handoff.require_context(&engine.planning_context()),
+        Err(crate::Error::FileDraft(DraftError::SourceChanged))));
+    engine.state = source;
+    handoff.require_context(&engine.planning_context()).unwrap();
+    // Moving the plan did not publish or clear any row, and a replacement
+    // source remains rejected even when its actual bytes are identical.
+    fs::rename(&path, &parked).unwrap();
+    fs::copy(&parked, &path).unwrap();
+    assert!(handoff.require_material().is_err());
+    assert!(prepared[1].source.open().is_err());
+    assert_eq!(engine.state(), before.as_ref());
+    assert!(!engine.state().operations.contains_key(&operation));
+    fs::remove_file(&path).unwrap();
+    fs::rename(&parked, &path).unwrap();
 }

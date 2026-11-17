@@ -8,8 +8,48 @@ use std::sync::Arc;
 #[path = "verified_payloads.rs"]
 mod verified_payloads;
 use verified_payloads::{PayloadPreparation, VerifiedPayloadSet};
+mod physical_budget;
+use physical_budget::PhysicalRequirements;
+mod directory;
+pub(crate) use directory::{
+    BudgetedDirectoryPreparation, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
+};
 
 pub(crate) use verified_payloads::{PayloadProofReservation, payload_proof_budget};
+
+/// Returned only after the real member publication and local material tail.
+/// The stored original must still be read through snapshot admission before an
+/// index can retain its operation; these serialized fields alone grant nothing.
+pub(in crate::engine) struct CompletedPublication {
+    publication: Publication,
+    seal: PublicationSeal,
+}
+
+impl CompletedPublication {
+    fn original_receipt(
+        &self, engine: &Engine, candidate: &Candidate, visible: &State,
+    ) -> Result<crate::publication_evidence::OriginalReceiptProjection> {
+        crate::publication_evidence::verified_recovery_snapshot_at(
+            &engine.disk_resources, &engine.members(), &candidate.snapshot_hash,
+        )?.into_shared().project_original_receipt(
+            candidate, &self.publication, &self.seal, visible,
+        )
+    }
+
+    pub(in crate::engine) fn retain_original(
+        &self, engine: &Engine, candidate: &Candidate,
+        original: &crate::publication_evidence::SharedAdmittedSnapshot, visible: &State,
+        originals: &mut super::OriginalReceiptCursor,
+    ) -> Result<()> {
+        if originals.needs_projection(&self.publication.result) {
+            let projection = original.project_original_receipt(
+                candidate, &self.publication, &self.seal, visible,
+            )?;
+            originals.retain_completed(projection, &engine.config, &engine.disk_resources)?;
+        }
+        Ok(())
+    }
+}
 
 type ExistingCopies<'a> = Vec<Option<RetainedExisting<'a>>>;
 
@@ -195,6 +235,7 @@ pub(crate) struct DetachedPublication {
     result: OperationResult,
     verified: VerifiedPayloadSet,
     names: crate::container_storage::PreparedNames,
+    directory: Option<directory::DirectoryPublicationGuard>,
     metadata_epoch: super::provenance::MetadataEpoch,
     prepared_epoch: super::provenance::MetadataEpoch,
     reused_dependencies: Option<PublishedDependencyReuse>,
@@ -521,6 +562,9 @@ impl Engine {
             )
             .retryable());
         }
+        if let Some(directory) = &detached.directory {
+            directory.require_context(&self.planning_context(), &detached.candidate)?;
+        }
         Ok(())
     }
 
@@ -654,6 +698,7 @@ impl Engine {
             result,
             verified,
             names,
+            directory,
             snapshot_basis,
             history_basis,
             history_owners,
@@ -663,6 +708,10 @@ impl Engine {
             reused_dependencies,
             ..
         } = detached;
+        let next = std::sync::Arc::new(next);
+        // This retains only the prior observed prefix. The new operation is
+        // added after actual publication, never from the prospective State.
+        let mut originals = super::OriginalReceiptCursor::for_context(&self.planning_context())?;
         verified
             .validate(&self.config, &candidate)
             .map_err(|error| {
@@ -746,6 +795,9 @@ impl Engine {
                 "prepared container identity changed before decision",
             ).retryable()
         })?;
+        if let Some(directory) = &directory {
+            directory.require_candidate(&candidate)?;
+        }
         if let Some(reuse) = reused_dependencies {
             reuse.admit(&self.planning_context(), &config_hash)?;
         } else if !prepared_epoch.matches(&self.metadata_integrity) {
@@ -766,7 +818,7 @@ impl Engine {
         #[cfg(not(feature = "fault-injection"))]
         let admission: Result<()> = Ok(());
         let finish = admission.and_then(|()| {
-            self.complete_candidate_verified(
+            let completed = self.complete_candidate_verified(
                 &candidate,
                 &hash,
                 &next,
@@ -775,16 +827,30 @@ impl Engine {
                     payloads: &verified,
                     names,
                 },
+            )?;
+            if let Some(directory) = &directory {
+                directory.require_candidate(&candidate)?;
+            }
+            if originals.needs_projection(&result) {
+                let projection = completed.original_receipt(self, &candidate, &next)?;
+                originals.retain_completed(projection, &self.config, &self.disk_resources)?;
+            }
+            Arc::new(originals).install(
+                &self.config, &self.disk_resources, &next, &Some(candidate.snapshot_hash.clone()),
             )
         });
-        if let Err(e) = finish {
-            self.metadata_integrity.invalidate();
-            let message = format!("{e}; query operation {} and recover", result.operation_id);
-            return Err(e
-                .context(storage_contract::ErrorCode::InDoubt, message)
-                .retryable());
-        }
-        let previous = self.named_namespaces.install_state(&mut self.state, std::sync::Arc::new(next));
+        let original_receipts = match finish {
+            Ok(source) => source,
+            Err(e) => {
+                // The decision may already be permanent. A failed readback or
+                // index relation does not undo it or install unproven results.
+                self.metadata_integrity.invalidate();
+                let message = format!("{e}; query operation {} and recover", result.operation_id);
+                return Err(e.context(storage_contract::ErrorCode::InDoubt, message).retryable());
+            }
+        };
+        let previous = self.named_namespaces.install_state(&mut self.state, next);
+        self.original_receipts = original_receipts;
         self.named_namespaces.install_current(&mut self.current_namespaces, next_current_namespaces);
         self.history_window_roots = Some(super::history_window::HistoryRootBindings::published(
             &self.state,
@@ -847,7 +913,7 @@ impl Engine {
                 next,
                 existing,
                 Completion::Recovery,
-            );
+            ).map(|_| ());
         }
         self.complete_candidate_verified(
             candidate,
@@ -855,17 +921,27 @@ impl Engine {
             next,
             existing,
             Completion::Move { names, recovered },
-        )
+        ).map(|_| ())
     }
 
     pub(crate) fn complete_candidate(
-        &mut self,
-        c: &Candidate,
-        hash: &str,
-        next: &State,
-        existing: Option<Publication>,
+        &mut self, candidate: &Candidate, hash: &str,
+        original: &crate::publication_evidence::SharedAdmittedSnapshot,
+        visible: &Arc<State>, publication: Publication,
+        mut originals: super::OriginalReceiptCursor,
     ) -> Result<()> {
-        self.complete_candidate_verified(c, hash, next, existing, Completion::Recovery)
+        let next = original.share_state();
+        let completed = self.complete_candidate_verified(
+            candidate, hash, &next, Some(publication), Completion::Recovery,
+        )?;
+        completed.retain_original(self, candidate, original, visible, &mut originals)?;
+        let originals = Arc::new(originals).install(
+            &self.config, &self.disk_resources, visible, &Some(candidate.snapshot_hash.clone()),
+        )?;
+        self.named_namespaces.install_state(&mut self.state, Arc::clone(visible));
+        self.original_receipts = originals;
+        self.snapshot = Some(candidate.snapshot_hash.clone());
+        Ok(())
     }
     pub(super) fn observe_ordinary_pending<'original>(
         &self,
@@ -900,7 +976,7 @@ impl Engine {
         hash: &str,
         next: &State,
         observed: RecoveredOrdinaryPayloads<'_>,
-    ) -> Result<()> {
+    ) -> Result<CompletedPublication> {
         let same_current = match (&observed.current, &self.current_namespaces) {
             (None, None) => true,
             (Some(before), Some(current)) => std::sync::Arc::ptr_eq(before, current),
@@ -950,17 +1026,6 @@ impl Engine {
         Ok(())
     }
 
-    pub(super) fn complete_published_candidate(
-        &mut self,
-        c: &Candidate,
-        hash: &str,
-        next: &State,
-        publication: Publication,
-        append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
-    ) -> Result<()> {
-        self.complete_published_at(c, hash, next, publication, None, append_receipt)
-    }
-
     pub(super) fn complete_historical_candidate(
         &mut self,
         c: &Candidate,
@@ -969,7 +1034,7 @@ impl Engine {
         publication: Publication,
         locations: &super::recovery::container_locations::ReplayContainerLocations,
         append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
-    ) -> Result<()> {
+    ) -> Result<CompletedPublication> {
         self.complete_published_at(c, hash, next, publication, Some(locations), append_receipt)
     }
 
@@ -981,7 +1046,7 @@ impl Engine {
         publication: Publication,
         locations: Option<&super::recovery::container_locations::ReplayContainerLocations>,
         mut append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
-    ) -> Result<()> {
+    ) -> Result<CompletedPublication> {
         self.require_bound_publication(c, hash, &publication)?;
         crate::container_storage::repair_historical_names(
             &self.config,
@@ -1106,7 +1171,7 @@ impl Engine {
                 )?;
             }
         }
-        Ok(())
+        Ok(CompletedPublication { publication, seal })
     }
     fn complete_candidate_verified(
         &mut self,
@@ -1115,7 +1180,7 @@ impl Engine {
         next: &State,
         existing: Option<Publication>,
         completion: Completion<'_>,
-    ) -> Result<()> {
+    ) -> Result<CompletedPublication> {
         let (verified, names, append) = match completion {
             Completion::Move { names, recovered } => (
                 None,
@@ -1146,11 +1211,12 @@ impl Engine {
             ),
         };
         if let Some(publication) = existing {
-            return self.complete_published_candidate(
+            return self.complete_published_at(
                 c,
                 hash,
                 next,
                 publication,
+                None,
                 |engine, d, pub_hash| {
                     append(
                         engine,
@@ -1392,7 +1458,7 @@ impl Engine {
         }
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_local_publications")?;
-        Ok(())
+        Ok(CompletedPublication { publication, seal })
     }
 }
 
@@ -1631,76 +1697,8 @@ impl crate::engine::PlanningContext<'_> {
         let next = containers.budget_state();
         let metadata_epoch = self.metadata_integrity.capture();
         let members = self.members();
-        let mut required = BTreeMap::<String, u64>::new();
-        // One held descriptor per proof; release all before decision proofs.
-        let proof_budget = payload_proof_budget();
-        let mut existing = Vec::with_capacity(prepared.len());
-        for p in &prepared {
-            let mut copies = Vec::with_capacity(p.placement.route_slot_ids.len());
-            for slot in &p.placement.route_slot_ids {
-                let disk = self.disk(slot)?;
-                let reservation = proof_budget.reserve(1);
-                let disk_id = disk.disk_id.parse::<storage_contract::DiskId>()?;
-                let published = self.state.file_containers
-                    .get(&p.version.file_id.parse::<storage_contract::FileId>()?)
-                    .filter(|record| record.replicas.contains_key(&disk_id));
-                let observed = match published {
-                    Some(record) => {
-                        let scope = super::fresh_layout::containers::observe_replica(
-                            self.config, self.disk_resources, self.state,
-                            p.version.file_id.parse()?, disk,
-                        )?;
-                        let material = VersionMaterial::current(&scope, &p.version)?;
-                        // Only a missing version leaf permits a full new copy.
-                        // A failed source/container identity observation above
-                        // is not converted to missing content.
-                        VerifiedExisting::read_container(
-                            material.root()?, &material.directory()?, &p.version,
-                            scope.container()?, &record.namespace.name,
-                        ).map(Some)
-                    }
-                    None => {
-                        // No source area exists yet for this replica. Charge
-                        // the complete payload before exclusive preparation;
-                        // do not probe an unrelated disk-global directory.
-                        Ok(None)
-                    }
-                };
-                match observed {
-                    Ok(Some(proof)) => {
-                        if let Some(reservation) = reservation {
-                            copies.push(Some(RetainedExisting { proof, reservation }));
-                        } else {
-                            // Large requests retain the bounded-memory reread path.
-                            copies.push(None);
-                        }
-                        continue;
-                    }
-                    Ok(None) => copies.push(None),
-                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
-                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
-                        if error.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        copies.push(None);
-                    }
-                    // Existing corrupt/unreadable bodies were never repairable by
-                    // preparation. Preserve that cause instead of reporting NoSpace.
-                    Err(error) => return Err(error),
-                }
-                *required.entry(slot.clone()).or_default() = required
-                    .get(slot)
-                    .copied()
-                    .unwrap_or(0)
-                    .checked_add(p.version.logical_size)
-                    .ok_or_else(|| {
-                        Error::new(
-                            storage_contract::ErrorCode::ResourceLimit,
-                            "admission bytes overflow",
-                        )
-                    })?;
-            }
-            existing.push(std::sync::Mutex::new(Some(copies)));
-        }
+        let mut required = PhysicalRequirements::new(self);
+        let existing = self.observe_existing_payloads(&prepared, &mut required)?;
         if let Some((file, payload)) = working.as_ref().and_then(|input| input.new_draft()) {
             let record = next.file_containers.get(&file)
                 .ok_or(super::fresh_layout::FreshLayoutError::ContainerScope)?;
@@ -1713,22 +1711,9 @@ impl crate::engine::PlanningContext<'_> {
             if payload.logical_size() > self.config.max_file_bytes {
                 return Err(super::fresh_layout::FreshLayoutError::DraftTooLarge.into());
             }
-            required.insert(disk.slot_id.clone(), payload.logical_size());
+            required.add(disk, payload.logical_size())?;
         }
-        for (slot, bytes) in &required {
-            let d = self.disk(slot)?;
-            let free = self.disk_resources.get(d)?.root.available()?;
-            let budget = d
-                .capacity_bytes
-                .map(|limit| limit.saturating_sub(self.used_bytes(slot)))
-                .unwrap_or(u64::MAX);
-            if bytes.saturating_add(self.config.metadata_reserve_bytes) > free || *bytes > budget {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::NoSpace,
-                    format!("fixed route slot {slot} cannot reserve the complete payload"),
-                ));
-            }
-        }
+        required.check()?;
         // Resolve real page hashes and enforce every metadata bound without
         // publishing files or journal records. No estimate enters the decision.
         let config_hash = object_hash("publication-config", &self.config)?;
@@ -1922,6 +1907,7 @@ impl crate::engine::PlanningContext<'_> {
             result,
             verified,
             names,
+            directory: None,
             metadata_epoch,
             prepared_epoch: self.metadata_integrity.capture(),
             reused_dependencies,
@@ -1942,6 +1928,74 @@ impl crate::engine::PlanningContext<'_> {
 }
 
 impl crate::engine::PlanningContext<'_> {
+    fn observe_existing_payloads<'payload>(
+        &self,
+        prepared: &'payload [Prepared],
+        required: &mut PhysicalRequirements<'_, '_>,
+    ) -> Result<Vec<std::sync::Mutex<Option<ExistingCopies<'payload>>>>> {
+        // Preserve the same held read, missing-leaf policy and retained-FD
+        // budget for both ordinary and combined directory preparations.
+        let proof_budget = payload_proof_budget();
+        let mut existing = Vec::with_capacity(prepared.len());
+        for p in prepared {
+            let mut copies = Vec::with_capacity(p.placement.route_slot_ids.len());
+            for slot in &p.placement.route_slot_ids {
+                let disk = self.disk(slot)?;
+                let reservation = proof_budget.reserve(1);
+                let disk_id = disk.disk_id.parse::<storage_contract::DiskId>()?;
+                let published = self.state.file_containers
+                    .get(&p.version.file_id.parse::<storage_contract::FileId>()?)
+                    .filter(|record| record.replicas.contains_key(&disk_id));
+                let observed = match published {
+                    Some(record) => {
+                        let scope = super::fresh_layout::containers::observe_replica(
+                            self.config, self.disk_resources, self.state,
+                            p.version.file_id.parse()?, disk,
+                        )?;
+                        let material = VersionMaterial::current(&scope, &p.version)?;
+                        // Only a missing version leaf permits a full new copy.
+                        // A failed source/container identity observation above
+                        // is not converted to missing content.
+                        VerifiedExisting::read_container(
+                            material.root()?, &material.directory()?, &p.version,
+                            scope.container()?, &record.namespace.name,
+                        ).map(Some)
+                    }
+                    None => {
+                        // No source area exists yet for this replica. Charge
+                        // the complete payload before exclusive preparation;
+                        // do not probe an unrelated disk-global directory.
+                        Ok(None)
+                    }
+                };
+                match observed {
+                    Ok(Some(proof)) => {
+                        if let Some(reservation) = reservation {
+                            copies.push(Some(RetainedExisting { proof, reservation }));
+                        } else {
+                            // Large requests retain the bounded-memory reread path.
+                            copies.push(None);
+                        }
+                        continue;
+                    }
+                    Ok(None) => copies.push(None),
+                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        copies.push(None);
+                    }
+                    // Existing corrupt/unreadable bodies were never repairable by
+                    // preparation. Preserve that cause instead of reporting NoSpace.
+                    Err(error) => return Err(error),
+                }
+                required.add(disk, p.version.logical_size)?;
+            }
+            existing.push(std::sync::Mutex::new(Some(copies)));
+        }
+        Ok(existing)
+    }
+
     fn prepare_payloads<'a>(
         &self,
         prepared: &'a [Prepared],

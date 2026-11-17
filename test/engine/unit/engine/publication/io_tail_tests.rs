@@ -46,6 +46,7 @@ impl Fixture {
             config: &self.config,
             disk_resources: &self.resources,
             state: &self.state,
+            original_receipts: None,
             named_namespaces: &self.named_namespaces,
             current_namespaces: None,
             workspace_namespace_baselines: &self.namespace_baselines,

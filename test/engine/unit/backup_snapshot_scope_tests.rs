@@ -2,7 +2,7 @@
 use super::require_backup_snapshot_scope;
 use crate::persist::snapshot_worktree::{self as codec, NodeAllocation};
 use crate::snapshot_worktree::{
-    prepare_namespace_host, publication, registry::ReceiptIndex, SnapshotSourceError,
+    prepare_namespace_host, publication, SnapshotSourceError,
 };
 use crate::{
     BackupPreparationRequest, BackupTopologyTarget, BackupTransactionRequest,
@@ -92,7 +92,7 @@ fn require_registered(error: Error, publication: OperationId) {
 }
 
 fn require_original_body(engine: &Engine, handle: SnapshotHandle) {
-    let index = ReceiptIndex::capture(engine.state()).unwrap();
+    let index = engine.snapshot_receipts().unwrap();
     let held = index.reopen_node(engine, handle).unwrap();
     let entries = held.manifest().entries();
     assert_eq!(entries.len(), 1);
@@ -199,7 +199,7 @@ fn reserved_snapshot_is_pending_not_a_published_snapshot() {
     assert_eq!(
         engine.operation(allocated.completion).unwrap_err().code(), ErrorCode::OperationNotFound,
     );
-    let index = ReceiptIndex::capture(engine.state()).unwrap();
+    let index = engine.snapshot_receipts().unwrap();
     assert!(index.completions.contains_key(&allocated.completion));
     drop(index);
     let path = target(temp.path(), "unwritten-target");

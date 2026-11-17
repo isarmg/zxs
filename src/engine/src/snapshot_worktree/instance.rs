@@ -8,7 +8,6 @@ use crate::disk::DiskResources;
 use crate::persist::snapshot_worktree::{
     Record, WorktreeAllocation, WorktreeCompletion, WorktreeReservation,
 };
-use crate::snapshot_worktree::registry::ReceiptIndex;
 use crate::snapshot_worktree::{RegistrationError, Result, publication};
 use crate::working_tree::snapshot::HeldSnapshotNode;
 use crate::{Engine, State, ValidatedConfig};
@@ -34,7 +33,8 @@ pub(crate) fn create_worktree(
     request: &CreateWorktree,
     principal: &Principal,
 ) -> Result<WorktreeHandle> {
-    let index = ReceiptIndex::capture(engine.state())?;
+    let receipts = engine.snapshot_receipt_source()?;
+    let index = receipts.index()?;
     if let Some(handle) = index.retry_worktree(request, principal)? {
         with_worktree(engine, handle, |_| Ok(()))?;
         return Ok(handle);
@@ -85,7 +85,7 @@ impl ReservedWorktree {
         {
             return Err(RegistrationError::PublicationChanged);
         }
-        let fresh = ReceiptIndex::capture(engine.state())?
+        let fresh = engine.snapshot_receipts()?
             .reopen_node(engine, self.plan.request.source)?;
         if fresh.binding() != self.source.binding() {
             return Err(RegistrationError::Source);
@@ -147,7 +147,7 @@ pub(crate) fn with_worktree<R>(
     handle: WorktreeHandle,
     read: impl for<'node, 'session> FnOnce(&'session WorktreeSession<'node>) -> Result<R>,
 ) -> Result<R> {
-    let index = ReceiptIndex::capture(engine.state())?;
+    let index = engine.snapshot_receipts()?;
     let registered = index.worktree(handle)?;
     let source = index.reopen_node(engine, registered.source().handle())?;
     let session = registered.reopen(&source)?;
