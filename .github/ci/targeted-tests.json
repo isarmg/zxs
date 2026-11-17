@@ -106,7 +106,7 @@
           "exact": [
             "snapshot_worktree::public::transport::tests::complete_resaves_keep_original_occurrence_and_move_only_exact_current_revision"
           ],
-          "max_tests": 8
+          "max_tests": 11
         },
         {
           "package": "storage-engine",
@@ -222,7 +222,7 @@
             "offline::foreign_chain::identity::tests::",
             "offline::foreign_chain::tests::"
           ],
-          "max_tests": 21,
+          "max_tests": 23,
           "timeout_seconds": 900
         },
         {
@@ -722,7 +722,7 @@
           "exact": [
             "smb_rpc::tests::native_dispatch_tests::native_dispatch_uses_real_engine_and_cold_unborn_content_without_transport"
           ],
-          "max_tests": 3,
+          "max_tests": 4,
           "timeout_seconds": 900
         }
       ]
@@ -741,7 +741,7 @@
           "prefixes": [
             "snapshot_worktree::instance::allocation::tests::"
           ],
-          "max_tests": 6,
+          "max_tests": 8,
           "timeout_seconds": 900
         }
       ]
@@ -6920,6 +6920,137 @@
           "name": "browser-smoke"
         }
       ]
+    },
+    "selected-scope-and-physical-images": {
+      "reason": "Exact cold physical FILE and original DISK/SYSTEM, scalar audit, native database/marker/registered FILE and held predecessor tests. No live cutover, full non-genesis protocol or physical retirement claim.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "engine::scope_closure::tests::previously_admitted_frontier_reads_only_the_selected_original_disk_without_writers",
+            "engine::index::preparation::tests::genesis_system_logical_digest_includes_native_scalar_audit_row",
+            "container_storage::file_database::tests::held_file_scope_preserves_unknown_sidecars_and_rejects_byte_equal_replacement"
+          ],
+          "max_tests": 3,
+          "isolate": true,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "container_storage::ordinary_preparation::backup::originals::inventory_tests::registered_unborn_file_is_not_an_empty_original_or_complete_object_backup",
+            "container_storage::ordinary_preparation::backup::originals::inventory_tests::registered_file_is_independent_of_body_routes_and_each_route_needs_its_original_binding",
+            "engine::backup_preparation::native_control::archive::format_tests::object_scoped_and_cutover_marker_tails_require_the_unmarked_peers_own_evidence",
+            "database_install::tests::required_exchange_does_not_adopt_empty_or_matching_successors_from_another_root",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::serving_activation::original_objects::tests::original_file_epoch_is_not_the_latest_whole_pool_sequence"
+          ],
+          "max_tests": 5,
+          "isolate": true,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "encoding::tests::named_wire_records_require_objects_at_every_nesting_level",
+            "encoding::tests::published_vectors"
+          ],
+          "max_tests": 2
+        }
+      ]
+    },
+    "nested-ordinary-and-smb-birth": {
+      "reason": "Exercise real nested ordinary FILE selection and origin, exact canonical mounted path budget, and read-only native birth versus genuine writer contention on both SMB dispatchers. Not a network Samba or Worktree Automatic run.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "snapshot_worktree::drafts::native_tests::root_snapshot_selects_a_nested_file_without_copying_unselected_working_bytes",
+            "snapshot_worktree::drafts::native_tests::automatic_save_is_durable_without_history_and_emergency_manual_switch_keeps_its_body",
+            "snapshot_worktree::instance::allocation::tests::mounted_path_budget::depth_32_is_servable_but_a_33rd_component_never_reserves_a_mount",
+            "snapshot_worktree::instance::allocation::tests::mounted_path_budget::fresh_mount_uses_its_real_prefix_and_accepts_the_exact_utf16_boundary"
+          ],
+          "max_tests": 4,
+          "isolate": true,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "smb_rpc::tests::native_dispatch_tests::readonly_birth::native_readonly_creator_and_existing_open_if_do_not_own_the_writer_slot",
+            "smb_rpc::tests::native_dispatch_tests::worktree::native_worktree_added_birth_resaves_close_and_cold_reopen_keep_independent_identity",
+            "smb_rpc::tests::native_dispatch_tests::worktree::native_worktree_nested_birth_resaves_close_and_cold_reopen_keep_independent_identity",
+            "smb_rpc::tests::worktree_dispatch_tests::named_root_pages_reopen_the_captured_mounts_and_restart_on_membership_change"
+          ],
+          "max_tests": 4,
+          "isolate": true,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "helper-existing-host-boundaries": {
+      "reason": "Check the existing private management startup gate and the real helper router admission/HTTP boundaries for original configuration, sealed material and repair. Only isolated fixtures; no host or package operations.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "startup_admission::tests::durable_initial_activation_admits_without_writing_or_probing_data_disks",
+            "startup_admission::tests::interrupted_initial_activation_is_not_bootstrapped_by_normal_entry",
+            "startup_admission::tests::completed_first_storage_needs_its_exact_original_offline_readback"
+          ],
+          "max_tests": 3,
+          "isolate": true,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "exact": [
+            "console::configuration_recovery_tests::both_original_configuration_routes_keep_csrf_and_one_owner",
+            "console::materials_tests::material_downloads_keep_same_origin_and_bounded_work_admission",
+            "console::program_repair_tests::every_repair_route_retains_csrf_and_one_worker_admission",
+            "console::runtime_tests::runtime_routes_keep_origin_csrf_and_single_work_owner_boundaries"
+          ],
+          "max_tests": 4
+        }
+      ]
     }
   },
   "rules": [
@@ -6933,7 +7064,10 @@
         "automatic-management-observation",
         "original-holder-recovery",
         "same-payload-repair-originals",
-        "real-browser-first-commit-delivery"
+        "real-browser-first-commit-delivery",
+        "selected-scope-and-physical-images",
+        "nested-ordinary-and-smb-birth",
+        "helper-existing-host-boundaries"
       ]
     },
     {
@@ -7188,7 +7322,8 @@
       "path": "src/server/src/offline/service_worker.rs",
       "groups": [
         "offline-worker-failures",
-        "original-holder-recovery"
+        "original-holder-recovery",
+        "foreign-original-material"
       ]
     },
     {
@@ -7549,7 +7684,8 @@
     {
       "path": "src/engine/src/container_storage/ordinary_preparation/backup/originals.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "selected-scope-and-physical-images"
       ]
     },
     {
@@ -7873,7 +8009,8 @@
     {
       "path": "src/server/src/smb_rpc/native.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "nested-ordinary-and-smb-birth"
       ]
     },
     {
@@ -7891,7 +8028,8 @@
     {
       "path": "src/server/src/smb_rpc/worktree/native.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "nested-ordinary-and-smb-birth"
       ]
     },
     {
@@ -7940,7 +8078,8 @@
     {
       "path": "test/server/unit/smb_rpc/native_worktree_tests.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "nested-ordinary-and-smb-birth"
       ]
     },
     {
@@ -8380,7 +8519,8 @@
     {
       "path": "test/server/unit/smb_rpc/worktree_dispatch_tests.rs",
       "groups": [
-        "smb-worktree-overwrite"
+        "smb-worktree-overwrite",
+        "nested-ordinary-and-smb-birth"
       ]
     },
     {
@@ -9046,7 +9186,8 @@
     {
       "path": "test/engine/unit/snapshot_worktree/draft_gateway/native.rs",
       "groups": [
-        "directory-working-publication"
+        "directory-working-publication",
+        "nested-ordinary-and-smb-birth"
       ]
     },
     {
@@ -9752,7 +9893,8 @@
     {
       "path": "test/server/unit/startup_admission_tests.rs",
       "groups": [
-        "server-named-disk-fixtures"
+        "server-named-disk-fixtures",
+        "helper-existing-host-boundaries"
       ]
     },
     {
@@ -11709,7 +11851,10 @@
     {
       "path": "src/engine/src/error.rs",
       "groups": [
-        "file-metadata-plan"
+        "file-metadata-plan",
+        "selected-scope-and-physical-images",
+        "original-holder-recovery",
+        "permanent-removal-exact-leaves"
       ]
     },
     {
@@ -12595,7 +12740,8 @@
       "path": "test/engine/unit/backup_native_format_tests.rs",
       "groups": [
         "container-tags-format",
-        "original-holder-recovery"
+        "original-holder-recovery",
+        "selected-scope-and-physical-images"
       ]
     },
     {
@@ -15882,7 +16028,8 @@
     {
       "path": "test/engine/unit/container_storage/file_database_tests.rs",
       "groups": [
-        "engine-integer-errors"
+        "engine-integer-errors",
+        "selected-scope-and-physical-images"
       ]
     },
     {
@@ -16499,7 +16646,8 @@
     {
       "path": "test/engine/unit/engine/index/preparation_readback_tests.rs",
       "groups": [
-        "backup-scoped-encoding-memo"
+        "backup-scoped-encoding-memo",
+        "selected-scope-and-physical-images"
       ]
     },
     {
@@ -16911,7 +17059,8 @@
     {
       "path": "test/engine/unit/database_install_tests.rs",
       "groups": [
-        "scoped-database-install-recovery"
+        "scoped-database-install-recovery",
+        "selected-scope-and-physical-images"
       ]
     },
     {
@@ -19330,7 +19479,8 @@
     {
       "path": "src/server/src/engine_backend/read_projection.rs",
       "groups": [
-        "ordinary-smb-manual-draft"
+        "ordinary-smb-manual-draft",
+        "nested-ordinary-and-smb-birth"
       ]
     },
     {
@@ -20373,7 +20523,8 @@
     {
       "path": "test/engine/unit/engine/scope_genesis_tests.rs",
       "groups": [
-        "original-holder-recovery"
+        "original-holder-recovery",
+        "selected-scope-and-physical-images"
       ]
     },
     {
@@ -20597,6 +20748,218 @@
       "path": "test/engine/unit/snapshot_worktree/draft_gateway/automatic_nodes.rs",
       "groups": [
         "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/contract/src/encoding.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/physical.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/index/preparation/logical.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/index/preparation/readback.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/index/scope/prepared.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/index/system_changes/prepared.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/materials.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/runtime.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/runtime.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/runtime.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/store.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/store.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/database_install/existing.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/backup_original_inventory_tests.rs",
+      "groups": [
+        "selected-scope-and-physical-images"
+      ]
+    },
+    {
+      "path": "src/contract/src/shared_records.rs",
+      "groups": [
+        "nested-ordinary-and-smb-birth",
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/automatic.rs",
+      "groups": [
+        "nested-ordinary-and-smb-birth",
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/ordinary.rs",
+      "groups": [
+        "nested-ordinary-and-smb-birth",
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/origin.rs",
+      "groups": [
+        "nested-ordinary-and-smb-birth",
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/trace.rs",
+      "groups": [
+        "nested-ordinary-and-smb-birth",
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/mounted_path_budget.rs",
+      "groups": [
+        "nested-ordinary-and-smb-birth"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/native_readonly_birth.rs",
+      "groups": [
+        "nested-ordinary-and-smb-birth"
+      ]
+    },
+    {
+      "path": "src/server/src/startup_admission.rs",
+      "groups": [
+        "helper-existing-host-boundaries"
+      ]
+    },
+    {
+      "path": "test/helper/unit/console/configuration_recovery_tests.rs",
+      "groups": [
+        "helper-existing-host-boundaries"
+      ]
+    },
+    {
+      "path": "test/helper/unit/console/materials_tests.rs",
+      "groups": [
+        "helper-existing-host-boundaries"
+      ]
+    },
+    {
+      "path": "test/helper/unit/console/program_repair_tests.rs",
+      "groups": [
+        "helper-existing-host-boundaries"
+      ]
+    },
+    {
+      "path": "test/helper/unit/console/runtime_tests.rs",
+      "groups": [
+        "helper-existing-host-boundaries"
+      ]
+    },
+    {
+      "path": "helper/src/deployment/samba_password.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "helper/src/deployment/samba_password/enrollment.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "helper/src/system_program.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/maintenance/cleanup.rs",
+      "groups": [
+        "original-holder-recovery",
+        "permanent-removal-exact-leaves"
+      ]
+    },
+    {
+      "path": "src/engine/src/node_retirement/frozen_bodies.rs",
+      "groups": [
+        "original-holder-recovery",
+        "permanent-removal-exact-leaves"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/foreign_chain/delivery.rs",
+      "groups": [
+        "foreign-original-material"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/file_epochs.rs",
+      "groups": [
+        "selected-scope-and-physical-images",
+        "backup-published-original-files"
       ]
     }
   ],

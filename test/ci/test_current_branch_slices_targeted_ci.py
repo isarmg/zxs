@@ -16,7 +16,27 @@ class CurrentBranchSelection(unittest.TestCase):
 
     def test_changed_inputs_select_held_budget_helper_and_admission_tests(self):
         for group, files in {
+            'selected-scope-and-physical-images': [
+                'src/engine/src/engine/index/system_changes/prepared.rs',
+                'src/engine/src/container_storage/file_database/physical.rs',
+                'test/engine/unit/container_storage/backup_original_inventory_tests.rs',
+                'src/engine/src/database_install/existing.rs',
+                'src/engine/src/engine/backup_preparation/file_epochs.rs',
+                'src/engine/src/error.rs',
+            ],
+            'nested-ordinary-and-smb-birth': [
+                'test/server/unit/smb_rpc/native_readonly_birth.rs',
+                'test/engine/unit/snapshot_worktree/mounted_path_budget.rs',
+                'src/engine/src/business/file_draft/trace.rs',
+            ],
+            'helper-existing-host-boundaries': [
+                'src/server/src/startup_admission.rs', 'test/helper/unit/console/runtime_tests.rs',
+                'test/helper/unit/console/configuration_recovery_tests.rs',
+            ],
+            'foreign-original-material': ['src/server/src/offline/foreign_chain/delivery.rs',
+                                         'src/server/src/offline/service_worker.rs'],
             'automatic-management-observation': [
+                'src/web/src/files/commit_mode.rs',
                 'src/web/src/files/commit_mode/warning.rs', 'src/web/src/files/automatic_observation/calendar.rs',
                 'test/server/unit/http_automatic_observation.rs', 'src/contract/src/file_draft/automatic.rs',
             ],

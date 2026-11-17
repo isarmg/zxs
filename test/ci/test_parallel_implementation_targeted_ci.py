@@ -96,7 +96,7 @@ class ParallelImplementationSelection(unittest.TestCase):
     def test_native_draft_and_worktree_tests_are_not_only_product_checks(self):
         expected = {
             'shared-draft-selected-scope': (3, ['business::batch::shared_draft_copy_tests::']),
-            'worktree-exact-originals': (8, ['snapshot_worktree::explicit_occurrence_tests::',
+            'worktree-exact-originals': (11, ['snapshot_worktree::explicit_occurrence_tests::',
                                             'snapshot_worktree::instance::allocation::tests::']),
             'draft-base-retention': (2, ['node_retirement::working::tests::']),
             'lifecycle-membership-cache': (13, ['state_projection::lifecycles::membership::tests::',
@@ -117,7 +117,7 @@ class ParallelImplementationSelection(unittest.TestCase):
             ('helper-http-owner-budgets', 'storage-helper', 'zxs-helper', 16),
             ('helper-maintenance-replies', 'storage-helper', 'zxs-helper', 6),
             ('offline-worker-failures', 'storage-server', 'zxs', 2),
-            ('foreign-original-material', 'storage-server', 'zxs', 21),
+            ('foreign-original-material', 'storage-server', 'zxs', 23),
         ]:
             with self.subTest(group=group):
                 runtime, product = self.policy['groups'][group]['rust_targets']
@@ -135,7 +135,7 @@ class ParallelImplementationSelection(unittest.TestCase):
 
     def test_previous_worktree_and_backup_scopes_keep_their_own_budgets(self):
         names = self.policy['groups']['worktree-automatic-names']['rust_targets'][0]
-        self.assertEqual(names['max_tests'], 6)
+        self.assertEqual(names['max_tests'], 8)
         for path, previous in [
             ('test/engine/unit/snapshot_worktree/automatic_names.rs', 'worktree-automatic-names'),
             ('test/engine/unit/snapshot_worktree/complete_resaves.rs', 'worktree-http-transport'),
