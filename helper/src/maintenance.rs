@@ -78,6 +78,40 @@ struct Joined {
     child: Child,
     reaped: bool,
 }
+
+#[derive(Debug)]
+struct UnsuccessfulExit(std::process::ExitStatus);
+impl std::fmt::Display for UnsuccessfulExit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "embedded maintenance program exited unsuccessfully: {}; its original operation may already be durable", self.0)
+    }
+}
+impl std::error::Error for UnsuccessfulExit {}
+
+/// Protocol bytes may contain credential or path text. Keep the typed parser
+/// cause privately without exposing it through Display, Debug or source chains.
+struct MalformedReplyHeader {
+    cause: json_codec::Error,
+}
+impl std::fmt::Display for MalformedReplyHeader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "invalid maintenance reply header at line {} column {}; raw parser details are withheld",
+            self.cause.line(), self.cause.column())
+    }
+}
+impl std::fmt::Debug for MalformedReplyHeader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, formatter)
+    }
+}
+impl std::error::Error for MalformedReplyHeader {}
+
+fn require_successful_exit(status: std::process::ExitStatus) -> Result<(), Error> {
+    if !status.success() {
+        return Err(transport("exit", UnsuccessfulExit(status)));
+    }
+    Ok(())
+}
 impl Joined {
     fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
         let status = self.child.wait()?;
@@ -158,12 +192,7 @@ pub(crate) fn run(operation: Operation, body: SecretBytes) -> Result<Vec<u8>, Er
     let status = child.wait().map_err(|source| transport("wait", source))?;
     written.map_err(|source| transport("request write", source))?;
     drained.map_err(|source| transport("response drain", source))?;
-    if !status.success() {
-        return Err(transport(
-            "exit",
-            "embedded program failed without a complete successful protocol exit",
-        ));
-    }
+    require_successful_exit(status)?;
     reply
 }
 fn read_reply(operation: Operation, output: &mut impl BufRead) -> Result<Vec<u8>, Error> {
@@ -178,8 +207,8 @@ fn read_reply(operation: Operation, output: &mut impl BufRead) -> Result<Vec<u8>
             "missing, incomplete or oversized reply header",
         ));
     }
-    let header: ReplyHeader =
-        json_codec::from_slice(&header).map_err(|source| transport("response header", source))?;
+    let header: ReplyHeader = json_codec::from_slice(&header)
+        .map_err(|cause| transport("response header", MalformedReplyHeader { cause }))?;
     let limit = match &header {
         ReplyHeader::Success { body_bytes } => {
             if *body_bytes == 0 || *body_bytes > operation.response_limit() {

@@ -82,3 +82,46 @@ fn current_protocol_does_not_admit_unknown_commands_or_formats() {
         assert!(json_codec::from_str::<wire::RequestHeader>(value).is_err());
     }
 }
+
+#[test]
+fn unsuccessful_native_exit_retains_status_without_claiming_the_operation_did_not_run() {
+    use std::os::unix::process::ExitStatusExt;
+    for raw in [7 << 8, 9] {
+        let status = std::process::ExitStatus::from_raw(raw);
+        let error = require_successful_exit(status).unwrap_err();
+        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code(Operation::DiskAdditionCommit), "maintenance_transport");
+        let Error::Transport { stage, source } = &error else {
+            panic!("failed native exit must remain a transport observation");
+        };
+        assert_eq!(*stage, "exit");
+        assert_eq!(source.downcast_ref::<UnsuccessfulExit>().unwrap().0, status);
+        assert!(error.to_string().contains(&status.to_string()));
+        assert!(error.to_string().contains("may already be durable"));
+    }
+    require_successful_exit(std::process::ExitStatus::from_raw(0)).unwrap();
+}
+
+#[test]
+fn malformed_reply_header_keeps_private_parser_cause_without_echoing_response_text() {
+    let secret = "credential-or-private-path-must-not-leak";
+    let malformed = format!("{{\"status\":\"{secret}\"}}\n");
+    for operation in [Operation::DiskAdditionPreview, Operation::AdministratorReset] {
+        let error = read_reply(operation, &mut Cursor::new(malformed.as_bytes())).unwrap_err();
+        assert_eq!(error.code(operation), "maintenance_transport");
+        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let Error::Transport { stage, source } = &error else {
+            panic!("invalid header is a transport failure, not a domain rejection");
+        };
+        assert_eq!(*stage, "response header");
+        let private = source.downcast_ref::<MalformedReplyHeader>().unwrap();
+        assert!(private.cause.is_data());
+        assert!(private.cause.to_string().contains(secret));
+        assert!(std::error::Error::source(private).is_none());
+        for diagnostic in [error.to_string(), format!("{error:?}"),
+            crate::diagnostic_chain(&error)] {
+            assert!(!diagnostic.contains(secret));
+            assert!(diagnostic.contains("raw parser details are withheld"));
+        }
+    }
+}
