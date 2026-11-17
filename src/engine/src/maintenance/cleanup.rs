@@ -83,6 +83,9 @@ fn same_regular(original: &Metadata, named: &Metadata) -> bool {
         && original.ctime_nsec() == named.ctime_nsec()
 }
 
+mod readback;
+pub(crate) use readback::CleanupReadback;
+
 /// Never rewrite an equivalent authenticated local decision simply because an
 /// unrelated global publication is newer. Only admitted irreversible forwards
 /// can replace an older local decision; an occupied unproven slot is not ours.

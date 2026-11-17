@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 mod cleanup;
+pub(crate) use cleanup::CleanupReadback;
 mod live_pins;
 
 struct BoundaryInput<'a> {

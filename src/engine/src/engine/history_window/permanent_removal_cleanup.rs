@@ -1,6 +1,5 @@
 //! Bound cleanup observations. Recorded original bindings survive route changes.
 use super::{HistoryCancellationCheckpoint, PermanentNodeRemovalAnalysis};
-use crate::persist::layout;
 use crate::{ContentState, Engine, Error, ErrorCode, Result};
 use storage_contract::history_window::{HistoryRoot, HistoryVersionId, HistoryWindowCancellation};
 
@@ -276,27 +275,11 @@ fn inspect_replica(
         &engine.config, &engine.disk_resources, &engine.state, version.file_id.parse()?, disk,
     )?;
     let material = crate::disk::VersionMaterial::current(&scope, version)?;
-    let root = material.root()?;
-    let directory = material.directory()?;
-    let tombstone_path = directory.join(layout::VERSION_TOMBSTONE.as_path());
-    if root.open_optional_read_regular(&tombstone_path)?.is_none() {
-        return Ok(RemovalReplicaCleanupState::MissingTombstone);
-    }
+    let readback = crate::maintenance::CleanupReadback::capture(&material)?;
     let observe = &mut |bytes| budget.read(bytes);
-    let stored: crate::FileVersion =
-        root.read_json_observed(&directory.join(layout::VERSION_DESCRIPTOR.as_path()), observe)?;
-    if stored != *version {
-        return Err(Error::new(
-            ErrorCode::ObjectCorrupt,
-            "cleanup version differs from the captured retained version",
-        ));
-    }
-    let tombstone: crate::journal::ContentTombstone =
-        crate::journal::decode_proof(&root.read_bytes_observed(
-            &tombstone_path,
-            crate::disk::MAX_METADATA,
-            observe,
-        )?)?;
+    let Some(tombstone) = readback.read_proof(version, observe)? else {
+        return Ok(RemovalReplicaCleanupState::MissingTombstone);
+    };
     if tombstone.state != state || tombstone.candidate.sequence > engine.state.sequence {
         return Err(Error::new(
             ErrorCode::TombstoneInvalid,
@@ -315,19 +298,9 @@ fn inspect_replica(
         observe,
         Some(&metadata),
     )?;
-    // The installed body may have moved but the source preparation keeps the
-    // original creation name. Both leaf observations require their real parents;
-    // missing parents, stopped disks and unsafe links are not verified absence.
-    let installed_present = material
-        .container()?
-        .open_optional_read_regular(&material.body_path()?)?
-        .is_some();
-    budget.observe(0)?;
-    let prepared_present = root
-        .open_optional_read_regular(&material.prepared_body_path()?)?
-        .is_some();
-    material.verify()?;
-    Ok(if installed_present || prepared_present {
+    // This is an interval under the Engine's writer exclusion, not proof
+    // that an external copy or an unobserved occurrence was removed.
+    Ok(if readback.observe_bodies(&material, &mut || budget.observe(0))? {
         RemovalReplicaCleanupState::PayloadPresent
     } else {
         RemovalReplicaCleanupState::VerifiedAbsent

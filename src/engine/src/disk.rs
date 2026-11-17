@@ -260,10 +260,11 @@ pub(crate) fn read_fill_with_limit(
 }
 
 pub(crate) fn read_file_bytes_observed(
-    mut file: File,
+    file: impl Into<crate::ReadFile>,
     maximum: usize,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<Vec<u8>> {
+    let mut file = file.into();
     if file.metadata()?.len() > maximum as u64 {
         return Err(Error::new(
             ErrorCode::ResourceLimit,
@@ -287,6 +288,7 @@ pub(crate) fn read_file_bytes_observed(
         }
     }
     observe(0)?;
+    file.check_running()?;
     Ok(output)
 }
 
