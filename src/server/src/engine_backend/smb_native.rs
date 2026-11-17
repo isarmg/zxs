@@ -48,8 +48,7 @@ pub(super) fn open(
             };
             let working = &engine.state().file_containers.get(&target.file)
                 .ok_or_else(ApiError::forbidden)?.working;
-            if working.mode() != storage_contract::file_draft::CommitMode::Manual
-                || (working.draft().is_some() && working.incremental().is_none())
+            if working.draft().is_some() && working.incremental().is_none()
             {
                 return Ok(None);
             }

@@ -40,7 +40,7 @@ fn lost_manual_reply_reuses_the_frozen_request_and_never_acknowledges_later_fd_b
     };
     let working = engine.file_working_state(&target).unwrap();
     engine.change_file_working(&DraftCommand::SetMode {
-        target: target.clone(), expected: working.revision(), mode: CommitMode::Manual,
+        target: target.clone(), expected: working.revision(), mode: CommitMode::Manual.into(),
     }, &"alice".parse().unwrap(), OperationId::generate().unwrap()).unwrap();
     let (fixture, shared, backend) = fixture_backend(temp, engine);
     let mut session = named_session(shared.clone(), &repository.main_branch_id);

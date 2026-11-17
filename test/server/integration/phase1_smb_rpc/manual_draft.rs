@@ -205,6 +205,7 @@ fn public_smb_manual_flush_and_close_keep_drafts_until_cold_authenticated_http_c
     fixture.backend.write_file_draft(&fixture.identity(), ChangeFileWorking {
         operation_id: OperationId::generate().unwrap(),
         command: DraftCommand::Write {
+            controller: storage_contract::file_draft::SaveController::Manual {},
             target: target.clone(), expected: before.working.revision(), base: before.base,
             content_hash: source.hash, logical_size: source.size,
         },

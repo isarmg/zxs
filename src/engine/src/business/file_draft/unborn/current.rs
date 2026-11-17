@@ -4,13 +4,13 @@ use crate::business::namespace::working::WorkingNamespace;
 use crate::persist::file_draft::birth as codec;
 use crate::{Result, State};
 use std::collections::{BTreeMap, BTreeSet};
-use storage_contract::file_draft::{CommitMode, UnbornBody, UnbornWorking};
+use storage_contract::file_draft::{DraftCommand, UnbornBody, UnbornDecision, UnbornWorking};
 use storage_contract::file_container::FileContainerRecord;
 use storage_contract::{FileId, Principal, Sequence};
 
-/// Structural closure of Birth and Save receipts. Native pair admission still
-/// reconstructs every complete original transition and the held consumer checks
-/// every extent. Later mode transitions have no issuer here.
+/// Birth, save and the last explicit mode decision are independently related to
+/// the current working row. Native admission replays each original pair; actual
+/// extents remain mandatory when the held content is used.
 pub(crate) fn validate(state: &State, maximum: usize) -> Result<BTreeSet<FileId>> {
     let mut namespaces = BTreeMap::new();
     let mut files = BTreeSet::new();
@@ -75,29 +75,46 @@ fn require_record(
         return Err(invalid());
     }
     let working = record.working.unborn().ok_or_else(invalid)?;
-    match working.body() {
-        UnbornBody::Empty {} if working == &UnbornWorking::birth() => Ok(()),
-        UnbornBody::Empty {} => Err(invalid()),
-        UnbornBody::Saved { manifest } => {
-            let saved = state.operations.get(&manifest.operation()).ok_or_else(invalid)?;
-            let principal = state.operation_principals.get(&manifest.operation())
-                .ok_or_else(invalid)?                .parse::<Principal>()                .map_err(|_| invalid())?;
-            let save = crate::persist::file_draft::unborn_save::decode(saved)?;
-            if saved.sequence <= receipt.sequence || saved.sequence > state.sequence
-                || save.receipt(manifest.operation(), Sequence::new(saved.sequence), &principal)?
-                    != *saved
-                || save.request().target != *decoded.target()
-                || &save.request().manifest != manifest
-                || working.mode() != CommitMode::Manual
-                || save.request().expected.generation().get()
-                    != manifest.generation().generation().get()
-                || save.request().expected.next().map_err(|source| {
-                    crate::Error::FileDraft(crate::DraftError::RevisionExhausted(source))
-                })? != working.revision()
-            {
+    if let Some(controller) = working.automatic_controller() {
+        controller.validate(working.revision())
+            .map_err(|error| crate::Error::FileDraft(crate::DraftError::Controller(error)))?;
+    }
+    match working.last_decision() {
+        UnbornDecision::Birth {} if working == &UnbornWorking::birth() => return Ok(()),
+        UnbornDecision::Birth {} => return Err(invalid()),
+        UnbornDecision::Mode { operation } => {
+            let change = state.operations.get(&operation).ok_or_else(invalid)?;
+            let actor = state.operation_principals.get(&operation).ok_or_else(invalid)?;
+            let original = crate::persist::file_draft::decode(state, change)?;
+            let outcome = original.outcome();
+            if change.sequence <= receipt.sequence || change.sequence > state.sequence
+                || !matches!(&outcome.request, crate::persist::file_draft::Request::Command(
+                    DraftCommand::SetMode { .. } | DraftCommand::ResumeAutomatic { .. }))
+                || outcome.request.target() != decoded.target() || outcome.content.is_some()
+                || outcome.working != record.working
+                || original.receipt(state, operation, change.sequence, actor)? != *change
+            { return Err(invalid()); }
+        }
+        UnbornDecision::Save { operation } => {
+            if !matches!(working.body(), UnbornBody::Saved { manifest } if manifest.operation() == operation) {
                 return Err(invalid());
             }
-            Ok(())
         }
     }
+    if let UnbornBody::Saved { manifest } = working.body() {
+        let saved = state.operations.get(&manifest.operation()).ok_or_else(invalid)?;
+        let principal = state.operation_principals.get(&manifest.operation())
+            .ok_or_else(invalid)?.parse::<Principal>().map_err(|_| invalid())?;
+        let save = crate::persist::file_draft::unborn_save::decode(saved)?;
+        let after = save.request().expected.next()
+            .map_err(|source| crate::Error::FileDraft(crate::DraftError::RevisionExhausted(source)))?;
+        if saved.sequence <= receipt.sequence || saved.sequence > state.sequence
+            || save.receipt(manifest.operation(), Sequence::new(saved.sequence), &principal)? != *saved
+            || save.request().target != *decoded.target() || &save.request().manifest != manifest
+            || after > working.revision()
+            || (matches!(working.last_decision(), UnbornDecision::Save { .. }) &&
+                (after != working.revision() || save.request().controller != record.working.save_controller()))
+        { return Err(invalid()); }
+    }
+    Ok(())
 }

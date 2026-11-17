@@ -470,6 +470,7 @@ impl PreparedWorkingSave {
             return Err(Error::FileDraft(Failure::UnbornRequired));
         }
         Ok(storage_contract::file_draft::UnbornSaveRequest {
+            controller: self.source.reader.scope().record.working.save_controller(),
             target: target.clone(),
             expected: self.source.reader.scope().record.working.revision(),
             manifest: self.manifest.clone(),
@@ -515,6 +516,7 @@ impl PreparedWorkingSave {
         Ok(crate::persist::file_draft::RangeSaveRequest::new(
             target.clone(), self.source.reader.scope().record.working.revision(),
             reader.base(), self.manifest.commitment(), payload.logical_size(),
+            self.source.reader.scope().record.working.save_controller(),
         ))
     }
 
@@ -524,6 +526,7 @@ impl PreparedWorkingSave {
         &self,
         context: &PlanningContext<'_>,
         target: &storage_contract::file_draft::DraftLocation,
+        time: storage_contract::Timestamp,
     ) -> Result<crate::business::file_draft::unborn::Projection> {
         self.require_context(context)?;
         if !matches!(self.body, SavedBody::Unborn) {
@@ -541,6 +544,7 @@ impl PreparedWorkingSave {
                 target,
                 expected: self.source.reader.scope().record.working.revision(),
                 manifest: &self.manifest,
+                controller: self.source.reader.scope().record.working.save_controller(), time,
             },
             context.config.max_entries,
             context.config.max_file_bytes,

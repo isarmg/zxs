@@ -97,6 +97,15 @@ impl InstalledOriginalReceipts {
         self.environment.require(context.config, context.disk_resources)
     }
 
+    /// Read only the original decision/actor for this operation from the
+    /// actual installed prefix. A visible recovered result is not an original.
+    pub(in crate::engine) fn file_decision<'a>(
+        &'a self, context: &PlanningContext<'_>, operation: storage_contract::OperationId,
+    ) -> Result<(&'a crate::OperationResult, &'a storage_contract::Principal)> {
+        self.require_context(context)?;
+        self.cursor.receipt(context.state, operation)
+    }
+
     pub(in crate::engine) fn replay_cursor(
         &self, context: &PlanningContext<'_>,
     ) -> Result<OriginalReceiptCursor> {

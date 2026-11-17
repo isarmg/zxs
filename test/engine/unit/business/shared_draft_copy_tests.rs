@@ -58,9 +58,10 @@ impl Fixture {
         let principal: Principal = "admin".parse().unwrap();
         self.engine.change_file_working(&DraftCommand::SetMode {
             target: target.clone(), expected: self.engine.file_working_state(&target).unwrap().revision(),
-            mode: CommitMode::Manual,
+            mode: CommitMode::Manual.into(),
         }, &principal, operation()).unwrap();
         let write = DraftCommand::Write {
+            controller: storage_contract::file_draft::SaveController::Manual {},
             target: target.clone(), expected: self.engine.file_working_state(&target).unwrap().revision(),
             base: self.engine.file_draft_base(&target).unwrap(),
             content_hash: ContentHash::from_digest(blake3::hash(bytes)), logical_size: bytes.len() as u64,

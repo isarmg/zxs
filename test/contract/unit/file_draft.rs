@@ -24,7 +24,7 @@ fn working_state_roundtrips_all_states_without_implicit_clean_defaults() {
     for value in [0, 1, (1 << 53) + 1, u64::MAX] {
         let revision = WorkingRevision::new(Generation::new(value));
         for state in [
-            FileWorkingState::Automatic { revision },
+            FileWorkingState::enabled_automatic(revision, crate::file_draft::automatic::AutomaticPolicy::TwentySavesInSixtySeconds),
             FileWorkingState::ManualClean { revision },
             FileWorkingState::ManualDirty {
                 revision,

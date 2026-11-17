@@ -568,7 +568,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         let mode = DraftCommand::SetMode {
             target: target.clone(),
             expected: engine.file_working_state(&target).unwrap().revision(),
-            mode: CommitMode::Manual,
+            mode: CommitMode::Manual.into(),
         };
         let mode_operation = OperationId::generate().unwrap();
         let mode_receipt = engine.change_file_working(&mode, &principal(), mode_operation).unwrap();
@@ -576,6 +576,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         let base = engine.file_draft_base(&target).unwrap();
         let draft_bytes = b"shared manual body, not an immutable history node";
         let write = DraftCommand::Write {
+            controller: storage_contract::file_draft::SaveController::Manual {},
             target: target.clone(),
             expected: engine.file_working_state(&target).unwrap().revision(),
             base, content_hash: ContentHash::from_digest(blake3::hash(draft_bytes)),
@@ -644,7 +645,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         let dirty_media = inventory(&disks[0].join("common-data"));
         let before = Arc::clone(&engine.state);
         let wrong_mode = DraftCommand::SetMode {
-            target: target.clone(), expected: dirty.revision(), mode: CommitMode::Automatic,
+            target: target.clone(), expected: dirty.revision(), mode: CommitMode::Automatic.into(),
         };
         assert!(matches!(engine.change_file_working(
             &wrong_mode, &principal(), OperationId::generate().unwrap(),
@@ -712,6 +713,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         {
             let interrupted_body = b"accepted immutable draft that must survive cold recovery";
             let interrupted = DraftCommand::Write {
+                controller: storage_contract::file_draft::SaveController::Manual {},
                 target: target.clone(),
                 expected: engine.file_working_state(&target).unwrap().revision(),
                 base: engine.file_draft_base(&target).unwrap(),

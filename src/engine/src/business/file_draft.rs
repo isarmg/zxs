@@ -17,7 +17,7 @@ pub(crate) mod worktree;
 pub(crate) use selection::{resolve, validate as validate_working_record};
 mod publication;
 pub(crate) use publication::{
-    Outcome, apply, draft_content_hash, draft_matches_base, plan_change, plan_incremental, verify_working_transition,
+    Outcome, SaveStamp, apply, draft_content_hash, draft_matches_base, plan_change, plan_incremental, verify_working_transition,
 };
 use storage_contract::file_draft::{
     CommitMode, DraftBase, DraftPayload, FileWorkingState, WorkingRevision,
@@ -44,6 +44,8 @@ pub(crate) fn require_committed_transfer(
 
 #[derive(Debug, error_definition::Error)]
 pub enum DraftError {
+    #[error("invalid automatic FILE controller transition")]
+    Controller(#[source] storage_contract::file_draft::automatic::ControllerError),
     #[error("the nested FILE selector cannot verify original snapshot host registrations")]
     NestedRegistration(#[source] Box<crate::SnapshotWorktreeError>),
     #[error("the exact worktree FILE publication could not complete")]
@@ -109,6 +111,8 @@ impl DraftError {
     pub(crate) fn code(&self) -> storage_contract::ErrorCode {
         use storage_contract::ErrorCode;
         match self {
+            Self::Controller(storage_contract::file_draft::automatic::ControllerError::Invalid) => ErrorCode::PublicationInvalid,
+            Self::Controller(_) => ErrorCode::FileBranchConflict,
             Self::Worktree(source) | Self::NestedRegistration(source) => source.code(),
             Self::UnbornRequired => ErrorCode::UnsupportedOperation,
             Self::WorkingManifest(_) | Self::WorkingNamespace => ErrorCode::StateInvalid,
@@ -188,8 +192,12 @@ impl<'a> ManualCommit<'a> {
     pub(crate) fn into_change(self) -> WorkingChange<'a> {
         WorkingChange {
             previous: self.previous,
-            next: FileWorkingState::ManualClean {
-                revision: self.next_revision,
+            next: match self.previous {
+                FileWorkingState::Automatic { controller, .. } => FileWorkingState::Automatic {
+                    revision: self.next_revision, controller: controller.consumed_manually(),
+                    body: storage_contract::file_draft::AutomaticBody::Clean {},
+                },
+                _ => FileWorkingState::ManualClean { revision: self.next_revision },
             },
         }
     }
@@ -225,10 +233,24 @@ pub(crate) fn change_mode(
             next: current.clone(),
         });
     }
+    if let FileWorkingState::Automatic { body, .. } = current {
+        // Emergency switch fences any pre-existing worker by mode/revision;
+        // every acknowledged byte and its original base survive without a node.
+        let revision = next_revision(current)?;
+        let next = match body {
+            storage_contract::file_draft::AutomaticBody::Clean {} => FileWorkingState::ManualClean { revision },
+            storage_contract::file_draft::AutomaticBody::Full { base, payload } =>
+                FileWorkingState::ManualDirty { revision, base: *base, payload: *payload },
+            storage_contract::file_draft::AutomaticBody::Incremental { base, payload, manifest } =>
+                FileWorkingState::ManualIncremental { revision, base: *base, payload: *payload, manifest: manifest.clone() },
+        };
+        return Ok(WorkingChange { previous: current, next });
+    }
     require_clean(current)?;
     let revision = next_revision(current)?;
     let next = match mode {
-        CommitMode::Automatic => FileWorkingState::Automatic { revision },
+        CommitMode::Automatic => FileWorkingState::enabled_automatic(revision,
+            storage_contract::file_draft::automatic::AutomaticPolicy::TwentySavesInSixtySeconds),
         CommitMode::Manual => FileWorkingState::ManualClean { revision },
     };
     Ok(WorkingChange {
@@ -273,6 +295,12 @@ pub(crate) fn discard(
     require_revision(current, expected)?;
     let next = match current {
         FileWorkingState::Unborn { .. } => return Err(DraftError::UnbornRequired),
+        FileWorkingState::Automatic { controller, body, .. } if body.draft().is_some() => {
+            FileWorkingState::Automatic {
+                revision: next_revision(current)?, controller: controller.consumed_manually(),
+                body: storage_contract::file_draft::AutomaticBody::Clean {},
+            }
+        }
         FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => {
             current.clone()
         }
@@ -292,24 +320,15 @@ pub(crate) fn commit(
     expected: WorkingRevision,
 ) -> Result<ManualCommit<'_>, DraftError> {
     require_revision(current, expected)?;
-    match current {
-        FileWorkingState::Unborn { .. } => Err(DraftError::UnbornRequired),
-        FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => {
-            Err(DraftError::DraftRequired)
-        }
-        FileWorkingState::ManualDirty { base, payload, .. }
-        | FileWorkingState::ManualIncremental { base, payload, .. } => Ok(ManualCommit {
-            previous: current,
-            base,
-            payload,
-            next_revision: next_revision(current)?,
-        }),
-    }
+    if current.unborn().is_some() { return Err(DraftError::UnbornRequired); }
+    let (base, payload) = current.draft().ok_or(DraftError::DraftRequired)?;
+    Ok(ManualCommit { previous: current, base, payload, next_revision: next_revision(current)? })
 }
 
 pub(crate) fn require_clean(current: &FileWorkingState) -> Result<(), DraftError> {
     match current {
         FileWorkingState::Unborn { .. } => Err(DraftError::UnbornRequired),
+        FileWorkingState::Automatic { body, .. } if body.draft().is_some() => Err(DraftError::Dirty),
         FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => Ok(()),
         FileWorkingState::ManualDirty { .. } | FileWorkingState::ManualIncremental { .. }
             => Err(DraftError::Dirty),

@@ -77,12 +77,12 @@ impl Engine {
         principal: &Principal,
         prepared: Option<&PreparedWorkingSave>,
     ) -> Result<MutationPlan> {
-        self.plan_mutation_digest(
-            codec::KIND, principal.as_str(), request.manifest.operation(),
-            codec::request(request)?, None,
-            |engine, next, _| {
+        self.plan_draft_at(
+            codec::KIND, principal, request.manifest.operation(),
+            codec::request(request)?,
+            |engine, next, _, time| {
                 let prepared = prepared.ok_or_else(business::invalid)?;
-                let projection = prepared.project(&engine.planning_context(), &request.target)?;
+                let projection = prepared.project(&engine.planning_context(), &request.target, time)?;
                 if prepared.request(&request.target)? != *request {
                     return Err(business::invalid());
                 }

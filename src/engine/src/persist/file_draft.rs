@@ -112,6 +112,8 @@ pub(crate) struct Decoded {
     protection: Vec<Protection>,
 }
 impl Decoded {
+    pub(crate) fn timestamp(&self) -> storage_contract::Timestamp { storage_contract::Timestamp::from_unix_seconds(self.timestamp) }
+
     pub(crate) fn outcome(&self) -> &Outcome {
         &self.outcome
     }

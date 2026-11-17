@@ -370,7 +370,7 @@ fn exercise_live_automatic_switch(cycle_back: bool) {
             command: DraftCommand::SetMode {
                 target: target.clone(),
                 expected: view.working.revision(),
-                mode,
+                mode: mode.into(),
             },
         }).unwrap();
         view.base

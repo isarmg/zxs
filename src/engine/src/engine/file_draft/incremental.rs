@@ -74,13 +74,12 @@ impl Engine {
         operation: OperationId,
         material: Arc<PreparedWorkingSave>,
     ) -> Result<OperationResult> {
-        let plan = self.plan_mutation_digest(
+        let plan = self.plan_draft_at(
             "file.draft.write",
-            principal.as_str(),
+            principal,
             operation,
             codec::request(request)?,
-            None,
-            |engine, next, _| {
+            |engine, next, _, time| {
                 material.require_context(&engine.planning_context())?;
                 require_initial(&engine.planning_context(), &request.target)?;
                 if material.manual_command(&request.target)? != *request {
@@ -96,7 +95,7 @@ impl Engine {
                     request,
                     payload,
                     &manifest,
-                    operation,
+                    business::SaveStamp::new(operation, next.sequence, time),
                 )?;
                 business::apply(next, request.target.file, working.clone())?;
                 codec::encode(Outcome {

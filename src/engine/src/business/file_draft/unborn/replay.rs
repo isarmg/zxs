@@ -56,6 +56,7 @@ pub(crate) fn save(
         previous, config, receipt.operation_id, Sequence::new(receipt.sequence),
         Edit::Save {
             target: &request.target, expected: request.expected, manifest: &request.manifest,
+            controller: request.controller, time: decoded.timestamp(),
         },
         config.max_entries, config.max_file_bytes,
     )?;

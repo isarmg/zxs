@@ -22,7 +22,11 @@ impl WorkingExpectation {
     /// value with the same admitted State before opening any selected body.
     pub fn from_working(working: &FileWorkingState) -> Option<Self> {
         let content = match working {
-            FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => {
+            FileWorkingState::Automatic { body, .. } => {
+                let (base, payload) = body.draft()?;
+                WorkingContentExpectation::Born { base: *base, payload: *payload }
+            }
+            FileWorkingState::ManualClean { .. } => {
                 return None;
             }
             FileWorkingState::ManualDirty { base, payload, .. }

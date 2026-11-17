@@ -17,6 +17,7 @@ pub(crate) struct RangeSaveRequest {
     action: RangeSaveAction,
     pub(crate) target: DraftLocation,
     pub(crate) expected: WorkingRevision,
+    pub(crate) controller: storage_contract::file_draft::SaveController,
     pub(crate) base: DraftBase,
     pub(crate) manifest_commitment: ManifestCommitment,
     #[serialization(with = "storage_contract::u64_string")]
@@ -31,8 +32,9 @@ impl RangeSaveRequest {
     pub(crate) fn new(
         target: DraftLocation, expected: WorkingRevision, base: DraftBase,
         manifest_commitment: ManifestCommitment, logical_size: u64,
+        controller: storage_contract::file_draft::SaveController,
     ) -> Self {
-        Self { action: RangeSaveAction::SaveRanges, target, expected, base,
+        Self { action: RangeSaveAction::SaveRanges, target, expected, controller, base,
             manifest_commitment, logical_size }
     }
 }

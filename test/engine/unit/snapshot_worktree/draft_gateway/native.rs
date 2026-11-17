@@ -288,3 +288,55 @@ fn root_snapshot_selects_a_nested_file_without_copying_unselected_working_bytes(
     assert_eq!(engine.file_working_state(&fixture.targets[1]).unwrap(), unselected);
     assert_eq!(read_draft(&engine, &fixture.targets[1]), fixture::SECOND_DRAFT);
 }
+
+#[test]
+fn automatic_save_is_durable_without_history_and_emergency_manual_switch_keeps_its_body() {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    use storage_contract::file_draft::{CommitMode, DraftCommand, SaveController};
+    use storage_contract::{ContentHash, OperationId};
+    let (fixture, mut engine) = Fixture::new();
+    let target = &fixture.targets[0];
+    let principal = "admin".parse().unwrap();
+    let initial = engine.file_working_state(target).unwrap();
+    assert_eq!(initial.mode(), CommitMode::Manual);
+    let enable = DraftCommand::SetMode { target: target.clone(), expected: initial.revision(),
+        mode: CommitMode::Automatic.into() };
+    engine.change_file_working(&enable, &principal, OperationId::generate().unwrap()).unwrap();
+    let active = engine.file_working_state(target).unwrap();
+    let observed_epoch = active.automatic_controller().unwrap().epoch();
+    let original_versions = engine.state().versions.len();
+    let bytes = b"an acknowledged automatic save without an automatic version yet";
+    let mut source = tempfile::tempfile().unwrap();
+    source.write_all(bytes).unwrap();
+    source.seek(SeekFrom::Start(0)).unwrap();
+    let operation = OperationId::generate().unwrap();
+    let command = DraftCommand::Write {
+        target: target.clone(), expected: active.revision(), controller: SaveController::Automatic { epoch: observed_epoch },
+        base: engine.file_draft_base(target).unwrap(),
+        content_hash: ContentHash::from_digest(blake3::hash(bytes)), logical_size: bytes.len() as u64,
+    };
+    let receipt = engine.write_file_draft(&command, &principal, operation, source.into()).unwrap();
+    assert_eq!(engine.state().versions.len(), original_versions);
+    let latest = engine.file_working_state(target).unwrap();
+    let decision = *latest.automatic_controller().unwrap().pending_save().unwrap();
+    assert_eq!(decision.operation, operation);
+    assert_eq!(decision.sequence.get(), receipt.sequence);
+    assert_eq!(Some(decision.server_time.unix_seconds().to_string().as_str()), receipt.result["timestamp"].as_str());
+    assert_eq!(decision.revision, latest.revision());
+    drop(engine);
+    let mut engine = Engine::open(&fixture.system).unwrap();
+    assert_eq!(engine.file_working_state(target).unwrap(), latest);
+    let manual = DraftCommand::SetMode { target: target.clone(), expected: latest.revision(),
+        mode: CommitMode::Manual.into() };
+    engine.change_file_working(&manual, &principal, OperationId::generate().unwrap()).unwrap();
+    let retained = engine.file_working_state(target).unwrap();
+    assert_eq!(retained.mode(), CommitMode::Manual);
+    assert_eq!(retained.draft(), latest.draft());
+    let mut actual = Vec::new(); engine.open_file_draft(target).unwrap().read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, bytes);
+    // Original immutable decision wins even after policy changed; this bogus
+    // fresh source would not be accepted for a genuinely new operation.
+    let retry = engine.write_file_draft(&command, &principal, operation, tempfile::tempfile().unwrap().into()).unwrap();
+    assert_eq!(retry, receipt);
+    assert_eq!(engine.state().versions.len(), original_versions);
+}

@@ -192,7 +192,7 @@ fn begin(state: &mut State, mode: CommitMode, operation: OperationId) -> Option<
         command: DraftCommand::SetMode {
             target: review.target.location.clone(),
             expected: review.snapshot.working.revision(),
-            mode,
+            mode: mode.into(),
         },
     });
     state.files.commit_mode.pending = Some(Arc::clone(&pending));

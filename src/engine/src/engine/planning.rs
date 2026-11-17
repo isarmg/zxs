@@ -547,6 +547,19 @@ impl<'a> PlanningContext<'a> {
     where
         F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
     {
+        self.prepare_new_mutation_at(kind, principal, operation_id, digest,
+            |context, next, prepared, _| change(context, next, prepared))
+    }
+
+    /// The original server timestamp is sampled exactly once for a fresh
+    /// decision. Shared-save controller state consumes that same observation;
+    /// the old planners still run through the unchanged wrapper above.
+    pub(in crate::engine) fn prepare_new_mutation_at<F>(
+        &self, kind: &str, principal: &str, operation_id: OperationId, digest: String, change: F,
+    ) -> Result<MutationPlan>
+    where F: FnOnce(&Self, &mut State, &mut Vec<Prepared>, storage_contract::Timestamp)
+        -> Result<json_codec::Value>,
+    {
         crate::directory_conversion::require_import_not_stopped(self.state, operation_id)?;
         // Published and planning views share only the immutable base. Every
         // mutation still owns an independent next State until publication.
@@ -572,7 +585,8 @@ impl<'a> PlanningContext<'a> {
         // before invoking the new mutation's preparation work.
         let timestamp = crate::business::now()?;
         let mut prepared = Vec::new();
-        let mut result = change(self, &mut next, &mut prepared)?;
+        let mut result = change(self, &mut next, &mut prepared,
+            storage_contract::Timestamp::from_unix_seconds(timestamp))?;
         if !crate::file_deletion::occurrence::verify_plan(
             self.state,
             &next,

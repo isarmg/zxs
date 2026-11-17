@@ -3,7 +3,7 @@
 use crate::engine_backend::{EngineBackend, error, read_projection, repo_for_branch, repository};
 use crate::{ApiError, Content, Identity, SmbAutomaticFile, SmbDraftAccess, SmbManualFile};
 use storage_contract::file_draft::{
-    CommitMode, DraftCommand, DraftLocation, FileWorkingState, WorkingRevision,
+    DraftCommand, DraftLocation, FileWorkingState, WorkingRevision,
 };
 use storage_contract::{Entry, ErrorCode, FileId, NamespaceEntryKind};
 
@@ -39,7 +39,9 @@ fn require_selection<'a>(
         return Err(changed());
     }
     let working = selected.working();
-    if working.mode() != CommitMode::Manual || working.revision() != expected {
+    if working.save_controller() != file.working.save_controller()
+        || working.revision() != expected
+    {
         return Err(changed());
     }
     Ok(selected)
@@ -65,7 +67,7 @@ pub(super) fn capture_automatic(
     let Some(record) = engine.state().file_containers.get(&file) else {
         return Ok(None);
     };
-    let FileWorkingState::Automatic { revision } = &record.working else {
+    let FileWorkingState::Automatic { revision, .. } = &record.working else {
         return Ok(None);
     };
     let target = location(repo, observed, file)?;
@@ -95,7 +97,7 @@ pub(super) fn require_automatic_revision(
     authorize_target(engine, current, &automatic.target)?;
     let record = engine.state().file_containers.get(&automatic.target.file)
         .ok_or_else(changed)?;
-    if let FileWorkingState::Automatic { revision } = &record.working
+    if let FileWorkingState::Automatic { revision, .. } = &record.working
         && *revision == automatic.revision
     {
         return Ok(());
@@ -170,10 +172,10 @@ pub(super) fn capture(
     let actual = observed_occurrence(&engine, branch, observed)?.ok_or_else(changed)?;
     let file = actual.file_id.parse().map_err(ApiError::invalid_source)?;
     let record = engine.state().file_containers.get(&file).ok_or_else(changed)?;
-    if record.working.mode() == CommitMode::Automatic {
-        return Ok(None);
-    }
     let repository = repo_for_branch(&engine, branch)?;
+    if !repository.file_manager_root || repository.main_branch_id != branch
+        || record.namespace.parent.is_worktree()
+    { return Ok(None); }
     let target = location(repository, &actual, file)?;
     authorize_target(&engine, &current, &target)?;
     if repository.main_branch_id != branch {

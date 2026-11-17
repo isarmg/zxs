@@ -543,6 +543,7 @@ fn flush_writer(
             writer.switched_draft = Some(crate::ChangeFileWorking {
                 operation_id: writer.operation_id,
                 command: storage_contract::file_draft::DraftCommand::Write {
+                    controller: storage_contract::file_draft::SaveController::Manual {},
                     target: automatic.target.clone(),
                     expected,
                     base: automatic.base,

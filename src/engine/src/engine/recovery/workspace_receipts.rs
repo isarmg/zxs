@@ -159,6 +159,8 @@ impl OriginalReceiptCursor {
     pub(in crate::engine) fn needs_projection(&self, result: &OperationResult) -> bool {
         self.records.is_empty()
             || result.commit_state == storage_contract::CommitState::PublishedDegraded
+            || crate::persist::file_draft::is_kind(&result.kind)
+            || result.kind == crate::persist::file_draft::unborn_save::KIND
             || crate::snapshot_worktree::ReceiptIndex::requires_original(result)
     }
 

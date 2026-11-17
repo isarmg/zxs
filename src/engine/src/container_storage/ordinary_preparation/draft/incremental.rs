@@ -184,7 +184,8 @@ impl HeldManualReader {
         scope.verify()?;
         let material = match &scope.draft {
             Some(HeldDraft::Incremental(material)) => Arc::clone(material),
-            None if matches!(scope.record.working, FileWorkingState::ManualClean { .. }) => {
+            None if matches!(scope.record.working, FileWorkingState::ManualClean { .. }
+                | FileWorkingState::Automatic { body: storage_contract::file_draft::AutomaticBody::Clean {}, .. }) => {
                 Arc::new(HeldManualMaterial::from_version(
                     &scope, base, version, None,
                 )?)

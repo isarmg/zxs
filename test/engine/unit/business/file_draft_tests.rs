@@ -617,9 +617,7 @@ fn payload(identity: u8, bytes: &[u8]) -> DraftPayload {
 
 #[test]
 fn manual_writes_retain_first_base_and_commit_consumes_the_exact_latest_draft() {
-    let automatic = FileWorkingState::Automatic {
-        revision: revision(0),
-    };
+    let automatic = FileWorkingState::enabled_automatic(revision(0), storage_contract::file_draft::automatic::AutomaticPolicy::TwentySavesInSixtySeconds);
     let mode = change_mode(&automatic, revision(0), CommitMode::Manual).unwrap();
     assert!(mode.changed());
     assert_eq!(mode.previous(), &automatic);
@@ -697,9 +695,7 @@ fn stale_writes_mode_changes_and_selection_rebinding_do_not_replace_a_draft() {
     assert!(matches!(require_clean(&dirty), Err(DraftError::Dirty)));
     assert!(!change_mode(&dirty, revision(3), CommitMode::Manual).unwrap().changed());
     assert_eq!(dirty, before);
-    let automatic = FileWorkingState::Automatic {
-        revision: revision(0),
-    };
+    let automatic = FileWorkingState::enabled_automatic(revision(0), storage_contract::file_draft::automatic::AutomaticPolicy::TwentySavesInSixtySeconds);
     assert!(matches!(
         write(&automatic, revision(0), base(1), payload(4, b"draft")),
         Err(DraftError::ManualRequired)
@@ -740,7 +736,7 @@ fn discard_preserves_mode_and_same_bytes_still_advance_the_working_fence() {
 #[test]
 fn exhausted_working_revision_never_wraps_or_clears_a_dirty_body() {
     let maximum = revision(u64::MAX);
-    let automatic = FileWorkingState::Automatic { revision: maximum };
+    let automatic = FileWorkingState::enabled_automatic(maximum, storage_contract::file_draft::automatic::AutomaticPolicy::TwentySavesInSixtySeconds);
     assert!(!change_mode(&automatic, maximum, CommitMode::Automatic).unwrap().changed());
     assert!(matches!(
         change_mode(&automatic, maximum, CommitMode::Manual),
@@ -831,9 +827,10 @@ fn whole_working_selection_checks_all_cas_before_open_and_retains_real_published
         };
         engine.change_file_working(&DraftCommand::SetMode {
             expected: engine.file_working_state(&target).unwrap().revision(),
-            target: target.clone(), mode: CommitMode::Manual,
+            target: target.clone(), mode: CommitMode::Manual.into(),
         }, &principal, OperationId::generate().unwrap()).unwrap();
         let write = DraftCommand::Write {
+            controller: storage_contract::file_draft::SaveController::Manual {},
             expected: engine.file_working_state(&target).unwrap().revision(),
             base: engine.file_draft_base(&target).unwrap(),
             target: target.clone(),
@@ -1007,9 +1004,10 @@ fn born_working_batch_uses_one_prior_and_exact_sources_without_independent_clear
         engine.change_file_working(&DraftCommand::SetMode {
             target: target.clone(),
             expected: engine.file_working_state(&target).unwrap().revision(),
-            mode: CommitMode::Manual,
+            mode: CommitMode::Manual.into(),
         }, &principal, OperationId::generate().unwrap()).unwrap();
         engine.write_file_draft(&DraftCommand::Write {
+            controller: storage_contract::file_draft::SaveController::Manual {},
             target: target.clone(),
             expected: engine.file_working_state(&target).unwrap().revision(),
             base: engine.file_draft_base(&target).unwrap(),

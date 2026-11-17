@@ -8,7 +8,7 @@ use storage_contract::file_container::{ContainerNamespace, FileContainerRecord};
 use storage_contract::file_container_tags::ContainerTags;
 use storage_contract::file_draft::manifest::WorkingManifest;
 use storage_contract::file_draft::{
-    CommitMode, DraftLocation, FileWorkingState, UnbornWorking, WorkingRevision,
+    DraftLocation, FileWorkingState, UnbornWorking, WorkingRevision,
 };
 use storage_contract::{
     CommitId, DiskId, EntryId, FileId, Generation, OperationId, RepositoryId, Sequence,
@@ -42,11 +42,8 @@ pub(crate) enum Edit<'a> {
         target: &'a DraftLocation,
         expected: WorkingRevision,
         manifest: &'a WorkingManifest,
-    },
-    SetMode {
-        target: &'a DraftLocation,
-        expected: WorkingRevision,
-        mode: CommitMode,
+        controller: storage_contract::file_draft::SaveController,
+        time: storage_contract::Timestamp,
     },
     FirstCommit(FirstCommit<'a>),
 }
@@ -68,6 +65,14 @@ impl Projection {
     pub(crate) fn into_state(self) -> State {
         self.state
     }
+}
+
+pub(super) fn save_error(error: storage_contract::file_draft::UnbornSaveError) -> Error {
+    use storage_contract::file_draft::UnbornSaveError;
+    Error::FileDraft(match error {
+        UnbornSaveError::Controller(error) => Failure::Controller(error),
+        UnbornSaveError::Manifest(error) => Failure::WorkingManifest(error),
+    })
 }
 
 pub(crate) fn selected<'a>(
@@ -162,7 +167,7 @@ pub(crate) fn project(
     }
     let repository = match &edit {
         Edit::Birth(birth) => birth.repository,
-        Edit::Save { target, .. } | Edit::SetMode { target, .. } => target.repository,
+        Edit::Save { target, .. } => target.repository,
         Edit::FirstCommit(commit) => commit.target.repository,
     };
     let namespace = WorkingNamespace::from_main_state(previous, repository, maximum_entries)?;
@@ -192,23 +197,14 @@ pub(crate) fn project(
                 file: birth.file,
             }
         }
-        Edit::Save { target, expected, manifest } => {
+        Edit::Save { target, expected, manifest, controller, time } => {
             let record = selected(&namespace, target, expected)?;
             let working = record.working.unborn().ok_or_else(invalid)?;
-            if manifest.operation() != operation {
+            if manifest.operation() != operation || record.working.save_controller() != controller {
                 return Err(invalid());
             }
-            let working = working.saved(target.file, manifest.clone(), maximum_bytes)
-                .map_err(|source| Error::FileDraft(Failure::WorkingManifest(source)))?;
-            next.file_containers.get_mut(&target.file).ok_or_else(invalid)?.working =
-                FileWorkingState::Unborn { working };
-            target.clone()
-        }
-        Edit::SetMode { target, expected, mode } => {
-            let record = selected(&namespace, target, expected)?;
-            let working = record.working.unborn().ok_or_else(invalid)?;
-            let working = working.change_mode(mode)
-                .map_err(|source| Error::FileDraft(Failure::RevisionExhausted(source)))?;
+            let working = working.saved_decision(target.file, manifest.clone(), maximum_bytes, sequence, time)
+                .map_err(save_error)?;
             next.file_containers.get_mut(&target.file).ok_or_else(invalid)?.working =
                 FileWorkingState::Unborn { working };
             target.clone()

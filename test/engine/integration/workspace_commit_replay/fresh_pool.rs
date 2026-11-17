@@ -232,7 +232,7 @@ fn empty_held_pool_stages_reopens_commits_and_selects_real_file_history() {
     assert_eq!(container_record.namespace.name.as_str(), "notes.txt");
     assert_eq!(container_record.history_tree_id.to_string(), repository.history_tree_id);
     assert!(matches!(container_record.working,
-        storage_contract::file_draft::FileWorkingState::Automatic { .. }));
+        storage_contract::file_draft::FileWorkingState::ManualClean { .. }));
     let replica = &container_record.replicas[&disk_id];
     assert_eq!(replica.root_id, root_binding.root_id);
     let container = disk.join("common-data/notes.txt");

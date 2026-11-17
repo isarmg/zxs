@@ -70,16 +70,11 @@ impl ObservedContainerReplica {
         -> Result<storage_contract::file_draft::DraftPayload>
     {
         self.verify()?;
-        match &self.record.working {
-            storage_contract::file_draft::FileWorkingState::ManualIncremental { payload, .. } => {
-                Ok(*payload)
-            }
-            storage_contract::file_draft::FileWorkingState::Unborn { .. }
-            | storage_contract::file_draft::FileWorkingState::Automatic { .. }
-            | storage_contract::file_draft::FileWorkingState::ManualClean { .. }
-            | storage_contract::file_draft::FileWorkingState::ManualDirty { .. } => {
-                Err(Failure::ContainerScope.into())
-            }
+        let working = &self.record.working;
+        match (working.incremental(), working.draft()) {
+            (Some(manifest), Some((_, payload))) if payload.manifest_commitment()
+                == Some(manifest.material().commitment()) => Ok(*payload),
+            _ => Err(Failure::ContainerScope.into()),
         }
     }
 

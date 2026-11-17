@@ -30,9 +30,8 @@ impl ContainerPreparation {
             if (previous.working.draft().is_none() && !first_commit)
                 || previous.replicas.len() != 1
                 || !(matches!(item.working_after(), FileWorkingState::ManualClean { .. })
-                    || (first_commit && matches!(
-                        item.working_after(), FileWorkingState::Automatic { .. },
-                    )))
+                    || matches!(item.working_after(), FileWorkingState::Automatic {
+                        body: storage_contract::file_draft::AutomaticBody::Clean {}, .. }))
             {
                 return Err(Failure::ContainerScope.into());
             }
@@ -106,7 +105,7 @@ pub(crate) fn verify_directory_transition<'a>(
         let first_commit = first.contains_key(&file) && before.working.unborn().is_some();
         if (before.working.draft().is_none() && !first_commit) || before.replicas.len() != 1
             || !(matches!(after.working, FileWorkingState::ManualClean { .. })
-                || (first_commit && matches!(after.working, FileWorkingState::Automatic { .. })))
+                || matches!(after.working, FileWorkingState::Automatic { body: storage_contract::file_draft::AutomaticBody::Clean {}, .. }))
         {
             return Err(Failure::ContainerScope.into());
         }

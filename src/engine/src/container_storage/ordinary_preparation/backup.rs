@@ -267,7 +267,7 @@ impl BackupTargetLayout {
             preparation_checkpoint(stop)?;
             if logical.owner_disk != owner || logical.replicas.contains_key(&source.disk())
                 || !matches!(logical.working,
-                    storage_contract::file_draft::FileWorkingState::Automatic { .. })
+                    storage_contract::file_draft::FileWorkingState::ManualClean { .. })
             {
                 return Err(Failure::BackupLayoutUnsupported.into());
             }
@@ -312,7 +312,7 @@ impl BackupTargetLayout {
             || state.file_containers.values().any(|record| record.owner_disk != owner
                 || record.replicas.contains_key(&self.disk)
                 || !matches!(record.working,
-                    storage_contract::file_draft::FileWorkingState::Automatic { .. }))
+                    storage_contract::file_draft::FileWorkingState::ManualClean { .. }))
             || state.namespace_directories.values().any(|record| record.owner_disk != owner
                 || record.replicas.contains_key(&self.disk))
         {

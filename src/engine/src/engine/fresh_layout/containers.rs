@@ -4,9 +4,9 @@ use crate::{Config, DiskConfig, Result, State};
 use crate::engine::{PlanningContext, Prepared};
 use crate::disk::DiskResources;
 use std::collections::{BTreeMap, BTreeSet};
-use storage_contract::{DiskId, FileId, Generation, HistoryTreeId, OperationResult};
+use storage_contract::{DiskId, FileId, HistoryTreeId, OperationResult};
 use storage_contract::file_container::{ContainerEntity, ContainerReplica, FileContainerRecord};
-use storage_contract::file_draft::{FileWorkingState, WorkingRevision};
+use storage_contract::file_draft::FileWorkingState;
 
 pub(super) mod prefixes;
 mod rename;
@@ -75,7 +75,7 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
             return Err(Failure::ContainerShape.into());
         }
         crate::engine::file_draft::validate_working_record(state, file, record)?;
-        if !matches!(record.working, FileWorkingState::Automatic { .. })
+        if !matches!(record.working, FileWorkingState::ManualClean { .. })
             && record.replicas.len() != 1
         {
             return Err(Failure::ContainerScope.into());
@@ -236,9 +236,7 @@ impl ContainerPreparation {
                     owner_disk: disk.disk_id.parse()?,
                     created_by: result.operation_id,
                     namespace,
-                    working: FileWorkingState::Automatic {
-                        revision: WorkingRevision::new(Generation::new(1)),
-                    },
+                    working: FileWorkingState::initial_manual(),
                     replicas: BTreeMap::new(),
                 });
             }
@@ -252,7 +250,11 @@ impl ContainerPreparation {
             }
             let record = next.file_containers.get_mut(&file).ok_or(Failure::ContainerScope)?;
             if record.history_tree_id != history
-                || !(matches!(record.working, FileWorkingState::Automatic { .. })
+                || !(((!before.contains_key(&file) && record.working == FileWorkingState::initial_manual())
+                    || (result.kind == "workspace.commit" && record.working.draft().is_none()
+                        && record.working.unborn().is_none()))
+                    || (matches!(record.working, FileWorkingState::Automatic { body: storage_contract::file_draft::AutomaticBody::Clean {}, .. })
+                        && working == Some(file))
                     || (working == Some(file)
                         && matches!(record.working, FileWorkingState::ManualClean { .. })
                         && (context.state.file_containers.get(&file)
@@ -959,14 +961,16 @@ fn verify_transition_read<'a>(
                 namespace: super::namespace::file_target(
                     next, file, version.history_tree_id.parse()?,
                 )?,
-                working: FileWorkingState::Automatic {
-                    revision: WorkingRevision::new(Generation::new(1)),
-                },
+                working: FileWorkingState::initial_manual(),
                 replicas: BTreeMap::new(),
             });
         }
         let mut record = expected.get(&file).ok_or(Failure::ContainerShape)?.clone();
-        if !(matches!(record.working, FileWorkingState::Automatic { .. })
+        if !(((!previous.file_containers.contains_key(&file) && record.working == FileWorkingState::initial_manual())
+            || (result.kind == "workspace.commit" && record.working.draft().is_none()
+                && record.working.unborn().is_none()))
+            || (matches!(record.working, FileWorkingState::Automatic { body: storage_contract::file_draft::AutomaticBody::Clean {}, .. })
+                && working == Some(file))
             || (working == Some(file)
                 && matches!(record.working, FileWorkingState::ManualClean { .. })
                 && previous.file_containers.get(&file)

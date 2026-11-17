@@ -2,7 +2,7 @@
 use super::{DraftError as Failure, PublishedContent, content, invalid, selection};
 use crate::{Error, OperationResult, Result, State};
 use data_serialization::{Deserialize, Serialize};
-use storage_contract::file_draft::{DraftCommand, DraftPayload, FileWorkingState};
+use storage_contract::file_draft::{AutomaticBody, DraftCommand, DraftPayload, FileWorkingState, SaveController};
 use storage_contract::{Event, FileId, Generation};
 use crate::persist::file_draft::{Request, RangeSaveRequest};
 
@@ -14,24 +14,103 @@ pub(crate) struct Outcome {
     pub(crate) content: Option<PublishedContent>,
 }
 
+/// From the single real new-decision clock, or the original receipt on replay.
+#[derive(Clone, Copy)]
+pub(crate) struct SaveStamp {
+    operation: storage_contract::OperationId,
+    sequence: storage_contract::Sequence,
+    time: storage_contract::Timestamp,
+}
+impl SaveStamp {
+    pub(crate) fn new(operation: storage_contract::OperationId, sequence: u64, time: storage_contract::Timestamp) -> Self {
+        Self { operation, sequence: storage_contract::Sequence::new(sequence), time }
+    }
+}
+
+fn saved(
+    current: &FileWorkingState, expected: storage_contract::file_draft::WorkingRevision,
+    controller: SaveController, base: storage_contract::file_draft::DraftBase, payload: DraftPayload,
+    manifest: Option<&storage_contract::file_draft::IncrementalManifest>, stamp: SaveStamp,
+) -> Result<FileWorkingState> {
+    super::require_revision(current, expected).map_err(Error::FileDraft)?;
+    if current.save_controller() != controller || current.unborn().is_some() {
+        return Err(Error::FileDraft(Failure::SourceChanged));
+    }
+    if current.draft().is_some_and(|(original, _)| *original != base) {
+        return Err(Error::FileDraft(Failure::BaseChanged));
+    }
+    let revision = super::next_revision(current).map_err(Error::FileDraft)?;
+    if let FileWorkingState::Automatic { controller, .. } = current {
+        let controller = controller.saved(revision, stamp.operation, stamp.sequence, stamp.time)
+            .map_err(|e| Error::FileDraft(Failure::Controller(e)))?;
+        let body = match manifest {
+            Some(manifest) => AutomaticBody::Incremental { base, payload, manifest: manifest.clone() },
+            None => AutomaticBody::Full { base, payload },
+        };
+        return Ok(FileWorkingState::Automatic { revision, controller, body });
+    }
+    Ok(match manifest {
+        Some(manifest) => FileWorkingState::ManualIncremental { revision, base, payload, manifest: manifest.clone() },
+        None => super::write(current, expected, base, payload).map_err(Error::FileDraft)?.into_next(),
+    })
+}
+
 pub(crate) fn plan_change(
     previous: &State,
     request: &DraftCommand,
     payload: Option<DraftPayload>,
+    stamp: SaveStamp,
 ) -> Result<FileWorkingState> {
-    let selected = selection::resolve(previous, request.target())?;
-    let record = previous.file_containers.get(&request.target().file).ok_or_else(invalid)?;
+    let target = request.target();
+    let record = previous.file_containers.get(&target.file).ok_or_else(invalid)?;
+    if let Some(working) = record.working.unborn() {
+        if payload.is_some() { return Err(invalid()); }
+        let expected = match request {
+            DraftCommand::SetMode { expected, .. } | DraftCommand::ResumeAutomatic { expected, .. } => *expected,
+            _ => return Err(Error::FileDraft(Failure::UnbornRequired)),
+        };
+        let namespace = crate::business::namespace::working::WorkingNamespace::from_main_state(
+            previous, target.repository, crate::working_tree::snapshot::MAX_ENTRIES,
+        )?;
+        super::unborn::selected(&namespace, target, expected)?;
+        let after = match request {
+            DraftCommand::SetMode { mode, .. } => {
+                if working.mode() == storage_contract::file_draft::CommitMode::Manual
+                    && mode.mode() == storage_contract::file_draft::CommitMode::Automatic
+                    && !matches!(working.body(), storage_contract::file_draft::UnbornBody::Empty {})
+                { return Err(Error::FileDraft(Failure::Dirty)); }
+                working.change_mode(mode.mode(), stamp.operation)
+                    .map_err(|e| Error::FileDraft(Failure::RevisionExhausted(e)))?
+            }
+            DraftCommand::ResumeAutomatic { epoch, .. } =>
+                working.resume(*epoch, stamp.operation).map_err(super::unborn::save_error)?,
+            _ => return Err(invalid()),
+        };
+        return Ok(FileWorkingState::Unborn { working: after });
+    }
+    let selected = selection::resolve(previous, target)?;
     selection::validate(previous, request.target().file, record)?;
     let change = match request {
         DraftCommand::SetMode { expected, mode, .. } => {
             if payload.is_some() { return Err(invalid()); }
-            super::change_mode(&record.working, *expected, *mode)
+            super::change_mode(&record.working, *expected, mode.mode())
+        }
+        DraftCommand::ResumeAutomatic { expected, epoch, .. } => {
+            if payload.is_some() { return Err(invalid()); }
+            super::require_revision(&record.working, *expected).map_err(Error::FileDraft)?;
+            let FileWorkingState::Automatic { controller, body, .. } = &record.working else {
+                return Err(Error::FileDraft(Failure::AutomaticRequired));
+            };
+            let revision = super::next_revision(&record.working).map_err(Error::FileDraft)?;
+            let controller = controller.resumed(*epoch, revision)
+                .map_err(|e| Error::FileDraft(Failure::Controller(e)))?;
+            return Ok(FileWorkingState::Automatic { revision, controller, body: body.clone() });
         }
         DraftCommand::Discard { expected, .. } => {
             if payload.is_some() { return Err(invalid()); }
             super::discard(&record.working, *expected)
         }
-        DraftCommand::Write { expected, base, content_hash, logical_size, .. } => {
+        DraftCommand::Write { expected, controller, base, content_hash, logical_size, .. } => {
             let payload = payload.ok_or_else(invalid)?;
             if selected.base != *base {
                 return Err(Error::FileDraft(Failure::BaseChanged));
@@ -39,7 +118,7 @@ pub(crate) fn plan_change(
             if payload.content_hash() != Some(*content_hash) || payload.logical_size() != *logical_size {
                 return Err(invalid());
             }
-            super::write(&record.working, *expected, *base, payload)
+            return saved(&record.working, *expected, *controller, *base, payload, None, stamp);
         }
         DraftCommand::Commit { expected, base, .. } => {
             if payload.is_some() || selected.base != *base {
@@ -58,7 +137,7 @@ pub(crate) fn plan_change(
 pub(crate) fn plan_incremental(
     previous: &State, request: &RangeSaveRequest, payload: DraftPayload,
     manifest: &storage_contract::file_draft::IncrementalManifest,
-    operation: storage_contract::OperationId,
+    stamp: SaveStamp,
 ) -> Result<FileWorkingState> {
     let target = &request.target;
     let selected = selection::resolve(previous, target)?;
@@ -67,18 +146,17 @@ pub(crate) fn plan_incremental(
     let current = &record.working;
     if selected.base != request.base { return Err(Error::FileDraft(Failure::BaseChanged)); }
     if !matches!(current, FileWorkingState::ManualClean { .. }
-        | FileWorkingState::ManualIncremental { .. })
+        | FileWorkingState::ManualIncremental { .. }
+        | FileWorkingState::Automatic { body: AutomaticBody::Clean {} | AutomaticBody::Incremental { .. }, .. })
     {
         return Err(Error::FileDraft(Failure::UnsupportedScope));
     }
-    let working = super::write(current, request.expected, request.base, payload)
-        .map_err(Error::FileDraft)?.into_next();
     let version = previous.versions.get(&request.base.version_id().to_string())
         .ok_or_else(invalid)?;
     manifest.require_previous(current.incremental(), version.logical_size, u64::MAX)
         .map_err(|source| Error::FileDraft(Failure::WorkingManifest(source)))?;
     if manifest.material().file() != target.file
-        || manifest.material().operation() != operation
+        || manifest.material().operation() != stamp.operation
         || manifest.material().logical_size() != payload.logical_size()
         || request.logical_size != payload.logical_size()
         || payload.manifest_commitment() != Some(manifest.material().commitment())
@@ -86,9 +164,7 @@ pub(crate) fn plan_incremental(
     {
         return Err(invalid());
     }
-    Ok(FileWorkingState::ManualIncremental {
-        revision: working.revision(), base: request.base, payload, manifest: manifest.clone(),
-    })
+    saved(current, request.expected, request.controller, request.base, payload, Some(manifest), stamp)
 }
 
 /// A range identity alone never supplies a ContentHash. The explicit commit's
@@ -174,14 +250,15 @@ pub(crate) fn verify_working_transition(
             }
             Some(*payload)
         }
-        Request::Command(DraftCommand::SetMode { .. } | DraftCommand::Discard { .. }
+        Request::Command(DraftCommand::SetMode { .. } | DraftCommand::ResumeAutomatic { .. } | DraftCommand::Discard { .. }
             | DraftCommand::Commit { .. }) => None,
     };
+    let stamp = SaveStamp::new(result.operation_id, result.sequence, decoded.timestamp());
     let working = match &outcome.request {
         Request::Ranges(request) => plan_incremental(previous, request,
             payload.ok_or_else(invalid)?, outcome.working.incremental().ok_or_else(invalid)?,
-            result.operation_id)?,
-        Request::Command(request) => plan_change(previous, request, payload)?,
+            stamp)?,
+        Request::Command(request) => plan_change(previous, request, payload, stamp)?,
     };
     if read.is_some() && !matches!(outcome.request,
         Request::Command(DraftCommand::Commit { .. }))
@@ -212,7 +289,7 @@ pub(crate) fn verify_working_transition(
         (Request::Command(command @ DraftCommand::Commit { .. }), None) => {
             if !draft_matches_base(previous, command, read)? { return Err(invalid()); }
         }
-        (Request::Command(DraftCommand::SetMode { .. } | DraftCommand::Write { .. }
+        (Request::Command(DraftCommand::SetMode { .. } | DraftCommand::ResumeAutomatic { .. } | DraftCommand::Write { .. }
             | DraftCommand::Discard { .. }) | Request::Ranges(_), None) => {}
         _ => return Err(invalid()),
     }

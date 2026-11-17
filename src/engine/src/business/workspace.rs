@@ -338,7 +338,10 @@ impl Engine {
     ) -> Result<()> {
         if let Some(file) = self.workspace_selected_file(workspace, path)?
             && self.state.file_containers.get(&file).is_some_and(|record| {
-                record.working.mode() == storage_contract::file_draft::CommitMode::Manual
+                // Both ordinary policies now save to the authoritative working
+                // row. A legacy workspace FD may not synthesize a history node,
+                // including after manual -> automatic or protection/resume.
+                !record.namespace.parent.is_worktree()
             })
         {
             return Err(Error::FileDraft(

@@ -98,6 +98,10 @@ pub(crate) fn validate(
     if record.working.revision().generation().get() == 0 {
         return Err(super::invalid());
     }
+    if let Some(controller) = record.working.automatic_controller() {
+        controller.validate(record.working.revision())
+            .map_err(|source| Error::FileDraft(Failure::Controller(source)))?;
+    }
     let Some((base, payload)) = record.working.draft() else {
         return Ok(());
     };

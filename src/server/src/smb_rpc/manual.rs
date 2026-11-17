@@ -195,6 +195,7 @@ impl ManualWriter {
                 request: ChangeFileWorking {
                     operation_id,
                     command: DraftCommand::Write {
+                        controller: self.selection.working.save_controller(),
                         target: self.selection.target.clone(),
                         expected: self.revision,
                         base: self.selection.base.clone(),

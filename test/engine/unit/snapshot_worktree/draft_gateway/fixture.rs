@@ -195,13 +195,14 @@ pub(super) fn write_draft(
     let working = engine.file_working_state(target).unwrap();
     if working.draft().is_none() {
         let mode = DraftCommand::SetMode {
-            target: target.clone(), expected: working.revision(), mode: CommitMode::Manual,
+            target: target.clone(), expected: working.revision(), mode: CommitMode::Manual.into(),
         };
         engine.change_file_working(
             &mode, &principal, OperationId::generate().unwrap(),
         ).unwrap();
     }
     let command = DraftCommand::Write {
+        controller: storage_contract::file_draft::SaveController::Manual {},
         target: target.clone(),
         expected: engine.file_working_state(target).unwrap().revision(),
         base: engine.file_draft_base(target).unwrap(),

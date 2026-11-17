@@ -41,6 +41,7 @@ pub(crate) struct Decoded(Envelope);
 
 impl Decoded {
     pub(crate) fn request(&self) -> &UnbornSaveRequest { &self.0.request }
+    pub(crate) fn timestamp(&self) -> storage_contract::Timestamp { storage_contract::Timestamp::from_unix_seconds(self.0.timestamp) }
     pub(crate) fn epoch(&self) -> u64 { self.0.membership_epoch }
 
     pub(crate) fn receipt(

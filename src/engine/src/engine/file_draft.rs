@@ -150,6 +150,40 @@ impl SelectedFileWorking<'_> {
 }
 
 impl Engine {
+    /// Only the bounded Initial FILE native operations may use this
+    /// timestamp-aware planner. Reconcile the immutable original before any
+    /// current selection/controller gate or material operation.
+    fn plan_draft_at(
+        &self, kind: &str, principal: &Principal, operation: OperationId, request: json_codec::Value,
+        change: impl FnOnce(&Engine, &mut State, &mut Vec<crate::engine::Prepared>,
+            storage_contract::Timestamp) -> Result<json_codec::Value>,
+    ) -> Result<MutationPlan> {
+        if !codec::is_kind(kind) && kind != codec::unborn_save::KIND { return Err(business::invalid()); }
+        let digest = Self::native_request_digest(kind, principal.as_str(), &request)?;
+        let context = self.planning_context();
+        if self.state.operations.contains_key(&operation) {
+            // First reject operation/actor conflicts even when the conflicting
+            // operation belongs to another subsystem and has no FILE original.
+            let visible = self.state.operations.get(&operation).ok_or_else(business::invalid)?;
+            if visible.kind != kind || visible.request_digest != digest
+                || self.operation_owner(operation)?.as_deref() != Some(principal.as_str())
+            { return Err(Error::new(storage_contract::ErrorCode::IdempotencyKeyReused,
+                "operation belongs to different FILE input or principal")); }
+            let (original, actor) = context.original_receipts.ok_or_else(business::invalid)?
+                .file_decision(&context, operation)?;
+            if original.kind != kind || original.request_digest != digest || actor != principal {
+                return Err(business::invalid());
+            }
+            return Ok(MutationPlan::Existing(original.clone()));
+        }
+        self.require_write()?;
+        if context.current_namespaces.is_some() || context.config.generation().is_some() {
+            return Err(Error::FileDraft(Failure::UnsupportedScope));
+        }
+        context.prepare_new_mutation_at(kind, principal.as_str(), operation, digest,
+            |_, next, prepared, timestamp| change(self, next, prepared, timestamp))
+    }
+
     pub fn file_draft_base(&self, target: &DraftLocation) -> Result<DraftBase> {
         require_initial(&self.planning_context(), target)?;
         Ok(business::resolve(self.state(), target)?.base)
@@ -184,9 +218,9 @@ impl Engine {
         let DraftCommand::Write { content_hash, logical_size, .. } = command else {
             return Err(business::invalid());
         };
-        let plan = self.plan_mutation_digest(
-            command.kind(), principal.as_str(), operation, codec::request(command)?, None,
-            |engine, next, _| {
+        let plan = self.plan_draft_at(
+            command.kind(), principal, operation, codec::request(command)?,
+            |engine, next, _, time| {
                 require_initial(&engine.planning_context(), command.target())?;
                 if *logical_size > engine.config.max_file_bytes {
                     return Err(Error::FileDraft(Failure::Size));
@@ -194,7 +228,7 @@ impl Engine {
                 let payload = DraftPayload::new(
                     DraftPayloadId::generate()?, *content_hash, *logical_size,
                 );
-                let working = business::plan_change(engine.state(), command, Some(payload))?;
+                let working = business::plan_change(engine.state(), command, Some(payload), business::SaveStamp::new(operation, next.sequence, time))?;
                 business::apply(next, command.target().file, working.clone())?;
                 codec::encode(Outcome { request: codec::Request::Command(command.clone()), working, content: None })
             },
@@ -220,14 +254,35 @@ impl Engine {
         principal: &Principal,
         operation: OperationId,
     ) -> Result<OperationResult> {
+        self.change_working_for(command, principal, operation, false)
+    }
+
+    pub fn change_unborn_working_mode(
+        &mut self, command: &DraftCommand, principal: &Principal, operation: OperationId,
+    ) -> Result<OperationResult> {
+        if !matches!(command, DraftCommand::SetMode { .. } | DraftCommand::ResumeAutomatic { .. }) {
+            return Err(Error::FileDraft(Failure::UnbornRequired));
+        }
+        self.change_working_for(command, principal, operation, true)
+    }
+
+    fn change_working_for(
+        &mut self, command: &DraftCommand, principal: &Principal, operation: OperationId,
+        unborn: bool,
+    ) -> Result<OperationResult> {
         if matches!(command, DraftCommand::Write { .. }) { return Err(business::invalid()); }
         let mut committed = None;
-        let plan = self.plan_mutation_digest(
-            command.kind(), principal.as_str(), operation, codec::request(command)?, None,
-            |engine, next, prepared| {
+        let plan = self.plan_draft_at(
+            command.kind(), principal, operation, codec::request(command)?,
+            |engine, next, prepared, time| {
                 let context = engine.planning_context();
                 require_initial(&context, command.target())?;
-                let working = business::plan_change(engine.state(), command, None)?;
+                let prior = context.state.file_containers.get(&command.target().file)
+                    .ok_or_else(business::invalid)?;
+                if prior.working.unborn().is_some() != unborn {
+                    return Err(Error::FileDraft(Failure::Selection));
+                }
+                let working = business::plan_change(engine.state(), command, None, business::SaveStamp::new(operation, next.sequence, time))?;
                 let read = if matches!(command, DraftCommand::Commit { .. })
                     && context.state.file_containers.get(&command.target().file)
                         .and_then(|record| record.working.incremental()).is_some()
@@ -247,7 +302,7 @@ impl Engine {
                             )?)
                         }
                     }
-                    DraftCommand::SetMode { .. } | DraftCommand::Discard { .. } => None,
+                    DraftCommand::SetMode { .. } | DraftCommand::ResumeAutomatic { .. } | DraftCommand::Discard { .. } => None,
                     DraftCommand::Write { .. } => return Err(business::invalid()),
                 };
                 // Clear the draft only after the equal-base check or the content
@@ -258,7 +313,15 @@ impl Engine {
             },
         )?;
         match plan {
-            MutationPlan::Existing(receipt) => Ok(receipt),
+            MutationPlan::Existing(receipt) => {
+                // The two management authorization routes have distinct target
+                // classes. A retained Unborn mode still retries after birth;
+                // today's FILE class cannot make another route's receipt valid.
+                if matches!(command, DraftCommand::SetMode { .. } | DraftCommand::ResumeAutomatic { .. })
+                    && codec::decode(self.state(), &receipt)?.outcome().working.unborn().is_some() != unborn
+                { return Err(Error::FileDraft(Failure::Selection)); }
+                Ok(receipt)
+            }
             MutationPlan::Prepared { next, prepared, result } => {
                 match committed {
                     Some(read) => {

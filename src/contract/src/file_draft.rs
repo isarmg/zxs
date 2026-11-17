@@ -11,7 +11,7 @@ pub mod automatic;
 mod incremental;
 pub use incremental::IncrementalManifest;
 mod unborn;
-pub use unborn::{BirthRequest, UnbornBody, UnbornSaveRequest, UnbornWorking};
+pub use unborn::{BirthRequest, UnbornBody, UnbornDecision, UnbornSaveError, UnbornSaveRequest, UnbornWorking};
 mod selection;
 pub use selection::{WorkingContentExpectation, WorkingExpectation, WorkingSelection};
 
@@ -25,16 +25,49 @@ pub struct DraftLocation {
     pub file: crate::FileId,
 }
 
+/// Wire representation of the explicit mode choice. Automatic cannot be
+/// silently enabled with a missing or unrecognized policy, including on retry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ModeSelection {
+    Manual {},
+    Automatic { policy: automatic::AutomaticPolicy },
+}
+impl ModeSelection {
+    pub const fn mode(self) -> CommitMode { match self {
+        Self::Manual {} => CommitMode::Manual, Self::Automatic { .. } => CommitMode::Automatic,
+    } }
+}
+impl From<CommitMode> for ModeSelection {
+    fn from(mode: CommitMode) -> Self { match mode {
+        CommitMode::Manual => Self::Manual {},
+        CommitMode::Automatic => Self::Automatic { policy: automatic::AutomaticPolicy::TwentySavesInSixtySeconds },
+    } }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SaveController {
+    Manual {},
+    Automatic { epoch: Generation },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DraftCommand {
     SetMode {
         target: DraftLocation,
         expected: WorkingRevision,
-        mode: CommitMode,
+        mode: ModeSelection,
+    },
+    ResumeAutomatic {
+        target: DraftLocation,
+        expected: WorkingRevision,
+        epoch: Generation,
     },
     Write {
         target: DraftLocation,
+        controller: SaveController,
         expected: WorkingRevision,
         base: DraftBase,
         content_hash: ContentHash,
@@ -56,14 +89,14 @@ pub enum DraftCommand {
 impl DraftCommand {
     pub const fn target(&self) -> &DraftLocation {
         match self {
-            Self::SetMode { target, .. } | Self::Write { target, .. }
+            Self::SetMode { target, .. } | Self::ResumeAutomatic { target, .. } | Self::Write { target, .. }
             | Self::Discard { target, .. } | Self::Commit { target, .. } => target,
         }
     }
 
     pub const fn kind(&self) -> &'static str {
         match self {
-            Self::SetMode { .. } => "file.working.mode",
+            Self::SetMode { .. } | Self::ResumeAutomatic { .. } => "file.working.mode",
             Self::Write { .. } => "file.draft.write",
             Self::Discard { .. } => "file.draft.discard",
             Self::Commit { .. } => "file.draft.commit",
@@ -217,6 +250,27 @@ impl DraftPayload {
     }
 }
 
+/// Saved content remains real working content in Automatic as well as Manual.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AutomaticBody {
+    Clean {},
+    Full { base: DraftBase, payload: DraftPayload },
+    Incremental { base: DraftBase, payload: DraftPayload, manifest: IncrementalManifest },
+}
+
+impl AutomaticBody {
+    pub const fn draft(&self) -> Option<(&DraftBase, &DraftPayload)> {
+        match self {
+            Self::Clean {} => None,
+            Self::Full { base, payload } | Self::Incremental { base, payload, .. } => Some((base, payload)),
+        }
+    }
+    pub const fn incremental(&self) -> Option<&IncrementalManifest> {
+        match self { Self::Incremental { manifest, .. } => Some(manifest), _ => None }
+    }
+}
+
 /// This mandatory record belongs inside the authoritative container record.
 /// There is no default that could turn absent draft metadata into clean state.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -229,6 +283,8 @@ pub enum FileWorkingState {
     },
     Automatic {
         revision: WorkingRevision,
+        controller: automatic::AutomaticController,
+        body: AutomaticBody,
     },
     ManualClean {
         revision: WorkingRevision,
@@ -247,6 +303,26 @@ pub enum FileWorkingState {
 }
 
 impl FileWorkingState {
+    pub const fn initial_manual() -> Self {
+        Self::ManualClean { revision: WorkingRevision::new(Generation::new(1)) }
+    }
+    pub fn enabled_automatic(revision: WorkingRevision, policy: automatic::AutomaticPolicy) -> Self {
+        Self::Automatic { revision, controller: automatic::AutomaticController::enabled(revision, policy),
+            body: AutomaticBody::Clean {} }
+    }
+    pub const fn save_controller(&self) -> SaveController {
+        match self.automatic_controller() {
+            Some(controller) => SaveController::Automatic { epoch: controller.epoch() },
+            None => SaveController::Manual {},
+        }
+    }
+    pub const fn automatic_controller(&self) -> Option<&automatic::AutomaticController> {
+        match self {
+            Self::Automatic { controller, .. } => Some(controller),
+            Self::Unborn { working } => working.automatic_controller(),
+            _ => None,
+        }
+    }
     /// Actual still-referenced working storage, separate from historical FULL
     /// versions and from a sparse body's potentially much larger visible length.
     pub fn material_bytes(&self) -> u64 {
@@ -259,14 +335,20 @@ impl FileWorkingState {
             Self::ManualDirty { payload, .. } => payload.logical_size(),
             Self::ManualIncremental { manifest, .. } => manifest.material().blocks().iter()
                 .map(|block| block.extent().bytes()).sum(),
-            Self::Automatic { .. } | Self::ManualClean { .. } => 0,
+            Self::Automatic { body, .. } => match body {
+                AutomaticBody::Clean {} => 0,
+                AutomaticBody::Full { payload, .. } => payload.logical_size(),
+                AutomaticBody::Incremental { manifest, .. } => manifest.material().blocks().iter()
+                    .map(|block| block.extent().bytes()).sum(),
+            },
+            Self::ManualClean { .. } => 0,
         }
     }
 
     pub const fn revision(&self) -> WorkingRevision {
         match self {
             Self::Unborn { working } => working.revision(),
-            Self::Automatic { revision }
+            Self::Automatic { revision, .. }
             | Self::ManualClean { revision }
             | Self::ManualDirty { revision, .. }
             | Self::ManualIncremental { revision, .. } => *revision,
@@ -285,7 +367,8 @@ impl FileWorkingState {
     pub const fn draft(&self) -> Option<(&DraftBase, &DraftPayload)> {
         match self {
             Self::Unborn { .. } => None,
-            Self::Automatic { .. } | Self::ManualClean { .. } => None,
+            Self::Automatic { body, .. } => body.draft(),
+            Self::ManualClean { .. } => None,
             Self::ManualDirty { base, payload, .. }
             | Self::ManualIncremental { base, payload, .. } => Some((base, payload)),
         }
@@ -294,7 +377,8 @@ impl FileWorkingState {
     pub const fn incremental(&self) -> Option<&IncrementalManifest> {
         match self {
             Self::ManualIncremental { manifest, .. } => Some(manifest),
-            Self::Unborn { .. } | Self::Automatic { .. } | Self::ManualClean { .. }
+            Self::Automatic { body, .. } => body.incremental(),
+            Self::Unborn { .. } | Self::ManualClean { .. }
             | Self::ManualDirty { .. } => None,
         }
     }
