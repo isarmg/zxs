@@ -22,7 +22,7 @@ impl LocationQuery {
     }
 }
 
-pub(crate) struct CommandBody(ChangeFileWorking);
+pub(crate) struct CommandBody(pub(crate) ChangeFileWorking);
 impl JsonBody for CommandBody {
     fn from_json(value: json_codec::Value) -> Result<Self, ApiError> {
         if !value.is_object()

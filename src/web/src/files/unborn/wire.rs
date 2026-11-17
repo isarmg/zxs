@@ -23,15 +23,20 @@ pub(super) struct Expectation {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-pub(super) struct Snapshot {
+pub(in crate::files) struct Snapshot {
     pub(super) target: DraftLocation,
     pub(super) expected: Expectation,
-    pub(super) mode: CommitMode,
+    pub(in crate::files) mode: CommitMode,
+    #[serialization(deserialize_with="required_controller")]
+    pub(in crate::files) automatic: Option<storage_contract::file_draft::automatic::AutomaticController>,
     #[serialization(with = "storage_contract::u64_string")]
     pub(super) logical_size: u64,
 }
+fn required_controller<'de,D:data_serialization::Deserializer<'de>>(d:D)->Result<Option<storage_contract::file_draft::automatic::AutomaticController>,D::Error>{Option::deserialize(d)}
 impl Snapshot {
-    pub(super) fn parse(value: Value, target: &DraftLocation) -> Result<Self, api::Error> {
+    pub(in crate::files) fn revision(&self)->WorkingRevision{self.expected.revision}
+    pub(in crate::files) fn has_draft(&self)->bool{matches!(self.expected.content,Content::Saved{..})}
+    pub(in crate::files) fn parse(value: Value, target: &DraftLocation) -> Result<Self, api::Error> {
         if !value.is_object()
             || !value.get("target").is_some_and(Value::is_object)
             || !value.get("expected").is_some_and(Value::is_object)
@@ -45,6 +50,10 @@ impl Snapshot {
             || matches!(snapshot.expected.content, Content::Empty {}) && snapshot.logical_size != 0
         {
             return Err(invalid("The working response differs from this exact file occurrence."));
+        }
+        if (snapshot.mode==CommitMode::Automatic)!=snapshot.automatic.is_some(){return Err(invalid("Automatic protection observation missing or unexpected."));}
+        if let Some(controller)=&snapshot.automatic {
+            controller.validate(snapshot.expected.revision).map_err(|e|crate::files::commit_mode::controller_error(e))?;
         }
         Ok(snapshot)
     }

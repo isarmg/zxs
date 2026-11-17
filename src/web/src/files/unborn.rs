@@ -17,7 +17,8 @@ pub(crate) use recovery::restore;
 use recovery::{Submission, dispatch};
 use storage::Original;
 pub(crate) use view::{recovery_view, view};
-use wire::{Command, Record, Snapshot, invalid};
+use wire::{Command, Record, invalid};
+pub(in crate::files) use wire::Snapshot;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Target {

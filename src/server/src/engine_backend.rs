@@ -798,6 +798,11 @@ impl Backend for EngineBackend {
     ) -> Result<crate::UnbornFileSnapshot, ApiError> {
         unborn::status(self, identity, target)
     }
+    fn change_unborn_working_mode(
+        &self, identity: &Identity, request: crate::ChangeFileWorking,
+    ) -> Result<storage_contract::OperationResult,ApiError> {
+        unborn::change_mode(self,identity,request)
+    }
     fn commit_unborn_file(
         &self, identity: &Identity, request: crate::CommitUnbornFile,
     ) -> Result<storage_contract::OperationResult, ApiError> {

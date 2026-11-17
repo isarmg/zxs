@@ -38,9 +38,17 @@ fn state() -> State {
 
 fn observed(state: &State, working: Value) -> Snapshot {
     let target = Target::capture(state).unwrap();
+    let Selection::Born {
+        branch,
+        node,
+        version,
+    } = target.selection
+    else {
+        panic!("born fixture required")
+    };
     Snapshot::parse(
         json!({
-            "base":DraftBase::new(target.branch, target.node, target.version, Generation::new(1)),
+            "base":DraftBase::new(branch,node,version, Generation::new(1)),
             "working":working,
         }),
         &target,
@@ -50,7 +58,17 @@ fn observed(state: &State, working: Value) -> Snapshot {
 
 fn review(state: &mut State, mode: &str) {
     let target = Target::capture(state).unwrap();
-    let snapshot = observed(state, json!({"state":mode,"revision":"3"}));
+    let snapshot = if mode == "automatic" {
+        observed(
+            state,
+            json!(FileWorkingState::enabled_automatic(
+                WorkingRevision::new(Generation::new(3)),
+                storage_contract::file_draft::automatic::AutomaticPolicy::TwentySavesInSixtySeconds
+            )),
+        )
+    } else {
+        observed(state, json!({"state":mode,"revision":"3"}))
+    };
     let generation = state.files.commit_mode.generation;
     complete_load(state, target, generation, Ok(snapshot));
 }
@@ -74,7 +92,7 @@ fn reviewed_mode_creates_only_explicit_exact_selected_file_command() {
         json!({
             "operation_id":operation,
             "command":{"action":"set_mode", "target":location(), "expected":"3",
-                "mode":"automatic"},
+                "mode":{"mode":"automatic","policy":"twenty_saves_in_sixty_seconds"}},
         })
     );
     assert!(
@@ -109,7 +127,10 @@ fn reviewed_mode_creates_only_explicit_exact_selected_file_command() {
     assert!(can_change(&automatic, CommitMode::Manual));
     assert!(!can_change(&automatic, CommitMode::Automatic));
     let manual = begin(&mut automatic, CommitMode::Manual, operation).unwrap();
-    assert_eq!(manual.body().unwrap()["command"]["mode"], "manual");
+    assert_eq!(
+        manual.body().unwrap()["command"]["mode"],
+        json!({"mode":"manual"})
+    );
 }
 
 #[test]
@@ -119,7 +140,10 @@ fn dirty_draft_and_stale_navigation_never_enable_automatic_or_reuse_a_review() {
     let clean = observed(&state, json!({"state":"manual_clean","revision":"3"}));
     let dirty = FileWorkingState::ManualDirty {
         revision: WorkingRevision::new(Generation::new(1)),
-        base: clean.base,
+        base: match &clean {
+            Snapshot::Born(b) => b.base,
+            _ => unreachable!(),
+        },
         payload: storage_contract::file_draft::DraftPayload::new(
             storage_contract::file_draft::DraftPayloadId::from_random([8; 16]),
             "ab".repeat(32).parse().unwrap(),
@@ -159,6 +183,9 @@ fn mode_response_and_receipt_bind_selection_and_original_command() {
     let mut state = state();
     let target = Target::capture(&state).unwrap();
     let snapshot = observed(&state, json!({"state":"manual_clean","revision":"3"}));
+    let Snapshot::Born(snapshot) = snapshot else {
+        unreachable!()
+    };
     let mut value = json!({"base":snapshot.base, "working":snapshot.working});
     value["base"]["version_id"] = json!(VersionId::from_random([9; 16]));
     assert!(Snapshot::parse(value, &target).is_err());
@@ -211,4 +238,67 @@ fn mode_response_and_receipt_bind_selection_and_original_command() {
         &pending.operation.to_string(),
         &receipt
     ));
+}
+
+#[test]
+fn protected_resume_binds_the_triggered_epoch_and_current_durable_revision() {
+    use storage_contract::file_draft::{
+        AutomaticBody,
+        automatic::{AutomaticController, AutomaticPolicy},
+    };
+    use storage_contract::{Sequence, Timestamp};
+    let mut state = state();
+    let revision = |n| WorkingRevision::new(Generation::new(n));
+    let mut controller =
+        AutomaticController::enabled(revision(3), AutomaticPolicy::TwentySavesInSixtySeconds);
+    for n in 1..=21u8 {
+        controller = controller
+            .saved(
+                revision(3 + u64::from(n)),
+                OperationId::from_random([n; 16]),
+                Sequence::new(u64::from(n)),
+                Timestamp::from_unix_seconds(101),
+            )
+            .unwrap();
+    }
+    assert!(controller.protection().is_some());
+    let target = Target::capture(&state).unwrap();
+    let Selection::Born {
+        branch,
+        node,
+        version,
+    } = target.selection
+    else {
+        unreachable!()
+    };
+    let base = DraftBase::new(branch, node, version, Generation::new(1));
+    let working = FileWorkingState::Automatic {
+        revision: revision(24),
+        controller,
+        body: AutomaticBody::Full {
+            base,
+            payload: storage_contract::file_draft::DraftPayload::new(
+                storage_contract::file_draft::DraftPayloadId::from_random([90; 16]),
+                "ac".repeat(32).parse().unwrap(),
+                7,
+            ),
+        },
+    };
+    let snapshot = observed(&state, json!(working));
+    let generation = state.files.commit_mode.generation;
+    complete_load(&mut state, target, generation, Ok(snapshot));
+    assert!(can_change(&state, CommitMode::Manual)); // emergency Manual preserves this real draft
+    assert!(!can_change(&state, CommitMode::Automatic));
+    assert!(can_change(&state, Choice::Resume));
+    let pending = begin(
+        &mut state,
+        Choice::Resume,
+        OperationId::from_random([97; 16]),
+    )
+    .unwrap();
+    assert_eq!(
+        pending.body().unwrap()["command"],
+        json!({"action":"resume_automatic","target":location(),"expected":"24","epoch":"3"})
+    );
+    assert!(!can_change(&state, Choice::Resume));
 }

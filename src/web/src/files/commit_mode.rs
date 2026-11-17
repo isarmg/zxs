@@ -9,19 +9,32 @@ use storage_contract::{BranchId, FileNodeId, OperationId, Principal, VersionId};
 use web_interface::{prelude::*, tasks::spawn_local};
 
 mod view;
+mod warning;
 mod wire;
 pub(crate) use view::view;
 pub use wire::DecodeError;
 use wire::Snapshot;
+pub(in crate::files) fn controller_error(
+    source: storage_contract::file_draft::automatic::ControllerError,
+) -> api::Error {
+    wire::failure(DecodeError::Controller(source))
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Target {
     epoch: u64,
     navigation: u64,
     location: DraftLocation,
-    branch: BranchId,
-    node: FileNodeId,
-    version: VersionId,
+    selection: Selection,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Selection {
+    Born {
+        branch: BranchId,
+        node: FileNodeId,
+        version: VersionId,
+    },
+    Unborn,
 }
 
 impl Target {
@@ -33,21 +46,31 @@ impl Target {
             return None;
         }
         let entry = state.files.selected.as_ref()?;
-        if entry.read_only() || entry.backup() || entry.unborn().is_some() {
+        if entry.preview() || entry.backup() {
             return None;
         }
+        let (location, selection) = if let Some(occurrence) = entry.unborn() {
+            (occurrence.clone(), Selection::Unborn)
+        } else {
+            (
+                DraftLocation {
+                    repository: entry.repository_id()?.parse().ok()?,
+                    path: name_policy::PortablePath::parse(entry.repository_path()?).ok()?,
+                    entry: entry.entry_id().parse().ok()?,
+                    file: entry.file_id().parse().ok()?,
+                },
+                Selection::Born {
+                    branch: entry.selected_branch_id()?.parse().ok()?,
+                    node: entry.node_id()?.parse().ok()?,
+                    version: entry.version_id()?.parse().ok()?,
+                },
+            )
+        };
         Some(Self {
             epoch: state.session_epoch,
             navigation: state.files.generation,
-            location: DraftLocation {
-                repository: entry.repository_id()?.parse().ok()?,
-                path: name_policy::PortablePath::parse(entry.repository_path()?).ok()?,
-                entry: entry.entry_id().parse().ok()?,
-                file: entry.file_id().parse().ok()?,
-            },
-            branch: entry.selected_branch_id()?.parse().ok()?,
-            node: entry.node_id()?.parse().ok()?,
-            version: entry.version_id()?.parse().ok()?,
+            location,
+            selection,
         })
     }
 
@@ -57,8 +80,12 @@ impl Target {
 
     fn endpoint(&self) -> String {
         format!(
-            "/api/file-manager/files/{}/working?repository_id={}&path={}&entry_id={}",
+            "/api/file-manager/files/{}/{}?repository_id={}&path={}&entry_id={}",
             self.location.file,
+            match self.selection {
+                Selection::Born { .. } => "working",
+                Selection::Unborn => "unborn-working",
+            },
             self.location.repository,
             api::segment(self.location.path.as_str()),
             self.location.entry,
@@ -74,6 +101,7 @@ struct Review {
 
 #[derive(Clone)]
 struct Pending {
+    selection: Selection,
     epoch: u64,
     principal: Principal,
     operation: OperationId,
@@ -168,32 +196,72 @@ fn complete_load(
     }
 }
 
-fn can_change(state: &State, mode: CommitMode) -> bool {
-    actions::write_allowed(state)
-        && state.files.commit_mode.pending.is_none()
-        && state
-            .files
-            .commit_mode
-            .reviewed(state)
-            .is_some_and(|review| {
-                review.snapshot.working.mode() != mode && review.snapshot.working.draft().is_none()
-            })
+#[derive(Clone, Copy)]
+enum Choice {
+    Mode(CommitMode),
+    Resume,
 }
-
-fn begin(state: &mut State, mode: CommitMode, operation: OperationId) -> Option<Arc<Pending>> {
-    if !can_change(state, mode) {
+impl From<CommitMode> for Choice {
+    fn from(mode: CommitMode) -> Self {
+        Self::Mode(mode)
+    }
+}
+fn can_change(state: &State, choice: impl Into<Choice>) -> bool {
+    if !actions::write_allowed(state)
+        || state
+            .files
+            .selected
+            .as_ref()
+            .is_none_or(|entry| entry.read_only())
+        || state.files.commit_mode.pending.is_some()
+    {
+        return false;
+    }
+    let Some(review) = state.files.commit_mode.reviewed(state) else {
+        return false;
+    };
+    match choice.into() {
+        Choice::Mode(mode) => {
+            mode != review.snapshot.mode()
+                && (mode == CommitMode::Manual || !review.snapshot.dirty())
+        }
+        Choice::Resume => review
+            .snapshot
+            .controller()
+            .and_then(|c| c.protection())
+            .is_some(),
+    }
+}
+fn begin(
+    state: &mut State,
+    choice: impl Into<Choice>,
+    operation: OperationId,
+) -> Option<Arc<Pending>> {
+    let choice = choice.into();
+    if !can_change(state, choice) {
         return None;
     }
     let review = state.files.commit_mode.reviewed(state)?;
+    let target = review.target.location.clone();
+    let expected = review.snapshot.revision();
+    let command = match choice {
+        Choice::Mode(mode) => DraftCommand::SetMode {
+            target,
+            expected,
+            mode: mode.into(),
+        },
+        Choice::Resume => DraftCommand::ResumeAutomatic {
+            target,
+            expected,
+            epoch: review.snapshot.controller()?.protection()?.epoch,
+        },
+    };
     let pending = Arc::new(Pending {
+        selection: review.target.selection,
         epoch: state.session_epoch,
         principal: state.principal.clone()?,
         operation,
-        command: DraftCommand::SetMode {
-            target: review.target.location.clone(),
-            expected: review.snapshot.working.revision(),
-            mode,
-        },
+        command,
     });
     state.files.commit_mode.pending = Some(Arc::clone(&pending));
     state.files.commit_mode.error = None;
@@ -202,7 +270,8 @@ fn begin(state: &mut State, mode: CommitMode, operation: OperationId) -> Option<
     Some(pending)
 }
 
-fn submit(state: RwSignal<State>, mode: CommitMode) {
+fn submit(state: RwSignal<State>, choice: impl Into<Choice>) {
+    let mode = choice.into();
     if !state.with_untracked(|s| can_change(s, mode)) {
         return;
     }

@@ -30,7 +30,7 @@ fn row() -> Value {
 fn snapshot() -> Value {
     json!({
         "target":target(), "expected":{"revision":"0","content":{"state":"empty"}},
-        "mode":"manual", "logical_size":"0",
+        "mode":"manual","automatic":null, "logical_size":"0",
     })
 }
 fn state() -> State {
@@ -389,4 +389,12 @@ fn same_account_relogin_recovers_the_hint_without_repeating_work_or_unsettling_p
         assert_eq!(retained.phase, expected);
         assert!(!owns_phase(&state, prior, &record, phase));
     }
+}
+
+#[test]
+fn absent_or_contradictory_unborn_protection_is_not_reported_as_safe() {
+    let mut missing=snapshot();missing.as_object_mut().unwrap().remove("automatic");
+    assert!(Snapshot::parse(missing,&target()).is_err());
+    let mut wrong=snapshot();wrong["mode"]=json!("automatic");
+    assert!(Snapshot::parse(wrong,&target()).is_err());
 }

@@ -23,8 +23,7 @@ async fn post(fixture: &Fixture, route: &str, token: bool, body: Value)
     ).await.unwrap()
 }
 
-#[tokio::test]
-async fn authenticated_unborn_empty_first_commit_is_explicit_and_cold_idempotent() {
+async fn native_unborn_fixture()->(Fixture,DraftLocation,String){
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
     let primary = root.path().join("primary");
@@ -66,13 +65,22 @@ async fn authenticated_unborn_empty_first_commit_is_explicit_and_cold_idempotent
         "username": "admin", "password": password,
     }))).await;
     let fixture = Fixture { root, app, token: login["token"].as_str().unwrap().into() };
+    (fixture,target,slot)
+}
+fn status_route(target:&DraftLocation)->String {
     let query = url_encoding::form::Serializer::new(String::new())
         .append_pair("repository_id", &target.repository.to_string())
         .append_pair("path", target.path.as_str())
         .append_pair("entry_id", &target.entry.to_string()).finish();
-    let status_route = format!(
+    format!(
         "/api/file-manager/files/{}/unborn-working?{query}", target.file,
-    );
+    )
+}
+
+#[tokio::test]
+async fn authenticated_unborn_empty_first_commit_is_explicit_and_cold_idempotent() {
+    let (fixture,target,slot)=native_unborn_fixture().await;
+    let status_route=status_route(&target);
     let route = format!("/api/file-manager/files/{}/first-commit", target.file);
     let before = fixture.json("GET", &status_route, None).await;
     assert_eq!(before["mode"], "manual");
@@ -114,4 +122,37 @@ async fn authenticated_unborn_empty_first_commit_is_explicit_and_cold_idempotent
     second["operation_id"] = json!(OperationId::generate().unwrap());
     assert!(!post(&fixture, &route, true, second).await.status().is_success());
     assert_eq!(fixture.history(&target.file.to_string()).await, history);
+}
+
+#[tokio::test]
+async fn real_unborn_mode_route_rejects_other_commands_and_replays_only_its_original_after_birth() {
+    let (fixture,target,_)=native_unborn_fixture().await;
+    let status=status_route(&target);
+    let change=format!("/api/file-manager/files/{}/unborn-working/mode",target.file);
+    let first=format!("/api/file-manager/files/{}/first-commit",target.file);
+    let before=fixture.json("GET",&status,None).await;
+    assert_eq!(before.get("automatic"),Some(&Value::Null));
+    let op=OperationId::generate().unwrap();
+    let mut enable=json!({"operation_id":op,"command":{"action":"set_mode","target":target,
+        "expected":before["expected"]["revision"],"mode":{"mode":"automatic","policy":"twenty_saves_in_sixty_seconds"}}});
+    assert_eq!(post(&fixture,&change,false,enable.clone()).await.status(),StatusCode::UNAUTHORIZED);
+    let mut other=enable.clone();other["command"]=json!({"action":"discard","target":target,"expected":before["expected"]["revision"]});
+    assert_eq!(post(&fixture,&change,true,other).await.status(),StatusCode::BAD_REQUEST);
+    let receipt=json_response(post(&fixture,&change,true,enable.clone()).await).await;
+    assert_eq!(receipt["result"]["request"],enable["command"]);
+    let armed=fixture.json("GET",&status,None).await;
+    assert_eq!(armed["mode"],"automatic");assert!(armed["automatic"].is_object());
+    let mut manual=enable.clone();manual["operation_id"]=json!(OperationId::generate().unwrap());
+    manual["command"]["expected"]=armed["expected"]["revision"].clone();
+    manual["command"]["mode"]=json!({"mode":"manual"});
+    assert!(post(&fixture,&change,true,manual).await.status().is_success());
+    let latest=fixture.json("GET",&status,None).await;
+    assert_eq!(latest["mode"],"manual");assert!(latest["automatic"].is_null());
+    let publish=json!({"operation_id":OperationId::generate().unwrap(),"target":target,"expected":latest["expected"],
+        "message":"explicit first node after the original mode decision"});
+    assert!(post(&fixture,&first,true,publish).await.status().is_success());
+    let fixture=fixture.reopen().await;
+    assert_eq!(json_response(post(&fixture,&change,true,enable.clone()).await).await,receipt);
+    enable["operation_id"]=json!(OperationId::generate().unwrap());
+    assert!(!post(&fixture,&change,true,enable).await.status().is_success());
 }

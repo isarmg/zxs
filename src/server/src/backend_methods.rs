@@ -653,6 +653,12 @@ macro_rules! methods {
                     let _ = (identity, target);
                     Err($crate::ApiError::unsupported())
                 }
+                fn change_unborn_working_mode(
+                    &self, identity: &$crate::Identity, request: $crate::ChangeFileWorking,
+                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn commit_unborn_file(
                     &self, identity: &$crate::Identity, request: $crate::CommitUnbornFile,
                 ) -> Result<storage_contract::OperationResult, $crate::ApiError> {

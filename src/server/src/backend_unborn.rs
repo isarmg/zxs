@@ -59,6 +59,7 @@ pub struct UnbornFileSnapshot {
     pub target: DraftLocation,
     pub expected: UnbornExpectation,
     pub mode: CommitMode,
+    pub automatic: Option<storage_contract::file_draft::automatic::AutomaticController>,
     #[serialization(with = "storage_contract::u64_string")]
     pub logical_size: u64,
 }

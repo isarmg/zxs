@@ -41,3 +41,18 @@ pub(crate) async fn commit(
             .and_then(|result| crate::operation_wire::operation_wire(result.into())))
         .await.map(Json)
 }
+
+pub(crate) async fn mode(
+    State(state):State<AppState>,Authenticated(identity):Authenticated,
+    ApiPath(file):ApiPath<FileId>,ApiJson(body):ApiJson<crate::http_file_draft::CommandBody>,
+)->Result<Json<json_codec::Value>,ApiError>{
+    use storage_contract::file_draft::DraftCommand;
+    let request=body.0;
+    if request.command.target().file!=file || !matches!(request.command,DraftCommand::SetMode{..}|DraftCommand::ResumeAutomatic{..}){
+        return Err(ApiError::invalid("only a mode decision for the named unborn file is allowed"));
+    }
+    crate::http_job::HttpBackendJob::admit(state.backend,state.auth,state.backend_slots)?
+        .run(move |backend|backend.change_unborn_working_mode(&identity,request)
+            .and_then(|result|crate::operation_wire::operation_wire(result.into())))
+        .await.map(Json)
+}

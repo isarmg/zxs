@@ -6,6 +6,7 @@ pub(crate) fn routes() -> Router<AppState> {
             "/api/file-manager/repositories/{repository}/automatic-nodes",
             get(http_automatic_observation::read),
         )
+        .route("/api/file-manager/files/{file}/unborn-working/mode", post(http_unborn::mode))
         .route(
             "/api/file-manager/files/{file}/unborn-working",
             get(http_unborn::status),
