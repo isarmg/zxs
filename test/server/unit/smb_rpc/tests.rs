@@ -2005,6 +2005,29 @@ fn writer_reservations_compare_path_segments_without_prefix_aliasing() {
 }
 
 #[test]
+fn writer_reservations_keep_descendant_ranges_inside_the_branch() {
+    let (_temp, shared, _backend, branch) = fixture();
+    let owner = session(shared.clone(), &branch);
+    let other = session(shared, "branch_other");
+    let unrelated = reserve_paths(&owner, &["CAFÉ-early", "caféafter"]).unwrap();
+    let child = reserve_paths(&owner, &["Cafe\u{301}/Child"]).unwrap();
+    assert_eq!(
+        reserve_paths(&owner, &["CAFÉ"]).err().unwrap().code,
+        storage_contract::ErrorCode::FileWriteBusy,
+    );
+    let another_branch = reserve_paths(&other, &["CAFÉ"]).unwrap();
+    let unrelated_sibling = reserve_paths(&owner, &["CAFÉ/Another"]).unwrap();
+    drop(unrelated_sibling);
+    drop(child);
+    let parent = reserve_paths(&owner, &["CAFÉ"]).unwrap();
+    assert!(reserve_paths(&owner, &["café/child/deep"]).is_err());
+    drop(parent);
+    drop(another_branch);
+    drop(unrelated);
+    assert!(owner.shared.file_writers.lock().unwrap().is_empty());
+}
+
+#[test]
 fn detached_handle_keeps_its_path_reserved_until_the_owner_is_dropped() {
     let (_temp, shared, _backend, branch) = fixture();
     let mut owner = session(shared.clone(), &branch);

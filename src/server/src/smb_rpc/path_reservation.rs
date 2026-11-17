@@ -1,14 +1,29 @@
 //! File handles and namespace mutations own one atomic path reservation.
 use super::*;
 
-fn overlaps(left: &str, right: &str) -> bool {
-    left == right
-        || left
-            .strip_prefix(right)
-            .is_some_and(|tail| tail.starts_with('/'))
-        || right
-            .strip_prefix(left)
-            .is_some_and(|tail| tail.starts_with('/'))
+// Equality and each ancestor are exact index lookups. A component-bounded
+// descendant range is contiguous within the branch, so its first item is
+// sufficient even when unrelated handles sort between the owner and the range.
+fn has_overlap(writers: &BTreeSet<(String, String)>, branch: &str, key: &str) -> bool {
+    let mut path = key;
+    let mut probe = (branch.to_owned(), path.to_owned());
+    loop {
+        if writers.contains(&probe) {
+            return true;
+        }
+        let Some((parent, _)) = path.rsplit_once('/') else {
+            break;
+        };
+        path = parent;
+        probe.1.truncate(path.len());
+    }
+    probe.1.clear();
+    probe.1.push_str(key);
+    probe.1.push('/');
+    let start = probe.clone();
+    writers.range(start..).next().is_some_and(|(owner, path)| {
+        owner == branch && path.starts_with(&probe.1)
+    })
 }
 
 pub(super) struct PathReservation {
@@ -31,10 +46,7 @@ impl PathReservation {
             .file_writers
             .lock()
             .expect("invariant: service state lock poisoned");
-        if writers.iter().any(|(branch, path)| {
-            keys.iter()
-                .any(|(candidate, key)| branch == candidate && overlaps(path, key))
-        }) {
+        if keys.iter().any(|(branch, key)| has_overlap(&writers, branch, key)) {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::FileWriteBusy,
                 "an affected SMB path has an active write handle or namespace operation",
