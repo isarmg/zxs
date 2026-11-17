@@ -1108,6 +1108,14 @@ pub(crate) fn identity_at(
 }
 
 fn seal_for_root(config: &ValidatedConfig, disk: &DiskConfig, metadata: &fs::Metadata) -> DiskSeal {
+    seal_for_identity(
+        config, disk, platform_io::fs_safety::linux::FileIdentity::from_metadata(metadata),
+    )
+}
+
+pub(crate) fn seal_for_identity(
+    config: &ValidatedConfig, disk: &DiskConfig, root: platform_io::fs_safety::linux::FileIdentity,
+) -> DiskSeal {
     DiskSeal {
         format: match config.generation_hash() {
             None => DiskSealFormat::ManagedDirectory,
@@ -1120,8 +1128,8 @@ fn seal_for_root(config: &ValidatedConfig, disk: &DiskConfig, metadata: &fs::Met
         disk_id: disk.disk_id.clone(),
         slot_id: disk.slot_id.clone(),
         binding_generation: disk.binding_generation,
-        device: metadata.dev(),
-        inode: metadata.ino(),
+        device: root.device,
+        inode: root.inode,
         simulation: config.mode == Mode::Development,
     }
 }

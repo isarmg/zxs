@@ -285,3 +285,58 @@ fn interrupted_initial_activation_is_not_bootstrapped_by_normal_entry() {
             .exists()
     );
 }
+#[test]
+fn completed_first_storage_needs_its_exact_original_offline_readback() {
+    let f = Fixture::new();
+    activate_first(&f, true).unwrap();
+    let ready = f.system.join("storage-activation-ready.json");
+    let bytes = fs::read(&ready).unwrap();
+    let original: json_codec::Value = storage_contract::strict_json(&bytes).unwrap();
+    // No actual data root is available. Only the originally recorded selection
+    // and native SYSTEM records can participate in this cold prerequisite.
+    fs::rename(f.temp.path().join("disks"), f.temp.path().join("offline")).unwrap();
+    let reject_preserving_evidence = || {
+        let before = snapshot(f.temp.path());
+        assert!(matches!(f.open(), Err(Error::Activation { source })
+            if source.code == storage_contract::ErrorCode::SetupProofInvalid));
+        assert_eq!(snapshot(f.temp.path()), before);
+        assert!(!f.temp.path().join("disks").exists());
+    };
+
+    fs::remove_file(&ready).unwrap();
+    reject_preserving_evidence();
+    write_private(&ready, &bytes);
+    for corruption in 0..4 {
+        let mut changed = original.clone();
+        let invalid = json_codec::Value::String("0".repeat(64));
+        match corruption {
+            0 => changed["intent_digest"] = invalid,
+            1 => {
+                let (_, seal) = changed["disk_seals"].as_object_mut().unwrap().iter_mut().next().unwrap();
+                assert_ne!(&*seal, &invalid);
+                *seal = invalid;
+            }
+            2 => changed["disk_seals"].as_object_mut().unwrap().clear(),
+            3 => {
+                let seals = changed["disk_seals"].as_object_mut().unwrap();
+                let key = seals.keys().next().unwrap().clone();
+                let exact_seal = seals.remove(&key).unwrap();
+                seals.insert("different-original-disk".to_owned(), exact_seal);
+            }
+            _ => unreachable!(),
+        }
+        fs::write(&ready, json_codec::to_vec(&changed).unwrap()).unwrap();
+        reject_preserving_evidence();
+    }
+    fs::write(&ready, &bytes).unwrap();
+    f.open().unwrap().recheck().unwrap();
+
+    // Losing only the original management initialization cannot reclassify
+    // this configured/credentialed first pool as a recovered installation.
+    fs::remove_file(f.system.join(INITIALIZATION)).unwrap();
+    reject_preserving_evidence();
+    // The last surviving ready record still identifies a partial chain.
+    fs::remove_file(f.system.join("storage-activation-intent.json")).unwrap();
+    fs::remove_file(f.system.join("storage-activation-complete.json")).unwrap();
+    reject_preserving_evidence();
+}

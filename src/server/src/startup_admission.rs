@@ -86,16 +86,9 @@ impl PreparedService {
         if read_optional(&prepared.system, "config.json", MAX_CONFIGURATION_BYTES)?.is_none() {
             return Err(Error::StorageNotPrepared);
         }
-        if let Some(intent) = read_optional(&prepared.system, INITIALIZATION, 4096)?
-            && (intent != crate::setup_recovery::management_initialization_record()
-                || read_optional(&prepared.system, AUTHORITY, 4096)?.as_deref()
-                    != Some(crate::management::MANAGEMENT_AUTHORITY_BYTES))
-        {
-            return Err(Error::InitialAuthority);
-        }
-        // Existing recovered systems without an initial helper activation
-        // intent retain their current core recovery semantics. This does not
-        // accept any legacy format or invent missing credentials/readiness.
+        let initial_management = InitialManagement::read(&prepared.system)?;
+        // Explicit recovery may have no first-installation chain. A partial
+        // chain (including a lone ready record) is not another authority.
         let setup = SetupRecovery::new(
             prepared.system.path().to_owned(),
             prepared.management.path().to_owned(),
@@ -103,7 +96,7 @@ impl PreparedService {
         )
         .map_err(|source| Error::Activation { source })?;
         setup
-            .activation_admitted()
+            .activation_with_management_at(&prepared.system, initial_management)
             .map_err(|source| Error::Activation { source })?;
         prepared.recheck()?;
         Ok(prepared)
@@ -151,6 +144,22 @@ impl PreparedService {
         Ok(())
     }
 }
+/// Presence can only be constructed here by correlating both existing native
+/// markers. Neither marker establishes recovery provenance or healthy credentials.
+pub(crate) struct InitialManagement(());
+impl InitialManagement {
+    pub(crate) fn read(directory: &PrivateDirectory) -> Result<Option<Self>, Error> {
+        let Some(bytes) = read_optional(directory, INITIALIZATION, 4096)? else {
+            return Ok(None);
+        };
+        if bytes != crate::setup_recovery::management_initialization_record() {
+            return Err(Error::InitialAuthority);
+        }
+        require_existing_authority(directory)?;
+        Ok(Some(Self(())))
+    }
+}
+
 /// A normal recovery attempt may re-read the marker, never recreate it. Keep
 /// the original SYSTEM directory capability so a new path cannot inherit it.
 pub(crate) fn require_existing_authority(directory: &PrivateDirectory) -> Result<(), Error> {

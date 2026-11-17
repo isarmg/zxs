@@ -226,6 +226,13 @@ enum AuthorityPreparation {
     Existing(platform_io::fs_safety::PrivateDirectory),
 }
 impl AuthorityPreparation {
+    fn admit_activation(&self, setup: &crate::setup_recovery::SetupRecovery) -> Result<(), ApiError> {
+        match self {
+            Self::ExplicitLibraryRecovery => setup.activation_admitted(),
+            Self::Existing(directory) => setup.activation_admitted_at(directory),
+        }
+    }
+
     fn require(&self, data_root: &Path) -> Result<(), ApiError> {
         match self {
             Self::ExplicitLibraryRecovery => claim_authority(data_root),
@@ -583,18 +590,18 @@ impl Inner {
         if self.recover_terminal()? {
             return Ok(());
         }
+        let setup = crate::setup_recovery::SetupRecovery::new(
+            self.data_root.clone(),
+            self.management_root.clone(),
+            BTreeMap::new(),
+        )?
+        .with_discovery_root(self.discovery_root.clone())
+        .with_workspace_limits(self.retained_workspace_limits)?;
+        self.authority_preparation.admit_activation(&setup)?;
         let existing = crate::lock(&self.state).backend.engine().cloned();
         let backend = if let Some(backend) = existing {
             backend
         } else {
-            let setup = crate::setup_recovery::SetupRecovery::new(
-                self.data_root.clone(),
-                self.management_root.clone(),
-                BTreeMap::new(),
-            )?
-            .with_discovery_root(self.discovery_root.clone())
-            .with_workspace_limits(self.retained_workspace_limits)?;
-            setup.activation_admitted()?;
             if setup.storage_status().state
                 == crate::setup_recovery::StorageActivationState::Pending
             {

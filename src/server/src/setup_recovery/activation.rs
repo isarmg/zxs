@@ -8,6 +8,7 @@ const MANAGEMENT_INTENT: &str = "management-initialization.json";
 pub(super) const ACTIVATION_INTENT: &str = "storage-activation-intent.json";
 const ACTIVATION_READY: &str = "storage-activation-ready.json";
 const ACTIVATION_COMPLETE: &str = "storage-activation-complete.json";
+const MAX_INITIAL_DISKS: usize = 32;
 
 #[derive(Serialize, Deserialize)]
 enum ManagementFormat {
@@ -247,34 +248,103 @@ impl SetupRecovery {
     /// Call before ordinary background Engine::open. A config file created by
     /// an interrupted genesis is not permission to admit user storage writes.
     pub fn activation_admitted(&self) -> Result<(), ApiError> {
-        if !present(&self.data_root.join(ACTIVATION_INTENT))? {
-            if present(&self.data_root.join(ACTIVATION_COMPLETE))?
-                || (present(&self.data_root.join(MANAGEMENT_INTENT))?
-                    && present(&self.data_root.join("config.json"))?)
+        let directory = platform_io::fs_safety::PrivateDirectory::open_existing(&self.data_root)
+            .map_err(control_publication_error)?;
+        self.activation_admitted_at(&directory)
+    }
+
+    pub(crate) fn activation_admitted_at(
+        &self,
+        directory: &platform_io::fs_safety::PrivateDirectory,
+    ) -> Result<(), ApiError> {
+        let management = crate::startup_admission::InitialManagement::read(directory)
+            .map_err(|source| match source {
+                crate::startup_admission::Error::InitialAuthority => ApiError::conflict(
+                    storage_contract::ErrorCode::SetupProofInvalid,
+                    "initial management authority differs from its original preparation",
+                ).with_source(std::io::Error::other(source)),
+                _ => ApiError::io(std::io::Error::other(source)),
+            })?;
+        self.activation_with_management_at(directory, management)
+    }
+
+    /// SYSTEM-only check. An explicit restore has its own authority and may
+    /// have no first-storage trace at all. Once any such trace exists, none
+    /// of its original stages can be silently reclassified as an ordinary restore.
+    pub(crate) fn activation_with_management_at(
+        &self,
+        directory: &platform_io::fs_safety::PrivateDirectory,
+        management: Option<crate::startup_admission::InitialManagement>,
+    ) -> Result<(), ApiError> {
+        use storage_contract::ErrorCode::{RecoveryRequired, SetupProofInvalid};
+        directory.verify_identity().map_err(control_publication_error)?;
+        let intent: Option<StorageActivationIntent> =
+            Self::read_optional_durable_control_at(directory, ACTIVATION_INTENT)?;
+        let complete: Option<StorageActivationComplete> =
+            Self::read_optional_durable_control_at(directory, ACTIVATION_COMPLETE)?;
+        let ready: Option<StorageActivationReady> =
+            Self::read_optional_durable_control_at(directory, ACTIVATION_READY)?;
+        let Some(intent) = intent else {
+            if ready.is_some()
+                || complete.is_some()
+                || (management.is_some() && Self::open_optional_control_at(directory, "config.json")?.is_some())
             {
                 return Err(ApiError::conflict(
-                    storage_contract::ErrorCode::SetupProofInvalid,
-                    "storage activation receipt is missing its intent",
+                    SetupProofInvalid, "storage activation evidence is missing its original intent",
                 ));
             }
+            directory.verify_identity().map_err(control_publication_error)?;
             return Ok(());
-        }
-        let intent: StorageActivationIntent = self.read_durable_control(ACTIVATION_INTENT)?;
-        if !present(&self.data_root.join(ACTIVATION_COMPLETE))? {
+        };
+        if management.is_none() {
             return Err(ApiError::conflict(
-                storage_contract::ErrorCode::RecoveryRequired,
-                "storage activation must be explicitly completed before data admission",
+                SetupProofInvalid, "known storage activation lacks its original management initialization",
             ));
         }
-        let complete: StorageActivationComplete = self.read_durable_control(ACTIVATION_COMPLETE)?;
-        self.verify_activation_configuration(&intent)?;
-        if complete.intent_digest != value_digest(&intent)? {
+        let complete = complete.ok_or_else(|| ApiError::conflict(
+            RecoveryRequired, "storage activation must be explicitly completed before data admission",
+        ))?;
+        let ready = ready.ok_or_else(|| ApiError::conflict(
+            SetupProofInvalid, "completed storage activation lacks its original disk readback",
+        ))?;
+        let config: Config = Self::read_optional_durable_control_at(directory, "config.json")?
+            .ok_or_else(|| ApiError::conflict(SetupProofInvalid, "storage activation configuration is absent"))?;
+        self.verify_activation_config_value(&config, &intent)?;
+        let digest = value_digest(&intent)?;
+        if complete.intent_digest != digest
+            || ready.intent_digest != digest
+            || !(1..=MAX_INITIAL_DISKS).contains(&intent.selections.len())
+            || ready.disk_seals.len() != intent.config.disks.len()
+            || intent.selections.len() != intent.config.disks.len()
+        {
             return Err(ApiError::conflict(
-                storage_contract::ErrorCode::SetupProofInvalid,
-                "storage activation receipt does not match its intent",
+                SetupProofInvalid, "storage activation records do not cover the exact original request",
             ));
         }
-        Ok(())
+        for (named, disk) in intent.selections.iter().zip(&intent.config.disks) {
+            let selected = &named.selection;
+            let recorded = ready.disk_seals.get(&disk.disk_id).ok_or_else(|| {
+                ApiError::conflict(SetupProofInvalid, "storage activation is missing an original disk seal")
+            })?;
+            let identity = storage_contract::working_tree::LocalEntityIdentity::new(
+                selected.root_identity.device, selected.root_identity.inode,
+            );
+            if named.name != disk.name
+                || Path::new(&selected.root_path) != disk.root
+                || !disk.root.starts_with(&selected.mount_path)
+                || !storage_engine::InitialSealDigest::matches_recorded_initial_selection(
+                    &intent.config,
+                    disk.disk_id.parse().map_err(ApiError::invalid_source)?,
+                    identity,
+                    recorded,
+                ).map_err(engine_error)?
+            {
+                return Err(ApiError::conflict(
+                    SetupProofInvalid, "storage activation readback differs from its original disk selection",
+                ));
+            }
+        }
+        directory.verify_identity().map_err(control_publication_error)
     }
 
     /// First storage activation only. Existing pools retain their fixed members;
@@ -294,7 +364,7 @@ impl SetupRecovery {
                 "first storage activation requires initialized management without a storage pool",
             ));
         }
-        if request.selections.is_empty() || request.selections.len() > 32 {
+        if !(1..=MAX_INITIAL_DISKS).contains(&request.selections.len()) {
             return Err(ApiError::invalid(
                 "select between one and 32 storage directories",
             ));
@@ -458,10 +528,16 @@ impl SetupRecovery {
         intent: &StorageActivationIntent,
     ) -> Result<(), ApiError> {
         let config: Config = read_control(&self.data_root.join("config.json"))?;
+        self.verify_activation_config_value(&config, intent)
+    }
+
+    fn verify_activation_config_value(
+        &self, config: &Config, intent: &StorageActivationIntent,
+    ) -> Result<(), ApiError> {
         if !config.is_initialization_result_of(&intent.config)
             && !crate::management::storage_configuration::admits_configuration(
                 &self.management_root,
-                &config,
+                config,
                 &intent.config,
             )?
         {

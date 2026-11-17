@@ -646,12 +646,33 @@ impl SetupRecovery {
         &self,
         name: &str,
     ) -> Result<T, ApiError> {
-        use platform_io::fs_safety::{EntryName, PrivateDirectory, linux::open_private_regular};
-        let directory =
-            PrivateDirectory::open_existing(&self.data_root).map_err(control_publication_error)?;
-        let name = EntryName::new(name).map_err(ApiError::invalid_source)?;
-        let mut file =
-            open_private_regular(&directory, &name).map_err(control_publication_error)?;
+        let directory = platform_io::fs_safety::PrivateDirectory::open_existing(&self.data_root)
+            .map_err(control_publication_error)?;
+        Self::read_optional_durable_control_at(&directory, name)?.ok_or_else(|| {
+            control_publication_error(std::io::Error::from(std::io::ErrorKind::NotFound).into())
+        })
+    }
+
+    fn open_optional_control_at(
+        directory: &platform_io::fs_safety::PrivateDirectory,
+        name: &str,
+    ) -> Result<Option<File>, ApiError> {
+        use platform_io::fs_safety::{EntryName, Error as FileError, linux::open_private_regular};
+        let entry = EntryName::new(name).map_err(ApiError::invalid_source)?;
+        match open_private_regular(directory, &entry) {
+            Ok(file) => Ok(Some(file)),
+            Err(FileError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(control_publication_error(error)),
+        }
+    }
+
+    fn read_optional_durable_control_at<T: data_serialization::de::DeserializeOwned>(
+        directory: &platform_io::fs_safety::PrivateDirectory,
+        name: &str,
+    ) -> Result<Option<T>, ApiError> {
+        let Some(mut file) = Self::open_optional_control_at(directory, name)? else {
+            return Ok(None);
+        };
         let metadata = file.metadata().map_err(ApiError::io)?;
         if metadata.uid() != rustix::process::geteuid().as_raw()
             || metadata.mode() & 0o7777 != 0o600
@@ -672,7 +693,7 @@ impl SetupRecovery {
         file.sync_all()
             .map_err(|error| control_publication_error(error.into()))?;
         directory.sync().map_err(control_publication_error)?;
-        Ok(value)
+        Ok(Some(value))
     }
 
     fn write_control<T: Serialize>(&self, name: &str, value: &T) -> Result<(), ApiError> {
