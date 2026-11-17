@@ -33,6 +33,15 @@ pub(crate) fn edit_worktree(
     bytes: &mut crate::ReadFile,
     principal: &Principal,
 ) -> Result<WorktreeRevision> {
+    let receipts = engine.snapshot_receipt_source()?;
+    let index = receipts.index()?;
+    // Exact original intent wins before a new transport body or today's size
+    // limit. A retry does not resave, reread the upload, or allocate a version;
+    // the actual published instance must still pass its held integrity proof.
+    if let Some(revision) = index.retry_edit(request, principal)? {
+        with_worktree(engine, request.target, |_| Ok(()))?;
+        return Ok(revision);
+    }
     if request.size > engine.config().max_file_bytes {
         return Err(RegistrationError::EditBody);
     }
@@ -43,12 +52,6 @@ pub(crate) fn edit_worktree(
         blake3: Some(request.content_hash.digest()),
     }).map_err(RegistrationError::EditVerification)?;
     bytes.seek(SeekFrom::Start(0)).map_err(RegistrationError::EditRead)?;
-    let receipts = engine.snapshot_receipt_source()?;
-    let index = receipts.index()?;
-    if let Some(revision) = index.retry_edit(request, principal)? {
-        with_worktree(engine, request.target, |_| Ok(()))?;
-        return Ok(revision);
-    }
     if engine.admitted_current_namespaces().map_err(RegistrationError::Publication)?.is_some()
         || engine.config.generation().is_some()
     {

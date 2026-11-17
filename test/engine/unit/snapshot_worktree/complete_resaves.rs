@@ -223,11 +223,31 @@ fn complete_resaves_keep_original_occurrence_and_move_only_exact_current_revisio
     assert_eq!(read(&engine, target, "file.txt"), b);
     assert_eq!(fs::read(&path_a).unwrap(), a);
     let before = inventory(&disk);
+    let all_material = inventory(temporary.path());
+    let state = std::sync::Arc::clone(&engine.state);
     let sequence = engine.state().sequence;
+    // These are queries of the exact original successful saves, not a fresh
+    // upload. Missing retransmitted bytes must not replace the permanent result.
     assert_eq!(engine.edit_directory_worktree(&first, &principal,
-        source(source_directory.path(), "retry-A", a)).unwrap(), revision_a);
+        source(source_directory.path(), "retry-A", b"")).unwrap(), revision_a);
     assert_eq!(engine.edit_directory_worktree(&second, &principal,
-        source(source_directory.path(), "retry-B", b)).unwrap(), revision_b);
+        source(source_directory.path(), "retry-B", b"partial retry")).unwrap(), revision_b);
+    assert_eq!(engine.edit_directory_worktree(&second, &"other".parse().unwrap(),
+        source(source_directory.path(), "wrong-principal", b"")).unwrap_err().code(),
+        storage_contract::ErrorCode::IdempotencyKeyReused);
+    let mut changed = second.clone();
+    changed.size += 1;
+    assert_eq!(engine.edit_directory_worktree(&changed, &principal,
+        source(source_directory.path(), "changed-request", b"")).unwrap_err().code(),
+        storage_contract::ErrorCode::IdempotencyKeyReused);
+    let mut fresh = second.clone();
+    fresh.operation_id = OperationId::generate().unwrap();
+    fresh.expected = revision_b;
+    assert_eq!(engine.edit_directory_worktree(&fresh, &principal,
+        source(source_directory.path(), "new-incomplete-body", b"")).unwrap_err().code(),
+        storage_contract::ErrorCode::ChecksumMismatch);
+    assert!(std::sync::Arc::ptr_eq(&state, &engine.state));
+    assert_eq!(inventory(temporary.path()), all_material);
     assert_eq!(engine.directory_worktree_status(target).unwrap().revision, revision_b);
     assert_eq!(engine.operation(first.operation_id).unwrap(), receipt_a);
     assert_eq!(engine.operation(second.operation_id).unwrap(), receipt_b);
