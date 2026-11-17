@@ -21,8 +21,7 @@ pub(crate) struct InstalledProgram {
 impl InstalledProgram {
     pub(crate) fn open() -> Result<Self> {
         let payload = payload::required()?;
-        let destination =
-            crate::private_io::ProgramDestination::open(std::path::Path::new(DESTINATION))?;
+        let destination = crate::private_io::ProgramDestination::installed()?;
         let held = destination
             .matching_file(payload.bytes)?
             .ok_or("install the exact embedded ZXS program before installing configuration")?;
@@ -147,7 +146,7 @@ struct PreparedProgram {
 fn prepare(payload: payload::Payload) -> Result<PreparedProgram> {
     require_root()?;
     let host = BundleDestination::open(Path::new(platform_io::service_lease::HOST_ROOT))?;
-    let destination = ProgramDestination::open(Path::new(DESTINATION))?;
+    let destination = ProgramDestination::installed()?;
     let installed = baseline::existing(&host, &baseline::expected(&host, &destination, payload)?)?;
     let identity = destination.parent_identity();
     let captured = destination.matching_file(payload.bytes)?;

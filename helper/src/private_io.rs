@@ -2,6 +2,7 @@
 //! /tmp); files are owner-only and single-linked. Existing outputs are never
 //! clobbered; draft replacements require a held transaction.
 mod configuration_files;
+mod fixed_program;
 mod host_root;
 mod program_repair;
 mod rescue_image;
@@ -10,6 +11,7 @@ use crate::Result;
 pub(crate) use configuration_files::{
     ConfigurationFiles, ParentSnapshot, SAMBA_PATH, SYSTEMD_PATH,
 };
+pub(crate) use fixed_program::FixedProgramParents;
 pub(crate) use host_root::HostRoot;
 use platform_io::fs_safety::{
     AtomicCommitError, EntryName,
@@ -159,6 +161,7 @@ mod tests;
 /// fixed installation path, not an arbitrary browser-supplied destination.
 /// Existing nonmatching files, links, modes or owners are never replaced.
 pub(crate) struct ProgramDestination {
+    chain: Option<FixedProgramParents>,
     parent_path: std::path::PathBuf,
     target: AnchoredPath,
     _lock: AdvisoryLock,
@@ -171,6 +174,24 @@ pub(crate) struct HeldProgram {
     stamp: crate::system_program::FileStamp,
 }
 impl ProgramDestination {
+    pub(crate) fn installed() -> Result<Self> {
+        Self::fixed(
+            Path::new(crate::installation::DESTINATION),
+            FixedProgramParents::executable()?,
+        )
+    }
+    fn fixed(path: &Path, parents: FixedProgramParents) -> Result<Self> {
+        if path.parent() != Some(parents.path()) {
+            return Err("the fixed destination differs from its declared directory chain".into());
+        }
+        let mut result = Self::open(path)?;
+        if result.parent_identity() != parents.leaf().identity() {
+            return Err("fixed executable parent was replaced before it could be locked".into());
+        }
+        result.chain = Some(parents);
+        result.recheck_parent()?;
+        Ok(result)
+    }
     pub(crate) fn open(path: &Path) -> Result<Self> {
         let target = AnchoredPath::open(path)?;
         let metadata = target.directory.directory().metadata()?;
@@ -183,6 +204,7 @@ impl ProgramDestination {
             .ok_or("program parent path is required")?
             .to_owned();
         let result = Self {
+            chain: None,
             parent_path,
             target,
             _lock: lock,
@@ -191,6 +213,9 @@ impl ProgramDestination {
         Ok(result)
     }
     fn recheck_parent(&self) -> Result<()> {
+        if let Some(parents) = &self.chain {
+            parents.require_current()?;
+        }
         let current = OpenAt2Root::open(&self.parent_path, MountPolicy::AllowNestedMounts)?;
         if current.identity() != self.target.directory.identity() {
             return Err(format!("program parent path changed; retain and inspect publication under parent device {} inode {}", self.target.directory.identity().device, self.target.directory.identity().inode).into());

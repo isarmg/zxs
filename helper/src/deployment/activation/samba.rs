@@ -2,25 +2,22 @@ use crate::{
     Result,
     account::LocalAccount,
     installation::vfs_payload::{self, HOST_VERSION, MODULE_DIRECTORY, MODULE_LIMIT},
+    private_io::FixedProgramParents,
     system_program::{Executable, FileStamp, Program},
 };
 use json_codec::{Value, json};
-use platform_io::fs_safety::{
-    RelativePath,
-    linux::{MountPolicy, OpenAt2Root, SingleLinkRequirement},
-};
+use platform_io::fs_safety::{EntryName, RelativePath, linux::SingleLinkRequirement};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
     os::unix::fs::{FileExt, MetadataExt},
-    path::Path,
 };
 
 pub(super) struct Samba {
     daemon: Executable,
     testparm: Executable,
     pdbedit: Executable,
-    module_root: OpenAt2Root,
+    module_root: FixedProgramParents,
     module: File,
     module_stamp: FileStamp,
     module_hash: String,
@@ -37,15 +34,10 @@ impl Samba {
         let testparm = Executable::open(Program::Testparm)?;
         let pdbedit = Executable::open(Program::Pdbedit)?;
         super::super::samba_password::require_activation(&testparm, &pdbedit, &account.snapshot())?;
-        let module_root =
-            OpenAt2Root::open(Path::new(MODULE_DIRECTORY), MountPolicy::AllowNestedMounts)?;
-        let parent = module_root.directory().metadata()?;
-        if parent.uid() != 0 || parent.mode() & 0o022 != 0 {
-            return Err(
-                "Samba VFS directory must be root-owned and not writable by other users".into(),
-            );
-        }
-        let module = module_root.open_file(&RelativePath::new("zxs.so")?, false)?;
+        let module_root = FixedProgramParents::vfs()?;
+        let module = module_root
+            .leaf()
+            .open_file(&RelativePath::new("zxs.so")?, false)?;
         let (module_stamp, module_hash) = module_identity(&module)?;
         if module_hash != expected.sha256() {
             return Err("installed VFS differs from the helper's sealed same-source payload; no different module was loaded or replaced".into());
@@ -72,21 +64,20 @@ impl Samba {
         self.daemon.recheck()?;
         self.testparm.recheck()?;
         self.pdbedit.recheck()?;
-        let root = OpenAt2Root::open(Path::new(MODULE_DIRECTORY), MountPolicy::AllowNestedMounts)?;
-        let meta = root.directory().metadata()?;
-        if meta.uid() != 0
-            || meta.mode() & 0o022 != 0
-            || root.identity() != self.module_root.identity()
-            || SingleLinkRequirement::check(root.open_file(&RelativePath::new("zxs.so")?, false)?)?
-                != SingleLinkRequirement::check(&self.module)?
-            || module_identity(&self.module)?
-                != (self.module_stamp.clone(), self.module_hash.clone())
-        {
+        self.module_root.require_current()?;
+        let root = self.module_root.leaf();
+        let name = EntryName::new("zxs.so")?;
+        let original = SingleLinkRequirement::check(&self.module)?;
+        root.verify_entry_identity(&name, original)?;
+        if module_identity(&self.module)? != (self.module_stamp.clone(), self.module_hash.clone()) {
             return Err(
-                "installed Samba module changed after preview; no replacement module was accepted"
-                    .into(),
+                "installed Samba module changed; do not activate from a substituted source".into(),
             );
         }
+        // A legitimate module read can be long. The path itself must still lead
+        // through every original ancestor to the same leaf after hashing.
+        self.module_root.require_current()?;
+        root.verify_entry_identity(&name, original)?;
         Ok(())
     }
 }

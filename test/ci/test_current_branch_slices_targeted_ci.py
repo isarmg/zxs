@@ -18,7 +18,7 @@ class CurrentBranchSelection(unittest.TestCase):
         for group, files in {
             'held-helper-installation-files': [
                 'helper/src/deployment/install.rs', 'helper/src/private_io/configuration_files.rs',
-                'test/helper/unit/installation/vfs_records.rs',
+                'test/helper/unit/installation/vfs_records.rs', 'helper/src/private_io/fixed_program.rs',
             ],
             'selected-scope-and-physical-images': [
                 'src/engine/src/engine/index/system_changes/prepared.rs',

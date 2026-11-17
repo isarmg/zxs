@@ -83,7 +83,7 @@ impl Context {
         super::require_root()?;
         let payload = payload::required()?;
         let host = BundleDestination::open(Path::new(HOST_ROOT))?;
-        let program = ProgramDestination::open(Path::new(super::DESTINATION))?;
+        let program = ProgramDestination::installed()?;
         let baseline = baseline::expected(&host, &program, payload)?;
         baseline::require(&host, &baseline)?;
         Ok(Self {
