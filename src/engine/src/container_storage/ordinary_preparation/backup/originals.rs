@@ -190,6 +190,40 @@ impl BackupOriginalCompletion {
     }
 }
 
+/// A FILE occurrence is an obligation of its registered root even when no
+/// historical BODY currently selects that root. Conversely a routed BODY may
+/// not borrow a FILE occurrence from a sibling or a different binding.
+fn source_files(
+    state: &State, source: &crate::DiskConfig, stop: &AtomicBool,
+) -> Result<BTreeSet<FileId>> {
+    let disk = source.disk_id.parse::<DiskId>()?;
+    let mut files = BTreeSet::new();
+    for (file, record) in state.file_containers.iter() {
+        preparation_checkpoint(stop)?;
+        if record.replicas.contains_key(&disk) {
+            if record.working.unborn().is_some() || record.working.draft().is_some()
+                || record.namespace.parent.ordinary().is_none()
+            {
+                return Err(Failure::BackupLayoutUnsupported.into());
+            }
+            files.insert(*file);
+        }
+    }
+    for version in state.versions.values() {
+        preparation_checkpoint(stop)?;
+        let placement = state.placements.get(&version.version_id)
+            .ok_or(Failure::BackupLayoutEvidence)?;
+        if placement.route_slot_ids.contains(&source.slot_id)
+            && (placement.binding_generations.get(&source.slot_id)
+                != Some(&source.binding_generation)
+                || !files.contains(&version.file_id.parse::<FileId>()?))
+        {
+            return Err(Failure::BackupLayoutEvidence.into());
+        }
+    }
+    Ok(files)
+}
+
 pub(crate) struct BackupOriginalImage<'a> {
     source: &'a PublishedBackupOriginal<'a>,
     projection: ProjectionSnapshot<'a>,
@@ -207,19 +241,11 @@ impl<'a> BackupOriginalImage<'a> {
         if !state.directory_git_repositories.is_empty() || !state.file_deletions.is_empty() {
             return Err(Failure::BackupLayoutUnsupported.into());
         }
-        let mut selected = BTreeSet::new();
-        for version in state.versions.values() {
-            preparation_checkpoint(stop)?;
-            if state.placements[&version.version_id].route_slot_ids
-                .contains(&source.disk().slot_id)
-            {
-                selected.insert(version.file_id.parse::<FileId>()?);
-            }
-        }
+        let mut selected = source_files(state, source.disk(), stop)?;
+        let disk = source.disk().disk_id.parse::<DiskId>()?;
         let mut descriptors = 0usize;
         for file in &selected {
             let record = &state.file_containers[file];
-            let disk = source.disk().disk_id.parse::<DiskId>()?;
             let replica = record.replicas.get(&disk).ok_or(Failure::BackupLayoutEvidence)?;
             let parent = record.namespace.parent.ordinary().ok_or(Failure::BackupLayoutEvidence)?;
             let depth = match parent {
@@ -280,7 +306,6 @@ impl<'a> BackupOriginalImage<'a> {
             published_sequence: u64,
             objects: Vec<ObjectDescriptor<'b>>,
         }
-        let disk = source.disk().disk_id.parse::<DiskId>()?;
         let recipe = crate::canonical_json(&Recipe {
             root: &source.config().storage_roots[&disk],
             original_sequence: state.sequence,
@@ -471,3 +496,7 @@ impl<'a> BackupPayloadVersion<'a> {
         self.held.verify(self.source.root())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/container_storage/backup_original_inventory_tests.rs"]
+mod inventory_tests;

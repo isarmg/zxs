@@ -8,7 +8,7 @@ use crate::{
     state_projection::ProjectionSnapshot,
 };
 use data_serialization::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf, sync::atomic::AtomicBool};
+use std::{path::PathBuf, sync::atomic::AtomicBool};
 
 const MAX_DATABASES: usize = 4096;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -103,28 +103,23 @@ impl PreparedDatabases {
     }
     pub(crate) fn capture(admitted: &AdmittedState, stop: &AtomicBool) -> Result<Self> {
         let state = admitted.state();
-        let mut files = BTreeMap::new();
-        for version in state.versions.values() {
-            if files
-                .get(&version.file_id)
-                .is_some_and(|history| *history != &version.history_tree_id)
-            {
-                return Err(Error::new(
-                    ErrorCode::StateInvalid,
-                    "one prepared file cannot belong to multiple history units",
-                ));
-            }
-            files.insert(&version.file_id, &version.history_tree_id);
-            if files.len() > MAX_DATABASES {
-                return Err(budget());
-            }
-        }
-        if files
-            .len()
-            .checked_add(state.directory_git_repositories.len())
+        // Full State admission closes every historical FileId to its one
+        // container and also admits current-only births. Versions alone are
+        // not the object inventory. A database of committed rows cannot stand
+        // in for a working BODY or its independent storage proof.
+        if state.file_containers.len().checked_add(state.directory_git_repositories.len())
             .is_none_or(|count| count > MAX_DATABASES)
         {
             return Err(budget());
+        }
+        for record in state.file_containers.values() {
+            preparation_checkpoint(stop)?;
+            if record.working.unborn().is_some() || record.working.draft().is_some() {
+                return Err(Error::new(
+                    ErrorCode::UnsupportedOperation,
+                    "complete object backup requires every working file to be committed",
+                ));
+            }
         }
         let snapshot = ProjectionSnapshot::new(state);
         let view = snapshot.view();
@@ -134,11 +129,13 @@ impl PreparedDatabases {
             files: 0,
             directories: 0,
         };
-        for (file, history) in files {
+        for (file, record) in state.file_containers.iter() {
             preparation_checkpoint(stop)?;
+            let file = file.to_string();
+            let history = record.history_tree_id.to_string();
             // The older graph-only copy never retained its imported D/undo.
             // Do not convert that absence into a complete database certificate.
-            if view.owners().file_rows(file).is_some_and(|rows| {
+            if view.owners().file_rows(&file).is_some_and(|rows| {
                 rows.history_copies
                     .keys()
                     .any(|id| state.operations[id].kind == crate::business::history_copy::KIND)
@@ -148,14 +145,8 @@ impl PreparedDatabases {
                     "graph-only copied history lacks its imported lifecycle closure",
                 ));
             }
-            let bytes = file_database::prepare(view, file, history)?.bytes;
-            prepared.add(
-                Scope::File {
-                    history: history.clone(),
-                    file: file.clone(),
-                },
-                bytes,
-            )?;
+            let bytes = file_database::prepare(view, &file, &history)?.bytes;
+            prepared.add(Scope::File { history, file }, bytes)?;
             prepared.files += 1;
         }
         for (directory, git) in &state.directory_git_repositories {
