@@ -183,10 +183,12 @@ pub(super) fn require_selector(
             ));
         }
     }
-    let saved: ValidatedConfig = decode_strict(&root.read_bytes(
-        &root.path().join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
-        MAX_METADATA,
-    )?)?;
+    let saved = crate::engine::scope_closure::Anchor::read(root)?;
+    let fixed = plan.authority.archived_fixed_genesis(archive(root, &plan.authority)?)?;
+    if saved.fixed_genesis()?.hash != fixed.hash {
+        return Err(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch.into());
+    }
+    crate::engine::scope_closure::Anchor::verify_if_original(&saved, disk, root)?;
     original.verify_saved_metadata_membership(&saved)?;
     Ok(())
 }

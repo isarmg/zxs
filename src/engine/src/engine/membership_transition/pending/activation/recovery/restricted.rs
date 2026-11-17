@@ -496,11 +496,12 @@ fn verify_held_generation_from(
                     }
                 }
             };
+            let mut local_anchor = None;
             if let Some(saved) = saved {
-                let saved: ValidatedConfig = decode_strict(&read_file_bytes(saved, MAX_METADATA)?)?;
-                portable
-                    .genesis_config()?
-                    .verify_saved_metadata_membership(&saved)?;
+                let saved = crate::engine::scope_closure::Anchor::decode(&read_file_bytes(saved, MAX_METADATA)?)?;
+                crate::engine::scope_closure::Anchor::verify_if_original(&saved, &disk, &held.root)?;
+                portable.genesis_config()?.verify_saved_metadata_membership(&saved)?;
+                local_anchor = Some(saved.fixed_genesis()?.hash);
             } else if intent
                 .origin
                 .config()
@@ -563,18 +564,24 @@ fn verify_held_generation_from(
                     )?;
                 }
             }
+            let fixed = portable.archived_fixed_genesis(
+                parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?,
+            )?;
+            if local_anchor.is_some_and(|local| local != fixed.hash) {
+                return Err(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch.into());
+            }
             let (state, history) = portable.read_archive_base(
                 parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?,
             )?;
             portable.verify_registry_source(&state)?;
             if config.is_none() {
-                config = Some(effective.clone().with_generation(Arc::new(Generation {
+                config = Some(effective.clone().with_fixed_genesis(fixed.clone()).with_generation(Arc::new(Generation {
                     backup_continuation: None,
                     hash: hash.clone(),
                     workspace_roots: portable.workspace_root_aliases()?,
                     portable: portable.clone(),
                     intent: intent.clone(),
-                    original: portable.genesis_config()?,
+                    original: portable.genesis_config()?.with_fixed_genesis(fixed),
                     history,
                     epoch: portable.epoch()?,
                     base: Arc::new(state),
@@ -732,8 +739,7 @@ fn verify_held_genesis(
     held: Vec<HeldCandidate>,
     mut rejected_members: Vec<(String, Error)>,
 ) -> Result<RestrictedGenerationEvidence> {
-    let mut selected: Option<ValidatedConfig> = None;
-    let mut verified_members = Vec::new();
+    let mut groups = BTreeMap::<[u8; 32], (ValidatedConfig, Vec<String>)>::new();
     for held in held {
         let result = (|| {
             // Projection supplies only a deny-only expected physical binding.
@@ -746,15 +752,10 @@ fn verify_held_genesis(
                 &layout::ZXS_DATA_ROOT,
                 crate::working_tree::records::file_identity(binding.roots.zxs_data.entity),
             ).map_err(crate::engine::fresh_layout::directory_error)?;
-            let saved: ValidatedConfig = management.read_json_observed(
-                &held.disk.root.join(layout::GENESIS_CONFIGURATION.as_path()),
-                &mut |_| Ok(()),
-            )?;
-            if !saved.permits_genesis_recovery_projection(projected)
-                || selected
-                    .as_ref()
-                    .is_some_and(|previous| !previous.same_genesis_io_authority(&saved))
-            {
+            let saved = crate::engine::scope_closure::Anchor::decode(&management.read_bytes(
+                &held.disk.root.join(layout::GENESIS_CONFIGURATION.as_path()), MAX_METADATA,
+            )?)?;
+            if !saved.permits_genesis_recovery_projection(projected) {
                 return Err(Error::new(
                     ErrorCode::ConfigConflict,
                     "genesis projection differs from fixed saved registration authority",
@@ -779,18 +780,30 @@ fn verify_held_genesis(
                     )?,
             )?;
             validate_stored_seal(&stored, &expected)?;
-            crate::engine::fresh_layout::verify_root(&saved, disk, &held.root)?;
-            if selected.is_none() {
-                selected = Some(saved);
-            }
-            Ok(())
+            crate::engine::scope_closure::Anchor::verify_original_disk(&saved, &held.disk, &held.root)?;
+            let key = *saved.fixed_genesis()?.hash.hash().digest().as_bytes();
+            Ok((key, saved))
         })();
         match result {
-            Ok(()) => verified_members.push(held.disk.disk_id),
+            Ok((key, saved)) => groups.entry(key).or_insert_with(|| (saved, Vec::new()))
+                .1.push(held.disk.disk_id),
             Err(error) => rejected_members.push((held.disk.disk_id, error)),
         }
     }
-    let Some(config) = selected else {
+    let mut selected = None;
+    for (_, (config, members)) in groups {
+        if members.len() >= config.metadata_quorum() {
+            if selected.replace((config, members)).is_some() {
+                return Err(Error::new(ErrorCode::LogFork, "two distinct fixed genesis majorities"));
+            }
+        } else {
+            for disk_id in members {
+                rejected_members.push((disk_id, Error::new(ErrorCode::ConfigConflict,
+                    "this exact fixed genesis has no original voting majority")));
+            }
+        }
+    }
+    let Some((config, verified_members)) = selected else {
         // A concrete identity or resource failure is not a missing authority.
         // Preserve its exact error/source shape at the disk-read boundary.
         if let Some(index) = rejected_members.iter().position(|(_, error)| {
@@ -803,9 +816,6 @@ fn verify_held_genesis(
         }
         return Err(genesis_quorum_failure(rejected_members));
     };
-    if verified_members.len() < config.metadata_quorum() {
-        return Err(genesis_quorum_failure(rejected_members));
-    }
     let metadata_members = config.metadata_members().len();
     Ok(RestrictedGenerationEvidence {
         #[cfg(test)]
@@ -815,7 +825,7 @@ fn verify_held_genesis(
         // Registration and N/Q were independently authenticated above. Keep
         // the stricter local budget (and separate explicit runtime override),
         // rather than silently replacing it with the saved higher limits.
-        config: projected.clone(),
+        config: projected.clone().with_fixed_genesis(config.fixed_genesis()?.clone()),
         verified_members,
         rejected_members,
     })

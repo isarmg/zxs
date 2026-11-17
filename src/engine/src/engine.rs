@@ -563,6 +563,12 @@ impl Engine {
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
         let selection = crate::authority_selection::SelectionGuard::legacy(&root)?;
+        // This direct fresh-pool entry point does not carry a management
+        // setup capability. A nonempty unknown SYSTEM is never adopted.
+        let system = selection.held_system_root()?;
+        if system.entries(system.path())?.next().transpose()?.is_some() {
+            return Err(scope_closure::ScopeClosureError::GenesisMismatch.into());
+        }
         let mut roots = Vec::with_capacity(config.disks.len());
         for disk in &config.disks {
             private_dir(&disk.root)?;
@@ -648,6 +654,12 @@ impl Engine {
             }
         }
         let system_root = selection.held_system_root()?;
+        // The held setup entry point may already contain independently
+        // authorized management files. It can never adopt a pre-existing
+        // scope-object namespace as fresh storage.
+        if system_root.optional_metadata(&system_root.path().join("metadata"))?.is_some() {
+            return Err(scope_closure::ScopeClosureError::GenesisMismatch.into());
+        }
         let unbound_locks = config::acquire_initialization_locks(&root, disk_resources, selection)?;
         // Recheck after locking: an earlier empty-root observation can be stale.
         for disk in disk_resources.handles() {
@@ -692,10 +704,18 @@ impl Engine {
         genesis.install(&system_root, &config, &disk_resources)?;
         // Recheck all original held areas after database encoding and readback.
         scope_closure::capture_initial_roots(&config, &disk_resources)?;
-        // Every payload disk retains the fixed membership anchor for offline proofs.
+        // A disk-local prepared graph cannot select itself: only these original,
+        // complete bytes at the existing fixed membership address select it.
+        let config = scope_closure::Anchor::initial(&config, operation, genesis.hash())?;
+        let fixed = config.fixed_genesis()?;
         for d in &config.disks {
             let address = d.root.join(layout::GENESIS_CONFIGURATION.as_path());
-            disk_resources.get(d)?.root_for(&address)?.write_json(&address, &config, false)?;
+            let original = disk_resources.get(d)?.root_for(&address)?;
+            original.write_atomic(&address, fixed.bytes(), false)?;
+            let reread = scope_closure::Anchor::decode(&original.read_bytes(&address, MAX_METADATA)?)?;
+            if reread.fixed_genesis()?.hash != fixed.hash {
+                return Err(scope_closure::ScopeClosureError::GenesisMismatch.into());
+            }
         }
         disk_lifecycle::bootstrap::runtime::initialize(&root, &config, &disk_resources)?;
         write_json(&root.join("config.json"), &config, false)?;
@@ -794,7 +814,7 @@ impl Engine {
         let (config, bootstrap) =
             membership_transition::pending::activation::discover_startup(&root, config)?;
         let resources = Arc::new(DiskResources::recover_held(&config, directories)?);
-        let engine = Self::prepare_recovery_resources(root, config, resources)?;
+        let engine = Self::prepare_scoped_recovery(root, config, resources, None)?;
         Self::finish_held_recovery(engine, bootstrap)
     }
 
@@ -872,7 +892,7 @@ impl Engine {
     ) -> Result<(Self, Vec<RecoverySealFailure>, BootstrapStore)> {
         let (config, bootstrap) =
             membership_transition::pending::activation::discover_startup(&root, config)?;
-        let (engine, warnings) = Self::prepare_retained_workspace_recovery(root, config)?;
+        let (engine, warnings) = Self::prepare_retained_workspace_recovery(root, config, None)?;
         Ok((engine, warnings, bootstrap))
     }
 
@@ -896,11 +916,27 @@ impl Engine {
     fn prepare_retained_workspace_recovery(
         root: PathBuf,
         config: ValidatedConfig,
+        fresh_system: Option<scope_closure::GenesisPreparation>,
     ) -> Result<(Self, Vec<RecoverySealFailure>)> {
         let disk_resources = Arc::new(DiskResources::open(&config, true)?);
-        let mut engine = Self::prepare_recovery_resources(root, config, disk_resources)?;
+        let mut engine = Self::prepare_scoped_recovery(root, config, disk_resources, fresh_system)?;
         let warnings = engine.prepare_generation_resources()?;
         Ok((engine, warnings))
+    }
+
+    fn prepare_scoped_recovery(
+        root: PathBuf, config: ValidatedConfig, resources: Arc<DiskResources>,
+        fresh_system: Option<scope_closure::GenesisPreparation>,
+    ) -> Result<Self> {
+        let selection = crate::authority_selection::SelectionGuard::legacy(&root)?;
+        let system = selection.held_system_root()?;
+        scope_closure::Anchor::preflight_holders(&config, &resources)?;
+        match fresh_system {
+            Some(prepared) => prepared.install_restored_system(&system, &config)?,
+            None => scope_closure::Anchor::verify_system(&config, &system)?,
+        }
+        let locks = config::acquire_locks_selected(&root, &resources, selection)?;
+        Self::recovery_resources_with_locks(root, config, resources, locks)
     }
 
     fn prepare_recovery_resources(
@@ -1096,9 +1132,10 @@ impl Engine {
                     continue;
                 }
             };
+            let fixed = config.fixed_genesis()?.hash.hash().digest().to_hex();
             let hash = match config.generation_hash() {
-                Some(hash) => hash.to_owned(),
-                None => object_hash("pool-config", &config)?,
+                Some(hash) => format!("{hash}:{fixed}"),
+                None => fixed.to_string(),
             };
             configs
                 .entry(hash)
@@ -1225,9 +1262,19 @@ impl Engine {
         let config = config
             .with_workspace_limits(workspace_limits)?
             .restrict_io_disks(allowed)?;
+        // Do not create or repair a retained SYSTEM target. The explicit
+        // fresh-only restore is allowed to reconstitute original empty SYSTEM
+        // material only after its exact pinned graph commitment matched.
+        if root.try_exists()? {
+            let target = DiskRoot::open(root)?;
+            if target.entries(target.path())?.next().transpose()?.is_some() {
+                return Err(scope_closure::ScopeClosureError::GenesisMismatch.into());
+            }
+        }
+        let prepared_system = scope_closure::GenesisPreparation::prepare_system_restore(&config)?;
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
-        let (mut engine, warnings) = Self::prepare_retained_workspace_recovery(root, config)?;
+        let (mut engine, warnings) = Self::prepare_retained_workspace_recovery(root, config, Some(prepared_system))?;
         // Resource acquisition must retain the exact identity checked above;
         // disappearance or replacement cannot become a silently unavailable disk.
         for disk in engine

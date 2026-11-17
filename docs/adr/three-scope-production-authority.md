@@ -90,6 +90,12 @@ Q=floor(N/2)+1 验证，不按在线数重算。局部 material 和[离线盘日
 包预算。SQLite 原始页按 `metadata/objects/scope-sqlite-image/HH/HASH.sqlite` 的
 原始内容摘要取回，不把 JSON 摘要当正文摘要。原池空库存也必须读到真实规范空页。
 
+原配置的域仍为 `pool-config`；固定锚的规范字节属于 `fixed-genesis` 域，成员票按
+整份锚而非裸 Config 分组。Add／Backup 目标从已认证原生归档携带原样字节，不从
+当前配置生成另一个 genesis。普通打开只读核验并保留损坏材料。已有显式多成员恢复的
+空 SYSTEM 目标只有在按真实固定原配置重现的完整 **genesis** 图摘要完全一致时，才能写入
+其原非秘密空 SYSTEM 镜像；不采信仅逻辑行等价，也不从单盘重建后续 SYSTEM 状态。
+
 ## 一次发布，逐盘只读
 
 1. 现有 owner 在同一来源捕获权限、原请求、成员代际、真实对象及材料清单。准备时

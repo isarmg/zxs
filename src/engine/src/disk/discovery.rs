@@ -104,6 +104,9 @@ pub fn recognize_disk(directory: File, path: PathBuf) -> Result<RecognizedDisk> 
         .iter()
         .find(|disk| disk.disk_id == seal.disk_id)
         .expect("invariant: local configuration verified this seal");
+    let mut local = disk.clone();
+    local.root = path.clone();
+    crate::engine::scope_closure::verify_recognized_holder(&config, &local, &root)?;
     let role = RecordedDiskRole {
         level: disk.level,
         upstream_slot_id: disk.upstream_slot_id.clone(),

@@ -133,11 +133,15 @@ fn authenticate(
             selected = Some(actual);
         }
     }
+    // All targets independently verified this same archive; keep its exact
+    // original anchor for the original SYSTEM scope check before writer I/O.
+    let fixed = plan.authority.archived_fixed_genesis(native::archive(&roots[0].1, &plan.authority)?)?;
     let native = selected.expect("invariant: nonempty fixed root set verified");
     let config = native
         .writer
         .config()
         .clone()
+        .with_fixed_genesis(fixed)
         .with_workspace_limits(Some(projected.effective_workspace_limits()))?;
     let mut admission = BackupStartupAdmission {
         plan,

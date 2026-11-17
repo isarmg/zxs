@@ -352,7 +352,8 @@ impl ArchiveStore {
             &disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
             MAX_METADATA,
         )?;
-        let saved: ValidatedConfig = decode_strict(&config)?;
+        let saved = crate::engine::scope_closure::Anchor::decode(&config)?;
+        crate::engine::scope_closure::Anchor::verify_if_original(&saved, disk, &handle.root)?;
         match engine.config.generation() {
             Some(generation) => generation
                 .original()
@@ -1202,7 +1203,7 @@ fn verify_member(
             "archive original identity bytes differ",
         ));
     }
-    let saved: ValidatedConfig = decode_strict(&config_bytes)?;
+    let saved = crate::engine::scope_closure::Anchor::decode(&config_bytes)?;
     epoch.genesis.verify_saved_metadata_membership(&saved)?;
     let seal = decode_seal(&seal_bytes)?;
     verify_archived_member_identity(config, epoch.authority_hash.as_deref(), disk, member, &seal)
@@ -1463,6 +1464,41 @@ impl ControlSource for ActiveObjects<'_> {
         )
     }
 }
+/// Read the permanent original bytes inside this exact authorized predecessor
+/// archive. No current root path, SQLite file or projection supplies them.
+pub(in crate::engine::membership_transition) fn read_archived_fixed_genesis(
+    directory: DiskRoot, expected_archive: &str, transition: &str,
+    prior: &ValidatedConfig, genesis: &ValidatedConfig,
+) -> Result<crate::engine::scope_closure::Anchor> {
+    let store = ArchiveStore { root: directory };
+    let root: ArchiveRoot = json_codec::from_value(AuthenticatedMetadataObject::authenticate(
+        ROOT_KIND, expected_archive, decode_strict(&store.root.read_bytes(&store.path(ROOT_FILE), MAX_METADATA)?)?,
+    )?.into_value())?;
+    if root.transition_hash != transition {
+        return Err(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch.into());
+    }
+    let mut selected: Option<crate::engine::scope_closure::Anchor> = None;
+    for voter in prior.metadata_members() {
+        let row = crate::metadata_map::lookup(&root.members, &voter.disk_id,
+            |kind, hash| store.load(kind, hash))?
+            .ok_or(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch)?;
+        let member: ArchivedMember = json_codec::from_value(row)?;
+        let path = store.member_directory(voter, None).join("config.json");
+        let bytes = store.root.read_bytes(&path, MAX_METADATA)?;
+        if content_hash(&bytes) != member.config_bytes_hash {
+            return Err(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch.into());
+        }
+        let saved = crate::engine::scope_closure::Anchor::decode(&bytes)?;
+        let fixed = saved.fixed_genesis()?;
+        if !saved.permits_genesis_recovery_projection(genesis)
+            || selected.as_ref().is_some_and(|old| old.hash != fixed.hash) {
+            return Err(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch.into());
+        }
+        selected.get_or_insert_with(|| fixed.clone());
+    }
+    selected.ok_or_else(|| crate::engine::scope_closure::ScopeClosureError::GenesisMismatch.into())
+}
+
 pub(in crate::engine::membership_transition) fn read_generation_base(
     root: DiskRoot,
     expected: &str,

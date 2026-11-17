@@ -159,7 +159,7 @@ fn relocated_genesis_anchors_survive_exit_readmission_and_cold_restart() {
                 let bytes = fs::read(
                     disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
                 ).unwrap();
-                let saved: Config = decode_strict(&bytes).unwrap();
+                let saved = crate::engine::scope_closure::Anchor::decode(&bytes).unwrap();
                 assert_ne!(saved.disks[0].root, fixture.config.disks[0].root);
                 bytes
             })

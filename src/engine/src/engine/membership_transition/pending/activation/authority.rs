@@ -1084,6 +1084,16 @@ impl PortableAuthority {
         }
     }
 
+    /// The original Config projection is not the fixed anchor. Authenticate
+    /// its entire original bytes through the existing native archive root.
+    pub(in crate::engine::membership_transition) fn archived_fixed_genesis(
+        &self, root: DiskRoot,
+    ) -> Result<crate::engine::scope_closure::Anchor> {
+        let intent = self.archive_intent()?;
+        read_archived_fixed_genesis(root, &self.archive_hash()?, &object_hash(INTENT_KIND, &intent)?,
+            intent.origin.config(), &self.genesis_config()?)
+    }
+
     pub(in crate::engine::membership_transition) fn read_archive_base(
         &self,
         root: DiskRoot,

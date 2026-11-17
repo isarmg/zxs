@@ -151,12 +151,7 @@ impl GenesisPreparation {
         config: &ValidatedConfig,
         resources: &DiskResources,
     ) -> Result<()> {
-        let system_input = SystemEncodingInput::new(&self.state, &|| Ok(()))?;
-        self.system_image
-            .install_verified(system_root, |bytes| system_input.verify(bytes, &|| Ok(())))?;
-        self.empty_system_inventory.install(system_root)?;
-        self.system.install(system_root)?;
-        self.closure.install(system_root)?;
+        self.install_system_material(system_root)?;
         let original = super::readback::Original::new(config, self.operation, self.hash())?;
         let (mut actual_bytes, expected_bytes) = original.system(system_root)?;
         for disk in &config.disks {
@@ -181,6 +176,41 @@ impl GenesisPreparation {
             return Err(ScopeClosureError::GenesisMismatch.into());
         }
         Ok(())
+    }
+    fn install_system_material(&self, system_root: &DiskRoot) -> Result<()> {
+        let system_input = SystemEncodingInput::new(&self.state, &|| Ok(()))?;
+        self.system_image
+            .install_verified(system_root, |bytes| system_input.verify(bytes, &|| Ok(())))?;
+        self.empty_system_inventory.install(system_root)?;
+        self.system.install(system_root)?;
+        self.closure.install(system_root)?;
+        Ok(())
+    }
+
+    /// Explicit multi-voter restore only: material for a different, known
+    /// empty SYSTEM target is admissible only if reproducing the entire fixed
+    /// original graph gives the exact already-voted anchor bytes' commitment.
+    pub(in crate::engine) fn prepare_system_restore(config: &ValidatedConfig) -> Result<Self> {
+        let fixed = config.fixed_genesis()?;
+        let original = super::Anchor::decode(fixed.bytes())?;
+        let prepared = Self::capture(&original, fixed.operation)?;
+        if prepared.hash() != fixed.closure {
+            return Err(ScopeClosureError::ImageMismatch.into());
+        }
+        Ok(prepared)
+    }
+    pub(in crate::engine) fn install_restored_system(
+        &self,
+        system: &DiskRoot,
+        config: &ValidatedConfig,
+    ) -> Result<()> {
+        if self.hash() != config.fixed_genesis()?.closure
+            || system.entries(system.path())?.next().transpose()?.is_some()
+        {
+            return Err(ScopeClosureError::GenesisMismatch.into());
+        }
+        self.install_system_material(system)?;
+        super::Anchor::verify_system(config, system)
     }
 }
 

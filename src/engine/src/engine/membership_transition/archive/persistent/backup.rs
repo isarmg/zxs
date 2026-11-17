@@ -16,6 +16,7 @@ pub(in crate::engine) struct PreparedBackupControl {
     archive: ArchiveRoot,
     transition_hash: String,
     files: BTreeMap<PathBuf, Vec<u8>>,
+    original_anchor_path: PathBuf,
     journals: Vec<MembershipJournalInspection>,
 }
 struct Files {
@@ -116,6 +117,7 @@ impl PreparedBackupControl {
         }
         let mut members = json_codec::Map::new();
         let mut journals = Vec::with_capacity(frozen.members.len());
+        let mut original_anchor_path = None;
         for member in &frozen.members {
             preparation_checkpoint(stop)?;
             let path = PathBuf::from("journals")
@@ -132,7 +134,12 @@ impl PreparedBackupControl {
                 member.disk.disk_id.clone(),
                 json_codec::to_value(&metadata)?,
             );
-            files.insert(path.join("config.json"), member.config.clone())?;
+            let address = path.join("config.json");
+            // The frozen reader already compared every original voter's entire
+            // fixed anchor. Retain the actual archived bytes, never an encoding
+            // of the portable configuration as a replacement for those bytes.
+            original_anchor_path.get_or_insert_with(|| address.clone());
+            files.insert(address, member.config.clone())?;
             files.insert(path.join(layout::DISK_IDENTITY.as_path()), member.seal.clone())?;
             files.insert(path.join(layout::JOURNAL.as_path()), member.journal.clone())?;
             journals.push(member.inspection.clone());
@@ -167,11 +174,16 @@ impl PreparedBackupControl {
             archive,
             transition_hash: transition,
             files: files.values,
+            original_anchor_path: original_anchor_path
+                .ok_or(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch)?,
             journals,
         })
     }
     pub(in crate::engine::membership_transition) fn archive(&self) -> &ArchiveRoot {
         &self.archive
+    }
+    pub(in crate::engine) fn fixed_genesis_bytes(&self) -> &[u8] {
+        &self.files[&self.original_anchor_path]
     }
     pub(in crate::engine) fn root_hash(&self) -> &str {
         &self.root_hash

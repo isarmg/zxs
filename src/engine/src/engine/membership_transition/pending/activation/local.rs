@@ -15,7 +15,7 @@ fn read_generation_configuration(
             "local authority differs from active seal",
         ));
     }
-    let effective = portable.effective_config()?;
+    let effective = portable.effective_config()?.with_fixed_genesis(saved.fixed_genesis()?.clone());
     portable
         .genesis_config()?
         .verify_saved_metadata_membership(saved)?;
@@ -34,9 +34,9 @@ pub(crate) fn read_local_disk_configuration(
     seal: &DiskSeal,
     read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
 ) -> Result<ValidatedConfig> {
-    let saved = ValidatedConfig::try_from(decode_strict::<Config>(&read(
+    let saved = crate::engine::scope_closure::Anchor::decode(&read(
         &root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
-    )?)?)?;
+    )?)?;
     let config = match &seal.format {
         DiskSealFormat::ManagedDirectory => saved,
         DiskSealFormat::MembershipGeneration { authority_hash } => {
@@ -69,11 +69,8 @@ pub(crate) fn verify_local_membership(
     read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
     metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<ValidatedConfig> {
-    let saved = (|| {
-        ValidatedConfig::try_from(decode_strict::<Config>(&read(
-            &root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
-        )?)?)
-    })();
+    let saved = read(&root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()))
+        .and_then(|bytes| crate::engine::scope_closure::Anchor::decode(&bytes));
     match &seal.format {
         DiskSealFormat::ManagedDirectory => {
             let saved = match metadata {

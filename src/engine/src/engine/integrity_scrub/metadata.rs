@@ -587,9 +587,9 @@ fn verify_saved_membership(
     disk: &DiskConfig,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<()> {
-    let saved = ValidatedConfig::try_from(root.read_json_observed::<Config>(
+    let saved = crate::engine::scope_closure::Anchor::decode(&root.read_bytes_observed(
         &disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
-        observe,
+        crate::disk::MAX_METADATA, observe,
     )?)?;
     match plan.config.generation() {
         None => plan.config.verify_saved_metadata_membership(&saved),

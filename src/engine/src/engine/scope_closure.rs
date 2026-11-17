@@ -3,6 +3,8 @@
 use crate::{Config, ErrorCode, Result, ValidatedConfig};
 use storage_contract::{Generation, OperationId};
 
+mod anchor;
+pub(in crate::engine) use anchor::Anchor;
 mod genesis;
 mod images;
 mod objects;
@@ -30,6 +32,14 @@ impl ScopeClosureError {
             Self::Budget => ErrorCode::ResourceLimit,
         }
     }
+}
+
+/// Discovery is not an independent publication vote. Refuse to identify a
+/// damaged original scope as healthy; never borrow a missing peer's material.
+pub(crate) fn verify_recognized_holder(
+    config: &ValidatedConfig, disk: &crate::DiskConfig, root: &crate::disk::DiskRoot,
+) -> Result<()> {
+    Anchor::verify_managed_recognition(config, disk, root)
 }
 
 pub(super) fn require_disk_budget(config: &ValidatedConfig) -> Result<()> {

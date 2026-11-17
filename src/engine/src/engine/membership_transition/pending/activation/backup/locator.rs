@@ -53,7 +53,7 @@ impl BackupWriterIoConfig {
         let mut files = BTreeMap::from([
             (
                 crate::persist::layout::GENESIS_CONFIGURATION.as_path().to_path_buf(),
-                canonical_json(&generation.original)?,
+                control.fixed_genesis_bytes().to_vec(),
             ),
             (PathBuf::from(GENERATION_FILE), portable.clone()),
             (
@@ -168,10 +168,8 @@ impl PreparedBackupTargetLocator {
             &seal,
             &identity_at(original, disk, &root.directory(root.path())?)?,
         )?;
-        let saved: ValidatedConfig = decode_strict(&root.read_bytes(
-            &root.path().join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
-            MAX_METADATA,
-        )?)?;
+        let saved = crate::engine::scope_closure::Anchor::read(root)?;
+        crate::engine::scope_closure::Anchor::verify_if_original(&saved, disk, root)?;
         original.verify_saved_metadata_membership(&saved)?;
         self.control.verify(
             root.private_child(&root.path().join(&self.archive_path))?,

@@ -33,6 +33,7 @@ pub struct ValidatedConfig {
 #[derive(Clone, Debug)]
 struct AdmittedConfig {
     config: Config,
+    fixed_genesis: Option<super::scope_closure::Anchor>,
     metadata_members: Box<[usize]>,
     membership: MetadataMembership,
     genesis_io_authority: Arc<GenesisIoAuthority>,
@@ -58,6 +59,7 @@ impl TryFrom<Config> for ValidatedConfig {
         Ok(Self {
             admitted: Arc::new(AdmittedConfig {
                 config,
+                fixed_genesis: None,
                 metadata_members,
                 membership,
                 genesis_io_authority,
@@ -87,6 +89,22 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    pub(in crate::engine) fn with_fixed_genesis(mut self, witness: super::scope_closure::Anchor) -> Self {
+        Arc::make_mut(&mut self.admitted).fixed_genesis = Some(witness);
+        self
+    }
+    pub(in crate::engine) fn fixed_genesis(&self) -> Result<&super::scope_closure::Anchor> {
+        self.admitted.fixed_genesis.as_ref()
+            .ok_or_else(|| super::scope_closure::ScopeClosureError::GenesisMismatch.into())
+    }
+    fn consistent_fixed_genesis(&self, other: &Self) -> bool {
+        // Raw input projections may name a configuration only; two actual
+        // fixed anchors cannot agree on identity using Config alone.
+        match (&self.admitted.fixed_genesis, &other.admitted.fixed_genesis) {
+            (Some(a), Some(b)) => a.hash == b.hash,
+            _ => true,
+        }
+    }
     pub(super) fn with_created_layout(
         &self,
         created: &super::fresh_layout::CreatedRoots,
@@ -257,16 +275,16 @@ impl ValidatedConfig {
     /// Context equality only. Authentication still belongs to Genesis admission
     /// or the verified successor; neither schema validity nor equal voters suffice.
     pub(crate) fn same_genesis_io_authority(&self, other: &Self) -> bool {
-        Arc::ptr_eq(
+        self.consistent_fixed_genesis(other) && (Arc::ptr_eq(
             &self.admitted.genesis_io_authority,
             &other.admitted.genesis_io_authority,
-        ) || self.admitted.genesis_io_authority == other.admitted.genesis_io_authority
+        ) || self.admitted.genesis_io_authority == other.admitted.genesis_io_authority)
     }
 
     /// The fixed saved Genesis authority permits only tighter local retained
     /// limits. This is a recovery projection check, not I/O-context equality.
     pub(crate) fn permits_genesis_recovery_projection(&self, projected: &Self) -> bool {
-        self.admitted
+        self.consistent_fixed_genesis(projected) && self.admitted
             .genesis_io_authority
             .permits_recovery_projection(&projected.admitted.genesis_io_authority)
     }
@@ -346,7 +364,7 @@ impl ValidatedConfig {
     }
 
     pub(crate) fn verify_saved_metadata_membership(&self, saved: &Self) -> Result<()> {
-        if !self.same_metadata_membership(saved) {
+        if !self.consistent_fixed_genesis(saved) || !self.same_metadata_membership(saved) {
             return Err(Error::new(
                 ErrorCode::PublicationInvalid,
                 "saved metadata membership differs from admitted configuration",
@@ -410,12 +428,16 @@ impl ValidatedConfig {
 /// Admit one recovery input against its own anchor. Selection still requires a
 /// configured majority and later checks every input seal against that winner.
 pub(super) fn read_recovery_anchor(path: &Path, seal: &DiskSeal) -> Result<ValidatedConfig> {
-    let original = ValidatedConfig::try_from(read_json::<Config>(
-        &path.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
-    )?)?;
+    let root = DiskRoot::open(path)?;
+    let original = super::scope_closure::Anchor::read(&root)?;
+    let fixed = original.fixed_genesis()?.clone();
+    if let Some(disk) = original.disks.iter().find(|d| d.disk_id == seal.disk_id
+        && d.slot_id == seal.slot_id && d.binding_generation == seal.binding_generation) {
+        super::scope_closure::Anchor::verify_if_original(&original, disk, &root)?;
+    }
     super::fresh_layout::require_persisted_roots(&original)?;
     let config =
-        super::membership_transition::pending::activation::restore_anchor(path, seal, original)?;
+        super::membership_transition::pending::activation::restore_anchor(path, seal, original)?.with_fixed_genesis(fixed);
     super::fresh_layout::require_persisted_roots(&config)?;
     let mut member = config
         .disks

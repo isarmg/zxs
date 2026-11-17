@@ -170,9 +170,9 @@ impl Plan {
             &root.path().join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
             MAX_METADATA,
         )?;
-        self.candidate
-            .original_config()
-            .verify_saved_metadata_membership(&decode_strict(&anchor)?)?;
+        let saved = crate::engine::scope_closure::Anchor::decode(&anchor)?;
+        self.candidate.original_config().verify_saved_metadata_membership(&saved)?;
+        crate::engine::scope_closure::Anchor::verify_if_original(&saved, disk, root)?;
         let journal = if disk.metadata_member {
             let (physical, bytes_hash) =
                 self.publication

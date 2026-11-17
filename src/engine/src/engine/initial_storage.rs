@@ -53,6 +53,7 @@ pub(super) fn observe(
     }
     let original_operation = super::scope_closure::genesis_operation(config)?;
     let expected = storage_contract::canonical_json(config)?;
+    let mut selected = None;
     let mut disks = BTreeMap::new();
     for disk in &config.disks {
         // This requires every original root, not an available subset/quorum.
@@ -61,19 +62,17 @@ pub(super) fn observe(
         fresh_layout::verify_root(config, disk, &held.root)?;
         let address = disk.root.join(layout::GENESIS_CONFIGURATION.as_path());
         let bytes = held.root_for(&address)?.read_bytes(&address, MAX_METADATA)?;
-        let genesis: crate::Config = storage_contract::decode_strict(&bytes).map_err(|source| {
-            management_error(BootstrapError::Encoding {
-                stage: "read initial fixed genesis",
-                source,
-            })
-        })?;
-        if super::scope_closure::genesis_operation(&genesis)? != original_operation
+        let genesis = super::scope_closure::Anchor::decode(&bytes)?;
+        let witness = genesis.fixed_genesis()?;
+        if witness.operation != original_operation || selected.is_some_and(|hash| hash != witness.hash)
             || storage_contract::canonical_json(&genesis)? != expected
         {
             return Err(management_error(BootstrapError::ManagementOnly(
                 "initial storage differs from its fixed genesis configuration",
             )));
         }
+        selected = Some(witness.hash);
+        super::scope_closure::Anchor::verify_original_disk(&genesis, disk, &held.root)?;
         let bytes = held.root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?;
         let seal = decode_seal(&bytes)?;
         validate_stored_seal(&seal, &held.seal)?;

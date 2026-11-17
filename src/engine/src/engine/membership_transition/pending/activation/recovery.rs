@@ -25,6 +25,16 @@ pub(crate) fn latest_restore_config(
                     .0
                     .generation()
                     .expect("invariant: selected generation");
+                if current.hash == old.hash {
+                    if candidate.0.fixed_genesis()?.hash == previous.0.fixed_genesis()?.hash {
+                        return Err(Error::new(ErrorCode::LogFork, "duplicate restore authority group"));
+                    }
+                    if candidate.1 >= candidate.0.metadata_quorum() && previous.1 >= previous.0.metadata_quorum() {
+                        return Err(Error::new(ErrorCode::LogFork, "one generation names inconsistent fixed genesis majorities"));
+                    }
+                    if candidate.1 > previous.1 { selected = Some(candidate); }
+                    continue;
+                }
                 if current.portable.contains(&old.hash)? {
                     selected = Some(candidate);
                 } else if !old.portable.contains(&current.hash)? {
@@ -458,6 +468,12 @@ pub(crate) fn restore_anchor(
     if portable.exit_registry().is_some() {
         require_abort_journal(&root, disk, &hash)?;
     }
+    let fixed = portable.archived_fixed_genesis(
+        parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?,
+    )?;
+    if fixed.hash != original.fixed_genesis()?.hash {
+        return Err(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch.into());
+    }
     let (state, history) = portable
         .read_archive_base(parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?)?;
     portable.verify_registry_source(&state)?;
@@ -465,7 +481,7 @@ pub(crate) fn restore_anchor(
         backup_continuation: None,
         hash,
         workspace_roots: portable.workspace_root_aliases()?,
-        original: portable.genesis_config()?,
+        original: portable.genesis_config()?.with_fixed_genesis(fixed),
         epoch: portable.epoch()?,
         portable,
         intent,
@@ -496,10 +512,8 @@ impl ValidatedConfig {
     }
 
     pub(crate) fn verify_root_membership(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<()> {
-        let saved: ValidatedConfig = root.read_json_observed(
-            &disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
-            &mut |_| Ok(()),
-        )?;
+        let saved = crate::engine::scope_closure::Anchor::read(root)?;
+        crate::engine::scope_closure::Anchor::verify_if_original(&saved, disk, root)?;
         match self.generation() {
             None => self.verify_saved_metadata_membership(&saved),
             Some(generation) => {

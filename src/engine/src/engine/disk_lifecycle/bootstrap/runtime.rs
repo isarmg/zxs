@@ -290,6 +290,8 @@ impl Engine {
                 )));
             }
             let resources = Arc::new(DiskResources::recover_held(&config, directories)?);
+            crate::engine::scope_closure::Anchor::preflight_holders(&config, &resources)?;
+            crate::engine::scope_closure::Anchor::verify_system(&config, &selection.held_system_root()?)?;
             let observation = observe(&config, &resources)?;
             let locks = crate::engine::config::acquire_locks_selected(
                 &root, &resources, selection,

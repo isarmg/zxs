@@ -531,6 +531,29 @@ impl SetupRecovery {
         let config = config
             .with_workspace_limits(self.retained_workspace_limits)
             .map_err(engine_error)?;
+        // Setup already owns an authenticated management directory and lock.
+        // Hold each explicitly authorized disk before persisting the intent;
+        // the raw empty-SYSTEM entry point must not adopt this installation.
+        let mut directories = Vec::with_capacity(config.disks.len());
+        if config.disks.len() != disk_ids.len() {
+            return Err(ApiError::invalid("setup selections differ from configured disks"));
+        }
+        for (disk, id) in config.disks.iter().zip(&disk_ids) {
+            use platform_io::fs_safety::{PrivateDirectory, linux::{MountPolicy, OpenAt2Root}};
+            if self.disks.get(id) != Some(&disk.root) {
+                return Err(ApiError::invalid("setup disk address differs from its selection"));
+            }
+            let directory = PrivateDirectory::open_existing(&disk.root)
+                .map_err(ApiError::invalid_source)?;
+            let held = OpenAt2Root::from_private_directory(directory, MountPolicy::SameMount)
+                .map_err(ApiError::invalid_source)?;
+            let metadata = held.directory().metadata().map_err(ApiError::io)?;
+            if self.identities.get(id) != Some(&(metadata.dev(), metadata.ino())) {
+                return Err(ApiError::conflict(storage_contract::ErrorCode::DiskChanged,
+                    "selected setup disk changed before initialization"));
+            }
+            directories.push(held.into_directory());
+        }
         let intent = SetupIntent {
             version: 2,
             config: config.clone(),
@@ -538,7 +561,7 @@ impl SetupRecovery {
             bootstrap_binding: permit.binding.to_hex().to_string(),
         };
         self.write_control("setup-intent.json", &intent)?;
-        let engine = Engine::initialize_validated(&self.data_root, config).map_err(engine_error)?;
+        let engine = Engine::initialize_held(&self.data_root, config, directories).map_err(engine_error)?;
         self.write_ready(&intent)?;
         // Disk I/O may outlive or revoke the original local authorization.
         // Never publish account authority after that authorization is gone.

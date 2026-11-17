@@ -223,10 +223,13 @@ fn first_pair_genesis_retains_fixed_quorum_and_reopens() {
     for disk in &engine.config().disks {
         let seal: json_codec::Value = read_control(&disk.root.join("disk.json")).unwrap();
         assert_eq!(seal["pool_semantic_format"], "manual-directory-v1");
-        let genesis: Config = read_control(
+        let anchor: json_codec::Value = read_control(
             &disk.root.join("zxs-data/pool-membership/config.json"),
         ).unwrap();
+        let genesis: Config = json_codec::from_value(anchor["config"].clone()).unwrap();
         assert_eq!(genesis.pool_semantic_format, saved.pool_semantic_format);
+        assert!(anchor["scope_closure"].as_str().is_some());
+        assert!(anchor["initialization_operation_id"].as_str().is_some());
     }
     assert!(
         engine
@@ -628,7 +631,7 @@ fn complete_genesis_without_ready_receipt_is_checked_and_completed_not_reinitial
         ),
         (
             f.service.disks["one"].join("zxs-data/pool-membership/config.json"),
-            "",
+            "/config",
             storage_contract::ErrorCode::MetadataQuorumUnavailable,
         ),
         (

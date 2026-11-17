@@ -2,7 +2,7 @@
 //! additionally requires held roots, local control archives and actual journals.
 use super::*;
 use crate::engine::membership_transition::archive::persistent::{
-    ArchiveRoot, install_generation_archive, read_generation_base,
+    ArchiveRoot, install_generation_archive, read_archived_fixed_genesis, read_generation_base,
 };
 use crate::persist::layout;
 use joint::store::PortableJoint;

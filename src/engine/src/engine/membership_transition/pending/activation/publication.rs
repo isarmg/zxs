@@ -12,7 +12,8 @@ pub(in crate::engine::membership_transition) fn sync_retained_genesis_anchor(
 ) -> Result<()> {
     let anchor = disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path());
     let bytes = root.read_bytes(&anchor, MAX_METADATA)?;
-    let saved: ValidatedConfig = decode_strict(&bytes)?;
+    let saved = crate::engine::scope_closure::Anchor::decode(&bytes)?;
+    crate::engine::scope_closure::Anchor::verify_if_original(&saved, disk, root)?;
     if !saved.permits_genesis_recovery_projection(original) {
         return Err(Error::new(
             ErrorCode::PublicationInvalid,
@@ -657,6 +658,12 @@ impl Engine {
             .iter()
             .map(|disk| disk.disk_id.as_str())
             .collect::<BTreeSet<_>>();
+        let new_anchor = if self.config.io_disks().any(|disk| !retained.contains(disk.disk_id.as_str())) {
+            let source = self.disk_resources.get(first)?.root.private_child(
+                &member_directory(first, &transition).join(CONTROL_ARCHIVE_DIRECTORY),
+            )?;
+            Some(generation.portable.archived_fixed_genesis(source)?)
+        } else { None };
         for disk in self.config.io_disks() {
             let handle = self.disk_resources.get(disk)?;
             let retained_disk = retained.contains(disk.disk_id.as_str());
@@ -688,11 +695,12 @@ impl Engine {
             } else {
                 // Only an actual addition in the authenticated transition may
                 // create this anchor. Absence on a retained root never does.
-                handle.root.write_json(
-                    &disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
-                    &generation.original,
-                    false,
-                )?;
+                let fixed = new_anchor.as_ref()
+                    .ok_or(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch)?;
+                handle.root.write_relative_atomic(&layout::GENESIS_CONFIGURATION, fixed.bytes(), false)?;
+                if crate::engine::scope_closure::Anchor::read(&handle.root)?.fixed_genesis()?.hash != fixed.hash {
+                    return Err(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch.into());
+                }
             }
             install_marker(&handle.root, disk, &generation)?;
             handle

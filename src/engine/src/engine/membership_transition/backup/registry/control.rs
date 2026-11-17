@@ -50,6 +50,7 @@ impl BackupFrozenControl {
         let original = intent.origin.config();
         let mut members = Vec::new();
         let mut used = 0usize;
+        let mut original_anchor = None;
         for disk in original.metadata_members() {
             preparation_checkpoint(stop)?;
             let expected = &decision.original_members()[&disk.disk_id];
@@ -70,7 +71,12 @@ impl BackupFrozenControl {
                 Ok(data)
             };
             let config = read(Path::new("config.json"), MAX_METADATA)?;
-            let saved: ValidatedConfig = crate::journal::decode_proof(&config)?;
+            let saved = crate::engine::scope_closure::Anchor::decode(&config)?;
+            let fixed = saved.fixed_genesis()?.hash;
+            if original_anchor.is_some_and(|other| other != fixed) {
+                return Err(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch.into());
+            }
+            original_anchor = Some(fixed);
             original.verify_saved_metadata_membership(&saved)?;
             let seal = read(layout::DISK_IDENTITY.as_path(), MAX_METADATA)?;
             let journal = read(layout::JOURNAL.as_path(), MAX_MEMBER_JOURNAL)?;
