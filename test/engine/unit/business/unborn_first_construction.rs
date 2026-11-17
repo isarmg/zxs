@@ -236,3 +236,26 @@ fn real_first_construction_accumulates_without_receipts_and_rejects_reused_alloc
     assert_eq!(read_working(&engine, &second), b"");
     assert_eq!(read_working(&engine, &untouched), b"unselected stays a draft");
 }
+
+#[test]
+fn unborn_container_blocks_portable_history_before_any_output_is_created() {
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("state");
+    let mut engine = Engine::initialize(&system, Config::development([
+        (Name::parse("Primary").unwrap(), temp.path().join("disk")),
+    ]).unwrap()).unwrap();
+    let owner = "admin".parse::<Principal>().unwrap();
+    let repo = engine.create_disk_root(
+        "P01", owner.as_str(), OperationId::generate().unwrap(),
+    ).unwrap();
+    let target = birth(&mut engine, repo.repository_id.parse().unwrap(), &owner, "unborn.txt");
+    save(&mut engine, &target, &owner, b"working bytes cannot be omitted");
+    let before = inventory(temp.path());
+    let destination = temp.path().join("new-parent/package");
+    let error = engine.export_history_package(&repo.history_tree_id, &destination).unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::FileBranchConflict);
+    let error = engine.prepare_backup_history(&repo.history_tree_id).err().unwrap();
+    assert_eq!(error.code(), storage_contract::ErrorCode::FileBranchConflict);
+    assert_eq!(inventory(temp.path()), before);
+    assert!(!destination.parent().unwrap().exists());
+}

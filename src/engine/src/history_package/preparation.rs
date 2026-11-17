@@ -12,6 +12,19 @@ pub(super) struct HistoryMetadata {
 impl Engine {
     pub(super) fn history_package_metadata(&self, history: &str) -> Result<HistoryMetadata> {
         self.repository_for_history(history)?;
+        let history_id = history.parse::<storage_contract::HistoryTreeId>()?;
+        // Portable packages contain committed history, not working containers.
+        // Treat an unborn stable file as unpublished even if its body is empty,
+        // and do not infer cleanliness from the number of resident draft bytes.
+        if self.state.file_containers.values().any(|record| {
+            record.history_tree_id == history_id
+                && (record.working.draft().is_some() || record.working.unborn().is_some())
+        }) {
+            return Err(Error::new(
+                ErrorCode::FileBranchConflict,
+                "commit or discard this history's shared working files before exporting or packaging it",
+            ));
+        }
         crate::node_retirement_engine::require_portable_history(&self.state, history)?;
         let manifest = HistoryManifest::project_state(&self.state, history)?;
         let mut proof = None;
