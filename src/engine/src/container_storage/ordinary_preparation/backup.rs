@@ -71,6 +71,17 @@ impl BackupTargetLayout {
         require_new_names_at(root.component_name_maximum()?, path, state, stop)
     }
 
+    /// Initial creation also needs the five root areas. Later layout staging
+    /// plans only its remaining exclusive entities. Neither census authorizes
+    /// applying, observing, or replaying an already recorded preparation.
+    pub(crate) fn require_fresh_root_capacity(
+        root: &DiskRoot, path: &ConfiguredSourcePath<'_>, state: &State,
+    ) -> Result<()> {
+        let count = directory_count(path.source_ids().len(), state.namespace_directories.len(),
+            state.file_containers.len(), 5)?;
+        crate::engine::require_new_backup_directories(root, count, MAX_BYTES)
+    }
+
     /// All targets retain this exact plan before the first mkdir. It contains
     /// only a fixed-width budget shape and has no serializable/public constructor.
     pub(crate) fn plan(
@@ -556,14 +567,28 @@ fn preflight(
         preparation_checkpoint(stop)?;
         check_target_name_at(maximum, &layout::container::preparation(value.preparation))?;
     }
-    let required = (MAX_BYTES as u64).checked_add(record.descriptors()? as u64 * 8192)
-        .and_then(|v| v.checked_add(16 * 1024 * 1024)).ok_or(Failure::ContainerBudget)?;
-    if root.available()? < required {
-        return Err(Failure::BackupRootSpace.into());
-    }
-    Ok(())
+    let count = directory_count(record.prefixes.len(), record.directories.len(),
+        record.files.len(), 0)?;
+    crate::engine::require_new_backup_directories(root, count, MAX_BYTES)
+}
+
+// One exclusive source prefix + five lifecycle children; one user directory;
+// each FILE creates both the container and its versions/ directory. The
+// process FD budget (which does not retain versions/ here) is separate.
+fn directory_count(
+    prefixes: usize, directories: usize, files: usize, root_areas: usize,
+) -> Result<u64> {
+    let count = files.checked_mul(2).and_then(|n| n.checked_add(directories))
+        .and_then(|n| n.checked_add(prefixes.checked_mul(6)?))
+        .and_then(|n| n.checked_add(root_areas)).ok_or(Failure::ContainerBudget)?;
+    u64::try_from(count).map_err(|_| Failure::ContainerBudget.into())
 }
 
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/container_storage/backup_target_names.rs"]
 mod name_tests;
+
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/container_storage/backup_layout_allocations.rs"]
+mod allocation_tests;

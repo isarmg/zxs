@@ -49,9 +49,9 @@ impl PreparedBackupLayouts {
                     plans.push(plan);
                 }
                 for source in choices.sources.values() {
-                    if source.root.available()? < RESERVE + MAX_LAYOUT as u64 {
-                        return Err(Failure::BackupRootSpace.into());
-                    }
+                    crate::engine::backup_preparation::require_new_feedback_capacity(
+                        &source.root, [prospective_feedback(choices.intent.operation_id)],
+                    )?;
                 }
                 let mut layouts = BTreeMap::new();
                 for (index, plan) in plans.into_iter().enumerate() {
@@ -173,8 +173,14 @@ fn require_source(value: &Feedback, fence: &str, operation: OperationId) -> Resu
     }
     Ok(())
 }
+pub(super) fn prospective_feedback(operation: OperationId) -> (std::path::PathBuf, usize) {
+    (relative(operation), MAX_LAYOUT)
+}
 fn path(root: &DiskRoot, operation: OperationId) -> std::path::PathBuf {
-    root.path().join(layout::BACKUP_LAYOUT_PREPARATIONS.as_path())
+    root.path().join(relative(operation))
+}
+fn relative(operation: OperationId) -> std::path::PathBuf {
+    layout::BACKUP_LAYOUT_PREPARATIONS.as_path()
         .join(layout::backup_root_preparation(operation).as_path())
 }
 fn read(source: &Source, operation: OperationId) -> Result<Option<Feedback>> {

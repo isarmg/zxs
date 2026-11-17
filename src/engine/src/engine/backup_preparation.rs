@@ -18,6 +18,8 @@ use std::{
 
 mod batch;
 mod capacity;
+pub(crate) use capacity::require_new_backup_directories;
+pub(in crate::engine) use capacity::require_new_feedback_capacity;
 mod completion;
 mod execution;
 mod inspection;

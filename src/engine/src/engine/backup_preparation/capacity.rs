@@ -10,6 +10,10 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
+mod layout;
+pub(crate) use layout::require_new_backup_directories;
+pub(in crate::engine) use layout::require_new_feedback_capacity;
+
 mod records;
 pub(super) use records::Records;
 
@@ -72,19 +76,12 @@ struct Needed {
 
 impl Needed {
     fn charge(&mut self, count: EntryCost, unit: NonZeroU64) -> Result<()> {
-        let (entries, data_units) = match count {
-            EntryCost::Directory => (&mut self.directories, 1),
-            EntryCost::File(length) => (&mut self.files, length.div_ceil(unit.get())),
+        let entries = match count {
+            EntryCost::Directory => &mut self.directories,
+            EntryCost::File(_) => &mut self.files,
         };
         *entries = entries.checked_add(1).ok_or(CapacityError::Overflow)?;
-        // Account for directory contents as well as their own allocation.
-        // Each new name can grow its parent, including a preexisting parent.
-        // Atomic writers rename their one staged inode to its final name.
-        self.bytes = data_units
-            .checked_add(1)
-            .and_then(|blocks| blocks.checked_mul(unit.get()))
-            .and_then(|bytes| bytes.checked_add(self.bytes))
-            .ok_or(CapacityError::Overflow)?;
+        self.bytes = count.allocation(unit)?.checked_add(self.bytes).ok_or(CapacityError::Overflow)?;
         Ok(())
     }
 
@@ -119,6 +116,18 @@ impl Needed {
 enum EntryCost {
     Directory,
     File(u64),
+}
+impl EntryCost {
+    fn allocation(self, unit: NonZeroU64) -> Result<u64> {
+        let units = match self {
+            Self::Directory => 1,
+            Self::File(length) => length.div_ceil(unit.get()),
+        };
+        // Each new name can grow its parent, including a preexisting parent.
+        // Atomic writers rename their one staged inode to its final name.
+        Ok(units.checked_add(1).and_then(|n| n.checked_mul(unit.get()))
+            .ok_or(CapacityError::Overflow)?)
+    }
 }
 
 pub(super) struct Census<'a> {

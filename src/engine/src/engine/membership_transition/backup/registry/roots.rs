@@ -32,7 +32,6 @@ pub(crate) use layout_source::{
 };
 
 const MAX_FEEDBACK: usize = 256 * 1024;
-const RESERVE: u64 = 16 * 1024 * 1024;
 
 /// Commitment to the existing canonical transition object, not a BODY digest.
 /// Text is the old transition codec boundary; equality with that verified source
@@ -194,9 +193,12 @@ impl BackupChoiceContext {
 
     fn require_root_capacity(&self) -> Result<()> {
         for source in self.sources.values() {
-            if source.root.available()? < RESERVE + MAX_FEEDBACK as u64 {
-                return Err(Failure::BackupRootSpace.into());
-            }
+            crate::engine::backup_preparation::require_new_feedback_capacity(
+                &source.root, [
+                    (feedback_relative(self.intent.operation_id), MAX_FEEDBACK),
+                    layouts::prospective_feedback(self.intent.operation_id),
+                ],
+            )?;
         }
         Ok(())
     }
@@ -233,9 +235,7 @@ fn create_preparation(
                 return Err(Failure::BackupRootUnrecorded.into());
             }
         }
-        if root.available()? < RESERVE + MAX_FEEDBACK as u64 {
-            return Err(Failure::BackupRootSpace.into());
-        }
+        BackupTargetLayout::require_fresh_root_capacity(root, &path, original.state())?;
         identities.push((id, RootId::generate()?, [
             DirectoryId::generate()?, DirectoryId::generate()?, DirectoryId::generate()?,
             DirectoryId::generate()?, DirectoryId::generate()?,
@@ -307,7 +307,11 @@ fn require_preparation(
 }
 
 fn feedback_path(root: &DiskRoot, operation: OperationId) -> std::path::PathBuf {
-    root.path().join(layout::BACKUP_ROOT_PREPARATIONS.as_path())
+    root.path().join(feedback_relative(operation))
+}
+
+fn feedback_relative(operation: OperationId) -> std::path::PathBuf {
+    layout::BACKUP_ROOT_PREPARATIONS.as_path()
         .join(layout::backup_root_preparation(operation).as_path())
 }
 
