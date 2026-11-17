@@ -12,7 +12,7 @@ use std::{
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{TcpListener, TcpStream},
-    sync::{OwnedSemaphorePermit, Semaphore},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore, futures::OwnedNotified},
     time::{Instant, Sleep},
 };
 
@@ -20,10 +20,16 @@ const MAX_CONNECTIONS: usize = 32;
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Default)]
-pub(super) struct Drain(Arc<OnceLock<Instant>>);
+pub(super) struct Drain {
+    deadline: Arc<OnceLock<Instant>>,
+    started: Arc<Notify>,
+}
 impl Drain {
     pub(super) fn begin(&self) {
-        self.0.get_or_init(|| Instant::now() + DRAIN_TIMEOUT);
+        self.deadline.get_or_init(|| Instant::now() + DRAIN_TIMEOUT);
+        // An idle/blocked socket may already have returned Pending before the
+        // deadline existed. Wake its registered poll without waiting for I/O.
+        self.started.notify_waiters();
     }
 }
 
@@ -58,6 +64,7 @@ impl Listener for BoundedListener {
                 stream,
                 _permit: permit,
                 drain: self.drain.clone(),
+                started: Box::pin(Arc::clone(&self.drain.started).notified_owned()),
                 deadline: None,
             },
             address,
@@ -73,11 +80,19 @@ pub(super) struct Connection {
     stream: TcpStream,
     _permit: OwnedSemaphorePermit,
     drain: Drain,
+    // Exactly one registration per owned socket, bounded by MAX_CONNECTIONS.
+    // OwnedNotified unregisters on drop; Drain does not retain stale sockets.
+    started: Pin<Box<OwnedNotified>>,
     deadline: Option<Pin<Box<Sleep>>>,
 }
 impl Connection {
     fn poll_drain(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
-        if let Some(deadline) = self.drain.0.get() {
+        if self.drain.deadline.get().is_none() {
+            let _: Poll<()> = self.started.as_mut().poll(cx);
+            // Recheck after registering. A concurrent begin between the first
+            // check and this poll cannot leave the connection waiting for I/O.
+        }
+        if let Some(deadline) = self.drain.deadline.get() {
             let timer = self
                 .deadline
                 .get_or_insert_with(|| Box::pin(tokio::time::sleep_until(*deadline)));
