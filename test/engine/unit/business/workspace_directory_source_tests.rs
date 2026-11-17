@@ -95,3 +95,63 @@ fn native_directory_source_replays_original_request_and_rejects_forged_rows() {
     assert_eq!(introduced(engine.state(), &changed, &before, &forged, 100).unwrap_err().code(),
         ErrorCode::PublicationInvalid);
 }
+
+#[test]
+fn sealed_wire_parent_source_replays_and_rejects_changed_original_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let mut engine = Engine::initialize(
+        &system,
+        Config::development(crate::test_disks([temp.path().join("primary")])).unwrap(),
+    ).unwrap();
+    let root = engine.create_disk_root("P01", "admin", OperationId::generate().unwrap()).unwrap();
+    let workspace = engine.create_workspace(&root.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "parent/child/notes.txt", b"sealed body").unwrap();
+    let sealed = engine.seal_workspace(&workspace.workspace_id, "admin").unwrap();
+    let mut body = json_codec::to_value(&sealed).unwrap();
+    body["request_digest"] = crate::wire::commit_request_digest(&workspace.workspace_id, &body)
+        .unwrap().into();
+    let make_envelope = || crate::PublicCommitEnvelope::parse(&workspace.workspace_id, body.clone()).unwrap();
+    let request = CommitRequest {
+        workspace_id: workspace.workspace_id.clone(),
+        operation_id: sealed.operation_id,
+        principal: "admin".into(),
+        expected_head: sealed.expected_head.clone(),
+        fencing_token: sealed.fencing_token,
+        message: sealed.message.clone(),
+        request_digest: None,
+    };
+    let before = engine.state().commits[&workspace.base_head].clone();
+    assert!(!before.entries.iter().any(|entry| entry.path() == "parent"));
+    let result = engine.commit_workspace_wire(request.clone(), make_envelope()).unwrap();
+    let after = engine.state().commits[result.commit_id.as_ref().unwrap()].clone();
+    let field = "workspace_directory_wire_source";
+    assert!(result.result.get("workspace_directory_source").is_none());
+    assert_eq!(result.result[field]["body"], body);
+    let (_, entries) = introduced(engine.state(), &result, &before, &after, 100).unwrap();
+    assert_eq!(entries.iter().map(|entry| entry.path()).collect::<Vec<_>>(), ["parent", "parent/child"]);
+    drop(engine);
+
+    let mut engine = Engine::open(&system).unwrap();
+    assert_eq!(engine.commit_workspace_wire(request, make_envelope()).unwrap(), result);
+    introduced(engine.state(), &result, &before, &after, 100).unwrap();
+    let rejected = |changed| {
+        assert_eq!(introduced(engine.state(), &changed, &before, &after, 100).unwrap_err().code(),
+            ErrorCode::PublicationInvalid);
+    };
+    let mut changed = result.clone();
+    changed.result[field]["body"]["message"] = "substituted".into();
+    rejected(changed);
+    let mut changed = result.clone();
+    changed.result[field]["source"]["manifest"]["files"][0]["generation"] = "29".into();
+    rejected(changed);
+    let mut changed = result.clone();
+    changed.result[field]["source"]["request"]["principal"] = "another-actor".into();
+    rejected(changed);
+    let mut changed = result.clone();
+    changed.result[field]["source"]["directories"].as_array_mut().unwrap().swap(0, 1);
+    rejected(changed);
+    let mut changed = result.clone();
+    changed.result.as_object_mut().unwrap().remove(field);
+    rejected(changed);
+}

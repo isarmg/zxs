@@ -1515,7 +1515,7 @@ impl crate::engine::PlanningContext<'_> {
                 let mut draft = namespace::NamespaceDraft::new(current_entries.to_vec());
                 let mut directory_ids =
                     crate::persist::namespace_directory::workspace::Allocations::new(
-                        wire.is_none() && repo.file_manager_root
+                        (wire.is_none() || !w.files.is_empty()) && repo.file_manager_root
                             && repo.main_branch_id == w.branch_id,
                     );
                 if let Some(view) = engine.current_namespaces {
@@ -1678,7 +1678,7 @@ impl crate::engine::PlanningContext<'_> {
                         "history_tree_id":branch.history_tree_id}),
                     path_changes,
                 )?;
-                directory_ids.attach(&mut result, &w, &request)?;
+                directory_ids.attach(&mut result, &w, &request, wire.as_ref())?;
                 Ok(result)
             },
         )?;

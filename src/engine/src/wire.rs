@@ -40,11 +40,44 @@ pub(crate) fn admit_public_commit<'state>(
     })
 }
 
-pub fn manifest_hash(w: &Workspace) -> Result<String> {
+pub(crate) fn sealed_manifest_item(
+    item: impl data_serialization::Serialize,
+    path: &name_policy::PortablePath,
+    size: u64,
+    hash: &ContentHash,
+    generation: u64,
+) -> Value {
+    json!({
+        "item_id":item, "path":path, "logical_size":size.to_string(),
+        "content_hash":hash, "upload_generation":generation.to_string()
+    })
+}
+
+pub(crate) fn sealed_manifest_hash(
+    workspace: &str,
+    branch: &str,
+    head: &str,
+    fence: u64,
+    items: Vec<Value>,
+    operations: &[NamespaceOperation],
+) -> Result<String> {
     object_hash(
         "workspace-manifest",
-        &json!({"workspace_id":w.workspace_id,"branch_id":w.branch_id,"base_head":w.base_head,"fencing_token":w.fencing_token.to_string(),"items":w.files.values().map(|f|json!({"item_id":f.item_id,"path":f.path,"logical_size":f.size.to_string(),"content_hash":f.content_hash,"upload_generation":f.dirty_generation.to_string()})).collect::<Vec<_>>(),"namespace_operations":w.namespace_operations}),
+        &json!({
+            "workspace_id":workspace,"branch_id":branch,"base_head":head,
+            "fencing_token":fence.to_string(),"items":items,"namespace_operations":operations,
+        }),
     ).map_err(Into::into)
+}
+
+pub fn manifest_hash(w: &Workspace) -> Result<String> {
+    sealed_manifest_hash(
+        &w.workspace_id, &w.branch_id, &w.base_head, w.fencing_token,
+        w.files.values().map(|f| sealed_manifest_item(
+            &f.item_id, &f.path, f.size, &f.content_hash, f.dirty_generation,
+        )).collect(),
+        &w.namespace_operations,
+    )
 }
 pub fn commit_request_digest(workspace: &str, body: &Value) -> Result<String> {
     request_digest(

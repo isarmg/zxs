@@ -28,6 +28,12 @@ pub(crate) fn operation_wire(
         // no host entity, FILE trace or native request escapes this adapter.
         op.result = Value::Null;
     }
+    if op.kind == "workspace.commit"
+        && let Some(fields) = op.result.as_object_mut()
+    {
+        // The original HTTP body is a private replay witness, not a DTO field.
+        fields.remove("workspace_directory_wire_source");
+    }
     let content_save = op.kind == "workspace.commit"
         && op.protection_at_publish != storage_contract::ProtectionAtPublish::NotApplicable;
     if content_save {

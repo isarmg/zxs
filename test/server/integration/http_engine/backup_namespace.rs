@@ -754,3 +754,32 @@ async fn primary_and_backup_listings_keep_directory_first_unicode_order() {
         entry["version_id"]
     );
 }
+
+#[tokio::test]
+async fn sealed_http_upload_publishes_new_parents_atomically_without_exposing_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let path = "new/nested/file.txt";
+    let bytes = b"original authenticated upload";
+    let result = manager_upload(&app, &token, path, bytes).await;
+    assert_eq!(result["state"], "completed");
+    assert!(!result.to_string().contains("workspace_directory_wire_source"));
+    assert!(!result.to_string().contains("sealed_manifest_hash"));
+    let operation_id = result["operation_id"].as_str().unwrap().parse().unwrap();
+    drop(app);
+
+    let engine = reopen_after_router_drop(&root.path().join("system")).await;
+    let operation = engine.state().operations.get(&operation_id).unwrap();
+    assert_eq!(operation.kind, "workspace.commit");
+    assert!(operation.result.get("workspace_directory_wire_source").is_some());
+    let tree = engine.namespace_tree(operation.branch_id.as_deref().unwrap()).unwrap();
+    for path in ["new", "new/nested"] {
+        assert_eq!(tree.get(path).unwrap().kind, storage_contract::NamespaceEntryKind::Directory);
+    }
+    use std::io::Read;
+    let mut opened = engine.open_content(&tree.get(path).unwrap().version_id).unwrap();
+    let mut readback = Vec::new();
+    opened.file.read_to_end(&mut readback).unwrap();
+    assert_eq!(readback, bytes);
+}
