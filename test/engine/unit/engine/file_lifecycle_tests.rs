@@ -761,3 +761,40 @@ fn file_lifecycle_real_long_paths_form_short_bounded_pages_without_losing_events
     assert_eq!(actual, expected);
     assert_eq!(storage_contract::canonical_json(engine.state()).unwrap(), before);
 }
+
+#[test]
+fn lifecycle_audit_cache_keys_exact_state_and_keeps_only_one_file() {
+    use super::{AuditKey, Event, LifecycleCache};
+    use std::sync::Arc;
+    use storage_contract::history_window::HistoryTreeId;
+
+    let cache = LifecycleCache::default();
+    let state = Arc::new(crate::State::default());
+    let another = Arc::new((*state).clone());
+    let make_key = |generation: &Arc<crate::State>, file: &str, history: &str| AuditKey {
+        state: Arc::downgrade(generation),
+        file: HistoryFileId::parse(file).unwrap(),
+        history: HistoryTreeId::parse(history).unwrap(),
+    };
+    let file = "file_00000000000000000000000000000001";
+    let different_file = "file_00000000000000000000000000000002";
+    let history = "history_00000000000000000000000000000001";
+    let different_history = "history_00000000000000000000000000000002";
+    let first = make_key(&state, file, history);
+    let events: Arc<[Event]> = Vec::new().into();
+
+    cache.remember(&first, Arc::clone(&events));
+    assert!(Arc::ptr_eq(
+        &events,
+        &cache.lookup(&make_key(&state, file, history)).unwrap(),
+    ));
+    assert!(cache.lookup(&make_key(&another, file, history)).is_none());
+    assert!(cache.lookup(&make_key(&state, file, different_history)).is_none());
+
+    let second = make_key(&state, different_file, history);
+    assert!(cache.lookup(&second).is_none());
+    cache.remember(&second, Arc::clone(&events));
+    assert!(cache.lookup(&first).is_none());
+    assert!(cache.lookup(&second).is_some());
+    assert_eq!(Arc::strong_count(&state), 1);
+}

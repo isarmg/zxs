@@ -2,10 +2,13 @@
 use crate::engine::history_window::HistoryCancellationCheckpoint;
 use crate::engine::history_window::read::HistoryWindowRead;
 use crate::{Engine, Result, State};
+use std::sync::{Arc, Mutex, Weak};
 use storage_contract::file_lifecycle::{
     Cursor, Detail, Event, LifecycleError, Page, Request, Timestamp,
 };
-use storage_contract::history_window::HistoryWindowCancellation;
+use storage_contract::history_window::{
+    HistoryFileId, HistoryTreeId, HistoryWindowCancellation,
+};
 
 struct EventBudget {
     count: usize,
@@ -30,21 +33,72 @@ impl EventBudget {
     }
 }
 
+/// Only one complete, budget-checked audit is resident per Engine. Cache keys
+/// own no authoritative State and exclude cursor/page size; those remain
+/// request-specific and are checked after looking up the same immutable audit.
+#[derive(Default)]
+pub(in crate::engine) struct LifecycleCache {
+    slot: Mutex<Option<CachedAudit>>,
+}
+
+struct AuditKey {
+    state: Weak<State>,
+    file: HistoryFileId,
+    history: HistoryTreeId,
+}
+
+struct CachedAudit {
+    key: AuditKey,
+    events: Arc<[Event]>,
+}
+
+impl AuditKey {
+    fn matches(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.state, &other.state)
+            && self.file == other.file
+            && self.history == other.history
+    }
+}
+
+impl LifecycleCache {
+    fn lookup(&self, key: &AuditKey) -> Option<Arc<[Event]>> {
+        self.slot.lock().ok()?.as_ref()
+            .filter(|cached| cached.key.matches(key))
+            .map(|cached| Arc::clone(&cached.events))
+    }
+
+    fn remember(&self, key: &AuditKey, events: Arc<[Event]>) {
+        // No cache lock spans classification, decoding, sorting, or response
+        // encoding. Concurrent misses do their own verification.
+        if let Ok(mut slot) = self.slot.lock()
+            && key.state.strong_count() != 0
+        {
+            *slot = Some(CachedAudit {
+                key: AuditKey {
+                    state: key.state.clone(),
+                    file: key.file.clone(),
+                    history: key.history.clone(),
+                },
+                events,
+            });
+        }
+    }
+}
+
 pub struct FileLifecycleRead {
     read: HistoryWindowRead,
     request: Request,
     // Private projection excludes authentication, plans and control events. Only
     // this read needs permanent receipts; ordinary MetadataView still omits them.
     source: State,
+    key: AuditKey,
+    cache: Arc<LifecycleCache>,
 }
 impl FileLifecycleRead {
-    /// Every page scans the full permanent ledger and decodes its audit envelopes;
-    /// this is NOT O(page size). Scans check cancellation between receipts and
-    /// facts; one envelope's classification and decoding are not interruptible.
-    /// Each audit envelope and the target event summaries have a 12 MiB budget;
-    /// the target summaries also have a 65,536-event limit. The full ledger has
-    /// no aggregate byte bound. Retained frontiers are not accumulated across it.
-    /// The service's bounded history slot spans preparation and response encoding.
+    /// On a cache miss, admit the entire permanent ledger and the target
+    /// audit before returning any page. Continuation on the exact same State
+    /// and file can reuse the bounded sorted summaries, not a prior authority
+    /// check, context, cursor, or encoded response.
     pub fn page(&self) -> Result<Page> {
         self.read.cancellation.checkpoint()?;
         let binding = self.request.binding(&self.read.context, self.source.sequence);
@@ -56,6 +110,62 @@ impl FileLifecycleRead {
         {
             return Err(LifecycleError::Changed.into_error().into());
         }
+        let events = match self.cache.lookup(&self.key) {
+            Some(events) => events,
+            None => {
+                let events: Arc<[Event]> = self.admit_events()?.into();
+                self.read.cancellation.checkpoint()?;
+                self.cache.remember(&self.key, Arc::clone(&events));
+                events
+            }
+        };
+        self.read.cancellation.checkpoint()?;
+        let start = match &self.request.cursor {
+            Some(cursor) => events.binary_search_by_key(&cursor.after_key(), Event::order_key)
+                .map_err(|_| LifecycleError::Cursor.into_error())? + 1,
+            None => 0,
+        };
+        let end = events.len().min(start + self.request.limit());
+        let selected = events[start..end].to_vec();
+        let more = end < events.len();
+        let next_cursor = if more {
+            selected.last().map(|event| Cursor {
+                binding,
+                after_operation_id: event.operation_id,
+                after_sequence: event.sequence,
+                after_source_id: event.source_id(),
+            })
+        } else {
+            None
+        };
+        let mut page = Page {
+            file_id: self.request.file_id.clone(),
+            history_root: self.request.history_root,
+            context: self.read.context.clone(),
+            observation_sequence: self.source.sequence,
+            events: selected,
+            next_cursor,
+        };
+        while json_codec::to_vec(&page)?.len()
+            > storage_contract::file_lifecycle::MAX_RESPONSE_BYTES
+        {
+            self.read.cancellation.checkpoint()?;
+            if page.events.len() <= 1 {
+                return Err(LifecycleError::Bytes.into_error().into());
+            }
+            page.events.pop();
+            page.next_cursor = page.events.last().map(|event| Cursor {
+                binding,
+                after_operation_id: event.operation_id,
+                after_sequence: event.sequence,
+                after_source_id: event.source_id(),
+            });
+        }
+        page.validate(&self.request)?;
+        Ok(page)
+    }
+
+    fn admit_events(&self) -> Result<Vec<Event>> {
         let source = crate::state_projection::lifecycles::LifecycleSource::capture(
             &self.source,
             &self.request.file_id,
@@ -108,64 +218,14 @@ impl FileLifecycleRead {
         }
         self.append_path_events(&mut events, &mut budget)?;
         events.sort_by_key(Event::order_key);
-        let mut found_cursor = self.request.cursor.is_none();
-        let mut selected = Vec::with_capacity(self.request.limit());
-        let mut more = false;
-        for event in events {
+        self.read.cancellation.checkpoint()?;
+        for pair in events.windows(2) {
             self.read.cancellation.checkpoint()?;
-            if !found_cursor {
-                found_cursor = self
-                    .request
-                    .cursor
-                    .as_ref()
-                    .is_some_and(|cursor| cursor.after_key() == event.order_key());
-                continue;
+            if pair[0].order_key() == pair[1].order_key() {
+                return Err(LifecycleError::Response.into_error().into());
             }
-            if selected.len() == self.request.limit() {
-                more = true;
-                // The complete source identity was admitted before page selection.
-                break;
-            }
-            selected.push(event);
         }
-        if !found_cursor {
-            return Err(LifecycleError::Cursor.into_error().into());
-        }
-        let next_cursor = if more {
-            selected.last().map(|event| Cursor {
-                binding,
-                after_operation_id: event.operation_id,
-                after_sequence: event.sequence,
-                after_source_id: event.source_id(),
-            })
-        } else {
-            None
-        };
-        let mut page = Page {
-            file_id: self.request.file_id.clone(),
-            history_root: self.request.history_root,
-            context: self.read.context.clone(),
-            observation_sequence: self.source.sequence,
-            events: selected,
-            next_cursor,
-        };
-        while json_codec::to_vec(&page)?.len()
-            > storage_contract::file_lifecycle::MAX_RESPONSE_BYTES
-        {
-            self.read.cancellation.checkpoint()?;
-            if page.events.len() <= 1 {
-                return Err(LifecycleError::Bytes.into_error().into());
-            }
-            page.events.pop();
-            page.next_cursor = page.events.last().map(|event| Cursor {
-                binding,
-                after_operation_id: event.operation_id,
-                after_sequence: event.sequence,
-                after_source_id: event.source_id(),
-            });
-        }
-        page.validate(&self.request)?;
-        Ok(page)
+        Ok(events)
     }
 
     fn append_path_events(
@@ -211,10 +271,17 @@ impl Engine {
         let mut source = self.metadata_view().business_projection().clone();
         source.operations = self.state.operations.clone();
         source.operation_principals = self.state.operation_principals.clone();
+        let key = AuditKey {
+            state: Arc::downgrade(&self.state),
+            file: request.file_id.clone(),
+            history: read.context.history_tree_id.clone(),
+        };
         Ok(FileLifecycleRead {
             read,
             request,
             source,
+            key,
+            cache: Arc::clone(&self.lifecycle_cache),
         })
     }
     pub fn recheck_file_lifecycle(&self, read: &FileLifecycleRead) -> Result<()> {
@@ -222,7 +289,9 @@ impl Engine {
         // History manifests alone do not prove the captured permanent audit.
         // Conservatively restart pagination after ANY publication, even another
         // history's, instead of claiming that a graph root commits its receipts.
-        if self.state.sequence != read.source.sequence {
+        if self.state.sequence != read.source.sequence
+            || !Weak::ptr_eq(&Arc::downgrade(&self.state), &read.key.state)
+        {
             return Err(LifecycleError::Changed.into_error().into());
         }
         Ok(())

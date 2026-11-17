@@ -38,6 +38,7 @@ pub use permanent_removal_cleanup::{
     PermanentRemovalCleanupObservation, RemovalCleanupScope, RemovalReplicaCleanup,
     RemovalReplicaCleanupState,
 };
+pub(in crate::engine) use read::LifecycleCache;
 pub use read::{
     ContentMatchRead, FileHistorySourceRead, FileLifecycleRead, HistoryWindowRead,
     PermanentNodeRetirementOutcome, SharedHistoryRead,

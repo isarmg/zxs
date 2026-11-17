@@ -652,4 +652,5 @@ impl Engine {
 }
 
 mod lifecycle;
+pub(in crate::engine) use lifecycle::LifecycleCache;
 pub use lifecycle::FileLifecycleRead;
