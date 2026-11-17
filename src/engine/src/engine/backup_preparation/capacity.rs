@@ -1,12 +1,17 @@
 //! Missing physical entries on one held target. This is a space observation, not
 //! a reservation or integrity proof: every install and complete readback still runs.
 use crate::disk::DiskRoot;
-use crate::engine::backup_preparation::RESERVE;
+use crate::engine::backup_preparation::{RESERVE, inspection::ReportCounts};
+use crate::history_package::PreparedHistoryPackage;
 use crate::{Error, ErrorCode, Result};
 use platform_io::fs_safety::{Error as FsError, RelativePath};
 use std::num::NonZeroU64;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+
+mod records;
+pub(super) use records::Records;
 
 #[derive(Debug, error_definition::Error)]
 enum CapacityError {
@@ -16,6 +21,8 @@ enum CapacityError {
     Geometry,
     #[error("complete backup allocation exceeds the capacity counter")]
     Overflow,
+    #[error("complete backup receipt exceeds its existing reader limit")]
+    RecordLimit,
     #[error("backup target cannot hold the complete frozen unit and its reserve")]
     Space,
     #[error("backup target lacks available inodes for its complete frozen unit")]
@@ -26,7 +33,9 @@ impl From<CapacityError> for Error {
     fn from(error: CapacityError) -> Self {
         let code = match error {
             CapacityError::Layout => ErrorCode::HistoryPackageInvalid,
-            CapacityError::Geometry | CapacityError::Overflow => ErrorCode::ResourceLimit,
+            CapacityError::Geometry | CapacityError::Overflow | CapacityError::RecordLimit => {
+                ErrorCode::ResourceLimit
+            }
             CapacityError::Space | CapacityError::Inodes => ErrorCode::NoSpace,
         };
         storage_contract::Error::new(code, error.to_string()).into()
@@ -79,12 +88,19 @@ impl Needed {
         Ok(())
     }
 
-    fn require(&self, space: &Space) -> Result<()> {
+    fn material_reserve(&self) -> u64 {
+        if self.files == 0 && self.directories == 0 {
+            64 * 1024
+        } else {
+            RESERVE
+        }
+    }
+
+    fn require(&self, space: &Space, reserve: u64) -> Result<()> {
         let entries = self
             .files
             .checked_add(self.directories)
             .ok_or(CapacityError::Overflow)?;
-        let reserve = if entries == 0 { 64 * 1024 } else { RESERVE };
         let bytes = self
             .bytes
             .checked_add(reserve)
@@ -180,14 +196,22 @@ impl<'a> Census<'a> {
         Ok(())
     }
 
-    pub(super) fn require(self) -> Result<()> {
+    pub(super) fn require(
+        mut self,
+        records: Records<'_>,
+        plans: &[PreparedHistoryPackage],
+        counts: ReportCounts,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        let reserve = self.needed.material_reserve();
+        records.charge(&mut self, plans, counts, stop)?;
         // Sampling the free counts after the whole census matters for large
         // plans. External users may still consume space after this observation.
         let space = Space::observe(self.root)?;
         if self.unit != space.unit {
             return Err(CapacityError::Geometry.into());
         }
-        self.needed.require(&space)
+        self.needed.require(&space, reserve)
     }
 }
 

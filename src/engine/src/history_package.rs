@@ -48,6 +48,27 @@ pub struct HistoryPackageReport {
     #[serialization(with = "storage_contract::u64_string")]
     pub full_bytes: u64,
 }
+impl HistoryPackageReport {
+    fn inventory(
+        manifest: &HistoryManifest,
+        proof: &PackageProof,
+        full_files: usize,
+        full_bytes: u64,
+    ) -> Self {
+        Self {
+            history_tree_id: manifest.history.history_tree_id.clone(),
+            repository_id: manifest.repository.repository_id.clone(),
+            manifest_hash: proof.manifest_hash.clone(),
+            publication_sequence: proof.candidate.sequence,
+            commits: manifest.commits.len(),
+            versions: manifest.versions.len(),
+            full_files,
+            tombstones: manifest.versions.len() - full_files,
+            full_bytes,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct PackageProof {
@@ -761,7 +782,6 @@ fn load_package_at(
         ));
     }
     let mut full_files = 0;
-    let mut tombstones = 0;
     let mut full_bytes = 0u64;
     for (id, version) in &manifest.versions {
         if manifest.content_states[id] == ContentState::Available {
@@ -776,21 +796,9 @@ fn load_package_at(
                         "package byte count overflow",
                     )
                 })?;
-        } else {
-            tombstones += 1;
         }
     }
-    let report = HistoryPackageReport {
-        history_tree_id: manifest.history.history_tree_id.clone(),
-        repository_id: manifest.repository.repository_id.clone(),
-        manifest_hash: hash,
-        publication_sequence: proof.candidate.sequence,
-        commits: manifest.commits.len(),
-        versions: manifest.versions.len(),
-        full_files,
-        tombstones,
-        full_bytes,
-    };
+    let report = HistoryPackageReport::inventory(&manifest, &proof, full_files, full_bytes);
     Ok((manifest, proof, report))
 }
 

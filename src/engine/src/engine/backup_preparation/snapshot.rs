@@ -110,6 +110,7 @@ fn object_path(root: &Path, kind: &str, hash: &str) -> Result<PathBuf> {
 pub(super) struct PreparedSnapshot {
     envelope: Vec<u8>,
     objects: BTreeMap<(&'static str, String), Vec<u8>>,
+    pub(super) report_counts: super::inspection::ReportCounts,
 }
 impl PreparedSnapshot {
     pub(super) fn freeze(engine: &Engine, job: &Job) -> Result<Self> {
@@ -194,7 +195,14 @@ impl PreparedSnapshot {
                 .or_insert_with(|| object.bytes().to_vec());
             Ok(())
         })?;
-        let prepared = Self { envelope, objects };
+        let prepared = Self {
+            envelope,
+            objects,
+            report_counts: super::inspection::ReportCounts {
+                operations: engine.state().operations.len(),
+                principals: engine.state().operation_principals.len(),
+            },
+        };
         let admitted = prepared.admit(&job.snapshot)?;
         if canonical_json(admitted.state())? != canonical_json(engine.state())? {
             return Err(invalid(

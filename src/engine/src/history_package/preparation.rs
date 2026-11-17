@@ -258,6 +258,17 @@ impl PreparedHistoryPackage {
                 })
         })
     }
+    /// Length only: a source inventory is not a target verification report.
+    pub(crate) fn report_length(&self) -> Result<usize> {
+        let shape = HistoryPackageReport::inventory(
+            &self.metadata.manifest,
+            &self.metadata.proof,
+            self.bodies.len(),
+            self.body_bytes()?,
+        );
+        Ok(canonical_json(&shape)?.len())
+    }
+
     /// Visit this complete history in target address order, without reordering
     /// dependency-first installation. Only pointers into one admitted graph are sorted.
     pub(crate) fn visit_files(

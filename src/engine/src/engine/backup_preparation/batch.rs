@@ -5,10 +5,10 @@ use std::{collections::BTreeSet, path::Component};
 
 const FORMAT: &str = "zxs-backup-whole-unit-batch";
 pub(super) const BATCH_JOB: &str = "backup-preparation/batch.json";
-const BATCH_INTENT: &str = "backup-batch.json";
+pub(super) const BATCH_INTENT: &str = "backup-batch.json";
 pub(super) const BATCH_COMPLETE: &str = "backup-batch-prepared.json";
 const MAX_TARGETS: usize = 8;
-const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -267,15 +267,16 @@ impl Engine {
         let snapshot = snapshot::PreparedSnapshot::freeze(self, batch.first())?;
         // No target writes precede the complete-set resource and identity
         // admission. Capacity is per disk; one target cannot borrow another's.
-        for target in &work {
+        let (envelope, bytes) = BatchEnvelope::encode(&batch)?;
+        for (job, target) in batch.jobs().iter().zip(&work) {
             execution::require_capacity(
                 &target.root,
                 &target.histories,
                 &snapshot,
+                capacity::Records::batch(job, envelope),
                 &AtomicBool::new(false),
             )?;
         }
-        let bytes = batch.encoded()?;
         system.private_dir(&self.root.join("backup-preparation"))?;
         system.write_atomic(&self.root.join(BATCH_JOB), &bytes, false)?;
         let started = spawn_batch(self, batch.clone(), system, work, snapshot);
@@ -432,6 +433,30 @@ pub struct BackupPreparationBatchReport {
     pub targets: Vec<BackupPreparationReport>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct BatchEnvelope {
+    pub(super) intent: usize,
+    pub(super) completion_base: usize,
+    pub(super) targets: usize,
+}
+
+impl BatchEnvelope {
+    pub(super) fn encode(batch: &Batch) -> Result<(Self, Vec<u8>)> {
+        let encoded = batch.encoded()?;
+        let empty = BackupPreparationBatchReport {
+            format: FORMAT.into(),
+            batch_hash: "0".repeat(64),
+            targets: Vec::new(),
+        };
+        let envelope = Self {
+            intent: encoded.len(),
+            completion_base: canonical_json(&empty)?.len(),
+            targets: batch.targets.len(),
+        };
+        Ok((envelope, encoded))
+    }
+}
+
 fn completion(
     batch: &Batch,
     reports: Vec<BackupPreparationReport>,
@@ -526,10 +551,16 @@ fn spawn_batch(
         let update = |action: &dyn Fn(&mut BackupPreparationStatus)| progress.update(action);
         let cancel = progress.stop.as_ref();
         let result = (|| {
-            let intent = batch.encoded()?;
+            let (envelope, intent) = BatchEnvelope::encode(&batch)?;
             for (job, target) in batch.targets.iter().zip(&work) {
                 named_target(&target.root, job)?;
-                execution::require_capacity(&target.root, &target.histories, &snapshot, cancel)?;
+                execution::require_capacity(
+                    &target.root,
+                    &target.histories,
+                    &snapshot,
+                    capacity::Records::batch(job, envelope),
+                    cancel,
+                )?;
             }
             for (index, (job, target)) in batch.targets.iter().zip(&mut work).enumerate() {
                 crate::history_package::preparation_checkpoint(cancel)?;
@@ -549,7 +580,7 @@ fn spawn_batch(
                         &intent,
                     )?;
                     execution::copy_target(
-                        job,
+                        capacity::Records::batch(job, envelope),
                         &target.root,
                         std::mem::take(&mut target.histories),
                         &snapshot,

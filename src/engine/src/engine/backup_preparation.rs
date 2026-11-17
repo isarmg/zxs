@@ -638,7 +638,13 @@ impl Engine {
                 "backup task exceeds metadata budget",
             ));
         }
-        execution::require_capacity(&target, &plans, &snapshot, &AtomicBool::new(false))?;
+        execution::require_capacity(
+            &target,
+            &plans,
+            &snapshot,
+            capacity::Records::single(&job),
+            &AtomicBool::new(false),
+        )?;
         named_target(&target, &job)?;
         system.private_dir(&self.root.join("backup-preparation"))?;
         system.write_atomic(&self.root.join(JOB), &intent, false)?;
@@ -980,7 +986,7 @@ fn spawn(
         let _target_lock = lock;
         let update = |action: &dyn Fn(&mut BackupPreparationStatus)| progress.update(action);
         let result = execution::copy_target(
-            &job,
+            capacity::Records::single(&job),
             &target,
             plans,
             &snapshot,

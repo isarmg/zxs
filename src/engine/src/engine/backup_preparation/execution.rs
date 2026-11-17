@@ -6,6 +6,7 @@ pub(super) fn require_capacity(
     target: &DiskRoot,
     plans: &[PreparedHistoryPackage],
     snapshot: &snapshot::PreparedSnapshot,
+    records: capacity::Records<'_>,
     stop: &AtomicBool,
 ) -> Result<()> {
     let mut census = capacity::Census::new(target)?;
@@ -17,20 +18,21 @@ pub(super) fn require_capacity(
         plan.visit_files(&mut account)?;
     }
     snapshot.visit_files(&mut account)?;
-    census.require()
+    census.require(records, plans, snapshot.report_counts, stop)
 }
 
 pub(super) fn copy_target(
-    job: &Job,
+    records: capacity::Records<'_>,
     target: &DiskRoot,
     plans: Vec<PreparedHistoryPackage>,
     snapshot: &snapshot::PreparedSnapshot,
     stop: &AtomicBool,
     update: &impl Fn(&dyn Fn(&mut BackupPreparationStatus)) -> Result<()>,
 ) -> Result<BackupPreparationReport> {
+    let job = records.job();
     named_target(target, job)?;
     crate::history_package::preparation_checkpoint(stop)?;
-    require_capacity(target, &plans, snapshot, stop)?;
+    require_capacity(target, &plans, snapshot, records, stop)?;
     update(&|_| {})?;
     snapshot.copy(target, stop)?;
     let admitted = snapshot::read(target, job, stop)?;
@@ -59,7 +61,7 @@ pub(super) fn copy_target(
     crate::history_package::preparation_checkpoint(stop)?;
     crate::history_package::install_preparation_bytes(
         target,
-        &target.path().join("history-prepared.json"),
+        &target.path().join(inspection::HISTORY_COMPLETE),
         &inspection::history_marker(job, &reports)?,
     )?;
     let report = inspection::verify_material(target, job, &admitted, stop)?;

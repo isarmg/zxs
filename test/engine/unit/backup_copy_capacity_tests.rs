@@ -101,21 +101,36 @@ fn bytes_inodes_and_existing_reserve_are_independent() {
         bytes: 64 * 1024,
         inodes: Some(0),
     };
-    work.require(&space).unwrap();
+    work.require(&space, work.material_reserve()).unwrap();
     space.bytes -= 1;
-    assert_eq!(work.require(&space).unwrap_err().code(), ErrorCode::NoSpace);
+    assert_eq!(
+        work.require(&space, work.material_reserve())
+            .unwrap_err()
+            .code(),
+        ErrorCode::NoSpace
+    );
 
     work.charge(EntryCost::File(0), unit).unwrap();
     space.bytes = RESERVE + 4096;
-    assert_eq!(work.require(&space).unwrap_err().code(), ErrorCode::NoSpace);
+    assert_eq!(
+        work.require(&space, work.material_reserve())
+            .unwrap_err()
+            .code(),
+        ErrorCode::NoSpace
+    );
     space.inodes = Some(1);
-    work.require(&space).unwrap();
+    work.require(&space, work.material_reserve()).unwrap();
     space.bytes -= 1;
-    assert_eq!(work.require(&space).unwrap_err().code(), ErrorCode::NoSpace);
+    assert_eq!(
+        work.require(&space, work.material_reserve())
+            .unwrap_err()
+            .code(),
+        ErrorCode::NoSpace
+    );
     // No fixed inode count is reported on every supported filesystem.
     space.bytes += 1;
     space.inodes = None;
-    work.require(&space).unwrap();
+    work.require(&space, work.material_reserve()).unwrap();
     assert_eq!(
         work.charge(EntryCost::File(u64::MAX), unit)
             .unwrap_err()

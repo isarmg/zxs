@@ -26,6 +26,7 @@ pub(super) fn history_marker(job: &Job, histories: &[HistoryPackageReport]) -> R
     })?)
 }
 
+pub(super) const HISTORY_COMPLETE: &str = "history-prepared.json";
 pub(super) const COMPLETE: &str = "snapshot-prepared.json";
 const REPORT_FORMAT: &str = "zxs-backup-snapshot-prepared";
 
@@ -42,6 +43,37 @@ pub struct BackupPreparationReport {
     pub operations: usize,
     pub operation_principals: usize,
     pub histories: Vec<HistoryPackageReport>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ReportCounts {
+    pub(super) operations: usize,
+    pub(super) principals: usize,
+}
+
+/// Use the real canonical envelopes. Only sizes leave this function; no
+/// synthesized hash or source forecast can be installed as a completion.
+pub(super) fn empty_envelope_lengths(job: &Job, counts: ReportCounts) -> Result<(usize, usize)> {
+    let hash = "0".repeat(64);
+    let history = HistoryCompletion {
+        format: FORMAT,
+        job_hash: hash.clone(),
+        histories: &[],
+    };
+    let snapshot = BackupPreparationReport {
+        format: REPORT_FORMAT.into(),
+        job_hash: hash.clone(),
+        snapshot_hash: job.snapshot.clone(),
+        state_hash: hash,
+        sequence: job.request.expected_sequence,
+        operations: counts.operations,
+        operation_principals: counts.principals,
+        histories: Vec::new(),
+    };
+    Ok((
+        canonical_json(&history)?.len(),
+        canonical_json(&snapshot)?.len(),
+    ))
 }
 
 /// Independently verify only the held target's complete State and history
@@ -72,7 +104,7 @@ pub(super) fn check_at(root: &DiskRoot, stop: &AtomicBool) -> Result<BackupPrepa
     let state = snapshot::read(root, &job, stop)?;
     let report = verify_material(root, &job, &state, stop)?;
     let history: json_codec::Value = storage_contract::strict_json(&root.read_bytes(
-        &path.join("history-prepared.json"),
+        &path.join(HISTORY_COMPLETE),
         crate::disk::MAX_METADATA,
     )?)?;
     if canonical_json(&history)? != history_marker(&job, &report.histories)? {
