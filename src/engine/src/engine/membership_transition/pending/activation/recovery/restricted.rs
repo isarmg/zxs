@@ -67,6 +67,7 @@ fn discover_startup_with_io(
     projected: ValidatedConfig,
     io: &mut impl RootIo,
 ) -> Result<(ValidatedConfig, BootstrapStore)> {
+    crate::engine::fresh_layout::require_persisted_roots(&projected)?;
     let terminal = super::super::terminal_resume::completed_selector(root).map_err(|source| {
         source.context(
             ErrorCode::RecoveryRequired,
@@ -105,6 +106,7 @@ fn discover_startup_in_store_with_io(
     projected: ValidatedConfig,
     io: &mut impl RootIo,
 ) -> Result<ValidatedConfig> {
+    crate::engine::fresh_layout::require_persisted_roots(&projected)?;
     let locator = store.reload(&projected.pool_id).map_err(management_error)?;
     let admissions = store.readmission_probe_admissions(&locator)?;
     let probes = locator

@@ -218,3 +218,102 @@ fn current_exit_holds_discovery_until_read_only_workspace_admission() {
     assert_eq!(images(&parked), stopped);
     assert_eq!(fs::read(&target.root).unwrap(), b"stopped address must not be admitted");
 }
+
+#[test]
+fn an_unbound_saved_pool_never_recreates_startup_control_material() {
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let disk = temp.path().join("primary");
+    let config = Config::development(crate::test_disks([disk.clone()])).unwrap();
+    let engine = Engine::initialize(&system, config).unwrap();
+    let mut unbound = (*engine.config).clone();
+    drop(engine);
+    remove_idle_control_lock(&system);
+    unbound.storage_roots.clear();
+    let unbound = ValidatedConfig::try_from(unbound).unwrap();
+    fs::write(
+        system.join(layout::SYSTEM_CONFIGURATION.as_path()),
+        canonical_json(&unbound).unwrap(),
+    )
+    .unwrap();
+    let before = images(temp.path());
+    assert_eq!(
+        Engine::open(&system).err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(images(temp.path()), before);
+    assert_eq!(
+        Engine::open_for_recovery(&system).err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(images(temp.path()), before);
+    assert_eq!(
+        Engine::open_for_recovery_held(&system, None, vec![File::open(&disk).unwrap()])
+            .err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(images(temp.path()), before);
+    assert_eq!(
+        Engine::begin_initial_activation_probe(&system, &unbound).err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(images(temp.path()), before);
+    assert_eq!(
+        Engine::begin_initial_storage_completion(&system, &unbound).err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(images(temp.path()), before);
+}
+
+#[test]
+fn explicit_restore_does_not_adopt_an_unbound_genesis_or_create_system_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let disk = temp.path().join("primary");
+    let destination = temp.path().join("recovered");
+    let config = Config::development(crate::test_disks([disk.clone()])).unwrap();
+    let engine = Engine::initialize(&system, config).unwrap();
+    let mut unbound = (*engine.config).clone();
+    drop(engine);
+    unbound.storage_roots.clear();
+    fs::write(
+        disk.join(layout::GENESIS_CONFIGURATION.as_path()),
+        canonical_json(&unbound).unwrap(),
+    )
+    .unwrap();
+    let before = images(temp.path());
+    assert!(Engine::restore_from_disks(&destination, &[disk]).is_err());
+    assert!(!destination.exists());
+    assert_eq!(images(temp.path()), before);
+}
+
+#[test]
+fn held_recovery_verifies_the_registered_top_root_before_binding_io() {
+    use storage_contract::working_tree::LocalEntityIdentity;
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let disk = temp.path().join("primary");
+    let other = temp.path().join("unrelated");
+    fs::create_dir(&other).unwrap();
+    let config = Config::development(crate::test_disks([disk.clone()])).unwrap();
+    let engine = Engine::initialize(&system, config).unwrap();
+    let admitted = engine.config.clone();
+    let mut changed = (*admitted).clone();
+    drop(engine);
+    let metadata = fs::metadata(&other).unwrap();
+    let disk_id = changed.disks[0].disk_id.parse().unwrap();
+    changed.storage_roots.get_mut(&disk_id).unwrap().root_entity =
+        LocalEntityIdentity::new(metadata.dev(), metadata.ino());
+    let changed = ValidatedConfig::try_from(changed).unwrap();
+    let before = images(temp.path());
+    assert_eq!(
+        DiskResources::recover_held(&changed, vec![File::open(&disk).unwrap()])
+            .err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(images(temp.path()), before);
+    let resources = DiskResources::recover_held(&admitted, vec![File::open(&disk).unwrap()])
+        .unwrap();
+    assert!(resources.available(&admitted.disks[0]).is_some());
+    assert_eq!(images(temp.path()), before);
+}

@@ -413,8 +413,10 @@ pub(super) fn read_recovery_anchor(path: &Path, seal: &DiskSeal) -> Result<Valid
     let original = ValidatedConfig::try_from(read_json::<Config>(
         &path.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
     )?)?;
+    super::fresh_layout::require_persisted_roots(&original)?;
     let config =
         super::membership_transition::pending::activation::restore_anchor(path, seal, original)?;
+    super::fresh_layout::require_persisted_roots(&config)?;
     let mut member = config
         .disks
         .iter()

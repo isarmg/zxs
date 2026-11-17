@@ -820,6 +820,7 @@ impl Engine {
             "system projection is unavailable; use explicit retained metadata roots for management recovery",
         ))?;
         let config = ValidatedConfig::try_from(config)?.with_workspace_limits(workspace_limits)?;
+        fresh_layout::require_persisted_roots(&config)?;
         Ok((root, config))
     }
 
@@ -1118,6 +1119,7 @@ impl Engine {
                     None => Error::new(ErrorCode::ConfigConflict, message),
                 }
             })?;
+        fresh_layout::require_persisted_roots(&config)?;
         if (generation_config.is_none() && agreed.next().is_some())
             || seals.keys().any(|id| {
                 !config

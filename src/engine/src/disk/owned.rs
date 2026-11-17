@@ -1472,6 +1472,9 @@ impl InitializationDisks {
 
 impl DiskResources {
     pub(crate) fn open(config: &ValidatedConfig, sealed: bool) -> Result<Self> {
+        if sealed {
+            crate::engine::fresh_layout::require_persisted_roots(config)?;
+        }
         let mut disks = BTreeMap::new();
         for disk in config.io_disks() {
             if sealed && disk_unavailable(disk)? {
@@ -1484,6 +1487,7 @@ impl DiskResources {
     }
 
     pub(crate) fn open_activation(config: &ValidatedConfig) -> Result<Self> {
+        crate::engine::fresh_layout::require_persisted_roots(config)?;
         let mut disks = BTreeMap::new();
         for disk in config.io_disks() {
             let root = DiskRoot::open(&disk.root)?;
@@ -1495,6 +1499,7 @@ impl DiskResources {
             crate::engine::membership_transition::pending::activation::predecessor_seal_matches(
                 config, disk, &root, &bytes, &seal,
             )?;
+            crate::engine::fresh_layout::verify_root(config, disk, &root)?;
             disks.insert(
                 disk.disk_id.clone(),
                 Arc::new(DiskHandle::new(root, seal, config)?),
@@ -1539,6 +1544,7 @@ impl DiskResources {
     }
 
     pub(crate) fn recover_held(config: &ValidatedConfig, directories: Vec<File>) -> Result<Self> {
+        crate::engine::fresh_layout::require_persisted_roots(config)?;
         if directories.len() != config.io_disks().count() {
             return Err(Error::new(
                 ErrorCode::ConfigInvalid,
@@ -1562,6 +1568,7 @@ impl DiskResources {
                 MAX_METADATA,
             )?;
             validate_stored_seal(&decode_seal(&bytes)?, &seal)?;
+            crate::engine::fresh_layout::verify_root(config, disk, &root)?;
             disks.insert(
                 disk.disk_id.clone(),
                 Arc::new(DiskHandle::new(root, seal, config)?),

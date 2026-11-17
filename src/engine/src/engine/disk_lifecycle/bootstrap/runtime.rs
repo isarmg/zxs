@@ -130,6 +130,7 @@ fn initial_configuration(
         ))
     })?;
     let projected = ValidatedConfig::try_from(config)?.with_workspace_limits(workspace_limits)?;
+    crate::engine::fresh_layout::require_persisted_roots(&projected)?;
     let matches = match relation {
         InitialProjection::Exact => storage_contract::canonical_json(&projected)?
             == storage_contract::canonical_json(expected)?,

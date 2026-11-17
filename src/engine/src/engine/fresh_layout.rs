@@ -294,6 +294,16 @@ pub(super) fn validate_roots(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Empty roots are an initialization request, never a saved pool format.
+/// Invoke before a cold opener can recreate even an idle control/writer lock.
+/// Structural consistency is already owned by ValidatedConfig admission.
+pub(crate) fn require_persisted_roots(config: &ValidatedConfig) -> Result<()> {
+    if config.storage_roots.is_empty() {
+        return Err(FreshLayoutError::Registration.into());
+    }
+    Ok(())
+}
+
 pub(crate) fn verify_root(
     config: &ValidatedConfig,
     disk: &DiskConfig,
