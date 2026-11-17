@@ -36,6 +36,24 @@ fn required_controller<'de,D:data_serialization::Deserializer<'de>>(d:D)->Result
 impl Snapshot {
     pub(in crate::files) fn revision(&self)->WorkingRevision{self.expected.revision}
     pub(in crate::files) fn has_draft(&self)->bool{matches!(self.expected.content,Content::Saved{..})}
+    /// The single-file and directory pickers read the same current route.
+    /// Convert its admitted original expectation; never create a history base.
+    pub(in crate::files) fn directory_expectation(&self) -> (
+        storage_contract::snapshot_worktree::draft_commit::DirectoryDraftExpectation,
+        u64,
+    ) {
+        use storage_contract::snapshot_worktree::draft_commit::{
+            DirectoryDraftExpectation, DirectoryUnbornExpectation,
+        };
+        let content = match self.expected.content {
+            Content::Empty {} => DirectoryUnbornExpectation::Empty {},
+            Content::Saved { generation, commitment } => {
+                DirectoryUnbornExpectation::Saved { generation, commitment }
+            }
+        };
+        (DirectoryDraftExpectation::Unborn { revision: self.expected.revision, content }, self.logical_size)
+    }
+
     pub(in crate::files) fn parse(value: Value, target: &DraftLocation) -> Result<Self, api::Error> {
         if !value.is_object()
             || !value.get("target").is_some_and(Value::is_object)

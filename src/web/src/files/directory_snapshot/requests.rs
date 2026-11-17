@@ -86,7 +86,7 @@ async fn read(
             if state.try_with_untracked(|state| target.current(state)) != Some(true) {
                 return Err(wire::invalid("the directory changed during review"));
             }
-            let Some(item) = ReadItem::from_entry(entry, target.repository)? else {
+            let Some(item) = ReadItem::from_page(entry, target)? else {
                 continue;
             };
             let value = api::cancellable_get(&item.endpoint(), cancellation.clone()).await?;

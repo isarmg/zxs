@@ -47,7 +47,7 @@ fn source() -> SnapshotHandle {
         node_id: SnapshotNodeId::from_random([5; 16]),
     }
 }
-fn head() -> DirectorySnapshotHead {
+pub(super) fn head() -> DirectorySnapshotHead {
     DirectorySnapshotHead {
         repository_id: repository(),
         context: SnapshotRootContext {
@@ -122,7 +122,7 @@ fn record() -> Record {
     )
     .unwrap()
 }
-fn state() -> State {
+pub(super) fn state() -> State {
     let principal = "alice".parse().unwrap();
     let mut state = State {
         authenticated: true,
@@ -143,7 +143,7 @@ fn state() -> State {
     };
     state
 }
-fn unborn_row() -> Value {
+pub(super) fn unborn_row() -> Value {
     let target = unborn().selected.target;
     json!({
         "entry_id":target.entry, "name":"first.txt", "path":"first.txt",
@@ -189,10 +189,9 @@ fn directory_snapshot_uses_actual_head_and_exact_mixed_original_request() {
     );
     state.files.generation -= 1;
     state.files.repository_path = "child".into();
-    assert!(
-        Target::capture(&state).is_none(),
-        "the production API is currently root-only"
-    );
+    assert!(Target::capture(&state).is_some(), "a child can contribute to its original root");
+    assert!(!target.current(&state));
+    assert!(!can_submit(&state), "a child never inherits a root page review");
     state.files.repository_path.clear();
 
     let record = Arc::new(record());
@@ -250,8 +249,14 @@ fn directory_snapshot_review_keeps_unborn_identity_and_rejects_wrong_responses()
     assert!(item.endpoint().contains("/unborn-working?"));
     let value = json!({
         "target":target, "expected":{"revision":"2","content":{"state":"empty"}},
-        "mode":"manual", "logical_size":"0",
+        "mode":"manual", "automatic":null, "logical_size":"0",
     });
+    let mut incomplete = value.clone();
+    incomplete.as_object_mut().unwrap().remove("automatic");
+    assert!(wire::unborn(incomplete, target.clone()).is_err());
+    let mut inconsistent = value.clone();
+    inconsistent["mode"] = "automatic".into();
+    assert!(wire::unborn(inconsistent, target.clone()).is_err());
     assert_eq!(
         wire::unborn(value.clone(), target.clone()).unwrap(),
         unborn()

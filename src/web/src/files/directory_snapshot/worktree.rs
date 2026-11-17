@@ -27,6 +27,9 @@ struct Scope {
 impl Scope {
     fn capture(state: &State) -> Option<Self> {
         let review = state.files.directory_snapshot.reviewed(state)?;
+        if review.target.folder.is_some() {
+            return None;
+        }
         let source = wire::ready_source(&review.head)?;
         Some(Self {
             epoch: state.session_epoch,
@@ -101,7 +104,7 @@ impl Model {
     }
 }
 
-fn available(state: &State) -> bool {
+pub(super) fn available(state: &State) -> bool {
     can_review(state) && Scope::capture(state).is_some()
 }
 

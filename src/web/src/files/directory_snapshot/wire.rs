@@ -4,14 +4,14 @@ use crate::api;
 use data_serialization::{Deserialize, Serialize};
 use json_codec::Value;
 use name_policy::SlotId;
-use storage_contract::file_draft::{CommitMode, DraftBase, DraftLocation, FileWorkingState};
+use storage_contract::file_draft::{DraftBase, DraftLocation, FileWorkingState};
 use storage_contract::snapshot_worktree::creation::AllocateWorktree;
 use storage_contract::snapshot_worktree::discovery::{
     DirectorySnapshotHead, SnapshotHeadDiscovery,
 };
 use storage_contract::snapshot_worktree::draft_commit::{
     CommitDirectoryDrafts, DirectoryDraftExpectation, DirectoryDraftOutcome, DirectoryDraftReceipt,
-    DirectoryUnbornExpectation, SelectedDirectoryDraft,
+    SelectedDirectoryDraft,
 };
 use storage_contract::snapshot_worktree::root::{RegisterSnapshotRoot, RegisteredSnapshotRoot};
 use storage_contract::snapshot_worktree::{
@@ -85,16 +85,6 @@ struct BornSnapshot {
     working: FileWorkingState,
 }
 
-#[derive(Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct UnbornSnapshot {
-    target: DraftLocation,
-    expected: DirectoryDraftExpectation,
-    mode: CommitMode,
-    #[serialization(with = "storage_contract::u64_string")]
-    logical_size: u64,
-}
-
 pub(super) fn born(value: Value, target: DraftLocation) -> Result<Option<Candidate>, api::Error> {
     object_field(&value, "base")?;
     let working = object_field(&value, "working")?;
@@ -135,34 +125,11 @@ pub(super) fn born(value: Value, target: DraftLocation) -> Result<Option<Candida
 }
 
 pub(super) fn unborn(value: Value, target: DraftLocation) -> Result<Candidate, api::Error> {
-    object_field(&value, "target")?;
-    object_field(object_field(&value, "expected")?, "content")?;
-    let snapshot: UnbornSnapshot = decode(value)?;
-    if snapshot.target != target {
-        return Err(invalid("the unborn response belongs to another occurrence"));
-    }
-    match snapshot.expected {
-        DirectoryDraftExpectation::Unborn { content, .. } => {
-            if matches!(content, DirectoryUnbornExpectation::Empty {}) && snapshot.logical_size != 0
-            {
-                return Err(invalid(
-                    "an empty unborn file must have zero visible length",
-                ));
-            }
-        }
-        DirectoryDraftExpectation::Born { .. } => {
-            return Err(invalid("an unborn file must not acquire a historical base"));
-        }
-    }
-    // Automatic mode remains a display fact. Only this explicit directory
-    // request consumes the reviewed unborn body.
-    let _mode = snapshot.mode;
+    let snapshot = crate::files::unborn::Snapshot::parse(value, &target)?;
+    let (expected, size) = snapshot.directory_expectation();
     Ok(Candidate {
-        selected: SelectedDirectoryDraft {
-            target,
-            expected: snapshot.expected,
-        },
-        size: snapshot.logical_size,
+        selected: SelectedDirectoryDraft { target, expected },
+        size,
     })
 }
 

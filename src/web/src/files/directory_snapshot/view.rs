@@ -38,12 +38,13 @@ fn review_view(state: RwSignal<State>) -> impl IntoView {
         state.with(|state| {
         state.files.directory_snapshot.reviewed(state).map(|review| {
             (
+                review.target.folder.is_none(),
                 review.head.clone(),
                 review.candidates.clone(),
                 state.files.directory_snapshot.read_generation,
             )
         })
-    }).map(|(head, candidates, generation)| {
+    }).map(|(at_root, head, candidates, generation)| {
         match head.head {
             SnapshotHeadDiscovery::NotInitialized => view! {
                 <div class="zxs-stack" data-zxs-directory-snapshot-state="not_initialized">
@@ -58,14 +59,16 @@ fn review_view(state: RwSignal<State>) -> impl IntoView {
                             "not admitted. No file is implicitly committed.",
                         ),
                     )}</p>
-                    <button
+                    <Show when=move ||at_root fallback=move ||view! {
+                        <p role="status">{t("请返回仓库根目录初始化；不会在子目录创建另一个快照仓库。","Return to the repository root to initialize it. No snapshot repository is created in this folder.")}</p>
+                    }><button
                         class="zxs-button"
                         data-zxs-directory-snapshot-initialize=""
                         disabled=move ||!state.with(can_initialize)
                         on:click=move |_|requests::initialize(state)
                     >
                         {t("初始化 .zxs 目录快照", "Initialize .zxs snapshots")}
-                    </button>
+                    </button></Show>
                 </div>
             }.into_any(),
             SnapshotHeadDiscovery::Pending { operation } => view! {
@@ -221,7 +224,9 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     Effect::new(move |_| {
         let current = target.get();
         state.update(|state| state.files.directory_snapshot.clear_review());
-        if current.is_some() {
+        // A new child folder is ordinary browsing, not consent to read up to
+        // one page of individual working statuses. Nested reviews are explicit.
+        if current.is_some_and(|t| t.folder.is_none()) {
             requests::load(state);
         }
     });
@@ -278,7 +283,9 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 </Show>
                 {review_view(state)}
                 {publication_view(state)}
-                {super::worktree::view(state)}
+                <Show when=move ||state.with(super::worktree::available)>
+                    {super::worktree::view(state)}
+                </Show>
             </Show>
             {move ||state.with(|state| {
                 let model = &state.files.directory_snapshot;

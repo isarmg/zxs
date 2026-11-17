@@ -29,6 +29,10 @@ struct Target {
     navigation: u64,
     repository: RepositoryId,
     namespace_head: CommitId,
+    slot: String,
+    // This is a lookup on an already listed folder, not permission to
+    // initialize a new snapshot host at that path.
+    folder: Option<name_policy::LookupPath>,
 }
 
 impl Target {
@@ -36,7 +40,7 @@ impl Target {
         if !state.session_active()
             || !state.files.loaded
             || state.files.loading
-            || !state.files.repository_path.is_empty()
+            || state.files.listing_failed
             || state.files.selected.is_some()
             || state.files.directory_preview.is_some()
             || state.files.file_preview.is_some()
@@ -48,6 +52,12 @@ impl Target {
             navigation: state.files.generation,
             repository: state.files.repository_id.parse().ok()?,
             namespace_head: state.files.namespace_head.parse().ok()?,
+            slot: state.files.slot.clone(),
+            folder: if state.files.repository_path.is_empty() {
+                None
+            } else {
+                Some(name_policy::LookupPath::parse(&state.files.repository_path).ok()?)
+            },
         })
     }
 
@@ -112,6 +122,17 @@ impl ReadItem {
             },
             kind: BodyKind::Born,
         }))
+    }
+
+    fn from_page(entry: &Entry, owner: &Target) -> Result<Option<Self>, api::Error> {
+        let Some(item) = Self::from_entry(entry, owner.repository)? else { return Ok(None); };
+        let parent = item.target.path.parent();
+        if parent.as_ref().map(name_policy::PortablePath::key)
+            != owner.folder.as_ref().map(name_policy::LookupPath::key)
+        {
+            return Err(wire::invalid("the file is outside the reviewed folder"));
+        }
+        Ok(Some(item))
     }
 
     fn endpoint(&self) -> String {
@@ -232,7 +253,8 @@ fn can_initialize(state: &State) -> bool {
     let Some(review) = model.reviewed(state) else {
         return false;
     };
-    matches!(review.head.head, SnapshotHeadDiscovery::NotInitialized)
+    review.target.folder.is_none()
+        && matches!(review.head.head, SnapshotHeadDiscovery::NotInitialized)
         && initialization_listing(state)
 }
 
@@ -288,3 +310,7 @@ fn toggle(state: RwSignal<State>, entry: EntryId, generation: u64, selected: boo
 #[cfg(test)]
 #[path = "../../../../test/web/unit/files/directory_snapshot_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/web/unit/files/directory_snapshot_nested.rs"]
+mod nested_tests;

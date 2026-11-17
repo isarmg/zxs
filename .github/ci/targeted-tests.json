@@ -7243,6 +7243,31 @@
           "name": "zxs"
         }
       ]
+    },
+    "nested-directory-web-selection": {
+      "reason": "The current directory chooser reviews only explicit direct listed occurrences at the original root snapshot, never initializes a child or admits a new worktree parent. The single-file and directory actions must decode the same present Unborn response including its actual controller. Real Chrome execution is separate.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "files::directory_snapshot::nested_tests::nested_ordinary_review_binds_actual_page_parent_and_cannot_initialize_or_manage_worktrees",
+            "files::directory_snapshot::tests::directory_snapshot_review_keeps_unborn_identity_and_rejects_wrong_responses",
+            "files::directory_snapshot::tests::directory_snapshot_initializes_only_a_complete_empty_or_born_root"
+          ],
+          "max_tests": 3
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        }
+      ]
     }
   },
   "rules": [
@@ -21537,6 +21562,54 @@
       "path": "test/server/unit/offline/managed_layout_physical.rs",
       "groups": [
         "offline-disjoint-held-roots"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot.rs",
+      "groups": [
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/requests.rs",
+      "groups": [
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/view.rs",
+      "groups": [
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/wire.rs",
+      "groups": [
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree.rs",
+      "groups": [
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "src/web/src/files/unborn/wire.rs",
+      "groups": [
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_snapshot_tests.rs",
+      "groups": [
+        "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_snapshot_nested.rs",
+      "groups": [
+        "nested-directory-web-selection"
       ]
     }
   ],
