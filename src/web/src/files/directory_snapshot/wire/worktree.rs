@@ -90,7 +90,9 @@ pub(super) fn lookup(record: &Record, value: Value) -> Result<LookupResult, api:
                 }
             }
         }
-        Command::Commit { .. } => record.result(value).map(LookupResult::Complete),
+        Command::Commit { request, .. } => {
+            super::directory_observation(request, value).map(LookupResult::DirectoryObserved)
+        }
         Command::RegisterRoot { .. } | Command::Initialize { .. } => {
             Err(invalid("this original request has no outcome lookup"))
         }

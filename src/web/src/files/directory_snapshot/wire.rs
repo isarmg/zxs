@@ -1,7 +1,10 @@
 //! Browser-boundary DTOs and immutable requests for the formal `.zxs` path.
+mod directory;
 mod worktree;
 use crate::api;
 use data_serialization::{Deserialize, Serialize};
+pub(super) use directory::DirectoryObservation;
+use directory::observe as directory_observation;
 use json_codec::Value;
 use name_policy::SlotId;
 use storage_contract::file_draft::{DraftBase, DraftLocation, FileWorkingState};
@@ -10,14 +13,13 @@ use storage_contract::snapshot_worktree::discovery::{
     DirectorySnapshotHead, SnapshotHeadDiscovery,
 };
 use storage_contract::snapshot_worktree::draft_commit::{
-    CommitDirectoryDrafts, DirectoryDraftExpectation, DirectoryDraftOutcome, DirectoryDraftReceipt,
-    SelectedDirectoryDraft,
+    CommitDirectoryDrafts, DirectoryDraftExpectation, SelectedDirectoryDraft,
 };
 use storage_contract::snapshot_worktree::root::{RegisterSnapshotRoot, RegisteredSnapshotRoot};
 use storage_contract::snapshot_worktree::{
     CommitWorktree, CreateWorktree, InitializeSnapshot, SnapshotHandle, WorktreeHandle,
 };
-use storage_contract::{CommitState, OperationId, Principal, RepositoryId};
+use storage_contract::{OperationId, Principal, RepositoryId};
 
 pub(super) const MAX_SELECTIONS: usize = crate::files::page::PAGE_SIZE;
 const MAX_RECORD_BYTES: usize = 256 * 1024;
@@ -88,8 +90,10 @@ struct BornSnapshot {
 pub(super) fn born(value: Value, target: DraftLocation) -> Result<Option<Candidate>, api::Error> {
     object_field(&value, "base")?;
     let working = object_field(&value, "working")?;
-    if matches!(working.get("state").and_then(Value::as_str),
-        Some("manual_dirty" | "manual_incremental")) {
+    if matches!(
+        working.get("state").and_then(Value::as_str),
+        Some("manual_dirty" | "manual_incremental")
+    ) {
         object_field(working, "base")?;
         object_field(working, "payload")?;
     }
@@ -99,7 +103,13 @@ pub(super) fn born(value: Value, target: DraftLocation) -> Result<Option<Candida
             revision,
             base,
             payload,
-        } | FileWorkingState::ManualIncremental { revision, base, payload, .. } => {
+        }
+        | FileWorkingState::ManualIncremental {
+            revision,
+            base,
+            payload,
+            ..
+        } => {
             if snapshot.base != base {
                 return Err(invalid(
                     "the working base differs from the selected occurrence",
@@ -316,7 +326,7 @@ impl Record {
                 let mut entries = std::collections::BTreeSet::new();
                 let mut paths = std::collections::BTreeSet::new();
                 for selected in &request.selected {
-                    let target=&selected.target;
+                    let target = &selected.target;
                     if target.repository != *repository
                         || !files.insert(target.file)
                         || !entries.insert(target.entry)
@@ -421,52 +431,11 @@ impl Record {
                 // reserve operation. The caller binds this result to real HEAD.
                 Ok(Publication::Initialized(decode(value)?))
             }
+            // A direct POST was driven by the complete frozen command. On
+            // Existing, the native authority compares every selected occurrence,
+            // its expectation, the source, the note and the principal.
             Command::Commit { request, .. } => {
-                object_field(object_field(&value, "result")?, "snapshot")?;
-                let receipt: DirectoryDraftReceipt = decode(value)?;
-                if receipt.operation_id != request.operation_id {
-                    return Err(invalid("the receipt belongs to another directory commit"));
-                }
-                let snapshot = match receipt.result {
-                    DirectoryDraftOutcome::Changed { snapshot } => {
-                        if snapshot.publication != request.operation_id
-                            || snapshot.repository_id != request.source.repository_id
-                            || snapshot.branch_id != request.source.branch_id
-                            || snapshot.node_id == request.source.node_id
-                        {
-                            return Err(invalid("the changed receipt differs from this branch"));
-                        }
-                        snapshot
-                    }
-                    DirectoryDraftOutcome::Unchanged { snapshot } => {
-                        if snapshot != request.source {
-                            return Err(invalid("the unchanged receipt differs from the source"));
-                        }
-                        snapshot
-                    }
-                };
-                match receipt.commit_state {
-                    CommitState::Published | CommitState::Acked => Ok(Publication::Committed {
-                        snapshot,
-                        degraded: false,
-                    }),
-                    CommitState::PublishedDegraded => Ok(Publication::Committed {
-                        snapshot,
-                        degraded: true,
-                    }),
-                    CommitState::Staging
-                    | CommitState::Sealed
-                    | CommitState::Prepared
-                    | CommitState::Deciding
-                    | CommitState::Decided
-                    | CommitState::Protected
-                    | CommitState::Recovering
-                    | CommitState::RecoveryRequired
-                    | CommitState::InDoubt
-                    | CommitState::Aborted => Err(invalid(
-                        "publication is not confirmed; retain the original request",
-                    )),
-                }
+                directory_observation(request, value).map(Publication::Committed)
             }
         }
     }
@@ -475,6 +444,7 @@ impl Record {
 #[derive(Clone, Debug)]
 pub(super) enum LookupResult {
     Pending,
+    DirectoryObserved(DirectoryObservation),
     Complete(Publication),
 }
 
@@ -491,10 +461,7 @@ pub(super) enum Publication {
     },
     Registered(RegisteredSnapshotRoot),
     Initialized(SnapshotHandle),
-    Committed {
-        snapshot: SnapshotHandle,
-        degraded: bool,
-    },
+    Committed(DirectoryObservation),
 }
 
 pub(super) fn object_field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, api::Error> {

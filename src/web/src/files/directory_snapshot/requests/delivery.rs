@@ -99,6 +99,8 @@ pub(in crate::files::directory_snapshot) fn retain_and_send(
             });
             m.error = None;
             m.publication = None;
+            m.observed = None;
+            m.observe_on_restore = None;
             s.files.mutation_pending = true;
             Some(s.session_epoch)
         })
@@ -132,6 +134,7 @@ fn existing(state: Session, action: Action) {
                 }
                 Action::First => return None,
             };
+            s.files.directory_snapshot.observe_on_restore = None;
             s.files.directory_snapshot.pending.as_mut()?.phase = action.phase();
             s.files.mutation_pending = true;
             Some((s.session_epoch, original))
@@ -146,6 +149,14 @@ pub(in crate::files::directory_snapshot) fn retry(state: Session) {
 }
 pub(in crate::files::directory_snapshot) fn lookup(state: Session) {
     existing(state, Action::Read);
+}
+pub(in crate::files::directory_snapshot) fn observe_restored(
+    s: &State,
+) -> Option<(u64, storage_contract::OperationId)> {
+    let expected = s.files.directory_snapshot.observe_on_restore?;
+    let r = retry_record(s)?;
+    (matches!(&r.command, Command::Commit { .. }) && expected == r.command.operation())
+        .then_some((s.session_epoch, expected))
 }
 pub(in crate::files::directory_snapshot) fn cleanup(state: Session) {
     existing(state, Action::Clear);
@@ -279,6 +290,9 @@ async fn run(
             Ok(wire::LookupResult::Pending) => {
                 state.update(|s| s.files.directory_snapshot.error = None)
             }
+            Ok(wire::LookupResult::DirectoryObserved(observation)) => {
+                state.update(|s| observe(s, epoch, original, observation));
+            }
             Ok(wire::LookupResult::Complete(p)) => {
                 finish(state, epoch, original, slot, Ok(p), false)
             }
@@ -310,6 +324,23 @@ async fn run(
     Ok(())
 }
 
+fn observe(
+    s: &mut State,
+    epoch: u64,
+    original: &Arc<Original>,
+    observation: wire::DirectoryObservation,
+) {
+    if !owns(s, epoch, original, Phase::Pending) {
+        return;
+    }
+    let m = &mut s.files.directory_snapshot;
+    m.observed = Some((Arc::clone(original), observation));
+    m.error = None;
+    // Intentionally no settled transition, bookmark, cleanup, synthetic
+    // write or success notice. Only the direct full original POST can compare
+    // this browser record with the permanent request.
+}
+
 fn clear_locked(
     state: Session,
     epoch: u64,
@@ -328,6 +359,7 @@ fn clear_locked(
         s.files.mutation_pending = false;
         let m = &mut s.files.directory_snapshot;
         m.pending = None;
+        m.observed = None;
         m.storage_ready = true;
         true
     }) == Some(true)
@@ -366,6 +398,7 @@ fn finish(
                 };
                 p.phase = Phase::Settled;
                 m.publication = Some(publication);
+                m.observed = None;
                 m.error = None;
                 m.clear_review();
             });

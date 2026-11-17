@@ -221,7 +221,7 @@ pub(super) fn remember_publication(
         )),
         wire::Publication::Registered(_)
         | wire::Publication::Initialized(_)
-        | wire::Publication::Committed { .. } => Ok(()),
+        | wire::Publication::Committed(_) => Ok(()),
     }
 }
 
@@ -242,7 +242,7 @@ pub(super) fn accept_publication(
         }
         wire::Publication::Registered(_)
         | wire::Publication::Initialized(_)
-        | wire::Publication::Committed { .. } => return,
+        | wire::Publication::Committed(_) => return,
     };
     let scope = Scope::capture(state);
     let Some(scope) = scope else {

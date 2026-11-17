@@ -177,3 +177,69 @@ fn observed_directory_original_is_prioritized_and_never_replaced_or_demoted_by_r
         other.command.operation()
     );
 }
+
+#[test]
+fn scoped_directory_read_does_not_confirm_a_different_order_or_note_under_the_same_original_id() {
+    use storage_contract::snapshot_worktree::draft_commit::DirectoryDraftOutcome;
+    let actual = record();
+    let mut alternative = actual.clone();
+    let Command::Commit { request, .. } = &mut alternative.command else {
+        panic!("fixture")
+    };
+    request.message = "different valid local note".into();
+    request.selected.reverse();
+    let mut node = request.source;
+    node.node_id = storage_contract::working_tree::SnapshotNodeId::from_random([94; 16]);
+    node.publication = request.operation_id;
+    let receipt = json_codec::json!({"operation_id":request.operation_id,"publication_sequence":"12",
+      "commit_state":"PUBLISHED","protection_at_publish":"TARGET_MET","result":{"outcome":"changed","snapshot":node}});
+    // The five-field server GET is deliberately identical for both local
+    // descriptions, so its decoder must never hand it to terminal cleanup.
+    let seen = |r: &Record| match r.lookup_result(receipt.clone()).unwrap() {
+        wire::LookupResult::DirectoryObserved(v) => v,
+        _ => panic!("scope-only lookup passed as a complete original"),
+    };
+    assert_eq!(seen(&actual), seen(&alternative));
+    assert_eq!(
+        seen(&alternative).result,
+        DirectoryDraftOutcome::Changed { snapshot: node }
+    );
+    let mut state = state();
+    let epoch = state.session_epoch;
+    let owner = (epoch, state.principal.clone().unwrap());
+    let mut inventory = storage::Inventory::default();
+    inventory
+        .observe(
+            &storage::key(&alternative),
+            &alternative.encode().unwrap(),
+            &alternative.principal,
+        )
+        .unwrap();
+    super::super::restored(&mut state.files.directory_snapshot, owner, Ok(inventory));
+    let real = Arc::clone(
+        &state
+            .files
+            .directory_snapshot
+            .pending
+            .as_ref()
+            .unwrap()
+            .record,
+    );
+    let other = Arc::new(Original::fresh(actual).unwrap());
+    assert_eq!(
+        observe_restored(&state),
+        Some((epoch, alternative.command.operation()))
+    );
+    state.management.storage = Storage::ReadOnly;
+    assert!(observe_restored(&state).is_some());
+    state.files.directory_snapshot.observe_on_restore = None;
+    observe(&mut state, epoch, &other, seen(&alternative));
+    assert!(state.files.directory_snapshot.observed.is_none());
+    observe(&mut state, epoch, &real, seen(&alternative));
+    let m = &state.files.directory_snapshot;
+    assert!(m.publication.is_none() && m.pending.as_ref().unwrap().phase == Phase::Pending);
+    assert!(Arc::ptr_eq(&m.observed.as_ref().unwrap().0, &real));
+    assert!(observe_restored(&state).is_none() && retry_post_record(&state).is_none());
+    state.management.storage = Storage::Ready;
+    assert!(retry_post_record(&state).is_some());
+}

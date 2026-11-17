@@ -8,7 +8,7 @@ use crate::files::directory_snapshot::{
 };
 use crate::ui::{State, accept_read_response};
 pub(super) use delivery::{
-    cleanup, lookup, retain_and_send, retry, retry_post_record, retry_record,
+    cleanup, lookup, observe_restored, retain_and_send, retry, retry_post_record, retry_record,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -314,6 +314,8 @@ fn restored(
         model.pending = None;
         model.retained_count = 0;
         model.publication = None;
+        model.observed = None;
+        model.observe_on_restore = None;
         model.error = None;
     }
     model.owner = Some(owner);
@@ -342,6 +344,10 @@ fn restored(
             }
             model.storage_ready = true;
             model.error = None;
+            model.observed = None;
+            model.observe_on_restore = records.first.as_ref().and_then(|r| {
+                matches!(&r.command, Command::Commit { .. }).then(|| r.command.operation())
+            });
             model.pending = records.first.map(|record| Pending {
                 record,
                 phase: Phase::Pending,

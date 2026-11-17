@@ -186,26 +186,28 @@ fn publication_view(state: RwSignal<State>) -> impl IntoView {
                         t(".zxs 已初始化。", ".zxs initialized."),
                         snapshot.node_id.to_string(),
                     ),
-                    Publication::Committed {
-                        snapshot,
-                        degraded: false,
-                    } => (
-                        t(
-                            "所选工作稿已共同提交。未选稿保持原样。",
-                            "Selected drafts committed together. Unselected drafts are unchanged.",
-                        ),
-                        snapshot.node_id.to_string(),
-                    ),
-                    Publication::Committed {
-                        snapshot,
-                        degraded: true,
-                    } => (
-                        t(
-                            "所选工作稿已发布，但发布时保护不足，请检查磁盘状态。",
-                            "Selected drafts published with reduced protection. Check disk status.",
-                        ),
-                        snapshot.node_id.to_string(),
-                    ),
+                    Publication::Committed(observation) => {
+                        use storage_contract::snapshot_worktree::draft_commit::DirectoryDraftOutcome;
+                        let text = match (observation.result,observation.degraded) {
+                            (DirectoryDraftOutcome::Changed { .. },false) => t(
+                                "所选工作稿已共同提交。未选稿保持原样。",
+                                "Selected drafts committed together. Unselected drafts are unchanged.",
+                            ),
+                            (DirectoryDraftOutcome::Changed { .. },true) => t(
+                                "所选工作稿已发布，但发布时保护不足，请检查磁盘状态。",
+                                "Selected drafts published with reduced protection. Check disk status.",
+                            ),
+                            (DirectoryDraftOutcome::Unchanged { .. },false) => t(
+                                "已核对原选集：内容未改变，没有创建新目录节点。",
+                                "The original selection was checked. Content is unchanged; no new directory node was created.",
+                            ),
+                            (DirectoryDraftOutcome::Unchanged { .. },true) => t(
+                                "原选集未产生新目录节点；发布时保护不足，请检查磁盘状态。",
+                                "The original selection produced no new directory node. Protection was reduced; check disk status.",
+                            ),
+                        };
+                        (text,observation.snapshot().node_id.to_string())
+                    }
                 };
                 view! {
                     <p class="zxs-row" role="status" data-zxs-directory-snapshot-result="">
@@ -300,6 +302,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
 }
 
 pub(crate) fn recovery_view(state: RwSignal<State>) -> impl IntoView {
+    let observed_original = Memo::new(move |_| state.with(requests::observe_restored));
+    Effect::new(move |_| {
+        if observed_original.get().is_some() { requests::lookup(state); }
+    });
     view! {
         <Show when=move ||state.with(blocks_writes)>
             <aside class="zxs-surface zxs-stack" data-zxs-directory-snapshot-recovery="">
@@ -344,6 +350,22 @@ pub(crate) fn recovery_view(state: RwSignal<State>) -> impl IntoView {
                         ),
                     )}</p>
                 </Show>
+                {move ||state.with(|s| {
+                    let m=&s.files.directory_snapshot;
+                    let p=m.pending.as_ref()?;
+                    let (original,observation)=m.observed.as_ref()?;
+                    (m.owns(s) && s.principal.as_ref()==Some(&original.principal)
+                        && std::sync::Arc::ptr_eq(&p.record,original)).then_some(*observation)
+                }).map(|observation|view! {
+                    <p role="status" data-zxs-directory-scoped-receipt="">
+                        {format!("{} {}. {}",
+                            t("已查到此账号、原目录和操作编号的节点：","Found the node for this account, original directory and operation:"),
+                            observation.snapshot().node_id,
+                            t("查询不核对完整选集和备注，原请求仍保留。可写时显式重试原请求以完成核对；本次查询不重发。","The lookup does not compare every selected draft or the note. The original is retained. When writable, explicitly retry it to verify the full request; this lookup sends no write."))
+                        }
+                        {observation.degraded.then(||view!{<strong>{t(" 发布时保护不足，请检查磁盘状态。"," Protection was reduced at publication. Check disk status.")}</strong>})}
+                    </p>
+                })}
                 <button
                     class="zxs-button"
                     data-zxs-directory-snapshot-retry=""

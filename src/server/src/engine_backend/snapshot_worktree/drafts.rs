@@ -48,5 +48,9 @@ pub(in crate::engine_backend) fn read(
     operations::authorized_record(&engine, &current, lookup.operation_id)?;
     authorize_source(&engine, &current, lookup.source)?;
     let principal = current.principal.parse().map_err(ApiError::invalid_authenticated_principal)?;
-    engine.directory_draft_receipt(lookup, &principal).map_err(error)
+    let receipt = engine.directory_draft_receipt(lookup, &principal).map_err(error)?;
+    // Receipt indexing can outlast a credential revocation. The node and its
+    // scope are private even when this GET carries no full selection details.
+    super::super::current_protected_identity(&engine, identity)?;
+    Ok(receipt)
 }

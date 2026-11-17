@@ -15,6 +15,7 @@ use storage_contract::{
 };
 use storage_engine::{Engine, Repository};
 mod fixture;
+mod recovery;
 mod tabs;
 const LEFT: &str = "pick-left/chosen.txt";
 const RIGHT: &str = "pick-right/chosen.txt";
@@ -62,11 +63,17 @@ pub(super) fn run(
     ))?)?;
     row(browser, "pick-left")?;
     tabs::with_peer(browser, origin, password, slot, |peer| {
-        exercise(browser, e, peer)
+        exercise(browser, origin, password, e, peer)
     })
 }
 
-fn exercise(browser: &Browser, e: &Evidence, peer: &tabs::Peer) -> Result<()> {
+fn exercise(
+    browser: &Browser,
+    origin: &str,
+    password: &str,
+    e: &Evidence,
+    peer: &tabs::Peer,
+) -> Result<()> {
     // The server sees the original unmodified request and the UI receives its
     // actual response after a second signed-in tab tries to submit a different
     // real selection. Delay delivery; do not manufacture or change the reply.
@@ -147,6 +154,7 @@ fn exercise(browser: &Browser, e: &Evidence, peer: &tabs::Peer) -> Result<()> {
                 }
                 },
             )?;
+            recovery::after_terminal(browser, origin, password, request.operation_id, &receipt)?;
             e.original.set(Some(request.operation_id));
             Ok(())
         },

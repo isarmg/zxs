@@ -7245,7 +7245,7 @@
       ]
     },
     "nested-directory-web-selection": {
-      "reason": "The current directory chooser reviews only explicit direct listed occurrences at the original root snapshot, never initializes a child or admits a new worktree parent. The single-file and directory actions must decode the same present Unborn response including its actual controller. Real Chrome execution is separate. Check the existing directory/worktree journal at its precise account lock, epoch and raw text; only an original receipt or a rejection observed while the initial lock is still held can authorize its corresponding cleanup.",
+      "reason": "The current directory chooser reviews only explicit direct listed occurrences at the original root snapshot, never initializes a child or admits a new worktree parent. The single-file and directory actions must decode the same present Unborn response including its actual controller. Real Chrome execution is separate. Check the existing directory/worktree journal at its precise account lock, epoch and raw text; only an original receipt or a rejection observed while the initial lock is still held can authorize its corresponding cleanup. A scoped read is not a full comparison with the retained ordered set: the actual complete original retry must match before cleanup.",
       "python_tests": [
         "test_current_branch_slices_targeted_ci"
       ],
@@ -7266,9 +7266,10 @@
             "files::directory_snapshot::requests::delivery::tests::observed_directory_original_is_prioritized_and_never_replaced_or_demoted_by_reload",
             "files::directory_snapshot::tests::directory_snapshot_storage_keys_retain_independent_tab_originals",
             "files::directory_snapshot::worktree::tests::worktree_ui_creation_lookup_requires_original_request_and_independent_completion",
-            "files::directory_snapshot::worktree::tests::worktree_ui_reuses_original_request_journal_and_keeps_old_source_when_head_advances"
+            "files::directory_snapshot::worktree::tests::worktree_ui_reuses_original_request_journal_and_keeps_old_source_when_head_advances",
+            "files::directory_snapshot::requests::delivery::tests::scoped_directory_read_does_not_confirm_a_different_order_or_note_under_the_same_original_id"
           ],
-          "max_tests": 12
+          "max_tests": 13
         },
         {
           "package": "web-app",
@@ -8932,7 +8933,8 @@
       "path": "src/web/src/files/directory_snapshot/wire/worktree.rs",
       "groups": [
         "directory-web-worktree-management",
-        "worktree-historical-commit"
+        "worktree-historical-commit",
+        "nested-directory-web-selection"
       ]
     },
     {
@@ -9150,7 +9152,8 @@
     {
       "path": "test/server/integration/phase1_save_tags/directory_drafts.rs",
       "groups": [
-        "directory-root-mixed-http"
+        "directory-root-mixed-http",
+        "nested-directory-web-selection"
       ]
     },
     {
@@ -20062,7 +20065,8 @@
     {
       "path": "src/server/src/engine_backend/snapshot_worktree/drafts.rs",
       "groups": [
-        "directory-draft-http"
+        "directory-draft-http",
+        "nested-directory-web-selection"
       ]
     },
     {
@@ -21752,6 +21756,22 @@
       "groups": [
         "real-browser-first-commit-delivery",
         "nested-directory-web-selection"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/nested_picks/recovery.rs",
+      "groups": [
+        "real-browser-first-commit-delivery",
+        "nested-directory-web-selection",
+        "directory-draft-http"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/wire/directory.rs",
+      "groups": [
+        "nested-directory-web-selection",
+        "directory-draft-http",
+        "real-browser-first-commit-delivery"
       ]
     }
   ],

@@ -188,6 +188,12 @@ pub(crate) struct Model {
     message: String,
     error: Option<api::Error>,
     publication: Option<Publication>,
+    // An original scoped GET is useful, but its five-field receipt is not a
+    // comparison with the complete local selection. Only show it for that row.
+    observed: Option<(Arc<storage::Original>, wire::DirectoryObservation)>,
+    // One best-effort protected GET for a recovered directory original, when
+    // storage actually becomes readable. Never arm on a not-yet-sent write.
+    observe_on_restore: Option<storage_contract::OperationId>,
     worktree: worktree::Model,
 }
 

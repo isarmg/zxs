@@ -12,7 +12,7 @@ pub(super) fn ready(browser: &Browser, origin: &str, password: &str) -> Result<(
     let panel = wait_for(
         "authenticated file listing or its actual login form",
         || {
-            let state=browser.script("return document.querySelector('.zxs-disk-entry,[data-zxs-first-commit-recovery]') ? 'files' : document.querySelector('form[data-auth-form=login] input[autocomplete=current-password]:not([disabled])') ? 'login' : ''")?;
+            let state=browser.script("return document.querySelector('.zxs-disk-entry,[data-zxs-first-commit-recovery],[data-zxs-directory-snapshot-recovery]') ? 'files' : document.querySelector('form[data-auth-form=login] input[autocomplete=current-password]:not([disabled])') ? 'login' : ''")?;
             state
                 .as_str()
                 .filter(|s| !s.is_empty())
@@ -55,7 +55,7 @@ pub(super) fn until(browser: &Browser, label: &str, script: &str) -> Result<()> 
         }
     })
 }
-fn install(browser: &Browser, body: &str) -> Result<String> {
+pub(super) fn install(browser: &Browser, body: &str) -> Result<String> {
     let id = browser.cdp(
         "Page.addScriptToEvaluateOnNewDocument",
         json!({"source":body}),
