@@ -389,6 +389,9 @@ impl Engine {
         archived: &BTreeSet<String>,
     ) -> Result<()> {
         let selected = versions.iter().collect::<BTreeSet<_>>();
+        crate::node_retirement_engine::require_unpinned_working(&self.state, |version| {
+            selected.contains(&version.to_owned())
+        })?;
         let reads = self
             .reads
             .lock()

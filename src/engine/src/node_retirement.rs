@@ -21,7 +21,10 @@ pub(crate) use replicas::{CleanupRoutes, original_cleanup_bindings};
 mod separation;
 #[path = "node_retirement/terminal.rs"]
 mod terminal;
+#[path = "node_retirement/working.rs"]
+mod working;
 pub(crate) use publication::{admit_current, verify};
+pub(crate) use working::require_unpinned_working;
 pub use separation::PermanentNodeSeparation;
 pub(crate) const KIND: &str = "file.nodes.retire";
 const MAX_SELECTED: usize = storage_contract::shared_history::MAX_SHARED_HISTORY_NODES;
@@ -54,7 +57,7 @@ fn invalid() -> Error {
 fn pinned() -> Error {
     Error::new(
         ErrorCode::ContentPinned,
-        "node retirement still has a live HEAD, merge, deletion, or directory reference",
+        "node retirement still has a live HEAD, merge, deletion, directory, or shared draft reference",
     )
 }
 pub(crate) fn is_retired(state: &State, version: &str) -> bool {
@@ -208,6 +211,9 @@ fn archive_digest(state: &State, request: &Request) -> Result<String> {
 
 pub(crate) fn decide(state: &State, request: Request) -> Result<Decision> {
     request.validate()?;
+    require_unpinned_working(state, |version| {
+        request.version_ids.binary_search_by(|id| id.as_str().cmp(version)).is_ok()
+    })?;
     for id in &request.version_ids {
         let version = state.versions.get(id).ok_or_else(invalid)?;
         if version.history_tree_id != request.history_tree_id
@@ -257,6 +263,7 @@ fn require_live_references(
     terminals: &BTreeSet<String>,
     archived: &BTreeSet<String>,
 ) -> Result<()> {
+    require_unpinned_working(state, |version| is_retired(state, version))?;
     for branch in state.branches.values() {
         if archived.contains(&branch.branch_id) {
             continue;
