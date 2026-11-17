@@ -1670,6 +1670,11 @@ impl Backend for ManagementBackend {
             tracing::warn!(error = ?error, "disk observation worker could not start");
         }
     }
+    fn finish_running_business(&self) -> Result<(), ApiError> {
+        let backend = crate::lock(&self.inner.state).backend.engine().cloned();
+        // Do not keep the management-state lock while the engine's worker joins.
+        backend.map_or(Ok(()), |backend| backend.finish_running_business())
+    }
     fn stop_management(&self) {
         self.scrub.stop();
         self.inner.stop();

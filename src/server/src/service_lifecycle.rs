@@ -279,7 +279,18 @@ where
 {
     let started = std::time::Instant::now();
     let work = async {
-        let result = http.await;
+        let result = match http.await {
+            Ok(()) => {
+                if let Some(backend) = management.backend.clone() {
+                    tokio::task::spawn_blocking(move || backend.finish_running_business())
+                        .await.map_err(io::Error::other)
+                        .and_then(|result| result.map_err(io::Error::other))
+                } else {
+                    Ok(())
+                }
+            }
+            Err(error) => Err(error),
+        };
         let drained = management.finish().await;
         combine_shutdown_results(result, drained)
     };

@@ -8,6 +8,7 @@ use std::sync::{
 
 struct WriterProbe {
     stopped: AtomicBool,
+    finished_business: AtomicBool,
     failure: Option<&'static str>,
     entered: Mutex<Option<oneshot::Sender<()>>>,
     release: Mutex<mpsc::Receiver<()>>,
@@ -560,6 +561,11 @@ impl Backend for WriterProbe {
         unreachable!("this test backend does not serve snapshot lookups")
     }
 
+    fn finish_running_business(&self) -> Result<(), ApiError> {
+        assert!(!self.stopped.load(Ordering::SeqCst));
+        self.finished_business.store(true, Ordering::SeqCst);
+        Ok(())
+    }
     fn stop_management(&self) {
         self.stopped.store(true, Ordering::SeqCst);
     }
@@ -627,6 +633,7 @@ fn writer() -> (
     (
         Arc::new(WriterProbe {
             stopped: AtomicBool::new(false),
+            finished_business: AtomicBool::new(false),
             failure: None,
             entered: Mutex::new(Some(entered)),
             release: Mutex::new(released),
@@ -655,6 +662,7 @@ async fn shutdown_waits_for_native_writer_after_http_has_drained() {
     ));
     stop.send(()).unwrap();
     notice(started).await;
+    assert!(backend.finished_business.load(Ordering::SeqCst));
     assert!(backend.stopped.load(Ordering::SeqCst));
     assert!(!server.is_finished());
     release.send(()).unwrap();

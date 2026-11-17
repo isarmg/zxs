@@ -485,6 +485,11 @@ pub trait Backend: Send + Sync {
 
     /// Called after system authentication has been placed in shared state.
     fn start_management(&self, _auth: Arc<Mutex<AuthStore>>) {}
+    /// Normal shutdown only, after network admission and handles are drained.
+    /// The original durable task may stop at an explicit user-action checkpoint.
+    fn finish_running_business(&self) -> Result<(), ApiError> {
+        Ok(())
+    }
     /// Close background recovery admission without waiting for disk I/O.
     fn stop_management(&self) {}
     /// Join owned native recovery writers; called only on a blocking thread.
@@ -753,6 +758,9 @@ impl Backend for AuthorizedBackend {
     // Startup runs on the raw backend before this wrapper is constructed;
     // telemetry also retains that raw backend for private disk sampling. Keep
     // start_management and observe_disks on their inert defaults here.
+    fn finish_running_business(&self) -> Result<(), ApiError> {
+        self.backend.finish_running_business()
+    }
     fn stop_management(&self) {
         self.backend.stop_management();
     }

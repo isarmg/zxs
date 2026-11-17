@@ -405,6 +405,25 @@ impl EngineBackend {
 }
 
 impl Backend for EngineBackend {
+    fn finish_running_business(&self) -> Result<(), ApiError> {
+        use storage_engine::BackupPreparationPhase::{Blocked, Copying, SourceChanged, Verifying};
+        let mut engine = self.engine.lock().map_err(|_| ApiError::conflict(
+            storage_contract::ErrorCode::RecoveryRequired,
+            "storage owner failed during shutdown; query the original tasks after restart",
+        ))?;
+        match engine.wait_backup_preparation() {
+            Ok(status) if matches!(status.phase, Blocked | Copying | SourceChanged | Verifying) => {
+                Err(ApiError::conflict(
+                    status.error_code.unwrap_or(storage_contract::ErrorCode::RecoveryRequired),
+                    format!("backup preparation {} did not finish; inspect the original task after restart", status.operation_id),
+                ))
+            }
+            Ok(_) => Ok(()),
+            Err(source) if source.code() == storage_contract::ErrorCode::NotFound => Ok(()),
+            Err(source) => Err(error(source)),
+        }
+    }
+
     fn directory_snapshot_source(
         &self,
         identity: &Identity,
