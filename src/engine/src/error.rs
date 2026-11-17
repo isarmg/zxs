@@ -50,6 +50,8 @@ pub enum Error {
     #[error(transparent)]
     FreshLayout(#[from] crate::engine::FreshLayoutError),
     #[error(transparent)]
+    RetainedBody(#[from] crate::RetainedBodyError),
+    #[error(transparent)]
     AutomaticBackup(crate::AutomaticBackupError),
     #[error(transparent)]
     ConfiguredDiskName(crate::ConfiguredDiskNameError),
@@ -161,6 +163,7 @@ impl Error {
             },
             source @ (Self::HistoricalBranch(_)
             | Self::FreshLayout(_)
+            | Self::RetainedBody(_)
             | Self::AutomaticBackup(_)
             | Self::BackupRead(_)
             | Self::ConfiguredDiskName(_)
@@ -204,6 +207,7 @@ impl Error {
             Self::Context { retryable, .. } => *retryable,
             Self::HistoricalBranch(_)
             | Self::FreshLayout(_)
+            | Self::RetainedBody(_)
             | Self::AutomaticBackup(_)
             | Self::BackupRead(_)
             | Self::ConfiguredDiskName(_)
@@ -242,6 +246,7 @@ impl Error {
             Self::HistoricalBranch(error) => error.code(),
             Self::ContainerTags(error) => error.code(),
             Self::FreshLayout(error) => error.code(),
+            Self::RetainedBody(error) => error.code(),
             Self::AutomaticBackup(error) => error.code(),
             Self::BackupRead(error) => error.code(),
             Self::ConfiguredDiskName(error) => error.code(),
@@ -306,6 +311,7 @@ impl Error {
             Self::HistoricalBranch(error) => error.to_string().into(),
             Self::ContainerTags(error) => error.to_string().into(),
             Self::FreshLayout(error) => error.to_string().into(),
+            Self::RetainedBody(error) => error.to_string().into(),
             Self::AutomaticBackup(error) => error.to_string().into(),
             Self::BackupRead(error) => error.to_string().into(),
             Self::ConfiguredDiskName(error) => error.to_string().into(),
@@ -372,6 +378,7 @@ impl Error {
             Self::Cleanup { operation, .. } => operation.published_result(),
             Self::HistoricalBranch(_)
             | Self::FreshLayout(_)
+            | Self::RetainedBody(_)
             | Self::AutomaticBackup(_)
             | Self::BackupRead(_)
             | Self::ConfiguredDiskName(_)

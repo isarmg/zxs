@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 mod cleanup;
+mod live_pins;
 
 struct BoundaryInput<'a> {
     history: &'a str,
@@ -390,9 +391,9 @@ impl Engine {
         versions: &[String],
         archived: &BTreeSet<String>,
     ) -> Result<()> {
-        let selected = versions.iter().collect::<BTreeSet<_>>();
+        let selected = versions.iter().map(String::as_str).collect::<BTreeSet<_>>();
         crate::node_retirement_engine::require_unpinned_working(&self.state, |version| {
-            selected.contains(&version.to_owned())
+            selected.contains(version)
         })?;
         let reads = self
             .reads
@@ -411,7 +412,7 @@ impl Engine {
                 })
                 .filter_map(|branch| self.state.commits.get(&branch.head_commit_id))
                 .flat_map(|commit| &commit.entries)
-                .filter(|entry| selected.contains(&entry.version_id))
+                .filter(|entry| selected.contains(entry.version_id.as_str()))
                 .map(|entry| entry.version_id.as_str())
                 .collect::<BTreeSet<_>>()
         });
@@ -421,7 +422,7 @@ impl Engine {
                 .values()
                 .flat_map(|branch| &branch.entries)
                 .filter(|entry| {
-                    entry.kind == NamespaceEntryKind::File && selected.contains(&entry.version_id)
+                    entry.kind == NamespaceEntryKind::File && selected.contains(entry.version_id.as_str())
                 })
                 .map(|entry| entry.version_id.as_str())
                 .collect::<BTreeSet<_>>()
@@ -470,7 +471,8 @@ impl Engine {
                 .state
                 .commits
                 .get(&w.base_head)
-                .is_some_and(|c| c.entries.iter().any(|e| selected.contains(&e.version_id)))
+                .is_some_and(|c| c.entries.iter().any(|e| selected.contains(e.version_id.as_str()))
+                    || c.pending_file_versions.values().any(|id| selected.contains(id.as_str())))
             {
                 return Err(Error::new(
                     storage_contract::ErrorCode::ContentPinned,
@@ -487,6 +489,11 @@ impl Engine {
                     "version is referenced by a directory Git HEAD or index",
                 ));
             }
+        }
+        // A historical commit alone does not pin data. Only live inherited
+        // selections and exact frozen child compositions extend the admitted roots.
+        if live_pins::selected(&self.state, archived, &selected)? {
+            return Err(crate::RetainedBodyError::Selected.into());
         }
         Ok(())
     }

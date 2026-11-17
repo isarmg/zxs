@@ -21,6 +21,10 @@ pub(crate) use replicas::{CleanupRoutes, original_cleanup_bindings};
 mod separation;
 #[path = "node_retirement/terminal.rs"]
 mod terminal;
+#[path = "node_retirement/frozen_bodies.rs"]
+mod frozen_bodies;
+pub(crate) use frozen_bodies::any_frozen_body;
+pub use frozen_bodies::RetainedBodyError;
 #[path = "node_retirement/working.rs"]
 mod working;
 pub(crate) use publication::{admit_current, verify};
@@ -313,36 +317,10 @@ fn require_live_references(
     // Current directory composition can pin an older child tree even after the
     // child's own mutable HEAD advances. Follow frozen references, not today's
     // child branch, and include explicit retained tree selections.
-    let mut trees = state
-        .directory_branches
-        .values()
-        .map(|branch| branch.head_tree_id.as_str())
-        .chain(state.directory_tree_selections.values().map(String::as_str))
-        .collect::<BTreeSet<_>>();
-    let mut visited = BTreeSet::new();
-    while let Some(id) = trees.pop_first() {
-        if !visited.insert(id) {
-            continue;
-        }
-        let tree = state.directory_trees.get(id).ok_or_else(invalid)?;
-        if tree
-            .entries
-            .iter()
-            .any(|entry| is_retired(state, &entry.version_id))
-            || tree.file_contexts.values().any(|context| {
-                context
-                    .node_id
-                    .as_deref()
-                    .is_some_and(|node| node_is_retired(state, node))
-            })
-        {
-            return Err(pinned());
-        }
-        trees.extend(
-            tree.directory_refs
-                .values()
-                .map(|reference| reference.tree_id.as_str()),
-        );
+    let trees = state.directory_branches.values().map(|branch| branch.head_tree_id.as_str())
+        .chain(state.directory_tree_selections.values().map(String::as_str));
+    if any_frozen_body(state, trees, |version| is_retired(state, version))? {
+        return Err(pinned());
     }
     for node in state.file_deletions.values() {
         if node
@@ -373,7 +351,7 @@ fn require_live_references(
         .content_states
         .iter()
         .filter(|(_, s)| **s == ContentState::Retired)
-        .map(|(id, _)| id)
+        .map(|(id, _)| id.as_str())
         .collect::<BTreeSet<_>>();
     if !crate::business::directory_git::protected_git_versions(state, &retired).is_empty() {
         return Err(pinned());

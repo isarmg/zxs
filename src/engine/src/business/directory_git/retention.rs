@@ -22,7 +22,7 @@ pub(crate) fn staged_owned_files<'a>(
 /// references pin their bodies. Keep only the caller's requested version IDs.
 pub(crate) fn protected_git_versions<'a>(
     state: &'a State,
-    selected: &BTreeSet<&String>,
+    selected: &BTreeSet<&str>,
 ) -> BTreeSet<&'a str> {
     let mut protected = BTreeSet::new();
     let mut committed = BTreeSet::new();
@@ -38,7 +38,7 @@ pub(crate) fn protected_git_versions<'a>(
             let tree = &state.directory_trees[&index.index_tree_id];
             protected.extend(
                 staged_owned_files(tree, &index.index_boundaries)
-                    .filter(|entry| selected.contains(&entry.version_id))
+                    .filter(|entry| selected.contains(entry.version_id.as_str()))
                     .map(|entry| entry.version_id.as_str()),
             );
         }
@@ -49,7 +49,7 @@ pub(crate) fn protected_git_versions<'a>(
                 .entries
                 .iter()
                 .filter(|entry| {
-                    entry.kind == NamespaceEntryKind::File && selected.contains(&entry.version_id)
+                    entry.kind == NamespaceEntryKind::File && selected.contains(entry.version_id.as_str())
                 })
                 .map(|entry| entry.version_id.as_str()),
         );

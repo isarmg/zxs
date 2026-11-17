@@ -170,7 +170,7 @@ mod metadata_map;
 // module re-exported by storage_contract below.
 #[path = "node_retirement.rs"]
 mod node_retirement_engine;
-pub use node_retirement_engine::PermanentNodeSeparation;
+pub use node_retirement_engine::{PermanentNodeSeparation, RetainedBodyError};
 mod protection;
 mod publication_evidence;
 mod publication_shape;
