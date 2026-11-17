@@ -16,6 +16,15 @@ class CurrentBranchSelection(unittest.TestCase):
 
     def test_changed_inputs_select_held_budget_helper_and_admission_tests(self):
         for group, files in {
+            'automatic-management-observation': [
+                'src/web/src/files/commit_mode/warning.rs', 'src/web/src/files/automatic_observation/calendar.rs',
+                'test/server/unit/http_automatic_observation.rs', 'src/contract/src/file_draft/automatic.rs',
+            ],
+            'original-holder-recovery': [
+                'test/engine/unit/backup_scope_file_refs.rs', 'test/helper/unit/samba_password_state.rs',
+                'test/server/integration/phase1_save_tags/worktree_commit_recovery.rs',
+                'test/engine/unit/engine/scope_genesis_tests.rs', 'src/engine/src/maintenance/live_pins.rs',
+            ],
             'backup-held-entry-budget': [
                 'src/engine/src/engine/backup_preparation/batch.rs',
                 'src/engine/src/engine/backup_preparation/capacity.rs',

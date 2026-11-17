@@ -184,7 +184,9 @@
           "manifest": "src/server/Cargo.toml",
           "kind": "bin",
           "name": "zxs",
-          "features": ["core"],
+          "features": [
+            "core"
+          ],
           "prefixes": [
             "offline::service_worker::failure::tests::"
           ],
@@ -759,7 +761,7 @@
           "prefixes": [
             "worktree_transport::"
           ],
-          "max_tests": 3,
+          "max_tests": 4,
           "timeout_seconds": 900
         },
         {
@@ -6693,7 +6695,7 @@
           "prefixes": [
             "permanent_removal_cleanup::"
           ],
-          "max_tests": 7,
+          "max_tests": 9,
           "timeout_seconds": 900
         },
         {
@@ -6702,6 +6704,159 @@
           "kind": "lib",
           "mode": "check",
           "default_features": false
+        }
+      ]
+    },
+    "automatic-management-observation": {
+      "reason": "Admit the original bounded directory/UTC observation and actual rolling controller, enforce private continuation, real Unborn-only action and stale/partial results; these sources do not prove Chrome or the immutable node writer.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "automatic_observation::tests::cursor_binds_account_scope_interval_sequence_and_last_stable_pair",
+            "automatic_observation::tests::exact_bounded_rows_preserve_half_open_interval_unique_identity_and_continuity",
+            "automatic_observation::tests::over_budget_missing_or_forged_continuation_is_never_a_complete_page",
+            "file_draft::automatic::tests::threshold_save_is_latest_and_fenced_through_reopen_until_explicit_resume",
+            "file_draft::automatic::tests::exactly_sixty_seconds_expires_and_an_older_captured_save_cannot_publish"
+          ],
+          "max_tests": 5
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "http_automatic_observation::tests::first_or_exact_continuation_never_downgrades_a_partial_query"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "files::automatic_observation::tests::split_file_across_pages_counts_original_independent_nodes_once",
+            "files::automatic_observation::tests::resolved_path_and_original_window_must_match_before_any_count",
+            "files::automatic_observation::tests::utc_controls_never_convert_through_local_time_or_accept_invalid_calendar_days",
+            "files::commit_mode::tests::reviewed_mode_creates_only_explicit_exact_selected_file_command",
+            "files::commit_mode::tests::dirty_draft_and_stale_navigation_never_enable_automatic_or_reuse_a_review",
+            "files::commit_mode::tests::mode_response_and_receipt_bind_selection_and_original_command",
+            "files::commit_mode::tests::protected_resume_binds_the_triggered_epoch_and_current_durable_revision",
+            "files::unborn::tests::absent_or_contradictory_unborn_protection_is_not_reported_as_safe"
+          ],
+          "max_tests": 8
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "exact": [
+            "unborn_first::real_unborn_mode_route_rejects_other_commands_and_replays_only_its_original_after_birth"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "original-holder-recovery": {
+      "reason": "Pin recovery regressions to real scope genesis, purge pins, archival originals, frozen worktree receipts, offline command inspection, and original Samba database identity. No host activation, real Samba, or full-format certification.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "isolate": true,
+          "exact": [
+            "maintenance::live_pins::tests::inherited_branch_is_a_real_purge_pin_before_and_after_cold_open",
+            "maintenance::live_pins::tests::pinned_inheritance_is_checked_separately_on_branch_and_admitted_head",
+            "maintenance::live_pins::tests::selected_directory_follows_frozen_child_ids_not_mutable_head_or_historical_parent",
+            "snapshot_worktree::edit::recovery_tests::lost_edit_completion_reports_its_original_without_adopting_local_bytes_or_frames",
+            "engine::scope_closure::tests::actual_empty_pool_keeps_system_image_on_system_and_two_checked_images_on_each_disk",
+            "engine::scope_closure::tests::damaged_original_system_scope_is_not_reconstructed_on_normal_open",
+            "engine::scope_closure::tests::original_anchor_rejects_noncanonical_unknown_missing_and_cross_occurrence_fields"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "isolate": true,
+          "exact": [
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::published_scopes::projection::file_reference_tests::scoped_image_keeps_the_existing_descriptor_bytes_and_own_target_without_rehashing_inputs",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::published_scopes::projection::file_reference_tests::shared_encoded_disk_path_does_not_authorize_another_registration_or_role",
+            "engine::backup_preparation::native_control::archive::format_tests::partial_native_marker_fanout_never_refills_a_peer_or_ignores_a_late_conflict",
+            "engine::backup_preparation::native_control::archive::format_tests::incomplete_native_archive_resumes_original_task_but_unowned_evidence_is_not_adopted",
+            "engine::backup_preparation::native_control::archive::format_tests::native_allocation_visits_the_exact_written_archive_and_forecasts_the_real_fanout",
+            "engine::backup_preparation::native_control::archive::format_tests::partial_native_archive_on_a_late_peer_is_checked_before_any_earlier_refill"
+          ],
+          "max_tests": 6,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "exact": [
+            "worktree_transport::commit_recovery::exact_authenticated_commit_reaches_its_existing_tail_through_tcp_after_restart"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "offline::disk_addition::tests::retained_intent_requires_both_exact_execution_and_original_inspection_to_fit",
+            "offline::disk_readmission::tests::retained_intent_requires_both_exact_execution_and_original_inspection_to_fit",
+            "offline::disk_removal::tests::retained_intent_requires_both_exact_execution_and_original_inspection_to_fit",
+            "offline::initialization::storage::tests::first_storage_rejects_an_executable_plan_whose_original_inspection_cannot_cross_ipc"
+          ],
+          "max_tests": 4
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "exact": [
+            "deployment::samba_password::state::tests::historical_reset_requires_the_same_private_parent_and_single_link_database",
+            "deployment::samba_password::state::tests::enrollment_only_allows_a_new_inode_after_a_genuinely_absent_database"
+          ],
+          "max_tests": 2
         }
       ]
     }
@@ -6713,7 +6868,9 @@
         "backup-held-entry-budget",
         "helper-stop-handoff",
         "cold-lifecycle-receipt-rows",
-        "permanent-removal-exact-leaves"
+        "permanent-removal-exact-leaves",
+        "automatic-management-observation",
+        "original-holder-recovery"
       ]
     },
     {
@@ -6848,7 +7005,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/edit.rs",
       "groups": [
-        "worktree-exact-originals"
+        "worktree-exact-originals",
+        "original-holder-recovery"
       ]
     },
     {
@@ -6897,7 +7055,8 @@
       "path": "src/engine/src/maintenance.rs",
       "groups": [
         "draft-base-retention",
-        "permanent-removal-exact-leaves"
+        "permanent-removal-exact-leaves",
+        "original-holder-recovery"
       ]
     },
     {
@@ -6965,13 +7124,15 @@
     {
       "path": "src/server/src/offline/service_worker.rs",
       "groups": [
-        "offline-worker-failures"
+        "offline-worker-failures",
+        "original-holder-recovery"
       ]
     },
     {
       "path": "src/server/src/offline/service_worker/failure.rs",
       "groups": [
-        "offline-worker-failures"
+        "offline-worker-failures",
+        "original-holder-recovery"
       ]
     },
     {
@@ -7222,15 +7383,21 @@
     },
     {
       "path": "test/server/unit/smb_rpc/native_dispatch_tests.rs",
-      "groups": ["default-share-backup-visibility"]
+      "groups": [
+        "default-share-backup-visibility"
+      ]
     },
     {
       "path": "src/server/src/smb_rpc/default_share.rs",
-      "groups": ["default-share-backup-visibility"]
+      "groups": [
+        "default-share-backup-visibility"
+      ]
     },
     {
       "path": "src/server/src/smb_rpc/default_share/directory.rs",
-      "groups": ["default-share-backup-visibility"]
+      "groups": [
+        "default-share-backup-visibility"
+      ]
     },
     {
       "path": "docs/design/worktree-added-native-files.md",
@@ -7594,7 +7761,8 @@
     {
       "path": "src/server/src/backend_methods.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "automatic-management-observation"
       ]
     },
     {
@@ -7733,7 +7901,8 @@
     {
       "path": "src/contract/src/file_draft.rs",
       "groups": [
-        "ordinary-manual-incremental"
+        "ordinary-manual-incremental",
+        "automatic-management-observation"
       ]
     },
     {
@@ -7757,7 +7926,8 @@
     {
       "path": "src/contract/src/file_draft/unborn.rs",
       "groups": [
-        "ordinary-manual-incremental"
+        "ordinary-manual-incremental",
+        "automatic-management-observation"
       ]
     },
     {
@@ -7955,7 +8125,8 @@
     {
       "path": "src/web/src/api.rs",
       "groups": [
-        "file-commit-mode-web-http"
+        "file-commit-mode-web-http",
+        "automatic-management-observation"
       ]
     },
     {
@@ -7967,19 +8138,22 @@
     {
       "path": "src/web/src/files/commit_mode.rs",
       "groups": [
-        "file-commit-mode-web-http"
+        "file-commit-mode-web-http",
+        "automatic-management-observation"
       ]
     },
     {
       "path": "src/web/src/files/commit_mode/view.rs",
       "groups": [
-        "file-commit-mode-web-http"
+        "file-commit-mode-web-http",
+        "automatic-management-observation"
       ]
     },
     {
       "path": "src/web/src/files/commit_mode/wire.rs",
       "groups": [
-        "file-commit-mode-web-http"
+        "file-commit-mode-web-http",
+        "automatic-management-observation"
       ]
     },
     {
@@ -7991,7 +8165,8 @@
     {
       "path": "src/web/src/files/mod.rs",
       "groups": [
-        "file-commit-mode-web-http"
+        "file-commit-mode-web-http",
+        "automatic-management-observation"
       ]
     },
     {
@@ -8003,7 +8178,8 @@
     {
       "path": "test/web/unit/files/commit_mode_tests.rs",
       "groups": [
-        "file-commit-mode-web-http"
+        "file-commit-mode-web-http",
+        "automatic-management-observation"
       ]
     },
     {
@@ -8394,7 +8570,8 @@
     {
       "path": "src/server/src/engine_backend/snapshot_worktree/transport.rs",
       "groups": [
-        "worktree-http-transport"
+        "worktree-http-transport",
+        "original-holder-recovery"
       ]
     },
     {
@@ -8540,7 +8717,8 @@
     {
       "path": "src/server/src/http_file_draft.rs",
       "groups": [
-        "fresh-manual-file-normal-http"
+        "fresh-manual-file-normal-http",
+        "automatic-management-observation"
       ]
     },
     {
@@ -8967,7 +9145,8 @@
     {
       "path": "src/server/src/backend_unborn.rs",
       "groups": [
-        "native-first-manual-save"
+        "native-first-manual-save",
+        "automatic-management-observation"
       ]
     },
     {
@@ -8979,7 +9158,8 @@
     {
       "path": "src/server/src/engine_backend/unborn.rs",
       "groups": [
-        "native-first-manual-save"
+        "native-first-manual-save",
+        "automatic-management-observation"
       ]
     },
     {
@@ -9047,7 +9227,8 @@
     {
       "path": "src/web/src/files/unborn/wire.rs",
       "groups": [
-        "native-first-manual-save"
+        "native-first-manual-save",
+        "automatic-management-observation"
       ]
     },
     {
@@ -9124,7 +9305,8 @@
     {
       "path": "test/web/unit/files/unborn_tests.rs",
       "groups": [
-        "native-first-manual-save"
+        "native-first-manual-save",
+        "automatic-management-observation"
       ]
     },
     {
@@ -9142,7 +9324,8 @@
     {
       "path": "src/server/src/http_unborn.rs",
       "groups": [
-        "native-first-manual-save"
+        "native-first-manual-save",
+        "automatic-management-observation"
       ]
     },
     {
@@ -9154,7 +9337,8 @@
     {
       "path": "test/server/integration/phase1_save_tags/unborn_first.rs",
       "groups": [
-        "native-first-manual-save"
+        "native-first-manual-save",
+        "automatic-management-observation"
       ]
     },
     {
@@ -10268,7 +10452,8 @@
     {
       "path": "src/server/src/offline/disk_addition.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "original-holder-recovery"
       ]
     },
     {
@@ -10292,7 +10477,8 @@
     {
       "path": "src/server/src/offline/initialization/storage.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "original-holder-recovery"
       ]
     },
     {
@@ -11243,7 +11429,8 @@
     {
       "path": "test/server/unit/offline/disk_addition_tests.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "original-holder-recovery"
       ]
     },
     {
@@ -11255,7 +11442,8 @@
     {
       "path": "test/server/unit/offline/initialization/storage_tests.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "original-holder-recovery"
       ]
     },
     {
@@ -11888,7 +12076,8 @@
     {
       "path": "src/engine/src/engine/backup_preparation/native_control/archive.rs",
       "groups": [
-        "container-tags-format"
+        "container-tags-format",
+        "original-holder-recovery"
       ]
     },
     {
@@ -12340,7 +12529,8 @@
     {
       "path": "test/engine/unit/backup_native_format_tests.rs",
       "groups": [
-        "container-tags-format"
+        "container-tags-format",
+        "original-holder-recovery"
       ]
     },
     {
@@ -12985,7 +13175,8 @@
     {
       "path": "src/web/src/files/view.rs",
       "groups": [
-        "legacy-directory-branch-web-retirement"
+        "legacy-directory-branch-web-retirement",
+        "automatic-management-observation"
       ]
     },
     {
@@ -14640,7 +14831,8 @@
       "groups": [
         "historical-directory-runtime",
         "directory-web-worktree-management",
-        "worktree-http-transport"
+        "worktree-http-transport",
+        "automatic-management-observation"
       ]
     },
     {
@@ -15199,19 +15391,22 @@
     {
       "path": "helper/src/deployment/samba_password/state.rs",
       "groups": [
-        "helper-samba-observation-sources"
+        "helper-samba-observation-sources",
+        "original-holder-recovery"
       ]
     },
     {
       "path": "helper/src/deployment/samba_password/state/enrollment.rs",
       "groups": [
-        "helper-samba-observation-sources"
+        "helper-samba-observation-sources",
+        "original-holder-recovery"
       ]
     },
     {
       "path": "test/helper/unit/samba_password_state.rs",
       "groups": [
-        "helper-samba-observation-sources"
+        "helper-samba-observation-sources",
+        "original-holder-recovery"
       ]
     },
     {
@@ -16206,7 +16401,8 @@
     {
       "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_scopes/projection.rs",
       "groups": [
-        "backup-scoped-encoding-memo"
+        "backup-scoped-encoding-memo",
+        "original-holder-recovery"
       ]
     },
     {
@@ -20025,6 +20221,211 @@
       "path": "test/engine/unit/backup_copy_record_cost_tests.rs",
       "groups": [
         "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "test/contract/unit/automatic_observation.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "test/contract/unit/automatic_controller.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/automatic_observation.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_automatic_observation.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/contract/src/automatic_observation.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft/automatic.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/server/src/http_automatic_observation.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/automatic_observation.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/web/src/files/automatic_observation.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/web/src/files/automatic_observation/calendar.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/web/src/files/automatic_observation/view.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "src/web/src/files/commit_mode/warning.rs",
+      "groups": [
+        "automatic-management-observation"
+      ]
+    },
+    {
+      "path": "test/engine/unit/maintenance/live_pins_tests.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/scope_genesis_tests.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/edit_recovery.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/worktree_commit_recovery.rs",
+      "groups": [
+        "original-holder-recovery",
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_scope_file_refs.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/disk_readmission.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/disk_removal.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/disk_readmission_tests.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/disk_removal_tests.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/maintenance/live_pins.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/directory_git/retention.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/genesis.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/images.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/objects.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/readback.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/schema.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/anchor.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/genesis.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/allocation.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/completion_fanout.rs",
+      "groups": [
+        "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/runtime.rs",
+      "groups": [
+        "original-holder-recovery"
       ]
     }
   ],
