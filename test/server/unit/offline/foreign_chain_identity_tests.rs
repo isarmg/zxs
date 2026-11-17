@@ -458,3 +458,45 @@ fn database_preflight_rejects_self_consistent_source_drift_and_keeps_exact_retry
     expected.require_original(&plan, &observed.targets[0].original).unwrap();
     assert!(expected.require_original(&plan, &altered.targets[0].original).is_err());
 }
+
+#[test]
+fn material_intent_preflight_preserves_absent_conflicting_and_exact_original_records() {
+    let (_, plan, _) = fixture();
+    let directory = tempfile::tempdir().unwrap();
+    let host = crate::offline::private_io::BundleDestination::open(directory.path()).unwrap();
+    inspect_material_intent(&host, &plan, false).unwrap();
+    assert!(inspect_material_intent(&host, &plan, true).is_err());
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+
+    let name = operation_name(plan.binding.operation_id);
+    let bytes = json_codec::to_vec(&plan).unwrap();
+    host.publish(&name, &[("plan.json", &bytes)]).unwrap();
+    inspect_material_intent(&host, &plan, true).unwrap();
+    let mut changed = plan.clone();
+    changed.binding.source.evidence_digest = "0".repeat(64);
+    for completed in [false, true] {
+        assert!(inspect_material_intent(&host, &changed, completed).is_err());
+        assert_eq!(
+            host.read_operation(&name, "plan.json", MAX_RECORD_BYTES).unwrap(),
+            Some(bytes.clone()),
+        );
+        inspect_material_intent(&host, &plan, completed).unwrap();
+    }
+}
+
+#[test]
+fn empty_pending_material_intent_cannot_be_treated_as_completed_or_reconstructed() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_, plan, _) = fixture();
+    let directory = tempfile::tempdir().unwrap();
+    let pending = directory.path().join(format!(
+        "{}.pending", operation_name(plan.binding.operation_id),
+    ));
+    std::fs::create_dir(&pending).unwrap();
+    std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let host = crate::offline::private_io::BundleDestination::open(directory.path()).unwrap();
+    inspect_material_intent(&host, &plan, false).unwrap();
+    assert!(inspect_material_intent(&host, &plan, true).is_err());
+    assert_eq!(std::fs::read_dir(&pending).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+}

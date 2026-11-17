@@ -63,7 +63,7 @@ pub(super) fn match_expected(
 ) -> Result<()> {
     observed.require_plan(plan, databases)?;
     if &observed.expected != expected {
-        return Err("foreign identity preview changed; no root intent was saved".into());
+        return Err("foreign identity preview changed; no new root intent was saved".into());
     }
     Ok(())
 }
@@ -179,16 +179,17 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     {
         return Err("completed foreign identity batch cannot be replaced".into());
     }
-    let (root, plan, databases) = if completion.is_none() {
+    let (root, plan, databases, completion) = if completion.is_none() {
         preflight(root, &plan, &databases, &input.expected)?;
-        databases::completed_original(&input.input)?
+        let (root, plan, databases) = databases::completed_original(&input.input)?;
+        let completion = saved(&root, &plan, &databases, true)?;
+        (root, plan, databases, completion)
     } else {
         // Existing exact completion already admitted this intent. Physical
         // readback still happens in the write worker, without a duplicate scan.
-        (root, plan, databases)
+        (root, plan, databases, completion)
     };
     require_expected(&plan, &databases, &input.expected)?;
-    let completion = saved(&root, &plan, &databases, true)?;
     if completion.as_ref().is_some_and(|saved| saved != &input.expected) {
         return Err("completed foreign identity batch cannot be replaced".into());
     }

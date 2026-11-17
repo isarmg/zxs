@@ -120,7 +120,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
         Action::Status { plan } => {
             original(&target, &configuration, &plan)?;
             let (_, report) = status(&target, &plan)?;
-            original(&target, &configuration, &plan)?;
+            let _ = material_plan(&target, &configuration, &plan, &report)?;
             Ok(Output::Report { report })
         }
         Action::Prepare { plan, completed } => {
@@ -451,50 +451,7 @@ fn prepare(
     roots: Vec<OpenAt2Root>,
     observed: Report,
 ) -> Result<()> {
-    // Freeze and check every target before the first lower root can be written.
-    // Even a partially prepared original may not omit another required level.
-    let source = exact_source(target, plan)?;
-    foreign_identity(
-        configuration,
-        &source,
-        &plan.binding.source_slot_id,
-        &plan
-            .binding
-            .lower
-            .iter()
-            .map(|item| &item.directory)
-            .collect::<Vec<_>>(),
-    )?;
-    let chain_digest = digest(&plan.binding)?.parse()?;
-    let mut native_plans = Vec::with_capacity(roots.len());
-    for (item, expected) in plan.binding.lower.iter().zip(&plan.capsule_digests) {
-        let native = ForeignMigrationPlan::chain_material(
-            &source,
-            plan.binding.operation_id,
-            &chain_digest,
-            item.directory.level,
-        )?;
-        if native.digest().to_string() != *expected {
-            return Err("complete-chain native inventory differs from its original digest".into());
-        }
-        native_plans.push(native);
-    }
-    let all_roots = plan.roots();
-    for (item, progress) in plan.binding.lower.iter().zip(&observed.targets) {
-        if progress.progress == Progress::Unstarted {
-            let excluded = all_roots
-                .iter()
-                .filter(|path| path.as_str() != item.directory.root_path.as_str())
-                .map(PathBuf::from)
-                .chain([
-                    PathBuf::from(layout::STATE),
-                    PathBuf::from(layout::MANAGEMENT),
-                ])
-                .collect::<Vec<_>>();
-            storage_directories::revalidate_within(layout::DISKS, &item.selection, &excluded)?;
-        }
-    }
-    original(target, configuration, plan)?;
+    let (source, native_plans) = material_plan(target, configuration, plan, &observed)?;
     for (((root, native), item), progress) in roots
         .into_iter()
         .zip(native_plans)
@@ -526,6 +483,59 @@ fn prepare(
         transaction.publish(None)?;
     }
     Ok(())
+}
+
+fn material_plan(
+    target: &ManagedPool,
+    configuration: &Config,
+    plan: &Plan,
+    observed: &Report,
+) -> Result<(ForeignImportPreview, Vec<ForeignMigrationPlan>)> {
+    // Freeze and check every target before the first lower root can be written.
+    // Status uses the same source/plan admission before root saves a new intent.
+    let source = exact_source(target, plan)?;
+    foreign_identity(
+        configuration,
+        &source,
+        &plan.binding.source_slot_id,
+        &plan
+            .binding
+            .lower
+            .iter()
+            .map(|item| &item.directory)
+            .collect::<Vec<_>>(),
+    )?;
+    let chain_digest = digest(&plan.binding)?.parse()?;
+    let mut native_plans = Vec::with_capacity(plan.binding.lower.len());
+    for (item, expected) in plan.binding.lower.iter().zip(&plan.capsule_digests) {
+        let native = ForeignMigrationPlan::chain_material(
+            &source,
+            plan.binding.operation_id,
+            &chain_digest,
+            item.directory.level,
+        )?;
+        if native.digest().to_string() != *expected {
+            return Err("complete-chain native inventory differs from its original digest".into());
+        }
+        native_plans.push(native);
+    }
+    let all_roots = plan.roots();
+    for (item, progress) in plan.binding.lower.iter().zip(&observed.targets) {
+        if progress.progress == Progress::Unstarted {
+            let excluded = all_roots
+                .iter()
+                .filter(|path| path.as_str() != item.directory.root_path.as_str())
+                .map(PathBuf::from)
+                .chain([
+                    PathBuf::from(layout::STATE),
+                    PathBuf::from(layout::MANAGEMENT),
+                ])
+                .collect::<Vec<_>>();
+            storage_directories::revalidate_within(layout::DISKS, &item.selection, &excluded)?;
+        }
+    }
+    original(target, configuration, plan)?;
+    Ok((source, native_plans))
 }
 
 fn object_identities(

@@ -204,17 +204,18 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     {
         return Err("completed original database batch cannot be replaced".into());
     }
-    let (root, plan) = if completion.is_none() {
+    let (root, plan, completion) = if completion.is_none() {
         preflight(root, &plan, &input.expected)?;
         // Reacquire the original selector after releasing the worker's lease;
         // a successful scan does not authorize a different current context.
-        self::root(&input.input)?
+        let (root, plan) = self::root(&input.input)?;
+        let completion = saved(&root, &plan, true)?;
+        (root, plan, completion)
     } else {
         // A completed exact intent already passed this admission. The normal
         // worker still rechecks all physical evidence; do not scan it twice.
-        (root, plan)
+        (root, plan, completion)
     };
-    let completion = saved(&root, &plan, true)?;
     if completion.as_ref().is_some_and(|old| old != &input.expected) {
         return Err("completed original database batch cannot be replaced".into());
     }

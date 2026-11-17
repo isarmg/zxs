@@ -444,7 +444,8 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     let root = Root::open(input.input.service_user.clone())?;
     root.check(&input.plan)?;
     let completion = root.completion(&input.plan)?;
-    let envelope = WorkerRequest {
+    inspect_material_intent(&root.host, &input.plan, completion.is_some())?;
+    let mut envelope = WorkerRequest {
         context: root.context.clone(),
         action: Action::Prepare {
             plan: input.plan.clone(),
@@ -454,6 +455,23 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     if json_codec::to_vec(&envelope)?.len() > MAX_RECORD_BYTES {
         return Err("complete-chain execution exceeds the IPC budget; no intent was saved".into());
     }
+    let (root, completion) = if completion.is_none() {
+        material_preflight(root, &input.plan)?;
+        let root = Root::open(input.input.service_user.clone())?;
+        root.check(&input.plan)?;
+        let completion = root.completion(&input.plan)?;
+        inspect_material_intent(&root.host, &input.plan, completion.is_some())?;
+        (root, completion)
+    } else {
+        // An exact completion has already admitted its immutable intent. Keep
+        // the actual write-worker revalidation without another source scan.
+        (root, completion)
+    };
+    envelope.context = root.context.clone();
+    envelope.action = Action::Prepare {
+        plan: input.plan.clone(),
+        completed: completion.is_some(),
+    };
     let bytes = json_codec::to_vec(&input.plan)?;
     root.host.publish(
         &operation_name(input.input.operation_id),
@@ -461,6 +479,30 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     )?;
     drop(root);
     finish(input, envelope, completion).map_err(coordinator::pending::<Plan>)
+}
+fn inspect_material_intent(
+    host: &crate::offline::private_io::BundleDestination,
+    plan: &Plan,
+    completed: bool,
+) -> Result<()> {
+    let name = operation_name(plan.binding.operation_id);
+    host.inspect(&name, &[("plan.json", &json_codec::to_vec(plan)?)])?;
+    if completed && host.read_operation(&name, "plan.json", MAX_RECORD_BYTES)?.is_none() {
+        return Err(
+            "completed foreign material lost its immutable intent; nothing was rebuilt".into(),
+        );
+    }
+    Ok(())
+}
+fn material_preflight(root: Root, plan: &Plan) -> Result<()> {
+    let envelope = WorkerRequest {
+        context: root.into_context(),
+        action: Action::Status { plan: plan.clone() },
+    };
+    let Output::Report { report } = crate::offline::service_worker::run(envelope)? else {
+        return Err("unexpected foreign-chain preflight reply".into());
+    };
+    report.require_plan(plan)
 }
 fn finish(
     input: Prepare,
