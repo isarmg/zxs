@@ -401,7 +401,10 @@ impl<'a> Transaction<'a> {
             input: *blake3::hash(manifest).as_bytes(),
             kind: Kind::Archive,
         };
-        match memo.get(&key) {
+        // A successful earlier read in this same verification may retain its
+        // pure transcript before final commit. The reader still compares the
+        // complete manifest and repeats every ordered current-target read.
+        match self.pending_entry(&key).or_else(|| memo.get(&key)) {
             Some(Bytes::Archive { trace, .. }) => Some(trace),
             Some(Bytes::System(_)) | Some(Bytes::DiskPair(_, _))
             | Some(Bytes::Canonical { .. }) | None => None,
@@ -419,11 +422,20 @@ impl<'a> Transaction<'a> {
             input: *blake3::hash(manifest).as_bytes(),
             kind: Kind::Archive,
         };
+        if self.pending_entry(&key).is_some() {
+            // A lookup collision may require a full fresh verification, but
+            // must not replace or charge the original pending proof again.
+            return None;
+        }
         let mut session = Session::new(Some((memo, [0; 32])));
         if !session.reserve(key, payload) {
             return None;
         }
         Some(ArchiveReservation { session, key, payload })
+    }
+
+    fn pending_entry(&self, key: &Key) -> Option<Bytes> {
+        self.pending.iter().find_map(|session| session.pending.get(key).cloned())
     }
 
     pub(in crate::engine::backup_preparation::native_control) fn retain_archive(

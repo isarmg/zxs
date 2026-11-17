@@ -936,3 +936,26 @@ pub(in crate::engine::backup_preparation::native_control) fn with_pending_system
     assert_eq!(session.reserved_entries, 1);
     action();
 }
+
+// Move a genuine proof under a colliding lookup key without changing its bytes
+// or accounting. Production callers cannot construct or alter retained traces.
+pub(in crate::engine::backup_preparation::native_control) fn move_pending_archive_lookup(
+    transaction: &mut Transaction<'_>,
+    original: &[u8],
+    changed: &[u8],
+) {
+    let key = Key {
+        context: [0; 32],
+        input: *blake3::hash(original).as_bytes(),
+        kind: Kind::Archive,
+    };
+    let new_key = Key { input: *blake3::hash(changed).as_bytes(), ..key };
+    for session in &mut transaction.pending {
+        if let Some(value) = session.pending.remove(&key) {
+            assert!(matches!(&value, Bytes::Archive { .. }));
+            assert!(session.pending.insert(new_key, value).is_none());
+            return;
+        }
+    }
+    panic!("fixture retained no pending archive proof");
+}

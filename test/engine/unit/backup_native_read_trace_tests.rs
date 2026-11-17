@@ -2,7 +2,8 @@
 use super::*;
 use super::super::decode_tests::{Fixture, error_signature, fixture_file_bytes};
 use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo::tests::{
-    memo_usage, memo_with_archive_headroom, memo_with_limit, with_pending_system_byte,
+    memo_usage, memo_with_archive_headroom, memo_with_limit, move_pending_archive_lookup,
+    with_pending_system_byte,
 };
 use std::{fs, os::unix::fs::DirBuilderExt, sync::atomic::Ordering};
 
@@ -224,11 +225,93 @@ fn archive_trace_refusal_and_failed_transaction_leave_original_admission_unchang
         read(&root, task.selection.first(), &task, &AtomicBool::new(false), &mut transaction)
             .unwrap();
         assert!(memo_usage(&memo).3 > 0);
-        assert!(transaction.archive(&bytes).is_none());
+        assert!(transaction.archive(&bytes).is_some());
+        let independent = Transaction::new(Some(&memo), &binding);
+        assert!(independent.archive(&bytes).is_none());
         // A later registry/name/stop error drops this exact uncommitted account.
     }
     assert_eq!(memo_usage(&memo), (0, 0, 0, 0));
     assert_eq!(fixture_file_bytes(fixture._temp.path()), before);
+}
+
+#[test]
+fn pending_archive_reuse_is_local_and_keeps_fresh_reads_cancellation_and_rollback() {
+    let fixture = Fixture::prepared();
+    let root = DiskRoot::open(&fixture.target).unwrap();
+    let task = task(&fixture);
+    let before = fixture_file_bytes(fixture._temp.path());
+    let memo = ScopeEncodingMemo::new();
+    let stop = AtomicBool::new(false);
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    let expected = read(&root, task.selection.first(), &task, &stop, &mut transaction).unwrap();
+    let bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST).unwrap();
+    let trace = transaction.archive(&bytes).unwrap();
+    let usage = memo_usage(&memo);
+    assert_eq!((usage.0, usage.1), (0, 0));
+    assert!(usage.3 > 0);
+    assert_eq!(read(
+        &root, task.selection.first(), &task, &stop, &mut transaction,
+    ).unwrap(), expected);
+    assert!(Arc::ptr_eq(&trace, &transaction.archive(&bytes).unwrap()));
+    assert_eq!(memo_usage(&memo), usage);
+    assert!(Transaction::new(Some(&memo), &binding).archive(&bytes).is_none());
+
+    let manifest: Manifest = decode_proof(&bytes).unwrap();
+    let path = object_path(root.path(), "candidate", &manifest.publications[0].candidate).unwrap();
+    let original = fs::read(&path).unwrap();
+    let mut damaged = original.clone();
+    damaged[0] = b'?';
+    fs::write(&path, &damaged).unwrap();
+    let reference = super::super::read(
+        &root, task.selection.first(), &task.archive_hash, &stop,
+    ).unwrap_err();
+    let failure = read(
+        &root, task.selection.first(), &task, &stop, &mut transaction,
+    ).unwrap_err();
+    assert_eq!(error_signature(&failure), error_signature(&reference));
+    assert_eq!(fs::read(&path).unwrap(), damaged);
+    fs::write(&path, original).unwrap();
+    stop.store(true, Ordering::Relaxed);
+    assert_eq!(read(
+        &root, task.selection.first(), &task, &stop, &mut transaction,
+    ).unwrap_err().code(), ErrorCode::OperationAborted);
+    drop(transaction);
+    assert_eq!(memo_usage(&memo), (0, 0, 0, 0));
+    assert_eq!(fixture_file_bytes(fixture._temp.path()), before);
+}
+
+#[test]
+fn pending_archive_key_collision_does_not_replace_the_exact_manifest_proof() {
+    let fixture = Fixture::prepared();
+    let root = DiskRoot::open(&fixture.target).unwrap();
+    let task = task(&fixture);
+    let memo = ScopeEncodingMemo::new();
+    let stop = AtomicBool::new(false);
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    let expected = read(&root, task.selection.first(), &task, &stop, &mut transaction).unwrap();
+    let path = manifest_path(root.path());
+    let bytes = root.read_bytes(&path, MAX_MANIFEST).unwrap();
+    let trace = transaction.archive(&bytes).unwrap();
+    let usage = memo_usage(&memo);
+    let mut different_raw = bytes.clone();
+    different_raw.push(b'\n');
+    move_pending_archive_lookup(&mut transaction, &bytes, &different_raw);
+    assert!(!transaction.archive(&different_raw).unwrap().matches(&different_raw));
+    fs::write(&path, &different_raw).unwrap();
+    let reference = super::super::read(
+        &root, task.selection.first(), &task.archive_hash, &stop,
+    ).unwrap();
+    assert_eq!(reference.verified_metadata_bytes, expected.verified_metadata_bytes + 1);
+    assert_eq!(read(
+        &root, task.selection.first(), &task, &stop, &mut transaction,
+    ).unwrap(), reference);
+    assert!(Arc::ptr_eq(&trace, &transaction.archive(&different_raw).unwrap()));
+    assert_eq!(memo_usage(&memo), usage);
+    fs::write(path, bytes).unwrap();
+    drop(transaction);
+    assert_eq!(memo_usage(&memo), (0, 0, 0, 0));
 }
 
 #[test]

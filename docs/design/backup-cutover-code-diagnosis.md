@@ -35,6 +35,26 @@
 丢弃回滚、canonical 原始字节／domain／预期摘要和人为查找碰撞。
 这些是纯编码接口的行为用例，不代表物理切换、SMB 或冷恢复已经通过。
 
+## 同一完整验证内的原生归档计算
+
+后续切片处理原有 `Transaction` 内另一处可确定重复：完整 registry verification
+为所有目标共用一个 transaction，但 `archive()` 只查询全局 committed 项，不看
+该 transaction 已完整验证、尚待最终门禁的 transcript。因此冷态多目标验证会在
+全局提交前重复计算相同原前缀，即使本次已经保留了完整读序列。
+
+现在仅本 transaction 的后续读取可以取得自己的 pending transcript。原生 reader
+仍先比较完整 manifest 原字节，再对**当前目标**执行每次原顺序 object／journal
+读取、完整内容相等比较、预算与取消检查；第一次差异带实际新字节进入原验证器。
+不能只以 manifest 摘要、长度、路径、相同报告或健康同伴替代当前目标材料。
+外层真实根／writer／原请求以及最后投影与取消检查都保留。不同 transaction 和
+committed-only reader 看不到 pending；晚失败时整笔释放，最终成功前不发布到共享表。
+
+同一 pending key 不重复预留归档容量；人为 key 碰撞也只能退回完整验证，不能
+替换原证明。查找扫描受现有 256 项预算约束，32 MiB 账户不变，不保存 State、根句柄
+或 writer authority。新增真实临时归档的测试源码覆盖同事务重用、同长度内容损坏、
+取消、回滚、独立事务隔离，以及不同 manifest 原字节被故意放到同一查找键时的完整
+读验和准确字节预算。没有运行这些用例，没有新的时长／根因结论。
+
 ## 仍需后续验收
 
 全部实现整合后，在准确整合 SHA 上运行原完整 900 秒切换／冷重开用例和受影响的
