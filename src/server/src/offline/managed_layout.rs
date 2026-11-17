@@ -20,6 +20,9 @@ pub(crate) const STATE: &str = "/zxs/data/state";
 pub(crate) const MANAGEMENT: &str = "/zxs/data/management";
 pub(crate) const DISKS: &str = "/zxs/data/disks";
 const DATA: &str = "/zxs/data";
+
+mod physical;
+use physical::DistinctRoots;
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Identity {
@@ -88,8 +91,12 @@ impl Layout {
             account: self.account.snapshot(),
         }
     }
+    fn distinct_roots(&self) -> Result<DistinctRoots> {
+        DistinctRoots::from_held([&self.data, &self.state, &self.management, &self.disks])
+    }
     pub fn recheck(&self) -> Result<()> {
         self.account.recheck()?;
+        self.distinct_roots()?;
         for (path, held) in [
             (DATA, &self.data),
             (STATE, &self.state),
@@ -153,6 +160,7 @@ impl Layout {
             .disks
             .open_directory(&EntryName::new(name)?.as_relative())?;
         owner(&file, self.account.owner())?;
+        self.distinct_roots()?.storage(&file)?;
         self.recheck()?;
         Ok(OpenAt2Root::from_directory(file, MountPolicy::SameMount)?)
     }
@@ -170,6 +178,7 @@ impl Layout {
         self.inventory_names(all_names(paths)?)
     }
     fn inventory_names(&self, mut missing: BTreeSet<String>) -> Result<()> {
+        let mut observed = self.distinct_roots()?;
         for name in self.disks.entries()? {
             let name = name?;
             let text = name
@@ -181,6 +190,7 @@ impl Layout {
             }
             let file = self.disks.open_directory(&name.as_relative())?;
             owner(&file, self.account.owner())?;
+            observed.storage(&file)?;
         }
         if !missing.is_empty() {
             return Err(
@@ -211,6 +221,7 @@ impl Layout {
             );
         }
         missing.retain(|name| !stopped_names.contains(name));
+        let mut observed = self.distinct_roots()?;
         for name in self.disks.entries()? {
             let name = name?;
             let text = name
@@ -228,6 +239,7 @@ impl Layout {
                 DISKS, &path, stopped,
             )?;
             owner(&file, self.account.owner())?;
+            observed.storage(&file)?;
         }
         if !missing.is_empty() {
             return Err(
