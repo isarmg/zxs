@@ -588,6 +588,7 @@ impl Engine {
                     engine.current_namespaces.as_deref(),
                     request,
                 )?;
+                super::file_draft::require_committed_transfer(engine.state(), &source.file)?;
                 let target = &engine.state.repositories[&request.target_repository_id];
                 for history in [
                     &engine.state.repositories[&request.source_repository_id].history_tree_id,

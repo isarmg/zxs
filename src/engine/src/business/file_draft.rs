@@ -21,6 +21,25 @@ use storage_contract::file_draft::{
     CommitMode, DraftBase, DraftPayload, FileWorkingState, WorkingRevision,
 };
 
+/// Transfers that only carry committed versions must not silently omit a
+/// working file. Admission uses the selected stable identity, not its path,
+/// the current disk spelling, or whether the draft happens to have zero bytes.
+pub(in crate::business) fn require_committed_transfer(
+    state: &crate::State,
+    file: &str,
+) -> crate::Result<()> {
+    let file = file.parse::<storage_contract::FileId>()?;
+    if state.file_containers.get(&file).is_some_and(|record| {
+        record.working.draft().is_some() || record.working.unborn().is_some()
+    }) {
+        return Err(crate::Error::new(
+            storage_contract::ErrorCode::FileBranchConflict,
+            "commit or discard the selected file's shared working bytes before transferring its history",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, error_definition::Error)]
 pub enum DraftError {
     #[error("the exact worktree FILE publication could not complete")]

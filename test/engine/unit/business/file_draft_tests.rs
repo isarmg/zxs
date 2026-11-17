@@ -849,6 +849,11 @@ fn whole_working_selection_checks_all_cas_before_open_and_retains_real_published
         });
     }
     let state = Arc::clone(engine.planning_context().state);
+    for request in &requests {
+        let error = require_committed_transfer(&state, &request.target.file.to_string()).unwrap_err();
+        assert_eq!(error.code(), storage_contract::ErrorCode::FileBranchConflict);
+    }
+    assert!(Arc::ptr_eq(&state, engine.planning_context().state));
     let selected = engine.select_working_sources(&requests).unwrap();
     assert_eq!(selected.sources().len(), 2);
     for ((source, expected), bytes) in selected.sources().iter().zip(&requests).zip(bytes) {

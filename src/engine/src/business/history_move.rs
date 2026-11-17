@@ -222,6 +222,7 @@ impl Engine {
                 "a single-path history move requires exactly one current source occurrence; explicitly separate the shared file first",
             ));
         }
+        file_draft::require_committed_transfer(self.state(), request.source_file_id.as_str())?;
         let database = crate::container_storage::file_database::capture_copy(
             self.state(),
             request.source_file_id.as_str(),
@@ -247,6 +248,9 @@ impl Engine {
                 )
             })
             .transpose()?;
+        if let Some(target) = &replacement {
+            file_draft::require_committed_transfer(self.state(), &target.entry.file_id)?;
+        }
         if replacement
             .as_ref()
             .is_some_and(|capture| capture.entry.file_id == request.source_file_id.as_str())
