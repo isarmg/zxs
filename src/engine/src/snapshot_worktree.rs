@@ -110,7 +110,7 @@ pub(crate) enum RegistrationError {
     Manifest(#[source] crate::working_tree::snapshot::SnapshotManifestError),
     #[error("reopening the independently registered worktree ledger")]
     Ledger(#[source] crate::directory_worktree::ledger::LedgerError),
-    #[error("worktree edits require one original root-level file before directory publication")]
+    #[error("worktree edits require one exact original file before directory publication")]
     EditScope,
     #[error("worktree write differs from its declared complete content or exceeds its limit")]
     EditBody,

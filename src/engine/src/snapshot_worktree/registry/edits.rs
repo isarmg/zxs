@@ -23,8 +23,9 @@ pub(super) struct EditRecordEntry<'a> {
 }
 
 impl<'a> ReceiptIndex<'a> {
-    /// A new sealed revision may replace only the same original occurrence.
-    /// Namespace/multi-file edits and post-commit rebase have separate contracts.
+    /// A new sealed revision may replace only the same original occurrence at
+    /// any admitted snapshot depth. Its parents come from the immutable source,
+    /// not a new physical namespace. Multi-file edits and rebase remain separate.
     pub(in crate::snapshot_worktree) fn require_edit_scope(
         &self,
         target: WorktreeHandle,
@@ -32,10 +33,7 @@ impl<'a> ReceiptIndex<'a> {
         expected: WorktreeRevision,
     ) -> Result<()> {
         let current = self.worktree(target)?;
-        if current.revision() != expected
-            || path.parent().is_some()
-            || current.published_node().is_some()
-        {
+        if current.revision() != expected || current.published_node().is_some() {
             return Err(RegistrationError::EditScope);
         }
         if let Some(previous) = self.active_file_edits.get(&target.worktree_id) {

@@ -54,6 +54,11 @@ fn actual_same_content_edit_publishes_reserved_version_and_moves_exact_inode() {
     publish_occurrence("edited.txt", ORIGINAL);
 }
 
+#[test]
+fn actual_nested_edit_keeps_parent_paths_and_same_name_sibling_identity() {
+    publish_occurrence("Folder/Child/untouched.txt", b"only the nested occurrence changed");
+}
+
 fn publish_occurrence(path: &str, edited: &[u8]) {
     let temporary = tempfile::tempdir().unwrap();
     let inputs = tempfile::tempdir().unwrap();
@@ -127,6 +132,16 @@ fn publish_occurrence(path: &str, edited: &[u8]) {
     let untouched = content(&engine, independent, "untouched.txt");
     let before = engine.directory_worktree_status(target).unwrap().revision;
     engine.check_directory_worktree_edit(target, &path, before).unwrap();
+    if let Some(parent) = path.parent() {
+        let sequence = engine.state().sequence;
+        assert!(engine.check_directory_worktree_edit(target, &parent, before).is_err());
+        let page = engine.directory_worktree_entries(
+            target, Some(&LookupPath::from(&parent)), None,
+        ).unwrap();
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].path, path);
+        assert_eq!(engine.state().sequence, sequence);
+    }
     let edit = EditWorktree {
         target, path: path.clone(), expected: before,
         size: edited.len() as u64, content_hash: ContentHash::from_digest(blake3::hash(edited)),
