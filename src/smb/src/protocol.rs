@@ -1,5 +1,6 @@
 use data_serialization::{Deserialize, Serialize, de::DeserializeOwned};
 use json_codec::Value;
+use storage_contract::PortablePath;
 use std::{
     io, mem,
     os::{
@@ -455,7 +456,7 @@ pub struct StatResult {
 pub enum DirectoryEntry {
     WorktreeRetained {
         target: storage_contract::snapshot_worktree::additions::WorktreeFileTarget,
-        path: name_policy::PortablePath,
+        path: PortablePath,
         version: storage_contract::VersionId,
         #[serialization(with = "storage_contract::u64_string")]
         size: u64,
@@ -463,14 +464,14 @@ pub enum DirectoryEntry {
     },
     WorktreeWorking {
         target: storage_contract::snapshot_worktree::additions::WorktreeFileTarget,
-        path: name_policy::PortablePath,
+        path: PortablePath,
         #[serialization(with = "storage_contract::u64_string")]
         logical_size: u64,
     },
     Worktree {
         target: storage_contract::snapshot_worktree::WorktreeHandle,
-        path: name_policy::PortablePath,
-        relative_path: Option<name_policy::PortablePath>,
+        path: PortablePath,
+        relative_path: Option<PortablePath>,
         kind: storage_contract::NamespaceEntryKind,
         #[serialization(with = "storage_contract::u64_string")]
         size: u64,
@@ -500,7 +501,7 @@ impl DirectoryEntry {
             },
         }
     }
-    pub fn path(&self) -> &name_policy::PortablePath {
+    pub fn path(&self) -> &PortablePath {
         match self {
             Self::Published { entry, .. } => &entry.path,
             Self::Unborn { target, .. } => &target.path,
@@ -535,7 +536,7 @@ impl DirectoryEntry {
 /// Display-prefix rebasing never changes this instance/occurrence identity.
 pub fn worktree_entry_id(
     target: storage_contract::snapshot_worktree::WorktreeHandle,
-    relative: Option<&name_policy::PortablePath>,
+    relative: Option<&PortablePath>,
 ) -> String {
     format!("{}/{}", target.worktree_id, relative.map_or("", |path| path.key()))
 }
