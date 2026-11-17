@@ -84,7 +84,8 @@ impl Session {
     /// A dirty successor keeps that saved time; a new unpublished file has none.
     pub(super) fn handle_metadata(&self, opened: &Handle) -> Result<AuthorizedMetadata, ApiError> {
         let mtime = match opened {
-            Handle::Native(_) | Handle::WorktreeWrite(_, _) | Handle::ReadWorktree(_, _) => {
+            Handle::Native(opened) => opened.file.mtime,
+            Handle::WorktreeWrite(_, _) | Handle::ReadWorktree(_, _) => {
                 FileMtime::Unpublished {}
             }
             Handle::WorktreeDirectory(_) => FileMtime::NotFile {},

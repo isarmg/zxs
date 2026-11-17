@@ -48,8 +48,8 @@ impl ContentFile {
         }
     }
 
-    /// Checks cancellation without touching the managed disk. This also applies
-    /// to cached SMB chunks, which must not revive a fully cancelled handle.
+    /// Rechecks source ownership before serving cached bytes. A merged draft also
+    /// verifies its retained base/extent identities; cancellation cannot revive it.
     pub(crate) fn check_running(&self) -> io::Result<()> {
         match &self.0 {
             Source::Local(_) => Ok(()),
@@ -57,6 +57,14 @@ impl ContentFile {
             Source::Engine(file) => file
                 .check_running()
                 .map_err(|source| io::Error::new(io::ErrorKind::PermissionDenied, source)),
+        }
+    }
+
+    pub fn logical_size(&self) -> io::Result<u64> {
+        match &self.0 {
+            Source::Local(file) => file.metadata().map(|metadata| metadata.len()),
+            #[cfg(feature = "core")]
+            Source::Engine(file) => file.logical_size(),
         }
     }
 

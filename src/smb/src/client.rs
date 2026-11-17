@@ -643,9 +643,12 @@ impl Client {
                 crate::protocol::OpenIo::Directory => !file,
                 crate::protocol::OpenIo::Descriptor
                 | crate::protocol::OpenIo::VerifiedRanges => file,
-                crate::protocol::OpenIo::NativeWorking => file && result.version_id.is_none()
-                    && result.workspace_id.is_none()
-                    && result.mtime == crate::protocol::FileMtime::Unpublished {},
+                crate::protocol::OpenIo::NativeWorking => file && result.workspace_id.is_none()
+                    && match result.mtime {
+                        crate::protocol::FileMtime::Unpublished {} => result.version_id.is_none(),
+                        crate::protocol::FileMtime::Saved { .. } => true,
+                        crate::protocol::FileMtime::NotFile {} => false,
+                    },
             };
             if !valid {
                 return Err(io::Error::new(io::ErrorKind::InvalidData,

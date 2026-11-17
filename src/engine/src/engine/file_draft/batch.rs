@@ -4,7 +4,7 @@ use crate::engine::file_draft::{SelectedWorkingSources, require_initial};
 use crate::business::file_draft::{DraftError as Failure, batch, invalid};
 use crate::engine::{PlanningContext, Prepared};
 use crate::{Error, Result, State};
-use crate::container_storage::{PreparedUnbornFull, ReadWorkingDigest};
+use crate::container_storage::{PreparedUnbornFull, ReadWorkingDigest, ReadDraftDigest};
 use std::sync::Arc;
 use storage_contract::{FileId, OperationId, Principal, Sequence};
 
@@ -21,6 +21,7 @@ pub(crate) struct PreparedWorkingBatch {
     request: WorkingBatchRequest,
     projection: batch::WorkingBatchProjection,
     first: Vec<Option<Arc<PreparedUnbornFull>>>,
+    drafts: Vec<Option<Arc<ReadDraftDigest>>>,
     prepared: Vec<Prepared>,
 }
 
@@ -51,8 +52,8 @@ impl PreparedWorkingBatch {
         // Source and all namespace/owner admissions precede Version allocation.
         // The batch planner separately completes every selected CAS/category check.
         for source in sources.sources() { require_initial(context, source.target())?; }
-        let (projection, prepared, first) = batch::build(context, &sources, &request)?;
-        let result = Self { sources, request, projection, first, prepared };
+        let (projection, prepared, first, drafts) = batch::build(context, &sources, &request)?;
+        let result = Self { sources, request, projection, first, drafts, prepared };
         result.require_context(context)?;
         result.require_prepared(&result.prepared)?;
         Ok(result)
@@ -63,6 +64,8 @@ impl PreparedWorkingBatch {
     pub(crate) fn state(&self) -> &State { self.projection.state() }
     pub(crate) fn items(&self) -> &[WorkingBatchItem] { self.projection.items() }
     pub(crate) fn trace(&self) -> &WorkingBatchTrace { self.projection.trace() }
+
+    pub(crate) fn draft_reads(&self) -> &[Option<Arc<ReadDraftDigest>>] { &self.drafts }
 
     pub(crate) fn first_reads(&self) -> Result<Vec<Option<ReadWorkingDigest<'_>>>> {
         self.first.iter().map(|material| material.as_ref().map(|full| full.digest()).transpose())
@@ -75,6 +78,10 @@ impl PreparedWorkingBatch {
         self.sources.require_context(context)?;
         for material in self.first.iter().flatten() {
             material.require_context(context)?;
+        }
+        for read in self.drafts.iter().flatten() {
+            let record = context.state.file_containers.get(&read.file()).ok_or_else(invalid)?;
+            read.require_record(read.file(), record)?;
         }
         if context.current_namespaces.is_some() || context.config.generation().is_some() {
             return Err(Error::FileDraft(Failure::UnsupportedScope));
@@ -101,7 +108,7 @@ impl PreparedWorkingBatch {
         self.require_context(context)?;
         let replay = batch::replay(
             context.state, context.config, &self.request, Sequence::new(context.next_slot),
-            self.trace(), &self.first_reads()?,
+            self.trace(), &self.first_reads()?, &self.drafts,
         )?;
         if !crate::publication_shape::same_transition(
             context.state, replay.state(), self.state(),
@@ -122,6 +129,7 @@ pub(crate) struct WorkingBatchHandoff {
     request: WorkingBatchRequest,
     projection: batch::WorkingBatchProjection,
     first: Vec<Option<Arc<PreparedUnbornFull>>>,
+    drafts: Vec<Option<Arc<ReadDraftDigest>>>,
 }
 
 impl PreparedWorkingBatch {
@@ -130,9 +138,9 @@ impl PreparedWorkingBatch {
         context: &PlanningContext<'_>,
     ) -> Result<(State, Vec<Prepared>, WorkingBatchHandoff)> {
         self.require_reconstruction(context)?;
-        let Self { sources, request, projection, first, prepared } = self;
+        let Self { sources, request, projection, first, drafts, prepared } = self;
         let next = projection.state().clone();
-        let source = WorkingBatchHandoff { sources, request, projection, first };
+        let source = WorkingBatchHandoff { sources, request, projection, first, drafts };
         Ok((next, prepared, source))
     }
 }
@@ -155,6 +163,8 @@ impl WorkingBatchHandoff {
             .and_then(|index| self.first[index].as_ref())
     }
 
+    pub(crate) fn draft_reads(&self) -> &[Option<Arc<ReadDraftDigest>>] { &self.drafts }
+
     pub(crate) fn first_reads(&self) -> Result<Vec<Option<ReadWorkingDigest<'_>>>> {
         self.first.iter().map(|material| material.as_ref().map(|full| full.digest()).transpose())
             .collect()
@@ -165,6 +175,10 @@ impl WorkingBatchHandoff {
         self.sources.require_context(context)?;
         for material in self.first.iter().flatten() {
             material.require_context(context)?;
+        }
+        for read in self.drafts.iter().flatten() {
+            let record = context.state.file_containers.get(&read.file()).ok_or_else(invalid)?;
+            read.require_record(read.file(), record)?;
         }
         if context.current_namespaces.is_some() || context.config.generation().is_some() {
             return Err(Error::FileDraft(Failure::UnsupportedScope));
@@ -197,6 +211,7 @@ impl WorkingBatchHandoff {
         for material in self.first.iter().flatten() {
             material.require_source()?;
         }
+        for read in self.drafts.iter().flatten() { read.require_source()?; }
         Ok(())
     }
 }

@@ -66,6 +66,45 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_incremental_paths_select_actual_dispatch_tcp_and_current_format_tests(self):
+        policy = self.policy
+        name = 'ordinary-manual-incremental'
+        group = policy['groups'][name]
+        for path in (
+            'src/contract/src/file_draft/incremental.rs',
+            'src/engine/src/engine/file_draft/incremental.rs',
+            'src/engine/src/container_storage/ordinary_preparation/draft/incremental.rs',
+            'src/engine/src/container_storage/ordinary_preparation/working/write.rs',
+            'src/server/src/engine_backend/smb_native.rs',
+            'test/server/unit/smb_rpc/incremental_manual.rs',
+            'test/server/unit/smb_rpc/incremental_http.rs',
+        ):
+            with self.subTest(path=path):
+                plan = CI.select_plan(policy, [path], shardable=True)
+                self.assertIn(name, plan['groups'])
+                actual = [selection
+                          for target in plan['rust_targets']
+                          for origin, selection in zip(target['selection_groups'],
+                              target.get('selections', [{key: value for key, value in target.items()
+                                                        if key != 'selection_groups'}]))
+                          if origin == name]
+                self.assertCountEqual(actual, group['rust_targets'])
+        server, contract = group['rust_targets']
+        self.assertEqual((server['package'], server['kind']), ('storage-server', 'lib'))
+        self.assertEqual(server['features'], ['core'])
+        self.assertEqual(server['exact'], [
+            'smb_rpc::tests::native_dispatch_tests::incremental_manual::'
+            'ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_bytes',
+            'smb_rpc::tests::native_dispatch_tests::'
+            'native_dispatch_uses_real_engine_and_cold_unborn_content_without_transport',
+        ])
+        self.assertEqual(server['max_tests'], 2)
+        self.assertEqual(server['timeout_seconds'], 900)
+        self.assertEqual(contract['prefixes'], ['file_draft::tests::'])
+        self.assertEqual(contract['max_tests'], 6)
+        self.assertTrue(all(not target.get('whole', False) for target in group['rust_targets']))
+
+
     def test_published_worktree_tail_keeps_real_cold_flow_and_ledger_regressions(self):
         paths = [
             'src/engine/src/snapshot_worktree.rs',
@@ -1715,7 +1754,7 @@ class TargetedSelection(unittest.TestCase):
         ], ['container-path-facts-engine', 'container-lifecycle-engine',
             'upload-occurrence-source', 'workspace-version-construction',
             'workspace-logical-input', 'ordinary-smb-manual-draft',
-            'native-workspace-directory-source'])
+            'native-workspace-directory-source', 'ordinary-manual-incremental'])
         self.assertEqual(plan['groups'],
                          ['ci-selection', 'container-tags-engine',
                           'container-unchanged-save', 'portable-path-consumers'])
@@ -2508,6 +2547,7 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
             'container-path-facts-schema',
             'fresh-root-name-budget', 'ordinary-namespace-parents',
             'ordinary-empty-directory-backup', 'ordinary-smb-manual-draft',
+            'ordinary-manual-incremental',
         ])
         self.assertEqual(len(plan['rust_targets']), 14)
         self.assertEqual(len(plan['python_tests']), 8)
@@ -3204,7 +3244,8 @@ class ContainerTagsSelection(unittest.TestCase):
                         ['container-tags-storage', 'engine-date-errors',
                          'engine-integer-errors', 'file-material-copy-reuse'],
                         ['fresh-managed-core', 'ordinary-namespace-parents',
-                         'ordinary-container-rename', 'terminal-backup-source-layout'],
+                         'ordinary-container-rename', 'terminal-backup-source-layout',
+                         'ordinary-manual-incremental'],
                     )
                 else:
                     plan = CI.select_plan(self.policy, [path])

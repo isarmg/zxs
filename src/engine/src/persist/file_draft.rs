@@ -7,12 +7,14 @@ use crate::business::file_draft::{Outcome, invalid, trace_limit};
 use crate::{Engine, Error, OperationResult, Result, State};
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::file_draft::{DraftCommand, FileWorkingState};
+mod request;
+pub(crate) use request::{Request, RangeSaveRequest};
 use storage_contract::{CommitState, CurrentHealth, DiskId, OperationId, ProtectionAtPublish};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Envelope {
-    request: DraftCommand,
+    request: Request,
     working: FileWorkingState,
     content: Option<crate::business::file_draft::PublishedContent>,
     #[serialization(with = "storage_contract::u64_string")]
@@ -58,11 +60,11 @@ pub(crate) fn is_kind(kind: &str) -> bool {
         | "file.draft.discard" | "file.draft.commit")
 }
 
-pub(crate) fn request(request: &DraftCommand) -> Result<json_codec::Value> {
+pub(crate) fn request(request: &impl Serialize) -> Result<json_codec::Value> {
     json_codec::to_value(request).map_err(codec)
 }
 
-pub(crate) fn digest(command: &DraftCommand, principal: &str) -> Result<String> {
+pub(crate) fn digest(command: &Request, principal: &str) -> Result<String> {
     Engine::native_request_digest(command.kind(), principal, &request(command)?)
 }
 
@@ -150,11 +152,11 @@ pub(crate) fn decode(previous: &State, receipt: &OperationResult) -> Result<Deco
     if object.len() != required.len() || required.iter().any(|key| !object.contains_key(*key)) {
         return Err(invalid());
     }
-    let request: DraftCommand = json_codec::from_value(object["request"].clone()).map_err(codec)?;
+    let request: Request = json_codec::from_value(object["request"].clone()).map_err(codec)?;
     if request.kind() != receipt.kind { return Err(invalid()); }
     let content = &object["content"];
     let has_content = !content.is_null();
-    if has_content && !matches!(&request, DraftCommand::Commit { .. }) { return Err(invalid()); }
+    if has_content && !matches!(&request, Request::Command(DraftCommand::Commit { .. })) { return Err(invalid()); }
     let protection = object["version_protection"].as_array().ok_or_else(invalid)?;
     if protection.len() != usize::from(has_content) { return Err(invalid()); }
     if has_content {

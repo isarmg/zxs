@@ -188,7 +188,7 @@ fn unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node
     writer.truncate(&engine.planning_context(), 3, last + 1).unwrap();
     writer.write_at(&engine.planning_context(), last, b"z").unwrap();
     let prepared = Arc::new(writer.prepare(&engine.planning_context()).unwrap().unwrap());
-    let save_request = prepared.request(&target);
+    let save_request = prepared.request(&target).unwrap();
     assert_eq!(save_request.manifest.generation(), SaveGeneration::first());
     let source = Arc::clone(engine.planning_context().state);
     // A manifest naming genuine prepared files is still not the hot issuer.
@@ -248,7 +248,7 @@ fn unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node
     writer.truncate(&engine.planning_context(), last + 1, 2).unwrap();
     writer.truncate(&engine.planning_context(), 2, 7).unwrap();
     let prepared = Arc::new(writer.prepare(&engine.planning_context()).unwrap().unwrap());
-    let second_request = prepared.request(&target);
+    let second_request = prepared.request(&target).unwrap();
     assert_eq!(second_request.manifest.generation(), SaveGeneration::first().next().unwrap());
     let second = engine.save_unborn_working(
         &second_request, &principal, Some(prepared),
@@ -367,7 +367,7 @@ fn unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node
         let mut writer = engine.begin_unborn_write(&target, operation).unwrap();
         writer.write_at(&engine.planning_context(), 2, b"COLD").unwrap();
         let prepared = Arc::new(writer.prepare(&engine.planning_context()).unwrap().unwrap());
-        let request = prepared.request(&target);
+        let request = prepared.request(&target).unwrap();
         let original = Arc::clone(engine.planning_context().state);
         engine.inject_fault_once("after_accept_1");
         let error = engine.save_unborn_working(&request, &principal, Some(prepared)).unwrap_err();
@@ -867,7 +867,7 @@ fn whole_working_selection_checks_all_cas_before_open_and_retains_real_published
     changed_payload[0].expected.content = WorkingContentExpectation::Born {
         base,
         payload: DraftPayload::new(
-            DraftPayloadId::generate().unwrap(), payload.content_hash(), payload.logical_size(),
+            DraftPayloadId::generate().unwrap(), payload.content_hash().unwrap(), payload.logical_size(),
         ),
     };
     assert!(matches!(engine.select_working_sources(&changed_payload),
@@ -1046,7 +1046,7 @@ fn born_working_batch_uses_one_prior_and_exact_sources_without_independent_clear
 
     let replay = batch::replay(
         &before, engine.planning_context().config, batch.request(),
-        Sequence::new(batch.state().sequence), batch.trace(), &batch.first_reads().unwrap(),
+        Sequence::new(batch.state().sequence), batch.trace(), &batch.first_reads().unwrap(), batch.draft_reads(),
     ).unwrap();
     assert_eq!(replay.state(), batch.state());
     let evidence = batch.prepared().iter().map(|item| crate::journal::VersionEvidence {
@@ -1064,20 +1064,20 @@ fn born_working_batch_uses_one_prior_and_exact_sources_without_independent_clear
     wrong.contents[2] = wrong.contents[0].clone();
     assert!(batch::replay(
         &before, engine.planning_context().config, batch.request(),
-        Sequence::new(batch.state().sequence), &wrong, &batch.first_reads().unwrap(),
+        Sequence::new(batch.state().sequence), &wrong, &batch.first_reads().unwrap(), batch.draft_reads(),
     ).is_err());
     let mut wrong = batch.trace().clone();
     wrong.contents[1] = wrong.contents[0].clone();
     assert!(batch::replay(
         &before, engine.planning_context().config, batch.request(),
-        Sequence::new(batch.state().sequence), &wrong, &batch.first_reads().unwrap(),
+        Sequence::new(batch.state().sequence), &wrong, &batch.first_reads().unwrap(), batch.draft_reads(),
     ).is_err());
     let mut wrong = batch.trace().clone();
     let earlier_ids = wrong.contents[0].as_ref().unwrap().allocations.clone();
     wrong.contents[2].as_mut().unwrap().allocations = earlier_ids;
     assert!(batch::replay(
         &before, engine.planning_context().config, batch.request(),
-        Sequence::new(batch.state().sequence), &wrong, &batch.first_reads().unwrap(),
+        Sequence::new(batch.state().sequence), &wrong, &batch.first_reads().unwrap(), batch.draft_reads(),
     ).is_err());
     // A fresh picker on identical values is not the same retained selection.
     let other = Arc::new(engine.select_working_sources(&requests[..3]).unwrap());

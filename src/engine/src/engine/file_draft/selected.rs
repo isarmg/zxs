@@ -34,6 +34,23 @@ impl SelectedWorkingSource {
     pub(crate) fn expected(&self) -> WorkingExpectation { self.request.expected }
     pub(crate) fn record(&self) -> &FileContainerRecord { &self.record }
 
+    pub(crate) fn draft_digest(
+        &self, state: &State, chunk_bytes: u32,
+    ) -> Result<Option<Arc<crate::container_storage::ReadDraftDigest>>> {
+        if self.record.working.incremental().is_none() { return Ok(None); }
+        let HeldWorkingBody::Born { scope, .. } = &self.body else {
+            return Err(Error::FileDraft(Failure::WorkingBodyChanged));
+        };
+        let (base, _) = self.record.working.draft()
+            .ok_or(Error::FileDraft(Failure::WorkingBodyChanged))?;
+        let version = state.versions.get(&base.version_id().to_string())
+            .ok_or(Error::FileDraft(Failure::WorkingBodyChanged))?;
+        let reader = crate::container_storage::HeldManualReader::capture(
+            Arc::clone(scope), *base, version,
+        )?;
+        crate::container_storage::ReadDraftDigest::capture(Arc::new(reader), chunk_bytes).map(Some)
+    }
+
     pub(crate) fn unborn_reader(&self) -> Result<&Arc<HeldUnbornReader>> {
         match &self.body {
             HeldWorkingBody::Unborn(reader) => Ok(reader),

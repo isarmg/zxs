@@ -17,7 +17,11 @@ use std::{
 use storage_contract::file_draft::DraftLocation;
 use storage_engine::{Config, Engine};
 
+#[path = "incremental_manual.rs"]
+mod incremental_manual;
+
 struct Direct {
+    backend: Arc<EngineBackend>,
     share: DefaultShare,
     // AuthReader is weak: retain the real store and its lock until dispatch ends.
     _auth: AuthStore,
@@ -25,6 +29,10 @@ struct Direct {
 
 impl Direct {
     fn start(root: &Path, engine: Engine, auth: AuthStore) -> Self {
+        Self::start_with_limit(root, engine, auth, 4096)
+    }
+
+    fn start_with_limit(root: &Path, engine: Engine, auth: AuthStore, limit: u64) -> Self {
         let backend = Arc::new(EngineBackend::new(engine));
         let auth = backend.protect_auth(auth).unwrap();
         backend.set_management_auth(auth.reader()).unwrap();
@@ -44,10 +52,10 @@ impl Direct {
         };
         let account = crate::smb_account_binding::Authority::open(&config).unwrap();
         let budget = budget::Budget::recover(&spool, config.spool_limits).unwrap();
-        let max_file_bytes = backend.capabilities().unwrap().max_upload_bytes().min(4096);
+        let max_file_bytes = backend.capabilities().unwrap().max_upload_bytes().min(limit);
         let account_generation = account.read().unwrap().selection().generation;
         let shared = Arc::new(Shared {
-            backend,
+            backend: backend.clone(),
             account,
             auth: auth.reader(),
             spool,
@@ -59,7 +67,7 @@ impl Direct {
         });
         let share =
             DefaultShare::new(shared, identity, account_generation, max_file_bytes).unwrap();
-        Self { share, _auth: auth }
+        Self { backend, share, _auth: auth }
     }
 
     fn call(&mut self, request: Request) -> Reply {

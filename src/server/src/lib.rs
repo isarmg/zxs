@@ -411,7 +411,7 @@ fn verify_content_file(
     };
     if !storage_contract::SUPPORTED_CHECKSUM_CHUNK_BYTES.contains(&manifest.chunk_bytes)
         || manifest.logical_size != size
-        || file.metadata()?.len() != size
+        || file.logical_size()? != size
         || manifest.chunks.len() as u64 != size.div_ceil(manifest.chunk_bytes as u64)
     {
         return Err(corrupt());
@@ -433,7 +433,7 @@ fn verify_content_file(
     }
     let mut extra = [0u8; 1];
     if file.read(&mut extra)? != 0
-        || file.metadata()?.len() != size
+        || file.logical_size()? != size
         || whole.finalize().to_hex().as_str() != hash
     {
         return Err(corrupt());

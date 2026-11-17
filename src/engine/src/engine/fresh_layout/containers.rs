@@ -120,6 +120,7 @@ pub(crate) struct ContainerPreparation {
     renames: BTreeMap<FileId, ContainerNameChange>,
     birth: Option<std::sync::Arc<VerifiedUnbornBirth>>,
     first: BTreeMap<FileId, std::sync::Arc<VerifiedUnbornFirst>>,
+    draft_reads: Vec<std::sync::Arc<crate::container_storage::ReadDraftDigest>>,
 }
 impl ContainerPreparation {
     pub(crate) fn new(
@@ -127,6 +128,7 @@ impl ContainerPreparation {
         mut next: State,
         prepared: &[Prepared],
         result: &OperationResult,
+        draft_read: Option<&std::sync::Arc<crate::container_storage::ReadDraftDigest>>,
     ) -> Result<Self> {
         validate_state(context.state)?;
         // Every old writer must still see Unborn names as occupied. This pure
@@ -153,7 +155,7 @@ impl ContainerPreparation {
             (None, Some(proof), None) => Some(proof.file()),
             (None, None, Some(proof)) => Some(proof.file()),
             (None, None, None) => crate::engine::file_draft::verify_working_transition(
-                context.state, &next, result,
+                context.state, &next, result, draft_read.map(AsRef::as_ref),
             )?,
             _ => return Err(Failure::ContainerScope.into()),
         };
@@ -330,11 +332,18 @@ impl ContainerPreparation {
         Ok(Self {
             next, additions, targets, directory_additions, directory_targets, renames, birth,
             first: first.into_iter().map(|proof| (proof.file(), proof)).collect(),
+            draft_reads: draft_read.into_iter().cloned().collect(),
         })
     }
 
     pub(crate) fn birth(&self) -> Option<&std::sync::Arc<VerifiedUnbornBirth>> {
         self.birth.as_ref()
+    }
+
+    pub(crate) fn draft_reads(&self)
+        -> &[std::sync::Arc<crate::container_storage::ReadDraftDigest>]
+    {
+        &self.draft_reads
     }
 
     pub(crate) fn first_sources(
@@ -754,10 +763,17 @@ pub(crate) struct VerifiedContainerTransition<'a> {
     renames: BTreeMap<FileId, ContainerNameChange>,
     birth: Option<std::sync::Arc<VerifiedUnbornBirth>>,
     first: BTreeMap<FileId, std::sync::Arc<VerifiedUnbornFirst>>,
+    draft_reads: Vec<std::sync::Arc<crate::container_storage::ReadDraftDigest>>,
 }
 impl VerifiedContainerTransition<'_> {
     pub(crate) fn birth(&self) -> Option<&std::sync::Arc<VerifiedUnbornBirth>> {
         self.birth.as_ref()
+    }
+
+    pub(crate) fn draft_reads(&self)
+        -> &[std::sync::Arc<crate::container_storage::ReadDraftDigest>]
+    {
+        &self.draft_reads
     }
 
     pub(crate) fn first_sources(
@@ -778,6 +794,7 @@ impl VerifiedContainerTransition<'_> {
         {
             return Err(Failure::ContainerScope.into());
         }
+        for read in &self.draft_reads { read.require_source()?; }
         Ok(())
     }
 
@@ -805,6 +822,33 @@ pub(crate) fn verify_transition_with_working_source<'a>(
     locations: Option<&RecoveryRenameLocations<'_>>,
 ) -> Result<VerifiedContainerTransition<'a>> {
     let result = next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
+    if result.kind == "file.draft.commit" {
+        let decoded = crate::persist::file_draft::decode(previous, result)?;
+        let target = decoded.outcome().request.target();
+        let record = previous.file_containers.get(&target.file).ok_or(Failure::ContainerScope)?;
+        if record.working.incremental().is_some() {
+            let disk = config.disks.iter().find(|disk| disk.disk_id == record.owner_disk.to_string())
+                .ok_or(Failure::ContainerScope)?;
+            let observed = match locations {
+                Some(locations) => locations.observe_previous(
+                    config, resources, previous, next, candidate, target.file, disk,
+                )?,
+                None => crate::container_storage::ObservedContainerReplica::observe(
+                    published_source(config, resources, previous, target.file, disk)?,
+                )?,
+            };
+            let (base, _) = record.working.draft().ok_or(Failure::ContainerScope)?;
+            let version = previous.versions.get(&base.version_id().to_string())
+                .ok_or(Failure::ContainerScope)?;
+            let reader = crate::container_storage::HeldManualReader::capture(
+                std::sync::Arc::new(observed), *base, version,
+            )?;
+            let read = crate::container_storage::ReadDraftDigest::capture(
+                std::sync::Arc::new(reader), config.checksum_chunk_bytes,
+            )?;
+            return verify_transition_read(config, previous, next, candidate, Some(read));
+        }
+    }
     if result.kind != crate::persist::file_draft::unborn_first::KIND {
         return verify_transition(config, previous, next, candidate);
     }
@@ -814,7 +858,7 @@ pub(crate) fn verify_transition_with_working_source<'a>(
         .ok_or(Failure::ContainerScope)?;
     Ok(VerifiedContainerTransition {
         previous, next, candidate, renames: BTreeMap::new(), birth: None,
-        first: BTreeMap::from([(first.file(), first)]),
+        first: BTreeMap::from([(first.file(), first)]), draft_reads: Vec::new(),
     })
 }
 
@@ -826,25 +870,33 @@ pub(crate) fn verify_transition<'a>(
     next: &'a State,
     candidate: &'a crate::journal::Candidate,
 ) -> Result<VerifiedContainerTransition<'a>> {
+    verify_transition_read(config, previous, next, candidate, None)
+}
+
+fn verify_transition_read<'a>(
+    config: &crate::ValidatedConfig, previous: &'a State, next: &'a State,
+    candidate: &'a crate::journal::Candidate,
+    draft_read: Option<std::sync::Arc<crate::container_storage::ReadDraftDigest>>,
+) -> Result<VerifiedContainerTransition<'a>> {
     validate_state(previous)?;
     validate_state(next)?;
     if let Some(proof) = config.verify_backup_first_layout(previous, next, candidate)? {
         proof.require_pair(previous, next, candidate)?;
         return Ok(VerifiedContainerTransition {
             previous, next, candidate, renames: BTreeMap::new(), birth: None,
-            first: BTreeMap::new(),
+            first: BTreeMap::new(), draft_reads: Vec::new(),
         });
     }
     if let Some(birth) = unborn::candidate(config, previous, next, candidate)? {
         return Ok(VerifiedContainerTransition {
             previous, next, candidate, renames: BTreeMap::new(),
-            birth: Some(std::sync::Arc::new(birth)), first: BTreeMap::new(),
+            birth: Some(std::sync::Arc::new(birth)), first: BTreeMap::new(), draft_reads: Vec::new(),
         });
     }
     if unborn::save_candidate(config, previous, next, candidate)?.is_some() {
         return Ok(VerifiedContainerTransition {
             previous, next, candidate, renames: BTreeMap::new(), birth: None,
-            first: BTreeMap::new(),
+            first: BTreeMap::new(), draft_reads: Vec::new(),
         });
     }
     let result = next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
@@ -854,7 +906,7 @@ pub(crate) fn verify_transition<'a>(
     if !additions.is_empty() && candidate.generation().is_some() {
         return Err(Failure::NamespaceSource.into());
     }
-    let working = crate::engine::file_draft::verify_working_transition(previous, next, result)?;
+    let working = crate::engine::file_draft::verify_working_transition(previous, next, result, draft_read.as_deref())?;
     let mut expected = previous.file_containers.clone();
     if let Some(file) = working {
         let after = next.file_containers.get(&file).ok_or(Failure::ContainerScope)?;
@@ -972,6 +1024,7 @@ pub(crate) fn verify_transition<'a>(
     }
     Ok(VerifiedContainerTransition {
         previous, next, candidate, renames, birth: None, first: BTreeMap::new(),
+        draft_reads: draft_read.into_iter().collect(),
     })
 }
 

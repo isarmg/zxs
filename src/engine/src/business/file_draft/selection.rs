@@ -2,7 +2,7 @@
 use super::DraftError as Failure;
 use crate::{BranchKind, BranchState, ContentState, Error, Result, State};
 use storage_contract::file_container::FileContainerRecord;
-use storage_contract::file_draft::{DraftBase, DraftLocation, FileWorkingState};
+use storage_contract::file_draft::{DraftBase, DraftLocation};
 use storage_contract::{FileId, Generation, HistoryTreeId, NamespaceEntryKind, Placement};
 
 pub(crate) struct Selection {
@@ -99,7 +99,7 @@ pub(crate) fn validate(
     if record.working.revision().generation().get() == 0 {
         return Err(super::invalid());
     }
-    let FileWorkingState::ManualDirty { base, .. } = &record.working else {
+    let Some((base, payload)) = record.working.draft() else {
         return Ok(());
     };
     let branch = state.branches.get(&base.branch_id().to_string())
@@ -115,6 +115,20 @@ pub(crate) fn validate(
             state, &file.to_string(), &base.node_id().to_string(),
         )? != version.version_id
     {
+        return Err(super::invalid());
+    }
+    if let Some(manifest) = record.working.incremental() {
+        manifest.validate(version.logical_size, u64::MAX).map_err(|source| {
+            Error::FileDraft(Failure::WorkingManifest(source))
+        })?;
+        if manifest.material().file() != file
+            || payload.logical_size() != manifest.material().logical_size()
+            || payload.manifest_commitment() != Some(manifest.material().commitment())
+        {
+            return Err(super::invalid());
+        }
+    }
+    if record.working.incremental().is_none() && payload.content_hash().is_none() {
         return Err(super::invalid());
     }
     let head = super::super::file_nodes::retained_branch_head(state, &branch.branch_id)?;

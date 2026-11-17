@@ -48,8 +48,9 @@ impl PlanningContext<'_> {
             state: Arc::clone(self.state), config: self.config.clone(),
             resources: Arc::clone(self.disk_resources), containers, file, path: path.clone(),
         });
-        // Full bytes were admitted by published(); this last check closes its
-        // named entity/stamp interval before a retained source can escape.
+        // Full uploads retain their full-byte admission. Range drafts retain the
+        // authenticated base sidecar and extent identities; their reader
+        // verifies only returned chunks. Close the named source interval here.
         source.open(&path)?;
         Ok(ReadSource::VerifiedDraft { source, path })
     }

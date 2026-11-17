@@ -4,11 +4,12 @@ use crate::{Error, OperationResult, Result, State};
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::file_draft::{DraftCommand, DraftPayload, FileWorkingState};
 use storage_contract::{Event, FileId, Generation};
+use crate::persist::file_draft::{Request, RangeSaveRequest};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Outcome {
-    pub(crate) request: DraftCommand,
+    pub(crate) request: Request,
     pub(crate) working: FileWorkingState,
     pub(crate) content: Option<PublishedContent>,
 }
@@ -35,7 +36,7 @@ pub(crate) fn plan_change(
             if selected.base != *base {
                 return Err(Error::FileDraft(Failure::BaseChanged));
             }
-            if payload.content_hash() != *content_hash || payload.logical_size() != *logical_size {
+            if payload.content_hash() != Some(*content_hash) || payload.logical_size() != *logical_size {
                 return Err(invalid());
             }
             super::write(&record.working, *expected, *base, payload)
@@ -54,20 +55,71 @@ pub(crate) fn plan_change(
     Ok(change.into_next())
 }
 
-/// Explicit commit compares only the immutable, already admitted draft and
-/// its exact base. No history scan and no version allocation are needed.
-pub(crate) fn draft_matches_base(previous: &State, request: &DraftCommand) -> Result<bool> {
-    let DraftCommand::Commit { target, base, .. } = request else {
+pub(crate) fn plan_incremental(
+    previous: &State, request: &RangeSaveRequest, payload: DraftPayload,
+    manifest: &storage_contract::file_draft::IncrementalManifest,
+    operation: storage_contract::OperationId,
+) -> Result<FileWorkingState> {
+    let target = &request.target;
+    let selected = selection::resolve(previous, target)?;
+    let record = previous.file_containers.get(&target.file).ok_or_else(invalid)?;
+    selection::validate(previous, target.file, record)?;
+    let current = &record.working;
+    if selected.base != request.base { return Err(Error::FileDraft(Failure::BaseChanged)); }
+    if !matches!(current, FileWorkingState::ManualClean { .. }
+        | FileWorkingState::ManualIncremental { .. })
+    {
+        return Err(Error::FileDraft(Failure::UnsupportedScope));
+    }
+    let working = super::write(current, request.expected, request.base, payload)
+        .map_err(Error::FileDraft)?.into_next();
+    let version = previous.versions.get(&request.base.version_id().to_string())
+        .ok_or_else(invalid)?;
+    manifest.require_previous(current.incremental(), version.logical_size, u64::MAX)
+        .map_err(|source| Error::FileDraft(Failure::WorkingManifest(source)))?;
+    if manifest.material().file() != target.file
+        || manifest.material().operation() != operation
+        || manifest.material().logical_size() != payload.logical_size()
+        || request.logical_size != payload.logical_size()
+        || payload.manifest_commitment() != Some(manifest.material().commitment())
+        || request.manifest_commitment != manifest.material().commitment()
+    {
         return Err(invalid());
-    };
+    }
+    Ok(FileWorkingState::ManualIncremental {
+        revision: working.revision(), base: request.base, payload, manifest: manifest.clone(),
+    })
+}
+
+/// A range identity alone never supplies a ContentHash. The explicit commit's
+/// actual read proof is retained through the live/cold publication gate.
+pub(crate) fn draft_content_hash(
+    previous: &State, target: &storage_contract::file_draft::DraftLocation,
+    read: Option<&crate::container_storage::ReadDraftDigest>,
+) -> Result<storage_contract::ContentHash> {
+    let record = previous.file_containers.get(&target.file).ok_or_else(invalid)?;
+    let (_, payload) = record.working.draft().ok_or(Error::FileDraft(Failure::DraftRequired))?;
+    match (payload.content_hash(), read) {
+        (Some(hash), None) => Ok(hash),
+        (None, Some(read)) => {
+            read.require_record(target.file, record)?;
+            Ok(read.content_hash())
+        }
+        (Some(_), Some(_)) | (None, None) => Err(invalid()),
+    }
+}
+
+pub(crate) fn draft_matches_base(
+    previous: &State, request: &DraftCommand,
+    read: Option<&crate::container_storage::ReadDraftDigest>,
+) -> Result<bool> {
+    let DraftCommand::Commit { target, base, .. } = request else { return Err(invalid()); };
     let working = &previous.file_containers.get(&target.file).ok_or_else(invalid)?.working;
     let (draft_base, payload) = working.draft().ok_or(Error::FileDraft(Failure::DraftRequired))?;
-    if draft_base != base {
-        return Err(Error::FileDraft(Failure::BaseChanged));
-    }
+    if draft_base != base { return Err(Error::FileDraft(Failure::BaseChanged)); }
+    let hash = draft_content_hash(previous, target, read)?;
     let version = previous.versions.get(&base.version_id().to_string()).ok_or_else(invalid)?;
-    Ok(version.logical_size == payload.logical_size()
-        && version.content_hash == payload.content_hash())
+    Ok(version.logical_size == payload.logical_size() && version.content_hash == hash)
 }
 
 pub(crate) fn apply(next: &mut State, file: FileId, working: FileWorkingState) -> Result<()> {
@@ -98,6 +150,7 @@ pub(crate) fn verify_working_transition(
     previous: &State,
     next: &State,
     result: &OperationResult,
+    read: Option<&crate::container_storage::ReadDraftDigest>,
 ) -> Result<Option<FileId>> {
     if !crate::persist::file_draft::is_kind(&result.kind) {
         preserve(previous, next)?;
@@ -114,17 +167,27 @@ pub(crate) fn verify_working_transition(
     let principal = next.operation_principals.get(&result.operation_id).ok_or_else(invalid)?;
     crate::Engine::require_actor(principal)?;
     let payload = match &outcome.request {
-        DraftCommand::Write { .. } => {
+        Request::Command(DraftCommand::Write { .. }) | Request::Ranges(_) => {
             let (_, payload) = outcome.working.draft().ok_or_else(invalid)?;
             if crate::persist::file_draft::payload_was_published(previous, payload.payload_id())? {
                 return Err(invalid());
             }
             Some(*payload)
         }
-        DraftCommand::SetMode { .. } | DraftCommand::Discard { .. }
-        | DraftCommand::Commit { .. } => None,
+        Request::Command(DraftCommand::SetMode { .. } | DraftCommand::Discard { .. }
+            | DraftCommand::Commit { .. }) => None,
     };
-    let working = plan_change(previous, &outcome.request, payload)?;
+    let working = match &outcome.request {
+        Request::Ranges(request) => plan_incremental(previous, request,
+            payload.ok_or_else(invalid)?, outcome.working.incremental().ok_or_else(invalid)?,
+            result.operation_id)?,
+        Request::Command(request) => plan_change(previous, request, payload)?,
+    };
+    if read.is_some() && !matches!(outcome.request,
+        Request::Command(DraftCommand::Commit { .. }))
+    {
+        return Err(invalid());
+    }
     if working != outcome.working {
         return Err(invalid());
     }
@@ -137,22 +200,20 @@ pub(crate) fn verify_working_transition(
     expected.business_generation = Generation::new(previous.business_generation).next()
         .map_err(|source| Error::FileDraft(Failure::PublicationGeneration(source)))?.get();
     match (&outcome.request, &outcome.content) {
-        (DraftCommand::Commit { target, message, .. }, Some(content)) => {
+        (Request::Command(DraftCommand::Commit { target, message, .. }), Some(content)) => {
             let selection = selection::resolve(previous, target)?;
             let record = previous.file_containers.get(&file).ok_or_else(invalid)?;
             let (_, payload) = record.working.draft().ok_or_else(invalid)?;
             content::replay(
                 previous, &mut expected, target, &selection, *payload, content, message,
-                principal, result.operation_id,
+                principal, result.operation_id, read,
             )?;
         }
-        (DraftCommand::Commit { .. }, None) => {
-            if !draft_matches_base(previous, &outcome.request)? {
-                return Err(invalid());
-            }
+        (Request::Command(command @ DraftCommand::Commit { .. }), None) => {
+            if !draft_matches_base(previous, command, read)? { return Err(invalid()); }
         }
-        (DraftCommand::SetMode { .. } | DraftCommand::Write { .. }
-        | DraftCommand::Discard { .. }, None) => {}
+        (Request::Command(DraftCommand::SetMode { .. } | DraftCommand::Write { .. }
+            | DraftCommand::Discard { .. }) | Request::Ranges(_), None) => {}
         _ => return Err(invalid()),
     }
     apply(&mut expected, file, working)?;

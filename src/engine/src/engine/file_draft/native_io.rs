@@ -1,7 +1,9 @@
 //! Opaque application handle over the existing native working publication.
 //! No mutable data FD or caller-supplied manifest can bypass extent preparation.
 use crate::business::file_draft::DraftError as Failure;
-use crate::container_storage::{HeldUnbornReader, PreparedUnbornSave, UnbornWriteSession};
+use crate::container_storage::{
+    HeldManualReader, HeldUnbornReader, PreparedWorkingSave, WorkingWriteSession,
+};
 use crate::{Engine, Error, OperationResult, Result};
 use std::sync::Arc;
 use storage_contract::file_draft::{DraftLocation, UnbornSaveRequest};
@@ -20,7 +22,7 @@ pub enum NativeCurrentEntry {
 pub struct NativeWorkingFile {
     target: DraftLocation,
     principal: Principal,
-    reader: HeldUnbornReader,
+    reader: NativeReader,
     writable: bool,
     stage: Stage,
     operation: Option<OperationId>,
@@ -29,9 +31,49 @@ pub struct NativeWorkingFile {
 
 enum Stage {
     Idle,
-    Editing(UnbornWriteSession),
-    Pending { request: UnbornSaveRequest, material: Arc<PreparedUnbornSave> },
+    Editing(WorkingWriteSession),
+    Pending { request: SaveRequest, material: Arc<PreparedWorkingSave> },
     Failed,
+}
+
+enum NativeReader {
+    Unborn(HeldUnbornReader),
+    Manual(HeldManualReader),
+}
+
+enum SaveRequest {
+    Unborn(UnbornSaveRequest),
+    Manual(crate::persist::file_draft::RangeSaveRequest),
+}
+
+impl NativeReader {
+    fn require_source(&self) -> Result<()> {
+        match self {
+            Self::Unborn(reader) => reader.require_source(),
+            Self::Manual(reader) => reader.require_source(),
+        }
+    }
+    fn logical_size(&self) -> u64 {
+        match self {
+            Self::Unborn(reader) => reader.logical_size(),
+            Self::Manual(reader) => reader.logical_size(),
+        }
+    }
+    fn read_at(&self, output: &mut [u8], offset: u64) -> Result<usize> {
+        match self {
+            Self::Unborn(reader) => reader.read_at(output, offset),
+            Self::Manual(reader) => reader.read_at(output, offset),
+        }
+    }
+    fn require_record(
+        &self, file: storage_contract::FileId,
+        record: &storage_contract::file_container::FileContainerRecord,
+    ) -> Result<()> {
+        match self {
+            Self::Unborn(reader) => reader.require_record(file, record),
+            Self::Manual(reader) => reader.require_record(file, record),
+        }
+    }
 }
 
 impl NativeWorkingFile {
@@ -46,7 +88,7 @@ impl NativeWorkingFile {
     }
 
     fn editing(&mut self, engine: &Engine, principal: &Principal)
-        -> Result<&mut UnbornWriteSession>
+        -> Result<&mut WorkingWriteSession>
     {
         self.require_writer(principal)?;
         if matches!(self.stage, Stage::Idle) {
@@ -56,7 +98,13 @@ impl NativeWorkingFile {
                 .ok_or(Error::FileDraft(Failure::SourceChanged))?;
             self.reader.require_record(self.target.file, record)?;
             let operation = OperationId::generate()?;
-            let editing = engine.begin_unborn_write(&self.target, operation)?;
+            let editing = match &self.reader {
+                NativeReader::Unborn(_) => engine.begin_unborn_write(&self.target, operation)?,
+                NativeReader::Manual(_) => WorkingWriteSession::begin_manual(
+                    &engine.planning_context(),
+                    engine.open_manual_working(&self.target)?, operation,
+                )?,
+            };
             self.stage = Stage::Editing(editing);
             self.operation = Some(operation);
             self.saved = None;
@@ -102,9 +150,19 @@ impl Engine {
         if writable { self.planning_context().require_write()?; }
         Ok(NativeWorkingFile {
             target: target.clone(), principal: principal.clone(),
-            reader: self.open_unborn_working(target)?, writable, stage: Stage::Idle,
+            reader: self.open_native_reader(target)?, writable, stage: Stage::Idle,
             operation: None, saved: None,
         })
+    }
+
+    fn open_native_reader(&self, target: &DraftLocation) -> Result<NativeReader> {
+        let record = self.state.file_containers.get(&target.file)
+            .ok_or(Error::FileDraft(Failure::SourceChanged))?;
+        if record.working.unborn().is_some() {
+            self.open_unborn_working(target).map(NativeReader::Unborn)
+        } else {
+            self.open_manual_working(target).map(NativeReader::Manual)
+        }
     }
 
     pub fn native_working_size(&self, file: &NativeWorkingFile) -> Result<u64> {
@@ -169,7 +227,11 @@ impl Engine {
             };
             match editing.prepare(&self.planning_context())? {
                 Some(material) => {
-                    let request = material.request(&file.target);
+                    let request = if material.is_manual() {
+                        SaveRequest::Manual(material.manual_command(&file.target)?)
+                    } else {
+                        SaveRequest::Unborn(material.request(&file.target)?)
+                    };
                     file.stage = Stage::Pending { request, material: Arc::new(material) };
                 }
                 None => { file.stage = Stage::Idle; }
@@ -185,10 +247,17 @@ impl Engine {
         let Stage::Pending { request, material } = &file.stage else {
             return Err(Error::FileDraft(Failure::WorkingEditFailed));
         };
-        let result = self.save_unborn_working(request, principal, Some(Arc::clone(material)))?;
+        let result = match request {
+            SaveRequest::Unborn(request) => self.save_unborn_working(
+                request, principal, Some(Arc::clone(material)),
+            )?,
+            SaveRequest::Manual(request) => self.save_incremental_working(
+                request, principal, material.manifest().operation(), Arc::clone(material),
+            )?,
+        };
         // If post-publication source admission fails, retain Pending. The same
         // request will reach Existing before its old source revision on retry.
-        let reader = self.open_unborn_working(&file.target)?;
+        let reader = self.open_native_reader(&file.target)?;
         file.reader = reader;
         file.stage = Stage::Idle;
         file.saved = Some(result.clone());

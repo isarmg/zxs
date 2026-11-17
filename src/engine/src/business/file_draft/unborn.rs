@@ -6,7 +6,7 @@ use crate::{Error, Result, State};
 use name_policy::PortablePath;
 use storage_contract::file_container::{ContainerNamespace, FileContainerRecord};
 use storage_contract::file_container_tags::ContainerTags;
-use storage_contract::file_draft::manifest::UnbornManifest;
+use storage_contract::file_draft::manifest::WorkingManifest;
 use storage_contract::file_draft::{
     CommitMode, DraftLocation, FileWorkingState, UnbornWorking, WorkingRevision,
 };
@@ -40,7 +40,7 @@ pub(crate) enum Edit<'a> {
     Save {
         target: &'a DraftLocation,
         expected: WorkingRevision,
-        manifest: &'a UnbornManifest,
+        manifest: &'a WorkingManifest,
     },
     SetMode {
         target: &'a DraftLocation,

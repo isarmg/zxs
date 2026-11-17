@@ -12,6 +12,7 @@ use storage_contract::{FileId, OperationId, Principal};
 
 mod unborn;
 mod native_io;
+mod incremental;
 pub use native_io::{NativeCurrentEntry, NativeWorkingFile};
 mod selected;
 mod batch;
@@ -152,7 +153,7 @@ impl Engine {
                 );
                 let working = business::plan_change(engine.state(), command, Some(payload))?;
                 business::apply(next, command.target().file, working.clone())?;
-                codec::encode(Outcome { request: command.clone(), working, content: None })
+                codec::encode(Outcome { request: codec::Request::Command(command.clone()), working, content: None })
             },
         )?;
         match plan {
@@ -177,19 +178,29 @@ impl Engine {
         operation: OperationId,
     ) -> Result<OperationResult> {
         if matches!(command, DraftCommand::Write { .. }) { return Err(business::invalid()); }
+        let mut committed = None;
         let plan = self.plan_mutation_digest(
             command.kind(), principal.as_str(), operation, codec::request(command)?, None,
             |engine, next, prepared| {
                 let context = engine.planning_context();
                 require_initial(&context, command.target())?;
                 let working = business::plan_change(engine.state(), command, None)?;
+                let read = if matches!(command, DraftCommand::Commit { .. })
+                    && context.state.file_containers.get(&command.target().file)
+                        .and_then(|record| record.working.incremental()).is_some()
+                {
+                    Some(crate::container_storage::ReadDraftDigest::capture(
+                        Arc::new(engine.open_manual_working(command.target())?),
+                        context.config.checksum_chunk_bytes,
+                    )?)
+                } else { None };
                 let content = match command {
                     DraftCommand::Commit { .. } => {
-                        if business::draft_matches_base(engine.state(), command)? {
+                        if business::draft_matches_base(engine.state(), command, read.as_deref())? {
                             None
                         } else {
                             Some(business::build_content(
-                                &context, next, prepared, command, principal.as_str(), operation,
+                                &context, next, prepared, command, principal.as_str(), operation, read.as_deref(),
                             )?)
                         }
                     }
@@ -199,13 +210,23 @@ impl Engine {
                 // Clear the draft only after the equal-base check or the content
                 // constructor succeeds. Errors leave the published draft intact.
                 business::apply(next, command.target().file, working.clone())?;
-                codec::encode(Outcome { request: command.clone(), working, content })
+                committed = read;
+                codec::encode(Outcome { request: codec::Request::Command(command.clone()), working, content })
             },
         )?;
         match plan {
             MutationPlan::Existing(receipt) => Ok(receipt),
             MutationPlan::Prepared { next, prepared, result } => {
-                self.persist(*next, prepared, result.clone())?;
+                match committed {
+                    Some(read) => {
+                        let input = incremental::CommittedDraftInput::new(
+                            &self.planning_context(), &next, &result, read,
+                        )?;
+                        self.persist_committed_draft(*next, prepared, result.clone(),
+                            WorkingPublicationInput::Committed(input))?;
+                    }
+                    None => self.persist(*next, prepared, result.clone())?,
+                }
                 Ok(result)
             }
         }

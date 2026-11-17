@@ -1,4 +1,4 @@
-//! Immutable working material for a container which has no historical node.
+//! Immutable bounded blocks for an unpublished body or an overlay on one exact base.
 //!
 //! This value is the working field of the one authoritative container record.
 //! It is not a Version, a full-file content hash, or permission to open a path.
@@ -211,7 +211,7 @@ pub struct Truncation {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serialization(deny_unknown_fields)]
-pub struct UnbornManifest {
+pub struct WorkingManifest {
     file: FileId,
     operation: OperationId,
     generation: SaveGeneration,
@@ -272,7 +272,7 @@ fn required_truncation<'de, D: Deserializer<'de>>(
     Option::<Truncation>::deserialize(deserializer)
 }
 
-impl<'de> Deserialize<'de> for UnbornManifest {
+impl<'de> Deserialize<'de> for WorkingManifest {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let wire = WireManifest::deserialize(deserializer)?;
         let value = Self {
@@ -289,7 +289,7 @@ impl<'de> Deserialize<'de> for UnbornManifest {
     }
 }
 
-impl UnbornManifest {
+impl WorkingManifest {
     pub fn first(
         file: FileId,
         operation: OperationId,
@@ -358,6 +358,10 @@ impl UnbornManifest {
     pub const fn previous(&self) -> ManifestPrevious { self.previous }
     pub const fn logical_size(&self) -> u64 { self.logical_size }
     pub fn blocks(&self) -> &[WorkingBlock] { &self.blocks }
+
+    pub fn retained_prefix(&self) -> Option<u64> {
+        self.truncation.map(|cut| cut.retained_prefix)
+    }
 
     pub fn block(&self, index: u64) -> Option<WorkingBlock> {
         self.blocks.binary_search_by_key(&index, |block| block.index)
@@ -470,24 +474,24 @@ impl UnbornManifest {
         &self,
         operation: OperationId,
         maximum: u64,
-    ) -> Result<UnbornSave, ManifestError> {
+    ) -> Result<WorkingSave, ManifestError> {
         self.validate(maximum)?;
-        Ok(UnbornSave { next: self.successor(operation)?, maximum })
+        Ok(WorkingSave { next: self.successor(operation)?, maximum })
     }
 }
 
 /// One private, ordered edit batch. Mutation frames never allocate save
 /// generations. Only finish returns the one candidate for a later durable
 /// publication; it does not itself issue Saved or release the published base.
-pub struct UnbornSave {
-    next: UnbornManifest,
+pub struct WorkingSave {
+    next: WorkingManifest,
     maximum: u64,
 }
 
-impl UnbornSave {
+impl WorkingSave {
     pub fn first(file: FileId, operation: OperationId, maximum: u64) -> Self {
         Self {
-            next: UnbornManifest {
+            next: WorkingManifest {
                 file,
                 operation,
                 generation: SaveGeneration::first(),
@@ -500,7 +504,15 @@ impl UnbornSave {
         }
     }
 
-    pub fn view(&self) -> &UnbornManifest { &self.next }
+    pub fn first_with_length(
+        file: FileId, operation: OperationId, length: u64, maximum: u64,
+    ) -> Result<Self, ManifestError> {
+        let mut value = Self::first(file, operation, maximum);
+        value.resize(length)?;
+        Ok(value)
+    }
+
+    pub fn view(&self) -> &WorkingManifest { &self.next }
 
     /// Read/modify/write of every affected block is verified by the actual
     /// held-source producer. None means an observed all-zero block, never an
@@ -573,7 +585,7 @@ impl UnbornSave {
         Ok(())
     }
 
-    pub fn finish(self) -> Result<UnbornManifest, ManifestError> {
+    pub fn finish(self) -> Result<WorkingManifest, ManifestError> {
         self.next.validate(self.maximum)?;
         Ok(self.next)
     }

@@ -80,6 +80,7 @@ impl ContainerPreparation {
         Ok(Self {
             next, targets, additions: BTreeMap::new(), directory_additions: BTreeSet::new(),
             directory_targets: BTreeSet::new(), renames: BTreeMap::new(), birth: None, first,
+            draft_reads: source.draft_reads().iter().flatten().cloned().collect(),
         })
     }
 }
@@ -119,5 +120,6 @@ pub(crate) fn verify_directory_transition<'a>(
     }
     Ok(VerifiedContainerTransition {
         previous, next, candidate, renames: BTreeMap::new(), birth: None, first,
+        draft_reads: proof.draft_reads().to_vec(),
     })
 }

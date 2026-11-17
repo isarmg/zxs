@@ -14,7 +14,7 @@ pub(crate) mod unborn;
 pub(crate) use selection::{resolve, validate as validate_working_record};
 mod publication;
 pub(crate) use publication::{
-    Outcome, apply, draft_matches_base, plan_change, verify_working_transition,
+    Outcome, apply, draft_content_hash, draft_matches_base, plan_change, plan_incremental, verify_working_transition,
 };
 use storage_contract::file_draft::{
     CommitMode, DraftBase, DraftPayload, FileWorkingState, WorkingRevision,
@@ -221,7 +221,8 @@ pub(crate) fn write(
         FileWorkingState::Unborn { .. } => return Err(DraftError::UnbornRequired),
         FileWorkingState::Automatic { .. } => return Err(DraftError::ManualRequired),
         FileWorkingState::ManualClean { .. } => {}
-        FileWorkingState::ManualDirty { base: original, .. } => {
+        FileWorkingState::ManualDirty { base: original, .. }
+        | FileWorkingState::ManualIncremental { base: original, .. } => {
             if *original != base {
                 return Err(DraftError::BaseChanged);
             }
@@ -248,7 +249,8 @@ pub(crate) fn discard(
         FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => {
             current.clone()
         }
-        FileWorkingState::ManualDirty { .. } => FileWorkingState::ManualClean {
+        FileWorkingState::ManualDirty { .. } | FileWorkingState::ManualIncremental { .. }
+            => FileWorkingState::ManualClean {
             revision: next_revision(current)?,
         },
     };
@@ -268,7 +270,8 @@ pub(crate) fn commit(
         FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => {
             Err(DraftError::DraftRequired)
         }
-        FileWorkingState::ManualDirty { base, payload, .. } => Ok(ManualCommit {
+        FileWorkingState::ManualDirty { base, payload, .. }
+        | FileWorkingState::ManualIncremental { base, payload, .. } => Ok(ManualCommit {
             previous: current,
             base,
             payload,
@@ -281,7 +284,8 @@ pub(crate) fn require_clean(current: &FileWorkingState) -> Result<(), DraftError
     match current {
         FileWorkingState::Unborn { .. } => Err(DraftError::UnbornRequired),
         FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => Ok(()),
-        FileWorkingState::ManualDirty { .. } => Err(DraftError::Dirty),
+        FileWorkingState::ManualDirty { .. } | FileWorkingState::ManualIncremental { .. }
+            => Err(DraftError::Dirty),
     }
 }
 

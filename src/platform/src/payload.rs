@@ -276,3 +276,17 @@ pub fn verify_full_observed(
 #[cfg(test)]
 #[path = "../../../test/platform/unit/payload/tests.rs"]
 mod tests;
+
+/// Verify precisely the allocation a range consumer will expose. The caller
+/// supplies its already-admitted chunk bound and reads no bytes outside it.
+pub fn read_verified_chunk(
+    count: usize, expected: blake3::Hash,
+    read: impl FnOnce(&mut [u8]) -> io::Result<()>,
+) -> io::Result<Vec<u8>> {
+    let mut buffer = vec![0; count];
+    read(&mut buffer)?;
+    if blake3::hash(&buffer) != expected {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Digest));
+    }
+    Ok(buffer)
+}

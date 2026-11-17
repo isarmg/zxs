@@ -1187,6 +1187,7 @@ fn incomplete_private_version_admission_cannot_be_truncated_by_zip() {
         engine.state().clone(),
         &prepared,
         &engine.state().operations[&candidate.operation_id],
+        None,
     )
     .unwrap();
     assert!(plan.additions().is_empty());

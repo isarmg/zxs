@@ -1,5 +1,5 @@
 //! Working state of the existing container owner before its first history node.
-use super::manifest::{ManifestError, ManifestPrevious, UnbornManifest};
+use super::manifest::{ManifestError, ManifestPrevious, WorkingManifest};
 use super::{CommitMode, FileWorkingState, WorkingRevision};
 use crate::{FileId, Generation, GenerationExhausted};
 use data_serialization::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ pub struct BirthRequest {
 pub struct UnbornSaveRequest {
     pub target: super::DraftLocation,
     pub expected: WorkingRevision,
-    pub manifest: UnbornManifest,
+    pub manifest: WorkingManifest,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -31,7 +31,7 @@ pub struct UnbornSaveRequest {
 pub enum UnbornBody {
     /// Container birth is a readable empty file, not a saved empty Version.
     Empty {},
-    Saved { manifest: UnbornManifest },
+    Saved { manifest: WorkingManifest },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -65,7 +65,7 @@ impl UnbornWorking {
     pub fn saved(
         &self,
         file: FileId,
-        manifest: UnbornManifest,
+        manifest: WorkingManifest,
         maximum: u64,
     ) -> Result<Self, ManifestError> {
         manifest.validate(maximum)?;

@@ -6,7 +6,7 @@ use crate::business::file_draft::{
 use crate::engine::file_draft::SelectedWorkingSources;
 use crate::engine::{PlanningContext, Prepared, ReadSource};
 use crate::{Error, FileVersion, Result, State, ValidatedConfig};
-use crate::container_storage::{PreparedUnbornFull, ReadWorkingDigest};
+use crate::container_storage::{PreparedUnbornFull, ReadWorkingDigest, ReadDraftDigest};
 use crate::business::file_draft::unborn::first::{FirstContentConstruction, FirstCommit};
 use crate::business::namespace::working::WorkingNamespace;
 use std::sync::Arc;
@@ -171,6 +171,7 @@ impl PlannedItem {
 fn plan(
     previous: &State, request: &WorkingBatchRequest, sequence: Sequence,
     maximum_entries: usize, maximum_bytes: u64,
+    reads: &[Option<Arc<ReadDraftDigest>>],
 ) -> Result<Vec<PlannedItem>> {
     if previous.operations.contains_key(&request.operation)
         || sequence.get() <= previous.sequence
@@ -182,8 +183,12 @@ fn plan(
     let checked = selected::require_all(
         previous, &request.selected, maximum_entries, maximum_bytes,
     )?;
+    if reads.len() != checked.len() { return Err(invalid()); }
     let mut planned = Vec::with_capacity(checked.len());
-    for item in checked {
+    for (index, item) in checked.into_iter().enumerate() {
+        if item.record().working.incremental().is_some() != reads[index].is_some() {
+            return Err(invalid());
+        }
         let selected = item.request();
         let planned_item = match selected.expected.content {
             WorkingContentExpectation::Born { base, .. } => {
@@ -194,7 +199,7 @@ fn plan(
                 let working_after = super::commit(
                     &item.record().working, selected.expected.revision,
                 ).map_err(Error::FileDraft)?.into_change().into_next();
-                let retained = if super::draft_matches_base(previous, &command)? {
+                let retained = if super::draft_matches_base(previous, &command, reads[index].as_deref())? {
                     Some(previous.versions.get(&base.version_id().to_string())
                         .cloned().ok_or_else(invalid)?)
                 } else {
@@ -286,7 +291,8 @@ enum Construction<'a> {
 pub(crate) fn build(
     context: &PlanningContext<'_>, selection: &Arc<SelectedWorkingSources>,
     request: &WorkingBatchRequest,
-) -> Result<(WorkingBatchProjection, Vec<Prepared>, Vec<Option<Arc<PreparedUnbornFull>>>)> {
+) -> Result<(WorkingBatchProjection, Vec<Prepared>, Vec<Option<Arc<PreparedUnbornFull>>>,
+    Vec<Option<Arc<ReadDraftDigest>>>)> {
     selection.require_context(context)?;
     if request.selected.len() != selection.sources().len()
         || request.selected.iter().zip(selection.sources())
@@ -295,8 +301,12 @@ pub(crate) fn build(
         return Err(Error::FileDraft(Failure::SourceChanged));
     }
     let sequence = Sequence::new(context.next_slot);
+    let reads = selection.sources().iter().map(|source| {
+        source.draft_digest(context.state, context.config.checksum_chunk_bytes)
+    }).collect::<Result<Vec<_>>>()?;
     let planned = plan(
         context.state, request, sequence, context.config.max_entries, context.config.max_file_bytes,
+        &reads,
     )?;
     let materials = planned.iter().enumerate().map(|(index, item)| match item {
         PlannedItem::Born { .. } => Ok(None),
@@ -326,7 +336,7 @@ pub(crate) fn build(
                 let source = ReadSource::selected_working(Arc::clone(selection), index)?;
                 content::build_planned(
                     context, next, &mut prepared, command, request.principal.as_str(),
-                    request.operation, policy, &source,
+                    request.operation, policy, &source, reads[index].as_deref(),
                 )?
             }
             (Construction::First(construction), PlannedItem::First { .. }) => {
@@ -338,7 +348,7 @@ pub(crate) fn build(
         Ok(content)
     })?;
     drop(policies);
-    Ok((projection, prepared, materials))
+    Ok((projection, prepared, materials, reads))
 }
 
 /// Complete deterministic replay still needs the actual predecessor BODY for
@@ -347,8 +357,9 @@ pub(crate) fn replay(
     previous: &State, config: &ValidatedConfig, request: &WorkingBatchRequest,
     sequence: Sequence, trace: &WorkingBatchTrace,
     first_reads: &[Option<ReadWorkingDigest<'_>>],
+    reads: &[Option<Arc<ReadDraftDigest>>],
 ) -> Result<WorkingBatchProjection> {
-    let planned = plan(previous, request, sequence, config.max_entries, config.max_file_bytes)?;
+    let planned = plan(previous, request, sequence, config.max_entries, config.max_file_bytes, reads)?;
     if trace.contents.len() != planned.len()
         || first_reads.len() != planned.len()
         || planned.iter().zip(&trace.contents)
@@ -367,7 +378,7 @@ pub(crate) fn replay(
                 let (_, payload) = record.working.draft().ok_or_else(invalid)?;
                 content::replay(
                     previous, expected, target, &selection, *payload, facts, message,
-                    request.principal.as_str(), request.operation,
+                    request.principal.as_str(), request.operation, reads[index].as_deref(),
                 )?;
             }
             PlannedItem::Born { .. } => return Err(invalid()),

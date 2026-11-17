@@ -25,7 +25,8 @@ impl WorkingExpectation {
             FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. } => {
                 return None;
             }
-            FileWorkingState::ManualDirty { base, payload, .. } => {
+            FileWorkingState::ManualDirty { base, payload, .. }
+            | FileWorkingState::ManualIncremental { base, payload, .. } => {
                 WorkingContentExpectation::Born { base: *base, payload: *payload }
             }
             FileWorkingState::Unborn { working } => match working.body() {

@@ -25,6 +25,7 @@ pub(crate) struct VerifiedDirectoryDraft<'pair> {
     receipt: &'pair OperationResult,
     envelope: Cow<'pair, Envelope>,
     first_sources: Vec<Option<Arc<HeldUnbornReader>>>,
+    draft_reads: Vec<Arc<crate::container_storage::ReadDraftDigest>>,
 }
 
 impl VerifiedDirectoryDraft<'_> {
@@ -39,12 +40,21 @@ impl VerifiedDirectoryDraft<'_> {
         self.require_first_sources()
     }
 
+    pub(crate) fn draft_reads(&self)
+        -> &[Arc<crate::container_storage::ReadDraftDigest>]
+    {
+        &self.draft_reads
+    }
+
     pub(crate) fn first_source(&self, file: FileId) -> Option<&Arc<HeldUnbornReader>> {
         self.envelope.directory.files().iter().position(|item| item.target.file == file)
             .and_then(|index| self.first_sources[index].as_ref())
     }
 
     fn require_first_sources(&self) -> Result<()> {
+        for read in &self.draft_reads {
+            read.require_source().map_err(Failure::Engine)?;
+        }
         for source in self.first_sources.iter().flatten() {
             source.require_source().map_err(Failure::Engine)?;
         }
@@ -76,6 +86,7 @@ impl VerifiedDirectoryDraft<'_> {
         }).collect::<Result<Vec<_>>>()?;
         Ok(VerifiedDirectoryDraft {
             previous, next, receipt, envelope: Cow::Borrowed(envelope), first_sources,
+            draft_reads: files.draft_reads().iter().flatten().cloned().collect(),
         })
     }
 }
@@ -128,6 +139,23 @@ fn verify_bound_original<'pair>(
     let checked = crate::business::file_draft::selected::require_all(
         previous, request.selected(), config.max_entries, config.max_file_bytes,
     ).map_err(Failure::Engine)?;
+    let draft_reads = checked.iter().map(|selected| {
+        let record = selected.record();
+        if record.working.incremental().is_none() { return Ok(None); }
+        let disk = config.disks.iter().find(|disk| disk.disk_id == record.owner_disk.to_string())
+            .ok_or(Failure::Projection)?;
+        let source = crate::engine::fresh_layout::containers::published_source(
+            config, resources, previous, selected.request().target.file, disk,
+        ).map_err(Failure::Engine)?;
+        let observed = Arc::new(ObservedContainerReplica::observe(source).map_err(Failure::Engine)?);
+        let (base, _) = record.working.draft().ok_or(Failure::Projection)?;
+        let version = previous.versions.get(&base.version_id().to_string())
+            .ok_or(Failure::Projection)?;
+        let reader = crate::container_storage::HeldManualReader::capture(observed, *base, version)
+            .map_err(Failure::Engine)?;
+        crate::container_storage::ReadDraftDigest::capture(Arc::new(reader),
+            config.checksum_chunk_bytes).map(Some).map_err(Failure::Engine)
+    }).collect::<Result<Vec<_>>>()?;
     let first_sources = checked.iter().map(|selected| {
         match selected.request().expected.content {
             WorkingContentExpectation::Born { .. } => Ok(None),
@@ -151,7 +179,7 @@ fn verify_bound_original<'pair>(
         source.as_ref().map(|reader| reader.full_digest()).transpose().map_err(Failure::Engine)
     }).collect::<Result<Vec<_>>>()?;
     let replay = super::reconstruction::replay(
-        config, previous, index, result, maximum, &first_reads,
+        config, previous, index, result, maximum, &first_reads, &draft_reads,
     )?;
     replay.require_candidate(candidate)?;
     if !crate::publication_shape::same_transition(previous, replay.state(), next) {
@@ -164,6 +192,7 @@ fn verify_bound_original<'pair>(
         next,
         receipt: result,
         envelope: Cow::Owned(envelope), first_sources,
+        draft_reads: draft_reads.into_iter().flatten().collect(),
     })
 }
 
@@ -177,6 +206,7 @@ pub(crate) struct ObservedOriginalDirectory<'original> {
     receipt: &'original OperationResult,
     envelope: Envelope,
     first_sources: Vec<Option<Arc<HeldUnbornReader>>>,
+    draft_reads: Vec<Arc<crate::container_storage::ReadDraftDigest>>,
     candidate: Candidate,
     config: crate::ValidatedConfig,
     resources: Arc<crate::disk::DiskResources>,
@@ -193,6 +223,7 @@ impl ObservedOriginalDirectory<'_> {
             previous: self.previous.as_ref(), next: self.next, receipt: self.receipt,
             envelope: Cow::Borrowed(&self.envelope),
             first_sources: self.first_sources.clone(),
+            draft_reads: self.draft_reads.clone(),
         }
     }
 
@@ -217,6 +248,9 @@ impl ObservedOriginalDirectory<'_> {
     }
 
     pub(crate) fn require_material(&self) -> Result<()> {
+        for read in &self.draft_reads {
+            read.require_source().map_err(Failure::Engine)?;
+        }
         for source in self.first_sources.iter().flatten() {
             source.require_source().map_err(Failure::Engine)?;
         }
@@ -272,6 +306,7 @@ pub(crate) fn observe_original<'original>(
 ) -> Result<ObservedOriginalDirectory<'original>> {
     let proof = verify_original(context, candidate, original_snapshot, maximum)?;
     let first_sources = proof.first_sources;
+    let draft_reads = proof.draft_reads;
     let envelope = proof.envelope.into_owned();
     let source = &envelope.directory.request().source;
     let root = context.namespace_host_root(
@@ -282,6 +317,7 @@ pub(crate) fn observe_original<'original>(
     let receipt = next.operations.get(&candidate.operation_id).ok_or(Failure::Candidate)?;
     let observed = ObservedOriginalDirectory {
         previous: Arc::clone(context.state), next, receipt, envelope, first_sources,
+        draft_reads,
         candidate: candidate.clone(), config: context.config.clone(),
         resources: Arc::clone(context.disk_resources), snapshot: context.snapshot.clone(),
         material,

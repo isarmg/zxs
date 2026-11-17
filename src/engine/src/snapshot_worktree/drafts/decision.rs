@@ -147,7 +147,7 @@ impl<'a> BoundDirectoryRequest<'a> {
             match (self.request.selected[index].content, result.outcome) {
                 (ExpectedContent::Born { payload, .. }, FileOutcome::Retained { .. }) => {
                     if self.retained[index] != Some(material)
-                        || payload.content_hash() != material.content_hash
+                        || payload.content_hash().is_some_and(|hash| hash != material.content_hash)
                     {
                         return Err(ReconstructionError::File(result.target.file));
                     }
@@ -155,7 +155,7 @@ impl<'a> BoundDirectoryRequest<'a> {
                 (ExpectedContent::Born { payload, .. }, FileOutcome::Published { .. }) => {
                     let base = self.retained[index]
                         .ok_or(ReconstructionError::Base(result.target.file))?;
-                    if payload.content_hash() != material.content_hash
+                    if payload.content_hash().is_some_and(|hash| hash != material.content_hash)
                         || context.state.versions.contains_key(&material.version_id.to_string())
                         || (base.size == material.size
                             && base.content_hash == material.content_hash)

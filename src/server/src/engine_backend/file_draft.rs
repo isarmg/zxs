@@ -80,11 +80,40 @@ pub(super) fn content(
         http::StatusCode::CONFLICT, storage_contract::ErrorCode::FileBranchConflict,
         "selected file has no shared draft body",
     ))?.1;
-    verified_content(payload.logical_size(), payload.content_hash(), request.deadline, || {
+    saved_content(payload, request.deadline, || {
         let file = engine.open_file_draft(&request.target).map_err(error)?;
         drop(engine);
         Ok(file)
     })
+}
+
+pub(super) fn saved_content(
+    payload: storage_contract::file_draft::DraftPayload,
+    deadline: std::time::Instant,
+    open: impl FnOnce() -> Result<storage_engine::ReadFile, ApiError>,
+) -> Result<Content, ApiError> {
+    match payload {
+        storage_contract::file_draft::DraftPayload::Full { content_hash, .. } => {
+            verified_content(payload.logical_size(), content_hash, deadline, open)
+        }
+        storage_contract::file_draft::DraftPayload::Ranges { manifest_commitment, .. } => {
+            if std::time::Instant::now() >= deadline {
+                return Err(crate::transfer_limits::timeout_error());
+            }
+            let file = open()?;
+            if file.verified_working_identity().map_err(error)? != Some(payload) {
+                return Err(ApiError::invalid("range draft differs from its held source"));
+            }
+            // None means this opaque engine reader verifies each returned
+            // range itself. A raw descriptor cannot construct this branch.
+            Ok(Content {
+                fallback_files: Vec::new(), checksum_manifest: None,
+                file: file.into(), size: payload.logical_size(),
+                hash: format!("working-manifest-{manifest_commitment}"),
+                lease: Box::new(()), download_name: None,
+            })
+        }
+    }
 }
 
 pub(super) fn verified_content(

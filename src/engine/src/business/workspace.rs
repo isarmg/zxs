@@ -1218,6 +1218,13 @@ impl crate::engine::PlanningContext<'_> {
 }
 
 impl crate::engine::PlanningContext<'_> {
+    pub(crate) fn build_draft_version(
+        &self, state: &mut State, pending: &mut Vec<Prepared>, input: VersionBuild<'_>,
+        read: &crate::container_storage::ReadDraftDigest,
+    ) -> Result<FileVersion> {
+        self.build_version_with_reserved(state, pending, input, None, None, Some(read))
+    }
+
     fn build_version_checked(
         &self,
         state: &mut State,
@@ -1225,7 +1232,7 @@ impl crate::engine::PlanningContext<'_> {
         input: VersionBuild<'_>,
         expected: Option<&FileVersion>,
     ) -> Result<FileVersion> {
-        self.build_version_with_reserved(state, pending, input, expected, None)
+        self.build_version_with_reserved(state, pending, input, expected, None, None)
     }
 
     fn build_version_with_reserved(
@@ -1235,6 +1242,7 @@ impl crate::engine::PlanningContext<'_> {
         input: VersionBuild<'_>,
         expected: Option<&FileVersion>,
         mut reserved: Option<&mut crate::snapshot_worktree::ReservedFileVersion>,
+        draft_read: Option<&crate::container_storage::ReadDraftDigest>,
     ) -> Result<FileVersion> {
         let VersionBuild {
             history,
@@ -1246,8 +1254,22 @@ impl crate::engine::PlanningContext<'_> {
             source_ids,
             checkpoint,
         } = input;
+        let (size, content_hash, manifest) = match draft_read {
+            Some(read) => {
+                let file_id = file_id.parse::<storage_contract::FileId>()?;
+                let record = self.state.file_containers.get(&file_id)
+                    .ok_or_else(crate::business::file_draft::invalid)?;
+                read.require_record(file_id, record)?;
+                if read.checksums().chunk_bytes != self.config.checksum_chunk_bytes
+                    || source.open()?.verified_working_identity()? != Some(read.payload())
+                {
+                    return Err(crate::business::file_draft::invalid());
+                }
+                (read.payload().logical_size(), read.content_hash(), read.checksums().clone())
+            }
+            None => {
         let mut file = source.open()?;
-        let size = file.metadata()?.len();
+        let size = file.logical_size()?;
         if size > self.config.max_file_bytes {
             return Err(Error::new(
                 storage_contract::ErrorCode::FileTooLarge,
@@ -1298,6 +1320,9 @@ impl crate::engine::PlanningContext<'_> {
         };
         let digest = full.finalize();
         let content_hash = ContentHash::from_digest(digest);
+                (size, content_hash, manifest)
+            }
+        };
         if expected.is_some_and(|original| {
             original.logical_size != size || original.content_hash != content_hash
         }) {
@@ -1575,7 +1600,7 @@ impl crate::engine::PlanningContext<'_> {
                             path: location, source: &source, primary: &primary, copies,
                             source_ids: source_ids.clone(), checkpoint: pending_source.is_some(),
                         },
-                        None, reserved.as_deref_mut(),
+                        None, reserved.as_deref_mut(), None,
                     )?;
                     if version.logical_size != file.size || version.content_hash != file.content_hash {
                         return Err(Error::new(storage_contract::ErrorCode::ChecksumMismatch, "workspace source changed after sealing"));

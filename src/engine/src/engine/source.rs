@@ -169,7 +169,25 @@ impl ReadSource {
 /// Managed resources never expose their inner file or an unleased descriptor.
 pub struct ReadFile(ReadFileSource);
 
+impl ReadFile {
+    /// A range identity is returned only for the actual engine reader that
+    /// verifies its base checksum chunk or immutable extent before every read.
+    pub fn verified_working_identity(&self)
+        -> Result<Option<storage_contract::file_draft::DraftPayload>>
+    {
+        match &self.0 {
+            ReadFileSource::IncrementalDraft { scope, .. } => scope.incremental_identity().map(Some),
+            ReadFileSource::Local(_) | ReadFileSource::Managed(_)
+            | ReadFileSource::WorkingFull { .. } | ReadFileSource::Container { .. } => Ok(None),
+        }
+    }
+}
+
 enum ReadFileSource {
+    IncrementalDraft {
+        scope: Arc<crate::container_storage::ObservedContainerReplica>,
+        offset: u64,
+    },
     Local(File),
     Managed(DiskFile),
     WorkingFull {
@@ -200,12 +218,31 @@ impl ReadFile {
     /// and the caller remains responsible for synchronization and publication.
     pub fn try_clone_working_file(&self, target: &File, bytes: u64) -> io::Result<bool> {
         match &self.0 {
+            ReadFileSource::IncrementalDraft { .. } => Ok(false),
             ReadFileSource::Local(file) => {
                 platform_io::fs_safety::linux::try_clone_working_file(file, target, bytes)
             }
             ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
             | ReadFileSource::WorkingFull { file, .. } => {
                 file.try_clone_working_file(target, bytes)
+            }
+        }
+    }
+
+    pub(crate) fn incremental_draft(
+        scope: Arc<crate::container_storage::ObservedContainerReplica>,
+    ) -> Self {
+        Self(ReadFileSource::IncrementalDraft { scope, offset: 0 })
+    }
+
+    pub fn logical_size(&self) -> io::Result<u64> {
+        match &self.0 {
+            ReadFileSource::IncrementalDraft { scope, .. } => {
+                scope.working_size().map_err(io::Error::other)
+            }
+            ReadFileSource::Local(_) | ReadFileSource::Managed(_)
+            | ReadFileSource::WorkingFull { .. } | ReadFileSource::Container { .. } => {
+                self.metadata().map(|metadata| metadata.len())
             }
         }
     }
@@ -231,6 +268,10 @@ impl ReadFile {
         expectation: platform_io::payload::Expectation,
     ) -> std::result::Result<platform_io::payload::Receipt, platform_io::payload::Error> {
         match &mut self.0 {
+            ReadFileSource::IncrementalDraft { .. } => Err(platform_io::payload::Error::Io(
+                io::Error::new(io::ErrorKind::Unsupported,
+                    "a merged working body has no independent FULL inode"),
+            )),
             ReadFileSource::Local(file) => platform_io::payload::verify_full(file, expectation),
             ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
             | ReadFileSource::WorkingFull { file, .. } => {
@@ -241,6 +282,7 @@ impl ReadFile {
 
     pub fn check_running(&self) -> Result<()> {
         match &self.0 {
+            ReadFileSource::IncrementalDraft { scope, .. } => scope.verify(),
             ReadFileSource::Local(_) => Ok(()),
             ReadFileSource::Managed(file) => file.check_running(),
             ReadFileSource::Container { file, .. } => file.check_running(),
@@ -250,6 +292,9 @@ impl ReadFile {
 
     pub fn metadata(&self) -> io::Result<std::fs::Metadata> {
         match &self.0 {
+            ReadFileSource::IncrementalDraft { .. } => Err(io::Error::new(
+                io::ErrorKind::Unsupported, "a merged working body has no single inode metadata",
+            )),
             ReadFileSource::Local(file) => file.metadata(),
             ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
             | ReadFileSource::WorkingFull { file, .. } => {
@@ -260,6 +305,9 @@ impl ReadFile {
 
     pub fn sync_all(&self) -> io::Result<()> {
         match &self.0 {
+            ReadFileSource::IncrementalDraft { .. } => Err(io::Error::new(
+                io::ErrorKind::Unsupported, "immutable working blocks are already synchronized",
+            )),
             ReadFileSource::Local(file) => file.sync_all(),
             ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
             | ReadFileSource::WorkingFull { file, .. } => {
@@ -270,6 +318,12 @@ impl ReadFile {
 
     pub fn try_clone(&self) -> io::Result<Self> {
         match &self.0 {
+            ReadFileSource::IncrementalDraft { scope, offset } => {
+                scope.verify().map_err(io::Error::other)?;
+                Ok(Self(ReadFileSource::IncrementalDraft {
+                    scope: Arc::clone(scope), offset: *offset,
+                }))
+            }
             ReadFileSource::Local(file) => file.try_clone().map(Self::from),
             ReadFileSource::Managed(file) => file.try_clone().map(Self::from),
             ReadFileSource::Container { file, scope } => {
@@ -290,6 +344,12 @@ impl ReadFile {
 impl Read for ReadFile {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         match &mut self.0 {
+            ReadFileSource::IncrementalDraft { scope, offset } => {
+                let count = scope.read_incremental_draft(buffer, *offset)
+                    .map_err(io::Error::other)?;
+                *offset += count as u64;
+                Ok(count)
+            }
             ReadFileSource::Local(file) => file.read(buffer),
             ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
             | ReadFileSource::WorkingFull { file, .. } => {
@@ -302,6 +362,19 @@ impl Read for ReadFile {
 impl Seek for ReadFile {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         match &mut self.0 {
+            ReadFileSource::IncrementalDraft { scope, offset } => {
+                scope.verify().map_err(io::Error::other)?;
+                let next = match position {
+                    SeekFrom::Start(position) => i128::from(position),
+                    SeekFrom::Current(relative) => i128::from(*offset) + i128::from(relative),
+                    SeekFrom::End(relative) => i128::from(scope.working_size()
+                        .map_err(io::Error::other)?) + i128::from(relative),
+                };
+                *offset = u64::try_from(next).map_err(|source| {
+                    io::Error::new(io::ErrorKind::InvalidInput, source)
+                })?;
+                Ok(*offset)
+            }
             ReadFileSource::Local(file) => file.seek(position),
             ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
             | ReadFileSource::WorkingFull { file, .. } => {
@@ -314,6 +387,9 @@ impl Seek for ReadFile {
 impl FileExt for ReadFile {
     fn read_at(&self, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
         match &self.0 {
+            ReadFileSource::IncrementalDraft { scope, .. } => {
+                scope.read_incremental_draft(buffer, offset).map_err(io::Error::other)
+            }
             ReadFileSource::Local(file) => file.read_at(buffer, offset),
             ReadFileSource::Managed(file) | ReadFileSource::Container { file, .. }
             | ReadFileSource::WorkingFull { file, .. } => {

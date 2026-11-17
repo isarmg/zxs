@@ -170,7 +170,7 @@ impl DirectoryDecisionInput {
             .map_err(|source| DirectoryPublicationError::ReceiptIndex(source.into()))?;
         let replay = super::reconstruction::replay(
             context.config, context.state, &index, &result, self.maximum, &files.first_reads()
-                .map_err(DirectoryPublicationError::Engine)?,
+                .map_err(DirectoryPublicationError::Engine)?, files.draft_reads(),
         )?;
         replay.require_file_projection(context.state, files.state())?;
         let next = replay.into_state();

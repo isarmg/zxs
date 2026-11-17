@@ -13,6 +13,8 @@ pub struct SmbNativeOpen<'a> {
 
 pub struct SmbNativeHandle {
     pub(crate) target: DraftLocation,
+    pub(crate) version: Option<storage_contract::VersionId>,
+    pub(crate) mtime: smb_protocol::protocol::FileMtime,
     #[cfg(feature = "core")]
     pub(crate) held: storage_engine::NativeWorkingFile,
 }

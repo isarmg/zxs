@@ -105,12 +105,14 @@ pub(super) fn replay(
     message: &str,
     principal: &str,
     operation: OperationId,
+    read: Option<&crate::container_storage::ReadDraftDigest>,
 ) -> Result<()> {
+    let hash = super::draft_content_hash(previous, target, read)?;
     if expected.versions.contains_key(&facts.version.version_id)
         || expected.placements.contains_key(&facts.version.version_id)
         || expected.content_states.contains_key(&facts.version.version_id)
         || facts.version.logical_size != payload.logical_size()
-        || facts.version.content_hash != payload.content_hash()
+        || facts.version.content_hash != hash
         || facts.allocations.len() > trace_limit(previous, target)?
     {
         return Err(invalid());
@@ -127,7 +129,7 @@ pub(super) fn replay(
             sources: vec![selection.base.version_id().to_string()], checkpoint: false,
         },
         Content {
-            size: payload.logical_size(), hash: payload.content_hash(),
+            size: payload.logical_size(), hash,
             chunk_bytes: facts.version.checksum_chunk_bytes,
         },
         &mut effects,
@@ -189,6 +191,7 @@ pub(super) fn build_planned(
     operation: OperationId,
     plan: &PlannedContent,
     source: &crate::engine::ReadSource,
+    read: Option<&crate::container_storage::ReadDraftDigest>,
 ) -> Result<PublishedContent> {
     let storage_contract::file_draft::DraftCommand::Commit { target, base, message, .. } = request
     else {
@@ -198,17 +201,17 @@ pub(super) fn build_planned(
     let payload = plan.payload;
     if selection.base != *base { return Err(Error::FileDraft(Failure::BaseChanged)); }
     let primary = selection.placement.route_slot_ids.first().ok_or_else(invalid)?;
-    let version = context.build_version(
-        next, prepared,
-        crate::business::VersionBuild {
-            history: &selection.history.to_string(), file_id: &target.file.to_string(),
-            path: &target.path, source, primary, copies: 1,
-            source_ids: vec![base.version_id().to_string()], checkpoint: false,
-        },
-    )?;
-    if version.logical_size != payload.logical_size()
-        || version.content_hash != payload.content_hash()
-    {
+    let hash = super::draft_content_hash(context.state, target, read)?;
+    let input = crate::business::VersionBuild {
+        history: &selection.history.to_string(), file_id: &target.file.to_string(),
+        path: &target.path, source, primary, copies: 1,
+        source_ids: vec![base.version_id().to_string()], checkpoint: false,
+    };
+    let version = match read {
+        Some(read) => context.build_draft_version(next, prepared, input, read)?,
+        None => context.build_version(next, prepared, input)?,
+    };
+    if version.logical_size != payload.logical_size() || version.content_hash != hash {
         return Err(Error::FileDraft(Failure::Body));
     }
     let placement = next.placements.get(&version.version_id).cloned().ok_or_else(invalid)?;
@@ -237,8 +240,9 @@ pub(crate) fn build(
     request: &storage_contract::file_draft::DraftCommand,
     principal: &str,
     operation: OperationId,
+    read: Option<&crate::container_storage::ReadDraftDigest>,
 ) -> Result<PublishedContent> {
     let plan = plan(context, request)?;
     let source = context.draft_payload_source(request.target().file)?;
-    build_planned(context, next, prepared, request, principal, operation, &plan, &source)
+    build_planned(context, next, prepared, request, principal, operation, &plan, &source, read)
 }

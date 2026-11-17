@@ -20,11 +20,13 @@ pub(crate) use backup::{
 };
 mod areas;
 mod draft;
+pub(crate) use draft::{HeldManualReader, ReadDraftDigest};
 mod birth;
 pub(in crate::container_storage) use birth::UnbornBirthFile;
 mod working;
 pub(crate) use working::{
-    HeldUnbornReader, PreparedUnbornFull, PreparedUnbornSave, ReadWorkingDigest, UnbornWriteSession,
+    HeldUnbornReader, PreparedUnbornFull, PreparedWorkingSave,
+    ReadWorkingDigest, WorkingWriteSession,
 };
 mod directories;
 mod rename;
@@ -55,6 +57,36 @@ impl ObservedContainerReplica {
     pub(crate) fn open_working_draft(self: &Arc<Self>) -> Result<ReadFile> {
         self.verify()?;
         self.draft.as_ref().ok_or(Failure::ContainerScope)?.open(self)
+    }
+
+    pub(crate) fn read_incremental_draft(
+        &self, output: &mut [u8], offset: u64,
+    ) -> Result<usize> {
+        self.verify()?;
+        self.draft.as_ref().ok_or(Failure::ContainerScope)?.read_at(self, output, offset)
+    }
+
+    pub(crate) fn incremental_identity(&self)
+        -> Result<storage_contract::file_draft::DraftPayload>
+    {
+        self.verify()?;
+        match &self.record.working {
+            storage_contract::file_draft::FileWorkingState::ManualIncremental { payload, .. } => {
+                Ok(*payload)
+            }
+            storage_contract::file_draft::FileWorkingState::Unborn { .. }
+            | storage_contract::file_draft::FileWorkingState::Automatic { .. }
+            | storage_contract::file_draft::FileWorkingState::ManualClean { .. }
+            | storage_contract::file_draft::FileWorkingState::ManualDirty { .. } => {
+                Err(Failure::ContainerScope.into())
+            }
+        }
+    }
+
+    pub(crate) fn working_size(&self) -> Result<u64> {
+        self.verify()?;
+        self.record.working.draft().map(|(_, payload)| payload.logical_size())
+            .ok_or_else(|| Failure::ContainerScope.into())
     }
 
     /// Opening authority remains the actual observed source. A manifest or a
@@ -129,7 +161,7 @@ impl ObservedContainerReplica {
             draft: None, unborn: None, first: None, rename, installed,
         };
         if let Some((_, payload)) = record.working.draft() {
-            result.draft = Some(draft::HeldDraft::capture(&result, *payload)?);
+            result.draft = Some(draft::HeldDraft::capture(&result, state, *payload)?);
         }
         if record.working.unborn().is_some() {
             result.unborn = Some(Arc::new(working::HeldUnbornMaterial::capture(
@@ -200,6 +232,10 @@ impl ObservedContainerReplica {
 
     pub(crate) fn body_path(&self, version: &FileVersion) -> Result<PathBuf> {
         self.require_version(version)?;
+        self.body_path_for_material(version)
+    }
+
+    fn body_path_for_material(&self, version: &FileVersion) -> Result<PathBuf> {
         self.check_rename_start()?;
         if let Some(rename) = &self.rename {
             let expected = version_rename::CompletionBinding {
@@ -354,6 +390,7 @@ pub(crate) struct PreparedContainerEntities {
     directories: HeldDirectories,
     config: ValidatedConfig,
     resources: Arc<DiskResources>,
+    draft_reads: Vec<Arc<ReadDraftDigest>>,
     birth: Option<Arc<crate::engine::fresh_layout::containers::VerifiedUnbornBirth>>,
     _reservation: Arc<crate::engine::PayloadProofReservation>,
 }
@@ -507,7 +544,7 @@ impl PreparedContainerEntities {
                 first: None, rename, installed,
             });
         }
-        draft::populate(&mut held, input, context.config.max_file_bytes)?;
+        draft::populate(&mut held, input, context.config.max_file_bytes, plan.budget_state())?;
         working::populate(&mut held, context.config.max_file_bytes)?;
         retain_first_sources(&mut held, plan.first_sources())?;
         let result = Self {
@@ -515,6 +552,7 @@ impl PreparedContainerEntities {
             prefixes, directories, config: context.config.clone(),
             resources: Arc::clone(context.disk_resources),
             birth: plan.birth().map(Arc::clone), _reservation: reservation,
+            draft_reads: plan.draft_reads().to_vec(),
         };
         result.verify()?;
         Ok(result)
@@ -740,7 +778,7 @@ impl PreparedContainerEntities {
                 });
             }
         }
-        draft::populate(&mut held, None, config.max_file_bytes)?;
+        draft::populate(&mut held, None, config.max_file_bytes, next)?;
         working::populate(&mut held, config.max_file_bytes)?;
         retain_first_sources(&mut held, transition.first_sources())?;
         let result = Self {
@@ -748,6 +786,7 @@ impl PreparedContainerEntities {
             prefixes, directories, config: config.clone(),
             resources: Arc::clone(resources),
             birth: transition.birth().map(Arc::clone), _reservation: reservation,
+            draft_reads: transition.draft_reads().to_vec(),
         };
         result.verify()?;
         Ok(result)
@@ -821,12 +860,12 @@ impl PreparedContainerEntities {
                 });
             }
         }
-        draft::populate(&mut held, None, config.max_file_bytes)?;
+        draft::populate(&mut held, None, config.max_file_bytes, state)?;
         working::populate(&mut held, config.max_file_bytes)?;
         let result = Self {
             held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
             prefixes, directories, config: config.clone(), resources: Arc::clone(resources),
-            birth: None, _reservation: reservation,
+            birth: None, _reservation: reservation, draft_reads: Vec::new(),
         };
         result.verify()?;
         Ok(result)
@@ -834,6 +873,7 @@ impl PreparedContainerEntities {
 
     pub(crate) fn verify(&self) -> Result<()> {
         crate::engine::fresh_layout::verify_available(&self.config, &self.resources)?;
+        for read in &self.draft_reads { read.require_source()?; }
         for prefix in self.prefixes.values() {
             prefix.verify()?;
         }
@@ -851,7 +891,7 @@ impl PreparedContainerEntities {
     pub(crate) fn retains_draft_on(&self, disk: DiskId) -> bool {
         self.held.iter().any(|((_, id), container)| {
             *id == disk && container.draft.is_some()
-        })
+        }) || self.draft_reads.iter().any(|read| read.owner() == disk)
     }
 
     pub(crate) fn directory_record(

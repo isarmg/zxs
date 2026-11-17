@@ -50,7 +50,6 @@ pub(crate) fn read<R: Read + Seek>(
     let index = offset / chunk_bytes;
     let base = index * chunk_bytes;
     let count = chunk_bytes.min(manifest.logical_size - base) as usize;
-    let mut buffer = vec![0; count];
     let expected = &manifest.chunks[index as usize];
     let mut verified_source = None;
     let mut first_io_error = None;
@@ -58,24 +57,22 @@ pub(crate) fn read<R: Read + Seek>(
         .chain(fallbacks.iter_mut())
         .enumerate()
     {
-        match file.seek(SeekFrom::Start(base)).and_then(|_| {
-            for block in buffer.chunks_mut(64 * 1024) {
-                file.read_exact(block)?;
+        let read = platform_io::payload::read_verified_chunk(
+            count, blake3::Hash::from_bytes(*expected), |buffer| {
+                file.seek(SeekFrom::Start(base))?;
+                for block in buffer.chunks_mut(64 * 1024) { file.read_exact(block)?; }
+                Ok(())
+            },
+        );
+        match read {
+            Ok(bytes) => {
+                verified_source = Some((source, bytes));
+                break;
             }
-            Ok(())
-        }) {
-            Ok(()) => {
-                if blake3::hash(&buffer).as_bytes() == expected {
-                    verified_source = Some(source);
-                    break;
-                }
-            }
-            Err(error) => {
-                first_io_error.get_or_insert(error);
-            }
+            Err(error) => { first_io_error.get_or_insert(error); }
         }
     }
-    let Some(source) = verified_source else {
+    let Some((source, buffer)) = verified_source else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             VerifiedChunkUnavailable { io: first_io_error },

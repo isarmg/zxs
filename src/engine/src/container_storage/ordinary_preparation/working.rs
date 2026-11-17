@@ -17,23 +17,34 @@ use storage_contract::{ContentHash, FileId};
 mod full;
 pub(crate) use full::PreparedUnbornFull;
 mod write;
-pub(crate) use write::{PreparedUnbornSave, UnbornWriteSession};
+pub(crate) use write::{PreparedWorkingSave, WorkingWriteSession};
 
 fn changed() -> Error {
     Error::FileDraft(Failure::WorkingMaterialChanged)
 }
 
-struct HeldExtent {
-    block: WorkingBlock,
+pub(in crate::container_storage::ordinary_preparation) struct HeldExtent {
+    pub(in crate::container_storage::ordinary_preparation) block: WorkingBlock,
     file: ReadFile,
     stamp: FileStamp,
 }
 
 impl HeldExtent {
-    fn capture(scope: &ObservedContainerReplica, block: WorkingBlock) -> Result<Self> {
+    pub(in crate::container_storage::ordinary_preparation) fn capture(
+        scope: &ObservedContainerReplica, block: WorkingBlock,
+    ) -> Result<Self> {
+        let result = Self::observe(scope, block)?;
+        let mut buffer = [0; WORKING_BLOCK_BYTES as usize];
+        result.read_block(scope, &mut buffer)?;
+        Ok(result)
+    }
+
+    pub(in crate::container_storage::ordinary_preparation) fn observe(
+        scope: &ObservedContainerReplica, block: WorkingBlock,
+    ) -> Result<Self> {
         let extent = block.extent();
         let name = layout::container::working_extent(extent.id());
-        let mut file = scope.held.open_read_entry(&name)?;
+        let file = scope.held.open_read_entry(&name)?;
         let metadata = file.metadata()?;
         let identity = extent.entity();
         if metadata.dev() != identity.device() || metadata.ino() != identity.inode()
@@ -41,17 +52,14 @@ impl HeldExtent {
         {
             return Err(changed());
         }
-        let stamp = FileStamp::from_metadata(&metadata);
-        file.verify_full(platform_io::payload::Expectation {
-            bytes: extent.bytes(),
-            blake3: Some(extent.hash().digest()),
-        })?;
-        let result = Self { block, file, stamp };
+        let result = Self { block, file, stamp: FileStamp::from_metadata(&metadata) };
         result.require_named(scope)?;
         Ok(result)
     }
 
-    fn require_named(&self, scope: &ObservedContainerReplica) -> Result<()> {
+    pub(in crate::container_storage::ordinary_preparation) fn require_named(
+        &self, scope: &ObservedContainerReplica,
+    ) -> Result<()> {
         self.file.check_running()?;
         let name = layout::container::working_extent(self.block.extent().id());
         let named = scope.held.open_read_entry(&name)?;
@@ -63,7 +71,7 @@ impl HeldExtent {
         Ok(())
     }
 
-    fn read_block(
+    pub(in crate::container_storage::ordinary_preparation) fn read_block(
         &self,
         scope: &ObservedContainerReplica,
         buffer: &mut [u8; WORKING_BLOCK_BYTES as usize],

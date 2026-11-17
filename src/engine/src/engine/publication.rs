@@ -512,6 +512,16 @@ impl Engine {
         self.decide_publication(detached).map(|_| ())
     }
 
+    pub(in crate::engine) fn persist_committed_draft(
+        &mut self, next: State, prepared: Vec<Prepared>, result: OperationResult,
+        input: super::file_draft::WorkingPublicationInput,
+    ) -> Result<()> {
+        let detached = self.planning_context().prepare_publication_with_working(
+            next, prepared, result, MAX_METADATA, MAX_METADATA, Some(input),
+        )?;
+        self.decide_publication(detached).map(|_| ())
+    }
+
     pub(crate) fn persist_with_metadata_limit(
         &mut self,
         next: State,
@@ -1667,7 +1677,9 @@ impl crate::engine::PlanningContext<'_> {
         super::file_draft::WorkingPublicationInput::require_input(
             working.as_ref(), self, &next, &result,
         )?;
-        if working.is_some() && (!prepared.is_empty() || self.current_namespaces.is_some()
+        if working.is_some() && ((!prepared.is_empty()
+            && working.as_ref().and_then(|input| input.commit_read()).is_none())
+            || self.current_namespaces.is_some()
             || self.config.generation().is_some())
         {
             return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into());
@@ -1692,6 +1704,7 @@ impl crate::engine::PlanningContext<'_> {
         }
         let containers = super::fresh_layout::containers::ContainerPreparation::new(
             self, next, &prepared, &result,
+            working.as_ref().and_then(|input| input.commit_read()),
         )?;
         let needs_entity_feedback = containers.needs_entity_feedback();
         let next = containers.budget_state();

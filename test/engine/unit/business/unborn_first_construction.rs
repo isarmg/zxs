@@ -52,7 +52,7 @@ fn save(engine: &mut Engine, target: &DraftLocation, principal: &Principal, byte
     let mut writer = engine.begin_unborn_write(target, OperationId::generate().unwrap()).unwrap();
     assert_eq!(writer.write_at(&engine.planning_context(), 0, bytes).unwrap(), bytes.len());
     let prepared = Arc::new(writer.prepare(&engine.planning_context()).unwrap().unwrap());
-    let request = prepared.request(target);
+    let request = prepared.request(target).unwrap();
     engine.save_unborn_working(&request, principal, Some(prepared)).unwrap();
 }
 

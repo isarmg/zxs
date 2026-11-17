@@ -7,6 +7,8 @@ use data_serialization::{Deserialize, Serialize};
 use std::fmt;
 
 pub mod manifest;
+mod incremental;
+pub use incremental::IncrementalManifest;
 mod unborn;
 pub use unborn::{BirthRequest, UnbornBody, UnbornSaveRequest, UnbornWorking};
 mod selection;
@@ -154,40 +156,63 @@ impl DraftBase {
     }
 }
 
-/// Complete material of the current shared draft. No path, open file, upload
-/// workspace or lease is part of its durable identity.
+/// A saved body's stable identity. Full uploads retain their existing wire
+/// commitment; range saves name the authenticated manifest, never a body hash.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct DraftPayload {
-    payload_id: DraftPayloadId,
-    content_hash: ContentHash,
-    #[serialization(with = "crate::u64_string")]
-    logical_size: u64,
+#[serialization(untagged, deny_unknown_fields)]
+pub enum DraftPayload {
+    Full {
+        payload_id: DraftPayloadId,
+        content_hash: ContentHash,
+        #[serialization(with = "crate::u64_string")]
+        logical_size: u64,
+    },
+    Ranges {
+        payload_id: DraftPayloadId,
+        manifest_commitment: manifest::ManifestCommitment,
+        #[serialization(with = "crate::u64_string")]
+        logical_size: u64,
+    },
 }
 
 impl DraftPayload {
-    pub const fn new(
-        payload_id: DraftPayloadId,
-        content_hash: ContentHash,
+    pub const fn new(payload_id: DraftPayloadId, content_hash: ContentHash, logical_size: u64)
+        -> Self
+    {
+        Self::Full { payload_id, content_hash, logical_size }
+    }
+
+    pub const fn ranges(
+        payload_id: DraftPayloadId, manifest_commitment: manifest::ManifestCommitment,
         logical_size: u64,
     ) -> Self {
-        Self {
-            payload_id,
-            content_hash,
-            logical_size,
-        }
+        Self::Ranges { payload_id, manifest_commitment, logical_size }
     }
 
     pub const fn payload_id(self) -> DraftPayloadId {
-        self.payload_id
+        match self {
+            Self::Full { payload_id, .. } | Self::Ranges { payload_id, .. } => payload_id,
+        }
     }
 
-    pub const fn content_hash(self) -> ContentHash {
-        self.content_hash
+    pub const fn content_hash(self) -> Option<ContentHash> {
+        match self {
+            Self::Full { content_hash, .. } => Some(content_hash),
+            Self::Ranges { .. } => None,
+        }
+    }
+
+    pub const fn manifest_commitment(self) -> Option<manifest::ManifestCommitment> {
+        match self {
+            Self::Full { .. } => None,
+            Self::Ranges { manifest_commitment, .. } => Some(manifest_commitment),
+        }
     }
 
     pub const fn logical_size(self) -> u64 {
-        self.logical_size
+        match self {
+            Self::Full { logical_size, .. } | Self::Ranges { logical_size, .. } => logical_size,
+        }
     }
 }
 
@@ -207,6 +232,12 @@ pub enum FileWorkingState {
     ManualClean {
         revision: WorkingRevision,
     },
+    ManualIncremental {
+        revision: WorkingRevision,
+        base: DraftBase,
+        payload: DraftPayload,
+        manifest: IncrementalManifest,
+    },
     ManualDirty {
         revision: WorkingRevision,
         base: DraftBase,
@@ -225,6 +256,8 @@ impl FileWorkingState {
                     .map(|block| block.extent().bytes()).sum(),
             },
             Self::ManualDirty { payload, .. } => payload.logical_size(),
+            Self::ManualIncremental { manifest, .. } => manifest.material().blocks().iter()
+                .map(|block| block.extent().bytes()).sum(),
             Self::Automatic { .. } | Self::ManualClean { .. } => 0,
         }
     }
@@ -234,7 +267,8 @@ impl FileWorkingState {
             Self::Unborn { working } => working.revision(),
             Self::Automatic { revision }
             | Self::ManualClean { revision }
-            | Self::ManualDirty { revision, .. } => *revision,
+            | Self::ManualDirty { revision, .. }
+            | Self::ManualIncremental { revision, .. } => *revision,
         }
     }
 
@@ -242,7 +276,8 @@ impl FileWorkingState {
         match self {
             Self::Unborn { working } => working.mode(),
             Self::Automatic { .. } => CommitMode::Automatic,
-            Self::ManualClean { .. } | Self::ManualDirty { .. } => CommitMode::Manual,
+            Self::ManualClean { .. } | Self::ManualDirty { .. }
+            | Self::ManualIncremental { .. } => CommitMode::Manual,
         }
     }
 
@@ -250,14 +285,24 @@ impl FileWorkingState {
         match self {
             Self::Unborn { .. } => None,
             Self::Automatic { .. } | Self::ManualClean { .. } => None,
-            Self::ManualDirty { base, payload, .. } => Some((base, payload)),
+            Self::ManualDirty { base, payload, .. }
+            | Self::ManualIncremental { base, payload, .. } => Some((base, payload)),
+        }
+    }
+
+    pub const fn incremental(&self) -> Option<&IncrementalManifest> {
+        match self {
+            Self::ManualIncremental { manifest, .. } => Some(manifest),
+            Self::Unborn { .. } | Self::Automatic { .. } | Self::ManualClean { .. }
+            | Self::ManualDirty { .. } => None,
         }
     }
 
     pub const fn unborn(&self) -> Option<&UnbornWorking> {
         match self {
             Self::Unborn { working } => Some(working),
-            Self::Automatic { .. } | Self::ManualClean { .. } | Self::ManualDirty { .. } => None,
+            Self::Automatic { .. } | Self::ManualClean { .. } | Self::ManualDirty { .. }
+            | Self::ManualIncremental { .. } => None,
         }
     }
 }

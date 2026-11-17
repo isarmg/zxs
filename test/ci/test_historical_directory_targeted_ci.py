@@ -160,7 +160,9 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
                 'note-http-boundary', 'note-target-consumers', 'paged-deletion-review',
                 'server-authorization', 'version-metadata-read',
             ], ['container-path-facts-http', 'container-lifecycle-http',
-                'automatic-smb-working-clone', 'ordinary-smb-manual-draft']),
+                'automatic-smb-working-clone', 'ordinary-smb-manual-draft',
+                'ordinary-manual-incremental', 'directory-web-worktree-management',
+                'worktree-http-transport']),
             CI.select_plan(self.policy, policy),
         ]
         # HTTP retirement adds a core product check without dropping any old selection.

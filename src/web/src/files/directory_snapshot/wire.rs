@@ -98,7 +98,8 @@ struct UnbornSnapshot {
 pub(super) fn born(value: Value, target: DraftLocation) -> Result<Option<Candidate>, api::Error> {
     object_field(&value, "base")?;
     let working = object_field(&value, "working")?;
-    if working.get("state").and_then(Value::as_str) == Some("manual_dirty") {
+    if matches!(working.get("state").and_then(Value::as_str),
+        Some("manual_dirty" | "manual_incremental")) {
         object_field(working, "base")?;
         object_field(working, "payload")?;
     }
@@ -108,7 +109,7 @@ pub(super) fn born(value: Value, target: DraftLocation) -> Result<Option<Candida
             revision,
             base,
             payload,
-        } => {
+        } | FileWorkingState::ManualIncremental { revision, base, payload, .. } => {
             if snapshot.base != base {
                 return Err(invalid(
                     "the working base differs from the selected occurrence",

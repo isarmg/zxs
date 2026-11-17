@@ -33,11 +33,36 @@ pub(super) fn open(
     }
     let repository = repo.repository_id.parse().map_err(ApiError::contract_input)?;
     let entries = engine.native_current_entries(repository).map_err(error)?;
+    let mut published = None;
     let target = match entries.into_iter().find(|entry| match entry {
         NativeCurrentEntry::Published(entry) => entry.path.key() == request.path.key(),
         NativeCurrentEntry::Unborn { target, .. } => target.path.key() == request.path.key(),
     }) {
-        Some(NativeCurrentEntry::Published(_)) => return Ok(None),
+        Some(NativeCurrentEntry::Published(entry)) => {
+            if entry.kind != storage_contract::NamespaceEntryKind::File { return Ok(None); }
+            let target = DraftLocation {
+                repository, path: entry.path.clone(),
+                entry: entry.entry_id.parse().map_err(ApiError::contract_input)?,
+                file: entry.file_id.parse().map_err(ApiError::contract_input)?,
+            };
+            let working = &engine.state().file_containers.get(&target.file)
+                .ok_or_else(ApiError::forbidden)?.working;
+            if working.mode() != storage_contract::file_draft::CommitMode::Manual
+                || (working.draft().is_some() && working.incremental().is_none())
+            {
+                return Ok(None);
+            }
+            if request.create && request.exclusive {
+                return Err(ApiError::conflict(storage_contract::ErrorCode::NameConflict,
+                    "entry already exists"));
+            }
+            let base = engine.file_draft_base(&target).map_err(error)?;
+            let version = engine.state().versions.get(&base.version_id().to_string())
+                .ok_or_else(ApiError::forbidden)?;
+            let mtime = crate::backend_read::version_mtime(version)?;
+            published = Some((working.draft().is_none().then_some(base.version_id()), mtime));
+            target
+        }
         Some(NativeCurrentEntry::Unborn { target, .. }) => {
             if request.create && request.exclusive {
                 return Err(ApiError::conflict(storage_contract::ErrorCode::NameConflict,
@@ -74,7 +99,9 @@ pub(super) fn open(
     if request.truncate {
         engine.resize_native_working(&mut held, &principal, 0).map_err(error)?;
     }
-    Ok(Some(SmbNativeHandle { target, held }))
+    let (version, mtime) = published.unwrap_or((None,
+        smb_protocol::protocol::FileMtime::Unpublished {}));
+    Ok(Some(SmbNativeHandle { target, held, version, mtime }))
 }
 
 pub(super) fn stat(

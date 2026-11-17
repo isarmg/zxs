@@ -1,7 +1,7 @@
 //! Ordered native frames retain their real core source; no mutable BODY FD is sent.
 use super::{Handle, OpenResult, OwnedFd, Session, handles, path_reservation};
 use crate::{ApiError, SmbNativeEdit, SmbNativeHandle, SmbNativeOpen};
-use smb_protocol::protocol::{FileMtime, OpenIo, WorkingPosition, WorkingStat, WorkingWriteResult};
+use smb_protocol::protocol::{OpenIo, WorkingPosition, WorkingStat, WorkingWriteResult};
 use std::fs::File;
 
 pub(super) struct NativeHandle {
@@ -37,7 +37,8 @@ impl Session {
             kind: storage_contract::NamespaceEntryKind::File,
             path: file.target.path.as_str().into(), handle, size,
             max_file_bytes: self.max_file_bytes,
-            version_id: None, workspace_id: None, mtime: FileMtime::Unpublished {},
+            version_id: file.version.map(|version| version.to_string()),
+            workspace_id: None, mtime: file.mtime,
         };
         self.handles.insert(handle, Handle::Native(NativeHandle {
             file, writable, write_through, _paths: paths,

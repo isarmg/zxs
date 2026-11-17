@@ -132,6 +132,7 @@ pub(super) fn replay(
     config: &ValidatedConfig, previous: &State, index: &ReceiptIndex<'_>,
     result: &OperationResult, maximum: usize,
     first_reads: &[Option<crate::container_storage::ReadWorkingDigest<'_>>],
+    draft_reads: &[Option<std::sync::Arc<crate::container_storage::ReadDraftDigest>>],
 ) -> Result<ReconstructedDirectory> {
     index.require_source(previous)
         .map_err(|error| Failure::Source(DirectoryDraftError::Registration(error)))?;
@@ -149,7 +150,7 @@ pub(super) fn replay(
     }
     let request = envelope.batch_request();
     let files = batch::replay(
-        previous, config, &request, Sequence::new(result.sequence), &envelope.trace(), first_reads,
+        previous, config, &request, Sequence::new(result.sequence), &envelope.trace(), first_reads, draft_reads,
     ).map_err(Failure::Engine)?;
     let described = super::batch::describe_items(files.items()).map_err(Failure::Working)?;
     if described.as_slice() != envelope.directory.files()

@@ -10,7 +10,8 @@ pub(crate) use ordinary_preparation::verify_namespace_directory as verify_ordina
 pub(crate) use ordinary_preparation::{
     BackupLayoutPlan, BackupOriginalImage, BackupPayloadVersion, BackupServingImage,
     BackupServingVersion, BackupTargetLayout, ObservedContainerReplica, PreparedContainerEntities,
-    HeldUnbornReader, PreparedUnbornFull, PreparedUnbornSave, ReadWorkingDigest, UnbornWriteSession,
+    HeldManualReader, ReadDraftDigest, HeldUnbornReader, PreparedUnbornFull, PreparedWorkingSave,
+    ReadWorkingDigest, WorkingWriteSession,
     open_published_container,
     ordinary_body_path,
 };

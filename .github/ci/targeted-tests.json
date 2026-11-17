@@ -1,5 +1,34 @@
 {
   "groups": {
+    "ordinary-manual-incremental": {
+      "reason": "Run production native range dispatch with actual held extents, path locks, cold merged reads and authenticated TCP HTTP explicit commits. This does not execute AF_UNIX framing, descriptor transfer, Samba or high-frequency policy. Manual save and range reads authenticate touched data without a full-body hash; exact explicit commit verifies material and suppresses an unchanged version.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "smb_rpc::tests::native_dispatch_tests::incremental_manual::ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_bytes",
+            "smb_rpc::tests::native_dispatch_tests::native_dispatch_uses_real_engine_and_cold_unborn_content_without_transport"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "file_draft::tests::"
+          ],
+          "max_tests": 6
+        }
+      ]
+    },
     "file-commit-mode-web-http": {
       "reason": "Explicit per-file Manual/Automatic Web controls and the authenticated normal mode-switch flow. Tests retain manual drafts and immutable bytes across two automatic saves; no high-frequency protection, browser or Samba acceptance is claimed.",
       "python_tests": [],
@@ -5959,6 +5988,246 @@
     }
   },
   "rules": [
+    {
+      "path": "src/platform/src/payload.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/server/src/verified_chunk.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "docs/validation/ordinary-manual-incremental.md",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft/incremental.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft/manifest.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft/selection.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft/unborn.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/publication.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/selection.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/unborn.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/draft.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/draft/incremental.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/working.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/working/write.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/incremental.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/input.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/native_io.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/unborn/save.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/source.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_smb_native.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/server/src/content_file.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/smb_native.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/server/src/lib.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/metadata.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/native.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/smb/src/client.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/wire.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "test/contract/unit/file_draft.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/file_draft_tests.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/unborn_first_construction.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/incremental_http.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/incremental_manual.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/native_dispatch_tests.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/file_draft/request.rs",
+      "groups": [
+        "ordinary-manual-incremental"
+      ]
+    },
     {
       "path": "src/web/src/api.rs",
       "groups": [
