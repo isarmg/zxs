@@ -10,6 +10,11 @@ elif [[ $# -ne 0 ]]; then
   printf 'usage: %s [--build-only|--manual-fd-tests]\n' "$0" >&2
   exit 2
 fi
+network="${ZXS_BUILD_NETWORK:-online}"
+case "$network" in
+  online|offline) ;;
+  *) printf 'ZXS_BUILD_NETWORK must be online or offline\n' >&2; exit 2 ;;
+esac
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 [[ "$(. /etc/os-release; printf '%s:%s' "$ID" "$VERSION_ID")" == debian:13 ]]
@@ -22,9 +27,10 @@ cache="$root/target/smb-debian13"
 mkdir -p "$cache/source"
 # A failed attempt must not leave an old successful product receipt in place.
 rm -f "$cache/product/VFS-BUILD.json"
-if [[ ! -f "$cache/source/.downloaded" ]]; then
+if [[ ! -f "$cache/source/.downloaded" && "$network" == online ]]; then
   (cd "$cache/source"; apt-get source --download-only --only-source "samba=$version")
 fi
+# Offline mode admits only already present exact archives, even without a marker.
 # Never treat a marker as evidence that cached source archives remain intact.
 python3 - "$cache/source" <<'PYVERIFY'
 import hashlib, json, pathlib, sys

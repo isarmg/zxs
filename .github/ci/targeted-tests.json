@@ -1,5 +1,14 @@
 {
   "groups": {
+    "debian-offline-entrypoint": {
+      "reason": "Offline Debian entrypoint admits only an existing immutable image and explicit toolchain, isolates the container network and never repairs missing SDK source through apt. Fake-command tests exercise failure and selection paths, not a real build, authenticated input closure, release or installation.",
+      "python_tests": [
+        "test_debian_offline_runner",
+        "test_smb_build_only",
+        "test_debian_offline_targeted_ci"
+      ],
+      "rust_targets": []
+    },
     "web-telemetry-ingress": {
       "reason": "Browser history projection admits exact ordered timestamps, inclusive response windows and its independent 361-sample budget before replacing the visible snapshot. Native state tests and WASM compilation do not claim Chrome interaction or live sensor acceptance.",
       "python_tests": [],
@@ -6326,6 +6335,36 @@
     }
   },
   "rules": [
+    {
+      "path": ".github/scripts/debian13-run.sh",
+      "groups": [
+        "debian-offline-entrypoint"
+      ]
+    },
+    {
+      "path": ".github/scripts/smb-sdk.sh",
+      "groups": [
+        "debian-offline-entrypoint"
+      ]
+    },
+    {
+      "path": "test/ci/test_debian_offline_runner.py",
+      "groups": [
+        "debian-offline-entrypoint"
+      ]
+    },
+    {
+      "path": "test/ci/test_smb_build_only.py",
+      "groups": [
+        "debian-offline-entrypoint"
+      ]
+    },
+    {
+      "path": "test/ci/test_debian_offline_targeted_ci.py",
+      "groups": [
+        "debian-offline-entrypoint"
+      ]
+    },
     {"path": "src/web/src/monitor/history.rs", "groups": ["web-telemetry-ingress"]},
     {"path": "test/web/unit/monitor/history/tests.rs", "groups": ["web-telemetry-ingress"]},
     {"path": "src/auth/src/secret.rs", "groups": ["credential-secret-ownership"]},

@@ -70,7 +70,7 @@ class SmbBuildOnly(unittest.TestCase):
         waf.chmod(0o755)
         self.calls = self.root / 'calls.jsonl'
         self.env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'], CALLS=str(self.calls),
-                        CARGO_TARGET_DIR=str(self.root / 'cargo-target'))
+                        CARGO_TARGET_DIR=str(self.root / 'cargo-target'), ZXS_BUILD_NETWORK='online')
 
     def run_script(self, *args, script='smb-sdk.sh'):
         return subprocess.run(['bash', str(self.root / '.github/scripts' / script), *args],
@@ -168,6 +168,35 @@ class SmbBuildOnly(unittest.TestCase):
         result = self.run_script('--build-only')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / 'target/smb-debian13/product/VFS-BUILD.json').exists())
+
+    def test_offline_source_cache_without_marker_extracts_without_apt(self):
+        self.env['ZXS_BUILD_NETWORK'] = 'offline'
+        (self.sdk.parent / '.downloaded').unlink()
+        result = self.run_script('--build-only')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(c[0] == 'apt-get' for c in self.recorded()))
+        self.assertTrue(any(c[0] == 'dpkg-source' for c in self.recorded()))
+
+    def test_offline_missing_or_changed_source_never_downloads_or_compiles(self):
+        self.env['ZXS_BUILD_NETWORK'] = 'offline'
+        archive = self.sdk.parent / 'samba_fixture.dsc'
+        for content in (None, b'wrong source bytes'):
+            with self.subTest(content=content):
+                self.calls.write_text('')
+                archive.unlink(missing_ok=True)
+                if content is not None:
+                    archive.write_bytes(content)
+                result = self.run_script('--build-only')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(c[0] in ('apt-get', 'dpkg-source', 'make', 'waf', 'cargo')
+                                     for c in self.recorded()))
+                self.assertFalse((self.root / 'target/smb-debian13/product/VFS-BUILD.json').exists())
+
+    def test_unknown_network_policy_runs_no_dependencies(self):
+        self.env['ZXS_BUILD_NETWORK'] = 'offlien'
+        result = self.run_script('--build-only')
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.recorded(), [])
 
 
 if __name__ == '__main__':

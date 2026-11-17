@@ -45,7 +45,11 @@ VFS 必须与收据中实际验证的 Debian 13 Samba 包匹配，不能用旧 4
 
 ## 仓内源码与离线输入的边界
 
-**首次完整离线构建尚未具备输入闭包。** 四文件及完整仓内源码不包含已经认证的完整 Debian deb/对应源/签名索引、固定 OCI 镜像、Rust/WASM 工具链；`smb-sdk.sh` 缓存未命中仍有 apt 路径，Dockerfile 仍联网准备系统包。本片保留这些明确阻塞，不编造固定摘要或将未核材料列为已交付。后续需生产可信完整闭包、保留许可证/对应源，再单独切换强制离线入口。
+**首次完整离线构建尚未具备输入闭包。** 四文件及完整仓内源码不包含已经认证的完整 Debian deb/对应源/签名索引、固定 OCI 镜像、Rust/WASM 工具链。默认在线准备路径仍由 Dockerfile 联网准备系统包，`smb-sdk.sh` 缓存未命中仍允许 apt；不能把 Cargo 的 `--offline` 当作整条链离线。本片保留这些明确阻塞，不编造固定摘要或将未核材料列为已交付。
+
+已有受信完整输入时可显式使用 `ZXS_BUILD_NETWORK=offline` 调用 `debian13-run.sh`。入口要求绝对路径 `ZXS_BUILD_TOOLCHAIN_ROOT` 指向已存在的完整 Rust 工具链（含所需 WASM 标准库，而非 rustup 代理）；不会调用宿主 `rustc` 自动寻找或下载工具链。默认、`--native`、`--browser` 分别只使用当前 Docker 中已经准备好的 `zxs-debian13-build`、`zxs-debian13-native`、`zxs-debian13-browser` 镜像，先解析为单一不可变 image ID，再以 `--pull=never --network none` 运行；镜像缺失、检查失败或输入不完整必须停止，不回退到在线构建。`smb-sdk.sh` 同样接收此模式，只接受准确源码摘要的既有缓存，可重新提取缺少 marker 的完整归档，不调用 apt 补件。
+
+此模式只提供执行时的禁止联网边界，不认证既有镜像或工具链来源、不补齐首次离线输入、不证明实际构建或安装成功。直接在容器外运行 `smb-sdk.sh` 时，模式只关闭该脚本自己的 apt 回退；完整网络隔离来自上述 Docker 入口。后续仍需生产可信完整闭包并保留许可证与对应源，再用真实空缓存和无网络环境验收。
 
 已有受信工具链和系统输入时，检出源码包 `BUILD.txt` 记录的精确提交，准备 `rust-toolchain.toml` 指定的 Rust 工具链及 WASM 标准库。第三方 Rust 源码由仓库提供，首次正式业务构建也使用 `--locked --offline`；CI 和 Release 使用空的独立 Cargo home，不缓存 registry/git 源码。
 
