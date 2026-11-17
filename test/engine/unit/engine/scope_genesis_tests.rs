@@ -152,3 +152,43 @@ fn original_anchor_rejects_noncanonical_unknown_missing_and_cross_occurrence_fie
         json_codec::to_value(storage_contract::OperationId::generate().unwrap()).unwrap();
     assert!(Anchor::decode(&storage_contract::canonical_json_value(&changed).unwrap()).is_err());
 }
+
+#[test]
+fn previously_admitted_frontier_reads_only_the_selected_original_disk_without_writers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = [tmp.path().join("primary"), tmp.path().join("peer")];
+    let input =
+        ValidatedConfig::try_from(Config::development(crate::test_disks(paths.clone())).unwrap())
+            .unwrap();
+    let system = tmp.path().join("system");
+    let engine = Engine::initialize_validated(&system, input.clone()).unwrap();
+    let frontier = engine.initial_storage_observation(&input).unwrap();
+    let fixed = engine.config.fixed_genesis().unwrap().closure;
+    let local = engine.config.disks[0].disk_id.parse().unwrap();
+    let peer = engine.config.disks[1].disk_id.parse().unwrap();
+    drop(engine);
+    fs::rename(&system, tmp.path().join("offline-system")).unwrap();
+    fs::rename(&paths[1], tmp.path().join("offline-peer")).unwrap();
+    let held = || fs::File::open(&paths[0]).unwrap();
+    assert_eq!(
+        frontier
+            .verify_initial_disk_scope(local, &paths[0], held())
+            .unwrap(),
+        fixed
+    );
+    assert!(
+        frontier
+            .verify_initial_disk_scope(peer, &paths[0], held())
+            .is_err()
+    );
+    let mut manifests = files(&paths[0].join("metadata/objects/disk-scope-manifest"));
+    let manifest = manifests.pop().unwrap();
+    fs::rename(&manifest, manifest.with_extension("preserved")).unwrap();
+    assert!(
+        frontier
+            .verify_initial_disk_scope(local, &paths[0], held())
+            .is_err()
+    );
+    assert!(!manifest.exists());
+    assert!(!paths[1].exists() && !system.exists());
+}
