@@ -1702,6 +1702,7 @@ impl crate::engine::PlanningContext<'_> {
             view.verify_backup_prepared(self.state, &next, &result, &prepared)?;
             view.verify_history_copy_prepared(self.state, &next, &result, &prepared)?;
         }
+        self.require_worktree_mount_reservations(&next)?;
         let containers = super::fresh_layout::containers::ContainerPreparation::new(
             self, next, &prepared, &result,
             working.as_ref().and_then(|input| input.commit_read()),

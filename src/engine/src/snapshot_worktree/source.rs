@@ -36,6 +36,8 @@ pub enum SnapshotSourceError {
     BackupRegisteredSnapshot(OperationId),
     #[error("checking permanent snapshot registration before whole Backup")]
     BackupRegistration(#[source] super::SnapshotWorktreeError),
+    #[error("checking worktree mount reservations before ordinary namespace publication")]
+    WorktreeMounts(#[source] Box<super::SnapshotWorktreeError>),
 }
 
 impl SnapshotSourceError {
@@ -48,6 +50,7 @@ impl SnapshotSourceError {
             Self::RootFiles => ErrorCode::UnsupportedOperation,
             Self::BackupRegisteredSnapshot(_) => ErrorCode::UnsupportedOperation,
             Self::BackupRegistration(source) => source.code(),
+            Self::WorktreeMounts(source) => source.code(),
             Self::Budget | Self::Manifest(SnapshotManifestError::Budget) => {
                 ErrorCode::ResourceLimit
             }

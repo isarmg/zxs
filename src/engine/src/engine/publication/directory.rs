@@ -94,6 +94,7 @@ impl crate::engine::PlanningContext<'_> {
     ) -> Result<(DirectoryDecisionInput, PreparedDirectoryFiles)> {
         let (decision, source, prepared, directory, envelope) = input.into_material(self)
             .map_err(DirectoryPublicationError::into_engine)?;
+        self.require_worktree_mount_reservations(source.state())?;
         let containers = ContainerPreparation::for_working_batch(self, &source, &prepared)?;
         let metadata_epoch = self.metadata_integrity.capture();
         let mut required = PhysicalRequirements::new(self);

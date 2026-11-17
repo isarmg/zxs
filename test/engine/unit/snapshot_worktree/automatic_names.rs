@@ -188,6 +188,104 @@ fn automatic_worktrees_allocate_real_parent_names_and_cold_retry_original_intent
 }
 
 #[test]
+fn ordinary_publication_cannot_shadow_a_completed_worktree_mount() {
+    reject_ordinary_shadow(false);
+}
+
+#[test]
+fn ordinary_publication_cannot_shadow_a_pending_worktree_mount() {
+    reject_ordinary_shadow(true);
+}
+
+fn reject_ordinary_shadow(pending: bool) {
+    let (fixture, mut engine) = Fixture::new();
+    let original = request(&fixture, &engine);
+    if pending {
+        let record = {
+            let receipts = engine.snapshot_receipt_source().unwrap();
+            let index = receipts.index().unwrap();
+            let (_, plan) = allocation_plan(&engine, &index, &original).unwrap();
+            Record::ReserveAllocatedWorktree(plan)
+        };
+        // A real SYSTEM decision owns this name before the instance mkdir.
+        publication::publish_new(
+            &mut engine, original.operation_id, &principal(), &record,
+        ).unwrap();
+    } else {
+        engine.allocate_directory_worktree(&original, &principal()).unwrap();
+    }
+    let repository = fixture.targets[0].repository;
+    let repo = engine.state().repositories[&repository.to_string()].clone();
+    let state = Arc::clone(&engine.state);
+    let media = fixture.media();
+    for path in ["WORKTREE-main-001", "worktree-main-001/child"] {
+        let operation = OperationId::generate().unwrap();
+        let error = engine.file_namespace(
+            &repo.repository_id,
+            storage_contract::NamespaceOperation::Mkdir {
+                path: name_policy::PortablePath::parse(path).unwrap(),
+            },
+            "admin", operation,
+        ).unwrap_err();
+        assert_eq!(error.code(), storage_contract::ErrorCode::NameCollision);
+        assert!(!engine.state().operations.contains_key(&operation));
+        assert!(Arc::ptr_eq(&state, &engine.state));
+        assert_eq!(fixture.media(), media);
+    }
+    let birth = storage_contract::file_draft::BirthRequest {
+        repository,
+        path: name_policy::PortablePath::parse("WORKTREE-MAIN-001").unwrap(),
+        expected_namespace_head: engine.state().branches[&repo.main_branch_id]
+            .head_commit_id.parse().unwrap(),
+    };
+    let operation = OperationId::generate().unwrap();
+    assert_eq!(engine.create_unborn_file(&birth, &principal(), operation).unwrap_err().code(),
+        storage_contract::ErrorCode::NameCollision);
+    assert!(!engine.state().operations.contains_key(&operation));
+    assert!(Arc::ptr_eq(&state, &engine.state));
+    assert_eq!(fixture.media(), media);
+
+    let workspace = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "worktree-main-001", FIRST_ORIGINAL).unwrap();
+    let before_commit = fixture.media();
+    let operation = OperationId::generate().unwrap();
+    assert_eq!(engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: operation,
+        principal: "admin".into(), expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "not an overwrite of the logical mount".into(), request_digest: None,
+    }).unwrap_err().code(), storage_contract::ErrorCode::NameCollision);
+    assert!(!engine.state().operations.contains_key(&operation));
+    assert!(Arc::ptr_eq(&state, &engine.state));
+    // Retaining the original workspace request may change SYSTEM, but no
+    // ordinary container, snapshot or worktree on either data disk may change.
+    assert_eq!(&fixture.media()[1..], &before_commit[1..]);
+
+    let mut unrelated = birth;
+    unrelated.path = name_policy::PortablePath::parse("worktree-main-009").unwrap();
+    engine.create_unborn_file(&unrelated, &principal(), OperationId::generate().unwrap()).unwrap();
+    let original_receipt = engine.operation(original.operation_id).unwrap();
+    drop(engine);
+
+    let mut engine = Engine::open(&fixture.system).unwrap();
+    let state = Arc::clone(&engine.state);
+    let media = fixture.media();
+    let operation = OperationId::generate().unwrap();
+    let birth = storage_contract::file_draft::BirthRequest {
+        repository,
+        path: name_policy::PortablePath::parse("worktree-MAIN-001").unwrap(),
+        expected_namespace_head: engine.state().branches[&repo.main_branch_id]
+            .head_commit_id.parse().unwrap(),
+    };
+    assert_eq!(engine.create_unborn_file(&birth, &principal(), operation).unwrap_err().code(),
+        storage_contract::ErrorCode::NameCollision);
+    assert!(Arc::ptr_eq(&state, &engine.state));
+    assert_eq!(engine.operation(original.operation_id).unwrap(), original_receipt);
+    assert_eq!(fixture.media(), media);
+}
+
+#[test]
 fn automatic_pending_claim_is_not_reallocated_or_mistaken_for_a_named_request() {
     let (fixture, mut engine) = Fixture::new();
     let first = request(&fixture, &engine);

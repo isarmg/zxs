@@ -10,6 +10,7 @@ pub use public::{
     WorktreePage, WorktreePageStamp,
 };
 mod reopen;
+mod reservations;
 mod prepare;
 mod initialize;
 mod publication;
