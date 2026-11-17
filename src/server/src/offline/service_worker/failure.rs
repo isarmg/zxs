@@ -42,6 +42,10 @@ pub(super) enum Failure {
     )]
     RequestBudget { phase: RequestPhase, maximum: usize },
     #[error(
+        "storage worker request exceeds its {maximum}-byte IPC budget before dispatch; no child was started; preserve any original intent"
+    )]
+    DispatchBudget { maximum: usize },
+    #[error(
         "storage worker {stage} failed; preserve original intent and inspect its outcome; no rollback is claimed"
     )]
     Io {

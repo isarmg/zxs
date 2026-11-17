@@ -1,5 +1,6 @@
 //! One same-executable child, with real/effective service UID/GID, no inherited
 //! environment, no shell, no external program and no secrets in argv.
+mod encoding;
 mod failure;
 use crate::offline::service_worker::failure::{Failure, RequestPhase, Stage};
 use data_serialization::{Deserialize, Serialize, de::DeserializeOwned};
@@ -72,6 +73,27 @@ impl Drop for Joined {
         }
     }
 }
+/// Measure with the actual compact pipe codec, without allocating an oversized
+/// payload. This is a length observation and cannot emit a successful reply.
+pub(crate) fn encoded_fits(value: &impl Serialize, maximum: usize) -> Result<bool> {
+    struct Count { remaining: usize, exceeded: bool }
+    impl Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            match self.remaining.checked_sub(bytes.len()) {
+                Some(left) => { self.remaining = left; Ok(bytes.len()) },
+                None => { self.exceeded = true; Err(std::io::Error::other("bounded pipe encoding exceeds its limit")) },
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut count = Count { remaining: maximum, exceeded: false };
+    match json_codec::to_writer(&mut count, value) {
+        Ok(()) => Ok(true),
+        Err(_) if count.exceeded => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// A plan that cannot be inspected after a disconnect is not admissible.
 /// Serialize both actual domain envelopes with the same bound as the worker;
 /// never estimate escaped lengths or assume their action tags are equally long.
@@ -82,13 +104,13 @@ pub(super) fn retained_execution<A: Action, P: Clone>(
     original: impl FnOnce(P) -> A,
 ) -> Result<Envelope<A>> {
     let request = Envelope { context: context.clone(), action: execute(plan.clone()) };
-    if json_codec::to_vec(&request)?.len() > MAX_RECORD_BYTES {
+    if !encoded_fits(&request, MAX_RECORD_BYTES)? {
         return Err(Failure::RequestBudget {
             phase: RequestPhase::Execution, maximum: MAX_RECORD_BYTES,
         }.into());
     }
     let inspection = Envelope { context: context.clone(), action: original(plan.clone()) };
-    if json_codec::to_vec(&inspection)?.len() > MAX_RECORD_BYTES {
+    if !encoded_fits(&inspection, MAX_RECORD_BYTES)? {
         return Err(Failure::RequestBudget {
             phase: RequestPhase::OriginalInspection, maximum: MAX_RECORD_BYTES,
         }.into());
@@ -99,10 +121,9 @@ pub(crate) fn run<T: Request>(request: T) -> Result<T::Output> {
     if rustix::process::geteuid().as_raw() != 0 {
         return Err("storage coordinator requires root".into());
     }
-    let bytes = json_codec::to_vec(&request)?;
-    if bytes.len() > MAX_RECORD_BYTES {
-        return Err("service worker request exceeds its bound".into());
-    }
+    let bytes = encoding::frame(&request, MAX_RECORD_BYTES, || Failure::DispatchBudget {
+        maximum: MAX_RECORD_BYTES,
+    })?;
     let account = request.account();
     // Rust's Unix uid() clears supplementary groups before setuid; the child
     // independently rejects any remaining groups or incorrect real/effective IDs.
@@ -189,13 +210,12 @@ pub(crate) fn entry<T: Request>() -> Result<()> {
         Err(error) => Reply::Failed {
             // Storage failures can traverse protected credential backup
             // material. Never expand the native source chain into this wire.
-            message: error.to_string(),
+            message: encoding::diagnostic(error.as_ref()),
         },
     };
-    let bytes = json_codec::to_vec(&reply)?;
-    if bytes.len() > T::MAX_RESPONSE_BYTES {
-        return Err("storage worker reply exceeds its bound".into());
-    }
+    let bytes = encoding::frame(&reply, T::MAX_RESPONSE_BYTES, || Failure::ReplyBudget {
+        maximum: T::MAX_RESPONSE_BYTES,
+    })?;
     let mut output = std::io::stdout().lock();
     output.write_all(&bytes)?;
     output.flush()?;
