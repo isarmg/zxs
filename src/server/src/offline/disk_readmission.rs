@@ -202,24 +202,26 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     if plan_digest(&input.plan)? != input.input.request_digest {
         return Err("readmission confirmation differs from its exact preview".into());
     }
+    let bytes = json_codec::to_vec(&input.plan)?;
+    if bytes.len() > MAX_RECORD_BYTES {
+        return Err("plan exceeds its retained-record budget; preserve any original intent".into());
+    }
+    let request = execution_request(&input.plan)?;
     let root = Root::open(input.input.service_user.clone())?;
     root.check(&input.plan)?;
-    let request = WorkerRequest {
-        context: root.context.clone(),
-        action: Action::Commit {
-            plan: input.plan.clone(),
-        },
-    };
-    let bytes = json_codec::to_vec(&input.plan)?;
-    if bytes.len() > MAX_RECORD_BYTES || json_codec::to_vec(&request)?.len() > MAX_RECORD_BYTES {
-        return Err("readmission plan exceeds its bounded envelope; no intent saved".into());
-    }
     root.host.publish(
         &record_name(&input.input.request_digest),
         &[("plan.json", &bytes)],
     )?;
     drop(root);
     finish(input, request).map_err(coordinator::pending::<Plan>)
+}
+fn execution_request(plan: &Plan) -> Result<WorkerRequest> {
+    crate::offline::service_worker::retained_execution(
+        &plan.context, plan,
+        |plan| Action::Commit { plan },
+        |plan| Action::Original { plan },
+    )
 }
 fn finish(input: Commit, request: WorkerRequest) -> Result<json_codec::Value> {
     let Output::Status { status } = crate::offline::service_worker::run(request)? else {

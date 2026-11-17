@@ -1,7 +1,7 @@
 //! One same-executable child, with real/effective service UID/GID, no inherited
 //! environment, no shell, no external program and no secrets in argv.
 mod failure;
-use crate::offline::service_worker::failure::{Failure, Stage};
+use crate::offline::service_worker::failure::{Failure, RequestPhase, Stage};
 use data_serialization::{Deserialize, Serialize, de::DeserializeOwned};
 const MAX_RECORD_BYTES: usize = 64 * 1024;
 pub(crate) trait Request: Serialize + DeserializeOwned {
@@ -71,6 +71,29 @@ impl Drop for Joined {
             tracing::error!(%error, "service worker could not be reaped; inspect retained initialization before retrying");
         }
     }
+}
+/// A plan that cannot be inspected after a disconnect is not admissible.
+/// Serialize both actual domain envelopes with the same bound as the worker;
+/// never estimate escaped lengths or assume their action tags are equally long.
+pub(super) fn retained_execution<A: Action, P: Clone>(
+    context: &super::managed_layout::Context,
+    plan: &P,
+    execute: impl FnOnce(P) -> A,
+    original: impl FnOnce(P) -> A,
+) -> Result<Envelope<A>> {
+    let request = Envelope { context: context.clone(), action: execute(plan.clone()) };
+    if json_codec::to_vec(&request)?.len() > MAX_RECORD_BYTES {
+        return Err(Failure::RequestBudget {
+            phase: RequestPhase::Execution, maximum: MAX_RECORD_BYTES,
+        }.into());
+    }
+    let inspection = Envelope { context: context.clone(), action: original(plan.clone()) };
+    if json_codec::to_vec(&inspection)?.len() > MAX_RECORD_BYTES {
+        return Err(Failure::RequestBudget {
+            phase: RequestPhase::OriginalInspection, maximum: MAX_RECORD_BYTES,
+        }.into());
+    }
+    Ok(request)
 }
 pub(crate) fn run<T: Request>(request: T) -> Result<T::Output> {
     if rustix::process::geteuid().as_raw() != 0 {

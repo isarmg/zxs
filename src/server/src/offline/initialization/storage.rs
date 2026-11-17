@@ -222,8 +222,8 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     if bytes.len() > MAX_RECORD_BYTES {
         return Err("first-storage plan exceeds its retained-record budget".into());
     }
-    // The only worker envelope repeats the plan's admitted context. Verify its
-    // existing IPC bound before retaining an intent that cannot be executed.
+    // Both execution and original inspection must fit the existing IPC bound
+    // before retaining an intent that might outlive this process.
     // Already saved over-budget plans remain unchanged; this does not allocate
     // another identity, trim the original plan or silently retry a smaller batch.
     let request = execution_request(&input.plan)?;
@@ -242,14 +242,11 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     finish(input, request).map_err(coordinator::pending::<Plan>)
 }
 fn execution_request(plan: &Plan) -> Result<WorkerRequest> {
-    let request = WorkerRequest {
-        context: plan.context.clone(),
-        action: Action::Execute { plan: plan.clone() },
-    };
-    if json_codec::to_vec(&request)?.len() > MAX_RECORD_BYTES {
-        return Err("first-storage execution envelope exceeds its IPC budget; no intent was written or changed by this attempt; preserve any original plan and digest".into());
-    }
-    Ok(request)
+    crate::offline::service_worker::retained_execution(
+        &plan.context, plan,
+        |plan| Action::Execute { plan },
+        |plan| Action::InspectOriginal { plan },
+    )
 }
 fn finish(input: Commit, request: WorkerRequest) -> Result<json_codec::Value> {
     let WorkerOutput::Initialized { report } =

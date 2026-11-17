@@ -76,3 +76,26 @@ fn previews_do_not_claim_foreign_admission_or_complete_installation() {
     p.registered_roots.push("/zxs/data/disks/another".into());
     assert_ne!(first, plan_digest(&p).unwrap());
 }
+
+#[test]
+fn retained_intent_requires_both_exact_execution_and_original_inspection_to_fit() {
+    let plan = plan();
+    let execute = |p: &Plan| WorkerRequest {
+        context: p.context.clone(), action: Action::Commit { plan: p.clone() },
+    };
+    // Codec-only boundary: no host lookup, registration or actual worker.
+    let used = json_codec::to_vec(&execute(&plan)).unwrap().len();
+    let mut shape = json_codec::to_value(&plan).unwrap();
+    let principal = shape["credential"]["principal"].as_str().unwrap().to_owned();
+    let padded = [principal, "x".repeat(MAX_RECORD_BYTES - used)].concat();
+    shape["credential"]["principal"] = json!(padded);
+    let boundary: Plan = json_codec::from_value(shape).unwrap();
+    assert_eq!(json_codec::to_vec(&execute(&boundary)).unwrap().len(), MAX_RECORD_BYTES);
+    let inspection = WorkerRequest {
+        context: boundary.context.clone(), action: Action::Status { plan: boundary.clone() },
+    };
+    // Status and Commit have equal size; exactly the wire limit is admissible.
+    assert_eq!(json_codec::to_vec(&inspection).unwrap().len(), MAX_RECORD_BYTES);
+    let actual = execution_request(&boundary).unwrap();
+    assert_eq!(json_codec::to_vec(&actual).unwrap(), json_codec::to_vec(&execute(&boundary)).unwrap());
+}

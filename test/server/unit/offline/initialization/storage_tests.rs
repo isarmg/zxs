@@ -202,3 +202,27 @@ fn first_storage_execution_budget_precedes_host_access_and_retained_intent() {
     };
     assert!(commit(input).unwrap_err().to_string().contains("IPC budget"));
 }
+
+
+#[test]
+fn first_storage_rejects_an_executable_plan_whose_original_inspection_cannot_cross_ipc() {
+    let mut plan = plan();
+    let execute = |p: &Plan| WorkerRequest {
+        context: p.context.clone(), action: Action::Execute { plan: p.clone() },
+    };
+    let used = json_codec::to_vec(&execute(&plan)).unwrap().len();
+    plan.selections[0].selection.mount_identity.filesystem
+        .push_str(&"x".repeat(MAX_RECORD_BYTES - used));
+    assert_eq!(json_codec::to_vec(&execute(&plan)).unwrap().len(), MAX_RECORD_BYTES);
+    let inspect = WorkerRequest {
+        context: plan.context.clone(), action: Action::InspectOriginal { plan: plan.clone() },
+    };
+    assert!(json_codec::to_vec(&inspect).unwrap().len() > MAX_RECORD_BYTES);
+    let error = execution_request(&plan).err().expect("recovery inspection is over budget");
+    assert!(error.to_string().contains("original inspection"));
+    let input = Commit {
+        input: Original { service_user: "zxs".into(), request_digest: digest(&plan).unwrap() },
+        confirmation: "initialize-first-storage-batch".into(), external_writers_stopped: true, plan,
+    };
+    assert!(commit(input).unwrap_err().to_string().contains("original inspection"));
+}

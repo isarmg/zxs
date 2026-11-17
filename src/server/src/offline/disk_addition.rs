@@ -214,41 +214,29 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     if plan_digest(&input.plan)? != input.input.request_digest {
         return Err("addition plan no longer matches its reviewed digest".into());
     }
-    let root = Root::open(input.input.service_user.clone())?;
-    root.check(&input.plan)?;
     let bytes = json_codec::to_vec(&input.plan)?;
     if bytes.len() > MAX_RECORD_BYTES {
-        return Err("addition plan exceeds its retained-record budget".into());
+        return Err("plan exceeds its retained-record budget; preserve any original intent".into());
     }
-    // The IPC envelope repeats the admission context. Reject a plan that fits
-    // its local record but cannot be sent to its only execution owner.
-    let envelope = WorkerRequest {
-        context: root.context.clone(),
-        action: Action::Commit {
-            plan: input.plan.clone(),
-        },
-    };
-    if json_codec::to_vec(&envelope)?.len() > MAX_RECORD_BYTES {
-        return Err(
-            "addition execution envelope exceeds its IPC budget; no original intent was created"
-                .into(),
-        );
-    }
+    let request = execution_request(&input.plan)?;
+    let root = Root::open(input.input.service_user.clone())?;
+    root.check(&input.plan)?;
     root.host.publish(
         &format!(".zxs-helper-addition-{}", input.input.request_digest),
         &[("plan.json", &bytes)],
     )?;
-    let context = root.into_context();
-    finish(input, context).map_err(coordinator::pending::<Plan>)
+    drop(root);
+    finish(input, request).map_err(coordinator::pending::<Plan>)
 }
-fn finish(input: Commit, context: layout::Context) -> Result<json_codec::Value> {
-    let Output::Status { status } = crate::offline::service_worker::run(WorkerRequest {
-        context,
-        action: Action::Commit {
-            plan: input.plan.clone(),
-        },
-    })?
-    else {
+fn execution_request(plan: &Plan) -> Result<WorkerRequest> {
+    crate::offline::service_worker::retained_execution(
+        &plan.context, plan,
+        |plan| Action::Commit { plan },
+        |plan| Action::Status { plan },
+    )
+}
+fn finish(input: Commit, request: WorkerRequest) -> Result<json_codec::Value> {
+    let Output::Status { status } = crate::offline::service_worker::run(request)? else {
         return Err("unexpected original addition execution reply".into());
     };
     let root = Root::open(input.input.service_user)?;

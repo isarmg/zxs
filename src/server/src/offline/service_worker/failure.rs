@@ -21,8 +21,26 @@ impl fmt::Display for Stage {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) enum RequestPhase {
+    Execution,
+    OriginalInspection,
+}
+impl fmt::Display for RequestPhase {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Execution => "execution",
+            Self::OriginalInspection => "original inspection",
+        })
+    }
+}
+
 #[derive(Debug, error_definition::Error)]
 pub(super) enum Failure {
+    #[error(
+        "storage worker {phase} envelope exceeds its {maximum}-byte IPC budget; no intent was written or changed by this attempt; preserve any original plan and digest"
+    )]
+    RequestBudget { phase: RequestPhase, maximum: usize },
     #[error(
         "storage worker {stage} failed; preserve original intent and inspect its outcome; no rollback is claimed"
     )]
