@@ -913,7 +913,7 @@ fn whole_working_selection_checks_all_cas_before_open_and_retains_real_published
     assert_eq!(engine.state(), state.as_ref());
     drop(state);
     drop(engine);
-    let engine = Engine::open(&system).unwrap();
+    let mut engine = Engine::open(&system).unwrap();
     let selected = engine.select_working_sources(&requests).unwrap();
     selected.require_engine(&engine).unwrap();
     for (source, bytes) in selected.sources().iter().zip(bytes) {
@@ -921,6 +921,25 @@ fn whole_working_selection_checks_all_cas_before_open_and_retains_real_published
         assert_eq!(source.read_at(&mut actual, 0).unwrap(), bytes.len());
         assert_eq!(actual, bytes);
     }
+    drop(selected);
+    let first = &requests[0].target;
+    let current = engine.selected_file_working(first).unwrap();
+    assert_eq!(current.selected_payload().unwrap(), Some(payload));
+    assert_eq!(current.base(), base);
+    // Simulate a changed selector on this observed projection only. Keep the
+    // real saved row/body untouched; metadata is needed for explicit discard.
+    let key = crate::business::directory::context_key_from_key(
+        &repository.repository_id, first.path.key(),
+    );
+    let context = Arc::make_mut(&mut engine.state).file_contexts.get_mut(&key).unwrap();
+    context.selection_generation = Generation::new(context.selection_generation).next().unwrap().get();
+    let stale = engine.selected_file_working(first).unwrap();
+    assert_ne!(stale.base(), base);
+    assert_eq!(stale.working().draft(), Some((&base, &payload)));
+    assert!(matches!(stale.selected_payload(), Err(crate::Error::FileDraft(DraftError::BaseChanged))));
+    assert!(matches!(stale.open_draft(), Err(crate::Error::FileDraft(DraftError::BaseChanged))));
+    assert!(engine.selected_file_working(&requests[1].target).unwrap()
+        .selected_payload().unwrap().is_some());
 }
 
 #[test]

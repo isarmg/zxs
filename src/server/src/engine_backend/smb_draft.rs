@@ -29,19 +29,20 @@ fn authorize_target(
     Ok(())
 }
 
-fn require_selection(
-    engine: &storage_engine::Engine,
+fn require_selection<'a>(
+    engine: &'a storage_engine::Engine,
     file: &SmbManualFile,
     expected: storage_contract::file_draft::WorkingRevision,
-) -> Result<(), ApiError> {
-    if engine.file_draft_base(&file.target).map_err(error)? != file.base {
+) -> Result<storage_engine::SelectedFileWorking<'a>, ApiError> {
+    let selected = engine.selected_file_working(&file.target).map_err(error)?;
+    if selected.base() != file.base {
         return Err(changed());
     }
-    let working = engine.file_working_state(&file.target).map_err(error)?;
+    let working = selected.working();
     if working.mode() != CommitMode::Manual || working.revision() != expected {
         return Err(changed());
     }
-    Ok(())
+    Ok(selected)
 }
 
 /// A current occurrence may enrich an automatic handle, but an unsupported
@@ -178,9 +179,10 @@ pub(super) fn capture(
     if repository.main_branch_id != branch {
         return Err(ApiError::forbidden());
     }
+    let selected = engine.selected_file_working(&target).map_err(error)?;
     Ok(Some(SmbManualFile {
-        base: engine.file_draft_base(&target).map_err(error)?,
-        working: engine.file_working_state(&target).map_err(error)?,
+        base: selected.base(),
+        working: selected.working().clone(),
         target,
     }))
 }
@@ -194,7 +196,7 @@ pub(super) fn authorize(
     let (engine, current) = backend.lock_current(identity)?;
     authorize_target(&engine, &current, &file.target)?;
     match access {
-        SmbDraftAccess::Write { expected } => require_selection(&engine, file, expected),
+        SmbDraftAccess::Write { expected } => require_selection(&engine, file, expected).map(drop),
         SmbDraftAccess::Read => {
             let repository = repository(&engine, &file.target.repository.to_string())?;
             let entry = read_projection::lookup_current(
@@ -219,16 +221,10 @@ pub(super) fn content(
 ) -> Result<Content, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
     authorize_target(&engine, &current, &file.target)?;
-    require_selection(&engine, file, file.revision())?;
-    let working = engine.file_working_state(&file.target).map_err(error)?;
-    if let Some((_, payload)) = working.draft() {
-        let payload = *payload;
-        return crate::engine_backend::file_draft::saved_content(
-            payload, deadline, || {
-            let source = engine.open_file_draft(&file.target).map_err(error)?;
-            drop(engine);
-            Ok(source)
-        });
+    let selected = require_selection(&engine, file, file.revision())?;
+    if let Some(read) = super::file_draft::SavedRead::open(&selected, deadline)? {
+        drop(engine);
+        return read.finish();
     }
     let plan = engine.prepare_content(&file.base.version_id().to_string()).map_err(error)?;
     let memory = crate::content_proof_budget::reserve(
@@ -310,15 +306,18 @@ pub(in crate::engine_backend) fn published_size(
     let Some(record) = engine.state().file_containers.get(&file) else {
         return Ok(None);
     };
-    let Some((_, payload)) = record.working.draft() else {
+    if record.working.draft().is_none() {
         return Ok(None);
-    };
+    }
     let target = DraftLocation {
         repository: repository.repository_id.parse().map_err(ApiError::invalid_source)?,
         path: entry.path.clone(),
         entry: entry.entry_id.parse().map_err(ApiError::invalid_source)?,
         file,
     };
-    engine.file_draft_base(&target).map_err(error)?;
-    Ok(Some(payload.logical_size()))
+    let selected = engine.selected_file_working(&target).map_err(error)?;
+    if selected.base().version_id().to_string() != entry.version_id {
+        return Err(changed());
+    }
+    Ok(selected.selected_payload().map_err(error)?.map(|payload| payload.logical_size()))
 }

@@ -47,7 +47,7 @@ mod config;
 mod initial_storage;
 pub use initial_storage::{InitialSealDigest, InitialStorageDisk, InitialStorageObservation};
 pub(crate) mod file_draft;
-pub use file_draft::{NativeCurrentEntry, NativeWorkingFile, NativeWorkingTarget};
+pub use file_draft::{NativeCurrentEntry, NativeWorkingFile, NativeWorkingTarget, SelectedFileWorking};
 pub(crate) mod fresh_layout;
 pub use fresh_layout::FreshLayoutError;
 pub(crate) use fresh_layout::namespace::RegisteredNamespaceRoot;

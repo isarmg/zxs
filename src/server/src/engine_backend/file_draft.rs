@@ -3,7 +3,7 @@ use super::{EngineBackend, application::Application, error, file_manager, reposi
 use crate::{ApiError, ChangeFileWorking, Content, FileWorkingSnapshot, ReadFileDraft, UploadSource};
 use crate::auth::Identity;
 use std::io::{Read, Seek, SeekFrom};
-use storage_contract::file_draft::{DraftCommand, DraftLocation};
+use storage_contract::file_draft::{DraftCommand, DraftLocation, DraftPayload, DraftPayloadId, manifest::ManifestCommitment};
 
 pub(super) fn authorize(
     engine: &mut storage_engine::Engine, current: &Identity, target: &DraftLocation,
@@ -23,10 +23,8 @@ pub(super) fn status(
 ) -> Result<FileWorkingSnapshot, ApiError> {
     let (mut engine, current) = backend.lock_current(identity)?;
     authorize(&mut engine, &current, &target)?;
-    Ok(FileWorkingSnapshot {
-        base: engine.file_draft_base(&target).map_err(error)?,
-        working: engine.file_working_state(&target).map_err(error)?,
-    })
+    let selected = engine.selected_file_working(&target).map_err(error)?;
+    Ok(FileWorkingSnapshot { base: selected.base(), working: selected.working().clone() })
 }
 
 pub(super) fn authorize_write(
@@ -75,43 +73,65 @@ pub(super) fn content(
 ) -> Result<Content, ApiError> {
     let (mut engine, current) = backend.lock_current(identity)?;
     authorize(&mut engine, &current, &request.target)?;
-    let working = engine.file_working_state(&request.target).map_err(error)?;
-    let payload = *working.draft().ok_or_else(|| ApiError::new(
+    let selected = engine.selected_file_working(&request.target).map_err(error)?;
+    let read = SavedRead::open(&selected, request.deadline)?.ok_or_else(|| ApiError::new(
         http::StatusCode::CONFLICT, storage_contract::ErrorCode::FileBranchConflict,
         "selected file has no shared draft body",
-    ))?.1;
-    saved_content(payload, request.deadline, || {
-        let file = engine.open_file_draft(&request.target).map_err(error)?;
-        drop(engine);
-        Ok(file)
-    })
+    ))?;
+    drop(engine);
+    read.finish()
 }
 
-pub(super) fn saved_content(
-    payload: storage_contract::file_draft::DraftPayload,
-    deadline: std::time::Instant,
-    open: impl FnOnce() -> Result<storage_engine::ReadFile, ApiError>,
-) -> Result<Content, ApiError> {
-    match payload {
-        storage_contract::file_draft::DraftPayload::Full { content_hash, .. } => {
-            verified_content(payload.logical_size(), content_hash, deadline, open)
-        }
-        storage_contract::file_draft::DraftPayload::Ranges { manifest_commitment, .. } => {
-            if std::time::Instant::now() >= deadline {
-                return Err(crate::transfer_limits::timeout_error());
+/// Budget the proof before opening the physical body, with the same borrowed
+/// FILE result that supplied its metadata. Only held file/proof material
+/// leaves the authorization lock for the potentially long full checksum pass.
+pub(super) struct SavedRead {
+    file: storage_engine::ReadFile,
+    proof: SavedProof,
+}
+
+enum SavedProof {
+    Full(FullProof),
+    Ranges { id: DraftPayloadId, commitment: ManifestCommitment, size: u64 },
+}
+
+impl SavedRead {
+    pub(super) fn open(
+        selected: &storage_engine::SelectedFileWorking<'_>,
+        deadline: std::time::Instant,
+    ) -> Result<Option<Self>, ApiError> {
+        let proof = match selected.selected_payload().map_err(error)? {
+            None => return Ok(None),
+            Some(DraftPayload::Full { content_hash, logical_size, .. }) => {
+                SavedProof::Full(FullProof::reserve(logical_size, content_hash, deadline)?)
             }
-            let file = open()?;
-            if file.verified_working_identity().map_err(error)? != Some(payload) {
-                return Err(ApiError::invalid("range draft differs from its held source"));
+            Some(DraftPayload::Ranges { payload_id, manifest_commitment, logical_size }) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(crate::transfer_limits::timeout_error());
+                }
+                SavedProof::Ranges { id: payload_id, commitment: manifest_commitment, size: logical_size }
             }
-            // None means this opaque engine reader verifies each returned
-            // range itself. A raw descriptor cannot construct this branch.
-            Ok(Content {
-                fallback_files: Vec::new(), checksum_manifest: None,
-                file: file.into(), size: payload.logical_size(),
-                hash: format!("working-manifest-{manifest_commitment}"),
-                lease: Box::new(()), download_name: None,
-            })
+        };
+        Ok(Some(Self { file: selected.open_draft().map_err(error)?, proof }))
+    }
+
+    pub(super) fn finish(self) -> Result<Content, ApiError> {
+        match self.proof {
+            SavedProof::Full(proof) => proof.verify(self.file),
+            SavedProof::Ranges { id, commitment, size } => {
+                let expected = DraftPayload::ranges(id, commitment, size);
+                if self.file.verified_working_identity().map_err(error)? != Some(expected) {
+                    return Err(ApiError::invalid("range draft differs from its held source"));
+                }
+                // The opaque reader verifies the actual base and each returned
+                // extent. A raw descriptor cannot construct an unchecked stream.
+                Ok(Content {
+                    fallback_files: Vec::new(), checksum_manifest: None,
+                    file: self.file.into(), size,
+                    hash: format!("working-manifest-{commitment}"),
+                    lease: Box::new(()), download_name: None,
+                })
+            }
         }
     }
 }
@@ -122,52 +142,72 @@ pub(super) fn verified_content(
     deadline: std::time::Instant,
     open: impl FnOnce() -> Result<storage_engine::ReadFile, ApiError>,
 ) -> Result<Content, ApiError> {
-    const CHUNK: u32 = 65_536;
-    let count = usize::try_from(size.div_ceil(u64::from(CHUNK)))
-        .map_err(|source| {
+    FullProof::reserve(size, content_hash, deadline)?.verify(open()?)
+}
+
+const CHUNK: u32 = 65_536;
+
+struct FullProof {
+    size: u64,
+    content_hash: storage_contract::ContentHash,
+    deadline: std::time::Instant,
+    count: usize,
+    proof_memory: crate::content_proof_budget::Reservation<'static>,
+}
+
+impl FullProof {
+    fn reserve(
+        size: u64, content_hash: storage_contract::ContentHash, deadline: std::time::Instant,
+    ) -> Result<Self, ApiError> {
+        let count = usize::try_from(size.div_ceil(u64::from(CHUNK))).map_err(|source| {
             ApiError::limit("draft checksum proof is too large").with_source(source)
         })?;
-    let encoded_bytes = count.checked_mul(32)
-        .and_then(|bytes| bytes.checked_add(storage_contract::CHECKSUM_HEADER_BYTES))
-        .ok_or_else(|| ApiError::limit("draft checksum proof length overflow"))?;
-    let proof_memory = crate::content_proof_budget::reserve(encoded_bytes)?;
-    if std::time::Instant::now() >= deadline {
-        return Err(crate::transfer_limits::timeout_error());
-    }
-    let mut file = open()?;
-    // The core API returns its fully verified held descriptor. Build range
-    // proofs from that same descriptor and compare the complete digest again;
-    // neither a new pathname nor unchecked raw-None streaming is accepted.
-    file.seek(SeekFrom::Start(0)).map_err(ApiError::io)?;
-    let mut chunks = Vec::with_capacity(count);
-    let mut buffer = vec![0u8; CHUNK as usize];
-    let mut remaining = size;
-    let mut digest = blake3::Hasher::new();
-    while remaining > 0 {
+        let encoded = count.checked_mul(32)
+            .and_then(|bytes| bytes.checked_add(storage_contract::CHECKSUM_HEADER_BYTES))
+            .ok_or_else(|| ApiError::limit("draft checksum proof length overflow"))?;
+        let proof_memory = crate::content_proof_budget::reserve(encoded)?;
         if std::time::Instant::now() >= deadline {
             return Err(crate::transfer_limits::timeout_error());
         }
+        Ok(Self { size, content_hash, deadline, count, proof_memory })
+    }
+
+    fn verify(self, mut file: storage_engine::ReadFile) -> Result<Content, ApiError> {
+        let Self { size, content_hash, deadline, count, proof_memory } = self;
+        // The core API returns its fully verified held descriptor. Build range
+        // proofs from that same descriptor and compare the complete digest again;
+        // neither a new pathname nor unchecked raw-None streaming is accepted.
+        file.seek(SeekFrom::Start(0)).map_err(ApiError::io)?;
+        let mut chunks = Vec::with_capacity(count);
+        let mut buffer = vec![0u8; CHUNK as usize];
+        let mut remaining = size;
+        let mut digest = blake3::Hasher::new();
+        while remaining > 0 {
+            if std::time::Instant::now() >= deadline {
+                return Err(crate::transfer_limits::timeout_error());
+            }
+            file.check_running().map_err(error)?;
+            let length = remaining.min(u64::from(CHUNK)) as usize;
+            file.read_exact(&mut buffer[..length]).map_err(ApiError::io)?;
+            digest.update(&buffer[..length]);
+            chunks.push(*blake3::hash(&buffer[..length]).as_bytes());
+            remaining -= length as u64;
+        }
+        if file.read(&mut buffer[..1]).map_err(ApiError::io)? != 0
+            || storage_contract::ContentHash::from_digest(digest.finalize()) != content_hash
+        {
+            return Err(ApiError::new(http::StatusCode::INTERNAL_SERVER_ERROR,
+                storage_contract::ErrorCode::ChecksumMismatch, "draft body changed during read"));
+        }
         file.check_running().map_err(error)?;
-        let length = remaining.min(u64::from(CHUNK)) as usize;
-        file.read_exact(&mut buffer[..length]).map_err(ApiError::io)?;
-        digest.update(&buffer[..length]);
-        chunks.push(*blake3::hash(&buffer[..length]).as_bytes());
-        remaining -= length as u64;
+        file.seek(SeekFrom::Start(0)).map_err(ApiError::io)?;
+        Ok(Content {
+            fallback_files: Vec::new(),
+            checksum_manifest: Some(storage_contract::ChecksumManifest {
+                chunk_bytes: CHUNK, logical_size: size, chunks,
+            }),
+            file: file.into(), size, hash: content_hash.to_string(),
+            lease: Box::new(proof_memory), download_name: None,
+        })
     }
-    if file.read(&mut buffer[..1]).map_err(ApiError::io)? != 0
-        || storage_contract::ContentHash::from_digest(digest.finalize()) != content_hash
-    {
-        return Err(ApiError::new(http::StatusCode::INTERNAL_SERVER_ERROR,
-            storage_contract::ErrorCode::ChecksumMismatch, "draft body changed during read"));
-    }
-    file.check_running().map_err(error)?;
-    file.seek(SeekFrom::Start(0)).map_err(ApiError::io)?;
-    Ok(Content {
-        fallback_files: Vec::new(),
-        checksum_manifest: Some(storage_contract::ChecksumManifest {
-            chunk_bytes: CHUNK, logical_size: size, chunks,
-        }),
-        file: file.into(), size: size, hash: content_hash.to_string(),
-        lease: Box::new(proof_memory), download_name: None,
-    })
 }

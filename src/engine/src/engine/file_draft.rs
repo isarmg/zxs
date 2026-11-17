@@ -108,26 +108,59 @@ impl DraftPublicationInput {
     }
 }
 
+/// Descriptive FILE working state plus its current read binding; not transport
+/// authorization, an earlier request's receipt, or a capability to publish.
+pub struct SelectedFileWorking<'a> {
+    engine: &'a Engine,
+    file: FileId,
+    base: DraftBase,
+    working: &'a FileWorkingState,
+}
+
+impl SelectedFileWorking<'_> {
+    pub fn base(&self) -> DraftBase { self.base }
+
+    pub fn working(&self) -> &FileWorkingState { self.working }
+
+    /// A stale saved base remains visible as metadata so the user can
+    /// explicitly discard it. Never overlay or serve that body as current.
+    pub fn selected_payload(&self) -> Result<Option<DraftPayload>> {
+        match self.working.draft() {
+            Some((base, _)) if *base != self.base => Err(Error::FileDraft(Failure::BaseChanged)),
+            Some((_, payload)) => Ok(Some(*payload)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn open_draft(&self) -> Result<ReadFile> {
+        if self.selected_payload()?.is_none() {
+            return Err(Error::FileDraft(Failure::DraftRequired));
+        }
+        self.engine.planning_context().draft_payload_source(self.file)?.open()
+    }
+}
+
 impl Engine {
     pub fn file_draft_base(&self, target: &DraftLocation) -> Result<DraftBase> {
         require_initial(&self.planning_context(), target)?;
         Ok(business::resolve(self.state(), target)?.base)
     }
 
+    /// Freeze the current exact occurrence together with the saved record (which
+    /// may show an older base). The borrow cannot cross an Engine mutation or
+    /// reopen another target's body.
+    pub fn selected_file_working(&self, target: &DraftLocation) -> Result<SelectedFileWorking<'_>> {
+        let base = self.file_draft_base(target)?;
+        let record = self.state.file_containers.get(&target.file).ok_or_else(business::invalid)?;
+        Ok(SelectedFileWorking { engine: self, file: target.file, base, working: &record.working })
+    }
+
     pub fn file_working_state(&self, target: &DraftLocation) -> Result<FileWorkingState> {
-        self.file_draft_base(target)?;
-        self.state.file_containers.get(&target.file).map(|record| record.working.clone())
-            .ok_or_else(business::invalid)
+        Ok(self.selected_file_working(target)?.working().clone())
     }
 
     pub fn open_file_draft(&self, target: &DraftLocation) -> Result<ReadFile> {
-        let selected = self.file_draft_base(target)?;
-        let record = self.state.file_containers.get(&target.file).ok_or_else(business::invalid)?;
-        let (base, _) = record.working.draft().ok_or(Error::FileDraft(Failure::DraftRequired))?;
-        if selected != *base {
-            return Err(Error::FileDraft(Failure::BaseChanged));
-        }
-        self.planning_context().draft_payload_source(target.file)?.open()
+        self.selected_file_working(target)?.open_draft()
     }
 
     /// The future close/flush route uses this writer, not the explicit Commit
