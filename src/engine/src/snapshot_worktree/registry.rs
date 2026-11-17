@@ -27,6 +27,9 @@ pub(crate) use backup::require_backup_snapshot_scope;
 mod edits;
 mod files;
 mod commits;
+mod added_commits;
+pub(crate) use added_commits::PublishedAddedCommitTail;
+pub(super) use added_commits::AddedCommitRetry;
 mod historical;
 mod drafts;
 mod discovery;
@@ -62,6 +65,7 @@ pub(crate) struct ReceiptIndex<'a> {
     heads: BTreeMap<WorktreeId, LedgerHead>,
     pending_edits: BTreeMap<WorktreeId, OperationId>,
     commits: BTreeMap<OperationId, CommitRecord<'a>>,
+    added_commits: BTreeMap<OperationId, added_commits::AddedCommitRecord<'a>>,
     historical: BTreeMap<OperationId, historical::HistoricalRecord<'a>>,
     working: BTreeMap<OperationId, WorkingRecord<'a>>,
     // Only complete indexed publications set this exact handle. Keeping the
@@ -162,6 +166,9 @@ enum CompletionOwner {
     Worktree(OperationId),
     Edit(OperationId),
     File(OperationId),
+    AddedFirst,
+    AddedNode(OperationId),
+    AddedCommit,
     CommitNode(OperationId),
     HistoricalReady,
     Commit,
@@ -173,6 +180,9 @@ impl CompletionOwner {
             Self::Worktree(_) => snapshot_worktree::WORKTREE_COMPLETE,
             Self::Edit(_) => snapshot_worktree::EDIT_COMPLETE,
             Self::File(_) => snapshot_worktree::FILE_COMPLETE,
+            Self::AddedFirst => snapshot_worktree::ADDED_FIRST,
+            Self::AddedNode(_) => snapshot_worktree::ADDED_NODE,
+            Self::AddedCommit => snapshot_worktree::ADDED_COMPLETE,
             Self::CommitNode(_) => snapshot_worktree::COMMIT_NODE,
             Self::HistoricalReady => snapshot_worktree::HISTORICAL_READY,
             Self::Commit => snapshot_worktree::COMMIT_COMPLETE,
@@ -244,6 +254,7 @@ pub(super) struct PublishedWorktree<'a> {
     checkpoint: Checkpoint,
     revision: storage_contract::snapshot_worktree::WorktreeRevision,
     publication: Option<&'a CommitRecord<'a>>,
+    added_publication: Option<&'a added_commits::AddedCommitRecord<'a>>,
     added: &'a [crate::directory_worktree::ledger::AddedFile],
 }
 
@@ -277,6 +288,15 @@ impl PublishedWorktree<'_> {
 
     pub(super) fn revision(&self) -> storage_contract::snapshot_worktree::WorktreeRevision {
         self.revision
+    }
+
+    pub(super) fn require_added_publication(
+        &self, publication: &crate::directory_worktree::lifecycle::Publication,
+        file: &crate::directory_worktree::ledger::AddedFileResult,
+    ) -> std::result::Result<(), crate::directory_worktree::ledger::LedgerError> {
+        self.added_publication
+            .ok_or(crate::directory_worktree::ledger::LedgerError::PublicationPending)?
+            .require_publication(publication, file)
     }
 
     pub(super) fn require_publication(
@@ -411,7 +431,7 @@ impl<'a> ReceiptIndex<'a> {
     /// Validate one real planner's typed record against the prior authenticated
     /// index. The prospective index is discarded: it cannot become a published
     /// source, reopen material, or supply a missing original on retry.
-    pub(super) fn require_planned(
+    pub(crate) fn require_planned(
         &self, next: &State, result: &OperationResult, principal: &Principal, record: &Record,
     ) -> Result<()> {
         let operation = result.operation_id;
@@ -465,7 +485,8 @@ impl<'a> ReceiptIndex<'a> {
             added_files: BTreeMap::new(), active_file_edits: BTreeMap::new(),
             heads: BTreeMap::new(),
             pending_edits: BTreeMap::new(),
-            commits: BTreeMap::new(), historical: BTreeMap::new(),
+            commits: BTreeMap::new(), added_commits: BTreeMap::new(),
+            historical: BTreeMap::new(),
             working: BTreeMap::new(),
             branch_heads: BTreeMap::new(),
             pending_branches: BTreeMap::new(),
@@ -514,6 +535,12 @@ impl<'a> ReceiptIndex<'a> {
             let commitment = decoded.record.commitment().map_err(RegistrationError::Codec)?;
             let receipt = Receipt { original, principal };
             match decoded.record {
+                Record::ReserveAddedCommit(plan) => {
+                    index.reserve_added_commit(receipt, plan, commitment, &mut allocations)?;
+                }
+                Record::PublishAddedFile(first) => index.publish_added_file(receipt, first)?,
+                Record::PublishAddedNode(node) => index.publish_added_node(receipt, node)?,
+                Record::CompleteAddedCommit(done) => index.complete_added_commit(receipt, done)?,
                 Record::BirthFile(plan) => index.birth_file(receipt, plan, commitment)?,
                 Record::SaveFile(plan) => index.save_file(receipt, plan, commitment)?,
                 Record::CompleteFile(completion) => index.complete_file(receipt, completion)?,
@@ -565,6 +592,11 @@ impl<'a> ReceiptIndex<'a> {
     pub(super) fn node(&self, handle: SnapshotHandle) -> Result<PublishedNode<'_>> {
         if self.working.contains_key(&handle.publication) {
             return self.working_node(handle);
+        }
+        if let Some(CompletionOwner::AddedNode(reserve)) =
+            self.completions.get(&handle.publication)
+        {
+            return self.added_node(*reserve, handle);
         }
         if let Some(CompletionOwner::CommitNode(reserve)) =
             self.completions.get(&handle.publication)
@@ -621,6 +653,7 @@ impl<'a> ReceiptIndex<'a> {
             checkpoint: head.checkpoint,
             revision: head.revision,
             publication: self.worktree_publication(handle),
+            added_publication: self.worktree_added_publication(handle),
             added: self.added(handle),
         })
     }

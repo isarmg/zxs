@@ -40,11 +40,12 @@ impl PublishedWorktree<'_> {
         }
         // Only a separately completed SYSTEM publication can verify a later
         // FILE/directory completion frame. An unregistered local tail cannot.
-        let reopened = WorktreeSession::reopen(
+        let reopened = WorktreeSession::reopen_with_added(
             source,
             self.binding(),
             self.checkpoint(),
             |publication, files| self.require_publication(publication, files),
+            |publication, file| self.require_added_publication(publication, file),
         ).map_err(RegistrationError::Ledger)?;
         let ReopenedWorktree::Ready(session) = reopened else {
             return Err(RegistrationError::Source);

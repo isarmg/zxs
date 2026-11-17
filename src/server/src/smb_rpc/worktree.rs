@@ -79,7 +79,17 @@ impl Session {
                 target.clone(), &path, writable, truncate, write_through,
             );
         }
-        let entry_id = worktree_entry_id(target, entry.as_ref().map(|entry| &entry.path));
+        let (entry_id, version_id) = match entry.as_ref().map(|entry| &entry.content) {
+            Some(SmbWorktreeEntryContent::RetainedFile { target, version, .. }) => {
+                (target.entry.to_string(), Some(*version))
+            }
+            Some(SmbWorktreeEntryContent::Working { .. }
+                | SmbWorktreeEntryContent::Directory | SmbWorktreeEntryContent::File { .. })
+                | None => {
+                    (worktree_entry_id(target, entry.as_ref().map(|entry| &entry.path)), None)
+                }
+        };
+        let mtime = entry.as_ref().map_or(FileMtime::NotFile {}, |entry| entry.mtime());
         let handle = self.next_handle;
         self.next_handle += 1;
         let directory = entry.as_ref().is_none_or(|entry| {
@@ -104,7 +114,7 @@ impl Session {
         } else {
             let entry = entry.expect("invariant: a non-directory worktree entry is present");
             let selection = SmbWorktreeFile {
-                target, path: entry.path, revision: status.revision,
+                target, path: entry.path, revision: status.revision, mtime,
             };
             if writable {
                 self.open_worktree_writer(selection, &path, truncate, write_through)?
@@ -128,8 +138,7 @@ impl Session {
             data_io, entry_id, kind: if directory { NamespaceEntryKind::Directory }
                 else { NamespaceEntryKind::File },
             path: path.into_string(), handle, size, max_file_bytes: self.max_file_bytes,
-            version_id: None, workspace_id: None,
-            mtime: if directory { FileMtime::NotFile {} } else { FileMtime::Unpublished {} },
+            version_id: version_id.map(|version| version.to_string()), workspace_id: None, mtime,
         }, descriptor))
     }
 
@@ -196,15 +205,15 @@ impl Session {
             (entry.kind(), entry.size())
         });
         let entry_id = match entry.as_ref().map(|entry| &entry.content) {
-            Some(SmbWorktreeEntryContent::Working { target, .. }) => target.entry.to_string(),
+            Some(SmbWorktreeEntryContent::Working { target, .. }
+                | SmbWorktreeEntryContent::RetainedFile { target, .. }) => target.entry.to_string(),
             Some(SmbWorktreeEntryContent::Directory | SmbWorktreeEntryContent::File { .. })
                 | None => worktree_entry_id(location.status.target, relative),
         };
         Ok(StatResult {
             entry_id,
             name: path.file_name().into(), path: path.into_string(), kind, size,
-            mtime: if kind == NamespaceEntryKind::Directory { FileMtime::NotFile {} }
-                else { FileMtime::Unpublished {} },
+            mtime: entry.as_ref().map_or(FileMtime::NotFile {}, |entry| entry.mtime()),
         })
     }
 
@@ -242,6 +251,11 @@ impl Session {
                 SmbWorktreeEntryContent::Working { target, working } => {
                     DirectoryEntry::WorktreeWorking {
                         target: target.clone(), path, logical_size: working.logical_size(),
+                    }
+                }
+                SmbWorktreeEntryContent::RetainedFile { target, version, size, mtime } => {
+                    DirectoryEntry::WorktreeRetained {
+                        target: target.clone(), path, version: *version, size: *size, mtime: *mtime,
                     }
                 }
                 SmbWorktreeEntryContent::Directory | SmbWorktreeEntryContent::File { .. } => {

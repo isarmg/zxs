@@ -109,6 +109,27 @@ impl<'a> WorktreeSession<'a> {
         }
     }
 
+    pub(crate) fn reopen_with_added(
+        source: &'a HeldSnapshotNode,
+        binding: Binding,
+        checkpoint: Checkpoint,
+        verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
+        verify_added: impl FnMut(
+            &Publication, &crate::directory_worktree::ledger::AddedFileResult,
+        ) -> Result<(), LedgerError>,
+    ) -> Result<ReopenedWorktree<'a>, LedgerError> {
+        match HeldWorktreeLedger::recover_with_added(
+            source, binding, checkpoint, verify, verify_added,
+        )? {
+            RecoveredLedger::Ready(ledger) => {
+                Ok(ReopenedWorktree::Ready(Self { source, ledger }))
+            }
+            RecoveredLedger::Publishing(pending) => {
+                Ok(ReopenedWorktree::Publishing(pending))
+            }
+        }
+    }
+
     pub(crate) fn worktree(&self) -> &Worktree {
         self.ledger.worktree()
     }

@@ -1,6 +1,7 @@
 //! Strict permanent reservation/completion records. Local material never supplies them.
 pub(crate) mod historical;
 pub(crate) mod files;
+pub(crate) mod added_commit;
 pub(crate) use historical::{CommitRouting, HistoricalCommit, HistoricalFile, HistoricalReady};
 use crate::directory_worktree::ledger::{Binding as LedgerBinding, Checkpoint, EditRecord};
 use crate::working_tree::snapshot::{
@@ -21,6 +22,11 @@ use storage_contract::working_tree::{
 use storage_contract::{
     BranchName, CommitState, EntryId, OperationId, Principal, ProtectionAtPublish, VersionId,
 };
+
+pub(crate) const ADDED_RESERVE: &str = "snapshot.worktree.added-reserve";
+pub(crate) const ADDED_FIRST: &str = "snapshot.worktree.added-first";
+pub(crate) const ADDED_NODE: &str = "snapshot.worktree.added-node";
+pub(crate) const ADDED_COMPLETE: &str = "snapshot.worktree.added-complete";
 
 pub(crate) const FILE_BIRTH: &str = "snapshot.worktree.file-birth";
 pub(crate) const FILE_SAVE: &str = "snapshot.worktree.file-save";
@@ -211,9 +217,13 @@ pub(crate) struct EditCompletion {
     pub(crate) revision: WorktreeRevision,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", content = "record", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Record {
+    ReserveAddedCommit(added_commit::AddedCommit),
+    PublishAddedFile(added_commit::AddedFirst),
+    PublishAddedNode(CommitNode),
+    CompleteAddedCommit(CommitCompletion),
     BirthFile(files::WorktreeFileBirth),
     SaveFile(files::WorktreeFileSave),
     CompleteFile(files::WorktreeFileCompletion),
@@ -239,13 +249,14 @@ struct Envelope {
     timestamp: u64,
     #[serialization(with = "storage_contract::u64_string")]
     membership_epoch: u64,
-    version_protection: Vec<()>,
+    version_protection: Vec<crate::persist::file_draft::Protection>,
 }
 
 pub(crate) struct Decoded {
     pub(crate) record: Record,
     pub(crate) timestamp: u64,
     pub(crate) membership_epoch: u64,
+    pub(crate) protection: Vec<crate::persist::file_draft::Protection>,
 }
 
 #[derive(Debug, error_definition::Error)]
@@ -287,13 +298,23 @@ impl Record {
             Self::ReserveEdit(record) => {
                 json_codec::to_value(&record.request).map_err(CodecError::Value)
             }
+            Self::ReserveAddedCommit(record) => {
+                json_codec::to_value(&record.request).map_err(CodecError::Value)
+            }
+            Self::PublishAddedFile(record) => {
+                #[derive(Serialize)]
+                struct Request { reserve: OperationId, reservation: MaterialCommitment }
+                json_codec::to_value(Request { reserve: record.reserve,
+                    reservation: record.reservation }).map_err(CodecError::Value)
+            }
             Self::ReserveCommit(record) => {
                 json_codec::to_value(&record.request).map_err(CodecError::Value)
             }
             Self::ReserveHistoricalCommit(record) => {
                 json_codec::to_value(&record.request).map_err(CodecError::Value)
             }
-            Self::CompleteFile(_) | Self::CompleteNode(_) | Self::CompleteWorktree(_)
+            Self::PublishAddedNode(_) | Self::CompleteAddedCommit(_)
+            | Self::CompleteFile(_) | Self::CompleteNode(_) | Self::CompleteWorktree(_)
             | Self::CompleteEdit(_)
             | Self::PrepareHistoricalCommit(_) | Self::PublishCommitNode(_)
             | Self::CompleteCommit(_) => {
@@ -304,6 +325,10 @@ impl Record {
 
     pub(crate) fn kind(&self) -> &'static str {
         match self {
+            Self::ReserveAddedCommit(_) => ADDED_RESERVE,
+            Self::PublishAddedFile(_) => ADDED_FIRST,
+            Self::PublishAddedNode(_) => ADDED_NODE,
+            Self::CompleteAddedCommit(_) => ADDED_COMPLETE,
             Self::BirthFile(_) => FILE_BIRTH,
             Self::SaveFile(_) => FILE_SAVE,
             Self::CompleteFile(_) => FILE_COMPLETE,
@@ -375,7 +400,8 @@ impl PublicationEncoding {
 
 fn indexed_kind(kind: &str) -> bool {
     matches!(kind,
-        FILE_BIRTH | FILE_SAVE | FILE_COMPLETE | NODE_RESERVE | NODE_COMPLETE
+        ADDED_RESERVE | ADDED_FIRST | ADDED_NODE | ADDED_COMPLETE
+            | FILE_BIRTH | FILE_SAVE | FILE_COMPLETE | NODE_RESERVE | NODE_COMPLETE
             | WORKTREE_RESERVE | WORKTREE_ALLOCATE | WORKTREE_COMPLETE
             | EDIT_RESERVE | EDIT_COMPLETE | COMMIT_RESERVE | HISTORICAL_RESERVE | HISTORICAL_READY
             | COMMIT_NODE | COMMIT_COMPLETE)
@@ -399,7 +425,9 @@ pub(crate) fn decode(receipt: &OperationResult) -> Result<Option<Decoded>, Codec
         return Err(CodecError::Kind);
     }
     if receipt.commit_state != CommitState::Published
-        || receipt.protection_at_publish != ProtectionAtPublish::NotApplicable
+        || receipt.protection_at_publish != if receipt.kind == ADDED_FIRST {
+            ProtectionAtPublish::TargetMet
+        } else { ProtectionAtPublish::NotApplicable }
         || receipt.commit_id.is_some()
         || receipt.history_tree_id.is_some()
         || receipt.branch_id.is_some()
@@ -440,18 +468,50 @@ pub(crate) fn decode(receipt: &OperationResult) -> Result<Option<Decoded>, Codec
     {
         return Err(CodecError::Budget);
     }
+    if record.and_then(|record| record.get("added"))
+        .and_then(|added| added.get("working")).and_then(|working| working.get("body"))
+        .and_then(|body| body.get("manifest")).and_then(|manifest| manifest.get("blocks"))
+        .and_then(json_codec::Value::as_array).is_some_and(|blocks| {
+            blocks.len() > storage_contract::file_draft::manifest::MAX_WORKING_BLOCKS
+        })
+    { return Err(CodecError::Budget); }
+    if receipt.kind == ADDED_FIRST {
+        let content = record.and_then(|record| record.get("content"))
+            .ok_or(CodecError::Publication)?;
+        let version = content.get("version").ok_or(CodecError::Publication)?;
+        let placement = content.get("placement").ok_or(CodecError::Publication)?;
+        let protection = receipt.result.get("version_protection")
+            .and_then(json_codec::Value::as_array).ok_or(CodecError::Publication)?;
+        if protection.len() != 1
+            || content.get("allocations").and_then(json_codec::Value::as_array)
+                .is_none_or(|allocations| !allocations.is_empty())
+            || version.get("source_version_ids").and_then(json_codec::Value::as_array)
+                .is_none_or(|sources| !sources.is_empty())
+            || placement.get("route_slot_ids").and_then(json_codec::Value::as_array)
+                .is_none_or(|slots| slots.len() != 1)
+            || placement.get("binding_generations").and_then(json_codec::Value::as_object)
+                .is_none_or(|bindings| bindings.len() != 1)
+            || ["required_slots", "slots"].into_iter().any(|key| {
+                protection[0].get(key).and_then(json_codec::Value::as_array)
+                    .is_none_or(|slots| slots.len() != 1)
+            })
+        { return Err(CodecError::Budget); }
+    }
     let envelope: Envelope = json_codec::from_value(receipt.result.clone())
         .map_err(CodecError::Decoding)?;
     if envelope.snapshot_worktree.kind() != receipt.kind {
         return Err(CodecError::Kind);
     }
-    if !envelope.version_protection.is_empty() {
+    if (receipt.kind == ADDED_FIRST && envelope.version_protection.len() != 1)
+        || (receipt.kind != ADDED_FIRST && !envelope.version_protection.is_empty())
+    {
         return Err(CodecError::Publication);
     }
     Ok(Some(Decoded {
         record: envelope.snapshot_worktree,
         timestamp: envelope.timestamp,
         membership_epoch: envelope.membership_epoch,
+        protection: envelope.version_protection,
     }))
 }
 
@@ -464,12 +524,15 @@ impl Decoded {
             operation_id: operation, kind: self.record.kind().into(),
             commit_id: None, history_tree_id: None, branch_id: None,
             commit_state: CommitState::Published,
-            protection_at_publish: ProtectionAtPublish::NotApplicable,
+            protection_at_publish: if self.record.kind() == ADDED_FIRST {
+                ProtectionAtPublish::TargetMet
+            } else { ProtectionAtPublish::NotApplicable },
             current_health: storage_contract::CurrentHealth::Healthy,
             request_digest: self.record.digest(principal)?, sequence: sequence.get(),
             result: json_codec::to_value(Envelope {
                 snapshot_worktree: self.record.clone(), timestamp: self.timestamp,
-                membership_epoch: self.membership_epoch, version_protection: Vec::new(),
+                membership_epoch: self.membership_epoch,
+                version_protection: self.protection.clone(),
             }).map_err(CodecError::Value)?,
         })
     }

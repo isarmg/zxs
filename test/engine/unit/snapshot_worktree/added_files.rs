@@ -11,7 +11,7 @@ use storage_contract::file_container::ContainerParent;
 use storage_contract::file_draft::UnbornBody;
 use storage_contract::snapshot_worktree::additions::{CreateWorktreeFile, WorktreeFileTarget};
 use storage_contract::snapshot_worktree::creation::{AllocateWorktree, WorktreeNaming};
-use storage_contract::snapshot_worktree::{CommitWorktree, WorktreeHandle};
+use storage_contract::snapshot_worktree::WorktreeHandle;
 use storage_contract::{OperationId, Principal};
 
 fn principal() -> Principal {
@@ -176,18 +176,6 @@ fn native_added_files_birth_deleted_containers_save_twice_and_cold_reopen_withou
         matches!(entry.content, WorktreeEntryContent::Working { target, working }
         if target == file && working.logical_size() == 10)
     );
-    let commit = CommitWorktree {
-        target: one,
-        expected: engine.directory_worktree_status(one).unwrap().revision,
-        message: "not yet a first FILE commit".into(),
-        operation_id: OperationId::generate().unwrap(),
-    };
-    assert!(
-        engine
-            .commit_directory_worktree(&commit, &principal())
-            .is_err()
-    );
-    assert_eq!(fixture.media(), before);
     assert_eq!(engine.state().versions, history);
     assert_eq!(engine.state().branches, branches);
     drop(retained);

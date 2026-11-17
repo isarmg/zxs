@@ -15,6 +15,7 @@ pub struct SmbWorktreeFile {
     pub target: WorktreeHandle,
     pub path: PortablePath,
     pub revision: WorktreeRevision,
+    pub mtime: smb_protocol::protocol::FileMtime,
 }
 
 pub struct SmbWorktreeEntry {
@@ -26,13 +27,21 @@ pub enum SmbWorktreeEntryContent {
     Directory,
     File { size: u64 },
     Working { target: WorktreeFileTarget, working: UnbornWorking },
+    RetainedFile {
+        target: WorktreeFileTarget,
+        version: storage_contract::VersionId,
+        size: u64,
+        mtime: smb_protocol::protocol::FileMtime,
+    },
 }
 
 impl SmbWorktreeEntry {
     pub(crate) fn kind(&self) -> NamespaceEntryKind {
         match &self.content {
             SmbWorktreeEntryContent::Directory => NamespaceEntryKind::Directory,
-            SmbWorktreeEntryContent::File { .. } | SmbWorktreeEntryContent::Working { .. } => {
+            SmbWorktreeEntryContent::File { .. }
+            | SmbWorktreeEntryContent::Working { .. }
+            | SmbWorktreeEntryContent::RetainedFile { .. } => {
                 NamespaceEntryKind::File
             }
         }
@@ -41,8 +50,19 @@ impl SmbWorktreeEntry {
     pub(crate) fn size(&self) -> u64 {
         match &self.content {
             SmbWorktreeEntryContent::Directory => 0,
-            SmbWorktreeEntryContent::File { size } => *size,
+            SmbWorktreeEntryContent::File { size }
+            | SmbWorktreeEntryContent::RetainedFile { size, .. } => *size,
             SmbWorktreeEntryContent::Working { working, .. } => working.logical_size(),
+        }
+    }
+
+    pub(crate) fn mtime(&self) -> smb_protocol::protocol::FileMtime {
+        use smb_protocol::protocol::FileMtime;
+        match &self.content {
+            SmbWorktreeEntryContent::Directory => FileMtime::NotFile {},
+            SmbWorktreeEntryContent::File { .. }
+            | SmbWorktreeEntryContent::Working { .. } => FileMtime::Unpublished {},
+            SmbWorktreeEntryContent::RetainedFile { mtime, .. } => *mtime,
         }
     }
 }

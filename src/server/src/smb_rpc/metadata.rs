@@ -85,9 +85,8 @@ impl Session {
     pub(super) fn handle_metadata(&self, opened: &Handle) -> Result<AuthorizedMetadata, ApiError> {
         let mtime = match opened {
             Handle::Native(opened) => opened.file.mtime(),
-            Handle::WorktreeWrite(_, _) | Handle::ReadWorktree(_, _) => {
-                FileMtime::Unpublished {}
-            }
+            Handle::WorktreeWrite(_, _) => FileMtime::Unpublished {},
+            Handle::ReadWorktree(_, file) => file.mtime,
             Handle::WorktreeDirectory(_) => FileMtime::NotFile {},
             Handle::Read(_, version) => self.version_mtime(version)?,
             Handle::ReadDraft(_, file) => {

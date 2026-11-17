@@ -34,7 +34,7 @@ impl<'a> ReceiptIndex<'a> {
         let current = self.worktree(target)?;
         if current.revision() != expected
             || path.parent().is_some()
-            || current.publication.is_some()
+            || current.published_node().is_some()
         {
             return Err(RegistrationError::EditScope);
         }

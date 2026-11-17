@@ -9,6 +9,36 @@ use std::sync::Arc;
 use storage_contract::file_container::FileContainerRecord;
 use storage_contract::{DiskId, FileId, Principal};
 
+pub(super) fn is_first(kind: &str) -> bool {
+    kind == codec::KIND || kind == crate::persist::snapshot_worktree::ADDED_FIRST
+}
+
+fn description(
+    previous: &State, result: &OperationResult,
+) -> Result<(FileId, crate::business::file_draft::PublishedContent,
+    Option<crate::persist::snapshot_worktree::added_commit::AddedFull>)>
+{
+    if result.kind == codec::KIND {
+        let decoded = codec::decode(previous, result)?;
+        return Ok((decoded.selection().target.file, decoded.content().clone(), None));
+    }
+    let decoded = crate::persist::snapshot_worktree::decode(result)
+        .map_err(|source| crate::business::file_draft::worktree::failure(
+            crate::snapshot_worktree::RegistrationError::Codec(source),
+        ))?.ok_or_else(invalid)?;
+    let crate::persist::snapshot_worktree::Record::PublishAddedFile(first) = decoded.record
+        else { return Err(invalid()); };
+    let principal = previous.operation_principals.get(&first.reserve)
+        .ok_or_else(invalid)?.parse::<Principal>().map_err(|_| invalid())?;
+    let plan =
+        crate::business::file_draft::worktree::first::original(previous, &first, &principal)?;
+    let record = crate::business::file_draft::worktree::selected(previous, &plan.added.target)?;
+    if record.working.unborn() != Some(&plan.added.working)
+        || result.operation_id != plan.file_operation
+    { return Err(invalid()); }
+    Ok((plan.added.target.file, first.content, Some(first.full)))
+}
+
 enum Source {
     Live(Arc<PreparedUnbornFull>),
     Recovery(Arc<HeldUnbornReader>),
@@ -60,11 +90,18 @@ fn verified(
     let principal = next.operation_principals.get(&result.operation_id)
         .ok_or_else(invalid)?        .parse::<Principal>()        .map_err(|_| invalid())?;
     let read = source.digest()?;
-    let expected = unborn::replay_first(config, previous, result, &principal, &read)?;
-    if !crate::publication_shape::same_transition(previous, expected.state(), next) {
+    let (expected, file) = if result.kind == crate::persist::snapshot_worktree::ADDED_FIRST {
+        crate::business::file_draft::worktree::first::replay(
+            config, previous, result, &principal, &read,
+        )?
+    } else {
+        let projected = unborn::replay_first(config, previous, result, &principal, &read)?;
+        let file = projected.target().file;
+        (projected.into_state(), file)
+    };
+    if !crate::publication_shape::same_transition(previous, &expected, next) {
         return Err(invalid());
     }
-    let file = expected.target().file;
     let record = next.file_containers.get(&file).ok_or_else(invalid)?.clone();
     read.require_source()?;
     drop(read);
@@ -76,17 +113,20 @@ fn verified(
 pub(in crate::engine::fresh_layout::containers) fn plan(
     context: &PlanningContext<'_>, next: &State, prepared: &[Prepared], result: &OperationResult,
 ) -> Result<Option<Arc<VerifiedUnbornFirst>>> {
-    if result.kind != codec::KIND { return Ok(None); }
+    if !is_first(&result.kind) { return Ok(None); }
     let [prepared] = prepared else { return Err(invalid()); };
-    let decoded = codec::decode(context.state, result)?;
-    if prepared.version != decoded.content().version
-        || prepared.placement != decoded.content().placement
+    let (_, content, full) = description(context.state, result)?;
+    if prepared.version != content.version
+        || prepared.placement != content.placement
         || context.current_namespaces.is_some()
     {
         return Err(invalid());
     }
     let material = prepared.source.require_working_full()?;
     material.require_context(context)?;
+    if let Some(full) = full {
+        if material.worktree_evidence()? != full { return Err(invalid()); }
+    }
     verified(context.config, context.state, next, result, Source::Live(Arc::clone(material)))
         .map(Some)
 }
@@ -100,33 +140,35 @@ pub(in crate::engine::fresh_layout::containers) fn candidate(
     locations: Option<&super::super::RecoveryRenameLocations<'_>>,
 ) -> Result<Option<Arc<VerifiedUnbornFirst>>> {
     let result = next.operations.get(&candidate.operation_id).ok_or_else(invalid)?;
-    if result.kind != codec::KIND { return Ok(None); }
+    if !is_first(&result.kind) { return Ok(None); }
     let [prepared] = candidate.versions.as_slice() else { return Err(invalid()); };
-    let decoded = codec::decode(previous, result)?;
+    let (file, content, _) = description(previous, result)?;
     if config.generation().is_some() || candidate.generation().is_some()
         || candidate.sequence != next.sequence || result.sequence != candidate.sequence
         || result.request_digest != candidate.request_digest
-        || prepared.version != decoded.content().version
-        || prepared.placement != decoded.content().placement
+        || prepared.version != content.version
+        || prepared.placement != content.placement
     {
         return Err(invalid());
     }
-    let selection = decoded.selection();
-    crate::business::file_draft::selected::require_all(
-        previous, std::slice::from_ref(&selection), config.max_entries, config.max_file_bytes,
-    )?;
-    let record = previous.file_containers.get(&selection.target.file).ok_or_else(invalid)?;
+    if result.kind == codec::KIND {
+        let selection = codec::decode(previous, result)?.selection();
+        crate::business::file_draft::selected::require_all(
+            previous, std::slice::from_ref(&selection), config.max_entries, config.max_file_bytes,
+        )?;
+    }
+    let record = previous.file_containers.get(&file).ok_or_else(invalid)?;
     let disk = config.disks.iter().find(|disk| disk.disk_id == record.owner_disk.to_string())
         .ok_or_else(invalid)?;
     // This new Initial one-owner mode requires its actual predecessor extents.
     // Unavailable is not empty, a different copy, or permission to infer bytes.
     let observed = match locations {
         Some(locations) => locations.observe_previous(
-            config, resources, previous, next, candidate, selection.target.file, disk,
+            config, resources, previous, next, candidate, file, disk,
         )?,
         None => {
             let source = super::super::published_source(
-                config, resources, previous, selection.target.file, disk,
+                config, resources, previous, file, disk,
             )?;
             ObservedContainerReplica::observe(source)?
         }

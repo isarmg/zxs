@@ -3,7 +3,7 @@ use crate::directory_worktree::lifecycle::{Mount, Publication, Revision, Snapsho
 use crate::directory_worktree::projection::{FileEdit, FileResult, WorkingFile};
 use crate::directory_worktree::projection::namespace::NamespaceChange;
 use crate::directory_worktree::store::SparseWorktreeBinding;
-use crate::working_tree::snapshot::SnapshotFile;
+use crate::working_tree::snapshot::{SnapshotFile, SnapshotFileSource};
 use data_serialization::{Deserialize, Deserializer, Serialize};
 use name_policy::PortablePath;
 use storage_contract::{OperationId, Sequence};
@@ -47,6 +47,33 @@ pub(crate) struct AddedFile {
     pub(crate) working: UnbornWorking,
 }
 
+/// Exact independent first FILE result for an instance-owned occurrence.
+/// This descriptive frame cannot construct a held source or prove publication.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct AddedFileResult {
+    pub(crate) target: WorktreeFileTarget,
+    pub(crate) birth: OperationId,
+    pub(crate) working: UnbornWorking,
+    pub(crate) file_operation: OperationId,
+    pub(crate) material: SnapshotFile,
+    pub(crate) source: SnapshotFileSource,
+}
+impl AddedFileResult {
+    pub(crate) fn require_file(&self, file: &AddedFile) -> Result<(), LedgerError> {
+        if self.target != file.target || self.birth != file.birth || self.working != file.working
+            || self.file_operation == self.birth
+            || self.material.file_id != self.target.file
+            || self.material.size != self.working.logical_size()
+            || !matches!(self.source, SnapshotFileSource::Container { node, .. }
+                if node == storage_contract::FileNodeId::Version(self.material.version_id))
+        {
+            return Err(LedgerError::FileResults);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Event {
@@ -67,6 +94,13 @@ pub(crate) enum Event {
         current_head: SnapshotNodeId,
         fork_branch: SnapshotBranchId,
     },
+    CommitAdded {
+        operation: OperationId,
+        expected: Revision,
+        current_head: SnapshotNodeId,
+        fork_branch: SnapshotBranchId,
+    },
+    AddedCompleted { publication: Publication, file: AddedFileResult },
     Delete { operation: OperationId, expected: Revision },
     Completed { publication: Publication, files: Vec<FileResult> },
     /// The repository namespace owner has reserved this free mount under its fence.

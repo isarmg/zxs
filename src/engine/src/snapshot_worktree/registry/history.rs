@@ -79,6 +79,13 @@ impl ReceiptIndex<'_> {
                 visit(&commit.node_plan, Some(commit.plan.source))?;
             }
         }
+        for commit in self.added_commits.values() {
+            if matches!(commit.node, Publication::Complete(_)) {
+                if let Publication::Complete(first) = &commit.first {
+                    visit(&first.node_plan, Some(commit.plan.source))?;
+                }
+            }
+        }
         for working in self.working.values() {
             if let Some((node, parent)) = working.history_node() {
                 visit(node.plan, Some(parent))?;

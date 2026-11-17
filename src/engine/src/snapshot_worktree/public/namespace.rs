@@ -20,6 +20,13 @@ type Result<T> = std::result::Result<T, SnapshotWorktreeError>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorktreeEntryContent {
+    RetainedFile {
+        target: WorktreeFileTarget,
+        file: FileId,
+        version: VersionId,
+        size: u64,
+        content_hash: ContentHash,
+    },
     Working { target: WorktreeFileTarget, working: UnbornWorking },
     Directory,
     File {
@@ -64,6 +71,15 @@ impl From<Entry> for WorktreeEntry {
             EntryContent::Directory => WorktreeEntryContent::Directory,
             EntryContent::Working { target, working } => {
                 WorktreeEntryContent::Working { target, working }
+            }
+            EntryContent::RetainedFile { target, material } => {
+                WorktreeEntryContent::RetainedFile {
+                    target,
+                    file: material.file_id,
+                    version: material.version_id,
+                    size: material.size,
+                    content_hash: material.content_hash,
+                }
             }
             EntryContent::File { material } => WorktreeEntryContent::File {
                 file: material.file_id,

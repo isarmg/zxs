@@ -4,10 +4,12 @@
 use crate::directory_worktree::ledger::storage::{
     HeldWorktreeLedger, RecoveredLedger, event_frame, open_bound_directory,
 };
-use crate::directory_worktree::ledger::{Checkpoint, LedgerError};
+use crate::directory_worktree::ledger::{AddedFileResult, Binding, Checkpoint, Event, LedgerError};
+use crate::directory_worktree::lifecycle::Publication;
+use crate::directory_worktree::projection::FileResult;
 use crate::disk::DiskRoot;
 use crate::persist::layout::worktree as layout;
-use crate::snapshot_worktree::PublishedCommitTail;
+use crate::snapshot_worktree::{PublishedAddedCommitTail, PublishedCommitTail};
 use crate::working_tree::records::file_identity;
 use crate::working_tree::snapshot::HeldSnapshotNode;
 use platform_io::payload::Expectation;
@@ -21,27 +23,49 @@ impl<'a> HeldWorktreeLedger<'a> {
         published: &PublishedCommitTail<'_>,
     ) -> Result<Self, LedgerError> {
         published.require_nodes(source, node)?;
-        let [commit, completed] = published.transitions();
-        let (commit_bytes, committing) = event_frame(published.before(), &commit)?;
+        Self::finish_published_transitions(source, published.binding(), published.before(),
+            published.transitions(),
+            |publication, files| published.require_publication(publication, files),
+            |_, _| Err(LedgerError::FileResults))
+    }
+
+    pub(crate) fn finish_published_added_commit(
+        source: &'a HeldSnapshotNode,
+        node: &HeldSnapshotNode,
+        published: &PublishedAddedCommitTail<'_>,
+    ) -> Result<Self, LedgerError> {
+        published.require_nodes(source, node)?;
+        Self::finish_published_transitions(source, published.binding(), published.before(),
+            published.transitions(), |_, _| Err(LedgerError::FileResults),
+            |publication, file| published.require_publication(publication, file))
+    }
+
+    // Only the two opaque, independently published tails above can enter here.
+    fn finish_published_transitions(
+        source: &'a HeldSnapshotNode,
+        binding: Binding,
+        before: Checkpoint,
+        transitions: [Event; 2],
+        mut verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
+        mut verify_added: impl FnMut(&Publication, &AddedFileResult) -> Result<(), LedgerError>,
+    ) -> Result<Self, LedgerError> {
+        let [commit, completed] = transitions;
+        let (commit_bytes, committing) = event_frame(before, &commit)?;
         let (completed_bytes, finished) = event_frame(committing, &completed)?;
-        let binding = published.binding();
         let directory = open_bound_directory(source.worktrees_directory(), binding)?;
         let _activity = directory.retain_io_activity().map_err(LedgerError::Disk)?;
         let checkpoint = selected_tail(&directory, committing, finished)?;
         // The normal reader replays every canonical frame from Genesis, checks
         // the entire hash chain and original instance, and verifies completion
         // against the same permanent FILE/node result. No prefix is skipped.
-        let recovered = Self::recover(source, binding, checkpoint, |publication, files| {
-            published.require_publication(publication, files)
-        })?;
+        let recovered = Self::recover_with_added(source, binding, checkpoint,
+            &mut verify, &mut verify_added)?;
         let mut ledger = match recovered {
             RecoveredLedger::Ready(ledger) => ledger,
             RecoveredLedger::Publishing(pending) => pending.ledger,
         };
         if checkpoint == committing {
-            ledger.append(completed, |publication, files| {
-                published.require_publication(publication, files)
-            })?;
+            ledger.append_with_added(completed, &mut verify, &mut verify_added)?;
         }
         // A matching but previously unacknowledged frame still owes its file
         // and parent durability tail. Never publish SYSTEM completion merely

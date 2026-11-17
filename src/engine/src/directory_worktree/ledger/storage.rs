@@ -5,7 +5,7 @@ use crate::directory_worktree::projection::namespace::NamespaceChange;
 use crate::name_budget::NameBudget;
 use super::record::{Body, Checkpoint, Event, Format, Frame, Genesis};
 use super::state::State;
-use super::{AddedFile, LedgerError, MAX_FRAME_BYTES, MAX_FRAMES, MAX_LEDGER_BYTES};
+use super::{AddedFile, AddedFileResult, LedgerError, MAX_FRAME_BYTES, MAX_FRAMES, MAX_LEDGER_BYTES};
 use crate::directory_worktree::lifecycle::{
     Mount, Phase, Publication, PublicationScope, SnapshotSource, Worktree, WorktreeId,
 };
@@ -206,7 +206,18 @@ impl<'a> HeldWorktreeLedger<'a> {
         source: &'a HeldSnapshotNode,
         binding: Binding,
         expected: Checkpoint,
+        verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
+    ) -> Result<RecoveredLedger<'a>, LedgerError> {
+        Self::recover_with_added(source, binding, expected, verify,
+            |_, _| Err(LedgerError::PublicationPending))
+    }
+
+    pub(crate) fn recover_with_added(
+        source: &'a HeldSnapshotNode,
+        binding: Binding,
+        expected: Checkpoint,
         mut verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
+        mut verify_added: impl FnMut(&Publication, &AddedFileResult) -> Result<(), LedgerError>,
     ) -> Result<RecoveredLedger<'a>, LedgerError> {
         if source.manifest().reference() != binding.source
             || expected.sequence.get() >= MAX_FRAMES
@@ -245,7 +256,8 @@ impl<'a> HeldWorktreeLedger<'a> {
                 }
                 Body::Event(event) => {
                     let admitted = state.as_mut().ok_or(LedgerError::Chain)?;
-                    admitted.apply(source.manifest(), &event, checkpoint, &mut verify)?;
+                    admitted.apply(source.manifest(), &event, checkpoint,
+                        &mut verify, &mut verify_added)?;
                 }
             }
             previous = Some(checkpoint.commitment);
@@ -282,7 +294,16 @@ impl<'a> HeldWorktreeLedger<'a> {
     pub(crate) fn append(
         &mut self,
         event: Event,
+        verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
+    ) -> Result<Checkpoint, LedgerError> {
+        self.append_with_added(event, verify, |_, _| Err(LedgerError::PublicationPending))
+    }
+
+    pub(crate) fn append_with_added(
+        &mut self,
+        event: Event,
         mut verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
+        mut verify_added: impl FnMut(&Publication, &AddedFileResult) -> Result<(), LedgerError>,
     ) -> Result<Checkpoint, LedgerError> {
         if matches!(self.append, AppendState::Uncertain) {
             return Err(LedgerError::Uncertain);
@@ -318,7 +339,8 @@ impl<'a> HeldWorktreeLedger<'a> {
         let (bytes, checkpoint) = event_frame(self.checkpoint, &event)?;
         let total = bounded_total(self.bytes, bytes.len())?;
         let mut next = self.state.clone();
-        next.apply(self.source.manifest(), &event, checkpoint, &mut verify)?;
+        next.apply(self.source.manifest(), &event, checkpoint,
+            &mut verify, &mut verify_added)?;
         match &event {
             Event::Edits { edits, .. } => self.verify_edits(edits, EditAccess::Seal)?,
             Event::Completed { publication, .. }
@@ -329,8 +351,8 @@ impl<'a> HeldWorktreeLedger<'a> {
             Event::File { file, .. } => {
                 self.verify_prospective_paths(std::iter::once(&file.target.path))?;
             }
-            Event::Commit { .. } | Event::Delete { .. }
-                | Event::Restored { .. } | Event::Completed { .. } => {}
+            Event::Commit { .. } | Event::CommitAdded { .. } | Event::AddedCompleted { .. }
+                | Event::Delete { .. } | Event::Restored { .. } | Event::Completed { .. } => {}
         }
         self.append = AppendState::Uncertain;
         write_frame(&self.directory, &bytes, checkpoint)?;
@@ -432,6 +454,7 @@ impl<'a> HeldWorktreeLedger<'a> {
         bounded_total(self.bytes, bytes.len())?;
         self.state.clone().apply(
             self.source.manifest(), &event, checkpoint, &mut |_, _| Err(LedgerError::FileResults),
+            &mut |_, _| Err(LedgerError::FileResults),
         )?;
         self.verify_prospective_paths(std::iter::once(&file.target.path))
     }
@@ -445,6 +468,51 @@ impl<'a> HeldWorktreeLedger<'a> {
         file: AddedFile,
     ) -> Result<Checkpoint, LedgerError> {
         self.append(Event::File { operation, expected, file }, |_, _| Err(LedgerError::FileResults))
+    }
+    /// Exact normal scope is checked before reserving the original operation.
+    pub(crate) fn check_single_added(&self, expected: &AddedFile) -> Result<(), LedgerError> {
+        self.admit_read_view()?;
+        self.state.require_added_scope()?;
+        if self.state.added.first() != Some(expected) {
+            return Err(LedgerError::AddedFile);
+        }
+        Ok(())
+    }
+
+    /// Pure, complete two-frame admission before the owner publishes the first
+    /// FILE. Local structural planning deliberately cannot certify that receipt.
+    pub(crate) fn check_added_publication(
+        &self,
+        commit: &Event,
+        publication: Publication,
+        file: &AddedFileResult,
+    ) -> Result<(), LedgerError> {
+        self.admit_read_view()?;
+        if !matches!(commit, Event::CommitAdded { .. }) {
+            return Err(LedgerError::FileResults);
+        }
+        let mut next = self.state.clone();
+        let (checkpoint, total) = match self.state.prior(commit)? {
+            Some(checkpoint) if checkpoint == self.checkpoint => (checkpoint, self.bytes),
+            Some(_) => return Err(LedgerError::FileResults),
+            None => {
+                let (bytes, checkpoint) = event_frame(self.checkpoint, commit)?;
+                let total = bounded_total(self.bytes, bytes.len())?;
+                next.apply(self.source.manifest(), commit, checkpoint,
+                    &mut |_, _| Err(LedgerError::FileResults),
+                    &mut |_, _| Err(LedgerError::FileResults))?;
+                (checkpoint, total)
+            }
+        };
+        let completion = Event::AddedCompleted { publication, file: file.clone() };
+        let (bytes, completed) = event_frame(checkpoint, &completion)?;
+        bounded_total(total, bytes.len())?;
+        next.apply(self.source.manifest(), &completion, completed,
+            &mut |_, _| Err(LedgerError::FileResults), &mut |_, _| Ok(()))?;
+        Ok(())
+    }
+    pub(crate) fn added_file_results(&self) -> &[AddedFileResult] {
+        &self.state.added_results
     }
     pub(crate) fn added_files(&self) -> &[AddedFile] {
         &self.state.added

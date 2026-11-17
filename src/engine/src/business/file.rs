@@ -1,7 +1,7 @@
 //! Independent file branches: metadata first, complete content on first save.
 use super::*;
 use json_codec::json;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn selected_file_branch<'a>(
     state: &'a State,
@@ -501,49 +501,13 @@ pub(super) fn ensure_shared_file_branch_with_ids(
         }
         let id = ids("br")?;
         let commit_id = ids("commit")?;
-        state.commits.insert(
-            commit_id.clone(),
-            Commit {
-                namespace_deletions: None,
-                commit_id: commit_id.clone(),
-                history_tree_id: current.history_tree_id.clone(),
-                kind: "file_branch_root".into(),
-                parent_commit_ids: vec![current.commit_id.clone()],
-                tree_id: ids("tree")?,
-                sequence: state.sequence,
-                operation_id: current.operation_id,
-                author: current.author.clone(),
-                message: "Initialize file main branch".into(),
-                entries: file_snapshot(&current.entries, original),
-                pending_file_versions: current
-                    .pending_file_versions
-                    .iter()
-                    .filter(|(file, _)| file.as_str() == file_id)
-                    .map(|(file, source)| (file.clone(), source.clone()))
-                    .collect(),
-                provenance: Some(current.commit_id.clone()),
-            },
-        );
-        state.branches.insert(
-            id.clone(),
-            Branch {
-                file_node_id: None,
-                branch_id: id.clone(),
-                history_tree_id: current.history_tree_id.clone(),
-                name: "main".into(),
-                head_commit_id: commit_id,
-                fork_commit_id: current.commit_id.clone(),
-                branch_kind: BranchKind::File,
-                file_id: Some(file_id.into()),
-                pending_file_versions: current
-                    .pending_file_versions
-                    .get(file_id)
-                    .map(|version| [(file_id.into(), version.clone())].into())
-                    .unwrap_or_default(),
-                generation: 1,
-                state: BranchState::Active,
-            },
-        );
+        let tree = ids("tree")?;
+        let author = current.author.parse().map_err(|_| Error::new(
+            storage_contract::ErrorCode::StateInvalid, "file publication author is invalid",
+        ))?;
+        initialize_file_root(state, current, original, file_snapshot(&current.entries, original),
+            FileRootIds { branch: id.parse()?, commit: commit_id.parse()?, tree: tree.parse()? },
+            current.operation_id, &author)?;
         state.file_selections.insert(file_id.into(), id);
     }
     state.file_selections.get(file_id).cloned().ok_or_else(|| {
@@ -552,6 +516,50 @@ pub(super) fn ensure_shared_file_branch_with_ids(
             "shared file branch missing",
         )
     })
+}
+
+/// The shared FILE root constructor does not publish an ordinary namespace.
+/// Callers supply a real retained parent and their canonically proved entry set.
+pub(crate) struct FileRootIds {
+    pub(crate) branch: storage_contract::BranchId,
+    pub(crate) commit: storage_contract::CommitId,
+    pub(crate) tree: storage_contract::TreeId,
+}
+
+pub(crate) fn initialize_file_root(
+    state: &mut State, parent: &Commit, original: &Entry, entries: Vec<Entry>,
+    ids: FileRootIds, operation: OperationId, principal: &storage_contract::Principal,
+) -> Result<()> {
+    let file = &original.file_id;
+    if state.branches.contains_key(&ids.branch.to_string())
+        || state.commits.contains_key(&ids.commit.to_string())
+        || state.commits.values().any(|commit| commit.tree_id == ids.tree.to_string())
+    {
+        return Err(crate::business::file_draft::invalid());
+    }
+    state.commits.insert(ids.commit.to_string(), Commit {
+        namespace_deletions: None, commit_id: ids.commit.to_string(),
+        history_tree_id: parent.history_tree_id.clone(), kind: "file_branch_root".into(),
+        parent_commit_ids: vec![parent.commit_id.clone()], tree_id: ids.tree.to_string(),
+        sequence: state.sequence, operation_id: operation, author: principal.as_str().into(),
+        message: "Initialize file main branch".into(), entries,
+        pending_file_versions: parent.pending_file_versions.iter()
+            .filter(|(candidate, _)| *candidate == file)
+            .map(|(file, source)| (file.clone(), source.clone())).collect(),
+        provenance: Some(parent.commit_id.clone()),
+    });
+    state.branches.insert(ids.branch.to_string(), Branch {
+        file_node_id: None, branch_id: ids.branch.to_string(),
+        history_tree_id: parent.history_tree_id.clone(), name: "main".into(),
+        head_commit_id: ids.commit.to_string(), fork_commit_id: parent.commit_id.clone(),
+        branch_kind: BranchKind::File, file_id: Some(file.clone()),
+        pending_file_versions: match parent.pending_file_versions.get(file) {
+            Some(version) => [(file.clone(), version.clone())].into(),
+            None => BTreeMap::new(),
+        },
+        generation: 1, state: BranchState::Active,
+    });
+    Ok(())
 }
 
 pub(crate) struct FileBranchCreation<'a> {

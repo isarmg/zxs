@@ -66,6 +66,97 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_single_added_commit_paths_select_both_real_producers_and_keep_old_groups(self):
+        name = 'worktree-added-commit'
+        paths = [
+            'docs/design/worktree-added-first-publication.md',
+            'src/engine/src/business/file.rs',
+            'src/engine/src/business/file_draft/unborn.rs',
+            'src/engine/src/business/file_draft/unborn/first.rs',
+            'src/engine/src/business/file_draft/worktree.rs',
+            'src/engine/src/business/file_draft/worktree/first.rs',
+            'src/engine/src/container_storage/ordinary_preparation/working/full.rs',
+            'src/engine/src/directory_worktree/io.rs',
+            'src/engine/src/directory_worktree/ledger.rs',
+            'src/engine/src/directory_worktree/ledger/record.rs',
+            'src/engine/src/directory_worktree/ledger/state.rs',
+            'src/engine/src/directory_worktree/ledger/storage.rs',
+            'src/engine/src/directory_worktree/ledger/storage/published.rs',
+            'src/engine/src/directory_worktree/projection.rs',
+            'src/engine/src/directory_worktree/projection/added.rs',
+            'src/engine/src/directory_worktree/session.rs',
+            'src/engine/src/engine/file_draft.rs',
+            'src/engine/src/engine/file_draft/worktree.rs',
+            'src/engine/src/engine/file_draft/worktree/first.rs',
+            'src/engine/src/engine/fresh_layout/containers.rs',
+            'src/engine/src/engine/fresh_layout/containers/unborn/first.rs',
+            'src/engine/src/engine/fresh_layout/namespace.rs',
+            'src/engine/src/persist/file_draft.rs',
+            'src/engine/src/persist/snapshot_worktree.rs',
+            'src/engine/src/persist/snapshot_worktree/added_commit.rs',
+            'src/engine/src/snapshot_worktree.rs',
+            'src/engine/src/snapshot_worktree/commit.rs',
+            'src/engine/src/snapshot_worktree/commit/added.rs',
+            'src/engine/src/snapshot_worktree/commit/transfer.rs',
+            'src/engine/src/snapshot_worktree/public/namespace.rs',
+            'src/engine/src/snapshot_worktree/public/transport.rs',
+            'src/engine/src/snapshot_worktree/registry.rs',
+            'src/engine/src/snapshot_worktree/registry/added_commits.rs',
+            'src/engine/src/snapshot_worktree/registry/edits.rs',
+            'src/engine/src/snapshot_worktree/registry/historical.rs',
+            'src/engine/src/snapshot_worktree/registry/history.rs',
+            'src/engine/src/snapshot_worktree/registry/outcome.rs',
+            'src/engine/src/snapshot_worktree/registry/transport.rs',
+            'src/engine/src/snapshot_worktree/reopen.rs',
+            'src/server/src/backend_smb_worktree.rs',
+            'src/server/src/engine_backend/smb_worktree.rs',
+            'src/server/src/smb_rpc/metadata.rs',
+            'src/server/src/smb_rpc/worktree.rs',
+            'src/smb/src/protocol.rs',
+            'test/engine/unit/directory_worktree/ledger.rs',
+            'test/engine/unit/snapshot_worktree/added_files.rs',
+            'test/engine/unit/snapshot_worktree/added_first.rs',
+            'test/server/unit/smb_rpc/native_worktree_tests.rs',
+            'test/server/unit/smb_rpc/worktree_commit_tests.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(name, plan['groups'])
+                self.assertCountEqual(origin_selections(plan, name),
+                                      self.policy['groups'][name]['rust_targets'])
+                if len(plan['groups']) > 1:
+                    assert_path_group_extension(self, self.policy, [path], None, [name])
+                else:
+                    self.assertEqual(len(plan['rust_targets']), 2)
+        assert_path_group_extension(self, self.policy, paths + [
+            CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
+        ], None, [name])
+        group = self.policy['groups'][name]
+        self.assertEqual(group['python_tests'], [])
+        engine, server = group['rust_targets']
+        self.assertEqual((engine['package'], engine['manifest']),
+                         ('storage-engine', 'src/engine/Cargo.toml'))
+        self.assertEqual((server['package'], server['manifest']),
+                         ('storage-server', 'src/server/Cargo.toml'))
+        self.assertEqual(engine.get('features', []), [])
+        self.assertEqual(server['features'], ['core'])
+        self.assertEqual(engine['exact'], [
+            'snapshot_worktree::commit::added::tests::'
+            'single_added_first_commit_keeps_deleted_owner_moves_full_and_cold_retries_exactly',
+        ])
+        self.assertEqual(server['exact'], [
+            'smb_rpc::tests::native_dispatch_tests::worktree::commit::'
+            'native_added_single_commit_over_tcp_preserves_other_instance_and_cold_original_result',
+        ])
+        for target in (engine, server):
+            self.assertEqual((target['kind'], target.get('mode', 'test')), ('lib', 'test'))
+            self.assertEqual((target['max_tests'], target['timeout_seconds']), (1, 900))
+            self.assertIs(target.get('default_features', True), True)
+            self.assertFalse(target.get('isolate', False))
+            self.assertEqual(target.get('prefixes', []), [])
+            self.assertFalse(target.get('whole', False))
+
     def test_incremental_paths_select_actual_dispatch_tcp_and_current_format_tests(self):
         policy = self.policy
         name = 'ordinary-manual-incremental'

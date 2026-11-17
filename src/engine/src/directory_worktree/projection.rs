@@ -1,7 +1,7 @@
 //! Existing-file sparse edits retain logical paths while physical bodies move.
 pub(crate) mod namespace;
 mod added;
-use crate::directory_worktree::ledger::AddedFile;
+use crate::directory_worktree::ledger::{AddedFile, AddedFileResult};
 pub(crate) mod obligations;
 use data_serialization::{Deserialize, Serialize};
 use crate::working_tree::snapshot::{
@@ -130,6 +130,7 @@ pub(crate) struct SparseProjection<'a> {
     edits: BTreeMap<usize, WorkingFile>,
     results: BTreeMap<usize, FileResult>,
     added: BTreeMap<EntryId, AddedFile>,
+    added_results: BTreeMap<EntryId, AddedFileResult>,
 }
 impl<'a> SparseProjection<'a> {
     /// The complete original manifest supplies untouched files and empty dirs.
@@ -172,7 +173,7 @@ impl<'a> SparseProjection<'a> {
             },
         }).collect();
         Ok(Self { source, entries, edits: by_index, results: BTreeMap::new(),
-            added: BTreeMap::new() })
+            added: BTreeMap::new(), added_results: BTreeMap::new() })
     }
 
     /// Results come from the exact independently verified completion records,
@@ -322,7 +323,7 @@ impl<'a> SparseProjection<'a> {
         node: &AdmittedSnapshotManifest,
         published_sources: &[PublishedFileSource],
     ) -> Result<SnapshotReference, ProjectionError> {
-        if !self.added.is_empty() {
+        if self.added.len() != self.added_results.len() {
             return Err(ProjectionError::AddedPublicationRequired);
         }
         let visible_edits = self.entries.iter().filter(|entry| match entry.content {
@@ -353,7 +354,13 @@ impl<'a> SparseProjection<'a> {
     ) -> Result<SnapshotEntryContent, ProjectionError> {
         let (index, file, source) = match entry.content {
             Content::Directory => return Ok(SnapshotEntryContent::Directory {}),
-            Content::Added { .. } => return Err(ProjectionError::AddedPublicationRequired),
+            Content::Added { entry } => {
+                let result = self.added_results.get(&entry)
+                    .ok_or(ProjectionError::AddedPublicationRequired)?;
+                return Ok(SnapshotEntryContent::File {
+                    material: result.material, source: result.source,
+                });
+            },
             Content::File { original, material, source } => (original, material, source),
         };
         Ok(match self.edits.get(&index) {

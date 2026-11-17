@@ -307,10 +307,14 @@ pub(super) fn file_target(
     history: storage_contract::HistoryTreeId,
 ) -> Result<storage_contract::file_container::ContainerNamespace> {
     if let Some(record) = state.file_containers.get(&file)
-        .filter(|record| record.working.unborn().is_some())
+        .filter(|record| record.working.unborn().is_some() || record.namespace.parent.is_worktree())
     {
         if record.history_tree_id != history { return Err(Failure::NamespaceSource.into()); }
-        crate::business::file_draft::unborn::validate_current_record(state, file, record)?;
+        if record.namespace.parent.is_worktree() {
+            crate::business::file_draft::worktree::validate_record(state, file, record)?;
+        } else {
+            crate::business::file_draft::unborn::validate_current_record(state, file, record)?;
+        }
         return Ok(record.namespace.clone());
     }
     let history = state.histories.get(&history.to_string()).ok_or(Failure::NamespaceSource)?;

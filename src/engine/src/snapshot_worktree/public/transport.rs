@@ -44,7 +44,8 @@ impl Engine {
         };
         let view = session.read(material).map_err(RegistrationError::ReadView)?;
         let material = match view.content(path).map_err(RegistrationError::ReadView)? {
-            EntryContent::File { material } => material,
+            EntryContent::File { material }
+                | EntryContent::RetainedFile { material, .. } => material,
             EntryContent::Directory => return Err(RegistrationError::ReadView(
                 crate::directory_worktree::io::ViewError::IsDirectory,
             ).into()),

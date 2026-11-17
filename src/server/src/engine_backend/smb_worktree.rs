@@ -30,15 +30,23 @@ pub(super) fn authorize_target(
     authorize(engine, current, engine.directory_worktree_owner(target).map_err(error)?)
 }
 
-fn entry(value: WorktreeEntry) -> SmbWorktreeEntry {
+fn entry(engine: &Engine, value: WorktreeEntry) -> Result<SmbWorktreeEntry, ApiError> {
     let content = match value.content {
         WorktreeEntryContent::Directory => SmbWorktreeEntryContent::Directory,
         WorktreeEntryContent::File { size, .. } => SmbWorktreeEntryContent::File { size },
         WorktreeEntryContent::Working { target, working } => {
             SmbWorktreeEntryContent::Working { target, working }
         }
+        WorktreeEntryContent::RetainedFile { target, version, size, .. } => {
+            let (metadata, _) = crate::engine_backend::authorized_version(
+                engine, &version.to_string(),
+            )?;
+            SmbWorktreeEntryContent::RetainedFile {
+                target, version, size, mtime: crate::backend_read::version_mtime(metadata)?,
+            }
+        }
     };
-    SmbWorktreeEntry { path: value.path, content }
+    Ok(SmbWorktreeEntry { path: value.path, content })
 }
 
 pub(super) fn open_working(
@@ -101,7 +109,7 @@ pub(super) fn stat(
 ) -> Result<SmbWorktreeEntry, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
     authorize_target(&engine, &current, target)?;
-    engine.directory_worktree_entry(target, path).map(entry).map_err(error)
+    entry(&engine, engine.directory_worktree_entry(target, path).map_err(error)?)
 }
 
 pub(super) fn page(
@@ -114,7 +122,8 @@ pub(super) fn page(
         .map_err(error)?;
     Ok(SmbWorktreePage {
         stamp: page.stamp,
-        entries: page.entries.into_iter().map(entry).collect(),
+        entries: page.entries.into_iter().map(|value| entry(&engine, value))
+            .collect::<Result<_, _>>()?,
         next: page.next.map(|held| SmbWorktreeCursor { held }),
     })
 }

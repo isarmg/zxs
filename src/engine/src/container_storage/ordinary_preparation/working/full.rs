@@ -16,6 +16,19 @@ use std::sync::Arc;
 use storage_contract::ContentHash;
 use storage_contract::file_draft::manifest::WORKING_BLOCK_BYTES;
 
+enum FullSelection {
+    Ordinary(Arc<SelectedWorkingSources>),
+    Worktree(Arc<crate::engine::file_draft::worktree::WorktreeFirstSource>),
+}
+impl FullSelection {
+    fn require_context(&self, context: &PlanningContext<'_>) -> Result<()> {
+        match self {
+            Self::Ordinary(selected) => selected.require_context(context),
+            Self::Worktree(selected) => selected.require_context(context),
+        }
+    }
+}
+
 struct Merged<'a> {
     source: &'a HeldUnbornReader,
     offset: u64,
@@ -35,7 +48,8 @@ impl Read for Merged<'_> {
 /// CAS occurrence, original merged reader, independent full inode and its budget.
 /// Abandoned preparation remains isolated and is never adopted by a pathname.
 pub(crate) struct PreparedUnbornFull {
-    selection: Arc<SelectedWorkingSources>,
+    selection: FullSelection,
+    id: WorkingFullId,
     source: Arc<HeldUnbornReader>,
     name: EntryName,
     path: PathBuf,
@@ -61,6 +75,23 @@ impl PreparedUnbornFull {
         }
         let source = Arc::clone(selected.unborn_reader()?);
         source.require_record(selected.target().file, selected.record())?;
+        Self::prepare_source(context, FullSelection::Ordinary(selection), source)
+    }
+
+    pub(crate) fn prepare_worktree(
+        context: &PlanningContext<'_>,
+        selection: Arc<crate::engine::file_draft::worktree::WorktreeFirstSource>,
+    ) -> Result<Arc<Self>> {
+        selection.require_context(context)?;
+        let source = Arc::clone(selection.reader());
+        Self::prepare_source(context, FullSelection::Worktree(selection), source)
+    }
+
+    fn prepare_source(
+        context: &PlanningContext<'_>, selection: FullSelection, source: Arc<HeldUnbornReader>,
+    ) -> Result<Arc<Self>> {
+        context.require_write()?;
+        selection.require_context(context)?;
         let disk = context.config.disks.iter().find(|disk| {
             disk.disk_id == source.scope.disk.seal.disk_id
         }).ok_or(Error::FileDraft(Failure::SourceChanged))?;
@@ -86,7 +117,8 @@ impl PreparedUnbornFull {
         }
         let reservation = crate::engine::payload_proof_budget().reserve(2)
             .ok_or(Error::FileDraft(Failure::Size))?;
-        let name = layout::working_full(WorkingFullId::generate()?);
+        let id = WorkingFullId::generate()?;
+        let name = layout::working_full(id);
         let scope = &source.scope;
         scope.verify()?;
         crate::container_storage::version_names::check_target_name(&scope.held, &name)?;
@@ -115,11 +147,46 @@ impl PreparedUnbornFull {
         })?;
         selection.require_context(context)?;
         let result = Arc::new(Self {
-            selection, source, name, path, file, stamp,
+            selection, id, source, name, path, file, stamp,
             hash: ContentHash::from_digest(receipt.blake3), _reservation: reservation,
         });
         result.require_context(context)?;
         Ok(result)
+    }
+
+    pub(crate) fn worktree_evidence(
+        &self,
+    ) -> Result<crate::persist::snapshot_worktree::added_commit::AddedFull> {
+        if !matches!(self.selection, FullSelection::Worktree(_)) { return Err(changed()); }
+        self.require_source()?;
+        let metadata = self.file.metadata()?;
+        Ok(crate::persist::snapshot_worktree::added_commit::AddedFull {
+            id: self.id,
+            entity: storage_contract::working_tree::LocalEntityIdentity::new(
+                metadata.dev(), metadata.ino(),
+            ),
+        })
+    }
+
+    /// Called only after an independently verified first FILE publication.
+    /// No State-context check is fabricated after that publication advanced it.
+    pub(crate) fn move_worktree_full(
+        &self, target: &crate::disk::DiskRoot, name: &EntryName,
+        material: &crate::working_tree::snapshot::SnapshotFile,
+    ) -> std::result::Result<(), crate::working_tree::snapshot::SnapshotStoreError> {
+        use crate::working_tree::snapshot::SnapshotStoreError;
+        let evidence = self.worktree_evidence().map_err(SnapshotStoreError::Disk)?;
+        if material.file_id != self.source.file() || material.size != self.source.logical_size()
+            || material.content_hash != self.hash
+        {
+            return Err(SnapshotStoreError::Version);
+        }
+        self.source.scope.held.move_new_entry_verified_synced(
+            &self.name, target, name, crate::disk::FrozenFileMove {
+                bytes: material.size, content_hash: material.content_hash, entity: evidence.entity,
+            },
+        ).map_err(SnapshotStoreError::Move)?;
+        Ok(())
     }
 
     pub(crate) fn path(&self) -> &Path { &self.path }
@@ -130,7 +197,8 @@ impl PreparedUnbornFull {
         &self, selection: &Arc<SelectedWorkingSources>, index: usize,
     ) -> Result<()> {
         let selected = selection.sources().get(index).ok_or_else(changed)?;
-        if !Arc::ptr_eq(&self.selection, selection)
+        if !matches!(&self.selection, FullSelection::Ordinary(original)
+            if Arc::ptr_eq(original, selection))
             || !Arc::ptr_eq(&self.source, selected.unborn_reader()?)
         {
             return Err(changed());

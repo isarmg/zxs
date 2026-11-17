@@ -1,4 +1,4 @@
-use super::record::{AddedFile, Checkpoint, EditRecord, Event, Genesis, commitment};
+use super::record::{AddedFile, AddedFileResult, Checkpoint, EditRecord, Event, Genesis, commitment};
 use super::LedgerError;
 use crate::directory_worktree::lifecycle::{
     Phase, Publication, PublicationMode, PublicationScope, Worktree,
@@ -11,7 +11,7 @@ use storage_contract::OperationId;
 use storage_contract::working_tree::MaterialCommitment;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OperationKind { File, Edits, Namespace, Commit, Delete, Restore }
+enum OperationKind { File, Edits, Namespace, Commit, CommitAdded, Delete, Restore }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum Stage { Requested, Completed }
 impl Event {
@@ -23,6 +23,12 @@ impl Event {
                 (*operation, OperationKind::Namespace, Stage::Requested)
             }
             Self::Commit { operation, .. } => (*operation, OperationKind::Commit, Stage::Requested),
+            Self::CommitAdded { operation, .. } => {
+                (*operation, OperationKind::CommitAdded, Stage::Requested)
+            }
+            Self::AddedCompleted { publication, .. } => (
+                publication.intent.operation, OperationKind::CommitAdded, Stage::Completed,
+            ),
             Self::Delete { operation, .. } => (*operation, OperationKind::Delete, Stage::Requested),
             Self::Restored { operation, .. } => {
                 (*operation, OperationKind::Restore, Stage::Requested)
@@ -64,6 +70,7 @@ pub(super) struct State {
     pub(super) edits: Vec<EditRecord>,
     pub(super) file_results: Vec<FileResult>,
     pub(super) added: Vec<AddedFile>,
+    pub(super) added_results: Vec<AddedFileResult>,
     // Frame and ledger byte limits bound the retained history on append/replay.
     namespace: NamespaceState,
     creation: OperationId,
@@ -80,6 +87,7 @@ impl State {
             edits: Vec::new(),
             file_results: Vec::new(),
             added: Vec::new(),
+            added_results: Vec::new(),
             namespace: NamespaceState::Original,
             creation: genesis.binding.operation(),
             versions: BTreeSet::new(),
@@ -108,6 +116,7 @@ impl State {
         event: &Event,
         checkpoint: Checkpoint,
         verify: &mut impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
+        verify_added: &mut impl FnMut(&Publication, &AddedFileResult) -> Result<(), LedgerError>,
     ) -> Result<(), LedgerError> {
         if self.prior(event)?.is_some() {
             return Err(LedgerError::Chain);
@@ -230,6 +239,29 @@ impl State {
                 self.worktree.prepare_commit(operation, *current_head, *fork_branch)
                     .map_err(LedgerError::Lifecycle)?;
             }
+            Event::CommitAdded { expected, current_head, fork_branch, .. } => {
+                self.expected(*expected)?;
+                self.require_added_scope()?;
+                self.worktree.prepare_commit(operation, *current_head, *fork_branch)
+                    .map_err(LedgerError::Lifecycle)?;
+            }
+            Event::AddedCompleted { publication, file } => {
+                self.require_added_files()?;
+                if !matches!(publication.intent.mode, PublicationMode::DirectoryCommit { .. })
+                    || !matches!(publication.scope, PublicationScope::Directory { .. })
+                    || self.operations.get(&operation) != Some(&OperationKind::CommitAdded)
+                {
+                    return Err(LedgerError::FileResults);
+                }
+                file.require_file(&self.added[0])?;
+                let mut next = self.worktree.clone();
+                next.complete_publication(*publication).map_err(LedgerError::Lifecycle)?;
+                self.projection(source)?.with_added_results(std::slice::from_ref(file))
+                    .map_err(LedgerError::Projection)?;
+                verify_added(publication, file)?;
+                self.added_results = vec![file.clone()];
+                self.worktree = next;
+            }
             Event::Delete { expected, .. } => {
                 self.expected(*expected)?;
                 self.require_publication_scope()?;
@@ -306,7 +338,24 @@ impl State {
                 view.with_namespace(namespace).map_err(LedgerError::Namespace)?
             }
         };
-        view.with_added(added).map_err(LedgerError::Projection)
+        view.with_added(added).map_err(LedgerError::Projection)?
+            .with_added_results(&self.added_results).map_err(LedgerError::Projection)
+    }
+    fn require_added_files(&self) -> Result<(), LedgerError> {
+        if self.added.len() != 1 || !self.edits.is_empty() || !self.file_results.is_empty()
+            || !self.added_results.is_empty()
+            || !matches!(self.namespace, NamespaceState::Original)
+        {
+            return Err(LedgerError::AddedPublicationRequired);
+        }
+        Ok(())
+    }
+    pub(super) fn require_added_scope(&self) -> Result<(), LedgerError> {
+        self.require_added_files()?;
+        if !matches!(self.worktree.phase(), Phase::Active { saved: None }) {
+            return Err(LedgerError::RebaseRequired);
+        }
+        Ok(())
     }
     fn require_publication_scope(&self) -> Result<(), LedgerError> {
         // Publication still associates FILE results with original paths. Until

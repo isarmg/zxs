@@ -101,6 +101,10 @@ impl<'a> ReceiptIndex<'a> {
                     node.node_plan.allocated.repository == plan.source.repository_id
                         && node.node_plan.branch_name.key() == plan.branch_name.key()
                 })
+                || self.added_commits.values().any(|record| {
+                    record.plan.source.repository_id == plan.source.repository_id
+                        && record.plan.branch_name.key() == plan.branch_name.key()
+                })
                 || self.historical.values().any(|record| {
                     record.plan.source.repository_id == plan.source.repository_id
                         && record.plan.branch_name.key() == plan.branch_name.key()

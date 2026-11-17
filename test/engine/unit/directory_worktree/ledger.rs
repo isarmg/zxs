@@ -786,8 +786,10 @@ fn namespace_retries_keep_exact_identity_and_latest_append_checkpoint() {
     ).unwrap();
     let record::Body::Genesis(genesis) = genesis.body else { panic!("genesis fixture") };
     let mut replay = state::State::new(&genesis);
-    replay.apply(fixture.source.manifest(), &first, first_checkpoint, &mut trusted).unwrap();
-    replay.apply(fixture.source.manifest(), &second, latest, &mut trusted).unwrap();
+    replay.apply(fixture.source.manifest(), &first, first_checkpoint, &mut trusted,
+        &mut |_, _| Err(LedgerError::FileResults)).unwrap();
+    replay.apply(fixture.source.manifest(), &second, latest, &mut trusted,
+        &mut |_, _| Err(LedgerError::FileResults)).unwrap();
     assert_eq!(replay.prior(&first).unwrap(), Some(first_checkpoint));
     let state = ledger.worktree().clone();
     let first_bytes = fs::read(fixture.frame_path(1)).unwrap();

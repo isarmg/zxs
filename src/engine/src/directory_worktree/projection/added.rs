@@ -2,7 +2,7 @@
 //! snapshot version/hash or a second BODY reader. Native original receipts own
 //! their actual containers and working manifests.
 use super::{Content, Entry, ProjectionError, SparseProjection};
-use crate::directory_worktree::ledger::AddedFile;
+use crate::directory_worktree::ledger::{AddedFile, AddedFileResult};
 use crate::working_tree::snapshot::{
     LogicalAdmission, MAX_ENTRIES, MAX_LOGICAL_BYTES, MAX_VERSIONS,
 };
@@ -69,6 +69,29 @@ impl SparseProjection<'_> {
             self.added.insert(file.target.entry, file.clone());
         }
         self.logical_admission(None)?;
+        Ok(self)
+    }
+
+    /// Metadata admission follows, but never replaces, the publisher's exact
+    /// independent FILE proof. Only the complete single-Added normal scope is open.
+    pub(crate) fn with_added_results(
+        mut self, results: &[AddedFileResult],
+    ) -> Result<Self, ProjectionError> {
+        if results.is_empty() {
+            return Ok(self);
+        }
+        if results.len() != 1 || self.added.len() != 1 || !self.edits.is_empty()
+            || !self.results.is_empty() || !self.added_results.is_empty()
+        {
+            return Err(ProjectionError::AddedPublicationRequired);
+        }
+        let result = &results[0];
+        let file = self.added.get(&result.target.entry).ok_or(ProjectionError::Added)?;
+        result.require_file(file).map_err(|_| ProjectionError::FileResult)?;
+        if self.source.files().contains_key(&result.material.version_id) {
+            return Err(ProjectionError::Version);
+        }
+        self.added_results.insert(result.target.entry, result.clone());
         Ok(self)
     }
 

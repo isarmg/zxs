@@ -210,33 +210,8 @@ pub(in crate::business::file_draft) fn project(
     {
         return Err(invalid());
     }
-    let owner = record.owner_disk.to_string();
-    let disk = config.disks.iter().find(|disk| disk.disk_id == owner).ok_or_else(invalid)?;
-    if disk.level != 1 || disk.upstream_slot_id.is_some() {
-        return Err(Error::FileDraft(Failure::UnsupportedScope));
-    }
-    let mut facts = VersionFacts { previous, content: commit.content, disk, consumed: false };
-    let (version, placement) = version_build::construct(
-        next,
-        Input {
-            history: &record.history_tree_id.to_string(),
-            file: &commit.target.file.to_string(),
-            path: &commit.target.path,
-            primary: &disk.slot_id,
-            copies: 1,
-            sources: Vec::new(),
-            checkpoint: false,
-        },
-        Content {
-            size: source.logical_size(),
-            hash: commit.read.content_hash(),
-            chunk_bytes: commit.content.version.checksum_chunk_bytes,
-        },
-        &mut facts,
-    )?;
-    if version != commit.content.version || placement != commit.content.placement {
-        return Err(invalid());
-    }
+    replay_version(previous, config, next, commit.target.file, &commit.target.path,
+        record, commit.content, commit.read)?;
     // Earlier selected items already own their allocations in this local
     // projection. Reusing one must fail rather than overwrite its graph row.
     let mut replay = Replay::new(next, &commit.content.allocations)?;
@@ -249,6 +224,41 @@ pub(in crate::business::file_draft) fn project(
         working.after_first_commit()
             .map_err(|source| Error::FileDraft(Failure::RevisionExhausted(source)))?;
     commit.read.require_source()
+}
+
+/// Shared first-Version reconstruction. The source must still be the actual
+/// selected Unborn reader; the caller separately owns its namespace publication.
+pub(crate) fn replay_version(
+    previous: &State, config: &ValidatedConfig, next: &mut State,
+    file: storage_contract::FileId, path: &name_policy::PortablePath,
+    record: &FileContainerRecord, content: &PublishedContent, read: &ReadWorkingDigest<'_>,
+) -> Result<()> {
+    read.source().require_record(file, record)?;
+    if content.version.logical_size != read.source().logical_size()
+        || content.version.content_hash != read.content_hash()
+        || next.versions.contains_key(&content.version.version_id)
+    {
+        return Err(invalid());
+    }
+    let owner = record.owner_disk.to_string();
+    let disk = config.disks.iter().find(|disk| disk.disk_id == owner).ok_or_else(invalid)?;
+    if disk.level != 1 || disk.upstream_slot_id.is_some() {
+        return Err(Error::FileDraft(Failure::UnsupportedScope));
+    }
+    let mut facts = VersionFacts { previous, content, disk, consumed: false };
+    let (version, placement) = version_build::construct(
+        next, Input {
+            history: &record.history_tree_id.to_string(), file: &file.to_string(), path,
+            primary: &disk.slot_id, copies: 1, sources: Vec::new(), checkpoint: false,
+        }, Content {
+            size: read.source().logical_size(), hash: read.content_hash(),
+            chunk_bytes: content.version.checksum_chunk_bytes,
+        }, &mut facts,
+    )?;
+    if version != content.version || placement != content.placement {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 /// The original first-file policy and material checks, before beginning a

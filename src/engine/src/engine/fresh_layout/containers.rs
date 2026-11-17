@@ -859,7 +859,9 @@ pub(crate) fn verify_transition_with_working_source<'a>(
             return verify_transition_read(config, previous, next, candidate, Some(read));
         }
     }
-    if result.kind != crate::persist::file_draft::unborn_first::KIND {
+    if result.kind != crate::persist::file_draft::unborn_first::KIND
+        && result.kind != crate::persist::snapshot_worktree::ADDED_FIRST
+    {
         return verify_transition(config, previous, next, candidate);
     }
     validate_state(previous)?;

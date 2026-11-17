@@ -2,6 +2,9 @@
 //! independently published FILE child and directory node may finish their exact
 //! ledger/SYSTEM tail on retry. Earlier uncertain preparations remain Pending.
 mod recovery;
+mod added;
+mod transfer;
+pub(crate) use transfer::ReservedDirectoryTransfer;
 mod version;
 pub(crate) use version::ReservedFileVersion;
 
@@ -14,10 +17,7 @@ use crate::persist::snapshot_worktree::{
 };
 use crate::snapshot_worktree::registry::CommitRetry;
 use crate::snapshot_worktree::{RegistrationError, Result, publication, with_worktree};
-use crate::working_tree::snapshot::{
-    AdmittedSnapshotManifest, HeldSnapshotNode, SnapshotFile, SnapshotFileSource,
-    SnapshotStoreError,
-};
+use crate::working_tree::snapshot::{HeldSnapshotNode, SnapshotFileSource};
 use crate::{CommitRequest, Engine};
 use std::{io::Read, sync::Arc};
 use storage_contract::snapshot_worktree::{CommitWorktree, SnapshotHandle};
@@ -30,6 +30,7 @@ pub(crate) fn commit_worktree(
     commit_inner(engine, request, principal).map_err(|source| {
         if engine.state().operations.get(&request.operation_id).is_some_and(|record| {
             record.kind == crate::persist::snapshot_worktree::HISTORICAL_RESERVE
+                || record.kind == crate::persist::snapshot_worktree::ADDED_RESERVE
         }) && !matches!(source, RegistrationError::Pending(_) | RegistrationError::Digest(_)
             | RegistrationError::Operation(_))
         {
@@ -47,6 +48,9 @@ fn commit_inner(
 ) -> Result<SnapshotHandle> {
     let source = engine.snapshot_receipt_source()?;
     let index = source.index()?;
+    if let Some(retry) = index.retry_added_commit(request, principal)? {
+        return added::retry(engine, &index, retry, request.target, principal);
+    }
     if let Some(retry) = index.retry_commit(request, principal)? {
         return match retry {
             CommitRetry::Complete(handle) => {
@@ -66,7 +70,8 @@ fn commit_inner(
     let original = index.reopen_node(engine, registered.source().handle())?;
     let session = registered.reopen(&original)?;
     if !session.added_files().is_empty() {
-        return Err(RegistrationError::CommitScope);
+        return added::commit(engine, request, principal, &registered, &original, session,
+            index.commit_head(registered.source().handle())?);
     }
     let (edited, completed) = index.completed_edit(request.target)?;
     if request.expected != session.worktree().revision()
@@ -297,9 +302,9 @@ fn complete(
     let manifest = index.into_commit_manifest(plan.request.operation_id)?;
     let root = engine.namespace_host_root(host.namespace.repository_id, host.namespace.branch_id)
         .map_err(RegistrationError::Publication)?;
-    let transfer = ReservedDirectoryTransfer {
-        original, instance, plan: &plan, expected: manifest.reference(),
-    };
+    let transfer = ReservedDirectoryTransfer::existing(
+        original, instance, &plan, manifest.reference(),
+    );
     let node = HeldSnapshotNode::prepare_worktree_commit(
         root.common().map_err(RegistrationError::Publication)?, manifest, &transfer,
     ).map_err(RegistrationError::NodePreparation)?;
@@ -339,60 +344,6 @@ fn publish_completion(
     engine.snapshot_receipts()?.reopen_node(engine, handle)?;
     with_worktree(engine, plan.request.target, |_| Ok(()))?;
     Ok(handle)
-}
-
-/// No raw constructor is exposed. This borrows the actual completed FILE
-/// publication's original SYSTEM intent and the same held sparse instance.
-pub(crate) struct ReservedDirectoryTransfer<'a> {
-    original: &'a HeldSnapshotNode,
-    instance: HeldSparseWorktree,
-    plan: &'a CommitReservation,
-    expected: crate::working_tree::snapshot::SnapshotReference,
-}
-
-impl ReservedDirectoryTransfer<'_> {
-    pub(crate) fn original(&self) -> &HeldSnapshotNode {
-        self.original
-    }
-
-    pub(crate) fn require_manifest(&self, manifest: &AdmittedSnapshotManifest)
-        -> std::result::Result<(), SnapshotStoreError>
-    {
-        if manifest.reference() != self.expected
-            || self.original.manifest().reference() != self.plan.binding.source()
-        {
-            return Err(SnapshotStoreError::Repository);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn transfer(
-        &self, target: &crate::disk::DiskRoot,
-        file: &SnapshotFile, name: &platform_io::fs_safety::EntryName,
-    ) -> std::result::Result<(), SnapshotStoreError> {
-        if file.version_id == self.plan.edit.material.version_id {
-            if *file != self.plan.edit.material {
-                return Err(SnapshotStoreError::Version);
-            }
-            self.instance.directory().move_new_entry_verified_synced(
-                self.plan.edit.leaf.entry(), target, name, crate::disk::FrozenFileMove {
-                    bytes: file.size, content_hash: file.content_hash,
-                    entity: self.plan.edit.entity,
-                },
-            ).map_err(SnapshotStoreError::Move)?;
-        } else {
-            if self.original.manifest().files().get(&file.version_id) != Some(file) {
-                return Err(SnapshotStoreError::Version);
-            }
-            target.copy_new_entry_verified_synced(name,
-                &mut self.original.open_payload(file.version_id)?,
-                platform_io::payload::Expectation {
-                    bytes: file.size, blake3: Some(file.content_hash.digest()),
-                },
-            ).map_err(SnapshotStoreError::Copy)?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

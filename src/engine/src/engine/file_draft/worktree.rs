@@ -1,4 +1,6 @@
 //! Hot worktree save input is issued only from the same held extent preparation.
+pub(crate) mod first;
+pub(crate) use first::WorktreeFirstSource;
 use crate::business::file_draft::{DraftError as Failure, invalid};
 use crate::container_storage::PreparedWorkingSave;
 use crate::engine::{PlanningContext, file_draft::WorkingPublicationInput};

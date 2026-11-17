@@ -29,6 +29,7 @@ pub(crate) struct ViewStamp {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum EntryContent {
+    RetainedFile { target: WorktreeFileTarget, material: SnapshotFile },
     Working {
         target: WorktreeFileTarget,
         #[serialization(serialize_with = "working_metadata")]
@@ -190,7 +191,7 @@ impl<'a> HeldReadView<'a> {
             Backing::Published { node } => match self.admitted_content(path)? {
                 EntryContent::Directory => Err(ViewError::IsDirectory),
                 EntryContent::Working { .. } => Err(ViewError::WorkingSourceRequired),
-                EntryContent::File { material } => {
+                EntryContent::File { material } | EntryContent::RetainedFile { material, .. } => {
                     node.open_payload(material.version_id).map_err(ViewError::Snapshot)
                 }
             },
@@ -236,7 +237,23 @@ impl<'a> HeldReadView<'a> {
                     .map_err(|_| ViewError::Missing)?;
                 Ok(match entries[index].content {
                     SnapshotEntryContent::Directory {} => EntryContent::Directory,
-                    SnapshotEntryContent::File { material, .. } => EntryContent::File { material },
+                    SnapshotEntryContent::File { material, source } => {
+                        match self.ledger.added_file_results().iter().find(|result| {
+                            result.material.version_id == material.version_id
+                        }) {
+                            None => EntryContent::File { material },
+                            Some(result) => {
+                                if result.material != material || result.source != source
+                                    || result.target.path != entries[index].path
+                                {
+                                    return Err(ViewError::Binding);
+                                }
+                                EntryContent::RetainedFile {
+                                    target: result.target.clone(), material,
+                                }
+                            }
+                        }
+                    },
                 })
             }
         }

@@ -15,6 +15,7 @@ use storage_contract::{
 };
 
 pub(super) mod first;
+pub(crate) use first::replay_version as replay_first_version;
 mod replay;
 mod current;
 pub(crate) use first::{FirstCommit, build as build_first_content};

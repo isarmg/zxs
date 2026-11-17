@@ -1,6 +1,8 @@
 //! Canonical native birth/save projection for an exact worktree-owned occurrence.
 //! These are descriptive rows; only the held root and native FILE preparation
 //! may attach the actual deleted-data inode and publish its three-scope material.
+pub(crate) mod first;
+
 use crate::business::file_draft::{DraftError as Failure, invalid};
 use crate::persist::snapshot_worktree::files::{WorktreeFileBirth, WorktreeFileSave};
 use crate::persist::snapshot_worktree::{self as codec, Record};
@@ -237,6 +239,9 @@ pub(crate) fn validate_record(
         || plan.target.path != plan.request.path
     {
         return Err(invalid());
+    }
+    if record.working.unborn().is_none() {
+        return first::validate_retained(state, file, record, &plan);
     }
     let key = file.to_string();
     if state

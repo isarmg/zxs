@@ -6,7 +6,7 @@ use std::os::unix::fs::MetadataExt;
 use storage_contract::file_draft::{CommitMode, UnbornBody};
 use storage_contract::snapshot_worktree::additions::WorktreeFileTarget;
 use storage_contract::snapshot_worktree::creation::{AllocateWorktree, WorktreeNaming};
-use storage_contract::snapshot_worktree::{CommitWorktree, InitializeSnapshot, WorktreeHandle};
+use storage_contract::snapshot_worktree::{InitializeSnapshot, WorktreeHandle};
 use storage_contract::{OperationId, RepositoryId};
 use storage_engine::{CommitRequest, WorktreeEntryContent};
 
@@ -233,7 +233,7 @@ fn native_worktree_added_birth_resaves_close_and_cold_reopen_keep_independent_id
     assert_eq!(stat.size, 11);
     drop(direct);
 
-    let mut engine = Engine::open(&system).unwrap();
+    let engine = Engine::open(&system).unwrap();
     assert_eq!(engine.state().versions, versions);
     assert_eq!(engine.state().branches, branches);
     assert_eq!(added_metadata(&engine, first), (first_file.clone(), 11));
@@ -245,21 +245,6 @@ fn native_worktree_added_birth_resaves_close_and_cold_reopen_keep_independent_id
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut original.file, &mut bytes).unwrap();
     assert_eq!(bytes, b"unchanged original");
-    let status = engine.directory_worktree_status(first).unwrap();
-    assert!(
-        engine
-            .commit_directory_worktree(
-                &CommitWorktree {
-                    target: first,
-                    expected: status.revision,
-                    message: "Added is not yet committable".into(),
-                    operation_id: OperationId::generate().unwrap(),
-                },
-                &principal
-            )
-            .is_err()
-    );
-    assert_eq!(engine.state().versions, versions);
     drop(original);
     let auth = AuthStore::open(&system).unwrap();
     let mut direct = Direct::start(root.path(), engine, auth);
@@ -279,3 +264,6 @@ fn native_worktree_added_birth_resaves_close_and_cold_reopen_keep_independent_id
     });
     drop(descriptor);
 }
+
+#[path = "worktree_commit_tests.rs"]
+mod commit;

@@ -77,8 +77,15 @@ pub(crate) fn content_protection(
     target: &storage_contract::file_draft::DraftLocation,
     content: &crate::business::file_draft::PublishedContent,
 ) -> Result<Protection> {
+    content_protection_for_file(previous, target.file, content)
+}
+
+pub(crate) fn content_protection_for_file(
+    previous: &State, file: storage_contract::FileId,
+    content: &crate::business::file_draft::PublishedContent,
+) -> Result<Protection> {
     let placement = &content.placement;
-    let owner = previous.file_containers.get(&target.file).ok_or_else(invalid)?.owner_disk;
+    let owner = previous.file_containers.get(&file).ok_or_else(invalid)?.owner_disk;
     let slot = placement.route_slot_ids.first().ok_or_else(invalid)?;
     if placement.route_slot_ids.len() != 1 || placement.target_copies != 1
         || placement.primary_slot_id != *slot
