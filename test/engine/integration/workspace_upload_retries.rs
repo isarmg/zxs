@@ -503,6 +503,7 @@ fn interrupted_copy_temporaries_consume_workspace_bytes_and_generation_slots() {
 
 #[test]
 fn retry_removes_owned_upload_scratch_but_keeps_complete_zxs_data() {
+    use std::os::unix::fs::MetadataExt;
     let temporary = tempfile::tempdir().unwrap();
     let system = temporary.path().join("system");
     let primary = temporary.path().join("primary");
@@ -515,6 +516,15 @@ fn retry_removes_owned_upload_scratch_but_keeps_complete_zxs_data() {
     ).unwrap();
     let workspace = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
     let saved = engine.stage_bytes(&workspace.workspace_id, "complete.txt", b"complete").unwrap();
+    let original = storage_engine::CommitRequest {
+        workspace_id: workspace.workspace_id.clone(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
+        principal: "admin".into(),
+        expected_head: workspace.base_head.clone(),
+        fencing_token: workspace.fencing_token,
+        message: "retry the exact retained upload".into(),
+        request_digest: None,
+    };
     let directory = saved.source_path.parent().unwrap();
     let partial = directory.join(format!(".zxs-upload-inflight-{}", new_id("req").unwrap()));
     let not_admitted = directory.join(format!(".zxs-upload-{}.prepared", new_id("req").unwrap()));
@@ -522,15 +532,53 @@ fn retry_removes_owned_upload_scratch_but_keeps_complete_zxs_data() {
     fs::write(&partial, b"interrupted prefix").unwrap();
     fs::write(&not_admitted, b"never admitted into the workspace").unwrap();
     fs::write(&unknown, b"unrecognized material").unwrap();
+    let saved_inode = fs::metadata(&saved.source_path).unwrap().ino();
+    let unknown_inode = fs::metadata(&unknown).unwrap().ino();
+    let source = temporary.path().join("retry-source");
+    fs::write(&source, b"complete retry").unwrap();
+    let item = new_id("entry").unwrap();
     drop(engine);
 
     let mut engine = Engine::open(&system).unwrap();
     assert!(!partial.exists(), "the writable restart cleans before a retry");
     assert!(!not_admitted.exists());
     fs::write(&partial, b"unpublished scratch before retry").unwrap();
-    let next = engine.stage_bytes(&workspace.workspace_id, "retry.txt", b"complete retry").unwrap();
+    assert_eq!(
+        engine.operation(original.operation_id).unwrap_err().code(),
+        storage_contract::ErrorCode::OperationNotFound
+    );
+    assert_eq!(engine.workspace(&workspace.workspace_id).unwrap().files.len(), 1);
+    let next = engine
+        .stage_upload(&workspace.workspace_id, &item, "retry.txt", &source, 1)
+        .unwrap();
     assert!(!partial.exists());
     assert_eq!(fs::read(&unknown).unwrap(), b"unrecognized material");
     assert_eq!(fs::read(&saved.source_path).unwrap(), b"complete");
     assert_eq!(fs::read(&next.source_path).unwrap(), b"complete retry");
+    let next_inode = fs::metadata(&next.source_path).unwrap().ino();
+    drop(engine);
+
+    let mut engine = Engine::open(&system).unwrap();
+    let retried = engine
+        .stage_upload(&workspace.workspace_id, &item, "retry.txt", &source, 1)
+        .unwrap();
+    assert_eq!(retried.source_path, next.source_path);
+    assert_eq!(fs::metadata(&retried.source_path).unwrap().ino(), next_inode);
+    assert_eq!(fs::metadata(&saved.source_path).unwrap().ino(), saved_inode);
+    assert_eq!(fs::metadata(&unknown).unwrap().ino(), unknown_inode);
+    assert_eq!(fs::read(&unknown).unwrap(), b"unrecognized material");
+    let result = engine.commit_workspace(original.clone()).unwrap();
+    assert_eq!(result.operation_id, original.operation_id);
+    assert_eq!(engine.operation(original.operation_id).unwrap(), result);
+    let sequence = engine.state().sequence;
+    assert_eq!(engine.commit_workspace(original.clone()).unwrap(), result);
+    assert_eq!(engine.state().sequence, sequence);
+    drop(engine);
+
+    let mut engine = Engine::open(&system).unwrap();
+    assert_eq!(engine.operation(original.operation_id).unwrap(), result);
+    assert_eq!(engine.commit_workspace(original).unwrap(), result);
+    assert_eq!(engine.state().sequence, sequence);
+    assert_eq!(engine.list_tree(&repo.main_branch_id).unwrap().len(), 2);
+    assert_eq!(fs::read(&unknown).unwrap(), b"unrecognized material");
 }

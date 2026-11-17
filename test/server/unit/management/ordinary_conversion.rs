@@ -1740,3 +1740,99 @@ fn conversion_drain_budget_exhaustion_is_not_success_or_permission_to_delete() {
         (before.dev(), before.ino(), before.len())
     );
 }
+
+#[test]
+fn normal_shutdown_waits_for_live_conversion_then_replays_original_commit() {
+    use std::{sync::mpsc, time::Duration};
+    let f = fixture();
+    let p = preview(&f);
+    let PreparedOrdinaryConversion { backend, source } = registered_conversion_input(&f, &p);
+    let registration = f
+        .backend
+        .commit_storage_addition(
+            &f.identity,
+            AdditionCommit { preview: p.target.clone() },
+        )
+        .unwrap();
+    let directory = PrivateDirectory::open_existing(f.data.join("management"))
+        .unwrap()
+        .create_child(&EntryName::new(DIRECTORY).unwrap())
+        .unwrap();
+    let mut record = pending_record(&f, &p);
+    record.status.registration = Some(registration);
+    record.status.phase = OrdinaryDiskConversionPhase::Importing;
+    record.import_attempted = true;
+    save(&directory, &record).unwrap();
+    write(&directory, &storage_addition::latest_name(), &p.operation_id).unwrap();
+    let owner = Arc::clone(&f.backend);
+    let identity = f.identity.clone();
+    let target = p.target.clone();
+    let import_operation = p.import_operation_id;
+    let (entered, writing) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        // This is the existing admitted coordinator, not another task registry.
+        // Its real import reaches the production durable commit-intent callback.
+        let _gate = owner.inner.ordinary_conversion.lock().unwrap();
+        let mut paused = false;
+        let result = backend
+            .run_ordinary_conversion(
+                &identity,
+                &target,
+                source,
+                import_operation,
+                |progress| {
+                    record.status.root_operation_id = progress.root_operation_id();
+                    record.status.workspace_id = progress.workspace_id().map(str::to_owned);
+                    record.commit_request = progress.request().cloned();
+                    save(&directory, &record).map_err(|error| {
+                        storage_engine::Error::from(std::io::Error::other(error))
+                    })?;
+                    if progress.request().is_some() && !paused {
+                        paused = true;
+                        entered.send(()).unwrap();
+                        released.recv_timeout(Duration::from_secs(10)).unwrap();
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let request = record.commit_request.clone().unwrap();
+        record.status.phase = OrdinaryDiskConversionPhase::Completed;
+        record.status.result = Some(result.clone());
+        save(&directory, &record).unwrap();
+        (request, result)
+    });
+    writing.recv_timeout(Duration::from_secs(10)).unwrap();
+    f.backend.stop_management();
+    let lock_error = storage_engine::Engine::open(&f.data)
+        .err()
+        .map(|error| error.code().clone());
+    let (done, finished) = mpsc::channel();
+    let draining = Arc::clone(&f.backend);
+    let drain = std::thread::spawn(move || {
+        let business = draining.finish_running_business();
+        let management = draining.drain_management();
+        done.send((business, management)).unwrap();
+    });
+    let early = finished.recv_timeout(Duration::from_millis(50));
+    release.send(()).unwrap();
+    assert_eq!(lock_error, Some(ErrorCode::WriterAlreadyActive));
+    assert!(matches!(early, Err(mpsc::RecvTimeoutError::Timeout)));
+    let (request, result) = writer.join().unwrap();
+    let (business, management) = finished.recv_timeout(Duration::from_secs(10)).unwrap();
+    business.unwrap();
+    management.unwrap();
+    drain.join().unwrap();
+    assert_eq!(commit(&f, &p, true).unwrap_err().code, ErrorCode::ServiceStopping);
+    assert_eq!(
+        fs::read(f.discovery.join("ordinary/document.txt")).unwrap(),
+        b"keep original content"
+    );
+    drop(f.backend);
+    let mut engine = storage_engine::Engine::open(&f.data).unwrap();
+    let sequence = engine.state().sequence;
+    assert_eq!(engine.operation(import_operation).unwrap(), result);
+    assert_eq!(engine.commit_workspace(request).unwrap(), result);
+    assert_eq!(engine.state().sequence, sequence);
+}
