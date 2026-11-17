@@ -1,4 +1,4 @@
-//! Existing Born occurrences before the directory node has physical feedback.
+//! Existing Born and Unborn owners before the directory has physical feedback.
 //! The actual complete FILE producer, not a provisional receipt, fixes this set.
 use super::*;
 use crate::engine::file_draft::WorkingBatchHandoff;
@@ -12,6 +12,7 @@ impl ContainerPreparation {
         validate_state(context.state)?;
         source.require_context(context)?;
         source.require_prepared(prepared)?;
+        let first = unborn::first_working_batch(context, source, prepared)?;
         let next = source.state().clone();
         validate_state(&next)?;
         if inventory(context.state)? != inventory(&next)?
@@ -25,8 +26,13 @@ impl ContainerPreparation {
             let file = item.target().file;
             let previous = context.state.file_containers.get(&file)
                 .ok_or(Failure::ContainerScope)?;
-            if previous.working.draft().is_none() || previous.replicas.len() != 1
-                || !matches!(item.working_after(), FileWorkingState::ManualClean { .. })
+            let first_commit = first.contains_key(&file) && previous.working.unborn().is_some();
+            if (previous.working.draft().is_none() && !first_commit)
+                || previous.replicas.len() != 1
+                || !(matches!(item.working_after(), FileWorkingState::ManualClean { .. })
+                    || (first_commit && matches!(
+                        item.working_after(), FileWorkingState::Automatic { .. },
+                    )))
             {
                 return Err(Failure::ContainerScope.into());
             }
@@ -73,7 +79,7 @@ impl ContainerPreparation {
         }
         Ok(Self {
             next, targets, additions: BTreeMap::new(), directory_additions: BTreeSet::new(),
-            directory_targets: BTreeSet::new(), renames: BTreeMap::new(), birth: None, first: None,
+            directory_targets: BTreeSet::new(), renames: BTreeMap::new(), birth: None, first,
         })
     }
 }
@@ -91,12 +97,15 @@ pub(crate) fn verify_directory_transition<'a>(
         .map_err(crate::snapshot_worktree::drafts::DirectoryPublicationError::into_engine)?;
     validate_state(previous)?;
     validate_state(next)?;
+    let first = unborn::first_directory(previous, next, result, proof)?;
     let mut expected = previous.file_containers.clone();
     for file in proof.working_files() {
         let before = previous.file_containers.get(&file).ok_or(Failure::ContainerScope)?;
         let after = next.file_containers.get(&file).ok_or(Failure::ContainerScope)?;
-        if before.working.draft().is_none() || before.replicas.len() != 1
-            || !matches!(after.working, FileWorkingState::ManualClean { .. })
+        let first_commit = first.contains_key(&file) && before.working.unborn().is_some();
+        if (before.working.draft().is_none() && !first_commit) || before.replicas.len() != 1
+            || !(matches!(after.working, FileWorkingState::ManualClean { .. })
+                || (first_commit && matches!(after.working, FileWorkingState::Automatic { .. })))
         {
             return Err(Failure::ContainerScope.into());
         }
@@ -109,6 +118,6 @@ pub(crate) fn verify_directory_transition<'a>(
         return Err(Failure::ContainerScope.into());
     }
     Ok(VerifiedContainerTransition {
-        previous, next, candidate, renames: BTreeMap::new(), birth: None, first: None,
+        previous, next, candidate, renames: BTreeMap::new(), birth: None, first,
     })
 }

@@ -878,7 +878,8 @@ class TargetedSelection(unittest.TestCase):
         plan = assert_path_group_extension(self, self.policy, paths, [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout', 'projection-cache-layout', 'version-publication-location',
-        ], ['fresh-first-add-root-binding', 'terminal-backup-source-layout'])
+        ], ['degraded-current-format-recovery', 'fresh-first-add-root-binding',
+            'terminal-backup-source-layout'])
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout',
@@ -935,7 +936,8 @@ class TargetedSelection(unittest.TestCase):
                 plan = (assert_path_group_extension(
                     self, self.policy, [path],
                     ['backup-scoped-encoding-memo', 'held-directory-layout',
-                     'version-publication-location'], ['terminal-backup-source-layout'],
+                     'version-publication-location'],
+                    ['degraded-current-format-recovery', 'terminal-backup-source-layout'],
                 ) if path == 'src/engine/src/journal.rs'
                     else CI.select_plan(self.policy, [path]))
                 required = ['held-directory-layout', 'version-publication-location']
@@ -1200,7 +1202,8 @@ class TargetedSelection(unittest.TestCase):
         ], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout', 'projection-cache-layout', 'version-publication-location',
-        ], ['fresh-first-add-root-binding', 'terminal-backup-source-layout'])
+        ], ['degraded-current-format-recovery', 'fresh-first-add-root-binding',
+            'terminal-backup-source-layout'])
         self.assertEqual(len(plan['rust_targets']), 5)
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
@@ -1713,7 +1716,8 @@ class TargetedSelection(unittest.TestCase):
             'container-unchanged-save', 'portable-path-consumers',
         ], ['container-path-facts-engine', 'container-lifecycle-engine',
             'upload-occurrence-source', 'workspace-version-construction',
-            'workspace-logical-input', 'ordinary-smb-manual-draft'])
+            'workspace-logical-input', 'ordinary-smb-manual-draft',
+            'native-workspace-directory-source'])
         self.assertEqual(plan['groups'],
                          ['ci-selection', 'container-tags-engine',
                           'container-unchanged-save', 'portable-path-consumers'])

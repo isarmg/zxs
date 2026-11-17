@@ -23,13 +23,15 @@ impl JsonBody for CommitBody {
             let expected = item.get("expected");
             if !item.get("target").is_some_and(json_codec::Value::is_object)
                 || !expected.is_some_and(json_codec::Value::is_object)
-                || !expected.and_then(|value| value.get("base"))
+                || !(expected.and_then(|value| value.get("content"))
                     .is_some_and(json_codec::Value::is_object)
-                || !expected.and_then(|value| value.get("payload"))
-                    .is_some_and(json_codec::Value::is_object)
+                    || (expected.and_then(|value| value.get("base"))
+                        .is_some_and(json_codec::Value::is_object)
+                        && expected.and_then(|value| value.get("payload"))
+                            .is_some_and(json_codec::Value::is_object)))
             {
                 return Err(ApiError::invalid(
-                    "selected target, expected, base and payload must be objects",
+                    "selected target and its Born or Unborn expectation must be objects",
                 ));
             }
         }

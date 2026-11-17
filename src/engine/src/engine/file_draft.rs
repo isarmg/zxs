@@ -15,7 +15,9 @@ mod native_io;
 pub use native_io::{NativeCurrentEntry, NativeWorkingFile};
 mod selected;
 mod batch;
-pub(crate) use batch::{PreparedWorkingBatch, WorkingBatchHandoff, WorkingBatchResult};
+pub(crate) use batch::{
+    PreparedWorkingBatch, WorkingBatchHandoff, WorkingBatchOrigin, WorkingBatchResult,
+};
 mod input;
 pub(super) use input::WorkingPublicationInput;
 pub(crate) use selected::{SelectedWorkingSource, SelectedWorkingSources};

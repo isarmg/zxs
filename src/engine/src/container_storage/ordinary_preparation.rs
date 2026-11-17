@@ -509,7 +509,7 @@ impl PreparedContainerEntities {
         }
         draft::populate(&mut held, input, context.config.max_file_bytes)?;
         working::populate(&mut held, context.config.max_file_bytes)?;
-        retain_first_source(&mut held, plan.first())?;
+        retain_first_sources(&mut held, plan.first_sources())?;
         let result = Self {
             held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
             prefixes, directories, config: context.config.clone(),
@@ -742,7 +742,7 @@ impl PreparedContainerEntities {
         }
         draft::populate(&mut held, None, config.max_file_bytes)?;
         working::populate(&mut held, config.max_file_bytes)?;
-        retain_first_source(&mut held, transition.first())?;
+        retain_first_sources(&mut held, transition.first_sources())?;
         let result = Self {
             held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
             prefixes, directories, config: config.clone(),
@@ -1183,11 +1183,13 @@ pub(crate) fn verify_namespace_directory(
 /// Retain the actual predecessor material on the same one-owner occurrence.
 /// Every existing payload/name verification therefore keeps it alive through
 /// the native decision. Available-only discovery cannot manufacture a full set.
-fn retain_first_source(
+fn retain_first_sources<'a>(
     held: &mut BTreeMap<(FileId, DiskId), ObservedContainerReplica>,
-    first: Option<&Arc<crate::engine::fresh_layout::containers::VerifiedUnbornFirst>>,
+    first: impl Iterator<
+        Item = &'a Arc<crate::engine::fresh_layout::containers::VerifiedUnbornFirst>,
+    >,
 ) -> Result<()> {
-    if let Some(first) = first {
+    for first in first {
         let scope = held.get_mut(&(first.file(), first.owner()))
             .ok_or(Failure::ContainerScope)?;
         first.require_record(scope.file, &scope.record)?;

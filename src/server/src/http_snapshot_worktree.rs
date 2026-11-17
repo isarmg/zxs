@@ -1,6 +1,9 @@
 //! Strict management requests over the existing authentication, CSRF, JSON
 //! byte/duplicate-key boundary and bounded blocking backend job owner.
 pub(crate) mod drafts;
+pub(crate) mod discovery;
+pub(crate) mod root;
+pub(crate) mod transport;
 
 use crate::{ApiError, AppState};
 use crate::http_boundary::{ApiJson, ApiPath, ApiQuery, Authenticated, JsonBody};

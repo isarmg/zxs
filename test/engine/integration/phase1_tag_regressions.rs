@@ -1,5 +1,6 @@
 //! Real production Engine calls on disposable tmpfs roots; no save implementation
 //! or phase-two model is substituted. HTTP/Samba are covered by other owners.
+use name_policy::Name;
 use std::{collections::BTreeSet, io::Read};
 use storage_engine::*;
 use storage_engine as engine_api;
@@ -80,7 +81,10 @@ fn container_replacement_keeps_content_graph_and_replays_exact_cas() {
     let temp = tempfile::tempdir().unwrap();
     let mut e = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("primary")]).unwrap(),
+        Config::development([(
+            Name::parse("primary").unwrap(),
+            temp.path().join("primary"),
+        )]).unwrap(),
     )
     .unwrap();
     let repo = e.create_disk_root("P01", "admin", op()).unwrap();
@@ -122,7 +126,10 @@ fn reused_old_path_does_not_retarget_container_tags_or_break_exact_replay() {
     let temp = tempfile::tempdir().unwrap();
     let mut e = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("primary")]).unwrap(),
+        Config::development([(
+            Name::parse("primary").unwrap(),
+            temp.path().join("primary"),
+        )]).unwrap(),
     )
     .unwrap();
     let repo = e.create_disk_root("P01", "admin", op()).unwrap();
@@ -159,8 +166,9 @@ fn reused_old_path_does_not_retarget_container_tags_or_break_exact_replay() {
 fn current_tags_ignore_retired_directory_identity_and_keep_root_and_history() {
     for recreate in [false, true] {
         let temp = tempfile::tempdir().unwrap();
-        let mut config =
-            Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        let mut config = Config::development((0..4).map(|n| {
+            (Name::parse(&format!("disk-{n}")).unwrap(), temp.path().join(format!("disk-{n}")))
+        })).unwrap();
         config.disks[3].level = 1;
         config.disks[3].upstream_slot_id = None;
         config.disks[3].metadata_member = false;

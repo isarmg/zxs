@@ -308,7 +308,8 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     };
     let file_head = engine.file_branch_head(&selected.branch_id).unwrap();
     let original_versions = engine.state().versions.clone();
-    let revision = edit_worktree(&mut engine, &edit, edited_body, &principal()).unwrap();
+    let (_edit_source_directory, mut edit_source) = held_edit_body(edited_body);
+    let revision = edit_worktree(&mut engine, &edit, &mut edit_source, &principal()).unwrap();
     assert_eq!(revision.generation, edit.expected.generation.next().unwrap());
     assert_ne!(revision.manifest, edit.expected.manifest);
     assert_eq!(engine.file_branch_head(&selected.branch_id).unwrap(), file_head);
@@ -343,7 +344,9 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         engine.state().sequence);
     read_edit(&engine);
     let before = Arc::clone(&engine.state);
-    assert_eq!(edit_worktree(&mut engine, &edit, edited_body, &principal()).unwrap(), revision);
+    assert_eq!(
+        edit_worktree(&mut engine, &edit, &mut edit_source, &principal()).unwrap(), revision,
+    );
     assert!(Arc::ptr_eq(&before, &engine.state));
     assert_eq!(engine.state().operations, edited_receipts);
     assert_eq!(inventory(&disks[0].join("common-data")), cold_edited_material);
@@ -1133,4 +1136,12 @@ fn typed_receipt_rejects_retag_unknown_fields_oversize_and_unverified_recovery_o
     assert_eq!(plan.request, fixture.request);
     assert_eq!(decoded.timestamp.to_string(), receipt.result["timestamp"].as_str().unwrap());
     assert_eq!(decoded.membership_epoch, fixture.engine.config.membership_epoch());
+}
+
+fn held_edit_body(bytes: &[u8]) -> (tempfile::TempDir, crate::ReadFile) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("edit-source");
+    fs::write(&path, bytes).unwrap();
+    let file = fs::File::open(path).unwrap();
+    (directory, file.into())
 }

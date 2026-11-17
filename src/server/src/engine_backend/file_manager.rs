@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend_activity::utc_timestamp;
 
-fn disk<'a>(
+pub(super) fn disk<'a>(
     engine: &'a Engine,
     slot: &str,
 ) -> Result<storage_engine::RegisteredDisk<'a>, ApiError> {
@@ -25,6 +25,18 @@ fn disk<'a>(
             )
         })
 }
+/// Current primary admission shared by namespace creation and explicit root registration.
+pub(super) fn require_primary_disk(disk: &storage_engine::RegisteredDisk<'_>) -> Result<(), ApiError> {
+    if disk.level != 1 {
+        return Err(ApiError::new(
+            ::http::StatusCode::FORBIDDEN,
+            storage_contract::ErrorCode::DiskReadOnly,
+            "backup disks are read only",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DiskAccess {
     Read,
@@ -97,12 +109,8 @@ fn resolve_existing<'a>(
     access: DiskAccess,
 ) -> Result<Option<(Repository, &'a str)>, ApiError> {
     let write = access != DiskAccess::Read;
-    if write && disk(engine, slot)?.level != 1 {
-        return Err(ApiError::new(
-            ::http::StatusCode::FORBIDDEN,
-            storage_contract::ErrorCode::DiskReadOnly,
-            "backup disks are read only",
-        ));
+    if write {
+        require_primary_disk(&disk(engine, slot)?)?;
     }
     let relative = value;
     let existing = engine

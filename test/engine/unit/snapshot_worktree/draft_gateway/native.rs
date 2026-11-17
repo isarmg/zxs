@@ -78,7 +78,7 @@ fn actual_same_body_batch_describes_no_node_and_preserves_unselected_draft() {
     assert!(result.result["directory"].get("node").is_none());
     let projected = super::reconstruction::replay(
         context.config, context.state, &context.snapshot_receipts().unwrap(),
-        &result, crate::disk::MAX_METADATA,
+        &result, crate::disk::MAX_METADATA, &files.first_reads().unwrap(),
     ).unwrap();
     projected.require_file_projection(context.state, &file_projection).unwrap();
     // A complete index is bound to its exact source allocation, not merely
@@ -86,7 +86,7 @@ fn actual_same_body_batch_describes_no_node_and_preserves_unselected_draft() {
     let same_value = context.state.as_ref().clone();
     assert!(matches!(super::reconstruction::replay(
         context.config, &same_value, &context.snapshot_receipts().unwrap(),
-        &result, crate::disk::MAX_METADATA,
+        &result, crate::disk::MAX_METADATA, &files.first_reads().unwrap(),
     ), Err(super::DirectoryPublicationError::Source(
         super::DirectoryDraftError::Registration(RegistrationError::Source),
     ))));
@@ -134,7 +134,7 @@ fn actual_same_body_batch_describes_no_node_and_preserves_unselected_draft() {
     ).unwrap();
     assert!(matches!(super::reconstruction::replay(
         context.config, context.state, &context.snapshot_receipts().unwrap(),
-        &stale, crate::disk::MAX_METADATA,
+        &stale, crate::disk::MAX_METADATA, &files.first_reads().unwrap(),
     ), Err(super::DirectoryPublicationError::Projection)));
     let mut surplus = result.clone();
     surplus.result["directory"]["node"] = json_codec::json!(unused_node);

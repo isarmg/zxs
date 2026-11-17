@@ -9,6 +9,7 @@ mod permanent_retirement;
 mod rename;
 #[path = "content_matches/shared_history.rs"]
 mod shared_history;
+use name_policy::Name;
 use storage_contract::content_matches::{ContentMatchPage, ContentMatchRequest};
 use storage_contract::history_window::HistoryWindowCancellation;
 use storage_engine::{
@@ -83,7 +84,10 @@ impl Pool {
         let root = temp.path().join("system");
         let mut engine = Engine::initialize(
             &root,
-            Config::development([temp.path().join("disk")]).unwrap(),
+            Config::development([(
+                Name::parse("disk").unwrap(),
+                temp.path().join("disk"),
+            )]).unwrap(),
         )
         .unwrap();
         let repo = engine

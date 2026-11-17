@@ -13,7 +13,7 @@ impl ReceiptIndex<'_> {
         if let Some(operation) = self.pending_branches.get(&branch) {
             return Err(RegistrationError::Pending(*operation));
         }
-        if self.branch_heads.get(&branch) != Some(&handle.node_id) {
+        if self.branch_heads.get(&branch) != Some(&handle) {
             return Err(RegistrationError::Source);
         }
         Ok(published)

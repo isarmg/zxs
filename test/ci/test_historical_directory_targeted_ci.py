@@ -97,7 +97,7 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
             'test/server/unit/smb_rpc/phase1_new_file_tests.rs',
         ]:
             with self.subTest(path=path):
-                added = (['ordinary-smb-manual-draft']
+                added = (['automatic-smb-working-clone', 'ordinary-smb-manual-draft']
                          if path == 'test/server/integration/phase1_smb_rpc.rs' else [])
                 plan = assert_path_group_extension(self, self.policy, [path], None, added)
                 self.assertIn('note-target-consumers', plan['groups'])
@@ -160,7 +160,7 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
                 'note-http-boundary', 'note-target-consumers', 'paged-deletion-review',
                 'server-authorization', 'version-metadata-read',
             ], ['container-path-facts-http', 'container-lifecycle-http',
-                'ordinary-smb-manual-draft']),
+                'automatic-smb-working-clone', 'ordinary-smb-manual-draft']),
             CI.select_plan(self.policy, policy),
         ]
         # HTTP retirement adds a core product check without dropping any old selection.

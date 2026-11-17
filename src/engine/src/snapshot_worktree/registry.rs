@@ -27,6 +27,8 @@ pub(crate) use backup::require_backup_snapshot_scope;
 mod edits;
 mod commits;
 mod drafts;
+mod discovery;
+mod transport;
 mod working;
 use working::WorkingRecord;
 use commits::CommitRecord;
@@ -51,7 +53,9 @@ pub(crate) struct ReceiptIndex<'a> {
     pending_edits: BTreeMap<WorktreeId, OperationId>,
     commits: BTreeMap<OperationId, CommitRecord<'a>>,
     working: BTreeMap<OperationId, WorkingRecord<'a>>,
-    branch_heads: BTreeMap<(SnapshotRepositoryId, SnapshotBranchId), SnapshotNodeId>,
+    // Only complete indexed publications set this exact handle. Keeping the
+    // completion identity avoids any latest-sequence or local-node lookup.
+    branch_heads: BTreeMap<(SnapshotRepositoryId, SnapshotBranchId), SnapshotHandle>,
     pending_branches: BTreeMap<(SnapshotRepositoryId, SnapshotBranchId), OperationId>,
     planned_files: BTreeSet<OperationId>,
 }
@@ -175,14 +179,20 @@ pub(super) struct PublishedNode<'a> {
     binding: SnapshotNodeBinding,
 }
 
+impl NodePlan {
+    fn handle(&self) -> SnapshotHandle {
+        SnapshotHandle {
+            publication: self.allocated.completion,
+            repository_id: self.allocated.repository,
+            branch_id: self.allocated.branch,
+            node_id: self.allocated.node,
+        }
+    }
+}
+
 impl PublishedNode<'_> {
     pub(super) fn handle(&self) -> SnapshotHandle {
-        SnapshotHandle {
-            publication: self.plan.allocated.completion,
-            repository_id: self.plan.allocated.repository,
-            branch_id: self.plan.allocated.branch,
-            node_id: self.plan.allocated.node,
-        }
+        self.plan.handle()
     }
 
     pub(super) fn initialization(&self) -> &InitializeSnapshot {
@@ -652,7 +662,7 @@ impl<'a> ReceiptIndex<'a> {
             return Err(RegistrationError::Completion(operation));
         }
         self.branch_heads.insert(
-            (node.plan.allocated.repository, node.plan.allocated.branch), node.plan.allocated.node,
+            (node.plan.allocated.repository, node.plan.allocated.branch), node.plan.handle(),
         );
         node.publication = Publication::Complete(completion);
         for directory in &node.plan.host.directories {

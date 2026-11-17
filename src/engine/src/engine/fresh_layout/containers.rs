@@ -119,7 +119,7 @@ pub(crate) struct ContainerPreparation {
     directory_targets: BTreeSet<(storage_contract::EntryId, DiskId)>,
     renames: BTreeMap<FileId, ContainerNameChange>,
     birth: Option<std::sync::Arc<VerifiedUnbornBirth>>,
-    first: Option<std::sync::Arc<VerifiedUnbornFirst>>,
+    first: BTreeMap<FileId, std::sync::Arc<VerifiedUnbornFirst>>,
 }
 impl ContainerPreparation {
     pub(crate) fn new(
@@ -328,7 +328,8 @@ impl ContainerPreparation {
             return Err(Failure::ContainerScope.into());
         }
         Ok(Self {
-            next, additions, targets, directory_additions, directory_targets, renames, birth, first,
+            next, additions, targets, directory_additions, directory_targets, renames, birth,
+            first: first.into_iter().map(|proof| (proof.file(), proof)).collect(),
         })
     }
 
@@ -336,8 +337,10 @@ impl ContainerPreparation {
         self.birth.as_ref()
     }
 
-    pub(crate) fn first(&self) -> Option<&std::sync::Arc<VerifiedUnbornFirst>> {
-        self.first.as_ref()
+    pub(crate) fn first_sources(
+        &self,
+    ) -> impl Iterator<Item = &std::sync::Arc<VerifiedUnbornFirst>> {
+        self.first.values()
     }
 
     pub(crate) fn rename(&self, file: FileId) -> Option<&ContainerNameChange> {
@@ -750,15 +753,17 @@ pub(crate) struct VerifiedContainerTransition<'a> {
     candidate: &'a crate::journal::Candidate,
     renames: BTreeMap<FileId, ContainerNameChange>,
     birth: Option<std::sync::Arc<VerifiedUnbornBirth>>,
-    first: Option<std::sync::Arc<VerifiedUnbornFirst>>,
+    first: BTreeMap<FileId, std::sync::Arc<VerifiedUnbornFirst>>,
 }
 impl VerifiedContainerTransition<'_> {
     pub(crate) fn birth(&self) -> Option<&std::sync::Arc<VerifiedUnbornBirth>> {
         self.birth.as_ref()
     }
 
-    pub(crate) fn first(&self) -> Option<&std::sync::Arc<VerifiedUnbornFirst>> {
-        self.first.as_ref()
+    pub(crate) fn first_sources(
+        &self,
+    ) -> impl Iterator<Item = &std::sync::Arc<VerifiedUnbornFirst>> {
+        self.first.values()
     }
 
     pub(in crate::engine) fn renames(&self) -> &BTreeMap<FileId, ContainerNameChange> {
@@ -808,7 +813,8 @@ pub(crate) fn verify_transition_with_working_source<'a>(
     let first = unborn::first_candidate(config, resources, previous, next, candidate, locations)?
         .ok_or(Failure::ContainerScope)?;
     Ok(VerifiedContainerTransition {
-        previous, next, candidate, renames: BTreeMap::new(), birth: None, first: Some(first),
+        previous, next, candidate, renames: BTreeMap::new(), birth: None,
+        first: BTreeMap::from([(first.file(), first)]),
     })
 }
 
@@ -825,18 +831,20 @@ pub(crate) fn verify_transition<'a>(
     if let Some(proof) = config.verify_backup_first_layout(previous, next, candidate)? {
         proof.require_pair(previous, next, candidate)?;
         return Ok(VerifiedContainerTransition {
-            previous, next, candidate, renames: BTreeMap::new(), birth: None, first: None,
+            previous, next, candidate, renames: BTreeMap::new(), birth: None,
+            first: BTreeMap::new(),
         });
     }
     if let Some(birth) = unborn::candidate(config, previous, next, candidate)? {
         return Ok(VerifiedContainerTransition {
             previous, next, candidate, renames: BTreeMap::new(),
-            birth: Some(std::sync::Arc::new(birth)), first: None,
+            birth: Some(std::sync::Arc::new(birth)), first: BTreeMap::new(),
         });
     }
     if unborn::save_candidate(config, previous, next, candidate)?.is_some() {
         return Ok(VerifiedContainerTransition {
-            previous, next, candidate, renames: BTreeMap::new(), birth: None, first: None,
+            previous, next, candidate, renames: BTreeMap::new(), birth: None,
+            first: BTreeMap::new(),
         });
     }
     let result = next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
@@ -963,7 +971,7 @@ pub(crate) fn verify_transition<'a>(
         )?;
     }
     Ok(VerifiedContainerTransition {
-        previous, next, candidate, renames, birth: None, first: None,
+        previous, next, candidate, renames, birth: None, first: BTreeMap::new(),
     })
 }
 

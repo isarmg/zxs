@@ -731,10 +731,23 @@ impl Backend for EngineBackend {
     ) -> Result<Content, ApiError> {
         file_draft::content(self, identity, request)
     }
+    fn register_snapshot_root(
+        &self, identity: &Identity, slot: name_policy::SlotId,
+        request: storage_contract::snapshot_worktree::root::RegisterSnapshotRoot,
+    ) -> Result<storage_contract::snapshot_worktree::root::RegisteredSnapshotRoot, ApiError> {
+        snapshot_worktree::root::register(self, identity, slot, request)
+    }
     fn snapshot_root_context(
         &self, identity: &Identity, repository: storage_contract::RepositoryId,
     ) -> Result<storage_contract::snapshot_worktree::SnapshotRootContext, ApiError> {
         snapshot_worktree::context(self, identity, repository)
+    }
+    fn directory_snapshot_head(
+        &self, identity: &Identity, repository: storage_contract::RepositoryId,
+    ) -> Result<
+        storage_contract::snapshot_worktree::discovery::DirectorySnapshotHead, ApiError,
+    > {
+        snapshot_worktree::discovery::head(self, identity, repository)
     }
     fn initialize_directory_snapshot(
         &self, identity: &Identity,
@@ -1146,6 +1159,37 @@ impl Backend for EngineBackend {
         engine
             .replace_container_tags(&request.command, &principal, request.operation_id)
             .map_err(error)
+    }
+    fn authorize_directory_worktree_edit(
+        &self,
+        identity: &Identity,
+        request: &storage_contract::snapshot_worktree::EditWorktree,
+    ) -> Result<(), ApiError> {
+        snapshot_worktree::transport::authorize_edit(self, identity, request)
+    }
+    fn edit_directory_worktree(
+        &self,
+        identity: &Identity,
+        request: storage_contract::snapshot_worktree::EditWorktree,
+        source: &crate::UploadSource,
+    ) -> Result<storage_contract::snapshot_worktree::WorktreeRevision, ApiError> {
+        snapshot_worktree::transport::edit(self, identity, request, source)
+    }
+    fn commit_directory_worktree(
+        &self,
+        identity: &Identity,
+        request: storage_contract::snapshot_worktree::CommitWorktree,
+    ) -> Result<storage_contract::snapshot_worktree::SnapshotHandle, ApiError> {
+        snapshot_worktree::transport::commit(self, identity, request)
+    }
+    fn directory_worktree_content(
+        &self,
+        identity: &Identity,
+        target: storage_contract::snapshot_worktree::WorktreeHandle,
+        path: name_policy::LookupPath,
+        deadline: std::time::Instant,
+    ) -> Result<Content, ApiError> {
+        snapshot_worktree::transport::content(self, identity, target, path, deadline)
     }
     fn file_container_tags(
         &self,

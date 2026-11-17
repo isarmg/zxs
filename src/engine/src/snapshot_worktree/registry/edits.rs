@@ -23,6 +23,28 @@ pub(super) struct EditRecordEntry<'a> {
 }
 
 impl<'a> ReceiptIndex<'a> {
+    /// A new sealed revision may replace only the same original occurrence.
+    /// Namespace/multi-file edits and post-commit rebase have separate contracts.
+    pub(in crate::snapshot_worktree) fn require_edit_scope(
+        &self,
+        request: &EditWorktree,
+    ) -> Result<()> {
+        let current = self.worktree(request.target)?;
+        if current.revision() != request.expected
+            || request.path.parent().is_some()
+            || current.publication.is_some()
+        {
+            return Err(RegistrationError::EditScope);
+        }
+        if request.expected.generation != Generation::new(0) {
+            let (previous, _) = self.completed_edit(request.target)?;
+            if previous.request.path != request.path {
+                return Err(RegistrationError::EditScope);
+            }
+        }
+        Ok(())
+    }
+
     pub(in crate::snapshot_worktree) fn retry_edit(
         &self,
         request: &EditWorktree,
@@ -53,12 +75,9 @@ impl<'a> ReceiptIndex<'a> {
         if plan.request.operation_id != operation {
             return Err(RegistrationError::Operation(operation));
         }
+        self.require_edit_scope(&plan.request)?;
         let current = self.worktree(plan.request.target)?;
         if current.binding() != plan.binding || current.checkpoint() != plan.before
-            || current.revision() != plan.request.expected
-            || plan.before != plan.binding.initial_checkpoint()
-            || plan.request.expected.generation != Generation::new(0)
-            || plan.request.path.parent().is_some()
         {
             return Err(RegistrationError::EditScope);
         }

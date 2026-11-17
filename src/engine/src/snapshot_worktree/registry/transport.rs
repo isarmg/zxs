@@ -1,0 +1,9 @@
+//! The current read basis comes only from the independently completed commit.
+use crate::snapshot_worktree::registry::PublishedWorktree;
+use storage_contract::snapshot_worktree::SnapshotHandle;
+
+impl PublishedWorktree<'_> {
+    pub(in crate::snapshot_worktree) fn published_node(&self) -> Option<SnapshotHandle> {
+        self.publication.map(|record| record.plan.handle())
+    }
+}

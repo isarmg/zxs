@@ -1,7 +1,7 @@
 //! A real FILE batch supplies historical identities for the pinned directory view.
 //! No native decision, physical node preparation or installed working clear is issued.
 use crate::engine::PlanningContext;
-use crate::engine::file_draft::{PreparedWorkingBatch, WorkingBatchResult};
+use crate::engine::file_draft::{PreparedWorkingBatch, WorkingBatchOrigin, WorkingBatchResult};
 use crate::persist::directory_draft_commit::{
     ConstructionDescription, FileOutcome, SelectedOutcome,
 };
@@ -110,14 +110,24 @@ pub(super) fn describe_items(
                 size: version.logical_size,
                 content_hash: version.content_hash,
             };
-            let outcome = match item.result() {
-                WorkingBatchResult::Retained(_) => FileOutcome::Retained {
-                    base: item.base(), material,
-                },
-                WorkingBatchResult::Published(_) => FileOutcome::Published {
-                    base: item.base(), branch: item.branch(),
-                    node: item.node().map_err(DirectoryWorkingError::Batch)?, material,
-                },
+            let outcome = match (item.origin(), item.result()) {
+                (WorkingBatchOrigin::Born(base), WorkingBatchResult::Retained(_)) => {
+                    FileOutcome::Retained { base, material }
+                }
+                (WorkingBatchOrigin::Born(base), WorkingBatchResult::Published(_)) => {
+                    FileOutcome::Published {
+                        base, branch: item.branch(),
+                        node: item.node().map_err(DirectoryWorkingError::Batch)?, material,
+                    }
+                }
+                (WorkingBatchOrigin::First { branch }, WorkingBatchResult::Published(_)) => {
+                    FileOutcome::FirstPublished {
+                        branch, node: item.node().map_err(DirectoryWorkingError::Batch)?, material,
+                    }
+                }
+                (WorkingBatchOrigin::First { .. }, WorkingBatchResult::Retained(_)) => {
+                    return Err(DirectoryWorkingError::Request);
+                }
             };
             Ok(SelectedOutcome { target: item.target().clone(), outcome })
     }).collect()

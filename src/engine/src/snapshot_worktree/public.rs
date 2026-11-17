@@ -1,6 +1,9 @@
 //! Public commands retain the existing independent reservation/completion
 //! publishers. No transport input constructs a host, session or local anchor.
 mod drafts;
+mod discovery;
+mod transport;
+pub use transport::WorktreeContent;
 
 use super::RegistrationError;
 use crate::Engine;
@@ -49,7 +52,15 @@ impl SnapshotWorktreeError {
             }
             RegistrationError::Host | RegistrationError::Mount => ErrorCode::NameCollision,
             RegistrationError::PublicationChanged => ErrorCode::PreparationStale,
-            RegistrationError::EditBody => ErrorCode::ChecksumMismatch,
+            RegistrationError::EditBody
+            | RegistrationError::EditVerification(platform_io::payload::Error::Length { .. }
+                | platform_io::payload::Error::Digest) => ErrorCode::ChecksumMismatch,
+            RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Missing) => {
+                ErrorCode::NotFound
+            }
+            RegistrationError::ReadView(crate::directory_worktree::io::ViewError::IsDirectory) => {
+                ErrorCode::IsDirectory
+            }
             _ => ErrorCode::MetadataUnavailable,
         }
     }

@@ -1,4 +1,5 @@
 //! Public production Engine regression. No fault-injection features are required.
+use name_policy::Name;
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 use storage_engine::{
     BranchName, CommitRequest, Config, DeleteFileRequest, Engine, ErrorCode, FileDeletionTarget,
@@ -29,7 +30,10 @@ fn deletion_joins_frontier_preserves_bytes_freezes_only_its_file_and_undo_surviv
     let root = temp.path().join("system");
     let mut engine = Engine::initialize(
         &root,
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development([(
+            Name::parse("disk").unwrap(),
+            temp.path().join("disk"),
+        )]).unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -388,7 +392,10 @@ fn deleted_same_body_branches_cannot_change_selection_or_default_but_other_files
     let root = temp.path().join("system");
     let mut engine = Engine::initialize(
         &root,
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development([(
+            Name::parse("disk").unwrap(),
+            temp.path().join("disk"),
+        )]).unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -589,7 +596,10 @@ fn named_initialized_file_deletion_and_undo_survive_restart() {
         let root = temp.path().join("system");
         let mut engine = Engine::initialize(
             &root,
-            Config::development([temp.path().join("disk")]).unwrap(),
+            Config::development([(
+                Name::parse("disk").unwrap(),
+                temp.path().join("disk"),
+            )]).unwrap(),
         )
         .unwrap();
         let repository = engine

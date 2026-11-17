@@ -19,8 +19,16 @@ pub(crate) fn routes() -> Router<AppState> {
             get(http_file_draft::content).put(http_file_draft::write),
         )
         .route(
+            "/api/file-manager/disks/{slot}/snapshot-root",
+            post(http_snapshot_worktree::root::register),
+        )
+        .route(
             "/api/repositories/{repository}/snapshot-root-context",
             get(http_snapshot_worktree::context),
+        )
+        .route(
+            "/api/repositories/{repository}/snapshot-head",
+            get(http_snapshot_worktree::discovery::head),
         )
         .route("/api/directory-snapshots", post(http_snapshot_worktree::initialize))
         .route("/api/directory-snapshots/commits", post(http_snapshot_worktree::drafts::commit))
@@ -32,6 +40,15 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/api/directory-worktrees/{worktree}",
             get(http_snapshot_worktree::status),
+        )
+        .route(
+            "/api/directory-worktrees/{worktree}/content",
+            get(http_snapshot_worktree::transport::content)
+                .put(http_snapshot_worktree::transport::edit),
+        )
+        .route(
+            "/api/directory-worktrees/{worktree}/commits",
+            post(http_snapshot_worktree::transport::commit),
         )
         .route(
             "/api/file-manager/directory-snapshot-source",

@@ -1,9 +1,10 @@
-//! Public descriptions for an explicit Born draft selection. Decoding these
+//! Public descriptions for an explicit mixed working selection. Decoding these
 //! values never admits a working source or a native receipt.
 use crate::file_draft::{
     DraftBase, DraftLocation, DraftPayload, WorkingContentExpectation,
     WorkingExpectation, WorkingRevision, WorkingSelection,
 };
+use crate::file_draft::manifest::{ManifestCommitment, SaveGeneration};
 use crate::snapshot_worktree::SnapshotHandle;
 use crate::{CommitState, OperationId, ProtectionAtPublish, Sequence};
 use data_serialization::{Deserialize, Serialize};
@@ -19,26 +20,40 @@ pub struct SelectedDirectoryDraft {
     pub expected: DirectoryDraftExpectation,
 }
 
-/// This first public batch admits Born drafts only. Unborn data must not be
-/// represented by a fabricated base or silently omitted from the selection.
+/// Born keeps its original wire shape; first commits carry their real working
+/// expectation and never a fabricated historical base.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct DirectoryDraftExpectation {
-    pub revision: WorkingRevision,
-    pub base: DraftBase,
-    pub payload: DraftPayload,
+#[serialization(untagged, deny_unknown_fields)]
+pub enum DirectoryDraftExpectation {
+    Born { revision: WorkingRevision, base: DraftBase, payload: DraftPayload },
+    Unborn { revision: WorkingRevision, content: DirectoryUnbornExpectation },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DirectoryUnbornExpectation {
+    Empty {},
+    Saved { generation: SaveGeneration, commitment: ManifestCommitment },
 }
 
 impl SelectedDirectoryDraft {
     pub fn selection(&self) -> WorkingSelection {
+        let (revision, content) = match self.expected {
+            DirectoryDraftExpectation::Born { revision, base, payload } => {
+                (revision, WorkingContentExpectation::Born { base, payload })
+            }
+            DirectoryDraftExpectation::Unborn { revision, content } => {
+                let content = match content {
+                    DirectoryUnbornExpectation::Empty {} => WorkingContentExpectation::UnbornEmpty,
+                    DirectoryUnbornExpectation::Saved { generation, commitment } => {
+                        WorkingContentExpectation::UnbornSaved { generation, commitment }
+                    }
+                };
+                (revision, content)
+            }
+        };
         WorkingSelection {
-            target: self.target.clone(),
-            expected: WorkingExpectation {
-                revision: self.expected.revision,
-                content: WorkingContentExpectation::Born {
-                    base: self.expected.base, payload: self.expected.payload,
-                },
-            },
+            target: self.target.clone(), expected: WorkingExpectation { revision, content },
         }
     }
 }

@@ -1,6 +1,9 @@
 //! Current management authentication encloses the real SYSTEM decision and
 //! held-root consumer. No public handle bypasses the independent receipt index.
 pub(super) mod drafts;
+pub(super) mod discovery;
+pub(super) mod root;
+pub(super) mod transport;
 
 use super::{EngineBackend, error_registry};
 use crate::{ApiError, auth::Identity};

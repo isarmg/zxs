@@ -124,6 +124,21 @@ impl PreparedUnbornFull {
 
     pub(crate) fn path(&self) -> &Path { &self.path }
 
+    pub(crate) fn reader(&self) -> &Arc<HeldUnbornReader> { &self.source }
+
+    pub(crate) fn require_selection(
+        &self, selection: &Arc<SelectedWorkingSources>, index: usize,
+    ) -> Result<()> {
+        let selected = selection.sources().get(index).ok_or_else(changed)?;
+        if !Arc::ptr_eq(&self.selection, selection)
+            || !Arc::ptr_eq(&self.source, selected.unborn_reader()?)
+        {
+            return Err(changed());
+        }
+        self.require_source()
+    }
+
+
     pub(crate) fn require_source(&self) -> Result<()> {
         self.source.require_source()?;
         self.file.check_running()?;

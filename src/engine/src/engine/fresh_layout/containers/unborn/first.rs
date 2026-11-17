@@ -135,3 +135,54 @@ pub(in crate::engine::fresh_layout::containers) fn candidate(
     let reader = Arc::new(observed.open_unborn_working(config.max_file_bytes)?);
     verified(config, previous, next, result, Source::Recovery(reader)).map(Some)
 }
+
+/// The complete batch already owns one canonical accumulated projection and
+/// exact prepared set. Retain each real FULL on its existing owner occurrence;
+/// this does not invoke or manufacture a single-file operation receipt.
+pub(in crate::engine::fresh_layout::containers) fn working_batch(
+    context: &PlanningContext<'_>,
+    source: &crate::engine::file_draft::WorkingBatchHandoff,
+    prepared: &[Prepared],
+) -> Result<std::collections::BTreeMap<FileId, Arc<VerifiedUnbornFirst>>> {
+    source.require_context(context)?;
+    source.require_prepared(prepared)?;
+    let mut first = std::collections::BTreeMap::new();
+    for item in source.items() {
+        match item.origin() {
+            crate::engine::file_draft::WorkingBatchOrigin::Born(_) => {}
+            crate::engine::file_draft::WorkingBatchOrigin::First { .. } => {
+                let file = item.target().file;
+                let full = source.first_material(file).ok_or_else(invalid)?;
+                let record = source.state().file_containers.get(&file).ok_or_else(invalid)?;
+                let proof = Arc::new(VerifiedUnbornFirst {
+                    file, record: record.clone(), source: Source::Live(Arc::clone(full)),
+                });
+                proof.verify()?;
+                first.insert(file, proof);
+            }
+        }
+    }
+    Ok(first)
+}
+
+/// Only the full directory verifier can provide these predecessor readers.
+/// Its proof remains bound to the exact original before/after pair and receipt.
+pub(in crate::engine::fresh_layout::containers) fn directory(
+    previous: &State, next: &State, result: &OperationResult,
+    directory: &crate::snapshot_worktree::drafts::VerifiedDirectoryDraft<'_>,
+) -> Result<std::collections::BTreeMap<FileId, Arc<VerifiedUnbornFirst>>> {
+    directory.require_pair(previous, next, result)
+        .map_err(crate::snapshot_worktree::drafts::DirectoryPublicationError::into_engine)?;
+    let mut first = std::collections::BTreeMap::new();
+    for file in directory.working_files() {
+        if let Some(reader) = directory.first_source(file) {
+            let record = next.file_containers.get(&file).ok_or_else(invalid)?;
+            let proof = Arc::new(VerifiedUnbornFirst {
+                file, record: record.clone(), source: Source::Recovery(Arc::clone(reader)),
+            });
+            proof.verify()?;
+            first.insert(file, proof);
+        }
+    }
+    Ok(first)
+}

@@ -5,7 +5,7 @@
 //! a completed index entry is only the exact independent anchor for reopening.
 mod registry;
 mod public;
-pub use public::SnapshotWorktreeError;
+pub use public::{SnapshotWorktreeError, WorktreeContent};
 mod reopen;
 mod prepare;
 mod initialize;
@@ -99,10 +99,16 @@ pub(crate) enum RegistrationError {
     Manifest(#[source] crate::working_tree::snapshot::SnapshotManifestError),
     #[error("reopening the independently registered worktree ledger")]
     Ledger(#[source] crate::directory_worktree::ledger::LedgerError),
-    #[error("this worktree write requires a pristine instance and one existing root-level file")]
+    #[error("worktree edits require one original root-level file before directory publication")]
     EditScope,
     #[error("worktree write differs from its declared complete content or exceeds its limit")]
     EditBody,
+    #[error("verifying the held complete worktree edit before reservation")]
+    EditVerification(#[source] platform_io::payload::Error),
+    #[error("rewinding the verified held worktree edit")]
+    EditRead(#[source] std::io::Error),
+    #[error("opening the admitted worktree read view")]
+    ReadView(#[source] crate::directory_worktree::io::ViewError),
     #[error("preparing the independently reserved worktree edit")]
     EditPreparation(#[source] crate::disk::NewEntryCopyError),
     #[error("worktree edit name exceeds its actual held target budget")]

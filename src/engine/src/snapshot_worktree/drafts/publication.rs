@@ -169,7 +169,8 @@ impl DirectoryDecisionInput {
         let index = context.snapshot_receipts()
             .map_err(|source| DirectoryPublicationError::ReceiptIndex(source.into()))?;
         let replay = super::reconstruction::replay(
-            context.config, context.state, &index, &result, self.maximum,
+            context.config, context.state, &index, &result, self.maximum, &files.first_reads()
+                .map_err(DirectoryPublicationError::Engine)?,
         )?;
         replay.require_file_projection(context.state, files.state())?;
         let next = replay.into_state();
@@ -215,10 +216,10 @@ impl PreparedDirectoryProposal {
         material: &PreparedDirectoryMaterial,
     ) -> Result<super::original::VerifiedDirectoryDraft<'a>> {
         self.require_context(context, files, material)?;
-        Ok(super::original::VerifiedDirectoryDraft::from_live(
+        super::original::VerifiedDirectoryDraft::from_live(
             context.state, &self.next, &self.result,
-            &self.envelope,
-        ))
+            &self.envelope, files,
+        )
     }
 
     pub(crate) fn require_candidate(

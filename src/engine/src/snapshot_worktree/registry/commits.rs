@@ -191,16 +191,25 @@ impl<'a> ReceiptIndex<'a> {
     ) -> Result<(&crate::persist::snapshot_worktree::EditReservation,
         &crate::persist::snapshot_worktree::EditCompletion)>
     {
-        self.worktree(target)?;
-        let mut entries = self.edits.values().filter(|entry| entry.plan.request.target == target);
-        let entry = entries.next().ok_or(RegistrationError::CommitScope)?;
+        let revision = self.worktree(target)?.revision();
+        // Select by the current independently decided revision, never operation
+        // ordering, filename, hash or the first historical edit for this file.
+        let mut entries = self.edits.values().filter_map(|entry| {
+            if entry.plan.request.target != target {
+                return None;
+            }
+            match &entry.publication {
+                Publication::Complete(completed) if completed.revision == revision => {
+                    Some((&entry.plan, completed))
+                }
+                Publication::Complete(_) | Publication::Reserved => None,
+            }
+        });
+        let current = entries.next().ok_or(RegistrationError::CommitScope)?;
         if entries.next().is_some() {
             return Err(RegistrationError::CommitScope);
         }
-        let Publication::Complete(completed) = &entry.publication else {
-            return Err(RegistrationError::CommitScope);
-        };
-        Ok((&entry.plan, completed))
+        Ok(current)
     }
 
     pub(super) fn committed_node(&self, reserve: OperationId, handle: SnapshotHandle)
@@ -234,7 +243,7 @@ impl<'a> ReceiptIndex<'a> {
             || plan.request.expected != completed.revision
             || plan.request.expected != worktree.revision()
             || self.branch_heads.get(&(plan.source.repository_id, plan.source.branch_id))
-                != Some(&plan.source.node_id)
+                != Some(&plan.source)
             || self.pending_branches.contains_key(
                 &(plan.source.repository_id, plan.source.branch_id),
             )
@@ -326,7 +335,7 @@ impl<'a> ReceiptIndex<'a> {
             return Err(RegistrationError::Completion(operation));
         }
         self.branch_heads.insert(
-            (entry.plan.source.repository_id, entry.plan.source.branch_id), entry.plan.node,
+            (entry.plan.source.repository_id, entry.plan.source.branch_id), entry.plan.handle(),
         );
         entry.node = Publication::Complete(completed);
         Ok(())

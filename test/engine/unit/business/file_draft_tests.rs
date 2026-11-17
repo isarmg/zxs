@@ -1045,9 +1045,8 @@ fn born_working_batch_uses_one_prior_and_exact_sources_without_independent_clear
     }
 
     let replay = batch::replay(
-        &before, batch.request(), Sequence::new(batch.state().sequence), batch.trace(),
-        engine.planning_context().config.max_entries,
-        engine.planning_context().config.max_file_bytes,
+        &before, engine.planning_context().config, batch.request(),
+        Sequence::new(batch.state().sequence), batch.trace(), &batch.first_reads().unwrap(),
     ).unwrap();
     assert_eq!(replay.state(), batch.state());
     let evidence = batch.prepared().iter().map(|item| crate::journal::VersionEvidence {
@@ -1064,24 +1063,21 @@ fn born_working_batch_uses_one_prior_and_exact_sources_without_independent_clear
     let mut wrong = batch.trace().clone();
     wrong.contents[2] = wrong.contents[0].clone();
     assert!(batch::replay(
-        &before, batch.request(), Sequence::new(batch.state().sequence), &wrong,
-        engine.planning_context().config.max_entries,
-        engine.planning_context().config.max_file_bytes,
+        &before, engine.planning_context().config, batch.request(),
+        Sequence::new(batch.state().sequence), &wrong, &batch.first_reads().unwrap(),
     ).is_err());
     let mut wrong = batch.trace().clone();
     wrong.contents[1] = wrong.contents[0].clone();
     assert!(batch::replay(
-        &before, batch.request(), Sequence::new(batch.state().sequence), &wrong,
-        engine.planning_context().config.max_entries,
-        engine.planning_context().config.max_file_bytes,
+        &before, engine.planning_context().config, batch.request(),
+        Sequence::new(batch.state().sequence), &wrong, &batch.first_reads().unwrap(),
     ).is_err());
     let mut wrong = batch.trace().clone();
     let earlier_ids = wrong.contents[0].as_ref().unwrap().allocations.clone();
     wrong.contents[2].as_mut().unwrap().allocations = earlier_ids;
     assert!(batch::replay(
-        &before, batch.request(), Sequence::new(batch.state().sequence), &wrong,
-        engine.planning_context().config.max_entries,
-        engine.planning_context().config.max_file_bytes,
+        &before, engine.planning_context().config, batch.request(),
+        Sequence::new(batch.state().sequence), &wrong, &batch.first_reads().unwrap(),
     ).is_err());
     // A fresh picker on identical values is not the same retained selection.
     let other = Arc::new(engine.select_working_sources(&requests[..3]).unwrap());

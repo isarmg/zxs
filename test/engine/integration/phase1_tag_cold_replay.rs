@@ -1,5 +1,6 @@
 //! Phase-one native saves and permanent tag receipts across cold reopens.
 //! Every mutation and content read uses the production Engine on temporary roots.
+use name_policy::Name;
 use std::{collections::BTreeSet, io::Read};
 use storage_engine::*;
 use storage_engine as engine_api;
@@ -32,8 +33,10 @@ impl Labels {
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let config =
-            Config::independent_roots(Mode::Development, [root.path().join("primary")]).unwrap();
+        let config = Config::independent_roots(
+            Mode::Development,
+            [(Name::parse("primary").unwrap(), root.path().join("primary"))],
+        ).unwrap();
         let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
         let repository = engine.create_disk_root("D01", "admin", op()).unwrap();
         Self {

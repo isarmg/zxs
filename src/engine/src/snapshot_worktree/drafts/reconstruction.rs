@@ -131,6 +131,7 @@ pub(in crate::snapshot_worktree) fn reconstruct_indexed_manifest(
 pub(super) fn replay(
     config: &ValidatedConfig, previous: &State, index: &ReceiptIndex<'_>,
     result: &OperationResult, maximum: usize,
+    first_reads: &[Option<crate::container_storage::ReadWorkingDigest<'_>>],
 ) -> Result<ReconstructedDirectory> {
     index.require_source(previous)
         .map_err(|error| Failure::Source(DirectoryDraftError::Registration(error)))?;
@@ -148,8 +149,7 @@ pub(super) fn replay(
     }
     let request = envelope.batch_request();
     let files = batch::replay(
-        previous, &request, Sequence::new(result.sequence), &envelope.trace(),
-        config.max_entries, config.max_file_bytes,
+        previous, config, &request, Sequence::new(result.sequence), &envelope.trace(), first_reads,
     ).map_err(Failure::Engine)?;
     let described = super::batch::describe_items(files.items()).map_err(Failure::Working)?;
     if described.as_slice() != envelope.directory.files()

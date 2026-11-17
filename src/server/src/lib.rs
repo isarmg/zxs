@@ -246,6 +246,7 @@ pub use backend_workspace::{
 };
 mod http_workspace;
 mod http_snapshot_worktree;
+mod http_complete_upload;
 pub use backend_read::{
     DirectoryReadSnapshot, DirectorySelection, DirectorySnapshot, DownloadContext, ReadContent,
     ReadDirectory, ReadTree, ResolveEntry, ResolvedEntry, TreeSnapshot, VersionSnapshot,

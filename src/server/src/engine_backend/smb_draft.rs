@@ -119,7 +119,8 @@ pub(super) fn content(
     let working = engine.file_working_state(&file.target).map_err(error)?;
     if let Some((_, payload)) = working.draft() {
         let payload = *payload;
-        return crate::engine_backend::file_draft::verified_content(payload, deadline, || {
+        return crate::engine_backend::file_draft::verified_content(
+            payload.logical_size(), payload.content_hash(), deadline, || {
             let source = engine.open_file_draft(&file.target).map_err(error)?;
             drop(engine);
             Ok(source)

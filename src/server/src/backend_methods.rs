@@ -578,11 +578,34 @@ macro_rules! methods {
                     let _ = (identity, request);
                     Err($crate::ApiError::unsupported())
                 }
+                fn register_snapshot_root(
+                    &self,
+                    identity: &$crate::Identity,
+                    slot: name_policy::SlotId,
+                    request: storage_contract::snapshot_worktree::root::RegisterSnapshotRoot,
+                ) -> Result<
+                    storage_contract::snapshot_worktree::root::RegisteredSnapshotRoot,
+                    $crate::ApiError,
+                > {
+                    let _ = (identity, slot, request);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn snapshot_root_context(
                     &self,
                     identity: &$crate::Identity,
                     repository: storage_contract::RepositoryId,
                 ) -> Result<storage_contract::snapshot_worktree::SnapshotRootContext, $crate::ApiError> {
+                    let _ = (identity, repository);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn directory_snapshot_head(
+                    &self,
+                    identity: &$crate::Identity,
+                    repository: storage_contract::RepositoryId,
+                ) -> Result<
+                    storage_contract::snapshot_worktree::discovery::DirectorySnapshotHead,
+                    $crate::ApiError,
+                > {
                     let _ = (identity, repository);
                     Err($crate::ApiError::unsupported())
                 }
@@ -629,6 +652,43 @@ macro_rules! methods {
                     target: storage_contract::snapshot_worktree::WorktreeHandle,
                 ) -> Result<storage_contract::snapshot_worktree::WorktreeStatus, $crate::ApiError> {
                     let _ = (identity, target);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn authorize_directory_worktree_edit(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: &storage_contract::snapshot_worktree::EditWorktree,
+                ) -> Result<(), $crate::ApiError> {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn edit_directory_worktree(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: storage_contract::snapshot_worktree::EditWorktree,
+                    source: &$crate::UploadSource,
+                ) -> Result<
+                    storage_contract::snapshot_worktree::WorktreeRevision, $crate::ApiError,
+                > {
+                    let _ = (identity, request, source);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn commit_directory_worktree(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: storage_contract::snapshot_worktree::CommitWorktree,
+                ) -> Result<storage_contract::snapshot_worktree::SnapshotHandle, $crate::ApiError> {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn directory_worktree_content(
+                    &self,
+                    identity: &$crate::Identity,
+                    target: storage_contract::snapshot_worktree::WorktreeHandle,
+                    path: name_policy::LookupPath,
+                    deadline: std::time::Instant,
+                ) -> Result<$crate::Content, $crate::ApiError> {
+                    let _ = (identity, target, path, deadline);
                     Err($crate::ApiError::unsupported())
                 }
                 fn file_container_tags(

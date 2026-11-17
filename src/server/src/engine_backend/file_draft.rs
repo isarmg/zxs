@@ -80,7 +80,7 @@ pub(super) fn content(
         http::StatusCode::CONFLICT, storage_contract::ErrorCode::FileBranchConflict,
         "selected file has no shared draft body",
     ))?.1;
-    verified_content(payload, request.deadline, || {
+    verified_content(payload.logical_size(), payload.content_hash(), request.deadline, || {
         let file = engine.open_file_draft(&request.target).map_err(error)?;
         drop(engine);
         Ok(file)
@@ -88,12 +88,13 @@ pub(super) fn content(
 }
 
 pub(super) fn verified_content(
-    payload: storage_contract::file_draft::DraftPayload,
+    size: u64,
+    content_hash: storage_contract::ContentHash,
     deadline: std::time::Instant,
     open: impl FnOnce() -> Result<storage_engine::ReadFile, ApiError>,
 ) -> Result<Content, ApiError> {
     const CHUNK: u32 = 65_536;
-    let count = usize::try_from(payload.logical_size().div_ceil(u64::from(CHUNK)))
+    let count = usize::try_from(size.div_ceil(u64::from(CHUNK)))
         .map_err(|source| {
             ApiError::limit("draft checksum proof is too large").with_source(source)
         })?;
@@ -111,7 +112,7 @@ pub(super) fn verified_content(
     file.seek(SeekFrom::Start(0)).map_err(ApiError::io)?;
     let mut chunks = Vec::with_capacity(count);
     let mut buffer = vec![0u8; CHUNK as usize];
-    let mut remaining = payload.logical_size();
+    let mut remaining = size;
     let mut digest = blake3::Hasher::new();
     while remaining > 0 {
         if std::time::Instant::now() >= deadline {
@@ -125,7 +126,7 @@ pub(super) fn verified_content(
         remaining -= length as u64;
     }
     if file.read(&mut buffer[..1]).map_err(ApiError::io)? != 0
-        || storage_contract::ContentHash::from_digest(digest.finalize()) != payload.content_hash()
+        || storage_contract::ContentHash::from_digest(digest.finalize()) != content_hash
     {
         return Err(ApiError::new(http::StatusCode::INTERNAL_SERVER_ERROR,
             storage_contract::ErrorCode::ChecksumMismatch, "draft body changed during read"));
@@ -135,9 +136,9 @@ pub(super) fn verified_content(
     Ok(Content {
         fallback_files: Vec::new(),
         checksum_manifest: Some(storage_contract::ChecksumManifest {
-            chunk_bytes: CHUNK, logical_size: payload.logical_size(), chunks,
+            chunk_bytes: CHUNK, logical_size: size, chunks,
         }),
-        file: file.into(), size: payload.logical_size(), hash: payload.content_hash().to_string(),
+        file: file.into(), size: size, hash: content_hash.to_string(),
         lease: Box::new(proof_memory), download_name: None,
     })
 }

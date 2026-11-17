@@ -10,10 +10,10 @@ use crate::snapshot_worktree::{RegistrationError, Result, publication, with_work
 use crate::working_tree::records::local_entity;
 use crate::working_tree::snapshot::{HeldSnapshotNode, SnapshotEntryContent, SnapshotFile};
 use crate::{Engine, State, ValidatedConfig};
-use std::{io::Cursor, sync::Arc};
+use std::{io::{Seek, SeekFrom}, sync::Arc};
 use storage_contract::snapshot_worktree::{EditWorktree, WorktreeRevision};
 use storage_contract::working_tree::MaterialCommitment;
-use storage_contract::{Generation, OperationId, Principal, VersionId};
+use storage_contract::{OperationId, Principal, VersionId};
 
 /// Only the same successful SYSTEM reserve can construct this writer. It owns
 /// its actual environment and never reconstructs continuation from local bytes.
@@ -30,15 +30,19 @@ struct ReservedEdit {
 pub(crate) fn edit_worktree(
     engine: &mut Engine,
     request: &EditWorktree,
-    bytes: &[u8],
+    bytes: &mut crate::ReadFile,
     principal: &Principal,
 ) -> Result<WorktreeRevision> {
-    if request.size != bytes.len() as u64
-        || request.content_hash != storage_contract::ContentHash::from_digest(blake3::hash(bytes))
-        || request.size > engine.config().max_file_bytes
-    {
+    if request.size > engine.config().max_file_bytes {
         return Err(RegistrationError::EditBody);
     }
+    // Verify the held source before any reservation, then copy from that same
+    // inode. The physical no-replace publisher independently verifies its copy.
+    bytes.verify_full(platform_io::payload::Expectation {
+        bytes: request.size,
+        blake3: Some(request.content_hash.digest()),
+    }).map_err(RegistrationError::EditVerification)?;
+    bytes.seek(SeekFrom::Start(0)).map_err(RegistrationError::EditRead)?;
     let receipts = engine.snapshot_receipt_source()?;
     let index = receipts.index()?;
     if let Some(revision) = index.retry_edit(request, principal)? {
@@ -50,15 +54,10 @@ pub(crate) fn edit_worktree(
     {
         return Err(RegistrationError::InitialOnly);
     }
+    index.require_edit_scope(request)?;
     let registered = index.worktree(request.target)?;
     let source = index.reopen_node(engine, registered.source().handle())?;
     let session = registered.reopen(&source)?;
-    if session.worktree().revision() != request.expected
-        || request.expected.generation != Generation::new(0)
-        || request.path.parent().is_some()
-    {
-        return Err(RegistrationError::EditScope);
-    }
     let entry = source.manifest().entries().iter()
         .find(|entry| entry.path == request.path).ok_or(RegistrationError::Source)?;
     let SnapshotEntryContent::File { material: original, source: original_source } = entry.content
@@ -111,7 +110,7 @@ impl ReservedEdit {
         engine: &mut Engine,
         source: &HeldSnapshotNode,
         mut ledger: HeldWorktreeLedger<'_>,
-        bytes: &[u8],
+        bytes: &mut crate::ReadFile,
     ) -> Result<WorktreeRevision> {
         self.require_engine(engine)?;
         if source.manifest().reference() != self.plan.binding.source()
@@ -129,7 +128,7 @@ impl ReservedEdit {
         };
         let leaf = EditLeaf::for_version(self.plan.version, &request.path);
         let copied = instance.directory().copy_new_entry_verified_synced(
-            leaf.entry(), &mut Cursor::new(bytes), platform_io::payload::Expectation {
+            leaf.entry(), bytes, platform_io::payload::Expectation {
                 bytes: material.size, blake3: Some(material.content_hash.digest()),
             },
         ).map_err(RegistrationError::EditPreparation)?;

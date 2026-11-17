@@ -348,3 +348,142 @@ async fn authenticated_directory_draft_commit_is_scoped_selected_and_cold_idempo
     assert_eq!(working(&fixture, &two).await, unselected);
     assert_eq!(draft(&fixture, &two).await, b"unselected draft must survive");
 }
+
+fn native_file(
+    engine: &mut Engine, repository: storage_contract::RepositoryId,
+    path: &str, bytes: Option<&[u8]>,
+) -> storage_contract::file_draft::DraftLocation {
+    use storage_contract::file_draft::{BirthRequest, DraftLocation};
+    let branch = engine.state().repositories[&repository.to_string()].main_branch_id.clone();
+    let request = BirthRequest {
+        repository, path: name_policy::PortablePath::parse(path).unwrap(),
+        expected_namespace_head: engine.state().branches[&branch].head_commit_id.parse().unwrap(),
+    };
+    let operation = OperationId::generate().unwrap();
+    let principal = "admin".parse().unwrap();
+    engine.create_unborn_file(&request, &principal, operation).unwrap();
+    let (file, record) = engine.state().file_containers.iter()
+        .find(|(_, record)| record.created_by == operation).unwrap();
+    let target = DraftLocation {
+        repository, path: request.path, entry: record.namespace.entry, file: *file,
+    };
+    if let Some(bytes) = bytes {
+        let mut handle = engine.open_native_working(&target, &principal, true).unwrap();
+        assert_eq!(engine.write_native_working(&mut handle, &principal, 0, bytes).unwrap(),
+            bytes.len());
+        engine.flush_native_working(&mut handle, &principal).unwrap().unwrap();
+    }
+    assert!(engine.unborn_working_state(&target).is_ok());
+    assert!(engine.state().versions.values().all(|version| {
+        version.file_id != target.file.to_string()
+    }));
+    target
+}
+
+#[tokio::test]
+async fn authenticated_mixed_directory_commit_publishes_once_and_keeps_unselected_drafts() {
+    use storage_contract::snapshot_worktree::InitializeSnapshot;
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let config = Config::independent_roots(Mode::Development, [
+        (name_policy::Name::parse("Mixed primary").unwrap(), root.path().join("primary")),
+    ]).unwrap();
+    let slot = config.disks[0].slot_id.clone();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let repo = engine.create_disk_root(&slot, "admin", OperationId::generate().unwrap()).unwrap();
+    let repository = repo.repository_id.parse().unwrap();
+    let workspace = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
+    for (path, bytes) in [("existing.txt", b"existing original".as_slice()),
+        ("unselected.txt", b"unselected original".as_slice())]
+    {
+        engine.stage_bytes(&workspace.workspace_id, path, bytes).unwrap();
+    }
+    engine.commit_workspace(storage_engine::CommitRequest {
+        workspace_id: workspace.workspace_id, operation_id: OperationId::generate().unwrap(),
+        principal: "admin".into(), expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token, message: "actual initial versions".into(),
+        request_digest: None,
+    }).unwrap();
+    let context = engine.snapshot_root_context(repository).unwrap();
+    let source = engine.initialize_directory_snapshot(&InitializeSnapshot {
+        host: context.host, source: context.source, operation_id: OperationId::generate().unwrap(),
+    }, &"admin".parse().unwrap()).unwrap();
+    let saved = native_file(&mut engine, repository, "new-saved.txt", Some(b"new selected body"));
+    let empty = native_file(&mut engine, repository, "new-empty.txt", None);
+    let untouched = native_file(&mut engine, repository, "unselected-new.txt",
+        Some(b"new unselected draft"));
+    let versions_before = engine.state().versions.len();
+    assert_eq!(versions_before, 2);
+    let password = authentication::random_token().unwrap();
+    let auth = AuthStore::initialize(&system, "admin", &password).unwrap();
+    let app = router(engine, auth, &system);
+    let login = request(&app, None, "POST", "/api/auth/login", Some(json!({
+        "username":"admin", "password":password,
+    }))).await;
+    let fixture = Fixture { root, app, token: login["token"].as_str().unwrap().into() };
+    let (existing, _) = target(&fixture, &slot, "existing.txt").await;
+    let (unselected, _) = target(&fixture, &slot, "unselected.txt").await;
+    let born = save_draft(&fixture, &existing, b"existing selected body").await;
+    save_draft(&fixture, &unselected, b"unselected shared draft").await;
+    let unborn_status = |target: &storage_contract::file_draft::DraftLocation| {
+        let target = json!(target);
+        format!("/api/file-manager/files/{}/unborn-working?{}",
+            target["file"].as_str().unwrap(), query(&target))
+    };
+    let saved_before = fixture.json("GET", &unborn_status(&saved), None).await;
+    let empty_before = fixture.json("GET", &unborn_status(&empty), None).await;
+    let untouched_before = fixture.json("GET", &unborn_status(&untouched), None).await;
+    let unselected_before = working(&fixture, &unselected).await;
+    let old_history = fixture.history(existing["file"].as_str().unwrap()).await;
+    let unselected_history = fixture.history(unselected["file"].as_str().unwrap()).await;
+    let operation = OperationId::generate().unwrap();
+    // A first append before and after the Born item exercises one accumulated
+    // namespace, not a loop of independently committed singleton requests.
+    let command = json!({
+        "source":source, "operation_id":operation, "message":"one real mixed selection",
+        "selected":[
+            {"target":saved, "expected":saved_before["expected"]},
+            born,
+            {"target":empty, "expected":empty_before["expected"]},
+        ],
+    });
+    let receipt = fixture.json("POST", ROUTE, Some(command.clone())).await;
+    let public: DirectoryDraftReceipt = json_codec::from_value(receipt.clone()).unwrap();
+    let DirectoryDraftOutcome::Changed { snapshot } = public.result else {
+        panic!("the mixed selection must publish a directory node");
+    };
+    assert_eq!(public.operation_id, operation);
+    assert_eq!(snapshot.publication, operation);
+    assert_eq!(snapshot.repository_id, source.repository_id);
+    assert_eq!(snapshot.branch_id, source.branch_id);
+    assert_ne!(snapshot.node_id, source.node_id);
+    no_native_fields(&receipt);
+    let history = fixture.history(existing["file"].as_str().unwrap()).await;
+    assert_eq!(history["nodes"].as_array().unwrap().len(),
+        old_history["nodes"].as_array().unwrap().len() + 1);
+    for (target, bytes) in [(&saved, b"new selected body".as_slice()), (&empty, b"".as_slice())] {
+        let entry = fixture.entry(&slot, target.path.as_str()).await;
+        assert_eq!(entry["file_id"], target.file.to_string());
+        assert_eq!(entry["entry_id"], target.entry.to_string());
+        assert_eq!(fixture.body(entry["version_id"].as_str().unwrap()).await, bytes);
+        let history = fixture.history(&target.file.to_string()).await;
+        assert_eq!(history["nodes"].as_array().unwrap().len(), 1);
+    }
+    let existing_entry = fixture.entry(&slot, "existing.txt").await;
+    assert_eq!(fixture.body(existing_entry["version_id"].as_str().unwrap()).await,
+        b"existing selected body");
+    assert_eq!(working(&fixture, &unselected).await, unselected_before);
+    assert_eq!(draft(&fixture, &unselected).await, b"unselected shared draft");
+    assert_eq!(fixture.json("GET", &unborn_status(&untouched), None).await, untouched_before);
+    assert_same_file_history(&fixture.history(unselected["file"].as_str().unwrap()).await,
+        &unselected_history);
+    let fixture = fixture.reopen().await;
+    let material = inventory(fixture.root.path());
+    assert_eq!(fixture.json("POST", ROUTE, Some(command.clone())).await, receipt);
+    let receipt_route = lookup(&json!(source), &json!(operation));
+    assert_eq!(fixture.json("GET", &receipt_route, None).await, receipt);
+    assert_eq!(inventory(fixture.root.path()), material);
+    assert_eq!(fixture.history(existing["file"].as_str().unwrap()).await, history);
+    assert_eq!(fixture.json("GET", &unborn_status(&untouched), None).await, untouched_before);
+    assert_eq!(working(&fixture, &unselected).await, unselected_before);
+}

@@ -1,5 +1,86 @@
 {
   "groups": {
+    "worktree-http-transport": {
+      "reason": "Test real router transport of repeated complete worktree file edits, selected commit and cold retry. This group does not exercise external Samba.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "worktree_transport::"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "snapshot_worktree::public::transport::tests::complete_resaves_keep_original_occurrence_and_move_only_exact_current_revision"
+          ],
+          "max_tests": 1
+        }
+      ]
+    },
+    "directory-root-mixed-http": {
+      "reason": "Open an empty ordinary directory root and submit selected existing and new file drafts together through the authenticated service. This selection does not exercise a real browser or external SMB.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "snapshot_worktree::discovery::tests::",
+            "snapshot_worktree::draft_commit::tests::"
+          ],
+          "max_tests": 5
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "snapshot_worktree::public::discovery::tests::"
+          ],
+          "exact": [
+            "business::file_draft::unborn::first::tests::real_first_construction_accumulates_without_receipts_and_rejects_reused_allocations"
+          ],
+          "max_tests": 5
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "snapshot_root::",
+            "snapshot_discovery::"
+          ],
+          "exact": [
+            "directory_drafts::authenticated_mixed_directory_commit_publishes_once_and_keeps_unselected_drafts"
+          ],
+          "max_tests": 6,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "fresh-manual-file-normal-http": {
       "reason": "Real empty-root default Manual save followed by authenticated first/second FILE commits, exact V1 branch selection, first Manual write and explicit commit on that inherited branch, real body reads and unchanged original V2. No preview, synthetic version, cold-fault matrix or Samba claim.",
       "python_tests": [],
@@ -5632,6 +5713,144 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/snapshot_worktree/public/transport.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/transport.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/snapshot_worktree/transport.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/server/src/http_complete_upload.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/server/src/http_snapshot_worktree/transport.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/complete_resaves.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/worktree_transport.rs",
+      "groups": [
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree/discovery.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree/draft_commit.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree/root.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/batch.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/public/discovery.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/discovery.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/snapshot_worktree/discovery.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/snapshot_worktree/root.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "src/server/src/http_snapshot_worktree/discovery.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "src/server/src/http_snapshot_worktree/root.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "test/contract/unit/snapshot_discovery.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/unborn_first_construction.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/head_discovery.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/directory_drafts.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/snapshot_discovery.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/snapshot_root.rs",
+      "groups": [
+        "directory-root-mixed-http"
+      ]
+    },
     {
       "path": "test/server/integration/http_engine.rs",
       "groups": [

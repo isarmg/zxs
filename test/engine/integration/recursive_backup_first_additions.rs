@@ -23,6 +23,8 @@ use storage_engine::{
 const PATH: &str = "docs/report";
 const FIRST: &[u8] = b"first body before a backup exists";
 const SECOND: &[u8] = b"second body after the first backup is published";
+const THIRD: &[u8] = b"third body after both backup additions are published";
+const BODIES: [&[u8]; 3] = [FIRST, SECOND, THIRD];
 const TAG: &str = "first-backup-history";
 const BRANCH: &str = "backup version chain";
 
@@ -179,7 +181,7 @@ fn body_path(config: &Config, version: &FileVersion, index: usize) -> PathBuf {
 
 fn assert_copies(engine: &Engine, versions: &[FileVersion], copies: usize) {
     assert_eq!(engine.config().disks.len(), copies);
-    for version in versions {
+    for (version_index, version) in versions.iter().enumerate() {
         let placement = &engine.state().placements[&version.version_id];
         assert_eq!(placement.primary_slot_id, "P01");
         assert_eq!(placement.target_copies, copies as u32);
@@ -187,6 +189,7 @@ fn assert_copies(engine: &Engine, versions: &[FileVersion], copies: usize) {
             placement.route_slot_ids.iter().map(String::as_str).collect::<Vec<_>>(),
             ["P01", "B01", "C01"][..copies]
         );
+        let mut body_entities = BTreeSet::new();
         for (index, disk) in engine.config().disks.iter().enumerate() {
             let id = disk.disk_id.parse::<storage_contract::DiskId>().unwrap();
             let file = version.file_id.parse::<storage_contract::FileId>().unwrap();
@@ -198,12 +201,13 @@ fn assert_copies(engine: &Engine, versions: &[FileVersion], copies: usize) {
             let actual = fs::metadata(container(engine.config(), index)).unwrap();
             assert_eq!((replica.entity.device(), replica.entity.inode()),
                 (actual.dev(), actual.ino()));
-            let expected = if version.version_id == versions[0].version_id {
-                FIRST
-            } else {
-                SECOND
-            };
-            assert_eq!(fs::read(body_path(engine.config(), version, index)).unwrap(), expected);
+            let body = body_path(engine.config(), version, index);
+            let actual = fs::metadata(&body).unwrap();
+            assert!(
+                body_entities.insert((actual.dev(), actual.ino())),
+                "each backup must own a distinct BODY inode"
+            );
+            assert_eq!(fs::read(body).unwrap(), BODIES[version_index]);
             assert!(container(engine.config(), index).join(".zxs-file.sqlite").is_file());
         }
     }
@@ -234,7 +238,10 @@ fn assert_history_state(
     assert_eq!(branch.name, BRANCH);
     assert_eq!(branch.state, BranchState::Active);
     assert!(!branch.pending_file_versions.contains_key(file));
-    assert_eq!(engine.file_branch_head(branch_id).unwrap(), versions[1].version_id);
+    assert_eq!(
+        engine.file_branch_head(branch_id).unwrap(),
+        versions.last().unwrap().version_id
+    );
     let history = engine.file_history(&versions[0].file_id).unwrap();
     assert_eq!(
         history
@@ -253,12 +260,14 @@ fn assert_history_state(
         snapshot.tags.iter().map(|tag| tag.as_str()).collect::<Vec<_>>(),
         [TAG]
     );
-    assert_eq!(
-        engine
-            .file_node_parents(&versions[1].file_id, &versions[1].version_id)
-            .unwrap(),
-        [versions[0].version_id.clone()]
-    );
+    for pair in versions.windows(2) {
+        assert_eq!(
+            engine
+                .file_node_parents(&pair[1].file_id, &pair[1].version_id)
+                .unwrap(),
+            [pair[0].version_id.clone()]
+        );
+    }
 }
 
 fn assert_engine_reads_only_surviving_tier(
@@ -292,7 +301,7 @@ fn assert_engine_reads_only_surviving_tier(
         assert_eq!((actual.dev(), actual.ino()), (expected.dev(), expected.ino()));
         let mut bytes = Vec::new();
         opened.file.read_to_end(&mut bytes).unwrap();
-        assert_eq!(bytes, if index == 0 { FIRST } else { SECOND });
+        assert_eq!(bytes, BODIES[index]);
     }
     for (disk, before) in engine.config().disks.iter().zip(before) {
         assert_eq!(
@@ -323,7 +332,7 @@ fn assert_registered_history_reads(
     let state = storage_engine::canonical_json(engine.state()).unwrap();
     for (index, version) in versions.iter().enumerate() {
         let expected = fs::metadata(body_path(engine.config(), version, target)).unwrap();
-        let bytes = if index == 0 { FIRST } else { SECOND };
+        let bytes = BODIES[index];
         let mut full = engine.open_content(&version.version_id).unwrap();
         let actual = full.file.metadata().unwrap();
         assert_eq!((actual.dev(), actual.ino()), (expected.dev(), expected.ino()));
@@ -538,7 +547,7 @@ fn inspect_offline_tier(
     };
     let local =
         inspect_object_database_material(fs::File::open(&parent).unwrap(), parent, &scope).unwrap();
-    for version in versions {
+    for (index, version) in versions.iter().enumerate() {
         let row = local
             .records()
             .iter()
@@ -549,10 +558,10 @@ fn inspect_offline_tier(
             json_codec::from_value::<FileVersion>(body["version"].clone()).unwrap(),
             *version
         );
-        if version.version_id == versions[1].version_id {
+        if index > 0 {
             assert_eq!(
                 body["parent_node_ids"],
-                json_codec::json!([versions[0].version_id])
+                json_codec::json!([versions[index - 1].version_id])
             );
         }
     }
@@ -575,7 +584,10 @@ fn inspect_offline_tier(
     assert_eq!(body["history_tree_id"], json_codec::json!(versions[0].history_tree_id));
     assert_eq!(body["name"], json_codec::json!(BRANCH));
     assert_eq!(body["state"], json_codec::json!("active"));
-    assert_eq!(body["head_node_id"], json_codec::json!(versions[1].version_id));
+    assert_eq!(
+        body["head_node_id"],
+        json_codec::json!(versions.last().unwrap().version_id)
+    );
     assert_eq!(body["pending_version_id"], json_codec::Value::Null);
     assert_eq!(files(&disk.root), before);
     for (original, saved) in parked.into_iter().rev() {
@@ -679,7 +691,7 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
     let second = save(&mut engine, &repository, SECOND);
     assert_eq!(first.file_id, second.file_id);
     assert_ne!(first.version_id, second.version_id);
-    let versions = [
+    let mut versions = vec![
         first_version,
         engine.state().versions[&second.version_id].clone(),
     ];
@@ -711,6 +723,22 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
     engine = inspect_offline_tier(engine, &system, &versions, &branch_id, 2);
     assert_cold_state(&engine, &repository, &versions, &branch_id);
     assert_copies(&engine, &versions, 3);
+
+    // A three-tier backfill alone does not prove later ordinary saves follow
+    // the activated Add chain or preserve every retained independent BODY.
+    let third = save(&mut engine, &repository, THIRD);
+    assert_eq!(third.file_id, first.file_id);
+    assert!(versions.iter().all(|version| version.version_id != third.version_id));
+    versions.push(engine.state().versions[&third.version_id].clone());
+    assert_history_state(&engine, &repository, &versions, &branch_id);
+    assert_copies(&engine, &versions, 3);
+    drop(engine);
+    engine = Engine::open(&system).unwrap();
+    assert_cold_state(&engine, &repository, &versions, &branch_id);
+    assert_copies(&engine, &versions, 3);
+    assert_engine_reads_only_surviving_tier(&engine, &versions, temp.path(), 2);
+    engine = inspect_offline_tier(engine, &system, &versions, &branch_id, 1);
+    engine = inspect_offline_tier(engine, &system, &versions, &branch_id, 2);
     assert_primary_offline_authenticated_history(
         engine, &system, temp.path(), &repository, &versions, &branch_id,
     );

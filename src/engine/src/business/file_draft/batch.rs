@@ -5,11 +5,14 @@ use crate::business::file_draft::{
 };
 use crate::engine::file_draft::SelectedWorkingSources;
 use crate::engine::{PlanningContext, Prepared, ReadSource};
-use crate::{Error, FileVersion, Result, State};
+use crate::{Error, FileVersion, Result, State, ValidatedConfig};
+use crate::container_storage::{PreparedUnbornFull, ReadWorkingDigest};
+use crate::business::file_draft::unborn::first::{FirstContentConstruction, FirstCommit};
+use crate::business::namespace::working::WorkingNamespace;
 use std::sync::Arc;
 use storage_contract::file_draft::{
     DraftBase, DraftCommand, DraftLocation, FileWorkingState, WorkingContentExpectation,
-    WorkingSelection,
+    WorkingRevision, WorkingSelection,
 };
 use storage_contract::{BranchId, FileNodeId, OperationId, Principal, Sequence};
 
@@ -49,17 +52,28 @@ pub(crate) enum WorkingBatchResult {
     Published(PublishedContent),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkingBatchOrigin {
+    Born(DraftBase),
+    First { branch: BranchId },
+}
+
 pub(crate) struct WorkingBatchItem {
     target: DraftLocation,
-    base: DraftBase,
+    origin: WorkingBatchOrigin,
     working_after: FileWorkingState,
     result: WorkingBatchResult,
 }
 
 impl WorkingBatchItem {
     pub(crate) fn target(&self) -> &DraftLocation { &self.target }
-    pub(crate) fn base(&self) -> DraftBase { self.base }
-    pub(crate) fn branch(&self) -> BranchId { self.base.branch_id() }
+    pub(crate) fn origin(&self) -> WorkingBatchOrigin { self.origin }
+    pub(crate) fn branch(&self) -> BranchId {
+        match self.origin {
+            WorkingBatchOrigin::Born(base) => base.branch_id(),
+            WorkingBatchOrigin::First { branch } => branch,
+        }
+    }
     pub(crate) fn working_after(&self) -> &FileWorkingState { &self.working_after }
     pub(crate) fn result(&self) -> &WorkingBatchResult { &self.result }
 
@@ -72,7 +86,10 @@ impl WorkingBatchItem {
 
     pub(crate) fn node(&self) -> Result<FileNodeId> {
         match &self.result {
-            WorkingBatchResult::Retained(_) => Ok(self.base.node_id()),
+            WorkingBatchResult::Retained(_) => match self.origin {
+                WorkingBatchOrigin::Born(base) => Ok(base.node_id()),
+                WorkingBatchOrigin::First { .. } => Err(invalid()),
+            },
             WorkingBatchResult::Published(content) => {
                 Ok(FileNodeId::Version(content.version.version_id.parse()?))
             }
@@ -116,10 +133,39 @@ impl WorkingBatchProjection {
     }
 }
 
-struct PlannedItem {
-    command: DraftCommand,
-    working_after: FileWorkingState,
-    retained: Option<FileVersion>,
+enum PlannedItem {
+    Born {
+        command: DraftCommand,
+        working_after: FileWorkingState,
+        retained: Option<FileVersion>,
+    },
+    First {
+        target: DraftLocation,
+        expected: WorkingRevision,
+        working_after: FileWorkingState,
+    },
+}
+
+impl PlannedItem {
+    fn target(&self) -> &DraftLocation {
+        match self {
+            Self::Born { command, .. } => command.target(),
+            Self::First { target, .. } => target,
+        }
+    }
+
+    fn working_after(&self) -> &FileWorkingState {
+        match self {
+            Self::Born { working_after, .. } | Self::First { working_after, .. } => working_after,
+        }
+    }
+
+    fn retained(&self) -> Option<&FileVersion> {
+        match self {
+            Self::Born { retained, .. } => retained.as_ref(),
+            Self::First { .. } => None,
+        }
+    }
 }
 
 fn plan(
@@ -131,70 +177,85 @@ fn plan(
     {
         return Err(invalid());
     }
-    // One whole-set CAS, including a later stale item, before any version read
-    // or allocation. Unborn remains explicitly unsupported by this Born slice.
+    // Every Born and Unborn expectation is checked before materialization or
+    // Version allocation. A later stale item cannot follow an earlier clear.
     let checked = selected::require_all(
         previous, &request.selected, maximum_entries, maximum_bytes,
     )?;
     let mut planned = Vec::with_capacity(checked.len());
     for item in checked {
         let selected = item.request();
-        let WorkingContentExpectation::Born { base, .. } = selected.expected.content else {
-            return Err(Error::FileDraft(Failure::UnsupportedScope));
+        let planned_item = match selected.expected.content {
+            WorkingContentExpectation::Born { base, .. } => {
+                let command = DraftCommand::Commit {
+                    target: selected.target.clone(), expected: selected.expected.revision,
+                    base, message: request.message.clone(),
+                };
+                let working_after = super::commit(
+                    &item.record().working, selected.expected.revision,
+                ).map_err(Error::FileDraft)?.into_change().into_next();
+                let retained = if super::draft_matches_base(previous, &command)? {
+                    Some(previous.versions.get(&base.version_id().to_string())
+                        .cloned().ok_or_else(invalid)?)
+                } else {
+                    None
+                };
+                PlannedItem::Born { command, working_after, retained }
+            }
+            WorkingContentExpectation::UnbornEmpty
+            | WorkingContentExpectation::UnbornSaved { .. } => {
+                let working = item.record().working.unborn().ok_or_else(invalid)?;
+                let working_after = working.after_first_commit()
+                    .map_err(|source| Error::FileDraft(Failure::RevisionExhausted(source)))?;
+                PlannedItem::First {
+                    target: selected.target.clone(), expected: selected.expected.revision,
+                    working_after,
+                }
+            }
         };
-        let command = DraftCommand::Commit {
-            target: selected.target.clone(), expected: selected.expected.revision,
-            base, message: request.message.clone(),
-        };
-        let working_after = super::commit(&item.record().working, selected.expected.revision)
-            .map_err(Error::FileDraft)?.into_change().into_next();
-        let retained = if super::draft_matches_base(previous, &command)? {
-            Some(previous.versions.get(&base.version_id().to_string())
-                .cloned().ok_or_else(invalid)?)
-        } else {
-            None
-        };
-        planned.push(PlannedItem { command, working_after, retained });
+        planned.push(planned_item);
     }
     Ok(planned)
 }
 
 fn project(
     previous: &State, request: &WorkingBatchRequest, sequence: Sequence,
-    planned: Vec<PlannedItem>,
-    mut build: impl FnMut(usize, &mut State, &DraftCommand) -> Result<PublishedContent>,
+    planned: &[PlannedItem],
+    mut build: impl FnMut(usize, &mut State, &PlannedItem) -> Result<PublishedContent>,
 ) -> Result<WorkingBatchProjection> {
-    // Shared initialization is a pure clone/generation/name projection. It is
-    // not the Unborn issuer and grants neither its BODY nor its native mode.
     let mut next = super::unborn::begin(previous, sequence)?;
     let mut items = Vec::with_capacity(planned.len());
     let mut contents = Vec::with_capacity(planned.len());
-    for (index, item) in planned.into_iter().enumerate() {
-        let DraftCommand::Commit { target, base, .. } = &item.command else {
-            return Err(invalid());
-        };
-        let result = match item.retained {
+    for (index, item) in planned.iter().enumerate() {
+        let target = item.target();
+        let result = match item.retained() {
             Some(version) => {
                 contents.push(None);
-                WorkingBatchResult::Retained(version)
+                WorkingBatchResult::Retained(version.clone())
             }
             None => {
-                let content = build(index, &mut next, &item.command)?;
+                let content = build(index, &mut next, item)?;
                 contents.push(Some(content.clone()));
                 WorkingBatchResult::Published(content)
             }
         };
-        // This mutates only the local accumulated projection. Nothing escapes
-        // if a later source/constructor fails, and no per-file receipt exists.
-        super::apply(&mut next, target.file, item.working_after.clone())?;
+        let origin = match item {
+            PlannedItem::Born { command: DraftCommand::Commit { base, .. }, .. } => {
+                WorkingBatchOrigin::Born(*base)
+            }
+            PlannedItem::Born { .. } => return Err(invalid()),
+            PlannedItem::First { .. } => WorkingBatchOrigin::First {
+                branch: selection::resolve(&next, target)?.base.branch_id(),
+            },
+        };
+        // The first append and Born publisher share this accumulated next.
+        // No per-file receipt or intermediate State is installed.
+        super::apply(&mut next, target.file, item.working_after().clone())?;
         items.push(WorkingBatchItem {
-            target: target.clone(), base: *base, working_after: item.working_after, result,
+            target: target.clone(), origin, working_after: item.working_after().clone(), result,
         });
     }
     crate::container_storage::capture_changed_names(previous, &mut next);
-    // All selected changes used one operation; none is independently installed.
-    // The complete owner table may change only these working rows. No other
-    // dirty body, namespace owner or physical identity can be normalized away.
     let mut containers = previous.file_containers.clone();
     for item in &items {
         containers.get_mut(&item.target.file).ok_or_else(invalid)?.working =
@@ -216,10 +277,16 @@ fn project(
     Ok(WorkingBatchProjection { state: next, items, trace: WorkingBatchTrace { contents } })
 }
 
+enum Construction<'a> {
+    Retained,
+    Born(content::PlannedContent),
+    First(FirstContentConstruction<'a>),
+}
+
 pub(crate) fn build(
     context: &PlanningContext<'_>, selection: &Arc<SelectedWorkingSources>,
     request: &WorkingBatchRequest,
-) -> Result<(WorkingBatchProjection, Vec<Prepared>)> {
+) -> Result<(WorkingBatchProjection, Vec<Prepared>, Vec<Option<Arc<PreparedUnbornFull>>>)> {
     selection.require_context(context)?;
     if request.selected.len() != selection.sources().len()
         || request.selected.iter().zip(selection.sources())
@@ -231,56 +298,93 @@ pub(crate) fn build(
     let planned = plan(
         context.state, request, sequence, context.config.max_entries, context.config.max_file_bytes,
     )?;
-    // Resolve every changed item's placement policy before constructing any
-    // Version. All payloads then come from the same complete held selection.
-    let mut policies = Vec::with_capacity(planned.len());
-    for item in &planned {
-        policies.push(if item.retained.is_none() {
-            Some(content::plan(context, &item.command)?)
-        } else {
-            None
-        });
-    }
+    let materials = planned.iter().enumerate().map(|(index, item)| match item {
+        PlannedItem::Born { .. } => Ok(None),
+        PlannedItem::First { .. } => {
+            PreparedUnbornFull::prepare(context, Arc::clone(selection), index).map(Some)
+        }
+    }).collect::<Result<Vec<_>>>()?;
+    // All policies and held source checks complete before constructing a Version.
+    let policies = planned.iter().zip(&materials).map(|(item, material)| match item {
+        PlannedItem::Born { retained: Some(_), .. } => Ok(Construction::Retained),
+        PlannedItem::Born { command, retained: None, .. } => {
+            content::plan(context, command).map(Construction::Born)
+        }
+        PlannedItem::First { target, expected, .. } => {
+            FirstContentConstruction::prepare(
+                context, target, *expected, &request.message, &request.principal,
+                request.operation, material.as_ref().ok_or_else(invalid)?,
+            ).map(Construction::First)
+        }
+    }).collect::<Result<Vec<_>>>()?;
     let mut prepared = Vec::new();
-    let projection = project(context.state, request, sequence, planned, |index, next, command| {
+    // The plans borrow the frozen request and materials, not the accumulated State.
+    let projection = project(context.state, request, sequence, &planned, |index, next, item| {
         selection.require_context(context)?;
-        let policy = policies[index].as_ref().ok_or_else(invalid)?;
-        let source = ReadSource::selected_working(Arc::clone(selection), index)?;
-        let content = content::build_planned(
-            context, next, &mut prepared, command, request.principal.as_str(),
-            request.operation, policy, &source,
-        )?;
+        let content = match (&policies[index], item) {
+            (Construction::Born(policy), PlannedItem::Born { command, .. }) => {
+                let source = ReadSource::selected_working(Arc::clone(selection), index)?;
+                content::build_planned(
+                    context, next, &mut prepared, command, request.principal.as_str(),
+                    request.operation, policy, &source,
+                )?
+            }
+            (Construction::First(construction), PlannedItem::First { .. }) => {
+                construction.append(context, next, &mut prepared)?
+            }
+            _ => return Err(invalid()),
+        };
         selection.require_context(context)?;
         Ok(content)
     })?;
-    Ok((projection, prepared))
+    drop(policies);
+    Ok((projection, prepared, materials))
 }
 
-/// Deterministic logical reconstruction. The cold native caller must still
-/// provide its original admitted pair and genuine held material obligations.
+/// Complete deterministic replay still needs the actual predecessor BODY for
+/// each first commit. A serialized full hash or sparse commitment is not that proof.
 pub(crate) fn replay(
-    previous: &State, request: &WorkingBatchRequest, sequence: Sequence,
-    trace: &WorkingBatchTrace, maximum_entries: usize, maximum_bytes: u64,
+    previous: &State, config: &ValidatedConfig, request: &WorkingBatchRequest,
+    sequence: Sequence, trace: &WorkingBatchTrace,
+    first_reads: &[Option<ReadWorkingDigest<'_>>],
 ) -> Result<WorkingBatchProjection> {
-    let planned = plan(previous, request, sequence, maximum_entries, maximum_bytes)?;
+    let planned = plan(previous, request, sequence, config.max_entries, config.max_file_bytes)?;
     if trace.contents.len() != planned.len()
+        || first_reads.len() != planned.len()
         || planned.iter().zip(&trace.contents)
-            .any(|(item, content)| item.retained.is_some() == content.is_some())
+            .any(|(item, content)| item.retained().is_some() == content.is_some())
+        || planned.iter().zip(first_reads)
+            .any(|(item, read)| matches!(item, PlannedItem::First { .. }) != read.is_some())
     {
         return Err(invalid());
     }
-    project(previous, request, sequence, planned, |index, expected, command| {
-        let DraftCommand::Commit { target, message, .. } = command else {
-            return Err(invalid());
-        };
-        let content = trace.contents[index].as_ref().ok_or_else(invalid)?;
-        let selection = selection::resolve(previous, target)?;
-        let record = previous.file_containers.get(&target.file).ok_or_else(invalid)?;
-        let (_, payload) = record.working.draft().ok_or_else(invalid)?;
-        content::replay(
-            previous, expected, target, &selection, *payload, content, message,
-            request.principal.as_str(), request.operation,
-        )?;
-        Ok(content.clone())
+    project(previous, request, sequence, &planned, |index, expected, item| {
+        let facts = trace.contents[index].as_ref().ok_or_else(invalid)?;
+        match item {
+            PlannedItem::Born { command: DraftCommand::Commit { target, message, .. }, .. } => {
+                let selection = selection::resolve(previous, target)?;
+                let record = previous.file_containers.get(&target.file).ok_or_else(invalid)?;
+                let (_, payload) = record.working.draft().ok_or_else(invalid)?;
+                content::replay(
+                    previous, expected, target, &selection, *payload, facts, message,
+                    request.principal.as_str(), request.operation,
+                )?;
+            }
+            PlannedItem::Born { .. } => return Err(invalid()),
+            PlannedItem::First { target, expected: revision, .. } => {
+                let namespace = WorkingNamespace::from_main_state(
+                    previous, target.repository, config.max_entries,
+                )?;
+                super::unborn::first::project(
+                    previous, config, &namespace, expected, request.operation,
+                    &FirstCommit {
+                        target, expected: *revision, message: &request.message,
+                        principal: &request.principal, content: facts,
+                        read: first_reads[index].as_ref().ok_or_else(invalid)?,
+                    },
+                )?;
+            }
+        }
+        Ok(facts.clone())
     })
 }

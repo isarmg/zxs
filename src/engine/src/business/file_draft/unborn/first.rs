@@ -9,6 +9,7 @@ use crate::container_storage::{PreparedUnbornFull, ReadWorkingDigest};
 use crate::{Commit, Entry, Error, FileContext, NamespaceEntryKind, Result, State, ValidatedConfig};
 use std::borrow::Cow;
 use std::sync::Arc;
+use storage_contract::file_container::FileContainerRecord;
 use storage_contract::file_draft::{DraftLocation, WorkingRevision};
 use storage_contract::{Generation, OperationId, Principal, Sequence, VersionId};
 
@@ -86,9 +87,10 @@ fn publish_first_namespace(
     ids: &mut impl FnMut(&str) -> Result<String>,
 ) -> Result<()> {
     let branch_id = namespace.branch().to_string();
-    let previous_branch = namespace.state().branches.get(&branch_id).ok_or_else(invalid)?;
-    let previous = namespace.state().commits.get(&previous_branch.head_commit_id)
-        .ok_or_else(invalid)?;
+    // The namespace fixed the original owner/branch. Its current accumulated
+    // HEAD, not that original State's HEAD, preserves earlier selected items.
+    let previous_branch = next.branches.get(&branch_id).ok_or_else(invalid)?;
+    let previous = next.commits.get(&previous_branch.head_commit_id).ok_or_else(invalid)?;
     let first = Entry {
         entry_id: target.entry.to_string(),
         path: target.path.clone(),
@@ -101,7 +103,7 @@ fn publish_first_namespace(
     // remain current-only and cannot leak through a directory snapshot/export.
     let mut entries = previous.entries.clone();
     let names = crate::business::namespace::container_name::current_names(
-        namespace.state(), &entries,
+        next, &entries,
     )?;
     crate::business::namespace::container_name::apply_file_names(&mut entries, &names)?;
     entries.push(first.clone());
@@ -185,7 +187,7 @@ fn require_first_source(
     Ok(())
 }
 
-pub(super) fn project(
+pub(in crate::business::file_draft) fn project(
     previous: &State,
     config: &ValidatedConfig,
     namespace: &WorkingNamespace<'_>,
@@ -197,12 +199,14 @@ pub(super) fn project(
     require_first_source(config, record, commit.target, commit.read)?;
     let working = record.working.unborn().ok_or_else(invalid)?;
     let source = commit.read.source();
-    if commit.content.version.content_hash != commit.read.content_hash()
+    if next.file_containers.get(&commit.target.file) != Some(record)
+        || commit.content.version.content_hash != commit.read.content_hash()
         || commit.content.version.logical_size != source.logical_size()
-        || previous.versions.contains_key(&commit.content.version.version_id)
-        || previous.placements.contains_key(&commit.content.version.version_id)
+        || next.versions.contains_key(&commit.content.version.version_id)
+        || next.placements.contains_key(&commit.content.version.version_id)
+        || next.content_states.contains_key(&commit.content.version.version_id)
         || commit.content.allocations.len()
-            > crate::business::file_draft::trace_limit(previous, commit.target)?
+            > crate::business::file_draft::trace_limit(next, commit.target)?
     {
         return Err(invalid());
     }
@@ -233,7 +237,9 @@ pub(super) fn project(
     if version != commit.content.version || placement != commit.content.placement {
         return Err(invalid());
     }
-    let mut replay = Replay::new(previous, &commit.content.allocations)?;
+    // Earlier selected items already own their allocations in this local
+    // projection. Reusing one must fail rather than overwrite its graph row.
+    let mut replay = Replay::new(next, &commit.content.allocations)?;
     publish_first_namespace(
         namespace, next, operation, commit.target, &commit.content.version,
         commit.message, commit.principal, &mut |prefix| replay.next(prefix),
@@ -245,10 +251,124 @@ pub(super) fn project(
     commit.read.require_source()
 }
 
-/// Real Version construction from the private independently materialized FULL.
-/// The output is still a plan: it does not install a FILE, clear a saved State
-/// or issue a permanent operation receipt. Cold native publication remains a
-/// separate consumer of the exact full logical construction.
+/// The original first-file policy and material checks, before beginning a
+/// projection. It borrows real prepared material; no digest/identity constructor
+/// can replace its held source. This is not a receipt or publication proof.
+pub(in crate::business::file_draft) struct FirstContentConstruction<'source> {
+    namespace: WorkingNamespace<'source>,
+    record: &'source FileContainerRecord,
+    target: &'source DraftLocation,
+    expected: WorkingRevision,
+    message: &'source str,
+    principal: &'source Principal,
+    operation: OperationId,
+    material: &'source Arc<PreparedUnbornFull>,
+    read: ReadWorkingDigest<'source>,
+    primary: name_policy::SlotId,
+}
+
+impl<'source> FirstContentConstruction<'source> {
+    pub(crate) fn prepare(
+        context: &'source crate::engine::PlanningContext<'_>,
+        target: &'source DraftLocation,
+        expected: WorkingRevision,
+        message: &'source str,
+        principal: &'source Principal,
+        operation: OperationId,
+        material: &'source Arc<PreparedUnbornFull>,
+    ) -> Result<Self> {
+        context.require_write()?;
+        material.require_context(context)?;
+        if context.current_namespaces.is_some()
+            || context.state.operations.contains_key(&operation)
+        {
+            return Err(invalid());
+        }
+        crate::directory_conversion::require_import_not_stopped(context.state, operation)?;
+        let namespace = WorkingNamespace::from_main_state(
+            context.state, target.repository, context.config.max_entries,
+        )?;
+        let record = selected(&namespace, target, expected)?;
+        let read = material.digest()?;
+        require_first_source(context.config, record, target, &read)?;
+        let (primary, copies) = context.new_file_placement_for_file(
+            &target.repository.to_string(), Some(&target.file.to_string()), target.path.as_str(),
+        )?;
+        let disk = context.disk(&primary)?;
+        if copies != 1 || disk.level != 1 || disk.upstream_slot_id.is_some()
+            || disk.disk_id.parse::<storage_contract::DiskId>()? != record.owner_disk
+        {
+            return Err(Error::FileDraft(Failure::UnsupportedScope));
+        }
+        Ok(Self {
+            namespace, record, target, expected, message, principal, operation,
+            material, read, primary: name_policy::SlotId::parse(&primary)?,
+        })
+    }
+
+    /// Append one real first-file construction to the caller's accumulating
+    /// State. The caller owns begin/final validation and the eventual one native
+    /// receipt. No independent FULL, payload, FILE or directory is written here.
+    pub(crate) fn append(
+        &self,
+        context: &crate::engine::PlanningContext<'_>,
+        next: &mut State,
+        prepared: &mut Vec<crate::engine::Prepared>,
+    ) -> Result<PublishedContent> {
+        self.material.require_context(context)?;
+        if !std::ptr::eq(self.namespace.state(), context.state.as_ref())
+            || next.sequence != context.next_slot
+            || next.file_containers.get(&self.target.file) != Some(self.record)
+        {
+            return Err(invalid());
+        }
+        let source = crate::engine::ReadSource::working_full(Arc::clone(self.material));
+        let version = context.build_version(
+            next, prepared,
+            crate::business::VersionBuild {
+                history: &self.record.history_tree_id.to_string(),
+                file_id: &self.target.file.to_string(),
+                path: &self.target.path, source: &source, primary: self.primary.as_str(), copies: 1,
+                source_ids: Vec::new(), checkpoint: false,
+            },
+        )?;
+        if version.logical_size != self.read.source().logical_size()
+            || version.content_hash != self.read.content_hash()
+        {
+            return Err(Error::FileDraft(Failure::Body));
+        }
+        let placement = next.placements.get(&version.version_id).cloned().ok_or_else(invalid)?;
+        let limit = crate::business::file_draft::trace_limit(next, self.target)?;
+        let mut allocations = Vec::new();
+        publish_first_namespace(
+            &self.namespace, next, self.operation, self.target, &version,
+            self.message, self.principal,
+            &mut |prefix| {
+                if allocations.len() == limit { return Err(Error::FileDraft(Failure::Size)); }
+                let allocation = Allocation::generate(prefix)?;
+                let text = allocation.text(prefix)?;
+                allocations.push(allocation);
+                Ok(text)
+            },
+        )?;
+        next.file_containers.get_mut(&self.target.file).ok_or_else(invalid)?.working =
+            self.record.working.unborn().ok_or_else(invalid)?.after_first_commit()
+                .map_err(|source| Error::FileDraft(Failure::RevisionExhausted(source)))?;
+        self.material.require_context(context)?;
+        Ok(PublishedContent { version, placement, allocations })
+    }
+
+    fn original_description<'a>(&'a self, content: &'a PublishedContent) -> FirstCommit<'a> {
+        FirstCommit {
+            target: self.target, expected: self.expected, message: self.message,
+            principal: self.principal, content, read: &self.read,
+        }
+    }
+}
+
+/// Single-file publication keeps its one begin and complete canonical replay.
+/// Batch callers may append to one next, but get no native admission from that
+/// construction alone and must retain the complete selected set and materials.
 pub(crate) fn build(
     context: &crate::engine::PlanningContext<'_>,
     target: &DraftLocation,
@@ -258,68 +378,16 @@ pub(crate) fn build(
     operation: OperationId,
     material: &Arc<PreparedUnbornFull>,
 ) -> Result<(super::Projection, Vec<crate::engine::Prepared>, PublishedContent)> {
-    context.require_write()?;
-    material.require_context(context)?;
-    if context.current_namespaces.is_some() || context.state.operations.contains_key(&operation) {
-        return Err(invalid());
-    }
-    crate::directory_conversion::require_import_not_stopped(context.state, operation)?;
-    let namespace = WorkingNamespace::from_main_state(
-        context.state, target.repository, context.config.max_entries,
+    let construction = FirstContentConstruction::prepare(
+        context, target, expected, message, principal, operation, material,
     )?;
-    let record = selected(&namespace, target, expected)?;
-    let read = material.digest()?;
-    require_first_source(context.config, record, target, &read)?;
-    let (primary, copies) = context.new_file_placement_for_file(
-        &target.repository.to_string(), Some(&target.file.to_string()), target.path.as_str(),
-    )?;
-    let disk = context.disk(&primary)?;
-    if copies != 1 || disk.level != 1 || disk.upstream_slot_id.is_some()
-        || disk.disk_id.parse::<storage_contract::DiskId>()? != record.owner_disk
-    {
-        return Err(Error::FileDraft(Failure::UnsupportedScope));
-    }
     let mut next = super::begin(context.state, Sequence::new(context.next_slot))?;
-    let source = crate::engine::ReadSource::working_full(Arc::clone(material));
     let mut prepared = Vec::new();
-    let version = context.build_version(
-        &mut next, &mut prepared,
-        crate::business::VersionBuild {
-            history: &record.history_tree_id.to_string(), file_id: &target.file.to_string(),
-            path: &target.path, source: &source, primary: &primary, copies: 1,
-            source_ids: Vec::new(), checkpoint: false,
-        },
-    )?;
-    if version.logical_size != read.source().logical_size()
-        || version.content_hash != read.content_hash()
-    {
-        return Err(Error::FileDraft(Failure::Body));
-    }
-    let placement = next.placements.get(&version.version_id).cloned().ok_or_else(invalid)?;
-    let limit = crate::business::file_draft::trace_limit(context.state, target)?;
-    let mut allocations = Vec::new();
-    publish_first_namespace(
-        &namespace, &mut next, operation, target, &version, message, principal,
-        &mut |prefix| {
-            if allocations.len() == limit { return Err(Error::FileDraft(Failure::Size)); }
-            let allocation = Allocation::generate(prefix)?;
-            let text = allocation.text(prefix)?;
-            allocations.push(allocation);
-            Ok(text)
-        },
-    )?;
-    next.file_containers.get_mut(&target.file).ok_or_else(invalid)?.working =
-        record.working.unborn().ok_or_else(invalid)?.after_first_commit()
-            .map_err(|source| Error::FileDraft(Failure::RevisionExhausted(source)))?;
+    let content = construction.append(context, &mut next, &mut prepared)?;
     crate::container_storage::capture_changed_names(context.state, &mut next);
-    let content = PublishedContent { version, placement, allocations };
-    // The original constructor facts and allocator trace must reproduce the
-    // complete result through the one canonical Unborn transition kernel.
     let projected = super::project(
         context.state, context.config, operation, Sequence::new(context.next_slot),
-        super::Edit::FirstCommit(FirstCommit {
-            target, expected, message, principal, content: &content, read: &read,
-        }),
+        super::Edit::FirstCommit(construction.original_description(&content)),
         context.config.max_entries, context.config.max_file_bytes,
     )?;
     if projected.state() != &next { return Err(invalid()); }
@@ -328,3 +396,7 @@ pub(crate) fn build(
     material.require_context(context)?;
     Ok((projected, prepared, content))
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/business/unborn_first_construction.rs"]
+mod tests;

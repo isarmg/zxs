@@ -3,7 +3,7 @@ use super::{EngineBackend, error, repository};
 use crate::{ApiError, CommitUnbornFile, Identity, UnbornExpectation, UnbornFileSnapshot};
 use storage_contract::file_draft::DraftLocation;
 
-fn authorize(
+pub(super) fn authorize(
     engine: &storage_engine::Engine,
     current: &Identity,
     target: &DraftLocation,

@@ -138,7 +138,7 @@ impl<'a> ReceiptIndex<'a> {
         if let Some(node) = &node {
             self.branch_heads.insert(
                 (request.source.handle.repository_id, request.source.handle.branch_id),
-                node.plan.allocated.node,
+                node.plan.handle(),
             );
         }
         self.working.insert(operation, WorkingRecord { receipt, visible, envelope, node });

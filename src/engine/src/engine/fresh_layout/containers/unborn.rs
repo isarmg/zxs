@@ -10,7 +10,10 @@ use storage_contract::{DiskId, FileId, Principal, Sequence};
 
 mod first;
 pub(crate) use first::VerifiedUnbornFirst;
-pub(super) use first::{candidate as first_candidate, plan as first_plan};
+pub(super) use first::{
+    candidate as first_candidate, plan as first_plan,
+    working_batch as first_working_batch, directory as first_directory,
+};
 
 pub(super) struct VerifiedUnbornSave {
     file: FileId,

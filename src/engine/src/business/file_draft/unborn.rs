@@ -14,7 +14,7 @@ use storage_contract::{
     CommitId, DiskId, EntryId, FileId, Generation, OperationId, RepositoryId, Sequence,
 };
 
-mod first;
+pub(super) mod first;
 mod replay;
 mod current;
 pub(crate) use first::{FirstCommit, build as build_first_content};
@@ -70,7 +70,7 @@ impl Projection {
 }
 
 pub(crate) fn selected<'a>(
-    namespace: &'a WorkingNamespace<'_>,
+    namespace: &WorkingNamespace<'a>,
     target: &DraftLocation,
     expected: WorkingRevision,
 ) -> Result<&'a FileContainerRecord> {
@@ -89,7 +89,7 @@ pub(crate) fn selected<'a>(
             actual: record.working.revision(),
         }));
     }
-    Ok(record)
+    Ok(*record)
 }
 
 fn require_fresh(previous: &State, birth: &Birth) -> Result<()> {

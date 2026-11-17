@@ -23,7 +23,7 @@ fn born_selection_wire_is_strict_and_public_outcome_has_no_native_material() {
             path: PortablePath::parse("named.txt").unwrap(),
             entry: EntryId::from_random([7; 16]), file: FileId::from_random([8; 16]),
         },
-        expected: DirectoryDraftExpectation {
+        expected: DirectoryDraftExpectation::Born {
             revision: WorkingRevision::new(Generation::new(9)),
             base: DraftBase::new(BranchId::from_random([10; 16]), FileNodeId::Version(version),
                 version, Generation::new(11)),
@@ -47,6 +47,11 @@ fn born_selection_wire_is_strict_and_public_outcome_has_no_native_material() {
     value["selected"][0]["expected"] = json_codec::json!({
         "revision":"9", "content":{"state":"empty"},
     });
+    let decoded = crate::decode_strict::<CommitDirectoryDrafts>(
+        &json_codec::to_vec(&value).unwrap()).unwrap();
+    assert!(matches!(decoded.selected[0].selection().expected.content,
+        WorkingContentExpectation::UnbornEmpty));
+    value["selected"][0]["expected"]["base"] = json_codec::json!({});
     assert!(crate::decode_strict::<CommitDirectoryDrafts>(
         &json_codec::to_vec(&value).unwrap()).is_err());
     let mut value: json_codec::Value = json_codec::from_slice(&bytes).unwrap();
