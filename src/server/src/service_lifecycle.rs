@@ -217,13 +217,28 @@ where
         tokio::select! {
             biased;
             _ = &mut shutdown => {
-                // Both protocols stop on the same signal, not after HTTP's
-                // potentially long drain. Actual blocking operations retain
-                // their permits and durability/recovery ownership until done.
                 drop(stop_http);
+                // Do not poll bridge again, but keep its socket owner alive
+                // until established SMB handles finish. HTTP drains concurrently.
+                tracing::info!("shutdown requested; waiting for active SMB handles and admitted work");
+                let mut http_result = None;
+                tokio::select! {
+                    biased;
+                    _ = management.smb.wait_idle() => {}
+                    result = &mut http => {
+                        if result.is_err() {
+                            drop(bridge);
+                            return combine_shutdown_results(result, management.finish().await);
+                        }
+                        http_result = Some(result);
+                        management.smb.wait_idle().await;
+                    }
+                }
                 drop(bridge);
-                management.begin();
-                tracing::info!("shutdown requested; admission closed, draining admitted work");
+                let http = async move { match http_result {
+                    Some(result) => result,
+                    None => http.await,
+                }};
                 return drain(http, &mut management).await;
             }
             result = &mut http => {

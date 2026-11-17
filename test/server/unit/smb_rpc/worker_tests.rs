@@ -418,3 +418,60 @@ fn concurrent_drain_consumers_both_wait_for_actual_native_join() {
     assert_eq!(Arc::strong_count(&marker), 1);
     assert!(handoff.lock().unwrap().is_none());
 }
+
+#[tokio::test]
+async fn normal_stop_closes_idle_socket_but_waits_for_the_active_worker() {
+    let mut shutdown = ConnectionShutdown::new();
+    let registry = shutdown.registry();
+    let connections = {
+        let state = registry.0.lock().unwrap();
+        Arc::clone(state.as_ref().unwrap().connections.as_ref().unwrap())
+    };
+    let (mut idle_client, idle_server) = UnixStream::pair().unwrap();
+    let (mut active_client, active_server) = UnixStream::pair().unwrap();
+    idle_client.set_nonblocking(true).unwrap();
+    active_client.set_nonblocking(true).unwrap();
+    connections.lock().unwrap().extend([
+        (1, idle_server.try_clone().unwrap()),
+        (2, active_server.try_clone().unwrap()),
+    ]);
+
+    registry.spawn_connection(1, move |activity| {
+        let mut server = idle_server;
+        if activity.unwrap().receiving(false) {
+            assert_eq!(server.read(&mut [0]).unwrap(), 0);
+        }
+        Ok(())
+    }).unwrap();
+    let (entered, active) = tokio::sync::oneshot::channel();
+    let (release, closed) = std::sync::mpsc::channel();
+    registry.spawn_connection(2, move |activity| {
+        let _server = active_server;
+        assert!(activity.unwrap().receiving(true));
+        entered.send(()).unwrap();
+        closed.recv_timeout(DEADLINE).unwrap();
+        Ok(())
+    }).unwrap();
+    active.await.unwrap();
+    let drain = tokio::spawn(async move {
+        shutdown.wait_idle().await;
+        shutdown.finish().await.unwrap();
+    });
+    tokio::time::timeout(DEADLINE, async {
+        loop {
+            match idle_client.read(&mut [0]) {
+                Ok(0) => break,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                state => panic!("idle socket closure: {state:?}"),
+            }
+        }
+    }).await.unwrap();
+    assert_eq!(active_client.read(&mut [0]).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    assert!(!drain.is_finished());
+    assert_eq!(registry.spawn(|| Ok(())).unwrap_err().kind(), io::ErrorKind::Interrupted);
+    release.send(()).unwrap();
+    tokio::time::timeout(DEADLINE, drain).await.unwrap().unwrap();
+    assert_eq!(active_client.read(&mut [0]).unwrap(), 0);
+}

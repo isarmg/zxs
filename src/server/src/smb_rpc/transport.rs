@@ -6,6 +6,13 @@ enum ConnectionSession {
     Default(default_share::DefaultShare),
 }
 impl ConnectionSession {
+    fn has_handles(&self) -> bool {
+        match self {
+            Self::Repository(session) => !session.handles.is_empty(),
+            Self::Default(session) => session.has_handles(),
+        }
+    }
+
     fn dispatch(&mut self, request: Request) -> Result<Reply, session::DispatchError> {
         match self {
             Self::Repository(session) => session.dispatch(request),
@@ -78,8 +85,26 @@ fn acquire_session_permit(shared: &Shared) -> Result<tokio::sync::SemaphorePermi
     }
 }
 
-pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io::Result<()> {
+#[cfg(test)]
+pub(super) fn run_connection(stream: FrameStream, shared: Arc<Shared>) -> io::Result<()> {
+    run_connection_with_activity(stream, shared, None)
+}
+
+fn run_connection_with_activity(
+    mut stream: FrameStream,
+    shared: Arc<Shared>,
+    activity: Option<&workers::ConnectionActivity>,
+) -> io::Result<()> {
+    if activity.is_some_and(|activity| !activity.receiving(false)) {
+        return Ok(());
+    }
     let (request, fd) = stream.receive::<Request>()?;
+    if let Some(activity) = activity {
+        activity.handling();
+        if activity.quiescing() {
+            return Ok(());
+        }
+    }
     if fd.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -180,6 +205,9 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         None,
     )?;
     loop {
+        if activity.is_some_and(|activity| !activity.receiving(session.has_handles())) {
+            return Ok(());
+        }
         let (request, fd) = match stream
             .receive_with_mode::<Request>(smb_protocol::protocol::ReadMode::EstablishedSession)
         {
@@ -197,6 +225,20 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
             Request::Namespace { operation_id, .. } => Some(operation_id.clone()),
             _ => None,
         };
+        if let Some(activity) = activity {
+            activity.handling();
+            if activity.quiescing() && matches!(request,
+                Request::Open { .. } | Request::Namespace { .. } | Request::Stat { .. }
+            ) {
+                let error = ApiError::new(
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
+                    storage_contract::ErrorCode::SmbUnavailable,
+                    "server is stopping; finish existing handles before disconnecting",
+                );
+                stream.send(&response_error(error, operation_id), None)?;
+                continue;
+            }
+        }
         match session.dispatch(request) {
             Ok(result) => send_success(&mut stream, result, operation_id)?,
             // Repository binding errors remain ordinary business errors so
@@ -490,10 +532,11 @@ pub(crate) async fn serve_owned(
             connections: connections.clone(),
         };
         let shared = shared.clone();
-        if let Err(error) = workers.spawn(move || {
+        if let Err(error) = workers.spawn_connection(id, move |activity| {
             let _permit = permit;
             let _connection_guard = connection_guard;
-            FrameStream::new(stream).and_then(|stream| run_connection(stream, shared))
+            FrameStream::new(stream)
+                .and_then(|stream| run_connection_with_activity(stream, shared, activity.as_deref()))
         }) {
             tracing::warn!(error = ?error, "SMB local RPC worker admission failed");
         }

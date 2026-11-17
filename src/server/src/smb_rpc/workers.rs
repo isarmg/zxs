@@ -1,6 +1,10 @@
 //! Dedicated connection threads; only their shutdown joins use the runtime pool.
 use super::*;
-use std::{os::unix::net::UnixStream, thread::JoinHandle};
+use std::{
+    os::unix::net::UnixStream,
+    sync::atomic::{AtomicBool, Ordering},
+    thread::JoinHandle,
+};
 
 pub(super) type Connections = Arc<Mutex<BTreeMap<u64, UnixStream>>>;
 
@@ -20,11 +24,53 @@ pub(super) fn closing_connections(
 }
 
 pub(crate) struct ConnectionRegistry(Arc<Mutex<Option<Workers>>>);
+struct Worker {
+    thread: JoinHandle<io::Result<()>>,
+    activity: Option<(u64, Arc<ConnectionActivity>)>,
+}
 struct Workers {
     connections: Option<Connections>,
-    threads: Vec<JoinHandle<io::Result<()>>>,
+    threads: Vec<Worker>,
+    quiescing: Arc<AtomicBool>,
+}
+
+/// Only a frame boundary with no live handles is idle. Starting an exchange
+/// clears idle before consulting the shared admission flag.
+pub(super) struct ConnectionActivity {
+    quiescing: Arc<AtomicBool>,
+    idle: AtomicBool,
+}
+
+impl ConnectionActivity {
+    pub(super) fn receiving(&self, has_handles: bool) -> bool {
+        self.idle.store(!has_handles, Ordering::SeqCst);
+        has_handles || !self.quiescing()
+    }
+
+    pub(super) fn handling(&self) {
+        self.idle.store(false, Ordering::SeqCst);
+    }
+
+    pub(super) fn quiescing(&self) -> bool {
+        self.quiescing.load(Ordering::SeqCst)
+    }
 }
 impl Workers {
+    fn quiesce(&self) {
+        self.quiescing.store(true, Ordering::SeqCst);
+        if let Some(connections) = &self.connections {
+            let connections = closing_connections(connections);
+            for worker in &self.threads {
+                if let Some((id, activity)) = &worker.activity
+                    && activity.idle.load(Ordering::SeqCst)
+                    && let Some(stream) = connections.get(id)
+                {
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                }
+            }
+        }
+    }
+
     fn stop(&mut self) {
         let Some(connections) = self.connections.take() else {
             return;
@@ -56,7 +102,7 @@ impl Drop for Workers {
     fn drop(&mut self) {
         self.stop();
         for thread in self.threads.drain(..) {
-            Self::join(thread);
+            Self::join(thread.thread);
         }
     }
 }
@@ -74,9 +120,26 @@ impl ConnectionRegistry {
             .expect("invariant: listener starts before shutdown")
             .connections = Some(connections);
     }
+    #[cfg(test)]
     pub(super) fn spawn(
         &self,
         work: impl FnOnce() -> io::Result<()> + Send + 'static,
+    ) -> io::Result<()> {
+        self.spawn_worker(None, |_| work())
+    }
+
+    pub(super) fn spawn_connection(
+        &self,
+        id: u64,
+        work: impl FnOnce(Option<Arc<ConnectionActivity>>) -> io::Result<()> + Send + 'static,
+    ) -> io::Result<()> {
+        self.spawn_worker(Some(id), work)
+    }
+
+    fn spawn_worker(
+        &self,
+        id: Option<u64>,
+        work: impl FnOnce(Option<Arc<ConnectionActivity>>) -> io::Result<()> + Send + 'static,
     ) -> io::Result<()> {
         let mut state = self
             .0
@@ -88,13 +151,16 @@ impl ConnectionRegistry {
                 "SMB admission stopped",
             ));
         };
+        if workers.quiescing.load(Ordering::SeqCst) {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "SMB admission stopped"));
+        }
         // Reap only finished threads on the async accept path. Keep retained
         // handles bounded as well as live sessions, including the permit-drop
         // interval immediately before a worker returns.
         let mut index = 0;
         while index < workers.threads.len() {
-            if workers.threads[index].is_finished() {
-                Workers::join(workers.threads.swap_remove(index));
+            if workers.threads[index].thread.is_finished() {
+                Workers::join(workers.threads.swap_remove(index).thread);
             } else {
                 index += 1;
             }
@@ -105,11 +171,15 @@ impl ConnectionRegistry {
                 "SMB worker capacity reached",
             ));
         }
-        workers.threads.push(
-            std::thread::Builder::new()
-                .name("smb-connection".into())
-                .spawn(work)?,
-        );
+        let activity = id.map(|id| (id, Arc::new(ConnectionActivity {
+            quiescing: Arc::clone(&workers.quiescing),
+            idle: AtomicBool::new(true),
+        })));
+        let observation = activity.as_ref().map(|(_, activity)| Arc::clone(activity));
+        let thread = std::thread::Builder::new()
+            .name("smb-connection".into())
+            .spawn(move || work(observation))?;
+        workers.threads.push(Worker { thread, activity });
         Ok(())
     }
 }
@@ -143,6 +213,7 @@ impl ConnectionShutdown {
             registry: ConnectionRegistry(Arc::new(Mutex::new(Some(Workers {
                 connections: Some(Arc::new(Mutex::new(BTreeMap::new()))),
                 threads: Vec::with_capacity(MAX_CONNECTIONS),
+                quiescing: Arc::new(AtomicBool::new(false)),
             })))),
             drain: None,
         }
@@ -150,6 +221,25 @@ impl ConnectionShutdown {
     pub(crate) fn registry(&self) -> ConnectionRegistry {
         self.registry.clone()
     }
+    /// The listener is no longer polled on the normal-stop path. Existing
+    /// handle owners are responsible for closing their own exchanges.
+    pub(crate) async fn wait_idle(&self) {
+        loop {
+            let idle = match self.registry.0.lock() {
+                Ok(state) => state.as_ref().is_none_or(|workers| {
+                    workers.quiesce();
+                    workers.threads.iter().all(|worker| worker.thread.is_finished())
+                }),
+                // Let the existing force-close/join path collect a damaged owner.
+                Err(_) => true,
+            };
+            if idle {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
     pub(crate) fn begin(&mut self) {
         // Closing takes the entire set even after an unwind poisoned this
         // owner. Leave None and keep the mutex poisoned: no admission resumes.

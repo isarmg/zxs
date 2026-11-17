@@ -82,6 +82,10 @@ fn directory_only() -> ApiError {
 }
 
 impl DefaultShare {
+    pub(super) fn has_handles(&self) -> bool {
+        !self.handles.is_empty()
+    }
+
     pub(super) fn new(
         shared: Arc<Shared>,
         identity: Identity,
