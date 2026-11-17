@@ -596,6 +596,7 @@ fn full_copy_held_observed(
         chunk_bytes,
         max_bytes,
         None,
+        ".zxs-upload-inflight-",
         observe,
     )
     .map_err(CopyFailure::into_error)
@@ -616,6 +617,7 @@ fn full_copy_checked(
         chunk_bytes,
         max_bytes,
         expected,
+        ".zxs-full-",
         &mut |_| Ok(()),
     )
 }
@@ -627,10 +629,12 @@ fn full_copy_checked_observed(
     chunk_bytes: u32,
     max_bytes: u64,
     expected: Option<&FileVersion>,
+    temporary_prefix: &str,
     observe: &mut impl FnMut(FullCopyProgress) -> Result<()>,
 ) -> std::result::Result<(u64, ContentHash, ChecksumManifest, File), CopyFailure> {
     observe(FullCopyProgress::Check)?;
-    let temporary = EntryName::new(format!(".zxs-full-{}", new_id("req")?)).map_err(fs_error)?;
+    let temporary = EntryName::new(format!("{temporary_prefix}{}", new_id("req")?))
+        .map_err(fs_error)?;
     let mut target = File::from(
         rustix::fs::openat(
             directory,

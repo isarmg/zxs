@@ -85,6 +85,41 @@ impl UploadIo {
         }
     }
 
+    /// Called under the exclusive workspace upload claim. Neither scratch
+    /// class can be referenced by a workspace manifest or used by recovery;
+    /// the only admitted upload name there is the final generation's .full.
+    pub(crate) fn discard_interrupted(&self) -> Result<()> {
+        let mut access = self.resources.access_checked()?;
+        let resources = &access.value().resource;
+        let directory = resources.directory.directory();
+        let entries = rustix::fs::Dir::read_from(directory).map_err(std::io::Error::from)?;
+        let mut removed = false;
+        for entry in entries {
+            self.resources.check_running()?;
+            let entry = entry.map_err(std::io::Error::from)?;
+            let Some(name) = std::str::from_utf8(entry.file_name().to_bytes()).ok() else {
+                continue;
+            };
+            let id = name.strip_prefix(".zxs-upload-inflight-").or_else(|| {
+                name.strip_prefix(".zxs-upload-")?.strip_suffix(".prepared")
+            });
+            if !id.is_some_and(|id| storage_contract::validate_id(id, "req").is_ok()) {
+                continue;
+            }
+            let name = EntryName::new(name).map_err(preparation_fs_error)?;
+            let file = resources.open(&name)?;
+            platform_io::fs_safety::linux::SingleLinkRequirement::check(&file)
+                .map_err(preparation_fs_error)?;
+            self.resources.check_running()?;
+            remove_owned_file(directory, &name, FileIdentity::from_fd(&file)?)?;
+            removed = true;
+        }
+        if removed {
+            directory.sync_all()?;
+        }
+        self.resources.check_running()
+    }
+
     pub(crate) fn retained_usage(&self) -> Result<(u64, usize)> {
         let mut access = self.resources.access_checked()?;
         access
@@ -177,6 +212,7 @@ impl UploadResources {
                 .extension()
                 .is_some_and(|ext| ext == "full" || ext == "prepared")
                 || entry.file_name().to_bytes().starts_with(b".zxs-full-")
+                || entry.file_name().to_bytes().starts_with(b".zxs-upload-inflight-")
             {
                 generations = generations.checked_add(1).ok_or_else(|| {
                     Error::new(

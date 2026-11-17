@@ -500,3 +500,35 @@ fn interrupted_copy_temporaries_consume_workspace_bytes_and_generation_slots() {
         assert_eq!(fs::read(outside).unwrap(), b"another workspace's data");
     }
 }
+
+#[test]
+fn retry_removes_owned_upload_scratch_but_keeps_complete_zxs_data() {
+    let temporary = tempfile::tempdir().unwrap();
+    let system = temporary.path().join("system");
+    let primary = temporary.path().join("primary");
+    let config = Config::development([
+        (name_policy::Name::parse("Primary").unwrap(), primary.clone()),
+    ]).unwrap();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let repo = engine.create_disk_root(
+        "P01", "admin", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    let workspace = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
+    let saved = engine.stage_bytes(&workspace.workspace_id, "complete.txt", b"complete").unwrap();
+    let directory = saved.source_path.parent().unwrap();
+    let partial = directory.join(format!(".zxs-upload-inflight-{}", new_id("req").unwrap()));
+    let not_admitted = directory.join(format!(".zxs-upload-{}.prepared", new_id("req").unwrap()));
+    let unknown = directory.join(".zxs-upload-inflight-not-an-owned-request");
+    fs::write(&partial, b"interrupted prefix").unwrap();
+    fs::write(&not_admitted, b"never admitted into the workspace").unwrap();
+    fs::write(&unknown, b"unrecognized material").unwrap();
+    drop(engine);
+
+    let mut engine = Engine::open(&system).unwrap();
+    let next = engine.stage_bytes(&workspace.workspace_id, "retry.txt", b"complete retry").unwrap();
+    assert!(!partial.exists());
+    assert!(!not_admitted.exists());
+    assert_eq!(fs::read(&unknown).unwrap(), b"unrecognized material");
+    assert_eq!(fs::read(&saved.source_path).unwrap(), b"complete");
+    assert_eq!(fs::read(&next.source_path).unwrap(), b"complete retry");
+}

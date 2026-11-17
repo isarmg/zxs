@@ -767,6 +767,7 @@ impl Engine {
         };
         let disk_root = self.planning_context().workspace_data_root(&w)?;
         let io = UploadIo::new(disk_root, &directory, source)?;
+        io.discard_interrupted()?;
         let (retained, generations) = io.retained_usage()?;
         let target = directory.join(format!("{item}-{generation}.full"));
         let target_name = EntryName::new(
