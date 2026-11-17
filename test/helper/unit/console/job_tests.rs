@@ -461,3 +461,33 @@ async fn credential_routes_keep_exact_parser_codes_and_admission_before_decode()
         assert_eq!(state.jobs.available_permits(), 1);
     }
 }
+
+#[tokio::test]
+async fn unowned_failure_has_a_bounded_actual_json_response() {
+    fn fail(_: Empty) -> crate::Result<Value> {
+        Err(std::io::Error::other("\"\\\n外".repeat(100_000)).into())
+    }
+    let response = app(state(), fail).oneshot(request("{}")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let limit = super::super::diagnostic::MAX_MESSAGE_BYTES;
+    let bytes = to_bytes(response.into_body(), 2 * limit + 128).await.unwrap();
+    let value: Value = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"]["code"], "operation-failed");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.len() <= limit && message.ends_with('…'));
+}
+
+#[tokio::test]
+async fn private_worker_panic_payload_is_not_an_http_error_message() {
+    fn fail(_: Empty) -> crate::Result<Value> {
+        panic!("fixture-only private credential detail");
+    }
+    let router = Router::new().route("/job",
+        Job::new("operation-failed", "worker-failed").credential_route(fail, CredentialInput::Secret))
+        .with_state(state());
+    let response = router.oneshot(request("{}")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let value = body(response).await;
+    assert_eq!(value["error"]["code"], "worker-failed");
+    assert!(!value.to_string().contains("fixture-only private credential detail"));
+}

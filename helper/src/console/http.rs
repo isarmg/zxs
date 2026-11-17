@@ -1,5 +1,6 @@
 use super::{MAX_REQUEST_BYTES, State, boundary, work};
 mod activation;
+mod diagnostic;
 mod job;
 mod materials;
 mod packages;
@@ -25,7 +26,7 @@ use tokio::sync::OwnedSemaphorePermit;
 pub(super) struct Failure {
     status: StatusCode,
     code: &'static str,
-    message: String,
+    message: diagnostic::SmallDiagnostic,
 }
 impl Failure {
     pub(super) fn new(
@@ -33,25 +34,24 @@ impl Failure {
         code: &'static str,
         error: impl std::error::Error + 'static,
     ) -> Self {
-        Self {
-            status,
-            code,
-            message: crate::diagnostic_chain(&error),
-        }
+        Self::chain(status, code, &error)
     }
-    pub(super) fn message(status: StatusCode, code: &'static str, message: &str) -> Self {
-        Self {
-            status,
-            code,
-            message: message.into(),
-        }
+    pub(super) fn chain(
+        status: StatusCode, code: &'static str, error: &(dyn std::error::Error + 'static),
+    ) -> Self {
+        Self { status, code, message: diagnostic::SmallDiagnostic::chain(error) }
+    }
+    pub(super) fn message(
+        status: StatusCode, code: &'static str, message: impl std::fmt::Display,
+    ) -> Self {
+        Self { status, code, message: diagnostic::SmallDiagnostic::display(message) }
     }
 }
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
         (
             self.status,
-            Json(json!({"error": {"code":self.code, "message":self.message}})),
+            Json(json!({"error": {"code":self.code, "message":self.message.into_string()}})),
         )
             .into_response()
     }
@@ -686,14 +686,13 @@ async fn maintenance_operation(
         Ok::<_, crate::maintenance::Error>((result, permit))
     })
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "maintenance_worker",
-            error,
-        )
+    .map_err(|_| {
+        // Maintenance requests can contain credentials. Tokio's panic Display
+        // includes the payload; it is not a public worker diagnostic.
+        Failure::message(StatusCode::INTERNAL_SERVER_ERROR, "maintenance_worker",
+            "The maintenance worker did not return; inspect the original operation.")
     })?
-    .map_err(|error| Failure::message(error.status(), error.code(operation), &error.to_string()))?;
+    .map_err(|error| Failure::message(error.status(), error.code(operation), &error))?;
     Ok((
         [(header::CONTENT_TYPE, "application/json")],
         response_body::owned(result.into(), permit),

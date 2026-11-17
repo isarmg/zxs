@@ -2,10 +2,10 @@ use super::*;
 use crate::deployment::activation;
 
 fn failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(
+    Failure::chain(
         StatusCode::CONFLICT,
         "service_activation",
-        &crate::diagnostic_chain(error.as_ref()),
+        error.as_ref(),
     )
 }
 pub(super) async fn activate(

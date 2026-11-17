@@ -81,19 +81,24 @@ impl Job {
                 let output = tokio::task::spawn_blocking(move || {
                     // A disconnected HTTP caller cannot release the native owner.
                     let output = operation(input).map_err(|error| {
-                        let message = match kind {
-                            Input::Json => crate::diagnostic_chain(error.as_ref()),
-                            // Credential operations own a public top-level diagnostic;
-                            // their source chain can contain private native details.
-                            Input::Credential(_) => error.to_string(),
-                        };
-                        Failure::message(StatusCode::CONFLICT, self.operation_error, &message)
+                        match kind {
+                            Input::Json => Failure::chain(StatusCode::CONFLICT, self.operation_error, error.as_ref()),
+                            // Credential operations expose only their public top-level
+                            // diagnostic. Never traverse private native causes.
+                            Input::Credential(_) => Failure::message(StatusCode::CONFLICT, self.operation_error, error.as_ref()),
+                        }
                     })?;
                     Ok::<_, Failure>(response_body::json(output, permit))
                 })
                 .await
                 .map_err(|error| {
-                    Failure::new(StatusCode::INTERNAL_SERVER_ERROR, self.worker_error, error)
+                    match kind {
+                        Input::Json => Failure::new(StatusCode::INTERNAL_SERVER_ERROR, self.worker_error, error),
+                        Input::Credential(_) => Failure::message(
+                            StatusCode::INTERNAL_SERVER_ERROR, self.worker_error,
+                            "The credential worker did not return; inspect the original operation.",
+                        ),
+                    }
                 })??;
                 Ok::<_, Failure>(output)
             },

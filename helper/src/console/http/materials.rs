@@ -23,10 +23,10 @@ async fn download(state: State, request: Request, kind: Kind) -> Result<Response
     let _: Empty = input(request).await?;
     let (verified, permit) = tokio::task::spawn_blocking(move || {
         let verified = crate::installation::materials::verified().map_err(|error| {
-            Failure::message(
+            Failure::chain(
                 StatusCode::CONFLICT,
                 "program_installation",
-                &crate::diagnostic_chain(error.as_ref()),
+                error.as_ref(),
             )
         })?;
         Ok::<_, Failure>((verified, permit))
