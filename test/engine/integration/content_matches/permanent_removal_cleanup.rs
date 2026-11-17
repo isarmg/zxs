@@ -2,42 +2,23 @@
 use super::*;
 use storage_engine::{PermanentRemovalCleanupObservation, RemovalReplicaCleanupState};
 
-fn containers(directory: &std::path::Path, file: &str, found: &mut Vec<std::path::PathBuf>) {
-    let marker = directory.join(".zxs-container-owner.json");
-    if marker.is_file() {
-        let owner: String = json_codec::from_slice(&std::fs::read(marker).unwrap()).unwrap();
-        if owner == file {
-            found.push(directory.to_owned());
-        }
-        return;
-    }
-    for entry in std::fs::read_dir(directory).unwrap() {
-        let entry = entry.unwrap();
-        if entry.file_type().unwrap().is_dir() {
-            containers(&entry.path(), file, found);
-        }
-    }
-}
-
 fn fixture() -> (Pool, Entry, std::path::PathBuf, std::path::PathBuf) {
     let mut pool = Pool::new();
     pool.save(&[("a", b"shared"), ("b", b"shared")]);
     let a = pool.entry("a");
     pool.save(&[("a", b"new-a"), ("b", b"new-b")]);
     let version = &pool.engine.state().versions[&a.version_id];
-    let history = pool.engine.config().disks[0]
-        .root
-        .join("histories")
-        .join(&pool.history);
-    let metadata = history.join("versions").join(&a.version_id);
-    let mut found = Vec::new();
-    containers(&history, &a.file_id, &mut found);
-    assert_eq!(found.len(), 1);
-    let body = found[0].join("versions").join(format!(
-        "{}-{}",
-        version.storage_id,
-        found[0].file_name().unwrap().to_str().unwrap(),
-    ));
+    // This fixture has one registered primary, no source prefixes, and a
+    // root-level file. Inspect only these two exact fresh-layout locations.
+    let root = &pool.engine.config().disks[0].root;
+    let metadata = root
+        .join("zxs-data/common-data")
+        .join(&pool.history)
+        .join("versions")
+        .join(&a.version_id);
+    let body = root
+        .join("common-data/a/versions")
+        .join(format!("{}-a", version.storage_id));
     assert!(body.is_file());
     assert!(metadata.join("version.json").is_file());
     (pool, a, metadata, body)
@@ -127,6 +108,31 @@ fn removal_cleanup_observation_does_not_confuse_published_proof_with_missing_bod
         RemovalReplicaCleanupState::PayloadPresent
     ));
     assert_eq!(std::fs::read(prepared).unwrap(), b"shared");
+}
+
+#[test]
+fn cleanup_needs_a_safe_prepared_parent_and_exact_absent_leaf() {
+    let (mut pool, a, metadata, installed) = fixture();
+    purge(&mut pool, &a);
+    assert!(!installed.exists());
+    let prepared_parent = metadata.join("content");
+    let held = metadata.join("original-content-directory");
+    std::fs::rename(&prepared_parent, &held).unwrap();
+    let missing = inspect(&pool, &a);
+    assert!(!missing.all_current_routes_absent());
+    assert!(matches!(missing.replicas()[0].state(), RemovalReplicaCleanupState::Unverified(_)));
+
+    std::os::unix::fs::symlink(&held, &prepared_parent).unwrap();
+    let linked = inspect(&pool, &a);
+    assert!(matches!(linked.replicas()[0].state(), RemovalReplicaCleanupState::Unverified(_)));
+    assert!(std::fs::symlink_metadata(&prepared_parent).unwrap().is_symlink());
+    std::fs::remove_file(&prepared_parent).unwrap();
+    std::fs::rename(&held, &prepared_parent).unwrap();
+
+    let unrelated = prepared_parent.join("other-file");
+    std::fs::write(&unrelated, b"not this version").unwrap();
+    assert!(inspect(&pool, &a).all_current_routes_absent());
+    assert_eq!(std::fs::read(unrelated).unwrap(), b"not this version");
 }
 
 #[test]

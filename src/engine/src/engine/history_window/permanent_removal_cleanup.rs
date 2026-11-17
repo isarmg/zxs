@@ -1,5 +1,6 @@
 //! Bound cleanup observations. Recorded original bindings survive route changes.
 use super::{HistoryCancellationCheckpoint, PermanentNodeRemovalAnalysis};
+use crate::persist::layout;
 use crate::{ContentState, Engine, Error, ErrorCode, Result};
 use storage_contract::history_window::{HistoryRoot, HistoryVersionId, HistoryWindowCancellation};
 
@@ -277,15 +278,13 @@ fn inspect_replica(
     let material = crate::disk::VersionMaterial::current(&scope, version)?;
     let root = material.root()?;
     let directory = material.directory()?;
-    if root
-        .open_optional_read_regular(&directory.join("purged.json"))?
-        .is_none()
-    {
+    let tombstone_path = directory.join(layout::VERSION_TOMBSTONE.as_path());
+    if root.open_optional_read_regular(&tombstone_path)?.is_none() {
         return Ok(RemovalReplicaCleanupState::MissingTombstone);
     }
     let observe = &mut |bytes| budget.read(bytes);
     let stored: crate::FileVersion =
-        root.read_json_observed(&directory.join("version.json"), observe)?;
+        root.read_json_observed(&directory.join(layout::VERSION_DESCRIPTOR.as_path()), observe)?;
     if stored != *version {
         return Err(Error::new(
             ErrorCode::ObjectCorrupt,
@@ -294,7 +293,7 @@ fn inspect_replica(
     }
     let tombstone: crate::journal::ContentTombstone =
         crate::journal::decode_proof(&root.read_bytes_observed(
-            &directory.join("purged.json"),
+            &tombstone_path,
             crate::disk::MAX_METADATA,
             observe,
         )?)?;
@@ -316,10 +315,19 @@ fn inspect_replica(
         observe,
         Some(&metadata),
     )?;
-    let present = scope.container()?.open_optional_read_regular(&scope.body_path(version)?)?
+    // The installed body may have moved but the source preparation keeps the
+    // original creation name. Both leaf observations require their real parents;
+    // missing parents, stopped disks and unsafe links are not verified absence.
+    let installed_present = material
+        .container()?
+        .open_optional_read_regular(&material.body_path()?)?
+        .is_some();
+    budget.observe(0)?;
+    let prepared_present = root
+        .open_optional_read_regular(&material.prepared_body_path()?)?
         .is_some();
     material.verify()?;
-    Ok(if present {
+    Ok(if installed_present || prepared_present {
         RemovalReplicaCleanupState::PayloadPresent
     } else {
         RemovalReplicaCleanupState::VerifiedAbsent

@@ -58,6 +58,15 @@ impl<'a> VersionMaterial<'a> {
         self.source.body_path(self.version)
     }
 
+    /// The source-side leaf left by an interrupted install is separate from the
+    /// installed container body. Its original creation name never follows a rename.
+    pub(crate) fn prepared_body_path(&self) -> Result<PathBuf> {
+        Ok(self
+            .directory()?
+            .join(layout::PREPARED_CONTENT.as_path())
+            .join(&self.version.creation_name))
+    }
+
     pub(crate) fn open_payload(
         &self,
     ) -> Result<(crate::engine::ReadFile, Vec<u8>, crate::ChecksumManifest)> {

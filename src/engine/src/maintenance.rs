@@ -712,8 +712,7 @@ impl Engine {
                     crate::engine::FreshLayoutError::ContainerScope,
                 )?)?;
                 container.open_optional_read_regular(&body)?;
-                let prepared = dir.join(crate::persist::layout::PREPARED_CONTENT.as_path())
-                    .join(&v.creation_name);
+                let prepared = material.prepared_body_path()?;
                 let prepared_present = root.open_optional_read_regular(&prepared)?.is_some();
                 container.remove_file_if_present_synced(&body)?;
                 if prepared_present {
