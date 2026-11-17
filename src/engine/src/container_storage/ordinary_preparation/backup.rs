@@ -3,10 +3,13 @@
 //! Creation uses the same exclusive directory and five-area kernels as ordinary
 //! publication. Only its exact original-member source can invoke preparation.
 use super::*;
+use crate::container_storage::version_names::{check_target_name_at, installed_version_leaf};
+use crate::disk_names::configuration::ConfiguredSourcePath;
 use crate::engine::fresh_layout::directory_error;
 use crate::engine::membership_transition::{BackupLayoutPreparation, BackupLayoutSource};
-use std::sync::atomic::AtomicBool;
 use crate::history_package::preparation_checkpoint;
+use crate::name_budget::NameBudget;
+use std::sync::atomic::AtomicBool;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::EntryName;
 use storage_contract::{EntryId, OperationId};
@@ -58,6 +61,16 @@ struct Observed {
 }
 
 impl BackupTargetLayout {
+    /// These names do not yet exist on a newly selected target. Use its
+    /// own held filesystem limit for the full source chain and all introduced
+    /// user components. This is never a budget gate on an existing occurrence.
+    pub(crate) fn require_new_names(
+        root: &DiskRoot, path: &ConfiguredSourcePath<'_>, state: &State, stop: &AtomicBool,
+    ) -> Result<()> {
+        preparation_checkpoint(stop)?;
+        require_new_names_at(root.component_name_maximum()?, path, state, stop)
+    }
+
     /// All targets retain this exact plan before the first mkdir. It contains
     /// only a fixed-width budget shape and has no serializable/public constructor.
     pub(crate) fn plan(
@@ -70,8 +83,7 @@ impl BackupTargetLayout {
             source.config(),
         ).map_err(crate::Error::ConfiguredDiskName)?;
         let path = configured.source_path(source.disk()).map_err(crate::Error::ConfiguredDiskName)?;
-        let components = layout::container::source_components(&path).collect::<Vec<_>>();
-        preflight(source, &result, &management(source)?, &components)?;
+        preflight(source, &result, &management(source)?, &path, stop)?;
         source.require(stop)?;
         Ok(BackupLayoutPlan(result))
     }
@@ -105,8 +117,8 @@ impl BackupTargetLayout {
             source.config(),
         ).map_err(crate::Error::ConfiguredDiskName)?;
         let path = configured.source_path(source.disk()).map_err(crate::Error::ConfiguredDiskName)?;
+        preflight(source, &result, &management, &path, stop)?;
         let components = layout::container::source_components(&path).collect::<Vec<_>>();
-        preflight(source, &result, &management, &components)?;
         let mut held_prefixes: Vec<(HeldNode, areas::HeldAreas)> = Vec::new();
         for (record, component) in result.prefixes.iter_mut().zip(&components) {
             preparation_checkpoint(stop)?;
@@ -503,42 +515,46 @@ fn locate(
     };
     Ok(HeldNode { root, installed })
 }
+fn require_new_names_at(
+    maximum: u64, path: &ConfiguredSourcePath<'_>, state: &State, stop: &AtomicBool,
+) -> Result<()> {
+    path.verify_component_budget(maximum).map_err(crate::Error::ConfiguredDiskName)?;
+    let budget = NameBudget::from_maximum(maximum).map_err(crate::Error::ConversionNameBudget)?;
+    let names = state.namespace_directories.values().map(|record| &record.name)
+        .chain(state.file_containers.values().map(|record| &record.namespace.name));
+    for name in names {
+        preparation_checkpoint(stop)?;
+        budget.component(name.as_str(), name.as_str())
+            .map_err(crate::Error::ConversionNameBudget)?;
+    }
+    for version in state.versions.values() {
+        preparation_checkpoint(stop)?;
+        let file = version.file_id.parse::<FileId>()?;
+        let record = state.file_containers.get(&file).ok_or(Failure::BackupLayoutEvidence)?;
+        let name = name_policy::Name::parse(record.namespace.name.as_str())?;
+        check_target_name_at(maximum, &installed_version_leaf(version.storage_id, &name)?)?;
+    }
+    Ok(())
+}
+
 fn preflight(
     source: &BackupLayoutSource<'_>, record: &BackupTargetLayout,
-    management: &DiskRoot, components: &[EntryName],
+    management: &DiskRoot, path: &ConfiguredSourcePath<'_>, stop: &AtomicBool,
 ) -> Result<()> {
     let root = source.root()?;
-    for component in components {
-        super::super::version_names::check_target_name(root, component)?;
-    }
+    BackupTargetLayout::require_new_names(root, path, source.state(), stop)?;
+    let maximum = management.component_name_maximum()?;
     for prefix in &record.prefixes {
-        super::super::version_names::check_target_name(management,
-            &layout::container::prefix_preparation(prefix.preparation))?;
+        preparation_checkpoint(stop)?;
+        check_target_name_at(maximum, &layout::container::prefix_preparation(prefix.preparation))?;
     }
-    for (entry, value) in &record.directories {
-        super::super::version_names::check_target_name(management,
-            &layout::container::namespace_preparation(value.preparation))?;
-        super::super::version_names::check_target_name(root,
-            &layout::namespace::directory(&source.state().namespace_directories[
-                &entry.to_string()].name))?;
+    for value in record.directories.values() {
+        preparation_checkpoint(stop)?;
+        check_target_name_at(maximum, &layout::container::namespace_preparation(value.preparation))?;
     }
-    for (file, value) in &record.files {
-        super::super::version_names::check_target_name(management,
-            &layout::container::preparation(value.preparation))?;
-        super::super::version_names::check_target_name(root,
-            &layout::namespace::directory(&source.state().file_containers[file].namespace.name))?;
-    }
-    // Each target can have a different component budget. Admit the actual
-    // installed BODY name before any target namespace preparation is created.
-    for version in source.state().versions.values() {
-        let file = version.file_id.parse::<FileId>()?;
-        let logical = source.state().file_containers.get(&file)
-            .ok_or(Failure::BackupLayoutEvidence)?;
-        let name = name_policy::Name::parse(logical.namespace.name.as_str())?;
-        let leaf = super::super::version_names::installed_version_leaf(
-            version.storage_id, &name,
-        )?;
-        super::super::version_names::check_target_name(root, &leaf)?;
+    for value in record.files.values() {
+        preparation_checkpoint(stop)?;
+        check_target_name_at(maximum, &layout::container::preparation(value.preparation))?;
     }
     let required = (MAX_BYTES as u64).checked_add(record.descriptors()? as u64 * 8192)
         .and_then(|v| v.checked_add(16 * 1024 * 1024)).ok_or(Failure::ContainerBudget)?;
@@ -547,3 +563,7 @@ fn preflight(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/container_storage/backup_target_names.rs"]
+mod name_tests;

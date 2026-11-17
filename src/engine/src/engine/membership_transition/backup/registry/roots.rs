@@ -1,7 +1,10 @@
 //! Exact target lifecycle feedback, retained by all original fenced members.
 //! A target's files alone never reissue a preparation. After the common choice,
 //! its authenticated projection is the other, disjoint read-only source.
+use crate::container_storage::BackupTargetLayout;
 use crate::disk::DiskRoot;
+use crate::disk_names::configuration::ConfiguredDiskNames;
+use crate::history_package::AdmittedState;
 use crate::engine::backup_preparation::{
     BackupRegistryProjection, BackupSourceFenceEvidence, RetainedBackupTarget,
 };
@@ -100,7 +103,7 @@ impl BackupChoiceContext {
     /// Partial target creation without a complete original-member record is
     /// preserved and rejected, never inferred from matching names or contents.
     pub(in crate::engine) fn prepare_target_roots(
-        &self, targets: &[RetainedBackupTarget], stop: &AtomicBool,
+        &self, targets: &[RetainedBackupTarget], original: &AdmittedState, stop: &AtomicBool,
     ) -> Result<PreparedBackupRoots> {
         let evidence = self.root_evidence()?;
         self.recheck_root_sources(stop)?;
@@ -109,7 +112,12 @@ impl BackupChoiceContext {
             Some(value) => value,
             None => {
                 self.require_root_capacity()?;
-                create_preparation(self, evidence, targets, stop)?
+                if crate::object_hash("backup-prepared-state", original.state())?
+                    != evidence.state_hash()
+                {
+                    return Err(Failure::BackupLayoutEvidence.into());
+                }
+                create_preparation(self, evidence, targets, original, stop)?
             }
         };
         self.require_root_source(&value)?;
@@ -198,12 +206,14 @@ fn create_preparation(
     choices: &BackupChoiceContext,
     evidence: &BackupSourceFenceEvidence,
     targets: &[RetainedBackupTarget],
+    original: &AdmittedState,
     stop: &AtomicBool,
 ) -> Result<Preparation> {
     if targets.len() != evidence.root_target_count() {
         return Err(Failure::BackupRootEvidence.into());
     }
     let config = evidence.target_layout_configuration();
+    let names = ConfiguredDiskNames::new(&config).map_err(crate::Error::ConfiguredDiskName)?;
     let mut identities = Vec::with_capacity(targets.len());
     // All targets and original member capacity are checked before the first
     // mkdir. Existing lifecycle names cannot be imported as a preparation.
@@ -214,6 +224,8 @@ fn create_preparation(
         if config.storage_roots.contains_key(&id) {
             return Err(Failure::BackupRootEvidence.into());
         }
+        let path = names.source_path(id).map_err(crate::Error::ConfiguredDiskName)?;
+        BackupTargetLayout::require_new_names(root, &path, original.state(), stop)?;
         for name in [&*layout::COMMON_DATA_ROOT, &*layout::DELETED_DATA_ROOT,
             &*layout::ZXS_DATA_ROOT]
         {

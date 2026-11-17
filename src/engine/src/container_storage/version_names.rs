@@ -101,7 +101,13 @@ pub(crate) fn installed_version_path(
 }
 
 pub(super) fn check_target_name(root: &crate::disk::DiskRoot, leaf: &EntryName) -> Result<()> {
-    if leaf.as_os_str().len() as u64 > root.component_name_maximum()? {
+    check_target_name_at(root.component_name_maximum()?, leaf)
+}
+
+/// Several prospective names under one held SameMount root share its observed
+/// physical limit; generated leaves do not spend the user reserve twice.
+pub(super) fn check_target_name_at(maximum: u64, leaf: &EntryName) -> Result<()> {
+    if leaf.as_os_str().len() as u64 > maximum {
         return Err(Error::VersionNames(VersionNameError::NameBudget));
     }
     Ok(())

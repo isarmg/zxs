@@ -312,8 +312,8 @@ impl PreparedBackupRegistry {
         task: Task, targets: Vec<Target>, choices: &BackupChoiceContext, stop: &AtomicBool,
     ) -> Result<Self> {
         installation::verify_installed(&task.installation, &targets, stop)?;
-        let roots = choices.prepare_target_roots(&targets, stop)?;
         let original = snapshot::read(&targets[0].root, task.selection().first(), stop)?;
+        let roots = choices.prepare_target_roots(&targets, &original, stop)?;
         let layouts = PreparedBackupLayouts::prepare(&roots, choices, &targets, &original, stop)?;
         Self::from_roots(task, targets, roots, layouts, stop)
     }
