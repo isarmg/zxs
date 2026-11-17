@@ -1,6 +1,7 @@
 //! Mount names are resolved only from admitted original reservations. Pending
 //! reservations occupy their names; local filesystem names never create a route.
 use crate::business::namespace::working::WorkingNamespace;
+use crate::persist::snapshot_worktree::{Record, WorktreeReservation};
 use crate::snapshot_worktree::registry::{NameKey, Publication, ReceiptIndex};
 use crate::snapshot_worktree::{RegistrationError, Result};
 use name_policy::LookupName;
@@ -16,9 +17,36 @@ impl ReceiptIndex<'_> {
     pub(in crate::snapshot_worktree) fn require_mount_namespace(
         &self, next: &crate::State, maximum: usize,
     ) -> Result<()> {
+        let plans = self.worktrees.values().map(|record| &record.plan);
+        self.require_unoccupied(next, maximum, plans)
+    }
+
+    /// The ordinary publication fence sees only *previously* registered mounts.
+    /// A fresh claim must also respect names already owned by the ordinary root
+    /// before its first permanent reservation, not only on later completion.
+    pub(in crate::snapshot_worktree) fn require_new_mount_namespace(
+        &self, next: &crate::State, maximum: usize, record: &Record,
+    ) -> Result<()> {
+        let plan = match record {
+            Record::ReserveWorktree(plan) => plan,
+            Record::ReserveAllocatedWorktree(plan) => &plan.resolved,
+            Record::ReserveNode(_) | Record::CompleteNode(_) | Record::CompleteWorktree(_)
+            | Record::ReserveEdit(_) | Record::CompleteEdit(_) | Record::ReserveCommit(_)
+            | Record::ReserveHistoricalCommit(_) | Record::PrepareHistoricalCommit(_)
+            | Record::PublishCommitNode(_) | Record::CompleteCommit(_) | Record::BirthFile(_)
+            | Record::SaveFile(_) | Record::CompleteFile(_) | Record::ReserveAddedCommit(_)
+            | Record::PublishAddedFile(_) | Record::PublishAddedNode(_)
+            | Record::CompleteAddedCommit(_) => return Ok(()),
+        };
+        self.require_unoccupied(next, maximum, std::iter::once(plan))
+    }
+
+    fn require_unoccupied<'p>(
+        &self, next: &crate::State, maximum: usize,
+        plans: impl Iterator<Item = &'p WorktreeReservation>,
+    ) -> Result<()> {
         let mut claims: BTreeMap<RepositoryId, BTreeSet<NameKey>> = BTreeMap::new();
-        for record in self.worktrees.values() {
-            let plan = &record.plan;
+        for plan in plans {
             let repository = plan.host.namespace.repository_id;
             if plan.host.namespace.directory != NamespaceDirectoryId::Repository(repository)
                 || !plan.host.directories.is_empty()

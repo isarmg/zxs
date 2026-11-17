@@ -199,7 +199,11 @@ fn publish_planned(
     }
     // This closes the original typed reserve/completion relationship before a
     // decision is written, including all fresh allocations and pending hosts.
-    engine.snapshot_receipts()?.require_planned(&next, &result, principal, record)?;
+    {
+        let index = engine.snapshot_receipts()?;
+        index.require_planned(&next, &result, principal, record)?;
+        index.require_new_mount_namespace(&next, engine.config.max_entries, record)?;
+    }
     let expected = next.as_ref().clone();
     engine.persist(*next, prepared, result).map_err(RegistrationError::Publication)?;
     if !crate::publication_shape::same_transition(before, &expected, engine.state()) {

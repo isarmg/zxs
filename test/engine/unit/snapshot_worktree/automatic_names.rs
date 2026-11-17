@@ -239,6 +239,56 @@ fn ordinary_publication_cannot_shadow_a_pending_worktree_mount() {
     reject_ordinary_shadow(true);
 }
 
+#[test]
+fn named_mount_cannot_reserve_a_preexisting_repository_name_on_its_owner_disk() {
+    use storage_contract::snapshot_worktree::CreateWorktree;
+
+    let (fixture, mut engine) = Fixture::new();
+    let owner_slot = engine.config.disks[0].slot_id.clone();
+    let other_slot = engine.config.disks[1].slot_id.clone();
+    let original_operation = OperationId::generate().unwrap();
+    engine.create_repository(
+        &storage_contract::RepositoryName::parse("Ordinary Name").unwrap(),
+        &owner_slot, 1, "admin", original_operation,
+    ).unwrap();
+    engine.create_repository(
+        &storage_contract::RepositoryName::parse("Other Disk Name").unwrap(),
+        &other_slot, 1, "admin", OperationId::generate().unwrap(),
+    ).unwrap();
+    let original_receipt = engine.operation(original_operation).unwrap();
+    let context = request(&fixture, &engine);
+    let requested = CreateWorktree {
+        source: context.source,
+        parent_directory_id: context.parent_directory_id,
+        expected_root_generation: context.expected_root_generation,
+        operation_id: context.operation_id,
+        name: Name::parse("ORDINARY NAME").unwrap(),
+    };
+    let repository = fixture.targets[0].repository;
+    for _ in 0..2 {
+        let before = fixture.media();
+        let state = Arc::clone(&engine.state);
+        let error = engine.create_directory_worktree(&requested, &principal()).unwrap_err();
+        assert_eq!(error.code(), storage_contract::ErrorCode::NameCollision);
+        assert!(Arc::ptr_eq(&state, &engine.state));
+        assert!(!engine.state().operations.contains_key(&requested.operation_id));
+        assert_eq!(engine.operation(original_operation).unwrap(), original_receipt);
+        assert!(engine.directory_worktree_mounts(repository).unwrap().is_empty());
+        assert_eq!(fixture.media(), before);
+        drop(engine);
+        engine = Engine::open(&fixture.system).unwrap();
+    }
+
+    let other = CreateWorktree {
+        operation_id: OperationId::generate().unwrap(),
+        name: Name::parse("OTHER DISK NAME").unwrap(),
+        ..requested
+    };
+    let handle = engine.create_directory_worktree(&other, &principal()).unwrap();
+    assert_eq!(engine.directory_worktree_status(handle).unwrap().name.as_str(), "OTHER DISK NAME");
+    assert_eq!(engine.create_directory_worktree(&other, &principal()).unwrap(), handle);
+}
+
 fn reject_ordinary_shadow(pending: bool) {
     let (fixture, mut engine) = Fixture::new();
     let original = request(&fixture, &engine);
