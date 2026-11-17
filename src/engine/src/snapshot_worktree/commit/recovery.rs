@@ -26,11 +26,12 @@ pub(super) fn resume(
     // Both reopens demand this exact Engine State and its admitted namespace
     // host. The permanent bindings, not local names, select all held entities.
     let original = index.reopen_node(engine, plan.source)?;
-    let node = index.reopen_node(engine, plan.handle())?;
+    let routing = tail.routing();
+    let node = index.reopen_node(engine, plan.handle_at(routing.directory.branch()))?;
     let ledger = HeldWorktreeLedger::finish_published_commit(&original, &node, &tail)
         .map_err(RegistrationError::Ledger)?;
     let handle = publish_completion(
-        engine, principal, plan, tail.commitment(), ledger.checkpoint(),
+        engine, principal, plan, routing, tail.commitment(), ledger.checkpoint(),
     )?;
     ledger.admit_read_view().map_err(RegistrationError::Ledger)?;
     Ok(handle)

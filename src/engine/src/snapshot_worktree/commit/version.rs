@@ -3,7 +3,6 @@
 use crate::engine::PlanningContext;
 use crate::persist::snapshot_worktree::{CommitReservation, FileRequestCommitment};
 use crate::snapshot_worktree::SnapshotSourceError;
-use crate::working_tree::snapshot::SnapshotFileSource;
 use crate::{CommitRequest, Error, Result, State, Workspace};
 use name_policy::PortablePath;
 use std::sync::Arc;
@@ -14,12 +13,15 @@ enum Consumption { Pending, Admitted, Consumed }
 pub(crate) struct ReservedFileVersion {
     source: Arc<State>,
     plan: CommitReservation,
+    branch: storage_contract::BranchId,
     consumption: Consumption,
 }
 
 impl ReservedFileVersion {
-    pub(super) fn new(source: Arc<State>, plan: CommitReservation) -> Self {
-        Self { source, plan, consumption: Consumption::Pending }
+    pub(super) fn new(
+        source: Arc<State>, plan: CommitReservation, branch: storage_contract::BranchId,
+    ) -> Self {
+        Self { source, plan, branch, consumption: Consumption::Pending }
     }
 
     fn invalid(&self) -> Error {
@@ -34,9 +36,6 @@ impl ReservedFileVersion {
         workspace: &Workspace,
         request: &CommitRequest,
     ) -> Result<()> {
-        let SnapshotFileSource::Container { branch, .. } = self.plan.original_source else {
-            return Err(self.invalid());
-        };
         let digest = FileRequestCommitment::capture(workspace, request)
             .map_err(|source| Error::SnapshotSource(Box::new(
                 SnapshotSourceError::Encoding(source),
@@ -44,7 +43,7 @@ impl ReservedFileVersion {
         if !std::ptr::eq(self.source.as_ref(), context.state.as_ref())
             || request.operation_id != self.plan.file_operation
             || digest != self.plan.file_request
-            || workspace.branch_id != branch.to_string()
+            || workspace.branch_id != self.branch.to_string()
             || workspace.base_head != self.plan.file_base.to_string()
             || workspace.files.len() != 1 || !workspace.namespace_operations.is_empty()
             || !matches!(self.consumption, Consumption::Pending)

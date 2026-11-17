@@ -67,6 +67,19 @@ fn history_selection_freezes_exact_old_source_without_changing_head_or_open_writ
         Some(reviewed_head),
         "ordinary directory draft commits still use the actual reviewed HEAD",
     );
+    let Command::CommitWorktree {
+        source: held,
+        request,
+        ..
+    } = requests::commit_command(&state, OperationId::from_random([76; 16])).unwrap()
+    else {
+        panic!("commit from the already opened writer");
+    };
+    assert_eq!(
+        held, reviewed_head,
+        "history selection is not the writer's source"
+    );
+    assert_eq!(request.target, writer);
     let command = requests::create_command(&state, OperationId::from_random([73; 16])).unwrap();
     let Command::AllocateWorktree { request, .. } = &command else {
         panic!("only Automatic creates are available");

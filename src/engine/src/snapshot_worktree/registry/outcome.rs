@@ -52,6 +52,19 @@ impl ReceiptIndex<'_> {
         operation: OperationId,
         principal: &Principal,
     ) -> Result<WorktreeCommitReceipt> {
+        if let Some(original) = self.historical.get(&operation) {
+            if original.receipt.principal != *principal
+                || self.node(original.plan.source)?.host().namespace.repository_id != repository
+            {
+                return Err(RegistrationError::Digest(operation));
+            }
+            if !self.commits.contains_key(&operation) {
+                return Ok(WorktreeCommitReceipt {
+                    repository_id: repository, request: original.plan.request.clone(),
+                    result: WorktreeCommitOutcome::Pending {},
+                });
+            }
+        }
         let record = self
             .commits
             .get(&operation)
@@ -64,7 +77,7 @@ impl ReceiptIndex<'_> {
         let result = match record.completion {
             Publication::Reserved => WorktreeCommitOutcome::Pending {},
             Publication::Complete(_) => WorktreeCommitOutcome::Complete {
-                snapshot: record.plan.handle(),
+                snapshot: record.plan.handle_at(record.routing.directory.branch()),
             },
         };
         Ok(WorktreeCommitReceipt {

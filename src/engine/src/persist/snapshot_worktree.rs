@@ -1,4 +1,6 @@
 //! Strict permanent reservation/completion records. Local material never supplies them.
+pub(crate) mod historical;
+pub(crate) use historical::{CommitRouting, HistoricalCommit, HistoricalFile, HistoricalReady};
 use crate::directory_worktree::ledger::{Binding as LedgerBinding, Checkpoint, EditRecord};
 use crate::working_tree::snapshot::{
     SnapshotEntry, SnapshotFile, SnapshotFileSource, SnapshotNodeBinding, SnapshotReference,
@@ -27,6 +29,8 @@ pub(crate) const WORKTREE_COMPLETE: &str = "snapshot.worktree.complete";
 pub(crate) const EDIT_RESERVE: &str = "snapshot.worktree.edit-reserve";
 pub(crate) const EDIT_COMPLETE: &str = "snapshot.worktree.edit-complete";
 pub(crate) const COMMIT_RESERVE: &str = "snapshot.worktree.commit-reserve";
+pub(crate) const HISTORICAL_RESERVE: &str = "snapshot.worktree.historical-reserve";
+pub(crate) const HISTORICAL_READY: &str = "snapshot.worktree.historical-ready";
 pub(crate) const COMMIT_NODE: &str = "snapshot.worktree.commit-node";
 pub(crate) const COMMIT_COMPLETE: &str = "snapshot.worktree.commit-complete";
 
@@ -213,6 +217,8 @@ pub(crate) enum Record {
     ReserveEdit(EditReservation),
     CompleteEdit(EditCompletion),
     ReserveCommit(CommitReservation),
+    ReserveHistoricalCommit(HistoricalCommit),
+    PrepareHistoricalCommit(HistoricalReady),
     PublishCommitNode(CommitNode),
     CompleteCommit(CommitCompletion),
 }
@@ -270,8 +276,12 @@ impl Record {
             Self::ReserveCommit(record) => {
                 json_codec::to_value(&record.request).map_err(CodecError::Value)
             }
+            Self::ReserveHistoricalCommit(record) => {
+                json_codec::to_value(&record.request).map_err(CodecError::Value)
+            }
             Self::CompleteNode(_) | Self::CompleteWorktree(_) | Self::CompleteEdit(_)
-            | Self::PublishCommitNode(_) | Self::CompleteCommit(_) => {
+            | Self::PrepareHistoricalCommit(_) | Self::PublishCommitNode(_)
+            | Self::CompleteCommit(_) => {
                 json_codec::to_value(self).map_err(CodecError::Value)
             }
         }
@@ -287,6 +297,8 @@ impl Record {
             Self::ReserveEdit(_) => EDIT_RESERVE,
             Self::CompleteEdit(_) => EDIT_COMPLETE,
             Self::ReserveCommit(_) => COMMIT_RESERVE,
+            Self::ReserveHistoricalCommit(_) => HISTORICAL_RESERVE,
+            Self::PrepareHistoricalCommit(_) => HISTORICAL_READY,
             Self::PublishCommitNode(_) => COMMIT_NODE,
             Self::CompleteCommit(_) => COMMIT_COMPLETE,
         }
@@ -346,7 +358,8 @@ impl PublicationEncoding {
 fn indexed_kind(kind: &str) -> bool {
     matches!(kind,
         NODE_RESERVE | NODE_COMPLETE | WORKTREE_RESERVE | WORKTREE_ALLOCATE | WORKTREE_COMPLETE
-            | EDIT_RESERVE | EDIT_COMPLETE | COMMIT_RESERVE | COMMIT_NODE | COMMIT_COMPLETE)
+            | EDIT_RESERVE | EDIT_COMPLETE | COMMIT_RESERVE | HISTORICAL_RESERVE | HISTORICAL_READY
+            | COMMIT_NODE | COMMIT_COMPLETE)
 }
 
 /// A malformed record alias also needs its actual original before indexing.

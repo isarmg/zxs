@@ -194,7 +194,7 @@
           "prefixes": [
             "worktree_transport::"
           ],
-          "max_tests": 2,
+          "max_tests": 3,
           "timeout_seconds": 900
         },
         {
@@ -5918,7 +5918,40 @@
           "prefixes": [
             "worktree_transport::"
           ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "worktree-historical-commit": {
+      "reason": "Use the existing real worktree writer to continue a current source or fork an exact historical source, including FILE ancestry, immutable MOVE/COPY and original-operation cold recovery. No external Samba or browser acceptance is claimed.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "snapshot_worktree::commit::historical_tests::"
+          ],
           "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "worktree_transport::tcp_two_saved_worktrees_serialize_head_and_historical_fork_with_exact_cold_receipts"
+          ],
+          "max_tests": 1,
           "timeout_seconds": 900
         }
       ]
@@ -6198,7 +6231,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/registry/outcome.rs",
       "groups": [
-        "worktree-http-transport"
+        "worktree-http-transport",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -6216,13 +6250,15 @@
     {
       "path": "src/web/src/files/directory_snapshot/wire/worktree.rs",
       "groups": [
-        "directory-web-worktree-management"
+        "directory-web-worktree-management",
+        "worktree-historical-commit"
       ]
     },
     {
       "path": "src/web/src/files/directory_snapshot/worktree.rs",
       "groups": [
-        "directory-web-worktree-management"
+        "directory-web-worktree-management",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -6234,13 +6270,15 @@
     {
       "path": "src/web/src/files/directory_snapshot/worktree/view.rs",
       "groups": [
-        "directory-web-worktree-management"
+        "directory-web-worktree-management",
+        "worktree-historical-commit"
       ]
     },
     {
       "path": "test/web/unit/files/directory_worktree_tests.rs",
       "groups": [
-        "directory-web-worktree-management"
+        "directory-web-worktree-management",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -6309,7 +6347,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/registry/transport.rs",
       "groups": [
-        "worktree-http-transport"
+        "worktree-http-transport",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -6339,7 +6378,8 @@
     {
       "path": "test/server/integration/phase1_save_tags/worktree_transport.rs",
       "groups": [
-        "worktree-http-transport"
+        "worktree-http-transport",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -7115,7 +7155,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/registry.rs",
       "groups": [
-        "backup-snapshot-scope"
+        "backup-snapshot-scope",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -7996,7 +8037,8 @@
     {
       "path": "src/engine/src/persist/snapshot_worktree.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -8041,13 +8083,15 @@
     {
       "path": "src/engine/src/snapshot_worktree/commit.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "worktree-historical-commit"
       ]
     },
     {
       "path": "src/engine/src/snapshot_worktree/commit/version.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -8096,7 +8140,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/registry/commits.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -17024,7 +17069,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/commit/recovery.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -17375,7 +17421,8 @@
       "path": "test/web/unit/files/directory_worktree_history_tests.rs",
       "groups": [
         "directory-snapshot-history",
-        "directory-web-worktree-management"
+        "directory-web-worktree-management",
+        "worktree-historical-commit"
       ]
     },
     {
@@ -17390,6 +17437,24 @@
       "groups": [
         "directory-snapshot-history",
         "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/snapshot_worktree/historical.rs",
+      "groups": [
+        "worktree-historical-commit"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/historical.rs",
+      "groups": [
+        "worktree-historical-commit"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/historical_commit.rs",
+      "groups": [
+        "worktree-historical-commit"
       ]
     }
   ],

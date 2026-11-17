@@ -21,14 +21,12 @@ pub(super) fn committed(
     value: Value,
 ) -> Result<Publication, api::Error> {
     let snapshot: SnapshotHandle = decode(value)?;
-    // This production slice continues the source branch. The node completion
-    // is independent of the reserve operation; never compare those two IDs.
-    if snapshot.repository_id != source.repository_id
-        || snapshot.branch_id != source.branch_id
-        || snapshot.node_id == source.node_id
-    {
+    // A completed commit may continue or fork the exact held source. The core
+    // owns that decision; a later HEAD is not evidence of this request's result.
+    // Node completion is independent of the original operation ID.
+    if snapshot.repository_id != source.repository_id || snapshot.node_id == source.node_id {
         return Err(invalid(
-            "the worktree result differs from its exact source branch",
+            "the worktree result must be a new node in its exact source repository",
         ));
     }
     Ok(Publication::WorktreeCommitted {
@@ -78,11 +76,10 @@ pub(super) fn lookup(record: &Record, value: Value) -> Result<LookupResult, api:
                 WorktreeCommitOutcome::Pending {} => Ok(LookupResult::Pending),
                 WorktreeCommitOutcome::Complete { snapshot } => {
                     if snapshot.repository_id != source.repository_id
-                        || snapshot.branch_id != source.branch_id
                         || snapshot.node_id == source.node_id
                     {
                         return Err(invalid(
-                            "the committed node differs from the original branch",
+                            "the committed node differs from the original repository",
                         ));
                     }
                     Ok(LookupResult::Complete(Publication::WorktreeCommitted {

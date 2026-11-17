@@ -59,12 +59,20 @@ fn observed(state: RwSignal<State>) -> impl IntoView {
                         />
                     </label>
                     <p class="zxs-row">{t(
-                        "提交使用上面精确实例和已读取的代数。仅原来源仍为当前 HEAD 时可提交；没有修改、文件基线变化或不受支持的布局会由服务器拒绝，不改选最新内容。",
                         concat!(
-                            "Commit uses this exact instance and the reviewed generation. ",
-                            "Its original source must still be HEAD. The server rejects ",
-                            "unchanged content, changed file bases or unsupported layouts; ",
-                            "it never substitutes newer content.",
+                            "提交只使用上面已打开的精确实例和已读取的工作稿代数，不使用新建实例的历史来源选择。",
+                            "原来源仍为其分支 HEAD 时续原分支，否则从该精确来源创建新分支；",
+                            "新分支使用该实例已分配的名称。名称超过 128 字节或重名时服务器拒绝，",
+                            "不截断、不覆盖；没有修改或布局不受支持也不会改选最新内容。",
+                        ),
+                        concat!(
+                            "Commit uses the exact opened instance and reviewed saved generation, ",
+                            "not the source selected for a new instance. If its source remains ",
+                            "branch HEAD, the server continues that branch; otherwise it forks ",
+                            "from that exact source using this instance's allocated name. Names ",
+                            "over 128 bytes or already occupied are rejected, never shortened ",
+                            "or replaced. The server never substitutes newer content ",
+                            "for this writer.",
                         ),
                     )}</p>
                     <button

@@ -366,6 +366,35 @@ fn worktree_ui_commit_lookup_never_confuses_unchanged_revision_with_published_no
             .result(json_codec::to_value(source()).unwrap())
             .is_err()
     );
+    let forked = SnapshotHandle {
+        publication: OperationId::from_random([52; 16]),
+        branch_id: SnapshotBranchId::from_random([53; 16]),
+        node_id: SnapshotNodeId::from_random([54; 16]),
+        ..source()
+    };
+    assert!(matches!(
+        record.result(json_codec::to_value(forked).unwrap()).unwrap(),
+        Publication::WorktreeCommitted { target, snapshot, .. }
+            if target == handle() && snapshot == forked
+    ));
+    let forked_receipt = WorktreeCommitReceipt {
+        result: WorktreeCommitOutcome::Complete { snapshot: forked },
+        ..pending
+    };
+    assert!(matches!(
+        record.lookup_result(json_codec::to_value(&forked_receipt).unwrap()).unwrap(),
+        LookupResult::Complete(Publication::WorktreeCommitted { target, snapshot, .. })
+            if target == handle() && snapshot == forked
+    ));
+    let foreign = SnapshotHandle {
+        repository_id: SnapshotRepositoryId::from_random([55; 16]),
+        ..forked
+    };
+    assert!(
+        record
+            .result(json_codec::to_value(foreign).unwrap())
+            .is_err()
+    );
     let mut wrong = complete;
     wrong.request.expected.generation = Generation::new(77);
     assert!(
@@ -384,7 +413,7 @@ fn worktree_ui_commit_lookup_never_confuses_unchanged_revision_with_published_no
 }
 
 #[test]
-fn worktree_ui_reuses_original_request_journal_and_gates_old_scope_or_new_head() {
+fn worktree_ui_reuses_original_request_journal_and_keeps_old_source_when_head_advances() {
     let mut state = state();
     let record = Arc::new(commit(&state));
     let frozen = record.encode().unwrap();
@@ -426,9 +455,19 @@ fn worktree_ui_reuses_original_request_journal_and_gates_old_scope_or_new_head()
         branch_name: storage_contract::BranchName::parse("actual").unwrap(),
     };
     assert!(
-        !can_commit(&state),
-        "this slice does not fork from an old source"
+        can_commit(&state),
+        "the core decides whether the held source needs a fork"
     );
+    let Command::CommitWorktree {
+        source: held,
+        request,
+        ..
+    } = requests::commit_command(&state, OperationId::from_random([91; 16])).unwrap()
+    else {
+        panic!("commit from the opened writer");
+    };
+    assert_eq!(held, source());
+    assert_eq!(request.target, handle());
     state.session_epoch += 1;
     assert!(!can_load(&state));
     assert!(smb_path(&state).is_none());

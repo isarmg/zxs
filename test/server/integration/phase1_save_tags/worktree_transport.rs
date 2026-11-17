@@ -436,3 +436,88 @@ async fn tcp_worktree_auth_shape_and_rejected_body_leave_current_bytes_unchanged
     assert!(engine.operation(named_operation).is_err());
     assert!(engine.operation(subsequent.operation_id).is_err());
 }
+
+#[tokio::test]
+async fn tcp_two_saved_worktrees_serialize_head_and_historical_fork_with_exact_cold_receipts() {
+    let fixture = Fixture::new(&["primary"]).await;
+    fixture.save("D01", "original.txt", b"one exact original source").await;
+    fixture.save("D01", "untouched.txt", b"unchanged original COPY").await;
+    let entry = fixture.entry("D01", "original.txt").await;
+    let history = fixture.history(entry["file_id"].as_str().unwrap()).await;
+    let repository = history["identity"]["context"]["repository_id"].as_str().unwrap();
+    let http = Http::start(fixture.app.clone(), &fixture.token).await;
+    let (context, source) = initialized(&http, repository).await;
+    let left = instance(&http, repository, &context, source, "worktree-main-001").await;
+    let right = instance(&http, repository, &context, source, "worktree-main-002").await;
+    let mut commands = Vec::new();
+    for (target, body) in [(left, b"left exact edit".as_slice()), (right, b"right exact edit")] {
+        let request = EditWorktree {
+            target, path: name_policy::PortablePath::parse("original.txt").unwrap(),
+            expected: http.status(target).await.revision,
+            size: body.len() as u64,
+            content_hash: storage_contract::ContentHash::from_digest(blake3::hash(body)),
+            operation_id: OperationId::generate().unwrap(),
+        };
+        let (status, revision) = http.edit(&request, body).await;
+        assert_eq!(status, 200, "{revision}");
+        commands.push(CommitWorktree {
+            target, expected: json_codec::from_value(revision).unwrap(),
+            message: "each request retains its exact old parent".into(),
+            operation_id: OperationId::generate().unwrap(),
+        });
+    }
+    let left_route = commit_route(left);
+    let right_route = commit_route(right);
+    let (left_result, right_result) = tokio::join!(
+        http.json("POST", &left_route, Some(json_codec::to_value(&commands[0]).unwrap())),
+        http.json("POST", &right_route, Some(json_codec::to_value(&commands[1]).unwrap())),
+    );
+    let nodes: [SnapshotHandle; 2] = [
+        json_codec::from_value(left_result).unwrap(),
+        json_codec::from_value(right_result).unwrap(),
+    ];
+    assert_eq!(nodes.iter().filter(|node| node.branch_id == source.branch_id).count(), 1);
+    assert_ne!(nodes[0].branch_id, nodes[1].branch_id);
+    for (command, node) in commands.iter().zip(nodes) {
+        assert_eq!(node.repository_id, source.repository_id);
+        assert_ne!(node.node_id, source.node_id);
+        let receipt: WorktreeCommitReceipt = json_codec::from_value(http.json("GET", &format!(
+            "/api/repositories/{repository}/directory-worktrees/commits/{}", command.operation_id,
+        ), None).await).unwrap();
+        assert_eq!(receipt.request, *command);
+        assert_eq!(receipt.result, WorktreeCommitOutcome::Complete { snapshot: node });
+    }
+    assert_eq!(http.read(left, "original.txt").await, b"left exact edit");
+    assert_eq!(http.read(right, "original.txt").await, b"right exact edit");
+    assert_eq!(http.read(left, "untouched.txt").await, b"unchanged original COPY");
+    assert_eq!(http.read(right, "untouched.txt").await, b"unchanged original COPY");
+    http.close().await;
+    let (root, engine, token) = cold(fixture).await;
+    let old_version = entry["version_id"].as_str().unwrap();
+    let file = entry["file_id"].as_str().unwrap();
+    let versions = engine.state().versions.values().filter(|version| version.file_id == file)
+        .collect::<Vec<_>>();
+    assert_eq!(versions.len(), 3);
+    for version in versions.iter().filter(|version| version.version_id != old_version) {
+        assert_eq!(version.source_version_ids, [old_version]);
+    }
+    let sequence = engine.state().sequence;
+    let fixture = resume(root, engine, token);
+    let http = Http::start(fixture.app.clone(), &fixture.token).await;
+    let media = inventory(fixture.root.path());
+    for (command, node) in commands.iter().zip(nodes) {
+        let retried: SnapshotHandle = json_codec::from_value(http.json(
+            "POST", &commit_route(command.target), Some(json_codec::to_value(command).unwrap()),
+        ).await).unwrap();
+        assert_eq!(retried, node);
+        let receipt: WorktreeCommitReceipt = json_codec::from_value(http.json("GET", &format!(
+            "/api/repositories/{repository}/directory-worktrees/commits/{}", command.operation_id,
+        ), None).await).unwrap();
+        assert_eq!(receipt.request, *command);
+        assert_eq!(receipt.result, WorktreeCommitOutcome::Complete { snapshot: node });
+    }
+    assert_eq!(inventory(fixture.root.path()), media);
+    http.close().await;
+    let (_root, engine, _token) = cold(fixture).await;
+    assert_eq!(engine.state().sequence, sequence);
+}

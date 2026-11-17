@@ -4,6 +4,6 @@ use storage_contract::snapshot_worktree::SnapshotHandle;
 
 impl PublishedWorktree<'_> {
     pub(in crate::snapshot_worktree) fn published_node(&self) -> Option<SnapshotHandle> {
-        self.publication.map(|record| record.plan.handle())
+        self.publication.map(|record| record.plan.handle_at(record.routing.directory.branch()))
     }
 }

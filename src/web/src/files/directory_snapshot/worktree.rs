@@ -142,15 +142,9 @@ fn can_commit(state: &State) -> bool {
         return false;
     }
     let model = &state.files.directory_snapshot;
-    let Some(observed) = model.worktree.observed(state) else {
-        return false;
-    };
-    let Some(review) = model.reviewed(state) else {
-        return false;
-    };
-    // The production commit currently continues only a source still at HEAD.
-    // This is a useful UI restriction, not permission to bypass the core CAS.
-    wire::ready_source(&review.head) == Some(observed.status.original)
+    // The exact opened writer, not the newly selected creation source, owns
+    // this commit. The core decides continue-versus-fork under its write lock.
+    model.worktree.observed(state).is_some()
         && storage_contract::validate_note(&model.worktree.message).is_ok()
 }
 

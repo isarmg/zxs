@@ -26,6 +26,7 @@ mod backup;
 pub(crate) use backup::require_backup_snapshot_scope;
 mod edits;
 mod commits;
+mod historical;
 mod drafts;
 mod discovery;
 mod history;
@@ -56,6 +57,7 @@ pub(crate) struct ReceiptIndex<'a> {
     heads: BTreeMap<WorktreeId, LedgerHead>,
     pending_edits: BTreeMap<WorktreeId, OperationId>,
     commits: BTreeMap<OperationId, CommitRecord<'a>>,
+    historical: BTreeMap<OperationId, historical::HistoricalRecord<'a>>,
     working: BTreeMap<OperationId, WorkingRecord<'a>>,
     // Only complete indexed publications set this exact handle. Keeping the
     // completion identity avoids any latest-sequence or local-node lookup.
@@ -155,6 +157,7 @@ enum CompletionOwner {
     Worktree(OperationId),
     Edit(OperationId),
     CommitNode(OperationId),
+    HistoricalReady,
     Commit,
 }
 impl CompletionOwner {
@@ -164,6 +167,7 @@ impl CompletionOwner {
             Self::Worktree(_) => snapshot_worktree::WORKTREE_COMPLETE,
             Self::Edit(_) => snapshot_worktree::EDIT_COMPLETE,
             Self::CommitNode(_) => snapshot_worktree::COMMIT_NODE,
+            Self::HistoricalReady => snapshot_worktree::HISTORICAL_READY,
             Self::Commit => snapshot_worktree::COMMIT_COMPLETE,
         }
     }
@@ -270,7 +274,7 @@ impl PublishedWorktree<'_> {
     ) -> std::result::Result<(), crate::directory_worktree::ledger::LedgerError> {
         let entry = self.publication
             .ok_or(crate::directory_worktree::ledger::LedgerError::PublicationPending)?;
-        if *publication != entry.plan.publication()
+        if *publication != entry.plan.publication_at(entry.routing)
             || files != std::slice::from_ref(&entry.file_result)
         {
             return Err(crate::directory_worktree::ledger::LedgerError::FileResults);
@@ -448,7 +452,7 @@ impl<'a> ReceiptIndex<'a> {
             edits: BTreeMap::new(),
             heads: BTreeMap::new(),
             pending_edits: BTreeMap::new(),
-            commits: BTreeMap::new(),
+            commits: BTreeMap::new(), historical: BTreeMap::new(),
             working: BTreeMap::new(),
             branch_heads: BTreeMap::new(),
             pending_branches: BTreeMap::new(),
@@ -519,6 +523,12 @@ impl<'a> ReceiptIndex<'a> {
                 Record::ReserveCommit(plan) => {
                     index.reserve_commit(receipt, plan, commitment, &mut allocations)?;
                 }
+                Record::ReserveHistoricalCommit(plan) => {
+                    index.reserve_historical(receipt, plan, commitment, &mut allocations)?;
+                }
+                Record::PrepareHistoricalCommit(ready) => {
+                    index.prepare_historical(receipt, ready, commitment, &mut allocations)?;
+                }
                 Record::PublishCommitNode(completion) => {
                     index.publish_commit_node(receipt, completion)?;
                 }
@@ -567,6 +577,12 @@ impl<'a> ReceiptIndex<'a> {
     }
 
     pub(super) fn worktree(&self, handle: WorktreeHandle) -> Result<PublishedWorktree<'_>> {
+        self.worktree_for_commit(handle, None)
+    }
+
+    fn worktree_for_commit(&self, handle: WorktreeHandle, owner: Option<OperationId>)
+        -> Result<PublishedWorktree<'_>>
+    {
         let Some(CompletionOwner::Worktree(reserve)) = self.completions.get(&handle.publication)
         else {
             return Err(RegistrationError::Source);
@@ -579,7 +595,7 @@ impl<'a> ReceiptIndex<'a> {
             return Err(RegistrationError::Pending(*reserve));
         };
         if let Some(operation) = self.pending_edits.get(&handle.worktree_id) {
-            return Err(RegistrationError::Pending(*operation));
+            if owner != Some(*operation) { return Err(RegistrationError::Pending(*operation)); }
         }
         let head = self.heads.get(&handle.worktree_id).ok_or(RegistrationError::Source)?;
         Ok(PublishedWorktree {
