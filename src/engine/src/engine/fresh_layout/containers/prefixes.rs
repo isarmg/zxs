@@ -4,6 +4,10 @@ use crate::disk_names::configuration::ConfiguredDiskNames;
 use storage_contract::file_container::{ContainerAreas, ContainerNamespace, ContainerPrefix};
 use storage_contract::working_tree::DirectoryId;
 
+/// Fresh ordinary publication is admitted through the fifth disk. The owner
+/// itself is not a prefix; deeper routes still need scale and recovery evidence.
+const MAX_ORDINARY_SOURCE_PREFIXES: usize = 4;
+
 /// Structural address only. Names are deliberately absent: changing a Config
 /// string cannot change a source area's target, direct parent or owned entities.
 /// A physical consumer still needs its admitted source and held-root checks.
@@ -132,8 +136,8 @@ pub(super) fn plan_source(
     )?;
     source.require_context(context)?;
     // Each hop is copied from the preceding installed BODY descriptor. The
-    // ordinary slice admits B and C through the same ordered held-parent chain.
-    if source.destination().source_ids().len() > 2 {
+    // admitted chain retains every held parent, not just the immediate source.
+    if source.destination().source_ids().len() > MAX_ORDINARY_SOURCE_PREFIXES {
         return Err(Failure::NamespaceUnmapped.into());
     }
     if source.destination().source_ids().last() != Some(owner) {
@@ -183,7 +187,7 @@ pub(in crate::engine::fresh_layout) fn require_source_geometry(
     let names = ConfiguredDiskNames::new(config).map_err(crate::Error::ConfiguredDiskName)?;
     let path = names.source_path(target).map_err(crate::Error::ConfiguredDiskName)?;
     let binding = config.storage_roots.get(&target).ok_or(Failure::Registration)?;
-    if path.source_ids().len() > 2 {
+    if path.source_ids().len() > MAX_ORDINARY_SOURCE_PREFIXES {
         return Err(Failure::NamespaceUnmapped.into());
     }
     if root != binding.root_id

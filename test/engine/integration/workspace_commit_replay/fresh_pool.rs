@@ -611,6 +611,78 @@ fn fresh_container_preparation_survives_exact_decision_cuts_without_adopting_nam
     }
 }
 
+#[test]
+fn fresh_deep_backup_reads_the_exact_fourth_and_fifth_disk_after_reopen() {
+    use storage_contract::{DiskId, FileId, VersionId};
+
+    for count in [4, 5] {
+        let temp = tempfile::tempdir().unwrap();
+        let system = temp.path().join("system");
+        let config = Config::development((1..=count).map(|tier| {
+            let name = format!("Archive {tier}");
+            (name_policy::Name::parse(&name).unwrap(), temp.path().join(format!("disk{tier}")))
+        })).unwrap();
+        let selected = config.disks.last().unwrap().clone();
+        let slot = name_policy::SlotId::parse(&selected.slot_id).unwrap();
+        let parent_disks = &config.disks[..config.disks.len() - 1];
+        let prefix = parent_disks.iter().rev().fold(selected.root.clone(), |path, disk| {
+            let uuid = disk.disk_id.strip_prefix("disk_").unwrap();
+            path.join(format!("{}--{uuid}", disk.name.as_str()))
+        });
+
+        let mut engine = Engine::initialize(&system, config.clone()).unwrap();
+        let repository = engine.create_disk_root("P01", "admin", OperationId::generate().unwrap())
+            .unwrap();
+        let policy = storage_contract::new_id("policy").unwrap();
+        engine.update_protection_policy(storage_engine::ProtectionPolicyUpdate {
+            policy_id: &policy,
+            repository_id: &repository.repository_id,
+            path_prefix: "",
+            target_copies: count,
+            expected_generation: 0,
+            principal: "admin",
+            operation_id: OperationId::generate().unwrap(),
+        }).unwrap();
+        let bytes = b"unique exact backup body";
+        let work = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
+        engine.stage_bytes(&work.workspace_id, "data.txt", bytes).unwrap();
+        let commit = request(&work, "publish contents along the full backup chain");
+        let receipt = engine.commit_workspace(commit.clone()).unwrap();
+        let current = entry(&engine, &repository.main_branch_id);
+        let version: VersionId = current.version_id.parse().unwrap();
+        let storage = engine.state().versions[&current.version_id].storage_id;
+        let file: FileId = current.file_id.parse().unwrap();
+        let replica = &engine.state().file_containers[&file].replicas[
+            &selected.disk_id.parse::<DiskId>().unwrap()
+        ];
+        assert_eq!(
+            replica.prefixes.iter().map(|prefix| prefix.source_disk.to_string())
+                .collect::<Vec<_>>(),
+            parent_disks.iter().rev().map(|disk| disk.disk_id.clone()).collect::<Vec<_>>(),
+        );
+        let path = prefix.join("common-data/data.txt/versions").join(format!("{storage}-data.txt"));
+        let expected = path.metadata().unwrap();
+        drop(engine);
+
+        let mut engine = Engine::open(&system).unwrap();
+        assert_eq!(engine.commit_workspace(commit).unwrap(), receipt);
+        let mut opened = engine.prepare_backup_content(version, &slot).unwrap().open().unwrap();
+        let actual = opened.file.metadata().unwrap();
+        assert_eq!((actual.dev(), actual.ino()), (expected.dev(), expected.ino()));
+        let mut read = Vec::new();
+        opened.file.read_to_end(&mut read).unwrap();
+        assert_eq!(read, bytes);
+        assert!(opened.fallback_files.is_empty());
+        drop(opened);
+
+        let parked = temp.path().join("temporarily-parked-replica");
+        fs::rename(&path, &parked).unwrap();
+        assert!(engine.prepare_backup_content(version, &slot).unwrap().open().is_err());
+        assert_eq!(body(&engine, &current.version_id), bytes);
+        fs::rename(parked, path).unwrap();
+    }
+}
+
 #[cfg(feature = "fault-injection")]
 #[test]
 fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparation() {
