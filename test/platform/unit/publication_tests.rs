@@ -317,3 +317,31 @@ fn renamed_directory_identity_failure_is_published_and_retains_all_evidence() {
         b"replacement"
     );
 }
+
+#[test]
+fn held_bundle_readback_compares_late_bytes_across_blocks_without_replacing_the_file() {
+    let temporary = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(
+        temporary.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let root = BundleDestination::open(temporary.path()).unwrap();
+    let expected = vec![42u8; 2 * 32 * 1024 + 1];
+    root.publish("retained", &[("original.bin", &expected)])
+        .unwrap();
+    assert_eq!(
+        root.inspect("retained", &[("original.bin", &expected)])
+            .unwrap(),
+        BundleState::Published
+    );
+    let path = temporary.path().join("retained/original.bin");
+    let mut changed = expected.clone();
+    *changed.last_mut().unwrap() = 99;
+    std::fs::write(&path, &changed).unwrap();
+    assert!(
+        root.inspect("retained", &[("original.bin", &expected)])
+            .is_err()
+    );
+    assert_eq!(std::fs::read(path).unwrap(), changed);
+}

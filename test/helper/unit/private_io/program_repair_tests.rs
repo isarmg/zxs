@@ -25,6 +25,7 @@ fn exchange_retains_original_inode_and_same_request_retry_does_not_replace_again
         destination
             .repair_original_bytes(DIGEST, &captured, PAYLOAD)
             .unwrap()
+            .1
             .unwrap(),
         b"damaged original"
     );
@@ -60,6 +61,7 @@ fn missing_program_repair_is_no_clobber_and_recoverable_without_fabricated_origi
         destination
             .repair_original_bytes(DIGEST, &None, PAYLOAD)
             .unwrap()
+            .1
             .is_none()
     );
     let first = destination
@@ -106,7 +108,7 @@ fn changed_source_or_missing_retained_inode_never_becomes_a_second_repair() {
     .unwrap();
     assert!(
         destination
-            .completed_repair_snapshot(DIGEST, &next, PAYLOAD)
+            .completed_repair_snapshot(DIGEST, &next, PAYLOAD, |_| Ok(()))
             .is_err()
     );
     assert!(
@@ -176,4 +178,33 @@ fn interrupted_staging_reuses_exact_payload_and_conflicts_preserve_both_files() 
     );
     assert_eq!(fs::read(&path).unwrap(), b"damaged original");
     assert_eq!(fs::read(&staged).unwrap(), b"unknown staging");
+}
+
+#[test]
+fn replacing_the_repaired_inode_during_independent_backup_verification_never_seals_a_receipt() {
+    use std::os::unix::fs::MetadataExt;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("zxs");
+    original(&path);
+    let destination = ProgramDestination::open(&path).unwrap();
+    let original = destination.repair_snapshot(PAYLOAD).unwrap();
+    destination
+        .repair_install(DIGEST, &original, PAYLOAD, || Ok(()))
+        .unwrap();
+    let before = fs::metadata(&path).unwrap().ino();
+    let receipt = destination.completed_repair_snapshot(DIGEST, &original, PAYLOAD, |bytes| {
+        assert_eq!(bytes, Some(b"damaged original".as_slice()));
+        fs::rename(&path, root.path().join("other-installer-held-original"))?;
+        fs::write(&path, PAYLOAD)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o555))?;
+        Ok(())
+    });
+    assert!(receipt.is_err());
+    assert_ne!(fs::metadata(&path).unwrap().ino(), before);
+    assert_eq!(
+        fs::metadata(root.path().join("other-installer-held-original"))
+            .unwrap()
+            .ino(),
+        before
+    );
 }

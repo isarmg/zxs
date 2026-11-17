@@ -18,6 +18,7 @@ pub(crate) struct ProgramSnapshot {
 }
 
 struct Captured {
+    stamp: crate::system_program::FileStamp,
     file: File,
     snapshot: ProgramSnapshot,
     bytes: Vec<u8>,
@@ -30,7 +31,7 @@ impl Captured {
 
 enum Position {
     Before,
-    After,
+    After(Captured),
 }
 
 impl ProgramDestination {
@@ -57,12 +58,16 @@ impl ProgramDestination {
             return Err("repair source must be an administrative-owned, bounded regular file without special or group/other-write modes; unsafe files are not replaced".into());
         }
         let identity = SingleLinkRequirement::check(&file)?;
+        let stamp = crate::system_program::FileStamp::of(&metadata);
         let mut bytes = Vec::new();
         (&file)
             .take(MAX_PROGRAM_BYTES as u64 + 1)
             .read_to_end(&mut bytes)?;
-        if bytes.len() > MAX_PROGRAM_BYTES || bytes.len() as u64 != metadata.len() {
-            return Err("repair program changed length or exceeded its byte budget".into());
+        if bytes.len() > MAX_PROGRAM_BYTES
+            || bytes.len() as u64 != metadata.len()
+            || crate::system_program::FileStamp::of(&file.metadata()?) != stamp
+        {
+            return Err("repair program changed during bounded readback; retain both names".into());
         }
         let snapshot = ProgramSnapshot {
             device: identity.device.to_string(),
@@ -78,6 +83,7 @@ impl ProgramDestination {
             .verify_entry_identity(name, identity)?;
         self.recheck_parent()?;
         Ok(Some(Captured {
+            stamp,
             file,
             snapshot,
             bytes,
@@ -92,6 +98,44 @@ impl ProgramDestination {
         }
     }
 
+    fn check_named_pair(
+        &self,
+        stage_name: &EntryName,
+        target: Option<&Captured>,
+        stage: Option<&Captured>,
+    ) -> Result<()> {
+        for (name, captured) in [(&self.target.name, target), (stage_name, stage)] {
+            if let Some(captured) = captured {
+                self.target
+                    .directory
+                    .verify_entry_identity(name, FileIdentity::from_fd(&captured.file)?)?;
+                if crate::system_program::FileStamp::of(&captured.file.metadata()?)
+                    != captured.stamp
+                {
+                    return Err(
+                        "repair source changed while observing the named pair; preserve both files"
+                            .into(),
+                    );
+                }
+            } else {
+                match statat(
+                    self.target.directory.directory(),
+                    name.as_os_str(),
+                    AtFlags::SYMLINK_NOFOLLOW,
+                ) {
+                    Ok(_) => {
+                        return Err(
+                            "an absent repair name became occupied; preserve the new entry".into(),
+                        );
+                    }
+                    Err(rustix::io::Errno::NOENT) => (),
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        self.recheck_parent()
+    }
+
     fn repair_position(
         &self,
         digest: &str,
@@ -99,7 +143,10 @@ impl ProgramDestination {
         payload: &[u8],
     ) -> Result<(Position, Option<Captured>)> {
         let target = self.capture_at(&self.target.name)?;
-        let stage = self.capture_at(&repair_stage(digest)?)?;
+        let stage_name = repair_stage(digest)?;
+        let stage = self.capture_at(&stage_name)?;
+        // Reading the second (possibly large) file can invalidate the first.
+        self.check_named_pair(&stage_name, target.as_ref(), stage.as_ref())?;
         match (original, target, stage) {
             (Some(expected), Some(current), stage) if current.snapshot == *expected => {
                 if stage.as_ref().is_some_and(|file| !file.matches_payload(payload)) {
@@ -110,7 +157,7 @@ impl ProgramDestination {
             (Some(expected), Some(current), Some(old))
                 if current.matches_payload(payload) && old.snapshot == *expected =>
             {
-                Ok((Position::After, Some(old)))
+                Ok((Position::After(current), Some(old)))
             }
             (None, None, stage) => {
                 if stage.as_ref().is_some_and(|file| !file.matches_payload(payload)) {
@@ -118,7 +165,7 @@ impl ProgramDestination {
                 }
                 Ok((Position::Before, None))
             }
-            (None, Some(current), None) if current.matches_payload(payload) => Ok((Position::After, None)),
+            (None, Some(current), None) if current.matches_payload(payload) => Ok((Position::After(current), None)),
             _ => Err("program and repair staging do not match one legal state of the exact original request; preserve both names and the backup".into()),
         }
     }
@@ -128,11 +175,12 @@ impl ProgramDestination {
         digest: &str,
         original: &Option<ProgramSnapshot>,
         payload: &[u8],
-    ) -> Result<Option<Vec<u8>>> {
-        Ok(self
-            .repair_position(digest, original, payload)?
-            .1
-            .map(|original| original.bytes))
+    ) -> Result<(bool, Option<Vec<u8>>)> {
+        let (position, retained) = self.repair_position(digest, original, payload)?;
+        Ok((
+            matches!(position, Position::After(_)),
+            retained.map(|original| original.bytes),
+        ))
     }
 
     pub(crate) fn repair_is_published(
@@ -143,7 +191,7 @@ impl ProgramDestination {
     ) -> Result<bool> {
         Ok(matches!(
             self.repair_position(digest, original, payload)?.0,
-            Position::After
+            Position::After(_)
         ))
     }
 
@@ -152,17 +200,19 @@ impl ProgramDestination {
         digest: &str,
         original: &Option<ProgramSnapshot>,
         payload: &[u8],
+        verify_backup: impl FnOnce(Option<&[u8]>) -> Result<()>,
     ) -> Result<ProgramSnapshot> {
-        if !matches!(
-            self.repair_position(digest, original, payload)?.0,
-            Position::After
-        ) {
+        let (Position::After(mut installed), retained) =
+            self.repair_position(digest, original, payload)?
+        else {
             return Err("completed repair lost its exact target; it was not recreated".into());
-        }
-        Ok(self
-            .capture_at(&self.target.name)?
-            .ok_or("completed repair target disappeared")?
-            .snapshot)
+        };
+        // The large replacement was compared to the sealed payload; only its
+        // held descriptor, stamp and original receipt fields are still needed.
+        installed.bytes = Vec::new();
+        verify_backup(retained.as_ref().map(|old| old.bytes.as_slice()))?;
+        self.check_named_pair(&repair_stage(digest)?, Some(&installed), retained.as_ref())?;
+        Ok(installed.snapshot)
     }
 
     pub(crate) fn repair_install(
@@ -218,7 +268,7 @@ impl ProgramDestination {
         revalidate: &impl Fn() -> Result<()>,
     ) -> Result<ProgramSnapshot> {
         let (position, retained) = self.repair_position(digest, original, payload)?;
-        if !matches!(position, Position::After) {
+        if !matches!(position, Position::After(_)) {
             return Err(
                 "repair has no completed program publication; all evidence was retained".into(),
             );

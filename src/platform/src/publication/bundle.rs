@@ -333,16 +333,33 @@ fn verify_file(directory: &OpenAt2Root, name: &str, expected: &[u8]) -> Result<O
         .into());
     }
     let identity = SingleLinkRequirement::check(&file)?;
-    let mut bytes = Vec::new();
-    (&file)
-        .take(expected.len() as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes != expected {
-        return Err(format!(
-            "bundle file {:?} differs from the exact request; it was not replaced",
-            name.as_os_str()
-        )
-        .into());
+    // A helper backup can be as large as the original executable. Compare the
+    // held private file directly instead of allocating a second program-sized Vec.
+    let mut opened = &file;
+    let mut buffer = [0u8; 32 * 1024];
+    for block in expected.chunks(buffer.len()) {
+        opened.read_exact(&mut buffer[..block.len()])?;
+        if buffer[..block.len()] != *block {
+            return Err(format!(
+                "bundle file {:?} differs from the exact request; it was not replaced",
+                name.as_os_str()
+            )
+            .into());
+        }
+    }
+    let after = file.metadata()?;
+    if opened.read(&mut buffer[..1])? != 0
+        || after.len() != metadata.len()
+        || after.uid() != metadata.uid()
+        || after.gid() != metadata.gid()
+        || after.mode() != metadata.mode()
+        || after.nlink() != 1
+        || (after.ctime(), after.ctime_nsec()) != (metadata.ctime(), metadata.ctime_nsec())
+        || (after.mtime(), after.mtime_nsec()) != (metadata.mtime(), metadata.mtime_nsec())
+    {
+        return Err(
+            "bundle file changed during exact readback; preserve the named material".into(),
+        );
     }
     directory.verify_entry_identity(&name, identity)?;
     Ok(Some(file))

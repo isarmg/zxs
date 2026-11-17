@@ -6859,6 +6859,35 @@
           "max_tests": 2
         }
       ]
+    },
+    "same-payload-repair-originals": {
+      "reason": "Exercise the irreversible same-payload repair decision, retained independent backup and exact held file readback. No host install, ABI or historical upgrade certification.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "exact": [
+            "installation::repair::tests::completed_same_payload_repair_requires_independent_original_without_rebuilding_it",
+            "installation::repair::tests::exchanged_program_without_completion_cannot_refill_a_missing_or_pending_backup",
+            "private_io::program_repair::tests::replacing_the_repaired_inode_during_independent_backup_verification_never_seals_a_receipt"
+          ],
+          "max_tests": 3
+        },
+        {
+          "package": "platform-io",
+          "manifest": "src/platform/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "publication::tests::held_bundle_readback_compares_late_bytes_across_blocks_without_replacing_the_file"
+          ],
+          "max_tests": 1
+        }
+      ]
     }
   },
   "rules": [
@@ -6870,7 +6899,8 @@
         "cold-lifecycle-receipt-rows",
         "permanent-removal-exact-leaves",
         "automatic-management-observation",
-        "original-holder-recovery"
+        "original-holder-recovery",
+        "same-payload-repair-originals"
       ]
     },
     {
@@ -20426,6 +20456,42 @@
       "path": "src/engine/src/engine/backup_preparation/native_control/runtime.rs",
       "groups": [
         "original-holder-recovery"
+      ]
+    },
+    {
+      "path": "helper/src/installation/repair.rs",
+      "groups": [
+        "same-payload-repair-originals"
+      ]
+    },
+    {
+      "path": "helper/src/private_io/program_repair.rs",
+      "groups": [
+        "same-payload-repair-originals"
+      ]
+    },
+    {
+      "path": "src/platform/src/publication/bundle.rs",
+      "groups": [
+        "same-payload-repair-originals"
+      ]
+    },
+    {
+      "path": "test/helper/unit/installation/repair_tests.rs",
+      "groups": [
+        "same-payload-repair-originals"
+      ]
+    },
+    {
+      "path": "test/helper/unit/private_io/program_repair_tests.rs",
+      "groups": [
+        "same-payload-repair-originals"
+      ]
+    },
+    {
+      "path": "test/platform/unit/publication_tests.rs",
+      "groups": [
+        "same-payload-repair-originals"
       ]
     }
   ],

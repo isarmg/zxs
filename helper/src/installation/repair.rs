@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     Result,
-    private_io::{BundleDestination, ProgramDestination, ProgramSnapshot},
+    private_io::{BundleDestination, BundleState, ProgramDestination, ProgramSnapshot},
 };
 use data_serialization::{Deserialize, Serialize};
 use platform_io::service_lease::HOST_ROOT;
@@ -217,15 +217,30 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     })
 }
 
+/// Backup bytes and the exchanged original inode are independent requirements.
+/// After the installed position exists, a missing or pending backup is loss
+/// of previously published evidence, never authority to reconstruct it.
+fn retained_backup(host: &BundleDestination, digest: &str, old: Option<&[u8]>) -> Result<()> {
+    let name = backup_name(digest);
+    match old {
+        Some(bytes) if host.inspect(&name,&[("original.bin",bytes)])?==BundleState::Published=>Ok(()),
+        Some(_)=>Err("published repair lacks the original independent backup; preserve the executable and retained inode without refilling the backup".into()),
+        None if !host.operation_started(&name)?=>Ok(()),
+        None=>Err("missing-program repair has unexpected independent backup material; preserve it".into()),
+    }
+}
+
 fn receipt<'a>(context: &Context, plan: &Plan, digest: &'a str) -> Result<Receipt<'a>> {
+    let installed = context.program.completed_repair_snapshot(
+        digest,
+        &plan.original,
+        context.payload.bytes,
+        |original| retained_backup(&context.host, digest, original),
+    )?;
     Ok(Receipt {
         format: "zxs-helper-same-payload-program-repaired",
         request_digest: digest,
-        installed: context.program.completed_repair_snapshot(
-            digest,
-            &plan.original,
-            context.payload.bytes,
-        )?,
+        installed,
         original_file_existed: plan.original.is_some(),
         original_inode_and_independent_backup_retained: plan.original.is_some(),
         data_or_configuration_modified: false,
@@ -247,7 +262,7 @@ fn publish(context: &Context, plan: &Plan, digest: &str) -> Result<json_codec::V
     } else if context.host.operation_started(&completion)? {
         return Err("repair completion record is incomplete; preserve it and both program names for explicit recovery".into());
     }
-    let original =
+    let (already_installed, original) =
         context
             .program
             .repair_original_bytes(digest, &plan.original, context.payload.bytes)?;
@@ -255,13 +270,18 @@ fn publish(context: &Context, plan: &Plan, digest: &str) -> Result<json_codec::V
     context
         .host
         .publish(&intent_name(digest), &[("plan.json", &plan_bytes)])?;
-    if let Some(bytes) = original {
+    if already_installed {
+        retained_backup(&context.host, digest, original.as_deref())?;
+    } else if let Some(bytes) = original.as_deref() {
         context
             .host
-            .publish(&backup_name(digest), &[("original.bin", &bytes)])?;
+            .publish(&backup_name(digest), &[("original.bin", bytes)])?;
     } else if context.host.operation_started(&backup_name(digest))? {
         return Err("missing-program repair unexpectedly has an original backup; preserve conflicting evidence".into());
     }
+    // Originals may be large; the backup has its own durable publication gate.
+    // Release this read before capturing the live held pair for exchange.
+    drop(original);
     context.recheck()?;
     context
         .program

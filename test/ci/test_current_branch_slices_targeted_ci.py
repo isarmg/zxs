@@ -32,6 +32,8 @@ class CurrentBranchSelection(unittest.TestCase):
                 'src/engine/src/history_package/preparation.rs',
                 'test/engine/unit/backup_copy_capacity_tests.rs',
             ],
+            'same-payload-repair-originals': ['helper/src/installation/repair.rs',
+                                              'src/platform/src/publication/bundle.rs'],
             'helper-stop-handoff': ['helper/src/console/shutdown.rs', 'helper/src/console/http.rs'],
             'cold-lifecycle-receipt-rows': ['test/engine/unit/path_changes_tests.rs'],
             'permanent-removal-exact-leaves': ['src/engine/src/disk/version_material.rs'],
