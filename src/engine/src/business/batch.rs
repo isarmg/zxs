@@ -4,6 +4,7 @@ use super::*;
 use crate::engine::{CurrentBatchScope, Prepared};
 use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+mod working;
 
 /// Initial-generation historical compositions and admitted current selections
 /// have different authority. A current selection never becomes an inactive
@@ -722,6 +723,19 @@ fn apply(
         } else {
             (source_scope, source)
         };
+        if matches!(request.kind, DirectoryBatchKind::Copy | DirectoryBatchKind::Separate) {
+            let content_origin = if request.kind == DirectoryBatchKind::Separate {
+                &originals[&target.directory_branch_id]
+            } else {
+                &originals[&item.source.directory_branch_id]
+            };
+            // Only the live planning closure reaches this guard. Exact saved
+            // operations are returned before this closure, and recovery keeps
+            // its original candidate rather than consulting a later draft.
+            working::require_committed_source(
+                engine.state(), content_origin, content_source, current.entries(),
+            )?;
+        }
         entries.extend(
             content_scope
                 .entries
@@ -1442,3 +1456,7 @@ impl Engine {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/business/shared_draft_copy_tests.rs"]
+mod shared_draft_copy_tests;
