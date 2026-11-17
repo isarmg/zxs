@@ -1,6 +1,7 @@
 //! Immutable preparation names. No active SQLite/namespace is replaced and no
 //! stored database opens by pathname through the SQLite library.
 use super::*;
+use crate::engine::backup_preparation::native_control::completion_fanout::MaterialMode;
 use crate::history_package::{
     install_preparation_bytes, preparation_checkpoint, preparation_path_exists,
 };
@@ -73,7 +74,7 @@ pub(super) enum Namespace {
     CommonDatabases,
 }
 impl Namespace {
-    fn name(self) -> &'static str {
+    pub(in crate::engine::backup_preparation::native_control) fn name(self) -> &'static str {
         match self {
             Self::Objects => "object-databases",
             Self::Scopes => "scoped-databases",
@@ -320,12 +321,21 @@ pub(super) fn install(
     prepared: &PreparedFiles<'_>,
     stop: &AtomicBool,
 ) -> Result<()> {
-    require_capacity(root, prepared, stop)?;
+    install_with(root, prepared, MaterialMode::CopyMissing, stop)
+}
+
+pub(super) fn install_with(
+    root: &DiskRoot, prepared: &PreparedFiles<'_>, mode: MaterialMode, stop: &AtomicBool,
+) -> Result<()> {
+    match mode {
+        MaterialMode::CopyMissing => require_capacity(root, prepared, stop)?,
+        MaterialMode::ExistingOnly => inventory(root, prepared, true, stop)?,
+    }
     let base = root.path().join(prepared.namespace.name());
-    install_preparation_bytes(root, &base.join(MANIFEST), prepared.manifest())?;
+    mode.write(root, &base.join(MANIFEST), prepared.manifest())?;
     for (path, bytes) in prepared.data_files() {
         preparation_checkpoint(stop)?;
-        install_preparation_bytes(root, &base.join(path), bytes)?;
+        mode.write(root, &base.join(path), bytes)?;
     }
     verify(root, prepared, stop)
 }

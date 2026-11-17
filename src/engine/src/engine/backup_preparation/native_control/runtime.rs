@@ -3,7 +3,7 @@
 use super::*;
 use allocation::Admission;
 use archive::PreparedArchive;
-use completion_fanout::{Fanout, MaterialMode};
+use completion_fanout::Fanout;
 
 pub(super) struct Target {
     pub(super) root: DiskRoot,
@@ -51,17 +51,7 @@ impl Engine {
             super::resume(self, &system)?;
         } else {
             let (work, materials) = prepare_with_reports(self, &selection)?;
-            let fanout = Fanout::observe(COMPLETE, &work, selection.jobs())?;
-            if matches!(fanout.mode(), MaterialMode::ExistingOnly) {
-                return Err(invalid("native completion predates the SYSTEM intent"));
-            }
-            for target in &work {
-                for name in [INTENT, archive::ROOT, COMPLETE] {
-                    if target.root.optional_metadata(&target.root.path().join(name))?.is_some() {
-                        return Err(invalid("native target evidence predates its SYSTEM intent; existing material retained"));
-                    }
-                }
-            }
+            let fanout = Fanout::new_stage(COMPLETE, &[INTENT, archive::ROOT], &work, selection.jobs())?;
             let archive = PreparedArchive::freeze(self, selection.first())?;
             let task = NativeTask {
                 format: FORMAT.into(),

@@ -1,6 +1,7 @@
 //! Persist owner intent before per-target topology input acknowledgements.
 //! There is no membership vote or write-fence release in this preparation step.
 use super::*;
+use crate::engine::backup_preparation::native_control::completion_fanout::{Fanout, MaterialMode};
 use crate::engine::backup_preparation::native_control::runtime::Target;
 
 impl Engine {
@@ -66,12 +67,13 @@ impl Engine {
             };
             task.validate()?;
             let (work, report) = prepare(self, &task)?;
+            let fanout = Fanout::new_stage(COMPLETE, &[INTENT, ACCEPTANCE], &work, task.selection().jobs())?;
             let bytes = task.bytes()?;
             for (index, target) in work.iter().enumerate() {
                 require_capacity(&target.root, &task, &report, index)?;
             }
             system.write_atomic(&self.root.join(TASK), &bytes, false)?;
-            self.backup_preparation = Some(match spawn(self, task.clone(), system, work, report) {
+            self.backup_preparation = Some(match spawn(self, task.clone(), system, work, report, fanout) {
                 Ok(worker) => worker,
                 Err(error) => task
                     .selection()
@@ -117,12 +119,14 @@ pub(in crate::engine::backup_preparation) fn resume(
     }
     let result = (|| {
         let (work, report) = prepare(engine, &task)?;
+        let fanout = Fanout::observe(COMPLETE, &work, task.selection().jobs())?;
         spawn(
             engine,
             task.clone(),
             DiskRoot::open(system.path())?,
             work,
             report,
+            fanout,
         )
     })();
     engine.backup_preparation = Some(match result {
@@ -178,19 +182,24 @@ fn run(
     task: &CutoverTask,
     work: &[Target],
     initial: &BackupCutoverPreparationReport,
+    mut fanout: Fanout,
     progress: &Progress,
 ) -> Result<()> {
     let stop = progress.stop.as_ref();
     let intent = task.bytes()?;
+    fanout.refresh(work, task.selection().jobs())?;
+    let mode = fanout.mode();
     for (index, (target, job)) in work.iter().zip(task.selection().jobs()).enumerate() {
         preparation_checkpoint(stop)?;
         named_target(&target.root, job)?;
-        require_capacity(&target.root, task, initial, index)?;
+        if matches!(mode, MaterialMode::CopyMissing) {
+            require_capacity(&target.root, task, initial, index)?;
+        }
     }
     for (target, job) in work.iter().zip(task.selection().jobs()) {
         preparation_checkpoint(stop)?;
         named_target(&target.root, job)?;
-        install_preparation_bytes(&target.root, &target.root.path().join(INTENT), &intent)?;
+        mode.write(&target.root, &target.root.path().join(INTENT), &intent)?;
     }
     progress.update(|status| {
         status.phase = BackupPreparationPhase::Verifying;
@@ -208,7 +217,7 @@ fn run(
     for (index, (target, job)) in work.iter().zip(task.selection().jobs()).enumerate() {
         preparation_checkpoint(stop)?;
         named_target(&target.root, job)?;
-        install_preparation_bytes(
+        mode.write(
             &target.root,
             &target.root.path().join(ACCEPTANCE),
             &acceptance(task, &observed, index)?,
@@ -227,14 +236,7 @@ fn run(
         }
         named_target(&target.root, job)?;
     }
-    for (target, job) in work.iter().zip(task.selection().jobs()) {
-        preparation_checkpoint(stop)?;
-        named_target(&target.root, job)?;
-        install_preparation_bytes(&target.root, &target.root.path().join(COMPLETE), &completed)?;
-    }
-    for (target, job) in work.iter().zip(task.selection().jobs()) {
-        named_target(&target.root, job)?;
-    }
+    fanout.finish(work, task.selection().jobs(), &completed, MAX_TASK, stop)?;
     progress.update(|status| {
         status.phase = BackupPreparationPhase::CutoverInputsPrepared;
         status.detail = format!(
@@ -250,6 +252,7 @@ fn spawn(
     system: DiskRoot,
     work: Vec<Target>,
     report: BackupCutoverPreparationReport,
+    fanout: Fanout,
 ) -> Result<Worker> {
     let locks = engine.retain_writer_locks()?;
     let mut initial = task.selection().status();
@@ -261,7 +264,7 @@ fn spawn(
         system,
         "zxs-backup-cutover-inputs",
         move |progress| {
-            progress.finish(run(&frozen, &work, &report, progress));
+            progress.finish(run(&frozen, &work, &report, fanout, progress));
         },
     )
 }

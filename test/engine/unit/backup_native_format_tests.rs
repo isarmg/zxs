@@ -359,3 +359,53 @@ fn partial_native_archive_on_a_late_peer_is_checked_before_any_earlier_refill() 
     assert_eq!(fixture.engine.wait_backup_preparation().unwrap().phase, BackupPreparationPhase::NativeControlPrepared);
     assert_eq!(fs::read(first).unwrap(), expected);
 }
+
+#[test]
+fn object_scoped_and_cutover_marker_tails_require_the_unmarked_peers_own_evidence() {
+    use crate::{BackupCutoverPreparationRequest, BackupTopologyTarget};
+    use std::os::unix::fs::MetadataExt;
+    let mut f = Fixture::prepared_with_sibling(true);
+    let op = f.operation;
+    fn exercise(
+        f: &mut Fixture, marker: &str, material: &str, phase: BackupPreparationPhase,
+        start: impl Fn(&mut Engine) -> Result<BackupPreparationStatus>,
+    ) {
+        start(&mut f.engine).unwrap();
+        assert_eq!(f.engine.wait_backup_preparation().unwrap().phase, phase);
+        let first = f.target.join(marker);
+        let last = f.temp.path().join("sibling-target").join(marker);
+        let material = f.target.join(material);
+        let saved = f.temp.path().join("exact-stage-material");
+        let expected = fs::read(&last).unwrap();
+        let last_inode = fs::metadata(&last).unwrap().ino();
+        fs::remove_file(&first).unwrap();
+        fs::rename(&material, &saved).unwrap();
+        start(&mut f.engine).unwrap();
+        assert_eq!(f.engine.wait_backup_preparation().unwrap().phase, BackupPreparationPhase::Blocked);
+        assert!(!first.exists());
+        assert!(!material.exists());
+        assert_eq!(fs::read(&last).unwrap(), expected);
+        assert!(f.engine.membership_fence_status().is_none());
+        // A partial marker fan-out with intact physical evidence is resumable.
+        fs::rename(&saved, &material).unwrap();
+        start(&mut f.engine).unwrap();
+        assert_eq!(f.engine.wait_backup_preparation().unwrap().phase, phase);
+        assert_eq!(fs::metadata(&last).unwrap().ino(), last_inode);
+        assert_eq!(fs::read(&first).unwrap(), expected);
+    }
+    exercise(&mut f, "object-databases-prepared.json", "object-databases", BackupPreparationPhase::ObjectDatabasesPrepared,
+        |engine| engine.start_backup_object_database_preparation(op, "admin"));
+    exercise(&mut f, "scoped-databases-prepared.json", "scoped-databases", BackupPreparationPhase::ScopedDatabasesPrepared,
+        |engine| engine.start_backup_scoped_database_preparation(op, "admin"));
+    let cutover = BackupCutoverPreparationRequest {
+        operation_id: op, principal: "admin".into(),
+        targets: (0..2).map(|i| BackupTopologyTarget {
+            name: name_policy::Name::parse(&format!("New archive {}", i + 1)).unwrap(),
+            disk_id: crate::new_id("disk").unwrap(), slot_id: format!("C{:02}", i + 2), upstream_slot_id: "B01".into(),
+        }).collect(),
+    };
+    exercise(&mut f, "cutover-inputs-prepared.json", "cutover-target-prepared.json", BackupPreparationPhase::CutoverInputsPrepared,
+        |engine| engine.start_backup_cutover_preparation(cutover.clone()));
+    assert!(f.engine.membership_fence_status().is_none());
+    assert!(!f.engine.state().operations.contains_key(&op));
+}

@@ -42,6 +42,32 @@ impl Fanout {
         Ok(result)
     }
 
+    /// SYSTEM must precede every native stage write. Do not adopt or complete
+    /// orphan stage files, even when their bytes happen to match this request.
+    pub(super) fn new_stage(
+        marker: &'static str,
+        names: &[&str],
+        targets: &[Target],
+        jobs: &[Job],
+    ) -> Result<Self> {
+        let fanout = Self::observe(marker, targets, jobs)?;
+        if matches!(fanout.mode(), MaterialMode::ExistingOnly) {
+            return Err(invalid(
+                "Backup completion predates its original SYSTEM intent",
+            ));
+        }
+        for target in targets {
+            for name in names {
+                if preparation_path_exists(&target.root, &target.root.path().join(name))? {
+                    return Err(invalid(
+                        "Backup target evidence predates its original SYSTEM intent; existing material retained",
+                    ));
+                }
+            }
+        }
+        Ok(fanout)
+    }
+
     pub(super) fn refresh(&mut self, targets: &[Target], jobs: &[Job]) -> Result<()> {
         if targets.len() != self.seen.len() || jobs.len() != self.seen.len() {
             return Err(invalid("Backup marker fan-out target set changed"));

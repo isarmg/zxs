@@ -2,8 +2,9 @@
 //! target writes; startup resumes it before either earlier worker stage.
 use super::super::runtime::Target;
 use super::*;
+use crate::engine::backup_preparation::native_control::{completion_fanout::{Fanout, MaterialMode}, databases::materials::Namespace};
 use crate::history_package::{
-    install_preparation_bytes, preparation_checkpoint, preparation_path_exists,
+    preparation_checkpoint, preparation_path_exists,
 };
 
 impl Engine {
@@ -52,9 +53,10 @@ impl Engine {
                 native,
             };
             task.check_native(&original)?;
+            let fanout = Fanout::new_stage(COMPLETE, &[INTENT, Namespace::Objects.name()], &work, task.native.selection.jobs())?;
             system.write_atomic(&self.root.join(TASK), &task.bytes()?, false)?;
             self.backup_preparation =
-                Some(match spawn(self, task.clone(), system, work, original) {
+                Some(match spawn(self, task.clone(), system, work, original, fanout) {
                     Ok(worker) => worker,
                     Err(error) => task
                         .native
@@ -99,12 +101,14 @@ pub(in crate::engine::backup_preparation) fn resume(
     let result = (|| {
         let (work, report) = prepare(engine, &task.native)?;
         task.check_native(&report)?;
+        let fanout = Fanout::observe(COMPLETE, &work, task.native.selection.jobs())?;
         spawn(
             engine,
             task.clone(),
             DiskRoot::open(system.path())?,
             work,
             report,
+            fanout,
         )
     })();
     engine.backup_preparation = Some(match result {
@@ -121,6 +125,7 @@ fn run(
     task: &DatabaseTask,
     work: &[Target],
     native: BackupNativePreparationReport,
+    mut fanout: Fanout,
     progress: &Progress,
 ) -> Result<()> {
     let stop = progress.stop.as_ref();
@@ -133,6 +138,8 @@ fn run(
     }
     let prepared = PreparedDatabases::capture(&state, stop)?;
     let intent = task.bytes()?;
+    fanout.refresh(work, task.native.selection.jobs())?;
+    let mode = fanout.mode();
     let observation = report(task, native, &prepared)?;
     let bytes = completion_bytes(&observation)?;
     // All targets pass their own partial inventory/space checks before the
@@ -140,7 +147,10 @@ fn run(
     for (target, job) in work.iter().zip(task.native.selection.jobs()) {
         preparation_checkpoint(stop)?;
         named_target(&target.root, job)?;
-        store::require_capacity(&target.root, &prepared, stop)?;
+        match mode {
+            MaterialMode::CopyMissing => store::require_capacity(&target.root, &prepared, stop)?,
+            MaterialMode::ExistingOnly => store::verify(&target.root, &prepared, stop)?,
+        }
     }
     for (index, (target, job)) in work.iter().zip(task.native.selection.jobs()).enumerate() {
         preparation_checkpoint(stop)?;
@@ -153,15 +163,16 @@ fn run(
             );
         })?;
         named_target(&target.root, job)?;
-        install_preparation_bytes(&target.root, &target.root.path().join(INTENT), &intent)?;
-        store::install(&target.root, &prepared, stop)?;
+        mode.write(&target.root, &target.root.path().join(INTENT), &intent)?;
+        store::install(&target.root, &prepared, mode, stop)?;
     }
     // Re-read the original control prefix and every retained FULL after all
     // SQLite writes, before any common completion marker. A good database is
     // never a substitute for a missing body, old receipt or changed target.
     let roots = work.iter().map(|target| &target.root).collect::<Vec<_>>();
     let final_native = verify_completed(&task.native, &roots, stop)?;
-    if completion_bytes(&report(task, final_native, &prepared)?)? != bytes {
+    let final_observation = report(task, final_native, &prepared)?;
+    if completion_bytes(&final_observation)? != bytes {
         return Err(invalid(
             "native material changed during database preparation",
         ));
@@ -169,16 +180,21 @@ fn run(
     for (target, job) in work.iter().zip(task.native.selection.jobs()) {
         preparation_checkpoint(stop)?;
         named_target(&target.root, job)?;
-        store::verify(&target.root, &prepared, stop)?;
+        match mode {
+            MaterialMode::CopyMissing => store::verify(&target.root, &prepared, stop)?,
+            MaterialMode::ExistingOnly => {
+                // The marker tail must not certify any peer from the first
+                // root's projection. Recompute from this held target's State.
+                let local_state = snapshot::read(&target.root, job, stop)?;
+                let local = PreparedDatabases::capture(&local_state, stop)?;
+                store::verify(&target.root, &local, stop)?;
+                if completion_bytes(&report(task, final_observation.native.clone(), &local)?)? != bytes {
+                    return Err(invalid("selected targets have different object-database closures"));
+                }
+            }
+        }
     }
-    for (target, job) in work.iter().zip(task.native.selection.jobs()) {
-        preparation_checkpoint(stop)?;
-        named_target(&target.root, job)?;
-        install_preparation_bytes(&target.root, &target.root.path().join(COMPLETE), &bytes)?;
-    }
-    for (target, job) in work.iter().zip(task.native.selection.jobs()) {
-        named_target(&target.root, job)?;
-    }
+    fanout.finish(work, task.native.selection.jobs(), &bytes, MAX_TASK, stop)?;
     progress.update(|status| {
         status.phase = BackupPreparationPhase::ObjectDatabasesPrepared;
         status.detail = format!(
@@ -196,6 +212,7 @@ fn spawn(
     system: DiskRoot,
     work: Vec<Target>,
     native: BackupNativePreparationReport,
+    fanout: Fanout,
 ) -> Result<Worker> {
     let locks = engine.retain_writer_locks()?;
     let mut initial = task.native.selection.status();
@@ -208,7 +225,7 @@ fn spawn(
         system,
         "zxs-backup-object-databases",
         move |progress| {
-            progress.finish(run(&frozen, &work, native, progress));
+            progress.finish(run(&frozen, &work, native, fanout, progress));
         },
     )
 }

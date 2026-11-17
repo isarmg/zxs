@@ -1,6 +1,7 @@
 //! Original-scope bytes share the object stage's no-clobber filesystem policy.
 use super::super::materials::{self, Namespace, PreparedFiles};
 use super::*;
+use crate::engine::backup_preparation::native_control::completion_fanout::MaterialMode;
 
 fn files(prepared: &PreparedScopes) -> Result<PreparedFiles<'_>> {
     PreparedFiles::new(
@@ -19,8 +20,8 @@ pub(super) fn require_capacity(
 ) -> Result<()> {
     materials::require_capacity(root, &files(prepared)?, stop)
 }
-pub(super) fn install(root: &DiskRoot, prepared: &PreparedScopes, stop: &AtomicBool) -> Result<()> {
-    materials::install(root, &files(prepared)?, stop)
+pub(super) fn install(root: &DiskRoot, prepared: &PreparedScopes, mode: MaterialMode, stop: &AtomicBool) -> Result<()> {
+    materials::install_with(root, &files(prepared)?, mode, stop)
 }
 pub(super) fn verify(root: &DiskRoot, prepared: &PreparedScopes, stop: &AtomicBool) -> Result<()> {
     materials::verify(root, &files(prepared)?, stop)

@@ -1,9 +1,10 @@
 //! Durable next stage of the same target selection. No new placement, member
 //! identity, source deletion or business publication is created by this worker.
 use super::*;
+use crate::engine::backup_preparation::native_control::{completion_fanout::{Fanout, MaterialMode}, databases::materials::Namespace};
 use crate::engine::backup_preparation::native_control::runtime::Target;
 use crate::history_package::{
-    install_preparation_bytes, preparation_checkpoint, preparation_path_exists,
+    preparation_checkpoint, preparation_path_exists,
 };
 
 impl Engine {
@@ -51,9 +52,10 @@ impl Engine {
             let (work, objects) = prepare(self, &task)?;
             // Owner first, every target second. Existing exact intent can be
             // resumed, never replaced by a different selected peer set.
+            let fanout = Fanout::new_stage(COMPLETE, &[INTENT, Namespace::Scopes.name()], &work, task.objects.native.selection.jobs())?;
             system.write_atomic(&self.root.join(TASK), &task.bytes()?, false)?;
             self.backup_preparation =
-                Some(match spawn(self, task.clone(), system, work, objects) {
+                Some(match spawn(self, task.clone(), system, work, objects, fanout) {
                     Ok(worker) => worker,
                     Err(error) => task
                         .objects
@@ -108,12 +110,14 @@ pub(in crate::engine::backup_preparation) fn resume(
     }
     let result = (|| {
         let (work, objects) = prepare(engine, &task)?;
+        let fanout = Fanout::observe(COMPLETE, &work, task.objects.native.selection.jobs())?;
         spawn(
             engine,
             task.clone(),
             DiskRoot::open(system.path())?,
             work,
             objects,
+            fanout,
         )
     })();
     engine.backup_preparation = Some(match result {
@@ -131,6 +135,7 @@ fn run(
     task: &ScopedTask,
     work: &[Target],
     objects: BackupObjectDatabasePreparationReport,
+    mut fanout: Fanout,
     progress: &Progress,
 ) -> Result<()> {
     let stop = progress.stop.as_ref();
@@ -143,10 +148,15 @@ fn run(
     )?;
     let expected = completion_bytes(&report(task, objects, &prepared)?)?;
     let intent = task.bytes()?;
+    fanout.refresh(work, task.objects.native.selection.jobs())?;
+    let mode = fanout.mode();
     for (target, job) in work.iter().zip(task.objects.native.selection.jobs()) {
         preparation_checkpoint(stop)?;
         named_target(&target.root, job)?;
-        store::require_capacity(&target.root, &prepared, stop)?;
+        match mode {
+            MaterialMode::CopyMissing => store::require_capacity(&target.root, &prepared, stop)?,
+            MaterialMode::ExistingOnly => store::verify(&target.root, &prepared, stop)?,
+        }
     }
     for (index, (target, job)) in work
         .iter()
@@ -163,8 +173,8 @@ fn run(
             );
         })?;
         named_target(&target.root, job)?;
-        install_preparation_bytes(&target.root, &target.root.path().join(INTENT), &intent)?;
-        store::install(&target.root, &prepared, stop)?;
+        mode.write(&target.root, &target.root.path().join(INTENT), &intent)?;
+        store::install(&target.root, &prepared, mode, stop)?;
     }
     let counts = (prepared.disk_count(), prepared.databases().len());
     drop(prepared);
@@ -187,14 +197,7 @@ fn run(
             ));
         }
     }
-    for (target, job) in work.iter().zip(task.objects.native.selection.jobs()) {
-        preparation_checkpoint(stop)?;
-        named_target(&target.root, job)?;
-        install_preparation_bytes(&target.root, &target.root.path().join(COMPLETE), &expected)?;
-    }
-    for (target, job) in work.iter().zip(task.objects.native.selection.jobs()) {
-        named_target(&target.root, job)?;
-    }
+    fanout.finish(work, task.objects.native.selection.jobs(), &expected, MAX_TASK, stop)?;
     progress.update(|status| {
         status.phase = BackupPreparationPhase::ScopedDatabasesPrepared;
         status.detail = format!(
@@ -212,6 +215,7 @@ fn spawn(
     system: DiskRoot,
     work: Vec<Target>,
     objects: BackupObjectDatabasePreparationReport,
+    fanout: Fanout,
 ) -> Result<Worker> {
     let locks = engine.retain_writer_locks()?;
     let mut initial = task.objects.native.selection.status();
@@ -223,7 +227,7 @@ fn spawn(
         system,
         "zxs-backup-scoped-databases",
         move |progress| {
-            progress.finish(run(&frozen, &work, objects, progress));
+            progress.finish(run(&frozen, &work, objects, fanout, progress));
         },
     )
 }
