@@ -67,6 +67,31 @@ impl Drop for Joined {
         }
     }
 }
+/// Measure with the actual compact pipe codec, without allocating an oversized
+/// payload. This is a length observation and cannot emit a successful reply.
+pub(crate) fn encoded_fits(value: &impl Serialize, maximum: usize) -> Result<bool> {
+    struct Count { remaining: usize, exceeded: bool }
+    impl Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            match self.remaining.checked_sub(bytes.len()) {
+                Some(left) => { self.remaining = left; Ok(bytes.len()) },
+                None => { self.exceeded = true; Err(std::io::Error::other("bounded pipe encoding exceeds its limit")) },
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut count = Count { remaining: maximum, exceeded: false };
+    match json_codec::to_writer(&mut count, value) {
+        Ok(()) => Ok(true),
+        Err(_) if count.exceeded => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub(crate) fn success_fits<T: Request>(value: &T::Output) -> Result<bool> {
+    encoded_fits(&Reply::Success { result: value }, T::MAX_RESPONSE_BYTES)
+}
+
 pub(crate) fn run<T: Request>(request: T) -> Result<T::Output> {
     if rustix::process::geteuid().as_raw() != 0 {
         return Err("storage coordinator requires root".into());

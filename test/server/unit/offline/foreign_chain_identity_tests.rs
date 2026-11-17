@@ -464,14 +464,14 @@ fn material_intent_preflight_preserves_absent_conflicting_and_exact_original_rec
     let (_, plan, _) = fixture();
     let directory = tempfile::tempdir().unwrap();
     let host = crate::offline::private_io::BundleDestination::open(directory.path()).unwrap();
-    inspect_material_intent(&host, &plan, false).unwrap();
+    assert!(!inspect_material_intent(&host, &plan, false).unwrap());
     assert!(inspect_material_intent(&host, &plan, true).is_err());
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 
     let name = operation_name(plan.binding.operation_id);
     let bytes = json_codec::to_vec(&plan).unwrap();
     host.publish(&name, &[("plan.json", &bytes)]).unwrap();
-    inspect_material_intent(&host, &plan, true).unwrap();
+    assert!(inspect_material_intent(&host, &plan, true).unwrap());
     let mut changed = plan.clone();
     changed.binding.source.evidence_digest = "0".repeat(64);
     for completed in [false, true] {
@@ -480,7 +480,7 @@ fn material_intent_preflight_preserves_absent_conflicting_and_exact_original_rec
             host.read_operation(&name, "plan.json", MAX_RECORD_BYTES).unwrap(),
             Some(bytes.clone()),
         );
-        inspect_material_intent(&host, &plan, completed).unwrap();
+        assert!(inspect_material_intent(&host, &plan, completed).unwrap());
     }
 }
 
@@ -495,8 +495,88 @@ fn empty_pending_material_intent_cannot_be_treated_as_completed_or_reconstructed
     std::fs::create_dir(&pending).unwrap();
     std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o700)).unwrap();
     let host = crate::offline::private_io::BundleDestination::open(directory.path()).unwrap();
-    inspect_material_intent(&host, &plan, false).unwrap();
+    assert!(!inspect_material_intent(&host, &plan, false).unwrap());
     assert!(inspect_material_intent(&host, &plan, true).is_err());
     assert_eq!(std::fs::read_dir(&pending).unwrap().count(), 0);
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn complete_foreign_scope_delivery_counts_the_repeated_original_proofs_and_both_external_envelopes() {
+    use crate::offline::service_worker;
+    let (_, seed, seed_observation) = fixture();
+    let mut accepted = false;
+    let mut worker_blocked = false;
+    let mut maintenance_blocked = false;
+    for count in 2..=16_u32 {
+        let mut plan = seed.clone();
+        plan.binding.lower = (1..=count).map(|level| {
+            let mut item = seed.binding.lower[0].clone();
+            item.directory.name = name_policy::Name::parse(&format!("Lower archive {level}")).unwrap();
+            item.directory.root_path = format!("/zxs/data/disks/new_{level}");
+            item.directory.slot_id = format!("new_{level}");
+            item.directory.level = level;
+            item.directory.upstream_slot_id = (level > 1).then(|| format!("new_{}", level - 1));
+            item.selection.root_path = item.directory.root_path.clone();
+            item.selection.root_identity.inode = u64::from(level) + 10;
+            item
+        }).collect();
+        plan.capsule_digests = (1..=count).map(|i| format!("{i:064x}")).collect();
+        plan.binding.source.level = count + 1;
+        plan.binding.source_slot_id = "source_top".into();
+        plan.binding.source_upstream_slot_id = format!("new_{count}");
+        plan.validate().unwrap();
+        let input = Original {service_user:"zxs".into(), operation_id:plan.binding.operation_id,
+            request_digest:digest(&plan).unwrap(), external_writers_stopped:true};
+        let mut template = seed_observation.targets[0].clone();
+        for index in 1..32 {
+            template.original.registrations.push(DiskRegistrationIdentity {
+                pool_id: template.original.pool_id.clone(), disk_id: format!("disk_{index:032x}"),
+                slot_id: format!("original_slot_{index}"), binding_generation: 1,
+            });
+        }
+        template.original_disks = template.original.registrations.len();
+        template.databases = 1 + template.original_disks * 2 + template.file_databases + template.directory_databases;
+        template.database_bytes = template.databases as u64 * 32768;
+        let chain = digest(&plan.binding).unwrap();
+        let targets = (1..=count).map(|level| {
+            let mut report = template.clone();
+            report.capsule_digest = plan.capsule_digests[level as usize - 1].clone();
+            report.chain_digest = chain.clone(); report.target_level = level; report
+        }).collect::<Vec<_>>();
+        let pending = databases::Observation {targets:targets.clone(), statuses:vec![ForeignDatabaseStatus::NotStarted; count as usize]};
+        let expected = pending.expected(&plan).unwrap();
+        let envelope = WorkerRequest {context:plan.binding.context.clone(), action:Action::Databases {
+            plan:plan.clone(), prepare:Some(expected.clone()), completed:false,
+        }};
+        if json_codec::to_vec(&envelope).unwrap().len() > MAX_RECORD_BYTES
+            || !service_worker::success_fits::<WorkerRequest>(&Output::Databases {report:pending}).unwrap() { continue; }
+        let final_report = databases::Observation {targets:targets.clone(), statuses:targets.into_iter().map(|r| ForeignDatabaseStatus::Verified { report:Box::new(r) }).collect()};
+        let worker = json_codec::to_vec(&json!({"status":"success","result":Output::Databases{report:final_report.clone()}})).unwrap().len();
+        let actual_public = databases::response(&input, expected.clone(), final_report, true).unwrap();
+        let public = json_codec::to_vec(&actual_public).unwrap().len();
+        let checked = delivery::databases(&input, &plan, &expected);
+        if worker > MAX_RECORD_BYTES {
+            assert!(checked.unwrap_err().to_string().contains("worker success")); worker_blocked = true;
+        } else if public > MAX_RECORD_BYTES {
+            assert!(checked.unwrap_err().to_string().contains("maintenance result")); maintenance_blocked = true;
+        } else { checked.unwrap(); accepted = true; }
+    }
+    assert!(accepted && worker_blocked && maintenance_blocked);
+}
+
+#[test]
+fn exact_compact_byte_limit_counts_escaped_utf8_and_includes_the_success_wrapper() {
+    use crate::offline::service_worker;
+    let value = json!({"path":"文件\\\"\n","items":["a", "b"]});
+    let n = json_codec::to_vec(&value).unwrap().len();
+    assert!(service_worker::encoded_fits(&value, n).unwrap());
+    assert!(!service_worker::encoded_fits(&value, n - 1).unwrap());
+    // Make the actual worker success frame exactly 64 KiB, not its inner DTO.
+    let sample = |path: String| Output::Report {report:Report {targets:vec![TargetProgress {
+        level:1, path, capsule_digest:"a".repeat(64), progress:Progress::PublishedCapsule,
+    }]}};
+    let empty = json_codec::to_vec(&json!({"status":"success","result":sample(String::new())})).unwrap().len();
+    assert!(service_worker::success_fits::<WorkerRequest>(&sample("x".repeat(MAX_RECORD_BYTES - empty))).unwrap());
+    assert!(!service_worker::success_fits::<WorkerRequest>(&sample("x".repeat(MAX_RECORD_BYTES - empty + 1))).unwrap());
 }

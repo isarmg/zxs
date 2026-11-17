@@ -9,6 +9,10 @@ pub(super) struct Expected {
     targets: Vec<ForeignOriginalDatabasesReport>,
 }
 impl Expected {
+    pub(super) fn target_reports(&self) -> &[ForeignOriginalDatabasesReport] {
+        &self.targets
+    }
+
     pub(super) fn require_original(
         &self,
         plan: &Plan,
@@ -131,7 +135,7 @@ fn root(input: &Original) -> Result<(Root, Plan)> {
     }
     Ok((root, plan))
 }
-fn response(
+pub(super) fn response(
     input: &Original,
     expected: Expected,
     report: Observation,
@@ -230,10 +234,12 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     if json_codec::to_vec(&envelope)?.len() > MAX_RECORD_BYTES {
         return Err("foreign database IPC envelope exceeds 64 KiB; nothing was reserved".into());
     }
-    root.host.publish(
-        &name(&plan, false),
-        &[("plan.json", &json_codec::to_vec(&input.expected)?)],
-    )?;
+    let intent = json_codec::to_vec(&input.expected)?;
+    let name = name(&plan, false);
+    if !delivery::has_exact_intent(&root.host, &name, &intent)? {
+        delivery::databases(&input.input, &plan, &input.expected)?;
+    }
+    root.host.publish(&name, &[("plan.json", &intent)])?;
     drop(root);
     finish(input, plan, envelope).map_err(coordinator::pending::<super::Plan>)
 }

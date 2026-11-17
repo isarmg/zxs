@@ -5,6 +5,7 @@ pub(crate) mod databases;
 pub(crate) mod identity;
 pub(crate) mod objects;
 mod worker;
+mod delivery;
 use crate::offline::{Result, managed_layout as layout};
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::linux::FileIdentity;
@@ -456,11 +457,13 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
         return Err("complete-chain execution exceeds the IPC budget; no intent was saved".into());
     }
     let (root, completion) = if completion.is_none() {
-        material_preflight(root, &input.plan)?;
+        let observed = material_preflight(root, &input.plan)?;
         let root = Root::open(input.input.service_user.clone())?;
         root.check(&input.plan)?;
         let completion = root.completion(&input.plan)?;
-        inspect_material_intent(&root.host, &input.plan, completion.is_some())?;
+        if !inspect_material_intent(&root.host, &input.plan, completion.is_some())? {
+            delivery::material(&input.plan, observed)?;
+        }
         (root, completion)
     } else {
         // An exact completion has already admitted its immutable intent. Keep
@@ -484,17 +487,17 @@ fn inspect_material_intent(
     host: &crate::offline::private_io::BundleDestination,
     plan: &Plan,
     completed: bool,
-) -> Result<()> {
+) -> Result<bool> {
     let name = operation_name(plan.binding.operation_id);
-    host.inspect(&name, &[("plan.json", &json_codec::to_vec(plan)?)])?;
-    if completed && host.read_operation(&name, "plan.json", MAX_RECORD_BYTES)?.is_none() {
+    let exact = delivery::has_exact_intent(host, &name, &json_codec::to_vec(plan)?)?;
+    if completed && !exact {
         return Err(
             "completed foreign material lost its immutable intent; nothing was rebuilt".into(),
         );
     }
-    Ok(())
+    Ok(exact)
 }
-fn material_preflight(root: Root, plan: &Plan) -> Result<()> {
+fn material_preflight(root: Root, plan: &Plan) -> Result<Report> {
     let envelope = WorkerRequest {
         context: root.into_context(),
         action: Action::Status { plan: plan.clone() },
@@ -502,7 +505,8 @@ fn material_preflight(root: Root, plan: &Plan) -> Result<()> {
     let Output::Report { report } = crate::offline::service_worker::run(envelope)? else {
         return Err("unexpected foreign-chain preflight reply".into());
     };
-    report.require_plan(plan)
+    report.require_plan(plan)?;
+    Ok(report)
 }
 fn finish(
     input: Prepare,

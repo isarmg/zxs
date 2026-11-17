@@ -3,7 +3,7 @@
 use super::*;
 use storage_engine::ForeignIdentityClosureReport;
 
-#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serialization(rename_all = "snake_case")]
 pub(super) enum Progress {
     NotStarted,
@@ -11,7 +11,7 @@ pub(super) enum Progress {
     Verified,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct Observation {
     pub expected: ForeignIdentityClosureReport,
@@ -101,7 +101,7 @@ fn saved(
     }
     Ok(Some(report))
 }
-fn response(
+pub(super) fn response(
     input: &Original,
     plan: &Plan,
     report: Observation,
@@ -205,10 +205,12 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     if json_codec::to_vec(&envelope)?.len() > MAX_RECORD_BYTES {
         return Err("foreign object identity IPC exceeds 64 KiB; nothing was reserved".into());
     }
-    root.host.publish(
-        &name(&plan, false),
-        &[("plan.json", &json_codec::to_vec(&input.expected)?)],
-    )?;
+    let intent = json_codec::to_vec(&input.expected)?;
+    let name = name(&plan, false);
+    if !delivery::has_exact_intent(&root.host, &name, &intent)? {
+        delivery::objects(&input.input, &plan, &input.expected)?;
+    }
+    root.host.publish(&name, &[("plan.json", &intent)])?;
     drop(root);
     finish(input, plan, envelope).map_err(coordinator::pending::<super::Plan>)
 }
