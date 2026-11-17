@@ -237,6 +237,9 @@ pub use protection::{
 };
 pub use storage_contract::*;
 pub use wire::{commit_request_digest, manifest_hash as workspace_manifest_hash};
+// Shared test fixtures consume the same public disk-name API in each crate.
+#[cfg(test)]
+extern crate self as storage_engine;
 #[cfg(test)]
 #[path = "../../../test/engine/support/configured_disks.rs"]
 mod test_config;
