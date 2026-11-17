@@ -104,6 +104,9 @@ impl FileReference {
     pub(super) fn bytes(&self) -> usize {
         self.bytes
     }
+    pub(super) fn digest(&self) -> &str {
+        &self.digest
+    }
     pub(super) fn matches(&self, bytes: &[u8]) -> bool {
         bytes.len() == self.bytes && blake3::hash(bytes).to_hex().as_str() == self.digest
     }

@@ -8,7 +8,7 @@ use crate::engine::backup_preparation::native_control::databases::materials::{
     self, FileReference, Namespace, PreparedFiles,
 };
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupFirstPublicationHash};
-use published_scopes::projection::Scopes;
+use published_scopes::projection::{ScopeFile, Scopes};
 
 mod sources;
 pub(super) use sources::Sources;
@@ -70,7 +70,7 @@ struct LocalManifest<'a> {
     format: &'static str,
     common_manifest_hash: &'a str,
     scope: LocalScope<'a>,
-    files: BTreeMap<&'a str, FileReference>,
+    files: BTreeMap<&'a str, &'a FileReference>,
 }
 
 pub(super) struct Context<'a> {
@@ -112,12 +112,13 @@ impl<'source> Plan<'source> {
                 let [(_, current), (_, history)] = scopes.disk(&binding.identity)?;
                 Ok(BackupOriginalDatabaseReport {
                     identity: binding.identity.clone(),
-                    bytes: (current.len() + history.len()) as u64,
-                    current_hash: blake3::hash(current).to_hex().to_string(),
-                    history_hash: blake3::hash(history).to_hex().to_string(),
+                    bytes: (current.reference().bytes() + history.reference().bytes()) as u64,
+                    current_hash: current.reference().digest().to_owned(),
+                    history_hash: history.reference().digest().to_owned(),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let system = scopes.system()?.reference();
         let configuration = registry.configuration();
         let publication = &configuration.publication.publication;
         let common = encode_metadata(
@@ -130,7 +131,7 @@ impl<'source> Plan<'source> {
                 registry: &configuration.registry,
                 system: context.sources.system_binding(),
                 system_writer: context.sources.system_writer_binding(),
-                system_database_hash: blake3::hash(scopes.system()).to_hex().to_string(),
+                system_database_hash: system.digest().to_owned(),
                 original_bindings: bindings,
                 original_databases: &originals,
                 targets: &observed.targets,
@@ -140,8 +141,8 @@ impl<'source> Plan<'source> {
         let report = BackupCommonDatabasesReport {
             published: observed,
             common_manifest_hash: blake3::hash(&common).to_hex().to_string(),
-            system_database_bytes: scopes.system().len() as u64,
-            system_database_hash: blake3::hash(scopes.system()).to_hex().to_string(),
+            system_database_bytes: system.bytes() as u64,
+            system_database_hash: system.digest().to_owned(),
             original_disks: originals,
         };
         Ok(Self {
@@ -154,7 +155,7 @@ impl<'source> Plan<'source> {
     fn files<'a>(
         &'a self,
         scope: LocalScope<'_>,
-        files: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+        files: impl IntoIterator<Item = (&'a str, &'a ScopeFile)>,
     ) -> Result<PreparedFiles<'a>> {
         let files: BTreeMap<_, _> = files.into_iter().collect();
         let manifest = encode_metadata(
@@ -164,7 +165,7 @@ impl<'source> Plan<'source> {
                 scope,
                 files: files
                     .iter()
-                    .map(|(name, bytes)| (*name, FileReference::from_bytes(bytes)))
+                    .map(|(name, file)| (*name, file.reference()))
                     .collect(),
             },
             MAX_DESCRIPTOR,
@@ -174,7 +175,7 @@ impl<'source> Plan<'source> {
             manifest,
             files
                 .into_iter()
-                .map(|(name, bytes)| (PathBuf::from(name), bytes)),
+                .map(|(name, file)| (PathBuf::from(name), file.bytes())),
         )
     }
     fn system_files(&self, prepared: &PreparedBackupRegistry) -> Result<PreparedFiles<'_>> {
@@ -182,7 +183,7 @@ impl<'source> Plan<'source> {
             LocalScope::System {
                 pool_id: &prepared.task.selection().first().pool_id,
             },
-            [("index.sqlite", self.scopes.system())],
+            [("index.sqlite", self.scopes.system()?)],
         )
     }
     fn disk_files(&self, identity: &DiskRegistrationIdentity) -> Result<PreparedFiles<'_>> {

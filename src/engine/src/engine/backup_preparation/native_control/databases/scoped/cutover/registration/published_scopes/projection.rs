@@ -4,6 +4,7 @@ use crate::engine::disk_catalog::PreparedDiskScopes;
 use crate::engine::index::preparation::SystemEncodingInput;
 use super::encoding_memo;
 use crate::engine::backup_preparation::native_control::archive;
+use crate::engine::backup_preparation::native_control::databases::materials::FileReference;
 use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo::{
     Transaction,
 };
@@ -37,11 +38,43 @@ fn disk_path(identity: &DiskRegistrationIdentity, name: &str) -> PathBuf {
 }
 
 #[derive(Serialize)]
-struct Descriptor {
-    scope: Scope,
+struct Descriptor<'a> {
+    scope: &'a Scope,
     bytes: usize,
-    digest: String,
+    digest: &'a str,
 }
+
+/// A digest of these immutable expected SQLite bytes, not a read of any
+/// installed file. This owner never hands out mutable access to the image.
+pub(in super::super) struct ScopeFile {
+    scope: Scope,
+    data: Vec<u8>,
+    reference: FileReference,
+}
+
+impl ScopeFile {
+    fn new(scope: Scope, data: Vec<u8>) -> Self {
+        let reference = FileReference::from_bytes(&data);
+        Self { scope, data, reference }
+    }
+
+    pub(in super::super) fn bytes(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub(in super::super) fn reference(&self) -> &FileReference {
+        &self.reference
+    }
+
+    fn descriptor(&self) -> Descriptor<'_> {
+        Descriptor {
+            scope: &self.scope,
+            bytes: self.reference.bytes(),
+            digest: self.reference.digest(),
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct Manifest<'a> {
     format: &'static str,
@@ -51,20 +84,30 @@ struct Manifest<'a> {
     snapshot_hash: &'a str,
     registry: &'a DiskRegistryCommitment,
     target: &'a DiskRegistrationIdentity,
-    databases: &'a [Descriptor],
+    databases: &'a [Descriptor<'a>],
 }
 
 pub(in super::super) struct Scopes {
-    files: BTreeMap<PathBuf, Vec<u8>>,
-    descriptors: Vec<Descriptor>,
-    own_current: PathBuf,
-    own_history: PathBuf,
+    addresses: BTreeMap<PathBuf, usize>,
+    // The manifest's insertion order is part of its canonical bytes.
+    files: Vec<ScopeFile>,
+    own_identity: DiskRegistrationIdentity,
     pub(super) bytes: usize,
     pub(super) disks: usize,
-    pub(super) system_bytes: usize,
     pub(super) manifest: Vec<u8>,
 }
 impl Scopes {
+    fn for_target(identity: &DiskRegistrationIdentity) -> Self {
+        Self {
+            addresses: BTreeMap::new(),
+            files: Vec::new(),
+            own_identity: identity.clone(),
+            bytes: 0,
+            disks: 0,
+            manifest: Vec::new(),
+        }
+    }
+
     pub(in super::super) fn capture(
         prepared: &PreparedBackupRegistry,
         registry: &published_registry::Plan,
@@ -129,16 +172,7 @@ impl Scopes {
             &published,
             stop,
         )?;
-        let mut scopes = Self {
-            files: BTreeMap::new(),
-            descriptors: Vec::new(),
-            own_current: disk_path(own, crate::database_install::DISK_DATABASE_NAME),
-            own_history: disk_path(own, crate::database_install::DISK_HISTORY_DATABASE_NAME),
-            bytes: 0,
-            disks: 0,
-            system_bytes: 0,
-            manifest: Vec::new(),
-        };
+        let mut scopes = Self::for_target(own);
         // Every call above still verifies this target's registry, archive and
         // authenticated disk history. The shared memo stores only pure encodings.
         let configuration = registry.configuration();
@@ -170,7 +204,6 @@ impl Scopes {
         let input = SystemEncodingInput::new(&published, &checkpoint)?;
         let system = encodings.system(input.input_hash(), || input.encode(&checkpoint))?;
         input.verify(&system, &checkpoint)?;
-        scopes.system_bytes = system.len();
         scopes.add(
             Scope::SystemCurrent {
                 pool_id: job.pool_id.clone(),
@@ -197,6 +230,7 @@ impl Scopes {
             scopes.disks += 1;
             Ok(())
         })?;
+        let descriptors: Vec<_> = scopes.files.iter().map(ScopeFile::descriptor).collect();
         scopes.manifest = canonical_json(&Manifest {
             format: "zxs-backup-published-scoped-databases",
             source_fence_hash: prepared.source_fence_hash(),
@@ -205,7 +239,7 @@ impl Scopes {
             snapshot_hash: &publication.snapshot_hash,
             registry: &configuration.registry,
             target: own,
-            databases: &scopes.descriptors,
+            databases: &descriptors,
         })?;
         if scopes.manifest.len() > MAX_COMPLETION {
             return Err(budget());
@@ -222,80 +256,77 @@ impl Scopes {
             return Err(budget());
         }
         let path = scope.path();
-        let descriptor = Descriptor {
-            scope,
-            bytes: bytes.len(),
-            digest: blake3::hash(&bytes).to_hex().to_string(),
-        };
-        if self.files.insert(path, bytes).is_some() {
-            return Err(invalid("published database scopes repeat an identity"));
+        match self.addresses.entry(path) {
+            std::collections::btree_map::Entry::Vacant(address) => {
+                address.insert(self.files.len());
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                return Err(invalid("published scopes repeat an identity"));
+            }
         }
+        self.files.push(ScopeFile::new(scope, bytes));
         self.bytes = total;
-        self.descriptors.push(descriptor);
         Ok(())
     }
     pub(super) fn prepared(&self) -> Result<PreparedFiles<'_>> {
         PreparedFiles::new(
             Namespace::PublishedScopes,
             self.manifest.as_slice(),
-            self.files
+            self.addresses
                 .iter()
-                .map(|(path, bytes)| (path.clone(), bytes.as_slice())),
+                .map(|(path, &index)| (path.clone(), self.files[index].bytes())),
         )
     }
-    pub(in super::super) fn system(&self) -> &[u8] {
-        &self.files[&PathBuf::from("system/index.sqlite")]
+    pub(in super::super) fn system(&self) -> Result<&ScopeFile> {
+        self.files
+            .first()
+            .filter(|file| match &file.scope {
+                Scope::SystemCurrent { pool_id } => pool_id == &self.own_identity.pool_id,
+                Scope::DiskCurrent { .. } | Scope::DiskHistory { .. } => false,
+            })
+            .ok_or_else(|| invalid("published scopes omit the expected SYSTEM database"))
     }
+
     pub(in super::super) fn disk(
         &self,
         identity: &DiskRegistrationIdentity,
-    ) -> Result<[(&'static str, &[u8]); 2]> {
-        let current = self
-            .files
-            .get(&disk_path(
-                identity,
-                crate::database_install::DISK_DATABASE_NAME,
-            ))
-            .ok_or_else(|| invalid("published scopes omit an original disk current database"))?;
-        let history = self
-            .files
-            .get(&disk_path(
-                identity,
-                crate::database_install::DISK_HISTORY_DATABASE_NAME,
-            ))
-            .ok_or_else(|| invalid("published scopes omit an original disk history database"))?;
-        Ok([
-            (crate::database_install::DISK_DATABASE_NAME, current),
-            (crate::database_install::DISK_HISTORY_DATABASE_NAME, history),
-        ])
+    ) -> Result<[(&'static str, &ScopeFile); 2]> {
+        let lookup = |name: &str| {
+            self.addresses
+                .get(&disk_path(identity, name))
+                .map(|&index| &self.files[index])
+        };
+        let current_name = crate::database_install::DISK_DATABASE_NAME;
+        let history_name = crate::database_install::DISK_HISTORY_DATABASE_NAME;
+        let current = lookup(current_name)
+            .filter(|file| {
+                matches!(&file.scope, Scope::DiskCurrent { identity: actual } if actual == identity)
+            })
+            .ok_or_else(|| invalid("published scopes omit the exact disk current database"))?;
+        let history = lookup(history_name)
+            .filter(|file| {
+                matches!(&file.scope, Scope::DiskHistory { identity: actual } if actual == identity)
+            })
+            .ok_or_else(|| invalid("published scopes omit the exact disk history database"))?;
+        Ok([(current_name, current), (history_name, history)])
     }
-    pub(super) fn own(&self) -> [(&'static str, &[u8]); 2] {
-        [
-            (
-                crate::database_install::DISK_DATABASE_NAME,
-                &self.files[&self.own_current],
-            ),
-            (
-                crate::database_install::DISK_HISTORY_DATABASE_NAME,
-                &self.files[&self.own_history],
-            ),
-        ]
+
+    pub(super) fn own(&self) -> Result<[(&'static str, &ScopeFile); 2]> {
+        self.disk(&self.own_identity)
     }
-    pub(super) fn report(
-        &self,
-        identity: &DiskRegistrationIdentity,
-    ) -> BackupPublishedScopeTargetReport {
-        let [(_, current), (_, history)] = self.own();
-        BackupPublishedScopeTargetReport {
-            target: identity.clone(),
+
+    pub(super) fn report(&self) -> Result<BackupPublishedScopeTargetReport> {
+        let [(_, current), (_, history)] = self.own()?;
+        Ok(BackupPublishedScopeTargetReport {
+            target: self.own_identity.clone(),
             scope_manifest_hash: blake3::hash(&self.manifest).to_hex().to_string(),
-            system_bytes: self.system_bytes as u64,
+            system_bytes: self.system()?.reference.bytes() as u64,
             configured_disks: self.disks,
             databases: self.files.len(),
             scoped_bytes: self.bytes as u64,
-            disk_current_hash: blake3::hash(current).to_hex().to_string(),
-            disk_history_hash: blake3::hash(history).to_hex().to_string(),
-        }
+            disk_current_hash: current.reference.digest().to_owned(),
+            disk_history_hash: history.reference.digest().to_owned(),
+        })
     }
 }
 pub(super) fn budget() -> Error {
@@ -310,3 +341,7 @@ pub(super) fn budget() -> Error {
     "../../../../../../../../../../../test/engine/unit/backup_published_encoding_probe.rs"
 ]
 pub(in super::super) mod encoding_probe;
+
+#[cfg(test)]
+#[path = "../../../../../../../../../../../test/engine/unit/backup_scope_file_refs.rs"]
+mod file_reference_tests;

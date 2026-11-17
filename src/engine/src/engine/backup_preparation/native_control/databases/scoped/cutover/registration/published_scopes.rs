@@ -72,9 +72,7 @@ impl<'a> Plan<'a> {
         };
         for index in 0..prepared.targets.len() {
             let scopes = Scopes::capture(prepared, plan.registry(), index, stop)?;
-            plan.report
-                .targets
-                .push(scopes.report(&prepared.projection.targets[index].node.identity));
+            plan.report.targets.push(scopes.report()?);
         }
         let configuration = plan.registry().configuration();
         let publication = &configuration.publication.publication;
@@ -106,9 +104,7 @@ impl<'a> Plan<'a> {
     ) -> Result<T> {
         // Reconstruct from this target, never a peer or an old source database.
         let scopes = Scopes::capture(prepared, self.registry(), index, stop)?;
-        if scopes.report(&prepared.projection.targets[index].node.identity)
-            != self.report.targets[index]
-        {
+        if scopes.report()? != self.report.targets[index] {
             return Err(invalid(
                 "published SQLite scopes changed after their original plan",
             ));
@@ -144,7 +140,8 @@ impl<'a> Plan<'a> {
 
 fn verify(root: &DiskRoot, scopes: &Scopes, stop: &AtomicBool) -> Result<()> {
     materials::verify(root, &scopes.prepared()?, stop)?;
-    for (name, bytes) in scopes.own() {
+    for (name, file) in scopes.own()? {
+        let bytes = file.bytes();
         preparation_checkpoint(stop)?;
         if root.read_bytes(&root.path().join(name), bytes.len())? != bytes {
             return Err(invalid(
@@ -158,7 +155,8 @@ fn require_capacity(root: &DiskRoot, scopes: &Scopes, stop: &AtomicBool) -> Resu
     // Aggregate private scopes AND the two root copies; checking each in
     // isolation would allow the same free bytes to satisfy both obligations.
     let mut needed = materials::required_capacity(root, &scopes.prepared()?, stop)?;
-    for (name, bytes) in scopes.own() {
+    for (name, file) in scopes.own()? {
+        let bytes = file.bytes();
         preparation_checkpoint(stop)?;
         let path = root.path().join(name);
         if preparation_path_exists(root, &path)? {
@@ -212,7 +210,8 @@ pub(super) fn install(
         plan.with_scopes(prepared, index, stop, |root, scopes| {
             require_capacity(root, scopes, stop)?;
             materials::install(root, &scopes.prepared()?, stop)?;
-            for (name, bytes) in scopes.own() {
+            for (name, file) in scopes.own()? {
+                let bytes = file.bytes();
                 preparation_checkpoint(stop)?;
                 // Never open SQLite by filesystem path or replace an existing
                 // database. Matching interrupted files are retained and synced.

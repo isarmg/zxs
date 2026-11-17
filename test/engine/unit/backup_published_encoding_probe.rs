@@ -21,9 +21,9 @@ fn observe_published_encodings(
         let scopes = Scopes::capture(
             prepared, registry, index, stop,
         )?;
-        observed.reports.push(scopes.report(&prepared.projection.targets[index].node.identity));
+        observed.reports.push(scopes.report()?);
         assert!(observed.sqlite.insert(
-            target.root.path().join("system/index.sqlite"), scopes.system().to_vec(),
+            target.root.path().join("system/index.sqlite"), scopes.system()?.bytes().to_vec(),
         ).is_none());
         for disk in &config.disks {
             let identity = crate::DiskRegistrationIdentity {
@@ -32,7 +32,8 @@ fn observe_published_encodings(
                 slot_id: disk.slot_id.clone(),
                 binding_generation: disk.binding_generation,
             };
-            for (name, bytes) in scopes.disk(&identity)? {
+            for (name, file) in scopes.disk(&identity)? {
+                let bytes = file.bytes();
                 let path = target.root.path().join("disks").join(&disk.disk_id).join(name);
                 assert!(observed.sqlite.insert(path, bytes.to_vec()).is_none());
             }
