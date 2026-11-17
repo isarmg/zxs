@@ -229,6 +229,14 @@ impl Session {
         replace: bool,
         operation_id: OperationId,
     ) -> Result<Value, ApiError> {
+        for text in std::iter::once(path.as_str()).chain(destination.as_deref()) {
+            let lookup = name_policy::LookupPath::parse(text).map_err(ApiError::invalid_source)?;
+            if self.shared.backend.smb_worktree_locate(
+                &self.identity, &self.branch, &lookup,
+            )?.is_some() {
+                return Err(ApiError::unsupported());
+            }
+        }
         let input = NamespaceInput::parse(kind, path, destination, replace)?;
         if input.kind == NamespaceOperation::Rename
             && let Some(retained) =

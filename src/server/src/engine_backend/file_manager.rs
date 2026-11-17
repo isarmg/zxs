@@ -121,6 +121,15 @@ fn resolve_existing<'a>(
         .cloned();
     if let Some(root) = &existing {
         ensure_unambiguous_disk_path(engine, root, relative)?;
+        if let Some(first) = relative.split('/').next().filter(|name| !name.is_empty()) {
+            // A named repository and a registered worktree share this displayed
+            // disk namespace. The authority rejects collisions before routing
+            // can prefer either one; no-match leaves ordinary routes unchanged.
+            let owner = root.repository_id.parse().map_err(ApiError::contract_input)?;
+            let name = name_policy::LookupName::parse(first).map_err(ApiError::invalid_source)?;
+            engine.directory_worktree_mount(owner, &name)
+                .map_err(super::snapshot_worktree::error)?;
+        }
     }
     let first = relative.split('/').next().unwrap_or("");
     if let Some(repo) = engine

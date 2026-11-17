@@ -3,7 +3,11 @@
 mod drafts;
 mod discovery;
 mod transport;
+mod namespace;
 pub use transport::WorktreeContent;
+pub use namespace::{
+    WorktreeCursor, WorktreeEntry, WorktreeEntryContent, WorktreePage, WorktreePageStamp,
+};
 
 use super::RegistrationError;
 use crate::Engine;
@@ -60,6 +64,15 @@ impl SnapshotWorktreeError {
             }
             RegistrationError::ReadView(crate::directory_worktree::io::ViewError::IsDirectory) => {
                 ErrorCode::IsDirectory
+            }
+            RegistrationError::ReadView(crate::directory_worktree::io::ViewError::NotDirectory) => {
+                ErrorCode::NotDirectory
+            }
+            RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Cursor) => {
+                ErrorCode::ListingChanged
+            }
+            RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Budget) => {
+                ErrorCode::ResourceLimitExceeded
             }
             _ => ErrorCode::MetadataUnavailable,
         }

@@ -152,7 +152,7 @@ impl crate::DirectoryReadSnapshot {
         };
         let entries = super::smb_draft::directory_entries(engine, branch, entries)?;
         let repo = repo_for_branch(engine, branch)?;
-        let unborn = if repo.file_manager_root && repo.main_branch_id == branch {
+        let mut unborn: Vec<_> = if repo.file_manager_root && repo.main_branch_id == branch {
             engine.native_current_entries(repo.repository_id.parse()
                 .map_err(ApiError::contract_input)?).map_err(error)?.into_iter()
                 .filter_map(|entry| match entry {
@@ -164,6 +164,20 @@ impl crate::DirectoryReadSnapshot {
                     }
                 }).collect()
         } else { Vec::new() };
+        if repo.file_manager_root && repo.main_branch_id == branch {
+            let owner = repo.repository_id.parse().map_err(ApiError::contract_input)?;
+            for mount in engine.directory_worktree_mounts(owner)
+                .map_err(super::snapshot_worktree::error)?
+            {
+                unborn.push(smb_protocol::protocol::DirectoryEntry::Worktree {
+                    target: mount.target, relative_path: None,
+                    path: name_policy::PortablePath::parse(mount.name.as_str())
+                        .map_err(ApiError::invalid_source)?,
+                    kind: storage_contract::NamespaceEntryKind::Directory, size: 0,
+                });
+            }
+            unborn.sort_by(|left, right| left.path().key().cmp(right.path().key()));
+        }
         Ok(Self {
             unborn: std::sync::Arc::new(unborn),
             branch_id: branch.into(),

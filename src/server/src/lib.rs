@@ -114,6 +114,11 @@ pub use backend_file_merge::{MergeFileBranches, MergeFileHistory};
 mod backend_file_tags;
 mod backend_file_draft;
 mod backend_unborn;
+mod backend_smb_worktree;
+pub use backend_smb_worktree::{
+    SmbWorktreeAccess, SmbWorktreeCursor, SmbWorktreeEntry, SmbWorktreeFile,
+    SmbWorktreeLocation, SmbWorktreePage,
+};
 mod backend_smb_native;
 pub use backend_smb_native::{SmbNativeEdit, SmbNativeHandle, SmbNativeOpen};
 mod http_unborn;

@@ -15,6 +15,8 @@ pub(super) struct VirtualDirectory {
     next_cursor: Option<String>,
     exhausted: bool,
     namespace: Option<SessionKey>,
+    mounts: Vec<storage_contract::snapshot_worktree::WorktreeStatus>,
+    mount_after: usize,
     // Keep the placeholder descriptor alive until the remote handle closes.
     _file: File,
 }
@@ -33,6 +35,7 @@ enum VirtualScope {
 }
 
 struct DiskPage {
+    mounts: Vec<storage_contract::snapshot_worktree::WorktreeStatus>,
     page: DirectoryPage,
     snapshot: String,
     next_cursor: Option<String>,
@@ -45,7 +48,8 @@ impl DefaultShare {
         location: Location,
         id: u64,
     ) -> Result<(OpenResult, OwnedFd, RoutedHandle), ApiError> {
-        let (entry_id, path, scope, pending, next_cursor, exhausted, namespace) = match location {
+        let (entry_id, path, scope, pending, next_cursor, exhausted, namespace, mounts) =
+            match location {
             Location::Root => {
                 let topology = self.shared.backend.topology_snapshot(&self.identity)?;
                 (
@@ -59,6 +63,7 @@ impl DefaultShare {
                     None,
                     false,
                     None,
+                    Vec::new(),
                 )
             }
             Location::Disk(slot) => {
@@ -81,6 +86,7 @@ impl DefaultShare {
                     snapshot,
                     next_cursor,
                     namespace,
+                    mounts,
                 } = self.disk_page(&slot.slot_id, None)?;
                 let exhausted = next_cursor.is_none();
                 (
@@ -95,6 +101,7 @@ impl DefaultShare {
                     next_cursor,
                     exhausted,
                     namespace,
+                    mounts,
                 )
             }
             Location::Path { .. } => {
@@ -124,6 +131,8 @@ impl DefaultShare {
                 next_cursor,
                 exhausted,
                 namespace,
+                mounts,
+                mount_after: 0,
                 _file: file,
             }),
         ))
@@ -196,8 +205,11 @@ impl DefaultShare {
                 mtime,
             });
         }
+        let mounts = if let Some(key) = &namespace {
+            self.shared.backend.smb_worktree_mounts(&projection_identity, &key.branch)?
+        } else { Vec::new() };
         let page = DirectoryPage {
-            more: snapshot.next_cursor.is_some(),
+            more: snapshot.next_cursor.is_some() || !mounts.is_empty(),
             entries,
         };
         // At a disk root, names are single components (<= 240 UTF-8 bytes).
@@ -213,6 +225,7 @@ impl DefaultShare {
                 .authorize_repository(&projection_identity, &key.repository)?;
         }
         Ok(DiskPage {
+            mounts,
             page,
             snapshot: snapshot.snapshot,
             next_cursor: snapshot.next_cursor,
@@ -349,6 +362,13 @@ impl DefaultShare {
         restart: bool,
     ) -> Result<DirectoryPage, ApiError> {
         if !restart {
+            let key = self.virtual_directory_mut(id).namespace.clone();
+            if let Some(key) = key {
+                let current = self.shared.backend.smb_worktree_mounts(
+                    &self.bound_identity(&key), &key.branch,
+                )?;
+                if current != self.virtual_directory_mut(id).mounts { return Err(changed()); }
+            }
             let pending_snapshot = self
                 .virtual_directory_mut(id)
                 .pending
@@ -367,10 +387,7 @@ impl DefaultShare {
         }
         let directory = self.virtual_directory_mut(id);
         if !restart && directory.exhausted {
-            return Ok(DirectoryPage {
-                entries: vec![],
-                more: false,
-            });
+            return mount_page(directory);
         }
         let cursor = if restart {
             None
@@ -382,12 +399,33 @@ impl DefaultShare {
             snapshot: _,
             next_cursor,
             namespace,
+            mounts,
         } = self.disk_page(slot, cursor)?;
         let directory = self.virtual_directory_mut(id);
         directory.pending = None;
         directory.exhausted = next_cursor.is_none();
         directory.next_cursor = next_cursor;
         directory.namespace = namespace;
+        directory.mounts = mounts;
+        directory.mount_after = 0;
         Ok(page)
     }
+}
+
+fn mount_page(directory: &mut VirtualDirectory) -> Result<DirectoryPage, ApiError> {
+    let mut entries = Vec::new();
+    let mut bytes = 128;
+    for mount in &directory.mounts[directory.mount_after..] {
+        let entry = crate::smb_rpc::worktree::mount_entry(mount)?;
+        let size = json_codec::to_vec(&entry).map_err(ApiError::invalid_source)?.len() + 1;
+        if entries.len() == MAX_DIRECTORY_PAGE_ENTRIES
+            || bytes + size > MAX_DIRECTORY_PAGE_BYTES
+        {
+            break;
+        }
+        bytes += size;
+        entries.push(entry);
+    }
+    directory.mount_after += entries.len();
+    Ok(DirectoryPage { entries, more: directory.mount_after < directory.mounts.len() })
 }

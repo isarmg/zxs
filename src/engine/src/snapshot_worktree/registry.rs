@@ -28,6 +28,7 @@ mod edits;
 mod commits;
 mod drafts;
 mod discovery;
+mod mounts;
 mod transport;
 mod working;
 use working::WorkingRecord;

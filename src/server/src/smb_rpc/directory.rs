@@ -8,6 +8,9 @@ impl Session {
         handle: u64,
         restart: bool,
     ) -> Result<DirectoryPage, ApiError> {
+        if matches!(self.handles.get(&handle), Some(Handle::WorktreeDirectory(_))) {
+            return self.read_worktree_directory(handle, restart);
+        }
         let directory = match self.handles.get_mut(&handle) {
             Some(Handle::Directory(directory)) => directory,
             Some(_) => {

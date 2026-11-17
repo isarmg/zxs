@@ -27,6 +27,7 @@ mod file_draft;
 mod unborn;
 mod smb_draft;
 mod smb_native;
+mod smb_worktree;
 mod file_history_move;
 mod file_manager;
 mod foreign_identity;
@@ -643,6 +644,51 @@ impl Backend for EngineBackend {
         let (engine, _) = self.lock_current(identity)?;
         repository(&engine, id)?;
         Ok(())
+    }
+    fn smb_worktree_mounts(
+        &self, identity: &Identity, branch: &str,
+    ) -> Result<Vec<storage_contract::snapshot_worktree::WorktreeStatus>, ApiError> {
+        smb_worktree::mounts(self, identity, branch)
+    }
+    fn smb_worktree_locate(
+        &self, identity: &Identity, branch: &str, path: &name_policy::LookupPath,
+    ) -> Result<Option<crate::SmbWorktreeLocation>, ApiError> {
+        smb_worktree::locate(self, identity, branch, path)
+    }
+    fn smb_worktree_entry(
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        path: &name_policy::LookupPath,
+    ) -> Result<crate::SmbWorktreeEntry, ApiError> {
+        smb_worktree::stat(self, identity, target, path)
+    }
+    fn smb_worktree_page(
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        parent: Option<&name_policy::LookupPath>, cursor: Option<&crate::SmbWorktreeCursor>,
+    ) -> Result<crate::SmbWorktreePage, ApiError> {
+        smb_worktree::page(self, identity, target, parent, cursor)
+    }
+    fn authorize_smb_worktree_page(
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        parent: Option<&name_policy::LookupPath>, page: &crate::SmbWorktreePage,
+    ) -> Result<(), ApiError> {
+        smb_worktree::check_page(self, identity, target, parent, page)
+    }
+    fn authorize_smb_worktree(
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        access: crate::SmbWorktreeAccess<'_>,
+    ) -> Result<(), ApiError> {
+        smb_worktree::check(self, identity, target, access)
+    }
+    fn smb_worktree_content(
+        &self, identity: &Identity, file: &crate::SmbWorktreeFile, deadline: std::time::Instant,
+    ) -> Result<Content, ApiError> {
+        smb_worktree::content(self, identity, file, deadline)
+    }
+    fn edit_smb_worktree(
+        &self, identity: &Identity, request: storage_contract::snapshot_worktree::EditWorktree,
+        source: &crate::UploadSource,
+    ) -> Result<storage_contract::snapshot_worktree::WorktreeRevision, ApiError> {
+        smb_worktree::edit(self, identity, request, source)
     }
     fn smb_native_open(
         &self, identity: &Identity, request: crate::SmbNativeOpen<'_>,

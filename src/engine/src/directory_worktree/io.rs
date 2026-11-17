@@ -168,6 +168,22 @@ impl<'a> HeldReadView<'a> {
             },
         }
     }
+    pub(crate) fn entry(&self, path: &LookupPath) -> Result<Entry, ViewError> {
+        self.ledger.admit_read_view().map_err(ViewError::Ledger)?;
+        let canonical = match &self.backing {
+            Backing::Sparse { projection, .. } => {
+                projection.canonical_path(path).ok_or(ViewError::Missing)?
+            }
+            Backing::Published { node } => {
+                let entries = node.manifest().entries();
+                let index = entries.binary_search_by(|entry| entry.path.key().cmp(path.key()))
+                    .map_err(|_| ViewError::Missing)?;
+                &entries[index].path
+            }
+        };
+        Ok(Entry { path: canonical.clone(), content: self.admitted_content(path)? })
+    }
+
     pub(crate) fn content(&self, path: &LookupPath) -> Result<EntryContent, ViewError> {
         self.ledger.admit_read_view().map_err(ViewError::Ledger)?;
         self.admitted_content(path)

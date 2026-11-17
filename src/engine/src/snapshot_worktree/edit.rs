@@ -54,7 +54,7 @@ pub(crate) fn edit_worktree(
     {
         return Err(RegistrationError::InitialOnly);
     }
-    index.require_edit_scope(request)?;
+    index.require_edit_scope(request.target, &request.path, request.expected)?;
     let registered = index.worktree(request.target)?;
     let source = index.reopen_node(engine, registered.source().handle())?;
     let session = registered.reopen(&source)?;
@@ -160,7 +160,9 @@ impl ReservedEdit {
     }
 }
 
-fn require_mount(engine: &Engine, plan: &WorktreeReservation) -> Result<()> {
+pub(in crate::snapshot_worktree) fn require_mount(
+    engine: &Engine, plan: &WorktreeReservation,
+) -> Result<()> {
     NamespaceHost::registered(engine, plan.host.namespace)
         .map_err(RegistrationError::NamespaceHost)?
         .require_root_mount(

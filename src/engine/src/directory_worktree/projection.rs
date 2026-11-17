@@ -215,6 +215,11 @@ impl<'a> SparseProjection<'a> {
         self.entries.iter().map(|entry| &entry.path)
     }
 
+    pub(crate) fn canonical_path(&self, path: &LookupPath) -> Option<&PortablePath> {
+        let index = self.entries.binary_search_by(|entry| entry.path.key().cmp(path.key())).ok()?;
+        Some(&self.entries[index].path)
+    }
+
     pub(crate) fn route(&self, path: &LookupPath) -> Option<ReadRoute<'_>> {
         let index = self.entries.binary_search_by(|entry| entry.path.key().cmp(path.key())).ok()?;
         Some(match self.entries[index].content {

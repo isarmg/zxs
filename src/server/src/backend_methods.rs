@@ -465,6 +465,71 @@ macro_rules! methods {
                 ) -> Result<storage_contract::StagedFile, $crate::ApiError>;
             }
             optional {
+                fn smb_worktree_mounts(
+                    &self, identity: &$crate::Identity, branch: &str,
+                ) -> Result<
+                    Vec<storage_contract::snapshot_worktree::WorktreeStatus>, $crate::ApiError,
+                > {
+                    let _ = (identity, branch);
+                    Ok(Vec::new())
+                }
+                fn smb_worktree_locate(
+                    &self, identity: &$crate::Identity, branch: &str,
+                    path: &name_policy::LookupPath,
+                ) -> Result<Option<$crate::SmbWorktreeLocation>, $crate::ApiError> {
+                    let _ = (identity, branch, path);
+                    Ok(None)
+                }
+                fn smb_worktree_entry(
+                    &self, identity: &$crate::Identity,
+                    target: storage_contract::snapshot_worktree::WorktreeHandle,
+                    path: &name_policy::LookupPath,
+                ) -> Result<$crate::SmbWorktreeEntry, $crate::ApiError> {
+                    let _ = (identity, target, path);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn smb_worktree_page(
+                    &self, identity: &$crate::Identity,
+                    target: storage_contract::snapshot_worktree::WorktreeHandle,
+                    parent: Option<&name_policy::LookupPath>,
+                    cursor: Option<&$crate::SmbWorktreeCursor>,
+                ) -> Result<$crate::SmbWorktreePage, $crate::ApiError> {
+                    let _ = (identity, target, parent, cursor);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn authorize_smb_worktree_page(
+                    &self, identity: &$crate::Identity,
+                    target: storage_contract::snapshot_worktree::WorktreeHandle,
+                    parent: Option<&name_policy::LookupPath>, page: &$crate::SmbWorktreePage,
+                ) -> Result<(), $crate::ApiError> {
+                    let _ = (identity, target, parent, page);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn authorize_smb_worktree(
+                    &self, identity: &$crate::Identity,
+                    target: storage_contract::snapshot_worktree::WorktreeHandle,
+                    access: $crate::SmbWorktreeAccess<'_>,
+                ) -> Result<(), $crate::ApiError> {
+                    let _ = (identity, target, access);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn smb_worktree_content(
+                    &self, identity: &$crate::Identity, file: &$crate::SmbWorktreeFile,
+                    deadline: ::std::time::Instant,
+                ) -> Result<$crate::Content, $crate::ApiError> {
+                    let _ = (identity, file, deadline);
+                    Err($crate::ApiError::unsupported())
+                }
+                fn edit_smb_worktree(
+                    &self, identity: &$crate::Identity,
+                    request: storage_contract::snapshot_worktree::EditWorktree,
+                    source: &$crate::UploadSource,
+                ) -> Result<
+                    storage_contract::snapshot_worktree::WorktreeRevision, $crate::ApiError,
+                > {
+                    let _ = (identity, request, source);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn smb_native_open(
                     &self, identity: &$crate::Identity, request: $crate::SmbNativeOpen<'_>,
                 ) -> Result<Option<$crate::SmbNativeHandle>, $crate::ApiError> {

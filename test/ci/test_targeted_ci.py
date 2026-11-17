@@ -764,14 +764,13 @@ class TargetedSelection(unittest.TestCase):
         ]
         with self.assertRaises(ValueError):
             CI.select_plan(self.policy, paths)
-        plan = CI.select_plan(self.policy, paths, shardable=True)
-        self.assertEqual(plan['groups'], [
+        plan = assert_path_group_extension(self, self.policy, paths, [
             'ci-selection', 'container-tags-browser', 'container-tags-web',
             'directory-rename-recovery', 'historical-directory-web',
             'legacy-directory-branch-web-retirement',
             'legacy-directory-staging-web-retirement', 'paged-deletion-review',
             'web-directory-history-retirement', 'web-recovery-principals',
-        ])
+        ], ['directory-web-selection'])
         self.assertEqual(len(plan['rust_targets']), 8)
         self.assertEqual(plan['python_tests'],
                          sorted(set(self.policy['groups']['ci-selection']['python_tests'])
@@ -977,15 +976,14 @@ class TargetedSelection(unittest.TestCase):
         ]
         with self.assertRaises(ValueError):
             CI.select_plan(self.policy, paths)
-        plan = CI.select_plan(self.policy, paths, shardable=True)
-        self.assertEqual(plan['groups'], [
+        plan = assert_path_group_extension(self, self.policy, paths, [
             'browser-identity-generation', 'browser-smoke-fixture', 'ci-selection',
             'container-tags-browser', 'container-tags-web',
             'directory-rename-recovery',
             'historical-directory-web', 'legacy-directory-branch-web-retirement',
             'legacy-directory-staging-web-retirement',
             'paged-deletion-review', 'web-directory-history-retirement',
-        ])
+        ], ['directory-web-selection'])
         self.assertEqual(len(plan['rust_targets']), 8)
         self.assertEqual(plan['python_tests'],
                          sorted(set(self.policy['groups']['ci-selection']['python_tests'])

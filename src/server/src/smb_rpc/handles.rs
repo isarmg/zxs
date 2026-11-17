@@ -72,6 +72,15 @@ impl Session {
             return Err(ApiError::limit("too many SMB handles"));
         }
         if let Some(path) = &lookup
+            && let Some(location) = self.shared.backend.smb_worktree_locate(
+                &self.identity, &self.branch, path,
+            )?
+        {
+            return self.open_worktree(
+                location, writable, create, truncate, exclusive, write_through,
+            );
+        }
+        if let Some(path) = &lookup
             && let Some(opened) = self.open_native(
                 path, writable, create, truncate, exclusive, write_through,
             )?
@@ -410,15 +419,17 @@ impl Session {
         }
         opened.authorize_read(&self.shared, &self.identity, &self.branch)?;
         let content = match opened {
-            Handle::Read(content, _) | Handle::ReadDraft(content, _) => content,
-            Handle::Directory(_) => {
+            Handle::Read(content, _) | Handle::ReadDraft(content, _)
+            | Handle::ReadWorktree(content, _) => content,
+            Handle::Directory(_) | Handle::WorktreeDirectory(_) => {
                 return Err(ApiError::new(
                     ::http::StatusCode::CONFLICT,
                     storage_contract::ErrorCode::IsDirectory,
                     "directory data is not readable",
                 ));
             }
-            Handle::Native(_) | Handle::Write(_, _) | Handle::ManualWrite(_, _) => {
+            Handle::Native(_) | Handle::Write(_, _) | Handle::ManualWrite(_, _)
+            | Handle::WorktreeWrite(_, _) => {
                 return Err(ApiError::unsupported());
             }
         };
@@ -489,6 +500,15 @@ impl Handle {
         branch: &str,
     ) -> Result<(), ApiError> {
         match self {
+            Self::WorktreeWrite(writer, _) => shared.backend.authorize_smb_worktree(
+                identity, writer.target(), crate::SmbWorktreeAccess::Read,
+            ),
+            Self::ReadWorktree(_, file) => shared.backend.authorize_smb_worktree(
+                identity, file.target, crate::SmbWorktreeAccess::Read,
+            ),
+            Self::WorktreeDirectory(directory) => shared.backend.authorize_smb_worktree(
+                identity, directory.target, crate::SmbWorktreeAccess::Read,
+            ),
             Self::Native(file) => shared.backend.smb_native_size(identity, &file.file).map(|_| ()),
             Self::Read(_, version) => shared.backend.authorize_version(identity, version),
             Self::ReadDraft(_, file) => {

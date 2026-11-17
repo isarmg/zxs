@@ -42,6 +42,8 @@ mod mtime_tests;
 mod manual_draft_tests;
 #[path = "native_dispatch_tests.rs"]
 mod native_dispatch_tests;
+#[path = "worktree_dispatch_tests.rs"]
+mod worktree_dispatch_tests;
 #[path = "named_move_tests.rs"]
 mod named_move_tests;
 #[path = "namespace_tests.rs"]
@@ -88,6 +90,57 @@ impl LostCommitReply {
     }
 }
 impl Backend for LostCommitReply {
+    fn smb_worktree_mounts(
+        &self, identity: &Identity, branch: &str,
+    ) -> Result<Vec<storage_contract::snapshot_worktree::WorktreeStatus>, ApiError> {
+        self.inner.smb_worktree_mounts(identity, branch)
+    }
+    fn smb_worktree_locate(
+        &self, identity: &Identity, branch: &str, path: &name_policy::LookupPath,
+    ) -> Result<Option<crate::SmbWorktreeLocation>, ApiError> {
+        self.inner.smb_worktree_locate(identity, branch, path)
+    }
+    fn smb_worktree_entry(
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        path: &name_policy::LookupPath,
+    ) -> Result<crate::SmbWorktreeEntry, ApiError> {
+        self.inner.smb_worktree_entry(identity, target, path)
+    }
+    fn smb_worktree_page(
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        parent: Option<&name_policy::LookupPath>, cursor: Option<&crate::SmbWorktreeCursor>,
+    ) -> Result<crate::SmbWorktreePage, ApiError> {
+        self.inner.smb_worktree_page(identity, target, parent, cursor)
+    }
+    fn authorize_smb_worktree_page(
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        parent: Option<&name_policy::LookupPath>, page: &crate::SmbWorktreePage,
+    ) -> Result<(), ApiError> {
+        self.inner.authorize_smb_worktree_page(identity, target, parent, page)
+    }
+    fn authorize_smb_worktree(
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        access: crate::SmbWorktreeAccess<'_>,
+    ) -> Result<(), ApiError> {
+        self.inner.authorize_smb_worktree(identity, target, access)
+    }
+    fn smb_worktree_content(
+        &self, identity: &Identity, file: &crate::SmbWorktreeFile, deadline: std::time::Instant,
+    ) -> Result<Content, ApiError> {
+        self.inner.smb_worktree_content(identity, file, deadline)
+    }
+    fn edit_smb_worktree(
+        &self, identity: &Identity, request: storage_contract::snapshot_worktree::EditWorktree,
+        source: &crate::UploadSource,
+    ) -> Result<storage_contract::snapshot_worktree::WorktreeRevision, ApiError> {
+        let revision = self.inner.edit_smb_worktree(identity, request, source)?;
+        if self.fail.swap(false, Ordering::SeqCst) {
+            return Err(ApiError::io(io::Error::new(io::ErrorKind::BrokenPipe,
+                "lost reply after the real completed worktree save")));
+        }
+        Ok(revision)
+    }
+
     fn smb_file_working(
         &self, identity: &Identity, branch: &str, entry: &storage_contract::Entry,
     ) -> Result<Option<crate::SmbManualFile>, ApiError> {

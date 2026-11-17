@@ -1,5 +1,5 @@
 //! Two sealed saves share one original occurrence, never one mutable payload.
-use crate::{CommitRequest, Config, Engine, ReadFile};
+use crate::{CommitRequest, Config, Engine, ReadFile, WorktreeEntryContent};
 use name_policy::{LookupPath, Name};
 use std::collections::BTreeMap;
 use std::fs;
@@ -83,6 +83,10 @@ fn complete_resaves_keep_original_occurrence_and_move_only_exact_current_revisio
     let principal: Principal = "admin".parse().unwrap();
     let repository = engine.create_disk_root(&slot, principal.as_str(),
         OperationId::generate().unwrap()).unwrap();
+    assert!(engine.directory_worktree_mounts(repository.repository_id.parse().unwrap())
+        .unwrap().is_empty());
+    assert!(engine.directory_worktree_mount(repository.repository_id.parse().unwrap(),
+        &name_policy::LookupName::parse("worktree-main-001").unwrap()).unwrap().is_none());
     let workspace = engine.create_workspace(&repository.main_branch_id,
         principal.as_str()).unwrap();
     engine.stage_bytes(&workspace.workspace_id, "file.txt", b"original immutable body").unwrap();
@@ -111,6 +115,31 @@ fn complete_resaves_keep_original_occurrence_and_move_only_exact_current_revisio
         expected_root_generation: context.host.expected_root_generation,
         operation_id: OperationId::generate().unwrap(),
     }, &principal).unwrap();
+    // The SMB authority projection resolves exact registered instances, not
+    // filesystem display names or the first occurrence sharing a FileId.
+    let repository_id = repository.repository_id.parse().unwrap();
+    let sequence = engine.state().sequence;
+    let mounts = engine.directory_worktree_mounts(repository_id).unwrap();
+    assert_eq!(mounts.iter().map(|mount| mount.target).collect::<Vec<_>>(),
+        [target, independent]);
+    assert_eq!(engine.directory_worktree_mount(repository_id,
+        &name_policy::LookupName::parse("WORKTREE-MAIN-001").unwrap()).unwrap(),
+        Some(mounts[0].clone()));
+    assert!(engine.directory_worktree_mount(repository_id,
+        &name_policy::LookupName::parse("worktree-main-999").unwrap()).unwrap().is_none());
+    let page = engine.directory_worktree_entries(target, None, None).unwrap();
+    engine.check_directory_worktree_page(target, None, &page.stamp).unwrap();
+    assert_eq!(page.revision, mounts[0].revision);
+    assert!(page.next.is_none());
+    assert_eq!(page.entries.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(),
+        ["file.txt", "other.txt"]);
+    let original_metadata = engine.directory_worktree_entry(target,
+        &LookupPath::parse("FILE.TXT").unwrap()).unwrap();
+    assert_eq!(original_metadata.path.as_str(), "file.txt");
+    assert_eq!(original_metadata, page.entries[0]);
+    engine.check_directory_worktree_edit(target, &original_metadata.path,
+        page.revision).unwrap();
+    assert_eq!(engine.state().sequence, sequence);
     let unchanged_source_inode = inode(&engine, independent, "other.txt");
     let selected = engine.file_context(&repository.repository_id, "file.txt").unwrap();
     let initial_file_head = engine.file_branch_head(&selected.branch_id).unwrap();
@@ -135,6 +164,25 @@ fn complete_resaves_keep_original_occurrence_and_move_only_exact_current_revisio
     };
     let revision_b = engine.edit_directory_worktree(&second, &principal,
         source(source_directory.path(), "B", b)).unwrap();
+    assert!(engine.check_directory_worktree_page(target, None, &page.stamp).is_err());
+    let saved_page = engine.directory_worktree_entries(target, None, None).unwrap();
+    engine.check_directory_worktree_page(target, None, &saved_page.stamp).unwrap();
+    let saved_metadata = engine.directory_worktree_entry(target,
+        &LookupPath::parse("file.txt").unwrap()).unwrap();
+    let WorktreeEntryContent::File { file, version, size, content_hash } = saved_metadata.content
+    else { panic!("the saved original occurrence remains a file"); };
+    let WorktreeEntryContent::File { file: original_file, version: original_version, .. } =
+        original_metadata.content else { panic!("the original occurrence is a file"); };
+    assert_eq!(file, original_file);
+    assert_ne!(version, original_version);
+    assert_eq!(size, b.len() as u64);
+    assert_eq!(content_hash, second.content_hash);
+    assert_eq!(engine.directory_worktree_entry(independent,
+        &LookupPath::parse("file.txt").unwrap()).unwrap(), original_metadata);
+    engine.check_directory_worktree_edit(target, &second.path, revision_b).unwrap();
+    assert!(engine.check_directory_worktree_edit(target, &second.path, revision_a).is_err());
+    assert!(engine.check_directory_worktree_edit(target,
+        &name_policy::PortablePath::parse("other.txt").unwrap(), revision_b).is_err());
     assert_eq!(revision_b.generation, revision_a.generation.next().unwrap());
     assert_ne!(revision_b.manifest, revision_a.manifest);
     assert_eq!(engine.state().versions, initial_versions);
@@ -182,6 +230,13 @@ fn complete_resaves_keep_original_occurrence_and_move_only_exact_current_revisio
         operation_id: OperationId::generate().unwrap(),
     };
     let committed = engine.commit_directory_worktree(&request, &principal).unwrap();
+    // A completed directory publication leaves the revision unchanged. An
+    // adapter must use the scope gate, not merely compare revision equality.
+    assert_eq!(engine.directory_worktree_status(target).unwrap().revision, revision_b);
+    assert!(engine.check_directory_worktree_page(target, None, &saved_page.stamp).is_err());
+    assert!(engine.check_directory_worktree_edit(target, &second.path, revision_b).is_err());
+    assert_eq!(engine.directory_worktree_entry(target,
+        &LookupPath::parse("file.txt").unwrap()).unwrap(), saved_metadata);
     assert_eq!(committed.branch_id, original.branch_id);
     assert_ne!(committed.node_id, original.node_id);
     assert_eq!(engine.state().versions.len(), initial_versions.len() + 1);
@@ -201,6 +256,10 @@ fn complete_resaves_keep_original_occurrence_and_move_only_exact_current_revisio
     drop(engine);
     let mut engine = Engine::open(&system).unwrap();
     assert_eq!(read(&engine, target, "file.txt"), b);
+    assert_eq!(engine.directory_worktree_mounts(repository_id).unwrap().len(), 2);
+    assert_eq!(engine.directory_worktree_entries(target, None, None).unwrap().entries[0],
+        saved_metadata);
+    assert!(engine.check_directory_worktree_edit(target, &second.path, revision_b).is_err());
     let before = inventory(&disk);
     let sequence = engine.state().sequence;
     assert_eq!(engine.commit_directory_worktree(&request, &principal).unwrap(), committed);

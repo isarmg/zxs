@@ -17,7 +17,7 @@ fn management(identity: &Identity) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn error(source: storage_engine::SnapshotWorktreeError) -> ApiError {
+pub(in crate::engine_backend) fn error(source: storage_engine::SnapshotWorktreeError) -> ApiError {
     if let Some(operation) = source.published_operation() {
         let mut result = ApiError::new(
             http::StatusCode::SERVICE_UNAVAILABLE, storage_contract::ErrorCode::RecoveryRequired,

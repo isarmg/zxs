@@ -447,6 +447,14 @@ pub struct StatResult {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DirectoryEntry {
+    Worktree {
+        target: storage_contract::snapshot_worktree::WorktreeHandle,
+        path: name_policy::PortablePath,
+        relative_path: Option<name_policy::PortablePath>,
+        kind: storage_contract::NamespaceEntryKind,
+        #[serialization(with = "storage_contract::u64_string")]
+        size: u64,
+    },
     Published { entry: storage_contract::Entry, mtime: FileMtime },
     Unborn {
         target: storage_contract::file_draft::DraftLocation,
@@ -458,33 +466,51 @@ impl DirectoryEntry {
     pub fn published(&self) -> Option<&storage_contract::Entry> {
         match self {
             Self::Published { entry, .. } => Some(entry),
-            Self::Unborn { .. } => None,
+            Self::Unborn { .. } | Self::Worktree { .. } => None,
         }
     }
     pub fn mtime(&self) -> FileMtime {
         match self {
             Self::Published { mtime, .. } => *mtime,
             Self::Unborn { .. } => FileMtime::Unpublished {},
+            Self::Worktree { kind, .. } => match kind {
+                storage_contract::NamespaceEntryKind::Directory => FileMtime::NotFile {},
+                storage_contract::NamespaceEntryKind::File => FileMtime::Unpublished {},
+            },
         }
     }
     pub fn path(&self) -> &name_policy::PortablePath {
         match self {
             Self::Published { entry, .. } => &entry.path,
             Self::Unborn { target, .. } => &target.path,
+            Self::Worktree { path, .. } => path,
         }
     }
     pub fn entry_id(&self) -> String {
         match self {
             Self::Published { entry, .. } => entry.entry_id.clone(),
             Self::Unborn { target, .. } => target.entry.to_string(),
+            Self::Worktree { target, relative_path, .. } => {
+                worktree_entry_id(*target, relative_path.as_ref())
+            }
         }
     }
     pub fn kind(&self) -> storage_contract::NamespaceEntryKind {
         match self {
             Self::Published { entry, .. } => entry.kind,
             Self::Unborn { .. } => storage_contract::NamespaceEntryKind::File,
+            Self::Worktree { kind, .. } => *kind,
         }
     }
+}
+
+/// An SMB inode-display key, not a container EntryId or a lookup capability.
+/// Display-prefix rebasing never changes this instance/occurrence identity.
+pub fn worktree_entry_id(
+    target: storage_contract::snapshot_worktree::WorktreeHandle,
+    relative: Option<&name_policy::PortablePath>,
+) -> String {
+    format!("{}/{}", target.worktree_id, relative.map_or("", |path| path.key()))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

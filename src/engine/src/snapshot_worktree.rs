@@ -5,7 +5,10 @@
 //! a completed index entry is only the exact independent anchor for reopening.
 mod registry;
 mod public;
-pub use public::{SnapshotWorktreeError, WorktreeContent};
+pub use public::{
+    SnapshotWorktreeError, WorktreeContent, WorktreeCursor, WorktreeEntry, WorktreeEntryContent,
+    WorktreePage, WorktreePageStamp,
+};
 mod reopen;
 mod prepare;
 mod initialize;

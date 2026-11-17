@@ -42,6 +42,7 @@ mod recovery_record;
 mod session;
 mod transport;
 mod workers;
+mod worktree;
 use publication::recovery_record;
 use session::Session;
 #[cfg(all(test, feature = "core"))]
@@ -114,6 +115,9 @@ impl Shared {
 }
 
 enum Handle {
+    WorktreeWrite(Box<worktree::WorktreeWriter>, path_reservation::PathReservation),
+    ReadWorktree(Content, crate::SmbWorktreeFile),
+    WorktreeDirectory(worktree::WorktreeDirectory),
     Native(native::NativeHandle),
     Read(Content, String),
     ReadDraft(Content, crate::SmbManualFile),

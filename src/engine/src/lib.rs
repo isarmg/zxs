@@ -255,4 +255,7 @@ mod directory_git_fixture;
 
 pub use business::namespace::container_name::RenameError as ContainerNameError;
 
-pub use snapshot_worktree::{SnapshotWorktreeError, WorktreeContent};
+pub use snapshot_worktree::{
+    SnapshotWorktreeError, WorktreeContent, WorktreeCursor, WorktreeEntry, WorktreeEntryContent,
+    WorktreePage, WorktreePageStamp,
+};

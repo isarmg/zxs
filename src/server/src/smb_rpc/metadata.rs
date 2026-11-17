@@ -36,6 +36,11 @@ impl Session {
                 }
             }
             SmbRelativePath::Entry(path) => {
+                if let Some(location) = self.shared.backend.smb_worktree_locate(
+                    &self.identity, &self.branch, path,
+                )? {
+                    return self.stat_worktree(location);
+                }
                 if let Some(native) = self.shared.backend.smb_native_stat(
                     &self.identity, &self.branch, path,
                 )? {
@@ -79,7 +84,10 @@ impl Session {
     /// A dirty successor keeps that saved time; a new unpublished file has none.
     pub(super) fn handle_metadata(&self, opened: &Handle) -> Result<AuthorizedMetadata, ApiError> {
         let mtime = match opened {
-            Handle::Native(_) => FileMtime::Unpublished {},
+            Handle::Native(_) | Handle::WorktreeWrite(_, _) | Handle::ReadWorktree(_, _) => {
+                FileMtime::Unpublished {}
+            }
+            Handle::WorktreeDirectory(_) => FileMtime::NotFile {},
             Handle::Read(_, version) => self.version_mtime(version)?,
             Handle::ReadDraft(_, file) => {
                 self.version_mtime(&file.base.version_id().to_string())?

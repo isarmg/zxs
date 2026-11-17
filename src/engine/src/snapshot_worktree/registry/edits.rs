@@ -6,7 +6,7 @@ use crate::snapshot_worktree::registry::{
 };
 use crate::snapshot_worktree::{RegistrationError, Result};
 use crate::working_tree::snapshot::{SnapshotEntryContent, SnapshotFile, SnapshotFileSource};
-use storage_contract::snapshot_worktree::{EditWorktree, WorktreeRevision};
+use storage_contract::snapshot_worktree::{EditWorktree, WorktreeHandle, WorktreeRevision};
 use storage_contract::working_tree::MaterialCommitment;
 use storage_contract::{Generation, Principal};
 
@@ -27,18 +27,20 @@ impl<'a> ReceiptIndex<'a> {
     /// Namespace/multi-file edits and post-commit rebase have separate contracts.
     pub(in crate::snapshot_worktree) fn require_edit_scope(
         &self,
-        request: &EditWorktree,
+        target: WorktreeHandle,
+        path: &name_policy::PortablePath,
+        expected: WorktreeRevision,
     ) -> Result<()> {
-        let current = self.worktree(request.target)?;
-        if current.revision() != request.expected
-            || request.path.parent().is_some()
+        let current = self.worktree(target)?;
+        if current.revision() != expected
+            || path.parent().is_some()
             || current.publication.is_some()
         {
             return Err(RegistrationError::EditScope);
         }
-        if request.expected.generation != Generation::new(0) {
-            let (previous, _) = self.completed_edit(request.target)?;
-            if previous.request.path != request.path {
+        if expected.generation != Generation::new(0) {
+            let (previous, _) = self.completed_edit(target)?;
+            if previous.request.path != *path {
                 return Err(RegistrationError::EditScope);
             }
         }
@@ -75,7 +77,9 @@ impl<'a> ReceiptIndex<'a> {
         if plan.request.operation_id != operation {
             return Err(RegistrationError::Operation(operation));
         }
-        self.require_edit_scope(&plan.request)?;
+        self.require_edit_scope(
+            plan.request.target, &plan.request.path, plan.request.expected,
+        )?;
         let current = self.worktree(plan.request.target)?;
         if current.binding() != plan.binding || current.checkpoint() != plan.before
         {

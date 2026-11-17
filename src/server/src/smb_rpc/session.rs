@@ -68,6 +68,7 @@ impl Session {
                     Some(Handle::Native(file)) => file.file.operation().map(|id| id.to_string()),
                     Some(Handle::Write(writer, _)) => Some(writer.operation_id.to_string()),
                     Some(Handle::ManualWrite(writer, _)) => Some(writer.operation().to_string()),
+                    Some(Handle::WorktreeWrite(writer, _)) => Some(writer.operation().to_string()),
                     _ => None,
                 }
             }
@@ -92,7 +93,11 @@ impl Session {
                 Some(Handle::ManualWrite(writer, _)) => {
                     operation_id = Some(writer.operation().to_string());
                 }
-                Some(Handle::Read(..) | Handle::ReadDraft(..) | Handle::Directory(_)) | None => {}
+                Some(Handle::WorktreeWrite(writer, _)) => {
+                    operation_id = Some(writer.operation().to_string());
+                }
+                Some(Handle::Read(..) | Handle::ReadDraft(..) | Handle::Directory(_)
+                    | Handle::ReadWorktree(..) | Handle::WorktreeDirectory(_)) | None => {}
             }
         }
         result.map_err(|mut error| {

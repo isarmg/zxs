@@ -423,6 +423,27 @@ impl DefaultShare {
                     "only rename accepts a destination or replacement",
                 ));
             }
+            // Worktree namespace edits are not ordinary container moves. Check
+            // both paths before any reservation or root-directory publication.
+            for text in std::iter::once(path.as_str()).chain(destination.as_deref()) {
+                if let Location::Path { slot, path } = self.locate(text)? {
+                    match self.resolve_at(&slot, path, SmbPathIntent::Lookup) {
+                        Ok(location) => {
+                            let key = self.pin_binding(location.repository)?;
+                            if let SmbRelativePath::Entry(path) = location.relative_path
+                                && self.shared.backend.smb_worktree_locate(
+                                    &self.bound_identity(&key), &key.branch, &path,
+                                )?.is_some()
+                            {
+                                return Err(ApiError::unsupported());
+                            }
+                        }
+                        Err(error) if error.code
+                            == storage_contract::ErrorCode::DirectoryNotFound => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
             let mkdir = if kind == NamespaceOperation::Mkdir {
                 let Location::Path { slot, path } = self.locate(&path)? else {
                     return Err(directory_only());
