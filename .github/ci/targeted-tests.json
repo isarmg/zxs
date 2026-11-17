@@ -7140,6 +7140,109 @@
           "name": "browser-smoke"
         }
       ]
+    },
+    "normal-startup-tail-join": {
+      "reason": "The original native spool admission and undelivered SMB socket must finish before normal service shutdown returns; cover same-runtime reuse and the independently authenticated listener. No real supervisor or external Samba acceptance.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "http_spool::tests::normal_shutdown_joins_original_inventory_without_destroying_shared_runtime",
+            "smb_rpc::transport::startup_tests::normal_shutdown_disposes_undelivered_smb_socket_before_return",
+            "smb_rpc::tests::admission_tests::listener_survives_bad_clients_and_joins_the_next_authenticated_connection"
+          ],
+          "max_tests": 3,
+          "features": [
+            "core"
+          ]
+        }
+      ]
+    },
+    "ordinary-exact-base-range": {
+      "reason": "Use the same checked original checksum chunk only in one merged working range; missing checksum or changed original still refuses. Not a throughput measurement or a new durable cache.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "container_storage::ordinary_preparation::draft::base_range::tests::adjacent_working_blocks_authenticate_one_real_base_chunk_then_verify_the_next",
+            "container_storage::ordinary_preparation::draft::base_range::tests::a_missing_checksum_never_exposes_an_unverified_requested_block"
+          ],
+          "max_tests": 2
+        }
+      ]
+    },
+    "original-ordinary-serving-selection": {
+      "reason": "A missing original SYSTEM intent or target selector cannot be manufactured once material exists, including empty directories/temporaries. Each selected held root rechecks actual entry types and per-target bounded projected geometry. Not complete cutover, 900-second performance, activation or physical device acceptance.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::ordinary_serving::start::tests::ordinary_target_cannot_recreate_the_system_intent_or_forge_a_local_selector",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::ordinary_serving::start::tests::ordinary_partial_selector_batch_can_resume_only_before_any_target_started",
+            "container_storage::ordinary_preparation::backup::serving::inventory_tests::only_the_original_empty_versions_is_unstarted_on_the_exact_held_root",
+            "container_storage::ordinary_preparation::backup::serving::inventory_tests::an_empty_directory_cannot_stand_in_for_a_regular_or_a_file_for_an_ancestor",
+            "container_storage::ordinary_preparation::backup::serving::paths::tests::same_named_file_roots_are_distinct_but_history_parents_count_once",
+            "container_storage::ordinary_preparation::backup::serving::paths::tests::complete_serving_geometry_and_retained_temporaries_share_the_real_entry_limit"
+          ],
+          "max_tests": 6
+        }
+      ]
+    },
+    "original-cleanup-readback": {
+      "reason": "Tie both original named body observations and tombstone content to the admitted held inodes instead of a detached parent or promoted body. No unrelated removal or physical terminal proof.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "maintenance::cleanup::readback::tests::promotion_between_the_two_reads_cannot_be_reported_as_absent",
+            "maintenance::cleanup::readback::tests::empty_replacement_parent_is_not_the_original_absent_leaf",
+            "maintenance::cleanup::readback::tests::proof_bytes_remain_on_the_held_inode_and_replacement_is_rejected"
+          ],
+          "max_tests": 3
+        }
+      ]
+    },
+    "offline-disjoint-held-roots": {
+      "reason": "Reject the same actual held inode for distinct control or active disk roles; allow directories on the same filesystem and do not introduce an absent-disk probe. Real host and full hot-mount recovery remain outside these fixtures.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "bin",
+          "exact": [
+            "offline::managed_layout::physical::tests::two_held_fixed_roles_cannot_be_the_same_directory",
+            "offline::managed_layout::physical::tests::selected_roots_must_differ_from_every_control_and_each_other_not_every_device"
+          ],
+          "max_tests": 2,
+          "features": [
+            "core"
+          ],
+          "name": "zxs"
+        }
+      ]
     }
   },
   "rules": [
@@ -21296,6 +21399,144 @@
       "path": "test/tools/browser-smoke/runner/error_feedback.js",
       "groups": [
         "setup-and-browser-secret-ownership"
+      ]
+    },
+    {
+      "path": "src/server/src/http_spool.rs",
+      "groups": [
+        "normal-startup-tail-join"
+      ]
+    },
+    {
+      "path": "src/server/src/startup_tail.rs",
+      "groups": [
+        "normal-startup-tail-join"
+      ]
+    },
+    {
+      "path": "src/server/src/lib.rs",
+      "groups": [
+        "normal-startup-tail-join"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/transport.rs",
+      "groups": [
+        "normal-startup-tail-join"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_spool.rs",
+      "groups": [
+        "normal-startup-tail-join"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/admission_tests.rs",
+      "groups": [
+        "normal-startup-tail-join"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/startup_tests.rs",
+      "groups": [
+        "normal-startup-tail-join"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/draft.rs",
+      "groups": [
+        "ordinary-exact-base-range"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/draft/base_range.rs",
+      "groups": [
+        "ordinary-exact-base-range"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/working_base_range.rs",
+      "groups": [
+        "ordinary-exact-base-range"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/backup/serving.rs",
+      "groups": [
+        "original-ordinary-serving-selection"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/backup/serving/paths.rs",
+      "groups": [
+        "original-ordinary-serving-selection"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/ordinary_serving.rs",
+      "groups": [
+        "original-ordinary-serving-selection"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/ordinary_serving/start.rs",
+      "groups": [
+        "original-ordinary-serving-selection"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_ordinary_selection_barrier_tests.rs",
+      "groups": [
+        "original-ordinary-serving-selection"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/backup_serving_inventory_tests.rs",
+      "groups": [
+        "original-ordinary-serving-selection"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/backup_serving_paths_tests.rs",
+      "groups": [
+        "original-ordinary-serving-selection"
+      ]
+    },
+    {
+      "path": "src/engine/src/maintenance/cleanup.rs",
+      "groups": [
+        "original-cleanup-readback"
+      ]
+    },
+    {
+      "path": "src/engine/src/maintenance/cleanup/readback.rs",
+      "groups": [
+        "original-cleanup-readback"
+      ]
+    },
+    {
+      "path": "test/engine/unit/cleanup_readback_tests.rs",
+      "groups": [
+        "original-cleanup-readback"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/managed_layout.rs",
+      "groups": [
+        "offline-disjoint-held-roots"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/managed_layout/physical.rs",
+      "groups": [
+        "offline-disjoint-held-roots"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/managed_layout_physical.rs",
+      "groups": [
+        "offline-disjoint-held-roots"
       ]
     }
   ],

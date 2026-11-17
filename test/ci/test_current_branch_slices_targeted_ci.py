@@ -18,6 +18,12 @@ class CurrentBranchSelection(unittest.TestCase):
         for group, files in {
             'setup-and-browser-secret-ownership': ['src/web/src/api/session.rs', 'src/server/src/setup_recovery.rs',
                                                    'test/tools/browser-smoke/runner/error_feedback.js'],
+            'normal-startup-tail-join': ['src/server/src/startup_tail.rs', 'test/server/unit/smb_rpc/startup_tests.rs'],
+            'ordinary-exact-base-range': ['src/engine/src/container_storage/ordinary_preparation/draft/base_range.rs'],
+            'original-ordinary-serving-selection': ['test/engine/unit/backup_ordinary_selection_barrier_tests.rs',
+                                                   'test/engine/unit/container_storage/backup_serving_paths_tests.rs'],
+            'original-cleanup-readback': ['test/engine/unit/cleanup_readback_tests.rs'],
+            'offline-disjoint-held-roots': ['src/server/src/offline/managed_layout/physical.rs'],
             'held-helper-installation-files': [
                 'helper/src/deployment/install.rs', 'helper/src/private_io/configuration_files.rs',
                 'test/helper/unit/installation/vfs_records.rs', 'helper/src/private_io/fixed_program.rs',
