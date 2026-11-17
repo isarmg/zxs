@@ -292,7 +292,7 @@ pub(super) fn with_archive_namespaces<T>(
         &crate::engine::disk_registry::current::backup::BackupNamespaceAdmission<'_>,
     ) -> Result<T>,
 ) -> Result<T> {
-    let replay = archive_replay(prepared, index, inputs.candidate, stop)?;
+    let replay = archive_replay(prepared, index, inputs.candidate, None, stop)?;
     let view = replay.finish(
         inputs.publication,
         inputs.candidate,
@@ -312,6 +312,7 @@ pub(super) fn archive_replay(
     prepared: &PreparedBackupRegistry,
     index: usize,
     candidate: &crate::engine::membership_transition::PreparedBackupFirstCandidate,
+    mut files: Option<&mut crate::engine::backup_preparation::file_epochs::FileEpochReplay>,
     stop: &AtomicBool,
 ) -> Result<crate::engine::disk_registry::current::backup::BackupNamespaceReplay> {
     let target = &prepared.targets[index];
@@ -322,7 +323,11 @@ pub(super) fn archive_replay(
     let native = &prepared.task.installation.evidence.task.scoped.objects.native;
     let mut observe = |_: &crate::ValidatedConfig, candidate: &crate::journal::Candidate,
                        _: &str, state: &crate::history_package::AdmittedState| {
-        replay.observe(candidate, state)
+        replay.observe(candidate, state)?;
+        match files.as_deref_mut() {
+            Some(files) => files.observe(candidate, state, stop),
+            None => Ok(()),
+        }
     };
     let (control, _) = match prepared.scope_encoding.as_ref() {
         Some(memo) => archive::read_observed_with_committed_encodings(

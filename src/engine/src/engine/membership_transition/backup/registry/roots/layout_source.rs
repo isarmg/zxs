@@ -270,6 +270,7 @@ pub(crate) struct PublishedBackupOriginal<'a> {
     first: &'a crate::engine::membership_transition::PreparedBackupFirstCandidate,
     _publication: &'a crate::engine::membership_transition::PreparedBackupFirstPublication,
     original: &'a AdmittedState,
+    originals: &'a crate::engine::backup_preparation::OriginalFileEpochs,
     published: &'a AdmittedState,
 }
 impl<'a> PublishedBackupOriginal<'a> {
@@ -277,10 +278,12 @@ impl<'a> PublishedBackupOriginal<'a> {
         root: &'a DiskRoot, identity: &crate::DiskRegistrationIdentity,
         first: &'a crate::engine::membership_transition::PreparedBackupFirstCandidate,
         publication: &'a crate::engine::membership_transition::PreparedBackupFirstPublication,
-        original: &'a AdmittedState, published: &'a AdmittedState, stop: &AtomicBool,
+        original: &'a AdmittedState, published: &'a AdmittedState,
+        originals: &'a crate::engine::backup_preparation::OriginalFileEpochs, stop: &AtomicBool,
     ) -> Result<Self> {
         publication.require_namespace_candidate(first)?;
         first.require_original_state(original)?;
+        originals.require_source(first, original)?;
         first.require_state(published)?;
         let config = first.original_config();
         let disk = config.disks.iter().find(|disk| disk.disk_id == identity.disk_id)
@@ -288,7 +291,7 @@ impl<'a> PublishedBackupOriginal<'a> {
         if fresh_layout::registration(config, disk) != *identity || disk.root != root.path() {
             return Err(Failure::BackupRootEvidence.into());
         }
-        let value = Self { root, disk, first, _publication: publication, original, published };
+        let value = Self { root, disk, first, _publication: publication, original, published, originals };
         value.require(stop)?;
         Ok(value)
     }
@@ -305,6 +308,16 @@ impl<'a> PublishedBackupOriginal<'a> {
     pub(crate) fn original(&self) -> &AdmittedState {
         self.original
     }
+    /// The old on-disk FILE must come from its exact scoped original writer,
+    /// not just an equal current projection or an unrelated whole-pool epoch.
+    pub(crate) fn require_file_predecessor(
+        &self, file: storage_contract::FileId, stored_sequence: u64, records_hash: &str,
+    ) -> Result<()> {
+        self.originals.require_file(
+            self.original, self.disk.disk_id.parse()?, file, stored_sequence, records_hash,
+        )
+    }
+
     pub(crate) fn published(&self) -> &AdmittedState {
         self.published
     }

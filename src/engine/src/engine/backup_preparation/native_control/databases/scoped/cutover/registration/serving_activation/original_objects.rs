@@ -18,6 +18,7 @@ pub(super) struct Recipe {
 pub(super) struct Objects<'a> {
     publication: &'a PreparedBackupFirstPublication,
     source: crate::history_package::AdmittedState,
+    original_files: &'a crate::engine::backup_preparation::OriginalFileEpochs,
     pub(super) recipes: Vec<Recipe>,
 }
 
@@ -26,6 +27,7 @@ impl<'a> Objects<'a> {
         prepared: &PreparedBackupRegistry,
         registry: &published_registry::Plan,
         publication: &'a PreparedBackupFirstPublication,
+        original_files: &'a crate::engine::backup_preparation::OriginalFileEpochs,
         sources: &common_databases::Sources,
         stop: &AtomicBool,
     ) -> Result<Self> {
@@ -50,7 +52,7 @@ impl<'a> Objects<'a> {
                 ))?;
                 let published = registry.candidate().read_state_at(&metadata, stop)?;
                 let scope = PublishedBackupOriginal::observe(
-                    root, identity, registry.candidate(), publication, &source, &published, stop,
+                    root, identity, registry.candidate(), publication, &source, &published, original_files, stop,
                 )?;
                 let plan = BackupOriginalImage::capture(&scope, stop)?;
                 recipes.push(Recipe {
@@ -62,7 +64,7 @@ impl<'a> Objects<'a> {
             },
             &prepared.task.selection().first().pool_id,
         )?;
-        Ok(Self { publication, source, recipes })
+        Ok(Self { publication, source, original_files, recipes })
     }
 
     fn with_plan<T>(
@@ -90,7 +92,7 @@ impl<'a> Objects<'a> {
         ))?;
         let published = registry.candidate().read_state_at(&metadata, stop)?;
         let scope = PublishedBackupOriginal::observe(
-            root, identity, registry.candidate(), self.publication, &self.source, &published, stop,
+            root, identity, registry.candidate(), self.publication, &self.source, &published, self.original_files, stop,
         )?;
         let plan = BackupOriginalImage::capture(&scope, stop)?;
         if plan.recipe_hash() != expected.recipe_hash {
@@ -167,13 +169,15 @@ impl<'a> Objects<'a> {
 }
 
 pub(super) fn verify_recovered(
-    roots: &[(DiskConfig, DiskRoot)],
-    first: &crate::engine::membership_transition::PreparedBackupFirstCandidate,
-    publication: &PreparedBackupFirstPublication,
-    source: &crate::history_package::AdmittedState,
+    admitted: &crate::engine::membership_transition::pending::activation::backup::startup::BackupStartupAdmission,
     recipes: &[Recipe],
     stop: &AtomicBool,
 ) -> Result<Vec<String>> {
+    let roots = admitted.held_roots();
+    let first = admitted.first();
+    let mut replay = crate::engine::backup_preparation::file_epochs::FileEpochReplay::new(first);
+    admitted.replay_source(stop, |candidate, state| replay.observe(candidate, state, stop))?;
+    let original_files = replay.finish(first)?;
     if recipes.len() != first.original_config().disks.len() {
         return Err(invalid(
             "Backup final selection omits original object recipes",
@@ -203,7 +207,8 @@ pub(super) fn verify_recovered(
         ))?;
         let published = first.read_state_at(&metadata, stop)?;
         let scope = PublishedBackupOriginal::observe(
-            root, &recipe.identity, first, publication, source, &published, stop,
+            root, &recipe.identity, first, admitted.publication(), admitted.source(), &published,
+            &original_files, stop,
         )?;
         let plan = BackupOriginalImage::capture(&scope, stop)?;
         if plan.recipe_hash() != recipe.recipe_hash {

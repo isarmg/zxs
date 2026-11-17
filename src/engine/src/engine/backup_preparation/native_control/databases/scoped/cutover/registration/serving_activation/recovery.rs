@@ -206,10 +206,7 @@ pub(super) fn verify_live_selection(
     }
     require_initial_targets(system, admitted, &selection, stop)?;
     let actual = original_objects::verify_recovered(
-        admitted.held_roots(),
-        admitted.first(),
-        admitted.publication(),
-        admitted.source(),
+        admitted,
         &selection.original_objects,
         stop,
     )?;
@@ -325,10 +322,7 @@ impl Engine {
         let (selection, bytes) = selected(&system, admitted)?;
         require_initial_targets(&system, admitted, &selection, &AtomicBool::new(false))?;
         let objects = original_objects::verify_recovered(
-            admitted.held_roots(),
-            admitted.first(),
-            admitted.publication(),
-            admitted.source(),
+            admitted,
             &selection.original_objects,
             &AtomicBool::new(false),
         )?;

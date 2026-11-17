@@ -97,6 +97,7 @@ fn media(path: &Path) -> BTreeMap<PathBuf, ((u64, u64), Option<Vec<u8>>)> {
 }
 
 fn with_original(
+    unrelated_publication: bool,
     action: impl FnOnce(&Path, &PublishedBackupOriginal<'_>, &BTreeMap<String, PathBuf>)
         -> Result<()>,
 ) -> Result<()> {
@@ -126,6 +127,15 @@ fn with_original(
         operation(),
     )?;
     save(&mut engine, &repository)?;
+    if unrelated_publication {
+        // This native operation has a durable receipt, but it never wrote a
+        // FILE database of either existing object.
+        engine.file_namespace(
+            &repository.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "unrelated", None)?,
+            "admin", operation(),
+        )?;
+    }
     assert_eq!(engine.state().file_containers.len(), 2);
     assert!(engine.state().directory_git_repositories.is_empty());
     let disk = &engine.config.disks[0];
@@ -206,6 +216,9 @@ fn with_original(
     let original = snapshot::read(
         &prepared.targets[0].root, prepared.task.selection().first(), &stop,
     )?;
+    let mut file_replay = crate::engine::backup_preparation::file_epochs::FileEpochReplay::new(&candidate);
+    let _ = published_registry::archive_replay(&prepared, 0, &candidate, Some(&mut file_replay), &stop)?;
+    let original_files = file_replay.finish(&candidate)?;
     let mut action = Some(action);
     sources.for_each_disk(&stop, |root, identity| {
         if identity.slot_id != "P01" {
@@ -216,7 +229,7 @@ fn with_original(
         ))?;
         let published = candidate.read_state_at(&metadata, &stop)?;
         let source = PublishedBackupOriginal::observe(
-            root, identity, &candidate, &publication, &original, &published, &stop,
+            root, identity, &candidate, &publication, &original, &published, &original_files, &stop,
         )?;
         action.take().expect("the fixed original primary occurs once")(
             temporary.path(), &source, &bodies,
@@ -245,7 +258,7 @@ fn expect_rejected(
 
 #[test]
 fn published_original_files_keep_no_clobber_readback_and_same_decision_retry() -> Result<()> {
-    with_original(|temporary, source, bodies| {
+    with_original(false, |temporary, source, bodies| {
         let stop = AtomicBool::new(false);
         let original = PreparedDatabases::capture(source.original(), &stop)?;
         let published = PreparedDatabases::capture(source.published(), &stop)?;
@@ -390,6 +403,33 @@ fn published_original_files_keep_no_clobber_readback_and_same_decision_retry() -
             BackupOriginalImage::capture(source, &stop)?.verify(&stop)?.bytes(),
             replacement_completion.bytes(),
         );
+        Ok(())
+    })
+}
+
+
+#[test]
+fn original_file_epoch_is_not_the_latest_whole_pool_sequence() -> Result<()> {
+    with_original(true, |temporary, source, bodies| {
+        let before = media(temporary);
+        let state = source.original().state();
+        for (id, body) in bodies {
+            let file = id.parse::<storage_contract::FileId>()?;
+            let container = body.parent().unwrap().parent().unwrap();
+            let scope = crate::ObjectDatabaseScope::File {
+                file_id: id.clone(),
+                history_tree_id: state.file_containers[&file].history_tree_id.to_string(),
+            };
+            let physical = crate::inspect_object_database_material(
+                fs::File::open(container)?, container.to_owned(), &scope,
+            )?;
+            let epoch = physical.source_sequence();
+            assert!(epoch < state.sequence);
+            source.require_file_predecessor(file, epoch, physical.records_hash())?;
+            assert!(source.require_file_predecessor(file, state.sequence, physical.records_hash()).is_err());
+            assert!(source.require_file_predecessor(file, epoch, &"0".repeat(64)).is_err());
+        }
+        assert_eq!(media(temporary), before);
         Ok(())
     })
 }

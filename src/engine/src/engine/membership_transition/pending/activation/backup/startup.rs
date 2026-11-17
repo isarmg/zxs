@@ -87,7 +87,10 @@ impl BackupStartupAdmission {
                 checkpoint(stop)?;
                 count += 1;
                 if count > 2048 { return Err(Error::new(ErrorCode::ResourceLimit, "Backup source replay exceeds 2048 Publications")); }
-                if item.activation().is_some() || item.candidate().generation().is_some() {
+                // Match the original native archive writer: a recovered visible result
+                // cannot substitute for the original candidate's FILE rows.
+                if item.activation().is_some() || item.candidate().generation().is_some()
+                    || item.publication().recovery.is_some() {
                     return Err(invalid("Backup source replay is not the selected fixed Genesis archive"));
                 }
                 let state =

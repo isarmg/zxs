@@ -65,6 +65,7 @@ struct Native {
     graph: crate::VerifiedDiskRegistry,
     published: AdmittedState,
     replay: BackupNamespaceReplay,
+    original_files: crate::engine::backup_preparation::OriginalFileEpochs,
     writer: BackupWriterIoConfig,
     ordinary: BackupOrdinaryServingReport,
 }
@@ -117,13 +118,16 @@ impl Native {
                 stop,
             )?
             .bind_published_continuation(candidate, &publication, graph.clone(), &published)?;
-        let replay = published_registry::archive_replay(prepared, 0, candidate, stop)?;
+        let mut files = crate::engine::backup_preparation::file_epochs::FileEpochReplay::new(candidate);
+        let replay = published_registry::archive_replay(prepared, 0, candidate, Some(&mut files), stop)?;
+        let original_files = files.finish(candidate)?;
         Ok(Self {
             registry,
             publication,
             graph,
             published,
             replay,
+            original_files,
             writer,
             ordinary,
         })
@@ -279,7 +283,7 @@ fn prepare_switch(
     };
     let native = Native::capture(&context, &prepared, &decision, &expected, stop)?;
     let objects = original_objects::Objects::capture(
-        &prepared, &native.registry, &native.publication, &sources, stop,
+        &prepared, &native.registry, &native.publication, &native.original_files, &sources, stop,
     )?;
     let io_hash = &native.ordinary.original.targets.seals.io.admission_hash;
     let mut target_handles = Vec::with_capacity(prepared.targets.len());

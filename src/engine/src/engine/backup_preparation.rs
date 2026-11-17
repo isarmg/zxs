@@ -19,6 +19,8 @@ use std::{
 mod batch;
 mod completion;
 mod execution;
+mod file_epochs;
+pub(in crate::engine) use file_epochs::OriginalFileEpochs;
 mod inspection;
 mod native_control;
 pub use native_control::{
