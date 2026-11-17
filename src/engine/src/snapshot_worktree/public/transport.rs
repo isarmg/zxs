@@ -1,8 +1,7 @@
 //! Descriptive transport requests enter the existing sealed edit and MOVE
 //! publication. A returned read retains the admitted managed-disk descriptor.
-use crate::directory_worktree::io::EntryContent;
-use crate::directory_worktree::session::ReadMaterial;
 use crate::snapshot_worktree::{RegistrationError, SnapshotWorktreeError};
+use crate::snapshot_worktree::public::namespace::with_view;
 use crate::{Engine, ReadFile};
 use name_policy::LookupPath;
 use storage_contract::snapshot_worktree::{
@@ -32,33 +31,14 @@ impl Engine {
         target: WorktreeHandle,
         path: &LookupPath,
     ) -> Result<WorktreeContent> {
-        let index = self.snapshot_receipts()?;
-        let registered = index.worktree(target)?;
-        let original = index.reopen_node(self, registered.source().handle())?;
-        let session = registered.reopen(&original)?;
-        let published = registered.published_node()
-            .map(|handle| index.reopen_node(self, handle)).transpose()?;
-        let material = match &published {
-            Some(node) => ReadMaterial::Published(node),
-            None => ReadMaterial::Original,
-        };
-        let view = session.read(material).map_err(RegistrationError::ReadView)?;
-        let material = match view.content(path).map_err(RegistrationError::ReadView)? {
-            EntryContent::File { material }
-                | EntryContent::RetainedFile { material, .. } => material,
-            EntryContent::Directory => return Err(RegistrationError::ReadView(
-                crate::directory_worktree::io::ViewError::IsDirectory,
-            ).into()),
-            EntryContent::Working { .. } => return Err(RegistrationError::ReadView(
-                crate::directory_worktree::io::ViewError::WorkingSourceRequired,
-            ).into()),
-        };
-        let file = view.open_file(path).map_err(RegistrationError::ReadView)?;
-        Ok(WorktreeContent {
-            file,
-            size: material.size,
-            content_hash: material.content_hash,
-            revision: session.worktree().revision(),
+        with_view(self, target, |view| {
+            let opened = view.open_file(path).map_err(RegistrationError::ReadView)?;
+            Ok(WorktreeContent {
+                file: opened.reader,
+                size: opened.material.size,
+                content_hash: opened.material.content_hash,
+                revision: view.stamp().revision,
+            })
         })
     }
 

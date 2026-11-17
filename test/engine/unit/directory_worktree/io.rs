@@ -103,7 +103,10 @@ impl Fixture {
 }
 fn read(view: &HeldReadView<'_>, path: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
-    view.open_file(&lookup(path)).unwrap().read_to_end(&mut bytes).unwrap();
+    let mut opened = view.open_file(&lookup(path)).unwrap();
+    opened.reader.read_to_end(&mut bytes).unwrap();
+    assert_eq!(opened.material.size, bytes.len() as u64);
+    assert_eq!(opened.material.content_hash, ContentHash::from_digest(blake3::hash(&bytes)));
     bytes
 }
 

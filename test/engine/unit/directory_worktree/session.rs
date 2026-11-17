@@ -130,7 +130,7 @@ fn reopen(
 
 fn read(view: &HeldReadView<'_>, path: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
-    view.open_file(&lookup(path)).unwrap().read_to_end(&mut bytes).unwrap();
+    view.open_file(&lookup(path)).unwrap().reader.read_to_end(&mut bytes).unwrap();
     bytes
 }
 
@@ -160,7 +160,7 @@ fn preparation_reopens_exact_empty_instance_and_lists_the_immutable_source() {
         ["Empty", "Folder", "Root.txt"]);
     assert!(view.directory(Some(&lookup("empty")), None, page_size(10))
         .unwrap().entries.is_empty());
-    assert!(matches!(view.content(&lookup("Root.txt")), Ok(EntryContent::File { .. })));
+    assert!(matches!(view.entry(&lookup("Root.txt")).unwrap().content, EntryContent::File { .. }));
     empty(&instance);
     drop(view);
     drop(first);

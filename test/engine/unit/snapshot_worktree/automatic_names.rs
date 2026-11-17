@@ -60,7 +60,7 @@ fn assert_original(
         let view = session.read(ReadMaterial::Original).unwrap();
         let mut file = view
             .open_file(&LookupPath::parse("first.txt").unwrap())
-            .unwrap();
+            .unwrap().reader;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, FIRST_ORIGINAL);

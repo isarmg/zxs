@@ -241,7 +241,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         assert_eq!(page.entries[0].path.as_str(), "original.txt");
         assert!(page.next.is_none());
         let mut bytes = Vec::new();
-        view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap()
+        view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap().reader
             .read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, BODY);
         Ok((session.instance(), session.worktree().clone(), view.stamp()))
@@ -289,7 +289,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         let page = view.directory(None, None, NonZeroU16::new(8).unwrap()).unwrap();
         assert_eq!(page.entries.len(), 1);
         let mut bytes = Vec::new();
-        view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap()
+        view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap().reader
             .read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, BODY);
         Ok((session.instance(), session.worktree().clone(), view.stamp()))
@@ -322,7 +322,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
             assert_eq!(session.worktree().revision(), revision);
             let view = session.read(ReadMaterial::Original).unwrap();
             let mut bytes = Vec::new();
-            view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap()
+            view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap().reader
                 .read_to_end(&mut bytes).unwrap();
             assert_eq!(bytes, edited_body);
             Ok(())
@@ -498,7 +498,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         assert_eq!(session.worktree().source(), observed.1.source());
         assert_eq!(session.worktree().revision(), revision);
         let view = session.read(ReadMaterial::Published(&successor)).unwrap();
-        let mut read = view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap();
+        let mut read = view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap().reader;
         let metadata = read.metadata().unwrap();
         assert_eq!((metadata.dev(), metadata.ino()), edited_inode);
         let mut bytes = Vec::new();
@@ -940,7 +940,7 @@ fn exact_receipt_chain_reopens_actual_empty_instance_and_original_material() {
     assert_eq!(page.entries.len(), 2);
     assert!(page.next.is_none());
     let mut actual = Vec::new();
-    view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap()
+    view.open_file(&LookupPath::parse("original.txt").unwrap()).unwrap().reader
         .read_to_end(&mut actual).unwrap();
     assert_eq!(actual, BODY);
     drop(view);

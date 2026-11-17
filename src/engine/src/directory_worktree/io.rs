@@ -114,6 +114,12 @@ pub(crate) struct HeldReadView<'a> {
     ledger: &'a HeldWorktreeLedger<'a>,
     backing: Backing<'a>,
 }
+
+pub(crate) struct OpenedWorktreeFile {
+    pub(crate) material: SnapshotFile,
+    pub(crate) reader: crate::ReadFile,
+}
+
 impl<'a> HeldReadView<'a> {
     /// Initial bytes are read from the original immutable node. Only explicitly
     /// sealed edited occurrences open sparse worktree bodies.
@@ -173,7 +179,9 @@ impl<'a> HeldReadView<'a> {
     pub(crate) fn stamp(&self) -> ViewStamp {
         self.stamp
     }
-    pub(crate) fn open_file(&self, path: &LookupPath) -> Result<crate::ReadFile, ViewError> {
+    /// Size, hash and reader come from the same selected occurrence. A fresh
+    /// open still verifies the live ledger and the exact physical body.
+    pub(crate) fn open_file(&self, path: &LookupPath) -> Result<OpenedWorktreeFile, ViewError> {
         self.ledger.admit_read_view().map_err(ViewError::Ledger)?;
         match &self.backing {
             Backing::Sparse { source, instance, projection } => {
@@ -181,10 +189,14 @@ impl<'a> HeldReadView<'a> {
                     ReadRoute::Directory => Err(ViewError::IsDirectory),
                     ReadRoute::Added { .. } => Err(ViewError::WorkingSourceRequired),
                     ReadRoute::Original { file } => {
-                        source.open_payload(file.version_id).map_err(ViewError::Snapshot)
+                        let reader = source.open_payload(file.version_id)
+                            .map_err(ViewError::Snapshot)?;
+                        Ok(OpenedWorktreeFile { material: file, reader })
                     }
                     ReadRoute::Working { material } => {
-                        instance.open_material(material).map_err(ViewError::Worktree)
+                        let reader = instance.open_material(material)
+                            .map_err(ViewError::Worktree)?;
+                        Ok(OpenedWorktreeFile { material: material.file, reader })
                     }
                 }
             }
@@ -192,7 +204,9 @@ impl<'a> HeldReadView<'a> {
                 EntryContent::Directory => Err(ViewError::IsDirectory),
                 EntryContent::Working { .. } => Err(ViewError::WorkingSourceRequired),
                 EntryContent::File { material } | EntryContent::RetainedFile { material, .. } => {
-                    node.open_payload(material.version_id).map_err(ViewError::Snapshot)
+                    let reader = node.open_payload(material.version_id)
+                        .map_err(ViewError::Snapshot)?;
+                    Ok(OpenedWorktreeFile { material, reader })
                 }
             },
         }
@@ -213,10 +227,6 @@ impl<'a> HeldReadView<'a> {
         Ok(Entry { path: canonical.clone(), content: self.admitted_content(path)? })
     }
 
-    pub(crate) fn content(&self, path: &LookupPath) -> Result<EntryContent, ViewError> {
-        self.ledger.admit_read_view().map_err(ViewError::Ledger)?;
-        self.admitted_content(path)
-    }
     fn admitted_content(&self, path: &LookupPath) -> Result<EntryContent, ViewError> {
         match &self.backing {
             Backing::Sparse { projection, .. } => {

@@ -95,7 +95,7 @@ impl From<Entry> for WorktreeEntry {
     }
 }
 
-fn with_view<T>(
+pub(super) fn with_view<T>(
     engine: &Engine,
     target: WorktreeHandle,
     read: impl FnOnce(&HeldReadView<'_>) -> Result<T>,
