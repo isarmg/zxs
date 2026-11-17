@@ -106,7 +106,7 @@ pub(super) fn interrupt_and_resume(
     let operations = engine.state().operations.clone();
     let versions = engine.state().versions.clone();
     let branches = engine.state().branches.clone();
-    let (ledger, node_path, node_binding) = {
+    let (ledger, node_path, node_binding, owner) = {
         let index = engine.snapshot_receipts().unwrap();
         let original = index.reopen_node(&engine, plan.source).unwrap();
         let published = index.reopen_node(&engine, plan.handle()).unwrap();
@@ -116,6 +116,7 @@ pub(super) fn interrupt_and_resume(
             ),
             published.worktrees_directory().path().parent().unwrap().to_path_buf(),
             published.binding(),
+            index.node(plan.source).unwrap().host().namespace.repository_id,
         )
     };
     let committing = plan.before.sequence.next().unwrap();
@@ -133,8 +134,31 @@ pub(super) fn interrupt_and_resume(
     assert_eq!(engine.state().branches, branches);
     assert_eq!(inventory(&node_path), node_before);
 
+    // Live command authorization must be able to reach the original recovery
+    // publisher after restart, not make the frozen handle generally readable.
+    assert_eq!(engine.directory_worktree_commit_owner(request, principal).unwrap(), owner);
+    assert_eq!(engine.directory_worktree_owner(request.target).unwrap_err().code(),
+        storage_contract::ErrorCode::RecoveryRequired);
+    assert!(engine.directory_worktree_status(request.target).is_err());
+    assert!(engine.directory_worktree_entries(request.target, None, None).is_err());
+    let mut fresh = request.clone();
+    fresh.operation_id = OperationId::generate().unwrap();
+    let fresh = engine.directory_worktree_commit_owner(&fresh, principal).unwrap_err();
+    assert_eq!(fresh.code(), storage_contract::ErrorCode::RecoveryRequired);
+    assert_eq!(fresh.published_operation(), None);
+    let mut wrong_target = request.clone();
+    wrong_target.target.worktree_id = storage_contract::snapshot_worktree::WorktreeId::generate()
+        .unwrap();
+    assert!(engine.directory_worktree_commit_owner(&wrong_target, principal).is_err());
     let mut other = request.clone();
     other.message.push_str(" different request");
+    for error in [
+        engine.directory_worktree_commit_owner(&other, principal).unwrap_err(),
+        engine.directory_worktree_commit_owner(request, &"other".parse().unwrap()).unwrap_err(),
+    ] {
+        assert_eq!(error.code(), storage_contract::ErrorCode::IdempotencyKeyReused);
+        assert_eq!(error.published_operation(), None);
+    }
     assert!(matches!(unchanged_rejection(&mut engine, system, disks, &other, principal),
         RegistrationError::Digest(operation) if operation == request.operation_id));
     assert!(matches!(unchanged_rejection(&mut engine, system, disks, request,
@@ -207,7 +231,8 @@ pub(super) fn interrupt_and_resume(
     assert!(!engine.is_read_only());
     assert_eq!(engine.state().operations, operations);
     assert_eq!(inventory(&ledger), completed_ledger);
-    let result = commit_worktree(&mut engine, request, principal).unwrap();
+    assert_eq!(engine.directory_worktree_commit_owner(request, principal).unwrap(), owner);
+    let result = engine.commit_directory_worktree(request, principal).unwrap();
     assert_eq!(result, plan.handle());
     assert_eq!(engine.state().operations.len(), operations.len() + 1);
     let completion = engine.operation(plan.completion).unwrap();

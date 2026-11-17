@@ -26,6 +26,14 @@ impl Engine {
         Ok(index.worktree(target)?.source().host().namespace.repository_id)
     }
 
+    /// Management commit authorization only. A registered pending operation
+    /// may reach its own retry; reads and held SMB handles still require Ready.
+    pub fn directory_worktree_commit_owner(
+        &self, request: &CommitWorktree, principal: &Principal,
+    ) -> Result<RepositoryId> {
+        self.snapshot_receipts()?.commit_owner(request, principal).map_err(Into::into)
+    }
+
     pub fn open_directory_worktree_content(
         &self,
         target: WorktreeHandle,

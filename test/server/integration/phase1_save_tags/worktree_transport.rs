@@ -21,6 +21,9 @@ use storage_engine::Engine;
 use storage_server::auth::AuthStore;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[path = "worktree_commit_recovery.rs"]
+mod commit_recovery;
+
 struct Http {
     address: SocketAddr,
     stop: tokio::sync::oneshot::Sender<()>,

@@ -55,8 +55,10 @@ pub(in crate::engine_backend) fn commit(
     request: CommitWorktree,
 ) -> Result<SnapshotHandle, ApiError> {
     let (mut engine, current) = backend.lock_current(identity)?;
-    authorize(&engine, &current, request.target)?;
+    management(&current)?;
     let principal = current.principal.parse().map_err(ApiError::invalid_authenticated_principal)?;
+    let owner = engine.directory_worktree_commit_owner(&request, &principal).map_err(error)?;
+    repository(&engine, &owner.to_string())?;
     engine.commit_directory_worktree(&request, &principal).map_err(error)
 }
 

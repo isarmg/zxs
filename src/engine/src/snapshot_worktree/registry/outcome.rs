@@ -3,13 +3,32 @@
 use super::{CreationIntent, Publication, ReceiptIndex};
 use storage_contract::snapshot_worktree::creation::WorktreeCreationRequest;
 use crate::snapshot_worktree::{RegistrationError, Result};
-use storage_contract::snapshot_worktree::WorktreeHandle;
+use storage_contract::snapshot_worktree::{CommitWorktree, WorktreeHandle};
 use storage_contract::snapshot_worktree::outcome::{
     WorktreeCommitOutcome, WorktreeCommitReceipt, WorktreeCreationOutcome, WorktreeCreationReceipt,
 };
 use storage_contract::{OperationId, Principal, RepositoryId};
 
 impl ReceiptIndex<'_> {
+    /// A ready handle follows ordinary ownership admission. If this exact
+    /// operation froze the handle, only its original command and principal may
+    /// resolve the owner for commit recovery. This returns no serving view.
+    pub(in crate::snapshot_worktree) fn commit_owner(
+        &self, request: &CommitWorktree, principal: &Principal,
+    ) -> Result<RepositoryId> {
+        let pending = self.pending_edits.get(&request.target.worktree_id).copied()
+            .filter(|operation| *operation == request.operation_id);
+        let tree = self.worktree_for_commit(request.target, pending)?;
+        let repository = tree.source().host().namespace.repository_id;
+        if let Some(operation) = pending {
+            let original = self.commit_outcome(repository, operation, principal)?;
+            if original.request != *request {
+                return Err(RegistrationError::Digest(operation));
+            }
+        }
+        Ok(repository)
+    }
+
     pub(in crate::snapshot_worktree) fn creation_outcome(
         &self,
         repository: RepositoryId,
