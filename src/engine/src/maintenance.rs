@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::fs;
 
+mod cleanup;
+
 struct BoundaryInput<'a> {
     history: &'a str,
     commit: &'a str,
@@ -685,40 +687,12 @@ impl Engine {
                     }
                     Err(error) => return Err(error),
                 }
-                if *state == ContentState::Retired {
-                    let stored: FileVersion =
-                        root.read_json_observed(&dir.join("version.json"), &mut |_| Ok(()))?;
-                    if stored != *v {
-                        return Err(Error::new(
-                            ErrorCode::ObjectCorrupt,
-                            "retirement cleanup descriptor differs from its retained identity",
-                        ));
-                    }
-                    let metadata = crate::engine::provenance::MetadataReadContext::for_disk(
-                        &self.config,
-                        &handle.seal,
-                        d.metadata_member
-                            .then_some(self.metadata_integrity.as_ref()),
-                    );
-                    verify_source_version_publication(&material, &mut |_| Ok(()), Some(&metadata))?;
-                }
-                root.write_json(&dir.join("purged.json"), &tombstone, true)?;
-                // Version availability is independent of whole-container
-                // lifecycle. Keep both removals under their already admitted
-                // Current source domains; neither path can select an owner.
-                let body = scope.body_path(v)?;
-                let container = scope.container()?;
-                container.directory_identity(body.parent().ok_or(
-                    crate::engine::FreshLayoutError::ContainerScope,
-                )?)?;
-                container.open_optional_read_regular(&body)?;
-                let prepared = material.prepared_body_path()?;
-                let prepared_present = root.open_optional_read_regular(&prepared)?.is_some();
-                container.remove_file_if_present_synced(&body)?;
-                if prepared_present {
-                    root.remove_file_if_present_synced(&prepared)?;
-                }
-                material.verify()?;
+                let metadata = crate::engine::provenance::MetadataReadContext::for_disk(
+                    &self.config,
+                    &handle.seal,
+                    d.metadata_member.then_some(self.metadata_integrity.as_ref()),
+                );
+                cleanup::remove_proven_bodies(&material, &tombstone, &metadata)?;
             }
         }
         Ok(())

@@ -945,7 +945,7 @@ pub(crate) fn verify_payload_held_with(
 
 pub(crate) fn verify_open_payload_observed(
     file: ReadFile,
-    manifest: ChecksumManifest,
+    manifest: impl std::borrow::Borrow<ChecksumManifest>,
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<ReadFile> {
@@ -954,20 +954,21 @@ pub(crate) fn verify_open_payload_observed(
 
 fn verify_open_payload(
     mut file: ReadFile,
-    manifest: ChecksumManifest,
+    manifest: impl std::borrow::Borrow<ChecksumManifest>,
     version: &FileVersion,
     maximum_read: usize,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<ReadFile> {
+    let manifest = manifest.borrow();
     let mut full = blake3::Hasher::new();
     let mut buffer = vec![0u8; manifest.chunk_bytes as usize];
     let mut remaining = manifest.logical_size;
-    for expected in manifest.chunks {
+    for expected in &manifest.chunks {
         let size = remaining.min(buffer.len() as u64) as usize;
         if read_fill_with_limit(&mut file, &mut buffer[..size], maximum_read, observe)? != size {
             return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
         }
-        if blake3::hash(&buffer[..size]).as_bytes() != &expected {
+        if blake3::hash(&buffer[..size]).as_bytes() != expected {
             return Err(Error::new(
                 ErrorCode::ChecksumMismatch,
                 "payload chunk differs",

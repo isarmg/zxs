@@ -77,6 +77,12 @@ pub enum FreshLayoutError {
     VersionSource,
     #[error("source-scoped damaged-version repair requires a held quarantine transaction")]
     SourceQuarantine,
+    #[error("content cleanup descriptor differs from the originally published version")]
+    CleanupDescriptor,
+    #[error("the local removal proof is not an authenticated predecessor of this content state")]
+    CleanupPredecessor,
+    #[error("a held cleanup directory, removal proof or body changed before removal")]
+    CleanupChanged,
     #[error("this namespace has no published genesis common-root registration")]
     NamespaceUnmapped,
     #[error("whole-container lifecycle transactions are not supported by this physical layout")]
@@ -141,6 +147,9 @@ impl FreshLayoutError {
             Self::Directory(_) => ErrorCode::IoError,
             Self::PublicationLocation => ErrorCode::PublicationInvalid,
             Self::VersionSource | Self::SourceQuarantine => ErrorCode::UnsupportedOperation,
+            Self::CleanupDescriptor => ErrorCode::ObjectCorrupt,
+            Self::CleanupPredecessor => ErrorCode::TombstoneInvalid,
+            Self::CleanupChanged => ErrorCode::ContainerLayoutInvalid,
             Self::ContainerShape => ErrorCode::StateInvalid,
             Self::NamespaceSource | Self::NamespaceRecord(_) => ErrorCode::PublicationInvalid,
             Self::NamespaceUnmapped | Self::WholeContainerLifecycleUnsupported => {

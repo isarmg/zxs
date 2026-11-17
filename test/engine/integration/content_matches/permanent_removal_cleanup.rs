@@ -255,3 +255,88 @@ fn removal_cleanup_observation_rejects_cancelled_and_stale_root_before_disk_evid
         ErrorCode::OperationAborted
     );
 }
+
+#[test]
+fn committed_purge_retry_requires_original_descriptor_publication_and_owned_tombstone() {
+    let (mut pool, a, metadata, body) = fixture();
+    let plan = pool.engine
+        .create_purge_plan(&pool.history, vec![a.version_id.clone()], "admin").unwrap();
+    let operation = OperationId::generate().unwrap();
+    let decision = pool.engine.commit_plan(&plan.plan_id, "admin", operation).unwrap();
+    let sequence = pool.engine.state().sequence;
+    let prepared = metadata.join("content/a");
+    std::fs::write(&body, b"shared").unwrap();
+    std::fs::write(&prepared, b"shared").unwrap();
+    let other = metadata.parent().unwrap().join(pool.entry("b").version_id);
+    let proof = metadata.join("purged.json");
+    let proof_bytes = std::fs::read(&proof).unwrap();
+
+    // Both substitutions are genuine material for another published version;
+    // a retained pathname, valid JSON or even a valid unrelated quorum is not authority.
+    for (name, code) in [("version.json", ErrorCode::ObjectCorrupt),
+                         ("publication-proof.json", ErrorCode::PublicationInvalid)] {
+        let target = metadata.join(name);
+        let original = std::fs::read(&target).unwrap();
+        let unrelated = std::fs::read(other.join(name)).unwrap();
+        assert_ne!(original, unrelated);
+        std::fs::write(&target, &unrelated).unwrap();
+        assert_eq!(pool.engine.commit_plan(&plan.plan_id, "admin", operation).unwrap_err().code(), code);
+        assert_eq!(std::fs::read(&target).unwrap(), unrelated);
+        assert_eq!(std::fs::read(&body).unwrap(), b"shared");
+        assert_eq!(std::fs::read(&prepared).unwrap(), b"shared");
+        assert_eq!(std::fs::read(&proof).unwrap(), proof_bytes);
+        assert_eq!(pool.engine.operation(operation).unwrap(), decision);
+        assert_eq!(pool.engine.state().sequence, sequence);
+        std::fs::write(target, original).unwrap();
+    }
+
+    // An occupied local evidence slot cannot be overwritten to make a retry pass.
+    let mut unrelated: json_codec::Value = json_codec::from_slice(&proof_bytes).unwrap();
+    unrelated["version_id"] = json_codec::json!(pool.entry("b").version_id);
+    let unrelated = storage_contract::canonical_json(&unrelated).unwrap();
+    std::fs::write(&proof, &unrelated).unwrap();
+    assert!(pool.engine.commit_plan(&plan.plan_id, "admin", operation).is_err());
+    assert_eq!(std::fs::read(&proof).unwrap(), unrelated);
+    assert_eq!(std::fs::read(&body).unwrap(), b"shared");
+    assert_eq!(std::fs::read(&prepared).unwrap(), b"shared");
+    assert_eq!(pool.engine.operation(operation).unwrap(), decision);
+    std::fs::write(&proof, &proof_bytes).unwrap();
+    assert_eq!(pool.engine.commit_plan(&plan.plan_id, "admin", operation).unwrap(), decision);
+    assert!(!body.exists() && !prepared.exists());
+    assert_eq!(std::fs::read(proof).unwrap(), proof_bytes);
+    assert_eq!(pool.engine.state().sequence, sequence);
+}
+
+#[test]
+fn cleanup_preserves_wrong_bytes_in_either_slot_without_consuming_the_other() {
+    let (mut pool, a, metadata, body) = fixture();
+    let plan = pool.engine
+        .create_purge_plan(&pool.history, vec![a.version_id.clone()], "admin").unwrap();
+    let operation = OperationId::generate().unwrap();
+    let prepared = metadata.join("content/a");
+    let proof = metadata.join("purged.json");
+    // Same length, unsafe for both cleanup and any silent checksum repair.
+    std::fs::write(&body, b"shared").unwrap();
+    std::fs::write(&prepared, b"wrong!").unwrap();
+    assert_eq!(pool.engine.commit_plan(&plan.plan_id, "admin", operation).unwrap_err().code(),
+               ErrorCode::ChecksumMismatch);
+    let decision = pool.engine.operation(operation).unwrap();
+    let sequence = pool.engine.state().sequence;
+    assert!(!proof.exists());
+    assert_eq!(std::fs::read(&body).unwrap(), b"shared");
+    assert_eq!(std::fs::read(&prepared).unwrap(), b"wrong!");
+
+    std::fs::write(&body, b"wrong!").unwrap();
+    std::fs::write(&prepared, b"shared").unwrap();
+    assert_eq!(pool.engine.commit_plan(&plan.plan_id, "admin", operation).unwrap_err().code(),
+               ErrorCode::ChecksumMismatch);
+    assert!(!proof.exists());
+    assert_eq!(std::fs::read(&body).unwrap(), b"wrong!");
+    assert_eq!(std::fs::read(&prepared).unwrap(), b"shared");
+    assert_eq!(pool.engine.operation(operation).unwrap(), decision);
+    std::fs::write(&body, b"shared").unwrap();
+    assert_eq!(pool.engine.commit_plan(&plan.plan_id, "admin", operation).unwrap(), decision);
+    assert!(!body.exists() && !prepared.exists());
+    assert!(inspect(&pool, &a).all_current_routes_absent());
+    assert_eq!(pool.engine.state().sequence, sequence);
+}
