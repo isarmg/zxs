@@ -1,4 +1,6 @@
 //! Backup configuration HTTP shape parsing and response encoding.
+#[cfg(feature = "core")]
+pub(crate) mod automatic;
 use crate::{
     ApiError, AppState,
     auth::Identity,

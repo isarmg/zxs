@@ -1,5 +1,7 @@
 //! Phase-one body saves and container tags through the real authenticated HTTP
 //! router. Temporary level-one roots do not require a Samba daemon or a browser.
+#[path = "phase1_save_tags/automatic_backups.rs"]
+mod automatic_backups;
 #[path = "phase1_save_tags/unborn_first.rs"]
 mod unborn_first;
 #[path = "phase1_save_tags/fresh_working.rs"]

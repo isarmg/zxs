@@ -1,4 +1,5 @@
 //! Per-scope custom prefixes and explicit recursive disk-name protection.
+mod automatic;
 pub(crate) mod recursive;
 use super::{actions, model::file_context, review};
 use crate::{
@@ -40,6 +41,7 @@ struct Configuration {
 #[derive(Clone, Deserialize)]
 struct Scope {
     id: String,
+    kind: storage_contract::NamespaceEntryKind,
 }
 
 fn read_routes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Vec<String>>, D::Error> {
@@ -319,6 +321,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             <div class="zxs-stack">{move ||paths.get().into_iter().map(|(slot,path)|view!{<p class="zxs-row">{format!("{slot} / {path}")}</p>}).collect_view()}</div>
             <Show when=move ||state.with(|s|!s.management.storage.writable())><p class="zxs-row">{t("此备份策略仅可查看。","This backup configuration is read only.")}</p></Show>
             <button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|submit(state)>{t("保存备份设置","Save backup settings")}</button>
+            {automatic::view(state)}
         </Show>
         <p class="zxs-row zxs-inline-error" role="status">{move ||state.with(|s|review::error_text(s,review::Kind::Backup))}</p>
     </section></Show>};

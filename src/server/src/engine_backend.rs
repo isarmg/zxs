@@ -14,6 +14,7 @@ use admission::AdmissionEngine;
 pub mod application;
 use application::Application;
 mod backup_transaction;
+mod automatic_backups;
 mod branch;
 mod content;
 mod directory_deletion;
@@ -1398,6 +1399,13 @@ impl Backend for EngineBackend {
                 }
                 _ => error(failure),
             })
+    }
+    fn configure_automatic_directory_backups(
+        &self,
+        identity: &Identity,
+        request: crate::ConfigureAutomaticDirectoryBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        automatic_backups::configure(self, identity, request)
     }
     fn recursive_backup_configuration(
         &self,

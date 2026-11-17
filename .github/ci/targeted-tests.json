@@ -35,6 +35,56 @@
         }
       ]
     },
+    "automatic-directory-backup-entry": {
+      "reason": "Run the authenticated automatic directory backup configuration through real three-tier roots and verify the typed Web control without claiming a browser, Samba, or backup switch.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "automatic_backups::automatic_directory_http_backfills_and_inherits_after_real_add_chain"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "http_backup_configuration::automatic::tests::automatic_directory_body_is_typed_and_excludes_caller_authority_or_prefixes"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "files::backup::automatic::tests::"
+          ],
+          "exact": [
+            "files::backup::tests::backup_configuration_preserves_valid_prefixes_and_allows_explicit_capacity_reduction"
+          ],
+          "max_tests": 3
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        }
+      ]
+    },
     "directory-web-selection": {
       "reason": "Check the real directory head and draft selection UI and product Wasm compile. Native state tests and Wasm build do not assert that Chromium or Samba ran.",
       "python_tests": [],
@@ -5981,6 +6031,60 @@
       "path": "test/server/unit/smb_rpc/worktree_dispatch_tests.rs",
       "groups": [
         "smb-worktree-overwrite"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_backup_configuration.rs",
+      "groups": [
+        "automatic-directory-backup-entry"
+      ]
+    },
+    {
+      "path": "src/server/src/http_backup_configuration.rs",
+      "groups": [
+        "automatic-directory-backup-entry"
+      ]
+    },
+    {
+      "path": "src/web/src/files/backup.rs",
+      "groups": [
+        "automatic-directory-backup-entry"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/automatic_backups.rs",
+      "groups": [
+        "automatic-directory-backup-entry"
+      ]
+    },
+    {
+      "path": "src/server/src/http_backup_configuration/automatic.rs",
+      "groups": [
+        "automatic-directory-backup-entry"
+      ]
+    },
+    {
+      "path": "src/web/src/files/backup/automatic.rs",
+      "groups": [
+        "automatic-directory-backup-entry"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/automatic_backups.rs",
+      "groups": [
+        "automatic-directory-backup-entry"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_backup_configuration/automatic.rs",
+      "groups": [
+        "automatic-directory-backup-entry"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/backup/automatic_tests.rs",
+      "groups": [
+        "automatic-directory-backup-entry"
       ]
     },
     {

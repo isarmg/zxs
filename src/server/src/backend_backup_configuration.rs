@@ -20,6 +20,17 @@ pub struct ConfigureBackups {
 
 #[cfg(feature = "core")]
 #[derive(Clone, Debug)]
+pub struct ConfigureAutomaticDirectoryBackups {
+    pub repository_id: storage_contract::RepositoryId,
+    pub path: name_policy::PortablePath,
+    pub directory_id: storage_contract::EntryId,
+    pub target_copies: u32,
+    pub expected_generation: storage_contract::Generation,
+    pub operation_id: storage_contract::OperationId,
+}
+
+#[cfg(feature = "core")]
+#[derive(Clone, Debug)]
 pub struct RecursiveBackupConfiguration {
     pub configuration: storage_contract::BackupConfigurationSnapshot,
     pub capture: storage_engine::RecursiveBackupCapture,

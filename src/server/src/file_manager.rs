@@ -200,6 +200,10 @@ pub(crate) fn routes() -> Router<AppState> {
     {
         routes
             .route(
+                "/api/repositories/{repository}/automatic-directory-backup-configuration",
+                http_routing::routing::put(http_backup_configuration::automatic::configure),
+            )
+            .route(
                 "/api/repositories/{repository}/recursive-backup-configuration",
                 get(http_backup_configuration::read_recursive)
                     .put(http_backup_configuration::configure_recursive),

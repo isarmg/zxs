@@ -27,6 +27,8 @@ const THIRD: &[u8] = b"third body after both backup additions are published";
 const BODIES: [&[u8]; 3] = [FIRST, SECOND, THIRD];
 const TAG: &str = "first-backup-history";
 const BRANCH: &str = "backup version chain";
+const ADDED_PATH: &str = "docs/another";
+const ADDED_BODY: &[u8] = b"a distinct file first saved after the complete A-B-C activation";
 
 fn save(engine: &mut Engine, repository: &Repository, bytes: &[u8]) -> Entry {
     let workspace = engine
@@ -742,4 +744,165 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
     assert_primary_offline_authenticated_history(
         engine, &system, temp.path(), &repository, &versions, &branch_id,
     );
+    assert_new_file_on_activated_chain(
+        Engine::open(&system).unwrap(), &system, temp.path(), &repository, &versions, &branch_id,
+    );
+}
+
+fn added_file_container(config: &Config, tier: usize) -> PathBuf {
+    source_area(config, tier).join("common-data").join(ADDED_PATH)
+}
+
+fn added_file_body(config: &Config, version: &FileVersion, tier: usize) -> PathBuf {
+    added_file_container(config, tier)
+        .join("versions")
+        .join(format!("{}-another", version.storage_id))
+}
+
+fn assert_added_file_copies(engine: &Engine, version: &FileVersion) {
+    let placement = &engine.state().placements[&version.version_id];
+    assert_eq!(placement.target_copies, 3);
+    assert_eq!(placement.route_slot_ids, ["P01", "B01", "C01"]);
+    let file = version.file_id.parse::<storage_contract::FileId>().unwrap();
+    let record = &engine.state().file_containers[&file];
+    assert_eq!(record.replicas.len(), 3);
+    let mut bodies = BTreeSet::new();
+    for (tier, disk) in engine.config().disks.iter().enumerate() {
+        let disk_id = disk.disk_id.parse::<storage_contract::DiskId>().unwrap();
+        let replica = &record.replicas[&disk_id];
+        assert_eq!(replica.root_id, engine.config().storage_roots[&disk_id].root_id);
+        let container = fs::metadata(added_file_container(engine.config(), tier)).unwrap();
+        assert_eq!(
+            (replica.entity.device(), replica.entity.inode()),
+            (container.dev(), container.ino())
+        );
+        let body = added_file_body(engine.config(), version, tier);
+        let entity = fs::metadata(&body).unwrap();
+        assert!(bodies.insert((entity.dev(), entity.ino())));
+        assert_eq!(fs::read(body).unwrap(), ADDED_BODY);
+    }
+}
+
+fn assert_new_file_on_activated_chain(
+    mut engine: Engine,
+    system: &Path,
+    temporary: &Path,
+    repository: &Repository,
+    original_versions: &[FileVersion],
+    original_branch: &str,
+) {
+    // The report's FILE-only policy must not be mistaken for protection of a
+    // new sibling. Configure its actual directory before creating the new file.
+    let path = name_policy::PortablePath::parse("docs").unwrap();
+    let directory = engine.namespace_tree(&repository.main_branch_id).unwrap()
+        .get(path.as_str()).unwrap().entry_id.parse().unwrap();
+    let principal = "admin".parse().unwrap();
+    let directory_request = storage_engine::AutomaticDirectoryBackupRequest {
+        repository_id: repository.repository_id.parse().unwrap(),
+        path: &path,
+        directory_id: directory,
+        target_copies: 3,
+        expected_generation: storage_contract::Generation::new(0),
+        principal: &principal,
+        operation_id: operation(),
+    };
+    let configured = engine.configure_automatic_directory_backups(directory_request).unwrap();
+    assert_eq!(configured.commit_state, CommitState::Published);
+    assert_eq!(configured.result["version_count"], "0");
+    let original_entry = engine.namespace_tree(&repository.main_branch_id).unwrap()
+        .get(PATH).unwrap().clone();
+    let prior_versions = engine.state().versions.clone();
+    let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, ADDED_PATH, ADDED_BODY).unwrap();
+    let request = CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: operation(),
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "first save of a new file on the activated backup chain".into(),
+        request_digest: None,
+    };
+    let receipt = engine.commit_workspace(request.clone()).unwrap();
+    assert_eq!(receipt.commit_state, CommitState::Published);
+    assert_eq!(receipt.protection_at_publish, ProtectionAtPublish::TargetMet);
+    let entry = engine.namespace_tree(&repository.main_branch_id).unwrap()
+        .get(ADDED_PATH).unwrap().clone();
+    assert_ne!(entry.entry_id, original_entry.entry_id);
+    assert_ne!(entry.file_id, original_entry.file_id);
+    assert!(!prior_versions.contains_key(&entry.version_id));
+    assert_eq!(engine.state().versions.len(), prior_versions.len() + 1);
+    let version = engine.state().versions[&entry.version_id].clone();
+    assert_added_file_copies(&engine, &version);
+    let config = engine.config().clone();
+    drop(engine);
+
+    // These reads use only each actual FILE container, with no live Engine or
+    // upstream reader capable of supplying the new file's missing local rows.
+    let scope = ObjectDatabaseScope::File {
+        file_id: version.file_id.clone(), history_tree_id: version.history_tree_id.clone(),
+    };
+    let mut material: Option<storage_engine::ObjectDatabaseMaterial> = None;
+    for tier in 0..3 {
+        let container = added_file_container(&config, tier);
+        let local = inspect_object_database_material(
+            fs::File::open(&container).unwrap(), container, &scope,
+        ).unwrap();
+        let row = local.records().iter().find(|row| {
+            row.kind() == "version" && row.id() == version.version_id
+        }).unwrap();
+        let body: json_codec::Value = json_codec::from_str(row.body_json()).unwrap();
+        assert_eq!(body["version"], json_codec::to_value(&version).unwrap());
+        match &material {
+            Some(expected) => {
+                assert_eq!(local.scope(), expected.scope());
+                assert_eq!(local.records_hash(), expected.records_hash());
+                assert_eq!(local.records(), expected.records());
+            }
+            None => material = Some(local),
+        }
+    }
+
+    let mut engine = Engine::open(system).unwrap();
+    assert_cold_state(&engine, repository, original_versions, original_branch);
+    assert_copies(&engine, original_versions, 3);
+    assert_added_file_copies(&engine, &version);
+    assert_eq!(engine.file_history(&version.file_id).unwrap(), vec![version.clone()]);
+    let roots = std::iter::once(system.to_path_buf())
+        .chain(config.disks.iter().map(|disk| disk.root.clone())).collect::<Vec<_>>();
+    let before = roots.iter().map(|root| files(root)).collect::<Vec<_>>();
+    let state = storage_engine::canonical_json(engine.state()).unwrap();
+    assert_eq!(engine.commit_workspace(request).unwrap(), receipt);
+    assert_eq!(
+        engine.configure_automatic_directory_backups(directory_request).unwrap(),
+        configured
+    );
+    assert_eq!(storage_engine::canonical_json(engine.state()).unwrap(), state);
+    assert_eq!(roots.iter().map(|root| files(root)).collect::<Vec<_>>(), before);
+
+    let mut parked = Vec::new();
+    for tier in 0..3 {
+        if tier > 0 {
+            let original = added_file_body(&config, &version, tier - 1);
+            let saved = temporary.join(format!("added-file-upstream-{tier}"));
+            fs::rename(&original, &saved).unwrap();
+            parked.push((original, saved));
+        }
+        let expected = fs::metadata(added_file_body(&config, &version, tier)).unwrap();
+        let mut direct = engine.open_content(&version.version_id).unwrap();
+        let mut planned = engine.prepare_content(&version.version_id).unwrap().open().unwrap();
+        for file in [&mut direct.file, &mut planned.file] {
+            let actual = file.metadata().unwrap();
+            assert_eq!((actual.dev(), actual.ino()), (expected.dev(), expected.ino()));
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, ADDED_BODY);
+        }
+        assert!(parked.iter().all(|(original, _)| !original.exists()));
+    }
+    for (original, saved) in parked.into_iter().rev() {
+        fs::rename(saved, original).unwrap();
+    }
+    assert_added_file_copies(&engine, &version);
+    assert_copies(&engine, original_versions, 3);
 }
