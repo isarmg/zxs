@@ -468,12 +468,16 @@ fn fresh_inventory_discards_only_a_confirmed_unpublished_upload_prefix() {
     let (partial_item, discarded) = make(b"partial", false);
     let (full_item, full) = make(&[0; 20], false);
     let (retained_item, retained_name) = make(b"retained", true);
+    let one_shot = format!("complete-upload-{}.data", authentication::random_token().unwrap());
+    retained(&budget, "alice", &one_shot, 20, b"one-shot draft body");
     drop(budget);
 
     let _reopened = SpoolBudget::recover(root.path(), limits).unwrap();
     assert!(uploads::load(root.path(), workspace, &partial_item).unwrap().is_none());
     assert!(!root.path().join(&discarded).exists());
     assert!(!root.path().join(format!("{discarded}.owner.json")).exists());
+    assert!(!root.path().join(&one_shot).exists());
+    assert!(!root.path().join(format!("{one_shot}.owner.json")).exists());
     assert_eq!(std::fs::read(root.path().join(full)).unwrap(), [0; 20]);
     assert_eq!(std::fs::read(root.path().join(retained_name)).unwrap(), b"retained");
     assert!(uploads::load(root.path(), workspace, &full_item).unwrap().is_some());

@@ -223,15 +223,10 @@ fn set_owner(
 /// descriptor to the backend. An earlier checkpoint proves no such handoff;
 /// full-length Incomplete and unknown records cannot make that claim.
 fn incomplete_before_publication(name: &str, record: &PersistedUploadRecord) -> bool {
-    let made_by_uploader = record.data_file.strip_prefix("upload-")
-        .and_then(|name| name.strip_suffix(".data"))
-        .is_some_and(|token| token.len() == 43 && token.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
-        }));
     record.state == crate::uploads::UploadState::Incomplete
         && record.persisted_bytes < record.logical_size
         && record.generation != 0
-        && made_by_uploader
+        && upload_data_name(&record.data_file, "upload-")
         && storage_contract::validate_id(&record.workspace_id, "ws").is_ok()
         && storage_contract::validate_id(&record.item_id, "entry").is_ok()
         && name_policy::PortablePath::parse(&record.path).is_ok()
@@ -241,21 +236,39 @@ fn incomplete_before_publication(name: &str, record: &PersistedUploadRecord) -> 
         && name == format!("{}.json", crate::uploads::key(&record.workspace_id, &record.item_id))
 }
 
-fn discard_incomplete_uploads(
+fn upload_data_name(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .and_then(|name| name.strip_suffix(".data"))
+        .is_some_and(|token| token.len() == 43 && token.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+        }))
+}
+
+fn discard_restart_uploads(
     directory: &PrivateDirectory,
     files: &mut BTreeMap<String, u64>,
     owners: &mut BTreeMap<String, String>,
     covered: &mut BTreeMap<String, String>,
-    interrupted: Vec<(String, String)>,
+    mut interrupted: Vec<(Option<String>, String)>,
 ) -> Result<(), ApiError> {
     let mut references = BTreeMap::<String, usize>::new();
     for data in covered.values() {
         *references.entry(data.clone()).or_default() += 1;
     }
+    // One-shot draft/worktree HTTP bodies are only descriptor inputs. The
+    // storage engine copies them into its own independently admitted material
+    // and never references a spool name. After exclusive restart, an isolated
+    // owner sidecar proves this isn't a retained resumable transfer.
+    interrupted.extend(covered.iter().filter_map(|(metadata, data)| {
+        (upload_data_name(data, "complete-upload-")
+            && metadata == &format!("{data}.owner.json"))
+            .then(|| (None, data.clone()))
+    }));
     for (record, data) in interrupted {
         let owner = format!("{data}.owner.json");
         let owner_confirmed = covered.get(&owner) == Some(&data);
-        if references.get(&data).copied() != Some(1 + usize::from(owner_confirmed))
+        let expected = usize::from(record.is_some()) + usize::from(owner_confirmed);
+        if references.get(&data).copied() != Some(expected)
             || (files.contains_key(&data) && !owner_confirmed)
         {
             // A retained generation or missing attribution is not safe to drop.
@@ -264,7 +277,7 @@ fn discard_incomplete_uploads(
         directory.verify_identity().map_err(crate::upload_fs_error)?;
         // Record last: another interrupted cleanup can resume from the same
         // incomplete evidence even if the data or owner is already absent.
-        for name in [&data, &owner, &record] {
+        for name in [&data, &owner].into_iter().chain(record.as_ref()) {
             if files.contains_key(name) {
                 let entry = EntryName::new(name).map_err(crate::upload_fs_error)?;
                 directory.remove_file(&entry).map_err(crate::upload_fs_error)?;
@@ -333,7 +346,7 @@ impl SpoolBudget {
                 match metadata::<PersistedUploadRecord>(&entry.path()) {
                     Ok(record) => {
                         if incomplete_before_publication(&name, &record) {
-                            interrupted.push((name.clone(), record.data_file.clone()));
+                            interrupted.push((Some(name.clone()), record.data_file.clone()));
                         }
                         covered_metadata.insert(name, record.data_file.clone());
                         set_owner(&mut owners, record.data_file, record.principal)?;
@@ -346,7 +359,7 @@ impl SpoolBudget {
             }
         }
         if !unknown_metadata {
-            discard_incomplete_uploads(
+            discard_restart_uploads(
                 &directory, &mut files, &mut owners, &mut covered_metadata, interrupted,
             )?;
         }
