@@ -404,7 +404,7 @@ impl<'a> BackupServingImage<'a> {
     // record requires each of them to exist. Even an expected metadata parent
     // or an atomic temporary is evidence that ordinary installation started;
     // neither is a receipt or permission to recreate a missing selector.
-    fn inventory(&self, stop: &AtomicBool) -> Result<bool> {
+    fn inventory(&self, stop: &AtomicBool) -> Result<Inventory> {
         let mut observed = Inventory::default();
         observed.read(self.current_zxs()?, &self.expected.management, None, stop)?;
         for (file, paths) in &self.expected.files {
@@ -415,12 +415,13 @@ impl<'a> BackupServingImage<'a> {
         let named = self.held._prefixes.iter().any(|(node, _)| node.installed)
             || self.held._directories.values().any(|node| node.installed)
             || self.held._files.values().any(|node| node.installed);
-        Ok(named || observed.started)
+        observed.started |= named;
+        Ok(observed)
     }
 
     pub(crate) fn require_absent(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         self.require_root(root, stop)?;
-        if self.inventory(stop)? {
+        if self.inventory(stop)?.started {
             return Err(Failure::BackupRootUnrecorded.into());
         }
         for key in self.files.keys() {
@@ -432,13 +433,13 @@ impl<'a> BackupServingImage<'a> {
         Ok(())
     }
 
-    pub(crate) fn require_capacity(
-        &self, root: &DiskRoot, reserve: u64, stop: &AtomicBool,
+    pub(crate) fn require_capacity<const N: usize>(
+        &self, root: &DiskRoot, reserve: u64, records: [(&str, usize); N], stop: &AtomicBool,
     ) -> Result<bool> {
         self.require_root(root, stop)?;
-        let started = self.inventory(stop)?;
-        let mut missing = 0u64;
-        let mut largest = 0u64;
+        let observed = self.inventory(stop)?;
+        let mut budget = crate::engine::BackupServingSpace::capture(root,
+            self.expected.missing_directories(observed.directories)?)?;
         for (key, data) in &self.files {
             preparation_checkpoint(stop)?;
             let held = self.root(key)?;
@@ -446,18 +447,12 @@ impl<'a> BackupServingImage<'a> {
             if preparation_path_exists(held, &path)? {
                 self.verify_file(key, data, stop)?;
             } else {
-                missing = missing.checked_add(data.length()).ok_or(Failure::ContainerBudget)?;
-                largest = largest.max(data.length());
+                budget.missing_file(data.length())?;
             }
         }
-        let needed = missing.checked_add(largest).and_then(|v| v.checked_add(reserve))
-            .and_then(|v| v.checked_add(MAX_MANIFEST as u64 + 1024 * 1024))
-            .and_then(|v| v.checked_add(self.files.len() as u64 * 8192))
-            .ok_or(Failure::ContainerBudget)?;
-        if root.available()? < needed {
-            return Err(Failure::BackupRootSpace.into());
-        }
-        Ok(started)
+        budget.require(self.files.len(), reserve, MAX_MANIFEST as u64 + 1024 * 1024, records)?;
+        self.source.require(stop)?;
+        Ok(observed.started)
     }
 
     fn verify_file(&self, key: &Key, data: &Data<'_>, stop: &AtomicBool) -> Result<FileIdentity> {
@@ -664,6 +659,7 @@ fn install_name(
 #[derive(Default)]
 struct Inventory {
     entries: usize,
+    directories: usize,
     temporaries: usize,
     started: bool,
 }
@@ -697,7 +693,10 @@ impl Inventory {
                 }
                 if let Some(kind) = expected.get(&child) {
                     match kind {
-                        Kind::Directory if metadata.is_dir() => pending.push(child),
+                        Kind::Directory if metadata.is_dir() => {
+                            self.directories += 1;
+                            pending.push(child);
+                        }
                         Kind::File if metadata.is_file() && metadata.nlink() == 1 => {}
                         _ => return Err(Failure::BackupLayoutEvidence.into()),
                     }

@@ -22,6 +22,9 @@ fn same_named_file_roots_are_distinct_but_history_parents_count_once() {
     // history store, three common directories and two separate regular files.
     assert_eq!(expected.entries, 9);
     assert_eq!(expected.management.len(), 5);
+    // Both original versions/ directories and one present metadata ancestor
+    // are already allocated; the other two shared metadata directories are not.
+    assert_eq!(expected.missing_directories(3).unwrap(), 2);
     assert_eq!(expected.files[&a].len(), 2);
     assert_eq!(expected.files[&b].len(), 2);
     assert!(expected.add(&Key::Database { file: b }, Path::new("versions")).is_err());

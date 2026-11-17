@@ -10,6 +10,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
+mod serving;
+pub(crate) use serving::BackupServingSpace;
+
 mod layout;
 pub(crate) use layout::require_new_backup_directories;
 pub(in crate::engine) use layout::require_new_feedback_capacity;

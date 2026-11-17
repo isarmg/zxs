@@ -12,14 +12,16 @@ pub(super) struct Expected {
     pub(super) management: Paths,
     pub(super) files: BTreeMap<FileId, Paths>,
     entries: usize,
+    directories: usize,
 }
 impl Expected {
     pub(super) fn new<T>(files: &BTreeMap<FileId, T>, stop: &AtomicBool) -> Result<Self> {
-        let mut value = Self { management: Paths::new(), files: BTreeMap::new(), entries: 0 };
+        let mut value = Self { management: Paths::new(), files: BTreeMap::new(), entries: 0, directories: 0 };
         for &file in files.keys() {
             preparation_checkpoint(stop)?;
             let mut paths = Paths::new();
             include(&mut paths, &mut value.entries, layout::VERSIONS.as_path(), Kind::Directory)?;
+            value.directories += 1;
             value.files.insert(file, paths);
         }
         Ok(value)
@@ -33,9 +35,16 @@ impl Expected {
             }
         };
         for parent in relative.ancestors().skip(1).filter(|p| !p.as_os_str().is_empty()) {
-            include(paths, &mut self.entries, parent, Kind::Directory)?;
+            if include(paths, &mut self.entries, parent, Kind::Directory)? {
+                self.directories += 1;
+            }
         }
-        include(paths, &mut self.entries, relative, Kind::File)
+        include(paths, &mut self.entries, relative, Kind::File).map(|_| ())
+    }
+
+    pub(super) fn missing_directories(&self, observed: usize) -> Result<u64> {
+        self.directories.checked_sub(observed).map(|n| n as u64)
+            .ok_or_else(|| Failure::BackupLayoutEvidence.into())
     }
 
     pub(super) fn require_room_for(&self, retained_temporaries: usize) -> Result<()> {
@@ -46,10 +55,10 @@ impl Expected {
     }
 }
 
-fn include(paths: &mut Paths, entries: &mut usize, path: &Path, kind: Kind) -> Result<()> {
+fn include(paths: &mut Paths, entries: &mut usize, path: &Path, kind: Kind) -> Result<bool> {
     match paths.entry(path.to_owned()) {
         // Only a directory prefix may be shared by multiple expected files.
-        Entry::Occupied(previous) if kind == Kind::Directory && *previous.get() == kind => Ok(()),
+        Entry::Occupied(previous) if kind == Kind::Directory && *previous.get() == kind => Ok(false),
         Entry::Occupied(_) => Err(Failure::BackupLayoutEvidence.into()),
         Entry::Vacant(entry) => {
             if *entries == MAX_ENTITIES {
@@ -57,7 +66,7 @@ fn include(paths: &mut Paths, entries: &mut usize, path: &Path, kind: Kind) -> R
             }
             entry.insert(kind);
             *entries += 1;
-            Ok(())
+            Ok(true)
         }
     }
 }

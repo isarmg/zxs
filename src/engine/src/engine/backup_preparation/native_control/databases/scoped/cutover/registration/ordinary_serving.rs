@@ -205,16 +205,18 @@ impl<'a> Plan<'a> {
         stop: &AtomicBool,
     ) -> Result<Progress> {
         self.with_image(prepared, index, stop, |image, root| {
-            match start::markers(root, &self.selection(index)?, has_intent)? {
+            let selection = self.selection(index)?;
+            let records = prospective_records(selection.len());
+            match start::markers(root, &selection, has_intent)? {
                 Markers::None => {
                     image.require_absent(root, stop)?;
-                    if image.require_capacity(root, reserve, stop)? {
+                    if image.require_capacity(root, reserve, records, stop)? {
                         return Err(invalid("unselected ordinary Backup target contains a later write"));
                     }
                     Ok(Progress::Unselected)
                 }
                 Markers::Selected => {
-                    let started = image.require_capacity(root, reserve, stop)?;
+                    let started = image.require_capacity(root, reserve, records, stop)?;
                     Ok(if started { Progress::Started } else { Progress::SelectedEmpty })
                 }
                 Markers::LocalComplete => {
@@ -286,6 +288,12 @@ impl<'a> Plan<'a> {
         }
         Ok(bytes)
     }
+}
+
+// Every target has three root-local no-clobber records. The selection bytes
+// are already known; final entity stamps and all-target reports are not yet.
+fn prospective_records(selection: usize) -> [(&'static str, usize); 3] {
+    [(SELECTED, selection), (LOCAL_COMPLETE, MAX_LOCAL), (COMPLETE, MAX_RECORD)]
 }
 
 fn require_completion(root: &DiskRoot, bytes: &[u8]) -> Result<()> {
@@ -371,7 +379,8 @@ pub(super) fn install(
                 {
                     plan.require_local(root, image, stop)?;
                 } else {
-                    image.require_capacity(root, context.sources.metadata_reserve_bytes(), stop)?;
+                    image.require_capacity(root, context.sources.metadata_reserve_bytes(),
+                        prospective_records(plan.selection(index)?.len()), stop)?;
                     image.install(root, stop)?;
                     let observed = image.verify(root, stop)?;
                     install_preparation_bytes(root, &root.path().join(LOCAL_COMPLETE), &observed)?;
