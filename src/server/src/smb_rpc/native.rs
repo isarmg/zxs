@@ -3,6 +3,7 @@ use super::{Handle, OpenResult, OwnedFd, Session, handles, path_reservation};
 use crate::{ApiError, SmbNativeEdit, SmbNativeHandle, SmbNativeOpen};
 use smb_protocol::protocol::{OpenIo, WorkingPosition, WorkingStat, WorkingWriteResult};
 use std::fs::File;
+use storage_contract::ErrorCode;
 
 pub(super) struct NativeHandle {
     pub(super) file: SmbNativeHandle,
@@ -16,16 +17,38 @@ impl Session {
         &mut self, path: &name_policy::LookupPath, writable: bool, create: bool,
         truncate: bool, exclusive: bool, write_through: bool,
     ) -> Result<Option<(OpenResult, OwnedFd)>, ApiError> {
-        let paths = if writable || create {
-            Some(path_reservation::PathReservation::acquire(
+        let mut paths = if writable || create {
+            match path_reservation::PathReservation::acquire(
                 &self.shared, [(self.branch.as_str(), path.key())],
-            )?)
+            ) {
+                Ok(paths) => Some(paths),
+                Err(busy) if !writable && busy.code == ErrorCode::FileWriteBusy => {
+                    // OPEN_IF on an existing native file needs only the normal
+                    // authorized read open. A contended missing target must
+                    // never fall through to a birth outside the reservation.
+                    let Some(file) = self.shared.backend.smb_native_open(
+                        &self.identity, SmbNativeOpen {
+                            branch: &self.branch, path, writable: false, create: false,
+                            truncate: false, exclusive: false,
+                        },
+                    )? else { return Err(busy); };
+                    if exclusive {
+                        return Err(ApiError::conflict(ErrorCode::NameConflict, "entry already exists"));
+                    }
+                    let canonical = file.path().clone();
+                    return self.install_native(file, &canonical, false, write_through, None).map(Some);
+                }
+                Err(error) => return Err(error),
+            }
         } else { None };
         let Some(file) = self.shared.backend.smb_native_open(&self.identity, SmbNativeOpen {
             branch: &self.branch, path, writable, create, truncate, exclusive,
         })? else { return Ok(None); };
         let path = file.path().clone();
-        self.install_native(file, &path, writable, write_through, paths).map(Some)
+        // A read-only birth holds the path through admission and handle setup,
+        // but its open reader is not an exclusive writer.
+        let writer_path = if writable { paths.take() } else { None };
+        self.install_native(file, &path, writable, write_through, writer_path).map(Some)
     }
 
     pub(super) fn install_native(

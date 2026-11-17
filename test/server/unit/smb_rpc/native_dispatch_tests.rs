@@ -19,6 +19,8 @@ use storage_engine::{Config, Engine};
 
 #[path = "incremental_manual.rs"]
 mod incremental_manual;
+#[path = "native_readonly_birth.rs"]
+mod readonly_birth;
 
 struct Direct {
     backend: Arc<EngineBackend>,
@@ -73,6 +75,14 @@ impl Direct {
 
     fn call(&mut self, request: Request) -> Reply {
         self.share.dispatch(request).unwrap()
+    }
+
+    fn peer(&self) -> DefaultShare {
+        let generation = self.shared.account.read().unwrap().selection().generation;
+        DefaultShare::new(
+            Arc::clone(&self.shared), self._auth.sole_identity().unwrap(),
+            generation, self.shared.max_file_bytes,
+        ).unwrap()
     }
 
     fn open(&mut self, path: &str, writable: bool, create: bool) -> (OpenResult, File) {

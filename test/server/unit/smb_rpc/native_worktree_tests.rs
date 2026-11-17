@@ -67,11 +67,7 @@ fn check_readonly_birth_open(
 ) {
     use storage_contract::ErrorCode;
 
-    let generation = direct.shared.account.read().unwrap().selection().generation;
-    let mut peer = DefaultShare::new(
-        Arc::clone(&direct.shared), direct._auth.sole_identity().unwrap(),
-        generation, direct.shared.max_file_bytes,
-    ).unwrap();
+    let mut peer = direct.peer();
     let snapshot = |engine: &Engine| (
         engine.directory_worktree_status(target.worktree).unwrap().revision,
         engine.state().file_containers.len(), engine.state().versions.len(),
