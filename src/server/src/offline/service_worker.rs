@@ -1,5 +1,7 @@
 //! One same-executable child, with real/effective service UID/GID, no inherited
 //! environment, no shell, no external program and no secrets in argv.
+mod failure;
+use crate::offline::service_worker::failure::{Failure, Stage};
 use data_serialization::{Deserialize, Serialize, de::DeserializeOwned};
 const MAX_RECORD_BYTES: usize = 64 * 1024;
 pub(crate) trait Request: Serialize + DeserializeOwned {
@@ -53,7 +55,10 @@ struct Joined {
 }
 impl Joined {
     fn wait(&mut self) -> Result<std::process::ExitStatus> {
-        let status = self.child.wait()?;
+        let status = self
+            .child
+            .wait()
+            .map_err(|source| Failure::io(Stage::Wait, source))?;
         self.reaped = true;
         Ok(status)
     }
@@ -91,7 +96,9 @@ pub(crate) fn run<T: Request>(request: T) -> Result<T::Output> {
         .stderr(Stdio::null());
     let fd = platform_io::service_lease::ServiceLease::host()?.inherit_to(&mut command)?;
     command.arg("--service-lease-fd").arg(fd.to_string());
-    let child = command.spawn()?;
+    let child = command
+        .spawn()
+        .map_err(|source| Failure::io(Stage::Spawn, source))?;
     let mut child = Joined {
         child,
         reaped: false,
@@ -117,12 +124,10 @@ pub(crate) fn run<T: Request>(request: T) -> Result<T::Output> {
     let drained = std::io::copy(&mut output, &mut std::io::sink());
     drop(output);
     let status = child.wait()?;
-    written?;
-    read?;
-    drained?;
-    if !status.success() || collected.len() > T::MAX_RESPONSE_BYTES {
-        return Err("storage worker failed or exceeded its bounded reply; preserve original intent, no rollback is claimed".into());
-    }
+    written.map_err(|source| Failure::io(Stage::WriteRequest, source))?;
+    read.map_err(|source| Failure::io(Stage::ReadReply, source))?;
+    drained.map_err(|source| Failure::io(Stage::DrainReply, source))?;
+    failure::admit_reply(status, collected.len(), T::MAX_RESPONSE_BYTES)?;
     match json_codec::from_slice::<Reply<T::Output>>(&collected)
         .map_err(|_| "invalid storage worker reply; inspect original operation before retrying")?
     {
@@ -159,6 +164,8 @@ pub(crate) fn entry<T: Request>() -> Result<()> {
     let reply = match request.execute() {
         Ok(result) => Reply::Success { result },
         Err(error) => Reply::Failed {
+            // Storage failures can traverse protected credential backup
+            // material. Never expand the native source chain into this wire.
             message: error.to_string(),
         },
     };
