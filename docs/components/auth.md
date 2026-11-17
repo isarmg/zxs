@@ -21,3 +21,10 @@ Origin 边界由 `verify_same_origin` 接收完整 Origin、Host、Sec-Fetch-Sit
 测试消费者，已迁移到当前产品向量。公开库仓外调用方不可在本仓穷尽确认，须迁移
 到当前 API；这不是声称旧接口无外部消费者。实际 peer 与可信代理来源选择仍归
 server 负责，Origin 证明不代替会话认证或代理信任。URL 解析错误保留具体 source。
+
+HTTP 管理员登录／改密和 SMB 改密／切换账户请求的明文密码由 `SecretPassword`
+持有，移入阻塞 worker 后仍由该 worker 保有直至结束。该类型不实现 `Serialize`、
+`Display` 或 `Clone`，`Debug` 只显示删节标记，所属字符串由 `Zeroizing` 在丢弃时
+清除；仅在密码策略、校验和子进程 stdin 边界显式读取。该类型不替代密码策略、
+限流、会话撤销或持锁凭据再验证，也不声称清除了 HTTP 正文或 JSON 解码中的其他
+副本。原请求字段、密码字节、错误先后与持久凭据格式不变。

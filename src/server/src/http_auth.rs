@@ -3,6 +3,7 @@
 //! Credential algorithms come directly from `authentication`;
 //! persistent administrator/session state remains in `auth::AuthStore`.
 use crate::{AdmittedServerConfig, ApiError, AppState, ServerConfig, auth::Identity, lock};
+use authentication::SecretPassword;
 use data_serialization::Deserialize;
 use http_routing::{
     Json,
@@ -426,7 +427,7 @@ pub(crate) struct SessionToken(String);
 #[serialization(deny_unknown_fields)]
 struct Login {
     username: String,
-    password: String,
+    password: SecretPassword,
 }
 
 /// The blocking worker owns both admission resources through final publication.
@@ -435,7 +436,7 @@ async fn login_job(
     slots: Arc<tokio::sync::Semaphore>,
     pending: PendingLogin,
     challenge: crate::auth::LoginChallenge,
-    password: String,
+    password: SecretPassword,
 ) -> Result<crate::auth::LoginResult, ApiError> {
     let permit = slots
         .try_acquire_owned()
@@ -443,7 +444,7 @@ async fn login_job(
     tokio::task::spawn_blocking(move || {
         let _pending = pending;
         let _permit = permit;
-        let verified = challenge.verify(&password)?;
+        let verified = challenge.verify(password.expose())?;
         lock(&auth).finish_login(verified)
     })
     .await
@@ -520,8 +521,8 @@ pub(crate) async fn logout(
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct PasswordChange {
-    current_password: String,
-    new_password: String,
+    current_password: SecretPassword,
+    new_password: SecretPassword,
 }
 
 pub(crate) async fn change_password(
@@ -553,7 +554,8 @@ pub(crate) async fn change_password(
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let challenge = lock(&auth).password_change_challenge(&token.0)?;
-        let prepared = challenge.prepare(&body.current_password, &body.new_password)?;
+        let prepared =
+            challenge.prepare(body.current_password.expose(), body.new_password.expose())?;
         lock(&auth).finish_password_change(prepared)
     })
     .await

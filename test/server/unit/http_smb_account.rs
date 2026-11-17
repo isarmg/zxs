@@ -14,8 +14,8 @@ fn passwords(old: &str, new: &str) -> Result<PasswordChange, ApiError> {
 #[test]
 fn password_boundary_preserves_exact_bytes_and_rejects_line_injection_or_truncation() {
     let valid = passwords(" old %'密码 ", &"x".repeat(255)).unwrap();
-    assert_eq!(valid.current, " old %'密码 ");
-    assert_eq!(valid.new.len(), 255);
+    assert_eq!(valid.current.expose(), " old %'密码 ");
+    assert_eq!(valid.new.expose().len(), 255);
     for invalid in [
         "".into(),
         "x".repeat(256),

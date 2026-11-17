@@ -90,19 +90,19 @@ fn status(
 struct PasswordInput {
     #[serialization(with = "storage_contract::u64_string")]
     expected_generation: u64,
-    current_password: String,
-    new_password: String,
+    current_password: authentication::SecretPassword,
+    new_password: authentication::SecretPassword,
 }
 
 struct PasswordChange {
     expected_generation: u64,
-    current: String,
-    new: String,
+    current: authentication::SecretPassword,
+    new: authentication::SecretPassword,
 }
 impl TryFrom<PasswordInput> for PasswordChange {
     type Error = ApiError;
     fn try_from(input: PasswordInput) -> Result<Self, ApiError> {
-        for password in [&input.current_password, &input.new_password] {
+        for password in [input.current_password.expose(), input.new_password.expose()] {
             // Samba 4.22 smbpasswd uses a 256-byte fstring for confirmation.
             if password.is_empty() || password.len() > 255 || password.chars().any(char::is_control)
             {
@@ -203,7 +203,7 @@ struct AccountInput {
     username: String,
     #[serialization(with = "storage_contract::u64_string")]
     expected_generation: u64,
-    administrator_password: String,
+    administrator_password: authentication::SecretPassword,
 }
 pub(crate) async fn select_account(
     State(state): State<AppState>,
@@ -215,7 +215,9 @@ pub(crate) async fn select_account(
         &crate::http_boundary::read_body(request, 16384).await?,
     )
     .map_err(|_| ApiError::invalid("invalid SMB account selection request"))?;
-    if input.administrator_password.is_empty() || input.administrator_password.len() > 1024 {
+    if input.administrator_password.expose().is_empty()
+        || input.administrator_password.expose().len() > 1024
+    {
         return Err(ApiError::invalid(
             "current Web password must contain 1–1024 UTF-8 bytes",
         ));
@@ -252,7 +254,7 @@ pub(crate) async fn select_account(
         let _mutation_permit = mutation_permit;
         let _hash_permit = hash_permit;
         let proof = challenge
-            .verify(&input.administrator_password)
+            .verify(input.administrator_password.expose())
             .map_err(|_| {
                 ApiError::new(
                     StatusCode::FORBIDDEN,
@@ -316,7 +318,9 @@ fn start_client(
         write!(
             input,
             "{}\n{}\n{}\n",
-            passwords.current, passwords.new, passwords.new
+            passwords.current.expose(),
+            passwords.new.expose(),
+            passwords.new.expose()
         )
     };
     if let Err(source) = result {

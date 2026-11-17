@@ -7,6 +7,8 @@ license.workspace = true
 description = "Portable ZXS administrator credential and browser admission primitives"
 
 [dependencies]
+data-serialization.workspace = true
+zeroize = { version = "1.9.1", path = "../foundation/cryptography/zeroize" }
 argon2 = { version = "0.5.3", features = ["std"], path = "../foundation/cryptography/argon2"}
 base64 = {version = "0.23.1", path = "../foundation/data-storage/base64"}
 system-entropy = {version = "0.4", path = "../foundation/cryptography/system-entropy"}

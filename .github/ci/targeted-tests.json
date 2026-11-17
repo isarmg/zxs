@@ -1,5 +1,44 @@
 {
   "groups": {
+    "credential-secret-ownership": {
+      "reason": "Plaintext HTTP administrator and Samba password buffers keep exact input, existing verification ordering, bounded worker ownership and zeroizing drop without Debug/Serialize disclosure. Request bodies and decoder intermediates remain outside this buffer-only guarantee. No persistent credential format changes or real Samba login are claimed.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "authentication",
+          "manifest": "src/auth/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "secret::tests::"
+          ],
+          "max_tests": 2
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_smb_account::tests::"
+          ],
+          "exact": [
+            "http_auth::tests::password_dtos_retain_exact_secret_inputs_without_changing_admission_policy",
+            "http_auth::tests::cancelled_login_job_retains_owned_slots_until_blocked_work_finishes"
+          ],
+          "max_tests": 15,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
     "upload-restart-cleanup": {
       "reason": "Select actual held-upload cleanup, workspace restart and HTTP spool-budget behavior rather than unrelated fresh-pool exacts. Production compile checks remain separate from explicit fault-injection test builds. These tests do not establish power-loss, physical-disk, Chrome or Samba acceptance.",
       "python_tests": [
@@ -6265,6 +6304,14 @@
     }
   },
   "rules": [
+    {"path": "src/auth/src/secret.rs", "groups": ["credential-secret-ownership"]},
+    {"path": "src/auth/src/lib.rs", "groups": ["credential-secret-ownership"]},
+    {"path": "src/auth/Cargo.toml", "groups": ["credential-secret-ownership"]},
+    {"path": "test/auth/unit/secret.rs", "groups": ["credential-secret-ownership"]},
+    {"path": "src/server/src/http_auth.rs", "groups": ["credential-secret-ownership"]},
+    {"path": "src/server/src/http_smb_account.rs", "groups": ["credential-secret-ownership"]},
+    {"path": "test/server/unit/http_auth/tests.rs", "groups": ["credential-secret-ownership"]},
+    {"path": "test/server/unit/http_smb_account.rs", "groups": ["credential-secret-ownership"]},
     {"path": "src/server/src/spool_budget.rs", "groups": ["upload-restart-cleanup"]},
     {"path": "test/server/unit/spool_budget/tests.rs", "groups": ["upload-restart-cleanup"]},
     {"path": "src/engine/src/disk/admission/upload.rs", "groups": ["upload-restart-cleanup"]},

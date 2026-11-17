@@ -16,6 +16,9 @@ use error_definition::Error;
 use sha2::{Digest, Sha256};
 use std::str;
 
+mod secret;
+pub use secret::SecretPassword;
+
 mod origin;
 pub use origin::{
     ExternalOrigin, OriginRequirement, VerifiedSameOrigin, require_same_origin_fetch_metadata,

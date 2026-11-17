@@ -2064,3 +2064,24 @@ fn optional_origin_keeps_native_fetch_semantics_but_rejects_ambiguity() {
     headers.append("sec-fetch-site", HeaderValue::from_static("same-origin"));
     assert!(same_origin(&headers, &config, false).is_err());
 }
+
+#[test]
+fn password_dtos_retain_exact_secret_inputs_without_changing_admission_policy() {
+    let login: Login = storage_contract::decode_strict(
+        br#"{"username":"Admin","password":" short "}"#,
+    )
+    .unwrap();
+    assert_eq!(login.username, "Admin");
+    assert_eq!(login.password.expose(), " short ");
+    assert_eq!(format!("{:?}", login.password), "SecretPassword([REDACTED])");
+    let change: PasswordChange = storage_contract::decode_strict(
+        br#"{"current_password":"","new_password":"still-unvalidated"}"#,
+    )
+    .unwrap();
+    assert_eq!(change.current_password.expose(), "");
+    assert_eq!(change.new_password.expose(), "still-unvalidated");
+    assert!(storage_contract::decode_strict::<Login>(
+        br#"{"username":"owner","password":null}"#,
+    )
+    .is_err());
+}
