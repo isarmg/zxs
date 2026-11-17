@@ -845,6 +845,7 @@ impl Engine {
         engine.verify_selected_move_prepare()?;
         engine.rebuild_index()?;
         if mode == RecoveryMode::CompletePending && !engine.move_is_retained() {
+            engine.discard_restarted_upload_scratch();
             engine.refresh_published_disk_catalogs(None);
             engine.restore_published_disk_histories();
             engine.resume_backup_preparation()?;

@@ -90,34 +90,8 @@ impl UploadIo {
     /// the only admitted upload name there is the final generation's .full.
     pub(crate) fn discard_interrupted(&self) -> Result<()> {
         let mut access = self.resources.access_checked()?;
-        let resources = &access.value().resource;
-        let directory = resources.directory.directory();
-        let entries = rustix::fs::Dir::read_from(directory).map_err(std::io::Error::from)?;
-        let mut removed = false;
-        for entry in entries {
-            self.resources.check_running()?;
-            let entry = entry.map_err(std::io::Error::from)?;
-            let Some(name) = std::str::from_utf8(entry.file_name().to_bytes()).ok() else {
-                continue;
-            };
-            let id = name.strip_prefix(".zxs-upload-inflight-").or_else(|| {
-                name.strip_prefix(".zxs-upload-")?.strip_suffix(".prepared")
-            });
-            if !id.is_some_and(|id| storage_contract::validate_id(id, "req").is_ok()) {
-                continue;
-            }
-            let name = EntryName::new(name).map_err(preparation_fs_error)?;
-            let file = resources.open(&name)?;
-            platform_io::fs_safety::linux::SingleLinkRequirement::check(&file)
-                .map_err(preparation_fs_error)?;
-            self.resources.check_running()?;
-            remove_owned_file(directory, &name, FileIdentity::from_fd(&file)?)?;
-            removed = true;
-        }
-        if removed {
-            directory.sync_all()?;
-        }
-        self.resources.check_running()
+        discard_owned_scratch(&access.value().resource.directory,
+            &mut || self.resources.check_running())
     }
 
     pub(crate) fn retained_usage(&self) -> Result<(u64, usize)> {
@@ -187,6 +161,48 @@ impl UploadIo {
                 self.resources.check_running()
             })
     }
+}
+
+/// Recovery uses the same cleanup as a retry, on an admitted ZXS directory
+/// and its live I/O lease; do not scan the whole disk or touch loose paths.
+pub(crate) fn discard_interrupted_uploads(root: &DiskRoot, path: &Path) -> Result<()> {
+    let lease = root.admit_io()?;
+    let held = OpenAt2Root::from_private_directory(
+        root.private_directory(path)?, MountPolicy::SameMount,
+    ).map_err(preparation_fs_error)?;
+    discard_owned_scratch(&held, &mut || lease.check_running())
+}
+
+fn discard_owned_scratch(held: &OpenAt2Root, check: &mut impl FnMut() -> Result<()>) -> Result<()> {
+    let directory = held.directory();
+    let entries = rustix::fs::Dir::read_from(directory).map_err(std::io::Error::from)?;
+    let mut removed = false;
+    for entry in entries {
+        check()?;
+        let entry = entry.map_err(std::io::Error::from)?;
+        let Some(name) = std::str::from_utf8(entry.file_name().to_bytes()).ok() else {
+            continue;
+        };
+        let id = name.strip_prefix(".zxs-upload-inflight-").or_else(|| {
+            name.strip_prefix(".zxs-upload-")?.strip_suffix(".prepared")
+        });
+        if !id.is_some_and(|id| storage_contract::validate_id(id, "req").is_ok()) {
+            continue;
+        }
+        let name = EntryName::new(name).map_err(preparation_fs_error)?;
+        let relative = RelativePath::new(Path::new(name.as_os_str()))
+            .map_err(preparation_fs_error)?;
+        let file = held.open_file(&relative, false).map_err(preparation_fs_error)?;
+        platform_io::fs_safety::linux::SingleLinkRequirement::check(&file)
+            .map_err(preparation_fs_error)?;
+        check()?;
+        remove_owned_file(directory, &name, FileIdentity::from_fd(&file)?)?;
+        removed = true;
+    }
+    if removed {
+        directory.sync_all()?;
+    }
+    check()
 }
 
 impl UploadResources {

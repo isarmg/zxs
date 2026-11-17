@@ -525,9 +525,11 @@ fn retry_removes_owned_upload_scratch_but_keeps_complete_zxs_data() {
     drop(engine);
 
     let mut engine = Engine::open(&system).unwrap();
+    assert!(!partial.exists(), "the writable restart cleans before a retry");
+    assert!(!not_admitted.exists());
+    fs::write(&partial, b"unpublished scratch before retry").unwrap();
     let next = engine.stage_bytes(&workspace.workspace_id, "retry.txt", b"complete retry").unwrap();
     assert!(!partial.exists());
-    assert!(!not_admitted.exists());
     assert_eq!(fs::read(&unknown).unwrap(), b"unrecognized material");
     assert_eq!(fs::read(&saved.source_path).unwrap(), b"complete");
     assert_eq!(fs::read(&next.source_path).unwrap(), b"complete retry");

@@ -245,6 +245,35 @@ impl Engine {
         self.restore_namespace_workspace_baselines()
     }
 
+    /// Ordinary writable restart, after the workspace mirrors and any published
+    /// decisions were reconciled. Only clean up scratch inside admitted data
+    /// directories; cold/unknown directories are never traversed here.
+    pub(super) fn discard_restarted_upload_scratch(&self) {
+        if self.is_read_only() || self.require_write().is_err() {
+            return;
+        }
+        let context = self.planning_context();
+        for workspace in self.workspaces.values() {
+            if workspace.purpose != WorkspacePurpose::Normal {
+                continue;
+            }
+            let cleanup = (|| -> Result<()> {
+                if let Some(current) = self.admitted_current_namespaces()? {
+                    current.require_branch_write(self.state(), &workspace.branch_id)?;
+                }
+                let root = context.workspace_data_root(workspace)?;
+                let path = context.workspace_data_directory(workspace)?;
+                discard_interrupted_uploads(root, &path)
+            })();
+            if let Err(error) = cleanup
+                && !workspace_absent(&error)
+            {
+                tracing::warn!(workspace_id = %workspace.workspace_id, error = %error,
+                    "upload scratch unavailable at startup; preserving unverified material");
+            }
+        }
+    }
+
     fn workspace_locations(&self) -> Result<Vec<WorkspaceLocation>> {
         workspace_locations(&self.root, &self.config, &self.disk_resources)
     }
