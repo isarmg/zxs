@@ -219,6 +219,64 @@ fn set_owner(
     Ok(())
 }
 
+/// The upload producer checkpoints a complete length before it can hand the
+/// descriptor to the backend. An earlier checkpoint proves no such handoff;
+/// full-length Incomplete and unknown records cannot make that claim.
+fn incomplete_before_publication(name: &str, record: &PersistedUploadRecord) -> bool {
+    let made_by_uploader = record.data_file.strip_prefix("upload-")
+        .and_then(|name| name.strip_suffix(".data"))
+        .is_some_and(|token| token.len() == 43 && token.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+        }));
+    record.state == crate::uploads::UploadState::Incomplete
+        && record.persisted_bytes < record.logical_size
+        && record.generation != 0
+        && made_by_uploader
+        && storage_contract::validate_id(&record.workspace_id, "ws").is_ok()
+        && storage_contract::validate_id(&record.item_id, "entry").is_ok()
+        && name_policy::PortablePath::parse(&record.path).is_ok()
+        && record.persisted_hash.len() == 64
+        && record.persisted_hash.bytes().all(|byte|
+            byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && name == format!("{}.json", crate::uploads::key(&record.workspace_id, &record.item_id))
+}
+
+fn discard_incomplete_uploads(
+    directory: &PrivateDirectory,
+    files: &mut BTreeMap<String, u64>,
+    owners: &mut BTreeMap<String, String>,
+    covered: &mut BTreeMap<String, String>,
+    interrupted: Vec<(String, String)>,
+) -> Result<(), ApiError> {
+    let mut references = BTreeMap::<String, usize>::new();
+    for data in covered.values() {
+        *references.entry(data.clone()).or_default() += 1;
+    }
+    for (record, data) in interrupted {
+        let owner = format!("{data}.owner.json");
+        let owner_confirmed = covered.get(&owner) == Some(&data);
+        if references.get(&data).copied() != Some(1 + usize::from(owner_confirmed))
+            || (files.contains_key(&data) && !owner_confirmed)
+        {
+            // A retained generation or missing attribution is not safe to drop.
+            continue;
+        }
+        directory.verify_identity().map_err(crate::upload_fs_error)?;
+        // Record last: another interrupted cleanup can resume from the same
+        // incomplete evidence even if the data or owner is already absent.
+        for name in [&data, &owner, &record] {
+            if files.contains_key(name) {
+                let entry = EntryName::new(name).map_err(crate::upload_fs_error)?;
+                directory.remove_file(&entry).map_err(crate::upload_fs_error)?;
+                files.remove(name);
+                covered.remove(name);
+            }
+        }
+        owners.remove(&data);
+    }
+    Ok(())
+}
+
 impl SpoolBudget {
     pub(crate) fn recover(root: &Path, limits: SpoolLimits) -> Result<Arc<Self>, ApiError> {
         limits.validate()?;
@@ -236,8 +294,10 @@ impl SpoolBudget {
         let mut files = BTreeMap::new();
         let mut owners = BTreeMap::new();
         let mut covered_metadata = BTreeMap::new();
-        // Inventory, never cleanup. Corrupt/unrecognized regular files remain
-        // charged as unknown rather than being silently discarded or ignored.
+        let mut interrupted = Vec::new();
+        let mut unknown_metadata = false;
+        // Inventory the entire exclusive spool before touching any file.
+        // Corrupt or unrecognized regular files remain charged as unknown.
         for entry in fs::read_dir(root).map_err(ApiError::io)? {
             let entry = entry.map_err(ApiError::io)?;
             let name = entry.file_name().into_string().map_err(|name| {
@@ -265,20 +325,30 @@ impl SpoolBudget {
                         set_owner(&mut owners, owner.data_file, owner.principal)?;
                     }
                     Err(error) => {
+                        unknown_metadata = true;
                         tracing::warn!(error = ?error, "unreadable spool ownership remains charged as unknown")
                     }
                 }
             } else if name.contains(".json") {
                 match metadata::<PersistedUploadRecord>(&entry.path()) {
                     Ok(record) => {
+                        if incomplete_before_publication(&name, &record) {
+                            interrupted.push((name.clone(), record.data_file.clone()));
+                        }
                         covered_metadata.insert(name, record.data_file.clone());
                         set_owner(&mut owners, record.data_file, record.principal)?;
                     }
                     Err(error) => {
+                        unknown_metadata = true;
                         tracing::warn!(error = ?error, "unreadable spool metadata remains charged as unknown")
                     }
                 }
             }
+        }
+        if !unknown_metadata {
+            discard_incomplete_uploads(
+                &directory, &mut files, &mut owners, &mut covered_metadata, interrupted,
+            )?;
         }
         let mut ledger = Ledger::default();
         // A durable owner record with a missing data file still costs metadata.

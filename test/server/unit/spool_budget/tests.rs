@@ -441,3 +441,41 @@ fn recovery_charges_missing_or_null_upload_digest_as_unknown_without_rewriting()
         assert_eq!(fs::read(root.path().join("retained.data")).unwrap(), b"abc");
     }
 }
+
+#[test]
+fn fresh_inventory_discards_only_a_confirmed_unpublished_upload_prefix() {
+    let root = private_tempdir();
+    let limits = limits(16 * METADATA_ALLOWANCE, 16 * METADATA_ALLOWANCE);
+    let budget = SpoolBudget::recover(root.path(), limits.clone()).unwrap();
+    let workspace = "ws_00000000000000000000000000000001";
+    let make = |bytes: &[u8], keep_retained: bool| {
+        let name = format!("upload-{}.data", authentication::random_token().unwrap());
+        let item = storage_contract::new_id("entry").unwrap();
+        retained(&budget, "alice", &name, 20, bytes);
+        let mut record = uploads::UploadRecord::new(uploads::UploadDeclaration {
+            workspace_id: workspace.into(), item_id: item.clone(), principal: "alice".into(),
+            path: "file.txt".into(), generation: 1, logical_size: 20,
+            content_hash: storage_contract::ContentHash::from_digest(blake3::hash(&[0; 20])),
+            data_file: name.clone(),
+        }).unwrap();
+        record.checkpoint(bytes.len() as u64, blake3::hash(bytes));
+        uploads::persist(root.path(), &record).unwrap();
+        if keep_retained {
+            uploads::retain_generation(root.path(), &record).unwrap();
+        }
+        (item, name)
+    };
+    let (partial_item, discarded) = make(b"partial", false);
+    let (full_item, full) = make(&[0; 20], false);
+    let (retained_item, retained_name) = make(b"retained", true);
+    drop(budget);
+
+    let _reopened = SpoolBudget::recover(root.path(), limits).unwrap();
+    assert!(uploads::load(root.path(), workspace, &partial_item).unwrap().is_none());
+    assert!(!root.path().join(&discarded).exists());
+    assert!(!root.path().join(format!("{discarded}.owner.json")).exists());
+    assert_eq!(std::fs::read(root.path().join(full)).unwrap(), [0; 20]);
+    assert_eq!(std::fs::read(root.path().join(retained_name)).unwrap(), b"retained");
+    assert!(uploads::load(root.path(), workspace, &full_item).unwrap().is_some());
+    assert!(uploads::load(root.path(), workspace, &retained_item).unwrap().is_some());
+}
