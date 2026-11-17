@@ -8,6 +8,7 @@ pub mod root;
 pub mod outcome;
 pub mod creation;
 pub mod history;
+pub mod instances;
 
 use crate::working_tree::{
     DirectoryId, RootId, SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId,

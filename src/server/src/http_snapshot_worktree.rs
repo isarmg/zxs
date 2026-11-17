@@ -3,6 +3,7 @@
 pub(crate) mod drafts;
 pub(crate) mod discovery;
 pub(crate) mod history;
+pub(crate) mod instances;
 pub(crate) mod root;
 pub(crate) mod outcome;
 pub(crate) mod transport;

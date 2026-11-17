@@ -122,6 +122,14 @@ fn complete_resaves_keep_original_occurrence_and_move_only_exact_current_revisio
     let mounts = engine.directory_worktree_mounts(repository_id).unwrap();
     assert_eq!(mounts.iter().map(|mount| mount.target).collect::<Vec<_>>(),
         [target, independent]);
+    let before_bounded = inventory(&disk);
+    assert_eq!(engine.directory_worktree_mounts_bounded(repository_id,
+        std::num::NonZeroU16::new(2).unwrap()).unwrap(), mounts);
+    assert_eq!(engine.directory_worktree_mounts_bounded(repository_id,
+        std::num::NonZeroU16::new(1).unwrap()).unwrap_err().code(),
+        storage_contract::ErrorCode::ResourceLimitExceeded);
+    assert_eq!(engine.state().sequence, sequence);
+    assert_eq!(inventory(&disk), before_bounded);
     assert_eq!(engine.directory_worktree_mount(repository_id,
         &name_policy::LookupName::parse("WORKTREE-MAIN-001").unwrap()).unwrap(),
         Some(mounts[0].clone()));

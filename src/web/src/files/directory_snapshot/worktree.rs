@@ -2,6 +2,7 @@
 //! SMB; all mutations use the parent snapshot original-request journal.
 mod bookmark;
 mod history;
+mod instances;
 mod requests;
 mod view;
 
@@ -11,7 +12,6 @@ use storage_contract::RepositoryId;
 use storage_contract::snapshot_worktree::creation::WorktreeCreationRequest;
 use storage_contract::snapshot_worktree::{WorktreeHandle, WorktreeStatus};
 use storage_contract::working_tree::{DirectoryId, SnapshotRepositoryId};
-use web_interface::prelude::*;
 
 pub(super) use requests::after_review;
 pub(super) use view::view;
@@ -50,6 +50,7 @@ struct Observed {
 #[derive(Clone, Default)]
 pub(super) struct Model {
     history: history::Model,
+    instances: instances::Model,
     reference: Option<bookmark::Reference>,
     bookmark_scope: Option<Scope>,
     message: String,
@@ -70,6 +71,7 @@ impl Model {
     pub(super) fn invalidate(&mut self) {
         self.cancel_read();
         self.history.invalidate();
+        self.instances.invalidate();
     }
 
     fn cancel_read(&mut self) {

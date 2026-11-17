@@ -3,6 +3,7 @@
 pub(super) mod drafts;
 pub(super) mod discovery;
 pub(super) mod history;
+pub(super) mod instances;
 pub(super) mod root;
 pub(super) mod outcome;
 pub(super) mod transport;

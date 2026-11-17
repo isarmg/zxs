@@ -749,6 +749,17 @@ macro_rules! methods {
                     let _ = (identity, request);
                     Err($crate::ApiError::unsupported())
                 }
+                fn directory_worktree_instances(
+                    &self,
+                    identity: &$crate::Identity,
+                    repository: storage_contract::RepositoryId,
+                ) -> Result<
+                    storage_contract::snapshot_worktree::instances::DirectoryWorktrees,
+                    $crate::ApiError,
+                > {
+                    let _ = (identity, repository);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn directory_worktree_status(
                     &self,
                     identity: &$crate::Identity,

@@ -1,4 +1,4 @@
-use super::{available, can_commit, can_create, can_load, history, requests, smb_path};
+use super::{available, can_commit, can_create, can_load, history, instances, requests, smb_path};
 use crate::ui::State;
 use web_interface::{i18n::t, prelude::*};
 
@@ -125,13 +125,14 @@ pub(in crate::files::directory_snapshot) fn view(state: RwSignal<State>) -> impl
             </button>
             <p class="zxs-row">{t(
                 concat!(
-                    "此浏览器只记住当前账号、当前目录最近创建或提交的实例。",
+                    "此浏览器只记住当前账号、当前目录最近打开、创建或提交的实例。",
                     "刷新后仅查询原实例，不重新创建；这不是全部 worktree 列表，",
                     "无需填写内部身份。名称和 SMB 路径以服务器实际状态为准。",
                 ),
                 concat!(
                     "This browser remembers only this account and folder's most recently ",
-                    "created or committed instance. Refresh only reads that exact instance; ",
+                    "opened, created or committed instance. Refresh only reads that exact ",
+                    "instance; ",
                     "it never creates another one. This is not a complete worktree list and ",
                     "no internal identifiers need to be entered. The server supplies its ",
                     "actual name and SMB path.",
@@ -150,6 +151,7 @@ pub(in crate::files::directory_snapshot) fn view(state: RwSignal<State>) -> impl
             })>
                 <p role="status">{t("正在读取实例状态…", "Reading instance status…")}</p>
             </Show>
+            {instances::view(state)}
             {observed(state)}
         </section>
     }

@@ -96,7 +96,7 @@
       ]
     },
     "directory-web-worktree-management": {
-      "reason": "Check the Web controls for creating, opening and explicitly committing a selected worktree and exact-original operation recovery. Changes run native Web and Wasm, not a browser or external SMB.",
+      "reason": "Check the Web controls for creating, listing, reopening and explicitly committing a selected exact registered worktree and original-operation recovery. Complete bounded lists and fresh status admission run native Web and Wasm, not a browser or external SMB.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -105,9 +105,10 @@
           "kind": "lib",
           "prefixes": [
             "files::directory_snapshot::worktree::tests::",
-            "files::directory_snapshot::worktree::history::tests::"
+            "files::directory_snapshot::worktree::history::tests::",
+            "files::directory_snapshot::worktree::instances::tests::"
           ],
-          "max_tests": 8
+          "max_tests": 10
         },
         {
           "package": "web-app",
@@ -6258,7 +6259,8 @@
       "path": "src/web/src/files/directory_snapshot/worktree.rs",
       "groups": [
         "directory-web-worktree-management",
-        "worktree-historical-commit"
+        "worktree-historical-commit",
+        "worktree-http-transport"
       ]
     },
     {
@@ -6271,7 +6273,8 @@
       "path": "src/web/src/files/directory_snapshot/worktree/view.rs",
       "groups": [
         "directory-web-worktree-management",
-        "worktree-historical-commit"
+        "worktree-historical-commit",
+        "worktree-http-transport"
       ]
     },
     {
@@ -6329,7 +6332,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/public/namespace.rs",
       "groups": [
-        "worktree-http-transport"
+        "worktree-http-transport",
+        "directory-web-worktree-management"
       ]
     },
     {
@@ -6372,7 +6376,8 @@
     {
       "path": "test/engine/unit/snapshot_worktree/complete_resaves.rs",
       "groups": [
-        "worktree-http-transport"
+        "worktree-http-transport",
+        "directory-web-worktree-management"
       ]
     },
     {
@@ -7789,7 +7794,9 @@
     {
       "path": "src/contract/src/snapshot_worktree.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "directory-web-worktree-management",
+        "worktree-http-transport"
       ]
     },
     {
@@ -8190,7 +8197,9 @@
     {
       "path": "src/server/src/engine_backend/snapshot_worktree.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "directory-web-worktree-management",
+        "worktree-http-transport"
       ]
     },
     {
@@ -8202,7 +8211,9 @@
     {
       "path": "src/server/src/http_snapshot_worktree.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "directory-web-worktree-management",
+        "worktree-http-transport"
       ]
     },
     {
@@ -11636,7 +11647,9 @@
       "path": "src/server/src/backend_methods.rs",
       "groups": [
         "paged-deletion-review",
-        "ordinary-smb-manual-draft"
+        "ordinary-smb-manual-draft",
+        "directory-web-worktree-management",
+        "worktree-http-transport"
       ]
     },
     {
@@ -11644,7 +11657,9 @@
       "groups": [
         "paged-deletion-review",
         "note-http-boundary",
-        "ordinary-smb-manual-draft"
+        "ordinary-smb-manual-draft",
+        "directory-web-worktree-management",
+        "worktree-http-transport"
       ]
     },
     {
@@ -12578,7 +12593,9 @@
     {
       "path": "src/server/src/file_manager.rs",
       "groups": [
-        "historical-directory-runtime"
+        "historical-directory-runtime",
+        "directory-web-worktree-management",
+        "worktree-http-transport"
       ]
     },
     {
@@ -17455,6 +17472,48 @@
       "path": "test/engine/unit/snapshot_worktree/historical_commit.rs",
       "groups": [
         "worktree-historical-commit"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_worktree_instances_tests.rs",
+      "groups": [
+        "directory-web-worktree-management",
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/instances.rs",
+      "groups": [
+        "directory-web-worktree-management",
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/instances/view.rs",
+      "groups": [
+        "directory-web-worktree-management",
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree/instances.rs",
+      "groups": [
+        "directory-web-worktree-management",
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/server/src/http_snapshot_worktree/instances.rs",
+      "groups": [
+        "directory-web-worktree-management",
+        "worktree-http-transport"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/snapshot_worktree/instances.rs",
+      "groups": [
+        "directory-web-worktree-management",
+        "worktree-http-transport"
       ]
     }
   ],

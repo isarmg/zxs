@@ -209,6 +209,22 @@ async fn tcp_worktree_edit_commit_cold_retry_keeps_exact_identity_and_move() {
         &http, repository, &context, original_node, "worktree-main-002",
     ).await;
     assert_ne!(target.worktree_id, independent.worktree_id);
+    let before_list = inventory(fixture.root.path());
+    let listed: storage_contract::snapshot_worktree::instances::DirectoryWorktrees =
+        json_codec::from_value(http.json("GET", &format!(
+            "/api/repositories/{repository}/directory-worktrees",
+        ), None).await).unwrap();
+    assert_eq!(listed.repository_id, repository.parse().unwrap());
+    assert_eq!(json_codec::to_value(&listed.context).unwrap(), context);
+    assert_eq!(listed.instances.len(), 2);
+    for target in [target, independent] {
+        let selected = listed.instances.iter().find(|item| item.target == target).unwrap();
+        let reopened = http.status(selected.target).await;
+        assert_eq!(reopened.target, selected.target);
+        assert_eq!(reopened.original, original_node);
+        assert_eq!(http.read(reopened.target, "original.txt").await, original);
+    }
+    assert_eq!(inventory(fixture.root.path()), before_list, "list and selection are read-only");
     assert_eq!(http.read(target, "original.txt").await, original);
     assert_eq!(http.read(independent, "original.txt").await, original);
     let status = http.status(target).await;

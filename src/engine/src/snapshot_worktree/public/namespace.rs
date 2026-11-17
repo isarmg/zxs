@@ -101,6 +101,7 @@ impl Engine {
         &self,
         repository: RepositoryId,
         name: Option<&LookupName>,
+        maximum: usize,
     ) -> Result<Vec<WorktreeStatus>> {
         let index = self.snapshot_receipts()?;
         // Ordinary SMB paths also ask this projection. No original reservation
@@ -118,7 +119,7 @@ impl Engine {
             .namespace_host_root(repository, namespace.branch_id)
             .map_err(RegistrationError::Publication)?;
         let handles =
-            index.mount_handles(namespace, root.binding(), name, self.config.max_entries)?;
+            index.mount_handles(namespace, root.binding(), name, maximum)?;
         if handles.is_empty() {
             return Ok(Vec::new());
         }
@@ -164,7 +165,22 @@ impl Engine {
         &self,
         repository: RepositoryId,
     ) -> Result<Vec<WorktreeStatus>> {
-        self.worktree_mounts(repository, None)
+        self.worktree_mounts(repository, None, self.config.max_entries)
+    }
+
+    /// A consumer may impose a smaller complete-result budget before any
+    /// instance is reopened. Over-budget inventories fail rather than returning
+    /// a silently truncated list; ordinary SMB retains its configured maximum.
+    pub fn directory_worktree_mounts_bounded(
+        &self,
+        repository: RepositoryId,
+        maximum: NonZeroU16,
+    ) -> Result<Vec<WorktreeStatus>> {
+        self.worktree_mounts(
+            repository,
+            None,
+            self.config.max_entries.min(usize::from(maximum.get())),
+        )
     }
 
     pub fn directory_worktree_mount(
@@ -173,7 +189,7 @@ impl Engine {
         name: &LookupName,
     ) -> Result<Option<WorktreeStatus>> {
         Ok(self
-            .worktree_mounts(repository, Some(name))?
+            .worktree_mounts(repository, Some(name), self.config.max_entries)?
             .into_iter()
             .next())
     }

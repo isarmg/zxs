@@ -848,6 +848,13 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::snapshot_worktree::WorktreeHandle, ApiError> {
         snapshot_worktree::create(self, identity, request)
     }
+    fn directory_worktree_instances(
+        &self, identity: &Identity, repository: storage_contract::RepositoryId,
+    ) -> Result<
+        storage_contract::snapshot_worktree::instances::DirectoryWorktrees, ApiError,
+    > {
+        snapshot_worktree::instances::read(self, identity, repository)
+    }
     fn directory_worktree_status(
         &self, identity: &Identity,
         target: storage_contract::snapshot_worktree::WorktreeHandle,
