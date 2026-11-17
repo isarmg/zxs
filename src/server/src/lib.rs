@@ -28,6 +28,7 @@ pub mod integrity_scrub;
 pub mod management;
 mod service_lifecycle;
 mod shutdown;
+mod startup_tail;
 pub mod storage_directories;
 pub use shutdown::ShutdownSignal;
 #[cfg(feature = "core")]
@@ -1426,6 +1427,7 @@ pub async fn serve_with_shutdown(
         spool_budget,
         smb_account,
     )?;
+    let (startup_tails, http_startup, smb_startup) = startup_tail::StartupTails::network();
     let http = |stopped| async move {
         http_shutdown::serve(listener, app, stopped).await?;
         // No HTTP connections remain, but an admitted blocking job may have
@@ -1443,6 +1445,7 @@ pub async fn serve_with_shutdown(
                     smb_max_file_bytes,
                     smb_connections,
                     bridge_account,
+                    smb_startup,
                 )
                 .await
                 .map_err(|source| {
@@ -1459,14 +1462,15 @@ pub async fn serve_with_shutdown(
             }
         }
     };
-    // One owned auxiliary future: no detached async readiness publisher. On
-    // shutdown, dropping it closes SMB and abandons late spool publication;
-    // started blocking inventory remains joined by runtime teardown.
+    // Dropping the auxiliary stops late readiness publication and closes the
+    // listener. Even on a shared runtime, don't return while an original native
+    // startup job (or its undelivered socket/lock result) still owns resources.
     let auxiliary = async move {
-        tokio::join!(spool_startup.run(spool_config), bridge);
+        tokio::join!(spool_startup.track(http_startup).run(spool_config), bridge);
     };
-    service_lifecycle::run_with_management(http, auxiliary, shutdown.wait(), management_shutdown)
-        .await?;
+    startup_tails.join(service_lifecycle::run_with_management(
+        http, auxiliary, shutdown.wait(), management_shutdown,
+    )).await?;
     Ok(())
 }
 

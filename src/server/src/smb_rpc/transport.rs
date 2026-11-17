@@ -377,12 +377,11 @@ fn prepare_socket(
     })
 }
 
+#[cfg(test)]
 async fn startup_io<T: Send + 'static>(
     work: impl FnOnce() -> io::Result<T> + Send + 'static,
 ) -> io::Result<T> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .map_err(io::Error::other)?
+    crate::startup_tail::StartupTail::default().blocking(work).await.map_err(io::Error::other)?
 }
 
 /// Validate the socket parent and durable spool independently, securely creating
@@ -403,6 +402,7 @@ pub async fn serve(
         max_file_bytes,
         shutdown.registry(),
         account,
+        Default::default(),
     )
     .await;
     shutdown.finish().await?;
@@ -444,6 +444,7 @@ pub(crate) async fn serve_owned(
     max_file_bytes: u64,
     workers: ConnectionRegistry,
     account: Arc<crate::smb_account_binding::Authority>,
+    startup: crate::startup_tail::StartupTail,
 ) -> io::Result<()> {
     // The reader must not extend the credential file lock. The listener owns
     // the real store, including when serve() receives its last strong reference.
@@ -464,7 +465,8 @@ pub(crate) async fn serve_owned(
         connections,
         spool,
         budget,
-    } = startup_io(move || prepare_socket(&socket, &spool_dir, spool_limits)).await?;
+    } = startup.blocking(move || prepare_socket(&socket, &spool_dir, spool_limits))
+        .await.map_err(io::Error::other)??;
     // The descriptor is already nonblocking and mode 0600 before registration;
     // no connection is accepted until preparation and budget recovery succeed.
     let listener = tokio::net::UnixListener::from_std(listener)?;

@@ -444,3 +444,43 @@ fn open_reply_owns_its_descriptor_through_delivery_size_rejection_and_send_failu
         assert_eq!(peer.read(&mut [0u8; 1]).unwrap(), 0);
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn normal_shutdown_disposes_undelivered_smb_socket_before_return() {
+    use std::time::Duration;
+    let root = tempfile::tempdir().unwrap();
+    let socket = root.path().join("smb/rpc.sock");
+    let spool = root.path().join("smb/spool");
+    let (tails, unused_http, smb) = crate::startup_tail::StartupTails::network();
+    drop(unused_http);
+    let (started, acquired) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let (bridge, gone) = tokio::sync::oneshot::channel::<()>();
+    let address = socket.clone();
+    let durable = spool.clone();
+    let auxiliary = async move {
+        let _bridge = bridge;
+        let _socket = smb.blocking(move || {
+            let socket = prepare_socket(&address, &durable, crate::SpoolLimits::default()).unwrap();
+            started.send(()).unwrap();
+            wait.recv_timeout(Duration::from_secs(10)).unwrap();
+            socket
+        }).await.unwrap();
+        std::future::pending::<()>().await
+    };
+    let service = crate::service_lifecycle::run(
+        |stopped| async move { let _ = stopped.await; Ok(()) }, auxiliary,
+        async move { let _ = stopped.await; },
+    );
+    let mut serving = tokio::spawn(tails.join(service));
+    acquired.await.unwrap();
+    assert!(socket.exists());
+    stop.send(()).unwrap();
+    assert!(gone.await.is_err());
+    assert!(tokio::time::timeout(Duration::from_millis(50), &mut serving).await.is_err());
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), serving).await.unwrap().unwrap().unwrap();
+    assert!(!socket.exists(), "the undelivered guard released its own socket first");
+    let _next = prepare_socket(&socket, &spool, crate::SpoolLimits::default()).unwrap();
+}

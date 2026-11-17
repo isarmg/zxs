@@ -233,7 +233,7 @@ async fn system_samba_real_engine_fixture() {
     let backend = shared.backend.clone();
     let server = tokio::spawn(async move {
         let mut shutdown = ConnectionShutdown::new();
-        let result = serve_owned(config, auth, backend, 4096, shutdown.registry(), account).await;
+        let result = serve_owned(config, auth, backend, 4096, shutdown.registry(), account, Default::default()).await;
         shutdown.finish().await?;
         result
     });

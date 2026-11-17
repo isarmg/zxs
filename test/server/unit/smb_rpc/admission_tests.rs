@@ -194,6 +194,7 @@ async fn listener_survives_bad_clients_and_joins_the_next_authenticated_connecti
         4096,
         shutdown.registry(),
         shared.account.clone(),
+        Default::default(),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {

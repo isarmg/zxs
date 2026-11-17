@@ -133,7 +133,7 @@ async fn system_samba_native_working_fixture() {
     let rpc = tokio::spawn(async move {
         let mut shutdown = ConnectionShutdown::new();
         let result = serve_owned(
-            smb, rpc_auth, rpc_backend, 4096, shutdown.registry(), account,
+            smb, rpc_auth, rpc_backend, 4096, shutdown.registry(), account, Default::default(),
         ).await;
         shutdown.finish().await?;
         result

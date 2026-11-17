@@ -901,3 +901,40 @@ fn poisoned_spool_state_is_an_invariant_failure_not_unavailable() {
     assert!(std::panic::catch_unwind(|| spool.status()).is_err());
     assert!(std::panic::catch_unwind(|| spool.budget()).is_err());
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn normal_shutdown_joins_original_inventory_without_destroying_shared_runtime() {
+    let root = crate::tests::private_tempdir();
+    let config = ServerConfig::new(root.path());
+    let inventory_config = config.clone();
+    let (state, startup) = HttpSpool::pending();
+    let (tails, http, unused_smb) = crate::startup_tail::StartupTails::network();
+    drop(unused_smb);
+    let (started, acquired) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let (shutdown, stopped) = tokio::sync::oneshot::channel();
+    let (publisher, gone) = tokio::sync::oneshot::channel::<()>();
+    let auxiliary = async move {
+        let _publisher = publisher;
+        startup.track(http).run_with(move || {
+            let budget = inventory_config.open_http_spool().unwrap();
+            started.send(()).unwrap();
+            wait.recv_timeout(DEADLINE).unwrap();
+            Some(budget)
+        }).await
+    };
+    let service = crate::service_lifecycle::run(
+        |stopped| async move { let _ = stopped.await; Ok(()) }, auxiliary,
+        async move { let _ = stopped.await; },
+    );
+    let mut serving = tokio::spawn(tails.join(service));
+    acquired.await.unwrap();
+    shutdown.send(()).unwrap();
+    assert!(gone.await.is_err(), "normal stop abandoned the readiness publisher");
+    assert!(tokio::time::timeout(Duration::from_millis(50), &mut serving).await.is_err(),
+        "the original inventory still holds the spool");
+    release.send(()).unwrap();
+    tokio::time::timeout(DEADLINE, serving).await.unwrap().unwrap().unwrap();
+    assert_eq!(state.status(), "pending");
+    assert!(config.open_http_spool().is_some(), "same-runtime restart reopens the original lock");
+}

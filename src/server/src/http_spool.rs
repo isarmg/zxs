@@ -16,6 +16,7 @@ pub(crate) struct HttpSpool {
 /// readiness itself; dropping this future prevents publication of a late result.
 pub(crate) struct Startup {
     spool: Arc<HttpSpool>,
+    tail: crate::startup_tail::StartupTail,
 }
 
 impl HttpSpool {
@@ -33,7 +34,7 @@ impl HttpSpool {
         let state = Arc::new(Self {
             state: Mutex::new(State::Pending),
         });
-        (state.clone(), Startup { spool: state })
+        (state.clone(), Startup { spool: state, tail: Default::default() })
     }
 
     pub(crate) fn status(&self) -> &'static str {
@@ -62,15 +63,18 @@ impl HttpSpool {
 }
 
 impl Startup {
+    pub(crate) fn track(mut self, tail: crate::startup_tail::StartupTail) -> Self {
+        self.tail = tail;
+        self
+    }
+
     pub(crate) async fn run(self, config: Arc<AdmittedServerConfig>) {
         self.run_with(move || config.open_http_spool()).await;
     }
 
     async fn run_with(self, work: impl FnOnce() -> Option<Arc<SpoolBudget>> + Send + 'static) {
-        // As for SMB startup_io, Tokio owns any started blocking work through
-        // runtime teardown even if the service drops this awaiting future.
-        // The closure owns only inventory inputs/result, never the publisher.
-        let result = tokio::task::spawn_blocking(work).await;
+        // The closure owns the inventory/result, never this readiness publisher.
+        let result = self.tail.blocking(work).await;
         let next = match result {
             Ok(Some(budget)) => State::Ready(budget),
             Ok(None) => State::Unavailable,
