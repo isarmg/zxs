@@ -553,6 +553,7 @@ impl Engine {
     /// # Errors
     /// Returns filesystem, disk identity, canonical root overlap or initialization errors.
     pub fn initialize_validated(root: &Path, config: ValidatedConfig) -> Result<Self> {
+        scope_closure::require_disk_budget(&config)?;
         if root.join("config.json").try_exists()? {
             return Err(Error::new(
                 storage_contract::ErrorCode::AlreadyInitialized,
@@ -592,6 +593,7 @@ impl Engine {
         config: ValidatedConfig,
         directories: Vec<File>,
     ) -> Result<Self> {
+        scope_closure::require_disk_budget(&config)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
         let selection = crate::authority_selection::SelectionGuard::legacy(&root)?;
         if root.join("config.json").try_exists()? {
@@ -645,6 +647,7 @@ impl Engine {
                 ));
             }
         }
+        let system_root = selection.held_system_root()?;
         let unbound_locks = config::acquire_initialization_locks(&root, disk_resources, selection)?;
         // Recheck after locking: an earlier empty-root observation can be stale.
         for disk in disk_resources.handles() {
@@ -684,6 +687,10 @@ impl Engine {
         }
         // Re-open the selected roots after installing the private layout. Never
         // commit an empty inventory if any user-data or management area changed.
+        let operation = scope_closure::capture_initial_roots(&config, &disk_resources)?;
+        let genesis = scope_closure::GenesisPreparation::capture(&config, operation)?;
+        genesis.install(&system_root, &config, &disk_resources)?;
+        // Recheck all original held areas after database encoding and readback.
         scope_closure::capture_initial_roots(&config, &disk_resources)?;
         // Every payload disk retains the fixed membership anchor for offline proofs.
         for d in &config.disks {

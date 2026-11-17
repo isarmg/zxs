@@ -252,8 +252,8 @@ pub fn encode_hashed_object<T: Serialize + ?Sized>(
     kind: &str,
     value: &T,
 ) -> Result<(Vec<u8>, String)> {
-    validate_object_domain(kind)?;
-    Ok(hash_canonical_bytes(kind, canonical_json(value)?))
+    let (bytes, hash) = encode_canonical_object_digest(kind, value)?;
+    Ok((bytes, hash.to_hex().to_string()))
 }
 
 /// Domain-separated digest of an existing JSON value without rebuilding it.
@@ -277,11 +277,33 @@ fn validate_object_domain(kind: &str) -> Result<()> {
     Ok(())
 }
 
-fn hash_canonical_bytes(kind: &str, bytes: Vec<u8>) -> (Vec<u8>, String) {
+/// The same canonical object domain used by on-disk metadata, without an
+/// intermediate hexadecimal string for typed scope/material commitments.
+pub fn canonical_object_digest<T: Serialize + ?Sized>(kind: &str, value: &T) -> Result<blake3::Hash> {
+    encode_canonical_object_digest(kind, value).map(|(_, digest)| digest)
+}
+
+/// Freeze the exact bytes together with their typed, domain-separated digest.
+pub fn encode_canonical_object_digest<T: Serialize + ?Sized>(
+    kind: &str,
+    value: &T,
+) -> Result<(Vec<u8>, blake3::Hash)> {
+    validate_object_domain(kind)?;
+    let bytes = canonical_json(value)?;
+    let hash = canonical_bytes_digest(kind, &bytes);
+    Ok((bytes, hash))
+}
+
+fn canonical_bytes_digest(kind: &str, bytes: &[u8]) -> blake3::Hash {
     let mut h = blake3::Hasher::new();
     h.update(format!("zxs:{kind}\0").as_bytes());
-    h.update(&bytes);
-    (bytes, h.finalize().to_hex().to_string())
+    h.update(bytes);
+    h.finalize()
+}
+
+fn hash_canonical_bytes(kind: &str, bytes: Vec<u8>) -> (Vec<u8>, String) {
+    let hash = canonical_bytes_digest(kind, &bytes);
+    (bytes, hash.to_hex().to_string())
 }
 
 /// Digest for a JSON mutation request; transport credentials never enter it.

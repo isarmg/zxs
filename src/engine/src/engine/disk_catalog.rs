@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 mod codec;
 mod database;
+pub(in crate::engine) mod genesis;
 mod directories;
 pub use directories::DiskCatalogDirectory;
 mod move_draft;

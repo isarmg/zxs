@@ -869,6 +869,18 @@ pub(crate) fn load_authenticated_object_at(
     )
 }
 
+/// Scope graph pages have a smaller hard byte limit than ordinary objects.
+pub(crate) fn load_scope_page_at(
+    root: &DiskRoot, disk: &DiskConfig, kind: &'static str, hash: &str, maximum: usize,
+) -> Result<AuthenticatedMetadataObject> {
+    let bytes = object_storage::read_object_bytes_bounded_at(root, disk, kind, hash, maximum)?;
+    let object = AuthenticatedMetadataObject::authenticate(kind, hash, decode_strict(&bytes)?)?;
+    if object.bytes() != bytes {
+        return Err(crate::engine::scope_closure::ScopeClosureError::GenesisMismatch.into());
+    }
+    Ok(object)
+}
+
 pub(crate) fn load_authenticated_object_observed_at(
     root: &DiskRoot,
     disk: &DiskConfig,

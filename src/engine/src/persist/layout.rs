@@ -35,6 +35,45 @@ pub(crate) static GENESIS_CONFIGURATION: LazyLock<RelativePath> = LazyLock::new(
         .expect("invariant: genesis configuration has one canonical management address")
 });
 
+/// These are object hash domains, not format versions or open path inputs.
+#[derive(Clone, Copy)]
+pub(crate) enum ScopeObjectDomain {
+    Closure,
+    Disk,
+    System,
+    EmptyInventoryPage,
+}
+impl ScopeObjectDomain {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Closure => "scope-closure",
+            Self::Disk => "disk-scope-manifest",
+            Self::System => "system-scope-material",
+            Self::EmptyInventoryPage => "state-page",
+        }
+    }
+}
+
+pub(crate) fn scope_descriptor(
+    domain: ScopeObjectDomain,
+    commitment: storage_contract::working_tree::MaterialCommitment,
+) -> RelativePath {
+    let digest = commitment.hash().digest().to_hex();
+    let hex = digest.as_str();
+    let domain = domain.name();
+    RelativePath::new(format!("metadata/objects/{domain}/{}/{hex}.json", &hex[..2]))
+        .expect("invariant: scope domain and lowercase digest form a private object address")
+}
+
+/// Raw, immutable SQLite images occupy their own typed leaf in the private
+/// hash-prefix object layout. JSON objects never decode these binary bytes.
+pub(crate) fn scope_image(hash: storage_contract::ContentHash) -> RelativePath {
+    let digest = hash.digest().to_hex();
+    let hex = digest.as_str();
+    RelativePath::new(format!("metadata/objects/scope-sqlite-image/{}/{hex}.sqlite", &hex[..2]))
+        .expect("invariant: fixed private components and a lowercase BLAKE3 digest")
+}
+
 /// Only an admitted repository binding can classify this entry as management data.
 pub(crate) static SNAPSHOT_REPOSITORY: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new(".zxs").expect("invariant: snapshot repository is one canonical entry")

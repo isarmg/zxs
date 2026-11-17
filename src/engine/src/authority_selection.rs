@@ -40,6 +40,16 @@ impl SelectionGuard {
         require_legacy_directory(&self.directory)
     }
 
+    /// Duplicate the actual selected SYSTEM directory rather than reopening a
+    /// caller-supplied path as the destination for its private scope image.
+    pub(crate) fn held_system_root(&self) -> Result<crate::disk::DiskRoot> {
+        let root = OpenAt2Root::from_private_directory(
+            self.directory.try_clone()?, MountPolicy::SameMount,
+        )?;
+        crate::disk::DiskRoot::from_directory(
+            self.directory.path().to_owned(), root.into_directory(),
+        )
+    }
     /// Read through the same SYSTEM directory whose selection lock is held.
     /// The caller must verify the read contents against its own admission proof;
     /// the guard establishes SYSTEM directory identity, not storage authority.
