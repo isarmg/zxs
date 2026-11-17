@@ -135,7 +135,7 @@ class ParallelImplementationSelection(unittest.TestCase):
 
     def test_previous_worktree_and_backup_scopes_keep_their_own_budgets(self):
         names = self.policy['groups']['worktree-automatic-names']['rust_targets'][0]
-        self.assertEqual(names['max_tests'], 4)
+        self.assertEqual(names['max_tests'], 6)
         for path, previous in [
             ('test/engine/unit/snapshot_worktree/automatic_names.rs', 'worktree-automatic-names'),
             ('test/engine/unit/snapshot_worktree/complete_resaves.rs', 'worktree-http-transport'),

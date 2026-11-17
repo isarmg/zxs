@@ -184,9 +184,7 @@
           "manifest": "src/server/Cargo.toml",
           "kind": "bin",
           "name": "zxs",
-          "features": [
-            "core"
-          ],
+          "features": ["core"],
           "prefixes": [
             "offline::service_worker::failure::tests::"
           ],
@@ -457,7 +455,9 @@
           "package": "storage-server",
           "manifest": "src/server/Cargo.toml",
           "kind": "lib",
-          "features": ["core"],
+          "features": [
+            "core"
+          ],
           "exact": [
             "smb_rpc::tests::native_dispatch_tests::default_share_hides_readable_backup_replicas_from_enumeration_and_direct_access"
           ],
@@ -739,7 +739,7 @@
           "prefixes": [
             "snapshot_worktree::instance::allocation::tests::"
           ],
-          "max_tests": 4,
+          "max_tests": 6,
           "timeout_seconds": 900
         }
       ]
@@ -1008,9 +1008,16 @@
           "exact": [
             "files::unborn::tests::listing_admits_unborn_without_manufacturing_version_or_branch_fields",
             "files::unborn::tests::first_commit_review_pins_selection_and_retains_exact_original_across_navigation",
-            "files::unborn::tests::snapshot_and_original_receipt_require_exact_content_pin_and_strict_shape"
+            "files::unborn::tests::snapshot_and_original_receipt_require_exact_content_pin_and_strict_shape",
+            "files::unborn::tests::lock_wait_blocks_new_work_and_failed_retention_never_admits_a_send",
+            "files::unborn::tests::late_retention_cannot_adopt_another_owner_or_a_new_session",
+            "files::unborn::tests::new_owner_read_failure_does_not_expose_the_previous_original",
+            "files::unborn::tests::rereading_original_preserves_settled_cleanup_and_rejects_replacement",
+            "files::unborn::tests::missing_or_unreadable_storage_does_not_discard_an_unconfirmed_original",
+            "files::unborn::tests::cleanup_completion_requires_the_same_owner_epoch_and_exact_settled_record",
+            "files::unborn::tests::same_account_relogin_recovers_the_hint_without_repeating_work_or_unsettling_publication"
           ],
-          "max_tests": 3
+          "max_tests": 10
         },
         {
           "package": "storage-server",
@@ -1529,12 +1536,13 @@
             "offline::initialization::storage::tests::first_storage_names_are_exact_distinct_direct_children",
             "offline::initialization::storage::tests::first_storage_confirmation_and_exact_digest_precede_system_access",
             "offline::initialization::storage::tests::first_storage_dto_cannot_override_uid_mode_or_start_services",
+            "offline::initialization::storage::tests::first_storage_execution_budget_precedes_host_access_and_retained_intent",
             "offline::initialization::storage::directories::entries::tests::empty_root_batch_preserves_existing_directory_and_retries_original_inodes",
             "offline::initialization::storage::directories::entries::tests::interrupted_root_publication_resumes_the_bound_pending_inode",
             "offline::initialization::storage::directories::entries::tests::published_root_replacement_and_nonempty_original_are_preserved",
             "offline::initialization::storage::directories::entries::tests::first_root_capture_refuses_symlinks_and_unselected_material"
           ],
-          "max_tests": 7
+          "max_tests": 8
         },
         {
           "package": "storage-helper",
@@ -6577,9 +6585,137 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "backup-held-entry-budget": {
+      "reason": "Missing entries, implicit parents and held filesystem observations on each Backup target. Filesystem checks do not establish the entire install peak, native handoff or 900-second cutover.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "engine::backup_preparation::capacity::tests::",
+            "engine::backup_preparation::capacity::records::tests::"
+          ],
+          "max_tests": 7
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "exact": [
+            "backup_preparation::new_single_backup_rejects_wrong_held_target_before_persisting_an_intent"
+          ],
+          "max_tests": 1,
+          "isolate": true,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
+    "helper-stop-handoff": {
+      "reason": "Helper Stop, handoff and job admission share a single decision. Signal and actual service activation still require end-to-end validation.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "prefixes": [
+            "console::shutdown::tests::"
+          ],
+          "max_tests": 3
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "mode": "check"
+        }
+      ]
+    },
+    "cold-lifecycle-receipt-rows": {
+      "reason": "A sparse cold lifecycle read still admits all receipt envelopes, without rewalking the full receipt map for its selected rows. Not a size or cold-open latency measurement.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "persist::path_changes::tests::cold_ledger_classifies_every_receipt_without_rewalking_a_sparse_map",
+            "persist::path_changes::tests::sparse_cold_ledger_admits_unrelated_copy_move_restore_and_path_envelopes"
+          ],
+          "max_tests": 2
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
+    "permanent-removal-exact-leaves": {
+      "reason": "Current held-slot readback must verify both scoped body leaves absent, with parent identity and tombstone evidence; this is not a physical retirement terminal proof.",
+      "python_tests": [
+        "test_current_branch_slices_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "content_matches",
+          "prefixes": [
+            "permanent_removal_cleanup::"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
+    {
+      "path": "test/ci/test_current_branch_slices_targeted_ci.py",
+      "groups": [
+        "backup-held-entry-budget",
+        "helper-stop-handoff",
+        "cold-lifecycle-receipt-rows",
+        "permanent-removal-exact-leaves"
+      ]
+    },
     {
       "path": "src/engine/src/directory_worktree/store.rs",
       "groups": [
@@ -6613,13 +6749,15 @@
     {
       "path": "src/engine/src/engine/history_window/read/lifecycle.rs",
       "groups": [
-        "lifecycle-membership-cache"
+        "lifecycle-membership-cache",
+        "cold-lifecycle-receipt-rows"
       ]
     },
     {
       "path": "src/engine/src/state_projection/lifecycles.rs",
       "groups": [
-        "lifecycle-membership-cache"
+        "lifecycle-membership-cache",
+        "cold-lifecycle-receipt-rows"
       ]
     },
     {
@@ -6758,7 +6896,8 @@
     {
       "path": "src/engine/src/maintenance.rs",
       "groups": [
-        "draft-base-retention"
+        "draft-base-retention",
+        "permanent-removal-exact-leaves"
       ]
     },
     {
@@ -6782,7 +6921,8 @@
     {
       "path": "helper/src/console.rs",
       "groups": [
-        "helper-http-owner-budgets"
+        "helper-http-owner-budgets",
+        "helper-stop-handoff"
       ]
     },
     {
@@ -6806,7 +6946,8 @@
     {
       "path": "test/helper/unit/console/job_tests.rs",
       "groups": [
-        "helper-http-owner-budgets"
+        "helper-http-owner-budgets",
+        "helper-stop-handoff"
       ]
     },
     {
@@ -6922,32 +7063,163 @@
         "debian-offline-entrypoint"
       ]
     },
-    {"path": "src/web/src/monitor/history.rs", "groups": ["web-telemetry-ingress"]},
-    {"path": "test/web/unit/monitor/history/tests.rs", "groups": ["web-telemetry-ingress"]},
-    {"path": "src/auth/src/secret.rs", "groups": ["credential-secret-ownership"]},
-    {"path": "src/auth/src/lib.rs", "groups": ["credential-secret-ownership"]},
-    {"path": "src/auth/Cargo.toml", "groups": ["credential-secret-ownership"]},
-    {"path": "test/auth/unit/secret.rs", "groups": ["credential-secret-ownership"]},
-    {"path": "src/server/src/http_auth.rs", "groups": ["credential-secret-ownership"]},
-    {"path": "src/server/src/http_smb_account.rs", "groups": ["credential-secret-ownership"]},
-    {"path": "test/server/unit/http_auth/tests.rs", "groups": ["credential-secret-ownership"]},
-    {"path": "test/server/unit/http_smb_account.rs", "groups": ["credential-secret-ownership"]},
-    {"path": "src/server/src/spool_budget.rs", "groups": ["upload-restart-cleanup"]},
-    {"path": "test/server/unit/spool_budget/tests.rs", "groups": ["upload-restart-cleanup"]},
-    {"path": "src/engine/src/disk/admission/upload.rs", "groups": ["upload-restart-cleanup"]},
-    {"path": "test/engine/unit/disk/upload_resources_tests.rs", "groups": ["upload-restart-cleanup"]},
-    {"path": "src/engine/src/engine/workspace_storage.rs", "groups": ["upload-restart-cleanup"]},
-    {"path": "test/engine/unit/engine/workspace_storage_tests.rs", "groups": ["upload-restart-cleanup"]},
-    {"path": "test/engine/integration/workspace_upload_retries.rs", "groups": ["upload-restart-cleanup"]},
-    {"path": "src/server/src/management.rs", "groups": ["normal-shutdown-owners"]},
-    {"path": "test/server/unit/management_shutdown_tests.rs", "groups": ["normal-shutdown-owners"]},
-    {"path": "src/server/src/management/ordinary_conversion.rs", "groups": ["normal-shutdown-owners"]},
-    {"path": "src/server/src/engine_backend/ordinary_conversion.rs", "groups": ["normal-shutdown-owners"]},
-    {"path": "test/server/unit/management/ordinary_conversion.rs", "groups": ["normal-shutdown-owners"]},
-    {"path": "test/ci/test_shutdown_cleanup_targeted_ci.py", "groups": ["upload-restart-cleanup", "normal-shutdown-owners"]},
-    {"path": "src/contract/src/encoded_len.rs", "groups": ["tracked-key-budgets"]},
-    {"path": "src/contract/src/tracked.rs", "groups": ["tracked-key-budgets"]},
-    {"path": "test/contract/unit/tracked.rs", "groups": ["tracked-key-budgets"]},
+    {
+      "path": "src/web/src/monitor/history.rs",
+      "groups": [
+        "web-telemetry-ingress"
+      ]
+    },
+    {
+      "path": "test/web/unit/monitor/history/tests.rs",
+      "groups": [
+        "web-telemetry-ingress"
+      ]
+    },
+    {
+      "path": "src/auth/src/secret.rs",
+      "groups": [
+        "credential-secret-ownership"
+      ]
+    },
+    {
+      "path": "src/auth/src/lib.rs",
+      "groups": [
+        "credential-secret-ownership"
+      ]
+    },
+    {
+      "path": "src/auth/Cargo.toml",
+      "groups": [
+        "credential-secret-ownership"
+      ]
+    },
+    {
+      "path": "test/auth/unit/secret.rs",
+      "groups": [
+        "credential-secret-ownership"
+      ]
+    },
+    {
+      "path": "src/server/src/http_auth.rs",
+      "groups": [
+        "credential-secret-ownership"
+      ]
+    },
+    {
+      "path": "src/server/src/http_smb_account.rs",
+      "groups": [
+        "credential-secret-ownership"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_auth/tests.rs",
+      "groups": [
+        "credential-secret-ownership"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_smb_account.rs",
+      "groups": [
+        "credential-secret-ownership"
+      ]
+    },
+    {
+      "path": "src/server/src/spool_budget.rs",
+      "groups": [
+        "upload-restart-cleanup"
+      ]
+    },
+    {
+      "path": "test/server/unit/spool_budget/tests.rs",
+      "groups": [
+        "upload-restart-cleanup"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/admission/upload.rs",
+      "groups": [
+        "upload-restart-cleanup"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/upload_resources_tests.rs",
+      "groups": [
+        "upload-restart-cleanup"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/workspace_storage.rs",
+      "groups": [
+        "upload-restart-cleanup"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/workspace_storage_tests.rs",
+      "groups": [
+        "upload-restart-cleanup"
+      ]
+    },
+    {
+      "path": "test/engine/integration/workspace_upload_retries.rs",
+      "groups": [
+        "upload-restart-cleanup"
+      ]
+    },
+    {
+      "path": "src/server/src/management.rs",
+      "groups": [
+        "normal-shutdown-owners"
+      ]
+    },
+    {
+      "path": "test/server/unit/management_shutdown_tests.rs",
+      "groups": [
+        "normal-shutdown-owners"
+      ]
+    },
+    {
+      "path": "src/server/src/management/ordinary_conversion.rs",
+      "groups": [
+        "normal-shutdown-owners"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/ordinary_conversion.rs",
+      "groups": [
+        "normal-shutdown-owners"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/ordinary_conversion.rs",
+      "groups": [
+        "normal-shutdown-owners"
+      ]
+    },
+    {
+      "path": "test/ci/test_shutdown_cleanup_targeted_ci.py",
+      "groups": [
+        "upload-restart-cleanup",
+        "normal-shutdown-owners"
+      ]
+    },
+    {
+      "path": "src/contract/src/encoded_len.rs",
+      "groups": [
+        "tracked-key-budgets"
+      ]
+    },
+    {
+      "path": "src/contract/src/tracked.rs",
+      "groups": [
+        "tracked-key-budgets"
+      ]
+    },
+    {
+      "path": "test/contract/unit/tracked.rs",
+      "groups": [
+        "tracked-key-budgets"
+      ]
+    },
     {
       "path": "test/server/unit/smb_rpc/native_dispatch_tests.rs",
       "groups": ["default-share-backup-visibility"]
@@ -7137,7 +7409,8 @@
     {
       "path": "src/engine/src/disk/owned.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "backup-held-entry-budget"
       ]
     },
     {
@@ -7257,13 +7530,15 @@
     {
       "path": "src/engine/src/snapshot_worktree/public.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "worktree-exact-originals"
       ]
     },
     {
       "path": "src/engine/src/snapshot_worktree/public/namespace.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "worktree-exact-originals"
       ]
     },
     {
@@ -7294,7 +7569,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/reopen.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "worktree-exact-originals"
       ]
     },
     {
@@ -8897,13 +9173,15 @@
     {
       "path": "src/engine/src/engine/backup_preparation.rs",
       "groups": [
-        "backup-snapshot-scope"
+        "backup-snapshot-scope",
+        "backup-held-entry-budget"
       ]
     },
     {
       "path": "src/engine/src/engine/backup_preparation/snapshot.rs",
       "groups": [
-        "backup-snapshot-scope"
+        "backup-snapshot-scope",
+        "backup-held-entry-budget"
       ]
     },
     {
@@ -9878,7 +10156,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/instance.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "worktree-exact-originals"
       ]
     },
     {
@@ -9896,7 +10175,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/publication.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "worktree-exact-originals"
       ]
     },
     {
@@ -11322,7 +11602,8 @@
     {
       "path": "src/engine/src/history_package.rs",
       "groups": [
-        "history-package-audit-guard"
+        "history-package-audit-guard",
+        "backup-held-entry-budget"
       ]
     },
     {
@@ -11968,7 +12249,8 @@
     {
       "path": "test/engine/integration/backup_preparation.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "backup-held-entry-budget"
       ]
     },
     {
@@ -16727,14 +17009,16 @@
       "path": "src/engine/src/persist/path_changes.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "cold-lifecycle-receipt-rows"
       ]
     },
     {
       "path": "src/engine/src/persist/path_changes/ledger.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "cold-lifecycle-receipt-rows"
       ]
     },
     {
@@ -16889,7 +17173,8 @@
       "path": "test/engine/unit/path_changes_tests.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "cold-lifecycle-receipt-rows"
       ]
     },
     {
@@ -17554,7 +17839,8 @@
       "path": "test/engine/integration/content_matches/permanent_removal_cleanup.rs",
       "groups": [
         "current-name-layout-consumers",
-        "container-current-name"
+        "container-current-name",
+        "permanent-removal-exact-leaves"
       ]
     },
     {
@@ -18076,7 +18362,8 @@
     {
       "path": "src/engine/src/disk/version_material.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "permanent-removal-exact-leaves"
       ]
     },
     {
@@ -18136,7 +18423,8 @@
     {
       "path": "src/engine/src/engine/history_window/permanent_removal_cleanup.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "permanent-removal-exact-leaves"
       ]
     },
     {
@@ -19645,6 +19933,98 @@
       "path": "test/engine/integration/backup_terminal_switch.rs",
       "groups": [
         "backup-terminal-two-copy"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/batch.rs",
+      "groups": [
+        "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/capacity.rs",
+      "groups": [
+        "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/execution.rs",
+      "groups": [
+        "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/preparation.rs",
+      "groups": [
+        "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_copy_capacity_tests.rs",
+      "groups": [
+        "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "helper/src/console/http.rs",
+      "groups": [
+        "helper-stop-handoff"
+      ]
+    },
+    {
+      "path": "helper/src/console/shutdown.rs",
+      "groups": [
+        "helper-stop-handoff"
+      ]
+    },
+    {
+      "path": "test/helper/unit/console/shutdown_tests.rs",
+      "groups": [
+        "helper-stop-handoff"
+      ]
+    },
+    {
+      "path": "test/helper/unit/console/tests.rs",
+      "groups": [
+        "helper-stop-handoff"
+      ]
+    },
+    {
+      "path": "src/web/src/browser_lock.rs",
+      "groups": [
+        "native-first-manual-save",
+        "browser-identity-generation"
+      ]
+    },
+    {
+      "path": "src/web/src/files/unborn/recovery.rs",
+      "groups": [
+        "native-first-manual-save",
+        "browser-identity-generation"
+      ]
+    },
+    {
+      "path": "src/web/src/lib.rs",
+      "groups": [
+        "native-first-manual-save"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/capacity/records.rs",
+      "groups": [
+        "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/inspection.rs",
+      "groups": [
+        "backup-held-entry-budget"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_copy_record_cost_tests.rs",
+      "groups": [
+        "backup-held-entry-budget"
       ]
     }
   ],

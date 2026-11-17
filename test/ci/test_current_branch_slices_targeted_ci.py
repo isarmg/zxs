@@ -1,0 +1,54 @@
+"""Regression coverage for declared selection paths; never substitute it for executing a shard."""
+import importlib.util
+import json
+from pathlib import Path
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location('current_branch_ci', ROOT / '.github/scripts/check-targeted-ci.py')
+CI = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(CI)
+
+
+class CurrentBranchSelection(unittest.TestCase):
+    def setUp(self):
+        self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+
+    def test_changed_inputs_select_held_budget_helper_and_admission_tests(self):
+        for group, files in {
+            'backup-held-entry-budget': [
+                'src/engine/src/engine/backup_preparation/batch.rs',
+                'src/engine/src/engine/backup_preparation/capacity.rs',
+                'src/engine/src/engine/backup_preparation/execution.rs',
+                'src/engine/src/history_package/preparation.rs',
+                'test/engine/unit/backup_copy_capacity_tests.rs',
+            ],
+            'helper-stop-handoff': ['helper/src/console/shutdown.rs', 'helper/src/console/http.rs'],
+            'cold-lifecycle-receipt-rows': ['test/engine/unit/path_changes_tests.rs'],
+            'permanent-removal-exact-leaves': ['src/engine/src/disk/version_material.rs'],
+            'worktree-exact-originals': ['src/engine/src/snapshot_worktree/public/namespace.rs'],
+            'native-first-manual-save': ['src/web/src/lib.rs', 'src/web/src/browser_lock.rs',
+                                         'src/web/src/files/unborn/recovery.rs'],
+            'browser-identity-generation': ['src/web/src/browser_lock.rs'],
+        }.items():
+            for path in files:
+                with self.subTest(group=group, path=path):
+                    self.assertIn(group, CI.select_plan(self.policy, [path], shardable=True)['groups'])
+
+    def test_native_first_commit_and_offline_storage_inventories_are_not_compile_only(self):
+        for group, package, kind, case in [
+            ('native-first-manual-save', 'web-app', 'lib',
+             'files::unborn::tests::cleanup_completion_requires_the_same_owner_epoch_and_exact_settled_record'),
+            ('fresh-managed-core', 'storage-server', 'bin',
+             'offline::initialization::storage::tests::first_storage_execution_budget_precedes_host_access_and_retained_intent'),
+        ]:
+            target = next(t for t in self.policy['groups'][group]['rust_targets']
+                          if t['package'] == package and t.get('kind') == kind and case in t.get('exact', []))
+            self.assertEqual(len(target['exact']), target['max_tests'])
+        backup = self.policy['groups']['backup-held-entry-budget']['rust_targets']
+        self.assertTrue(any(t.get('name') == 'recursive_backup_paths' and t.get('isolate')
+                            and t.get('timeout_seconds') == 900 for t in backup))
+
+
+if __name__ == '__main__':
+    unittest.main()
