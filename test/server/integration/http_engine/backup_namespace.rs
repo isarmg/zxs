@@ -79,12 +79,27 @@ async fn authenticated_backup_range_selects_only_the_published_third_disk() {
         engine.state().placements[&current_version].route_slot_ids,
         ["P01"]
     );
+    let disks = &engine.config().disks;
+    let component = |index: usize| {
+        let disk = &disks[index];
+        format!("{}--{}", disk.name.as_str(), disk.disk_id.strip_prefix("disk_").unwrap())
+    };
+    let primary = component(0);
+    let secondary = format!("{}/{primary}", component(1));
     let backend = Arc::new(EngineBackend::new(engine));
     let auth = backend
         .protect_auth(AuthStore::initialize(&system, "admin", "integration-test-password").unwrap())
         .unwrap();
     let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let admin = login(&app, "admin", "integration-test-password").await;
+    for (slot, parent) in [("B01", primary.as_str()), ("C01", secondary.as_str())] {
+        let page = listing(&app, &admin, slot, parent).await;
+        read_only_listing(&page);
+        let entries = page["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "{slot}: {page}");
+        assert_eq!(entries[0]["name"], "backed-up.txt");
+        assert_eq!(entries[0]["version_id"], version);
+    }
     let selected = app
         .clone()
         .oneshot(

@@ -143,6 +143,79 @@ fn no_file_history(engine: &Engine) {
 }
 
 #[test]
+fn default_share_hides_readable_backup_replicas_from_enumeration_and_direct_access() {
+    use std::io::Read;
+    use storage_contract::OperationId;
+
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("state");
+    let config = Config::development(["Primary", "Secondary", "Tertiary"].map(|name| {
+        (name_policy::Name::parse(name).unwrap(), root.path().join(name))
+    })).unwrap();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let operation = || OperationId::generate().unwrap();
+    let repo = engine.create_disk_root("P01", "alice", operation()).unwrap();
+    engine.update_protection_policy(storage_engine::ProtectionPolicyUpdate {
+        policy_id: &storage_contract::new_id("policy").unwrap(),
+        repository_id: &repo.repository_id,
+        path_prefix: "",
+        target_copies: 3,
+        expected_generation: 0,
+        principal: "alice",
+        operation_id: operation(),
+    }).unwrap();
+    let body = b"three actual replicas";
+    let workspace = engine.create_workspace(&repo.main_branch_id, "alice").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "record.txt", body).unwrap();
+    engine.commit_workspace(storage_engine::CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: operation(),
+        principal: "alice".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "publish one primary and two backup replicas".into(),
+        request_digest: None,
+    }).unwrap();
+    let version = engine.namespace_tree(&repo.main_branch_id).unwrap()
+        .get("record.txt").unwrap().version_id.parse().unwrap();
+    drop(engine);
+    let engine = Engine::open(&system).unwrap();
+    for slot in ["B01", "C01"] {
+        let slot = name_policy::SlotId::parse(slot).unwrap();
+        let mut replica = engine.prepare_backup_content(version, &slot).unwrap().open().unwrap();
+        let mut bytes = Vec::new();
+        replica.file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, body);
+        assert!(replica.fallback_files.is_empty());
+    }
+
+    let password = authentication::random_token().unwrap();
+    let auth = AuthStore::initialize(&system, "alice", &password).unwrap();
+    let spool = root.path().join("spool");
+    fs::create_dir(&spool).unwrap();
+    fs::set_permissions(&spool, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::create_dir(spool.join("empty-directory")).unwrap();
+    let mut direct = Direct::start(root.path(), engine, auth);
+    let (share_root, _) = direct.open("", false, false);
+    let reply = direct.call(Request::ReadDirectory { handle: share_root.handle, restart: true });
+    let Reply::Directory(page) = reply else {
+        panic!("ReadDirectory did not return a directory page");
+    };
+    assert!(!page.more);
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].path().as_str(), "Primary");
+    direct.call(Request::Close { handle: share_root.handle });
+
+    for path in ["Secondary", "Tertiary", "Secondary/record.txt", "Tertiary/record.txt"] {
+        let rejected = direct.share.dispatch(Request::Stat { path: path.into() }).unwrap_err();
+        assert_eq!(rejected.error.code, storage_contract::ErrorCode::NotFound);
+    }
+    let (primary, _) = direct.open("Primary/record.txt", false, false);
+    assert_eq!(direct.read(primary.handle), body);
+    direct.call(Request::Close { handle: primary.handle });
+}
+
+#[test]
 fn native_dispatch_uses_real_engine_and_cold_unborn_content_without_transport() {
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("state");

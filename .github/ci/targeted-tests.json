@@ -1,5 +1,22 @@
 {
   "groups": {
+    "default-share-backup-visibility": {
+      "reason": "Publish three independent file copies, cold reopen, read both backup replicas through the Engine, then verify the authenticated production DefaultShare lists and opens only the primary. Not external Samba or browser evidence.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": ["core"],
+          "exact": [
+            "smb_rpc::tests::native_dispatch_tests::default_share_hides_readable_backup_replicas_from_enumeration_and_direct_access"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "worktree-added-native": {
       "reason": "Run Added-file worktree birth at the root and beneath exact snapshot directories: held same-disk deleted-data FILE identity, Manual range saves, independent operation completion and cold reopen through Engine and DefaultShare. This does not execute external Samba, AF_UNIX framing or cross-disk MOVE.",
       "python_tests": [],
@@ -6112,6 +6129,18 @@
     }
   },
   "rules": [
+    {
+      "path": "test/server/unit/smb_rpc/native_dispatch_tests.rs",
+      "groups": ["default-share-backup-visibility"]
+    },
+    {
+      "path": "src/server/src/smb_rpc/default_share.rs",
+      "groups": ["default-share-backup-visibility"]
+    },
+    {
+      "path": "src/server/src/smb_rpc/default_share/directory.rs",
+      "groups": ["default-share-backup-visibility"]
+    },
     {
       "path": "docs/design/worktree-added-native-files.md",
       "groups": [
