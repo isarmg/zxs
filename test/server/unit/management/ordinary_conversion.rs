@@ -1594,3 +1594,149 @@ fn business_shutdown_accepts_only_the_exact_explicit_conversion_stop() {
     save(&directory, &record).unwrap();
     assert!(f.backend.finish_running_business().is_err());
 }
+
+#[test]
+fn conversion_drain_and_new_work_find_an_intent_without_a_latest_hint() {
+    let (f, p) = interrupted_conversion(ImportInterruption::CommitIntent);
+    let directory =
+        PrivateDirectory::open_existing(f.data.join("management").join(DIRECTORY)).unwrap();
+    fs::remove_file(directory.path().join(storage_addition::latest_name().as_path())).unwrap();
+    let before = conversion_tree_snapshot(directory.path());
+    let error = f.backend.finish_running_business().unwrap_err();
+    assert_eq!(error.code, ErrorCode::RecoveryRequired);
+    assert!(error.message.contains(&p.operation_id.to_string()));
+    assert_eq!(
+        f.backend
+            .ensure_prior_conversion_settled(&directory, &f.identity)
+            .unwrap_err()
+            .code,
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(conversion_tree_snapshot(directory.path()), before);
+}
+
+#[test]
+fn conversion_drain_and_new_work_find_an_intent_behind_a_settled_hint() {
+    let f = fixture();
+    let p = preview(&f);
+    commit(&f, &p, true).unwrap();
+    let directory =
+        PrivateDirectory::open_existing(f.data.join("management").join(DIRECTORY)).unwrap();
+    // A new record can reach disk before its latest-hint atomic write does.
+    let mut orphan = p.clone();
+    orphan.operation_id = OperationId::generate().unwrap();
+    orphan.preview_digest = digest(&orphan);
+    save(&directory, &pending_record(&f, &orphan)).unwrap();
+    let before = conversion_tree_snapshot(directory.path());
+    let error = f.backend.finish_running_business().unwrap_err();
+    assert_eq!(error.code, ErrorCode::RecoveryRequired);
+    assert!(error.message.contains(&orphan.operation_id.to_string()));
+    assert_eq!(
+        f.backend
+            .ensure_prior_conversion_settled(&directory, &f.identity)
+            .unwrap_err()
+            .code,
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(conversion_tree_snapshot(directory.path()), before);
+}
+
+#[test]
+fn conversion_drain_keeps_multiple_exact_historical_successes_without_a_hint() {
+    let f = fixture();
+    let original = preview(&f);
+    commit(&f, &original, true).unwrap();
+    for number in 3..=4 {
+        let target_name = format!("next-primary-{number}");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(f.discovery.join(&target_name))
+            .unwrap();
+        let discovered = f.backend.discovered_disks(&f.identity).unwrap();
+        let target = discovered
+            .candidates
+            .iter()
+            .find(|candidate| candidate.name == target_name)
+            .unwrap();
+        let DiscoveredDiskState::Empty { selection } = &target.state else {
+            panic!("new fixture target must be empty")
+        };
+        let next = f
+            .backend
+            .preview_ordinary_conversion(
+                &f.identity,
+                OrdinaryDiskConversionRequest {
+                    name: name_policy::Name::parse(&target_name).unwrap(),
+                    operation_id: OperationId::generate().unwrap(),
+                    source: original.source.clone(),
+                    target: selection.clone(),
+                    slot_id: format!("D{number:02}"),
+                    metadata_member: false,
+                },
+            )
+            .unwrap();
+        commit(&f, &next, true).unwrap();
+    }
+    let directory =
+        PrivateDirectory::open_existing(f.data.join("management").join(DIRECTORY)).unwrap();
+    fs::remove_file(directory.path().join(storage_addition::latest_name().as_path())).unwrap();
+    let before = conversion_tree_snapshot(directory.path());
+    let backend = f.backend.inner.backend().unwrap();
+    let sequence = backend.test_with_engine_locked(|engine| engine.state().sequence);
+    f.backend.finish_running_business().unwrap();
+    f.backend
+        .ensure_prior_conversion_settled(&directory, &f.identity)
+        .unwrap();
+    assert_eq!(conversion_operations(&directory).unwrap().len(), 3);
+    assert_eq!(conversion_tree_snapshot(directory.path()), before);
+    assert_eq!(
+        backend.test_with_engine_locked(|engine| engine.state().sequence),
+        sequence
+    );
+}
+
+#[test]
+fn conversion_drain_preserves_unrecognized_control_without_using_its_body() {
+    let f = fixture();
+    let p = preview(&f);
+    commit(&f, &p, true).unwrap();
+    let directory =
+        PrivateDirectory::open_existing(f.data.join("management").join(DIRECTORY)).unwrap();
+    let unknown = directory.path().join("unknown-partial");
+    fs::write(&unknown, b"not a conversion and not a receipt").unwrap();
+    let before = conversion_tree_snapshot(directory.path());
+    assert_eq!(
+        f.backend.finish_running_business().unwrap_err().code,
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(conversion_tree_snapshot(directory.path()), before);
+}
+
+#[test]
+fn conversion_drain_budget_exhaustion_is_not_success_or_permission_to_delete() {
+    let f = fixture();
+    let directory = PrivateDirectory::open_existing(f.data.join("management"))
+        .unwrap()
+        .create_child(&EntryName::new(DIRECTORY).unwrap())
+        .unwrap();
+    let retained = directory
+        .path()
+        .join(name(OperationId::generate().unwrap()).as_path());
+    let payload = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&retained)
+        .unwrap();
+    payload.set_len(RECORD_INVENTORY.max_total_bytes + 1).unwrap();
+    let before = payload.metadata().unwrap();
+    assert_eq!(
+        f.backend.finish_running_business().unwrap_err().code,
+        ErrorCode::ResourceLimit
+    );
+    let after = fs::metadata(retained).unwrap();
+    assert_eq!(
+        (after.dev(), after.ino(), after.len()),
+        (before.dev(), before.ino(), before.len())
+    );
+}

@@ -1,7 +1,7 @@
 //! One reviewed new-primary workflow: retain source, publish registration, then
 //! import to its empty root. The two durable phases are deliberately not atomic.
 use super::*;
-use platform_io::fs_safety::{EntryName, PrivateDirectory};
+use platform_io::fs_safety::{EntryName, InventoryLimits, PrivateDirectory};
 use storage_addition::{read, storage_error, write};
 use storage_contract::{
     CommitRequest, ErrorCode, OperationId,
@@ -33,6 +33,12 @@ impl ConversionTarget<'_> {
 }
 
 const DIRECTORY: &str = "ordinary-disk-conversions";
+// Historical successes remain intact. Admission and shutdown inspect their
+// bounded records one at a time rather than treating the latest hint as a log.
+const RECORD_INVENTORY: InventoryLimits = InventoryLimits {
+    max_entries: 65_536,
+    max_total_bytes: 256 * 1024 * 1024,
+};
 #[derive(data_serialization::Serialize, data_serialization::Deserialize)]
 enum Format {
     #[serialization(rename = "ordinary-disk-conversion")]
@@ -118,6 +124,49 @@ fn source_preview(source: &PreparedOrdinaryConversion) -> OrdinarySourcePreview 
 }
 fn save(directory: &PrivateDirectory, record: &Record) -> Result<(), ApiError> {
     write(directory, &name(record.status.preview.operation_id), record)
+}
+fn conversion_operations(directory: &PrivateDirectory) -> Result<Vec<OperationId>, ApiError> {
+    directory.verify_identity().map_err(storage_error)?;
+    let files = directory
+        .files(RECORD_INVENTORY)
+        .map_err(|source| match source {
+            platform_io::fs_safety::Error::BudgetExceeded => ApiError::conflict(
+                ErrorCode::ResourceLimit,
+                "conversion record inventory exceeds its verification budget; preserve all records",
+            )
+            .with_source(source),
+            source => storage_error(source),
+        })?;
+    let latest_name = storage_addition::latest_name();
+    let mut operations = Vec::with_capacity(files.len());
+    for file in files {
+        if file.name == latest_name {
+            continue;
+        }
+        let operation = file
+            .name
+            .as_os_str()
+            .to_str()
+            .and_then(|value| value.strip_suffix(".json"))
+            .and_then(|value| value.parse::<OperationId>().ok())
+            .ok_or_else(|| {
+                ApiError::conflict(
+                    ErrorCode::RecoveryRequired,
+                    "conversion control contains unrecognized material; preserve it for inspection",
+                )
+            })?;
+        operations.push(operation);
+    }
+    operations.sort_unstable();
+    if let Some(latest) = read::<OperationId>(directory, &latest_name)?
+        && operations.binary_search(&latest).is_err()
+    {
+        return Err(ApiError::conflict(
+            ErrorCode::RecoveryRequired,
+            format!("ordinary conversion {latest} is missing its original control record"),
+        ));
+    }
+    Ok(operations)
 }
 fn read_record(directory: &PrivateDirectory, id: OperationId) -> Result<Record, ApiError> {
     let record: Record = read(directory, &name(id))?.ok_or_else(|| {
@@ -273,11 +322,18 @@ impl ManagementBackend {
             }
             Err(source) => return Err(storage_error(source)),
         };
-        let Some(operation) = read::<OperationId>(&directory, &storage_addition::latest_name())?
-        else {
-            return Ok(());
-        };
-        let record = read_record(&directory, operation)?;
+        for operation in conversion_operations(&directory)? {
+            self.finish_conversion_record(&directory, operation)?;
+        }
+        directory.verify_identity().map_err(storage_error)
+    }
+
+    fn finish_conversion_record(
+        &self,
+        directory: &PrivateDirectory,
+        operation: OperationId,
+    ) -> Result<(), ApiError> {
+        let record = read_record(directory, operation)?;
         let incomplete = || {
             ApiError::conflict(
                 ErrorCode::RecoveryRequired,
@@ -870,7 +926,7 @@ impl ManagementBackend {
         directory: &PrivateDirectory,
         identity: &Identity,
     ) -> Result<(), ApiError> {
-        if let Some(id) = read::<OperationId>(directory, &storage_addition::latest_name())? {
+        for id in conversion_operations(directory)? {
             // Completion gates all future conversions, but is not authority to
             // disclose another principal's source, preview or receipt. A
             // recovered administrator may proceed only after the exact original
@@ -883,7 +939,7 @@ impl ManagementBackend {
                 ));
             }
         }
-        Ok(())
+        directory.verify_identity().map_err(storage_error)
     }
     fn conversion_record_settled(
         &self,
