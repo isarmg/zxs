@@ -219,7 +219,7 @@ impl Engine {
             }
         };
         let context = current.and_then(|entry| {
-            self.file_context_for_current_entry(&repository.repository_id, entry)
+            self.context_for_visible_file(&repository.repository_id, entry)
         });
         let current_node = context
             .as_ref()

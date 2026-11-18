@@ -64,7 +64,7 @@ pub(crate) fn synchronize_directory_edits(
             continue;
         };
         let Some(context) =
-            directory::context_at_key(state, &repo.repository_id, file.lookup_key())
+            namespace::file_context::context_at_key(state, &repo.repository_id, file.lookup_key())
         else {
             continue;
         };
@@ -340,7 +340,7 @@ fn publish_selected_file_source_with_ids(
                 "file is absent from current composition",
             )
         })?;
-    let context = directory::context_at_key(state, &repository.repository_id, selected_key);
+    let context = namespace::file_context::context_at_key(state, &repository.repository_id, selected_key);
     let inherited = context.as_ref().is_some_and(|c| c.inherited_from.is_some());
     state.file_write_origins.remove(file_id);
     let already_selected = context.as_ref().is_some_and(|c| c.branch_id == branch_id);
@@ -424,7 +424,7 @@ fn publish_selected_file_source_with_ids(
         .file_selections
         .insert(file_id.into(), branch_id.into());
     state.file_contexts.insert(
-        directory::context_key_from_key(&repository.repository_id, selected_key),
+        namespace::file_context::context_key_from_key(&repository.repository_id, selected_key),
         FileContext {
             node_id: branch.file_node_id.clone(),
             selection_generation: context
@@ -474,7 +474,7 @@ pub(super) fn ensure_shared_file_branch_with_ids(
             .values()
             .find(|r| r.history_tree_id == current.history_tree_id)
             .and_then(|r| {
-                state.file_contexts.get(&directory::context_key_from_key(
+                state.file_contexts.get(&namespace::file_context::context_key_from_key(
                     &r.repository_id,
                     original.lookup_key(),
                 ))

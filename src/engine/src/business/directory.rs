@@ -1,5 +1,10 @@
 //! Frozen directory compositions over public file branches and immutable nodes.
 use super::*;
+// Current-namespace inputs to the remaining composition commands. A historical
+// branch/tree reader must continue to use its own frozen path contexts.
+pub(super) use super::namespace::file_context::{
+    branch_context_at_key, context_at_key, context_for_entry, context_key_from_key,
+};
 use json_codec::json;
 use std::{
     borrow::Cow,
@@ -33,61 +38,6 @@ fn selected_tree<'a>(state: &'a State, directory: &str) -> Result<(&'a str, &'a 
         "selected directory tree commit missing",
     )?;
     Ok((branch_id, tree))
-}
-
-pub(crate) fn context_key_from_key(repository: &str, key: &str) -> String {
-    format!("{repository}/{key}")
-}
-pub(crate) fn context_at_key(state: &State, repository: &str, key: &str) -> Option<FileContext> {
-    if let Some(context) = state
-        .file_contexts
-        .get(&context_key_from_key(repository, key))
-    {
-        return Some(context.clone());
-    }
-    let repo = state.repositories.get(repository)?;
-    let commit = state
-        .commits
-        .get(&state.branches.get(&repo.main_branch_id)?.head_commit_id)?;
-    let entry = namespace::find_unordered_key(&commit.entries, key)
-        .filter(|e| e.kind == NamespaceEntryKind::File)?;
-    Some(context_for_entry(state, repo, entry))
-}
-
-// A freshly written namespace has not registered a directory composition yet.
-// Bootstrap its live context here; frozen DirectoryBranch/Tree readers never do.
-pub(super) fn context_for_entry(state: &State, repo: &Repository, entry: &Entry) -> FileContext {
-    let branch = state
-        .file_selections
-        .get(&entry.file_id)
-        .cloned()
-        .unwrap_or_else(|| repo.main_branch_id.clone());
-    FileContext {
-        node_id: state
-            .branches
-            .get(&branch)
-            .and_then(|b| b.file_node_id.clone()),
-        selection_generation: 0,
-        branch_id: branch,
-        inherited_from: state.file_write_origins.get(&entry.file_id).cloned(),
-    }
-}
-pub(crate) fn branch_context_at_key(
-    state: &State,
-    namespace: &str,
-    key: &str,
-) -> Option<FileContext> {
-    let branch = state.branches.get(namespace)?;
-    if let Some(repo) = repository::main_for_branch(state, namespace) {
-        context_at_key(state, &repo.repository_id, key)
-    } else {
-        Some(FileContext {
-            node_id: branch.file_node_id.clone(),
-            selection_generation: 0,
-            branch_id: branch.branch_id.clone(),
-            inherited_from: None,
-        })
-    }
 }
 
 struct DirectoryScopeView<'a> {
@@ -1275,57 +1225,6 @@ pub(super) fn record_directory_edits_with_ids(
 }
 
 impl Engine {
-    pub fn file_context(&self, repository: &str, path: &str) -> Option<FileContext> {
-        let key = name_policy::path_key(path);
-        let repo = self.state.repositories.get(repository)?;
-        match self.namespace_read_view() {
-            crate::engine::NamespaceReadView::AwaitingPublication => return None,
-            crate::engine::NamespaceReadView::Published(view) => {
-                let branch = self.state.branches.get(&repo.main_branch_id)?;
-                if !view.contains_entry(&repo.main_branch_id, &branch.head_commit_id, &key, None) {
-                    return None;
-                }
-            }
-            crate::engine::NamespaceReadView::Initial => {}
-        }
-        context_at_key(&self.state, repository, &key)
-    }
-
-    /// Resolve an entry already borrowed from this repository's current main
-    /// commit. The caller must not pass an entry from another snapshot. Unlike
-    /// `file_context`, this avoids looking the same entry up by path again.
-    pub fn file_context_for_current_entry<'a>(
-        &'a self,
-        repository: &str,
-        entry: &Entry,
-    ) -> Option<std::borrow::Cow<'a, FileContext>> {
-        match self.namespace_read_view() {
-            crate::engine::NamespaceReadView::AwaitingPublication => return None,
-            crate::engine::NamespaceReadView::Published(view) => {
-                let repo = self.state.repositories.get(repository)?;
-                let branch = self.state.branches.get(&repo.main_branch_id)?;
-                if !view.contains_entry(
-                    &repo.main_branch_id,
-                    &branch.head_commit_id,
-                    entry.lookup_key(),
-                    Some(entry),
-                ) {
-                    return None;
-                }
-            }
-            crate::engine::NamespaceReadView::Initial => {}
-        }
-        if let Some(context) = self
-            .state
-            .file_contexts
-            .get(&context_key_from_key(repository, entry.lookup_key()))
-        {
-            return Some(std::borrow::Cow::Borrowed(context));
-        }
-        let repo = self.state.repositories.get(repository)?;
-        (entry.kind == NamespaceEntryKind::File)
-            .then(|| std::borrow::Cow::Owned(context_for_entry(&self.state, repo, entry)))
-    }
     /// Explicitly initialize a directory's first composition identity.
     /// A new namespace need not have a named view; registration copies no data.
     pub fn initialize_directory_scope(

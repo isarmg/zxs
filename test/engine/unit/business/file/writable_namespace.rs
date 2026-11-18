@@ -279,3 +279,30 @@ fn expected_receipt(result: &OperationResult, source: &Entry) -> json_codec::Val
         "selected": false,
     })
 }
+
+#[test]
+fn file_selection_resolves_only_the_exact_current_ordinary_occurrence() {
+    for registry_published in [false, true] {
+        let (_root, engine, repo) = fixture(registry_published);
+        let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
+        let actual = tree.get("file.txt").unwrap();
+        let expected = engine.file_context(&repo.repository_id, "FILE.TXT").unwrap();
+        // The established FILE resolver continues returning the very same
+        // selected branch, node and generation for every genuine source row.
+        assert_eq!(engine.file_context_for_current_entry(&repo.repository_id, actual).as_deref(),
+            Some(&expected));
+        assert_eq!(
+            engine.context_for_visible_file(&repo.repository_id, actual).as_deref(),
+            Some(&expected),
+        );
+        assert!(engine.file_context(&repo.repository_id, "missing/file.txt").is_none());
+
+        // Even the correct current path, FILE and Version do not identify another row.
+        let mut other = actual.clone();
+        other.entry_id = new_id("entry").unwrap();
+        assert!(engine.context_for_visible_file(&repo.repository_id, &other).is_none());
+        let mut folder = actual.clone();
+        folder.kind = NamespaceEntryKind::Directory;
+        assert!(engine.context_for_visible_file(&repo.repository_id, &folder).is_none());
+    }
+}

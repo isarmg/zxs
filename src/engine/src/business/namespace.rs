@@ -2,6 +2,7 @@
 use super::*;
 use std::collections::BTreeMap;
 mod draft;
+pub(crate) mod file_context;
 mod query;
 pub(crate) mod working;
 pub(crate) mod container_name;
