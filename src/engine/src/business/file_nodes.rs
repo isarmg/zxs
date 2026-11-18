@@ -72,7 +72,24 @@ pub(crate) fn committed_name(
     let key = node.to_string();
     let file = file.to_string();
     let version = node_version(state, &file, &key)?;
-    let body = &state.versions[&version];
+    name_of_admitted_node(state, &file, node, &state.versions[&version])
+}
+
+/// Exact historical display name only. Self-contained snapshot bytes have
+/// their own issuer. This does not admit a live FILE/body, unretire a node,
+/// or authorize reading the metadata without the enclosing access check.
+pub(crate) fn recorded_name(
+    state: &State, file: storage_contract::FileId, node: storage_contract::FileNodeId,
+) -> Result<name_policy::Name> {
+    let file = file.to_string();
+    let version = retained_node_version(state, &file, &node.to_string())?;
+    name_of_admitted_node(state, &file, node, &state.versions[version])
+}
+
+fn name_of_admitted_node(
+    state: &State, file: &str, node: storage_contract::FileNodeId, body: &FileVersion,
+) -> Result<name_policy::Name> {
+    let key = node.to_string();
     let missing = || Error::new(storage_contract::ErrorCode::FileNodeNotFound,
         "selected FILE node has no proved committed logical name");
     match node {

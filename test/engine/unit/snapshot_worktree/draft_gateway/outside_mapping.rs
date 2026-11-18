@@ -67,3 +67,32 @@ fn renamed_container_cannot_change_the_committed_logical_name_of_its_old_node() 
     assert_eq!(crate::business::file_nodes::committed_name(engine.state(), file, exact).unwrap(), old_name);
     assert!(crate::business::file_nodes::committed_name(engine.state(), fixture.targets[1].file, exact).is_err());
 }
+
+#[test]
+fn projection_in_the_published_snapshot_keeps_its_own_bytes_and_original_name() {
+    use crate::snapshot_worktree::copy_source::PublishedSnapshotFile;
+    let (fixture, mut engine) = Fixture::new();
+    let outside = &fixture.targets[0];
+    let node = engine.file_draft_base(outside).unwrap().node_id();
+    let saved = PublishedSnapshotFile::capture(&engine, fixture.source, &outside.path).unwrap();
+    assert_eq!(saved.material().file_id, outside.file);
+    assert_eq!(saved.occurrence(), &outside.path);
+    assert_eq!(saved.handle(), fixture.source);
+    assert!(saved.open(&saved.address().join("child")).is_err());
+    write_draft(&mut engine, outside, fixture::FIRST_DRAFT);
+    assert!(saved.require_current(&engine).is_err());
+
+    // New authorized physical capture of the same published .zxs node. The
+    // original FILE's later shared save is not its source of bytes.
+    let existing = PublishedSnapshotFile::capture(&engine, fixture.source, &outside.path).unwrap();
+    assert!(existing.require_current(&engine).is_ok());
+    let media = fixture.media();
+    let mut bytes = Vec::new();
+    existing.open(existing.address()).unwrap().read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, fixture::FIRST_ORIGINAL);
+    assert_eq!(crate::business::file_nodes::recorded_name(engine.state(), outside.file, node)
+        .unwrap().as_str(), "first.txt");
+    assert!(PublishedSnapshotFile::capture(&engine, fixture.source,
+        &name_policy::PortablePath::parse("First.txt").unwrap()).is_err());
+    assert_eq!(fixture.media(), media);
+}

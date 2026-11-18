@@ -16,6 +16,10 @@ use std::{
 #[derive(Clone)]
 pub(crate) enum ReadSource {
     External(PathBuf),
+    PublishedSnapshotFile {
+        source: Arc<crate::snapshot_worktree::copy_source::PublishedSnapshotFile>,
+        path: PathBuf,
+    },
     VerifiedReplica(Arc<super::reads::VerifiedReplicaSource>),
     Container {
         scope: Arc<crate::container_storage::ObservedContainerReplica>,
@@ -45,6 +49,10 @@ pub(crate) enum ReadSource {
 }
 
 impl ReadSource {
+    pub(crate) fn published_snapshot_file(source: Arc<crate::snapshot_worktree::copy_source::PublishedSnapshotFile>) -> Self {
+        Self::PublishedSnapshotFile { path: source.address().to_owned(), source }
+    }
+
     pub(crate) fn external(path: impl Into<PathBuf>) -> Self {
         Self::External(path.into())
     }
@@ -132,6 +140,7 @@ impl ReadSource {
             Self::SelectedWorking { selection, index, path } => selection.open_born(*index, path),
             Self::WorkingFull { source, path } => source.open(path),
             Self::AutomaticFull { source, path } => source.open(path),
+            Self::PublishedSnapshotFile { source, path } => source.open(path),
             Self::VerifiedReplica(source) => source.open(),
             Self::Container { scope, version, path } => {
                 if path != &scope.body_path(version)? {
@@ -149,7 +158,7 @@ impl ReadSource {
 
     pub(crate) fn path(&self) -> &Path {
         match self {
-            Self::External(path) | Self::Disk { path, .. }
+            Self::PublishedSnapshotFile { path, .. } | Self::External(path) | Self::Disk { path, .. }
             | Self::VerifiedDraft { path, .. } | Self::Container { path, .. }
             | Self::AutomaticFull { path, .. } | Self::WorkingFull { path, .. } | Self::SelectedWorking { path, .. } => path,
             Self::VerifiedReplica(source) => source.path(),
@@ -160,6 +169,9 @@ impl ReadSource {
         let path = self.path().join(child);
         match self {
             Self::External(_) => Self::External(path),
+            Self::PublishedSnapshotFile { source, .. } => Self::PublishedSnapshotFile {
+                source: Arc::clone(source), path,
+            },
             // Joining is not authority over another draft or a child path.
             // The retained source's exact-path gate rejects it on open.
             Self::AutomaticFull { source, .. } => Self::AutomaticFull { source: Arc::clone(source), path },

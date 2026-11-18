@@ -283,6 +283,25 @@ impl HeldSnapshotNode {
         Ok(source)
     }
 
+    /// The absolute address is descriptive only; the independently held
+    /// node/files directory and payload inode are the actual read authority.
+    pub(crate) fn named_copy_payload(
+        &self, version: VersionId,
+    ) -> Result<(std::path::PathBuf, ReadFile), SnapshotStoreError> {
+        let payload = self.manifest.payloads().get(&version).ok_or(SnapshotStoreError::Version)?;
+        let name = layout::file(payload);
+        let files = self.node.private_entry_matching(&layout::FILES, file_identity(self.binding.files_entity))
+            .map_err(SnapshotStoreError::Directory)?;
+        let file = self.open_payload(version)?;
+        let named = files.open_read_entry(&name).map_err(SnapshotStoreError::Disk)?;
+        if FileIdentity::from_metadata(&named.metadata().map_err(SnapshotStoreError::Io)?)
+            != FileIdentity::from_metadata(&file.metadata().map_err(SnapshotStoreError::Io)?)
+        {
+            return Err(SnapshotStoreError::Repository);
+        }
+        Ok((files.path().join(name.as_path()), file))
+    }
+
     fn verify_inventory(&self) -> Result<(), SnapshotStoreError> {
         let mut required = BTreeSet::from([
             layout::MANIFEST.clone(), layout::FILES.clone(), layout::WORKTREES.clone(),
