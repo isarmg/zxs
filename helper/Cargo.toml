@@ -1,42 +1,25 @@
 [package]
-name = "storage-helper"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
+name = "local-ops-helper"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.100"
+license = "Apache-2.0"
+description = "Read-only diagnostics for explicitly selected local directories and files"
+publish = false
+
+[workspace]
+resolver = "3"
 
 [[bin]]
-name = "zxs-helper"
+name = "helper"
 path = "src/main.rs"
 
 [dependencies]
-tracing = { version = "0.1", default-features = false, features = ["fmt"], path = "../src/foundation/diagnostics/tracing" }
-authentication.workspace = true
-platform-io.workspace = true
-rustix.workspace = true
-command-line.workspace = true
-data-serialization.workspace = true
-json-codec.workspace = true
-storage-engine.workspace = true
-tokio.workspace = true
-sha2 = { version = "0.11.0", path = "../src/foundation/cryptography/sha2" }
-http-routing = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"], path = "../src/foundation/networking/http-routing" }
-
-[build-dependencies]
-sha2 = { version = "0.11.0", path = "../src/foundation/cryptography/sha2" }
+linux-raw-sys = { version = "=0.12.1", default-features = false, features = ["general", "std"] }
+rustix = { version = "=1.1.5", features = ["fs"] }
 
 [dev-dependencies]
-storage-server.workspace = true
-service-stack = { version = "0.5", features = ["util"], path = "../src/foundation/networking/service-stack" }
-tempfile.workspace = true
+tempfile = "=3.27.0"
 
-[[test]]
-name = "helper_startup"
-path = "../test/helper/startup.rs"
-
-[[test]]
-name = "independent_authority"
-path = "../test/helper/independent_authority.rs"
-
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"

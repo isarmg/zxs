@@ -1,0 +1,191 @@
+//! Path resolution is through held directories. No operation here writes or adopts a path.
+use rustix::fs::{Mode, OFlags, PROC_SUPER_MAGIC, fstatfs, open, openat, readlinkat};
+use std::ffi::OsStr;
+use std::fs::{File, Metadata};
+use std::io;
+use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+
+pub(crate) fn invalid(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub(crate) struct Entity { pub dev: u64, pub ino: u64 }
+impl Entity {
+    pub(crate) fn of(m: &Metadata) -> io::Result<Self> {
+        if m.ino() == 0 { return Err(invalid("filesystem did not supply an inode identity")); }
+        Ok(Self { dev: m.dev(), ino: m.ino() })
+    }
+}
+
+#[derive(Copy, Clone)]
+pub(crate) enum Kind { Directory, Regular }
+pub(crate) struct Pinned {
+    path: PathBuf,
+    kind: Kind,
+    fd: File,
+    chain: Vec<Entity>,
+}
+
+fn dir_flags() -> OFlags {
+    OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+}
+
+impl Pinned {
+    pub(crate) fn open(path: &Path, kind: Kind) -> io::Result<Self> {
+        let raw = path.as_os_str().as_bytes();
+        if raw.len() > 4096 || !raw.starts_with(b"/") {
+            return Err(invalid("expected an absolute path of at most 4096 bytes"));
+        }
+        let mut names = raw[1..].split(|b| *b == b'/').peekable();
+        let mut fd = File::from(open("/", dir_flags(), Mode::empty())?);
+        let mut chain = vec![Entity::of(&fd.metadata()?)?];
+        if raw == b"/" {
+            if !matches!(kind, Kind::Directory) { return Err(invalid("root is not a regular file")); }
+            return Ok(Self { path: path.to_owned(), kind, fd, chain });
+        }
+        while let Some(name) = names.next() {
+            if name.is_empty() || name == b"." || name == b".." || chain.len() > 128 {
+                return Err(invalid("empty, dot, parent or over-depth path component"));
+            }
+            let last_file = names.peek().is_none() && matches!(kind, Kind::Regular);
+            let flags = if last_file {
+                OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            } else { dir_flags() };
+            let child = File::from(openat(&fd, OsStr::from_bytes(name), flags, Mode::empty())?);
+            let meta = child.metadata()?;
+            if (last_file && !meta.is_file()) || (!last_file && !meta.is_dir()) {
+                return Err(invalid("path must have the requested type; symbolic links and special files are refused"));
+            }
+            let entity = Entity::of(&meta)?;
+            if chain.contains(&entity) { return Err(invalid("aliased ancestor in selected path")); }
+            chain.push(entity);
+            fd = child;
+        }
+        Ok(Self { path: path.to_owned(), kind, fd, chain })
+    }
+
+    pub(crate) fn entity(&self) -> Entity { *self.chain.last().expect("root and leaf are present") }
+    pub(crate) fn entity_is_visible_ancestor_of(&self, other: &Self) -> bool {
+        other.chain[..other.chain.len() - 1].contains(&self.entity())
+    }
+    pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.fd.metadata() }
+
+    pub(crate) fn require_same_path(&self) -> io::Result<()> {
+        let now = Self::open(&self.path, self.kind)?;
+        if now.chain != self.chain { return Err(invalid("selected path or parent changed during observation")); }
+        Ok(())
+    }
+
+    // Only upgrade an O_PATH handle already known to be a regular file. Opening an arbitrary
+    // pathname for reading before checking it could connect to a device or block on a FIFO.
+    fn read_regular_descriptor(&self, magic: u32) -> io::Result<File> {
+        if !matches!(self.kind, Kind::Regular) || !self.fd.metadata()?.is_file() {
+            return Err(invalid("only a held regular file may be read"));
+        }
+        let proc = open("/proc", dir_flags(), Mode::empty())?;
+        if fstatfs(&proc)?.f_type != PROC_SUPER_MAGIC {
+            return Err(invalid("a genuine procfs for this process is required"));
+        }
+        let pid = std::process::id().to_string();
+        if readlinkat(&proc, "self", Vec::new())?.as_bytes() != pid.as_bytes() {
+            return Err(invalid("procfs refers to another process namespace"));
+        }
+        let proc_pid = openat(&proc, pid.as_str(), dir_flags(), Mode::empty())?;
+        let fds = File::from(openat(&proc_pid, "fd", dir_flags(), Mode::empty())?);
+        if fstatfs(&fds)?.f_type != PROC_SUPER_MAGIC { return Err(invalid("untrusted descriptor directory")); }
+        // Even a procfs directory must belong to our descriptor table. Follow the kernel
+        // link for the directory's own held fd and compare identities before using it.
+        let myself = fds.as_raw_fd().to_string();
+        let again = File::from(openat(&fds, myself.as_str(),
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())?);
+        if Entity::of(&again.metadata()?)? != Entity::of(&fds.metadata()?)? {
+            return Err(invalid("procfs descriptor directory is not this process's"));
+        }
+        let number = self.fd.as_raw_fd().to_string();
+        let proc_link = File::from(openat(&fds, number.as_str(),
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?);
+        if !proc_link.metadata()?.file_type().is_symlink() || fstatfs(&proc_link)?.f_type != PROC_SUPER_MAGIC {
+            return Err(invalid("descriptor is not a procfs kernel link"));
+        }
+        let check = File::from(openat(&fds, number.as_str(), OFlags::PATH | OFlags::CLOEXEC, Mode::empty())?);
+        let original = check.metadata()?;
+        if !original.is_file() || Entity::of(&original)? != self.entity() || filesystem(&check)? != Some(magic) {
+            return Err(invalid("descriptor no longer selects the original regular file"));
+        }
+        let result = File::from(openat(&fds, number.as_str(),
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::NOATIME | OFlags::CLOEXEC, Mode::empty())?);
+        let observed = result.metadata()?;
+        if !observed.is_file() || Entity::of(&observed)? != self.entity() {
+            return Err(invalid("read descriptor did not resolve to the original regular file"));
+        }
+        Ok(result)
+    }
+}
+
+// S_IFREG on its own does not make a kernel/remote control endpoint a data file.
+// These are Linux UAPI values, not distro/mount-point names. Unknown means no reader.
+fn local_data<T>(magic: Option<u32>, admit: impl FnOnce(u32) -> T) -> io::Result<T> {
+    use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
+    match magic {
+        Some(kind @ (EXT4_SUPER_MAGIC | XFS_SUPER_MAGIC | BTRFS_SUPER_MAGIC | F2FS_SUPER_MAGIC)) => Ok(admit(kind)),
+        _ => Err(invalid("comparison requires ext2/3/4, XFS, Btrfs or F2FS; unsupported filesystem")),
+    }
+}
+
+fn filesystem(file: &File) -> io::Result<Option<u32>> {
+    Ok(u32::try_from(fstatfs(file)?.f_type).ok())
+}
+
+/// Only this type can upgrade an O_PATH operand to a data reader.
+pub(crate) struct LocalDataFile { pin: Pinned, magic: u32 }
+impl LocalDataFile {
+    pub(crate) fn select(path: &Path) -> io::Result<Self> {
+        let pin = Pinned::open(path, Kind::Regular)?;
+        local_data(filesystem(&pin.fd)?, |magic| Self { pin, magic })
+    }
+
+    pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.pin.metadata() }
+    pub(crate) fn require_same_path(&self) -> io::Result<()> { self.pin.require_same_path() }
+
+    pub(crate) fn reader(&self) -> io::Result<File> {
+        let reader = self.pin.read_regular_descriptor(self.magic)?;
+        if filesystem(&reader)? != Some(self.magic) {
+            return Err(invalid("read descriptor no longer belongs to the selected data filesystem"));
+        }
+        Ok(reader)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_data;
+    use linux_raw_sys::general as fs;
+    #[test]
+    fn new_directory_at_the_same_spelling_cannot_replace_a_held_observation() {
+        let area = tempfile::tempdir().unwrap();
+        let dir = area.path().join("original");
+        std::fs::create_dir(&dir).unwrap();
+        let original = super::Pinned::open(&dir, super::Kind::Directory).unwrap();
+        std::fs::rename(&dir, area.path().join("retained")).unwrap();
+        std::fs::create_dir(&dir).unwrap();
+        assert!(original.require_same_path().is_err());
+        assert_ne!(original.entity(), super::Pinned::open(&dir, super::Kind::Directory).unwrap().entity());
+    }
+    #[test]
+    fn only_known_disk_filesystems_can_issue_a_reader_even_for_a_zero_length_regular_operand() {
+        for v in [fs::EXT2_SUPER_MAGIC, fs::EXT3_SUPER_MAGIC, fs::EXT4_SUPER_MAGIC,
+                  fs::XFS_SUPER_MAGIC, fs::BTRFS_SUPER_MAGIC, fs::F2FS_SUPER_MAGIC] {
+            assert_eq!(local_data(Some(v), |kind| kind).unwrap(), v);
+        }
+        for rejected in [None, Some(0), Some(u32::MAX), Some(fs::PROC_SUPER_MAGIC), Some(fs::SYSFS_MAGIC),
+                         Some(fs::DEBUGFS_MAGIC), Some(fs::TRACEFS_MAGIC), Some(fs::TMPFS_MAGIC),
+                         Some(fs::NFS_SUPER_MAGIC), Some(fs::CIFS_SUPER_MAGIC), Some(fs::FUSE_SUPER_MAGIC),
+                         Some(fs::OVERLAYFS_SUPER_MAGIC)] {
+            assert!(local_data(rejected, |_| -> () { panic!("rejected input was admitted") }).is_err());
+        }
+    }
+}
