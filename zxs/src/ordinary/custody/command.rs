@@ -1,5 +1,5 @@
 //! First public custody transaction: one clean FILE with its actual original
-//! FULL and first INCR. Same logical name, two registered ordinary roots,
+//! FULL and zero, one or two original increments. Same logical name, two registered ordinary roots,
 //! no new FILE, node or version. Recycle is NOT an ordinary destination.
 use super::{purpose::Call,allocation::MoveAllocation,destination::Destination,finish,placed::Reopened,source::Clean,transfer::{self,Origin}};
 use crate::{EntryId,FileId,HistoryId,OperationId,VolumeId,fs::{self,invalid},ordinary::{self,Cut,journal::{Intent,Journal},wire},

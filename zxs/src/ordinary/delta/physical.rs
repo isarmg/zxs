@@ -66,8 +66,8 @@ impl Body{
         let ret=Self{parent,first,second:None};ret.require(dir)?;Ok(ret)
     }
     /// Private successor: only a node from the same actual confirmed FILE
-    /// cycle, not a hand-built Delta or an arbitrary latest node. No cold
-    /// reader or producer admits a second decision until custody supports it.
+    /// cycle, not a hand-built Delta or an arbitrary latest node. At most
+    /// two immutable children are supported by ordinary reads and custody.
     pub(in crate::ordinary) fn extend(self,at:&crate::ordinary::formal::PlacedSecond<'_>)->io::Result<Self>{
         let(dir,parent,d,object)=at.parts();self.follow(dir,parent,d,object)
     }
@@ -212,8 +212,8 @@ impl Verified{
     }
     pub(super) fn retire(mut self,dir:&HeldDir,v:&crate::pool::lease::FileVolume<'_>,bound:&Bound,d:&Delta,mut after:impl FnMut(crate::ordinary::Cut)->io::Result<()>)->io::Result<()>{
         self.require_source(dir,&d.original)?;drop(self.input.source.take());
-        // Read the actual named destination, its local map and both original
-        // authenticated indexes again, this time on the published side. Do not
+        // Read the actual named destination, its local map and every required
+        // authenticated original index again, this time on the published side. Do not
         // infer install or cleanup authority from an in-memory prepared hash.
         let reopened=crate::ordinary::formal::for_retirement(v,dir,d)?;
         reopened.write_range(0,0,io::sink())?;

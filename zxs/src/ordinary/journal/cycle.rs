@@ -67,11 +67,10 @@ impl<'a> Cycle<'a>{
         if self.edge_before(op)!=want{return Err(invalid("original formal baseline, working edge or custody changed while receiving input"));}Ok(())
     }
     pub(in crate::ordinary) fn work(&self)->&[&'a Saved]{&self.work}
-    pub(in crate::ordinary) fn clean_transportable(&self)->io::Result<(&'a Commit,Option<&'a Delta>)>{
+    pub(in crate::ordinary) fn clean_transportable(&self)->io::Result<super::Graph<'a>>{
         // Existing MOVE, DELETE and RESTORE must never send only a prefix of
         // a file's history, or silently leave an acknowledged current draft.
-        if !self.work.is_empty()||self.children.len()>1{return Err(invalid("uncommitted working cycle or unsupported retained formal graph"));}
-        Ok((self.full,self.children.first().copied()))
+        if !self.work.is_empty(){return Err(invalid("cannot transport an uncommitted working cycle"));}self.graph()
     }
     fn observe(&mut self,d:&'a Decision)->io::Result<()>{
         let id=self.birth.create.file;

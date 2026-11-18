@@ -1,4 +1,4 @@
-//! First genuine formal INCR after the original main FULL. The ordinary
+//! Two bounded genuine formal INCR generations after the first main FULL. The ordinary
 //! working editor remains separate and never implicitly calls this command.
 pub(in crate::ordinary) mod types;
 pub(in crate::ordinary) mod allocation;
@@ -41,14 +41,11 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,rev:u64)->io::
     }
     if s.moving.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.is_some()||s.editing.is_some()||
         s.incrementing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){return Err(invalid("another original FILE operation needs completion"));}
-    if s.delta(id).is_some_and(|d|d.original.op!=op){return Err(invalid("this formal producer requires the original FULL as the current parent"));}
     let c=s.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE"))?;
     let initial=s.saved(id).ok_or_else(||invalid("original FILE has no first saved revision"))?;
-    let first=s.head(id).ok_or_else(||invalid("INCR requires a real published formal parent"))?;
     let work=s.submission_input(id,op)?;let parent=work.parent();
-    // Until additional immutable packs, historical reads and custody are a
-    // single complete feature, no producer admits an incremental baseline.
-    if parent!=journal::cycle::Parent::full(first){return Err(invalid("this producer only publishes the first formal INCR"));}
+    let published=s.decided(op).map(|v|v.delta()).transpose()?;
+    s.actual_graph(id)?.working_parent(parent,published)?;
     let edge=work.last().ok_or_else(||invalid("no changed working revision to commit"))?;
     if edge.original.revision()!=rev{return Err(invalid("requested working revision is not the exact current original"));}
     let map=Map::derive(parent.length,work.rows())?;

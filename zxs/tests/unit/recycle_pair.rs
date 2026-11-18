@@ -165,3 +165,66 @@ fn a_resolved_public_action_cannot_be_replayed_on_another_new_system_before_the_
     assert_eq!(before.frontier(),after.frontier());assert!(after.moving.is_none()&&after.pending.is_none()&&after.decided(issued).is_none());
     assert!(z::recycle_receipt(&f.sys,issued,0,action(&f)).unwrap().is_none());f.all_history();other.all_history();
 }
+
+#[test]
+#[ignore="three private registered native filesystems; F0 and both immutable increments"]
+fn move_and_delete_require_even_the_part_of_i1_completely_overwritten_by_i2(){
+    use std::os::unix::fs::FileExt;
+    let f=Fixture::build(true,false);let id=f.file.file;
+    z::save_interval(&f.sys,op(),id,2,z::SpanEdit::new(0,claim(b"X"),z::LengthPolicy::Set(1)).unwrap(),Cursor::new(b"X")).unwrap();
+    let i2=z::commit_working(&f.sys,op(),id,3).unwrap();
+    let n=match &f.last.kind{z::FormalStorage::Incremental{changed,..}=>changed.bytes,_=>panic!("expected actual INCR")};assert!(n>0&&n<z::DRAFT_CHUNK as u64);
+    let path=f.old.join("name").join(format!("{}-name",f.last.storage));
+    let pack=fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
+    let at=pack.metadata().unwrap().len()-32-n;let mut original=[0];pack.read_exact_at(&mut original,at).unwrap();
+    pack.write_all_at(&[original[0]^1],at).unwrap();pack.sync_all().unwrap();
+    let mut visible=Vec::new();assert_eq!(z::read_node_to(&f.sys,id,i2.node,&mut visible).unwrap(),i2);assert_eq!(visible,b"X");
+    let place=op();let del=op();assert!(z::move_file(&f.sys,place,id,f.from,f.to,0).is_err());assert!(z::apply_recycle(&f.sys,del,0,action(&f)).is_err());
+    assert!(z::move_receipt(&f.sys,place,id,f.from,f.to,0).unwrap().is_none());assert!(z::recycle_receipt(&f.sys,del,0,action(&f)).unwrap().is_none());
+    assert!(fs::read_dir(&f.new).unwrap().next().is_none());assert_eq!(fs::read_dir(f.old.join("name")).unwrap().count(),5);
+    pack.write_all_at(&original,at).unwrap();pack.sync_all().unwrap();drop(pack);
+    assert_eq!(z::move_file(&f.sys,place,id,f.from,f.to,0).unwrap().status,MoveStatus::CompleteCheckedNow);
+    assert!(!f.old.join("name").exists()&&fs::read_dir(f.new.join("name")).unwrap().count()==5);
+    for(node,expected)in[(f.first.node,BEFORE),(f.last.node,AFTER),(i2.node,b"X".as_slice())]{
+        let mut out=Vec::new();z::read_node_to(&f.sys,id,node,&mut out).unwrap();assert_eq!(out,expected);
+    }
+}
+
+#[test]
+#[ignore="three private filesystems; original signed fifth unlink is not confirmed-empty in either transfer direction"]
+fn five_actual_roles_stop_before_the_last_unlink_and_never_adopt_a_replacement_as_the_empty_source(){
+    use crate::ordinary::custody::allocation::Progress;
+    use std::os::unix::ffi::OsStrExt;
+    for restore in [false,true]{
+        let f=Fixture::build(true,false);let id=f.file.file;
+        z::save_interval(&f.sys,op(),id,2,z::SpanEdit::new(1,claim(b"X"),z::LengthPolicy::KeepOrGrow).unwrap(),Cursor::new(b"X")).unwrap();
+        let i2=z::commit_working(&f.sys,op(),id,3).unwrap();let mut wanted=AFTER.to_vec();wanted[1]=b'X';
+        let(call,epoch)=if restore{(reclaim(keep(&f,op()),RestoreTarget::Volume(f.to)),1)}else{(action(&f),0)};
+        let operation=op();let mut issued=0;
+        assert!(recycle::apply(&f.sys,operation,epoch,call,&mut|step|{
+            if step==Cut::MoveEraseFlagBeforeSync{issued+=1;if issued==5{return Err(io::Error::other("last original leaf permitted, not empty"));}}Ok(())
+        }).is_err());assert_eq!(issued,5);
+        let source=if restore{z::inspect(&f.sys).unwrap().volumes.into_iter().find(|v|v.volume.role==z::Role::Recycle).unwrap().volume.path}else{f.old.clone()};
+        let q={let(_,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let(m,a)=s.confirmed_handoff(operation).unwrap();
+            assert_eq!(a.progress(),Progress::leaf(4).unwrap());assert_ne!(a.progress(),Progress::EMPTY);
+            assert_eq!(m.original.role_count(),5);assert_eq!(m.target.children.len(),2);
+            source.join(std::ffi::OsStr::from_bytes(m.original.quarantine_name().to_bytes()))};
+        assert_eq!(fs::read_dir(&q).unwrap().count(),1);let actual=q.join("FILE");let same=fs::read(&actual).unwrap();
+        let away=source.parent().unwrap().join("held-real-fifth-role");fs::rename(&actual,&away).unwrap();
+        fs::write(&actual,&same).unwrap();let original=fs::metadata(&away).unwrap();
+        fs::set_permissions(&actual,original.permissions()).unwrap();
+        let wrong=fs::metadata(&actual).unwrap().ino();assert_ne!(wrong,original.ino());
+        assert!(z::apply_recycle(&f.sys,operation,epoch,call).is_err());
+        assert_eq!(fs::metadata(&actual).unwrap().ino(),wrong);assert_eq!(fs::read(&actual).unwrap(),same);assert!(away.exists());
+        let still=receipt(&f,operation,epoch,call);assert_eq!(still.status,MoveStatus::TargetReopenedSourcePending);
+        fs::rename(&actual,source.parent().unwrap().join("unclaimed-substitute")).unwrap();fs::rename(&away,&actual).unwrap();
+        assert_eq!(z::apply_recycle(&f.sys,operation,epoch,call).unwrap().status,MoveStatus::CompleteCheckedNow);assert!(!q.exists());
+        if !restore{
+            let key=receipt(&f,operation,epoch,call).deletion.unwrap();
+            z::apply_recycle(&f.sys,op(),1,reclaim(key,RestoreTarget::Volume(f.to))).unwrap();
+        }
+        for(node,expected)in[(f.first.node,BEFORE),(f.last.node,AFTER),(i2.node,wanted.as_slice())]{
+            let mut out=Vec::new();z::read_node_to(&f.sys,id,node,&mut out).unwrap();assert_eq!(out,expected);
+        }
+    }
+}

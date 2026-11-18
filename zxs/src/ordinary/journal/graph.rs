@@ -28,6 +28,19 @@ impl<'a> Graph<'a>{
     pub(in crate::ordinary) fn tip(self)->Parent{match self.children{
         ChildRoles::None=>Parent::full(self.full),ChildRoles::One(d)|ChildRoles::Two(_,d)=>Parent::incremental(d),
     }}
+    /// Only F0 and its first confirmed child may be the parent of a new
+    /// working cycle. A complete-but-unconfirmed original is not a child
+    /// here. A still-open, already published submission must match the exact
+    /// next original at this tip, not somebody else's last node/receipt.
+    pub(in crate::ordinary) fn working_parent(self,want:Parent,published:Option<&Delta>)->io::Result<()>{
+        let selected=self.through(want.node)?;let i=selected.children.len();
+        if selected.tip()!=want||i>=2{return Err(invalid("unsupported or different original working parent"));}
+        let ok=match published{
+            None=>i==self.children.len(),
+            Some(d)=>self.children.len()==i+1&&self.children.ordinal(i).copied()==Some(d)&&want.precedes(d),
+        };
+        if !ok{return Err(invalid("original working cycle is not adjacent to the current confirmed frontier"));}Ok(())
+    }
     pub(in crate::ordinary) fn through(self,node:NodeId)->io::Result<Self>{
         let selected=if node==self.full.original.node{ChildRoles::None}
         else if let Some(n)=self.children.first().copied().filter(|d|d.original.node==node){ChildRoles::One(n)}

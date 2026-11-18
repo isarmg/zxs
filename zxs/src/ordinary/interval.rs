@@ -36,9 +36,9 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,revision:u64,e
     if s.moving.is_some()||s.incrementing.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.is_some()||s.editing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
         return Err(invalid("different original FILE operation needs completion"));
     }
-    if s.delta(id).is_some(){return Err(invalid("this working editor does not yet support a formal INCR base"));}
     let c=s.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published FILE"))?;
-    let work=s.active_work(id)?;let prior=work.rows().rev().find(|e|e.original.op!=op);
+    let work=s.active_work(id)?;s.actual_graph(id)?.working_parent(work.parent(),None)?;
+    let prior=work.rows().rev().find(|e|e.original.op!=op);
     let o=Original::select(op,fs::local_uid(),s.placement(id)?,work.parent(),prior,revision,edit)?;
     if s.editing.as_ref().is_some_and(|a|a.original!=o){return Err(invalid("original interval base differs"));}
     if s.editing.is_none(){s.room_for(super::wire::MAX_FRAME)?;}

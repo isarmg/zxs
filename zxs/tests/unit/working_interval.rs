@@ -168,6 +168,38 @@ fn four_kib_overwrite_on_a_real_hundred_gib_formal_file_uses_only_one_changed_ex
     assert_eq!(osfs::metadata(&raw).unwrap().ino(),original.ino());
     let mut published=Vec::new();crate::read_node_range_to(&system,file,next.node,at,4097,&mut published).unwrap();
     assert_eq!(published,bytes);for old in [op,b,c]{assert!(!root.join(format!("working-{old}")).exists());}
+
+    // On I1, not on the original F0, keep I1's first 'p', overwrite its
+    // middle 'Bp', and truncate away its later bytes and all of F0's tail.
+    // The second SAVE grows the same working revision back to 100 GiB.
+    let first_i1_edit=OperationId::new().unwrap();let second_i1_edit=OperationId::new().unwrap();
+    let shortened=save_interval(&system,first_i1_edit,file,4,edit(at+1,b"XY",LengthPolicy::Set(at+5)),Cursor::new(b"XY")).unwrap();
+    assert_eq!((shortened.base_node,shortened.base_version,shortened.revision,shortened.logical_bytes),(next.node,next.version,5,at+5));
+    let expanded=save_interval(&system,second_i1_edit,file,5,edit(total-2,b"Z",LengthPolicy::Set(total)),Cursor::new(b"Z")).unwrap();
+    assert_eq!((expanded.base_node,expanded.base_version,expanded.revision,expanded.logical_bytes),(next.node,next.version,6,total));
+    for o in [first_i1_edit,second_i1_edit]{assert!(osfs::metadata(root.join(format!("working-{o}"))).unwrap().len()<8192);}
+    let mut work=Vec::new();read_current_range_to(&system,file,at,7,&mut work).unwrap();assert_eq!(work,b"pXYpp\0\0");
+    let i2=crate::commit_working(&system,OperationId::new().unwrap(),file,6).unwrap();
+    assert_eq!(i2.kind,crate::FormalStorage::Incremental{parent:next.node,parent_version:next.version,changed:claim(b"XYZ")});
+    assert_eq!((i2.created_from_save,i2.body.bytes),(second_i1_edit,total));
+    let key=|m:&osfs::Metadata|(m.dev(),m.ino(),m.len(),m.blocks());
+    assert_eq!(key(&osfs::metadata(&raw).unwrap()),key(&original));
+    let i1_pack=root.join(format!("{}-large",next.storage));
+    assert_eq!(key(&osfs::metadata(&i1_pack).unwrap()),key(&actual));
+    let i2_pack=osfs::File::open(root.join(format!("{}-large",i2.storage))).unwrap();
+    let m=i2_pack.metadata().unwrap();assert_ne!(m.ino(),actual.ino());assert_ne!(m.ino(),original.ino());
+    assert!(m.len()>=35&&m.len()<8192&&m.blocks()*512<total/1024);
+    // One original dense block and its 32-byte terminal index entry. Assert
+    // the three actual stored bytes as well as the published claim above.
+    let mut dense=[0;3];i2_pack.read_exact_at(&mut dense,m.len()-32-3).unwrap();assert_eq!(&dense,b"XYZ");
+    assert_eq!(osfs::read_dir(&root).unwrap().count(),5);
+    for o in [first_i1_edit,second_i1_edit]{assert!(!root.join(format!("working-{o}")).exists());}
+    for (node,mid,tail) in [(base.node,b"aaaaaaa".as_slice(),b"aaaa".as_slice()),
+        (next.node,b"pBppppp".as_slice(),b"aaaa".as_slice()),(i2.node,b"pXYpp\0\0".as_slice(),b"\0\0Z\0".as_slice())]{
+        let mut got=Vec::new();crate::read_node_range_to(&system,file,node,at,7,&mut got).unwrap();assert_eq!(got,mid);
+        got.clear();crate::read_node_range_to(&system,file,node,total-4,4,&mut got).unwrap();assert_eq!(got,tail);
+    }
+    let mut current=Vec::new();read_current_range_to(&system,file,total-4,4,&mut current).unwrap();assert_eq!(current,b"\0\0Z\0");
 }
 #[test]
 #[ignore="two private native test filesystems"]

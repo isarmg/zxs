@@ -114,9 +114,14 @@ impl OriginalIndex{
         !self.formal.contains_key(&o.file)&&!self.nodes.contains_key(&o.node)&&!self.branches.contains(&o.branch)
             &&!self.versions.contains(&o.version)&&!self.storage.contains(&o.storage)
     }
+    fn formal_graph<'a>(&self,id:FileId,ds:&'a[Decision])->io::Result<Graph<'a>>{
+        let c=self.birth(id,ds)?;let f=self.formal.get(&id).and_then(|i|ds.get(*i))
+            .ok_or_else(||invalid("operation requires an original formal FULL"))?.formal()?;
+        Graph::indexed(c,f,ds,self.deltas.get(&id).map(Vec::as_slice).unwrap_or(&[]))
+    }
     fn original_span<'a>(&self,o:&span_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<Placement<'a>>{
         let place=self.placement(o.file,ds)?;
-        let w=self.work(o.file,ds)?;
+        let w=self.work(o.file,ds)?;self.formal_graph(o.file,ds)?.working_parent(w.parent(),None)?;
         if !o.matches(place,w.parent(),w.last())||!allow.file(o.volume,o.uid,place.directory().entity,&place.directory().birth,false){
             return Err(invalid("interval save is not bound to this registered FILE and original formal node"));
         }
@@ -124,20 +129,17 @@ impl OriginalIndex{
     }
     fn delta_source<'a>(&self,o:&delta_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<Placement<'a>>{
         let place=self.placement(o.file,ds)?;
-        let w=self.work(o.file,ds)?;
+        let w=self.work(o.file,ds)?;self.formal_graph(o.file,ds)?.working_parent(w.parent(),None)?;
         let last=w.last().ok_or_else(||invalid("no original saved working edge for INCR"))?;
         let map=DeltaMap::derive(w.parent().length,w.rows())?;
         o.require(place,w.parent(),last,&map)?;
-        if self.deltas.contains_key(&o.file)||self.nodes.contains_key(&o.node)||self.versions.contains(&o.version)||self.storage.contains(&o.storage)
+        if self.nodes.contains_key(&o.node)||self.versions.contains(&o.version)||self.storage.contains(&o.storage)
             ||!allow.file(o.volume,o.uid,place.directory().entity,&place.directory().birth,false){return Err(invalid("conflicting formal INCR identity or owner"));}
         Ok(place)
     }
     fn registered_source<'a>(&self,o:&MoveOrigin,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<Graph<'a>>{
         // Every input here belongs to the same already-verified prefix.
-        let before=self.placement(o.file,ds)?;let c=before.birth();
-        let f=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("handoff requires original first FULL"))?.formal()?;
-        let graph=Graph::indexed(c,f,ds,self.deltas.get(&o.file).map(Vec::as_slice).unwrap_or(&[]))?;
-        if graph.children().len()>1{return Err(invalid("second-child transport remains closed until five genuine physical leaves are supported"));}
+        let before=self.placement(o.file,ds)?;let graph=self.formal_graph(o.file,ds)?;
         if self.work(o.file,ds)?.last().is_some(){return Err(invalid("cannot hand off a dirty working chain"));}
         if self.tickets.contains(&o.ticket)||self.ops.contains(&o.ticket)||self.tickets.contains(&o.op)||self.ops.contains(&o.op){
             return Err(invalid("an original operation or custody ticket has already been used"));}
@@ -183,7 +185,7 @@ impl OriginalIndex{
                     return Err(invalid("formal INCR is not new immutable material on its original FILE volume"));}
             }
             Decision::Span(s)=>{let o=&s.original;let owner=self.original_span(o,frames,allow)?;let n=&s.material.object;
-                if self.deltas.contains_key(&o.file)||self.native.contains(&n.birth)||n.entity.device!=owner.directory().entity.device||
+                if self.native.contains(&n.birth)||n.entity.device!=owner.directory().entity.device||
                     n.birth.filesystem()!=owner.directory().birth.filesystem(){return Err(invalid("not an independent changed extent on the original FILE"));}
             }
         }
@@ -281,7 +283,7 @@ impl Journal{
                 // When an already-appended frame exactly equals this still-open
                 // original, its predecessor was checked before remember(). A fresh
                 // reservation must instead use the currently admitted FILE edge.
-                if !last{if idx.deltas.contains_key(&a.original.file){return Err(invalid("working reservation did not select the current formal HEAD"));}idx.original_span(&a.original,&ds,&allowed)?;}
+                if !last{idx.original_span(&a.original,&ds,&allowed)?;}
                 editing=Some(a);
             }else if bytes.starts_with(formal_allocation::MAGIC){
                 let a=FormalAllocation::from_bytes(pool,stamp,bytes)?;idx.original_formal(&a.original,&ds,&allowed)?;
@@ -452,8 +454,8 @@ impl Journal{
             self.ticket_used(o.op)||self.ticket_used(o.ticket){return Err(invalid("not an unused dedicated proposal at its original SYSTEM prefix"));}
         self.room_for_effect(MAX_FRAME,o.effect())?;
         let current=self.confirmed_file_cycle(o.file)?;
-        current.clean_transportable()?; // public transport remains closed for a second child
-        registered_handoff(o,reg,current.placement(),current.graph()?,self.named(o.from,&o.name).is_some(),self.named(o.to,&o.name).is_some())
+        let graph=current.clean_transportable()?; // all actual formal children; never an active dirty window
+        registered_handoff(o,reg,current.placement(),graph,self.named(o.from,&o.name).is_some(),self.named(o.to,&o.name).is_some())
     }
     /// Preflight is not an I/O permit. This is repeated from the very same
     /// writer snapshot immediately before naming the original reservation.
@@ -463,7 +465,7 @@ impl Journal{
         if self.pending.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||self.editing.is_some()||
             self.incrementing.is_some()||self.moving.is_some()||self.ticket_used(op)||from==to||c.create.volume!=from||
             !self.clean_initial_handoff(id)||self.named(to,&c.create.name).is_some(){
-            return Err(invalid("handoff needs a free original slot and operation, clean initial main FULL with optional original INCR and unoccupied registered target"));
+            return Err(invalid("handoff needs a free original slot and operation, the complete clean initial FILE history and unoccupied registered target"));
         }Ok(())
     }
     pub(in crate::ordinary) fn clean_initial_handoff(&self,id:FileId)->bool{

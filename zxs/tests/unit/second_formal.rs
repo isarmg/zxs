@@ -118,16 +118,18 @@ fn mutated_incremental_object_never_reads_from_an_old_working_extent_or_substitu
 
 #[test]
 #[ignore="two private native test filesystems"]
-fn no_mutable_base_after_incr_and_no_old_work_adopted_from_an_issued_name(){
+fn a_working_cycle_is_closed_after_the_second_increment_and_no_retired_work_is_adopted(){
     struct NeverRead;
     impl io::Read for NeverRead{
         fn read(&mut self,_:&mut[u8])->io::Result<usize>{panic!("unsupported request consumed client bytes")}
     }
     let t=Fixture::new(b"abcd");let id=t.base.file;let edit=t.edit(1,1,b"X",LengthPolicy::KeepOrGrow);
-    let finished=commit_working(&t.system,OperationId::new().unwrap(),id,2).unwrap();
+    let first=commit_working(&t.system,OperationId::new().unwrap(),id,2).unwrap();
+    let _=t.edit(2,2,b"Y",LengthPolicy::KeepOrGrow);
+    let finished=commit_working(&t.system,OperationId::new().unwrap(),id,3).unwrap();assert_ne!(finished.node,first.node);
     let new_op=OperationId::new().unwrap();
     let next=SpanEdit::new(2,claim(b"Y"),LengthPolicy::KeepOrGrow).unwrap();
-    assert!(save_interval(&t.system,new_op,id,2,next,NeverRead).is_err());
+    assert!(save_interval(&t.system,new_op,id,3,next,NeverRead).is_err());
     assert!(crate::interval_receipt(&t.system,new_op).unwrap().is_none());
     assert_eq!(current_info(&t.system,id).unwrap().head,Some(finished.clone()));
     let old_name=t.work(edit);assert!(!old_name.exists());
@@ -248,7 +250,7 @@ fn equal_working_revision_and_bytes_do_not_turn_an_old_working_edge_into_a_forma
     let now=new.edge_before(upload);assert_eq!(now.parent.node,next.node);assert_eq!(now.predecessor.op,promote);
     assert_eq!((now.predecessor.revision,now.predecessor.length),(edge.predecessor.revision,edge.predecessor.length));
     assert_ne!(now.predecessor.decision,edge.predecessor.decision);assert_ne!(now.parent.decision,edge.parent.decision);
-    assert!(new.work().is_empty());assert_eq!(new.clean_transportable().unwrap().1.unwrap().original.node,next.node);
+    assert!(new.work().is_empty());assert_eq!(new.clean_transportable().unwrap().tip().node,next.node);
     assert!(new.require_captured(upload,edge).is_err());new.require_captured(upload,now).unwrap();
     let before=s.file_cycle_at(id,cut.0,cut.1).unwrap();assert_eq!(before.edge_before(upload),edge);
     assert!(before.clean_transportable().is_err());assert!(s.file_cycle_at(id,cut.0,now.parent.decision).is_err());
@@ -419,4 +421,55 @@ fn cleanup_reads_only_its_decided_file_and_cannot_use_an_equal_sibling_directory
     }
     assert_eq!(commit_working(&t.system,op,file,2).unwrap(),original);
     let mut before=Vec::new();read_node_to(&t.system,file,t.base.node,&mut before).unwrap();assert_eq!(before,b"abc");
+}
+
+#[test]
+#[ignore="native private filesystems; original acknowledged floor vs a complete second incremental frame"]
+fn second_increment_above_floor_leaves_i1_and_only_its_own_truncation_and_extension_working_cycle(){
+    let t=Fixture::new(b"0123456789");let id=t.base.file;
+    let old=t.edit(1,2,b"AB",LengthPolicy::Set(5));let first_op=OperationId::new().unwrap();
+    let child=commit_working(&t.system,first_op,id,2).unwrap();assert!(!t.work(old).exists());
+    let middle=t.edit(2,3,b"X",LengthPolicy::KeepOrGrow);
+    let last=t.edit(3,0,b"",LengthPolicy::Set(9));let op=OperationId::new().unwrap();
+    let expected=b"01AX4\0\0\0\0";
+    assert!(commit_inner(&t.system,op,id,4,|step|if step==Cut::FrameSynced{
+        Err(io::Error::other("second child synced above original floor"))
+    }else{Ok(())}).is_err());
+    let pending={
+        let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();
+        let parent=s.actual_graph(id).unwrap().tip();assert_eq!(parent.node,child.node);
+        let w=s.active_work(id).unwrap();assert_eq!(w.parent(),parent);
+        assert_eq!(w.rows().map(|v|v.original.op).collect::<Vec<_>>(),[middle,last]);
+        let d=s.pending.as_ref().unwrap().frame.delta().unwrap();
+        assert!(s.decided(op).is_none()&&s.published_work(d).is_err());d.original.node
+    };
+    let mut out=Vec::new();assert!(read_node_to(&t.system,id,pending,&mut out).is_err());assert!(out.is_empty());
+    assert_eq!(read_current_to(&t.system,id,&mut out).unwrap().head,Some(child.clone()));assert_eq!(out,expected);
+    assert_eq!(commit_working(&t.system,first_op,id,2).unwrap(),child);assert!(t.work(middle).exists()&&t.work(last).exists());
+    assert!(commit_inner(&t.system,op,id,4,|step|if step==Cut::Decision{Err(io::Error::other("confirmed but not retired"))}else{Ok(())}).is_err());
+    {let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();assert!(s.active_work(id).unwrap().last().is_none());
+        let d=s.decided(op).unwrap().delta().unwrap();assert_eq!(d.original.node,pending);assert_eq!(d.original.parent,child.node);
+        let own=s.published_work(d).unwrap();assert_eq!(own.rows().map(|v|v.original.op).collect::<Vec<_>>(),[middle,last]);}
+    assert_eq!(commit_working(&t.system,first_op,id,2).unwrap(),child);assert!(t.work(middle).exists()&&t.work(last).exists());
+    let last_node=commit_working(&t.system,op,id,4).unwrap();assert_eq!(last_node.node,pending);
+    assert!(!t.work(middle).exists()&&!t.work(last).exists());
+    for(n,cmp)in[(t.base.node,b"0123456789".as_slice()),(child.node,b"01AB4".as_slice()),(pending,expected.as_slice())]{
+        let mut actual=Vec::new();read_node_to(&t.system,id,n,&mut actual).unwrap();assert_eq!(actual,cmp);
+    }
+}
+
+#[test]
+#[ignore="native original indexes; an all-overwritten second submission may skip old data but never assume a healthy old index"]
+fn second_increment_rejects_a_damaged_original_i1_index_even_if_its_complete_parent_is_truncated_away(){
+    let t=Fixture::new(b"old money");let id=t.base.file;t.edit(1,4,b"other",LengthPolicy::KeepOrGrow);
+    let child=commit_working(&t.system,OperationId::new().unwrap(),id,2).unwrap();
+    let w=t.edit(2,0,b"",LengthPolicy::Set(0));let submit=OperationId::new().unwrap();
+    let pack=osfs::OpenOptions::new().read(true).write(true).open(t.native(&child)).unwrap();
+    let pos=pack.metadata().unwrap().len()-1;let mut b=[0];pack.read_exact_at(&mut b,pos).unwrap();
+    pack.write_all_at(&[b[0]^1],pos).unwrap();pack.sync_all().unwrap();
+    let before=osfs::read_dir(t.data.join("original")).unwrap().count();
+    assert!(commit_working(&t.system,submit,id,3).is_err());assert!(formal_receipt(&t.system,submit).unwrap().is_none());
+    assert_eq!(osfs::read_dir(t.data.join("original")).unwrap().count(),before);assert!(t.work(w).exists());
+    pack.write_all_at(&b,pos).unwrap();pack.sync_all().unwrap();let child2=commit_working(&t.system,submit,id,3).unwrap();
+    let mut out=Vec::new();assert_eq!(read_node_to(&t.system,id,child2.node,&mut out).unwrap(),child2);assert!(out.is_empty());
 }
