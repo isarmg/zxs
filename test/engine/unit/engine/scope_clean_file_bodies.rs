@@ -62,3 +62,44 @@ fn full_body_table_requires_complete_named_versions_and_original_inodes() {
     assert!(bodies.recheck(&rows).is_err());
     assert!(complete.require(ctx.config, &parents).is_err());
 }
+
+#[test]
+fn real_unborn_birth_requires_its_file_and_existing_empty_history_directory() {
+    use storage_contract::file_draft::BirthRequest;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = Config::development([(name_policy::Name::parse("Primary").unwrap(), tmp.path().join("disk"))]).unwrap();
+    let slot = config.disks[0].slot_id.clone();
+    let mut engine = Engine::initialize(&tmp.path().join("system"), config).unwrap();
+    let actor = "alice".parse().unwrap();
+    let repo = engine.create_disk_root(&slot, "alice", OperationId::generate().unwrap()).unwrap();
+    let birth = OperationId::generate().unwrap();
+    let request = BirthRequest {
+        repository: repo.repository_id.parse().unwrap(),
+        path: name_policy::PortablePath::parse("not-a-version").unwrap(),
+        expected_namespace_head: engine.state().branches[&repo.main_branch_id].head_commit_id.parse().unwrap(),
+    };
+    engine.create_unborn_file(&request, &actor, birth).unwrap();
+    let ctx = engine.planning_context();
+    let (&file, native) = ctx.state.file_containers.iter().find(|(_, r)| r.created_by == birth).unwrap();
+    assert!(native.working.unborn().is_some());
+    let disk = &ctx.config.disks[0];
+    let rows = ResidentFileRows::current(&ctx, disk, file).unwrap();
+    let projection = crate::state_projection::ProjectionSnapshot::new(ctx.state);
+    assert!(rows.clean_full_bodies(&ctx, projection.view()).is_err());
+    let body = rows.resident_bodies(&ctx, projection.view()).unwrap();
+    assert_eq!(body.pages().entries(), 0);
+    let parents = crate::engine::scope_closure::directory::OrdinaryDirectories::original(&ctx, disk).unwrap();
+    let all = super::super::census::ResidentFiles::original(&ctx, disk, &parents).unwrap();
+    let mut inventory = OrdinalBuilder::new(1);
+    all.append_to(&mut inventory).unwrap();
+    let actual = inventory.into_occurrences().unwrap();
+    assert_eq!(actual.len(), 1);
+    assert_eq!(actual[0]["operation_id"], json_codec::to_value(birth).unwrap());
+    assert_eq!(actual[0]["object"]["material"], json_codec::to_value(body.material(&rows).unwrap()).unwrap());
+    // A real admitted empty history is not "any bytes whose name we don't understand".
+    let unknown = body.version_dir.path().join("unowned");
+    std::fs::write(&unknown, b"keep this").unwrap();
+    assert!(all.require(ctx.config, &parents).is_err());
+    assert!(rows.resident_bodies(&ctx, projection.view()).is_err());
+    assert_eq!(std::fs::read(unknown).unwrap(), b"keep this");
+}

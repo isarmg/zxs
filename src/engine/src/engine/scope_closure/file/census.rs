@@ -1,8 +1,9 @@
 //! Closed positive case: all registered FILEs on this holder are current,
-//! ordinary, originally born here, and each has a complete clean body set.
+//! ordinary, originally created here, and each has complete clean FULLs or
+//! its original explicitly empty Unborn working material.
 //! Missing or unsupported occurrences fail the entire FILE section. A partial
 //! read can never represent the collection, even when its route map is empty.
-use super::{ResidentFileRows, clean_bodies::CleanFileBodies};
+use super::{ResidentFileRows, clean_bodies::ResidentFileBodies};
 use crate::{DiskConfig, Result, ValidatedConfig, disk::DiskHandle, engine::{PlanningContext, fresh_layout}};
 use crate::engine::scope_closure::{OrdinalBuilder, ScopeClosureError as Failure, directory::OrdinaryDirectories,
     inventory::row::{InventoryRow, Lifecycle, Location, Ownership}, schema::Material};
@@ -21,7 +22,7 @@ fn require(ok: bool) -> Result<()> { if ok { Ok(()) } else { Err(reject()) } }
 enum Object<'a> { FileContainer { file_id: FileId, material: &'a Material<FileId> } }
 
 struct Occurrence {
-    rows: ResidentFileRows, bodies: CleanFileBodies, material: Material<FileId>,
+    rows: ResidentFileRows, bodies: ResidentFileBodies, material: Material<FileId>,
     parent: DirectoryId, name: LookupName, entity: LocalEntityIdentity, creation: OperationId,
 }
 pub(in crate::engine) struct ResidentFiles {
@@ -64,7 +65,7 @@ impl ResidentFiles {
                 && Arc::ptr_eq(rows.holder.disk(), &root))?;
             let entity = LocalEntityIdentity::new(occurrence.entity.device(), occurrence.entity.inode());
             parents.require_file_entry(parent, &record.namespace.name, &rows.holder, entity)?;
-            let bodies = rows.clean_full_bodies(ctx, projection.view())?;
+            let bodies = rows.resident_bodies(ctx, projection.view())?;
             let material = bodies.material(&rows)?;
             total = total.checked_add(rows.image.bytes().len()).and_then(|n| n.checked_add(bodies.pages().bytes()))
                 .filter(|n| *n <= PACKAGE).ok_or(Failure::Budget)?;

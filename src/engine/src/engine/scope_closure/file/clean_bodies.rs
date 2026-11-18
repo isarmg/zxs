@@ -1,6 +1,6 @@
-//! Narrow positive case: one clean, born FILE, all its native stored versions
-//! available and selected on this exact registration. No dirty/Unborn body,
-//! missing replica, migration or terminal occurrence is classified here.
+//! Complete historical FULL occurrences on the actual original registration.
+//! The independent working-state predicate also admits a real, explicitly
+//! empty Unborn, not a fabricated zero-byte historical version.
 use super::*;
 use crate::{ContentState, FileVersion, disk::DiskRoot, file_stamp::FileStamp, persist::layout};
 use crate::engine::scope_closure::{OrdinalBuilder, OrdinalPages};
@@ -21,7 +21,7 @@ enum Body<'a> {
     },
 }
 struct Leaf { name: EntryName, stamp: FileStamp, held: crate::ReadFile }
-pub(in crate::engine) struct CleanFileBodies {
+pub(in crate::engine) struct ResidentFileBodies {
     pages: OrdinalPages,
     version_dir: DiskRoot,
     dir_entity: FileIdentity,
@@ -47,9 +47,15 @@ fn clean(working: &FileWorkingState) -> bool {
     matches!(working, FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. })
 }
 impl ResidentFileRows {
-    /// This is not a default no-body path: unsupported cases return an error.
+    /// This narrower request expressly requires historical FULLs and no draft.
     pub(in crate::engine) fn clean_full_bodies(&self, context: &PlanningContext<'_>,
-        projection: crate::state_projection::StateProjection<'_>) -> Result<CleanFileBodies> {
+        projection: crate::state_projection::StateProjection<'_>) -> Result<ResidentFileBodies> {
+        if !clean(&self.image.working) { return Err(rejected()); }
+        self.resident_bodies(context, projection)
+    }
+
+    pub(in crate::engine) fn resident_bodies(&self, context: &PlanningContext<'_>,
+        projection: crate::state_projection::StateProjection<'_>) -> Result<ResidentFileBodies> {
         // One shared owner-indexed projection can be reused across all FILEs.
         if !std::ptr::eq(context.state.as_ref(), projection.state()) { return Err(rejected()); }
         self.image.require_rows(projection)?;
@@ -59,8 +65,24 @@ impl ResidentFileRows {
         let disk: DiskId = self.registration.disk_id.parse()?;
         if context.config.storage_roots.get(&disk).is_none_or(|r| r.registration != self.registration)
             || file.replicas.get(&disk) != Some(&self.replica) || file.history_tree_id != image.history
-            || file.working != image.working || !clean(&file.working) || image.versions.is_empty()
+            || file.working != image.working
         { return Err(rejected()); }
+        match &image.working {
+            FileWorkingState::Automatic { .. } | FileWorkingState::ManualClean { .. }
+                if !image.versions.is_empty() => {}
+            FileWorkingState::Unborn { working } if
+                matches!(working.body(), storage_contract::file_draft::UnbornBody::Empty {})
+                && image.versions.is_empty() && working.logical_size() == 0 => {
+                // Opened from this owner's actual birth record and namespace.
+                // validate_current_record checks its original operation and
+                // still-live stable FILE/entry; the physical source checks its
+                // held Unborn material. Neither a missing row nor ENOENT can
+                // select this case. The actual versions directory must exist.
+                crate::business::file_draft::unborn::validate_current_record(context.state,image.file,file)?;
+                self.holder.container()?;
+            }
+            _ => return Err(rejected()),
+        }
         // Keep every original FD until the consumer finishes the decision or
         // abandons it. Never substitute rapid inode reuse for an original.
         let permits = image.versions.len().checked_add(1).ok_or(Failure::Budget)?;
@@ -91,7 +113,7 @@ impl ResidentFileRows {
                 content_hash: version.content_hash })?;
             if names.insert(id, Leaf { name, stamp, held }).is_some() { return Err(rejected()); }
         }
-        let result = CleanFileBodies { pages: values.finish()?, version_dir: directory, dir_entity,
+        let result = ResidentFileBodies { pages: values.finish()?, version_dir: directory, dir_entity,
             names, image: self.representation, registration: self.registration.clone(), file: image.file,
             occurrence: self.replica.clone(), _permit: permit };
         result.recheck(self)?;
@@ -119,8 +141,8 @@ fn read_body(dir: &DiskRoot, name: &EntryName, version: &FileVersion,
     Ok((file, stamp))
 }
 
-impl CleanFileBodies {
-    /// The descriptor for just this one measured clean FILE. Installation of
+impl ResidentFileBodies {
+    /// The descriptor for this one measured FILE and selected working state. Installation of
     /// an enclosing manifest/decision is the complete graph owner's job.
     pub(in crate::engine::scope_closure) fn material(
         &self, source: &ResidentFileRows,
