@@ -1,6 +1,7 @@
 //! Strict permanent reservation/completion records. Local material never supplies them.
 pub(crate) mod historical;
 pub(crate) mod files;
+pub(crate) mod outside_selection;
 pub(crate) mod added_commit;
 pub(crate) use historical::{CommitRouting, HistoricalCommit, HistoricalFile, HistoricalReady};
 use crate::directory_worktree::ledger::{Binding as LedgerBinding, Checkpoint, EditRecord};

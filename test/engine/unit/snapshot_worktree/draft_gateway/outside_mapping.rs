@@ -152,3 +152,40 @@ fn ordinary_copy_plans_a_new_parentless_file_and_never_moves_the_snapshot_or_sou
     assert!(!engine.state().operations.contains_key(&operation));
     assert!(!engine.state().file_containers.contains_key(&target.file));
 }
+
+#[test]
+fn authenticated_selection_n1_is_not_advanced_when_the_source_file_publishes_n2() {
+    use storage_contract::file_draft::DraftCommand;
+    let (fixture, mut engine) = Fixture::new();
+    let target = &fixture.targets[0];
+    let n1 = HeldOutsideFile::capture(&engine, target).unwrap();
+    let witness = n1.witness().unwrap();
+    let encoded = json_codec::to_vec(&witness).unwrap();
+    type Witness = crate::persist::snapshot_worktree::outside_selection::OutsideSelectionWitness;
+    let decoded: Witness = json_codec::from_slice(&encoded).unwrap();
+    assert_eq!(decoded, witness); // Descriptive only. No read accepts decoded.
+    let mut invalid = json_codec::to_value(&witness).unwrap();
+    invalid["unexpected"] = json_codec::json!(true);
+    assert!(json_codec::from_value::<Witness>(invalid).is_err());
+    let mut replaced = json_codec::to_value(&witness).unwrap();
+    replaced["body"] = replaced["body_parent"].clone();
+    assert!(json_codec::from_value::<Witness>(replaced).is_err());
+    write_draft(&mut engine, target, fixture::FIRST_DRAFT);
+    let mut old = Vec::new();
+    n1.open_pinned_node(&engine).unwrap().read_to_end(&mut old).unwrap();
+    assert_eq!(old, fixture::FIRST_ORIGINAL);
+    engine.change_file_working(&DraftCommand::Commit {
+        target: target.clone(), expected: engine.file_working_state(target).unwrap().revision(),
+        base: witness.fields().selection, message: "genuine later unselected N2".into(),
+    }, &"admin".parse().unwrap(), storage_contract::OperationId::generate().unwrap()).unwrap();
+    let n2 = HeldOutsideFile::capture(&engine, target).unwrap();
+    assert_ne!(n2.facts().selection.node_id(), witness.fields().selection.node_id());
+    let media = fixture.media();
+    old.clear();
+    n1.open_pinned_node(&engine).unwrap().read_to_end(&mut old).unwrap();
+    let mut now = Vec::new();
+    n2.open_verified_for_copy(&engine).unwrap().read_to_end(&mut now).unwrap();
+    assert_eq!(old, fixture::FIRST_ORIGINAL);
+    assert_eq!(now, fixture::FIRST_DRAFT);
+    assert_eq!(fixture.media(), media);
+}

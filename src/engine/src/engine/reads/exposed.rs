@@ -123,6 +123,43 @@ impl HeldOutsideFile {
 
     pub(crate) fn facts(&self) -> &OutsideFileFacts { &self.facts }
 
+    /// The enclosing permanent mapping can record these exact source facts.
+    /// It never stores FDs or physical pathnames, and no FILE reader accepts
+    /// an unaccompanied decoded witness in place of native occurrence proof.
+    pub(crate) fn witness(&self) -> Result<crate::persist::snapshot_worktree::outside_selection::OutsideSelectionWitness> {
+        use crate::persist::snapshot_worktree::outside_selection::{OutsideSelectionFields, OutsideSelectionWitness};
+        let source = &self.facts;
+        let reg = &source.root.registration;
+        let fields = OutsideSelectionFields {
+            target: source.target.clone(), selection: source.selection, logical_name: source.logical_name.clone(),
+            history: source.history, birth: source.birth, namespace_branch: source.namespace.branch,
+            original_parent: source.namespace.parent.ordinary().ok_or(Failure::ContainerScope)?,
+            site: source.site.witness(source.target.file)?, pool: reg.pool_id.parse()?, owner: source.owner,
+            slot: name_policy::SlotId::parse(&reg.slot_id)?, owner_generation: storage_contract::Generation::new(reg.binding_generation),
+            root: source.root.root_id, root_entity: source.root.root_entity,
+            container_preparation: source.replica.preparation, container: source.replica.entity,
+            body_parent: source.body_parent, body: source.body, storage: self.version.storage_id,
+            size: self.version.logical_size, hash: self.version.content_hash,
+            version_sequence: storage_contract::Sequence::new(self.version.version_sequence),
+        };
+        OutsideSelectionWitness::checked(fields).ok_or_else(|| Failure::ContainerScope.into())
+    }
+
+    /// Warm read of exactly the immutable node that this original physical
+    /// selector saw. Advancing the current FILE/draft never advances a stored
+    /// mapping. This is still only its FILE-side operand: it does not prove a
+    /// mapping operation, current authority over the Worktree, or its revision.
+    pub(crate) fn open_pinned_node(&self, engine: &Engine) -> Result<ReadFile> {
+        let context = engine.planning_context();
+        let entity = crate::working_tree::records::file_identity(self.facts.body);
+        if !Weak::ptr_eq(&self.resources, &Arc::downgrade(context.disk_resources))
+            || FileIdentity::from_metadata(&self.body.metadata()?) != entity
+        {
+            return Err(Failure::ContainerIdentity.into());
+        }
+        read_pinned(engine, &self.witness()?)
+    }
+
     /// Enclosing writer checks this while revalidating its current session
     /// and original occurrence. No inference that an occurrence was (or was
     /// not) previously included in a permanent Worktree commit.
@@ -168,4 +205,95 @@ impl HeldOutsideFile {
         self.require_current(engine)?;
         Ok(file)
     }
+}
+
+// Private intentionally: a public-in-crate obligation cannot be discharged
+// by deserializing a witness. The warm caller above already holds the original
+// selected FILE. Cold callers need the original admitted native mapping loan.
+fn read_pinned(engine: &Engine,
+    witness: &crate::persist::snapshot_worktree::outside_selection::OutsideSelectionWitness,
+) -> Result<ReadFile> {
+    use crate::business::file_draft::ordinary::OrdinaryOccurrence;
+    use crate::business::file_nodes;
+    use crate::{BranchKind, BranchState, ContentState};
+    let f = witness.fields();
+    let context = engine.planning_context();
+    let state = context.state;
+    if context.config.generation().is_some() || context.current_namespaces.is_some()
+        || state.file_deletions.contains_key(&f.target.file.to_string())
+    {
+        return Err(Failure::WholeContainerLifecycleUnsupported.into());
+    }
+    let record = state.file_containers.get(&f.target.file).ok_or(Failure::ContainerScope)?;
+    let owner = context.namespace_host_root(f.target.repository, f.namespace_branch)?;
+    let root = owner.binding();
+    let replica = record.replicas.get(&f.owner).ok_or(Failure::ContainerScope)?;
+    if record.owner_disk != f.owner || record.history_tree_id != f.history || record.created_by != f.birth
+        || record.namespace.repository != f.target.repository || record.namespace.branch != f.namespace_branch
+        || record.namespace.entry != f.target.entry || record.namespace.parent.ordinary().is_none()
+        || record.working.unborn().is_some() || !matches!(record.site, FileSite::Created {})
+        || record.site.witness(f.target.file)? != f.site
+        || record.replicas.len() != 1 || !replica.prefixes.is_empty()
+        || replica.preparation != f.container_preparation || replica.entity != f.container || replica.root_id != f.root
+        || root.root_id != f.root || root.root_entity != f.root_entity || !root.source_chain.is_empty()
+        || root.registration.pool_id != f.pool.to_string() || root.registration.disk_id != f.owner.to_string()
+        || root.registration.slot_id != f.slot.as_str() || root.registration.binding_generation != f.owner_generation.get()
+    {
+        return Err(Failure::ContainerScope.into());
+    }
+    // The source can have a newly committed branch HEAD or a dirty current
+    // draft. Locate its true current registration independently; only the
+    // original mapped immutable node, not current visible bytes, is read.
+    let at = OrdinaryOccurrence::capture(state, f.target.file, record)?;
+    let index = engine.snapshot_receipts().map_err(crate::business::file_draft::worktree::failure)?;
+    if index.contains_nested_draft_host(f.target.repository, f.namespace_branch, &at.parents) {
+        return Err(Failure::ContainerScope.into());
+    }
+    let file = f.target.file.to_string();
+    let id = f.selection.version_id().to_string();
+    let selected = f.selection.node_id();
+    let branch = state.branches.get(&f.selection.branch_id().to_string()).ok_or(Failure::ContainerScope)?;
+    let placement = state.placements.get(&id).ok_or(Failure::ContainerScope)?;
+    if branch.branch_kind != BranchKind::File || branch.state != BranchState::Active
+        || branch.file_id.as_deref() != Some(file.as_str()) || branch.history_tree_id != f.history.to_string()
+        || state.file_branch_aliases.contains_key(&branch.branch_id)
+        || state.content_states.get(&id) != Some(&ContentState::Available)
+        || file_nodes::node_version(state, &file, &selected.to_string())? != id
+        || file_nodes::committed_name(state, f.target.file, selected)? != f.logical_name
+        || placement.target_copies != 1 || placement.primary_slot_id != f.slot.as_str()
+        || placement.route_slot_ids.as_slice() != [f.slot.as_str()]
+        || placement.binding_generations.get(f.slot.as_str()) != Some(&f.owner_generation.get())
+    {
+        return Err(Failure::ContainerScope.into());
+    }
+    let disk = owner.disk();
+    engine.with_replica(&id, |scope, material, version, lease| {
+        if version.file_id != file || version.history_tree_id != f.history.to_string()
+            || version.storage_id != f.storage || version.logical_size != f.size
+            || version.content_hash != f.hash || version.version_sequence != f.version_sequence.get()
+            || !Arc::ptr_eq(context.disk_resources.get(disk)?, scope.disk())
+        {
+            return Err(Failure::ContainerScope.into());
+        }
+        let _permit = crate::engine::payload_proof_budget().reserve(3).ok_or(Failure::ContainerBudget)?;
+        let held = scope.container()?;
+        let directory = held.path().join(crate::persist::layout::VERSIONS.as_path());
+        let parent = crate::working_tree::records::file_identity(f.body_parent);
+        if held.directory_identity(&directory)? != parent { return Err(Failure::ContainerIdentity.into()); }
+        let versions = held.private_child_matching(&directory, parent)?;
+        let expected = material.body_path()?;
+        if expected.parent() != Some(directory.as_path()) { return Err(Failure::ContainerScope.into()); }
+        let leaf = EntryName::new(expected.file_name().ok_or(Failure::ContainerScope)?)
+            .map_err(|_| Failure::ContainerScope)?;
+        let mut actual = super::verify_read_payload(material, version, lease)?;
+        let named = versions.open_read_entry(&leaf)?;
+        let entity = crate::working_tree::records::file_identity(f.body);
+        if FileIdentity::from_metadata(&actual.metadata()?) != entity || FileIdentity::from_metadata(&named.metadata()?) != entity
+            || held.directory_identity(&directory)? != parent
+        {
+            return Err(Failure::ContainerIdentity.into());
+        }
+        actual.seek(SeekFrom::Start(0))?;
+        Ok(ReadFile::in_container(actual, Arc::clone(scope)))
+    })
 }
