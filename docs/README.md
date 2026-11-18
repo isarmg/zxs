@@ -4,6 +4,8 @@
 
 文档只维护当前使用、设计、开发、验证和发行所需的说明。历史改进过程、评审报告、单次测试结果和发布日志不在此重复保存；提交历史、CI 产物及 GitHub Release 承担相应查询用途。维护文档以中文为主。
 
+**先看[文件容器的使用边界与验证状态](file-only-migration.md)。** 普通目录是路径，文件才有自己的容器和历史。旧章节或设计记录中提到的目录初始化、暂存与提交、目录分支、Worktree 或整树拆分，不是当前产品入口，也不是兼容操作。[目标磁盘布局](file-only-migration.md#disk-target)区分 FILE 容器与系统盘，并说明回收盘、备份和跨盘 MOVE 的边界；较早的盘格式图不是新池部署说明。
+
 ## 使用与运维
 
 - [快速开始](getting-started.md)：构建和启动服务。
@@ -20,7 +22,7 @@
 | 一致性与安全 | [事务恢复](10-transactions-and-recovery.md)、[写入](11-write-semantics.md)、[读取](12-reading-and-cache.md)、[保留删除](13-retention-and-deletion.md)、[权限](14-security-and-permissions.md) |
 | 接口与维护 | [API 与错误](15-api-and-errors.md)、[客户端](16-client-interfaces.md)、[生命周期](17-lifecycle-and-maintenance.md)、[故障处理](18-failure-handling.md)、[容量与性能](19-capacity-and-performance.md) |
 
-[专题设计](design/README.md)和[设计取舍](adr/README.md)解释当前规则；文件版本历史属于产品功能，不是项目改进记录。
+[专题设计](design/README.md)和[设计取舍](adr/README.md)保留实现依据和决策沿革；涉及已退役目录功能的段落仅供追溯。文件版本历史属于产品功能，不是项目改进记录。
 
 ## 开发与验证
 
