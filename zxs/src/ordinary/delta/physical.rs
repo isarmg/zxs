@@ -68,14 +68,19 @@ impl Body{
     /// Private successor: only a node from the same actual confirmed FILE
     /// cycle, not a hand-built Delta or an arbitrary latest node. No cold
     /// reader or producer admits a second decision until custody supports it.
-    pub(in crate::ordinary) fn extend(mut self,at:&crate::ordinary::formal::PlacedSecond<'_>)->io::Result<Self>{
-        let(dir,parent,d,object)=at.parts();
+    pub(in crate::ordinary) fn extend(self,at:&crate::ordinary::formal::PlacedSecond<'_>)->io::Result<Self>{
+        let(dir,parent,d,object)=at.parts();self.follow(dir,parent,d,object)
+    }
+    pub(in crate::ordinary) fn extend_frozen(self,at:&crate::ordinary::custody::FrozenSecond<'_>)->io::Result<Self>{
+        let(dir,parent,d,object)=at.parts();self.follow(dir,parent,d,object)
+    }
+    fn follow(mut self,dir:&HeldDir,parent:crate::ordinary::journal::cycle::Parent,d:&Delta,object:&NativeObject)->io::Result<Self>{
         if self.second.is_some()||self.first.key!=parent||!parent.precedes(d){return Err(invalid("wrong physical INCR parent; never skip a formal edge"));}
         self.require(dir)?;let child=Held::at_original(dir,d,object)?;self.second=Some(child);self.require(dir)?;Ok(self)
     }
     fn top(&self)->&Held{self.second.as_ref().unwrap_or(&self.first)}
-    pub(in crate::ordinary) fn single_pack(&self)->io::Result<&PinnedRegular>{
-        if self.second.is_some(){return Err(invalid("a one-INCR handoff cannot omit a retained formal pack"));}Ok(&self.first.pin)
+    pub(in crate::ordinary) fn pack_of(&self,wanted:crate::ordinary::journal::cycle::Parent)->io::Result<&PinnedRegular>{
+        let tip=self.top();if tip.key!=wanted{return Err(invalid("wrong retained pack ordinal"));}Ok(&tip.pin)
     }
     pub(in crate::ordinary) fn unchanged(&self)->io::Result<()>{
         self.parent.unchanged()?;self.first.pin.unchanged()?;if let Some(n)=&self.second{n.pin.unchanged()?;}Ok(())

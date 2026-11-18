@@ -96,7 +96,7 @@ fn move_frame_keeps_the_original_file_history_requires_every_distinct_role_and_e
     let m=Moved::seal(t.src.pool(),n+1,prev,original.clone(),[7;32],None,sites.clone()).unwrap();
     let round=Moved::read(t.src.pool(),&m.bytes,wire::envelope(t.src.pool(),&m.bytes).unwrap()).unwrap();
     assert_eq!(m,round);round.require_history(c,f,d).unwrap();
-    assert!(round.require_history(c,f,None).is_err());
+    assert!(round.require_history(c,f,crate::ordinary::custody::transfer::ChildRoles::None).is_err());
     let mut other=round.clone();other.original.entry=crate::EntryId::new().unwrap();assert!(other.require_history(c,f,d).is_err());
     let mut other=round.clone();other.target.raw=other.target.node.clone();assert!(other.require_history(c,f,d).is_err());
     let mut other=round.clone();other.original.parent=[1;32];assert!(other.require_history(c,f,d).is_err());

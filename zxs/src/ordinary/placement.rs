@@ -1,8 +1,8 @@
 //! A FILE birth and its *current native owner at one original prefix*.
 //! The constructor is fed only by the authenticated journal index. The MOVE
 //! never rewrites an original FILE decision; a later SAVE never amends MOVE.
-use super::{custody::{purpose::Purpose,transfer::{ChildRoles,Moved,Origin,Sites}},delta::{types::Delta,physical::Body},
-    formal::{types::Commit,physical::HistoryBody},wire::{Frame,NativeObject},material};
+use super::{custody::{purpose::Purpose,transfer::{ChildRoles,Children,Moved,Origin,Sites}},
+    formal::{types::Commit,physical::HistoryBody},journal::Graph,wire::{Frame,NativeObject},material};
 use crate::{VolumeId,fs::{HeldDir,invalid,stream::PinnedRegular}};
 use std::io;
 
@@ -48,27 +48,28 @@ impl<'a> Placement<'a>{
     /// Every leaf at this exact *source*. If an earlier transfer included
     /// a child, it is its destination leaf; a child authored later must be
     /// the FILE's actual newly published INCR on this active volume instead.
-    pub(super) fn sites(self,f:&Commit,d:Option<&Delta>)->io::Result<Sites>{
-        let c=self.birth;
-        if c.seq>=f.seq||f.original.file!=c.create.file||f.original.creation!=c.digest||
-            d.is_some_and(|n|n.seq<=f.seq||n.original.file!=c.create.file||n.original.creation!=c.digest||n.original.parent_decision!=f.digest){
-            return Err(invalid("source role set does not belong to the FILE's original FULL and child"));
-        }
-        let Some(m)=self.applied else{
-            if f.original.volume!=self.volume()||d.is_some_and(|x|x.original.volume!=self.volume()){
-                return Err(invalid("incorrect source volume for original formal material"));}
-            return Ok(Sites::birthplace(c,f,d))
+    pub(super) fn sites(self,f:&'a Commit,d:Children<'a>)->io::Result<Sites>{
+        self.graph_sites(Graph::from_roles(self.birth,f,d)?)
+    }
+    /// Return *all* retained native objects of this prefix, not just the
+    /// latest edited version. The caller cannot hide a role transported by
+    /// a preceding decision or give a later native child that old ticket.
+    pub(in crate::ordinary) fn graph_sites(self,g:Graph<'a>)->io::Result<Sites>{
+        let c=self.birth;let f=g.full();if c.seq>=f.seq||f.original.file!=c.create.file||f.original.creation!=c.digest{
+            return Err(invalid("wrong original FILE/FULL at custody prefix"));}
+        let mut sites=if let Some(m)=self.applied{
+            if m.original.parent!=f.digest||f.seq>=m.seq||m.original.children.len()>g.children().len()||
+                m.original.children.len()!=m.target.children.len(){return Err(invalid("cannot drop a frozen source role or substitute its original FULL"));}
+            m.target.clone()
+        }else{
+            if f.original.volume!=self.volume(){return Err(invalid("wrong original FULL birthplace"));}
+            Sites::birthplace(c,f,ChildRoles::None)
         };
-        if m.original.parent!=f.digest||f.seq>=m.seq{return Err(invalid("wrong FULL at prior custody boundary"));}
-        if m.original.children.second().is_some()||m.target.children.second().is_some(){return Err(invalid("single-child placement cannot attest a larger original handoff"));}
-        let mut sites=m.target.clone();
-        match(m.original.children.first().copied(),m.target.children.first(),d){
-            (Some(hash),Some(_),Some(n)) if n.digest==hash&&n.seq<m.seq=>{},
-            (None,None,None)=>{},
-            (None,None,Some(n)) if n.seq>m.seq&&self.retained().is_none()&&n.original.volume==self.volume()=>{
-                sites.children=ChildRoles::One(n.material.object.clone());},
-            _=>return Err(invalid("missing, extra or unrelated INCR at original custody frontier"))
-        }sites.check(&m.original.dst_root)?;Ok(sites)
+        sites.children=match g.children(){
+            ChildRoles::None=>ChildRoles::None,ChildRoles::One(_)=>ChildRoles::One(self.child_at(g,0)?.clone()),
+            ChildRoles::Two(..)=>ChildRoles::Two(self.child_at(g,0)?.clone(),self.child_at(g,1)?.clone()),
+        };
+        if let Some(m)=self.applied{sites.check(&m.original.dst_root)?;}Ok(sites)
     }
     pub(super) fn directory(self)->&'a NativeObject{self.applied.map_or(&self.birth.create.directory,|m|&m.target.directory)}
     pub(in crate::ordinary) fn local(self)->&'a NativeObject{self.applied.map_or(&self.birth.create.local,|m|&m.target.local)}
@@ -91,7 +92,11 @@ impl<'a> Placement<'a>{
     /// carries only its frozen prefix; later local children use their own
     /// named birth. No lookup by current FILE name or content can add roles.
     pub(in crate::ordinary) fn active_child(self,g:super::journal::Graph<'a>,i:usize)->io::Result<&'a NativeObject>{
-        if self.retained().is_some()||g.full().original.file!=self.birth.create.file||g.full().original.creation!=self.birth.digest{
+        if self.retained().is_some(){return Err(invalid("retained FILE is not an ordinary serving site"));}
+        self.child_at(g,i)
+    }
+    fn child_at(self,g:Graph<'a>,i:usize)->io::Result<&'a NativeObject>{
+        if g.full().original.file!=self.birth.create.file||g.full().original.creation!=self.birth.digest{
             return Err(invalid("not this active FILE's original graph"));}
         let ds=g.children();let d=match i{0=>ds.first(),1=>ds.second(),_=>None}
             .copied().ok_or_else(||invalid("missing exact ordinal of the selected original child"))?;
@@ -106,23 +111,7 @@ impl<'a> Placement<'a>{
             }
             if d.seq==m.seq||i<roots.len(){return Err(invalid("later formal child conflicts with a frozen transfer role"));}
         }
-        if d.original.volume!=self.volume(){return Err(invalid("later child was not authored on the actual active FILE owner"));}
+        if self.retained().is_some()||d.original.volume!=self.volume(){return Err(invalid("later child was not authored on the actual active FILE owner"));}
         Ok(&d.material.object)
-    }
-    pub(super) fn incremental(self,dir:&HeldDir,parent:HistoryBody,d:&Delta)->io::Result<Body>{
-        if self.retained().is_some()||d.original.file!=self.birth.create.file||d.original.creation!=self.birth.digest{
-            return Err(invalid("incremental node is not this FILE's original child"));
-        }
-        match self.applied{
-            None if d.original.volume==self.volume()=>Body::open(dir,parent,d),
-            Some(m) if m.original.children.first()==Some(&d.digest)&&d.seq<m.seq&&
-                (m.original.purpose!=Purpose::Ordinary||d.original.volume==m.original.from)=>{
-                let n=m.target.children.first().ok_or_else(||invalid("missing frozen transferred incremental object"))?;
-                Body::at_original(dir,parent,d,n)
-            },
-            Some(m) if m.original.children.first().is_none()&&m.target.children.first().is_none()&&d.seq>m.seq&&d.original.volume==self.volume()=>
-                Body::open(dir,parent,d),
-            _=>Err(invalid("incremental node is neither the frozen original nor a later decision at this owner")),
-        }
     }
 }

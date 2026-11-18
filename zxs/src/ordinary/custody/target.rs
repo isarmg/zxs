@@ -1,6 +1,6 @@
 //! The material that will, or already does, implement one specific lifecycle
 //! decision. A bounded frame, alone, is not proof the target bytes exist.
-use super::{admission::{LifecycleGrant,Side},placed::{self,Reopened,TargetInput},purpose::Call,transfer::Moved};
+use super::{admission::{LifecycleGrant,Side},placed::{self,Reopened,TargetInput},purpose::Call,transfer::{ChildRoles,Moved}};
 use crate::{fs::{HeldDir,invalid},ordinary::{delta::types::Delta,formal::types::Commit,wire::{self,Frame}},
     pool::lease::{LocalPool,recycle::CustodyEnd}};
 use std::{ffi::CString,io};
@@ -14,7 +14,7 @@ pub(crate) struct Checked{pub(super) goal:Goal,pub(super) bytes:Reopened}
 impl Goal{
     // Also invoked by the only R reader before it looks up a name. An old
     // receipt alone is no longer a read capability after its operand is gone.
-    fn parts(&self,p:&LocalPool,g:&LifecycleGrant<'_>)->io::Result<(CString,Frame,Commit,Option<Delta>)>{
+    fn parts(&self,p:&LocalPool,g:&LifecycleGrant<'_>)->io::Result<(CString,Frame,Commit,ChildRoles<Delta>)>{
         let s=g.live_cut(p)?;let r=g.request();let m=&self.frame;
         let a=s.moving.as_ref().ok_or_else(||invalid("no active original target operand"))?;
         if r.call==Call::Move||m.original.op!=r.op||m.original.purpose.call()!=r.call||r.digest(p)?!=m.request||!a.matches(m)||
@@ -26,14 +26,14 @@ impl Goal{
         }else{
             if self.site!=Site::Private||a.opened(){return Err(invalid("an undecided target has no public install address"));}
             let c=s.file(r.id).ok_or_else(||invalid("missing original FILE"))?;
-            let f=s.head(r.id).ok_or_else(||invalid("missing original FULL"))?;let d=s.delta(r.id);
+            let f=s.head(r.id).ok_or_else(||invalid("missing original FULL"))?;let d=s.actual_graph(r.id)?.children();
             m.require_at(s.placement(r.id)?,f,d)?;(c,f,d)
         };
         let name=match self.site{
             Site::Private=>{if a.opened(){return Err(invalid("opened target can never fall back to its stage"));}
                 let st=a.stage().ok_or_else(||invalid("no signed target stage"))?;crate::ordinary::material::staging(m.original.ticket,st.slot)}
             Site::Installed=>g.name(Side::Target).to_owned()
-        };Ok((name,c.clone(),f.clone(),d.cloned()))
+        };Ok((name,c.clone(),f.clone(),d.map(Clone::clone)))
     }
     pub(crate) fn addresses(&self,p:&LocalPool,g:&LifecycleGrant<'_>)->io::Result<(CString,CString)>{
         let selected=self.name(p,g)?;let other=match self.site{
@@ -70,10 +70,10 @@ impl Goal{
         let(name,c,f,d)=self.parts(p,g)?;end.check_target_child(self,&dir)?;
         let m=&self.frame;
         crate::ordinary::material::verify_header_at(&dir,&c.create,&m.target.directory,&m.target.local)?;
-        let rows=placed::roles(&c,&f,d.as_ref(),&m.target)?;
+        let rows=placed::roles(&c,&f,d.as_refs(),&m.target)?;
         for r in &rows{let _=placed::held_role(&dir,r,Some(m.allocation))?;}
         dir.share()?;end.check_target_child(self,&dir)?;
-        let input=Reopened::input_lifecycle(p,end.id(),m,name,dir,&c,&f,d.as_ref())?;
+        let input=Reopened::input_lifecycle(p,end.id(),m,name,dir,&c,&f,d.as_refs())?;
         Ok(Scan{goal:self.clone(),input})
     }
 }

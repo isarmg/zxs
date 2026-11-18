@@ -17,7 +17,7 @@ fn node(f:&Fixture,file:crate::FileId,n:&FormalNode,wanted:&[u8]){
 fn frozen(f:&Fixture,r:Request,first:&FormalNode)->(u64,[u8;32]){
     let(_,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let m=s.placed(r.id).unwrap();
     let(c,p,old_increment)=super::super::finish::frozen(&s,m).unwrap();
-    assert!(old_increment.is_none()&&m.original.children.first().is_none()&&m.target.children.first().is_none());
+    assert!(old_increment.len()==0&&m.original.children.first().is_none()&&m.target.children.first().is_none());
     assert_eq!((c.create.file,p.original.node),(r.id,first.node));assert_eq!(m.original.role_count(),3);
     (m.seq,m.digest)
 }
@@ -162,12 +162,18 @@ fn a_later_handoff_source_uses_the_actual_b_roles_and_never_adds_a_new_b_child_t
     let c=s.file(item.file).unwrap();let full=s.head(item.file).unwrap();let d=s.delta(item.file).unwrap();
     assert_eq!((full.original.node,d.original.node),(first.node,child.node));
     let m=s.placed(item.file).unwrap();let before=s.before_handoff(m).unwrap();assert_eq!((before.volume(),before.epoch()),(f.from,0));
-    let frozen=m.require_at(before,full,None).unwrap();assert!(frozen.children.first().is_none());assert_eq!(frozen.directory,c.create.directory);
-    let b=s.placement(item.file).unwrap();let sites=b.sites(full,Some(d)).unwrap();
+    let frozen=m.require_at(before,full,crate::ordinary::custody::transfer::ChildRoles::None).unwrap();assert!(frozen.children.first().is_none());assert_eq!(frozen.directory,c.create.directory);
+    let b=s.placement(item.file).unwrap();let sites=b.sites(full,crate::ordinary::custody::transfer::ChildRoles::One(d)).unwrap();
     let current=s.actual_graph(item.file).unwrap();let old=s.file_cycle_at(item.file,m.seq-1,m.previous).unwrap().graph().unwrap();
     assert!(old.through(child.node).is_err());assert!(before.active_child(current,0).is_err());
     assert_eq!(b.active_child(current.through(child.node).unwrap(),0).unwrap(),&d.material.object);
     assert!(b.active_child(old,0).is_err()); // no after-the-fact child in the original A→B ticket
+    let(archived,handoff)=super::super::finish::frozen_graph(&s,m).unwrap();
+    assert_eq!(archived.digest,c.digest);assert_eq!(handoff.hashes().len(),0);
+    assert!(m.require_at_graph(before,current).is_err()); // the B-local decision cannot enlarge the original A ticket
+    assert_eq!(m.require_at_graph(before,handoff).unwrap(),frozen);
+    assert_eq!(b.graph_sites(current).unwrap(),sites);
+    assert!(crate::ordinary::journal::Graph::at(c,full,&[d,d]).is_err());
     assert_eq!((b.volume(),b.epoch(),b.key()),(f.to,1,m.digest));
     assert_eq!(sites.directory,m.target.directory);assert_ne!(sites.directory,c.create.directory);
     assert_eq!(sites.children.first(),Some(&d.material.object));assert!(m.target.children.first().is_none());
@@ -177,7 +183,7 @@ fn a_later_handoff_source_uses_the_actual_b_roles_and_never_adds_a_new_b_child_t
     let checked=p.observe_dedicated(crate::pool::lease::recycle::Direction::ToRecycle,f.to,recycle).unwrap();
     let (_,to)=checked.registration().originals();let target=crate::ordinary::wire::NativeObject{entity:to.1,birth:to.2.clone()};
     let volume=p.ordinary(f.to).unwrap();let dir=volume.root.child_directory(c"one").unwrap().unwrap();
-    let observed=super::super::source::Clean::at_original_sites(&volume,dir,c,full,Some(d),&sites).unwrap().verify().unwrap();
+    let observed=super::super::source::Clean::at_original_sites(&volume,dir,c,full,crate::ordinary::custody::transfer::ChildRoles::One(d),&sites).unwrap().verify().unwrap();
     let mut proposed=m.original.clone();proposed.op=op();proposed.ticket=op();proposed.children=crate::ordinary::custody::transfer::ChildRoles::One(d.digest);
     proposed.source_material=observed.digest().unwrap();proposed.source_bytes=observed.physical_bytes();
     proposed.from=f.to;proposed.src_root=m.original.dst_root.clone();proposed.to=recycle;proposed.dst_root=target;proposed.epoch=1;
@@ -185,13 +191,13 @@ fn a_later_handoff_source_uses_the_actual_b_roles_and_never_adds_a_new_b_child_t
     b.require_next(&proposed).unwrap();
     proposed.purpose=Purpose::Delete{previous:c.digest,at:DeletedAt::new(55,0).unwrap()};
     assert!(b.require_next(&proposed).is_err());assert!(before.require_next(&proposed).is_err());
-    let mut foreign=d.clone();foreign.original.volume=f.from;assert!(b.sites(full,Some(&foreign)).is_err());
+    let mut foreign=d.clone();foreign.original.volume=f.from;assert!(b.sites(full,crate::ordinary::custody::transfer::ChildRoles::One(&foreign)).is_err());
     let mut forged=m.clone();forged.previous=[0;32];assert!(s.before_handoff(&forged).is_err());
     // Ordinary A can be offline: all cutoff/role projections are original
     // SYSTEM facts; they have not vouched for any online R or structural I/O.
     drop(observed);drop(volume);drop(checked);drop(s);drop(p);let off=f.old.with_file_name("offline-after-prior");fs::rename(&f.old,&off).unwrap();
     let(_,_,cold)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
-    let got=cold.placement(item.file).unwrap().sites(cold.head(item.file).unwrap(),cold.delta(item.file)).unwrap();
+    let got=cold.placement(item.file).unwrap().sites(cold.head(item.file).unwrap(),cold.actual_graph(item.file).unwrap().children()).unwrap();
     assert_eq!(got,sites);
 }
 
@@ -547,6 +553,12 @@ fn later_b_native_child_goes_to_recycle_by_its_own_original_and_explicit_restore
     let(frame,retained)={let(_,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let m=s.placed(file.file).unwrap();
         let before=s.before_handoff(m).unwrap().transfer().unwrap();assert_eq!(before.original.op,moved.op);assert!(before.target.children.first().is_none());
         assert_eq!(m.original.children.first().copied(),s.delta(file.file).map(|d|d.digest));assert!(m.target.children.first().is_some());
+        let(_,frozen)=super::super::finish::frozen_graph(&s,m).unwrap();
+        let previous=s.before_handoff(m).unwrap();let previous_roles=m.require_at_graph(previous,frozen).unwrap();
+        let d=frozen.children().first().copied().unwrap();assert_eq!(previous_roles.children.first(),Some(&d.material.object));
+        assert_ne!(previous_roles.children.first(),m.target.children.first()); // B-born physical pack vs newly issued actual R pack
+        assert!(s.placement(file.file).unwrap().graph_sites(frozen.through(frozen.full().original.node).unwrap()).is_err());
+        assert_eq!(s.placement(file.file).unwrap().graph_sites(frozen).unwrap(),m.target);
         (m.digest,s.placement(file.file).unwrap().retained().unwrap())};
     assert_eq!(retained.operation,del.op);assert_eq!(retained.decision,frame);
     // Same human name, different, later FILE. Its existence is not evidence

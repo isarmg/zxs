@@ -1,22 +1,22 @@
 //! Logical history never changes address. Only an original SYSTEM handoff
 //! selects the alternate native objects for that same FILE/entry/history.
-use super::{destination::Method,source::{Clean,Leaf,Verified},transfer::{Moved,Sites}};
+use super::{destination::Method,source::{Clean,Leaf,Verified},transfer::{Children,Moved,Sites}};
 use crate::{fs::{self,HeldDir,invalid,stream::PinnedRegular},pool::lease::FileVolume,
-    ordinary::{delta::types::Delta,formal::types::Commit,
+    ordinary::{formal::types::Commit,
         journal::Journal,material,wire::{self,Frame,NativeObject}}};
 use std::{collections::BTreeSet,ffi::{CStr,CString},io};
 
 pub(super) struct Role<'a>{pub kind:Leaf,pub name:CString,pub len:u64,pub original:&'a NativeObject}
-pub(super) fn roles<'a>(c:&Frame,f:&Commit,d:Option<&Delta>,sites:&'a Sites)->io::Result<Vec<Role<'a>>>{
+pub(super) fn roles<'a>(c:&Frame,f:&Commit,d:Children<'_>,sites:&'a Sites)->io::Result<Vec<Role<'a>>>{
     let mut out=vec![
         Role{kind:Leaf::File,name:c"FILE".to_owned(),len:wire::empty_material(c.create.file,c.create.history,c.create.op,&c.create.name).len()as u64,original:&sites.local},
         Role{kind:Leaf::FullNode,name:f.original.node_name(),len:crate::ordinary::formal::physical::index_size(&f.original)?,original:&sites.node},
         Role{kind:Leaf::FullRaw,name:f.original.body_name(),len:f.original.content.bytes,original:&sites.raw},
     ];
-    if sites.children.second().is_some(){return Err(invalid("a one-child proof cannot inventory a second retained child"));}
-    match (d,sites.children.first()){
-        (Some(d),Some(n))=>out.push(Role{kind:Leaf::Incr,name:d.original.leaf(),len:crate::ordinary::delta::physical::packed_size(&d.original)?,original:n}),
-        (None,None)=>{},_=>return Err(invalid("native role differs from the MOVE's frozen original history")),
+    if d.len()!=sites.children.len(){return Err(invalid("native role count differs from the frozen original history"));}
+    for (i,(node,n)) in d.iter().zip(sites.children.iter()).enumerate(){
+        let kind=match i{0=>Leaf::Incr,1=>Leaf::IncrNext,_=>return Err(invalid("unsupported retained ordinal"))};
+        out.push(Role{kind,name:node.original.leaf(),len:crate::ordinary::delta::physical::packed_size(&node.original)?,original:n});
     }Ok(out)
 }
 pub(super) fn token(allocation:[u8;32],kind:Leaf,n:&NativeObject)->io::Result<[u8;32]>{
@@ -33,7 +33,7 @@ pub(super) fn held_role(dir:&HeldDir,r:&Role<'_>,token_from:Option<[u8;32]>)->io
     if let Some(a)=token_from{fs::require_material_token(&p.file,&token(a,r.kind,r.original)?)?;}
     p.named(dir,&r.name)?;Ok(p)
 }
-pub(super) fn complete(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<HeldDir>{
+pub(super) fn complete(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,d:Children<'_>)->io::Result<HeldDir>{
     if m.original.purpose==super::purpose::Purpose::Ordinary{m.require_history(c,f,d)?;}else{
         let(_,s)=v.pool.snapshot()?;let(actual,p,child)=super::finish::frozen(&s,m)?;
         if !matches!(m.original.purpose,super::purpose::Purpose::Restore{..})||actual.digest!=c.digest||p.digest!=f.digest||
@@ -77,11 +77,11 @@ pub(in crate::ordinary) fn active_dir(s:&Journal,v:&FileVolume<'_>,c:&Frame)->io
 pub(super) struct TargetInput{clean:Clean,decision:Moved,name:CString}
 pub(super) struct Reopened{verified:Verified,decision:Moved,name:CString}
 impl Reopened{
-    pub(super) fn input(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<TargetInput>{
+    pub(super) fn input(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,d:Children<'_>)->io::Result<TargetInput>{
         let dir=complete(v,name,m,c,f,d)?;dir.share()?;
         Ok(TargetInput{clean:Clean::at_original_sites(v,dir,c,f,d,&m.target)?,decision:m.clone(),name:name.to_owned()})
     }
-    pub(super) fn input_lifecycle(p:&crate::pool::lease::LocalPool,id:crate::VolumeId,m:&Moved,name:CString,dir:HeldDir,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<TargetInput>{
+    pub(super) fn input_lifecycle(p:&crate::pool::lease::LocalPool,id:crate::VolumeId,m:&Moved,name:CString,dir:HeldDir,c:&Frame,f:&Commit,d:Children<'_>)->io::Result<TargetInput>{
         if id!=m.original.to{return Err(invalid("wrong dedicated destination"));}
         let clean=Clean::at_held_sites(p.id(),id,m.original.dst_root.clone(),dir,c,f,d,&m.target)?;
         Ok(TargetInput{clean,decision:m.clone(),name})

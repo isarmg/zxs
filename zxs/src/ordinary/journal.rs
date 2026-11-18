@@ -132,16 +132,17 @@ impl OriginalIndex{
             ||!allow.file(o.volume,o.uid,place.directory().entity,&place.directory().birth,false){return Err(invalid("conflicting formal INCR identity or owner"));}
         Ok(place)
     }
-    fn registered_source<'a>(&self,o:&MoveOrigin,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<(&'a Frame,&'a Commit,Option<&'a Delta>)>{
+    fn registered_source<'a>(&self,o:&MoveOrigin,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<Graph<'a>>{
         // Every input here belongs to the same already-verified prefix.
         let before=self.placement(o.file,ds)?;let c=before.birth();
         let f=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("handoff requires original first FULL"))?.formal()?;
-        let d=self.deltas.get(&o.file).and_then(|v|v.last()).map(|&i|ds[i].delta()).transpose()?;
+        let graph=Graph::indexed(c,f,ds,self.deltas.get(&o.file).map(Vec::as_slice).unwrap_or(&[]))?;
+        if graph.children().len()>1{return Err(invalid("second-child transport remains closed until five genuine physical leaves are supported"));}
         if self.work(o.file,ds)?.last().is_some(){return Err(invalid("cannot hand off a dirty working chain"));}
         if self.tickets.contains(&o.ticket)||self.ops.contains(&o.ticket)||self.tickets.contains(&o.op)||self.ops.contains(&o.op){
             return Err(invalid("an original operation or custody ticket has already been used"));}
-        registered_handoff(o,allow,before,f,d,self.names.contains(&(o.from,o.name.clone())),self.names.contains(&(o.to,o.name.clone())))?;
-        Ok((c,f,d))
+        registered_handoff(o,allow,before,graph,self.names.contains(&(o.from,o.name.clone())),self.names.contains(&(o.to,o.name.clone())))?;
+        Ok(graph)
     }
     fn admit(&self,f:&Decision,frames:&[Decision],used:usize,prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
         self.credits.room(frames.len(),used,f.bytes().len(),f.effect())?;
@@ -149,8 +150,8 @@ impl OriginalIndex{
             return Err(invalid("repeated operation or nonconsecutive original FILE decision"));
         }
         match f{
-            Decision::Move(m)=>{let(_,f,d)=self.registered_source(&m.original,frames,allow)?;
-                m.require_at(self.placement(m.original.file,frames)?,f,d)?;
+            Decision::Move(m)=>{let graph=self.registered_source(&m.original,frames,allow)?;
+                m.require_at_graph(self.placement(m.original.file,frames)?,graph)?;
                 if m.original.mode==Method::Transfer&&m.target.each().any(|x|self.native.contains(&x.birth)){
                     return Err(invalid("transferred material cannot reuse any admitted native owner"));
                 }
@@ -218,7 +219,7 @@ fn active_names(o:&MoveOrigin)->(bool,bool){
 }
 /// A logical precondition, not a warrant to install/delete material. The two
 /// endpoints are admitted as a pair by the *same* immutable original record.
-fn registered_handoff(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'_>,f:&Commit,d:Option<&Delta>,at_source:bool,at_target:bool)->io::Result<()>{
+fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,graph:Graph<'a>,at_source:bool,at_target:bool)->io::Result<()>{
     use crate::pool::lease::recycle::Direction;use super::custody::purpose::Purpose;
     let src=(o.from,o.src_root.entity,&o.src_root.birth);let dst=(o.to,o.dst_root.entity,&o.dst_root.birth);
     let eligible=match o.purpose{
@@ -228,8 +229,8 @@ fn registered_handoff(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'_>,f:&Com
     };
     let(src_active,_)=active_names(o);
     if !eligible||at_source!=src_active||at_target{return Err(invalid("wrong registered role, source name or occupied current destination"));}
-    o.purpose.check_transfer(o.mode,&o.src_root,&o.dst_root)?;before.require_next(o)?;o.require_history(before.birth(),f,d)?;
-    before.sites(f,d)?.check(&o.src_root)
+    o.purpose.check_transfer(o.mode,&o.src_root,&o.dst_root)?;before.require_next(o)?;o.require_graph(before.birth(),graph)?;
+    before.graph_sites(graph)?.check(&o.src_root)
 }
 
 pub(crate) struct Journal{
@@ -451,8 +452,8 @@ impl Journal{
             self.ticket_used(o.op)||self.ticket_used(o.ticket){return Err(invalid("not an unused dedicated proposal at its original SYSTEM prefix"));}
         self.room_for_effect(MAX_FRAME,o.effect())?;
         let current=self.confirmed_file_cycle(o.file)?;
-        let(f,d)=current.clean_transportable()?; // existing three/four physical roles only
-        registered_handoff(o,reg,current.placement(),f,d,self.named(o.from,&o.name).is_some(),self.named(o.to,&o.name).is_some())
+        current.clean_transportable()?; // public transport remains closed for a second child
+        registered_handoff(o,reg,current.placement(),current.graph()?,self.named(o.from,&o.name).is_some(),self.named(o.to,&o.name).is_some())
     }
     /// Preflight is not an I/O permit. This is repeated from the very same
     /// writer snapshot immediately before naming the original reservation.

@@ -9,16 +9,20 @@ use std::io;
 pub(in crate::ordinary) struct Graph<'a>{full:&'a Commit,children:ChildRoles<&'a Delta>}
 impl<'a> Graph<'a>{
     pub(in crate::ordinary) fn at(c:&Frame,f:&'a Commit,children:&[&'a Delta])->io::Result<Self>{
-        if c.seq>=f.seq||f.original.file!=c.create.file||f.original.history!=c.create.history||f.original.creation!=c.digest{
-            return Err(invalid("wrong original FILE or first FULL in retained formal graph"));}
         let items=match children{[]=>ChildRoles::None,[one]=>ChildRoles::One(*one),
             [one,two]=>ChildRoles::Two(*one,*two),_=>return Err(invalid("unsupported depth of retained FILE history"))};
+        Self::from_roles(c,f,items)
+    }
+    pub(in crate::ordinary) fn from_roles(c:&Frame,f:&'a Commit,items:ChildRoles<&'a Delta>)->io::Result<Self>{
+        if c.seq>=f.seq||f.original.file!=c.create.file||f.original.history!=c.create.history||f.original.creation!=c.digest{
+            return Err(invalid("wrong original FILE or first FULL in retained formal graph"));}
         let(mut seq,mut parent)=(f.seq,Parent::full(f));
         for d in items.iter().copied(){
             if d.seq<=seq||!parent.precedes(d){return Err(invalid("missing, reversed or substituted immediate formal FILE parent"));}
             seq=d.seq;parent=Parent::incremental(d);
         }Ok(Self{full:f,children:items})
     }
+    pub(in crate::ordinary) fn hashes(self)->ChildRoles<[u8;32]>{self.children.map(|d|d.digest)}
     pub(in crate::ordinary) fn full(self)->&'a Commit{self.full}
     pub(in crate::ordinary) fn children(self)->ChildRoles<&'a Delta>{self.children}
     pub(in crate::ordinary) fn tip(self)->Parent{match self.children{
@@ -32,18 +36,36 @@ impl<'a> Graph<'a>{
         Ok(Self{full:self.full,children:selected})
     }
 }
+impl<'a> Graph<'a>{
+    /// Resolve positions only against the exact authenticated slice on which
+    /// this index was built. Used before admitting the next native decision
+    /// as well as by the final confirmed reader.
+    pub(super) fn indexed(c:&Frame,f:&'a Commit,ds:&'a[super::Decision],ids:&[usize])->io::Result<Self>{
+        let get=|i:usize|ds.get(i).ok_or_else(||invalid("missing indexed original INCR"))?.delta();
+        let children=match ids{[]=>ChildRoles::None,[i]=>ChildRoles::One(get(*i)?),
+            [i,j]=>ChildRoles::Two(get(*i)?,get(*j)?),_=>return Err(invalid("unsupported number of original children"))};
+        Self::from_roles(c,f,children)
+    }
+}
 impl Journal{
+    /// Frozen subset for an actual earlier custody frame. Limit the *same*
+    /// confirmed FILE index by original ordinal; newer native children never
+    /// enlarge an older handoff. No extra full prefix scan per physical role.
+    pub(in crate::ordinary) fn handoff_graph(&self,m:&super::Moved)->io::Result<(super::Placement<'_>,Graph<'_>)>{
+        let before=self.before_handoff(m)?;let id=m.original.file;
+        let at=m.seq.checked_sub(1).and_then(|n|usize::try_from(n).ok()).ok_or_else(||invalid("invalid original handoff sequence"))?;
+        let f=self.head(id).filter(|v|v.seq<m.seq).ok_or_else(||invalid("original FULL did not precede handoff"))?;
+        let ds=self.decisions.get(..at).ok_or_else(||invalid("unavailable original custody prefix"))?;
+        let all=self.deltas.get(&id).map(Vec::as_slice).unwrap_or(&[]);let stop=all.partition_point(|&n|n<at);
+        if self.work_at(id,at)?.last().is_some(){return Err(invalid("a dirty original FILE cannot be a frozen transfer"));}
+        let g=Graph::indexed(before.birth(),f,ds,&all[..stop])?;Ok((before,g))
+    }
     /// The index contains only positions of actual confirmed frames. Do not
     /// consult the pending allocation/seal or treat an unavailable node as F0.
     pub(in crate::ordinary) fn actual_graph(&self,id:FileId)->io::Result<Graph<'_>>{
         let c=self.file(id).ok_or_else(||invalid("missing original FILE birth at formal cutoff"))?;
         let f=self.head(id).ok_or_else(||invalid("no confirmed first FULL at formal cutoff"))?;
         let ids=self.deltas.get(&id).map(Vec::as_slice).unwrap_or(&[]);
-        let child=|i:usize|self.decisions.get(i).ok_or_else(||invalid("missing indexed original INCR"))?.delta();
-        match ids{
-            []=>Graph::at(c,f,&[]),[i]=>Graph::at(c,f,&[child(*i)?]),
-            [i,j]=>Graph::at(c,f,&[child(*i)?,child(*j)?]),
-            _=>Err(invalid("unsupported number of retained original INCRs")),
-        }
+        Graph::indexed(c,f,&self.decisions,ids)
     }
 }

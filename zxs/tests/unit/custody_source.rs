@@ -95,3 +95,20 @@ fn ordinary_user_current_and_fixed_history_pin_actual_leaf_leases_without_claimi
     crate::read_node_to(&t.system,id,t.first.node,&mut old).unwrap();assert!(old.flush);assert_eq!(old.bytes,b"first");
     for p in old.files.iter().chain(std::iter::once(&incr)){let fd=osfs::File::open(p).unwrap();fd.try_lock().unwrap();}
 }
+
+#[test]
+#[ignore="private registered FILE and dedicated recycle filesystems"]
+fn verified_older_inventory_cannot_lend_an_extra_child_or_repeat_a_real_pack_at_a_different_ordinal(){
+    let t=Original::new(b"baseline");let id=t.first.file;t.write(1,b"X");t.second();
+    let live=Clean::capture(&t.system,id).unwrap().verify().unwrap();
+    let(p,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();let(c,f,ds)=live.originals();
+    let v=p.ordinary(live.volume()).unwrap();let native=Sites::birthplace(c,f,ds);
+    live.require_at(&v,c"normal",live.source_root(),&native).unwrap();
+    let one=*ds.first().unwrap();let object=native.children.first().unwrap().clone();
+    let mut wrong=native.clone();wrong.children=ChildRoles::Two(object.clone(),object);
+    assert!(live.require_at(&v,c"normal",live.source_root(),&wrong).is_err());
+    let dir=v.root.child_directory(c"normal").unwrap().unwrap();
+    assert!(Clean::at_original_sites(&v,dir,c,f,ChildRoles::Two(one,one),&wrong).is_err());
+    assert_eq!(s.actual_graph(id).unwrap().hashes(),ds.map(|d|d.digest));
+    assert!(live.stream(Leaf::IncrNext,|_,_|panic!("an unissued ordinal furnished bytes")).is_err());
+}

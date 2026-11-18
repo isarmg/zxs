@@ -22,14 +22,14 @@ pub(in crate::ordinary) fn view(s:&Journal,v:&FileVolume<'_>,tickets:&mut BTreeM
     if v.id()==o.from{
         if let Some(m)=moved{
             let(c,f,d)=history(s,m)?;
-            if let Some(n)=retire::observe_source(v,m,a.progress(),&c,&f,d.as_ref())?{seen.hidden.insert(n);}
+            if let Some(n)=retire::observe_source(v,m,a.progress(),&c,&f,d.as_refs())?{seen.hidden.insert(n);}
         }return Ok(seen)
     }
     let final_name=CString::new(o.name.as_bytes()).map_err(|_|invalid("invalid original target name"))?;
     let final_present=v.root.child_directory(&final_name)?.is_some();
     if let Some(m)=moved{
         if !a.opened(){seen.deferred=Some(o.file);
-            if final_present{let(c,f,d)=history(s,m)?;let _=placed::complete(v,&final_name,m,&c,&f,d.as_ref())?;seen.hidden.insert(o.name.as_bytes().to_vec());}
+            if final_present{let(c,f,d)=history(s,m)?;let _=placed::complete(v,&final_name,m,&c,&f,d.as_refs())?;seen.hidden.insert(o.name.as_bytes().to_vec());}
         }
     }else if final_present{return Err(invalid("destination occupied before original custody decision"));}
     if o.mode==Method::Rename{return Ok(seen);}
@@ -40,7 +40,7 @@ pub(in crate::ordinary) fn view(s:&Journal,v:&FileVolume<'_>,tickets:&mut BTreeM
         if final_present{return Err(invalid("both true stage and final MOVE name exist"));}
         let dir=staging::bound_dir(v,a,st)?;let c=s.file(o.file).ok_or_else(||invalid("missing MOVE origin"))?;
         let f=s.head(o.file).ok_or_else(||invalid("missing FULL"))?;
-        let d=if let Some(m)=moved{super::finish::frozen(s,m)?.2}else{s.delta(o.file)};
+        let d=if let Some(m)=moved{super::finish::frozen(s,m)?.2}else{s.actual_graph(o.file)?.children()};
         o.require_history(c,f,d)?;
         let before=if let Some(m)=moved{s.before_handoff(m)?}else{s.placement(o.file)?};
         before.require_next(o)?;let previous=before.sites(f,d)?;let rows=placed::roles(c,f,d,&previous)?;

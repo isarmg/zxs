@@ -11,6 +11,11 @@ impl<T> ChildRoles<T>{
     pub(in crate::ordinary) fn second(&self)->Option<&T>{match self{Self::Two(_,b)=>Some(b),_=>None}}
     pub(in crate::ordinary) fn len(&self)->usize{match self{Self::None=>0,Self::One(_)=>1,Self::Two(..)=>2}}
     pub(in crate::ordinary) fn iter(&self)->impl Iterator<Item=&T>{self.first().into_iter().chain(self.second())}
+    pub(in crate::ordinary) fn ordinal(&self,i:usize)->Option<&T>{match i{0=>self.first(),1=>self.second(),_=>None}}
+    pub(in crate::ordinary) fn as_refs(&self)->ChildRoles<&T>{match self{
+        Self::None=>ChildRoles::None,Self::One(a)=>ChildRoles::One(a),Self::Two(a,b)=>ChildRoles::Two(a,b)}}
+    pub(in crate::ordinary) fn map<U>(self,mut f:impl FnMut(T)->U)->ChildRoles<U>{match self{
+        Self::None=>ChildRoles::None,Self::One(a)=>ChildRoles::One(f(a)),Self::Two(a,b)=>ChildRoles::Two(f(a),f(b))}}
     pub(super) fn put(&self,b:&mut Vec<u8>,mut put:impl FnMut(&T,&mut Vec<u8>)){
         b.push(self.len() as u8);for item in self.iter(){put(item,b);}
     }

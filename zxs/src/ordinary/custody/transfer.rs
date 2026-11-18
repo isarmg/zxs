@@ -2,12 +2,13 @@
 //! no new content or nodes, no new vote. This codec is not a stand-alone
 //! admission or an I/O capability; replay must prove the prior custody cut.
 use crate::{EntryId,FileId,HistoryId,OperationId,PoolId,VolumeId,fs::{self,invalid},ordinary::{
-    delta::types::Delta,formal::types::Commit,wire::{self,Envelope,Frame,In,NativeObject}}};
+    delta::types::Delta,formal::types::Commit,journal::Graph,wire::{self,Envelope,Frame,In,NativeObject}}};
 use super::{purpose::{Call,Purpose},destination::{Method,Prepared},source::Verified};
 use std::{collections::BTreeSet,io};
 
 mod children;
 pub(in crate::ordinary) use children::ChildRoles;
+pub(in crate::ordinary) type Children<'a>=ChildRoles<&'a Delta>;
 
 pub(in crate::ordinary) const KIND:u8=6;
 pub(in crate::ordinary) fn request(pool:PoolId,uid:u32,op:OperationId,file:FileId,from:VolumeId,to:VolumeId,epoch:u64)->io::Result<[u8;32]>{
@@ -41,7 +42,7 @@ impl Origin{
         let src=p.source();let (c,f,d)=src.originals();
         let o=Self{op,uid:fs::local_uid(),file:src.file(),entry:c.create.entry,history:src.history(),from:src.volume(),to:p.volume(),epoch:0,
             name:src.name().to_owned(),ticket,mode:p.method(),purpose:Purpose::Ordinary,src_root:src.source_root().clone(),dst_root:p.root().clone(),
-            creation:c.digest,parent:f.digest,children:ChildRoles::from_first(d.map(|d|d.digest)),source_bytes:src.physical_bytes(),source_material:src.digest()?};
+            creation:c.digest,parent:f.digest,children:d.map(|d|d.digest),source_bytes:src.physical_bytes(),source_material:src.digest()?};
         o.require(src,p)?;Ok(o)
     }
     // The frozen roles are FILE, first node, first RAW, and only an already
@@ -59,16 +60,18 @@ impl Origin{
         }
         let(c,f,d)=src.originals();self.require_history(c,f,d)
     }
-    pub(in crate::ordinary) fn require_history(&self,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<()>{
-        let local=wire::empty_material(c.create.file,c.create.history,c.create.op,&c.create.name).len() as u64;
+    pub(in crate::ordinary) fn require_history(&self,c:&Frame,f:&Commit,d:Children<'_>)->io::Result<()>{
+        self.require_graph(c,Graph::from_roles(c,f,d)?)
+    }
+    pub(in crate::ordinary) fn require_graph(&self,c:&Frame,g:Graph<'_>)->io::Result<()>{
+        let f=g.full();let local=wire::empty_material(c.create.file,c.create.history,c.create.op,&c.create.name).len() as u64;
         let node=crate::ordinary::formal::physical::index_size(&f.original)?;
-        let child=d.map(|v|crate::ordinary::delta::physical::packed_size(&v.original)).transpose()?.unwrap_or(0);
-        let bytes=local.checked_add(node).and_then(|v|v.checked_add(f.original.content.bytes)).and_then(|v|v.checked_add(child));
+        let mut bytes=local.checked_add(node).and_then(|v|v.checked_add(f.original.content.bytes));
+        for d in g.children().iter(){let n=crate::ordinary::delta::physical::packed_size(&d.original)?;bytes=bytes.and_then(|v|v.checked_add(n));}
         if bytes!=Some(self.source_bytes)||self.epoch==u64::MAX||self.from==self.to||self.op==self.ticket||self.src_root==self.dst_root||
             self.uid!=c.create.uid||self.file!=c.create.file||self.history!=c.create.history||self.entry!=c.create.entry||
             (self.purpose==Purpose::Ordinary&&(self.from!=c.create.volume||self.epoch!=0))||self.name!=c.create.name||self.creation!=c.digest||self.parent!=f.digest||
-            f.original.file!=self.file||f.original.creation!=c.digest||self.children!=ChildRoles::from_first(d.map(|x|x.digest))||
-            d.is_some_and(|x|x.original.file!=self.file||x.original.creation!=c.digest||x.original.parent_decision!=f.digest)||
+            f.original.file!=self.file||f.original.creation!=c.digest||self.children!=g.hashes()||
             self.source_bytes==0{
             return Err(invalid("not the complete original FILE at its declared first custody cut"));
         }
@@ -112,9 +115,9 @@ pub(in crate::ordinary) struct Sites{
     pub directory:NativeObject,pub local:NativeObject,pub node:NativeObject,pub raw:NativeObject,pub children:ChildRoles<NativeObject>,
 }
 impl Sites{
-    pub(in crate::ordinary) fn birthplace(c:&Frame,f:&Commit,d:Option<&Delta>)->Self{
+    pub(in crate::ordinary) fn birthplace(c:&Frame,f:&Commit,d:Children<'_>)->Self{
         Self{directory:c.create.directory.clone(),local:c.create.local.clone(),node:f.materials.node.clone(),raw:f.materials.raw.clone(),
-            children:ChildRoles::from_first(d.map(|x|x.material.object.clone()))}
+            children:d.map(|x|x.material.object.clone())}
     }
     pub(super) fn at(&self,k:super::source::Leaf)->Option<&NativeObject>{
         use super::source::Leaf;match k{Leaf::File=>Some(&self.local),Leaf::FullNode=>Some(&self.node),Leaf::FullRaw=>Some(&self.raw),Leaf::Incr=>self.children.first(),Leaf::IncrNext=>self.children.second()}
@@ -151,15 +154,18 @@ pub(super) const MAX_ORIGIN:usize=7*16+4+8+1+1+wire::MAX_HUMAN+2*NATIVE+2*32+1+2
 const MAX_CUSTODY_FRAME:usize=wire::ENVELOPE_BYTES+MAX_ORIGIN+32+1+(6*NATIVE+1);
 const _:()=assert!(MAX_CUSTODY_FRAME<=wire::MAX_FRAME);
 impl Moved{
-    pub(in crate::ordinary) fn require_history(&self,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<()>{
+    pub(in crate::ordinary) fn require_history(&self,c:&Frame,f:&Commit,d:Children<'_>)->io::Result<()>{
         if self.original.purpose!=Purpose::Ordinary{return Err(invalid("cannot use FILE birthplace as a later custody source"));}
         let before=crate::ordinary::placement::Placement::from_prefix(c,None)?;
         self.require_at(before,f,d).map(|_|())
     }
-    pub(in crate::ordinary) fn require_at(&self,before:crate::ordinary::placement::Placement<'_>,f:&Commit,d:Option<&Delta>)->io::Result<Sites>{
-        let o=&self.original;before.require_next(o)?;o.require_history(before.birth(),f,d)?;
-        let previous=before.sites(f,d)?;previous.check(&o.src_root)?;self.target.check(&o.dst_root)?;
-        if self.target.children.len()!=usize::from(d.is_some()){return Err(invalid("a MOVE cannot lose/add a retained version"));}
+    pub(in crate::ordinary) fn require_at<'a>(&self,before:crate::ordinary::placement::Placement<'a>,f:&'a Commit,d:Children<'a>)->io::Result<Sites>{
+        self.require_at_graph(before,Graph::from_roles(before.birth(),f,d)?)
+    }
+    pub(in crate::ordinary) fn require_at_graph<'a>(&self,before:crate::ordinary::placement::Placement<'a>,g:Graph<'a>)->io::Result<Sites>{
+        let o=&self.original;before.require_next(o)?;o.require_graph(before.birth(),g)?;
+        let previous=before.graph_sites(g)?;previous.check(&o.src_root)?;self.target.check(&o.dst_root)?;
+        if self.target.children.len()!=g.children().len(){return Err(invalid("a MOVE cannot lose/add a retained version"));}
         match o.mode{
             Method::Rename if self.stage.is_none()&&self.target==previous=>Ok(previous),
             Method::Transfer if self.stage.is_some_and(|n|n<crate::ordinary::allocation::SLOTS)&&

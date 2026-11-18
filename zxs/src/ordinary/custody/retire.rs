@@ -4,8 +4,8 @@
 //! Loss of a business name, or even both names, is not proof of retirement.
 pub(super) mod dedicated;
 use super::{allocation::Progress,command::Request,destination::Method,finish::history,placed::{self,Reopened},
-    source::{self,Leaf},transfer::{Moved,Sites}};
-use crate::{fs::{self,HeldDir,invalid,stream::PinnedRegular},ordinary::{self,Cut,delta::types::Delta,formal::types::Commit,wire::{Frame,NativeObject}},
+    source::{self,Leaf},transfer::{Children,Moved,Sites}};
+use crate::{fs::{self,HeldDir,invalid,stream::PinnedRegular},ordinary::{self,Cut,formal::types::Commit,wire::{Frame,NativeObject}},
     pool::lease::{Access,FileVolume,LocalPool}};
 use std::{collections::BTreeSet,ffi::CString,io,path::Path};
 
@@ -32,7 +32,7 @@ impl VerifiedSource{
 }
 fn business(m:&Moved)->io::Result<CString>{m.original.purpose.leaves(m.original.file,m.original.op,&m.original.name).map(|(from,_)|from)}
 impl SourceRetirement{
-    fn capture(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Option<&Delta>,exclusive:bool)->io::Result<Self>{
+    fn capture(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Children<'_>,exclusive:bool)->io::Result<Self>{
         placed::root(v,&m.original.src_root)?;
         if v.id()!=m.original.from||m.original.mode!=Method::Transfer{return Err(invalid("not this original transfer source"));}
         let business=business(m)?;let quarantine=m.original.quarantine_name();
@@ -41,7 +41,7 @@ impl SourceRetirement{
         let g=Self::capture_selected(m,step,c,f,d,exclusive,sites,previous,v.root.child_directory(&business)?,v.root.child_directory(&quarantine)?)?;
         g.require(v,m)?;Ok(g)
     }
-    fn capture_selected(m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Option<&Delta>,exclusive:bool,sites:Sites,previous:Option<&Moved>,
+    fn capture_selected(m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Children<'_>,exclusive:bool,sites:Sites,previous:Option<&Moved>,
         live:Option<HeldDir>,priv_name:Option<HeldDir>)->io::Result<Self>{
         let business=business(m)?;let quarantine=m.original.quarantine_name();
         let (addr,dir)=match(live,priv_name){
@@ -146,7 +146,7 @@ pub(super) fn complete(system:&Path,r:Request,m:&Moved,dst:&Reopened,hook:&mut i
             let g={let(p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;let(now,a)=s.confirmed_handoff(r.op)?;
                 if now!=m||a.request!=r.digest(&p)?||!a.opened(){return Err(invalid("no genuine applied target for original source retirement"));}
                 a.confirm_phase(&p)?;let new=p.ordinary(m.original.to)?;dst.verify_installed(&new,now)?;let old=p.ordinary(m.original.from)?;
-                let(c,f,d)=history(&s,now)?;SourceRetirement::capture(&old,now,a.progress(),&c,&f,d.as_ref(),true)?};
+                let(c,f,d)=history(&s,now)?;SourceRetirement::capture(&old,now,a.progress(),&c,&f,d.as_refs(),true)?};
             Some(g.verify(dst)?)
         }else{None};
         let(p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;let(now,a)=s.confirmed_handoff(r.op)?;
@@ -183,7 +183,7 @@ pub(super) fn complete(system:&Path,r:Request,m:&Moved,dst:&Reopened,hook:&mut i
 /// An unresolved original source address is not a business FILE. The
 /// returned spelling identifies only the physically verified occurrence on
 /// this exact source root. It grants neither read nor retirement authority.
-pub(super) fn observe_source(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<Option<Vec<u8>>>{
+pub(super) fn observe_source(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Children<'_>)->io::Result<Option<Vec<u8>>>{
     if m.original.mode==Method::Transfer{
         let g=SourceRetirement::capture(v,m,step,c,f,d,false)?;
         return Ok(match g.addr{Address::EmptyGone=>None,Address::Business=>Some(g.business.into_bytes()),Address::Isolated=>Some(g.quarantine.into_bytes())})

@@ -5,6 +5,7 @@
 pub(crate) mod admission;
 pub(super) mod purpose;
 mod source;
+pub(in crate::ordinary) use source::FrozenSecond;
 pub(crate) use source::Clean as LifecycleSource;
 mod command;
 mod incoming;

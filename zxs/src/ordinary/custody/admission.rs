@@ -83,7 +83,7 @@ impl<'p> LifecycleGrant<'p>{
             let(_,_,child)=super::finish::frozen(s,m)?;
             (s.before_handoff(m)?,child,Some(&a.original))
         }else{
-            let prior=s.placement(r.id)?;let child=s.delta(r.id);
+            let prior=s.placement(r.id)?;let child=s.actual_graph(r.id)?.children();
             if s.active_work(r.id)?.last().is_some(){return Err(invalid("dirty original revision cannot change custody"));}
             let original=if let Some(a)=&s.moving{
                 if a.original.op!=r.op||a.request!=digest||a.original.purpose.call()!=r.call{

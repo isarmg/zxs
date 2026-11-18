@@ -41,7 +41,7 @@ impl OriginalIndex{
     }
 }
 impl Journal{
-    fn work_at(&self,file:FileId,end:usize)->io::Result<WorkWindow<'_>>{
+    pub(super) fn work_at(&self,file:FileId,end:usize)->io::Result<WorkWindow<'_>>{
         let first=*self.formal.get(&file).ok_or_else(||invalid("FILE has no confirmed FULL"))?;
         WorkWindow::new(file,&self.decisions,end,first,self.deltas.get(&file).map(Vec::as_slice).unwrap_or(&[]),
             self.spans.get(&file).map(Vec::as_slice).unwrap_or(&[]))

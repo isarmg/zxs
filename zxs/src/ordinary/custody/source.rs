@@ -1,6 +1,6 @@
-use super::{admission::{LifecycleGrant,Side},command::Request,purpose::Call,transfer::Sites};
+use super::{admission::{LifecycleGrant,Side},command::Request,purpose::Call,transfer::{ChildRoles,Children,Sites}};
 use super::super::{delta::{physical::Body as IncrBody,types::Delta},
-    formal::{self,physical::HistoryBody,types::Commit},journal::Journal,material,
+    formal::{self,physical::HistoryBody,types::Commit},journal::{Graph,Journal,cycle::Parent},material,
     wire::{Frame,NativeObject,empty_material}};
 use crate::{FileId,HistoryId,NodeId,PoolId,VolumeId,fs::{self,HeldDir,invalid,stream::{self,PinnedRegular}},
     pool::lease::{Access,FileVolume,LocalPool,recycle::CustodyEnd}};
@@ -26,21 +26,28 @@ pub(super) fn read_physical(pin:&PinnedRegular,expected:u64,mut part:impl FnMut(
     }
     pin.unchanged()?;Ok(h.finish())
 }
-fn selection(s:&Journal,id:FileId)->io::Result<(&Frame,&Commit,Option<&Delta>)>{
+fn selection(s:&Journal,id:FileId)->io::Result<(&Frame,&Commit,Children<'_>)>{
     let c=s.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE for transfer"))?;
     let parent=s.head(id).ok_or_else(||invalid("this MOVE source requires a clean, materialized first formal node"))?;
-    let d=s.delta(id);
+    let g=s.actual_graph(id)?;
     if s.placed(id).is_some()||s.allocated.as_ref().is_some_and(|a|a.file==id)||s.saving.as_ref().is_some_and(|a|a.original.file==id)
         ||s.committing.as_ref().is_some_and(|a|a.original.file==id)||s.editing.as_ref().is_some_and(|a|a.original.file==id)
         ||s.incrementing.as_ref().is_some_and(|a|a.original.file==id)||s.active_work(id)?.last().is_some(){
         return Err(invalid("dirty or unfinished FILE cannot provide a complete clean handoff"));
     }
-    Ok((c,parent,d))
+    Ok((c,parent,g.children()))
+}
+/// Only a checked, complete native custody inventory can bind this second
+/// child to its immediate parent in THIS source or not-yet-serving target.
+/// It confers no live serving, placement or retirement authority.
+pub(in crate::ordinary) struct FrozenSecond<'a>{dir:&'a HeldDir,parent:Parent,d:&'a Delta,object:&'a NativeObject}
+impl FrozenSecond<'_>{
+    pub(in crate::ordinary) fn parts(&self)->(&HeldDir,Parent,&Delta,&NativeObject){(self.dir,self.parent,self.d,self.object)}
 }
 pub(crate) struct Clean{
-    pool:PoolId,volume:VolumeId,root:NativeObject,c:Frame,parent:Commit,delta:Option<Delta>,
+    pool:PoolId,volume:VolumeId,root:NativeObject,c:Frame,parent:Commit,children:ChildRoles<Delta>,
     lifecycle:Option<(Request,[u8;32],Sites)>,
-    dir:HeldDir,local:PinnedRegular,first:HistoryBody,second:Option<IncrBody>,
+    dir:HeldDir,local:PinnedRegular,first:HistoryBody,packs:ChildRoles<IncrBody>,
 }
 impl Clean{
     /// The FILE's existing directory writer lease prevents a new operation
@@ -73,7 +80,7 @@ impl Clean{
         if !end.belongs(g,Side::Source){return Err(invalid("not this predecision source reader"));}
         end.check_source(&dir)?;dir.exclusive()?;end.check_source(&dir)?;
         let c=s.file(r.id).ok_or_else(||invalid("original FILE unavailable"))?;
-        let f=s.head(r.id).ok_or_else(||invalid("source has no original main FULL"))?;let d=s.delta(r.id);
+        let f=s.head(r.id).ok_or_else(||invalid("source has no original main FULL"))?;let d=s.actual_graph(r.id)?.children();
         Self::previous_labels(&s,end,g,&dir,c)?;
         let mut clean=Self::at_held_sites(p.id(),end.id(),g.root(Side::Source).clone(),dir,c,f,d,g.sites())?;
         clean.lifecycle=Some((r,g.prior(),g.sites().clone()));
@@ -96,19 +103,31 @@ impl Clean{
     /// Shared reader, not another authority. The caller supplies the true
     /// selected location and native roles from the preceding original decision
     /// or the exact held source/target handoff prior to that decision.
-    pub(super) fn at_original_sites(volume:&FileVolume<'_>,dir:HeldDir,c:&Frame,f:&Commit,d:Option<&Delta>,sites:&Sites)->io::Result<Self>{
+    pub(super) fn at_original_sites(volume:&FileVolume<'_>,dir:HeldDir,c:&Frame,f:&Commit,d:Children<'_>,sites:&Sites)->io::Result<Self>{
         volume.require_current()?;let root=NativeObject{entity:volume.root.entity,birth:fs::Birth::read(&volume.root.file)?};
         let clean=Self::at_held_sites(volume.pool.id(),volume.id(),root,dir,c,f,d,sites)?;volume.require_current()?;Ok(clean)
     }
-    pub(super) fn at_held_sites(pool:PoolId,volume:VolumeId,root:NativeObject,dir:HeldDir,c:&Frame,f:&Commit,d:Option<&Delta>,sites:&Sites)->io::Result<Self>{
-        if sites.children.len()!=usize::from(d.is_some()){return Err(invalid("incomplete original FILE placement"));}
+    pub(super) fn at_held_sites(pool:PoolId,volume:VolumeId,root:NativeObject,dir:HeldDir,c:&Frame,f:&Commit,d:Children<'_>,sites:&Sites)->io::Result<Self>{
+        let g=Graph::from_roles(c,f,d)?;
+        if sites.children.len()!=g.children().len(){return Err(invalid("incomplete original FILE placement"));}
+        sites.check(&root)?;
         material::verify_header_at(&dir,&c.create,&sites.directory,&sites.local)?;
         let local=material::custody_lease_at(&dir,&c.create,&sites.local,false)?;
         let open=||HistoryBody::at_originals(&dir,f,&sites.node,&sites.raw);
-        let first=open()?;let second=match(d,sites.children.first()){(Some(d),Some(n))=>Some(IncrBody::at_original(&dir,open()?,d,n)?),
-            (None,None)=>None,_=>return Err(invalid("unexpected retained role"))};
-        sites.check(&root)?;
-        let result=Self{pool,volume,root,lifecycle:None,c:c.clone(),parent:f.clone(),delta:d.cloned(),dir,local,first,second};
+        let first=open()?;let packs=match(d,sites.children.as_refs()){
+            (ChildRoles::None,ChildRoles::None)=>ChildRoles::None,
+            (ChildRoles::One(d),ChildRoles::One(n))=>ChildRoles::One(IncrBody::at_original(&dir,open()?,d,n)?),
+            (ChildRoles::Two(older,newer),ChildRoles::Two(a,b))=>{
+                // Keep a separate pinned view of the older version, even if
+                // all its bytes are overwritten or truncated by its child.
+                let one=IncrBody::at_original(&dir,open()?,older,a)?;
+                let two=IncrBody::at_original(&dir,open()?,older,a)?.extend_frozen(&FrozenSecond{
+                    dir:&dir,parent:Parent::incremental(older),d:newer,object:b})?;
+                ChildRoles::Two(one,two)
+            }
+            _=>return Err(invalid("unexpected retained role")),
+        };
+        let result=Self{pool,volume,root,lifecycle:None,c:c.clone(),parent:f.clone(),children:d.map(Clone::clone),dir,local,first,packs};
         result.exact_names()?;Ok(result)
     }
     fn each(&self,mut apply:impl FnMut(Leaf,&CStr,&PinnedRegular)->io::Result<()>)->io::Result<()>{
@@ -116,9 +135,10 @@ impl Clean{
         let(node,raw)=self.first.native_files();
         apply(Leaf::FullNode,&self.parent.original.node_name(),node)?;
         apply(Leaf::FullRaw,&self.parent.original.body_name(),raw)?;
-        match(&self.delta,&self.second){
-            (Some(d),Some(body))=>apply(Leaf::Incr,&d.original.leaf(),body.single_pack()?)?,
-            (None,None)=>{},_=>return Err(invalid("incomplete selected formal INCR")),
+        if self.children.len()!=self.packs.len(){return Err(invalid("incomplete retained INCR inventory"));}
+        for (i,(d,body)) in self.children.iter().zip(self.packs.iter()).enumerate(){
+            let kind=match i{0=>Leaf::Incr,1=>Leaf::IncrNext,_=>return Err(invalid("unsupported formal ordinal"))};
+            apply(kind,&d.original.leaf(),body.pack_of(Parent::incremental(d))?)?;
         }Ok(())
     }
     fn exact_names(&self)->io::Result<()>{
@@ -139,7 +159,7 @@ impl Clean{
         if self.lifecycle.is_some(){return Err(invalid("a lifecycle source requires its scoped original endpoint"));}
         let(c,f,d)=selection(s,self.c.create.file)?;
         if p.id()!=self.pool||v.id()!=self.c.create.volume||c.digest!=self.c.digest||f.digest!=self.parent.digest||
-            d.map(|v|v.digest)!=self.delta.as_ref().map(|v|v.digest)||v.root.entity!=self.root.entity||
+            d.map(|v|v.digest)!=self.children.as_refs().map(|v|v.digest)||v.root.entity!=self.root.entity||
             fs::Birth::read(&v.root.file)?!=self.root.birth||self.dir.entity!=c.create.directory.entity||
             fs::Birth::read(&self.dir.file)?!=c.create.directory.birth||self.dir.path!=v.root.path.join(&c.create.name){
             return Err(invalid("handoff source no longer belongs to its original FILE/root/frontier"));
@@ -152,7 +172,7 @@ impl Clean{
         if !v.belongs(g,Side::Source)||*r!=g.request()||p.id()!=self.pool||v.id()!=self.volume||
             v.id()!=r.from||g.root(Side::Source)!=&self.root||g.prior()!=*prior||g.sites()!=sites||
             s.file(r.id).map(|c|c.digest)!=Some(self.c.digest)||s.head(r.id).map(|f|f.digest)!=Some(self.parent.digest)||
-            s.delta(r.id).map(|d|d.digest)!=self.delta.as_ref().map(|d|d.digest){
+            s.actual_graph(r.id)?.hashes()!=self.children.as_refs().map(|d|d.digest){
             return Err(invalid("different lifecycle operation, source or formal history"));}
         v.check_source(&self.dir)?;Self::previous_labels(&s,v,g,&self.dir,&self.c)?;
         self.exact_names()?;v.check_source(&self.dir)
@@ -162,8 +182,8 @@ impl Clean{
         // Verify the ENTIRE first FULL even if a child overwrites all of it.
         // Verifying only the latest user-visible bytes would lose history.
         self.first.write_to(io::sink())?;
-        if let Some(body)=&self.second{body.whole(io::sink())?;}
-        let mut bytes=Vec::with_capacity(4);let mut total=0u64;
+        for body in self.packs.iter(){body.whole(io::sink())?;}
+        let mut bytes=Vec::with_capacity(3+self.children.len());let mut total=0u64;
         self.each(|kind,name,pin|{
             let len=pin.stamp.stat.size();
             let digest=match kind{
@@ -191,13 +211,13 @@ impl Clean{
 /// by themselves cannot become a new serving owner or authorize cleanup.
 pub(in crate::ordinary::custody) struct Verified{source:Clean,bytes:Vec<Bytes>,total:u64}
 impl Verified{
-    pub(super) fn originals(&self)->(&Frame,&Commit,Option<&Delta>){(&self.source.c,&self.source.parent,self.source.delta.as_ref())}
+    pub(super) fn originals(&self)->(&Frame,&Commit,Children<'_>){(&self.source.c,&self.source.parent,self.source.children.as_refs())}
     pub(super) fn require_at(&self,v:&FileVolume<'_>,name:&CStr,root:&NativeObject,sites:&Sites)->io::Result<()>{
         use std::os::unix::ffi::OsStrExt;
         if v.pool.id()!=self.pool()||self.source.root!=*root||v.root.entity!=root.entity||
             fs::Birth::read(&v.root.file)?!=root.birth||self.source.dir.path!=v.root.path.join(std::ffi::OsStr::from_bytes(name.to_bytes()))||
             self.source.dir.entity!=sites.directory.entity||fs::Birth::read(&self.source.dir.file)?!=sites.directory.birth||
-            self.objects().iter().any(|b|sites.at(b.kind)!=Some(&b.original)){
+            self.objects().len()!=3+sites.children.len()||self.objects().iter().any(|b|sites.at(b.kind)!=Some(&b.original)){
                 return Err(invalid("reopened material is not the original MOVE role, directory and exact named content"));
         }
         v.require_current()?;self.source.exact_names()?;v.require_current()
@@ -206,14 +226,14 @@ impl Verified{
         let m=&goal.frame;let sites=&m.target;
         if self.volume()!=end.id()||self.source.root!=m.original.dst_root||self.file()!=m.original.file||
             self.source.dir.entity!=sites.directory.entity||fs::Birth::read(&self.source.dir.file)?!=sites.directory.birth||
-            self.objects().iter().any(|row|sites.at(row.kind)!=Some(&row.original)){
+            self.objects().len()!=3+sites.children.len()||self.objects().iter().any(|row|sites.at(row.kind)!=Some(&row.original)){
             return Err(invalid("not the selected lifecycle destination incarnation"));}
         end.check_target_child(goal,&self.source.dir)?;self.source.exact_names()?;end.check_target_child(goal,&self.source.dir)
     }
     pub(super) fn digest(&self)->io::Result<[u8;32]>{
         let mut h=crate::hash::Sha256::new();h.update(b"ZXS/FILE/ALL-CLEAN-MATERIAL\0")?;
         let(c,parent,d)=self.originals();h.update(&c.digest)?;h.update(&parent.digest)?;
-        h.update(&[u8::from(d.is_some())])?;if let Some(d)=d{h.update(&d.digest)?;}
+        h.update(&[d.len() as u8])?;for child in d.iter(){h.update(&child.digest)?;}
         for role in self.objects(){
             let n=u8::try_from(role.name.to_bytes().len()).map_err(|_|invalid("noncanonical transfer name length"))?;
             h.update(&[role.kind.tag(),n])?;h.update(role.name.to_bytes())?;h.update(&role.len.to_be_bytes())?;h.update(&role.digest)?;
@@ -227,7 +247,7 @@ impl Verified{
     pub(super) fn file(&self)->FileId{self.source.c.create.file}
     pub(super) fn history(&self)->HistoryId{self.source.c.create.history}
     pub(super) fn volume(&self)->VolumeId{self.source.volume}
-    pub(super) fn head(&self)->NodeId{self.source.delta.as_ref().map_or(self.source.parent.original.node,|d|d.original.node)}
+    pub(super) fn head(&self)->NodeId{self.source.children.iter().last().map_or(self.source.parent.original.node,|d|d.original.node)}
     pub(super) fn objects(&self)->&[Bytes]{&self.bytes}
     pub(super) fn physical_bytes(&self)->u64{self.total}
     pub(super) fn require(&self,pool:&LocalPool,s:&Journal,volume:&FileVolume<'_>)->io::Result<()>{self.source.require(pool,s,volume)}
