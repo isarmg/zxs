@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zip-workspace"
+version = "0.1.0.dev0"
+description = "Local working directories and explicit, portable whole-directory ZIP commits"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+zip-workspace = "zipworkspace.cli:main"
+
+[tool.setuptools]
+packages = ["zipworkspace"]
