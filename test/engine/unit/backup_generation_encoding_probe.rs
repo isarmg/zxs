@@ -31,6 +31,7 @@ fn observe_generation_encoding(
     let rebuilt = PreparedBackupControl::capture(
         &frozen,
         BackupNativeObjects {
+            fixed_genesis: prefix.fixed_genesis.clone(),
             objects: prefix.objects.clone(),
             seals: prefix.seals.clone(),
         },
@@ -48,6 +49,7 @@ fn compare_generation_observations(
     left: &GenerationEncodingObservation,
     right: &GenerationEncodingObservation,
 ) -> Result<()> {
+    assert_eq!(left.prefix.fixed_genesis, right.prefix.fixed_genesis);
     assert_eq!(left.prefix.objects, right.prefix.objects);
     assert_eq!(canonical_json(&left.prefix.seals)?, canonical_json(&right.prefix.seals)?);
     assert_eq!(left.control.root_hash(), right.control.root_hash());

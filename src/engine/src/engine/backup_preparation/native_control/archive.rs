@@ -14,6 +14,7 @@ use crate::journal::{
 };
 use crate::publication_evidence::{verified_graph_object_at, verified_publication_seal_at};
 use crate::persist::layout;
+use crate::engine::scope_closure::{Anchor, FixedGenesis};
 use data_serialization::de::DeserializeOwned;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,7 +54,9 @@ struct Published {
 #[serialization(deny_unknown_fields)]
 struct Manifest {
     format: String,
-    config: Config,
+    // The one existing private envelope slot. Its nested value is the exact
+    // fixed anchor; Config alone omits the original request and scope root.
+    config: FixedGenesis,
     #[serialization(with = "storage_contract::u64_string")]
     through_sequence: u64,
     through_snapshot: String,
@@ -334,10 +337,17 @@ impl PreparedArchive {
             budget: Budget::default(),
             stored_bytes: 0,
         };
+        let fixed = engine.config.fixed_genesis()?;
         let mut origins = Vec::new();
         let mut journal_bytes = 0usize;
         for disk in &members {
             let root = &engine.disk_resources.get(disk)?.root;
+            engine._locks.verify_disk(disk, root)?;
+            let local = Anchor::read(root)?;
+            if local.fixed_genesis()?.bytes() != fixed.bytes() {
+                return Err(invalid("original Backup member has a different fixed genesis"));
+            }
+            Anchor::verify_original_disk(&local, disk, root)?;
             let seal_bytes = root.read_bytes(
                 &disk.root.join(layout::DISK_IDENTITY.as_path()),
                 MAX_MANIFEST,
@@ -444,7 +454,7 @@ impl PreparedArchive {
         }
         let manifest = Manifest {
             format: FORMAT.into(),
-            config: engine.config().clone(),
+            config: fixed.archived()?,
             through_sequence: job.request.expected_sequence,
             through_snapshot: job.snapshot.clone(),
             members: origins,
@@ -462,6 +472,13 @@ impl PreparedArchive {
             return Err(invalid(
                 "native prefix differs from the admitted live State",
             ));
+        }
+        for disk in &members {
+            let root = &engine.disk_resources.get(disk)?.root;
+            engine._locks.verify_disk(disk, root)?;
+            if Anchor::read(root)?.fixed_genesis()?.bytes() != fixed.bytes() {
+                return Err(invalid("original Backup member changed its fixed genesis during capture"));
+            }
         }
         Ok(Self {
             manifest: bytes,
@@ -517,8 +534,8 @@ fn original_journals(
     manifest: &Manifest,
     source: &mut impl Source,
 ) -> Result<(Vec<JournalSlots>, usize)> {
-    let members = manifest
-        .config
+    let original = manifest.config.configuration();
+    let members = original
         .disks
         .iter()
         .filter(|disk| disk.metadata_member)
@@ -534,11 +551,11 @@ fn original_journals(
             || member.slot_id != disk.slot_id
             || seal.disk_id != disk.disk_id
             || seal.slot_id != disk.slot_id
-            || seal.pool_id != manifest.config.pool_id
-            || seal.pool_semantic_format != manifest.config.pool_semantic_format
+            || seal.pool_id != original.pool_id
+            || seal.pool_semantic_format != original.pool_semantic_format
             || seal.binding_generation != disk.binding_generation
             || seal.format != DiskSealFormat::ManagedDirectory
-            || seal.simulation != (manifest.config.mode == Mode::Development)
+            || seal.simulation != (original.mode == Mode::Development)
         {
             return Err(invalid(
                 "archived member identity differs from the original configuration",
@@ -607,19 +624,20 @@ fn verify(
 }
 
 fn verify_manifest(manifest: &Manifest, job: &Job) -> Result<crate::ValidatedConfig> {
+    let config = manifest.config.configuration();
     if manifest.format != FORMAT
         || manifest.publications.is_empty()
         || manifest.publications.len() > MAX_PUBLICATIONS
         || manifest.through_sequence != job.request.expected_sequence
         || manifest.through_snapshot != job.snapshot
-        || manifest.config.pool_id != job.pool_id
-        || object_hash("backup-preparation-config", &manifest.config)? != job.configuration_hash
+        || config.pool_id != job.pool_id
+        || object_hash("backup-preparation-config", config)? != job.configuration_hash
     {
         return Err(invalid(
             "native prefix does not bind the complete frozen task",
         ));
     }
-    crate::ValidatedConfig::try_from(manifest.config.clone())
+    manifest.config.admit()
 }
 
 fn verify_observed(
@@ -632,6 +650,9 @@ fn verify_observed(
     ) -> Result<()>,
 ) -> Result<(BackupNativeControlReport, AdmittedState)> {
     let config = verify_manifest(manifest, job)?;
+    if canonical_json(manifest)?.as_slice() != bytes {
+        return Err(invalid("native archive does not carry its canonical original fixed bytes"));
+    }
     source.account(bytes.len())?;
     let (journals, journal_frames) = original_journals(manifest, source)?;
     let mut previous: Option<AdmittedState> = None;
@@ -692,7 +713,7 @@ fn verify_observed(
         bound_history_objects_with(&candidate, Some(&admitted), |kind, hash| {
             source.object(kind, hash)
         })?;
-        verify_payloads(&manifest.config, &candidate, &publication, source)?;
+        verify_payloads(&config, &candidate, &publication, source)?;
         // The observer can build bounded in-memory derived material. It must
         // not install/authorize anything until this entire prefix returns.
         observe(&config, &candidate, &published.candidate, &admitted)?;

@@ -89,6 +89,14 @@ impl PreparedBackupControl {
         prefix: BackupNativeObjects,
         stop: &AtomicBool,
     ) -> Result<Self> {
+        if frozen.members.is_empty()
+            || frozen.members.iter().any(|member| member.config.as_slice() != prefix.fixed_genesis.as_slice())
+        {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "original native Backup archive and fenced members have different fixed genesis",
+            ));
+        }
         let transition = object_hash(INTENT_KIND, &frozen.intent)?;
         let mut files = Files {
             values: BTreeMap::new(),

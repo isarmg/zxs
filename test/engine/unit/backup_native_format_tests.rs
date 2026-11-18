@@ -173,6 +173,71 @@ fn current_native_archive_survives_cold_reopen_and_exact_continuation() {
 }
 
 #[test]
+fn detached_archive_supplies_exact_genesis_to_its_first_disk_publication() {
+    let fixture = Fixture::prepared();
+    let task = fixture.task();
+    let fixed = fixture.engine.config.fixed_genesis().unwrap();
+    let manifest = fixture.manifest();
+    assert_eq!(canonical_json(&manifest.config).unwrap(), fixed.bytes());
+    assert_eq!(manifest.config.admit().unwrap().fixed_genesis().unwrap().hash, fixed.hash);
+    let stop = AtomicBool::new(false);
+    let mut prefix = None;
+    let mut first = false;
+    read_observed(
+        &DiskRoot::open(&fixture.target).unwrap(),
+        task.selection.first(),
+        &task.archive_hash,
+        &stop,
+        &mut |config, candidate, hash, state| {
+            assert_eq!(config.fixed_genesis()?.bytes(), fixed.bytes());
+            if prefix.is_none() {
+                assert!(candidate.previous_snapshot.is_none());
+                first = true;
+                prefix = Some(crate::engine::disk_catalog::PreparedDiskScopes::new(config)?);
+            }
+            prefix.as_mut().unwrap().observe(candidate, hash, state, &stop)
+        },
+    ).unwrap();
+    assert!(first);
+    // Same semantic hash is not an excuse to normalize a different physical
+    // envelope containing the fixed bytes.
+    let mut noncanonical = canonical_json(&manifest).unwrap();
+    noncanonical.push(b'\n');
+    fs::write(manifest_path(&fixture.target), noncanonical).unwrap();
+    let preserved = fixture.bytes();
+    assert!(fixture.read(&task.archive_hash).is_err());
+    assert_eq!(fixture.bytes(), preserved);
+    // A caller that rehashes a naked Config still cannot create this format.
+    let mut raw = json_codec::to_value(&manifest).unwrap();
+    raw["config"] = json_codec::to_value(manifest.config.configuration()).unwrap();
+    let changed = storage_contract::object_hash_value(FORMAT, &raw).unwrap();
+    fs::write(manifest_path(&fixture.target), canonical_json(&raw).unwrap()).unwrap();
+    let preserved = fixture.bytes();
+    assert!(fixture.read(&changed).is_err());
+    assert_eq!(fixture.bytes(), preserved);
+}
+
+#[test]
+fn backup_freeze_refuses_one_original_holder_with_same_config_but_another_scope() {
+    let fixture = Fixture::prepared();
+    let task = fixture.task();
+    let selected = fixture.engine.config.metadata_members().next().unwrap();
+    let path = selected.root.join(layout::GENESIS_CONFIGURATION.as_path());
+    let mut raw = storage_contract::strict_json(&fs::read(&path).unwrap()).unwrap();
+    let different = storage_contract::working_tree::MaterialCommitment::from_digest(
+        blake3::hash(b"another well-formed local scope"),
+    );
+    raw["scope_closure"] = json_codec::to_value(different).unwrap();
+    let other = canonical_json(&raw).unwrap();
+    let decoded = Anchor::decode(&other).unwrap();
+    assert_eq!(canonical_json(&*decoded).unwrap(), canonical_json(fixture.engine.config()).unwrap());
+    fs::write(&path, other).unwrap();
+    let preserved = fixture.bytes();
+    assert!(PreparedArchive::freeze(&fixture.engine, task.selection.first()).is_err());
+    assert_eq!(fixture.bytes(), preserved);
+}
+
+#[test]
 fn old_native_manifest_is_rejected_even_with_current_hash_domain_without_writes() {
     for format in ["zxs-backup-native-control", "zxs-container-tags-backup-native-control"] {
         let fixture = Fixture::prepared();

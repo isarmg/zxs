@@ -13,10 +13,22 @@ use storage_contract::working_tree::MaterialCommitment;
 
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct FixedGenesis {
+pub(in crate::engine) struct FixedGenesis {
     config: Config,
     initialization_operation_id: OperationId,
     scope_closure: MaterialCommitment,
+}
+
+impl FixedGenesis {
+    /// The private Backup manifest embeds this exact canonical object, not a
+    /// new Config vote. Decode the only fixed-address format when consuming it.
+    pub(in crate::engine) fn admit(&self) -> Result<ValidatedConfig> {
+        Anchor::decode(&storage_contract::canonical_json(self)?)
+    }
+
+    pub(in crate::engine) fn configuration(&self) -> &Config {
+        &self.config
+    }
 }
 
 /// Read-only presentation of the exact immutable original. This private
@@ -31,6 +43,12 @@ pub(in crate::engine) struct Anchor {
 impl Anchor {
     pub(in crate::engine) fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub(in crate::engine) fn archived(&self) -> Result<FixedGenesis> {
+        // Only decode an already-admitted immutable original. Never synthesize
+        // a lost initialization/scope from present configuration or membership.
+        storage_contract::decode_strict(self.bytes()).map_err(Into::into)
     }
 
     pub(in crate::engine) fn initial(

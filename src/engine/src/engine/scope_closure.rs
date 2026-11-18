@@ -4,7 +4,7 @@ use crate::{Config, ErrorCode, Result, ValidatedConfig};
 use storage_contract::{Generation, OperationId};
 
 mod anchor;
-pub(in crate::engine) use anchor::Anchor;
+pub(in crate::engine) use anchor::{Anchor, FixedGenesis};
 mod genesis;
 mod images;
 mod objects;

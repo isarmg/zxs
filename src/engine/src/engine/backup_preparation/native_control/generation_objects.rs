@@ -3,6 +3,9 @@
 use super::*;
 
 pub(in crate::engine) struct BackupNativeObjects {
+    // In-memory join between the verified preparation manifest and every
+    // original fenced member. No extra durable copy or new archive object.
+    pub(in crate::engine) fixed_genesis: Vec<u8>,
     pub(in crate::engine) objects: BTreeMap<(String, String), Vec<u8>>,
     pub(in crate::engine) seals: BTreeMap<String, PublicationSeal>,
 }
@@ -95,6 +98,7 @@ fn collect_at(
         })
         .collect::<Result<_>>()?;
     Ok(BackupNativeObjects {
+        fixed_genesis: canonical_json(&manifest.config)?,
         objects: source.objects,
         seals,
     })

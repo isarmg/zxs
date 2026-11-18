@@ -991,9 +991,9 @@ fn real_finalize_structural_equality_preserves_payload_rejection_and_bytes() {
             let mut old = target(&root, &stop);
             let mut new = target(&root, &stop);
             let expected = encoded_reference_verify_payloads(
-                &manifest.config, &candidate, selected, &mut old,
+                manifest.config.configuration(), &candidate, selected, &mut old,
             );
-            let actual = verify_payloads(&manifest.config, &candidate, selected, &mut new);
+            let actual = verify_payloads(manifest.config.configuration(), &candidate, selected, &mut new);
             assert_eq!(old.budget.reads, new.budget.reads);
             assert_eq!(old.budget.bytes, new.budget.bytes);
             assert!(new.budget.reads > 0);
@@ -1110,15 +1110,15 @@ fn decomposed_verify_observed(
         || manifest.publications.len() > MAX_PUBLICATIONS
         || manifest.through_sequence != job.request.expected_sequence
         || manifest.through_snapshot != job.snapshot
-        || manifest.config.pool_id != job.pool_id
-        || object_hash("backup-preparation-config", &manifest.config)? != job.configuration_hash
+        || manifest.config.configuration().pool_id != job.pool_id
+        || object_hash("backup-preparation-config", manifest.config.configuration())? != job.configuration_hash
     {
         return Err(invalid(
             "native prefix does not bind the complete frozen task",
         ));
     }
     let config = costs.measure(ArchiveStage::Configuration, source, |_| {
-        crate::ValidatedConfig::try_from(manifest.config.clone())
+        manifest.config.admit()
     })?;
     source.account(bytes.len())?;
     let (journals, journal_frames) = costs.measure(ArchiveStage::Journals, source, |source| {
@@ -1194,7 +1194,7 @@ fn decomposed_verify_observed(
             })
         })?;
         costs.measure(ArchiveStage::Payloads, source, |source| {
-            verify_payloads(&manifest.config, &candidate, &publication, source)
+            verify_payloads(manifest.config.configuration(), &candidate, &publication, source)
         })?;
         // The observer can build bounded in-memory derived material. It must
         // not install/authorize anything until this entire prefix returns.
