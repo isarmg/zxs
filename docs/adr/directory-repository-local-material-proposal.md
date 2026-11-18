@@ -1,6 +1,6 @@
 # 待决定：让一块盘能核验整个目录快照仓库，而不另建分支注册表
 
-**状态：仅提案，尚未获批，未实现。** [已批准的三范围格式](three-scope-production-authority.md)
+**决策：2026-11-18 03:53:31 UTC，所有者批准了 [02d97634 的本页](https://github.com/isarmg/zxs/blob/02d97634a45f028bcdab5cbae78606a7ce70637e/docs/adr/directory-repository-local-material-proposal.md)。批准只覆盖下述目录局部材料；不是已完成、已合并或已测试声明。** [已批准的三范围格式](three-scope-production-authority.md)
 给目录材料留了 `native{root_hash}`，但没有定义一个能代表**整个目录仓库**的本地原生根。
 本提案只定义这个引用的内容，及首次仅有预约时如何诚实登记。不是升级、第二种
 Snapshot 格式、另一个写者、可变 HEAD 文件或新的表决。既有目录操作/HTTP/SMB 不变。

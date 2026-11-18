@@ -209,7 +209,7 @@ fn frozen_image_remains_named_while_its_logical_rows_are_admitted() {
     let image = PreparedImage::new(Schema::DiskHistory, b"frozen bytes".to_vec());
     image.install_verified(&root, |_| Ok(())).unwrap();
     let representation = image.representation();
-    let Representation::Sqlite { image_hash, .. } = representation;
+    let Representation::Sqlite { image_hash, .. } = representation else { panic!("expected original SQLite representation") };
     let path = temporary.path().join(layout::scope_image(image_hash).as_path());
     let parked = path.with_extension("saved");
     // Isolate the physical image guard; production callbacks actually decode SQLite.

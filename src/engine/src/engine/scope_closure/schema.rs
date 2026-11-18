@@ -34,6 +34,7 @@ pub(super) enum Membership {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(rename_all = "snake_case")]
 pub(super) enum Scope {
+    Directory,
     File,
     DiskCurrent,
     DiskHistory,

@@ -23,17 +23,19 @@ impl OrdinalBuilder {
     /// The ordinal is local to this exact material. Matching object hashes
     /// across different occurrences must not remove/reorder rows.
     pub(in crate::engine) fn push<T: Serialize>(&mut self, row: &T) -> Result<()> {
-        if self.rows.len() == self.limit {
-            return Err(Failure::Budget.into());
-        }
         let key = format!("{:020}", self.rows.len());
+        self.put(key, row)
+    }
+    fn put<T: Serialize>(&mut self, key: String, row: &T) -> Result<()> {
+        if self.rows.contains_key(&key) { return Err(Failure::PageMismatch.into()); }
+        if self.rows.len() >= self.limit { return Err(Failure::Budget.into()); }
         let value = json_codec::to_value(row)?;
         let bytes = storage_contract::canonical_json_value(&value)?.len();
-        // A singleton must fit even including its key, quotes, colon and braces.
-        let singleton = bytes.checked_add(key.len() + 5).ok_or(Failure::Budget)?;
-        if singleton > PAGE_LIMIT {
-            return Err(Failure::Budget.into());
-        }
+        // Include escaped JSON map key, colon and the two braces. Typed keys
+        // may themselves contain quotes; ordinal keys keep their old cost.
+        let named = storage_contract::canonical_json(&key)?.len();
+        let singleton = bytes.checked_add(named).and_then(|n| n.checked_add(3)).ok_or(Failure::Budget)?;
+        if singleton > PAGE_LIMIT { return Err(Failure::Budget.into()); }
         self.input_bytes = self.input_bytes.checked_add(singleton - 1)
             .filter(|total| *total <= PACKAGE_LIMIT).ok_or(Failure::Budget)?;
         self.rows.insert(key, value);
@@ -52,6 +54,18 @@ impl OrdinalBuilder {
         }
         Ok(OrdinalPages { root, pages, entries, bytes })
     }
+}
+
+/// Stable typed occurrence keys for an approved native material. This writer
+/// is separate from ordinal rows: mixing the two representations is not valid.
+pub(super) struct KeyedBuilder(OrdinalBuilder);
+impl KeyedBuilder {
+    pub(super) fn new(limit: usize) -> Self { Self(OrdinalBuilder::new(limit)) }
+    pub(super) fn push<K: Serialize, V: Serialize>(&mut self, key: &K, value: &V) -> Result<()> {
+        let key = String::from_utf8(storage_contract::canonical_json(key)?).map_err(|_| Failure::PageMismatch)?;
+        self.0.put(key, value)
+    }
+    pub(super) fn finish(self) -> Result<OrdinalPages> { self.0.finish() }
 }
 
 pub(in crate::engine) struct OrdinalPages {

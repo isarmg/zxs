@@ -223,7 +223,9 @@ impl Original {
         if let Some(lease) = lease {
             lease.check_running()?;
         }
-        let Representation::Sqlite { image_hash, image_bytes, .. } = material.representation;
+        let Representation::Sqlite { image_hash, image_bytes, .. } = material.representation else {
+            return Err(invalid("native material cannot be a DISK history SQLite image"));
+        };
         Ok((VerifiedHistory {
             registration: identity.clone(),
             sequence: Sequence::new(sequence),
@@ -257,6 +259,8 @@ pub(super) fn verify_current_image(
         }
         Ok(actual)
     })?;
-    let Representation::Sqlite { image_hash, image_bytes, .. } = representation;
+    let Representation::Sqlite { image_hash, image_bytes, .. } = representation else {
+        return Err(invalid("native material cannot be a DISK current SQLite image"));
+    };
     Ok(VerifiedCurrent { logical_root, image_hash, image_bytes, catalog })
 }

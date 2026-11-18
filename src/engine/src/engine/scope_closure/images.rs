@@ -23,6 +23,7 @@ pub(in crate::engine) enum Schema {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(in crate::engine) enum Representation {
+    Native { root_hash: storage_contract::working_tree::MaterialCommitment },
     Sqlite {
         schema: Schema,
         image_hash: ContentHash,
@@ -50,7 +51,7 @@ impl Representation {
             schema,
             image_hash,
             image_bytes,
-        } = self;
+        } = self else { return Err(ScopeClosureError::ImageMismatch.into()); };
         if schema != required || image_bytes == 0 {
             return Err(ScopeClosureError::ImageMismatch.into());
         }
@@ -150,7 +151,7 @@ impl PreparedImage {
     ) -> Result<()> {
         let Representation::Sqlite {
             schema, image_hash, ..
-        } = self.representation;
+        } = self.representation else { return Err(ScopeClosureError::ImageMismatch.into()); };
         // Existing immutable material is compared, never exchanged; both a new
         // and a previously completed install synchronize file and parent.
         let path = layout::scope_image(image_hash);

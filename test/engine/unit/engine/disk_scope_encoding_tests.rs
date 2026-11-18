@@ -307,7 +307,7 @@ fn selected_current_image_requires_original_full_rows_and_exact_page_bytes() {
         wrong.source_sequence += 1;
         assert!(check(&wrong).is_err());
 
-        let Representation::Sqlite { image_hash, .. } = reference;
+        let Representation::Sqlite { image_hash, .. } = reference else { panic!("expected original SQLite representation") };
         assert_eq!(verified.image_hash, image_hash);
         let path = disk.root.join(crate::persist::layout::scope_image(image_hash).as_path());
         let mut equivalent = bytes;

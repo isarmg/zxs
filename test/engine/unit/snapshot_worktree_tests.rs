@@ -796,7 +796,15 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     let (reserved, manifest) = publication::reserve(
         &mut engine, &host, &pending, allocated, &principal(),
     ).unwrap();
+    let measured = crate::engine::scope_closure::measure_initial_directory_reservation(&engine, allocated.repository).unwrap();
+    assert_eq!(measured.0, pending.operation_id);
+    assert!(crate::engine::scope_closure::measure_initial_directory_reservation(
+        &engine, SnapshotRepositoryId::generate().unwrap()).is_err());
     let prepared = host.prepare_node(&mut engine, reserved, manifest).unwrap();
+    // A real staged node now exists under this host. Its bytes cannot
+    // silently promote or change the original unbound reservation root.
+    assert_eq!(crate::engine::scope_closure::measure_initial_directory_reservation(
+        &engine, allocated.repository).unwrap(), measured);
     prepared.require_engine(&engine).unwrap();
     let pending_receipt = engine.operation(pending.operation_id).unwrap();
     let pending_material = inventory(&disks[1].join("common-data"));
@@ -805,6 +813,8 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     drop(engine);
 
     engine = Engine::open(&system).unwrap();
+    assert_eq!(crate::engine::scope_closure::measure_initial_directory_reservation(
+        &engine, allocated.repository).unwrap(), measured);
     let before = Arc::clone(&engine.state);
     let error = initialize_root(&mut engine, &pending, &principal()).unwrap_err();
     assert!(matches!(error, RegistrationError::Pending(operation)

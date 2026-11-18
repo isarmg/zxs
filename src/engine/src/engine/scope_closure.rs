@@ -3,6 +3,7 @@
 use crate::{Config, ErrorCode, Result, ValidatedConfig};
 use storage_contract::{Generation, OperationId};
 
+pub(in crate::engine) mod directory;
 mod anchor;
 pub(in crate::engine) use anchor::{Anchor, FixedGenesis};
 mod genesis;
@@ -99,3 +100,14 @@ pub(super) fn capture_initial_roots(
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/scope_genesis_tests.rs"]
 mod tests;
+
+/// Internal local diagnostic: the entity is the admitted ORDINARY host and
+/// the commitment describes a reservation. It is never a usable repository
+/// or authority to adopt even correctly shaped material currently at its name.
+pub(crate) fn measure_initial_directory_reservation(
+    engine: &crate::Engine, repository: storage_contract::working_tree::SnapshotRepositoryId,
+) -> Result<(OperationId, storage_contract::working_tree::MaterialCommitment,
+            platform_io::fs_safety::linux::FileIdentity)> {
+    let pending = directory::PendingRepository::original(&engine.planning_context(), repository)?;
+    Ok((pending.reservation(), pending.root(), pending.host_entity()))
+}

@@ -41,6 +41,7 @@ pub(crate) enum ScopeObjectDomain {
     Closure,
     Disk,
     System,
+    DirectoryRepository,
     EmptyInventoryPage,
 }
 impl ScopeObjectDomain {
@@ -50,6 +51,7 @@ impl ScopeObjectDomain {
             Self::Disk => "disk-scope-manifest",
             Self::System => "system-scope-material",
             Self::EmptyInventoryPage => "state-page",
+            Self::DirectoryRepository => "directory-repository-material",
         }
     }
 }

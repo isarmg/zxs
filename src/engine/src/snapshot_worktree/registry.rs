@@ -22,6 +22,8 @@ use storage_contract::working_tree::{
 };
 use storage_contract::{BranchName, EntryId, OperationId, Principal, RepositoryId, Sequence};
 
+mod local_material;
+pub(crate) use local_material::InitialDirectoryMaterial;
 mod backup;
 pub(crate) use backup::require_backup_snapshot_scope;
 mod edits;

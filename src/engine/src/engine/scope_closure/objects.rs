@@ -13,7 +13,7 @@ pub(super) use layout::ScopeObjectDomain as Domain;
 impl Domain {
     fn maximum(self) -> usize {
         match self {
-            Self::Closure => 8 * 1024,
+            Self::Closure | Self::DirectoryRepository => 8 * 1024,
             Self::Disk | Self::System | Self::EmptyInventoryPage => 64 * 1024,
         }
     }
