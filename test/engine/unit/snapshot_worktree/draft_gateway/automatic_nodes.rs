@@ -156,3 +156,65 @@ fn emergency_after_real_unborn_full_keeps_zero_history_and_the_exact_saved_body(
     assert_eq!(count, bytes.len());
     assert!(bytes.iter().all(|byte| *byte == 67));
 }
+
+#[test]
+fn same_idle_writer_reopens_only_its_acknowledged_automatic_body_for_the_next_range() {
+    let (fixture,mut engine)=Fixture::new();
+    let target=&fixture.targets[0];
+    let actor:Principal="admin".parse().unwrap();
+    mode(&mut engine,target,&actor,CommitMode::Automatic);
+    let mut h=engine.open_native_working(target,&actor,true).unwrap();
+    engine.write_native_working(&mut h,&actor,0,b"acked-A").unwrap();
+    let a=engine.flush_native_working(&mut h,&actor).unwrap().unwrap();
+    let a_id=h.operation().unwrap();
+    assert_eq!(a.operation_id,a_id);
+    let task=engine.prepare_automatic_file(target.file).unwrap().execute().unwrap();
+    let published=engine.finish_automatic_file(task).unwrap();
+    let after_a=engine.file_draft_base(target).unwrap();
+    assert_ne!(a_id,published.operation_id);
+    let mut prefix=[0;7];
+    assert_eq!(engine.read_native_working(&h,&mut prefix,0).unwrap(),prefix.len());
+    assert_eq!(&prefix,b"acked-A");
+    let intruder:Principal="different".parse().unwrap();
+    assert!(engine.write_native_working(&mut h,&intruder,0,b"not allowed").is_err());
+    assert_eq!(h.operation(),Some(a_id));
+    engine.write_native_working(&mut h,&actor,6,b"B").unwrap();
+    let b=engine.flush_native_working(&mut h,&actor).unwrap().unwrap();
+    assert_ne!(a_id,b.operation_id);
+    assert_eq!(engine.flush_native_working(&mut h,&actor).unwrap(),Some(b.clone()));
+    assert_eq!(engine.operation(a_id).unwrap(),a);
+    assert_eq!(engine.operation(published.operation_id).unwrap(),published);
+    assert_eq!(engine.file_draft_base(target).unwrap(),after_a);
+    let current=engine.file_working_state(target).unwrap();
+    assert_eq!(current.draft().unwrap().0,&after_a);
+    assert_eq!(current.automatic_controller().unwrap().pending_save().unwrap().operation,b.operation_id);
+    assert_eq!(engine.read_native_working(&h,&mut prefix,0).unwrap(),prefix.len());
+    assert_eq!(&prefix,b"acked-B");
+    drop(h);drop(engine);
+    let cold=Engine::open(&fixture.system).unwrap();
+    assert_eq!(cold.operation(b.operation_id).unwrap(),b);
+    assert_eq!(cold.operation(published.operation_id).unwrap(),published);
+    assert_eq!(cold.file_working_state(target).unwrap(),current);
+}
+
+#[test]
+fn unacknowledged_edit_is_not_reissued_or_rebased_if_automatic_publication_intervenes() {
+    let (fixture,mut engine)=Fixture::new();
+    let target=&fixture.targets[0];
+    let actor:Principal="admin".parse().unwrap();
+    mode(&mut engine,target,&actor,CommitMode::Automatic);
+    let mut h=engine.open_native_working(target,&actor,true).unwrap();
+    engine.write_native_working(&mut h,&actor,0,b"durable").unwrap();
+    let saved=engine.flush_native_working(&mut h,&actor).unwrap().unwrap();
+    let task=engine.prepare_automatic_file(target.file).unwrap().execute().unwrap();
+    engine.write_native_working(&mut h,&actor,1,b"only staged").unwrap();
+    let staged=h.operation().unwrap();
+    let decided=engine.finish_automatic_file(task).unwrap();
+    let unchanged=engine.state().clone();
+    assert!(engine.flush_native_working(&mut h,&actor).is_err());
+    assert!(!engine.state().operations.contains_key(&staged));
+    assert_eq!(engine.state().sequence,unchanged.sequence);
+    assert_eq!(engine.state().file_containers[&target.file],unchanged.file_containers[&target.file]);
+    assert_eq!(engine.operation(saved.operation_id).unwrap(),saved);
+    assert_eq!(engine.operation(decided.operation_id).unwrap(),decided);
+}

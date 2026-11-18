@@ -9,6 +9,8 @@ use std::sync::Arc;
 use storage_contract::file_draft::{DraftLocation, UnbornSaveRequest};
 use storage_contract::{OperationId, Principal};
 
+mod continuation;
+
 /// Descriptive current namespace, never a synthetic historical Entry.
 #[derive(Clone, Debug)]
 pub enum NativeCurrentEntry {
@@ -45,6 +47,7 @@ pub struct NativeWorkingFile {
     stage: Stage,
     operation: Option<OperationId>,
     saved: Option<OperationResult>,
+    continued: Option<continuation::Acknowledged>,
 }
 
 enum Stage {
@@ -106,7 +109,7 @@ impl NativeWorkingFile {
         Self {
             target: NativeWorkingTarget::Worktree { target, revision, maximum },
             principal, reader: NativeReader::Unborn(reader), writable, stage: Stage::Idle,
-            operation: None, saved: None,
+            operation: None, saved: None, continued: None,
         }
     }
     pub fn operation(&self) -> Option<OperationId> { self.operation }
@@ -118,6 +121,15 @@ impl NativeWorkingFile {
         Ok(())
     }
 
+    fn continued_reader(&self, engine: &Engine) -> Result<Option<NativeReader>> {
+        if !self.writable || !matches!(self.stage, Stage::Idle) {return Ok(None)}
+        match (&self.target, &self.continued, &self.saved) {
+            (NativeWorkingTarget::Current(target), Some(source), Some(saved))
+                if self.operation==Some(saved.operation_id) => source.continued(engine,target,&self.principal,saved),
+            _ => Ok(None),
+        }
+    }
+
     fn editing(&mut self, engine: &Engine, principal: &Principal)
         -> Result<&mut WorkingWriteSession>
     {
@@ -125,6 +137,7 @@ impl NativeWorkingFile {
         if matches!(self.stage, Stage::Idle) {
             // A later batch gets a new operation only from the then-current
             // admitted source. We do not rebind an old Editing source Arc.
+            if let Some(verified)=self.continued_reader(engine)? { self.reader=verified; }
             let record = engine.state.file_containers.get(&self.target.file())
                 .ok_or(Error::FileDraft(Failure::SourceChanged))?;
             self.reader.require_record(self.target.file(), record)?;
@@ -155,6 +168,7 @@ impl NativeWorkingFile {
             self.stage = Stage::Editing(editing);
             self.operation = Some(operation);
             self.saved = None;
+            self.continued = None;
         }
         match &mut self.stage {
             Stage::Editing(editing) => Ok(editing),
@@ -198,7 +212,7 @@ impl Engine {
         Ok(NativeWorkingFile {
             target: NativeWorkingTarget::Current(target.clone()), principal: principal.clone(),
             reader: self.open_native_reader(target)?, writable, stage: Stage::Idle,
-            operation: None, saved: None,
+            operation: None, saved: None, continued: None,
         })
     }
 
@@ -216,8 +230,10 @@ impl Engine {
         match &file.stage {
             Stage::Editing(editing) => editing.logical_size(&self.planning_context()),
             Stage::Idle => {
-                file.reader.require_source()?;
-                Ok(file.reader.logical_size())
+                let fresh=file.continued_reader(self)?;
+                let observed=fresh.as_ref().unwrap_or(&file.reader);
+                observed.require_source()?;
+                Ok(observed.logical_size())
             }
             Stage::Pending { .. } | Stage::Failed => {
                 Err(Error::FileDraft(Failure::WorkingEditFailed))
@@ -230,7 +246,7 @@ impl Engine {
     ) -> Result<usize> {
         match &file.stage {
             Stage::Editing(editing) => editing.read_at(&self.planning_context(), output, offset),
-            Stage::Idle => file.reader.read_at(output, offset),
+            Stage::Idle => file.continued_reader(self)?.as_ref().unwrap_or(&file.reader).read_at(output, offset),
             Stage::Pending { .. } | Stage::Failed => {
                 Err(Error::FileDraft(Failure::WorkingEditFailed))
             }
@@ -324,7 +340,12 @@ impl Engine {
                 NativeReader::Unborn(reader)
             }
         };
+        let continued=match &file.target {
+            NativeWorkingTarget::Current(target) => continuation::Acknowledged::capture(self,target,&reader,principal,file.operation,&result)?,
+            NativeWorkingTarget::Worktree {..} => None,
+        };
         file.reader = reader;
+        file.continued = continued;
         file.stage = Stage::Idle;
         file.saved = Some(result.clone());
         Ok(Some(result))

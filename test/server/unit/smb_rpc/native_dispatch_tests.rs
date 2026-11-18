@@ -316,20 +316,24 @@ fn native_dispatch_uses_real_engine_and_cold_unborn_content_without_transport() 
 mod worktree;
 
 #[test]
-fn live_automatic_save_becomes_manual_draft_through_the_production_dispatcher() {
-    exercise_live_automatic_switch(false);
+fn same_native_smb_handle_continues_after_its_own_automatic_publication() {
+    exercise_acknowledged_automatic(None);
 }
 
 #[test]
-fn old_automatic_handle_cannot_publish_after_switching_back_to_automatic() {
-    exercise_live_automatic_switch(true);
+fn old_native_writer_refuses_an_intervening_manual_mode_even_after_its_own_publication() {
+    exercise_acknowledged_automatic(Some(false));
 }
 
-fn exercise_live_automatic_switch(cycle_back: bool) {
+#[test]
+fn restoring_automatic_mode_does_not_resurrect_an_old_native_writer() {
+    exercise_acknowledged_automatic(Some(true));
+}
+
+fn exercise_acknowledged_automatic(cycle_mode:Option<bool>) {
     use std::io::Read;
     use storage_contract::OperationId;
     use storage_contract::file_draft::{CommitMode, DraftCommand};
-
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("state");
     let engine = Engine::initialize(
@@ -376,60 +380,53 @@ fn exercise_live_automatic_switch(cycle_back: bool) {
         view.base
     };
     let historical = switch(&direct, CommitMode::Automatic);
-    let (old, file) = direct.open(path, true, false);
-    assert_eq!(old.data_io, OpenIo::Descriptor);
-    let bytes = b"staged before manual switch";
-    direct.call(Request::PrepareWrite {
-        handle: old.handle, end: bytes.len() as u64, bytes: bytes.len() as u64,
-    });
-    file.write_all_at(bytes, 0).unwrap();
-    file.set_len(bytes.len() as u64).unwrap();
-    direct.call(Request::Dirty { handle: old.handle });
-    assert_eq!(switch(&direct, CommitMode::Manual), historical);
-    if cycle_back {
-        assert_eq!(switch(&direct, CommitMode::Automatic), historical);
-    }
-    let blocked = direct.share.dispatch(Request::PrepareWrite {
-        handle: old.handle, end: 4096, bytes: 1,
-    }).unwrap_err();
-    assert_eq!(blocked.error.code, storage_contract::ErrorCode::FileBranchConflict);
-    if cycle_back {
-        let rejected = direct.share.dispatch(Request::Flush { handle: old.handle }).unwrap_err();
-        assert_eq!(rejected.error.code, storage_contract::ErrorCode::FileBranchConflict);
-        let working = direct.backend.file_working(&current, target.clone()).unwrap();
-        assert_eq!(working.base, historical);
-        assert_eq!(working.working.mode(), CommitMode::Automatic);
-        assert!(working.working.draft().is_none());
-        let file = target.file.to_string();
-        assert_eq!(direct.backend.file_history(&current, &file).unwrap().len(), 1);
-        let (read, _) = direct.open(path, false, false);
-        assert_eq!(direct.read(read.handle), original);
-        direct.call(Request::Close { handle: read.handle });
+    let (opened, descriptor)=direct.open(path,true,false);
+    assert_eq!(opened.data_io, OpenIo::NativeWorking);
+    let handle=opened.handle;
+    direct.write(handle,WorkingPosition::At {offset:0},b"AAAA");
+    let a=direct.flush(handle);
+    assert_eq!(a["operation_kind"],"file.draft.write");
+    assert_eq!(direct.flush(handle),a);
+    // Real native worker: independent source capture and single engine decision,
+    // no invented notification, new SMB OPEN or replacement descriptor.
+    direct.backend.run_automatic_file(&mut None,||true).unwrap();
+    let decided=direct.backend.file_working(&current,target.clone()).unwrap();
+    assert_ne!(decided.base.version_id(),historical.version_id());
+    assert!(decided.working.draft().is_none());
+    let count=direct.backend.file_history(&current,&target.file.to_string()).unwrap().len();
+    if let Some(cycle)=cycle_mode {
+        switch(&direct,CommitMode::Manual);
+        if cycle {switch(&direct,CommitMode::Automatic);}
+        assert!(direct.share.dispatch(Request::WorkingWrite {
+            handle,position:WorkingPosition::At {offset:1},bytes:b"B".to_vec(),
+        }).is_err());
+        assert_eq!(direct.backend.file_history(&current,&target.file.to_string()).unwrap().len(),count);
+        assert!(direct.backend.file_working(&current,target).unwrap().working.draft().is_none());
         return;
     }
-    let receipt = direct.flush(old.handle);
-    assert_eq!(receipt["operation_kind"], "file.draft.write");
-    assert_eq!(direct.flush(old.handle), receipt);
-    direct.call(Request::Close { handle: old.handle });
-    let now = direct.backend.file_working(&current, target.clone()).unwrap();
-    assert_eq!(now.base, historical);
-    assert!(now.working.draft().is_some());
-    assert_eq!(direct.backend.file_history(&current, &target.file.to_string()).unwrap().len(), 1);
-    let (read, _) = direct.open(path, false, false);
-    assert_eq!(direct.read(read.handle), bytes);
-    direct.call(Request::Close { handle: read.handle });
-    drop(file);
+    assert_eq!(&direct.read(handle)[..4],b"AAAA");
+    direct.write(handle,WorkingPosition::At {offset:1},b"BB");
+    let b=direct.flush(handle);
+    assert_eq!(b["operation_kind"],"file.draft.write");
+    assert_ne!(b["operation_id"],a["operation_id"]);
+    assert_eq!(direct.flush(handle),b);
+    assert_eq!(&direct.read(handle)[..4],b"ABBA");
+    assert_eq!(direct.backend.file_history(&current,&target.file.to_string()).unwrap().len(),count);
+    direct.call(Request::Close {handle});
+    drop(descriptor);
     drop(direct);
-
-    let engine = Engine::open(&system).unwrap();
-    let mut body = Vec::new();
-    engine.open_file_draft(&target).unwrap().read_to_end(&mut body).unwrap();
-    assert_eq!(body, bytes);
-    body.clear();
-    engine.open_content(&historical.version_id().to_string())
-        .unwrap().file.read_to_end(&mut body).unwrap();
-    assert_eq!(body, original);
-    assert_eq!(engine.file_history(&target.file.to_string()).unwrap().len(), 1);
+    let cold=Engine::open(&system).unwrap();
+    assert_eq!(cold.file_draft_base(&target).unwrap(),decided.base);
+    let working=cold.file_working_state(&target).unwrap();
+    assert!(working.incremental().is_some());
+    let actor="alice".parse().unwrap();
+    let reader=cold.open_native_working(&target,&actor,false).unwrap();
+    let mut prefix=[0;4];
+    assert_eq!(cold.read_native_working(&reader,&mut prefix,0).unwrap(),4);
+    assert_eq!(&prefix,b"ABBA");
+    let mut historical_body=Vec::new();
+    cold.open_content(&historical.version_id().to_string()).unwrap().file.read_to_end(&mut historical_body).unwrap();
+    assert_eq!(historical_body,original);
 }
 
 #[test]
