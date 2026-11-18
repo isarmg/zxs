@@ -15,6 +15,8 @@ use storage_contract::working_tree::SnapshotNodeId;
 
 #[path = "draft_gateway/fixture.rs"]
 mod fixture;
+#[path = "draft_gateway/outside_mapping.rs"]
+mod outside_mapping;
 use fixture::{Fixture, inventory, read_draft, read_view, selection, write_draft};
 
 fn read_plan(plan: &DirectoryWorkingPlan) -> Vec<(name_policy::PortablePath, Vec<u8>)> {

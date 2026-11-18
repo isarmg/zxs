@@ -1,4 +1,5 @@
 //! Verified replicas, read leases, offline export and disk observations.
+pub(crate) mod exposed;
 use super::provenance::MetadataReadContext;
 use super::{Engine, OpenedContent, ReadLease, ReadSource};
 use crate::error::BackupReadError;
