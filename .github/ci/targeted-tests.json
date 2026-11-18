@@ -707,7 +707,7 @@
       ]
     },
     "smb-worktree-overwrite": {
-      "reason": "Run existing-worktree open, resave, explicit commit and cold reopen through the real native SMB dispatcher, plus ordinary-file dispatch. This does not run smbd or exercise the external Samba ABI.",
+      "reason": "Run existing-worktree open, resave, explicit commit and cold reopen through the real native SMB dispatcher, plus ordinary-file dispatch. This does not run smbd or exercise the external Samba ABI. A same-name restore must not revive old read descriptors or a buffered directory listing.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -723,7 +723,7 @@
           "exact": [
             "smb_rpc::tests::native_dispatch_tests::native_dispatch_uses_real_engine_and_cold_unborn_content_without_transport"
           ],
-          "max_tests": 4,
+          "max_tests": 5,
           "timeout_seconds": 900
         }
       ]
@@ -7477,7 +7477,7 @@
       ]
     },
     "file-original-timeline-browser": {
-      "reason": "Future isolated packaged Chrome run uses two real versions between an original path and original frozen deletion. Source checks and harness compilation do not execute the real browser, verify physical graph closure, or claim end-to-end acceptance.",
+      "reason": "The browser target is wired into the packaged release check, but its current delete/undo seed is blocked by fresh layout whole-container lifecycle. Keep the original positive assertion; local source checks cannot make this fixture reachable. No Chrome or release acceptance claimed.",
       "python_tests": [
         "test_release_acceptance"
       ],
@@ -7594,6 +7594,44 @@
           ],
           "max_tests": 3,
           "timeout_seconds": 900
+        }
+      ]
+    },
+    "worktree-clean-mount-originals": {
+      "reason": "Select the original clean-batch Hide/Restore, repeated original cold ledger admission and fault-injected reserve/install boundaries. The direct SMB dispatch separately exercises a real management backend and stale open handles. Checking the HTTP route compiles it only; these are not direct HTTP auth tests, a browser run or a Samba acceptance.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "snapshot_worktree::public::transport::content_overlay::publish::clean_mount::hide_releases_only_the_visible_name_and_admin_restore_reuses_only_the_original_instance",
+            "snapshot_worktree::public::transport::content_overlay::publish::clean_mount::cold_replays_only_the_two_native_round_trips_and_rejects_an_unowned_canonical_ledger_frame"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "snapshot_worktree::public::transport::content_overlay::publish::clean_mount::hide_and_restore_keep_their_original_native_occupancy_across_all_install_boundaries"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900,
+          "features": [
+            "fault-injection"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "mode": "check"
         }
       ]
     }
@@ -7727,19 +7765,22 @@
       "path": "src/engine/src/engine/publication.rs",
       "groups": [
         "worktree-exact-originals",
-        "original-decision-disk-images"
+        "original-decision-disk-images",
+        "worktree-clean-mount-originals"
       ]
     },
     {
       "path": "src/engine/src/engine/publication/directory.rs",
       "groups": [
-        "worktree-exact-originals"
+        "worktree-exact-originals",
+        "worktree-clean-mount-originals"
       ]
     },
     {
       "path": "src/engine/src/snapshot_worktree.rs",
       "groups": [
-        "worktree-exact-originals"
+        "worktree-exact-originals",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -7765,7 +7806,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/registry/mounts.rs",
       "groups": [
-        "worktree-exact-originals"
+        "worktree-exact-originals",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -8168,7 +8210,8 @@
     {
       "path": "src/contract/src/snapshot_worktree.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -8271,7 +8314,8 @@
     {
       "path": "src/engine/src/directory_worktree/ledger.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -8289,7 +8333,8 @@
     {
       "path": "src/engine/src/directory_worktree/ledger/storage.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -8332,7 +8377,8 @@
     {
       "path": "src/engine/src/engine.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -8399,7 +8445,8 @@
     {
       "path": "src/engine/src/persist/snapshot_worktree.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -8448,7 +8495,8 @@
       "path": "src/engine/src/snapshot_worktree/public.rs",
       "groups": [
         "worktree-added-native",
-        "worktree-exact-originals"
+        "worktree-exact-originals",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -8467,7 +8515,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/registry.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -8512,13 +8561,16 @@
       "path": "src/server/src/backend_methods.rs",
       "groups": [
         "worktree-added-native",
-        "automatic-management-observation"
+        "automatic-management-observation",
+        "worktree-clean-mount-originals",
+        "smb-worktree-overwrite"
       ]
     },
     {
       "path": "src/server/src/backend_smb_native.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "smb-worktree-overwrite"
       ]
     },
     {
@@ -8531,13 +8583,16 @@
       "path": "src/server/src/engine_backend.rs",
       "groups": [
         "worktree-added-native",
-        "original-file-timeline-source"
+        "original-file-timeline-source",
+        "worktree-clean-mount-originals",
+        "smb-worktree-overwrite"
       ]
     },
     {
       "path": "src/server/src/engine_backend/smb_native.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "smb-worktree-overwrite"
       ]
     },
     {
@@ -8581,7 +8636,8 @@
       "path": "src/server/src/smb_rpc/worktree/native.rs",
       "groups": [
         "worktree-added-native",
-        "nested-ordinary-and-smb-birth"
+        "nested-ordinary-and-smb-birth",
+        "smb-worktree-overwrite"
       ]
     },
     {
@@ -10854,7 +10910,8 @@
       "path": "src/engine/src/container_storage/namespace_host.rs",
       "groups": [
         "fresh-managed-core",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -11193,7 +11250,9 @@
       "groups": [
         "fresh-managed-core",
         "directory-web-worktree-management",
-        "worktree-http-transport"
+        "worktree-http-transport",
+        "worktree-clean-mount-originals",
+        "smb-worktree-overwrite"
       ]
     },
     {
@@ -11207,7 +11266,8 @@
       "groups": [
         "fresh-managed-core",
         "directory-web-worktree-management",
-        "worktree-http-transport"
+        "worktree-http-transport",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -12409,7 +12469,8 @@
       "path": "src/engine/src/engine/recovery/workspace_receipts.rs",
       "groups": [
         "file-metadata-plan",
-        "worktree-existing-content-batch"
+        "worktree-existing-content-batch",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -12967,7 +13028,8 @@
       "path": "src/engine/src/engine/recovery.rs",
       "groups": [
         "container-tags-engine",
-        "held-directory-layout"
+        "held-directory-layout",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -15624,7 +15686,8 @@
         "historical-directory-runtime",
         "directory-web-worktree-management",
         "worktree-http-transport",
-        "automatic-management-observation"
+        "automatic-management-observation",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -20087,7 +20150,8 @@
     {
       "path": "src/server/src/smb_rpc/handles.rs",
       "groups": [
-        "ordinary-smb-manual-draft"
+        "ordinary-smb-manual-draft",
+        "smb-worktree-overwrite"
       ]
     },
     {
@@ -20154,7 +20218,8 @@
       "path": "src/engine/src/directory_worktree/ledger/storage/published.rs",
       "groups": [
         "fresh-managed-core",
-        "worktree-existing-content-batch"
+        "worktree-existing-content-batch",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -22236,7 +22301,8 @@
     {
       "path": "src/engine/src/engine/publication/directory/content.rs",
       "groups": [
-        "worktree-existing-content-batch"
+        "worktree-existing-content-batch",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -22254,7 +22320,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/commit/content/material.rs",
       "groups": [
-        "worktree-existing-content-batch"
+        "worktree-existing-content-batch",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -22266,7 +22333,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/registry/content_batches.rs",
       "groups": [
-        "worktree-existing-content-batch"
+        "worktree-existing-content-batch",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -22308,19 +22376,22 @@
     {
       "path": "src/engine/src/engine/recovery/workspace_receipts/content.rs",
       "groups": [
-        "worktree-existing-content-batch"
+        "worktree-existing-content-batch",
+        "worktree-clean-mount-originals"
       ]
     },
     {
       "path": "src/engine/src/snapshot_worktree/commit/content/recovery.rs",
       "groups": [
-        "worktree-existing-content-batch"
+        "worktree-existing-content-batch",
+        "worktree-clean-mount-originals"
       ]
     },
     {
       "path": "src/engine/src/snapshot_worktree/commit/content/scope.rs",
       "groups": [
-        "worktree-existing-content-batch"
+        "worktree-existing-content-batch",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -22426,7 +22497,8 @@
     {
       "path": "src/engine/src/directory_worktree/ledger/storage/content_material.rs",
       "groups": [
-        "worktree-existing-content-batch"
+        "worktree-existing-content-batch",
+        "worktree-clean-mount-originals"
       ]
     },
     {
@@ -22540,7 +22612,81 @@
     {
       "path": "src/contract/src/snapshot_worktree/mount_change.rs",
       "groups": [
-        "directory-web-worktree-management"
+        "directory-web-worktree-management",
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/ledger/storage/clean_mount.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/mount.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/mount/material.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/public/mount.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/clean_mount.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/clean_mount.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/ledger/storage/historical_mounts.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/workspace_receipts/mount_history.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/mount/recovery.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/snapshot_worktree/mount.rs",
+      "groups": [
+        "worktree-clean-mount-originals",
+        "smb-worktree-overwrite"
+      ]
+    },
+    {
+      "path": "src/server/src/http_snapshot_worktree/mount.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/snapshot_worktree/mount_change.rs",
+      "groups": [
+        "worktree-clean-mount-originals"
       ]
     }
   ],

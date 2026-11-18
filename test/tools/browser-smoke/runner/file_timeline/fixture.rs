@@ -1,5 +1,8 @@
 //! All expected IDs are read from actual original publications in the private
-//! test pool, never synthesized by the browser hook.
+//! test pool, never synthesized by the browser hook. The current ordinary
+//! fresh-layout delete/undo gate stops this positive seed before Chrome begins.
+//! This is a known missing reachable fixture, not an ignored assertion, a pass,
+//! or authority to inject a ledger event in place of a real mutation.
 use super::{Evidence, FINAL, Result};
 use storage_contract::{Entry, OperationId, history_window::{HistoryCollection, HistoryFileId, HistoryPageLimit, HistoryRepositoryId}};
 use storage_engine::{CommitRequest, DeleteFileRequest, Engine, FileDeletionTarget, NamespaceOperation, Repository, UndoFileDeletionRequest};
