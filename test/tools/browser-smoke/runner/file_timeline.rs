@@ -1,10 +1,10 @@
-//! Real packaged-browser reader: a server-backed same-FILE path fact locates
+//! Real packaged-browser reader: a server-backed same-FILE merge input locates
 //! one off-window card only after the original authorized observation returns.
 use super::{Browser, Result, first_commit_tabs::{ready,until}, json, with_cleanup};
 mod fixture;
 const FINAL:&str="timeline-final.txt";
 pub(super) struct Evidence {
-    slot:String,file:String,old:String,one:String,two:String,older:String,newer:String,undo:String,
+    slot:String,file:String,old:String,one:String,two:String,older:String,newer:String,observation:String,
 }
 pub(super) fn seed(temp:&tempfile::TempDir)->Result<Evidence>{fixture::seed(temp)}
 pub(super) fn run(b:&Browser, origin:&str, password:&str, e:&Evidence)->Result<()>{
@@ -14,13 +14,13 @@ pub(super) fn run(b:&Browser, origin:&str, password:&str, e:&Evidence)->Result<(
     b.click(&name)?;
     b.css("[data-zxs-lifecycle-load]:not([disabled])")?;
     b.script(&format!("window.__zxsTimelineExpected = {}; {}",
-        json!({"file":e.file,"old":e.old,"one":e.one,"two":e.two,"older":e.older,"newer":e.newer,"undo":e.undo}),
+        json!({"file":e.file,"old":e.old,"one":e.one,"two":e.two,"older":e.older,"newer":e.newer,"observation":e.observation}),
         include_str!("file_timeline/probe.js")))?;
     with_cleanup(|| {
         let load="[data-zxs-lifecycle-load]:not([disabled])";
         let jump=format!("[data-zxs-lifecycle-operation='{}'] [data-zxs-related-node='{}']:not([disabled])",e.older,e.old);
         b.click(&b.css(load)?)?;
-        until(b,"original path, deletion and restoration; true edge, open page end and off-window old version",
+        until(b,"two original FILE merges; true edge, open page end and off-window pinned input",
             "return window.__zxsTimeline.originalProjection()")?;
         b.script("const t=window.__zxsTimeline;t.remember();return true;")?;
         b.click(&b.css(load)?)?;

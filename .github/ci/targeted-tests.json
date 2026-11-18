@@ -7477,7 +7477,7 @@
       ]
     },
     "file-original-timeline-browser": {
-      "reason": "The browser target is wired into the packaged release check, but its current delete/undo seed is blocked by fresh layout whole-container lifecycle. Keep the original positive assertion; local source checks cannot make this fixture reachable. No Chrome or release acceptance claimed.",
+      "reason": "The packaged fixture seeds two actual FILE merge boundaries, two intervening published bodies and an off-window lower input before the final native observation. Source selection and compilation do not execute Chrome. The separate whole-container deletion path remains blocked.",
       "python_tests": [
         "test_release_acceptance"
       ],
@@ -7537,7 +7537,7 @@
       ]
     },
     "original-file-timeline-source": {
-      "reason": "Only a verified native FILE graph and adjacent frozen event bounds can close the queried interval. Select audience/cycle rejection and the real saved-body/deletion-bound pair; no synthetic HTTP principal or Chrome acceptance implied.",
+      "reason": "Only a complete original FILE graph and adjacent frozen bounds close an interval. Select the real native two-merge final observation, its later-open counterpart, and audience/cycle rejection. The historical deletion-bound assertion is retained, but its ordinary fresh-layout delete path remains gated by whole-container lifecycle.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -7555,9 +7555,10 @@
           "manifest": "src/engine/Cargo.toml",
           "kind": "lib",
           "exact": [
-            "engine::history_window::read::lifecycle::tests::closed_interval_uses_the_real_saved_body_and_the_deletions_frozen_branch_heads"
+            "engine::history_window::read::lifecycle::tests::closed_interval_uses_the_real_saved_body_and_the_deletions_frozen_branch_heads",
+            "engine::history_window::read::lifecycle::tests::two_native_existing_selections_bound_real_content_only_at_the_exact_final_decision"
           ],
-          "max_tests": 1,
+          "max_tests": 2,
           "timeout_seconds": 900
         }
       ]
