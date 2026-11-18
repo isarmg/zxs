@@ -560,9 +560,9 @@ fn page_continuations_include_the_exact_page_scope_and_query() {
 }
 
 #[test]
-fn installed_names_bind_current_name_and_admit_the_full_suffix_budget() {
+fn installed_names_admit_an_immutable_original_suffix_and_a_distinct_current_download() {
     let mut value = summary(1);
-    for stored in ["v000001_report.txt", "00000000000000A-report.txt", "000000000000001-old.txt"] {
+    for stored in ["v000001_report.txt", "00000000000000A-report.txt", "000000000000001-../bad"] {
         value.storage_name = stored.into();
         assert!(encode(&nodes_page(vec![value.clone()], Vec::new(), 1)).is_err());
     }
@@ -571,8 +571,10 @@ fn installed_names_bind_current_name_and_admit_the_full_suffix_budget() {
         value.storage_name = format!("000000000000001-{}", value.download_name);
         assert!(encode(&nodes_page(vec![value.clone()], Vec::new(), 1)).is_ok());
     }
+    value.download_name = "current.txt".into();
+    value.storage_name = "000000000000001-original.txt".into();
+    assert!(encode(&nodes_page(vec![value.clone()], Vec::new(), 1)).is_ok());
     value.download_name = "x".repeat(241);
-    value.storage_name = format!("000000000000001-{}", value.download_name);
     assert!(encode(&nodes_page(vec![value], Vec::new(), 1)).is_err());
 }
 
@@ -593,12 +595,15 @@ fn invalid_installed_names_preserve_typed_sources_and_state_invalid_status() {
         ),
         (
             "000000000000001-old.txt",
-            InvalidInstalledVersionName::CurrentName,
+            InvalidInstalledVersionName::Download(name_policy::validate_name("a/b").unwrap_err()),
         ),
     ];
     for (stored, expected) in cases {
         let mut value = summary(1);
         value.storage_name = stored.into();
+        if matches!(&expected, InvalidInstalledVersionName::Download(_)) {
+            value.download_name = "a/b".into();
+        }
         let error = encode(&nodes_page(vec![value], Vec::new(), 1)).unwrap_err();
         assert_eq!(error.status, ::http::StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.code, ErrorCode::StateInvalid);
@@ -617,10 +622,10 @@ fn invalid_installed_names_preserve_typed_sources_and_state_invalid_status() {
                     cause.source().unwrap().is::<storage_contract::InvalidVersionStorageId>()
                 );
             }
-            InvalidInstalledVersionName::Name(_) => {
+            InvalidInstalledVersionName::Name(_) | InvalidInstalledVersionName::Download(_) => {
                 assert!(cause.source().unwrap().is::<name_policy::Error>());
             }
-            InvalidInstalledVersionName::Separator | InvalidInstalledVersionName::CurrentName => {
+            InvalidInstalledVersionName::Separator => {
                 assert!(cause.source().is_none());
             }
         }

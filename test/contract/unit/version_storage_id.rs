@@ -26,17 +26,19 @@ fn storage_identity_is_stable_for_a_version_and_does_not_encode_a_filename() {
 }
 
 #[test]
-fn installed_leaf_binds_strict_identity_to_current_name_without_spending_prefix_budget() {
+fn installed_leaf_and_download_admit_distinct_names_and_reject_invalid_components() {
     use crate::validate_installed_version_name;
     for name in ["a-b.txt".to_string(), "x".repeat(240), "界".repeat(80)] {
         assert!(validate_installed_version_name(&format!("000000000000001-{name}"), &name).is_ok());
     }
     for stored in [
         "v000001_old.txt", "00000000000001-file.txt", "0000000000000001-file.txt",
-        "00000000000000A-file.txt", "000000000000001-old.txt", "000000000000001-../file.txt",
+        "00000000000000A-file.txt", "000000000000001-../file.txt",
     ] {
         assert!(validate_installed_version_name(stored, "file.txt").is_err());
     }
+    assert!(validate_installed_version_name("000000000000001-original.txt", "renamed.txt").is_ok());
+    assert!(validate_installed_version_name("000000000000001-original.txt", "../bad").is_err());
     let oversized = "x".repeat(241);
     assert!(validate_installed_version_name(&format!("000000000000001-{oversized}"), &oversized).is_err());
 }

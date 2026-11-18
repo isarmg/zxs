@@ -814,9 +814,9 @@ fn duplicate_visible_and_external_parent_edges_are_rejected_at_admission() {
 }
 
 #[test]
-fn installed_names_bind_current_name_and_admit_the_full_suffix_budget() {
+fn installed_names_admit_an_immutable_original_suffix_and_a_distinct_current_download() {
     let request = read_request(wire::HistoryCollection::Nodes);
-    for stored in ["v000001_file.txt", "00000000000000A-file.txt", "000000000000001-old.txt"] {
+    for stored in ["v000001_file.txt", "00000000000000A-file.txt", "000000000000001-../bad"] {
         let mut page = value(&nodes(&request, 1));
         page["nodes"][0]["storage_name"] = stored.into();
         assert!(admit(page, &request, None).is_err());
@@ -827,6 +827,12 @@ fn installed_names_bind_current_name_and_admit_the_full_suffix_budget() {
         page["nodes"][0]["storage_name"] = format!("000000000000001-{name}").into();
         assert!(admit(page, &request, None).is_ok());
     }
+    let mut original = value(&nodes(&request, 1));
+    original["nodes"][0]["download_name"] = "current.txt".into();
+    original["nodes"][0]["storage_name"] = "000000000000001-original.txt".into();
+    assert!(admit(original.clone(), &request, None).is_ok());
+    original["nodes"][0]["download_name"] = "bad/name".into();
+    assert!(admit(original, &request, None).is_err());
     let name = "x".repeat(241);
     let mut page = value(&nodes(&request, 1));
     page["nodes"][0]["download_name"] = name.clone().into();

@@ -16,10 +16,10 @@ pub enum InvalidInstalledVersionName {
     Separator,
     #[error("installed version leaf has an invalid identity")]
     Identity(#[source] InvalidVersionStorageId),
-    #[error("installed version leaf has an invalid current name")]
+    #[error("installed version leaf has an invalid creation name")]
     Name(#[source] name_policy::Error),
-    #[error("installed version leaf differs from the current download name")]
-    CurrentName,
+    #[error("version download has an invalid current name")]
+    Download(#[source] name_policy::Error),
 }
 
 /// Validate a read projection, not an independent filename authority. Only the
@@ -34,10 +34,9 @@ pub fn validate_installed_version_name(
     identity.parse::<VersionStorageId>()
         .map_err(InvalidInstalledVersionName::Identity)?;
     name_policy::validate_name(name).map_err(InvalidInstalledVersionName::Name)?;
-    if name != download {
-        return Err(InvalidInstalledVersionName::CurrentName);
-    }
-    Ok(())
+    // The protected download uses the current file name. Its validity matters,
+    // but it is not evidence of a historical BODY's spelling.
+    name_policy::validate_name(download).map_err(InvalidInstalledVersionName::Download)
 }
 
 impl VersionStorageId {

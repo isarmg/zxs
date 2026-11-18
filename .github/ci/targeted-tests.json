@@ -5180,7 +5180,7 @@
           "name": "contract-check",
           "exact": [
             "tests::checked_in_contracts_and_document_examples_are_consistent",
-            "history_window_tests::current_installed_names_share_suffix_budgets_and_reject_stale_projections"
+            "history_window_tests::installed_body_and_download_names_have_independent_component_budgets"
           ],
           "max_tests": 2,
           "timeout_seconds": 900
