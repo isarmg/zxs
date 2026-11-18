@@ -7388,9 +7388,10 @@
             "snapshot_worktree::public::transport::content_overlay::siblings_survive_resave_and_cold_reopen_without_publishing_either_file",
             "snapshot_worktree::public::transport::content_overlay::plan::exact_files_share_the_business_operation_on_one_state_but_cannot_install_it",
             "snapshot_worktree::public::transport::content_overlay::plan::durable_reservation_freezes_both_file_branches_without_publishing_and_reopens_only_original",
-            "snapshot_worktree::public::transport::content_overlay::publish::one_business_candidate_closes_all_existing_occurrences_and_lost_response_replays_without_allocation"
+            "snapshot_worktree::public::transport::content_overlay::publish::one_business_candidate_closes_all_existing_occurrences_and_lost_response_replays_without_allocation",
+            "snapshot_worktree::public::transport::content_overlay::publish::pending_originals_freeze_only_their_effective_future_file_routes_in_live_and_cold_slots"
           ],
-          "max_tests": 4,
+          "max_tests": 5,
           "timeout_seconds": 900
         },
         {
@@ -7402,9 +7403,11 @@
           ],
           "exact": [
             "snapshot_worktree::public::transport::content_overlay::publish::original_reservation_and_only_its_native_slot_survive_every_physical_install_boundary",
-            "snapshot_worktree::public::transport::content_overlay::publish::two_dirty_instances_competing_for_the_same_heads_never_publish_a_replacement_or_implicit_fork"
+            "snapshot_worktree::public::transport::content_overlay::publish::two_dirty_instances_competing_for_the_same_heads_never_publish_a_replacement_or_implicit_fork",
+            "snapshot_worktree::public::transport::content_overlay::publish::abandoned_occupancy_prepare_is_not_a_permanent_reservation_or_permission_to_rebind_another_actor",
+            "snapshot_worktree::public::transport::content_overlay::publish::install_obstructions::finalized_cold_reopen_neither_consumes_two_names_nor_replaces_an_equal_byte_impostor"
           ],
-          "max_tests": 2,
+          "max_tests": 4,
           "timeout_seconds": 900
         }
       ]
@@ -7486,6 +7489,112 @@
           "name": "browser-smoke"
         }
       ]
+    },
+    "backup-original-shutdown-diagnostics": {
+      "reason": "Select normal Backup drain when the original SYSTEM transaction was accepted but a target lock prevented worker installation; preserve the original identity for failed/poisoned workers. Not a full archive/ordinary cutover or runtime certification.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "exact": [
+            "backup_preparation::transaction_serving::shutdown_reports_the_original_start_when_target_lock_failed_before_any_worker"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::backup_preparation::tests::panicking_worker_wait_retains_failure_and_releases_owned_resources",
+            "engine::backup_preparation::tests::poisoned_progress_is_reported_as_unavailable_not_a_healthy_or_missing_task"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "resident-file-original-bodies": {
+      "reason": "Check one admitted registered FILE against an independently held original SQLite image and complete real version leaf inventory. Does not claim dirty FILE, full material, all closure producers, or a measured verification.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "container_storage::file_database::tests::resident_file_image_reads_actual_whole_sqlite_and_rejects_equal_byte_name_replacement",
+            "engine::scope_closure::file::clean_bodies::tests::full_body_table_requires_complete_named_versions_and_original_inodes"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "original-file-timeline-source": {
+      "reason": "Only a verified native FILE graph and adjacent frozen event bounds can close the queried interval. Select audience/cycle rejection and the real saved-body/deletion-bound pair; no synthetic HTTP principal or Chrome acceptance implied.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "file_lifecycle::tests::anchored_interval_and_audience_refuse_substitution_and_cycles"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 120
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::history_window::read::lifecycle::tests::closed_interval_uses_the_real_saved_body_and_the_deletions_frozen_branch_heads"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "original-file-body-adoption": {
+      "reason": "Reuse the original selected FILE body from its native merge decision, not a fabricated ancestry node. Exercise live/current replay, material tamper, indexed and oracle parent pages and stable aliases. Not a replacement for whole-pool integration.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::disk_registry::current::file_branches::tests::disk_exit_current_file_create_select_default_merge_and_restart_preserve_history",
+            "engine::disk_registry::current::file_branches::tests::history_merge_tests::disk_exit_history_merge_recovery_rejects_request_actor_graph_and_occurrence_tampering",
+            "engine::history_window::query::indexed::tests::indexed_parent_previews_ignore_unrelated_merges_and_match_complete_oracle",
+            "engine::history_window::oracle_tests::parent_windows_enumerate_high_indegree_and_reused_merge_parents_without_scope_leaks",
+            "engine::index::tests::scope_tests::scope_branch_corruption_never_returns_partial_or_foreign_membership",
+            "business::file_nodes::projection_tests::batch_ancestry_ignores_even_mutated_merge_event_edges",
+            "history_package::tests::rehashed_history_packages_reject_missing_and_cyclic_merge_sources"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "branch_alias_operations",
+          "exact": [
+            "file_history_merge_scenarios::historical_nodes_on_one_branch_merge_without_changing_original_heads_or_default",
+            "file_history_merge_scenarios::historical_merge_reads_frozen_aliases_and_can_adopt_an_outside_result_node",
+            "file_merge_scenarios::adopting_a_third_body_records_an_independent_fact_and_only_participating_views_advance"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -7540,7 +7649,8 @@
       "path": "src/engine/src/engine/history_window/read/lifecycle.rs",
       "groups": [
         "lifecycle-membership-cache",
-        "cold-lifecycle-receipt-rows"
+        "cold-lifecycle-receipt-rows",
+        "original-file-timeline-source"
       ]
     },
     {
@@ -7565,7 +7675,8 @@
     {
       "path": "test/engine/unit/engine/file_lifecycle_tests.rs",
       "groups": [
-        "lifecycle-membership-cache"
+        "lifecycle-membership-cache",
+        "original-file-timeline-source"
       ]
     },
     {
@@ -8250,7 +8361,8 @@
     {
       "path": "src/engine/src/engine/fresh_layout/containers.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -8417,7 +8529,8 @@
     {
       "path": "src/server/src/engine_backend.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "original-file-timeline-source"
       ]
     },
     {
@@ -9022,7 +9135,8 @@
       "path": "src/engine/src/protection.rs",
       "groups": [
         "automatic-backup-entry",
-        "ordinary-backup-listing-regression"
+        "ordinary-backup-listing-regression",
+        "worktree-existing-content-batch"
       ]
     },
     {
@@ -10007,7 +10121,8 @@
       "path": "src/engine/src/engine/backup_preparation.rs",
       "groups": [
         "backup-snapshot-scope",
-        "backup-held-entry-budget"
+        "backup-held-entry-budget",
+        "backup-original-shutdown-diagnostics"
       ]
     },
     {
@@ -11297,7 +11412,8 @@
     {
       "path": "test/engine/unit/backup_preparation_status_tests.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "backup-original-shutdown-diagnostics"
       ]
     },
     {
@@ -11510,7 +11626,8 @@
     {
       "path": "test/engine/unit/engine/current_file_branch_tests.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -11576,7 +11693,8 @@
     {
       "path": "test/engine/unit/engine/history_window_indexed_tests.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -12343,7 +12461,8 @@
     {
       "path": "test/engine/unit/history_package/tests.rs",
       "groups": [
-        "file-metadata-plan"
+        "file-metadata-plan",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -12653,19 +12772,22 @@
     {
       "path": "src/engine/src/business/file_history_merges.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "original-file-body-adoption"
       ]
     },
     {
       "path": "src/engine/src/business/file_merges.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "original-file-body-adoption"
       ]
     },
     {
       "path": "src/engine/src/business/file_nodes.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -12683,7 +12805,8 @@
     {
       "path": "src/engine/src/business/history_copy/graph.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -12713,7 +12836,8 @@
     {
       "path": "src/engine/src/container_storage/file_database/rows.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "resident-file-original-bodies"
       ]
     },
     {
@@ -12762,19 +12886,22 @@
     {
       "path": "src/engine/src/engine/disk_registry/current/history_merges.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "original-file-body-adoption"
       ]
     },
     {
       "path": "src/engine/src/engine/disk_registry/current/merge_metadata.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "original-file-body-adoption"
       ]
     },
     {
       "path": "src/engine/src/engine/history_window/nodes.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -12902,14 +13029,16 @@
     {
       "path": "src/engine/src/history_package/manifest.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "original-file-body-adoption"
       ]
     },
     {
       "path": "src/engine/src/history_package/state_read.rs",
       "groups": [
         "container-tags-storage",
-        "ordinary-namespace-parents"
+        "ordinary-namespace-parents",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -13199,7 +13328,8 @@
     {
       "path": "test/engine/unit/business/file_nodes/projection_tests.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -14057,7 +14187,8 @@
     {
       "path": "src/engine/src/disk/fencing.rs",
       "groups": [
-        "held-directory-layout"
+        "held-directory-layout",
+        "backup-original-shutdown-diagnostics"
       ]
     },
     {
@@ -14817,7 +14948,8 @@
     {
       "path": "test/engine/integration/branch_alias_operations/file_merge_scenarios.rs",
       "groups": [
-        "portable-path-consumers"
+        "portable-path-consumers",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -16477,13 +16609,15 @@
       "path": "test/engine/unit/container_storage/file_database_tests.rs",
       "groups": [
         "engine-integer-errors",
-        "selected-scope-and-physical-images"
+        "selected-scope-and-physical-images",
+        "resident-file-original-bodies"
       ]
     },
     {
       "path": "test/engine/unit/engine/history_window_oracle_tests.rs",
       "groups": [
-        "engine-integer-errors"
+        "engine-integer-errors",
+        "original-file-body-adoption"
       ]
     },
     {
@@ -17016,7 +17150,8 @@
       "path": "test/engine/integration/backup_transaction_serving.rs",
       "groups": [
         "backup-database-snapshot",
-        "backup-entity-entry-budget"
+        "backup-entity-entry-budget",
+        "backup-original-shutdown-diagnostics"
       ]
     },
     {
@@ -17163,7 +17298,8 @@
     {
       "path": "src/contract/src/file_lifecycle.rs",
       "groups": [
-        "container-lifecycle-contract"
+        "container-lifecycle-contract",
+        "original-file-timeline-source"
       ]
     },
     {
@@ -17175,7 +17311,8 @@
     {
       "path": "test/contract/unit/file_lifecycle.rs",
       "groups": [
-        "container-lifecycle-contract"
+        "container-lifecycle-contract",
+        "original-file-timeline-source"
       ]
     },
     {
@@ -19613,7 +19750,8 @@
     {
       "path": "src/engine/src/authority_selection.rs",
       "groups": [
-        "initial-storage-result-admission"
+        "initial-storage-result-admission",
+        "backup-original-shutdown-diagnostics"
       ]
     },
     {
@@ -21222,7 +21360,8 @@
     {
       "path": "src/engine/src/container_storage/file_database/physical.rs",
       "groups": [
-        "selected-scope-and-physical-images"
+        "selected-scope-and-physical-images",
+        "resident-file-original-bodies"
       ]
     },
     {
@@ -22271,6 +22410,96 @@
       "path": "test/tools/browser-smoke/runner/file_timeline/probe.js",
       "groups": [
         "file-original-timeline-browser"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/content_install_obstructions.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/ledger/storage/content_material.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/drain.rs",
+      "groups": [
+        "backup-original-shutdown-diagnostics"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/transaction.rs",
+      "groups": [
+        "backup-original-shutdown-diagnostics"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/file.rs",
+      "groups": [
+        "resident-file-original-bodies"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/file/clean_bodies.rs",
+      "groups": [
+        "resident-file-original-bodies"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/scope_clean_file_bodies.rs",
+      "groups": [
+        "resident-file-original-bodies"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_lifecycle/navigation.rs",
+      "groups": [
+        "original-file-timeline-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/read/lifecycle/navigation.rs",
+      "groups": [
+        "original-file-timeline-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/file_adoption.rs",
+      "groups": [
+        "original-file-body-adoption"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/query_auxiliary.rs",
+      "groups": [
+        "original-file-body-adoption"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/query_indexed.rs",
+      "groups": [
+        "original-file-body-adoption"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_history_merge_tests.rs",
+      "groups": [
+        "original-file-body-adoption"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/index/scope_tests.rs",
+      "groups": [
+        "original-file-body-adoption"
+      ]
+    },
+    {
+      "path": "test/engine/integration/branch_alias_operations/file_history_merge_scenarios.rs",
+      "groups": [
+        "original-file-body-adoption"
       ]
     }
   ],
