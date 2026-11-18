@@ -2,6 +2,10 @@
 //! selected registered ordinary root. Creation does not publish a version.
 mod wire;
 mod content;
+mod indexed;
+mod interval;
+pub use interval::{save_interval,interval_receipt,read_current_range_to,SpanObservation};
+pub use interval::types::{SpanEdit,LengthPolicy,SpanReceipt};
 mod formal;
 pub use formal::{commit_first,first_commit_receipt,read_node_to,read_node_range_to,FormalObservation};
 pub use formal::types::FormalNode;
@@ -64,7 +68,7 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
             return Ok(FileInfo::from_frame(done)); // Do not open a later same-named root.
         }
     }
-    if state.saving.is_some()||state.committing.is_some(){return Err(invalid("a different original FILE command needs completion"));}
+    if state.editing.is_some()||state.saving.is_some()||state.committing.is_some(){return Err(invalid("a different original FILE command needs completion"));}
     if let Some(a)=&state.allocated{
         if a.op!=op || a.request!=request {return Err(invalid("another original FILE allocation needs completion"));}
     }else{

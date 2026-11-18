@@ -4,7 +4,7 @@
 //! verified forward reads without loading a file-size-dependent checksum table.
 use super::{allocation::SaveAllocation,types::{DRAFT_CHUNK,DraftClaim,Material,Original}};
 use crate::{OperationId,fs::{self,Birth,HeldDir,invalid,stream::{self,PinnedRegular}}};
-use crate::ordinary::{wire::NativeObject,content::{self,chunks,end,link}};
+use crate::ordinary::{wire::NativeObject,content::{self,chunks}};
 use std::{ffi::CString,fs::File,io::{self,Read,Write}};
 
 const MAGIC:&[u8]=b"ZXS/FILE/WORKING/INITIAL-RANGE\0";
@@ -12,7 +12,6 @@ const FIXED:usize=MAGIC.len()+16*3+8*4+32;
 const HEADER:u64=FIXED as u64+32;
 const CHUNK:u64=DRAFT_CHUNK as u64;
 pub(in crate::ordinary) fn leaf(op:OperationId)->CString{CString::new(format!("working-{op}")).expect("fixed native working name")}
-fn claim_buffer(c:DraftClaim)->usize{c.bytes.clamp(1,CHUNK) as usize}
 pub(in crate::ordinary) fn physical_size(bytes:u64)->io::Result<u64>{
     if bytes>u64::MAX/8{return Err(invalid("content exceeds SHA-256 representable length"));}
     chunks(bytes).checked_mul(32).and_then(|n|n.checked_add(bytes)).and_then(|n|n.checked_add(HEADER))
@@ -53,27 +52,10 @@ impl InputHandle{
     }
     /// No SYSTEM or volume lock accompanies this anonymous FD into a slow or
     /// disconnected reader; only the actual intended FILE has an incoming lease. No named work, original reservation or ack yet.
-    pub(super) fn capture(self,mut input:impl Read)->io::Result<Input>{
+    pub(super) fn capture(self,input:impl Read)->io::Result<Input>{
         let o=&self.original;let claim=o.claim;let size=physical_size(claim.bytes)?;
         stream::allocate_stream(&self.file,size)?;stream::write_at(&self.file,&header(o),0)?;
-        let mut hash=crate::hash::Sha256::new();let mut buf=vec![0;claim_buffer(claim)];
-        for i in 0..chunks(claim.bytes){
-            let (at,n)=location(claim,i);let part=&mut buf[..n];input.read_exact(part)?;
-            hash.update(part)?;stream::write_at(&self.file,part,at)?;
-            // Unpublished, private and not authoritative. Replaced below with the next-chain link.
-            stream::write_at(&self.file,&crate::hash::digest(part)?,at+n as u64)?;
-        }
-        loop{match input.read(&mut buf[..1]){
-            Ok(0)=>break,Ok(_)=>return Err(invalid("first SAVE has trailing input")),
-            Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,Err(e)=>return Err(e),
-        }}
-        if hash.finish()!=claim.sha256{return Err(invalid("first SAVE content checksum differs"));}
-        drop(buf);
-        let mut root=end(claim)?;
-        for i in (0..chunks(claim.bytes)).rev(){
-            let (at,n)=location(claim,i);let mut digest=[0;32];stream::read_at(&self.file,&mut digest,at+n as u64)?;
-            stream::write_at(&self.file,&root,at+n as u64)?;root=link(i,n,digest,root)?;
-        }
+        let root=content::stage(claim,input,&self.file,|i,n|{let (p,_)=location(claim,i);(p,p+n as u64)})?;
         stream::write_at(&self.file,&root,FIXED as u64)?;self.file.sync_all()?;
         let stamp=stream::anonymous_stamp(&self.file)?;
         if stamp.stat.size()!=size||read_header(&self.file,o)?!=root{return Err(invalid("anonymous working file differs at seal"));}

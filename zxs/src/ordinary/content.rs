@@ -27,3 +27,27 @@ pub(super) fn visit(claim:DraftClaim,head:[u8;32],
     if expected!=end(claim)?||content.finish()!=claim.sha256{return Err(invalid("FILE length, content or terminal commitment differs"));}
     current()?;Ok(())
 }
+
+/// Receive an exact forward-only stream into an already preallocated, private
+/// original inode. The caller owns the actual data/link offsets and header.
+/// No externally named material or authority is changed here.
+pub(super) fn stage(claim:DraftClaim,mut input:impl std::io::Read,file:&std::fs::File,
+    at:impl Fn(u64,usize)->(u64,u64))->io::Result<[u8;32]>{
+    use crate::fs::stream::{read_at,write_at};
+    let mut h=crate::hash::Sha256::new();let mut buf=vec![0;claim.bytes.clamp(1,BLOCK) as usize];
+    for i in 0..chunks(claim.bytes){
+        let n=(claim.bytes-i*BLOCK).min(BLOCK) as usize;let (data,index)=at(i,n);let part=&mut buf[..n];
+        input.read_exact(part)?;h.update(part)?;write_at(file,part,data)?;write_at(file,&crate::hash::digest(part)?,index)?;
+    }
+    loop{match input.read(&mut buf[..1]){
+        Ok(0)=>break,Ok(_)=>return Err(invalid("trailing bytes after the declared extent")),
+        Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,Err(e)=>return Err(e),
+    }}
+    if h.finish()!=claim.sha256{return Err(invalid("input extent checksum differs"));}
+    drop(buf);let mut head=end(claim)?;
+    for i in (0..chunks(claim.bytes)).rev(){
+        let n=(claim.bytes-i*BLOCK).min(BLOCK) as usize;let (_,index)=at(i,n);let mut digest=[0;32];
+        read_at(file,&mut digest,index)?;write_at(file,&head,index)?;head=link(i,n,digest,head)?;
+    }
+    Ok(head)
+}

@@ -1,5 +1,5 @@
 use std::{env, ffi::OsStr, io, path::PathBuf, process::ExitCode};
-const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH";
+const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH";
 fn bad(message:&'static str)->io::Error {io::Error::new(io::ErrorKind::InvalidInput,message)}
 fn show(scope:&str,info:zxs::PoolInfo) {
     println!("{scope}");
@@ -59,6 +59,28 @@ fn run() -> io::Result<()> {
             let r=zxs::first_save_receipt(&system,op)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original first SAVE"))?;
             println!("Original first SAVE {:?}: FILE {} length {} published-sequence {:?}",r.status,r.file,r.body.bytes,r.decision_sequence);Ok(())
         }
+        Some("file-write-range")=>{
+            let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let file=word(&mut args)?.parse()?;
+            let rev=word(&mut args)?.parse::<u64>().map_err(|_|bad("invalid source working revision"))?;
+            let offset=word(&mut args)?.parse::<u64>().map_err(|_|bad("invalid working write offset"))?;
+            let len=word(&mut args)?.parse::<u64>().map_err(|_|bad("invalid input extent byte count"))?;
+            let input=zxs::DraftClaim::from_hex(len,&word(&mut args)?)?;
+            let p=word(&mut args)?;let policy=if p=="keep"{zxs::LengthPolicy::KeepOrGrow}
+                else{zxs::LengthPolicy::Set(p.parse().map_err(|_|bad("expected keep or explicit final size"))?)};
+            end(&mut args)?;let r=zxs::save_interval(&system,op,file,rev,zxs::SpanEdit::new(offset,input,policy)?,io::stdin().lock())?;
+            show_edit(&r);Ok(())
+        }
+        Some("file-range-receipt")=>{
+            let system=path(&mut args)?;let op=word(&mut args)?.parse()?;end(&mut args)?;
+            let r=zxs::interval_receipt(&system,op)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such original interval save"))?;
+            println!("Original interval {:?}: operation {} FILE {}",r.status,r.operation,r.file);if let Some(e)=r.published{show_edit(&e);}Ok(())
+        }
+        Some("file-read-range")=>{
+            let system=path(&mut args)?;let file=word(&mut args)?.parse()?;
+            let off=word(&mut args)?.parse::<u64>().map_err(|_|bad("invalid current range offset"))?;
+            let len=word(&mut args)?.parse::<u64>().map_err(|_|bad("invalid current range length"))?;end(&mut args)?;
+            zxs::read_current_range_to(&system,file,off,len,io::stdout().lock())?;Ok(())
+        }
         Some("file-commit")=>{
             let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let file=word(&mut args)?.parse()?;
             let rev=word(&mut args)?.parse::<u64>().map_err(|_|bad("invalid expected working revision"))?;end(&mut args)?;
@@ -85,6 +107,7 @@ fn run() -> io::Result<()> {
             if action==OsStr::new("file-read"){zxs::read_current_to(&system,id,io::stdout().lock())?;}
             else{
                 let current=zxs::current_info(&system,id)?;
+                if let Some(e)=&current.edit{show_edit(e);}
                 match (current.head,current.working){
                     (Some(f),None)=>show_node(&f),
                     (None,Some(r))=>println!("Current manual FILE: working revision {} length {} (header inspected, no formal node)",r.revision,r.body.bytes),
@@ -116,6 +139,10 @@ fn run() -> io::Result<()> {
         }
         _=>Err(bad(USAGE))
     }
+}
+fn show_edit(e:&zxs::SpanReceipt){
+    println!("Working interval: FILE {} revision {} base node {} offset {} changed bytes {} logical bytes {} original decision {}",
+        e.file,e.revision,e.base_node,e.edit.offset,e.edit.input.bytes,e.logical_bytes,e.decision_sequence);
 }
 fn show_node(f:&zxs::FormalNode){
     println!("Published manual FULL: FILE {} main {} node {} version {} storage {} created-name {} length {} from SAVE {} revision {} decision {}",

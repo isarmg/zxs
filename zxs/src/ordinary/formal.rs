@@ -34,7 +34,7 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,rev:u64)->io
         let f=d.formal()?;if f.request!=req{return Err(invalid("different initial formal commit request for original operation"));}
         if !s.committing.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(f.receipt()));}
     }
-    if s.allocated.is_some()||s.saving.is_some()||s.committing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
+    if s.editing.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
         return Err(invalid("another original FILE operation needs completion"));
     }
     let c=s.file(file).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE for formal commit"))?;
@@ -43,8 +43,8 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,rev:u64)->io
     if s.committing.is_none(){s.room_for(super::wire::MAX_FRAME)?;}
     Ok(Choice::Active(c,w,req))
 }
-fn selected_dir(v:&FileVolume<'_>,c:&Frame,w:&SaveFrame,a:Option<&FormalAllocation>,f:Option<&Commit>)->io::Result<HeldDir>{
-    let work=if f.is_none(){Some((w.original.op,true))}else if a.is_some(){Some((w.original.op,false))}else{None};
+fn selected_dir(v:&FileVolume<'_>,c:&Frame,w:&SaveFrame,a:Option<&FormalAllocation>,f:Option<&Commit>,edit:Option<(OperationId,bool)>)->io::Result<HeldDir>{
+    let work=if f.is_none(){Some((w.original.op,true))}else if a.is_some(){Some((w.original.op,false))}else{edit};
     let formal=f.map(|f|(&f.original,true)).or_else(||a.map(|a|(&a.original,false)));
     container::directory_with(v,&c.create,work,formal)
 }
@@ -53,7 +53,10 @@ fn selected_dir(v:&FileVolume<'_>,c:&Frame,w:&SaveFrame,a:Option<&FormalAllocati
 /// require or borrow bytes from the old working file.
 pub(in crate::ordinary) fn directory(v:&FileVolume<'_>,s:&Journal,c:&Frame,w:&SaveFrame)->io::Result<HeldDir>{
     let a=s.committing.as_ref().filter(|a|a.original.file==c.create.file);
-    let f=s.head(c.create.file);let dir=selected_dir(v,c,w,a,f)?;
+    let f=s.head(c.create.file);
+    let edit=s.interval(c.create.file).map(|r|(r.original.op,true)).or_else(||s.editing.as_ref().filter(|r|r.original.file==c.create.file)
+        .map(|r|(r.original.op,s.pending.is_some())));
+    let dir=selected_dir(v,c,w,a,f,edit)?;
     if let Some(a)=a{
         let sealed=s.pending.as_ref().map(|p|p.frame.formal()).transpose()?;
         physical::inspect_prepared(&dir,a,sealed.or(f))?;
@@ -65,7 +68,12 @@ fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<(FormalNode,Histo
         let f=s.node(file,node).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such published node in this FILE"))?;
         let c=s.file(file).ok_or_else(||invalid("formal node lacks original FILE"))?;
         let w=s.saved(file).ok_or_else(||invalid("formal node lacks its original saved-revision decision"))?;
-        let v=p.ordinary(c.create.volume)?;let dir=directory(&v,&s,c,w)?;
+        let v=p.ordinary(c.create.volume)?;
+        // A historical original never borrows an unrelated dirty extent,
+        // even when it has disappeared. Complete current reads are stricter.
+        let pending_work=if s.committing.as_ref().is_some_and(|a|a.original.file==file){Some((w.original.op,false))}
+            else{s.interval(file).map(|e|(e.original.op,false)).or_else(||s.editing.as_ref().filter(|a|a.original.file==file).map(|a|(a.original.op,false)))};
+        let dir=container::directory_with(&v,&c.create,pending_work,Some((&f.original,true)))?;
         let body=HistoryBody::current(&dir,f)?;v.root.file.sync_all()?;v.require_current()?;
         Ok((f.receipt(),body))
 }

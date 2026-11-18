@@ -49,8 +49,8 @@ impl HistoryBody{
         // below can issue preparation feedback to the original writer.
         let b=Self{node,raw,original:f.original.clone(),index_digest:f.materials.index_digest};b.require(dir)?;Ok(b)
     }
-    pub(super) fn unchanged(&self)->io::Result<()>{self.raw.unchanged()?;self.node.unchanged()}
-    fn require(&self,dir:&HeldDir)->io::Result<()>{
+    pub(in crate::ordinary) fn unchanged(&self)->io::Result<()>{self.raw.unchanged()?;self.node.unchanged()}
+    pub(in crate::ordinary) fn require(&self,dir:&HeldDir)->io::Result<()>{
         self.raw.named(dir,&self.original.body_name())?;self.node.named(dir,&self.original.node_name())
     }
     pub(in crate::ordinary) fn write_to(&self,out:impl Write)->io::Result<()>{
