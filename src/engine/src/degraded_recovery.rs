@@ -151,13 +151,30 @@ pub(crate) fn discover_publication(
     previous_snapshot: &Option<String>,
     original: &crate::publication_evidence::AdmittedSnapshot,
 ) -> Result<Option<Publication>> {
+    // Non-scanner calls must use the actual installed prefix and its own
+    // complete reservation/original cursor, not the latest receipt words.
+    if !std::ptr::eq(previous,engine.state.as_ref()) || previous_snapshot!=&engine.snapshot {
+        return Err(crate::Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+    }
+    let proof=crate::engine::workspace_provenance::from_context(
+        &engine.planning_context(),original.for_candidate(candidate)?.state(),candidate,
+    )?;
+    discover_publication_from_preflight(engine,candidate,hash,previous,previous_snapshot,original,&proof)
+}
+
+pub(crate) fn discover_publication_from_preflight(
+    engine:&Engine, candidate:&Candidate, hash:&str, previous:&State, previous_snapshot:&Option<String>,
+    original:&crate::publication_evidence::AdmittedSnapshot,
+    proof:&crate::engine::workspace_provenance::CandidateDecision<'_,'_>,
+) -> Result<Option<Publication>> {
+    proof.require_pair(previous,original.for_candidate(candidate)?.state(),candidate)?;
     let found = discover_metadata_publication(engine, hash)?;
     if candidate.versions.is_empty() {
         return Ok(found);
     }
     let sources = PreparedContainerEntities::observe_available_candidate_from_prefix(
         &engine.config, &engine.disk_resources, previous, previous_snapshot,
-        candidate, original,
+        candidate, original, proof,
     )?;
     discover_local_publication(engine, candidate, hash, found, |file, disk| {
         sources.scope(file, disk)

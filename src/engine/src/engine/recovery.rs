@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod payload_admission;
 mod workspace_receipts;
+pub(in crate::engine) use workspace_receipts::ArchiveWorkspacePrefix;
 pub(crate) use workspace_receipts::{
     InstalledOriginalReceipts, OriginalReceiptCursor, OriginalReceiptPrefix,
     ReadOnlyPublishedCandidate, DirectoryReplayPrefix,

@@ -202,6 +202,14 @@ impl OriginalReceiptCursor {
             Some(environment) => environment.require(config, resources)?,
             None => self.environment = Some(ReceiptEnvironment::capture(config, resources)),
         }
+        self.insert_verified(projection)
+    }
+
+    fn insert_verified(&mut self, projection:crate::publication_evidence::OriginalReceiptProjection) -> Result<()> {
+        let operation=projection.operation();
+        if self.records.contains_key(&operation) {
+            return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+        }
         if let Some(key) = projection.automatic_key()? {
             if self.automatic.contains_key(&key) {
                 return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
@@ -271,6 +279,49 @@ impl OriginalReceiptCursor {
                     source.into(),
                 ).into_engine()
             })
+    }
+}
+
+/// Archive-local, never installable in a live engine. Only the previous sealed
+/// slot's exact visible outcome can borrow this complete prior reservation
+/// index. The contained cursor/records and live resource environment never escape.
+#[derive(Default)]
+pub(in crate::engine) struct ArchiveWorkspacePrefix {
+    originals: OriginalReceiptCursor,
+    last: Option<(String,Arc<State>)>,
+}
+
+impl ArchiveWorkspacePrefix {
+    pub(in crate::engine) fn predecessor(
+        &self, slot:&crate::engine::membership_transition::VerifiedArchivePublication,
+    ) -> Result<Option<&State>> {
+        let Some((hash, prior))=&self.last else { return Ok(None) };
+        // A skipped (never published) proposal need not be a numeric neighbor.
+        if slot.candidate().previous_snapshot.as_ref()!=Some(hash)
+            || slot.candidate().sequence<=prior.sequence {
+            return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+        }
+        Ok(Some(prior))
+    }
+
+    pub(in crate::engine) fn index<'p>(&'p self, previous:&'p State)
+        -> Result<crate::snapshot_worktree::ReceiptIndex<'p>> {
+        if !self.last.as_ref().is_some_and(|(_,state)|std::ptr::eq(state.as_ref(),previous)) {
+            return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+        }
+        crate::engine::workspace_provenance::prefix_index(previous,&self.originals)
+    }
+
+    pub(in crate::engine) fn advance(
+        &mut self, slot:&crate::engine::membership_transition::VerifiedArchivePublication,
+    ) -> Result<()> {
+        self.predecessor(slot)?;
+        let visible=slot.visible_state();
+        if self.originals.needs_projection(&slot.publication().result) {
+            self.originals.insert_verified(crate::publication_evidence::OriginalReceiptProjection::from_archive(slot,&visible)?)?;
+        }
+        self.last=Some((slot.candidate().snapshot_hash.clone(),visible));
+        Ok(())
     }
 }
 
@@ -599,8 +650,9 @@ impl Engine {
         )?;
         // Verify both positive and negative Workspace obligations before opening
         // candidate payload sources, planning repairs or inspecting later slots.
-        crate::engine::workspace_provenance::candidate(
+        let workspace_decision=crate::engine::workspace_provenance::candidate(
             prefix.state, admitted.for_candidate(&candidate)?.state(), &candidate,
+            || crate::engine::workspace_provenance::prefix_index(prefix.state,prefix.originals),
         )?;
         if admitted.for_candidate(&candidate)?.state().operations
             .get(&candidate.operation_id).is_some_and(|result| {
@@ -652,8 +704,8 @@ impl Engine {
         let journal_publication = if registry { read_publication()? } else { journal_publication };
         let publication = match journal_publication {
             Some(publication) => Some(publication),
-            None => crate::degraded_recovery::discover_publication(
-                self, &candidate, hash, prefix.state, prefix.snapshot, &admitted,
+            None => crate::degraded_recovery::discover_publication_from_preflight(
+                self, &candidate, hash, prefix.state, prefix.snapshot, &admitted, &workspace_decision,
             )?,
         };
         let snapshot = Some(admitted.into_shared());
@@ -836,6 +888,8 @@ impl Engine {
         readonly: Option<&ReadOnlyPublishedCandidate<'_>>,
         locations: Option<&super::super::fresh_layout::containers::RecoveryRenameLocations<'_>>,
     ) -> Result<()> {
+        let decision=crate::engine::workspace_provenance::from_context(&self.planning_context(),next,candidate)?;
+        decision.require_pair(&self.state,next,candidate)?;
         let containers =
             super::super::fresh_layout::containers::verify_transition_with_working_source(
                 &self.config, &self.disk_resources, &self.state, next, candidate, locations,

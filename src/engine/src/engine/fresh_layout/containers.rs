@@ -896,7 +896,12 @@ fn verify_transition_read<'a>(
 ) -> Result<VerifiedContainerTransition<'a>> {
     validate_state(previous)?;
     validate_state(next)?;
-    crate::engine::workspace_provenance::candidate(previous, next, candidate)?;
+    // This pure container projection is also used for an already-sealed
+    // namespace rename and Backup geometry, neither of which issues Workspace
+    // source authority. The actual planner, cold scan, installed material
+    // observers and archive all require the adjacent, original-prefix E proof.
+    let result=next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
+    crate::engine::workspace_provenance::retained(next,result)?;
     if let Some(proof) = config.verify_backup_first_layout(previous, next, candidate)? {
         proof.require_pair(previous, next, candidate)?;
         return Ok(VerifiedContainerTransition {
@@ -916,7 +921,6 @@ fn verify_transition_read<'a>(
             first: BTreeMap::new(), draft_reads: Vec::new(),
         });
     }
-    let result = next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
     crate::persist::file_adoption::transition(previous, next, result, !candidate.versions.is_empty())?;
     let (mut directories, additions) = super::directories::project(
         config, previous, next, result, Some(&next.namespace_directories),

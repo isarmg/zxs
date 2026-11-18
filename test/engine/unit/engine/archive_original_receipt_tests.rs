@@ -130,7 +130,25 @@ fn actual_exit_archive_restores_original_index_and_rejects_unrelated_missing_sou
     ));
     let mut initialization_snapshot = None;
     let mut projected = 0;
+    let mut links=crate::engine::recovery::ArchiveWorkspacePrefix::default();
     engine.replay_generation_publications(generation, |publication| {
+        // Use the genuine prior slot held by the restricted archive cursor.
+        // A byte-equal clone isn't a loan, and an otherwise identical
+        // Candidate must not spend the decision at another material observer.
+        if let Some(prior)=links.predecessor(publication)? {
+            links.index(prior)?;
+            let copied=prior.clone();
+            assert!(matches!(links.index(&copied),Err(Error::OriginalReceipt(OriginalReceiptError::Prefix))));
+            let next=publication.original_state().as_ref();
+            let candidate=publication.candidate();
+            let decision=crate::engine::workspace_provenance::candidate(prior,next,candidate,||links.index(prior))?;
+            decision.require_pair(prior,next,candidate)?;
+            assert!(decision.require_pair(&copied,next,candidate).is_err());
+            assert!(decision.require_pair(prior,&next.clone(),candidate).is_err());
+            assert!(decision.require_pair(prior,next,&candidate.clone()).is_err());
+        }
+        links.advance(publication)?;
+        assert!(links.advance(publication).is_err());
         let visible = publication.visible_state();
         let projection = OriginalReceiptProjection::from_archive(publication, &visible)?;
         let (original, actor) = projection.in_prefix(&visible)?;

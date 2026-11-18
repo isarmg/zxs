@@ -585,9 +585,12 @@ impl PreparedContainerEntities {
         candidate: &crate::journal::Candidate,
         original: &crate::publication_evidence::AdmittedSnapshot,
     ) -> Result<Self> {
-        Self::observe_candidate_from_prefix(
+        let next=original.for_candidate(candidate)?.state();
+        let decision=crate::engine::workspace_provenance::from_context(context,next,candidate)?;
+        decision.require_pair(context.state,next,candidate)?;
+        Self::observe_candidate_inner(
             context.config, context.disk_resources, context.state, context.snapshot,
-            candidate, original,
+            candidate, original, CandidateAvailability::Required, None, None,
         )
     }
 
@@ -597,25 +600,12 @@ impl PreparedContainerEntities {
         original: &crate::publication_evidence::AdmittedSnapshot,
         locations: &crate::engine::fresh_layout::containers::RecoveryRenameLocations<'_>,
     ) -> Result<Self> {
+        let next=original.for_candidate(candidate)?.state();
+        let decision=crate::engine::workspace_provenance::from_context(context,next,candidate)?;
+        decision.require_pair(context.state,next,candidate)?;
         Self::observe_candidate_inner(
             context.config, context.disk_resources, context.state, context.snapshot,
             candidate, original, CandidateAvailability::Required, Some(locations), None,
-        )
-    }
-
-    /// Actual recovery prefix, not a synthesized PlanningContext or an inferred
-    /// directory source. This remains read-only and cannot expose preparations.
-    pub(crate) fn observe_candidate_from_prefix(
-        config: &ValidatedConfig,
-        resources: &Arc<DiskResources>,
-        previous: &State,
-        previous_snapshot: &Option<String>,
-        candidate: &crate::journal::Candidate,
-        original: &crate::publication_evidence::AdmittedSnapshot,
-    ) -> Result<Self> {
-        Self::observe_candidate_inner(
-            config, resources, previous, previous_snapshot, candidate, original,
-            CandidateAvailability::Required, None, None,
         )
     }
 
@@ -628,7 +618,9 @@ impl PreparedContainerEntities {
         previous_snapshot: &Option<String>,
         candidate: &crate::journal::Candidate,
         original: &crate::publication_evidence::AdmittedSnapshot,
+        proof:&crate::engine::workspace_provenance::CandidateDecision<'_,'_>,
     ) -> Result<AvailableCandidateContainers> {
+        proof.require_pair(previous,original.for_candidate(candidate)?.state(),candidate)?;
         let observed = Self::observe_candidate_inner(
             config, resources, previous, previous_snapshot, candidate, original,
             CandidateAvailability::Available, None, None,
