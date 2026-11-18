@@ -171,21 +171,31 @@ fn workspace_commit_input(
     workspace: &(impl WorkspaceInput + ?Sized),
     request: &CommitRequest,
 ) -> Result<json_codec::Value> {
-    let sealed = object_hash(
-        "workspace",
-        &json!({
-            "workspace_id": workspace.workspace_id(),
-            "base_head": workspace.base_head(),
-            "files": workspace.files().map(|file| json!({
-                "item_id": file.item(),
-                "path": file.path(),
-                "hash": file.hash(),
-                "size": file.size().to_string(),
-                "generation": file.generation().to_string(),
-            })).collect::<Vec<_>>(),
-            "namespace_operations": workspace.namespace_operations(),
-        }),
-    )?;
+    sealed_workspace_commit_input(
+        workspace.workspace_id(), workspace.base_head(), request, workspace.namespace_operations(),
+        workspace.files().map(|file| native_manifest_item(
+            file.item(), file.path(), file.hash(), file.size(), file.generation(),
+        )).collect(),
+    )
+}
+
+// This is an encoding adapter, not a WorkspaceInput, lease or upload authority.
+// The original native request and cold sealed source use the same field bytes.
+pub(crate) fn native_manifest_item(
+    item: impl data_serialization::Serialize, path: &name_policy::PortablePath,
+    hash: &storage_contract::ContentHash, size: u64, generation: u64,
+) -> json_codec::Value {
+    json!({"item_id":item,"path":path,"hash":hash,
+        "size":size.to_string(),"generation":generation.to_string()})
+}
+
+pub(crate) fn sealed_workspace_commit_input(
+    workspace: &str, base: &str, request: &CommitRequest, operations: &[crate::NamespaceOperation],
+    files: Vec<json_codec::Value>,
+) -> Result<json_codec::Value> {
+    let sealed = object_hash("workspace", &json!({
+        "workspace_id":workspace, "base_head":base, "files":files, "namespace_operations":operations,
+    }))?;
     let mut request = request.clone();
     request.request_digest = None;
     Ok(json!({"request":request,"sealed_manifest_hash":sealed}))
@@ -1044,20 +1054,20 @@ impl Engine {
         )?;
         self.publish_workspace_plan(plan)
     }
-    fn publish_workspace_plan(&mut self, plan: WorkspaceMutation) -> Result<OperationResult> {
-        self.persist_workspace_commit_request(&plan)?;
-        let result = match plan.mutation {
-            MutationPlan::Existing(result) => return Ok(result),
-            MutationPlan::Prepared {
-                next,
-                prepared,
-                result,
-            } => {
-                self.persist(*next, prepared, result.clone())?;
-                result
-            }
+    pub(crate) fn publish_workspace_plan(&mut self, plan: WorkspaceMutation) -> Result<OperationResult> {
+        let WorkspaceMutation { mutation, workspace, request, wire } = plan;
+        let (next, prepared, result) = match mutation {
+            MutationPlan::Existing(original) => return Ok(original),
+            MutationPlan::Prepared { next, prepared, result } => (next, prepared, result),
         };
-        self.complete_workspace_commit(plan.workspace, result)
+        // Same boundary as the real detached server route: the exact receipt,
+        // candidate, protection and physical paths must fit before either
+        // commit-request mirror; the request is still retained before decision.
+        self.require_workspace_request_paths(&workspace)?;
+        let detached = self.prepare_publication(*next, prepared, result, crate::disk::MAX_METADATA)?;
+        self.write_prechecked_workspace_request(&workspace, &request, wire.as_ref())?;
+        let result = self.decide_publication(detached)?;
+        self.complete_workspace_commit(workspace, result)
     }
     pub(crate) fn plan_workspace_commit_inner(
         &self,
@@ -1073,18 +1083,7 @@ impl Engine {
         self.planning_context()
             .plan_workspace_commit_inner(workspace, request, wire, replay)
     }
-    pub(crate) fn persist_workspace_commit_request(&self, plan: &WorkspaceMutation) -> Result<()> {
-        if matches!(plan.mutation, MutationPlan::Existing(_)) {
-            return Ok(());
-        }
-        self.write_workspace_commit_request(&plan.workspace, &plan.request, plan.wire.as_ref())
-    }
-    pub(crate) fn write_workspace_commit_request(
-        &self,
-        w: &Workspace,
-        request: &CommitRequest,
-        wire: Option<&crate::wire::WireCommit>,
-    ) -> Result<()> {
+    fn require_workspace_request_paths(&self, w: &Workspace) -> Result<()> {
         if w.purpose == WorkspacePurpose::Normal && !w.files.is_empty() {
             let repo = self.repository_for_branch(&w.branch_id)?;
             if repo.file_manager_root && repo.main_branch_id == w.branch_id {
@@ -1093,6 +1092,20 @@ impl Engine {
                 self.validate_disk_root_upload_paths(repo, paths)?;
             }
         }
+        Ok(())
+    }
+    pub(crate) fn write_workspace_commit_request(
+        &self,
+        w: &Workspace,
+        request: &CommitRequest,
+        wire: Option<&crate::wire::WireCommit>,
+    ) -> Result<()> {
+        self.require_workspace_request_paths(w)?;
+        self.write_prechecked_workspace_request(w, request, wire)
+    }
+    fn write_prechecked_workspace_request(
+        &self, w: &Workspace, request: &CommitRequest, wire: Option<&crate::wire::WireCommit>,
+    ) -> Result<()> {
         write_json(
             &self
                 .root
@@ -1477,7 +1490,7 @@ impl crate::engine::PlanningContext<'_> {
         if let Some(reserved) = reserved.as_deref() {
             reserved.require_request(self, &w, &request)?;
         }
-        let mutation = self.plan_new_mutation(
+        let mut mutation = self.plan_new_mutation(
             "workspace.commit", &request.principal, request.operation_id, digest,
             |engine, state, pending| {
                 let branch = state.branches.get(&w.branch_id).cloned()
@@ -1685,6 +1698,15 @@ impl crate::engine::PlanningContext<'_> {
         )?;
         if let Some(reserved) = reserved {
             reserved.require_consumed()?;
+        }
+        // The generic publication has now selected its single event time and
+        // the real builder has returned every Prepared version and placement.
+        // Attach to the original result and its snapshot mirror before either
+        // request persistence or any new publication can use this plan.
+        if let MutationPlan::Prepared { next, prepared, result } = &mut mutation {
+            crate::persist::workspace_file_origin::attach(
+                self, &w, &request, wire.as_ref(), next, result, prepared,
+            )?;
         }
         Ok(WorkspaceMutation {
             mutation,

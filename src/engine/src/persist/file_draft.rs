@@ -92,17 +92,24 @@ pub(crate) fn content_protection_for_file(
     {
         return Err(invalid());
     }
-    Ok(Protection {
-        version_id: content.version.version_id.parse()?,
-        primary_slot_id: slot.parse()?, target_copies: 1,
-        required_slots: vec![slot.parse()?],
-        topology_generation: placement.topology_generation,
-        slots: vec![Slot {
-            slot_id: slot.parse()?, copy_level: 1, disk_id: owner,
-            binding_generation: *placement.binding_generations.get(slot).ok_or_else(invalid)?,
-            state: SlotState::CompleteVerified,
-        }],
-    })
+    Ok(Protection::single_verified(content.version.version_id.parse()?, slot.parse()?, owner,
+        placement.topology_generation, *placement.binding_generations.get(slot).ok_or_else(invalid)?))
+}
+
+impl Protection {
+    pub(crate) fn single_verified(
+        version_id: storage_contract::VersionId, slot: name_policy::SlotId, owner: DiskId,
+        topology_generation: u64, binding_generation: u64,
+    ) -> Self {
+        Self {
+            version_id, primary_slot_id: slot.clone(), target_copies: 1,
+            required_slots: vec![slot.clone()], topology_generation,
+            slots: vec![Slot {
+                slot_id: slot, copy_level: 1, disk_id: owner, binding_generation,
+                state: SlotState::CompleteVerified,
+            }],
+        }
+    }
 }
 
 pub(crate) struct Decoded {

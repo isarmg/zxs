@@ -240,7 +240,7 @@ fn registered_namespace<'a>(
     Ok(NamespaceRegistration { state, config, disk, origin })
 }
 
-pub(super) fn root_origin(
+pub(crate) fn root_origin(
     state: &State, repository: RepositoryId, branch: BranchId,
 ) -> Result<RootOrigin> {
     let current = state.repositories.get(&repository.to_string())

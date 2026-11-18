@@ -133,6 +133,7 @@ fn historical_commit_forks_both_heads_moves_exact_edit_and_cold_retries_without_
     assert!(original.sequence < branch_receipt.sequence);
     assert!(branch_receipt.sequence < ready_receipt.sequence);
     let published_file = engine.operation(ready.plan.file_operation).unwrap();
+    assert_eq!(published_file.result["workspace_file_origin"]["kind"], "no_such_creation");
     assert!(ready_receipt.sequence < published_file.sequence);
     let version = &engine.state().versions[&ready.plan.edit.material.version_id.to_string()];
     assert_eq!(version.source_version_ids, [original_version]);

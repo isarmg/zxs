@@ -490,6 +490,17 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     assert!(!edited_path.exists());
     let read_committed = |engine: &Engine| {
         use std::os::unix::fs::MetadataExt;
+        // This is a real workspace.commit with changed existing FILE bytes.
+        // Its earlier original worktree reservation, not its method or hash,
+        // prevents it from identifying an explicit ordinary FILE creation.
+        let reserved = engine.operation_record(directory_commit.operation_id).unwrap().into_result();
+        let Record::ReserveCommit(plan) = codec::decode(&reserved).unwrap().unwrap().record else {
+            panic!("actual worktree FILE reservation required");
+        };
+        let child = engine.operation_record(plan.file_operation).unwrap().into_result();
+        assert_eq!(child.kind, "workspace.commit");
+        assert_eq!(child.result["workspace_file_origin"]["kind"], "no_such_creation");
+        assert!(child.result["workspace_file_origin"].get("source").is_some());
         let index = engine.snapshot_receipts().unwrap();
         let original = index.reopen_node(engine, handle).unwrap();
         let successor = index.reopen_node(engine, updated).unwrap();

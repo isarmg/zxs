@@ -14,6 +14,8 @@ pub use published::{
 pub enum OriginalReceiptError {
     #[error("the original receipt does not bind its admitted candidate")]
     Candidate,
+    #[error("verifying whether the original Workspace operation was reserved by a worktree")]
+    WorkspaceReservation(#[source] Box<crate::snapshot_worktree::SnapshotWorktreeError>),
     #[error("the original receipt has no recorded principal")]
     MissingPrincipal,
     #[error("the original receipt principal is invalid")]

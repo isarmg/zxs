@@ -102,6 +102,34 @@ pub(crate) fn project<'a>(
     Ok(Cow::Owned(projected))
 }
 
+/// Initial ordinary mode only. Read the admitted main occurrence and its stable
+/// directories, including visibility/deletion barriers. An independent FILE
+/// branch may point to another immutable body, but not to another occurrence.
+pub(crate) fn has_origin_occurrence(
+    state: &State, target: &storage_contract::file_draft::DraftLocation,
+    ancestors: &[storage_contract::EntryId],
+) -> Result<bool> {
+    let repository = state.repositories.get(&target.repository.to_string()).ok_or_else(changed)?;
+    let main = state.branches.get(&repository.main_branch_id).ok_or_else(changed)?;
+    let entries = &state.commits.get(&main.head_commit_id).ok_or_else(changed)?.entries;
+    let tree = namespace::NamespaceTree::from_current_state(state, &repository.repository_id, entries);
+    let Some(file) = tree.get_key(target.path.key()) else { return Ok(false) };
+    if file.kind != NamespaceEntryKind::File || file.path != target.path
+        || file.file_id != target.file.to_string() || file.entry_id != target.entry.to_string()
+        || crate::container_storage::current_container_name(state, &file.file_id)?.as_str()
+            != target.path.file_name()
+    { return Ok(false); }
+    let mut parent = target.path.parent();
+    for id in ancestors.iter().rev() {
+        let Some(path) = parent else { return Ok(false) };
+        let Some(row) = tree.get_key(path.key()) else { return Ok(false) };
+        if row.kind != NamespaceEntryKind::Directory || row.path != path
+            || row.entry_id != id.to_string() { return Ok(false); }
+        parent = path.parent();
+    }
+    Ok(parent.is_none())
+}
+
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/business/workspace_file_location_tests.rs"]
 mod tests;

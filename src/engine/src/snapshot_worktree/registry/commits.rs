@@ -465,6 +465,14 @@ pub(in crate::snapshot_worktree) fn verify_file_publication(
     principal: &Principal,
     reserved_at: u64, before: u64,
 ) -> Result<()> {
+    let through = before.checked_sub(1).ok_or(RegistrationError::CommitScope)?;
+    verify_file_through(state, plan, branch, principal, reserved_at, through)
+}
+
+fn verify_file_through(
+    state: &State, plan: &CommitReservation, branch: storage_contract::BranchId,
+    principal: &Principal, reserved_at: u64, through: u64,
+) -> Result<()> {
     let receipt = state.operations.get(&plan.file_operation)
         .ok_or(RegistrationError::CommitScope)?;
     let commit = receipt.commit_id.as_ref().and_then(|commit| state.commits.get(commit))
@@ -472,7 +480,7 @@ pub(in crate::snapshot_worktree) fn verify_file_publication(
     let file = state.versions.get(&plan.edit.material.version_id.to_string())
         .ok_or(RegistrationError::CommitScope)?;
     if receipt.kind != "workspace.commit" || receipt.commit_state != CommitState::Published
-        || receipt.sequence <= reserved_at || receipt.sequence >= before
+        || receipt.sequence <= reserved_at || receipt.sequence > through
         || !plan.file_request.matches(&receipt.request_digest)
         || state.operation_principals.get(&plan.file_operation).map(String::as_str)
             != Some(principal.as_str())
@@ -493,4 +501,40 @@ pub(in crate::snapshot_worktree) fn verify_file_publication(
         return Err(RegistrationError::CommitScope);
     }
     Ok(())
+}
+
+
+impl ReceiptIndex<'_> {
+    /// The reserved child is itself a genuine workspace.commit over an ordinary
+    /// FILE. Only its earlier original reservation distinguishes this publisher.
+    /// A missing original, pending historical selector, reused completion or
+    /// different material is an error, never an ordinary manual-save origin.
+    pub(crate) fn require_workspace_child(
+        &self, previous: &State, next: &State, original: &crate::OperationResult,
+        actor: &Principal,
+    ) -> crate::Result<bool> {
+        use crate::persist::workspace_file_origin::prior_error;
+        let invalid = || prior_error(RegistrationError::CommitScope);
+        let operation = original.operation_id;
+        if !std::ptr::eq(self.source, previous) || previous.operations.contains_key(&operation)
+            || next.sequence != original.sequence || next.sequence <= previous.sequence
+            || next.operations.get(&operation) != Some(original)
+            || self.completions.contains_key(&operation)
+        { return Err(invalid()); }
+        if !self.planned_files.contains(&operation) { return Ok(false); }
+        // Both regular and historical-ready file reservations are admitted to
+        // commits. A historical fork child or a not-yet-ready plan is not one.
+        let mut owners = self.commits.values().filter(|owner| owner.plan.file_operation == operation);
+        let owner = owners.next().ok_or_else(invalid)?;
+        if owners.next().is_some() || owner.prepared_at > previous.sequence
+            || &owner.receipt.principal != actor || !matches!(owner.node, Publication::Reserved)
+            || !matches!(owner.completion, Publication::Reserved)
+        { return Err(invalid()); }
+        verify_file_through(next, &owner.plan, owner.routing.file_branch, actor,
+            owner.prepared_at, original.sequence).map_err(prior_error)?;
+        let commit = original.commit_id.as_ref().and_then(|id| next.commits.get(id))
+            .ok_or_else(invalid)?;
+        if commit.entries[0].path != owner.plan.edit.path { return Err(invalid()); }
+        Ok(true)
+    }
 }

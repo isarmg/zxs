@@ -145,19 +145,7 @@ impl Engine {
         envelope: PublicCommitEnvelope,
     ) -> Result<OperationResult> {
         let plan = self.plan_workspace_commit_wire(request, envelope)?;
-        self.persist_workspace_commit_request(&plan)?;
-        let result = match plan.mutation {
-            crate::engine::MutationPlan::Existing(result) => return Ok(result),
-            crate::engine::MutationPlan::Prepared {
-                next,
-                prepared,
-                result,
-            } => {
-                self.persist(*next, prepared, result.clone())?;
-                result
-            }
-        };
-        self.complete_workspace_commit(plan.workspace, result)
+        self.publish_workspace_plan(plan)
     }
     pub(crate) fn plan_workspace_commit_wire(
         &self,

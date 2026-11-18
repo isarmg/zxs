@@ -45,7 +45,8 @@ mod repository;
 mod workspace;
 pub(crate) use ancestry::descendant_commits;
 pub(crate) use batch::{relocate as relocate_namespace_entry, separated_file_source};
-pub(crate) use directory::context_key_from_key;
+pub(crate) use directory::{context_at_key, context_key_from_key};
+pub(crate) use file::selected_file_branch;
 pub(crate) use directory::namespace_location;
 pub(crate) use directory::record_restored_namespace_with_ids;
 pub use file_nodes::{FileNodeProjectionRequest, FileNodeSummary};
@@ -59,10 +60,12 @@ pub(crate) use namespace::{
     validate_workspace_dependencies,
 };
 pub use workspace::{PreparedUpload, UploadPreparation};
-pub(crate) use workspace::file_location::project as workspace_file_entries;
+pub(crate) use workspace::file_location::{has_origin_occurrence, project as workspace_file_entries};
 pub(crate) use workspace::input::WorkspaceInput;
 pub(crate) use workspace::directory_source::introduced as workspace_directory_entries;
-pub(crate) use workspace::{VersionBuild, WorkspaceMutation, native_commit_digest};
+pub(crate) use workspace::{
+    VersionBuild, WorkspaceMutation, native_commit_digest, native_manifest_item, sealed_workspace_commit_input,
+};
 
 pub(crate) fn now() -> Result<u64> {
     unix_seconds(SystemTime::now())

@@ -15,3 +15,5 @@ pub(crate) mod namespace_directory;
 
 pub(crate) mod initial_storage;
 pub(crate) mod degraded_result;
+
+pub(crate) mod workspace_file_origin;
