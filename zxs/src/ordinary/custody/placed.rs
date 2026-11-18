@@ -2,19 +2,21 @@
 //! selects the alternate native objects for that same FILE/entry/history.
 use super::{destination::Method,source::{Clean,Leaf,Verified},transfer::{Moved,Sites}};
 use crate::{fs::{self,HeldDir,invalid,stream::PinnedRegular},pool::lease::FileVolume,
-    ordinary::{delta::{physical::Body as Incremental,types::Delta},formal::{physical::HistoryBody,types::Commit},
+    ordinary::{delta::types::Delta,formal::types::Commit,
         journal::Journal,material,wire::{self,Frame,NativeObject}}};
 use std::{collections::BTreeSet,ffi::{CStr,CString},io};
 
 pub(super) struct Role<'a>{pub kind:Leaf,pub name:CString,pub len:u64,pub original:&'a NativeObject}
-pub(super) fn roles<'a>(c:&Frame,f:&Commit,d:&Delta,sites:&'a Sites)->io::Result<Vec<Role<'a>>>{
-    Ok(vec![
+pub(super) fn roles<'a>(c:&Frame,f:&Commit,d:Option<&Delta>,sites:&'a Sites)->io::Result<Vec<Role<'a>>>{
+    let mut out=vec![
         Role{kind:Leaf::File,name:c"FILE".to_owned(),len:wire::empty_material(c.create.file,c.create.history,c.create.op,&c.create.name).len()as u64,original:&sites.local},
         Role{kind:Leaf::FullNode,name:f.original.node_name(),len:crate::ordinary::formal::physical::index_size(&f.original)?,original:&sites.node},
         Role{kind:Leaf::FullRaw,name:f.original.body_name(),len:f.original.content.bytes,original:&sites.raw},
-        Role{kind:Leaf::Incr,name:d.original.leaf(),len:crate::ordinary::delta::physical::packed_size(&d.original)?,
-            original:sites.incr.as_ref().ok_or_else(||invalid("a retained incremental node has no native role"))?},
-    ])
+    ];
+    match (d,sites.incr.as_ref()){
+        (Some(d),Some(n))=>out.push(Role{kind:Leaf::Incr,name:d.original.leaf(),len:crate::ordinary::delta::physical::packed_size(&d.original)?,original:n}),
+        (None,None)=>{},_=>return Err(invalid("native role differs from the MOVE's frozen original history")),
+    }Ok(out)
 }
 pub(super) fn token(allocation:[u8;32],kind:Leaf,n:&NativeObject)->io::Result<[u8;32]>{
     let mut b=b"ZXS/MOVE/OWN-TARGET\0".to_vec();b.extend_from_slice(&allocation);b.push(kind.tag());n.put(&mut b);crate::hash::digest(&b)
@@ -30,8 +32,8 @@ pub(super) fn held_role(dir:&HeldDir,r:&Role<'_>,token_from:Option<[u8;32]>)->io
     if let Some(a)=token_from{fs::require_material_token(&p.file,&token(a,r.kind,r.original)?)?;}
     p.named(dir,&r.name)?;Ok(p)
 }
-pub(super) fn complete(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,d:&Delta)->io::Result<HeldDir>{
-    m.require_history(c,f,Some(d))?;root(v,&m.original.dst_root)?;
+pub(super) fn complete(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<HeldDir>{
+    m.require_history(c,f,d)?;root(v,&m.original.dst_root)?;
     if v.id()!=m.original.to{return Err(invalid("wrong registered MOVE destination"));}
     let dir=v.root.child_directory(name)?.ok_or_else(||invalid("decided FILE not yet installed at its original target"))?;
     material::verify_header_at(&dir,&c.create,&m.target.directory,&m.target.local)?;
@@ -43,35 +45,35 @@ pub(super) fn complete(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,
     for r in &rows{let _=held_role(&dir,r,(m.original.mode==Method::Transfer).then_some(m.allocation))?;}
     dir.require_named()?;root(v,&m.original.dst_root)?;Ok(dir)
 }
-pub(in crate::ordinary) struct Current<'a>{pub dir:HeldDir,pub m:&'a Moved,pub f:&'a Commit,pub d:&'a Delta}
-impl<'a> Current<'a>{
-    pub(in crate::ordinary) fn open(s:&'a Journal,v:&FileVolume<'_>,c:&Frame)->io::Result<Option<Self>>{
-        let Some(m)=s.placed(c.create.file) else{return Ok(None)};
-        if let Some(a)=s.moving.as_ref().filter(|a|a.original.op==m.original.op){
-            if !a.matches(m)||!a.opened(){return Err(io::Error::new(io::ErrorKind::WouldBlock,"MOVE decided; entire target has not yet been reopened"));}
-            a.confirm_phase(v.pool)?;
-        }
-        let f=s.head(c.create.file).ok_or_else(||invalid("misplaced original FULL"))?;
-        let d=s.delta(c.create.file).ok_or_else(||invalid("misplaced original INCR"))?;
-        let name=CString::new(c.create.name.as_bytes()).map_err(|_|invalid("invalid selected name"))?;
-        let dir=complete(v,&name,m,c,f,d)?;Ok(Some(Self{dir,m,f,d}))
+/// Admit only the transferred fixed role set here. The caller must also
+/// enumerate *all* names against this same current prefix. Later working
+/// objects and the first B-native INCR never inherit a MOVE material token.
+pub(in crate::ordinary) fn active_dir(s:&Journal,v:&FileVolume<'_>,c:&Frame)->io::Result<Option<HeldDir>>{
+    let Some(m)=s.placed(c.create.file)else{return Ok(None)};
+    let (actual,f,d)=super::finish::frozen(s,m)?;
+    if actual.digest!=c.digest||v.id()!=m.original.to{return Err(invalid("not the confirmed current FILE owner"));}
+    if let Some(a)=s.moving.as_ref().filter(|a|a.original.op==m.original.op){
+        if !a.matches(m)||!a.opened(){return Err(io::Error::new(io::ErrorKind::WouldBlock,"MOVE decided; target installation not yet confirmed"));}
+        a.confirm_phase(v.pool)?;
     }
-    pub(in crate::ordinary) fn full(&self)->io::Result<HistoryBody>{
-        HistoryBody::at_originals(&self.dir,self.f,&self.m.target.node,&self.m.target.raw)?.user_read()
+    root(v,&m.original.dst_root)?;
+    let name=CString::new(m.original.name.as_bytes()).map_err(|_|invalid("invalid original name"))?;
+    let dir=v.root.child_directory(&name)?.ok_or_else(||invalid("current owner unavailable; never read from the previous location"))?;
+    if let Some(slot)=m.stage{if v.root.entry_present(&material::staging(m.original.ticket,slot))?{
+        return Err(invalid("unexpected private stage on an installed owner"));}
     }
-    pub(in crate::ordinary) fn incremental(&self)->io::Result<Incremental>{
-        let n=self.m.target.incr.as_ref().ok_or_else(||invalid("missing relocated INCR"))?;
-        Incremental::at_original(&self.dir,self.full()?,self.d,n)
-    }
+    material::verify_header_at(&dir,&c.create,&m.target.directory,&m.target.local)?;
+    for r in roles(c,f,d,&m.target)?{let _=held_role(&dir,&r,(m.original.mode==Method::Transfer).then_some(m.allocation))?;}
+    dir.require_named()?;root(v,&m.original.dst_root)?;Ok(Some(dir))
 }
 /// A completed DATA scan of the exact installed name or private stage. The
 /// transfer decision cannot replace it, and a string/checksum cannot mint it.
 pub(super) struct TargetInput{clean:Clean,decision:Moved,name:CString}
 pub(super) struct Reopened{verified:Verified,decision:Moved,name:CString}
 impl Reopened{
-    pub(super) fn input(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,d:&Delta)->io::Result<TargetInput>{
+    pub(super) fn input(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<TargetInput>{
         let dir=complete(v,name,m,c,f,d)?;dir.share()?;
-        Ok(TargetInput{clean:Clean::at_original_sites(v,dir,c,f,Some(d),&m.target)?,decision:m.clone(),name:name.to_owned()})
+        Ok(TargetInput{clean:Clean::at_original_sites(v,dir,c,f,d,&m.target)?,decision:m.clone(),name:name.to_owned()})
     }
     pub(super) fn verify(input:TargetInput)->io::Result<Self>{
         let TargetInput{clean,decision:m,name}=input;let verified=clean.verify()?;

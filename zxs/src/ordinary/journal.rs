@@ -65,6 +65,7 @@ impl Intent{
     }
 }
 
+use super::placement::Placement;
 type Allowed<'a>=dyn Fn(VolumeId,u32,Entity,&fs::Birth,bool)->bool+'a;
 #[derive(Default)]
 struct OriginalIndex{
@@ -76,6 +77,11 @@ struct OriginalIndex{
 impl OriginalIndex{
     fn birth<'a>(&self,id:FileId,frames:&'a[Decision])->io::Result<&'a Frame>{
         self.files.get(&id).and_then(|i|frames.get(*i)).ok_or_else(||invalid("no original FILE creation at this SAVE cutoff"))?.creation()
+    }
+    fn placement<'a>(&self,id:FileId,ds:&'a[Decision])->io::Result<Placement<'a>>{
+        let c=self.birth(id,ds)?;
+        let m=self.moves.get(&id).map(|&i|ds[i].moved()).transpose()?;
+        Placement::from_prefix(c,m)
     }
     fn original_save<'a>(&self,s:&Original,frames:&'a[Decision],allow:&Allowed<'_>)->io::Result<&'a Frame>{
         let c=self.birth(s.file,frames)?;
@@ -96,40 +102,40 @@ impl OriginalIndex{
         !self.formal.contains_key(&o.file)&&!self.nodes.contains_key(&o.node)&&!self.branches.contains(&o.branch)
             &&!self.versions.contains(&o.version)&&!self.storage.contains(&o.storage)
     }
-    fn original_span<'a>(&self,o:&span_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<&'a Frame>{
-        let c=self.birth(o.file,ds)?;
+    fn original_span<'a>(&self,o:&span_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<Placement<'a>>{
+        let place=self.placement(o.file,ds)?;
         let f=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("interval save has no original formal FILE baseline"))?.formal()?;
         let prior=self.spans.get(&o.file).and_then(|ids|ids.last()).map(|&i|ds[i].span()).transpose()?;
-        if !o.matches(c,f,prior)||!allow(o.volume,o.uid,c.create.directory.entity,&c.create.directory.birth,false){
+        if !o.matches(place,f,prior)||!allow(o.volume,o.uid,place.directory().entity,&place.directory().birth,false){
             return Err(invalid("interval save is not bound to this registered FILE and original formal node"));
         }
-        Ok(c)
+        Ok(place)
     }
-    fn delta_source<'a>(&self,o:&delta_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<&'a Frame>{
-        let c=self.birth(o.file,ds)?;
+    fn delta_source<'a>(&self,o:&delta_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<Placement<'a>>{
+        let place=self.placement(o.file,ds)?;
         let p=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("no formal parent for INCR"))?.formal()?;
         let indices=self.spans.get(&o.file).ok_or_else(||invalid("no original working chain for INCR"))?;
         let selected:Vec<&Saved>=indices.iter().map(|&i|ds[i].span()).collect::<io::Result<_>>()?;
         let last=selected.last().copied().ok_or_else(||invalid("no original saved working edge for INCR"))?;
         let map=DeltaMap::derive(p.original.content.bytes,selected.iter().copied())?;
-        o.require(c,p,last,&map)?;
+        o.require(place,p,last,&map)?;
         if self.deltas.contains_key(&o.file)||self.nodes.contains_key(&o.node)||self.versions.contains(&o.version)||self.storage.contains(&o.storage)
-            ||!allow(o.volume,o.uid,c.create.directory.entity,&c.create.directory.birth,false){return Err(invalid("conflicting formal INCR identity or owner"));}
-        Ok(c)
+            ||!allow(o.volume,o.uid,place.directory().entity,&place.directory().birth,false){return Err(invalid("conflicting formal INCR identity or owner"));}
+        Ok(place)
     }
-    fn move_source<'a>(&self,o:&MoveOrigin,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<(&'a Frame,&'a Commit,&'a Delta)>{
-        // The only externally admissible shape now is a settled first FULL +
-        // first INCR. Refuse a writable FULL-only FILE (or any dirty revision)
-        // before reservation: this slice does not redirect a future first INCR.
+    fn move_source<'a>(&self,o:&MoveOrigin,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<(&'a Frame,&'a Commit,Option<&'a Delta>)>{
+        // These maps contain only the verified prefix *before* this MOVE. A
+        // later B-native child can never fill an absent role in the origin.
         let c=self.birth(o.file,ds)?;
         let f=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("handoff requires original first FULL"))?.formal()?;
-        let d=self.deltas.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("handoff requires original first INCR"))?.delta()?;
+        let d=self.deltas.get(&o.file).map(|&i|ds[i].delta()).transpose()?;
+        if d.is_none()&&self.spans.get(&o.file).is_some_and(|v|!v.is_empty()){return Err(invalid("cannot hand off a dirty working chain"));}
         if self.moves.contains_key(&o.file)||self.names.contains(&(o.to,o.name.clone()))||!self.names.contains(&(o.from,o.name.clone()))||
             self.tickets.contains(&o.ticket)||self.ops.contains(&o.ticket)||self.tickets.contains(&o.op)||
             !allow(o.from,o.uid,o.src_root.entity,&o.src_root.birth,true)||!allow(o.to,o.uid,o.dst_root.entity,&o.dst_root.birth,true){
             return Err(invalid("different initial FILE placement, occupied destination, original ticket or ordinary registration"));
         }
-        o.require_history(c,f,Some(d))?;Ok((c,f,d))
+        o.require_history(c,f,d)?;Ok((c,f,d))
     }
     fn admit(&self,f:&Decision,frames:&[Decision],prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
         if frames.len()>=MAX_DECISIONS||f.seq()!=frames.len() as u64+1||f.previous()!=prev||self.ops.contains(&f.op()){
@@ -137,7 +143,7 @@ impl OriginalIndex{
         }
         match f{
             Decision::Move(m)=>{let(c,f,d)=self.move_source(&m.original,frames,allow)?;
-                m.require_history(c,f,Some(d))?;
+                m.require_history(c,f,d)?;
                 if m.original.mode==Method::Transfer&&m.target.each().any(|x|self.native.contains(&x.birth)){
                     return Err(invalid("transferred material cannot reuse any admitted native owner"));
                 }
@@ -164,13 +170,13 @@ impl OriginalIndex{
                 }
             }
             Decision::Delta(d)=>{
-                let c=self.delta_source(&d.original,frames,allow)?;let n=&d.material.object;
-                if self.native.contains(&n.birth)||n.entity.device!=c.create.directory.entity.device||n.birth.filesystem()!=c.create.directory.birth.filesystem(){
+                let owner=self.delta_source(&d.original,frames,allow)?;let n=&d.material.object;
+                if self.native.contains(&n.birth)||n.entity.device!=owner.directory().entity.device||n.birth.filesystem()!=owner.directory().birth.filesystem(){
                     return Err(invalid("formal INCR is not new immutable material on its original FILE volume"));}
             }
-            Decision::Span(s)=>{let o=&s.original;let c=self.original_span(o,frames,allow)?;let n=&s.material.object;
-                if self.deltas.contains_key(&o.file)||self.native.contains(&n.birth)||n.entity.device!=c.create.directory.entity.device||
-                    n.birth.filesystem()!=c.create.directory.birth.filesystem(){return Err(invalid("not an independent changed extent on the original FILE"));}
+            Decision::Span(s)=>{let o=&s.original;let owner=self.original_span(o,frames,allow)?;let n=&s.material.object;
+                if self.deltas.contains_key(&o.file)||self.native.contains(&n.birth)||n.entity.device!=owner.directory().entity.device||
+                    n.birth.filesystem()!=owner.directory().birth.filesystem(){return Err(invalid("not an independent changed extent on the original FILE"));}
             }
         }
         Ok(())
@@ -340,6 +346,10 @@ impl Journal{
         }Ok((m,a))
     }
     pub(super) fn placed(&self,id:FileId)->Option<&Moved>{self.decisions.get(*self.moves.get(&id)?)?.moved().ok()}
+    pub(super) fn placement(&self,id:FileId)->io::Result<Placement<'_>>{
+        let c=self.file(id).ok_or_else(||invalid("no confirmed original FILE placement"))?;
+        Placement::from_prefix(c,self.placed(id))
+    }
     pub(super) fn volume_of(&self,f:&Frame)->VolumeId{self.placed(f.create.file).map_or(f.create.volume,|m|m.original.to)}
     pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|self.volume_of(f)==v)}
     pub(super) fn moves(&self)->impl Iterator<Item=&Moved>{self.decisions.iter().filter_map(|d|d.moved().ok())}
@@ -350,9 +360,12 @@ impl Journal{
         let c=self.file(id).ok_or_else(||invalid("no original FILE for handoff"))?;
         if self.pending.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||self.editing.is_some()||
             self.incrementing.is_some()||self.moving.is_some()||self.ticket_used(op)||from==to||c.create.volume!=from||
-            self.placed(id).is_some()||self.head(id).is_none()||self.delta(id).is_none()||self.named(to,&c.create.name).is_some(){
-            return Err(invalid("handoff needs a free original slot and operation, complete initial FULL+INCR and unoccupied registered target"));
+            !self.clean_initial_handoff(id)||self.named(to,&c.create.name).is_some(){
+            return Err(invalid("handoff needs a free original slot and operation, clean initial main FULL with optional original INCR and unoccupied registered target"));
         }Ok(())
+    }
+    pub(in crate::ordinary) fn clean_initial_handoff(&self,id:FileId)->bool{
+        self.placed(id).is_none()&&self.head(id).is_some()&&(self.delta(id).is_some()||self.interval(id).is_none())
     }
     pub(super) fn ticket_used(&self,ticket:OperationId)->bool{
         self.on_all().any(|c|c.create.attempt==ticket)||self.moves().any(|m|m.original.ticket==ticket)||self.decided(ticket).is_some()

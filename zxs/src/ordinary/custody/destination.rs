@@ -22,7 +22,7 @@ impl<'s> Destination<'s>{
     pub(super) fn select(system:&Path,src:&'s Verified,to:VolumeId)->io::Result<Self>{
         let(p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;
         if p.id()!=src.pool()||to==src.volume(){return Err(invalid("MOVE requires two distinct original ordinary volume registrations"));}
-        if s.delta(src.file()).is_none()||s.placed(src.file()).is_some(){return Err(invalid("only initial clean FULL plus first INCR is currently transferable"));}
+        if !s.clean_initial_handoff(src.file()){return Err(invalid("initial clean formal FILE required for transfer"));}
         let old=p.ordinary(src.volume())?;src.require(&p,&s,&old)?;
         let new=p.ordinary(to)?;vacant(&s,&new,src.name())?;
         let root=NativeObject{entity:new.root.entity,birth:fs::Birth::read(&new.root.file)?};
@@ -151,10 +151,10 @@ impl Prepared<'_>{
             if a.original.mode==Method::Transfer&&old.root.entry_present(&a.original.quarantine_name())?{
                 return Err(invalid("source private name now occupied; no further target staging"));}
             p.system.confirm_record_sync(crate::ordinary::allocation::NAME,&a.stamp,a.bytes.len())?;p.system.file.sync_all()?;
-            let(c,f,d)=self.source().originals();let d=d.ok_or_else(||invalid("uncertified retained INCR"))?;
+            let(c,f,d)=self.source().originals();
             if a.original.mode==Method::Rename{
-                let m=Moved::seal(p.id(),a.seq,a.previous,a.original.clone(),a.digest,None,Sites::birthplace(c,f,Some(d)))?;
-                m.require_history(c,f,Some(d))?;if !a.matches(&m){return Err(invalid("different same-mount reservation"));}return Ok((m,None));
+                let m=Moved::seal(p.id(),a.seq,a.previous,a.original.clone(),a.digest,None,Sites::birthplace(c,f,d))?;
+                m.require_history(c,f,d)?;if !a.matches(&m){return Err(invalid("different same-mount reservation"));}return Ok((m,None));
             }
             if a.stage().is_none(){
                 let fresh=staging::Fresh::under_writer(p,new,a,hook)?;a.bind_fresh(p,new,fresh)?;
@@ -179,9 +179,9 @@ impl Prepared<'_>{
                 if selected.insert(role.kind,actual).is_some(){return Err(invalid("repeated MOVE role"));}
             }
             dir.file.sync_all()?;new.root.file.sync_all()?;
-            let sites=staging::sites(&dir,&selected)?;
+            let sites=staging::sites(&dir,&selected,&a.original)?;
             let m=Moved::seal(p.id(),a.seq,a.previous,a.original.clone(),a.digest,Some(st.slot),sites)?;
-            m.require_history(c,f,Some(d))?;if !a.matches(&m)||now.pending.as_ref().is_some_and(|i|i.frame.bytes()!=m.bytes){
+            m.require_history(c,f,d)?;if !a.matches(&m)||now.pending.as_ref().is_some_and(|i|i.frame.bytes()!=m.bytes){
                 return Err(invalid("named targets differ from the original MOVE seal"));}
             let name=material::staging(a.original.ticket,st.slot);
             let input=Reopened::input(new,&name,&m,c,f,d)?;Ok((m,Some((input,name))))

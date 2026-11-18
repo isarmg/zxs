@@ -247,3 +247,8 @@ fn actual_move_never_reserves_if_its_source_isolation_or_destination_slots_canno
     let f=Fixture::planned(true,false,Some(4049),Some(4052));let r=f.cmd();
     assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);f.all_history();
 }
+
+mod single_full {
+    use super::*;
+    include!("custody_single_full.rs");
+}

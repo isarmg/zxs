@@ -5,7 +5,7 @@ pub(super) mod types;
 pub(super) mod allocation;
 pub(super) mod physical;
 pub(in crate::ordinary) mod layout;
-use super::{allocation as ordinary_allocation,draft::{self,Body},formal::{self,types::Commit,physical::HistoryBody},
+use super::{allocation as ordinary_allocation,draft::{self,Body},formal::{self,types::Commit},
     journal::{self,Decision,Journal},wire::Frame,publish_sealed,Cut,CreationStatus,CurrentFile};
 use self::{allocation::SpanAllocation,types::{Original,Saved,SpanEdit,SpanReceipt},physical::{Capture,Verified}};
 use crate::{fs::{self,invalid},pool::lease::{Access,LocalPool},FileId,OperationId};
@@ -40,7 +40,7 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,revision:u64,e
     let c=s.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published FILE"))?;
     let f=s.head(id).ok_or_else(||invalid("interval editing requires an original formal FILE baseline"))?;
     let prior=s.intervals(id).rev().find(|e|e.original.op!=op);
-    let o=Original::select(op,fs::local_uid(),c,f,prior,revision,edit)?;
+    let o=Original::select(op,fs::local_uid(),s.placement(id)?,f,prior,revision,edit)?;
     if s.editing.as_ref().is_some_and(|a|a.original!=o){return Err(invalid("original interval base differs"));}
     if s.editing.is_none(){s.room_for(super::wire::MAX_FRAME)?;}
     Ok(Choice::Active(c,f,o,req))
@@ -51,9 +51,9 @@ fn source(system:&Path,op:OperationId,id:FileId,rev:u64,edit:SpanEdit)->io::Resu
     let (p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;
     let (c,f,o)=match choice(&p,&s,op,id,rev,edit)?{Choice::Done(r)=>return Ok(Source::Done(r)),Choice::Active(c,f,o,_)=>(c,f,o)};
     let w=s.saved(id).ok_or_else(||invalid("formal original lacks its first confirmed save"))?;
-    let v=p.ordinary(c.create.volume)?;let dir=formal::directory(&v,&s,c,w)?;
-    let base=HistoryBody::current(&dir,f)?;
-    let prior=physical::Operands::capture(&dir,c,f.original.content.bytes,s.intervals(id).filter(|r|r.original.op!=op))?;
+    let site=s.placement(c.create.file)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&s,c,w)?;
+    let base=site.full(&dir,f)?;
+    let prior=physical::Operands::capture(&dir,site,f.original.content.bytes,s.intervals(id).filter(|r|r.original.op!=op))?;
     v.require_current()?;
     Ok(Source::Input(Capture::open(dir,base,prior,o,s.editing.as_ref(),s.pending.is_some()||s.decided(op).is_some())?))
 }
@@ -68,7 +68,7 @@ fn writer(system:&Path,op:OperationId,file:FileId,rev:u64,e:SpanEdit,checked:Ver
     let (p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;
     let (c,o,request)=match choice(&p,&s,op,file,rev,e)?{Choice::Done(r)=>return Ok(r),Choice::Active(c,_,o,r)=>(c,o,r)};
     let w=s.saved(file).ok_or_else(||invalid("formal base lacks its exact save original"))?;
-    let v=p.ordinary(c.create.volume)?;let dir=formal::directory(&v,&s,c,w)?;v.require_current()?;
+    let site=s.placement(c.create.file)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&s,c,w)?;v.require_current()?;
     checked.source_current(&dir,&o)?;
     if s.editing.is_none(){let (seq,prev)=s.frontier();SpanAllocation::reserve(&p.system,p.id(),o,seq+1,prev)?;}
     drop(s);cut(Cut::Reservation)?;

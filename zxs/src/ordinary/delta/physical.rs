@@ -177,14 +177,14 @@ impl Verified{
         if content!=self.c||index!=self.index{return Err(invalid("newly named incremental bytes differ from verified inputs"));}
         p.named(dir,&o.leaf())?;Ok(Bound{pin:p,o:o.clone(),c:content,index})
     }
-    pub(super) fn retire(mut self,dir:&HeldDir,birth:&crate::ordinary::wire::Frame,parent:&crate::ordinary::formal::types::Commit,bound:&Bound,d:&Delta,mut after:impl FnMut(crate::ordinary::Cut)->io::Result<()>)->io::Result<()>{
+    pub(super) fn retire(mut self,dir:&HeldDir,site:crate::ordinary::placement::Placement<'_>,parent:&crate::ordinary::formal::types::Commit,bound:&Bound,d:&Delta,mut after:impl FnMut(crate::ordinary::Cut)->io::Result<()>)->io::Result<()>{
         self.require_source(dir,&d.original)?;drop(self.input.source.take());
         // Read the actual named destination, its local map and both original
         // authenticated indexes again, this time on the published side. Do not
         // infer install or cleanup authority from an in-memory prepared hash.
-        let reopened=Body::open(dir,HistoryBody::current(dir,parent)?,d)?;
+        let reopened=site.incremental(dir,site.full(dir,parent)?,d)?;
         reopened.range(0,0,io::sink())?;
-        let lease=crate::ordinary::material::retirement_lease(dir,&birth.create)?;
+        let lease=site.file_lease(dir,true)?;
         let checked=||->io::Result<()>{
             lease.named(dir,c"FILE")?;reopened.require(dir)?;
             if bound.feedback(dir)?!=d.material{return Err(invalid("published INCR no longer verifies; preserve old work"));}Ok(())

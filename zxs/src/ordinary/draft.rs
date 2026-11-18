@@ -24,7 +24,6 @@ pub struct FirstSaveObservation{
 }
 
 pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)->io::Result<Option<Body>>{
-    if let Some(h)=super::custody::placed::Current::open(state,volume,c)?{return Ok(Some(Body::Incr(h.incremental()?)));}
     let saved=state.saved(c.create.file);
     if let Some(f)=state.head(c.create.file){
         let w=saved.ok_or_else(||invalid("formal node has no original confirmed revision"))?;
@@ -32,9 +31,9 @@ pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)
         // The confirmed FULL is authoritative even if old-work cleanup is
         // obstructed. Do not use the old draft as the body, or require it for
         // the selected node. Complete-inventory and retirement verify it separately.
-        let base=super::formal::physical::HistoryBody::current(&dir,f)?.user_read()?;
+        let site=state.placement(c.create.file)?;let base=site.full(&dir,f)?.user_read()?;
         if let Some(d)=state.delta(c.create.file){
-            return Ok(Some(Body::Incr(super::delta::physical::Body::open(&dir,base,d)?)));
+            return Ok(Some(Body::Incr(site.incremental(&dir,base,d)?)));
         }
         if let Some(a)=state.incrementing.as_ref().filter(|a|a.original.file==c.create.file){
             let m=super::delta::map::Map::derive(f.original.content.bytes,state.intervals(c.create.file))?;
@@ -45,7 +44,7 @@ pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)
             super::interval::physical::inspect(&dir,a,sealed)?;
         }
         if state.interval(c.create.file).is_some(){
-            let set=super::interval::physical::Operands::capture(&dir,c,f.original.content.bytes,state.intervals(c.create.file))?;
+            let set=super::interval::physical::Operands::capture(&dir,site,f.original.content.bytes,state.intervals(c.create.file))?;
             return Ok(Some(Body::Composed(super::interval::physical::Composed::new(dir,base,set)?)));
         }
         return Ok(Some(Body::Formal(base)));

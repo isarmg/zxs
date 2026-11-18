@@ -46,6 +46,9 @@ impl Origin{
             creation:c.digest,parent:f.digest,last:d.map(|d|d.digest),source_bytes:src.physical_bytes(),source_material:src.digest()?};
         o.require(src,p)?;Ok(o)
     }
+    // The frozen roles are FILE, first node, first RAW, and only an already
+    // committed INCR. Missing physical material cannot reduce the count.
+    pub(super) fn role_count(&self)->usize{3+usize::from(self.last.is_some())}
     /// Only this MOVE issued the source-private isolation name on FROM.
     /// The internal spelling is not a business FILE or a scan pattern.
     pub(super) fn quarantine_name(&self)->std::ffi::CString{

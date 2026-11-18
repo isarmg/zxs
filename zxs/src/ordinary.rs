@@ -18,6 +18,7 @@ mod draft;
 pub use draft::{save_first,first_save_receipt,read_current_to,current_info,CurrentFile,FirstSaveObservation};
 pub use draft::types::{DraftClaim,DraftReceipt,DRAFT_CHUNK};
 mod material;
+mod placement;
 mod allocation;
 pub(crate) mod journal;
 

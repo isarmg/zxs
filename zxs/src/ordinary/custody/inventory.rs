@@ -18,14 +18,14 @@ pub(in crate::ordinary) fn view(s:&Journal,v:&FileVolume<'_>,tickets:&mut BTreeM
     if v.id()==o.from{
         if let Some(m)=moved{
             let(c,f,d)=history(s,m)?;
-            if let Some(n)=retire::observe_source(v,m,a.progress(),&c,&f,&d)?{seen.hidden.insert(n);}
+            if let Some(n)=retire::observe_source(v,m,a.progress(),&c,&f,d.as_ref())?{seen.hidden.insert(n);}
         }return Ok(seen)
     }
     let final_name=CString::new(o.name.as_bytes()).map_err(|_|invalid("invalid original target name"))?;
     let final_present=v.root.child_directory(&final_name)?.is_some();
     if let Some(m)=moved{
         if !a.opened(){seen.deferred=Some(o.file);
-            if final_present{let(c,f,d)=history(s,m)?;let _=placed::complete(v,&final_name,m,&c,&f,&d)?;seen.hidden.insert(o.name.as_bytes().to_vec());}
+            if final_present{let(c,f,d)=history(s,m)?;let _=placed::complete(v,&final_name,m,&c,&f,d.as_ref())?;seen.hidden.insert(o.name.as_bytes().to_vec());}
         }
     }else if final_present{return Err(invalid("destination occupied before original custody decision"));}
     if o.mode==Method::Rename{return Ok(seen);}
@@ -35,8 +35,9 @@ pub(in crate::ordinary) fn view(s:&Journal,v:&FileVolume<'_>,tickets:&mut BTreeM
     if v.root.child_directory(&n)?.is_some(){
         if final_present{return Err(invalid("both true stage and final MOVE name exist"));}
         let dir=staging::bound_dir(v,a,st)?;let c=s.file(o.file).ok_or_else(||invalid("missing MOVE origin"))?;
-        let f=s.head(o.file).ok_or_else(||invalid("missing FULL"))?;let d=s.delta(o.file).ok_or_else(||invalid("missing INCR"))?;
-        let previous=Sites::birthplace(c,f,Some(d));let rows=placed::roles(c,f,d,&previous)?;
+        let f=s.head(o.file).ok_or_else(||invalid("missing FULL"))?;
+        let d=if let Some(m)=moved{super::finish::frozen(s,m)?.2}else{s.delta(o.file)};
+        o.require_history(c,f,d)?;let previous=Sites::birthplace(c,f,d);let rows=placed::roles(c,f,d,&previous)?;
         let sealed=s.pending.as_ref().map(|p|p.frame.moved()).transpose()?.or(moved);
         let mut names:BTreeSet<_>=dir.names()?.into_iter().collect();let mut gap=false;
         for role in rows{

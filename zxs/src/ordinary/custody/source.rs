@@ -30,7 +30,7 @@ fn selection(s:&Journal,id:FileId)->io::Result<(&Frame,&Commit,Option<&Delta>)>{
     let c=s.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE for transfer"))?;
     let parent=s.head(id).ok_or_else(||invalid("this MOVE source requires a clean, materialized first formal node"))?;
     let d=s.delta(id);
-    if s.allocated.as_ref().is_some_and(|a|a.file==id)||s.saving.as_ref().is_some_and(|a|a.original.file==id)
+    if s.placed(id).is_some()||s.allocated.as_ref().is_some_and(|a|a.file==id)||s.saving.as_ref().is_some_and(|a|a.original.file==id)
         ||s.committing.as_ref().is_some_and(|a|a.original.file==id)||s.editing.as_ref().is_some_and(|a|a.original.file==id)
         ||s.incrementing.as_ref().is_some_and(|a|a.original.file==id)||(d.is_none()&&s.interval(id).is_some()){
         return Err(invalid("dirty or unfinished FILE cannot provide a complete clean handoff"));

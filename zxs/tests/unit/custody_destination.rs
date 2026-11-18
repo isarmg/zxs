@@ -132,17 +132,21 @@ fn original_move_reservation_cold_reopens_one_pending_slot_never_grants_serving_
 
 #[test]
 #[ignore="two private original filesystems; refuse without borrowing the only SYSTEM slot"]
-fn single_writable_full_or_used_operation_never_reserves_handoff_or_blocks_sibling(){
+fn dirty_first_full_or_used_operation_never_reserves_handoff_or_blocks_sibling(){
     use super::super::allocation::MoveAllocation;
     let t=make(false);let f=create_empty(&t.system,OperationId::new().unwrap(),t.src.volume(),"single").unwrap();
     let r=save_first(&t.system,OperationId::new().unwrap(),f.file,DraftClaim::new(1,crate::hash::digest(b"R").unwrap()).unwrap(),Cursor::new(b"R")).unwrap();
     commit_working(&t.system,OperationId::new().unwrap(),f.file,1).unwrap();
-    let one=Clean::capture(&t.system,f.file).unwrap().verify().unwrap();
-    assert!(Destination::select(&t.system,&one,t.dest).is_err());
+    let e=SpanEdit::new(0,DraftClaim::new(1,crate::hash::digest(b"D").unwrap()).unwrap(),LengthPolicy::KeepOrGrow).unwrap();
+    save_interval(&t.system,OperationId::new().unwrap(),f.file,1,e,Cursor::new(b"D")).unwrap();
+    let rejected=OperationId::new().unwrap();
+    assert!(crate::move_file(&t.system,rejected,f.file,t.src.volume(),t.dest,0).is_err());
+    assert!(crate::move_receipt(&t.system,rejected,f.file,t.src.volume(),t.dest,0).unwrap().is_none());
+    assert!(Clean::capture(&t.system,f.file).is_err());
     let p=Destination::select(&t.system,&t.src,t.dest).unwrap().prepare().unwrap();
     assert!(MoveAllocation::reserve(&p,r.operation).is_err());
     assert!(!t.system.join("FILE-ALLOCATION").exists());assert!(!t.system.join("FILE-INTENT").exists());
-    assert!(t.b.read_dir().unwrap().next().is_none());drop(one);drop(p);
+    assert!(t.b.read_dir().unwrap().next().is_none());drop(p);
     create_empty(&t.system,OperationId::new().unwrap(),t.dest,"sibling").unwrap();
 }
 

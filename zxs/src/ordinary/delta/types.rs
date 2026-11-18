@@ -3,8 +3,9 @@
 //! it binds the whole immutable local INCR; the variable run map stays there.
 use crate::{BranchId,FileId,HistoryId,NodeId,OperationId,PoolId,VersionId,VersionStorageId,VolumeId,fs::invalid};
 use crate::ordinary::{draft::types::DraftClaim,formal::types::{Commit as Parent,FormalNode,FormalStorage},
-    interval::types::Saved,wire::{self,Envelope,Frame,In,NativeObject}};
+    interval::types::Saved,wire::{self,Envelope,In,NativeObject}};
 use super::map::Map;
+use crate::ordinary::placement::Placement;
 use std::{ffi::CString,io};
 
 pub(in crate::ordinary) fn request(pool:PoolId,uid:u32,op:OperationId,file:FileId,rev:u64)->io::Result<[u8;32]>{
@@ -20,15 +21,17 @@ pub(in crate::ordinary) struct Original{
     pub node:NodeId,pub version:VersionId,pub storage:VersionStorageId,pub name:String,
 }
 impl Original{
-    pub fn select(op:OperationId,uid:u32,c:&Frame,p:&Parent,w:&Saved,m:&Map)->io::Result<Self>{
-        let o=Self{op,uid,file:c.create.file,history:c.create.history,volume:c.create.volume,creation:c.digest,
+    pub fn select(op:OperationId,uid:u32,place:Placement<'_>,p:&Parent,w:&Saved,m:&Map)->io::Result<Self>{
+        let c=place.birth();
+        let o=Self{op,uid,file:c.create.file,history:c.create.history,volume:place.volume(),creation:c.digest,
             branch:p.original.branch,parent:p.original.node,parent_version:p.original.version,parent_decision:p.digest,parent_length:p.original.content.bytes,
             working:w.original.op,working_decision:w.digest,revision:w.original.revision(),logical:m.logical,changed:m.changed,rows:m.rows(),map:m.digest()?,
             node:NodeId::new()?,version:VersionId::new()?,storage:VersionStorageId::fresh()?,name:c.create.name.clone()};
-        o.require(c,p,w,m)?;Ok(o)
+        o.require(place,p,w,m)?;Ok(o)
     }
-    pub fn require(&self,c:&Frame,p:&Parent,w:&Saved,m:&Map)->io::Result<()>{
-        if self.file!=c.create.file||self.history!=c.create.history||self.volume!=c.create.volume||self.creation!=c.digest||
+    pub fn require(&self,place:Placement<'_>,p:&Parent,w:&Saved,m:&Map)->io::Result<()>{
+        let c=place.birth();
+        if self.file!=c.create.file||self.history!=c.create.history||self.volume!=place.volume()||w.original.volume!=place.volume()||self.creation!=c.digest||
             self.name!=c.create.name||p.original.file!=self.file||p.original.creation!=c.digest||self.branch!=p.original.branch||
             self.parent!=p.original.node||self.parent_version!=p.original.version||self.parent_decision!=p.digest||self.parent_length!=p.original.content.bytes||
             w.original.file!=self.file||w.original.node!=self.parent||w.original.commit!=p.digest||self.working!=w.original.op||

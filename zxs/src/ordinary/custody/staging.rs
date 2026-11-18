@@ -88,9 +88,9 @@ impl Fresh{
         Ok(self.stage.clone())
     }
 }
-pub(super) fn sites(dir:&HeldDir,roles:&BTreeMap<Leaf,NativeObject>)->io::Result<Sites>{
+pub(super) fn sites(dir:&HeldDir,roles:&BTreeMap<Leaf,NativeObject>,o:&super::transfer::Origin)->io::Result<Sites>{
     let get=|k|roles.get(&k).cloned().ok_or_else(||invalid("incomplete original MOVE role set"));
-    if roles.len()!=4{return Err(invalid("incomplete double-node FILE stage"));}
+    if roles.len()!=o.role_count()||roles.contains_key(&Leaf::Incr)!=o.last.is_some(){return Err(invalid("incomplete original FILE stage"));}
     Ok(Sites{directory:NativeObject{entity:dir.entity,birth:fs::Birth::read(&dir.file)?},
-        local:get(Leaf::File)?,node:get(Leaf::FullNode)?,raw:get(Leaf::FullRaw)?,incr:Some(get(Leaf::Incr)?)})
+        local:get(Leaf::File)?,node:get(Leaf::FullNode)?,raw:get(Leaf::FullRaw)?,incr:roles.get(&Leaf::Incr).cloned()})
 }

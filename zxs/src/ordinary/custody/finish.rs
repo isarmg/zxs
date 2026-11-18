@@ -5,19 +5,29 @@ use super::{command::Request,destination::Method,placed::{self,Reopened,TargetIn
 use crate::{fs::{self,invalid},ordinary::{material,wire::Frame,formal::types::Commit,delta::types::Delta,Cut},
     pool::lease::{Access,FileVolume,LocalPool}};
 use std::{ffi::{CStr,CString},io,path::Path};
-pub(super) fn history(s:&crate::ordinary::journal::Journal,m:&Moved)->io::Result<(Frame,Commit,Delta)>{
-    let id=m.original.file;
-    let c=s.file(id).ok_or_else(||invalid("lost original FILE birth"))?;let f=s.head(id).ok_or_else(||invalid("lost original FULL"))?;
-    let d=s.delta(id).ok_or_else(||invalid("lost original INCR"))?;m.require_history(c,f,Some(d))?;Ok((c.clone(),f.clone(),d.clone()))
+/// Only the original native cut being handed off, never a later node merely
+/// because it is currently the FILE's tip.
+pub(super) fn frozen<'a>(s:&'a crate::ordinary::journal::Journal,m:&Moved)->io::Result<(&'a Frame,&'a Commit,Option<&'a Delta>)>{
+    let id=m.original.file;let c=s.file(id).ok_or_else(||invalid("lost original FILE birth"))?;
+    let f=s.head(id).ok_or_else(||invalid("lost original FULL"))?;
+    if f.seq>=m.seq||c.seq>=f.seq{return Err(invalid("MOVE is not after its original FILE and FULL"));}
+    let d=match(m.original.last,s.delta(id)){
+        (Some(h),Some(d)) if h==d.digest&&f.seq<d.seq&&d.seq<m.seq=>Some(d),
+        (None,Some(d)) if d.seq>m.seq=>None,(None,None)=>None,
+        _=>return Err(invalid("MOVE froze a different retained history, not the current branch tip")),
+    };m.require_history(c,f,d)?;Ok((c,f,d))
+}
+pub(super) fn history(s:&crate::ordinary::journal::Journal,m:&Moved)->io::Result<(Frame,Commit,Option<Delta>)>{
+    let(c,f,d)=frozen(s,m)?;Ok((c.clone(),f.clone(),d.cloned()))
 }
 fn name(m:&Moved)->io::Result<CString>{CString::new(m.original.name.as_bytes()).map_err(|_|invalid("invalid original FILE target name"))}
 /// A pre-rename source may be on a different registered root of the same
 /// mount. Pin/scan all original bytes before the namespace transition.
-fn at_source(v:&FileVolume<'_>,label:&CStr,m:&Moved,c:&Frame,f:&Commit,d:&Delta)->io::Result<Clean>{
+fn at_source(v:&FileVolume<'_>,label:&CStr,m:&Moved,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<Clean>{
     placed::root(v,&m.original.src_root)?;
     let dir=v.root.child_directory(label)?.ok_or_else(||invalid("original source missing before rename"))?;
     dir.exclusive()?;
-    Clean::at_original_sites(v,dir,c,f,Some(d),&Sites::birthplace(c,f,Some(d)))
+    Clean::at_original_sites(v,dir,c,f,d,&Sites::birthplace(c,f,d))
 }
 enum Scan{Target{input:TargetInput,fresh:bool,name:CString,frame:Moved},Source{input:Clean,frame:Moved}}
 fn select(system:&Path,r:Request)->io::Result<Scan>{
@@ -29,7 +39,7 @@ fn select(system:&Path,r:Request)->io::Result<Scan>{
         if let Some(st)=a.stage(){
             if dst.root.child_directory(&material::staging(m.original.ticket,st.slot))?.is_some(){return Err(invalid("both original installed and reserved MOVE directories are named"));}
         }
-        let input=Reopened::input(&dst,&name,m,&c,&f,&d)?;return Ok(Scan::Target{input,fresh:false,name,frame:m.clone()});
+        let input=Reopened::input(&dst,&name,m,&c,&f,d.as_ref())?;return Ok(Scan::Target{input,fresh:false,name,frame:m.clone()});
     }
     if a.opened(){return Err(invalid("previously admitted installed target missing; never recreate or revert to source"));}
     material::vacant_for_move(&dst,&m.original.name)?;
@@ -37,12 +47,12 @@ fn select(system:&Path,r:Request)->io::Result<Scan>{
         Method::Rename=>{
             let src=p.ordinary(m.original.from)?;
             if !src.root.same_mount(&dst.root)?{return Err(invalid("no cross-mount fallback for original rename"));}
-            Ok(Scan::Source{input:at_source(&src,&name,m,&c,&f,&d)?,frame:m.clone()})
+            Ok(Scan::Source{input:at_source(&src,&name,m,&c,&f,d.as_ref())?,frame:m.clone()})
         }
         Method::Transfer=>{
             let st=a.stage().ok_or_else(||invalid("no original bound target at published transfer"))?;
             let name=material::staging(m.original.ticket,st.slot);
-            let input=Reopened::input(&dst,&name,m,&c,&f,&d)?;
+            let input=Reopened::input(&dst,&name,m,&c,&f,d.as_ref())?;
             Ok(Scan::Target{input,fresh:true,name,frame:m.clone()})
         }
     }
@@ -51,7 +61,7 @@ fn sync_rename(system:&Path,r:Request,m:&Moved,v:&Verified,hook:&mut impl FnMut(
     let(p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;
     let(now,a)=s.confirmed_handoff(r.op)?;if now!=m||a.opened()||m.request!=r.digest(&p)?{return Err(invalid("original rename changed"));}
     let src=p.ordinary(m.original.from)?;let dst=p.ordinary(m.original.to)?;let n=name(m)?;let(c,f,d)=history(&s,m)?;
-    let sites=Sites::birthplace(&c,&f,Some(&d));v.require_at(&src,&n,&m.original.src_root,&sites)?;
+    let sites=Sites::birthplace(&c,&f,d.as_ref());v.require_at(&src,&n,&m.original.src_root,&sites)?;
     if v.physical_bytes()!=m.original.source_bytes||v.digest()?!=m.original.source_material{return Err(invalid("original rename history changed before application"));}
     placed::root(&dst,&m.original.dst_root)?;material::vacant_for_move(&dst,&m.original.name)?;
     src.root.handoff_directory(&n,&dst.root,&n,sites.directory.entity,&sites.directory.birth,||hook(Cut::MoveInstalled))

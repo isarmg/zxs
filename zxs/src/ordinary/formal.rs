@@ -58,13 +58,20 @@ pub(in crate::ordinary) fn working_names(s:&Journal,c:&Frame,w:&SaveFrame,histor
     }
     names
 }
+fn directory_at(v:&FileVolume<'_>,s:&Journal,c:&Frame,work:Vec<(OperationId,bool)>,
+    f:Option<(&Original,bool)>,d:Option<(&super::delta::types::Original,bool)>)->io::Result<HeldDir>{
+    if let Some(dir)=super::custody::placed::active_dir(s,v,c)?{
+        container::require_entries(&dir,work,f,d)?;dir.require_named()?;return Ok(dir)
+    }
+    container::directory_all(v,&c.create,work,f,d)
+}
 pub(in crate::ordinary) fn directory(v:&FileVolume<'_>,s:&Journal,c:&Frame,w:&SaveFrame)->io::Result<HeldDir>{
     let a=s.committing.as_ref().filter(|a|a.original.file==c.create.file);
     let f=s.head(c.create.file);
     let formal=f.map(|f|(&f.original,true)).or_else(||a.map(|a|(&a.original,false)));
     let delta=s.delta(c.create.file).map(|d|(&d.original,true)).or_else(||s.incrementing.as_ref()
         .filter(|i|i.original.file==c.create.file).map(|i|(&i.original,s.pending.is_some())));
-    let dir=container::directory_all(v,&c.create,working_names(s,c,w,false),formal,delta)?;
+    let dir=directory_at(v,s,c,working_names(s,c,w,false),formal,delta)?;
     if let Some(a)=a{
         let sealed=s.pending.as_ref().map(|p|p.frame.formal()).transpose()?;
         physical::inspect_prepared(&dir,a,sealed.or(f))?;
@@ -78,18 +85,15 @@ fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<(FormalNode,NodeB
     let f=if selected_delta.is_some(){s.head(file)}else{s.node(file,node)}.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such published node in this FILE"))?;
     let c=s.file(file).ok_or_else(||invalid("formal node lacks original FILE"))?;
     let w=s.saved(file).ok_or_else(||invalid("formal node lacks its original save"))?;let v=p.ordinary(s.volume_of(c))?;
-    if let Some(h)=super::custody::placed::Current::open(&s,&v,c)?{
-        let r=if selected_delta.is_some(){(h.d.receipt(),NodeBody::Incr(h.incremental()?))}else{(f.receipt(),NodeBody::Full(h.full()?))};
-        v.root.file.sync_all()?;v.require_current()?;return Ok(r);
-    }
+    let site=s.placement(file)?;
     let incr=s.delta(file).map(|d|(&d.original,selected_delta.is_some())).or_else(||s.incrementing.as_ref()
         .filter(|a|a.original.file==file).map(|a|(&a.original,false)));
-    let dir=container::directory_all(&v,&c.create,working_names(&s,c,w,true),Some((&f.original,true)),incr)?;
-    let parent=HistoryBody::current(&dir,f)?.user_read()?;
+    let dir=directory_at(&v,&s,c,working_names(&s,c,w,true),Some((&f.original,true)),incr)?;
+    let parent=site.full(&dir,f)?.user_read()?;
     let result=match selected_delta{
         None=>(f.receipt(),NodeBody::Full(parent)),
         Some(d)=>{
-            (d.receipt(),NodeBody::Incr(super::delta::physical::Body::open(&dir,parent,d)?))
+            (d.receipt(),NodeBody::Incr(site.incremental(&dir,parent,d)?))
         }
     };
     v.root.file.sync_all()?;v.require_current()?;Ok(result)

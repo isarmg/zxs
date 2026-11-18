@@ -2,7 +2,7 @@
 //! census is bounded by the native SYSTEM journal, not the logical FILE length.
 use super::Stored;
 use crate::ordinary::output::CheckedOutput;
-use crate::{fs::{self,HeldDir,invalid,stream::PinnedRegular},ordinary::{material,wire::Frame,
+use crate::{fs::{self,HeldDir,invalid,stream::PinnedRegular},ordinary::{placement::Placement,
     interval::{types::{Material,Original,Saved},layout::{From,Layout}},formal::physical::HistoryBody}};
 use std::io::{self,Write};
 
@@ -11,8 +11,8 @@ pub(in crate::ordinary) struct Operands{
     lease:PinnedRegular,rows:Vec<Seen>,edge:Option<Stored>,layout:Layout,
 }
 impl Operands{
-    pub(in crate::ordinary) fn capture<'a>(dir:&HeldDir,birth:&Frame,base_len:u64,entries:impl Iterator<Item=&'a Saved>)->io::Result<Self>{
-        let lease=material::read_lease(dir,&birth.create)?;
+    pub(in crate::ordinary) fn capture<'a>(dir:&HeldDir,site:Placement<'_>,base_len:u64,entries:impl Iterator<Item=&'a Saved>)->io::Result<Self>{
+        let lease=site.file_lease(dir,false)?;
         let mut layout=Layout::base(base_len);let mut rows=Vec::new();let mut edge=None;
         for s in entries{
             let o=&s.original;let named=Stored::reopen(dir,o,&s.material)?;

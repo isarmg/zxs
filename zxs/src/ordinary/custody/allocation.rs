@@ -23,11 +23,16 @@ impl Progress{
         if i<4{Ok(Self(3+i as u8))}else{Err(invalid("unknown original retirement role"))}
     }
     pub(super) fn authorized(self)->Option<usize>{(3..=6).contains(&self.0).then(||(self.0-3)as usize)}
+    fn allows_next(self,count:usize,next:Self)->bool{
+        if !(3..=4).contains(&count)||self<Progress::ARMED{return false;}
+        if next==Progress::EMPTY{return self.authorized()==Some(count-1);}
+        next.0==self.0+1&&next.authorized().is_some_and(|i|i<count)
+    }
     fn read(n:u8)->io::Result<Self>{if n<=7{Ok(Self(n))}else{Err(invalid("unknown MOVE progress"))}}
 }
 impl Phase{
     fn check(&self,o:&Origin)->io::Result<()>{
-        if self.step>=Progress::ARMED&&(o.mode!=Method::Transfer||self.stage.is_none())||self.step>=Progress::OPEN&&o.mode==Method::Transfer&&self.stage.is_none()||self.stage.as_ref().is_some_and(|s|
+        if self.step.authorized().is_some_and(|i|i>=o.role_count())||self.step>=Progress::ARMED&&(o.mode!=Method::Transfer||self.stage.is_none())||self.step>=Progress::OPEN&&o.mode==Method::Transfer&&self.stage.is_none()||self.stage.as_ref().is_some_and(|s|
             o.mode!=Method::Transfer||s.slot>=SLOTS||s.directory.entity.device!=o.dst_root.entity.device||
             s.directory.birth.filesystem()!=o.dst_root.birth.filesystem()||[&o.src_root,&o.dst_root].iter()
               .any(|r|r.entity==s.directory.entity||r.birth==s.directory.birth)){
@@ -149,7 +154,7 @@ impl MoveAllocation{
             return Err(invalid("not one original isolated retirement writer"));}
         let(_,s)=p.snapshot()?;let(m,a)=s.confirmed_handoff(self.original.op)?;
         if a.digest!=self.digest||a.stamp!=self.stamp||m.original.mode!=Method::Transfer||
-            a.progress()<Progress::ARMED||step.0!=a.progress().0+1{
+            !a.progress().allows_next(m.original.role_count(),step){
             return Err(invalid("source retirement progress is not the next original role"));}
         g.require_next(old,m,step)?;dst.verify_installed(new,m)?;
         let next=Phase{stage:a.phase.stage.clone(),step};next.check(&a.original)?;
@@ -159,5 +164,18 @@ impl MoveAllocation{
         self.seq==m.seq&&self.request==m.request&&self.previous==m.previous&&self.digest==m.allocation&&self.original==m.original&&
         match (&self.phase.stage,m.stage){(None,None)=>self.original.mode==Method::Rename,
             (Some(s),Some(n))=>self.original.mode==Method::Transfer&&s.slot==n&&s.directory==m.target.directory,_=>false}
+    }
+}
+
+#[cfg(test)]
+mod progress_tests{
+    use super::Progress as P;
+    #[test]
+    fn only_the_original_final_leaf_can_precede_the_checked_empty_quarantine(){
+        let (raw3,incr4)=(P::leaf(2).unwrap(),P::leaf(3).unwrap());
+        assert!(raw3.allows_next(3,P::EMPTY));assert!(!raw3.allows_next(3,incr4));
+        assert!(raw3.allows_next(4,incr4));assert!(!raw3.allows_next(4,P::EMPTY));
+        assert!(!incr4.allows_next(3,P::EMPTY));assert!(incr4.allows_next(4,P::EMPTY));
+        assert!(!P::ARMED.allows_next(3,P::EMPTY));assert!(!P::EMPTY.allows_next(3,P::EMPTY));
     }
 }

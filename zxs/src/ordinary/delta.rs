@@ -4,7 +4,7 @@ pub(in crate::ordinary) mod types;
 pub(in crate::ordinary) mod allocation;
 pub(in crate::ordinary) mod map;
 pub(in crate::ordinary) mod physical;
-use super::{allocation as common,draft::types::SaveFrame,formal::{self,types::{Commit,FormalNode},FormalObservation,physical::HistoryBody},
+use super::{allocation as common,draft::types::SaveFrame,formal::{self,types::{Commit,FormalNode},FormalObservation},
     interval::{types::Saved,physical::{Composed,Operands}},journal::{self,Decision,Journal},wire::{self,Frame},Cut,CreationStatus,publish_sealed};
 use self::{allocation::DeltaAllocation,map::Map,physical::{Input,Verified},types::{Delta,Original}};
 use crate::{FileId,OperationId,fs::{self,invalid},pool::lease::{Access,LocalPool}};
@@ -48,25 +48,25 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,rev:u64)->io::
     let edge=s.interval(id).ok_or_else(||invalid("no changed working revision to commit"))?;
     if edge.original.revision()!=rev{return Err(invalid("requested working revision is not the exact current original"));}
     let map=Map::derive(parent.original.content.bytes,s.intervals(id))?;
-    if let Some(a)=&s.incrementing{a.original.require(c,parent,edge,&map)?;}else{s.room_for(wire::MAX_FRAME)?;}
+    if let Some(a)=&s.incrementing{a.original.require(s.placement(id)?,parent,edge,&map)?;}else{s.room_for(wire::MAX_FRAME)?;}
     Ok(Choice::Active(SourceCut{c,initial,parent,edge,map,req}))
 }
 enum Source{Done(FormalNode),Input(Input)}
 fn source(system:&Path,op:OperationId,id:FileId,rev:u64)->io::Result<Source>{
     let (p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;
     let x=match choice(&p,&s,op,id,rev)?{Choice::Done(r)=>return Ok(Source::Done(r)),Choice::Active(x)=>x};
-    let v=p.ordinary(x.c.create.volume)?;let dir=formal::directory(&v,&s,x.c,x.initial)?;
+    let site=s.placement(id)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&s,x.c,x.initial)?;
     let a=s.incrementing.as_ref();let o=match a{
-        Some(a)=>a.original.clone(),None=>Original::select(op,fs::local_uid(),x.c,x.parent,x.edge,&x.map)?,
+        Some(a)=>a.original.clone(),None=>Original::select(op,fs::local_uid(),site,x.parent,x.edge,&x.map)?,
     };
     if a.is_none()&&!s.free_content_ids(o.node,o.version,o.storage){return Err(invalid("new formal identity already used"));}
     let decided=s.delta(id);let sealed=s.pending.as_ref().map(|seal|seal.frame.delta()).transpose()?.or(decided);
-    let parent=HistoryBody::current(&dir,x.parent)?;
-    let actual=HistoryBody::current(&dir,x.parent)?;
+    let parent=site.full(&dir,x.parent)?;
+    let actual=site.full(&dir,x.parent)?;
     let (working,published)=if let Some(d)=decided{
         (None,Some(physical::Body::open(&dir,actual,d)?))
     }else{
-        let set=Operands::capture(&dir,x.c,x.parent.original.content.bytes,s.intervals(id))?;
+        let set=Operands::capture(&dir,site,x.parent.original.content.bytes,s.intervals(id))?;
         (Some(Composed::new(dir.duplicate()?,actual,set)?),None)
     };
     let retained=s.intervals(id).cloned().collect();v.require_current()?;
@@ -79,9 +79,9 @@ fn commit_inner(system:&Path,op:OperationId,id:FileId,rev:u64,mut cut:impl FnMut
 fn writer(system:&Path,op:OperationId,id:FileId,rev:u64,verified:Verified,cut:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<FormalNode>{
     let (p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;
     let x=match choice(&p,&s,op,id,rev)?{Choice::Done(r)=>return Ok(r),Choice::Active(x)=>x};
-    let req=x.req;let v=p.ordinary(x.c.create.volume)?;let dir=formal::directory(&v,&s,x.c,x.initial)?;let o=verified.original();
+    let req=x.req;let site=s.placement(id)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&s,x.c,x.initial)?;let o=verified.original();
     if o.op!=op||o.uid!=fs::local_uid(){return Err(invalid("different explicit INCR principal or operation"));}
-    o.require(x.c,x.parent,x.edge,&x.map)?;v.require_current()?;verified.require_source(&dir,o)?;
+    o.require(site,x.parent,x.edge,&x.map)?;v.require_current()?;verified.require_source(&dir,o)?;
     if let Some(a)=&s.incrementing{if a.original!=*o||a.request!=req{return Err(invalid("different original INCR reservation"));}}
     else{
         if !s.free_content_ids(o.node,o.version,o.storage){return Err(invalid("formal INCR identity collision"));}
@@ -99,9 +99,9 @@ fn writer(system:&Path,op:OperationId,id:FileId,rev:u64,verified:Verified,cut:&m
     let bound=verified.verify_named(named)?;
     let (p,_,mut held)=LocalPool::with_snapshot(system,Access::Write)?;
     let x=match choice(&p,&held,op,id,rev)?{Choice::Done(r)=>return Ok(r),Choice::Active(x)=>x};
-    let v=p.ordinary(x.c.create.volume)?;let dir=formal::directory(&v,&held,x.c,x.initial)?;
+    let site=held.placement(id)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&held,x.c,x.initial)?;
     if x.req!=req{return Err(invalid("different original request after named INCR feedback"));}
-    verified.original().require(x.c,x.parent,x.edge,&x.map)?;verified.require_source(&dir,verified.original())?;
+    verified.original().require(site,x.parent,x.edge,&x.map)?;verified.require_source(&dir,verified.original())?;
     drop(x);
     let now=held.incrementing.take().ok_or_else(||invalid("original INCR reservation disappeared during verification"))?;
     if now.stamp!=a.stamp||now.bytes!=a.bytes{return Err(invalid("original held INCR reservation was replaced"));}
@@ -110,9 +110,9 @@ fn writer(system:&Path,op:OperationId,id:FileId,rev:u64,verified:Verified,cut:&m
     if let Some(d)=held.decided(op){
         if held.pending.is_none(){
             let f=d.delta()?;if !a.matches(f)||f.material!=material{return Err(invalid("wrong installed INCR after published completion"));}
-            let c=held.file(id).ok_or_else(||invalid("original FILE creation missing"))?;
+            let site=held.placement(id)?;
             let parent=held.head(id).ok_or_else(||invalid("published INCR lacks its original parent"))?;
-            v.require_current()?;verified.retire(&dir,c,parent,&bound,f,|step|cut(step))?;
+            v.require_current()?;verified.retire(&dir,site,parent,&bound,f,|step|cut(step))?;
             p.system.remove_original_record(common::NAME,&a.stamp,&a.bytes)?;return Ok(f.receipt());
         }
     }
@@ -127,10 +127,10 @@ fn writer(system:&Path,op:OperationId,id:FileId,rev:u64,verified:Verified,cut:&m
         if !a.matches(f)||bound.feedback(&dir)?!=f.material{return Err(invalid("formal INCR or held input changed before the original decision"));}Ok(())
     },|s|cut(s))?;
     let f=seal.frame.delta()?;cut(Cut::Decision)?;let (_,s)=p.snapshot()?;
-    let c=s.file(id).ok_or_else(||invalid("formal INCR lost its original FILE"))?;v.require_current()?;
+    let site=s.placement(id)?;v.require_current()?;
     if bound.feedback(&dir)?!=f.material{return Err(invalid("confirmed native INCR cannot reopen"));}
     let parent=s.head(id).ok_or_else(||invalid("confirmed INCR lacks its original parent"))?;
-    verified.retire(&dir,c,parent,&bound,f,|step|cut(step))?;cut(Cut::Installation)?;
+    verified.retire(&dir,site,parent,&bound,f,|step|cut(step))?;cut(Cut::Installation)?;
     p.system.remove_original_record(journal::INTENT,&seal.stamp,&seal.bytes)?;cut(Cut::IntentReleased)?;
     p.system.remove_original_record(common::NAME,&a.stamp,&a.bytes)?;cut(Cut::Release)?;Ok(f.receipt())
 }

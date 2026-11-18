@@ -162,6 +162,15 @@ pub(super) fn directory_all(volume:&FileVolume<'_>,c:&Creation,working:impl Into
     formal:Option<(&super::formal::types::Original,bool)>,incr:Option<(&super::delta::types::Original,bool)>)->io::Result<HeldDir>{
     if volume.id()!=c.volume{return Err(invalid("wrong current FILE role or volume"));}
     let dir=volume.root.child_directory(&destination(&c.name)?)?.ok_or_else(||invalid("current FILE container not installed"))?;
+    require_entries(&dir,working,formal,incr)?;
+    verify_header(&dir,c)?;
+    if volume.root.child_directory(&staging(c.attempt,c.slot))?.is_some(){return Err(invalid("both original FILE names present"));}
+    Ok(dir)
+}
+/// Exact FILE names from original decisions/issued operations; not a source of
+/// native identities. A future extent is never part of an earlier MOVE.
+pub(in crate::ordinary) fn require_entries(dir:&HeldDir,working:impl IntoIterator<Item=(OperationId,bool)>,
+    formal:Option<(&super::formal::types::Original,bool)>,incr:Option<(&super::delta::types::Original,bool)>)->io::Result<()>{
     let listed=dir.names()?;let count=listed.len();
     let mut names:std::collections::BTreeSet<_>=listed.into_iter().collect();
     if names.len()!=count{return Err(invalid("duplicate names during FILE enumeration"));}
@@ -176,18 +185,11 @@ pub(super) fn directory_all(volume:&FileVolume<'_>,c:&Creation,working:impl Into
     }
     if let Some((o,required))=incr{if !take(&o.leaf())&&required{return Err(invalid("required original incremental node is missing"));}}
     if !names.is_empty(){return Err(invalid("unknown material in the selected FILE"));}
-    verify_header(&dir,c)?;
-    if volume.root.child_directory(&staging(c.attempt,c.slot))?.is_some(){return Err(invalid("both original FILE names present"));}
-    Ok(dir)
+    Ok(())
 }
 /// One existing FILE birth registration is the read lease for an immutable
 /// working cut; no new sidecar or owner. Future retirement must acquire an
 /// exclusive lease on this same native inode before removing used material.
-pub(super) fn read_lease(dir:&HeldDir,c:&Creation)->io::Result<fs::stream::PinnedRegular>{
-    custody_lease(dir,c,false)
-}
-pub(super) fn retirement_lease(dir:&HeldDir,c:&Creation)->io::Result<fs::stream::PinnedRegular>{custody_lease(dir,c,true)}
-fn custody_lease(dir:&HeldDir,c:&Creation,retire:bool)->io::Result<fs::stream::PinnedRegular>{custody_lease_at(dir,c,&c.local,retire)}
 pub(in crate::ordinary) fn custody_lease_at(dir:&HeldDir,c:&Creation,local:&NativeObject,retire:bool)->io::Result<fs::stream::PinnedRegular>{
     let bytes=empty_material(c.file,c.history,c.op,&c.name);
     let pin=dir.pin_stream(LOCAL,bytes.len() as u64)?.ok_or_else(||invalid("original FILE birth unavailable for read lease"))?;

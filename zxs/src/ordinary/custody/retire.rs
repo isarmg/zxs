@@ -14,12 +14,12 @@ struct SourceRetirement{frame:Moved,initial:Progress,addr:Address,exclusive:bool
     business:CString,quarantine:CString,order:Vec<CString>,remaining:Vec<Remnant>}
 pub(super) struct VerifiedSource{group:SourceRetirement}
 impl VerifiedSource{
-    pub(super) fn whole_at_start(&self)->bool{self.group.addr==Address::Business&&self.group.remaining.len()==4}
+    pub(super) fn whole_at_start(&self)->bool{self.group.addr==Address::Business&&self.group.remaining.len()==self.group.frame.original.role_count()}
     pub(super) fn require(&self,v:&FileVolume<'_>,m:&Moved)->io::Result<()>{self.group.require(v,m)}
     pub(super) fn require_next(&self,v:&FileVolume<'_>,m:&Moved,next:Progress)->io::Result<()>{
         let g=&self.group;
-        let first=if next==Progress::EMPTY{4}else{next.authorized().ok_or_else(||invalid("not an isolated source release"))?};
-        if g.addr!=Address::Isolated||!g.exclusive||g.remaining.iter().map(|r|r.index).ne(first..4){
+        let count=m.original.role_count();let first=if next==Progress::EMPTY{count}else{next.authorized().ok_or_else(||invalid("not an isolated source release"))?};
+        if g.addr!=Address::Isolated||!g.exclusive||g.remaining.iter().map(|r|r.index).ne(first..count){
             return Err(invalid("wrong remaining original source roles for next retirement step"));}
         g.require(v,m)?;let dir=g.dir.as_ref().ok_or_else(||invalid("no exact quarantined source"))?;
         // The business -> private rename and any newly absent previous role
@@ -31,7 +31,7 @@ impl VerifiedSource{
 }
 fn business(m:&Moved)->io::Result<CString>{CString::new(m.original.name.as_bytes()).map_err(|_|invalid("invalid original source name"))}
 impl SourceRetirement{
-    fn capture(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:&Delta,exclusive:bool)->io::Result<Self>{
+    fn capture(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Option<&Delta>,exclusive:bool)->io::Result<Self>{
         placed::root(v,&m.original.src_root)?;
         if v.id()!=m.original.from||m.original.mode!=Method::Transfer{return Err(invalid("not this original transfer source"));}
         let business=business(m)?;let quarantine=m.original.quarantine_name();
@@ -41,7 +41,7 @@ impl SourceRetirement{
             (None,None) if step==Progress::EMPTY=>(Address::EmptyGone,None),
             _=>return Err(invalid("source not at its exact authorized business/quarantine name; do not infer retirement from absence")),
         };
-        let sites=Sites::birthplace(c,f,Some(d));let rows=placed::roles(c,f,d,&sites)?;
+        let sites=Sites::birthplace(c,f,d);let rows=placed::roles(c,f,d,&sites)?;
         let order=rows.iter().rev().map(|r|r.name.clone()).collect();
         let mut g=Self{frame:m.clone(),initial:step,addr,exclusive,dir,original:sites.directory.clone(),business,quarantine,order,remaining:Vec::new()};
         if let Some(ref dir)=g.dir{
@@ -104,7 +104,7 @@ fn advance(p:&LocalPool,old:&FileVolume<'_>,new:&FileVolume<'_>,m:&Moved,g:&Veri
 fn empty_source(p:&LocalPool,old:&FileVolume<'_>,new:&FileVolume<'_>,m:&Moved,g:&mut VerifiedSource,dst:&Reopened,
     hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{
     let mut cur=exact_progress(p,m)?;if cur!=g.group.initial||cur<Progress::ARMED{return Err(invalid("original isolated source cut changed"));}
-    for i in 0..4{
+    for i in 0..m.original.role_count(){
         let wanted=Progress::leaf(i)?;if cur>wanted{continue;}
         if cur<wanted{advance(p,old,new,m,g,dst,wanted,hook)?;cur=wanted;}
         g.require(old,m)?;dst.verify_installed(new,m)?;
@@ -126,13 +126,13 @@ fn empty_source(p:&LocalPool,old:&FileVolume<'_>,new:&FileVolume<'_>,m:&Moved,g:
 }
 pub(super) fn complete(system:&Path,r:Request,m:&Moved,dst:&Reopened,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{
     // The only optional second pass is after the business -> quarantine
-    // rename: reopen the original four roles by the private, now exact name.
+    // rename: reopen all roles frozen in this original MOVE by the private, now exact name.
     for _ in 0..2{
         let mut cut=if m.original.mode==Method::Transfer{
             let g={let(p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;let(now,a)=s.confirmed_handoff(r.op)?;
                 if now!=m||a.request!=r.digest(&p)?||!a.opened(){return Err(invalid("no genuine applied target for original source retirement"));}
                 a.confirm_phase(&p)?;let new=p.ordinary(m.original.to)?;dst.verify_installed(&new,now)?;let old=p.ordinary(m.original.from)?;
-                let(c,f,d)=history(&s,now)?;SourceRetirement::capture(&old,now,a.progress(),&c,&f,&d,true)?};
+                let(c,f,d)=history(&s,now)?;SourceRetirement::capture(&old,now,a.progress(),&c,&f,d.as_ref(),true)?};
             Some(g.verify(dst)?)
         }else{None};
         let(p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;let(now,a)=s.confirmed_handoff(r.op)?;
@@ -169,14 +169,14 @@ pub(super) fn complete(system:&Path,r:Request,m:&Moved,dst:&Reopened,hook:&mut i
 /// An unresolved original source address is not a business FILE. The
 /// returned spelling identifies only the physically verified occurrence on
 /// this exact source root. It grants neither read nor retirement authority.
-pub(super) fn observe_source(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:&Delta)->io::Result<Option<Vec<u8>>>{
+pub(super) fn observe_source(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<Option<Vec<u8>>>{
     if m.original.mode==Method::Transfer{
         let g=SourceRetirement::capture(v,m,step,c,f,d,false)?;
         return Ok(match g.addr{Address::EmptyGone=>None,Address::Business=>Some(g.business.into_bytes()),Address::Isolated=>Some(g.quarantine.into_bytes())})
     }
     let n=business(m)?;placed::root(v,&m.original.src_root)?;
     let Some(dir)=v.root.child_directory(&n)? else{return Ok(None)};
-    let sites=Sites::birthplace(c,f,Some(d));if dir.entity!=sites.directory.entity||fs::Birth::read(&dir.file)?!=sites.directory.birth{
+    let sites=Sites::birthplace(c,f,d);if dir.entity!=sites.directory.entity||fs::Birth::read(&dir.file)?!=sites.directory.birth{
         return Err(invalid("unknown same-named occupant on original rename source"));}
     let mut names:BTreeSet<Vec<u8>>=dir.names()?.into_iter().collect();
     for role in placed::roles(c,f,d,&sites)?{
