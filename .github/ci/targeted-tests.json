@@ -7315,6 +7315,81 @@
           "max_tests": 4
         }
       ]
+    },
+    "original-decision-disk-images": {
+      "reason": "Exercise exact DISK history image bytes, change pages and the original request across ordinary publication, preserved aliases and explicitly selected offline rescue. Distinguish a genuine scope root from a bare Snapshot hash. These tests do not certify every native publication or a complete three-scope pool.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::disk_catalog::history::preparation::encoding_tests::physical_history_carries_original_request_not_its_own_enclosing_hashes",
+            "engine::disk_catalog::history::preparation::encoding_tests::original_prefix_freezes_identical_complete_history_before_current_hashes_are_known",
+            "engine::disk_catalog::history::preparation::encoding_tests::first_nonlocal_publication_advances_the_real_header_without_manufacturing_a_change",
+            "engine::disk_catalog::history::preparation::encoding_tests::identical_sql_rows_in_different_physical_pages_are_not_the_committed_image",
+            "engine::disk_catalog::tests::ordinary_publications_preserve_a_swapped_history_alias_without_adopting_or_repairing_it",
+            "engine::disk_catalog::directory_tests::offline_fold_keeps_old_empty_directory_path_after_a_rename",
+            "engine::disk_catalog::directory_tests::offline_directory_fold_rejects_forged_predecessor_and_current_rows",
+            "engine::disk_catalog::tests::rescue::standalone_export_rebuilds_current_but_cannot_invent_the_final_request_after_source_loss",
+            "engine::disk_catalog::tests::rescue::selected_sqlite_sidecars_are_preserved_and_unselected_sidecars_are_not_inspected",
+            "engine::disk_catalog::tests::rescue::disk_rescue_readback_does_not_mix_current_and_history_families",
+            "engine::scope_closure::tests::an_original_snapshot_digest_without_a_scope_root_is_not_local_publication_evidence"
+          ],
+          "max_tests": 11,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "directory_layout_execution",
+          "exact": [
+            "database_admission::disk_headers_reject_nul_format_and_digest_without_touching_other_selected_family",
+            "rescue_integrity::disk_rescue_rejects_index_hidden_inventory_but_allows_explicit_other_family"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "backup-original-exchange-space": {
+      "reason": "Exercise only retained original FILE exchange demand, history parents, the additional receipt inode and the observed completion on its own root. Preserve predecessor checks; no Backup cutover, capacity-for-all-phases or timing claim.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::backup_preparation::capacity::original_files::tests::original_exchange_space_counts_missing_parents_per_history_and_never_adopts_orphans",
+            "engine::backup_preparation::capacity::original_files::tests::original_exchange_allocation_preserves_floors_and_requires_a_separate_receipt_inode",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::serving_activation::original_objects::receipts::tests::seen_original_completion_cannot_be_lost_replaced_or_borrowed_from_another_root",
+            "database_install::tests::required_exchange_does_not_adopt_empty_or_matching_successors_from_another_root"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "worktree-existing-content-batch": {
+      "reason": "Exercise multiple edited original occurrences surviving cold reopen, one prospective FILE projection, exact Pending reservation and held node staging without moving sparse originals. Do not infer completed atomic publication or SMB execution from a reservation.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "snapshot_worktree::public::transport::content_overlay::siblings_survive_resave_and_cold_reopen_without_publishing_either_file",
+            "snapshot_worktree::public::transport::content_overlay::plan::exact_files_share_the_business_operation_on_one_state_but_cannot_install_it",
+            "snapshot_worktree::public::transport::content_overlay::plan::durable_reservation_freezes_both_file_branches_without_publishing_and_reopens_only_original"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -7443,7 +7518,8 @@
     {
       "path": "src/engine/src/engine/publication.rs",
       "groups": [
-        "worktree-exact-originals"
+        "worktree-exact-originals",
+        "original-decision-disk-images"
       ]
     },
     {
@@ -7474,7 +7550,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/registry/edits.rs",
       "groups": [
-        "worktree-exact-originals"
+        "worktree-exact-originals",
+        "worktree-existing-content-batch"
       ]
     },
     {
@@ -19581,7 +19658,8 @@
       "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving_activation/original_objects.rs",
       "groups": [
         "terminal-backup-source-layout",
-        "backup-published-original-files"
+        "backup-published-original-files",
+        "backup-original-exchange-space"
       ]
     },
     {
@@ -20797,7 +20875,8 @@
       "path": "test/engine/unit/engine/scope_genesis_tests.rs",
       "groups": [
         "original-holder-recovery",
-        "selected-scope-and-physical-images"
+        "selected-scope-and-physical-images",
+        "original-decision-disk-images"
       ]
     },
     {
@@ -21778,6 +21857,180 @@
         "nested-directory-web-selection",
         "directory-draft-http",
         "real-browser-first-commit-delivery"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/change_pages.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/database.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/maintenance.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/offline/archive.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/postdecision.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/preparation/ordinary.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/preparation/prospective.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/stored.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/maintenance.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/root_install.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/publication.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "test/engine/integration/directory_layout_execution/database_admission.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "test/engine/integration/directory_layout_execution/rescue_integrity.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/disk_catalog_directory_tests.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/disk_catalog_rescue_tests.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/capacity/original_files.rs",
+      "groups": [
+        "backup-original-exchange-space"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving_activation/original_objects/receipts.rs",
+      "groups": [
+        "backup-original-exchange-space"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_original_file_space_tests.rs",
+      "groups": [
+        "backup-original-exchange-space"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_original_receipt_continuity_tests.rs",
+      "groups": [
+        "backup-original-exchange-space"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/worktree_content.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/publication/directory/content.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/snapshot_worktree/content_batch.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/commit/content.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/commit/content/material.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/commit/content/plan.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/content_batches.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/working_tree/snapshot/store/content_node.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/content_overlay.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/content_plan.rs",
+      "groups": [
+        "worktree-existing-content-batch"
       ]
     }
   ],
