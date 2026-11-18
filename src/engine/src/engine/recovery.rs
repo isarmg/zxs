@@ -527,18 +527,7 @@ impl Engine {
                     original,
                 )?;
                 if let Some(admitted) = admitted {
-                    if original_content_prepare.as_ref().is_some_and(|(s,h)| *s == sequence && h == &hash) {
-                    let observed = content.as_ref().ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
-                    observed.require_context(&self.planning_context(), &candidate)
-                        .map_err(crate::business::file_draft::worktree::failure)?;
-                    // The ordinary decision still needs each original PREPARE.
-                    // Repair the same hash-bound Candidate, never a newly
-                    // planned slot or partially reconstructed latest State.
-                    for member in &members {
-                        self.append_recovered_journal(member, RecordType::Prepare, sequence, &hash, &candidate.snapshot_hash)?;
-                    }
-                }
-                let recovered_result = publication
+                    let recovered_result = publication
                         .recovery
                         .as_ref()
                         .map(|_| publication.result.clone());
@@ -789,6 +778,17 @@ impl Engine {
                         &object_hash("publication", publication)?,
                         publication,
                     )?;
+                }
+                if original_content_prepare.as_ref().is_some_and(|(s,h)| *s == sequence && h == &hash) {
+                    let observed = content.as_ref().ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
+                    observed.require_context(&self.planning_context(), &candidate)
+                        .map_err(crate::business::file_draft::worktree::failure)?;
+                    // The ordinary decision still needs each original PREPARE.
+                    // Repair the same hash-bound Candidate, never a newly
+                    // planned slot or partially reconstructed latest State.
+                    for member in &members {
+                        self.append_recovered_journal(member, RecordType::Prepare, sequence, &hash, &candidate.snapshot_hash)?;
+                    }
                 }
                 let recovered_result = publication
                     .as_ref()
