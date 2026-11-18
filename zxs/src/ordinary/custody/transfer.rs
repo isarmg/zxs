@@ -67,9 +67,9 @@ impl Origin{
         let node=crate::ordinary::formal::physical::index_size(&f.original)?;
         let child=d.map(|v|crate::ordinary::delta::physical::packed_size(&v.original)).transpose()?.unwrap_or(0);
         let bytes=local.checked_add(node).and_then(|v|v.checked_add(f.original.content.bytes)).and_then(|v|v.checked_add(child));
-        if bytes!=Some(self.source_bytes)||self.epoch!=0||self.from==self.to||self.op==self.ticket||self.src_root==self.dst_root||
+        if bytes!=Some(self.source_bytes)||self.epoch==u64::MAX||self.from==self.to||self.op==self.ticket||self.src_root==self.dst_root||
             self.uid!=c.create.uid||self.file!=c.create.file||self.history!=c.create.history||self.entry!=c.create.entry||
-            self.from!=c.create.volume||self.name!=c.create.name||self.creation!=c.digest||self.parent!=f.digest||
+            (self.purpose==Purpose::Ordinary&&(self.from!=c.create.volume||self.epoch!=0))||self.name!=c.create.name||self.creation!=c.digest||self.parent!=f.digest||
             f.original.file!=self.file||f.original.creation!=c.digest||self.last!=d.map(|x|x.digest)||
             d.is_some_and(|x|x.original.file!=self.file||x.original.creation!=c.digest||x.original.parent_decision!=f.digest)||
             self.source_bytes==0{
@@ -149,13 +149,18 @@ const MAX_CUSTODY_FRAME:usize=wire::ENVELOPE_BYTES+MAX_ORIGIN+32+1+(5*NATIVE+1);
 const _:()=assert!(MAX_CUSTODY_FRAME<=wire::MAX_FRAME);
 impl Moved{
     pub(in crate::ordinary) fn require_history(&self,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<()>{
-        let o=&self.original;o.require_history(c,f,d)?;
-        let previous=Sites::birthplace(c,f,d);previous.check(&o.src_root)?;self.target.check(&o.dst_root)?;
+        if self.original.purpose!=Purpose::Ordinary{return Err(invalid("cannot use FILE birthplace as a later custody source"));}
+        let before=crate::ordinary::placement::Placement::from_prefix(c,None)?;
+        self.require_at(before,f,d).map(|_|())
+    }
+    pub(in crate::ordinary) fn require_at(&self,before:crate::ordinary::placement::Placement<'_>,f:&Commit,d:Option<&Delta>)->io::Result<Sites>{
+        let o=&self.original;before.require_next(o)?;o.require_history(before.birth(),f,d)?;
+        let previous=before.sites(f,d)?;previous.check(&o.src_root)?;self.target.check(&o.dst_root)?;
         if self.target.incr.is_some()!=d.is_some(){return Err(invalid("a MOVE cannot lose/add a retained version"));}
         match o.mode{
-            Method::Rename if self.stage.is_none()&&self.target==previous=>Ok(()),
+            Method::Rename if self.stage.is_none()&&self.target==previous=>Ok(previous),
             Method::Transfer if self.stage.is_some_and(|n|n<crate::ordinary::allocation::SLOTS)&&
-                self.target.each().all(|x|!previous.each().any(|v|v.birth==x.birth||v.entity==x.entity))=>Ok(()),
+                self.target.each().all(|x|!previous.each().any(|v|v.birth==x.birth||v.entity==x.entity))=>Ok(previous),
             _=>Err(invalid("wrong rename/transfer native material or alias with original FILE")),
         }
     }

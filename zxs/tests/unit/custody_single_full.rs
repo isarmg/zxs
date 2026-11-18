@@ -149,3 +149,65 @@ fn an_inflight_original_a_write_cannot_be_redirected_to_its_same_inode_on_b(){
     assert!(f.call(r).is_err());assert!(!f.new.join("one").exists());
     node(&f,r.id,&first,BEFORE);assert_eq!(z::current_info(&f.sys,r.id).unwrap().file.volume,f.from);
 }
+
+#[test]
+#[ignore="three private registered test filesystems; validates existing source and history, not a recycle transaction"]
+fn a_later_handoff_source_uses_the_actual_b_roles_and_never_adds_a_new_b_child_to_the_old_move(){
+    use crate::ordinary::custody::purpose::{DeletedAt,Purpose};
+    let f=Fixture::build(true,false);let(item,first,r)=seed(&f);
+    let _=f.call(r).unwrap();let patch=b"B-local";
+    z::save_interval(&f.sys,op(),item.file,1,edit(0,patch),Cursor::new(patch)).unwrap();
+    let child=z::commit_working(&f.sys,op(),item.file,2).unwrap();
+    let(p,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+    let c=s.file(item.file).unwrap();let full=s.head(item.file).unwrap();let d=s.delta(item.file).unwrap();
+    assert_eq!((full.original.node,d.original.node),(first.node,child.node));
+    let m=s.placed(item.file).unwrap();let before=s.before_handoff(m).unwrap();assert_eq!((before.volume(),before.epoch()),(f.from,0));
+    let frozen=m.require_at(before,full,None).unwrap();assert!(frozen.incr.is_none());assert_eq!(frozen.directory,c.create.directory);
+    let b=s.placement(item.file).unwrap();let sites=b.sites(full,Some(d)).unwrap();
+    assert_eq!((b.volume(),b.epoch(),b.key()),(f.to,1,m.digest));
+    assert_eq!(sites.directory,m.target.directory);assert_ne!(sites.directory,c.create.directory);
+    assert_eq!(sites.incr.as_ref(),Some(&d.material.object));assert!(m.target.incr.is_none());
+    // The next possible logical origin is inspected, not reserved. The
+    // current B-native child is not the A-born child of the historic MOVE.
+    let recycle=z::inspect(&f.sys).unwrap().volumes.into_iter().find(|v|v.volume.role==z::Role::Recycle).unwrap().id;
+    let checked=p.observe_dedicated(crate::pool::lease::recycle::Direction::ToRecycle,f.to,recycle).unwrap();
+    let (_,to)=checked.registration().originals();let target=crate::ordinary::wire::NativeObject{entity:to.1,birth:to.2.clone()};
+    let volume=p.ordinary(f.to).unwrap();let dir=volume.root.child_directory(c"one").unwrap().unwrap();
+    let observed=super::super::source::Clean::at_original_sites(&volume,dir,c,full,Some(d),&sites).unwrap().verify().unwrap();
+    let mut proposed=m.original.clone();proposed.op=op();proposed.ticket=op();proposed.last=Some(d.digest);
+    proposed.source_material=observed.digest().unwrap();proposed.source_bytes=observed.physical_bytes();
+    proposed.from=f.to;proposed.src_root=m.original.dst_root.clone();proposed.to=recycle;proposed.dst_root=target;proposed.epoch=1;
+    proposed.purpose=Purpose::Delete{previous:m.digest,at:DeletedAt::new(55,0).unwrap()};
+    b.require_next(&proposed).unwrap();
+    proposed.purpose=Purpose::Delete{previous:c.digest,at:DeletedAt::new(55,0).unwrap()};
+    assert!(b.require_next(&proposed).is_err());assert!(before.require_next(&proposed).is_err());
+    let mut foreign=d.clone();foreign.original.volume=f.from;assert!(b.sites(full,Some(&foreign)).is_err());
+    let mut forged=m.clone();forged.previous=[0;32];assert!(s.before_handoff(&forged).is_err());
+    // Ordinary A can be offline: all cutoff/role projections are original
+    // SYSTEM facts; they have not vouched for any online R or structural I/O.
+    drop(observed);drop(volume);drop(checked);drop(s);drop(p);let off=f.old.with_file_name("offline-after-prior");fs::rename(&f.old,&off).unwrap();
+    let(_,_,cold)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+    let got=cold.placement(item.file).unwrap().sites(cold.head(item.file).unwrap(),cold.delta(item.file)).unwrap();
+    assert_eq!(got,sites);
+}
+
+
+#[test]
+#[ignore="private registered roots; actual original reservation, intent and lower-bound decision"]
+fn before_handoff_does_not_promote_the_reservation_a_sealed_frame_or_an_unconfirmed_complete_tail(){
+    let f=Fixture::build(true,false);let r=f.cmd();
+    stop_at(&f,r,Cut::BeforeIntent);let(p,_,reserved)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();drop(p);
+    assert!(reserved.moving.is_some()&&reserved.pending.is_none()&&reserved.decided(r.op).is_none());
+    stop_at(&f,r,Cut::Intent);let(p,_,sealed)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();drop(p);
+    let m=sealed.pending.as_ref().unwrap().frame.moved().unwrap().clone();
+    let mut swapped=m.clone();std::mem::swap(&mut swapped.target.raw,&mut swapped.target.node);
+    let mut wrong=m.clone();wrong.digest[0]^=1;
+    for view in [&reserved,&sealed]{for offered in [&m,&swapped,&wrong]{assert!(view.before_handoff(offered).is_err());}}
+    stop_at(&f,r,Cut::FrameSynced);let(p,_,unconfirmed)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();drop(p);
+    assert!(unconfirmed.decided(r.op).is_none()&&unconfirmed.tail==m.bytes.len());
+    assert!(unconfirmed.before_handoff(&m).is_err());
+    stop_at(&f,r,Cut::Decision);let(_,_,confirmed)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+    assert_eq!(confirmed.before_handoff(&m).unwrap().volume(),f.from);
+    assert!(confirmed.before_handoff(&swapped).is_err());assert!(confirmed.before_handoff(&wrong).is_err());
+    assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);
+}

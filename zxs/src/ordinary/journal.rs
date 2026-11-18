@@ -146,7 +146,7 @@ impl OriginalIndex{
             !allow(o.from,o.uid,o.src_root.entity,&o.src_root.birth,true)||!allow(o.to,o.uid,o.dst_root.entity,&o.dst_root.birth,true){
             return Err(invalid("different initial FILE placement, occupied destination, original ticket or ordinary registration"));
         }
-        o.require_history(c,f,d)?;Ok((c,f,d))
+        self.placement(o.file,ds)?.require_next(o)?;o.require_history(c,f,d)?;Ok((c,f,d))
     }
     fn admit(&self,f:&Decision,frames:&[Decision],used:usize,prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
         self.credits.room(frames.len(),used,f.bytes().len(),f.effect())?;
@@ -154,8 +154,8 @@ impl OriginalIndex{
             return Err(invalid("repeated operation or nonconsecutive original FILE decision"));
         }
         match f{
-            Decision::Move(m)=>{let(c,f,d)=self.move_source(&m.original,frames,allow)?;
-                m.require_history(c,f,d)?;
+            Decision::Move(m)=>{let(_,f,d)=self.move_source(&m.original,frames,allow)?;
+                m.require_at(self.placement(m.original.file,frames)?,f,d)?;
                 if m.original.mode==Method::Transfer&&m.target.each().any(|x|self.native.contains(&x.birth)){
                     return Err(invalid("transferred material cannot reuse any admitted native owner"));
                 }
@@ -331,7 +331,13 @@ impl Journal{
             // not yet confirmed last frame (including a first working revision).
             match last {Decision::Move(m)=>{
                     if moving.as_ref().is_some_and(|a|a.opened()){return Err(invalid("target installation confirmation before original placement frontier"));}
-                    idx.moves.remove(&m.original.file);
+                    // Only this unconfirmed frame is hidden. If there was
+                    // earlier custody, restore the actual admitted predecessor,
+                    // not the creation site or an untrusted location claim.
+                    let id=m.original.file;
+                    match ds[..ds.len()-1].iter().rposition(|d|matches!(d,Decision::Move(old) if old.original.file==id)){
+                        Some(i)=>{idx.moves.insert(id,i);},None=>{idx.moves.remove(&id);}
+                    }
                 },Decision::Delta(d)=>{idx.deltas.remove(&d.original.file);idx.nodes.remove(&d.original.node);},Decision::Span(s)=>{
                     let chain=idx.spans.get_mut(&s.original.file).ok_or_else(||invalid("missing original span chain"))?;
                     if chain.pop()!=Some(ds.len()-1){return Err(invalid("wrong unconfirmed working edge"));}
@@ -374,6 +380,18 @@ impl Journal{
     pub(super) fn placement(&self,id:FileId)->io::Result<Placement<'_>>{
         let c=self.file(id).ok_or_else(||invalid("no confirmed original FILE placement"))?;
         Placement::from_prefix(c,self.placed(id))
+    }
+    /// Only a fully confirmed original at its own position. An allocation,
+    /// stage or even a sealed exact next frame is not a decided handoff.
+    pub(in crate::ordinary) fn before_handoff(&self,m:&Moved)->io::Result<Placement<'_>>{
+        let i=usize::try_from(m.seq).ok().and_then(|v|v.checked_sub(1)).ok_or_else(||invalid("invalid custody sequence"))?;
+        let before=self.decisions.get(..i).ok_or_else(||invalid("custody outside original prefix"))?;
+        if before.last().map_or(self.genesis,Decision::digest)!=m.previous{return Err(invalid("wrong original custody prefix digest"));}
+        if !matches!(self.decisions.get(i),Some(Decision::Move(f)) if f==m){
+            return Err(invalid("no exact confirmed original frame at this custody cutoff"));}
+        let c=self.file(m.original.file).filter(|c|c.seq<m.seq).ok_or_else(||invalid("missing original FILE before custody"))?;
+        let old=before.iter().rev().find_map(|d|match d{Decision::Move(x) if x.original.file==m.original.file=>Some(x),_=>None});
+        Placement::from_prefix(c,old)
     }
     pub(super) fn volume_of(&self,f:&Frame)->VolumeId{self.placed(f.create.file).map_or(f.create.volume,|m|m.original.to)}
     pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|self.volume_of(f)==v)}

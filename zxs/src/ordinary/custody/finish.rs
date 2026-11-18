@@ -15,7 +15,7 @@ pub(super) fn frozen<'a>(s:&'a crate::ordinary::journal::Journal,m:&Moved)->io::
         (Some(h),Some(d)) if h==d.digest&&f.seq<d.seq&&d.seq<m.seq=>Some(d),
         (None,Some(d)) if d.seq>m.seq=>None,(None,None)=>None,
         _=>return Err(invalid("MOVE froze a different retained history, not the current branch tip")),
-    };m.require_history(c,f,d)?;Ok((c,f,d))
+    };m.require_at(s.before_handoff(m)?,f,d)?;Ok((c,f,d))
 }
 pub(super) fn history(s:&crate::ordinary::journal::Journal,m:&Moved)->io::Result<(Frame,Commit,Option<Delta>)>{
     let(c,f,d)=frozen(s,m)?;Ok((c.clone(),f.clone(),d.cloned()))
