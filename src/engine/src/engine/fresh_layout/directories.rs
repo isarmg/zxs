@@ -135,7 +135,7 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
         if origin.genesis.registration.disk_id.parse::<DiskId>()? != record.owner_disk {
             return Err(Failure::NamespaceSource.into());
         }
-        if !crate::container_storage::namespace_host::ordinary_path(&entry.path) {
+        if !crate::persist::layout::namespace::ordinary_path(&entry.path) {
             return Err(Failure::NamespaceSource.into());
         }
         require_creation(state, record, &mut workspace_creations)?;
@@ -349,7 +349,7 @@ pub(super) fn project(
     }
     let all = indexed.get(repository, branch)?;
     for entry in introduced {
-        if !crate::container_storage::namespace_host::ordinary_path(&entry.path) {
+        if !crate::persist::layout::namespace::ordinary_path(&entry.path) {
             return Err(Failure::NamespaceSource.into());
         }
         let parent = all.parent(&entry)?;

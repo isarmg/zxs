@@ -433,10 +433,4 @@ fn require_ordinary(path: &PortablePath) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn ordinary_path(path: &PortablePath) -> bool {
-    let management = name_policy::lookup_key(
-        crate::persist::layout::SNAPSHOT_REPOSITORY.as_os_str().to_str()
-            .expect("invariant: snapshot management name is ASCII"),
-    );
-    !path.key().split('/').any(|component| component == management)
-}
+pub(crate) use crate::persist::layout::namespace::ordinary_path;

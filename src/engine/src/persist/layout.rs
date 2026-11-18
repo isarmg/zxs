@@ -35,9 +35,14 @@ pub(crate) static GENESIS_CONFIGURATION: LazyLock<RelativePath> = LazyLock::new(
         .expect("invariant: genesis configuration has one canonical management address")
 });
 
+/// Existing private component. This is a whole basename, never a file suffix.
+/// Ordinary admission reserves this spelling without exposing, evaluating
+/// or depending on any repository-format parser.
+pub(crate) const PRIVATE_DOT_COMPONENT: &str = ".zxs";
+
 /// Only an admitted repository binding can classify this entry as management data.
 pub(crate) static SNAPSHOT_REPOSITORY: LazyLock<EntryName> = LazyLock::new(|| {
-    EntryName::new(".zxs").expect("invariant: snapshot repository is one canonical entry")
+    EntryName::new(PRIVATE_DOT_COMPONENT).expect("invariant: snapshot repository is one canonical entry")
 });
 
 /// Address ordinary current material in the one supported fresh layout.

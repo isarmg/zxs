@@ -48,7 +48,7 @@ impl OrdinaryOccurrence {
         }
         path.push_str(namespace.name.as_str());
         let path = PortablePath::parse(&path)?;
-        if !crate::container_storage::namespace_host::ordinary_path(&path) {
+        if !crate::persist::layout::namespace::ordinary_path(&path) {
             return Err(unsupported());
         }
         Ok(Self {

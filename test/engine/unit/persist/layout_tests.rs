@@ -154,3 +154,14 @@ fn typed_entry_openers_preserve_absence_link_rejection_and_read_limits() {
     assert!(root.read_entry_bytes(&layout::DISK_IDENTITY, 1).is_err());
     assert_eq!(fs::read(path.join("disk.json")).unwrap(), b"17");
 }
+
+#[test]
+fn ordinary_namespace_reserves_a_complete_component_not_the_archive_extension() {
+    use name_policy::PortablePath;
+    for path in ["report.zxs", "Folder.ZXS/bytes.zip", "Demo/ARchive.ZxS", ".zxs-other"] {
+        assert!(crate::persist::layout::namespace::ordinary_path(&PortablePath::parse(path).unwrap()));
+    }
+    for path in [".zxs", "Folder/.ZxS/internal", "folder/.ZXS"] {
+        assert!(!crate::persist::layout::namespace::ordinary_path(&PortablePath::parse(path).unwrap()));
+    }
+}

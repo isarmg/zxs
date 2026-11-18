@@ -2,6 +2,13 @@
 use name_policy::LookupName;
 use platform_io::fs_safety::EntryName;
 
+/// An ordinary FILE/directory name remains ordinary regardless of extension
+/// or content. Do not traverse the separately reserved private component.
+/// PortablePath already carries normalized, case-equivalent lookup keys.
+pub(crate) fn ordinary_path(path: &name_policy::PortablePath) -> bool {
+    !path.key().split('/').any(|component| component == super::PRIVATE_DOT_COMPONENT)
+}
+
 pub(crate) fn directory(name: &LookupName) -> EntryName {
     EntryName::new(name.as_str())
         .expect("invariant: an admitted ordinary component is one relative entry")

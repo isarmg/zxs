@@ -149,7 +149,7 @@ impl<'a> WorkingNamespace<'a> {
                     entry.path.join_name(&name)?
                 }
             };
-            if !crate::container_storage::namespace_host::ordinary_path(&path) {
+            if !crate::persist::layout::namespace::ordinary_path(&path) {
                 return Err(invalid());
             }
             entries.push(WorkingEntry::Unborn { file: *file, record, path });
