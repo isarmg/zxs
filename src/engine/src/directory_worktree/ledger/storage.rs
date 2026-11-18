@@ -627,3 +627,9 @@ impl HeldWorktreeLedger<'_> {
         Ok([committing, completed])
     }
 }
+
+pub(crate) fn content_frame_bytes(before: Checkpoint, events: &[Event; 2]) -> Result<u64, LedgerError> {
+    let (first, next) = event_frame(before, &events[0])?;
+    let (second, _) = event_frame(next, &events[1])?;
+    Ok(bounded_total(first.len(), second.len())? as u64)
+}

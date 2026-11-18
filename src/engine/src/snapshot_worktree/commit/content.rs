@@ -2,6 +2,7 @@
 //! immutable: it verifies real native owners, FILEs, sparse bodies and source
 //! node but neither allocates nor publishes a history node or container.
 pub(in crate::snapshot_worktree) mod plan;
+pub(crate) mod material;
 use crate::container_storage::ObservedContainerReplica;
 use crate::directory_worktree::ledger::{Binding, Checkpoint, EditRecord};
 use crate::directory_worktree::lifecycle::Phase;
@@ -52,6 +53,9 @@ pub(crate) struct Originals {
     pub(crate) ledger: Binding,
     pub(crate) before: Checkpoint,
     pub(crate) rows: Vec<OriginalRow>,
+    // Node/files/worktrees, held host/repository, sparse directory and its
+    // ledger parent proof. Each ordinary FILE separately bills its own chain.
+    _descriptors: crate::engine::PayloadProofReservation,
 }
 
 /// Only the captured set creates this source. The path carried into ordinary
@@ -125,6 +129,8 @@ impl Originals {
         }
         crate::snapshot_worktree::edit::require_mount(engine, registered.reservation())?;
         registered.checkpoint().require_publication_frames().map_err(RegistrationError::Ledger)?;
+        let descriptors = crate::engine::payload_proof_budget().reserve(7)
+            .ok_or_else(|| RegistrationError::Publication(crate::engine::fresh_layout::FreshLayoutError::ContainerBudget.into()))?;
         let source_node = index.reopen_node(engine, source)?;
         let ordinary = engine.namespace_host_root(host.namespace.repository_id, host.namespace.branch_id)
             .map_err(RegistrationError::Publication)?;
@@ -214,7 +220,7 @@ impl Originals {
         Ok(Self {
             state: Arc::clone(&engine.state), config: engine.config.clone(), resources: Arc::clone(&engine.disk_resources),
             request: request.clone(), source, host, root, ordinary_head, ordinary_generation, source_node, repository,
-            sparse, ledger: ledger_binding, before, rows,
+            sparse, ledger: ledger_binding, before, rows, _descriptors: descriptors,
         })
     }
 }

@@ -13,6 +13,8 @@ use storage_contract::VersionId;
 use storage_contract::working_tree::LocalEntityIdentity;
 
 mod preparation_input;
+mod content_node;
+pub(crate) use content_node::HeldContentNode;
 pub(crate) use preparation_input::PinnedSnapshotRepository;
 
 #[derive(Debug, error_definition::Error)]
@@ -230,14 +232,28 @@ impl HeldSnapshotNode {
         repository: &DiskRoot,
         expected: SnapshotNodeBinding,
     ) -> Result<Self, SnapshotStoreError> {
+        let name = layout::node(expected.reference.node);
+        let held = Self::named_parts(repository, &name, expected)?;
+        held.verify_inventory()?;
+        for version in held.manifest.files().keys() {
+            held.open_payload(*version)?;
+        }
+        repository.private_entry_matching(&name, file_identity(expected.node_entity))
+            .map_err(SnapshotStoreError::Directory)?;
+        Ok(held)
+    }
+
+    // A partial node never leaves this physical module as a HeldSnapshotNode.
+    fn named_parts(repository: &DiskRoot, name: &EntryName, expected: SnapshotNodeBinding)
+        -> Result<Self, SnapshotStoreError>
+    {
         if repository.held_identity().map_err(SnapshotStoreError::Directory)?
             != file_identity(expected.repository_entity)
         {
             return Err(SnapshotStoreError::Repository);
         }
         let node = repository.private_entry_matching(
-            &layout::node(expected.reference.node),
-            file_identity(expected.node_entity),
+            name, file_identity(expected.node_entity),
         ).map_err(SnapshotStoreError::Directory)?;
         let bytes = node.read_entry_bytes(&layout::MANIFEST, MAX_MANIFEST_BYTES)
             .map_err(SnapshotStoreError::Disk)?;
@@ -249,17 +265,7 @@ impl HeldSnapshotNode {
         let worktrees = node.private_entry_matching(
             &layout::WORKTREES, file_identity(expected.worktrees_entity),
         ).map_err(SnapshotStoreError::Directory)?;
-        let held = Self { binding: expected, manifest, node, files, worktrees };
-        held.verify_inventory()?;
-        for version in held.manifest.files().keys() {
-            // Each source is opened and closed sequentially, not retained as a
-            // full-snapshot FD set. Every later open crosses admission again.
-            held.open_payload(*version)?;
-        }
-        repository.private_entry_matching(
-            &layout::node(expected.reference.node), file_identity(expected.node_entity),
-        ).map_err(SnapshotStoreError::Directory)?;
-        Ok(held)
+        Ok(Self { binding: expected, manifest, node, files, worktrees })
     }
 
     pub(crate) fn manifest(&self) -> &AdmittedSnapshotManifest {
@@ -291,6 +297,10 @@ impl HeldSnapshotNode {
     }
 
     fn verify_inventory(&self) -> Result<(), SnapshotStoreError> {
+        self.verify_inventory_missing(&BTreeSet::new())
+    }
+
+    fn verify_inventory_missing(&self, missing: &BTreeSet<EntryName>) -> Result<(), SnapshotStoreError> {
         let mut required = BTreeSet::from([
             layout::MANIFEST.clone(), layout::FILES.clone(), layout::WORKTREES.clone(),
         ]);
@@ -317,7 +327,7 @@ impl HeldSnapshotNode {
                 return Err(SnapshotStoreError::Entries);
             }
         }
-        if !files.is_empty() {
+        if &files != missing {
             return Err(SnapshotStoreError::Entries);
         }
         Ok(())

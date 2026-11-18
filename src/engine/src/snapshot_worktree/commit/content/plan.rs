@@ -33,7 +33,7 @@ impl OriginalRow {
 }
 
 impl Originals {
-    fn require_context(&self, context: &PlanningContext<'_>) -> Result<()> {
+    pub(super) fn require_context(&self, context: &PlanningContext<'_>) -> Result<()> {
         if !Arc::ptr_eq(&self.state, context.state) || !self.config.same_admission(context.config)
             || !Arc::ptr_eq(&self.resources, context.disk_resources)
             || context.current_namespaces.is_some() || context.config.generation().is_some()

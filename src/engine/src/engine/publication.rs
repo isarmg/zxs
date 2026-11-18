@@ -12,7 +12,7 @@ mod physical_budget;
 use physical_budget::PhysicalRequirements;
 mod directory;
 pub(crate) use directory::{
-    BudgetedDirectoryPreparation, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
+    BudgetedDirectoryPreparation, BudgetedOriginalContent, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
 };
 
 pub(crate) use verified_payloads::{PayloadProofReservation, payload_proof_budget};

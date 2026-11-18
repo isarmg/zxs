@@ -46,9 +46,11 @@ impl BatchRecord<'_> {
 /// Constructible only by original/index lookup with the same principal/intent.
 pub(in crate::snapshot_worktree) struct FrozenContent<'a> {
     plan: &'a Reservation,
+    principal: &'a Principal,
     commitment: MaterialCommitment,
 }
 impl FrozenContent<'_> {
+    pub(in crate::snapshot_worktree) fn belongs_to(&self, principal: &Principal) -> bool { self.principal == principal }
     pub(in crate::snapshot_worktree) fn plan(&self) -> &Reservation { self.plan }
     pub(in crate::snapshot_worktree) fn commitment(&self) -> MaterialCommitment { self.commitment }
 }
@@ -66,7 +68,7 @@ impl<'a> ReceiptIndex<'a> {
         }
         Ok(Some(match &entry.completion {
             Publication::Reserved => ContentRetry::Reserved(FrozenContent {
-                plan: &entry.plan, commitment: entry.commitment,
+                plan: &entry.plan, commitment: entry.commitment, principal: &entry.receipt.principal,
             }),
             Publication::Complete(_) => ContentRetry::Complete(entry.plan.handle()),
         }))

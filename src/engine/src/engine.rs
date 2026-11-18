@@ -134,7 +134,7 @@ pub(crate) mod provenance;
 mod publication;
 pub(crate) use publication::{
     DetachedPublication, PublishedDependencyReuse, PayloadProofReservation, payload_proof_budget,
-    BudgetedDirectoryPreparation, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
+    BudgetedDirectoryPreparation, BudgetedOriginalContent, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
 };
 mod workspace_commit;
 #[cfg(test)]

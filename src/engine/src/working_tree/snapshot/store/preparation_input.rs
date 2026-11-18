@@ -38,6 +38,16 @@ impl HeldSnapshotNode {
 }
 
 impl PinnedSnapshotRepository {
+    fn require_host(&self) -> Result<(), SnapshotStoreError> {
+        self.host.private_entry_matching(&SNAPSHOT_REPOSITORY, file_identity(self.source.repository_entity))
+            .map(|_| ()).map_err(SnapshotStoreError::Directory)
+    }
+    pub(super) fn batch_repository(&self, source: &HeldSnapshotNode) -> Result<&DiskRoot, SnapshotStoreError> {
+        self.require_host()?;
+        self.require_held_source(source)?;
+        Ok(&self.repository)
+    }
+
     /// Recheck the named relationship as well as the already-held descriptor.
     /// Equal bytes at a replacement path cannot supply a preparation parent.
     pub(crate) fn require_source(

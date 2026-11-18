@@ -1,6 +1,8 @@
 //! Combined physical preparation without a provisional node receipt.
 //! The old ordinary decision path remains closed to this private native mode.
 use super::*;
+mod content;
+pub(crate) use content::BudgetedOriginalContent;
 use crate::engine::file_draft::WorkingBatchHandoff;
 use crate::engine::fresh_layout::{FreshLayoutError as Failure, containers::ContainerPreparation};
 use crate::snapshot_worktree::drafts::{

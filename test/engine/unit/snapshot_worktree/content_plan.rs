@@ -136,4 +136,30 @@ fn durable_reservation_freezes_both_file_branches_without_publishing_and_reopens
     assert_eq!(projection.rows.len(), 2);
     assert_eq!(engine.state().versions, versions);
     assert_eq!(engine.state().branches, branches);
+    let input = crate::snapshot_worktree::OriginalContentInput::capture(&engine, &index, &frozen, &principal).unwrap();
+    let dirty: Vec<_> = input.rows().iter().map(|r| (
+        r.edit.leaf.entry().clone(),
+        crate::persist::layout::snapshot::file(&input.manifest().payloads()[&r.edit.material.version_id]),
+        r.edit.material,
+    )).collect();
+    let original_node = fixture.snapshot_path().join(crate::persist::layout::snapshot::node(fixture.source.node_id).as_path());
+    let sparse = original_node.join(crate::persist::layout::snapshot::WORKTREES.as_path())
+        .join(crate::persist::layout::worktree::instance(instance.worktree_id).as_path());
+    let (held, _, _) = engine.planning_context().prepare_sparse_content_node(input, crate::disk::MAX_METADATA).unwrap();
+    held.require_before(&engine.planning_context()).unwrap();
+    let stage = fixture.snapshot_path().join(crate::persist::layout::snapshot::batch(
+        held.result().prepared_node.preparation).as_path());
+    let final_name = fixture.snapshot_path().join(crate::persist::layout::snapshot::node(frozen.plan().destination_node).as_path());
+    assert!(stage.is_dir() && !final_name.exists());
+    assert_eq!(fs::read_dir(stage.join(crate::persist::layout::snapshot::FILES.as_path())).unwrap().count(), 0);
+    for (source, destination, material) in &dirty {
+        let bytes = fs::read(sparse.join(source.as_path())).unwrap();
+        assert_eq!(ContentHash::from_digest(blake3::hash(&bytes)), material.content_hash);
+        assert!(!stage.join(crate::persist::layout::snapshot::FILES.as_path()).join(destination.as_path()).exists());
+    }
+    let impostor = stage.join(crate::persist::layout::snapshot::FILES.as_path()).join(dirty[0].1.as_path());
+    fs::copy(sparse.join(dirty[0].0.as_path()), impostor).unwrap();
+    assert!(held.require_before(&engine.planning_context()).is_err(), "same bytes at both names are not the decided inode");
+    assert!(!final_name.exists());
+
 }

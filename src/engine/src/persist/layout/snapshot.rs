@@ -17,6 +17,10 @@ pub(crate) fn node(id: SnapshotNodeId) -> EntryName {
     EntryName::new(id.to_string())
         .expect("invariant: snapshot node identity is one canonical ASCII entry")
 }
+/// Only the complete native Candidate binds the entity created under this name.
+pub(crate) fn batch(id: storage_contract::working_tree::DirectoryId) -> EntryName {
+    EntryName::new(format!("batch-{id}")).expect("invariant: full preparation ID is one ASCII entry")
+}
 pub(crate) fn file(payload: &SnapshotPayload) -> EntryName {
     EntryName::new(format!("{}-{}", payload.storage_id, payload.source_path.file_name()))
         .expect("invariant: admitted snapshot storage identity and basename form one entry")
