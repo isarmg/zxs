@@ -41,6 +41,9 @@ fn check_siblings(names:&[Vec<u8>],name:&str,allow_target:bool)->io::Result<()>{
 fn check_name(volume:&FileVolume<'_>,name:&str,allow_target:bool)->io::Result<()>{
     check_siblings(&volume.root.names()?,name,allow_target)
 }
+pub(in crate::ordinary) fn vacant_for_move(v:&FileVolume<'_>,name:&str)->io::Result<()>{
+    v.require_current()?;crate::fs::check_path(&v.root.path.join(name))?;check_name(v,name,false)
+}
 fn room_for_ticket(names:&[Vec<u8>],name:&str,stage:&CStr)->io::Result<()>{
     let bytes:usize=names.iter().map(|n|1+n.len()).sum();let n=usize::from(SLOTS);
     if names.len()+n>8192 || bytes+n*(1+name.len().max(stage.to_bytes().len()))>512*1024 {
@@ -121,10 +124,13 @@ pub(super) fn prepare(volume:&FileVolume<'_>,a:&super::allocation::Allocation)->
     require_staged(volume,&c)?;Ok(c)
 }
 fn verify_header(dir:&HeldDir,c:&Creation)->io::Result<()>{
-    if dir.entity!=c.directory.entity{return Err(invalid("FILE container entity changed"));}
-    c.directory.birth.require(&Birth::read(&dir.file)?)?;
+    verify_header_at(dir,c,&c.directory,&c.local)
+}
+pub(in crate::ordinary) fn verify_header_at(dir:&HeldDir,c:&Creation,container:&NativeObject,local:&NativeObject)->io::Result<()>{
+    if dir.entity!=container.entity{return Err(invalid("FILE container entity changed"));}
+    container.birth.require(&Birth::read(&dir.file)?)?;
     let (origin,bytes)=dir.record(LOCAL,MAX_LOCAL)?.ok_or_else(||invalid("original FILE metadata missing"))?;
-    if NativeObject::stamp(&origin)!=c.local || crate::hash::digest(&bytes)?!=c.local_digest ||
+    if &NativeObject::stamp(&origin)!=local || crate::hash::digest(&bytes)?!=c.local_digest ||
         bytes!=empty_material(c.file,c.history,c.op,&c.name) {
         return Err(invalid("FILE local birth, contents or manual-unborn state differs"));
     }
@@ -181,11 +187,12 @@ pub(super) fn read_lease(dir:&HeldDir,c:&Creation)->io::Result<fs::stream::Pinne
     custody_lease(dir,c,false)
 }
 pub(super) fn retirement_lease(dir:&HeldDir,c:&Creation)->io::Result<fs::stream::PinnedRegular>{custody_lease(dir,c,true)}
-fn custody_lease(dir:&HeldDir,c:&Creation,retire:bool)->io::Result<fs::stream::PinnedRegular>{
+fn custody_lease(dir:&HeldDir,c:&Creation,retire:bool)->io::Result<fs::stream::PinnedRegular>{custody_lease_at(dir,c,&c.local,retire)}
+pub(in crate::ordinary) fn custody_lease_at(dir:&HeldDir,c:&Creation,local:&NativeObject,retire:bool)->io::Result<fs::stream::PinnedRegular>{
     let bytes=empty_material(c.file,c.history,c.op,&c.name);
     let pin=dir.pin_stream(LOCAL,bytes.len() as u64)?.ok_or_else(||invalid("original FILE birth unavailable for read lease"))?;
     if retire{pin.file.try_lock().map_err(io::Error::from)?;}else{pin.file.try_lock_shared().map_err(io::Error::from)?;}
-    if NativeObject::stamp(&pin.stamp)!=c.local{return Err(invalid("foreign FILE read lease"));}
+    if &NativeObject::stamp(&pin.stamp)!=local{return Err(invalid("foreign FILE read lease"));}
     let mut actual=vec![0;bytes.len()];fs::stream::read_at(&pin.file,&mut actual,0)?;
     if actual!=bytes||crate::hash::digest(&actual)?!=c.local_digest{return Err(invalid("FILE lease does not cover the original local birth"));}
     pin.named(dir,LOCAL)?;Ok(pin)

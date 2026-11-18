@@ -34,7 +34,7 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,rev:u64)->io
         let f=d.formal()?;if f.request!=req{return Err(invalid("different initial formal commit request for original operation"));}
         if !s.committing.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(f.receipt()));}
     }
-    if s.incrementing.is_some()||s.editing.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
+    if s.moving.is_some()||s.incrementing.is_some()||s.editing.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
         return Err(invalid("another original FILE operation needs completion"));
     }
     let c=s.file(file).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE for formal commit"))?;
@@ -77,11 +77,15 @@ fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<(FormalNode,NodeB
     let selected_delta=s.delta_node(file,node);
     let f=if selected_delta.is_some(){s.head(file)}else{s.node(file,node)}.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such published node in this FILE"))?;
     let c=s.file(file).ok_or_else(||invalid("formal node lacks original FILE"))?;
-    let w=s.saved(file).ok_or_else(||invalid("formal node lacks its original save"))?;let v=p.ordinary(c.create.volume)?;
+    let w=s.saved(file).ok_or_else(||invalid("formal node lacks its original save"))?;let v=p.ordinary(s.volume_of(c))?;
+    if let Some(h)=super::custody::placed::Current::open(&s,&v,c)?{
+        let r=if selected_delta.is_some(){(h.d.receipt(),NodeBody::Incr(h.incremental()?))}else{(f.receipt(),NodeBody::Full(h.full()?))};
+        v.root.file.sync_all()?;v.require_current()?;return Ok(r);
+    }
     let incr=s.delta(file).map(|d|(&d.original,selected_delta.is_some())).or_else(||s.incrementing.as_ref()
         .filter(|a|a.original.file==file).map(|a|(&a.original,false)));
     let dir=container::directory_all(&v,&c.create,working_names(&s,c,w,true),Some((&f.original,true)),incr)?;
-    let parent=HistoryBody::current(&dir,f)?;
+    let parent=HistoryBody::current(&dir,f)?.user_read()?;
     let result=match selected_delta{
         None=>(f.receipt(),NodeBody::Full(parent)),
         Some(d)=>{

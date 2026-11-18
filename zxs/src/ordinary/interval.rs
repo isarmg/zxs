@@ -33,7 +33,7 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,revision:u64,e
         let r=d.span()?;if r.request!=req{return Err(invalid("different original interval request under same operation"));}
         if !s.editing.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(r.receipt()));}
     }
-    if s.incrementing.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.is_some()||s.editing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
+    if s.moving.is_some()||s.incrementing.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.is_some()||s.editing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
         return Err(invalid("different original FILE operation needs completion"));
     }
     if s.delta(id).is_some(){return Err(invalid("this working editor does not yet support a formal INCR base"));}

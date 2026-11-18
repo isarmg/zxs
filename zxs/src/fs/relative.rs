@@ -12,9 +12,16 @@ fn leaf(name:&CStr)->io::Result<&OsStr>{
 }
 
 impl HeldDir {
+    /// Observe one bounded child name without opening its contents or
+    /// returning a handle for an untrusted device, FIFO, or symlink.
+    pub(crate) fn entry_present(&self,name:&CStr)->io::Result<bool>{
+        leaf(name)?;self.require_named()?;let present=self.pin_record(name)?.is_some();self.require_named()?;Ok(present)
+    }
+    pub(crate) fn checked_child_path(&self,name:&CStr)->io::Result<PathBuf>{
+        let path=self.path.join(leaf(name)?);check_path(&path)?;Ok(path)
+    }
     pub(crate) fn child_directory(&self,name:&CStr)->io::Result<Option<HeldDir>>{
-        let path=self.path.join(leaf(name)?);
-        check_path(&path)?;
+        let path=self.checked_child_path(name)?;
         let file=match child(&self.file,name) {
             Ok(file)=>file,
             Err(e) if e.kind()==io::ErrorKind::NotFound=>return Ok(None),
@@ -58,6 +65,34 @@ impl HeldDir {
         // belong to this parent. renameat2 refuses to replace any destination.
         os_result(unsafe{zxs_rename_fresh(self.file.as_raw_fd(),old.as_ptr(),self.file.as_raw_fd(),new.as_ptr())})?;
         self.file.sync_all()
+    }
+    /// True same-mount directory rename between two held, already registered
+    /// parents. Never copy on EXDEV, follow a new path or overwrite any entry.
+    pub(crate) fn handoff_directory(&self,old:&CStr,target:&HeldDir,new:&CStr,entity:Entity,birth:&Birth,
+        after:impl FnOnce()->io::Result<()>)->io::Result<()>{
+        leaf(old)?;leaf(new)?;self.require_named()?;target.require_named()?;
+        if !self.same_mount(target)?{return Err(invalid("original rename no longer selects one held mount"));}
+        let held=self.child_directory(old)?.ok_or_else(||invalid("original MOVE directory is absent"))?;
+        if held.entity!=entity||Birth::read(&held.file)?!=*birth||target.pin_record(new)?.is_some(){return Err(invalid("wrong source or occupied target for original MOVE"));}
+        // SAFETY: both directory descriptors are held; checked single-component
+        // names; renameat2(RENAME_NOREPLACE). Never chase an alternative target.
+        os_result(unsafe{zxs_rename_fresh(self.file.as_raw_fd(),old.as_ptr(),target.file.as_raw_fd(),new.as_ptr())})?;
+        after()?;target.file.sync_all()?;self.file.sync_all()?;
+        self.require_named()?;target.require_named()?;
+        self.confirm_absence(old)?;
+        let there=target.child_directory(new)?.ok_or_else(||invalid("renamed FILE absent at exact target"))?;
+        if there.entity!=entity||Birth::read(&there.file)?!=*birth{return Err(invalid("different FILE after native rename"));}Ok(())
+    }
+    /// Never recursive. The caller holds the original empty source plus all
+    /// applicable original retirement seals. The kernel also refuses nonempty.
+    pub(crate) fn retire_empty_original(&self,name:&CStr,held:&HeldDir,birth:&Birth,after:impl FnOnce()->io::Result<()>)->io::Result<()>{
+        let check=self.child_directory(name)?.ok_or_else(||invalid("source directory already missing at retirement"))?;
+        if check.entity!=held.entity||Birth::read(&check.file)?!=*birth||Birth::read(&held.file)?!=*birth||!check.same_mount(held)?{
+            return Err(invalid("refuse to retire a different FILE directory"));
+        }
+        held.require_named()?;held.only(None)?;held.file.sync_all()?;self.require_named()?;
+        // SAFETY: only this checked empty original directory, AT_REMOVEDIR.
+        os_result(unsafe{zxs_remove_empty_dir(self.file.as_raw_fd(),name.as_ptr())})?;after()?;self.confirm_absence(name)
     }
     pub(crate) fn remove_original_record(&self,name:&CStr,stamp:&OriginalStamp,bytes:&[u8])->io::Result<()>{
         leaf(name)?;self.require_named()?;

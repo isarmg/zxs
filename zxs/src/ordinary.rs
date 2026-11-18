@@ -1,5 +1,7 @@
 //! First ordinary vertical path: a real, initially empty manual FILE in a
 //! selected registered ordinary root. Creation does not publish a version.
+mod custody;
+pub use custody::{move_file,move_receipt,MoveReceipt,MoveStatus};
 mod wire;
 mod content;
 mod indexed;
@@ -29,9 +31,10 @@ pub struct FileInfo{
     pub name:String,pub created_by:OperationId,pub decision_sequence:Option<u64>,
 }
 impl FileInfo{
-    fn from_frame(f:&Frame)->Self{
+    fn from_frame(f:&Frame)->Self{Self::at(f,f.create.volume)}
+    fn at(f:&Frame,volume:VolumeId)->Self{
         let c=&f.create;
-        Self{entry:c.entry,file:c.file,history:c.history,volume:c.volume,name:c.name.clone(),
+        Self{entry:c.entry,file:c.file,history:c.history,volume,name:c.name.clone(),
             created_by:c.op,decision_sequence:Some(f.seq)}
     }
 }
@@ -42,10 +45,10 @@ pub struct CreationReceipt{pub status:CreationStatus,pub file:FileInfo}
 /// Complete current business entries. Separately reported issued private
 /// slots have not been certified as FILEs or as safe to remove.
 #[derive(Clone,Debug,Eq,PartialEq)]
-pub struct RootFiles{pub files:Vec<FileInfo>,pub reserved_private_entries:usize}
+pub struct RootFiles{pub files:Vec<FileInfo>,pub reserved_private_entries:usize,pub pending_moves:Vec<MoveReceipt>}
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-enum Cut { Reservation,UnboundMkdir,FormalIndex,IncrLinked,WorkUnlinked,WorkReleased,BeforeIntent,Intent,FrameSynced,MarkedBeforeSync,Decision,Installation,IntentReleased,Release }
+enum Cut { Reservation,UnboundMkdir,MoveLeafLinked,MoveInstalled,MoveTargetFlagBeforeSync,MoveTargetChecked,MoveRetireFlagBeforeSync,MoveSourceAdmitted,MoveSourceIsolated,MoveEraseFlagBeforeSync,MoveLeafRetired,MoveEmptyFlagBeforeSync,MoveEmptyConfirmed,MoveDirectoryUnlinked,FormalIndex,IncrLinked,WorkUnlinked,WorkReleased,BeforeIntent,Intent,FrameSynced,MarkedBeforeSync,Decision,Installation,IntentReleased,Release }
 
 fn expected(pool:&LocalPool,op:OperationId,v:VolumeId,name:&str)->io::Result<[u8;32]>{
     wire::request_digest(pool.id(),op,fs::local_uid(),v,name)
@@ -71,7 +74,7 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
             return Ok(FileInfo::from_frame(done)); // Do not open a later same-named root.
         }
     }
-    if state.incrementing.is_some()||state.editing.is_some()||state.saving.is_some()||state.committing.is_some(){return Err(invalid("a different original FILE command needs completion"));}
+    if state.moving.is_some()||state.incrementing.is_some()||state.editing.is_some()||state.saving.is_some()||state.committing.is_some(){return Err(invalid("a different original FILE command needs completion"));}
     if let Some(a)=&state.allocated{
         if a.op!=op || a.request!=request {return Err(invalid("another original FILE allocation needs completion"));}
     }else{
@@ -86,7 +89,7 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
         }
         let (seq,previous)=state.frontier();
         let (attempt,root)=material::select_ticket(&volume,name)?;
-        if state.on_all().any(|f|f.create.attempt==attempt){return Err(invalid("new private ticket collides with earlier operation"));}
+        if state.ticket_used(attempt)||op==attempt{return Err(invalid("new private ticket collides with earlier operation"));}
         allocation::Allocation::reserve(&pool.system,pool.id(),op,id,name,seq+1,previous,entry,file,history,attempt,root)?;
     }
     drop(state);
@@ -190,8 +193,9 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
     let (pool,_,state)=LocalPool::with_snapshot(system,Access::Read)?;
     let volume=pool.ordinary(id)?;
     let mut names=BTreeSet::new();let mut tickets=BTreeMap::new();let mut files=Vec::new();
-    for f in state.on(id){
-        names.insert(f.create.name.as_bytes().to_vec());files.push(FileInfo::from_frame(f));
+    for f in state.on_all().filter(|f|f.create.volume==id){
+        // A CREATE-private ticket was issued forever on that original root,
+        // never on the relocated FILE's current volume.
         // Only lower, previously empty private occupants were passed over. The
         // successful original slot must be absent once its name is installed.
         tickets.insert(f.create.attempt,f.create.slot);
@@ -199,15 +203,20 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
     if let Some(a)=state.allocated.as_ref().filter(|a|a.volume==id&&state.operation(a.op).is_none()){
         tickets.insert(a.attempt,a.stage.as_ref().map_or(allocation::SLOTS,|s|s.slot+1));
     }
+    let handoff=custody::inventory::view(&state,&volume,&mut tickets)?;
+    for f in state.on(id).filter(|f|handoff.deferred!=Some(f.create.file)){
+        names.insert(f.create.name.as_bytes().to_vec());files.push(FileInfo::at(f,id));
+    }
     let actual:BTreeSet<_>=volume.root.names()?.into_iter().collect();
     let mut observed=BTreeSet::new();let mut reserved_private_entries=0;
     for raw in &actual{
-        if material::private_slot(raw).is_some_and(|(ticket,slot)|tickets.get(&ticket).is_some_and(|&limit|slot<limit)){
+        if handoff.hidden.contains(raw){continue;}
+        if handoff.named_stage.as_ref()==Some(raw)||material::private_slot(raw).is_some_and(|(ticket,slot)|tickets.get(&ticket).is_some_and(|&limit|slot<limit)){
             reserved_private_entries+=1;
         }else{observed.insert(raw.clone());}
     }
     if observed!=names{return Err(invalid("missing or unrecognized business inventory; refusing a partial list"));}
-    for f in state.on(id){
+    for f in state.on(id).filter(|f|handoff.deferred!=Some(f.create.file)){
         let _=draft::admit_current_held(&state,&volume,f)?;
         if state.head(f.create.file).is_some()&&state.committing.as_ref().is_some_and(|a|a.original.file==f.create.file){
             let saved=state.saved(f.create.file).ok_or_else(||invalid("no original saved source for formal cleanup inventory"))?;
@@ -222,7 +231,7 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
     }
     volume.root.file.sync_all()?;volume.require_current()?;
     if volume.root.names()?.into_iter().collect::<BTreeSet<_>>()!=actual{return Err(invalid("root changed during FILE enumeration"));}
-    files.sort_by(|a,b|a.name.cmp(&b.name));Ok(RootFiles{files,reserved_private_entries})
+    files.sort_by(|a,b|a.name.cmp(&b.name));Ok(RootFiles{files,reserved_private_entries,pending_moves:handoff.pending})
 }
 
 #[cfg(test)]

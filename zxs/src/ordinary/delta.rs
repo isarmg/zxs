@@ -39,7 +39,7 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,rev:u64)->io::
         let original=d.delta()?;if original.request!=req{return Err(invalid("same operation does not have this original INCR request"));}
         if !s.incrementing.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(original.receipt()));}
     }
-    if s.allocated.is_some()||s.saving.is_some()||s.committing.is_some()||s.editing.is_some()||
+    if s.moving.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.is_some()||s.editing.is_some()||
         s.incrementing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){return Err(invalid("another original FILE operation needs completion"));}
     if s.delta(id).is_some_and(|d|d.original.op!=op){return Err(invalid("this formal producer requires the original FULL as the current parent"));}
     let c=s.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE"))?;

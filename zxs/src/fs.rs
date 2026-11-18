@@ -24,6 +24,7 @@ unsafe extern "C" {
     fn zxs_pin_record(fd: c_int, name: *const c_char) -> c_int;
     fn zxs_open_pinned_record(pin:c_int,write:c_int)->c_int;
     fn zxs_mkdir_private(fd:c_int,name:*const c_char)->c_int;
+    fn zxs_remove_empty_dir(fd:c_int,name:*const c_char)->c_int;
     fn zxs_remove_name(fd:c_int,name:*const c_char)->c_int;
     fn zxs_put_material_token(fd:c_int,value:*const u8,n:usize)->c_int;
     fn zxs_get_material_token(fd:c_int,value:*mut u8,n:usize)->isize;
@@ -204,6 +205,9 @@ fn record_stamp(file: &File, max: u64) -> io::Result<FileStamp> {
 
 impl HeldDir {
     /// Same open directory, not a fresh lookup; retains the existing flock.
+    pub(crate) fn same_mount(&self,other:&Self)->io::Result<bool>{
+        Ok(mounts::id(&self.file)?==mounts::id(&other.file)?)
+    }
     pub(crate) fn duplicate(&self)->io::Result<Self>{
         Ok(Self{file:self.file.try_clone()?,path:self.path.clone(),entity:self.entity})
     }

@@ -5,6 +5,7 @@ use super::{allocation::{self,Allocation},draft::{allocation::{self as save_allo
     formal::{allocation::{self as formal_allocation,FormalAllocation},types::{self as formal_types,Commit}},
     interval::{allocation::{self as span_allocation,SpanAllocation},types::{self as span_types,Saved}},
     wire::{self,Frame,In,NativeObject,MAX_FRAME}};
+use super::custody::{Method,allocation::{self as move_allocation,MoveAllocation},transfer::{self as transfer,Origin as MoveOrigin,Moved}};
 use super::delta::{allocation::{self as delta_allocation,DeltaAllocation},map::Map as DeltaMap,types::{self as delta_types,Delta}};
 use crate::{BranchId,NodeId,VersionId,VersionStorageId,fs::{self,HeldDir,invalid},Entity,EntryId,HistoryId,PoolId,OperationId,FileId,VolumeId};
 use std::{collections::{BTreeMap,BTreeSet},ffi::CStr,io};
@@ -15,7 +16,7 @@ pub(super) const INTENT:&CStr=c"FILE-INTENT";
 const INTENT_MAGIC:&[u8]=b"ZXS/ORIGINAL-FILE-INTENT\0";
 const MAX_INTENT:usize=MAX_FRAME+256;
 
-pub(super) enum Decision{Create(Frame),Save(SaveFrame),Formal(Commit),Span(Saved),Delta(Delta)}
+pub(super) enum Decision{Create(Frame),Save(SaveFrame),Formal(Commit),Span(Saved),Delta(Delta),Move(Moved)}
 impl Decision{
     pub(super) fn read(pool:PoolId,bytes:&[u8])->io::Result<Self>{
         let e=wire::envelope(pool,bytes)?;
@@ -25,20 +26,22 @@ impl Decision{
             3=>Ok(Self::Formal(Commit::from_envelope(pool,bytes,e)?)),
             4=>Ok(Self::Span(Saved::from_envelope(pool,bytes,e)?)),
             5=>Ok(Self::Delta(Delta::from_envelope(pool,bytes,e)?)),
+            transfer::KIND=>Ok(Self::Move(Moved::read(pool,bytes,e)?)),
             _=>Err(invalid("unknown original SYSTEM command")),
         }
     }
+    pub(super) fn moved(&self)->io::Result<&Moved>{match self{Self::Move(m)=>Ok(m),_=>Err(invalid("not an original FILE handoff"))}}
     pub(super) fn creation(&self)->io::Result<&Frame>{match self{Self::Create(f)=>Ok(f),_=>Err(invalid("original command is not FILE creation"))}}
     pub(super) fn save(&self)->io::Result<&SaveFrame>{match self{Self::Save(f)=>Ok(f),_=>Err(invalid("original command is not a first SAVE"))}}
     pub(super) fn formal(&self)->io::Result<&Commit>{match self{Self::Formal(f)=>Ok(f),_=>Err(invalid("original command is not a formal FILE commit"))}}
     pub(super) fn delta(&self)->io::Result<&Delta>{match self{Self::Delta(d)=>Ok(d),_=>Err(invalid("not a formal incremental decision"))}}
     pub(super) fn span(&self)->io::Result<&Saved>{match self{Self::Span(s)=>Ok(s),_=>Err(invalid("not an original working interval save"))}}
-    pub(super) fn seq(&self)->u64{match self{Self::Create(f)=>f.seq,Self::Save(f)=>f.seq,Self::Formal(f)=>f.seq,Self::Span(f)=>f.seq,Self::Delta(f)=>f.seq}}
-    fn previous(&self)->[u8;32]{match self{Self::Create(f)=>f.previous,Self::Save(f)=>f.previous,Self::Formal(f)=>f.previous,Self::Span(f)=>f.previous,Self::Delta(f)=>f.previous}}
-    fn digest(&self)->[u8;32]{match self{Self::Create(f)=>f.digest,Self::Save(f)=>f.digest,Self::Formal(f)=>f.digest,Self::Span(f)=>f.digest,Self::Delta(f)=>f.digest}}
-    pub(super) fn request(&self)->[u8;32]{match self{Self::Create(f)=>f.request,Self::Save(f)=>f.request,Self::Formal(f)=>f.request,Self::Span(f)=>f.request,Self::Delta(f)=>f.request}}
-    pub(super) fn bytes(&self)->&[u8]{match self{Self::Create(f)=>&f.bytes,Self::Save(f)=>&f.bytes,Self::Formal(f)=>&f.bytes,Self::Span(f)=>&f.bytes,Self::Delta(f)=>&f.bytes}}
-    pub(super) fn op(&self)->OperationId{match self{Self::Create(f)=>f.create.op,Self::Save(f)=>f.original.op,Self::Formal(f)=>f.original.op,Self::Span(f)=>f.original.op,Self::Delta(f)=>f.original.op}}
+    pub(super) fn seq(&self)->u64{match self{Self::Create(f)=>f.seq,Self::Save(f)=>f.seq,Self::Formal(f)=>f.seq,Self::Span(f)=>f.seq,Self::Delta(f)=>f.seq,Self::Move(m)=>m.seq}}
+    fn previous(&self)->[u8;32]{match self{Self::Create(f)=>f.previous,Self::Save(f)=>f.previous,Self::Formal(f)=>f.previous,Self::Span(f)=>f.previous,Self::Delta(f)=>f.previous,Self::Move(m)=>m.previous}}
+    fn digest(&self)->[u8;32]{match self{Self::Create(f)=>f.digest,Self::Save(f)=>f.digest,Self::Formal(f)=>f.digest,Self::Span(f)=>f.digest,Self::Delta(f)=>f.digest,Self::Move(m)=>m.digest}}
+    pub(super) fn request(&self)->[u8;32]{match self{Self::Create(f)=>f.request,Self::Save(f)=>f.request,Self::Formal(f)=>f.request,Self::Span(f)=>f.request,Self::Delta(f)=>f.request,Self::Move(m)=>m.request}}
+    pub(super) fn bytes(&self)->&[u8]{match self{Self::Create(f)=>&f.bytes,Self::Save(f)=>&f.bytes,Self::Formal(f)=>&f.bytes,Self::Span(f)=>&f.bytes,Self::Delta(f)=>&f.bytes,Self::Move(m)=>&m.bytes}}
+    pub(super) fn op(&self)->OperationId{match self{Self::Create(f)=>f.create.op,Self::Save(f)=>f.original.op,Self::Formal(f)=>f.original.op,Self::Span(f)=>f.original.op,Self::Delta(f)=>f.original.op,Self::Move(m)=>m.original.op}}
 }
 
 pub(super) struct Intent{pub frame:Decision,pub stamp:fs::OriginalStamp,pub bytes:Vec<u8>}
@@ -68,7 +71,7 @@ struct OriginalIndex{
     ops:BTreeSet<OperationId>,files:BTreeMap<FileId,usize>,entries:BTreeSet<EntryId>,histories:BTreeSet<HistoryId>,
     names:BTreeSet<(VolumeId,String)>,tickets:BTreeSet<OperationId>,native:BTreeSet<fs::Birth>,saved:BTreeMap<FileId,usize>,
     formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,branches:BTreeSet<BranchId>,
-    versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,usize>,
+    versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,usize>,moves:BTreeMap<FileId,usize>,
 }
 impl OriginalIndex{
     fn birth<'a>(&self,id:FileId,frames:&'a[Decision])->io::Result<&'a Frame>{
@@ -114,11 +117,31 @@ impl OriginalIndex{
             ||!allow(o.volume,o.uid,c.create.directory.entity,&c.create.directory.birth,false){return Err(invalid("conflicting formal INCR identity or owner"));}
         Ok(c)
     }
+    fn move_source<'a>(&self,o:&MoveOrigin,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<(&'a Frame,&'a Commit,&'a Delta)>{
+        // The only externally admissible shape now is a settled first FULL +
+        // first INCR. Refuse a writable FULL-only FILE (or any dirty revision)
+        // before reservation: this slice does not redirect a future first INCR.
+        let c=self.birth(o.file,ds)?;
+        let f=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("handoff requires original first FULL"))?.formal()?;
+        let d=self.deltas.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("handoff requires original first INCR"))?.delta()?;
+        if self.moves.contains_key(&o.file)||self.names.contains(&(o.to,o.name.clone()))||!self.names.contains(&(o.from,o.name.clone()))||
+            self.tickets.contains(&o.ticket)||self.ops.contains(&o.ticket)||self.tickets.contains(&o.op)||
+            !allow(o.from,o.uid,o.src_root.entity,&o.src_root.birth,true)||!allow(o.to,o.uid,o.dst_root.entity,&o.dst_root.birth,true){
+            return Err(invalid("different initial FILE placement, occupied destination, original ticket or ordinary registration"));
+        }
+        o.require_history(c,f,Some(d))?;Ok((c,f,d))
+    }
     fn admit(&self,f:&Decision,frames:&[Decision],prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
         if frames.len()>=MAX_DECISIONS||f.seq()!=frames.len() as u64+1||f.previous()!=prev||self.ops.contains(&f.op()){
             return Err(invalid("repeated operation or nonconsecutive original FILE decision"));
         }
         match f{
+            Decision::Move(m)=>{let(c,f,d)=self.move_source(&m.original,frames,allow)?;
+                m.require_history(c,f,Some(d))?;
+                if m.original.mode==Method::Transfer&&m.target.each().any(|x|self.native.contains(&x.birth)){
+                    return Err(invalid("transferred material cannot reuse any admitted native owner"));
+                }
+            }
             Decision::Create(f)=>{let c=&f.create;
                 if !allow(c.volume,c.uid,c.directory.entity,&c.directory.birth,false)
                     ||self.files.contains_key(&c.file)||self.names.contains(&(c.volume,c.name.clone()))||self.entries.contains(&c.entry)
@@ -155,6 +178,9 @@ impl OriginalIndex{
     fn remember(&mut self,d:&Decision,index:usize){
         self.ops.insert(d.op());
         match d{
+            Decision::Move(m)=>{let o=&m.original;self.moves.insert(o.file,index);self.tickets.insert(o.ticket);
+                self.names.remove(&(o.from,o.name.clone()));self.names.insert((o.to,o.name.clone()));
+                if o.mode==Method::Transfer{for obj in m.target.each(){self.native.insert(obj.birth.clone());}}}
             Decision::Create(f)=>{let c=&f.create;self.files.insert(c.file,index);self.names.insert((c.volume,c.name.clone()));
                 self.entries.insert(c.entry);self.histories.insert(c.history);self.tickets.insert(c.attempt);
                 self.native.insert(c.directory.birth.clone());self.native.insert(c.local.birth.clone());}
@@ -170,7 +196,7 @@ impl OriginalIndex{
 }
 
 pub(crate) struct Journal{
-    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,usize>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
+    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,usize>,moves:BTreeMap<FileId,usize>,pub(super) moving:Option<MoveAllocation>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
     pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) incrementing:Option<DeltaAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
 }
 impl Journal{
@@ -183,9 +209,21 @@ impl Journal{
             let f=Decision::read(pool,&input[..n])?;idx.admit(&f,&ds,prev,&allowed)?;
             prev=f.digest();idx.remember(&f,ds.len());ds.push(f);input=&input[n..];
         }
-        let (mut allocated,mut saving,mut committing,mut editing,mut incrementing)=(None,None,None,None,None);
-        if let Some((stamp,bytes))=system.record(allocation::NAME,allocation::MAX)?{
-            if bytes.starts_with(delta_allocation::MAGIC){
+        let (mut allocated,mut saving,mut committing,mut editing,mut incrementing,mut moving)=(None,None,None,None,None,None);
+        if let Some((stamp,bytes))=system.record(allocation::NAME,move_allocation::MAX)?{
+            if bytes.starts_with(move_allocation::MAGIC){
+                let a=MoveAllocation::from_bytes(system,pool,stamp,bytes)?;
+                let last=ds.last().is_some_and(|d|matches!(d,Decision::Move(m) if a.matches(m)));
+                if !last{
+                    if ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op)||a.opened(){
+                        return Err(invalid("handoff reservation not at its original frontier"));
+                    }
+                    idx.move_source(&a.original,&ds,&allowed)?;
+                    if a.stage().is_some_and(|s|idx.native.contains(&s.directory.birth)){return Err(invalid("handoff stage already belongs to admitted native material"));}
+                }
+                moving=Some(a);
+            }else if bytes.len()>allocation::MAX{return Err(invalid("original non-MOVE FILE allocation exceeds its own bound"));}
+            else if bytes.starts_with(delta_allocation::MAGIC){
                 let a=DeltaAllocation::from_bytes(pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Delta(f) if a.matches(f)));
                 if !last{
@@ -234,6 +272,7 @@ impl Journal{
         let pending=Intent::read(system,pool)?;
         if let Some(p)=&pending{
             let matches=match &p.frame{
+                Decision::Move(m)=>moving.as_ref().is_some_and(|a|a.matches(m)),
                 Decision::Create(f)=>allocated.as_ref().is_some_and(|a|a.matches(f)),
                 Decision::Save(f)=>saving.as_ref().is_some_and(|a|a.matches(f)),
                 Decision::Formal(f)=>committing.as_ref().is_some_and(|a|a.matches(f)),
@@ -261,14 +300,17 @@ impl Journal{
             frame_bytes=before;unconfirmed=last.bytes().len();
             // The replay indices must never expose an otherwise complete but
             // not yet confirmed last frame (including a first working revision).
-            match last {Decision::Delta(d)=>{idx.deltas.remove(&d.original.file);idx.nodes.remove(&d.original.node);},Decision::Span(s)=>{
+            match last {Decision::Move(m)=>{
+                    if moving.as_ref().is_some_and(|a|a.opened()){return Err(invalid("target installation confirmation before original placement frontier"));}
+                    idx.moves.remove(&m.original.file);
+                },Decision::Delta(d)=>{idx.deltas.remove(&d.original.file);idx.nodes.remove(&d.original.node);},Decision::Span(s)=>{
                     let chain=idx.spans.get_mut(&s.original.file).ok_or_else(||invalid("missing original span chain"))?;
                     if chain.pop()!=Some(ds.len()-1){return Err(invalid("wrong unconfirmed working edge"));}
                 },Decision::Formal(f)=>{idx.formal.remove(&f.original.file);idx.nodes.remove(&f.original.node);},
                 Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{idx.files.remove(&f.create.file);}}
             ds.pop();
         }
-        Ok(Self{decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,pending,allocated,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
+        Ok(Self{decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
     }
     pub(super) fn frontier(&self)->(u64,[u8;32]){
         (self.decisions.len() as u64,self.decisions.last().map_or(self.genesis,Decision::digest))
@@ -290,7 +332,31 @@ impl Journal{
     pub(super) fn file(&self,id:FileId)->Option<&Frame>{self.decisions.get(*self.originals.get(&id)?)?.creation().ok()}
     pub(super) fn named(&self,v:VolumeId,name:&str)->Option<&Frame>{self.on(v).find(|f|f.create.name==name)}
     pub(super) fn on_all(&self)->impl Iterator<Item=&Frame>{self.decisions.iter().filter_map(|d|d.creation().ok())}
-    pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|f.create.volume==v)}
+    pub(in crate::ordinary) fn confirmed_handoff(&self,op:OperationId)->io::Result<(&Moved,&MoveAllocation)>{
+        let m=self.decided(op).ok_or_else(||invalid("no confirmed handoff at the original SYSTEM lower bound"))?.moved()?;
+        let a=self.moving.as_ref().ok_or_else(||invalid("no open handoff completion"))?;
+        if !a.matches(m)||self.placed(m.original.file).map(|d|d.digest)!=Some(m.digest){
+            return Err(invalid("different original placement/operation at this completion cut"));
+        }Ok((m,a))
+    }
+    pub(super) fn placed(&self,id:FileId)->Option<&Moved>{self.decisions.get(*self.moves.get(&id)?)?.moved().ok()}
+    pub(super) fn volume_of(&self,f:&Frame)->VolumeId{self.placed(f.create.file).map_or(f.create.volume,|m|m.original.to)}
+    pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|self.volume_of(f)==v)}
+    pub(super) fn moves(&self)->impl Iterator<Item=&Moved>{self.decisions.iter().filter_map(|d|d.moved().ok())}
+    /// Preflight is not an I/O permit. This is repeated from the very same
+    /// writer snapshot immediately before naming the original reservation.
+    pub(in crate::ordinary) fn admit_new_handoff(&self,p:&crate::pool::lease::LocalPool,op:OperationId,id:FileId,from:VolumeId,to:VolumeId)->io::Result<()>{
+        p.require_business_op(op)?;self.room_for(MAX_FRAME)?;
+        let c=self.file(id).ok_or_else(||invalid("no original FILE for handoff"))?;
+        if self.pending.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||self.editing.is_some()||
+            self.incrementing.is_some()||self.moving.is_some()||self.ticket_used(op)||from==to||c.create.volume!=from||
+            self.placed(id).is_some()||self.head(id).is_none()||self.delta(id).is_none()||self.named(to,&c.create.name).is_some(){
+            return Err(invalid("handoff needs a free original slot and operation, complete initial FULL+INCR and unoccupied registered target"));
+        }Ok(())
+    }
+    pub(super) fn ticket_used(&self,ticket:OperationId)->bool{
+        self.on_all().any(|c|c.create.attempt==ticket)||self.moves().any(|m|m.original.ticket==ticket)||self.decided(ticket).is_some()
+    }
     pub(super) fn intervals(&self,id:FileId)->impl DoubleEndedIterator<Item=&Saved>{
         self.spans.get(&id).into_iter().flatten().map(move |&i|match &self.decisions[i]{
             Decision::Span(s)=>s,_=>unreachable!("only admitted working decisions enter this per-FILE index"),

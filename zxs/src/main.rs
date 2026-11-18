@@ -1,5 +1,5 @@
 use std::{env, ffi::OsStr, io, path::PathBuf, process::ExitCode};
-const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH";
+const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH | file-move OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-move-receipt OP SYSTEM FILE FROM TO PLACEMENT_EPOCH";
 fn bad(message:&'static str)->io::Error {io::Error::new(io::ErrorKind::InvalidInput,message)}
 fn show(scope:&str,info:zxs::PoolInfo) {
     println!("{scope}");
@@ -42,10 +42,28 @@ fn run() -> io::Result<()> {
             let system=path(&mut args)?;let volume=word(&mut args)?.parse()?;end(&mut args)?;
             let listed=zxs::list_initial_files(&system,volume)?;
             for f in listed.files{show_file(&f);}
+            for m in listed.pending_moves{
+                let detail=match m.status{
+                    zxs::MoveStatus::TargetReopenedSourcePending if m.to==volume=>"target is current on this checked volume; original source cleanup pending",
+                    zxs::MoveStatus::TargetReopenedSourcePending=>"target was reopened; original source cleanup pending (target is not inspected here)",
+                    zxs::MoveStatus::DecidedTargetPending=>"decided; target is not admitted for reading yet",
+                    _=>"not yet decided; source remains its owner",
+                };
+                eprintln!("Original MOVE {}: {detail}.",m.operation);
+            }
             if listed.reserved_private_entries!=0{
                 eprintln!("{} issued private slot(s) occupied: not current FILEs; contents and ownership not confirmed, nothing removed.",listed.reserved_private_entries);
             }
             Ok(())
+        }
+        Some("file-move"|"file-move-receipt")=>{
+            let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let id=word(&mut args)?.parse()?;
+            let from=word(&mut args)?.parse()?;let to=word(&mut args)?.parse()?;
+            let epoch=word(&mut args)?.parse().map_err(|_|bad("invalid original FILE placement epoch"))?;end(&mut args)?;
+            let r=if action==OsStr::new("file-move"){zxs::move_file(&system,op,id,from,to,epoch)?}
+                else{zxs::move_receipt(&system,op,id,from,to,epoch)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such original MOVE"))?};
+            println!("Original MOVE {:?}: {} FILE {} entry {} history {} {}@{} -> {}@{} name {} decision {:?}",
+                r.status,r.operation,r.file,r.entry,r.history,r.from,r.source_epoch,r.to,r.destination_epoch,r.name,r.decision_sequence);Ok(())
         }
         Some("file-save")=>{
             let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let file=word(&mut args)?.parse()?;

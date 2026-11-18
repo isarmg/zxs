@@ -24,6 +24,7 @@ pub struct FirstSaveObservation{
 }
 
 pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)->io::Result<Option<Body>>{
+    if let Some(h)=super::custody::placed::Current::open(state,volume,c)?{return Ok(Some(Body::Incr(h.incremental()?)));}
     let saved=state.saved(c.create.file);
     if let Some(f)=state.head(c.create.file){
         let w=saved.ok_or_else(||invalid("formal node has no original confirmed revision"))?;
@@ -31,7 +32,7 @@ pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)
         // The confirmed FULL is authoritative even if old-work cleanup is
         // obstructed. Do not use the old draft as the body, or require it for
         // the selected node. Complete-inventory and retirement verify it separately.
-        let base=super::formal::physical::HistoryBody::current(&dir,f)?;
+        let base=super::formal::physical::HistoryBody::current(&dir,f)?.user_read()?;
         if let Some(d)=state.delta(c.create.file){
             return Ok(Some(Body::Incr(super::delta::physical::Body::open(&dir,base,d)?)));
         }
@@ -74,9 +75,9 @@ pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)
 pub(super) fn capture_current(system:&Path,id:FileId)->io::Result<(CurrentFile,Option<Body>)>{
     let (pool,_,state)=LocalPool::with_snapshot(system,Access::Read)?;
     let c=state.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published original FILE"))?;
-    let volume=pool.ordinary(c.create.volume)?;let body=admit_current_held(&state,&volume,c)?;
+    let volume=pool.ordinary(state.volume_of(c))?;let body=admit_current_held(&state,&volume,c)?;
     volume.root.file.sync_all()?;volume.require_current()?;
-    Ok((CurrentFile{file:FileInfo::from_frame(c),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.delta(id).map(super::delta::types::Delta::receipt).or_else(||state.head(id).map(super::formal::types::Commit::receipt)),edit:if state.delta(id).is_some(){None}else{state.interval(id).map(super::interval::types::Saved::receipt)}},body))
+    Ok((CurrentFile{file:FileInfo::at(c,state.volume_of(c)),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.delta(id).map(super::delta::types::Delta::receipt).or_else(||state.head(id).map(super::formal::types::Commit::receipt)),edit:if state.delta(id).is_some(){None}else{state.interval(id).map(super::interval::types::Saved::receipt)}},body))
 }
 /// Inspect actual original FILE and (if present) its named working record and
 /// authenticated chunk head. This is not a whole-content verification scan.
@@ -116,7 +117,7 @@ fn choice<'a>(pool:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,claim:Dra
         // A completed historical receipt neither opens today's data path nor consumes input.
         if !s.saving.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(f.receipt()));}
     }
-    if s.incrementing.is_some()||s.editing.is_some()||s.committing.is_some()||s.allocated.is_some()||s.saving.as_ref().is_some_and(|a|a.original.op!=op||a.request!=request){
+    if s.moving.is_some()||s.incrementing.is_some()||s.editing.is_some()||s.committing.is_some()||s.allocated.is_some()||s.saving.as_ref().is_some_and(|a|a.original.op!=op||a.request!=request){
         return Err(invalid("different original FILE operation needs completion"));
     }
     let c=s.file(file).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE at first SAVE cutoff"))?;

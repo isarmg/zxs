@@ -19,6 +19,7 @@ impl Kind{
         b.push(match self{Self::Node=>1,Self::Raw=>2});n.put(&mut b);crate::hash::digest(&b)
     }
 }
+pub(in crate::ordinary) fn index_size(o:&Original)->io::Result<u64>{Kind::Node.size(o)}
 fn check_header(file:&File,o:&Original)->io::Result<Vec<u8>>{
     let wanted=o.node_header();let mut actual=vec![0;wanted.len()];stream::read_at(file,&mut actual,0)?;
     if wanted!=actual{return Err(invalid("local FILE node/branch/version/source or creation-time name differs"));}Ok(actual)
@@ -37,11 +38,29 @@ fn named(dir:&HeldDir,o:&Original,k:Kind)->io::Result<Option<PinnedRegular>>{
 }
 pub(in crate::ordinary) struct HistoryBody{pub(super) node:PinnedRegular,pub(super) raw:PinnedRegular,pub(super) original:Original,pub(super) index_digest:[u8;32]}
 impl HistoryBody{
+    /// These are the two *handled original* files actually checked by
+    /// write_to; a transfer cannot substitute a current path or remote blob.
+    pub(in crate::ordinary) fn native_files(&self)->(&PinnedRegular,&PinnedRegular){(&self.node,&self.raw)}
+    /// A user may continue reading the frozen old version after a placement
+    /// decision. A transfer therefore must not unlink either exact source
+    /// leaf until these two shared leases are absent. Don't lock the generic
+    /// FILE working-record here: a historical read never needs spent drafts.
+    pub(in crate::ordinary) fn user_read(self)->io::Result<Self>{
+        self.node.file.try_lock_shared().map_err(io::Error::from)?;
+        self.raw.file.try_lock_shared().map_err(io::Error::from)?;
+        self.unchanged()?;Ok(self)
+    }
     fn facts(&self)->Materials{Materials{node:NativeObject::stamp(&self.node.stamp),raw:NativeObject::stamp(&self.raw.stamp),index_digest:self.index_digest}}
     pub(in crate::ordinary) fn current(dir:&HeldDir,f:&Commit)->io::Result<Self>{
+        Self::at_originals(dir,f,&f.materials.node,&f.materials.raw)
+    }
+    /// Addressing is separate from the immutable initial publication. A moved
+    /// graph supplies the two original inodes from its admitted custody cut;
+    /// byte commitments and stable IDs always come from the content decision.
+    pub(in crate::ordinary) fn at_originals(dir:&HeldDir,f:&Commit,want_node:&NativeObject,want_raw:&NativeObject)->io::Result<Self>{
         let (node,raw)=(named(dir,&f.original,Kind::Node)?.ok_or_else(||invalid("original local node unavailable"))?,
             named(dir,&f.original,Kind::Raw)?.ok_or_else(||invalid("original independent FULL unavailable"))?);
-        if NativeObject::stamp(&node.stamp)!=f.materials.node||NativeObject::stamp(&raw.stamp)!=f.materials.raw{
+        if &NativeObject::stamp(&node.stamp)!=want_node||&NativeObject::stamp(&raw.stamp)!=want_raw{
             return Err(invalid("original formal material replaced"));
         }
         // A read handle carries the expected digest; opening the header is

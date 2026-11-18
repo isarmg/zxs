@@ -53,11 +53,16 @@ impl HeldDir{
         self.confirm_original_name(name,original,max)?;Ok(value)
     }
     pub(crate) fn bind_attempt(&self,name:&CStr,original:&OriginalStamp,max:usize,empty:&[u8],bound:&[u8])->io::Result<()>{
+        self.bind_attempt_at(name,original,max,empty,bound,||Ok(()))
+    }
+    pub(crate) fn bind_attempt_at(&self,name:&CStr,original:&OriginalStamp,max:usize,empty:&[u8],bound:&[u8],
+        after_set:impl FnOnce()->io::Result<()>)->io::Result<()>{
         let held=self.held_frontier_file(name,original,max,true)?;
         if read_stage(&held)?.as_slice()!=empty{return Err(invalid("cannot rebind a different FILE stage"));}
-        // SAFETY: exclusive SYSTEM, compare original unbound bytes, replace exactly
-        // once before any FILE payload exists. Never recreate a missing attribute.
+        // SAFETY: exclusive SYSTEM, compare the original phase first. Replace
+        // only its existing value on this inode; never create a missing binding.
         os_result(unsafe{zxs_set_stage(held.as_raw_fd(),bound.as_ptr(),bound.len(),0)})?;
+        after_set()?; // visible phase does not yet prove its inode was synced
         held.sync_all()?;
         if read_stage(&held)?.as_slice()!=bound{return Err(invalid("original stage binding readback differs"));}
         let after=OriginalStamp{stat:record_stamp(&held,max as u64)?,birth:original.birth.clone()};

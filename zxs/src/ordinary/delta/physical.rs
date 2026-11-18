@@ -11,6 +11,7 @@ fn shape(o:&Original)->io::Result<(u64,u64,u64)>{
     let end=content::chunks(o.changed).checked_mul(32).and_then(|n|n.checked_add(t)).filter(|x|*x<=i64::MAX as u64).ok_or_else(||invalid("INCR exceeds native space"))?;
     Ok((h,t,end))
 }
+pub(in crate::ordinary) fn packed_size(o:&Original)->io::Result<u64>{Ok(shape(o)?.2)}
 fn header(f:&File,o:&Original,m:&Map)->io::Result<(Content,Vec<u8>)>{
     let mut bytes=vec![0;shape(o)?.0 as usize];stream::read_at(f,&mut bytes,0)?;
     let tail=4+m.rows() as usize*9;let at=bytes.len()-tail-96;
@@ -36,9 +37,10 @@ fn seal_links(f:&File,raw:u64,table:u64,claim:DraftClaim)->io::Result<[u8;32]>{
 }
 struct Held{pin:PinnedRegular,o:Original,m:Map,c:Content,index:[u8;32]}
 impl Held{
-    fn open(dir:&HeldDir,d:&Delta)->io::Result<Self>{
+    fn open(dir:&HeldDir,d:&Delta)->io::Result<Self>{Self::at_original(dir,d,&d.material.object)}
+    fn at_original(dir:&HeldDir,d:&Delta,object:&NativeObject)->io::Result<Self>{
         let o=&d.original;let pin=dir.pin_stream(&o.leaf(),shape(o)?.2)?.ok_or_else(||invalid("actual published INCR missing"))?;
-        if NativeObject::stamp(&pin.stamp)!=d.material.object{return Err(invalid("different physical INCR original"));}
+        if &NativeObject::stamp(&pin.stamp)!=object{return Err(invalid("different physical INCR original"));}
         pin.file.try_lock_shared().map_err(io::Error::from)?;
         let mut bytes=vec![0;Map::checked_bytes(o.rows)?];stream::read_at(&pin.file,&mut bytes,o.prefix(&Content::default()).len() as u64)?;
         let map=Map::decode(&bytes,o.rows,o.parent_length,o.logical,o.changed)?;
@@ -57,6 +59,10 @@ impl Held{
 pub(in crate::ordinary) struct Body{parent:HistoryBody,target:Held}
 impl Body{
     pub(in crate::ordinary) fn open(dir:&HeldDir,parent:HistoryBody,d:&Delta)->io::Result<Self>{Ok(Self{parent,target:Held::open(dir,d)?})}
+    pub(in crate::ordinary) fn at_original(dir:&HeldDir,parent:HistoryBody,d:&Delta,object:&NativeObject)->io::Result<Self>{
+        Ok(Self{parent,target:Held::at_original(dir,d,object)?})
+    }
+    pub(in crate::ordinary) fn native_pack(&self)->&PinnedRegular{&self.target.pin}
     pub(in crate::ordinary) fn unchanged(&self)->io::Result<()>{self.parent.unchanged()?;self.target.pin.unchanged()}
     fn require(&self,dir:&HeldDir)->io::Result<()>{self.parent.require(dir)?;self.target.pin.named(dir,&self.target.o.leaf())}
     pub(in crate::ordinary) fn range(&self,at:u64,len:u64,out:impl Write)->io::Result<()>{

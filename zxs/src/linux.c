@@ -171,6 +171,7 @@ int zxs_open_pinned_record(int pin, int write) {
 }
 
 int zxs_mkdir_private(int fd,const char *name) { return mkdirat(fd,name,0700); }
+int zxs_remove_empty_dir(int fd,const char *name) { return unlinkat(fd,name,AT_REMOVEDIR); }
 int zxs_remove_name(int fd,const char *name) { return unlinkat(fd,name,0); }
 
 /* Return length-prefixed opaque names, without opening any entry. Refuse the
