@@ -960,7 +960,7 @@
             "engine::recovery::workspace_receipts::original_receipt_tests::",
             "engine::membership_transition::archive::persistent::namespace_replay::original_receipt_tests::"
           ],
-          "max_tests": 24,
+          "max_tests": 27,
           "timeout_seconds": 900
         },
         {
@@ -7752,7 +7752,7 @@
       ]
     },
     "formal-mounted-file-head": {
-      "reason": "Inner explicit mounted FILE selection reads its formal branch HEAD and held body, rather than a saved/inherited body, a draft or newer unrelated fork. No outer commit/API closure is implied.",
+      "reason": "A mounted occurrence reads its formal FILE branch HEAD, not a draft, inherited body or unrelated fork. The native merge reuses the chosen original node and requires no synthetic body. These read-side assertions are not an outer Worktree publication or an SMB path binding.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -7761,9 +7761,66 @@
           "kind": "lib",
           "exact": [
             "snapshot_worktree::public::transport::content_overlay::publish::mounted_file_head::selected_worktree_occurrence_reads_latest_head_of_its_branch_not_its_saved_or_inherited_body",
-            "snapshot_worktree::public::transport::content_overlay::publish::mounted_file_head::formal_merge_head_retains_its_node_while_selecting_its_older_body_not_the_newer_fork_or_private_edit"
+            "snapshot_worktree::public::transport::content_overlay::publish::mounted_file_head::formal_merge_head_reuses_its_chosen_original_node_not_the_newer_fork_or_private_edit"
           ],
           "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "registered-child-snapshot-source": {
+      "reason": "The original Mkdir and held child FILE produce an independent child snapshot with relative entries and cold exact replay; a foreign marker or same-spelling replacement never registers. A separate sibling mount under the outer parent supplies only the explicit current branch occurrence to a read-only proposed outer manifest. No outer reservation, copied outer node, receipt or SMB transfer is asserted.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "snapshot_worktree::direct_child::tests::child_initialization_uses_original_mkdir_entity_copies_only_relative_files_and_cold_replays",
+            "snapshot_worktree::direct_child::tests::foreign_child_marker_and_same_named_directory_impostor_never_become_a_child_registration",
+            "snapshot_worktree::direct_child::tests::distinct_child_mount_uses_outer_parent_claim_and_yields_only_the_selected_current_file_branch"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "registered-child-context-http": {
+      "reason": "Authenticated root-context HTTP resolves a single registered direct child, rejects unauthenticated, multi-component, duplicate and reserved requests, initializes the distinct child with exact retry, and creates its Worktree. Not SMB listing, mapping or outer publication.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "directory_drafts::authenticated_root_context_returns_only_a_registered_direct_child_and_creates_its_distinct_instance"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "worktree-held-file-sources": {
+      "reason": "The held ordinary FILE exposes its selected commit name and actual bytes without creating anything; wrong FILE, changed working state and a same-byte replacement are refused. An old node keeps its recorded basename after container rename. A separately held published snapshot occurrence yields its own immutable bytes after an outside edit. These are read-side inputs, not successful SMB moves, new mappings, independent FILE allocations or a new Worktree submission.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "snapshot_worktree::drafts::tests::outside_mapping::mounting_source_reads_the_original_selected_name_and_creates_nothing",
+            "snapshot_worktree::drafts::tests::outside_mapping::matching_bytes_in_a_replaced_body_at_its_old_name_cannot_supply_the_mapping",
+            "snapshot_worktree::drafts::tests::outside_mapping::renamed_container_cannot_change_the_committed_logical_name_of_its_old_node",
+            "snapshot_worktree::drafts::tests::outside_mapping::projection_in_the_published_snapshot_keeps_its_own_bytes_and_original_name"
+          ],
+          "max_tests": 4,
           "timeout_seconds": 900
         }
       ]
@@ -7940,7 +7997,8 @@
       "path": "src/engine/src/snapshot_worktree/registry/mounts.rs",
       "groups": [
         "worktree-exact-originals",
-        "worktree-clean-mount-originals"
+        "worktree-clean-mount-originals",
+        "registered-child-snapshot-source"
       ]
     },
     {
@@ -7952,7 +8010,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/source.rs",
       "groups": [
-        "worktree-exact-originals"
+        "worktree-exact-originals",
+        "registered-child-snapshot-source"
       ]
     },
     {
@@ -8698,7 +8757,8 @@
         "worktree-added-native",
         "automatic-management-observation",
         "worktree-clean-mount-originals",
-        "smb-worktree-overwrite"
+        "smb-worktree-overwrite",
+        "registered-child-context-http"
       ]
     },
     {
@@ -8720,7 +8780,8 @@
         "worktree-added-native",
         "original-file-timeline-source",
         "worktree-clean-mount-originals",
-        "smb-worktree-overwrite"
+        "smb-worktree-overwrite",
+        "registered-child-context-http"
       ]
     },
     {
@@ -8975,7 +9036,8 @@
     {
       "path": "src/engine/src/engine/source.rs",
       "groups": [
-        "ordinary-manual-incremental"
+        "ordinary-manual-incremental",
+        "worktree-held-file-sources"
       ]
     },
     {
@@ -9460,7 +9522,8 @@
       "path": "src/engine/src/snapshot_worktree/instance/allocation.rs",
       "groups": [
         "worktree-automatic-names",
-        "worktree-http-transport"
+        "worktree-http-transport",
+        "registered-child-snapshot-source"
       ]
     },
     {
@@ -9635,7 +9698,8 @@
       "path": "test/server/integration/phase1_save_tags/directory_drafts.rs",
       "groups": [
         "directory-root-mixed-http",
-        "nested-directory-web-selection"
+        "nested-directory-web-selection",
+        "registered-child-context-http"
       ]
     },
     {
@@ -11047,7 +11111,8 @@
       "groups": [
         "fresh-managed-core",
         "ordinary-namespace-parents",
-        "worktree-clean-mount-originals"
+        "worktree-clean-mount-originals",
+        "registered-child-snapshot-source"
       ]
     },
     {
@@ -11059,7 +11124,8 @@
     {
       "path": "src/engine/src/container_storage/namespace_host/preparation/snapshot.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "registered-child-snapshot-source"
       ]
     },
     {
@@ -11294,7 +11360,8 @@
       "path": "src/engine/src/snapshot_worktree/initialize.rs",
       "groups": [
         "fresh-managed-core",
-        "worktree-added-commit"
+        "worktree-added-commit",
+        "registered-child-snapshot-source"
       ]
     },
     {
@@ -11320,7 +11387,8 @@
       "path": "src/engine/src/snapshot_worktree/publication.rs",
       "groups": [
         "fresh-managed-core",
-        "worktree-exact-originals"
+        "worktree-exact-originals",
+        "registered-child-snapshot-source"
       ]
     },
     {
@@ -11388,7 +11456,8 @@
         "directory-web-worktree-management",
         "worktree-http-transport",
         "worktree-clean-mount-originals",
-        "smb-worktree-overwrite"
+        "smb-worktree-overwrite",
+        "registered-child-context-http"
       ]
     },
     {
@@ -11403,7 +11472,8 @@
         "fresh-managed-core",
         "directory-web-worktree-management",
         "worktree-http-transport",
-        "worktree-clean-mount-originals"
+        "worktree-clean-mount-originals",
+        "registered-child-context-http"
       ]
     },
     {
@@ -12985,7 +13055,8 @@
       "path": "src/engine/src/business/file_nodes.rs",
       "groups": [
         "container-tags-engine",
-        "original-file-body-adoption"
+        "original-file-body-adoption",
+        "worktree-held-file-sources"
       ]
     },
     {
@@ -18858,7 +18929,8 @@
       "path": "src/engine/src/business/namespace/query.rs",
       "groups": [
         "current-name-namespace-consumers",
-        "container-current-name"
+        "container-current-name",
+        "registered-child-snapshot-source"
       ]
     },
     {
@@ -22540,7 +22612,8 @@
     {
       "path": "src/engine/src/working_tree/snapshot/store.rs",
       "groups": [
-        "worktree-existing-content-batch"
+        "worktree-existing-content-batch",
+        "worktree-held-file-sources"
       ]
     },
     {
@@ -23016,7 +23089,8 @@
     {
       "path": "src/engine/src/snapshot_worktree/selection.rs",
       "groups": [
-        "formal-mounted-file-head"
+        "formal-mounted-file-head",
+        "registered-child-snapshot-source"
       ]
     },
     {
@@ -23072,6 +23146,66 @@
       "path": "src/engine/src/directory_worktree/projection/selection.rs",
       "groups": [
         "formal-mounted-file-head"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/reads/directory.rs",
+      "groups": [
+        "registered-child-snapshot-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/direct_child.rs",
+      "groups": [
+        "registered-child-snapshot-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/instance/mount_parent.rs",
+      "groups": [
+        "registered-child-snapshot-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/direct_child.rs",
+      "groups": [
+        "registered-child-snapshot-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/selection/within.rs",
+      "groups": [
+        "registered-child-snapshot-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/selection/within/projection.rs",
+      "groups": [
+        "registered-child-snapshot-source"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/direct_child.rs",
+      "groups": [
+        "registered-child-snapshot-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/reads/exposed.rs",
+      "groups": [
+        "worktree-held-file-sources"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/copy_source.rs",
+      "groups": [
+        "worktree-held-file-sources"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/draft_gateway/outside_mapping.rs",
+      "groups": [
+        "worktree-held-file-sources"
       ]
     }
   ],
