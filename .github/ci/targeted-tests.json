@@ -963,6 +963,25 @@
         }
       ]
     },
+    "ordinary-file-current-context": {
+      "reason": "A held registered FILE resolves only its own current occurrence, not a folder or a different entry at the same path, both before and after registry publication.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "default_features": true,
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "business::file::writable_namespace_tests::file_selection_resolves_only_the_exact_current_ordinary_occurrence"
+          ],
+          "max_tests": 1
+        }
+      ]
+    },
     "fresh-managed-core": {
       "reason": "Fresh managed-pool format: real held initialization, ordinary file branches and saves, verifiable two- and three-tier BODY/retained backfill, worktree and Draft publish/reopen, authenticated HTTP controls, and explicit first-init inputs. Keep original overlapping scopes. No claims of live SMB, full distribution, or old-pool migration.",
       "python_tests": [],
@@ -9391,9 +9410,16 @@
       ]
     },
     {
+      "path": "src/engine/src/business/namespace/file_context.rs",
+      "groups": [
+        "ordinary-file-current-context"
+      ]
+    },
+    {
       "path": "test/engine/unit/business/file/writable_namespace.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "ordinary-file-current-context"
       ]
     },
     {
