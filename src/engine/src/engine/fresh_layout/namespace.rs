@@ -8,6 +8,7 @@ use storage_contract::{BranchId, DiskId, OperationId, RepositoryId, Sequence};
 use storage_contract::working_tree::RootBinding;
 use crate::persist::namespace_root::{self, RootOrigin};
 
+pub(crate) mod outside;
 mod backup;
 pub(crate) use backup::{PreparedBackupSourcePath, PublishedBackupSourcePath};
 pub(super) use backup::{read_backup_source_path, published_backup_source_path};

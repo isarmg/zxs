@@ -160,6 +160,12 @@ fn authenticated_selection_n1_is_not_advanced_when_the_source_file_publishes_n2(
     let target = &fixture.targets[0];
     let n1 = HeldOutsideFile::capture(&engine, target).unwrap();
     let witness = n1.witness().unwrap();
+    let before = Arc::clone(&engine.state);
+    let original = engine.snapshot_receipt_source().unwrap();
+    let issued = original.index().unwrap();
+    issued.require_outside_selection_at_issue(&before, &engine.config, &witness).unwrap();
+    let equal_but_unrelated = before.as_ref().clone();
+    assert!(issued.require_outside_selection_at_issue(&equal_but_unrelated, &engine.config, &witness).is_err());
     let encoded = json_codec::to_vec(&witness).unwrap();
     type Witness = crate::persist::snapshot_worktree::outside_selection::OutsideSelectionWitness;
     let decoded: Witness = json_codec::from_slice(&encoded).unwrap();
@@ -170,6 +176,19 @@ fn authenticated_selection_n1_is_not_advanced_when_the_source_file_publishes_n2(
     let mut replaced = json_codec::to_value(&witness).unwrap();
     replaced["body"] = replaced["body_parent"].clone();
     assert!(json_codec::from_value::<Witness>(replaced).is_err());
+    let other = HeldOutsideFile::capture(&engine, &fixture.targets[1]).unwrap().witness().unwrap();
+    let old_fields = json_codec::to_value(&witness).unwrap();
+    let other_fields = json_codec::to_value(&other).unwrap();
+    // Both real selected FILEs share the same genuine storage root. Splicing
+    // its sibling's otherwise admissible content or FILE container into
+    // a witness cannot borrow that sibling's source selection.
+    for key in ["hash", "logical_name", "container", "container_preparation"] {
+        assert_ne!(old_fields[key], other_fields[key]);
+        let mut changed = old_fields.clone();
+        changed[key] = other_fields[key].clone();
+        let substitution: Witness = json_codec::from_value(changed).unwrap();
+        assert!(issued.require_outside_selection_at_issue(&before, &engine.config, &substitution).is_err());
+    }
     write_draft(&mut engine, target, fixture::FIRST_DRAFT);
     let mut old = Vec::new();
     n1.open_pinned_node(&engine).unwrap().read_to_end(&mut old).unwrap();
@@ -180,6 +199,11 @@ fn authenticated_selection_n1_is_not_advanced_when_the_source_file_publishes_n2(
     }, &"admin".parse().unwrap(), storage_contract::OperationId::generate().unwrap()).unwrap();
     let n2 = HeldOutsideFile::capture(&engine, target).unwrap();
     assert_ne!(n2.facts().selection.node_id(), witness.fields().selection.node_id());
+    // N1 remains a valid *old* mapping, but cannot be newly issued at N2.
+    let now_index = engine.snapshot_receipts().unwrap();
+    assert!(now_index.require_outside_selection_at_issue(engine.state(), &engine.config, &witness).is_err());
+    now_index.require_outside_selection_at_issue(engine.state(), &engine.config, &n2.witness().unwrap()).unwrap();
+    issued.require_outside_selection_at_issue(&before, &engine.config, &witness).unwrap();
     let media = fixture.media();
     old.clear();
     n1.open_pinned_node(&engine).unwrap().read_to_end(&mut old).unwrap();

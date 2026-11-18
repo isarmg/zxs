@@ -16,6 +16,14 @@ fn missing() -> Error {
 }
 
 pub(crate) fn resolve(state: &State, target: &DraftLocation) -> Result<Selection> {
+    resolve_with_occurrence(state, target).map(|(selection, _)| selection)
+}
+
+/// Keep the already checked registered ancestors when a second trust boundary
+/// (such as the independent snapshot-host registry) must consume them.
+pub(crate) fn resolve_with_occurrence(
+    state: &State, target: &DraftLocation,
+) -> Result<(Selection, super::ordinary::OrdinaryOccurrence)> {
     let record = state.file_containers.get(&target.file).ok_or_else(missing)?;
     let occurrence = super::ordinary::OrdinaryOccurrence::capture(state, target.file, record)?;
     occurrence.require_target(target)?;
@@ -78,14 +86,14 @@ pub(crate) fn resolve(state: &State, target: &DraftLocation) -> Result<Selection
     {
         return Err(Error::FileDraft(Failure::UnsupportedScope));
     }
-    Ok(Selection {
+    Ok((Selection {
         history: repository.history_tree_id.parse()?,
         base: DraftBase::new(
             branch.branch_id.parse()?, node.parse()?, entry.version_id.parse()?,
             Generation::new(context.selection_generation),
         ),
         placement: placement.clone(),
-    })
+    }, occurrence))
 }
 
 /// Cross-record integrity only. The selected head may have advanced after the

@@ -26,7 +26,7 @@ mod selection;
 pub(crate) mod selected;
 pub(crate) mod unborn;
 pub(crate) mod worktree;
-pub(crate) use selection::{resolve, validate as validate_working_record};
+pub(crate) use selection::{resolve, resolve_with_occurrence, validate as validate_working_record};
 mod publication;
 pub(crate) use publication::{
     Outcome, SaveStamp, apply, draft_content_hash, draft_matches_base, plan_change, plan_incremental, verify_working_transition,

@@ -19,6 +19,27 @@ impl ReceiptIndex<'_> {
         })
     }
 
+    /// Check a mapping witness only against *its original* immediately prior
+    /// native publication cut. The authenticated mapping issuer owns the
+    /// request, actor, exact instance/occurrence, chronology and decision.
+    /// No FILE bytes or physical read authority come from this predicate.
+    pub(crate) fn require_outside_selection_at_issue(
+        &self, previous: &crate::State, config: &crate::ValidatedConfig,
+        witness: &crate::persist::snapshot_worktree::outside_selection::OutsideSelectionWitness,
+    ) -> crate::Result<()> {
+        self.require_source(previous).map_err(crate::business::file_draft::worktree::failure)?;
+        let source = crate::engine::fresh_layout::namespace::outside::original(
+            previous, config, witness,
+        )?;
+        let selected = witness.fields();
+        if self.contains_nested_draft_host(
+            selected.target.repository, selected.namespace_branch, &source.parents,
+        ) {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerScope.into());
+        }
+        Ok(())
+    }
+
     pub(in crate::snapshot_worktree) fn draft_head(
         &self,
         handle: SnapshotHandle,
