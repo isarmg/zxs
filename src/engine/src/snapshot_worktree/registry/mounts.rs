@@ -87,21 +87,10 @@ impl ReceiptIndex<'_> {
             {
                 return Err(RegistrationError::Source);
             }
-            let namespace = WorkingNamespace::from_main_state(next, repository, maximum)
-                .map_err(RegistrationError::Publication)?;
-            for entry in namespace.entries() {
-                let key = entry.path().key();
-                let component = key.split_once('/').map_or(key, |(name, _)| name);
-                if names.contains(&NameKey(component.to_owned())) {
-                    return Err(RegistrationError::Mount);
-                }
-            }
-            if next.repositories.values().any(|candidate| {
-                !candidate.file_manager_root && candidate.primary_slot_id == owner.primary_slot_id
-                    && names.contains(&NameKey(name_policy::lookup_key(&candidate.name)))
-            }) {
-                return Err(RegistrationError::Mount);
-            }
+            ordinary_names(next, repository, maximum, |name| {
+                if names.contains(&NameKey(name.key())) { return Err(RegistrationError::Mount); }
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -165,5 +154,47 @@ impl ReceiptIndex<'_> {
             });
         }
         Ok(handles)
+    }
+}
+
+/// The same parent namespace and device-bound logical share occupancy used by
+/// the ordinary writer fence, recovery of a reserved name, and cold resolution.
+pub(super) fn ordinary_names(
+    next: &crate::State, repository: RepositoryId, maximum: usize,
+    mut visit: impl FnMut(LookupName) -> Result<()>,
+) -> Result<()> {
+    let owner = next.repositories.get(&repository.to_string()).ok_or(RegistrationError::Source)?;
+    if !owner.file_manager_root { return Err(RegistrationError::Source); }
+    let namespace = WorkingNamespace::from_main_state(next, repository, maximum)
+        .map_err(RegistrationError::Publication)?;
+    for entry in namespace.entries() {
+        let path = entry.path().as_str();
+        let first = path.split_once('/').map_or(path, |(name,_)| name);
+        visit(LookupName::parse(first).map_err(|_| RegistrationError::Mount)?)?;
+    }
+    for r in next.repositories.values().filter(|r| !r.file_manager_root && r.primary_slot_id == owner.primary_slot_id) {
+        visit(LookupName::parse(&r.name).map_err(|_| RegistrationError::Mount)?)?;
+    }
+    Ok(())
+}
+
+impl ReceiptIndex<'_> {
+    pub(in crate::snapshot_worktree) fn require_original_restore_name(
+        &self, plan: &crate::persist::snapshot_worktree::mount_change::Reservation, maximum: usize,
+    ) -> Result<()> {
+        use storage_contract::snapshot_worktree::mount_change::{MountAction,RestoreNaming};
+        let (MountAction::Restore { naming: RestoreNaming::OriginalOrAutomatic {}, .. }, Resolved::Restore { mount }) =
+            (&plan.request.action, &plan.resolved) else { return Ok(()); };
+        let mut occupied = self.reserved_mount_names(&plan.host,plan.prior_mount.parent);
+        ordinary_names(self.source, plan.host.namespace.repository_id, maximum, |name| { occupied.push(name); Ok(()) })?;
+        let expected = if occupied.iter().any(|n| n.key() == plan.prior_mount.name.key()) {
+            // Original allocation had to pass the actual device limit. This
+            // historical comparison must not re-budget an old decision under
+            // a different mount's current component limit.
+            LookupName::from(crate::directory_worktree::names::allocate(self.node(plan.source)?.branch_name(),
+                occupied,usize::MAX).map_err(RegistrationError::WorktreeName)?.name())
+        } else { plan.prior_mount.name.clone() };
+        if mount.name != expected { return Err(RegistrationError::Mount); }
+        Ok(())
     }
 }

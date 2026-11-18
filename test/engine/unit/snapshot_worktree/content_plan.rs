@@ -162,13 +162,13 @@ fn durable_reservation_freezes_both_file_branches_without_publishing_and_reopens
     let fences = index.content_replay_fences();
     let occupied = engine.state().operations.get(&request.operation_id).unwrap();
     assert!(fences.selects(frozen.plan().publish_operation));
-    fences.require_next(engine.state(), occupied).unwrap();
+    fences.require_next(engine.state(), occupied, engine.config().max_entries).unwrap();
     let mut displaced = engine.state().clone();
     let branch = displaced.branches.get_mut(&frozen.plan().rows[0].base.branch_id().to_string()).unwrap();
     branch.generation += 1;
     // Generation of the ordinary projected root is frozen independently too.
     displaced.branches.get_mut(&frozen.plan().host.namespace.branch_id.to_string()).unwrap().generation += 1;
-    assert!(fences.require_next(&displaced, occupied).is_err());
+    assert!(fences.require_next(&displaced, occupied, engine.config().max_entries).is_err());
     let original = Originals::retained(&engine, &index, &frozen).unwrap();
     let projection = original.project_reserved(&engine.planning_context(), &principal, frozen.plan()).unwrap();
     assert_eq!(projection.rows.len(), 2);

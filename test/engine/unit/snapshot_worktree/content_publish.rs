@@ -263,15 +263,15 @@ fn pending_originals_freeze_only_their_effective_future_file_routes_in_live_and_
     let mut engine = Engine::open(&fixture.system).unwrap();
     let fences = engine.snapshot_receipts().unwrap().content_replay_fences();
     let reserved = &engine.state().operations[&request.operation_id];
-    fences.require_next(engine.state(), reserved).unwrap();
+    fences.require_next(engine.state(), reserved, engine.config().max_entries).unwrap();
     let mut moved = engine.state().clone();
     let rule = moved.placement_rules.values().find(|r| r.path_prefix == "Folder/Child")
         .unwrap().rule_id.clone();
     moved.placement_rules.get_mut(&rule).unwrap().primary_slot_id = other_slot;
-    assert!(fences.require_next(&moved, reserved).is_err());
+    assert!(fences.require_next(&moved, reserved, engine.config().max_entries).is_err());
     let mut extra_copy = engine.state().clone();
     extra_copy.protection_policies.get_mut(&policy).unwrap().target_copies = 2;
-    assert!(fences.require_next(&extra_copy, reserved).is_err());
+    assert!(fences.require_next(&extra_copy, reserved, engine.config().max_entries).is_err());
 
     let handle = engine.commit_directory_worktree(&request, &principal).unwrap();
     assert_closed(&engine, &request, handle, fixture.source, other);

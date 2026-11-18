@@ -68,15 +68,39 @@ impl HeldMount {
         })
     }
 
+    pub(super) fn require_original_host(&self, host: &RegisteredNamespaceRoot<'_>) -> Result<()> {
+        let binding = host.binding();
+        if binding.registration != self.plan.host.registration || binding.root_id != self.plan.root.root_id
+            || binding.generation != self.plan.root.expected_root_generation || binding.root_entity != self.plan.host.root_entity
+            || binding.roots.common_data != self.plan.host.common_data { return Err(RegistrationError::Source); }
+        let exact = HeldSnapshotNode::reopen_at_host(host.common().map_err(RegistrationError::Publication)?,
+            self.original.source_binding).map_err(RegistrationError::NodeReadback)?;
+        self.repository.require_held_source(&exact).map_err(RegistrationError::NodeReadback)?;
+        self.repository.require_held_source(&self.source).map_err(RegistrationError::NodeReadback)
+    }
+
+    pub(super) fn require_vacant_name(&self, host: &RegisteredNamespaceRoot<'_>, maximum: usize) -> Result<()> {
+        let name = match &self.plan.resolved {
+            mount_change::Resolved::Hide {} => &self.plan.prior_mount.name,
+            mount_change::Resolved::Restore { mount } => &mount.name,
+        };
+        crate::container_storage::namespace_host::require_free_mount_at(host,name,maximum)
+            .map_err(RegistrationError::NamespaceHost)
+    }
+
     pub(crate) fn plan(&self) -> &mount_change::Reservation { &self.plan }
     pub(crate) fn result(&self) -> mount_change::Publication { self.value }
     pub(crate) fn principal(&self) -> &Principal { &self.actor }
 
     pub(crate) fn frame(&self, allow_after: bool) -> Result<MountFrame> {
+        self.frame_at(allow_after, None)
+    }
+
+    pub(super) fn frame_at(&self, allow_after: bool, history: Option<&crate::engine::NativeMountHistory>) -> Result<MountFrame> {
         self.committed.require_installed(&self.source, &self.repository, &self.sparse, &self.original)
             .map_err(RegistrationError::NodeReadback)?;
         let result = observe_mount_frame(
-            &self.source, &self.plan, &self.original, &self.completed, allow_after,
+            &self.source, &self.plan, &self.original, &self.completed, allow_after, history,
         ).map_err(RegistrationError::Ledger)?;
         if result.after != self.value.checkpoint { return Err(RegistrationError::CommitScope); }
         Ok(result)
@@ -130,6 +154,10 @@ impl PreparedMount {
         {
             return Err(RegistrationError::PublicationChanged);
         }
+        let n = self.held.plan.host.namespace;
+        let host = ctx.namespace_host_root(n.repository_id,n.branch_id).map_err(RegistrationError::Publication)?;
+        self.held.require_original_host(&host)?;
+        self.held.require_vacant_name(&host,ctx.config.max_entries)?;
         self.held.frame(false)?;
         Ok(())
     }

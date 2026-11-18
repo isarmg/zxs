@@ -12,7 +12,7 @@ mod payload_admission;
 mod workspace_receipts;
 pub(crate) use workspace_receipts::{
     InstalledOriginalReceipts, OriginalReceiptCursor, OriginalReceiptPrefix,
-    ReadOnlyPublishedCandidate, DirectoryReplayPrefix, ContentReplayCut,
+    ReadOnlyPublishedCandidate, DirectoryReplayPrefix, ContentReplayCut, NativeMountHistory,
 };
 pub(in crate::engine) mod container_locations;
 
@@ -29,6 +29,7 @@ pub(super) struct PreparedRecovery {
     original_receipts: workspace_receipts::OriginalReceiptCursor,
     directory_checkpoints: BTreeMap<u64, workspace_receipts::CheckpointDirectoryObservation>,
     original_content_prepare: Option<(u64, String)>,
+    mount_history: std::sync::Arc<NativeMountHistory>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -297,6 +298,7 @@ impl Engine {
             candidates: BTreeMap::new(),
             directory_checkpoints: BTreeMap::new(),
             original_content_prepare: None,
+            mount_history: Default::default(),
             container_locations: container_locations::ReplayContainerLocations::default(),
             original_receipts: workspace_receipts::OriginalReceiptCursor::for_recovery(self)?,
         })
@@ -351,6 +353,7 @@ impl Engine {
             original_receipts,
             mut directory_checkpoints,
             original_content_prepare,
+            mount_history,
         } = prepared;
         let mut original_receipts = std::sync::Arc::new(original_receipts);
         // Preflight retained these originals under these exact held resources.
@@ -446,6 +449,7 @@ impl Engine {
                         state: &self.state,
                         namespaces: self.current_namespaces.as_deref(),
                         originals: original_receipts.as_ref(),
+                        mount_history: &mount_history,
                     },
                 )?,
             };
@@ -598,12 +602,20 @@ impl Engine {
                 .is_some_and(|result| {
                     result.kind == crate::persist::directory_draft_commit::native::KIND
                 });
-            let content = if next.operations.get(&candidate.operation_id)
-                .is_some_and(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH) {
-                let cut = self.original_content_cut(&candidate, &hash, next, publication.as_ref(), &online, &rs)?;
-                Some(crate::snapshot_worktree::ObservedOriginalContent::original(self, &candidate, &admitted, cut)
-                    .map_err(crate::business::file_draft::worktree::failure)?)
-            } else { None };
+            let content = match next.operations.get(&candidate.operation_id).map(|r| r.kind.as_str()) {
+                Some(kind @ (crate::persist::snapshot_worktree::CONTENT_PUBLISH | crate::persist::snapshot_worktree::MOUNT_PUBLISH)) => {
+                    use super::publication::ReplayedWorktree;
+                    let cut = self.original_content_cut(&candidate, &hash, next, publication.as_ref(), &online, &rs, &mount_history)?;
+                    if kind == crate::persist::snapshot_worktree::MOUNT_PUBLISH {
+                        Some(ReplayedWorktree::Mount(crate::snapshot_worktree::mount::recovery::ObservedMount::from_engine(
+                            self,&candidate,next,cut).map_err(crate::business::file_draft::worktree::failure)?))
+                    } else {
+                        Some(ReplayedWorktree::Content(crate::snapshot_worktree::ObservedOriginalContent::original(
+                            self,&candidate,&admitted,cut).map_err(crate::business::file_draft::worktree::failure)?))
+                    }
+                }
+                _ => None,
+            };
             if !directory_kind {
                 // Native directory originals were fully admitted by the scanner;
                 // apply re-observes their exact material below, before repairs.

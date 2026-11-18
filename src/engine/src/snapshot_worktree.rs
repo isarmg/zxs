@@ -142,7 +142,7 @@ pub(crate) enum RegistrationError {
     },
 }
 
-type Result<T> = std::result::Result<T, RegistrationError>;
+pub(crate) type Result<T> = std::result::Result<T, RegistrationError>;
 
 #[cfg(test)]
 #[path = "../../../test/engine/unit/snapshot_worktree_tests.rs"]

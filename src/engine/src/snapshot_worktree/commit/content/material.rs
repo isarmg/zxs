@@ -178,19 +178,18 @@ pub(in crate::snapshot_worktree) fn require_installed(
     source: &HeldSnapshotNode, repository: &PinnedSnapshotRepository,
     node: &HeldContentNode, plan: &Reservation, value: &Publication,
 ) -> Result<()> {
+    require_installed_at(source, repository, node, plan, value, None)
+}
+
+pub(super) fn require_installed_at(
+    source: &HeldSnapshotNode, repository: &PinnedSnapshotRepository,
+    node: &HeldContentNode, plan: &Reservation, value: &Publication,
+    history: Option<&crate::engine::NativeMountHistory>,
+) -> Result<()> {
     let sparse = crate::directory_worktree::store::HeldSparseWorktree::reopen(source, plan.instance)
         .map_err(RegistrationError::EditInstance)?;
     node.require_installed(source, repository, &sparse, plan).map_err(RegistrationError::NodeReadback)?;
-    let ledger = HeldWorktreeLedger::reopen(source, plan.ledger, value.completed, |p, files| {
-        if *p != plan.ledger_publication() || !value.rows.iter().map(|r| &r.file).eq(files.iter()) {
-            return Err(LedgerError::FileResults);
-        }
-        Ok(())
-    }).map_err(RegistrationError::Ledger)?;
-    if ledger.instance() != plan.instance || ledger.worktree().revision() != plan.request.expected
-        || ledger.file_results().iter().ne(value.rows.iter().map(|r| &r.file))
-    { return Err(RegistrationError::CommitScope); }
-    Ok(())
+    HeldWorktreeLedger::require_content_checkpoint(source, plan, value, history).map_err(RegistrationError::Ledger)
 }
 
 pub(in crate::snapshot_worktree) fn finish_moves(

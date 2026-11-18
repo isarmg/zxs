@@ -440,3 +440,20 @@ pub(crate) fn ordinary_path(path: &PortablePath) -> bool {
     );
     !path.key().split('/').any(|component| component == management)
 }
+
+/// Re-read the virtual target's folded name at the writer fence. No physical
+/// mount is created. This never applies to a later historical observation:
+/// a legitimately released name may now belong to a different ordinary FILE.
+pub(crate) fn require_free_mount_at(
+    root: &RegisteredNamespaceRoot<'_>, name: &LookupName, maximum: usize,
+) -> Result<()> {
+    let common = root.common().map_err(NamespaceHostError::Source)?;
+    let wanted = name.key();
+    for (index,entry) in common.root_entries().map_err(NamespaceHostError::Physical)?.enumerate() {
+        if index >= maximum.saturating_add(1) { return Err(NamespaceHostError::RootInventory); }
+        let entry = entry.map_err(|e| NamespaceHostError::Physical(DirectoryIoError::Filesystem(e)))?;
+        let text = entry.as_os_str().to_str().ok_or(NamespaceHostError::RootInventory)?;
+        if name_policy::lookup_key(text) == wanted { return Err(NamespaceHostError::RootMount); }
+    }
+    Ok(())
+}

@@ -9,11 +9,13 @@ use crate::snapshot_worktree::ObservedOriginalContent;
 /// below can mint it. Every use rechecks the Candidate bytes and identity.
 #[derive(Clone)]
 pub(crate) struct ContentReplayCut {
+    mount_history: Arc<NativeMountHistory>,
     environment: ReceiptEnvironment, hash: String, operation: OperationId, sequence: u64, phase: CutPhase,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CutPhase { Before, Finalized, Published }
 impl ContentReplayCut {
+    pub(crate) fn mount_history(&self) -> &NativeMountHistory { &self.mount_history }
     pub(crate) fn can_have_moved(&self) -> bool { self.phase != CutPhase::Before }
     pub(crate) fn must_be_installed(&self) -> bool { self.phase == CutPhase::Published }
     pub(crate) fn require(&self, config: &ValidatedConfig, resources: &Arc<DiskResources>, candidate: &Candidate) -> Result<()> {
@@ -85,7 +87,8 @@ impl Engine {
     }
 
     pub(in crate::engine::recovery) fn original_content_cut(&self, candidate: &Candidate, hash: &str, next: &State,
-        publication: Option<&Publication>, online: &[DiskConfig], receipts: &[Receipt]) -> Result<ContentReplayCut> {
+        publication: Option<&Publication>, online: &[DiskConfig], receipts: &[Receipt],
+        mount_history: &Arc<NativeMountHistory>) -> Result<ContentReplayCut> {
         let phase = if let Some(p) = publication {
             if p.recovery.is_some() || p.candidate_hash != hash || p.result.operation_id != candidate.operation_id {
                 return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Visible));
@@ -98,7 +101,7 @@ impl Engine {
         } else if self.content_fully_finalized(candidate, hash, next, online, receipts)? {
             CutPhase::Finalized
         } else { CutPhase::Before };
-        let selected = ContentReplayCut { environment: ReceiptEnvironment::capture(&self.config, &self.disk_resources), hash: hash.to_owned(), operation: candidate.operation_id, sequence: candidate.sequence, phase };
+        let selected = ContentReplayCut { mount_history: Arc::clone(mount_history), environment: ReceiptEnvironment::capture(&self.config, &self.disk_resources), hash: hash.to_owned(), operation: candidate.operation_id, sequence: candidate.sequence, phase };
         selected.require(&self.config, &self.disk_resources, candidate)?;
         Ok(selected)
     }
@@ -137,9 +140,17 @@ impl Engine {
     ) -> Result<PreparedCandidate> {
         let source = DirectoryReplayPrefix::capture(self, &prefix)?;
         let cut = self.original_content_cut(&candidate, hash, admitted.for_candidate(&candidate)?.state(),
-            publication.as_ref(), online, receipts)?;
-        ObservedOriginalContent::with_replay_scope(&source, &candidate, &admitted, &cut,
-            |scope| scope.visit(|_| Ok(()))).map_err(failure)?;
+            publication.as_ref(), online, receipts, prefix.mount_history)?;
+        let next = admitted.for_candidate(&candidate)?.state();
+        if next.operations.get(&candidate.operation_id).is_some_and(|r|
+            r.kind == crate::persist::snapshot_worktree::MOUNT_PUBLISH) {
+            crate::snapshot_worktree::mount::recovery::ObservedMount::from_replay(
+                &source, &candidate, next, cut,
+            ).map_err(failure)?;
+        } else {
+            ObservedOriginalContent::with_replay_scope(&source, &candidate, &admitted, &cut,
+                |scope| scope.visit(|_| Ok(()))).map_err(failure)?;
+        }
         if let Some(p) = &publication {
             if p.recovery.is_some() || p.result != *admitted.for_candidate(&candidate)?.state().operations
                 .get(&candidate.operation_id).ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?

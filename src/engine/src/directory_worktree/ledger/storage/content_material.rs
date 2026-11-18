@@ -25,7 +25,13 @@ impl ScopedFrames {
         let (first, committing) = event_frame(plan.before, &events[0])?;
         let (second, completed) = event_frame(committing, &events[1])?;
         if [committing, completed] != [value.committing, value.completed] { return Err(LedgerError::Chain); }
-        let tail = super::published::content_tail(&directory, plan.before, committing, completed)?;
+        let (suffix, extra) = super::historical_mounts::physical_suffix(&directory, plan, completed, source.mount_history())?;
+        let tail = if suffix == completed {
+            super::published::content_tail(&directory, plan.before, committing, completed)?
+        } else {
+            verify_inventory(&directory, suffix)?;
+            completed
+        };
         if (!source.can_have_moved() && tail != plan.before) || (source.must_be_installed() && tail != completed) {
             return Err(LedgerError::Chain);
         }
@@ -53,7 +59,7 @@ impl ScopedFrames {
         if state.worktree.phase() != (Phase::Active { saved: None }) || state.worktree.revision() != plan.request.expected
             || !state.file_results.is_empty() || !state.edits.iter().eq(plan.rows.iter().map(|r| &r.edit))
         { return Err(LedgerError::FileResults); }
-        bounded_total(bounded_total(before_bytes, first.len())?, second.len())?;
+        bounded_total(bounded_total(bounded_total(before_bytes, first.len())?, second.len())?, extra)?;
         let mut verify = |p: &Publication, files: &[FileResult]| {
             if *p != plan.ledger_publication() || !files.iter().eq(value.rows.iter().map(|r| &r.file)) {
                 return Err(LedgerError::FileResults);

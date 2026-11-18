@@ -1,5 +1,6 @@
 mod published;
 mod clean_mount;
+mod historical_mounts;
 pub(crate) use clean_mount::{MountFrame, install_mount_frame, observe_mount_frame};
 mod content_material;
 pub(crate) use content_material::ScopedFrames;
@@ -224,7 +225,7 @@ impl<'a> HeldWorktreeLedger<'a> {
         verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
         verify_added: impl FnMut(&Publication, &AddedFileResult) -> Result<(), LedgerError>,
     ) -> Result<RecoveredLedger<'a>, LedgerError> {
-        Self::recover_frames(source, binding, expected, verify, verify_added, None)
+        Self::recover_frames(source, binding, expected, verify, verify_added, None, None)
     }
 
     // Active ledger reads normally require all edits still at the source.
@@ -235,6 +236,7 @@ impl<'a> HeldWorktreeLedger<'a> {
         mut verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
         mut verify_added: impl FnMut(&Publication, &AddedFileResult) -> Result<(), LedgerError>,
         installing: Option<&crate::engine::FinalizedOriginalContent<'_>>,
+        suffix: Option<(Checkpoint, usize)>,
     ) -> Result<RecoveredLedger<'a>, LedgerError> {
         if source.manifest().reference() != binding.source
             || expected.sequence.get() >= MAX_FRAMES
@@ -242,7 +244,7 @@ impl<'a> HeldWorktreeLedger<'a> {
             return Err(LedgerError::Binding);
         }
         let directory = open_bound_directory(source.worktrees_directory(), binding)?;
-        verify_inventory(&directory, expected)?;
+        verify_inventory(&directory, suffix.map_or(expected, |s| s.0))?;
         let mut previous = None;
         let mut total = 0usize;
         let mut state = None;
@@ -279,6 +281,7 @@ impl<'a> HeldWorktreeLedger<'a> {
             }
             previous = Some(checkpoint.commitment);
         }
+        if let Some((_, extra)) = suffix { bounded_total(total, extra)?; }
         if previous != Some(expected.commitment) {
             return Err(LedgerError::Chain);
         }
@@ -655,4 +658,10 @@ pub(crate) fn content_frame_bytes(before: Checkpoint, events: &[Event; 2]) -> Re
     let (first, next) = event_frame(before, &events[0])?;
     let (second, _) = event_frame(next, &events[1])?;
     Ok(bounded_total(first.len(), second.len())? as u64)
+}
+
+#[cfg(test)]
+pub(crate) fn mount_test_frame(plan: &crate::persist::snapshot_worktree::mount_change::Reservation)
+    -> Result<Vec<u8>,LedgerError> {
+    event_frame(plan.before, &plan.event()).map(|(bytes,_)| bytes)
 }

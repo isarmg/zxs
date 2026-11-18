@@ -3,6 +3,8 @@ use super::*;
 use crate::engine::disk_registry::current::CurrentNamespaces;
 use std::sync::Arc;
 
+mod mount_history;
+pub(crate) use mount_history::NativeMountHistory;
 mod content;
 pub(crate) use content::ContentReplayCut;
 mod directory;
@@ -262,6 +264,7 @@ pub(super) struct ReceiptPrefix<'a> {
     pub state: &'a State,
     pub namespaces: Option<&'a CurrentNamespaces>,
     pub originals: &'a OriginalReceiptCursor,
+    pub mount_history: &'a Arc<NativeMountHistory>,
 }
 
 impl Engine {
@@ -281,7 +284,15 @@ impl Engine {
             crate::snapshot_worktree::ReceiptIndex::capture_with_originals(&previous_state, &prepared.original_receipts)
                 .map_err(crate::business::file_draft::worktree::failure)?.content_replay_fences()
         } else { crate::snapshot_worktree::ContentReplayFences::default() };
+        let seed_has_content = previous_state.operations.values().any(|r|
+            r.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH);
+        let mut history_read = false;
+        let mut inspected = previous_state.sequence;
         for (sequence, candidates) in &prepared.records {
+            if !history_read && (seed_has_content || !content_fences.is_empty()) {
+                prepared.mount_history = Arc::new(self.read_native_mount_history(prepared)?);
+                history_read = true;
+            }
             let prepared_content = if candidates.values().any(|records|
                 records.iter().all(|r| r.record.record_type == RecordType::Prepare)) {
                 self.original_content_prepare(&previous, &prepared.online, *sequence, candidates, &content_fences)?
@@ -322,13 +333,15 @@ impl Engine {
                     state: &previous_state,
                     namespaces: namespaces.as_ref(),
                     originals: &prepared.original_receipts,
+                    mount_history: &prepared.mount_history,
                 },
             )?;
+            inspected = *sequence;
             if !content_fences.is_empty() {
                 let next = candidate.snapshot.as_ref().ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix))?.share_state();
                 let result = next.operations.get(&candidate.candidate.operation_id)
                     .ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
-                content_fences.require_next(&next, result).map_err(crate::business::file_draft::worktree::failure)?;
+                content_fences.require_next(&next, result, self.config.max_entries).map_err(crate::business::file_draft::worktree::failure)?;
             }
             if self.move_completion.as_ref().is_some_and(|selected| {
                 selected.sequence() == *sequence && selected.candidate_hash() == hash
@@ -505,6 +518,7 @@ impl Engine {
         // Build the complete relation once over the last verified visible
         // prefix. Scoped head/retry lookups cannot skip unrelated bad records.
         prepared.original_receipts.require_directory_index(&previous_state)?;
+        prepared.mount_history.require_reached(inspected)?;
         // End the cursor's snapshot loan before reclaiming the latest cached
         // admitted State below (SharedAdmittedState requires unique ownership).
         drop(previous_state);
@@ -613,12 +627,15 @@ impl Engine {
                 candidate, admitted, journal_publication, hash, prefix,
             );
         }
-        if admitted.for_candidate(&candidate)?.state().operations.get(&candidate.operation_id)
-            .is_some_and(|r| matches!(r.kind.as_str(), crate::persist::snapshot_worktree::MOUNT_RESERVE
-                | crate::persist::snapshot_worktree::MOUNT_PUBLISH))
-        {
-            // A generic metadata snapshot cannot attest the local mount frame or its absence.
-            return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate));
+        let kind = admitted.for_candidate(&candidate)?.state().operations.get(&candidate.operation_id)
+            .map(|r| r.kind.as_str());
+        if kind == Some(crate::persist::snapshot_worktree::MOUNT_RESERVE) {
+            let source = DirectoryReplayPrefix::capture(self,&prefix)?;
+            crate::snapshot_worktree::mount::recovery::reserve(&source, &candidate,
+                admitted.for_candidate(&candidate)?.state(), prefix.mount_history)
+                .map_err(crate::business::file_draft::worktree::failure)?;
+        } else if kind == Some(crate::persist::snapshot_worktree::MOUNT_PUBLISH) {
+            return self.read_content_receipt_candidate(candidate, admitted, journal_publication, prefix, online, hash, receipts);
         }
         let content_reserve = admitted.for_candidate(&candidate)?.state().operations.get(&candidate.operation_id)
             .is_some_and(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_RESERVE);

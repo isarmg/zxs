@@ -462,7 +462,25 @@ impl DirectoryPublicationGuard {
             Self::Mount(value) => Some(ContentInstaller::Mount(value)) }
     }
 }
+pub(in crate::engine) enum ReplayedWorktree {
+    Content(crate::snapshot_worktree::ObservedOriginalContent),
+    Mount(crate::snapshot_worktree::mount::recovery::ObservedMount),
+}
+impl ReplayedWorktree {
+    pub(super) fn installer(&self) -> ContentInstaller<'_> {
+        match self { Self::Content(v) => ContentInstaller::Recovery(v), Self::Mount(v) => ContentInstaller::RecoveredMount(v) }
+    }
+    pub(in crate::engine) fn require_installed(&self) -> crate::snapshot_worktree::Result<()> {
+        match self { Self::Content(v) => v.require_installed(), Self::Mount(v) => v.require_installed() }
+    }
+    pub(in crate::engine) fn require_context(&self, ctx: &crate::engine::PlanningContext<'_>, c: &Candidate)
+        -> crate::snapshot_worktree::Result<()> {
+        match self { Self::Content(v) => v.require_context(ctx,c), Self::Mount(v) => v.require_context(ctx,c) }
+    }
+}
+
 pub(super) enum ContentInstaller<'a> {
+    RecoveredMount(&'a crate::snapshot_worktree::mount::recovery::ObservedMount),
     Mount(&'a crate::snapshot_worktree::mount::PreparedMount),
     Live(&'a crate::snapshot_worktree::PreparedOriginalContent),
     Recovery(&'a crate::snapshot_worktree::ObservedOriginalContent),
@@ -473,6 +491,7 @@ impl ContentInstaller<'_> {
             Self::Live(value) => { value.require_before(ctx).map_err(crate::business::file_draft::worktree::failure)?;
                 value.require_candidate(candidate) },
             Self::Recovery(value) => value.require_context(ctx, candidate),
+            Self::RecoveredMount(value) => value.require_context(ctx,candidate),
             Self::Mount(value) => { value.require_before(ctx).map_err(crate::business::file_draft::worktree::failure)?;
                 value.held.require_candidate(candidate) },
         }.map_err(crate::business::file_draft::worktree::failure)
@@ -484,6 +503,7 @@ impl ContentInstaller<'_> {
         let mut cut = |_: &str| { let _ = &engine; Ok(()) };
         match self { Self::Live(value) => value.finish_moves(proof, &mut cut),
             Self::Recovery(value) => value.finish_moves(proof, &mut cut),
+            Self::RecoveredMount(value) => value.install(proof,&mut cut),
             Self::Mount(value) => value.held.install(proof, &mut cut) }
             .map_err(crate::business::file_draft::worktree::failure)
     }

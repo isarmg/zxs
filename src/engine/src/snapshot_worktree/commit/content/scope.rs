@@ -63,6 +63,7 @@ impl ScopeSource<'_> {
     pub(crate) fn plan(&self) -> &Reservation { self.plan }
     pub(crate) fn result(&self) -> &Publication { self.result }
     pub(crate) fn original(&self) -> &HeldSnapshotNode { self.original }
+    pub(crate) fn mount_history(&self) -> Option<&crate::engine::NativeMountHistory> { self.cut.map(|cut| cut.mount_history()) }
     pub(crate) fn can_have_moved(&self) -> bool { self.cut.is_some_and(|cut| cut.can_have_moved()) }
     pub(crate) fn must_be_installed(&self) -> bool { self.cut.is_some_and(|cut| cut.must_be_installed()) }
 }

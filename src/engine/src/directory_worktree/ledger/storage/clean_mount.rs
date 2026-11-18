@@ -64,7 +64,7 @@ impl HeldWorktreeLedger<'_> {
 fn read_frame(
     source: &HeldSnapshotNode, plan: &mount_change::Reservation,
     content: &content_batch::Reservation, published: &content_batch::Publication,
-    allow_after: bool,
+    allow_after: bool, history: Option<&crate::engine::NativeMountHistory>,
 ) -> Result<MountFrame, LedgerError> {
     if source.binding() != content.source_binding || plan.source != content.source
         || plan.committed != content.handle() || plan.instance != content.instance
@@ -90,7 +90,10 @@ fn read_frame(
         Some(_) => return Err(LedgerError::Chain),
     };
     let through = if observed.is_some() { after } else { plan.before };
-    let ledger = HeldWorktreeLedger::reopen(source, plan.ledger, through,
+    let suffix = super::historical_mounts::physical_suffix(&dir, content, after, history)?;
+    if suffix.0 != after && observed.is_none() { return Err(LedgerError::Chain); }
+    let inventory = if observed.is_none() { (through,0) } else { suffix };
+    let ledger = HeldWorktreeLedger::mount_prefix(source, plan.ledger, through, inventory,
         |p, files| verify_files(content, published, p, files))?;
     ledger.require_clean_mount(plan, content, published, observed.is_some())?;
     if observed.is_none() {
@@ -106,9 +109,9 @@ fn read_frame(
 pub(crate) fn observe_mount_frame(
     source: &HeldSnapshotNode, plan: &mount_change::Reservation,
     content: &content_batch::Reservation, published: &content_batch::Publication,
-    allow_after: bool,
+    allow_after: bool, history: Option<&crate::engine::NativeMountHistory>,
 ) -> Result<MountFrame, LedgerError> {
-    read_frame(source, plan, content, published, allow_after)
+    read_frame(source, plan, content, published, allow_after, history)
 }
 
 pub(crate) fn install_mount_frame(
@@ -117,7 +120,7 @@ pub(crate) fn install_mount_frame(
     content: &content_batch::Reservation, published: &content_batch::Publication,
 ) -> Result<(), LedgerError> {
     proof.require_mount(plan, result).map_err(LedgerError::Disk)?;
-    let observed = read_frame(source, plan, content, published, true)?;
+    let observed = read_frame(source, plan, content, published, true, None)?;
     if result.checkpoint != observed.after { return Err(LedgerError::Chain); }
     let directory = open_bound_directory(source.worktrees_directory(), plan.ledger)?;
     let _activity = directory.retain_io_activity().map_err(LedgerError::Disk)?;
@@ -136,7 +139,7 @@ pub(crate) fn install_mount_frame(
         file_identity(plan.ledger.ledger_entity)).map_err(|source| LedgerError::Persisted {
             intended: result.checkpoint, source,
         })?;
-    if read_frame(source, plan, content, published, true)?.observed.is_none() {
+    if read_frame(source, plan, content, published, true, None)?.observed.is_none() {
         return Err(LedgerError::Chain);
     }
     Ok(())

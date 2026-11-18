@@ -1,6 +1,6 @@
 //! Observe only the original Candidate's bound prospective State and the prior
 //! admitted reservation. This is read-only even when a finalized cut is seen.
-use super::material::{finish_moves, require_candidate, require_installed};
+use super::material::{finish_moves, require_candidate};
 use crate::directory_worktree::store::HeldSparseWorktree;
 use crate::engine::PlanningContext;
 use crate::journal::Candidate;
@@ -40,7 +40,7 @@ impl ObservedOriginalContent {
         let host = context.namespace_host_root(plan.host.namespace.repository_id, plan.host.namespace.branch_id)
             .map_err(RegistrationError::Publication)?;
         let (original, repository, node, descriptors) = observe(context.config, context.disk_resources,
-            context.state, &host, plan, &value, cut.can_have_moved(), cut.must_be_installed())?;
+            context.state, &host, plan, &value, cut.can_have_moved(), cut.must_be_installed(), cut.mount_history())?;
         let observed = Self { state: Arc::clone(context.state), config: context.config.clone(),
             resources: Arc::clone(context.disk_resources), candidate_hash: storage_contract::object_hash("candidate", candidate)
                 .map_err(RegistrationError::Allocation)?, principal: principal.clone(), plan: plan.clone(), value,
@@ -60,7 +60,7 @@ impl ObservedOriginalContent {
         let host = source.namespace_host_root(plan.host.namespace.repository_id, plan.host.namespace.branch_id)
             .map_err(RegistrationError::Publication)?;
         let (original, _repository, node, _descriptors) = observe(source.config(), source.resources(), source.previous(),
-            &host, plan, &value, cut.can_have_moved(), cut.must_be_installed())?;
+            &host, plan, &value, cut.can_have_moved(), cut.must_be_installed(), cut.mount_history())?;
         let entities = std::sync::OnceLock::new();
         let scope = super::scope::OriginalContentScope::replay(plan, &value, &original, &node, cut, &entities)?;
         read(&scope).map_err(RegistrationError::Publication)
@@ -94,7 +94,7 @@ impl ObservedOriginalContent {
         finish_moves(decision, &self.original, &self.repository, &self.node, &self.plan, &self.value, cut)
     }
     pub(crate) fn require_installed(&self) -> Result<()> {
-        require_installed(&self.original, &self.repository, &self.node, &self.plan, &self.value)
+        super::material::require_installed_at(&self.original, &self.repository, &self.node, &self.plan, &self.value, Some(self.cut.mount_history()))
     }
 }
 
@@ -118,7 +118,7 @@ fn source_transition<'a>(index: &'a ReceiptIndex<'_>, previous: &State, config: 
 
 fn observe(config: &crate::ValidatedConfig, resources: &crate::disk::DiskResources, previous: &State,
     host: &crate::engine::RegisteredNamespaceRoot<'_>, plan: &Reservation, value: &Publication,
-    finalized: bool, published: bool)
+    finalized: bool, published: bool, history: &crate::engine::NativeMountHistory)
     -> Result<(HeldSnapshotNode, PinnedSnapshotRepository, HeldContentNode, crate::engine::PayloadProofReservation)> {
     let descriptors = crate::engine::payload_proof_budget().reserve(9).ok_or_else(||
         RegistrationError::Publication(crate::engine::fresh_layout::FreshLayoutError::ContainerBudget.into()))?;
@@ -146,7 +146,7 @@ fn observe(config: &crate::ValidatedConfig, resources: &crate::disk::DiskResourc
             held.verify_version_body(version).map_err(RegistrationError::Publication)?;
         }
     }
-    if published { require_installed(&original, &repository, &node, plan, value)?; }
+    if published { super::material::require_installed_at(&original, &repository, &node, plan, value, Some(history))?; }
     if !finalized && !published { super::material::require_original_ledger(&original, plan, value)?; }
     Ok((original, repository, node, descriptors))
 }

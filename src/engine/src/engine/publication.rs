@@ -11,6 +11,7 @@ use verified_payloads::{PayloadPreparation, VerifiedPayloadSet};
 mod physical_budget;
 use physical_budget::PhysicalRequirements;
 mod directory;
+pub(in crate::engine) use directory::ReplayedWorktree;
 pub(crate) use directory::{
     BudgetedDirectoryPreparation, BudgetedOriginalContent, FinalizedOriginalContent, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
 };
@@ -994,7 +995,7 @@ impl Engine {
 
     pub(in crate::engine) fn complete_observed_with_original_content(
         &mut self, candidate: &Candidate, hash: &str, next: &State, observed: RecoveredOrdinaryPayloads<'_>,
-        content: Option<&crate::snapshot_worktree::ObservedOriginalContent>,
+        content: Option<&ReplayedWorktree>,
     ) -> Result<CompletedPublication> {
         let same_current = match (&observed.current, &self.current_namespaces) {
             (None, None) => true,
@@ -1020,7 +1021,7 @@ impl Engine {
         observed.verified.validate_containers()?;
         self.complete_candidate_verified(
             candidate, hash, next, None,
-            Completion::RecoveredPrepared { payloads: &observed.verified, names, content: content.map(directory::ContentInstaller::Recovery) },
+            Completion::RecoveredPrepared { payloads: &observed.verified, names, content: content.map(ReplayedWorktree::installer) },
         )
     }
 
@@ -1890,6 +1891,24 @@ impl crate::engine::PlanningContext<'_> {
             maximum,
             Some((&snapshot, &history_basis)),
         )?;
+        if mount.is_some() {
+            // Charge the entire actual prospective root material *together*
+            // with the new ledger frame on its real owner, before any stage.
+            // Existing native preflight separately verifies per-object,
+            // Candidate, DB and journal envelope limits.
+            let mut metadata = 0u64;
+            snapshot.visit_prepared_objects(&mut |_,_,bytes| {
+                metadata = metadata.checked_add(bytes.len() as u64)
+                    .ok_or(super::fresh_layout::FreshLayoutError::PhysicalBytesOverflow)?;
+                Ok(())
+            })?;
+            for manifest in &manifests {
+                metadata = metadata.checked_add(manifest.bytes().len() as u64)
+                    .ok_or(super::fresh_layout::FreshLayoutError::PhysicalBytesOverflow)?;
+            }
+            for member in &members { required.add(member,metadata)?; }
+            required.check()?;
+        }
         let metadata_shape = snapshot.encoding_shape();
         drop(budget_candidate);
         crate::container_storage::validate_new_projection_paths(self.config, &projection)?;

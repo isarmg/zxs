@@ -141,7 +141,7 @@ impl<'a> HeldWorktreeLedger<'a> {
             Ok(())
         };
         let mut ledger = match Self::recover_frames(source, plan.ledger, checkpoint, &mut verify,
-            |_, _| Err(LedgerError::FileResults), Some(decision))? {
+            |_, _| Err(LedgerError::FileResults), Some(decision), None)? {
             RecoveredLedger::Ready(ledger) => ledger, RecoveredLedger::Publishing(pending) => pending.ledger,
         };
         if ledger.instance() != plan.instance || !plan.rows.iter().map(|r| &r.edit).eq(ledger.edits().iter()) {

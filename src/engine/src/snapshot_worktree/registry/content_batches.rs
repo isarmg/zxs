@@ -267,28 +267,44 @@ impl ReceiptIndex<'_> {
 #[derive(Default)]
 pub(crate) struct ContentReplayFences {
     plans: std::collections::BTreeMap<OperationId, Reservation>,
+    mounts: std::collections::BTreeMap<OperationId, crate::persist::snapshot_worktree::mount_change::Reservation>,
 }
 impl ReceiptIndex<'_> {
     pub(crate) fn content_replay_fences(&self) -> ContentReplayFences {
         ContentReplayFences { plans: self.content_batches.values().filter(|entry| entry.complete().is_none())
-            .map(|entry| (entry.plan.publish_operation, entry.plan.clone())).collect() }
+            .map(|entry| (entry.plan.publish_operation, entry.plan.clone())).collect(),
+            mounts: self.mount_changes.values().filter(|change| change.outcome.is_none())
+                .map(|c| (c.plan.publish_operation,c.plan.clone())).collect() }
     }
 }
 impl ContentReplayFences {
-    pub(crate) fn selects(&self, operation: OperationId) -> bool { self.plans.contains_key(&operation) }
-    pub(crate) fn is_empty(&self) -> bool { self.plans.is_empty() }
+    pub(crate) fn selects(&self, operation: OperationId) -> bool { self.plans.contains_key(&operation) || self.mounts.contains_key(&operation) }
+    pub(crate) fn is_empty(&self) -> bool { self.plans.is_empty() && self.mounts.is_empty() }
 
     /// A later candidate cannot temporarily publish a different FILE/root
     /// head and then switch it back before the requested batch completes.
     /// Only the caller's already separately admitted exact CONTENT_PUBLISH
     /// may change its own original frozen rows.
-    pub(crate) fn require_next(&self, next: &crate::State, result: &crate::OperationResult) -> Result<()> {
+    pub(crate) fn require_next(&self, next: &crate::State, result: &crate::OperationResult, maximum: usize) -> Result<()> {
         for (publish, plan) in &self.plans {
             if result.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH && result.operation_id == *publish {
                 continue;
             }
             if next.operations.contains_key(publish) { return Err(RegistrationError::Pending(plan.request.operation_id)); }
             crate::business::file_draft::worktree_content::require_frozen(next, plan).map_err(RegistrationError::Publication)?;
+        }
+        for (publish,plan) in &self.mounts {
+            if result.kind == crate::persist::snapshot_worktree::MOUNT_PUBLISH && result.operation_id == *publish { continue; }
+            if next.operations.contains_key(publish) { return Err(RegistrationError::Pending(plan.request.operation_id)); }
+            use crate::persist::snapshot_worktree::mount_change::Resolved;
+            let selected = match &plan.resolved { Resolved::Hide {} => &plan.prior_mount, Resolved::Restore { mount } => mount };
+            let owner = next.repositories.get(&plan.host.namespace.repository_id.to_string()).ok_or(RegistrationError::Source)?;
+            if owner.primary_slot_id != plan.host.registration.slot_id || owner.main_branch_id != plan.host.namespace.branch_id.to_string()
+                || selected.parent != plan.host.common_data.directory_id { return Err(RegistrationError::Source); }
+            super::mounts::ordinary_names(next,plan.host.namespace.repository_id,maximum, |name| {
+                if name.key() == selected.name.key() { return Err(RegistrationError::Mount); }
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -303,6 +319,13 @@ impl ContentReplayFences {
                     return Err(RegistrationError::Identity);
                 }
             }
+            codec::MOUNT_RESERVE => {
+                let d = codec::decode(result).map_err(RegistrationError::Codec)?.ok_or(RegistrationError::Source)?;
+                let Record::ReserveCleanMount(plan) = d.record else { return Err(RegistrationError::Source); };
+                if result.operation_id != plan.request.operation_id || self.selects(plan.publish_operation)
+                    || self.mounts.insert(plan.publish_operation,plan).is_some() { return Err(RegistrationError::Identity); }
+            }
+            codec::MOUNT_PUBLISH if self.mounts.remove(&result.operation_id).is_none() => return Err(RegistrationError::Source),
             codec::CONTENT_PUBLISH if self.plans.remove(&result.operation_id).is_none() => return Err(RegistrationError::Source),
             _ => {}
         }

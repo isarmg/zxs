@@ -1,6 +1,7 @@
 //! A clean visibility change has one native reserve and one native decision.
 //! It never publishes contents or creates another physical instance.
 mod material;
+pub(crate) mod recovery;
 pub(crate) use material::{HeldMount, PreparedMount};
 use super::registry::{CleanBase, Presence};
 use super::{ReceiptIndex, RegistrationError, Result};
@@ -106,20 +107,23 @@ fn fresh(
     Ok(())
 }
 
+pub(super) fn reserve(
+    engine: &mut Engine, request: &MountChange, actor: &Principal,
+) -> Result<MountChangeReceipt> {
+    if let Some(prior) = engine.snapshot_receipts()?.mount_retry(request, actor)? { return Ok(prior); }
+    initial(engine)?;
+    engine.require_unstarted_mount_slot(request, actor, None).map_err(RegistrationError::Publication)?;
+    fresh(engine, request, actor)?;
+    let index = engine.snapshot_receipts()?;
+    index.clean_mount_receipt(index.mount_owner(request.target)?, request.operation_id, actor)
+}
+
 pub(super) fn change(
     engine: &mut Engine, request: &MountChange, actor: &Principal,
 ) -> Result<MountChangeReceipt> {
-    let prior = engine.snapshot_receipts()?.mount_retry(request, actor)?;
-    if let Some(ref receipt) = prior
-        && !matches!(receipt.outcome, MountOutcome::Pending {})
-    {
-        return Ok(receipt.clone());
-    }
+    let prior = reserve(engine, request, actor)?;
+    if !matches!(prior.outcome, MountOutcome::Pending {}) { return Ok(prior); }
     initial(engine)?;
-    if prior.is_none() {
-        engine.require_unstarted_mount_slot(request, actor, None).map_err(RegistrationError::Publication)?;
-        fresh(engine, request, actor)?;
-    }
     let source = engine.snapshot_receipt_source()?;
     let index = source.index()?;
     let (plan, principal, commitment) = index.frozen_mount(request.operation_id)?;

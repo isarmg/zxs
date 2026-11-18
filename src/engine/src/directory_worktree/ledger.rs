@@ -117,3 +117,6 @@ pub(crate) enum LedgerError {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/directory_worktree/ledger.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use storage::mount_test_frame;

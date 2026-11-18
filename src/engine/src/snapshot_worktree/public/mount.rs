@@ -15,11 +15,29 @@ impl Engine {
         self.snapshot_receipts()?.clean_mount_receipt(repository, operation, actor).map_err(Into::into)
     }
 
+    /// Freeze only. A management transport can now independently refresh the
+    /// same authenticated session at the final writer, without exposing a
+    /// second endpoint, publication decision or new operation identity.
+    pub fn reserve_directory_worktree_mount(
+        &mut self, request: &MountChange, actor: &Principal,
+    ) -> Result<MountChangeReceipt, SnapshotWorktreeError> {
+        let result = crate::snapshot_worktree::mount::reserve(self, request, actor);
+        self.mount_response(request, actor, result)
+    }
+
     pub fn change_directory_worktree_mount(
         &mut self, request: &MountChange, actor: &Principal,
     ) -> Result<MountChangeReceipt, SnapshotWorktreeError> {
+        let result = crate::snapshot_worktree::mount::change(self, request, actor);
+        self.mount_response(request, actor, result)
+    }
+
+    fn mount_response(
+        &self, request: &MountChange, actor: &Principal,
+        result: crate::snapshot_worktree::Result<MountChangeReceipt>,
+    ) -> Result<MountChangeReceipt, SnapshotWorktreeError> {
         use crate::snapshot_worktree::RegistrationError;
-        crate::snapshot_worktree::mount::change(self, request, actor).map_err(|source| {
+        result.map_err(|source| {
             let occupied = self.state().operations.get(&request.operation_id).is_some_and(|r|
                 r.kind == crate::persist::snapshot_worktree::MOUNT_RESERVE)
                 && self.state().operation_principals.get(&request.operation_id).map(String::as_str) == Some(actor.as_str());
