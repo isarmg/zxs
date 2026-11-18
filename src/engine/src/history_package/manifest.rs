@@ -1357,10 +1357,7 @@ impl HistoryManifest {
             })?;
             validate_id(id, "ver")?;
             validate_id(&version.file_id, "file")?;
-            name_policy::validate_name(&version.creation_name)?;
-            // Exact retained-file coverage and mirror agreement were admitted above.
-            let name = &current_names[version.file_id.as_str()];
-            crate::container_storage::installed_version_leaf(version.storage_id, name)?;
+            crate::container_storage::installed_version_leaf(version)?;
             let placement = self
                 .placements
                 .get(id)

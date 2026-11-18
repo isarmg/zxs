@@ -83,7 +83,7 @@ fn full_descriptor(
             "version_id":version.version_id,
             "parent_node_ids":crate::business::file_nodes::node_parents(state, &version.version_id),
             "storage_name":format!("{}-{}", version.storage_id,
-                current_container_name(state, file).unwrap()), "created_at":version.created_at,
+                version.creation_name), "created_at":version.created_at,
             "size":version.logical_size.to_string(), "content_hash":version.content_hash,
             "note":state.version_notes.get(&version.version_id).map(String::as_str).unwrap_or(""),
             "content_state":state.content_states.get(&version.version_id)

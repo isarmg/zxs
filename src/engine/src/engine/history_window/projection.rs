@@ -227,10 +227,7 @@ impl<'a> Query<'a> {
             content_hash: version.content_hash,
             content_state: self.state.content_states.get(&version.version_id).copied(),
             download_name: name.as_str().into(),
-            storage_name: crate::container_storage::installed_version_name(
-                version.storage_id,
-                &name,
-            )?,
+            storage_name: crate::container_storage::installed_version_name(version)?,
             parents,
             fields: match node {
                 Node::Content(version) => content_fields(version, commit, self.cancel)?,
@@ -263,10 +260,7 @@ impl<'a> Query<'a> {
                 .map_or("", String::as_str)
                 .into(),
             download_name: name.as_str().into(),
-            storage_name: crate::container_storage::installed_version_name(
-                version.storage_id,
-                &name,
-            )?,
+            storage_name: crate::container_storage::installed_version_name(version)?,
             source_count: u64::try_from(sources).map_err(Error::IntegerRange)?,
             fields: self.fields(Node::Content(version))?,
         })

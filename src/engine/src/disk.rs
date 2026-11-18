@@ -1038,11 +1038,10 @@ impl<'a> VerifiedExisting<'a> {
         directory: &Path,
         version: &'a FileVersion,
         container: &DiskRoot,
-        name: &name_policy::LookupName,
     ) -> Result<Self> {
         let checks = read_authenticated_checksums_at(metadata, directory, version)?;
         let manifest = decode_authenticated_checksums(&checks, version)?;
-        let path = crate::container_storage::ordinary_body_path(container.path(), version, name)?;
+        let path = crate::container_storage::installed_version_path(container.path(), version)?;
         let file = container.open_read_regular(&path)?;
         let file = verify_open_payload(file, manifest, version, usize::MAX, &mut |_| Ok(()))?;
         Ok(Self { version, directory: directory.to_owned(), path, file })

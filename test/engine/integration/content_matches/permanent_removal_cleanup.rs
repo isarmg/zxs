@@ -36,7 +36,7 @@ fn fixture() -> (Pool, Entry, std::path::PathBuf, std::path::PathBuf) {
     let body = found[0].join("versions").join(format!(
         "{}-{}",
         version.storage_id,
-        found[0].file_name().unwrap().to_str().unwrap(),
+        version.creation_name,
     ));
     assert!(body.is_file());
     assert!(metadata.join("version.json").is_file());

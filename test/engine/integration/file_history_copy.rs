@@ -15,8 +15,7 @@ use name_policy::Name;
 use storage_engine::*;
 
 fn installed_body(container: &std::path::Path, version: &FileVersion) -> std::path::PathBuf {
-    let name = container.file_name().unwrap().to_str().unwrap();
-    container.join("versions").join(format!("{}-{name}", version.storage_id))
+    container.join("versions").join(format!("{}-{}", version.storage_id, version.creation_name))
 }
 
 fn op() -> OperationId {

@@ -61,7 +61,7 @@ impl<'a> CapturedTarget<'a> {
         }
         let held = container.private_child_matching(container.path(), inode)?;
         verify_entity_contents(
-            &held, file, view, false, Some(&record.namespace.name), birth, loss,
+            &held, file, view, false, birth, loss,
         )?;
         Ok(Self {
             root, scoped: true, history: history.0, container: container.path(), held, inode,
@@ -343,7 +343,7 @@ fn capture_entity(
         }
         root.private_child(current)?
     };
-    verify_entity_contents(&held, file, view, indexed, None, None, None)?;
+    verify_entity_contents(&held, file, view, indexed, None, None)?;
     Ok(held)
 }
 
@@ -355,7 +355,7 @@ pub(in crate::container_storage) fn verify_held_container(
     let record = view.state().file_containers.get(&file.parse::<storage_contract::FileId>()?)
         .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerShape)?;
     validate_owner(view, file, &record.history_tree_id.to_string())?;
-    verify_entity_contents(held, file, view, false, Some(&record.namespace.name), None, None)
+    verify_entity_contents(held, file, view, false, None, None)
 }
 
 fn verify_entity_contents(
@@ -363,7 +363,6 @@ fn verify_entity_contents(
     file: &str,
     view: StateProjection<'_>,
     indexed: bool,
-    name: Option<&name_policy::LookupName>,
     birth: Option<&crate::container_storage::ordinary_preparation::UnbornBirthFile<'_>>,
     loss: Option<&crate::degraded_recovery::AcknowledgedContainerLoss>,
 ) -> Result<()> {
@@ -402,27 +401,22 @@ fn verify_entity_contents(
         // The first payload is installed before the publication decision; its
         // owner marker is only published with names after Finalize. An unmarked
         // empty/unrelated directory cannot stand in for that prepared payload.
-        let mut proved = false;
+        let mut original = std::collections::BTreeMap::new();
+        let mut identities = std::collections::BTreeSet::new();
         for id in view.owners().versions(file) {
             let version = &view.state().versions[id];
-            // A decided leaf rename can precede the outer container/owner marker.
-            // Its inode-bound intent locates the body; only a complete hash proves it.
-            let body = match crate::container_storage::version_rename::interrupted_path(
-                &held, held.path(), version,
-            )? {
-                Some(body) => body,
-                None => match name {
-                    Some(name) => crate::container_storage::ordinary_body_path(
-                        held.path(), version, name,
-                    )?,
-                    None => crate::container_storage::installed_version_path(held.path(), version)?,
-                },
-            };
-            if held.optional_metadata(&body)?.is_some() {
-                verify_body(&held, &body, version)?;
-                proved = true;
-                break;
+            let leaf = crate::container_storage::installed_version_leaf(version)?;
+            if !identities.insert(version.storage_id) || original.insert(leaf, version).is_some() {
+                return Err(invalid("unmarked FILE contains colliding version identities"));
             }
+        }
+        let mut proved = false;
+        for entry in held.entries(&versions)? {
+            let leaf = entry?;
+            let version = original.get(&leaf)
+                .ok_or_else(|| invalid("unmarked FILE contains an unowned version leaf"))?;
+            verify_body(held, &versions.join(leaf.as_path()), version)?;
+            proved = true;
         }
         if !proved {
             return Err(invalid(

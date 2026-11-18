@@ -8,7 +8,7 @@ const FILE: &str = "file_00000000000000000000000000000001";
 const HISTORY: &str = "history_00000000000000000000000000000001";
 
 #[test]
-fn historical_node_and_body_names_use_current_container_name_without_rewriting_evidence() {
+fn logical_download_and_original_body_names_do_not_rewrite_evidence() {
     let mut view = fixture();
     let state = Arc::make_mut(&mut view.state.0);
     state.file_locations.insert(FILE.into(), "现在/最新.txt".into());
@@ -44,7 +44,7 @@ fn historical_node_and_body_names_use_current_container_name_without_rewriting_e
                 .unwrap();
             assert_eq!(body.download_name, "最新.txt");
             assert_eq!(node.download_name, "最新.txt");
-            assert_eq!(body.storage_name, format!("{}-最新.txt", version.storage_id));
+            assert_eq!(body.storage_name, format!("{}-原稿.txt", version.storage_id));
             assert_eq!(node.storage_name, body.storage_name);
             assert_eq!(node.path, oracle_path(query.state, id));
             assert_eq!(version.creation_name, "原稿.txt");

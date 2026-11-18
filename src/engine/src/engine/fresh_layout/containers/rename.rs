@@ -35,6 +35,19 @@ pub(in crate::engine) fn project(
         let file = file.parse::<FileId>()?;
         let Some(old) = previous.file_containers.get(&file) else { continue; };
         let target = namespace::file_target(next, file, old.history_tree_id)?;
+        // Only the ordinary repository's main namespace supplies the outer
+        // spelling. In particular, FILE branch display metadata or selecting a
+        // different committed node must not independently drive a disk rename.
+        let key = file.to_string();
+        if old.working.unborn().is_none() && !old.namespace.parent.is_worktree()
+            && (old.namespace != target
+                || previous.file_locations.get(&key) != next.file_locations.get(&key)
+                || previous.file_names.get(&key) != next.file_names.get(&key))
+            && crate::container_storage::current_container_name(next, &key)?.as_str()
+                != target.name.as_str()
+        {
+            return Err(Failure::ContainerScope.into());
+        }
         if old.namespace == target {
             continue;
         }

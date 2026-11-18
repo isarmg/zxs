@@ -1074,8 +1074,8 @@ fn path_audit_missing_local_branch_is_rejected_after_rehash_and_by_rescue() {
 }
 
 #[test]
-fn unmarked_file_database_capture_binds_interrupted_rename_before_verifying_body() {
-    use crate::container_storage::{installed_version_path, version_rename};
+fn unmarked_file_database_captures_only_original_creation_leaves_before_the_row_budget() {
+    use crate::container_storage::installed_version_path;
     use crate::database_install::InstallAdmission;
     use crate::disk::DiskRoot;
     use crate::state_projection::ProjectionSnapshot;
@@ -1083,21 +1083,21 @@ fn unmarked_file_database_capture_binds_interrupted_rename_before_verifying_body
 
     #[derive(Debug)]
     enum Case {
-        CompletedLeaves,
-        MissingIntent,
-        ReplacedInode,
-        ForgedOwner,
-        AmbiguousLeaves,
+        OriginalLeaves,
+        OnlyCurrentSuffix,
+        BadBytes,
+        ForeignMarker,
+        DuplicateSpelling,
     }
     let fixture = Fixture::new();
     let state = fixture.engine.state();
     let expected = fixture.bytes();
     for case in [
-        Case::CompletedLeaves,
-        Case::MissingIntent,
-        Case::ReplacedInode,
-        Case::ForgedOwner,
-        Case::AmbiguousLeaves,
+        Case::OriginalLeaves,
+        Case::OnlyCurrentSuffix,
+        Case::BadBytes,
+        Case::ForeignMarker,
+        Case::DuplicateSpelling,
     ] {
         // Reproduce the real pre-marker layout using admitted versions and their
         // actual complete bodies, without fabricating a publication decision.
@@ -1118,39 +1118,29 @@ fn unmarked_file_database_capture_binds_interrupted_rename_before_verifying_body
             let body = installed_version_path(&container, version).unwrap();
             root.write_atomic(&body, &bytes, false).unwrap();
         }
-        let prepared = version_rename::Prepared::capture(
-            &root, &container, state, &fixture.file.file_id, &fixture.repo.history_tree_id,
-            &name_policy::Name::parse("moved.txt").unwrap(),
-        ).unwrap().unwrap();
-        prepared.apply(&root, &container, &mut |_| Ok(())).unwrap();
-        let intent = container.join(crate::persist::layout::VERSION_NAMES_INTENT.as_path());
         match case {
-            Case::CompletedLeaves => {}
-            Case::MissingIntent => root.remove_file_synced(&intent).unwrap(),
-            Case::ForgedOwner => {
-                let mut value: json_codec::Value = storage_contract::decode_strict(
-                    &std::fs::read(&intent).unwrap(),
-                ).unwrap();
-                value["file"] = json_codec::to_value(storage_contract::FileId::generate().unwrap())
-                    .unwrap();
-                root.write_atomic(&intent, &json_codec::to_vec(&value).unwrap(), true).unwrap();
+            Case::OriginalLeaves => {}
+            Case::ForeignMarker => {
+                // Unknown material is evidence, not permission to repair or
+                // adopt even if both the current outer and old BODY exist.
+                root.write_atomic(&container.join(".zxs-version-names.json"), b"foreign", false).unwrap();
             }
-            Case::ReplacedInode | Case::AmbiguousLeaves => {
+            Case::OnlyCurrentSuffix | Case::BadBytes | Case::DuplicateSpelling => {
                 for version in &versions {
-                    let body = version_rename::interrupted_path(&root, &container, version)
-                        .unwrap().unwrap();
-                    let bytes = std::fs::read(&body).unwrap();
-                    if matches!(case, Case::ReplacedInode) {
-                        root.write_atomic(&body, &bytes, true).unwrap();
-                    } else {
-                        let old = installed_version_path(&container, version).unwrap();
-                        root.write_atomic(&old, &bytes, false).unwrap();
+                    let original = installed_version_path(&container, version).unwrap();
+                    let other = original.with_file_name(format!("{}-new-current.txt", version.storage_id));
+                    assert_ne!(original,other);
+                    match case {
+                        Case::OnlyCurrentSuffix => root.rename_noreplace_synced(&original, &other).unwrap(),
+                        Case::BadBytes => root.write_atomic(&original, b"wrong original", true).unwrap(),
+                        Case::DuplicateSpelling => root.write_atomic(&other, &std::fs::read(&original).unwrap(), false).unwrap(),
+                        _ => unreachable!(),
                     }
                 }
             }
         }
         let mut captured_state = state.clone();
-        if matches!(case, Case::MissingIntent) {
+        if matches!(case, Case::OnlyCurrentSuffix) {
             captured_state.file_notes.insert(
                 fixture.file.file_id.clone(),
                 "x".repeat(projection::MAX_RECORD_BYTES + 1),
@@ -1158,7 +1148,7 @@ fn unmarked_file_database_capture_binds_interrupted_rename_before_verifying_body
         }
         let result = {
             let projection = ProjectionSnapshot::new(&captured_state);
-            if matches!(case, Case::MissingIntent) {
+            if matches!(case, Case::OnlyCurrentSuffix) {
                 let logical_error = CapturedMaterial::from_projection(
                     projection.view(),
                     &fixture.file.file_id,
@@ -1174,7 +1164,7 @@ fn unmarked_file_database_capture_binds_interrupted_rename_before_verifying_body
             )
         };
         match case {
-            Case::CompletedLeaves => {
+            Case::OriginalLeaves => {
                 // A fresh capture now fails; preparation must consume the earlier rows.
                 captured_state.file_notes.insert(
                     fixture.file.file_id.clone(),
@@ -1209,11 +1199,14 @@ fn unmarked_file_database_capture_binds_interrupted_rename_before_verifying_body
                 assert_eq!(std::fs::read(attempts[0].join("payload")).unwrap(), expected);
                 prepared.verify_unpublished(&root, &container).unwrap();
             }
-            Case::MissingIntent => {
+            Case::OnlyCurrentSuffix => {
                 // Physical source failure still precedes the known row budget error.
                 assert_eq!(result.err().unwrap().code(), ErrorCode::ContainerLayoutInvalid);
             }
             _ => assert!(result.is_err(), "{case:?}"),
+        }
+        if matches!(case, Case::ForeignMarker) {
+            assert_eq!(std::fs::read(container.join(".zxs-version-names.json")).unwrap(), b"foreign");
         }
         assert!(!container.join(NAME).exists());
         assert!(!container.join(".zxs-container-owner.json").exists());

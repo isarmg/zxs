@@ -199,7 +199,7 @@ impl Fixture {
         assert_eq!(owner, entry.file_id);
         assert_eq!(
             fs::read(container.join("versions").join(format!("{}-{}", version.storage_id,
-                container.file_name().unwrap().to_str().unwrap()))).unwrap(),
+                version.creation_name))).unwrap(),
             body
         );
         let mut read = self.engine().open_content(&entry.version_id).unwrap();

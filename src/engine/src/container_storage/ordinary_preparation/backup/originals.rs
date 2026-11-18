@@ -463,8 +463,7 @@ impl<'a> BackupPayloadVersion<'a> {
         &self.held.root
     }
     pub(crate) fn body_path(&self) -> Result<std::path::PathBuf> {
-        let name = &self.source.state().file_containers[&self.held.file].namespace.name;
-        super::super::ordinary_body_path(self.container().path(), self.version, name)
+        crate::container_storage::installed_version_path(self.container().path(), self.version)
     }
     pub(crate) fn verify(&self, stop: &AtomicBool) -> Result<()> {
         self.source.require(stop)?;

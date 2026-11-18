@@ -649,7 +649,7 @@ fn completed_identity_and_graph_material_still_recheck_each_replicas_full_body()
             } else if entry.file_name() == std::ffi::OsStr::new(&format!(
                 "{}-{}",
                 version.storage_id,
-                directory.parent().unwrap().file_name().unwrap().to_str().unwrap(),
+                version.creation_name,
             )) {
                 bodies.push(entry.path());
             }

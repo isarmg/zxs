@@ -669,7 +669,7 @@ fn main_parent_spelling_keeps_projected_container_internal_path_budget() {
         assert!(PortablePath::parse(&format!("{logical}/{metadata_suffix}")).is_ok());
         let a = file(&mut state, 1, &logical);
         let version = &state.versions[&a.version_id];
-        let body_suffix = format!("versions/{}-{leaf}", version.storage_id);
+        let body_suffix = format!("versions/{}-{}", version.storage_id, version.creation_name);
         let expected_body = format!("STRASSE/{leaf}/{body_suffix}");
         assert!(expected_body.encode_utf16().count() > 200);
         platform_io::fs_safety::RelativePath::new(std::path::Path::new(&expected_body))

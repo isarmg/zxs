@@ -448,7 +448,6 @@ pub(crate) enum ReplicaReadLocation<'a> {
     Finalized {
         source: &'a name_policy::LookupName,
         target: &'a name_policy::LookupName,
-        sequence: storage_contract::Sequence,
     },
 }
 pub(crate) enum ReplicaNamespace<'a> {
@@ -561,8 +560,8 @@ pub(in crate::engine) fn observe_historical_replica(
     if let Some(location) = locations.historical_location(state, file, disk.disk_id.parse()?)? {
         source.location = match location {
             ReplayName::Published(name) => ReplicaReadLocation::Published(name),
-            ReplayName::Finalized { source, target, sequence } => {
-                ReplicaReadLocation::Finalized { source, target, sequence }
+            ReplayName::Finalized { source, target, .. } => {
+                ReplicaReadLocation::Finalized { source, target }
             }
         };
     }

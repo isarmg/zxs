@@ -31,8 +31,7 @@ impl HistoryRows<'_> {
                 .then_with(|| left.version_id.cmp(&right.version_id))
         });
         let versions = self.versions.iter().map(|version| {
-            let name = crate::container_storage::current_container_name(state, &version.file_id)?;
-            let installed = crate::container_storage::installed_version_name(version.storage_id, &name)?;
+            let installed = crate::container_storage::installed_version_name(version)?;
             Ok(json!({
             "version_id": version.version_id,
             "parent_node_ids": nodes.parents(&version.version_id),

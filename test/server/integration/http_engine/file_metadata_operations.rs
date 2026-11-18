@@ -479,7 +479,6 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         let (identity, name) = old.split_once('-').unwrap();
         assert_eq!(identity.len(), 15);
         assert_eq!(name, "report.txt");
-        node["storage_name"] = format!("{identity}-renamed.txt").into();
         node["download_name"] = "renamed.txt".into();
     }
     assert_eq!(renamed["nodes"], expected_nodes);

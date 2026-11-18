@@ -153,10 +153,10 @@ impl ObservedContainerReplica {
                 (held, name.clone(), None)
             }
             crate::engine::fresh_layout::containers::ReplicaReadLocation::Finalized {
-                source, target, sequence,
+                source, target
             } => {
                 let (held, binding, complete) = rename::recover_names(
-                    parent.root()?, source, target, replica.entity, sequence,
+                    parent.root()?, source, target, replica.entity,
                 )?;
                 if complete {
                     let _ = installed.set(());
@@ -210,60 +210,13 @@ impl ObservedContainerReplica {
         &self.observed_name
     }
 
-    pub(super) fn require_rename_start(&self) -> Result<()> {
-        self.verify()?;
-        self.check_rename_start()
-    }
-
-    fn check_rename_start(&self) -> Result<()> {
-        if self.rename.as_ref().is_some_and(|rename| !rename.finalized)
-            && self.installed.get().is_none()
-            && self.held.optional_metadata(
-                &self.held.path().join(layout::VERSION_NAMES_INTENT.as_path()),
-            )?.is_some()
-        {
-            return Err(Failure::ContainerIdentity.into());
-        }
-        Ok(())
-    }
-
-    pub(super) fn require_rename_binding(
-        &self, source: &name_policy::Name, target: &name_policy::Name,
-        sequence: storage_contract::Sequence,
-    ) -> Result<()> {
-        let rename = self.rename.as_ref().ok_or(Failure::ContainerScope)?;
-        if source.as_str() != rename.source.as_str() || target.as_str() != self.name().as_str()
-            || sequence != rename.sequence
-        {
-            return Err(Failure::ContainerScope.into());
-        }
-        Ok(())
-    }
-
     pub(crate) fn body_path(&self, version: &FileVersion) -> Result<PathBuf> {
         self.require_version(version)?;
         self.body_path_for_material(version)
     }
 
     fn body_path_for_material(&self, version: &FileVersion) -> Result<PathBuf> {
-        self.check_rename_start()?;
-        if let Some(rename) = &self.rename {
-            let expected = version_rename::CompletionBinding {
-                file: self.file,
-                history: self.record.history_tree_id,
-                sequence: rename.sequence,
-                target_name: name_policy::Name::parse(self.name().as_str())?,
-            };
-            if let Some(path) = version_rename::interrupted_path_bound(
-                &self.held, self.held.path(), version, &rename.source, &expected,
-            )? {
-                return Ok(path);
-            }
-            if self.installed.get().is_none() {
-                return ordinary_body_path(self.held.path(), version, &rename.source);
-            }
-        }
-        ordinary_body_path(self.held.path(), version, self.name())
+        installed_version_path(self.held.path(), version)
     }
 
     pub(crate) fn verify_version_body(&self, version: &FileVersion) -> Result<()> {
@@ -498,13 +451,16 @@ impl PreparedContainerEntities {
             version_names::check_target_name(
                 common, &layout::namespace::container(&record.namespace),
             )?;
-            let name = name_policy::Name::parse(record.namespace.name.as_str())?;
-            for version in plan.budget_state().versions.values()
-                .filter(|version| version.file_id == file.to_string())
-            {
-                version_names::check_target_name(
-                    common, &installed_version_leaf(version.storage_id, &name)?,
-                )?;
+            let state = plan.budget_state();
+            let file_key = file.to_string();
+            for version in state.versions.values().filter(|version| {
+                version.file_id == file_key
+                    && state.content_states.get(&version.version_id) == Some(&ContentState::Available)
+                    && state.placements.get(&version.version_id).is_some_and(|placement| {
+                        placement.route_slot_ids.iter().any(|slot| slot == &disk.slot_id)
+                    })
+            }) {
+                version_names::check_target_name(common, &installed_version_leaf(version)?)?;
             }
             let replica = record.replicas.get(id).ok_or(Failure::ContainerScope)?;
             version_names::check_target_name(
@@ -538,7 +494,6 @@ impl PreparedContainerEntities {
             let (directory, entity) = if let Some(change) = plan.rename(*file) {
                 let (directory, binding) = rename::prepare(
                     target, change, replica.entity,
-                    storage_contract::Sequence::new(plan.budget_state().sequence),
                 )?;
                 rename = Some(binding);
                 (directory, replica.entity)
@@ -761,7 +716,7 @@ impl PreparedContainerEntities {
                     }).transpose()?.unwrap_or(false);
                     let (directory, binding, at_target) = rename::recover(
                         common, old, record, replica.entity,
-                        storage_contract::Sequence::new(candidate.sequence), permit_target,
+                        permit_target,
                     )?;
                     rename = Some(binding);
                     if at_target {
@@ -1094,17 +1049,6 @@ pub(crate) fn open_published_container(
     root.private_child_matching(&path, FileIdentity {
         device: expected.device(), inode: expected.inode(),
     })
-}
-
-pub(crate) fn ordinary_body_path(
-    container: &std::path::Path,
-    version: &FileVersion,
-    name: &name_policy::LookupName,
-) -> Result<PathBuf> {
-    Ok(container.join(layout::VERSIONS.as_path()).join(
-        installed_version_leaf(version.storage_id, &name_policy::Name::parse(name.as_str())?)?
-            .as_path(),
-    ))
 }
 
 fn configured_disk(config: &Config, id: DiskId) -> Result<&DiskConfig> {

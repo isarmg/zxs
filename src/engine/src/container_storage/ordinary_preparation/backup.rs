@@ -532,13 +532,13 @@ fn preflight(
     // installed BODY name before any target namespace preparation is created.
     for version in source.state().versions.values() {
         let file = version.file_id.parse::<FileId>()?;
-        let logical = source.state().file_containers.get(&file)
-            .ok_or(Failure::BackupLayoutEvidence)?;
-        let name = name_policy::Name::parse(logical.namespace.name.as_str())?;
-        let leaf = super::super::version_names::installed_version_leaf(
-            version.storage_id, &name,
-        )?;
-        super::super::version_names::check_target_name(root, &leaf)?;
+        if !source.state().file_containers.contains_key(&file) {
+            return Err(Failure::BackupLayoutEvidence.into());
+        }
+        if source.state().content_states.get(&version.version_id) == Some(&ContentState::Available) {
+            let leaf = super::super::version_names::installed_version_leaf(version)?;
+            super::super::version_names::check_target_name(root, &leaf)?;
+        }
     }
     let required = (MAX_BYTES as u64).checked_add(record.descriptors()? as u64 * 8192)
         .and_then(|v| v.checked_add(16 * 1024 * 1024)).ok_or(Failure::ContainerBudget)?;

@@ -332,13 +332,12 @@ impl MetadataView {
         crate::container_storage::current_container_name(self.state.0.as_ref(), &file.to_string())
     }
 
-    /// Derive the installed version leaf from its immutable identity and this view's name.
+    /// Derive only the actual Version's installed leaf, independent of this view's current name.
     pub fn installed_version_name(
         &self,
         version: &FileVersion,
     ) -> Result<String> {
-        let name = self.current_container_name(version.file_id.parse()?)?;
-        crate::container_storage::installed_version_name(version.storage_id, &name)
+        crate::container_storage::installed_version_name(version)
     }
 
     /// Read-only business fields for listing and history projection only.

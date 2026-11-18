@@ -6,9 +6,9 @@ use storage_contract::{ErrorCode, VersionId, VersionStorageId};
 
 #[derive(Debug, error_definition::Error)]
 pub enum VersionNameError {
-    #[error("version filename rename differs from its retained inode-bound intent")]
-    Intent,
-    #[error("version rename exceeds the shared retained payload descriptor budget")]
+    #[error("immutable version material differs from its held original occurrence")]
+    Material,
+    #[error("checking retained BODY files exceeds the shared descriptor budget")]
     Descriptors,
     #[error("container has no current authoritative location")]
     MissingLocation,
@@ -18,8 +18,6 @@ pub enum VersionNameError {
     Collision,
     #[error("container or installed version name is invalid: {0}")]
     Name(#[source] name_policy::Error),
-    #[error("container physical basename is absent or not UTF-8")]
-    Basename,
     #[error("installed version filename exceeds its target component budget")]
     NameBudget,
     #[error("installed version entry is invalid: {0}")]
@@ -31,8 +29,8 @@ impl VersionNameError {
         match self {
             Self::Collision => ErrorCode::NameCollision,
             Self::Descriptors => ErrorCode::ResourceLimit,
-            Self::Intent | Self::MissingLocation | Self::Mirror | Self::Name(_) | Self::Entry(_)
-            | Self::Basename | Self::NameBudget => {
+            Self::Material | Self::MissingLocation | Self::Mirror | Self::Name(_) | Self::Entry(_)
+            | Self::NameBudget => {
                 ErrorCode::ContainerLayoutInvalid
             }
         }
@@ -73,31 +71,27 @@ pub(crate) fn allocate_version_storage_id(
     Ok(id)
 }
 
-pub(crate) fn installed_version_name(id: VersionStorageId, name: &Name) -> Result<String> {
-    let leaf = format!("{id}-{name}");
-    // The user component was admitted separately. Prefix bytes are checked
-    // against the held target filesystem, not charged to its user-name policy.
-    EntryName::new(&leaf)
-        .map_err(|source| Error::VersionNames(VersionNameError::Entry(source)))?;
-    Ok(leaf)
+/// Only an owned Version has an installed BODY. A current container name,
+/// selected node, archive prefix or download name cannot select another leaf.
+pub(crate) fn installed_version_leaf(version: &crate::FileVersion) -> Result<EntryName> {
+    let name = Name::parse(&version.creation_name)
+        .map_err(|source| Error::VersionNames(VersionNameError::Name(source)))?;
+    EntryName::new(format!("{}-{name}", version.storage_id))
+        .map_err(|source| Error::VersionNames(VersionNameError::Entry(source)))
 }
 
-pub(crate) fn installed_version_leaf(id: VersionStorageId, name: &Name) -> Result<EntryName> {
-    EntryName::new(installed_version_name(id, name)?)
-        .map_err(|source| Error::VersionNames(VersionNameError::Entry(source)))
+pub(crate) fn installed_version_name(version: &crate::FileVersion) -> Result<String> {
+    let leaf = installed_version_leaf(version)?;
+    Ok(leaf.as_os_str().to_str()
+        .expect("invariant: the version leaf is formed exclusively from UTF-8").into())
 }
 
 pub(crate) fn installed_version_path(
     container: &std::path::Path,
     version: &crate::FileVersion,
 ) -> Result<std::path::PathBuf> {
-    let name = container.file_name().and_then(|name| name.to_str())
-        .ok_or(Error::VersionNames(VersionNameError::Basename))?;
-    let name = Name::parse(name)
-        .map_err(|source| Error::VersionNames(VersionNameError::Name(source)))?;
-    Ok(container
-        .join(crate::persist::layout::VERSIONS.as_path())
-        .join(installed_version_leaf(version.storage_id, &name)?.as_path()))
+    Ok(container.join(crate::persist::layout::VERSIONS.as_path())
+        .join(installed_version_leaf(version)?.as_path()))
 }
 
 pub(super) fn check_target_name(root: &crate::disk::DiskRoot, leaf: &EntryName) -> Result<()> {

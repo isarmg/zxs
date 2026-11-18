@@ -2,8 +2,7 @@ use crate::container_storage::{
     current_container_name, installed_version_leaf, installed_version_name,
 };
 use crate::State;
-use name_policy::Name;
-use storage_contract::VersionStorageId;
+use crate::container_storage::tests::version;
 
 #[test]
 fn current_name_uses_current_location_and_rejects_an_independent_mirror() {
@@ -22,12 +21,13 @@ fn current_name_uses_current_location_and_rejects_an_independent_mirror() {
 }
 
 #[test]
-fn installed_leaf_changes_only_the_name_and_keeps_all_fifteen_identity_bytes() {
-    let id: VersionStorageId = "0123456789abcde".parse().unwrap();
-    for name in ["first.txt", "latest.bin", "文件.txt"] {
-        let name = Name::parse(name).unwrap();
-        let text = installed_version_name(id, &name).unwrap();
-        assert_eq!(text, format!("0123456789abcde-{name}"));
-        assert_eq!(installed_version_leaf(id, &name).unwrap().as_os_str(), text.as_str());
+fn installed_leaf_uses_its_recorded_creation_name_and_all_fifteen_identity_bytes() {
+    for original in ["first.txt", "latest.bin", "文件.txt"] {
+        let item = version(&State::default(), &crate::new_id("history").unwrap(),
+            &crate::new_id("file").unwrap(), original, b"sample");
+        let text = installed_version_name(&item).unwrap();
+        assert_eq!(item.storage_id.as_str().len(), 15);
+        assert_eq!(text, format!("{}-{original}", item.storage_id));
+        assert_eq!(installed_version_leaf(&item).unwrap().as_os_str(), text.as_str());
     }
 }

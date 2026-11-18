@@ -179,7 +179,6 @@ async fn file_lifecycle_real_router_delete_undo_auth_current_root_and_read_only(
         let (identity, name) = old.split_once('-').unwrap();
         assert_eq!(identity.len(), 15);
         assert_eq!(name, "a");
-        node["storage_name"] = format!("{identity}-final-name").into();
         node["download_name"] = "final-name".into();
     }
     assert_eq!(after_rename["nodes"], expected_nodes);

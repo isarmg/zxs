@@ -3816,7 +3816,7 @@ class ContainerCurrentNameSelection(unittest.TestCase):
             'src/contract/src/version_storage_id.rs',
             'src/engine/src/business/namespace/container_name.rs',
             'src/engine/src/container_storage/version_names.rs',
-            'src/engine/src/container_storage/version_rename.rs',
+            'src/engine/src/container_storage/retained_versions.rs',
             'test/engine/integration/branch_alias_operations/current_name_scenarios.rs',
             'docs/adr/container-current-name.md',
         ]
@@ -3827,10 +3827,10 @@ class ContainerCurrentNameSelection(unittest.TestCase):
                 self.assertCountEqual(origin_selections(plan, 'container-current-name'),
                                       policy['groups']['container-current-name']['rust_targets'])
         targets = policy['groups']['container-current-name']['rust_targets']
-        self.assertTrue(any('container_storage::version_rename::tests::' in
+        self.assertTrue(any('container_storage::retained_versions::tests::' in
                             target.get('prefixes', []) for target in targets))
         self.assertTrue(any(target.get('exact') == [
-            'historical_selection_keeps_current_download_and_installed_names']
+            'historical_selection_keeps_current_download_and_the_original_installed_name']
                             for target in targets))
         self.assertTrue(any(target.get('compile_target') == 'wasm32-unknown-unknown'
                             for target in targets))

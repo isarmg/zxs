@@ -1200,7 +1200,7 @@ fn incomplete_private_version_admission_cannot_be_truncated_by_zip() {
 mod guarded_proof_tests;
 
 #[test]
-fn version_rename_uses_shared_descriptor_budget_before_persisting_intent() {
+fn container_rename_budgets_held_originals_before_any_write() {
     let (_temp, engine, candidate) = fixture();
     let version = &candidate.versions[0].version;
     let mut next = engine.state().clone();
@@ -1229,7 +1229,7 @@ fn version_rename_uses_shared_descriptor_budget_before_persisting_intent() {
 }
 
 #[test]
-fn decided_name_renames_revalidate_only_exact_held_payload_transitions() {
+fn moving_only_the_outer_directory_preserves_the_exact_held_body_stamp() {
     use std::os::unix::fs::PermissionsExt;
     for mutation in [
         "none", "body", "replacement", "mode", "metadata", "unlisted-ctime", "renamed-ctime",
@@ -1248,7 +1248,7 @@ fn decided_name_renames_revalidate_only_exact_held_payload_transitions() {
             &engine.config, &engine.disk_resources, &transition, MAX_METADATA,
         ).unwrap();
         proof.validate(&engine.config, &candidate).unwrap();
-        let (_, renamed) = names.apply_with_payload_renames(&mut |_| Ok(())).unwrap();
+        names.apply_observed(&mut |_| Ok(())).unwrap();
         let affected = if mutation == "unlisted-ctime" { 1 } else { 0 };
         let evidence = &candidate.versions[affected];
         let disk = engine.disk(&evidence.placement.route_slot_ids[0]).unwrap();
@@ -1309,9 +1309,7 @@ fn decided_name_renames_revalidate_only_exact_held_payload_transitions() {
             let mut cursor = proof.cursor();
             for evidence in &candidate.versions {
                 for slot in &evidence.placement.route_slot_ids {
-                    cursor.validate_payload_after_names(
-                        &engine.config, &evidence.version, slot, Some(&renamed),
-                    )?;
+                    cursor.validate_payload(&engine.config, &evidence.version, slot)?;
                 }
             }
             cursor.finish()

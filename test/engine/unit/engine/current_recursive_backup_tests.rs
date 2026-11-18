@@ -172,8 +172,7 @@ fn recursive_backup_writes_actual_three_level_paths_and_cold_reopens() {
                 .join(format!(
                     "{}-{}",
                     version.storage_id,
-                    std::path::Path::new(&expected[&disk.slot_id])
-                        .file_name().unwrap().to_str().unwrap(),
+                    version.creation_name,
                 ));
             assert_eq!(actual, target);
             assert_eq!(fs::read(&actual).unwrap(), bytes);

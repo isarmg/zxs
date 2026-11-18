@@ -95,10 +95,11 @@ fn observe(
         let entity = container.directory_identity(container.path()).unwrap();
         for version in versions(engine, file) {
             let path = scope.body_path(&version).unwrap();
-            let expected = crate::container_storage::installed_version_leaf(
-                version.storage_id, &name_policy::Name::parse(name).unwrap(),
-            ).unwrap();
-            assert_eq!(path.file_name(), Some(expected.as_os_str()));
+            let expected = format!("{}-{}", version.storage_id, version.creation_name);
+            assert_eq!(path.file_name().unwrap().to_str(), Some(expected.as_str()));
+            if name != version.creation_name {
+                assert!(!path.with_file_name(format!("{}-{name}",version.storage_id)).exists());
+            }
             let mut body = container.open_read_regular(&path).unwrap();
             let metadata = body.metadata().unwrap();
             let mut bytes = Vec::new();
@@ -192,6 +193,53 @@ fn same_parent_rename_preserves_full_history_and_each_replica() {
 }
 
 #[test]
+fn new_main_name_creates_only_its_new_body_and_non_main_actions_never_rename_earlier_versions() {
+    let (temp, system, mut engine, repository, main, file) = fixture(1);
+    let before = observe(&engine,file,"file.txt");
+    let original = versions(&engine,file);
+    assert_eq!(original.len(),2);
+    engine.file_namespace(&repository,rename("file.txt","renamed.txt"),"alice",
+        OperationId::generate().unwrap()).unwrap();
+    assert_eq!(observe(&engine,file,"renamed.txt"),before);
+    save(&mut engine,&main,"renamed.txt",b"only this version uses the new name");
+    let after = observe(&engine,file,"renamed.txt");
+    for (k,v) in &before { assert_eq!(after.get(k),Some(v)); }
+    let versions_after = versions(&engine,file);
+    assert_eq!(versions_after.len(),3);
+    assert_eq!(versions_after.iter().filter(|v|v.creation_name=="file.txt").count(),2);
+    assert_eq!(versions_after.iter().filter(|v|v.creation_name=="renamed.txt").count(),1);
+
+    let key=file.to_string();
+    let branch=engine.create_file_branch(&key,&original[0].version_id,
+        &storage_contract::BranchName::parse("review").unwrap(),"alice",OperationId::generate().unwrap()).unwrap();
+    let branch=branch.result["branch_id"].as_str().unwrap().to_owned();
+    engine.rename_file_branch(&key,&branch,&storage_contract::BranchName::parse("other").unwrap(),
+        "alice",OperationId::generate().unwrap()).unwrap();
+    engine.select_file_branch(&key,&branch,"alice",OperationId::generate().unwrap()).unwrap();
+    let session=engine.create_workspace(&branch,"alice").unwrap();
+    let denied=engine.namespace_operation(&session.workspace_id,rename("renamed.txt","not-the-main.txt")).unwrap_err();
+    assert_eq!(denied.code(),storage_contract::ErrorCode::FileBranchScope);
+    engine.abort_workspace(&session.workspace_id,"alice").unwrap();
+    assert_eq!(observe(&engine,file,"renamed.txt"),after);
+    assert_eq!(versions(&engine,file).len(),3);
+    drop(engine);
+    let engine=Engine::open(&system).unwrap();
+    assert_eq!(observe(&engine,file,"renamed.txt"),after);
+    let package=temp.path().join("original-names-export");
+    engine.export_history_package(&original[0].history_tree_id,&package).unwrap();
+    crate::offline_check_history_package(&package).unwrap();
+    for version in versions_after {
+        let dir=package.join("versions").join(&version.version_id).join("content");
+        let mut reader=engine.open_content(&version.version_id).unwrap();
+        let mut bytes=Vec::new();
+        reader.file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(std::fs::read(dir.join(&version.creation_name)).unwrap(),bytes);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(),1);
+        assert_eq!(ContentHash::from_digest(blake3::hash(&bytes)),version.content_hash);
+    }
+}
+
+#[test]
 fn same_parent_rename_refuses_collisions_before_decision_without_overwrite() {
     let (_temporary, _system, mut engine, repository, _branch, file) = fixture(3);
     let original = observe(&engine, file, "file.txt");
@@ -234,7 +282,7 @@ fn same_parent_rename_refuses_collisions_before_decision_without_overwrite() {
 #[test]
 fn same_parent_rename_replays_exact_finalized_cut_without_new_content() {
     for point in [
-        "after_accept_1", "after_finalize", "version-names-intent", "version-name-renamed",
+        "after_accept_1", "after_finalize",
         "ordinary-container-renamed", "after_container_names", "after_publication_1",
     ] {
         let (_temporary, system, mut engine, repository, _branch, file) = fixture(3);
@@ -246,9 +294,7 @@ fn same_parent_rename_replays_exact_finalized_cut_without_new_content() {
         let new_path = old_path.parent().unwrap().join("renamed.txt");
         let retained = versions(&engine, file).into_iter().next().unwrap();
         let renamed_body = new_path.join(crate::persist::layout::VERSIONS.as_path()).join(
-            crate::container_storage::installed_version_leaf(
-                retained.storage_id, &name_policy::Name::parse("renamed.txt").unwrap(),
-            ).unwrap().as_path(),
+            format!("{}-{}", retained.storage_id, retained.creation_name),
         );
         drop(source);
         let versions = engine.state().versions.clone();

@@ -1092,11 +1092,8 @@ pub(crate) fn plan_root<'a>(
         let full = joined(layout.root.as_ref(), path.as_str(), &mut budget)?;
         joined(Some(&full), "container.json", &mut budget)?;
         for version in &versions {
-            let leaf = crate::container_storage::installed_version_name(
-                version.storage_id,
-                &name_policy::Name::parse(path.file_name())
-                    .map_err(LayoutError::ExtraDirectoryName)?,
-            ).map_err(|source| LayoutError::VersionName(Box::new(source)))?;
+            let leaf = crate::container_storage::installed_version_name(version)
+                .map_err(|source| LayoutError::VersionName(Box::new(source)))?;
             // User names were admitted separately. The internal prefix does
             // not consume the user's portable-name allowance a second time.
             let relative = format!("{}/versions/{leaf}", full.as_str());

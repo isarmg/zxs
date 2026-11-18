@@ -364,10 +364,13 @@ impl<'a> BackupServingImage<'a> {
                 let state = self.source.published().state();
                 let value = state.versions.get(&version.to_string())
                     .ok_or(Failure::BackupLayoutEvidence)?;
-                let name = &state.file_containers.get(file)
-                    .ok_or(Failure::BackupLayoutEvidence)?.namespace.name;
+                if value.file_id.parse::<FileId>()? != *file
+                    || !state.file_containers.contains_key(file)
+                {
+                    return Err(Failure::BackupLayoutEvidence.into());
+                }
                 let root = self.root(key)?;
-                let path = super::super::ordinary_body_path(root.path(), value, name)?;
+                let path = crate::container_storage::installed_version_path(root.path(), value)?;
                 path.strip_prefix(root.path()).map(Path::to_owned)
                     .map_err(|_| Failure::BackupLayoutEvidence.into())
             }

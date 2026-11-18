@@ -5089,7 +5089,7 @@
       ]
     },
     "container-current-name": {
-      "reason": "One current file-container name across SMB occurrences and historical selection; immutable local version identity, inode-bound no-clobber rename recovery, strict new format, and matching server/Web/schema boundaries. Only related tests and feature checks run; this is not a backup performance or full-workspace pass.",
+      "reason": "Keep ordinary container/main SMB, immutable VersionStorageId-creation_name BODY and current download names distinct; verify held original bodies, collisions, source checks and lossless cold/export behavior. No compatibility or fallback from a current name. The ordinary rename feature tests separately exercise real replica fault boundaries.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -5107,15 +5107,17 @@
           "prefixes": [
             "business::namespace::container_name::tests::",
             "container_storage::version_names::tests::",
-            "container_storage::version_rename::tests::",
+            "container_storage::retained_versions::tests::",
             "tests::version_identity_tests::",
             "engine::history_window::projection::tests::"
           ],
           "exact": [
             "engine::detached_history::tests::detached_discovery_uses_current_container_name_for_pre_rename_versions",
-            "engine::publication::verified_payloads::tests::version_rename_uses_shared_descriptor_budget_before_persisting_intent",
+            "engine::publication::verified_payloads::tests::container_rename_budgets_held_originals_before_any_write",
             "history_package::tests::decoded_manifest_requires_current_location_for_every_retained_file",
-            "historical_save::tests::historical_only_new_file_publishes_current_name_without_changing_main"
+            "historical_save::tests::historical_only_new_file_publishes_current_name_without_changing_main",
+            "engine::publication::verified_payloads::tests::moving_only_the_outer_directory_preserves_the_exact_held_body_stamp",
+            "container_storage::file_database::tests::unmarked_file_database_captures_only_original_creation_leaves_before_the_row_budget"
           ],
           "max_tests": 64,
           "timeout_seconds": 900
@@ -5147,7 +5149,7 @@
           "kind": "test",
           "name": "http_engine",
           "exact": [
-            "historical_selection_keeps_current_download_and_installed_names"
+            "historical_selection_keeps_current_download_and_the_original_installed_name"
           ],
           "max_tests": 1,
           "timeout_seconds": 900
@@ -5926,7 +5928,7 @@
       ]
     },
     "ordinary-container-rename": {
-      "reason": "Ordinary Initial same-parent FILE container rename: exact namespace/path facts plus unchanged content graph, all held A/B/C inode-bound BODY names, no collision overwrite, original receipts and finalized cold replay. Keep Current/cross-parent/mixed content transactions unsupported, all existing selections and the separate 900-second backup switch unchanged.",
+      "reason": "Actual ordinary Initial main rename moves only the outer same-parent FILE. Original creation-named BODY inodes/bytes and receipts survive backup, exact retry, collision refusal and finalized cold replay; a later main write creates its own leaf, non-main branch metadata and selection do not rename it, and export carries each real Version creation name. Other lifecycle and transport coverage is separate.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -5937,9 +5939,10 @@
           "features": [],
           "exact": [
             "engine::fresh_layout::containers::rename_tests::same_parent_rename_preserves_full_history_and_each_replica",
-            "engine::fresh_layout::containers::rename_tests::same_parent_rename_refuses_collisions_before_decision_without_overwrite"
+            "engine::fresh_layout::containers::rename_tests::same_parent_rename_refuses_collisions_before_decision_without_overwrite",
+            "engine::fresh_layout::containers::rename_tests::new_main_name_creates_only_its_new_body_and_non_main_actions_never_rename_earlier_versions"
           ],
-          "max_tests": 2,
+          "max_tests": 3,
           "timeout_seconds": 900
         },
         {
@@ -5953,9 +5956,10 @@
           "exact": [
             "engine::fresh_layout::containers::rename_tests::same_parent_rename_preserves_full_history_and_each_replica",
             "engine::fresh_layout::containers::rename_tests::same_parent_rename_refuses_collisions_before_decision_without_overwrite",
-            "engine::fresh_layout::containers::rename_tests::same_parent_rename_replays_exact_finalized_cut_without_new_content"
+            "engine::fresh_layout::containers::rename_tests::same_parent_rename_replays_exact_finalized_cut_without_new_content",
+            "engine::fresh_layout::containers::rename_tests::new_main_name_creates_only_its_new_body_and_non_main_actions_never_rename_earlier_versions"
           ],
-          "max_tests": 3,
+          "max_tests": 4,
           "timeout_seconds": 900
         },
         {
@@ -23206,6 +23210,24 @@
       "path": "test/engine/unit/snapshot_worktree/draft_gateway/outside_mapping.rs",
       "groups": [
         "worktree-held-file-sources"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/retained_versions.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/retained_versions.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/retained_versions.rs",
+      "groups": [
+        "ordinary-container-rename"
       ]
     }
   ],

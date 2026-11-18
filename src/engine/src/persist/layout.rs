@@ -154,12 +154,6 @@ pub(crate) fn projection_cache_staging(process: u32, sequence: u64) -> EntryName
 #[path = "../../../../test/engine/unit/persist/layout_tests.rs"]
 mod tests;
 
-/// Inode-bound decided rename intent; retained for exact crash recovery.
-pub(crate) static VERSION_NAMES_INTENT: LazyLock<EntryName> = LazyLock::new(|| {
-    EntryName::new(".zxs-version-names.json")
-        .expect("invariant: version rename intent uses one canonical entry")
-});
-
 /// Private Add feedback stays on original members, not the unenrolled target.
 pub(crate) static MEMBERSHIP_ROOT_PREPARATIONS: LazyLock<RelativePath> = LazyLock::new(|| {
     RelativePath::new("metadata/membership-fresh-root-preparations")

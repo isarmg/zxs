@@ -1294,10 +1294,9 @@ impl Engine {
         // Only a decided candidate may rename a published file container.
         // A crash leaves the operation indeterminate and recovery replays it.
         #[cfg(feature = "fault-injection")]
-        let (_, renamed_payloads) =
-            names.apply_with_payload_renames(&mut |point| self.failpoint(point))?;
+        names.apply_observed(&mut |point| self.failpoint(point))?;
         #[cfg(not(feature = "fault-injection"))]
-        let (_, renamed_payloads) = names.apply_with_payload_renames(&mut |_| Ok(()))?;
+        names.apply()?;
         let directory_result = next.operations.get(&c.operation_id).ok_or_else(|| {
             Error::new(
                 ErrorCode::PublicationInvalid,
@@ -1322,12 +1321,7 @@ impl Engine {
             for slot in &evidence.placement.route_slot_ids {
                 let d = self.disk(slot)?;
                 if let Some(cursor) = &mut payload_cursor {
-                    cursor.validate_payload_after_names(
-                        &self.config,
-                        &evidence.version,
-                        slot,
-                        Some(&renamed_payloads),
-                    )?;
+                    cursor.validate_payload(&self.config, &evidence.version, slot)?;
                 }
                 let mut write_proof =
                     |scope: &crate::container_storage::ObservedContainerReplica| {
@@ -1339,7 +1333,7 @@ impl Engine {
                             // this exact source area and actual container.
                             VerifiedExisting::read_container(
                                 root, &directory, &evidence.version,
-                                scope.container()?, scope.name(),
+                                scope.container()?,
                             )?;
                         }
                         let proof = CommitProof {
@@ -1960,7 +1954,7 @@ impl crate::engine::PlanningContext<'_> {
                     .get(&p.version.file_id.parse::<storage_contract::FileId>()?)
                     .filter(|record| record.replicas.contains_key(&disk_id));
                 let observed = match published {
-                    Some(record) => {
+                    Some(_) => {
                         let scope = super::fresh_layout::containers::observe_replica(
                             self.config, self.disk_resources, self.state,
                             p.version.file_id.parse()?, disk,
@@ -1971,7 +1965,7 @@ impl crate::engine::PlanningContext<'_> {
                         // is not converted to missing content.
                         VerifiedExisting::read_container(
                             material.root()?, &material.directory()?, &p.version,
-                            scope.container()?, &record.namespace.name,
+                            scope.container()?,
                         ).map(Some)
                     }
                     None => {
@@ -2112,7 +2106,6 @@ impl crate::engine::PlanningContext<'_> {
             let material = VersionMaterial::current(&scope, &p.version)?;
             let root = material.root()?;
             let directory = material.directory()?;
-            let name = scope.name();
             // Keep the lease outside the consuming install call, including its
             // error/unwind paths. That call drops the body FD before returning.
             let mut reservation = None;
@@ -2138,7 +2131,7 @@ impl crate::engine::PlanningContext<'_> {
                             retained.proof
                         }
                         None => VerifiedExisting::read_container(
-                            root, &directory, &p.version, scope.container()?, name,
+                            root, &directory, &p.version, scope.container()?,
                         )?,
                     };
                     verified.assert_binding(&directory, &p.version);
@@ -2192,7 +2185,7 @@ impl crate::engine::PlanningContext<'_> {
             // any protection receipt is issued. The next level reads this copy.
             let target = scope.container()?;
             let path = crate::container_storage::install_version_content_in(
-                root, &directory, content, target, name,
+                root, &directory, content, target,
             )?;
             drop(reservation);
             scope.verify()?;

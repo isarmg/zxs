@@ -13,10 +13,9 @@ pub(crate) use ordinary_preparation::{
     HeldManualReader, ReadDraftDigest, HeldUnbornReader, PreparedUnbornFull, PreparedWorkingSave,
     ReadWorkingDigest, WorkingWriteSession,
     open_published_container,
-    ordinary_body_path,
 };
 mod version_names;
-mod version_rename;
+mod retained_versions;
 pub use version_names::VersionNameError;
 pub(crate) use version_names::{
     allocate_version_storage_id, container_name_from_locations, current_container_name,
@@ -181,7 +180,7 @@ fn marker_matches_at(
 // Unsupported on-disk layouts are never migrated or cleaned automatically.
 // Inspect metadata only; preserve all old bytes, including empty placeholders.
 fn reject_unsupported_container(root: &DiskRoot, named: &Path) -> Result<()> {
-    for name in ["pending-branches", "legacy"] {
+    for name in ["pending-branches", "legacy", ".zxs-version-names.json"] {
         if root.optional_metadata(&named.join(name))?.is_some() {
             return Err(Error::new(
                 storage_contract::ErrorCode::FormatUnsupported,
@@ -529,9 +528,6 @@ fn installed_content_path_at(
     let Some(named) = container_at(
         root, history, Some(&version.history_tree_id), &version.file_id, observe,
     )? else { return Ok(None); };
-    if let Some(path) = version_rename::interrupted_path(root, &named, version)? {
-        return Ok(Some(path));
-    }
     installed_version_path(&named, version).map(Some)
 }
 
@@ -667,16 +663,15 @@ pub(crate) fn install_version_content_in(
     directory: &Path,
     content: PreparedContent<'_>,
     container: &DiskRoot,
-    name: &name_policy::LookupName,
 ) -> Result<PathBuf> {
-    install_version_content_target(root, directory, content, Some((container, name)))
+    install_version_content_target(root, directory, content, Some(container))
 }
 
 fn install_version_content_target(
     root: &DiskRoot,
     directory: &Path,
     content: PreparedContent<'_>,
-    container: Option<(&DiskRoot, &name_policy::LookupName)>,
+    container: Option<&DiskRoot>,
 ) -> Result<PathBuf> {
     let (version, copied, verified) = match content {
         PreparedContent::Verified(verified) => (verified.version(), None, Some(verified)),
@@ -701,7 +696,7 @@ fn install_version_content_target(
         root.private_dir(&stable)?;
     }
     let named = match container {
-        Some((held, _)) => held.path().to_owned(),
+        Some(held) => held.path().to_owned(),
         None => match container_at(
             root,
             history,
@@ -718,17 +713,12 @@ fn install_version_content_target(
             }
         },
     };
-    let target_root = container.map_or(root, |(root, _)| root);
+    let target_root = container.unwrap_or(root);
     let versions = named.join("versions");
     target_root.private_dir(&versions)?;
-    let target = match container {
-        Some((_, name)) => ordinary_body_path(&named, version, name)?,
-        None => installed_version_path(&named, version)?,
-    };
-    let leaf = platform_io::fs_safety::EntryName::new(
-        target.file_name().expect("invariant: installed version path has a leaf"),
-    )?;
-    version_names::check_target_name(target_root, &leaf)?;
+    let leaf = installed_version_leaf(version)?;
+    version_names::check_target_name(&target_root.private_child(&versions)?, &leaf)?;
+    let target = versions.join(leaf.as_path());
     if file_exists_at(target_root, &target)? {
         if let Some(verified) = &verified
             && verified.path() == target
@@ -1068,28 +1058,7 @@ struct PreparedName {
     offset: u64,
     length: usize,
     database: Option<file_database::install::PreparedFile>,
-    version_names: Option<version_rename::Prepared>,
-    finish_version_names: Option<version_rename::CompletionBinding>,
-}
-/// Only successful leaf rename syscalls can populate this process-local proof.
-#[derive(Default)]
-pub(crate) struct AppliedPayloadRenames {
-    entries: BTreeMap<
-        name_policy::SlotId,
-        BTreeMap<storage_contract::VersionId, version_rename::AppliedVersionRename>,
-    >,
-}
-impl AppliedPayloadRenames {
-    pub(crate) fn matches(
-        &self,
-        slot: &name_policy::SlotId,
-        version: storage_contract::VersionId,
-        before: &crate::file_stamp::FileStamp,
-        after: &crate::file_stamp::FileStamp,
-    ) -> bool {
-        self.entries.get(slot).and_then(|versions| versions.get(&version))
-            .is_some_and(|rename| rename.matches(before, after))
-    }
+    originals: Option<retained_versions::HeldBodies>,
 }
 
 impl PreparedName {
@@ -1181,10 +1150,6 @@ impl PreparedNames {
                     .0
                     .checked_add(database.reservation().0)
                     .ok_or_else(|| invalid("unpublished FILE reservation overflow"))?;
-                if let Some(names) = &item.version_names {
-                    entry.0 = entry.0.checked_add(names.reservation()?.0)
-                        .ok_or_else(|| invalid("version rename reservation overflow"))?;
-                }
                 entry.1 = entry
                     .1
                     .checked_add(database.byte_len() as u64 + 8192)
@@ -1250,28 +1215,23 @@ impl PreparedNames {
         self,
         observe: &mut impl FnMut(&'static str) -> Result<()>,
     ) -> Result<DirectoryLayoutReceipt> {
-        self.apply_with_payload_renames(observe).map(|(receipt, _)| receipt)
-    }
-    pub(crate) fn apply_with_payload_renames(
-        mut self,
-        observe: &mut impl FnMut(&'static str) -> Result<()>,
-    ) -> Result<(DirectoryLayoutReceipt, AppliedPayloadRenames)> {
         crate::engine::fresh_layout::verify_available(
             &self.layout_config, &self.layout_resources,
         )?;
-        let mut renamed = AppliedPayloadRenames::default();
-        if let Some(cache) = &mut self.cache {
-            for item in &mut cache.items {
-                if let Some(names) = item.version_names.take() {
-                    let current = item.current()?;
-                    let slot = name_policy::SlotId::parse(&item.disk.seal.slot_id)?;
-                    renamed.entries.entry(slot).or_default()
-                        .extend(names.apply(item.root()?, &current, observe)?);
+        if let Some(cache) = &self.cache {
+            for item in &cache.items {
+                if let Some(originals) = &item.originals {
+                    let root = item.root()?;
+                    let path = match &item.container {
+                        Some(held) => held.path().to_owned(),
+                        None => item.current()?,
+                    };
+                    originals.verify_at(root, &path)?;
                 }
             }
         }
-        // The retained intent is durable before the outer name changes. A cold
-        // accepted tail can therefore distinguish each old/new BODY position.
+        // Only the outer directory moves. Every held BODY retains its complete
+        // stamp and canonical relative leaf through the entire namespace tail.
         if let Some(containers) = &self.containers {
             containers.install_decided(observe)?;
         }
@@ -1283,7 +1243,7 @@ impl PreparedNames {
             crate::engine::fresh_layout::verify_available(
                 &self.layout_config, &self.layout_resources,
             )?;
-            return Ok((receipt, renamed));
+            return Ok(receipt);
         };
         for item in cache.items {
             let root = if item.container.is_some() {
@@ -1371,11 +1331,8 @@ impl PreparedNames {
                     (None, None) => database.apply(root, &named, observe)?,
                 }
             }
-            if let Some(expected) = &item.finish_version_names {
-                match &item.ordinary_scope {
-                    Some(scope) => version_rename::finish_ordinary(scope, expected)?,
-                    None => version_rename::finish(root, &named, expected)?,
-                }
+            if let Some(originals) = &item.originals {
+                originals.verify_at(cache_root, cache_path)?;
             }
         }
         if let Some(containers) = &self.containers {
@@ -1384,7 +1341,7 @@ impl PreparedNames {
         crate::engine::fresh_layout::verify_available(
             &self.layout_config, &self.layout_resources,
         )?;
-        Ok((receipt, renamed))
+        Ok(receipt)
     }
 }
 
@@ -1914,29 +1871,21 @@ fn prepare_names_inner(
             };
             let offset = staged.file.stream_position()?;
             staged.file.write_all(&bytes)?;
-            let ordinary_rename = ordinary_scope.as_ref().is_some_and(|scope| scope.has_rename());
-            let version_names = if skip_shared || (container.is_some() && !ordinary_rename) {
-                None
+            let originals = if !skip_shared && match &ordinary_scope {
+                Some(scope) => scope.has_rename(),
+                None => current_name != name,
+            } {
+                let owner = match &container {
+                    Some(root) => root.as_ref(),
+                    None => root,
+                };
+                Some(retained_versions::HeldBodies::capture(
+                    owner, &current, view, &file, &history_id,
+                    ordinary_scope.as_ref().map(|scope| scope.disk().seal.slot_id.as_str()),
+                )?)
             } else {
-                let target = name_policy::Name::parse(name)?;
-                match &ordinary_scope {
-                    Some(scope) => version_rename::Prepared::capture_ordinary(
-                        scope, next, &file, &history_id, &target,
-                    )?,
-                    None => version_rename::Prepared::capture(
-                        root, &current, next, &file, &history_id, &target,
-                    )?,
-                }
+                None
             };
-            if let Some(names) = &version_names {
-                match &ordinary_scope {
-                    Some(scope) => {
-                        reservations.add_container(scope, &history, names.reservation()?)?;
-                    }
-                    None => reservations.add(held, &history, names.reservation()?)?,
-                }
-            }
-            let ordinary = container.is_some();
             let published_path = containers.as_ref().map(|scope| {
                 scope.published_path(file.parse()?, held.seal.disk_id.parse()?)
             }).transpose()?;
@@ -1953,17 +1902,7 @@ fn prepare_names_inner(
                 offset,
                 length: bytes.len(),
                 database,
-                version_names,
-                finish_version_names: if skip_shared || (ordinary && !ordinary_rename) {
-                    None
-                } else {
-                    Some(version_rename::CompletionBinding {
-                        file: file.parse()?,
-                        history: history_id.parse()?,
-                        sequence: storage_contract::Sequence::new(next.sequence),
-                        target_name: name_policy::Name::parse(name)?,
-                    })
-                },
+                originals,
             });
         }
     }

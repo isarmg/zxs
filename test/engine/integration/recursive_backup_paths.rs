@@ -163,7 +163,7 @@ impl Fixture {
                 .join(format!(
                     "{}-{}",
                     version.storage_id,
-                    std::path::Path::new(&expected).file_name().unwrap().to_str().unwrap(),
+                    version.creation_name,
                 ));
             assert_eq!(fs::read(body_path).unwrap(), body);
         }
@@ -381,7 +381,7 @@ fn assert_independent_route(
             .join(format!(
                     "{}-{}",
                     version.storage_id,
-                    std::path::Path::new(relative).file_name().unwrap().to_str().unwrap(),
+                    version.creation_name,
                 ));
         assert_eq!(fs::read(actual).unwrap(), body);
     }

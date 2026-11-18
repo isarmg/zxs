@@ -83,7 +83,7 @@ fn fixture_payload(
     let location = &state.file_locations[&version.file_id];
     let name = location.rsplit('/').next().unwrap();
     assert_eq!(state.file_names[&version.file_id], name);
-    let storage_name = format!("{}-{name}", version.storage_id);
+    let storage_name = format!("{}-{}", version.storage_id, version.creation_name);
     let history = version_directory.parent().unwrap().parent().unwrap();
     let named = history
         .join("file-containers")
@@ -890,7 +890,7 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
     let installed = versions["versions"][0]["storage_name"].as_str().unwrap();
     let (storage_id, name) = installed.split_once('-').unwrap();
     assert!(storage_id.parse::<storage_contract::VersionStorageId>().is_ok());
-    assert_eq!(name, "改名后的文件.txt");
+    assert_eq!(name, "original.txt");
     assert!(versions["versions"][0].get("legacy").is_none());
     assert_eq!(versions["versions"][0]["download_name"], "改名后的文件.txt");
     let response = app
@@ -982,7 +982,7 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
 }
 
 #[tokio::test]
-async fn historical_selection_keeps_current_download_and_installed_names() {
+async fn historical_selection_keeps_current_download_and_the_original_installed_name() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
@@ -1028,7 +1028,7 @@ async fn historical_selection_keeps_current_download_and_installed_names() {
         assert_eq!(row["download_name"], "最新.txt");
         let (id, name) = row["storage_name"].as_str().unwrap().split_once('-').unwrap();
         assert!(id.parse::<storage_contract::VersionStorageId>().is_ok());
-        assert_eq!(name, "最新.txt");
+        assert_eq!(name, "before.txt");
     }
     for original_node in before["nodes"].as_array().unwrap() {
         let selected = after["nodes"].as_array().unwrap().iter()

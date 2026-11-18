@@ -25,7 +25,7 @@ fn disk_root_preserves_private_admission_errors() {
     );
 }
 
-fn version(state: &State, history: &str, file: &str, name: &str, bytes: &[u8]) -> FileVersion {
+pub(super) fn version(state: &State, history: &str, file: &str, name: &str, bytes: &[u8]) -> FileVersion {
     let hash = blake3::hash(bytes);
     let version_id = storage_contract::VersionId::generate().unwrap();
     let storage_id = allocate_version_storage_id(state, file, version_id).unwrap();
@@ -619,9 +619,10 @@ fn identity_is_independent_of_current_name_and_global_sequence() {
     assert!(next.created_at.ends_with('Z'));
     assert_eq!(next.created_at.len(), 20);
     let name = current_container_name(&state, &file).unwrap();
+    assert_eq!(name.as_str(), "改名.md");
     assert_eq!(
-        installed_version_name(old.storage_id, &name).unwrap(),
-        format!("{}-改名.md", old.storage_id),
+        installed_version_name(&old).unwrap(),
+        format!("{}-报告.txt", old.storage_id),
     );
     assert_eq!(state.versions[&old.version_id], old);
 }
@@ -909,10 +910,8 @@ fn capture_names_keeps_first_alias_and_rejects_conflicting_name_authority() {
 #[test]
 fn installed_identity_prefix_does_not_reduce_user_name_policy_budget() {
     let name = name_policy::Name::parse(&format!("x.{}", "字".repeat(75))).unwrap();
-    let id = storage_contract::VersionStorageId::from_version(
-        storage_contract::VersionId::generate().unwrap(),
-    );
-    assert_eq!(installed_version_name(id, &name).unwrap(), format!("{id}-{name}"));
+    let item = version(&State::default(), &new_id("history").unwrap(), &new_id("file").unwrap(), name.as_str(), b"");
+    assert_eq!(installed_version_name(&item).unwrap(), format!("{}-{name}", item.storage_id));
 }
 
 #[test]

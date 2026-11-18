@@ -243,8 +243,7 @@ impl Pool {
             .join(format!(
                 "{}-{}",
                 version.storage_id,
-                std::path::Path::new(&state.file_locations[file])
-                    .file_name().unwrap().to_str().unwrap(),
+                version.creation_name,
             ))
     }
     fn current_entry(&self, path: &str) -> Entry {
