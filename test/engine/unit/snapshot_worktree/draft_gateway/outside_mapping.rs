@@ -74,7 +74,19 @@ fn projection_in_the_published_snapshot_keeps_its_own_bytes_and_original_name() 
     let (fixture, mut engine) = Fixture::new();
     let outside = &fixture.targets[0];
     let node = engine.file_draft_base(outside).unwrap().node_id();
+    let issue = Arc::clone(&engine.state);
+    let receipts = engine.snapshot_receipt_source().unwrap();
+    let index = receipts.index().unwrap();
+    let recorded = index.original_copy_file(&issue, fixture.source, &outside.path).unwrap();
+    assert!(index.original_copy_file(&issue.as_ref().clone(), fixture.source, &outside.path).is_err());
+    assert!(recorded.require_at(&issue, fixture.source, &fixture.targets[1].path).is_err());
     let saved = PublishedSnapshotFile::capture(&engine, fixture.source, &outside.path).unwrap();
+    assert_eq!(recorded.material(), saved.material());
+    assert_eq!(recorded.origin(), saved.origin());
+    assert_eq!(recorded.host(), saved.host());
+    assert_eq!(recorded.original_checksums(engine.config.checksum_chunk_bytes).unwrap(),
+        issue.versions[&saved.material().version_id.to_string()].checksum_manifest_hash);
+    assert!(recorded.original_checksums(1).is_err());
     assert_eq!(saved.material().file_id, outside.file);
     assert_eq!(saved.occurrence(), &outside.path);
     assert_eq!(saved.handle(), fixture.source);

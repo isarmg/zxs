@@ -3,6 +3,8 @@
 //! a particular Worktree occurrence was included, is still visible, or may
 //! be removed: the enclosing operation has those separate native obligations.
 use super::{RegistrationError as Failure, Result};
+mod original;
+pub(crate) use original::RecordedSnapshotFile;
 use crate::disk::DiskResources;
 use crate::engine::{PayloadProofReservation, PlanningContext};
 use crate::persist::snapshot_worktree::HostEvidence;
@@ -43,20 +45,16 @@ impl PublishedSnapshotFile {
             return Err(Failure::InitialOnly);
         }
         let index = engine.snapshot_receipts()?;
-        let registered = index.node(handle)?;
-        let selected = occurrence(registered.manifest().entries(), path)?;
-        let SnapshotEntryContent::File { material, source: origin } = selected.content else {
-            return Err(Failure::Source);
-        };
+        let issued = index.original_copy_file(context.state, handle, path)?;
+        let material = issued.material();
+        let origin = issued.origin();
         if material.size > context.config.max_file_bytes { return Err(Failure::CommitScope); }
-        let host = registered.host().clone();
+        let host = issued.host().clone();
         let count = host.directories.len().checked_add(8).ok_or(Failure::CommitScope)?;
         let permit = crate::engine::payload_proof_budget().reserve(count).ok_or_else(||
             Failure::Publication(crate::engine::fresh_layout::FreshLayoutError::ContainerBudget.into()))?;
         let node = index.reopen_node(engine, handle)?;
-        if node.binding() != registered.binding() || occurrence(node.manifest().entries(), path)? != selected {
-            return Err(Failure::Source);
-        }
+        issued.require_node(&node)?;
         let (address, original) = node.named_copy_payload(material.version_id).map_err(Failure::NodeReadback)?;
         let entity = FileIdentity::from_metadata(&original.metadata().map_err(Failure::CommitRead)?);
         Ok(Self {
