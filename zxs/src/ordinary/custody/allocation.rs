@@ -14,26 +14,30 @@ pub(in crate::ordinary) struct Stage{pub slot:u8,pub directory:NativeObject}
 struct Phase{stage:Option<Stage>,step:Progress}
 /// One bounded progress value on the original operand, not another decision.
 /// 2 authorizes only isolation; 3..=6 authorize exactly one named source
-/// role each. Only 7 proves the checked, synced original quarantine was empty.
-#[derive(Clone,Copy,Debug,Default,Eq,PartialEq,Ord,PartialOrd)]
+/// role each, 8 alone is the fifth. Only 7 proves the checked, synced original quarantine was empty.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(super) struct Progress(u8);
 impl Progress{
     const STAGING:Self=Self(0);pub(super) const OPEN:Self=Self(1);
     pub(super) const ARMED:Self=Self(2);pub(super) const EMPTY:Self=Self(7);
     pub(super) fn leaf(i:usize)->io::Result<Self>{
-        if i<4{Ok(Self(3+i as u8))}else{Err(invalid("unknown original retirement role"))}
+        match i{0..=3=>Ok(Self(3+i as u8)),4=>Ok(Self(8)),_=>Err(invalid("unknown original retirement role"))}
     }
-    pub(super) fn authorized(self)->Option<usize>{(3..=6).contains(&self.0).then(||(self.0-3)as usize)}
+    pub(super) fn authorized(self)->Option<usize>{match self.0{3..=6=>Some((self.0-3) as usize),8=>Some(4),_=>None}}
+    pub(super) fn opened(self)->bool{self!=Self::STAGING}
+    pub(super) fn retiring(self)->bool{self==Self::ARMED||self==Self::EMPTY||self.authorized().is_some()}
+    pub(super) fn business_possible(self)->bool{!self.retiring()||self==Self::ARMED}
+    pub(super) fn past_leaf(self,i:usize)->bool{self==Self::EMPTY||self.authorized().is_some_and(|j|j>i)}
     pub(super) fn allows_next(self,count:usize,next:Self)->bool{
-        if !(3..=4).contains(&count)||self<Progress::ARMED{return false;}
-        if next==Progress::EMPTY{return self.authorized()==Some(count-1);}
-        next.0==self.0+1&&next.authorized().is_some_and(|i|i<count)
+        if !(3..=5).contains(&count){return false;}
+        let i=if self==Self::ARMED{0}else if let Some(i)=self.authorized(){i+1}else{return false;};
+        if i==count{return next==Self::EMPTY;}i<count&&next.authorized()==Some(i)
     }
-    fn read(n:u8)->io::Result<Self>{if n<=7{Ok(Self(n))}else{Err(invalid("unknown MOVE progress"))}}
+    fn read(n:u8)->io::Result<Self>{if n<=8{Ok(Self(n))}else{Err(invalid("unknown MOVE progress"))}}
 }
 impl Phase{
     fn check(&self,o:&Origin)->io::Result<()>{
-        if self.step.authorized().is_some_and(|i|i>=o.role_count())||self.step>=Progress::ARMED&&(o.mode!=Method::Transfer||self.stage.is_none())||self.step>=Progress::OPEN&&o.mode==Method::Transfer&&self.stage.is_none()||self.stage.as_ref().is_some_and(|s|
+        if self.step.authorized().is_some_and(|i|i>=o.role_count())||self.step.retiring()&&(o.mode!=Method::Transfer||self.stage.is_none())||self.step.opened()&&o.mode==Method::Transfer&&self.stage.is_none()||self.stage.as_ref().is_some_and(|s|
             o.mode!=Method::Transfer||s.slot>=SLOTS||s.directory.entity.device!=o.dst_root.entity.device||
             s.directory.birth.filesystem()!=o.dst_root.birth.filesystem()||[&o.src_root,&o.dst_root].iter()
               .any(|r|r.entity==s.directory.entity||r.birth==s.directory.birth)){
@@ -61,8 +65,8 @@ pub(in crate::ordinary) struct MoveAllocation{pub original:Origin,pub seq:u64,pu
     pub digest:[u8;32],pub bytes:Vec<u8>,pub stamp:fs::OriginalStamp,phase:Phase}
 impl MoveAllocation{
     pub(in crate::ordinary) fn stage(&self)->Option<&Stage>{self.phase.stage.as_ref()}
-    pub(in crate::ordinary) fn opened(&self)->bool{self.phase.step>=Progress::OPEN}
-    pub(in crate::ordinary) fn retiring(&self)->bool{self.phase.step>=Progress::ARMED}
+    pub(in crate::ordinary) fn opened(&self)->bool{self.phase.step.opened()}
+    pub(in crate::ordinary) fn retiring(&self)->bool{self.phase.step.retiring()}
     pub(super) fn progress(&self)->Progress{self.phase.step}
     /// A previous process may have stopped just after SETXATTR. A visible
     /// flag alone does not license serving the target or unlinking the source.
@@ -235,5 +239,25 @@ mod progress_tests{
         assert!(raw3.allows_next(4,incr4));assert!(!raw3.allows_next(4,P::EMPTY));
         assert!(!incr4.allows_next(3,P::EMPTY));assert!(incr4.allows_next(4,P::EMPTY));
         assert!(!P::ARMED.allows_next(3,P::EMPTY));assert!(!P::EMPTY.allows_next(3,P::EMPTY));
+    }
+}
+
+#[cfg(test)]
+mod five_role_progress_tests{
+    use super::Progress as P;
+    #[test]
+    fn only_the_frozen_role_sequence_can_reach_verified_empty(){
+        assert_eq!(P::read(7).unwrap(),P::EMPTY);
+        assert_eq!(P::read(8).unwrap(),P::leaf(4).unwrap());
+        assert!(P::read(9).is_err());assert!(P::leaf(5).is_err());
+        for (count,steps) in [(3,&[2,3,4,5,7][..]),(4,&[2,3,4,5,6,7][..]),(5,&[2,3,4,5,6,8,7][..])]{
+            for from in 0..=8 {for to in 0..=8{
+                let a=P::read(from).unwrap();let b=P::read(to).unwrap();
+                assert_eq!(a.allows_next(count,b),steps.windows(2).any(|p|p[0]==from&&p[1]==to),"{count}: {from} => {to}");
+            }}
+        }
+        assert_eq!(P::EMPTY.authorized(),None);assert_eq!(P::leaf(4).unwrap().authorized(),Some(4));
+        assert!(P::EMPTY.past_leaf(4));assert!(!P::leaf(4).unwrap().past_leaf(4));
+        assert!(P::leaf(4).unwrap().past_leaf(3));
     }
 }

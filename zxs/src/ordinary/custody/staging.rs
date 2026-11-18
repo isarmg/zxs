@@ -99,7 +99,9 @@ impl Fresh{
 }
 pub(super) fn sites(dir:&HeldDir,roles:&BTreeMap<Leaf,NativeObject>,o:&super::transfer::Origin)->io::Result<Sites>{
     let get=|k|roles.get(&k).cloned().ok_or_else(||invalid("incomplete original MOVE role set"));
-    if roles.len()!=o.role_count()||roles.contains_key(&Leaf::Incr)!=o.last.is_some(){return Err(invalid("incomplete original FILE stage"));}
+    if roles.len()!=o.role_count()||roles.contains_key(&Leaf::Incr)!=o.children.first().is_some()||roles.contains_key(&Leaf::IncrNext)!=o.children.second().is_some(){return Err(invalid("incomplete original FILE stage"));}
     Ok(Sites{directory:NativeObject{entity:dir.entity,birth:fs::Birth::read(&dir.file)?},
-        local:get(Leaf::File)?,node:get(Leaf::FullNode)?,raw:get(Leaf::FullRaw)?,incr:roles.get(&Leaf::Incr).cloned()})
+        local:get(Leaf::File)?,node:get(Leaf::FullNode)?,raw:get(Leaf::FullRaw)?,children:match(o.children.len(),roles.get(&Leaf::Incr),roles.get(&Leaf::IncrNext)){
+            (0,None,None)=>super::transfer::ChildRoles::None,(1,Some(a),None)=>super::transfer::ChildRoles::One(a.clone()),
+            (2,Some(a),Some(b))=>super::transfer::ChildRoles::Two(a.clone(),b.clone()),_=>return Err(invalid("gap in original MOVE role set"))}})
 }

@@ -196,6 +196,30 @@ fn strict_inventory_after_partial_cleanup_refuses_equal_byte_work_name_substitut
 }
 
 #[test]
+#[ignore="two separately admitted FILEs on private native filesystems"]
+fn physical_increment_reader_denies_another_original_parent_even_at_equal_length_and_content(){
+    let t=Fixture::new(b"abcde");let first=t.base.file;
+    let other=create_empty(&t.system,OperationId::new().unwrap(),t.vol,"sibling").unwrap().file;
+    save_first(&t.system,OperationId::new().unwrap(),other,claim(b"abcde"),Cursor::new(b"abcde")).unwrap();
+    let shared_bytes=commit_working(&t.system,OperationId::new().unwrap(),other,1).unwrap();assert_eq!(shared_bytes.body,t.base.body);
+    t.edit(1,2,b"x",LengthPolicy::KeepOrGrow);
+    let child=commit_working(&t.system,OperationId::new().unwrap(),first,2).unwrap();
+    let(p,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();let v=p.ordinary(t.vol).unwrap();
+    let wrong_c=s.file(other).unwrap();let f=s.head(other).unwrap();let site=s.placement(other).unwrap();
+    let wrong_dir=formal::directory(&v,&s,wrong_c,s.saved(other).unwrap()).unwrap();
+    let c=s.file(first).unwrap();let dir=formal::directory(&v,&s,c,s.saved(first).unwrap()).unwrap();
+    let genuine=s.delta_node(first,child.node).unwrap();
+    let wrong=site.full(&wrong_dir,f).unwrap().user_read().unwrap();
+    assert!(physical::Body::open(&dir,wrong,genuine).is_err());
+    let mut forged=genuine.clone();forged.original.parent_decision[0]^=1;
+    let base=s.placement(first).unwrap().full(&dir,s.head(first).unwrap()).unwrap();
+    assert!(physical::Body::open(&dir,base,&forged).is_err());
+    let base=s.placement(first).unwrap().full(&dir,s.head(first).unwrap()).unwrap();
+    let exact=physical::Body::open(&dir,base,genuine).unwrap();let mut got=Vec::new();exact.whole(&mut got).unwrap();assert_eq!(got,b"abxde");
+    assert!(s.confirmed_file_cycle(first).unwrap().next_generation(child.node).is_err());
+}
+
+#[test]
 #[ignore="actual private native prefixes before, above and at the original formal publication floor"]
 fn equal_working_revision_and_bytes_do_not_turn_an_old_working_edge_into_a_formal_baseline(){
     let t=Fixture::new(b"abc");let id=t.base.file;let edit=t.edit(1,1,b"b",LengthPolicy::KeepOrGrow);

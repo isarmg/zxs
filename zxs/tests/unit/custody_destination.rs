@@ -103,7 +103,7 @@ fn move_frame_keeps_the_original_file_history_requires_every_distinct_role_and_e
     let mut other=round.clone();other.original.uid=other.original.uid.wrapping_add(1);assert!(other.require_history(c,f,d).is_err());
     assert!(Moved::seal(t.src.pool(),n+1,prev,original.clone(),[7;32],Some(255),sites.clone()).is_err());
     assert!(Moved::seal(t.src.pool(),n+1,prev,original.clone(),[7;32],Some(0),sites.clone()).is_err());
-    let mut no_child=sites;no_child.incr=None;
+    let mut no_child=sites;no_child.children=crate::ordinary::custody::transfer::ChildRoles::None;
     assert!(Moved::seal(t.src.pool(),n+1,prev,original,[7;32],None,no_child).is_err());
     assert!(fs::read_dir(&t.b).unwrap().next().is_none());
 }

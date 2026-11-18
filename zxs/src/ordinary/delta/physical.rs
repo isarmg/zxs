@@ -1,7 +1,7 @@
 //! One immutable object, named from the original VersionStorageId + creation
 //! name. Its own local header/node/map and checked dense change stream do not
 //! borrow even one byte from a working extent after publication.
-use super::{allocation::DeltaAllocation,map::{Map,Part},types::{Content,Delta,Material,Original}};
+use super::{allocation::DeltaAllocation,map::{Map,Source as ByteSource},types::{Content,Delta,Material,Original}};
 use crate::{fs::{self,HeldDir,invalid,stream::{self,PinnedRegular}},ordinary::{content::{self,BLOCK},draft::types::DraftClaim,
     formal::physical::HistoryBody,indexed::Indexed,interval::{physical::{Composed,cleanup_witness,retire_verified},types::Saved},output::CheckedOutput,wire::NativeObject}};
 use std::{fs::File,io::{self,Write}};
@@ -35,9 +35,8 @@ fn seal_links(f:&File,raw:u64,table:u64,claim:DraftClaim)->io::Result<[u8;32]>{
         stream::write_at(f,&head,table+i*32)?;head=content::link(i,n,crate::hash::digest(&buf[..n])?,head)?;
     }Ok(head)
 }
-struct Held{pin:PinnedRegular,o:Original,m:Map,c:Content,index:[u8;32]}
+struct Held{key:crate::ordinary::journal::cycle::Parent,pin:PinnedRegular,o:Original,m:Map,c:Content,index:[u8;32]}
 impl Held{
-    fn open(dir:&HeldDir,d:&Delta)->io::Result<Self>{Self::at_original(dir,d,&d.material.object)}
     fn at_original(dir:&HeldDir,d:&Delta,object:&NativeObject)->io::Result<Self>{
         let o=&d.original;let pin=dir.pin_stream(&o.leaf(),shape(o)?.2)?.ok_or_else(||invalid("actual published INCR missing"))?;
         if &NativeObject::stamp(&pin.stamp)!=object{return Err(invalid("different physical INCR original"));}
@@ -47,7 +46,7 @@ impl Held{
         if map.digest()?!=o.map{return Err(invalid("actual local INCR map differs from its original decision"));}
         let (c,_)=header(&pin.file,o,&map)?;
         if c!=d.material.content{return Err(invalid("different original INCR commitments"));}
-        pin.named(dir,&o.leaf())?;Ok(Self{pin,o:o.clone(),m:map,c,index:d.material.index})
+        pin.named(dir,&o.leaf())?;Ok(Self{key:crate::ordinary::journal::cycle::Parent::incremental(d),pin,o:o.clone(),m:map,c,index:d.material.index})
     }
     fn range(&self,at:u64,n:u64,out:impl Write)->io::Result<()>{
         let (raw,links,_)=shape(&self.o)?;
@@ -56,22 +55,45 @@ impl Held{
             .write_range(at,n,out,||self.pin.unchanged())
     }
 }
-pub(in crate::ordinary) struct Body{parent:HistoryBody,target:Held}
+pub(in crate::ordinary) struct Body{parent:HistoryBody,first:Held,second:Option<Held>}
 impl Body{
-    pub(in crate::ordinary) fn open(dir:&HeldDir,parent:HistoryBody,d:&Delta)->io::Result<Self>{Ok(Self{parent,target:Held::open(dir,d)?})}
-    pub(in crate::ordinary) fn at_original(dir:&HeldDir,parent:HistoryBody,d:&Delta,object:&NativeObject)->io::Result<Self>{
-        Ok(Self{parent,target:Held::at_original(dir,d,object)?})
+    pub(in crate::ordinary) fn open(dir:&HeldDir,parent:HistoryBody,d:&Delta)->io::Result<Self>{
+        Self::at_original(dir,parent,d,&d.material.object)
     }
-    pub(in crate::ordinary) fn native_pack(&self)->&PinnedRegular{&self.target.pin}
-    pub(in crate::ordinary) fn unchanged(&self)->io::Result<()>{self.parent.unchanged()?;self.target.pin.unchanged()}
-    pub(in crate::ordinary) fn require(&self,dir:&HeldDir)->io::Result<()>{self.parent.require(dir)?;self.target.pin.named(dir,&self.target.o.leaf())}
+    pub(in crate::ordinary) fn at_original(dir:&HeldDir,parent:HistoryBody,d:&Delta,object:&NativeObject)->io::Result<Self>{
+        if !parent.confirmed_parent()?.precedes(d){return Err(invalid("wrong actual FULL parent for incremental node"));}
+        parent.require(dir)?;let first=Held::at_original(dir,d,object)?;
+        let ret=Self{parent,first,second:None};ret.require(dir)?;Ok(ret)
+    }
+    /// Private successor: only a node from the same actual confirmed FILE
+    /// cycle, not a hand-built Delta or an arbitrary latest node. No cold
+    /// reader or producer admits a second decision until custody supports it.
+    pub(in crate::ordinary) fn extend_local(mut self,dir:&HeldDir,next:&crate::ordinary::journal::cycle::Next<'_>)->io::Result<Self>{
+        if self.second.is_some()||self.first.key!=next.parent(){return Err(invalid("wrong physical INCR parent; never skip a formal edge"));}
+        self.require(dir)?;let d=next.original();let object=next.local_object()?;
+        let child=Held::at_original(dir,d,object)?;self.second=Some(child);self.require(dir)?;Ok(self)
+    }
+    fn top(&self)->&Held{self.second.as_ref().unwrap_or(&self.first)}
+    pub(in crate::ordinary) fn single_pack(&self)->io::Result<&PinnedRegular>{
+        if self.second.is_some(){return Err(invalid("a one-INCR handoff cannot omit a retained formal pack"));}Ok(&self.first.pin)
+    }
+    pub(in crate::ordinary) fn unchanged(&self)->io::Result<()>{
+        self.parent.unchanged()?;self.first.pin.unchanged()?;if let Some(n)=&self.second{n.pin.unchanged()?;}Ok(())
+    }
+    pub(in crate::ordinary) fn require(&self,dir:&HeldDir)->io::Result<()>{
+        self.parent.require(dir)?;self.first.pin.named(dir,&self.first.o.leaf())?;
+        if let Some(n)=&self.second{n.pin.named(dir,&n.o.leaf())?;}Ok(())
+    }
     pub(in crate::ordinary) fn range(&self,at:u64,len:u64,out:impl Write)->io::Result<()>{
-        self.unchanged()?;self.target.range(0,0,io::sink())?;self.parent.write_range(0,0,io::sink())?;
+        self.unchanged()?;self.parent.write_range(0,0,io::sink())?;self.first.range(0,0,io::sink())?;
+        if let Some(n)=&self.second{n.range(0,0,io::sink())?;}
         let mut out=CheckedOutput{out,check:||self.unchanged()};let zeros=[0u8;64*1024];
-        self.target.m.visit(at,len,|kind,offset,n|match kind{
-            Part::Parent=>self.parent.write_range(offset,n,&mut out),
-            Part::Changed=>self.target.range(offset,n,&mut out),
-            Part::Zero=>{let mut left=n;while left!=0{let size=left.min(zeros.len() as u64) as usize;out.write_all(&zeros[..size])?;left-=size as u64;}Ok(())}
+        let older=self.second.as_ref().map(|_|&self.first.m);
+        self.top().m.resolve(older,self.parent.confirmed_parent()?.length,at,len,|from,offset,n|match from{
+            ByteSource::Full=>self.parent.write_range(offset,n,&mut out),
+            ByteSource::First=>self.first.range(offset,n,&mut out),
+            ByteSource::Second=>self.second.as_ref().ok_or_else(||invalid("missing second immutable pack"))?.range(offset,n,&mut out),
+            ByteSource::Zero=>{let mut left=n;while left!=0{let size=left.min(zeros.len() as u64) as usize;out.write_all(&zeros[..size])?;left-=size as u64;}Ok(())}
         })?;self.unchanged()
     }
     pub(in crate::ordinary) fn whole(&self,out:impl Write)->io::Result<()>{
@@ -81,8 +103,8 @@ impl Body{
             fn flush(&mut self)->io::Result<()>{self.out.flush()}
         }
         let mut out=HashOut{out,h:crate::hash::Sha256::new()};
-        self.range(0,self.target.o.logical,&mut out)?;
-        if out.h.finish()!=self.target.c.logical{return Err(invalid("composed formal INCR differs from its original logical bytes"));}Ok(())
+        self.range(0,self.top().o.logical,&mut out)?;
+        if out.h.finish()!=self.top().c.logical{return Err(invalid("composed formal INCR differs from its original logical bytes"));}Ok(())
     }
 }
 enum Target{Private(File),Named(PinnedRegular)}

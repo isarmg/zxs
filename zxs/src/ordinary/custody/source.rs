@@ -9,8 +9,8 @@ use std::{collections::BTreeSet,ffi::{CStr,CString},io,path::Path};
 /// The complete inventory of this narrow clean producer. There is exactly
 /// one of each required role. No taking a prefix of a dirty/bigger container.
 #[derive(Clone,Copy,Debug,Eq,Ord,PartialEq,PartialOrd)]
-pub(in crate::ordinary::custody) enum Leaf{File,FullNode,FullRaw,Incr}
-impl Leaf{pub(super) fn tag(self)->u8{match self{Self::File=>1,Self::FullNode=>2,Self::FullRaw=>3,Self::Incr=>4}}}
+pub(in crate::ordinary::custody) enum Leaf{File,FullNode,FullRaw,Incr,IncrNext}
+impl Leaf{pub(super) fn tag(self)->u8{match self{Self::File=>1,Self::FullNode=>2,Self::FullRaw=>3,Self::Incr=>4,Self::IncrNext=>5}}}
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(super) struct Bytes{pub kind:Leaf,pub name:CString,pub original:NativeObject,pub len:u64,pub digest:[u8;32]}
 
@@ -101,11 +101,11 @@ impl Clean{
         let clean=Self::at_held_sites(volume.pool.id(),volume.id(),root,dir,c,f,d,sites)?;volume.require_current()?;Ok(clean)
     }
     pub(super) fn at_held_sites(pool:PoolId,volume:VolumeId,root:NativeObject,dir:HeldDir,c:&Frame,f:&Commit,d:Option<&Delta>,sites:&Sites)->io::Result<Self>{
-        if sites.incr.is_some()!=d.is_some(){return Err(invalid("incomplete original FILE placement"));}
+        if sites.children.len()!=usize::from(d.is_some()){return Err(invalid("incomplete original FILE placement"));}
         material::verify_header_at(&dir,&c.create,&sites.directory,&sites.local)?;
         let local=material::custody_lease_at(&dir,&c.create,&sites.local,false)?;
         let open=||HistoryBody::at_originals(&dir,f,&sites.node,&sites.raw);
-        let first=open()?;let second=match(d,&sites.incr){(Some(d),Some(n))=>Some(IncrBody::at_original(&dir,open()?,d,n)?),
+        let first=open()?;let second=match(d,sites.children.first()){(Some(d),Some(n))=>Some(IncrBody::at_original(&dir,open()?,d,n)?),
             (None,None)=>None,_=>return Err(invalid("unexpected retained role"))};
         sites.check(&root)?;
         let result=Self{pool,volume,root,lifecycle:None,c:c.clone(),parent:f.clone(),delta:d.cloned(),dir,local,first,second};
@@ -117,7 +117,7 @@ impl Clean{
         apply(Leaf::FullNode,&self.parent.original.node_name(),node)?;
         apply(Leaf::FullRaw,&self.parent.original.body_name(),raw)?;
         match(&self.delta,&self.second){
-            (Some(d),Some(body))=>apply(Leaf::Incr,&d.original.leaf(),body.native_pack())?,
+            (Some(d),Some(body))=>apply(Leaf::Incr,&d.original.leaf(),body.single_pack()?)?,
             (None,None)=>{},_=>return Err(invalid("incomplete selected formal INCR")),
         }Ok(())
     }
@@ -179,7 +179,7 @@ impl Clean{
                 Leaf::FullRaw=>self.parent.original.content.sha256,
                 // material.index is NOT the raw package SHA. Raw packing is
                 // checked separately, including node, map, dense bytes, links.
-                Leaf::Incr=>read_physical(pin,len,|_,_|Ok(()))?,
+                Leaf::Incr|Leaf::IncrNext=>read_physical(pin,len,|_,_|Ok(()))?,
             };
             total=total.checked_add(len).ok_or_else(||invalid("transfer material byte total overflow"))?;
             bytes.push(Bytes{kind,name:name.to_owned(),original:NativeObject::stamp(&pin.stamp),len,digest});Ok(())

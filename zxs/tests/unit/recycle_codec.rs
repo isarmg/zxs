@@ -10,8 +10,8 @@ fn n(dev:u64,tag:u8)->NativeObject{
 fn max_origin(purpose:Purpose)->Origin{Origin{op:OperationId([1;16]),uid:9,file:FileId([2;16]),entry:EntryId([3;16]),
     history:HistoryId([4;16]),from:VolumeId([5;16]),to:VolumeId([6;16]),epoch:9,name:"n".repeat(wire::MAX_HUMAN),
     ticket:OperationId([7;16]),mode:Method::Transfer,purpose,src_root:n(1,1),dst_root:n(2,2),creation:[8;32],parent:[9;32],
-    last:Some([10;32]),source_bytes:u64::MAX,source_material:[11;32]}}
-fn sites()->Sites{Sites{directory:n(2,5),local:n(2,6),node:n(2,7),raw:n(2,8),incr:Some(n(2,9))}}
+    children:ChildRoles::Two([10;32],[23;32]),source_bytes:u64::MAX,source_material:[11;32]}}
+fn sites()->Sites{Sites{directory:n(2,5),local:n(2,6),node:n(2,7),raw:n(2,8),children:ChildRoles::Two(n(2,9),n(2,10))}}
 #[test]
 fn any_accepted_return_fits_even_at_every_native_and_name_maximum(){
     let pool=PoolId([12;16]);let by=OperationId([15;16]);let previous=[16;32];
@@ -50,4 +50,31 @@ fn distinct_requests_addresses_and_physical_methods_cannot_be_relabelled(){
     assert!(r.check_transfer(Method::Rename,&n(1,25),&n(2,26)).is_err());
     let x=n(1,25);let mut y=n(2,26);y.entity.device=1;assert!(r.check_transfer(Method::Transfer,&x,&y).is_err());
     let mut z=n(1,26);z.entity.device=2;assert!(r.check_transfer(Method::Transfer,&x,&z).is_err());
+}
+
+#[test]
+fn canonical_role_count_never_skips_a_child_or_confers_claim_of_an_extra_original(){
+    let pool=PoolId([12;16]);let purpose=Purpose::Restore{deleted_by:OperationId([15;16]),previous:[16;32]};
+    for count in 0..=2{
+        let mut o=max_origin(purpose);let mut at=sites();
+        o.children=match count{0=>ChildRoles::None,1=>ChildRoles::One([10;32]),_=>ChildRoles::Two([10;32],[23;32])};
+        at.children=match count{0=>ChildRoles::None,1=>ChildRoles::One(n(2,9)),_=>ChildRoles::Two(n(2,9),n(2,10))};
+        let m=Moved::seal(pool,14,[17;32],o.clone(),[18;32],Some(0),at.clone()).unwrap();
+        assert_eq!(m.bytes.len(),MAX_CUSTODY_FRAME-(2-count)*(32+NATIVE));
+        assert_eq!(m.original.role_count(),3+count);
+        let parsed=Moved::read(pool,&m.bytes,wire::envelope(pool,&m.bytes).unwrap()).unwrap();assert_eq!(parsed,m);
+        // The old 0 and 1 byte discriminants and first item's bytes are unchanged.
+        let mut hashes=Vec::new();o.children.put(&mut hashes,|h,b|b.extend_from_slice(h));
+        let mut want=vec![count as u8];if count>0{want.extend_from_slice(&[10;32]);}if count>1{want.extend_from_slice(&[23;32]);}
+        assert_eq!(hashes,want);
+        at.children=if count==1{ChildRoles::None}else{ChildRoles::One(n(2,9))};
+        assert!(Moved::seal(pool,14,[17;32],o,[18;32],Some(0),at).is_err());
+    }
+    for bad in [vec![3],vec![2],{let mut v=vec![2];v.extend_from_slice(&[10;32]);v}]{
+        assert!(ChildRoles::<[u8;32]>::get(&mut In(&bad),|r|r.fixed()).is_err());
+    }
+    let mut o=max_origin(purpose);o.children=ChildRoles::Two([10;32],[10;32]);
+    assert!(Moved::seal(pool,14,[17;32],o,[18;32],Some(0),sites()).is_err());
+    let mut at=sites();at.children=ChildRoles::Two(n(2,9),n(2,9));
+    assert!(Moved::seal(pool,14,[17;32],max_origin(purpose),[18;32],Some(0),at).is_err());
 }

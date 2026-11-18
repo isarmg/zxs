@@ -45,8 +45,8 @@ impl SourceRetirement{
         live:Option<HeldDir>,priv_name:Option<HeldDir>)->io::Result<Self>{
         let business=business(m)?;let quarantine=m.original.quarantine_name();
         let (addr,dir)=match(live,priv_name){
-            (Some(dir),None) if step<=Progress::ARMED=>(Address::Business,Some(dir)),
-            (None,Some(dir)) if step>=Progress::ARMED=>(Address::Isolated,Some(dir)),
+            (Some(dir),None) if step.business_possible()=>(Address::Business,Some(dir)),
+            (None,Some(dir)) if step.retiring()=>(Address::Isolated,Some(dir)),
             (None,None) if step==Progress::EMPTY=>(Address::EmptyGone,None),
             _=>return Err(invalid("source not at its exact authorized business/quarantine name; do not infer retirement from absence")),
         };
@@ -117,10 +117,10 @@ fn advance(p:&LocalPool,old:&FileVolume<'_>,new:&FileVolume<'_>,m:&Moved,g:&Veri
 }
 fn empty_source(p:&LocalPool,old:&FileVolume<'_>,new:&FileVolume<'_>,m:&Moved,g:&mut VerifiedSource,dst:&Reopened,
     hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{
-    let mut cur=exact_progress(p,m)?;if cur!=g.group.initial||cur<Progress::ARMED{return Err(invalid("original isolated source cut changed"));}
+    let mut cur=exact_progress(p,m)?;if cur!=g.group.initial||!cur.retiring(){return Err(invalid("original isolated source cut changed"));}
     for i in 0..m.original.role_count(){
-        let wanted=Progress::leaf(i)?;if cur>wanted{continue;}
-        if cur<wanted{advance(p,old,new,m,g,dst,wanted,hook)?;cur=wanted;}
+        let wanted=Progress::leaf(i)?;if cur.past_leaf(i){continue;}
+        if cur!=wanted{advance(p,old,new,m,g,dst,wanted,hook)?;cur=wanted;}
         g.require(old,m)?;dst.verify_installed(new,m)?;
         let gr=&mut g.group;let dir=gr.dir.as_ref().ok_or_else(||invalid("quarantine missing before original empty confirmation"))?;
         if let Some(r)=gr.remaining.first().filter(|r|r.index==i){

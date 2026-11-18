@@ -13,7 +13,8 @@ pub(super) fn roles<'a>(c:&Frame,f:&Commit,d:Option<&Delta>,sites:&'a Sites)->io
         Role{kind:Leaf::FullNode,name:f.original.node_name(),len:crate::ordinary::formal::physical::index_size(&f.original)?,original:&sites.node},
         Role{kind:Leaf::FullRaw,name:f.original.body_name(),len:f.original.content.bytes,original:&sites.raw},
     ];
-    match (d,sites.incr.as_ref()){
+    if sites.children.second().is_some(){return Err(invalid("a one-child proof cannot inventory a second retained child"));}
+    match (d,sites.children.first()){
         (Some(d),Some(n))=>out.push(Role{kind:Leaf::Incr,name:d.original.leaf(),len:crate::ordinary::delta::physical::packed_size(&d.original)?,original:n}),
         (None,None)=>{},_=>return Err(invalid("native role differs from the MOVE's frozen original history")),
     }Ok(out)

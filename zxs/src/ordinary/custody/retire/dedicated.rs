@@ -126,11 +126,11 @@ pub(in crate::ordinary::custody) fn complete(system:&Path,r:Request,m:&Moved,tar
             continue
         }
         for i in 0..m.original.role_count(){
-            let next=Progress::leaf(i)?;if cur>next{continue;}
-            if cur<next{with_ends(&p,r,m,target,|g,old,new,a|a.step_lifecycle(&p,g,old,new,&v,target,next,||hook(Cut::MoveEraseFlagBeforeSync)))?;cur=next;}
+            let next=Progress::leaf(i)?;if cur.past_leaf(i){continue;}
+            if cur!=next{with_ends(&p,r,m,target,|g,old,new,a|a.step_lifecycle(&p,g,old,new,&v,target,next,||hook(Cut::MoveEraseFlagBeforeSync)))?;cur=next;}
             with_ends(&p,r,m,target,|g,old,new,_|v.erase_one(&p,g,old,new,target,i,hook))?;
         }
-        if cur<Progress::EMPTY{with_ends(&p,r,m,target,|g,old,new,a|a.step_lifecycle(&p,g,old,new,&v,target,Progress::EMPTY,||hook(Cut::MoveEmptyFlagBeforeSync)))?;}
+        if cur!=Progress::EMPTY{with_ends(&p,r,m,target,|g,old,new,a|a.step_lifecycle(&p,g,old,new,&v,target,Progress::EMPTY,||hook(Cut::MoveEmptyFlagBeforeSync)))?;}
         with_ends(&p,r,m,target,|g,old,new,_|v.finish_empty(&p,g,old,new,target,hook))?;
         if let Some(i)=p.snapshot()?.1.pending{
             if i.frame.moved()?!=m{return Err(invalid("different original seal after verified retirement"));}

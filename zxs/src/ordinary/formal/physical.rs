@@ -36,8 +36,11 @@ fn named(dir:&HeldDir,o:&Original,k:Kind)->io::Result<Option<PinnedRegular>>{
     let Some(pin)=dir.pin_stream(&k.name(o),k.size(o)?)? else{return Ok(None)};
     if matches!(k,Kind::Node){check_header(&pin.file,o)?;}Ok(Some(pin))
 }
-pub(in crate::ordinary) struct HistoryBody{pub(super) node:PinnedRegular,pub(super) raw:PinnedRegular,pub(super) original:Original,pub(super) index_digest:[u8;32]}
+pub(in crate::ordinary) struct HistoryBody{confirmed:Option<crate::ordinary::journal::cycle::Parent>,pub(super) node:PinnedRegular,pub(super) raw:PinnedRegular,pub(super) original:Original,pub(super) index_digest:[u8;32]}
 impl HistoryBody{
+    pub(in crate::ordinary) fn confirmed_parent(&self)->io::Result<crate::ordinary::journal::cycle::Parent>{
+        self.confirmed.ok_or_else(||invalid("an unpublished prepared FULL is not a formal baseline"))
+    }
     /// These are the two *handled original* files actually checked by
     /// write_to; a transfer cannot substitute a current path or remote blob.
     pub(in crate::ordinary) fn native_files(&self)->(&PinnedRegular,&PinnedRegular){(&self.node,&self.raw)}
@@ -66,7 +69,7 @@ impl HistoryBody{
         // A read handle carries the expected digest; opening the header is
         // not evidence that its index was read. Only a fresh Verified object
         // below can issue preparation feedback to the original writer.
-        let b=Self{node,raw,original:f.original.clone(),index_digest:f.materials.index_digest};b.require(dir)?;Ok(b)
+        let b=Self{confirmed:Some(crate::ordinary::journal::cycle::Parent::full(f)),node,raw,original:f.original.clone(),index_digest:f.materials.index_digest};b.require(dir)?;Ok(b)
     }
     pub(in crate::ordinary) fn unchanged(&self)->io::Result<()>{self.raw.unchanged()?;self.node.unchanged()}
     pub(in crate::ordinary) fn require(&self,dir:&HeldDir)->io::Result<()>{
@@ -174,7 +177,7 @@ impl Verified{
         self.source_current(dir,&a.original)?;
         self.input.node.place(dir,Kind::Node,a,&self.node)?;after_node()?;self.input.raw.place(dir,Kind::Raw,a,&self.raw)?;
         let actual=Before::read(dir,Some(a),&a.original)?;
-        let body=HistoryBody{node:actual.node.ok_or_else(||invalid("formal node missing after preparation"))?,
+        let body=HistoryBody{confirmed:None,node:actual.node.ok_or_else(||invalid("formal node missing after preparation"))?,
             raw:actual.raw.ok_or_else(||invalid("formal FULL missing after preparation"))?,original:a.original.clone(),index_digest:self.index_digest};
         let actual=body.facts();
         if actual.node!=NativeObject::stamp(&self.node)||actual.raw!=NativeObject::stamp(&self.raw){return Err(invalid("different formal operands installed"));}

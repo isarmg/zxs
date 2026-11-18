@@ -6,6 +6,9 @@ use crate::{EntryId,FileId,HistoryId,OperationId,PoolId,VolumeId,fs::{self,inval
 use super::{purpose::{Call,Purpose},destination::{Method,Prepared},source::Verified};
 use std::{collections::BTreeSet,io};
 
+mod children;
+pub(in crate::ordinary) use children::ChildRoles;
+
 pub(in crate::ordinary) const KIND:u8=6;
 pub(in crate::ordinary) fn request(pool:PoolId,uid:u32,op:OperationId,file:FileId,from:VolumeId,to:VolumeId,epoch:u64)->io::Result<[u8;32]>{
     Call::Move.request(pool,uid,op,file,from,to,epoch)
@@ -14,14 +17,8 @@ pub(in crate::ordinary) fn request(pool:PoolId,uid:u32,op:OperationId,file:FileI
 pub(in crate::ordinary) struct Origin{
     pub op:OperationId,pub uid:u32,pub file:FileId,pub entry:EntryId,pub history:HistoryId,
     pub from:VolumeId,pub to:VolumeId,pub epoch:u64,pub name:String,pub ticket:OperationId,pub mode:Method,pub purpose:Purpose,
-    pub src_root:NativeObject,pub dst_root:NativeObject,pub creation:[u8;32],pub parent:[u8;32],pub last:Option<[u8;32]>,
+    pub src_root:NativeObject,pub dst_root:NativeObject,pub creation:[u8;32],pub parent:[u8;32],pub children:ChildRoles<[u8;32]>,
     pub source_bytes:u64,pub source_material:[u8;32],
-}
-fn take_hash(r:&mut In<'_>)->io::Result<Option<[u8;32]>>{
-    match r.byte()?{0=>Ok(None),1=>Ok(Some(r.fixed()?)),_=>Err(invalid("unknown optional INCR in MOVE"))}
-}
-fn put_hash(out:&mut Vec<u8>,d:Option<[u8;32]>){
-    out.push(u8::from(d.is_some()));if let Some(d)=d{out.extend_from_slice(&d);}
 }
 pub(super) fn isolation_name(ticket:OperationId)->std::ffi::CString{
     std::ffi::CString::new(format!(".zxs-move-out-{ticket}")).expect("fixed ASCII original MOVE ticket")
@@ -44,12 +41,12 @@ impl Origin{
         let src=p.source();let (c,f,d)=src.originals();
         let o=Self{op,uid:fs::local_uid(),file:src.file(),entry:c.create.entry,history:src.history(),from:src.volume(),to:p.volume(),epoch:0,
             name:src.name().to_owned(),ticket,mode:p.method(),purpose:Purpose::Ordinary,src_root:src.source_root().clone(),dst_root:p.root().clone(),
-            creation:c.digest,parent:f.digest,last:d.map(|d|d.digest),source_bytes:src.physical_bytes(),source_material:src.digest()?};
+            creation:c.digest,parent:f.digest,children:ChildRoles::from_first(d.map(|d|d.digest)),source_bytes:src.physical_bytes(),source_material:src.digest()?};
         o.require(src,p)?;Ok(o)
     }
     // The frozen roles are FILE, first node, first RAW, and only an already
-    // committed INCR. Missing physical material cannot reduce the count.
-    pub(super) fn role_count(&self)->usize{3+usize::from(self.last.is_some())}
+    // committed child for each native decision. Missing material cannot reduce the count.
+    pub(super) fn role_count(&self)->usize{3+self.children.len()}
     /// Only this MOVE issued the source-private isolation name on FROM.
     /// The internal spelling is not a business FILE or a scan pattern.
     pub(super) fn quarantine_name(&self)->std::ffi::CString{
@@ -70,21 +67,27 @@ impl Origin{
         if bytes!=Some(self.source_bytes)||self.epoch==u64::MAX||self.from==self.to||self.op==self.ticket||self.src_root==self.dst_root||
             self.uid!=c.create.uid||self.file!=c.create.file||self.history!=c.create.history||self.entry!=c.create.entry||
             (self.purpose==Purpose::Ordinary&&(self.from!=c.create.volume||self.epoch!=0))||self.name!=c.create.name||self.creation!=c.digest||self.parent!=f.digest||
-            f.original.file!=self.file||f.original.creation!=c.digest||self.last!=d.map(|x|x.digest)||
+            f.original.file!=self.file||f.original.creation!=c.digest||self.children!=ChildRoles::from_first(d.map(|x|x.digest))||
             d.is_some_and(|x|x.original.file!=self.file||x.original.creation!=c.digest||x.original.parent_decision!=f.digest)||
             self.source_bytes==0{
             return Err(invalid("not the complete original FILE at its declared first custody cut"));
         }
         Ok(())
     }
+    fn child_hashes(&self)->io::Result<()>{
+        if self.children.iter().any(|h|h==&self.parent||h==&self.creation)||
+            self.children.second().is_some_and(|v|Some(v)==self.children.first()){
+            return Err(invalid("repeated original custody history decision"));
+        }Ok(())
+    }
     pub(in crate::ordinary) fn put(&self,b:&mut Vec<u8>)->io::Result<()>{
-        wire::human_name(self.name.as_bytes())?;
+        self.child_hashes()?;wire::human_name(self.name.as_bytes())?;
         self.purpose.check_transfer(self.mode,&self.src_root,&self.dst_root)?;
         let start=b.len();
         for id in [&self.op.0,&self.file.0,&self.entry.0,&self.history.0,&self.from.0,&self.to.0,&self.ticket.0]{b.extend_from_slice(id);}
         b.extend_from_slice(&self.uid.to_be_bytes());b.extend_from_slice(&self.epoch.to_be_bytes());
         b.push(self.purpose.tag(self.mode)?);b.push(self.name.len() as u8);b.extend_from_slice(self.name.as_bytes());
-        self.src_root.put(b);self.dst_root.put(b);b.extend_from_slice(&self.creation);b.extend_from_slice(&self.parent);put_hash(b,self.last);
+        self.src_root.put(b);self.dst_root.put(b);b.extend_from_slice(&self.creation);b.extend_from_slice(&self.parent);self.children.put(b,|d,b|b.extend_from_slice(d));
         b.extend_from_slice(&self.source_bytes.to_be_bytes());b.extend_from_slice(&self.source_material);self.purpose.put(b);
         if b.len()-start>MAX_ORIGIN{return Err(invalid("custody origin exceeds the certified restore bound"));}Ok(())
     }
@@ -94,30 +97,30 @@ impl Origin{
         let epoch=r.u64()?;let tag=r.byte()?;let mode=Purpose::method(tag)?;
         let name=wire::human_name(r.short_buf()?)?.to_owned();
         let src_root=NativeObject::get(r)?;let dst_root=NativeObject::get(r)?;let creation=r.fixed()?;let parent=r.fixed()?;
-        let last=take_hash(r)?;let source_bytes=r.u64()?;let source_material=r.fixed()?;
+        let children=ChildRoles::get(r,|r|r.fixed())?;let source_bytes=r.u64()?;let source_material=r.fixed()?;
         let purpose=Purpose::get(tag,r)?;purpose.check_transfer(mode,&src_root,&dst_root)?;
         if op==ticket||from==to||epoch==u64::MAX||purpose==Purpose::Ordinary&&epoch!=0||source_bytes==0||src_root==dst_root{
             return Err(invalid("inconsistent original roots, epoch or method"));
         }
-        Ok(Self{op,file,entry,history,from,to,ticket,uid,epoch,mode,purpose,name,src_root,dst_root,creation,parent,last,source_bytes,source_material})
+        let o=Self{op,file,entry,history,from,to,ticket,uid,epoch,mode,purpose,name,src_root,dst_root,creation,parent,children,source_bytes,source_material};o.child_hashes()?;Ok(o)
     }
 }
 /// Physical custody alone, never replacement history. Stable version/node
 /// references and their byte commitments remain in their original decisions.
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct Sites{
-    pub directory:NativeObject,pub local:NativeObject,pub node:NativeObject,pub raw:NativeObject,pub incr:Option<NativeObject>,
+    pub directory:NativeObject,pub local:NativeObject,pub node:NativeObject,pub raw:NativeObject,pub children:ChildRoles<NativeObject>,
 }
 impl Sites{
     pub(in crate::ordinary) fn birthplace(c:&Frame,f:&Commit,d:Option<&Delta>)->Self{
         Self{directory:c.create.directory.clone(),local:c.create.local.clone(),node:f.materials.node.clone(),raw:f.materials.raw.clone(),
-            incr:d.map(|x|x.material.object.clone())}
+            children:ChildRoles::from_first(d.map(|x|x.material.object.clone()))}
     }
     pub(super) fn at(&self,k:super::source::Leaf)->Option<&NativeObject>{
-        use super::source::Leaf;match k{Leaf::File=>Some(&self.local),Leaf::FullNode=>Some(&self.node),Leaf::FullRaw=>Some(&self.raw),Leaf::Incr=>self.incr.as_ref()}
+        use super::source::Leaf;match k{Leaf::File=>Some(&self.local),Leaf::FullNode=>Some(&self.node),Leaf::FullRaw=>Some(&self.raw),Leaf::Incr=>self.children.first(),Leaf::IncrNext=>self.children.second()}
     }
     pub(in crate::ordinary) fn each(&self)->impl Iterator<Item=&NativeObject>{
-        [&self.directory,&self.local,&self.node,&self.raw].into_iter().chain(self.incr.iter())
+        [&self.directory,&self.local,&self.node,&self.raw].into_iter().chain(self.children.iter())
     }
     pub(in crate::ordinary) fn check(&self,root:&NativeObject)->io::Result<()>{
         let mut births=BTreeSet::new();let mut entities=BTreeSet::new();births.insert(root.birth.clone());entities.insert((root.entity.device,root.entity.inode));
@@ -130,12 +133,12 @@ impl Sites{
     }
     pub(in crate::ordinary) fn put(&self,b:&mut Vec<u8>){
         for n in [&self.directory,&self.local,&self.node,&self.raw]{n.put(b);}
-        b.push(u8::from(self.incr.is_some()));if let Some(x)=&self.incr{x.put(b);}
+        self.children.put(b,|x,b|x.put(b));
     }
     pub(in crate::ordinary) fn get(r:&mut In<'_>)->io::Result<Self>{
         let directory=NativeObject::get(r)?;let local=NativeObject::get(r)?;let node=NativeObject::get(r)?;let raw=NativeObject::get(r)?;
-        let incr=match r.byte()?{0=>None,1=>Some(NativeObject::get(r)?),_=>return Err(invalid("invalid incremental custody role"))};
-        Ok(Self{directory,local,node,raw,incr})
+        let children=ChildRoles::get(r,|r|NativeObject::get(r))?;
+        Ok(Self{directory,local,node,raw,children})
     }
 }
 #[derive(Clone,Debug,Eq,PartialEq)]
@@ -144,8 +147,8 @@ pub(in crate::ordinary) struct Moved{pub seq:u64,pub previous:[u8;32],pub reques
 // Canonical maxima. The actual maximal encoder is also exercised in the
 // source fixture. Omitting an optional INCR or a shorter name only shrinks it.
 const NATIVE:usize=16+1+fs::MAX_BIRTH;
-pub(super) const MAX_ORIGIN:usize=7*16+4+8+1+1+wire::MAX_HUMAN+2*NATIVE+2*32+1+32+8+32+super::purpose::MAX_EXTRA;
-const MAX_CUSTODY_FRAME:usize=wire::ENVELOPE_BYTES+MAX_ORIGIN+32+1+(5*NATIVE+1);
+pub(super) const MAX_ORIGIN:usize=7*16+4+8+1+1+wire::MAX_HUMAN+2*NATIVE+2*32+1+2*32+8+32+super::purpose::MAX_EXTRA;
+const MAX_CUSTODY_FRAME:usize=wire::ENVELOPE_BYTES+MAX_ORIGIN+32+1+(6*NATIVE+1);
 const _:()=assert!(MAX_CUSTODY_FRAME<=wire::MAX_FRAME);
 impl Moved{
     pub(in crate::ordinary) fn require_history(&self,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<()>{
@@ -156,7 +159,7 @@ impl Moved{
     pub(in crate::ordinary) fn require_at(&self,before:crate::ordinary::placement::Placement<'_>,f:&Commit,d:Option<&Delta>)->io::Result<Sites>{
         let o=&self.original;before.require_next(o)?;o.require_history(before.birth(),f,d)?;
         let previous=before.sites(f,d)?;previous.check(&o.src_root)?;self.target.check(&o.dst_root)?;
-        if self.target.incr.is_some()!=d.is_some(){return Err(invalid("a MOVE cannot lose/add a retained version"));}
+        if self.target.children.len()!=usize::from(d.is_some()){return Err(invalid("a MOVE cannot lose/add a retained version"));}
         match o.mode{
             Method::Rename if self.stage.is_none()&&self.target==previous=>Ok(previous),
             Method::Transfer if self.stage.is_some_and(|n|n<crate::ordinary::allocation::SLOTS)&&
@@ -165,7 +168,7 @@ impl Moved{
         }
     }
     fn target_shape(o:&Origin,stage:Option<u8>,target:&Sites)->io::Result<()>{
-        if target.incr.is_some()!=o.last.is_some()||match o.mode{
+        if target.children.len()!=o.children.len()||match o.mode{
             Method::Rename=>stage.is_some(),Method::Transfer=>!stage.is_some_and(|n|n<crate::ordinary::allocation::SLOTS),
         }{return Err(invalid("wrong MOVE role set, mode or stage slot"));}
         target.check(&o.dst_root)

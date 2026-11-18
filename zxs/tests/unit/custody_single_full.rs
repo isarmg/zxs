@@ -17,7 +17,7 @@ fn node(f:&Fixture,file:crate::FileId,n:&FormalNode,wanted:&[u8]){
 fn frozen(f:&Fixture,r:Request,first:&FormalNode)->(u64,[u8;32]){
     let(_,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let m=s.placed(r.id).unwrap();
     let(c,p,old_increment)=super::super::finish::frozen(&s,m).unwrap();
-    assert!(old_increment.is_none()&&m.original.last.is_none()&&m.target.incr.is_none());
+    assert!(old_increment.is_none()&&m.original.children.first().is_none()&&m.target.children.first().is_none());
     assert_eq!((c.create.file,p.original.node),(r.id,first.node));assert_eq!(m.original.role_count(),3);
     (m.seq,m.digest)
 }
@@ -162,11 +162,11 @@ fn a_later_handoff_source_uses_the_actual_b_roles_and_never_adds_a_new_b_child_t
     let c=s.file(item.file).unwrap();let full=s.head(item.file).unwrap();let d=s.delta(item.file).unwrap();
     assert_eq!((full.original.node,d.original.node),(first.node,child.node));
     let m=s.placed(item.file).unwrap();let before=s.before_handoff(m).unwrap();assert_eq!((before.volume(),before.epoch()),(f.from,0));
-    let frozen=m.require_at(before,full,None).unwrap();assert!(frozen.incr.is_none());assert_eq!(frozen.directory,c.create.directory);
+    let frozen=m.require_at(before,full,None).unwrap();assert!(frozen.children.first().is_none());assert_eq!(frozen.directory,c.create.directory);
     let b=s.placement(item.file).unwrap();let sites=b.sites(full,Some(d)).unwrap();
     assert_eq!((b.volume(),b.epoch(),b.key()),(f.to,1,m.digest));
     assert_eq!(sites.directory,m.target.directory);assert_ne!(sites.directory,c.create.directory);
-    assert_eq!(sites.incr.as_ref(),Some(&d.material.object));assert!(m.target.incr.is_none());
+    assert_eq!(sites.children.first(),Some(&d.material.object));assert!(m.target.children.first().is_none());
     // The next possible logical origin is inspected, not reserved. The
     // current B-native child is not the A-born child of the historic MOVE.
     let recycle=z::inspect(&f.sys).unwrap().volumes.into_iter().find(|v|v.volume.role==z::Role::Recycle).unwrap().id;
@@ -174,7 +174,7 @@ fn a_later_handoff_source_uses_the_actual_b_roles_and_never_adds_a_new_b_child_t
     let (_,to)=checked.registration().originals();let target=crate::ordinary::wire::NativeObject{entity:to.1,birth:to.2.clone()};
     let volume=p.ordinary(f.to).unwrap();let dir=volume.root.child_directory(c"one").unwrap().unwrap();
     let observed=super::super::source::Clean::at_original_sites(&volume,dir,c,full,Some(d),&sites).unwrap().verify().unwrap();
-    let mut proposed=m.original.clone();proposed.op=op();proposed.ticket=op();proposed.last=Some(d.digest);
+    let mut proposed=m.original.clone();proposed.op=op();proposed.ticket=op();proposed.children=crate::ordinary::custody::transfer::ChildRoles::One(d.digest);
     proposed.source_material=observed.digest().unwrap();proposed.source_bytes=observed.physical_bytes();
     proposed.from=f.to;proposed.src_root=m.original.dst_root.clone();proposed.to=recycle;proposed.dst_root=target;proposed.epoch=1;
     proposed.purpose=Purpose::Delete{previous:m.digest,at:DeletedAt::new(55,0).unwrap()};
@@ -226,7 +226,7 @@ fn only_the_original_local_subject_and_clean_file_can_borrow_the_two_physical_en
     let orig=p.custody_end(&grant,Side::Source).unwrap();let bin=p.custody_end(&grant,Side::Target).unwrap();
     assert_eq!((orig.id(),orig.role(),bin.id(),bin.role()),(f.from,crate::Role::File,rr.id,crate::Role::Recycle));
     assert_eq!(bin.identity().unwrap(),(grant.root(Side::Target).entity,grant.root(Side::Target).birth.clone()));
-    assert!(grant.sites().incr.is_some());assert!(orig.target_present().is_err());
+    assert!(grant.sites().children.first().is_some());assert!(orig.target_present().is_err());
     assert!(bin.read_clean_source().is_err());assert!(orig.read_clean_source().is_err()); // read-only observation, not incoming.
     for bad in [
         Request{call:Call::Move,..request},Request{op:f.last.created_by,..request},
@@ -342,7 +342,10 @@ fn only_its_live_verified_prepared_target_proposes_registered_native_custody_at_
     };assert!(ok(&bad).is_err()); // actual ordinary target is not the original dedicated R
     let mut bad=proposal.clone();bad.purpose=Purpose::Restore{deleted_by:op(),previous:proposal.creation};assert!(ok(&bad).is_err());
     let mut bad=proposal.clone();bad.epoch+=1;assert!(ok(&bad).is_err());
-    let mut bad=proposal.clone();bad.last=None;assert!(ok(&bad).is_err());
+    let mut bad=proposal.clone();bad.children=crate::ordinary::custody::transfer::ChildRoles::None;assert!(ok(&bad).is_err());
+    let mut bad=proposal.clone();bad.children=crate::ordinary::custody::transfer::ChildRoles::Two(*proposal.children.first().unwrap(),[45;32]);
+    assert!(ok(&bad).is_err()); // a valid two-child encoding cannot add a nonexistent second decision to this real FILE.
+    assert!(s.moving.is_none()&&s.decided(r.op).is_none());
     let mut bad=proposal.clone();bad.uid=bad.uid.wrapping_add(1);assert!(ok(&bad).is_err());
     let mut bad=proposal.clone();bad.ticket=f.last.created_by;assert!(ok(&bad).is_err());
     let mut bad=proposal.clone();if let Purpose::Delete{at,..}=bad.purpose{bad.purpose=Purpose::Delete{previous:[0;32],at};}assert!(ok(&bad).is_err());
@@ -538,8 +541,8 @@ fn later_b_native_child_goes_to_recycle_by_its_own_original_and_explicit_restore
     assert_eq!(z::list_initial_files(&f.sys,f.to).unwrap().files,[outsider.clone()]);
     assert_eq!(lifecycle::perform(&f.sys,del,&mut |_|Ok(())).unwrap().status,MoveStatus::CompleteCheckedNow);
     let(frame,retained)={let(_,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let m=s.placed(file.file).unwrap();
-        let before=s.before_handoff(m).unwrap().transfer().unwrap();assert_eq!(before.original.op,moved.op);assert!(before.target.incr.is_none());
-        assert_eq!(m.original.last,s.delta(file.file).map(|d|d.digest));assert!(m.target.incr.is_some());
+        let before=s.before_handoff(m).unwrap().transfer().unwrap();assert_eq!(before.original.op,moved.op);assert!(before.target.children.first().is_none());
+        assert_eq!(m.original.children.first().copied(),s.delta(file.file).map(|d|d.digest));assert!(m.target.children.first().is_some());
         (m.digest,s.placement(file.file).unwrap().retained().unwrap())};
     assert_eq!(retained.operation,del.op);assert_eq!(retained.decision,frame);
     // Same human name, different, later FILE. Its existence is not evidence

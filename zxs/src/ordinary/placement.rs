@@ -1,7 +1,7 @@
 //! A FILE birth and its *current native owner at one original prefix*.
 //! The constructor is fed only by the authenticated journal index. The MOVE
 //! never rewrites an original FILE decision; a later SAVE never amends MOVE.
-use super::{custody::{purpose::Purpose,transfer::{Moved,Origin,Sites}},delta::{types::Delta,physical::Body},
+use super::{custody::{purpose::Purpose,transfer::{ChildRoles,Moved,Origin,Sites}},delta::{types::Delta,physical::Body},
     formal::{types::Commit,physical::HistoryBody},wire::{Frame,NativeObject},material};
 use crate::{VolumeId,fs::{HeldDir,invalid,stream::PinnedRegular}};
 use std::io;
@@ -60,12 +60,13 @@ impl<'a> Placement<'a>{
             return Ok(Sites::birthplace(c,f,d))
         };
         if m.original.parent!=f.digest||f.seq>=m.seq{return Err(invalid("wrong FULL at prior custody boundary"));}
+        if m.original.children.second().is_some()||m.target.children.second().is_some(){return Err(invalid("single-child placement cannot attest a larger original handoff"));}
         let mut sites=m.target.clone();
-        match(m.original.last,m.target.incr.as_ref(),d){
+        match(m.original.children.first().copied(),m.target.children.first(),d){
             (Some(hash),Some(_),Some(n)) if n.digest==hash&&n.seq<m.seq=>{},
             (None,None,None)=>{},
             (None,None,Some(n)) if n.seq>m.seq&&self.retained().is_none()&&n.original.volume==self.volume()=>{
-                sites.incr=Some(n.material.object.clone());},
+                sites.children=ChildRoles::One(n.material.object.clone());},
             _=>return Err(invalid("missing, extra or unrelated INCR at original custody frontier"))
         }sites.check(&m.original.dst_root)?;Ok(sites)
     }
@@ -92,12 +93,12 @@ impl<'a> Placement<'a>{
         }
         match self.applied{
             None if d.original.volume==self.volume()=>Body::open(dir,parent,d),
-            Some(m) if m.original.last==Some(d.digest)&&d.seq<m.seq&&
+            Some(m) if m.original.children.first()==Some(&d.digest)&&d.seq<m.seq&&
                 (m.original.purpose!=Purpose::Ordinary||d.original.volume==m.original.from)=>{
-                let n=m.target.incr.as_ref().ok_or_else(||invalid("missing frozen transferred incremental object"))?;
+                let n=m.target.children.first().ok_or_else(||invalid("missing frozen transferred incremental object"))?;
                 Body::at_original(dir,parent,d,n)
             },
-            Some(m) if m.original.last.is_none()&&m.target.incr.is_none()&&d.seq>m.seq&&d.original.volume==self.volume()=>
+            Some(m) if m.original.children.first().is_none()&&m.target.children.first().is_none()&&d.seq>m.seq&&d.original.volume==self.volume()=>
                 Body::open(dir,parent,d),
             _=>Err(invalid("incremental node is neither the frozen original nor a later decision at this owner")),
         }

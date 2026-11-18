@@ -28,9 +28,13 @@ impl Parent{
         o.commit==self.decision&&o.base_len==self.length&&o.birth==self.creation
     }
     fn accepts(self,s:&Saved,last:Option<&Saved>)->bool{self.owns(s)&&s.original.predecessor==self.predecessor(last)}
+    pub(in crate::ordinary) fn precedes(self,d:&Delta)->bool{let o=&d.original;
+        o.creation==self.creation&&o.file==self.file&&o.history==self.history&&o.branch==self.branch&&o.parent==self.node&&
+        o.parent_version==self.version&&o.parent_decision==self.decision&&o.parent_length==self.length&&
+        o.revision>self.revision&&o.node!=self.node&&o.version!=self.version&&o.storage!=self.storage
+    }
     pub(super) fn child(self,d:&Delta,last:&Saved)->bool{let o=&d.original;
-        o.file==self.file&&o.history==self.history&&o.branch==self.branch&&o.parent==self.node&&o.parent_version==self.version&&
-        o.parent_decision==self.decision&&o.parent_length==self.length&&o.working==last.original.op&&o.working_decision==last.digest&&
+        self.precedes(d)&&self.owns(last)&&o.working==last.original.op&&o.working_decision==last.digest&&
         o.revision==last.original.revision()&&o.logical==last.original.result
     }
 }
@@ -44,7 +48,30 @@ pub(in crate::ordinary) struct Edge{
 pub(in crate::ordinary) struct Cycle<'a>{
     birth:&'a Frame,full:&'a Commit,children:Vec<&'a Delta>,work:Vec<&'a Saved>,parent:Parent,site:Placement<'a>,
 }
+/// The second edge, frozen at a confirmed original FILE prefix. Absence of
+/// a physical object is never a way to shorten this authenticated chain.
+pub(in crate::ordinary) struct Next<'a>{parent:Parent,child:&'a Delta,site:Placement<'a>}
+impl<'a> Next<'a>{
+    pub(in crate::ordinary) fn parent(&self)->Parent{self.parent}
+    pub(in crate::ordinary) fn original(&self)->&'a Delta{self.child}
+    /// Only a formal edge actually written at the selected active site may
+    /// use the inode from its own submission. Transferred roles must obtain
+    /// the exact destination inode from the independently confirmed handoff.
+    pub(in crate::ordinary) fn local_object(&self)->io::Result<&'a super::NativeObject>{
+        if self.site.retained().is_some()||self.child.original.volume!=self.site.volume()||
+            self.site.transfer().is_some_and(|m|self.child.seq<=m.seq){return Err(invalid("increment requires a proven transferred original, not its birth pathname"));}
+        Ok(&self.child.material.object)
+    }
+}
 impl<'a> Cycle<'a>{
+    pub(in crate::ordinary) fn next_generation(&self,node:NodeId)->io::Result<Next<'a>>{
+        let(first,second)=match self.children.as_slice(){[first,second]=>(*first,*second),
+            _=>return Err(invalid("no exact bounded pair of confirmed original incremental edges"))};
+        let parent=Parent::incremental(first);
+        if second.original.node!=node||!Parent::full(self.full).precedes(first)||!parent.precedes(second){
+            return Err(invalid("not the requested second incremental child of this FILE's real parent"));}
+        Ok(Next{parent,child:second,site:self.site})
+    }
     pub(in crate::ordinary) fn parent(&self)->Parent{self.parent}
     /// Fixed-node lookup never means latest. A future deeper child cannot
     /// accidentally be opened as if it were a direct patch of the first FULL.

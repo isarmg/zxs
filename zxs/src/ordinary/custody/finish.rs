@@ -11,7 +11,8 @@ pub(super) fn frozen<'a>(s:&'a crate::ordinary::journal::Journal,m:&Moved)->io::
     let id=m.original.file;let c=s.file(id).ok_or_else(||invalid("lost original FILE birth"))?;
     let f=s.head(id).ok_or_else(||invalid("lost original FULL"))?;
     if f.seq>=m.seq||c.seq>=f.seq{return Err(invalid("MOVE is not after its original FILE and FULL"));}
-    let d=match(m.original.last,s.delta(id)){
+    if m.original.children.second().is_some(){return Err(invalid("a second original child requires the full custody graph"));}
+    let d=match(m.original.children.first().copied(),s.delta(id)){
         (Some(h),Some(d)) if h==d.digest&&f.seq<d.seq&&d.seq<m.seq=>Some(d),
         (None,Some(d)) if d.seq>m.seq=>None,(None,None)=>None,
         _=>return Err(invalid("MOVE froze a different retained history, not the current branch tip")),
