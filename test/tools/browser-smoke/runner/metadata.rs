@@ -496,7 +496,9 @@ pub(super) fn directory_controls_retired(browser: &Browser) -> Result<()> {
         return document.querySelectorAll(
             '[data-initialize-directory-git],[data-stage-directory-owned],'+
             '[data-stage-directory-child],[data-commit-directory],'+
-            '[data-zxs-set-directory-default],'+
+            '[data-zxs-set-directory-default],[data-review-directory-layout],'+
+            '[data-directory-layout-review],[data-confirm-directory-layout],'+
+            '[data-cancel-directory-layout],[data-refresh-directory-layout],[data-directory-layout-result],'+
             'input[aria-label="Folder commit message"],input[aria-label="目录提交说明"]'
         ).length;
     "#)?;
@@ -511,14 +513,13 @@ pub(super) fn directory_controls_retired(browser: &Browser) -> Result<()> {
     if branch_controls != 0 {
         return Err("retired directory branch controls remain".into());
     }
-    browser.css("[data-review-directory-layout]")?;
     browser.click(&browser.css("[data-zxs-directory-files]:not([disabled])")?)?;
     browser.element(
         "xpath",
         "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']",
     )?;
     println!(
-        "PASS directory write controls retired; existing layout review and file navigation remain"
+        "PASS directory write and physical reconciliation controls absent; ordinary file navigation remains"
     );
     Ok(())
 }
@@ -543,10 +544,13 @@ pub(super) fn is_retired_directory_request(url: &str, origin: &str, method: &str
             || (path.starts_with("/api/repositories/")
                 && (path.ends_with("/default-branch")
                     || path.contains("/directory-branches/"))));
-    let retired_creator = method == "POST" && (path == "/api/repositories"
-        || path.strip_prefix("/api/repositories/").and_then(|tail| tail.split_once('/'))
-            .is_some_and(|(repository, tail)| !repository.is_empty() && tail == "branches"));
-    retired_creator || branch_write
+    let repository_action = path.strip_prefix("/api/repositories/")
+        .and_then(|rest| rest.split_once('/'))
+        .filter(|(repository, _)| !repository.is_empty())
+        .map(|(_, action)| action);
+    let retired_post = method == "POST" && (path == "/api/repositories"
+        || matches!(repository_action, Some("branches" | "directory-layout/reconcile")));
+    retired_post || branch_write
         || path.ends_with("/directory-scopes")
         || path.ends_with("/directory-select")
         || path.ends_with("/directory-git/initialize")

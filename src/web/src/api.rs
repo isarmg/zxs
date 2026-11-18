@@ -116,8 +116,6 @@ pub enum ErrorSource {
     ContainerTags(#[source] crate::files::ContainerTagsError),
     #[error("invalid directory repository status: {0}")]
     DirectoryGit(#[source] json_codec::Error),
-    #[error("invalid directory layout result: {0}")]
-    DirectoryLayout(#[source] json_codec::Error),
     #[error("invalid directory page: {0}")]
     DirectoryPage(#[source] crate::files::DirectoryPageError),
     #[error("invalid service API path: {0}")]

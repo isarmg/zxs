@@ -179,9 +179,10 @@ fn child_reference_is_explicit_and_never_inferred_from_parent_or_dirty_work() {
     }
 }
 #[test]
-fn writes_require_fresh_review_same_session_and_no_pending_operation() {
+fn directory_read_review_is_bound_to_its_loaded_session_and_namespace_head() {
     let (original, model) = reviewed(wire());
-    for change in 0..6 {
+    assert!(model.reviewed(&original).is_some());
+    for change in 0..7 {
         let mut state = original.clone();
         match change {
             0 => state.session_epoch += 1,
@@ -189,17 +190,18 @@ fn writes_require_fresh_review_same_session_and_no_pending_operation() {
             2 => state.files.repository_path = "other".into(),
             3 => state.files.namespace_head = id("commit", 2),
             4 => state.files.loading = true,
-            5 => state.files.mutation_pending = true,
+            5 => state.files.repository_id = id("repo", 2),
+            6 => state.authenticated = false,
             _ => unreachable!(),
         }
-        assert!(model.ready(&state).is_none(), "change {change}");
+        assert!(model.reviewed(&state).is_none(), "change {change}");
     }
     let mut changed = model.clone();
     changed.reading = true;
-    assert!(changed.ready(&original).is_none());
+    assert!(changed.reviewed(&original).is_none());
     changed.reading = false;
     changed.error = Some(invalid());
-    assert!(changed.ready(&original).is_none());
+    assert!(changed.reviewed(&original).is_none());
 }
 #[test]
 fn repeated_reads_have_distinct_tokens_and_navigation_discards_old_context() {
@@ -218,27 +220,6 @@ fn repeated_reads_have_distinct_tokens_and_navigation_discards_old_context() {
     model.begin(Some(next));
     assert!(model.status.is_none() && model.review_target.is_none());
 }
-#[test]
-fn shared_directory_context_requires_fresh_scope_session_and_write_fences() {
-    let (original, model) = reviewed(wire());
-    for change in 0..9 {
-        let mut state = original.clone();
-        match change {
-            0 => state.session_epoch += 1,
-            1 => state.files.generation += 1,
-            2 => state.files.repository_path = "other".into(),
-            3 => state.files.repository_id = id("repo", 2),
-            4 => state.files.namespace_head = id("commit", 2),
-            5 => state.files.loading = true,
-            6 => state.files.mutation_pending = true,
-            7 => state.files.writable = false,
-            8 => state.authenticated = false,
-            _ => unreachable!(),
-        }
-        assert!(model.ready(&state).is_none(), "change {change}");
-    }
-}
-
 #[test]
 fn directory_status_keeps_required_work_and_boundary_fields() {
     for field in ["unstaged", "needs_restage"] {

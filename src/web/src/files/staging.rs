@@ -1,5 +1,4 @@
-//! Existing directory context for branch review, navigation and physical layout repair.
-mod layout;
+//! Read the existing directory context for branch review and navigation.
 use super::actions;
 use crate::{
     api,
@@ -94,12 +93,7 @@ impl Model {
         }
         Some((target, self.status.as_ref()?))
     }
-    fn ready<'a>(&'a self, state: &State) -> Option<(&'a Target, &'a DirectoryGitStatus)> {
-        if !actions::write_allowed(state) {
-            return None;
-        }
-        self.reviewed(state)
-    }
+
 }
 fn invalid() -> api::Error {
     api::error(
@@ -410,10 +404,10 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <h3 class="zxs-row">{t("已有目录上下文", "Existing folder context")}</h3>
                 <p class="zxs-row">
                     {t(
-                        "Web 已移除原目录仓库的初始化、暂存、提交及分支写操作。以下只保留已有上下文和布局操作，不代表新的 .zxs 目录快照功能。",
+                        "Web 已移除原目录仓库的初始化、暂存、提交及分支写操作。以下只显示已有目录上下文，不代表新的 .zxs 目录快照功能。",
                         concat!(
                             "Directory initialization, staging, commit and branch writes were removed ",
-                            "from Web. Existing context and layout are not the new .zxs snapshots.",
+                            "from Web. The existing folder context is read-only; it is not a new .zxs snapshot.",
                         ),
                     )}
                 </p>
@@ -481,7 +475,6 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                         children=move |child|child_view(state,model,child)
                     />
                 </Show>
-                {layout::view(state, model)}
             </section>
         </Show>
     }

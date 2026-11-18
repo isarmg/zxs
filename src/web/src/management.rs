@@ -136,30 +136,11 @@ fn accept_status(s: &mut State, status: response::Status) -> bool {
     load_files
 }
 
-#[derive(Clone, Copy)]
-enum Refresh {
-    Status,
-    CurrentFolder,
-}
-#[derive(PartialEq, Eq)]
-struct FolderRefresh {
-    page: crate::ui::Page,
-    generation: u64,
-}
-impl FolderRefresh {
-    fn capture(state: &State) -> Self {
-        Self {
-            page: state.page,
-            generation: state.files.generation,
-        }
-    }
-}
 struct StatusRead {
     epoch: u64,
     generation: u64,
-    folder: Option<FolderRefresh>,
 }
-fn begin_load(state: &mut State, refresh: Refresh) -> Option<StatusRead> {
+fn begin_load(state: &mut State) -> Option<StatusRead> {
     // Never let a pre-retry snapshot resolve the retry outcome fence.
     // The completion path starts a fresh read after the POST settles.
     if state.management.loading
@@ -169,39 +150,18 @@ fn begin_load(state: &mut State, refresh: Refresh) -> Option<StatusRead> {
     {
         return None;
     }
-    let folder = match refresh {
-        Refresh::Status => None,
-        Refresh::CurrentFolder => {
-            if !state.session_active()
-                || !matches!(
-                    state.page,
-                    crate::ui::Page::Files | crate::ui::Page::Details
-                )
-                || state.files.slot.is_empty()
-                || state.files.loading
-                || files::pending(state)
-            {
-                return None;
-            }
-            // A fresh health read, not the cached Ready value, precedes the
-            // requested directory read. This does not settle the prior mutation.
-            state.management.storage = Storage::Unknown;
-            Some(FolderRefresh::capture(state))
-        }
-    };
     state.management.loading = true;
     state.management.generation += 1;
     Some(StatusRead {
         epoch: state.session_epoch,
         generation: state.management.generation,
-        folder,
     })
 }
 #[derive(Debug, PartialEq, Eq)]
 enum StatusCompletion {
     Obsolete,
     Superseded,
-    Accepted { disks: bool, folder: bool },
+    Accepted { disks: bool },
 }
 fn complete_load(
     state: &mut State,
@@ -216,38 +176,18 @@ fn complete_load(
         return StatusCompletion::Superseded;
     }
     match result {
-        Ok(status) => {
-            let disks = accept_status(state, status);
-            let folder = read.folder.as_ref() == Some(&FolderRefresh::capture(state))
-                && state.session_active()
-                && state.management.storage.readable()
-                && !state.files.loading
-                && !files::pending(state);
-            StatusCompletion::Accepted { disks, folder }
-        }
+        Ok(status) => StatusCompletion::Accepted { disks: accept_status(state, status) },
         Err(error) => {
             state.management.storage = Storage::Unknown;
             state.management.failure = Some(feedback(&error));
-            StatusCompletion::Accepted {
-                disks: false,
-                folder: false,
-            }
+            StatusCompletion::Accepted { disks: false }
         }
     }
 }
 
 pub(crate) fn load(state: RwSignal<State>) {
-    load_with(state, Refresh::Status);
-}
-
-/// Explicit read-only recovery step. Never retries a mutation or opens storage.
-pub(crate) fn refresh_storage_and_folder(state: RwSignal<State>) {
-    load_with(state, Refresh::CurrentFolder);
-}
-
-fn load_with(state: RwSignal<State>, refresh: Refresh) {
     let Some(read) = state
-        .try_update(|state| begin_load(state, refresh))
+        .try_update(begin_load)
         .flatten()
     else {
         return;
@@ -257,12 +197,9 @@ fn load_with(state: RwSignal<State>, refresh: Refresh) {
             api::validated_request("GET", "/api/management/status", None, response::status).await;
         match state.try_update(|state| complete_load(state, &read, result)) {
             Some(StatusCompletion::Superseded) => load(state),
-            Some(StatusCompletion::Accepted { disks, folder }) => {
+            Some(StatusCompletion::Accepted { disks }) => {
                 if disks {
                     files::load_disks(state);
-                }
-                if folder {
-                    files::load_entries(state);
                 }
             }
             Some(StatusCompletion::Obsolete) | None => {}

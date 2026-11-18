@@ -176,6 +176,28 @@ fn browser_guard_rejects_only_the_two_retired_creator_posts_not_registered_reads
 }
 
 #[test]
+fn browser_guard_rejects_only_the_original_directory_reconciliation_post() {
+    let origin = "http://127.0.0.1:2345";
+    let path = "/api/repositories/repo_123/directory-layout/reconcile";
+    for query in ["", "?unused=1"] {
+        let url = format!("{origin}{path}{query}");
+        assert!(metadata::is_retired_directory_request(&url, origin, "POST"));
+        assert!(!metadata::is_retired_directory_request(&url, origin, "GET"));
+    }
+    for other in [
+        "/api/repositories//directory-layout/reconcile",
+        "/api/repositories/repo_123/folder/directory-layout/reconcile",
+        "/api/repositories/repo_123/directory-layout/reconcile-preview",
+        "/api/repositories/repo_123/placement-configuration",
+        "/api/file-manager/disks/P01/namespace",
+        "/api/file-manager/files/file_123/branches",
+    ] {
+        assert!(!metadata::is_retired_directory_request(&format!("{origin}{other}"), origin, "POST"));
+    }
+    assert!(!metadata::is_retired_directory_request(&format!("{origin}0{path}"), origin, "POST"));
+}
+
+#[test]
 fn directory_network_guard_rejects_retired_web_writes_and_entry_queries_only() {
     let origin = "http://127.0.0.1:2345";
     for path in [
