@@ -601,12 +601,10 @@ impl<'a> Query<'a> {
     fn input_page(&self, id: &str) -> Result<HistoryWindowPage> {
         let merge = self.merge(id)?;
         let mut selector = Selector::new(self.member_position()?, self.request.limit.get())?;
-        for (ordinal, (branch, node)) in merge
-            .input_branch_ids
-            .iter()
-            .zip(&merge.input_node_ids)
-            .enumerate()
-        {
+        // Historical selection may use a same-operation helper branch to
+        // materialize an old HEAD. It is not the user's original input branch.
+        for (ordinal, input) in merge.original_inputs.iter().enumerate() {
+            let (branch, node) = (&input.branch_id, &input.source_node_id);
             self.cancel.checkpoint()?;
             if self.allowed_branch(branch) && nodes::node(self.state, self.scope(), node).is_some()
             {

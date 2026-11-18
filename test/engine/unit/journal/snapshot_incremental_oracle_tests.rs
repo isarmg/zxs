@@ -178,8 +178,12 @@ fn populated_state() -> State {
     value["file_branch_merges"] = json_codec::json!({"branch-merge": {
         "merge_id": "branch-merge", "history_tree_id": "history", "file_id": "file",
         "input_branch_ids": ["source", "target"], "input_node_ids": ["first", "second"],
-        "chosen_node_id": "first", "result_node_id": "result", "surviving_branch_id": "target",
-        "reused_node": false, "parent_node_ids": ["first", "second"], "operation_id": "op_00000000000000000000000000000000",
+        "original_inputs": [
+            {"branch_id":"source","source_node_id":"first","expected_node_id":"first"},
+            {"branch_id":"target","source_node_id":"second","expected_node_id":"second"}
+        ],
+        "chosen_node_id": "first", "result_node_id": "first", "surviving_branch_id": "target",
+        "principal":"作者", "reused_node": true, "parent_node_ids": [], "operation_id": "op_00000000000000000000000000000000",
         "sequence": "18446744073709551615"
     }});
     let mut state: State = json_codec::from_value(value).unwrap();

@@ -4368,16 +4368,18 @@
           "$ref": "#/$defs/UInt64"
         },
         "chosen_node_id": {
-          "$ref": "#/$defs/FileNodeId"
+          "$ref": "#/$defs/FileNodeId",
+          "pattern": "^(ver|fnode)_"
         },
         "result_node_id": {
-          "$ref": "#/$defs/FileNodeId"
+          "$ref": "#/$defs/FileNodeId",
+          "pattern": "^(ver|fnode)_"
         },
         "surviving_branch_id": {
           "$ref": "#/$defs/BranchId"
         },
         "reused_node": {
-          "type": "boolean"
+          "const": true
         },
         "operation_id": {
           "$ref": "#/$defs/OperationId"
@@ -4386,7 +4388,7 @@
           "$ref": "#/$defs/UInt64"
         },
         "parent_count": {
-          "$ref": "#/$defs/UInt64"
+          "const": "0"
         }
       },
       "required": [
@@ -5404,7 +5406,7 @@
           "items": {
             "$ref": "#/$defs/HistoryMergeParentMember"
           },
-          "maxItems": 512
+          "maxItems": 0
         },
         "page": {
           "$ref": "#/$defs/HistoryPageCursors"

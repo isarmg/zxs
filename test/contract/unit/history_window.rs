@@ -154,12 +154,12 @@ fn merge_summary() -> HistoryMergeSummary {
         merge_id: merge(),
         sequence: u64::MAX,
         chosen_node_id: node(1),
-        result_node_id: node(2),
+        result_node_id: node(1),
         surviving_branch_id: branch(3),
         reused_node: true,
         operation_id: id("op", 4).parse().unwrap(),
         input_count: u64::MAX,
-        parent_count: u64::MAX,
+        parent_count: 0,
     }
 }
 

@@ -290,7 +290,7 @@ fn every_collection_enforces_its_record_limit_before_encoding() {
         reused_node: true,
         operation_id: OperationId::generate().unwrap(),
         input_count: u64::MAX,
-        parent_count: u64::MAX,
+        parent_count: 0,
     };
     let pages = [
         nodes_page(vec![summary(1); 2], Vec::new(), 1),

@@ -624,6 +624,18 @@ fn merge_summaries_keep_descending_sequence_and_unique_identities() {
     let mut wrong = page.clone();
     wrong["merges"].as_array_mut().unwrap().swap(0, 1);
     assert!(admit(wrong, &request, None).is_err());
+    for (field, value) in [
+        ("reused_node", json!(false)), ("parent_count", json!("1")),
+        ("result_node_id", json!(id("ver",2))),
+    ] {
+        let mut stale=page.clone();
+        stale["merges"][0][field]=value;
+        assert!(admit(stale,&request,None).is_err());
+    }
+    let mut phantom=page.clone();
+    phantom["merges"][0]["chosen_node_id"]=json!(id("fmeta",1));
+    phantom["merges"][0]["result_node_id"]=json!(id("fmeta",1));
+    assert!(admit(phantom,&request,None).is_err());
     let mut wrong = page;
     wrong["merges"][1]["merge_id"] = id("fmerge", 1).into();
     assert!(admit(wrong, &request, None).is_err());

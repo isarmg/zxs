@@ -577,6 +577,16 @@ pub struct HistoryMergeSummary {
     #[serialization(with = "crate::u64_string")]
     pub parent_count: u64,
 }
+impl HistoryMergeSummary {
+    /// The existing selection API publishes a fact about a real body. The
+    /// fact neither creates a metadata body nor adds ancestry to that body.
+    pub fn is_existing_adoption(&self) -> bool {
+        self.reused_node && self.chosen_node_id == self.result_node_id && self.parent_count == 0
+            && matches!(self.chosen_node_id.as_str().parse::<crate::FileNodeId>(),
+                Ok(crate::FileNodeId::Version(_) | crate::FileNodeId::Anchor(_)))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct HistoryParentMember {

@@ -62,9 +62,10 @@ pub(super) fn admit(
             cursors(page, inputs.len(), identity, request)?;
         }
         wire::HistoryWindowPage::MergeParents { parents, page, .. } => {
-            bounded(parents.len(), request.limit.get())?;
-            ordinals(parents.iter().map(|parent| parent.ordinal))?;
-            cursors(page, parents.len(), identity, request)?;
+            if !parents.is_empty() || page.next_cursor.is_some() || page.previous_cursor.is_some() {
+                return Err(DecodeError::Relation("an adopted body has no added merge parents"));
+            }
+            cursors(page, 0, identity, request)?;
         }
         wire::HistoryWindowPage::NodeField {
             field,
@@ -470,8 +471,8 @@ fn merges_page(merges: &[wire::HistoryMergeSummary], limit: usize) -> Result<(),
             .map(|merge| (std::cmp::Reverse(merge.sequence), &merge.merge_id)),
     )?;
     let mut ids = BTreeSet::new();
-    if merges.iter().any(|merge| !ids.insert(&merge.merge_id)) {
-        return Err(DecodeError::Relation("history merges repeat an identity"));
+    if merges.iter().any(|merge| !merge.is_existing_adoption() || !ids.insert(&merge.merge_id)) {
+        return Err(DecodeError::Relation("history merge is not a unique existing-body adoption"));
     }
     Ok(())
 }

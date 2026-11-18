@@ -78,7 +78,18 @@ pub(super) fn validate(name: &str, value: &Value) -> Result {
     }
     // A fixture is already bounded source input. The production response writer
     // must prove its budget before encoding; this check makes no such claim.
-    let _: HistoryWindowPage = storage_contract::decode_strict(&encoded)?;
+    let page: HistoryWindowPage = storage_contract::decode_strict(&encoded)?;
+    match &page {
+        HistoryWindowPage::Merges { merges, .. } => require(
+            merges.iter().all(|merge| merge.is_existing_adoption()),
+            "FILE selection must reuse the exact chosen body without adding parents",
+        )?,
+        HistoryWindowPage::MergeParents { parents, page, .. } => require(
+            parents.is_empty() && page.previous_cursor.is_none() && page.next_cursor.is_none(),
+            "existing-body FILE adoption has no parent page",
+        )?,
+        _ => {}
+    }
     require(
         encoded.len() <= MAX_HISTORY_RESPONSE_BYTES,
         "history encoded page budget",

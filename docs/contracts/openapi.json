@@ -14681,16 +14681,18 @@
             "$ref": "#/components/schemas/UInt64"
           },
           "chosen_node_id": {
-            "$ref": "#/components/schemas/FileNodeId"
+            "$ref": "#/components/schemas/FileNodeId",
+            "pattern": "^(ver|fnode)_"
           },
           "result_node_id": {
-            "$ref": "#/components/schemas/FileNodeId"
+            "$ref": "#/components/schemas/FileNodeId",
+            "pattern": "^(ver|fnode)_"
           },
           "surviving_branch_id": {
             "$ref": "#/components/schemas/BranchId"
           },
           "reused_node": {
-            "type": "boolean"
+            "const": true
           },
           "operation_id": {
             "$ref": "#/components/schemas/OperationId"
@@ -14699,7 +14701,7 @@
             "$ref": "#/components/schemas/UInt64"
           },
           "parent_count": {
-            "$ref": "#/components/schemas/UInt64"
+            "const": "0"
           }
         },
         "required": [
@@ -15717,7 +15719,7 @@
             "items": {
               "$ref": "#/components/schemas/HistoryMergeParentMember"
             },
-            "maxItems": 512
+            "maxItems": 0
           },
           "page": {
             "$ref": "#/components/schemas/HistoryPageCursors"

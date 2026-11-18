@@ -230,21 +230,20 @@ pub(super) fn fixture() -> MetadataView {
             id("fmerge", n),
             FileBranchMerge {
                 principal: "admin".parse().unwrap(),
-            merge_id: id("fmerge", n),
+                merge_id: id("fmerge", n),
                 history_tree_id: HISTORY.into(),
                 file_id: FILE.into(),
-                original_inputs: Vec::new(),
+                original_inputs: (0..19).map(|index| storage_contract::FileHistoryMergeInput {
+                    branch_id: id("br", index), source_node_id: id("ver", index % 17),
+                    expected_node_id: id("ver", index % 17),
+                }).collect(),
                 input_branch_ids: (0..19).map(|index| id("br", index)).collect(),
                 input_node_ids: (0..19).map(|index| id("ver", index % 17)).collect(),
                 chosen_node_id: id("ver", 7),
                 result_node_id: id("ver", 7),
                 surviving_branch_id: id("br", 0),
                 reused_node: true,
-                parent_node_ids: if n == 0 {
-                    vec![id("ver", 1), id("fmeta", 0)]
-                } else {
-                    vec![]
-                },
+                parent_node_ids: vec![],
                 operation_id: operation(),
                 sequence: if n == 2 { u64::MAX } else { 11 },
             },
@@ -348,23 +347,9 @@ fn oracle_parents(state: &State, node: &str) -> Vec<String> {
             .get(node)
             .unwrap_or(&version.source_version_ids)
     };
-    let mut parents = base
-        .iter()
-        .filter(|id| visible.contains(id.as_str()))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    for merge in state.file_branch_merges.values().filter(|merge| {
-        merge.file_id == FILE && merge.history_tree_id == HISTORY && merge.result_node_id == node
-    }) {
-        parents.extend(
-            merge
-                .parent_node_ids
-                .iter()
-                .filter(|id| id.as_str() != node && visible.contains(id.as_str()))
-                .cloned(),
-        );
-    }
-    parents.into_iter().collect()
+    // A FILE selection cannot add parents to an already published node.
+    base.iter().filter(|id| visible.contains(id.as_str())).cloned()
+        .collect::<BTreeSet<_>>().into_iter().collect()
 }
 
 pub(super) fn oracle_path<'a>(state: &'a State, node: &'a str) -> &'a str {
@@ -462,79 +447,35 @@ fn borrowed_node_facts_match_independent_complete_state_oracle() {
 }
 
 #[test]
-fn merge_path_uses_the_chosen_source_and_keeps_the_referenced_real_body() {
+fn adoption_member_pages_reject_phantom_body_and_do_not_expose_helper_as_original() {
     let mut view = fixture();
-    let state = Arc::make_mut(&mut view.state.0);
-    // The chosen source is itself a merge, not a retired tag node. Give it
-    // its actual chosen-content provenance rather than relying on a parent
-    // fallback that only the removed metadata kind once provided.
-    let mut other_source = body(102, FILE, HISTORY);
-    other_source.source_version_ids.clear();
-    state
-        .versions
-        .insert(other_source.version_id.clone(), other_source);
-    let source_parents = vec![id("ver", 0), id("ver", 102)];
-    state
-        .file_metadata_nodes
-        .get_mut(&id("fmeta", 0))
-        .unwrap()
-        .parent_node_ids = source_parents.clone();
-    let mut source_merge = state.file_branch_merges[&id("fmerge", 0)].clone();
-    source_merge.merge_id = id("fmerge", 4);
-    source_merge.result_node_id = id("fmeta", 0);
-    source_merge.chosen_node_id = id("ver", 0);
-    source_merge.input_node_ids = source_parents.clone();
-    source_merge.input_branch_ids = vec![id("br", 0), id("br", 1)];
-    source_merge.parent_node_ids = source_parents;
-    source_merge.reused_node = false;
-    state
-        .file_branch_merges
-        .insert(source_merge.merge_id.clone(), source_merge);
-    let mut metadata = state.file_metadata_nodes[&id("fmeta", 0)].clone();
-    metadata.node_id = id("fmeta", 1);
-    metadata.kind = FileMetadataKind::Merge;
-    metadata.version_id = id("ver", 0);
-    metadata.parent_node_ids = vec![id("fnode", 0), id("ver", 7), id("fmeta", 0)];
-    let parents = metadata.parent_node_ids.clone();
-    state
-        .file_metadata_nodes
-        .insert(metadata.node_id.clone(), metadata);
-    let mut merge = state.file_branch_merges[&id("fmerge", 0)].clone();
-    merge.merge_id = id("fmerge", 3);
-    merge.result_node_id = id("fmeta", 1);
-    merge.chosen_node_id = id("fmeta", 0);
-    merge.parent_node_ids = parents;
-    merge.reused_node = false;
-    state
-        .file_branch_merges
-        .insert(merge.merge_id.clone(), merge);
-    let scope = nodes::Scope {
-        file: FILE,
-        history: HISTORY,
-    };
-    let node = nodes::node(state, scope, &id("fmeta", 1)).unwrap();
-    assert_eq!(node.version(state).version_id, id("ver", 0));
-    assert_eq!(
-        nodes::path(state, scope, node, &HistoryWindowCancellation::new()).unwrap(),
-        "目录/原稿.txt"
-    );
-    assert_eq!(oracle_path(state, &id("fmeta", 1)), "目录/原稿.txt");
-    let mut observed = BTreeSet::new();
-    nodes::visit_parents(
-        state,
-        scope,
-        &id("fmeta", 1),
-        &HistoryWindowCancellation::new(),
-        |id| {
-            observed.insert(id.to_owned());
-            Ok(())
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        observed.into_iter().collect::<Vec<_>>(),
-        oracle_parents(state, &id("fmeta", 1)),
-    );
+    let merge_id = id("fmerge", 0);
+    let inputs = request(HistoryCollection::MergeInputs { merge_id: merge_id.parse().unwrap() }, 32);
+    // Historical selection's actual original branch is separate from a
+    // temporary effective input. The old source, rather than its later HEAD,
+    // is returned, without creating a history node or borrowing another FILE.
+    {
+        let state = Arc::make_mut(&mut view.state.0);
+        let fact = state.file_branch_merges.get_mut(&merge_id).unwrap();
+        fact.original_inputs[1].branch_id = id("br", 2);
+        fact.original_inputs[1].expected_node_id = id("ver", 10);
+    }
+    let HistoryWindowPage::MergeInputs { inputs: actual, .. }=public_page(&view, &inputs) else {panic!()};
+    assert_eq!(actual[1].branch_id.as_str(), id("br", 2));
+    assert_eq!(actual[1].node_id.as_str(), id("ver", 1));
+    let parents = request(HistoryCollection::MergeParents { merge_id: merge_id.parse().unwrap() }, 1);
+    let HistoryWindowPage::MergeParents { parents: none, page, .. }=public_page(&view, &parents) else {panic!()};
+    assert!(none.is_empty() && page.previous_cursor.is_none() && page.next_cursor.is_none());
+    {
+        let bad = Arc::make_mut(&mut view.state.0).file_branch_merges.get_mut(&merge_id).unwrap();
+        bad.result_node_id = id("fmeta",0);
+        bad.parent_node_ids.push(id("ver",1));
+        bad.reused_node = false;
+    }
+    let summaries=request(HistoryCollection::Merges,128);
+    for req in [&inputs,&parents,&summaries] {
+        assert!(view.history_window(req,&context(),&HistoryWindowCancellation::new()).is_err());
+    }
 }
 
 #[test]
@@ -742,7 +683,7 @@ fn select_parents(
 }
 
 #[test]
-fn parent_windows_enumerate_high_indegree_and_reused_merge_parents_without_scope_leaks() {
+fn parent_windows_enumerate_high_indegree_without_borrowing_adoption_or_foreign_parents() {
     let view = fixture();
     let state = view.business_projection();
     for node in [
@@ -782,7 +723,7 @@ fn parent_windows_enumerate_high_indegree_and_reused_merge_parents_without_scope
         }
     }
     assert_eq!(oracle_parents(state, &id("ver", 16)).len(), 17);
-    assert!(oracle_parents(state, &id("ver", 7)).contains(&id("fmeta", 0)));
+    assert!(!oracle_parents(state, &id("ver", 7)).contains(&id("fmeta", 0)));
     assert!(!oracle_parents(state, &id("ver", 7)).contains(&id("ver", 100)));
     assert!(!oracle_parents(state, &id("ver", 7)).contains(&id("ver", 101)));
 }

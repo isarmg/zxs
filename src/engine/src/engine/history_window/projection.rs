@@ -56,7 +56,7 @@ impl<'a> Query<'a> {
     }
 
     pub(super) fn merge(&self, id: &str) -> Result<&'a crate::FileBranchMerge> {
-        self.state
+        let merge = self.state
             .file_branch_merges
             .get(id)
             .filter(|merge| {
@@ -67,7 +67,9 @@ impl<'a> Query<'a> {
                     storage_contract::ErrorCode::NotFound,
                     "merge is outside this file and history",
                 )
-            })
+            })?;
+        require_adoption(merge)?;
+        Ok(merge)
     }
 
     pub(super) fn field(&self, node: Node<'a>, field: HistoryField) -> Result<Cow<'a, str>> {
@@ -366,21 +368,14 @@ impl<'a> Query<'a> {
         merge: &crate::FileBranchMerge,
     ) -> Result<HistoryMergeSummary> {
         self.cancel.checkpoint()?;
-        assert_eq!(
-            merge.input_branch_ids.len(),
-            merge.input_node_ids.len(),
-            "invariant: admitted merge input pairs have equal length"
-        );
+        require_adoption(merge)?;
         let mut inputs = 0usize;
-        for (branch, node) in merge.input_branch_ids.iter().zip(&merge.input_node_ids) {
+        for input in &merge.original_inputs {
             self.cancel.checkpoint()?;
             inputs += usize::from(
-                self.allowed_branch(branch)
-                    && nodes::node(self.state, self.scope(), node).is_some(),
+                self.allowed_branch(&input.branch_id)
+                    && nodes::node(self.state, self.scope(), &input.source_node_id).is_some(),
             );
-        }
-        if !merge.is_existing_adoption() {
-            return Err(crate::Error::new(storage_contract::ErrorCode::StateInvalid, "invalid FILE adoption fact"));
         }
         Ok(HistoryMergeSummary {
             merge_id: HistoryMergeId::parse(&merge.merge_id)?,
@@ -488,4 +483,16 @@ fn created_at(timestamp: u64) -> Result<String> {
         .map_err(Error::TimestampRange)?
         .format(&date_time::format_description::well_known::Rfc3339)
         .map_err(Error::DateFormat)
+}
+
+
+fn require_adoption(merge: &crate::FileBranchMerge) -> Result<()> {
+    if !merge.is_existing_adoption() || merge.input_branch_ids.len() < 2
+        || merge.input_branch_ids.len() != merge.input_node_ids.len()
+        || !matches!(merge.chosen_node_id.parse::<storage_contract::FileNodeId>(),
+            Ok(storage_contract::FileNodeId::Version(_) | storage_contract::FileNodeId::Anchor(_)))
+    {
+        return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "invalid FILE adoption fact"));
+    }
+    Ok(())
 }
