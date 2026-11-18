@@ -7426,6 +7426,23 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "held-directory-node-occurrences": {
+      "reason": "Check each original directory-node occurrence and its own body identity, including aliases, missing leaves and same-inode conflicts. These row and binding fixtures do not establish a full repository or DISK publication.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::scope_closure::snapshot_bodies::tests::alias_occurrences_and_original_node_are_not_replaced_by_one_version_or_one_digest",
+            "engine::scope_closure::snapshot_bodies::tests::missing_wrong_logical_and_hardlinked_distinct_version_leaves_are_not_node_closure"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -22124,6 +22141,18 @@
       "path": "src/engine/src/working_tree/snapshot/store/preparation_input.rs",
       "groups": [
         "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/snapshot_bodies.rs",
+      "groups": [
+        "held-directory-node-occurrences"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/scope_node_bodies.rs",
+      "groups": [
+        "held-directory-node-occurrences"
       ]
     }
   ],
