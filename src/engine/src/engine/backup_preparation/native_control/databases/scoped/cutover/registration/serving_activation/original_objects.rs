@@ -4,6 +4,10 @@ use super::*;
 use crate::{container_storage::BackupOriginalImage, database_install::InstallAdmission};
 use crate::engine::membership_transition::PublishedBackupOriginal;
 
+mod receipts;
+use receipts::Receipt;
+pub(super) use receipts::Seen;
+
 const COMPLETE: &str = "backup-serving-original-objects.json";
 const MAX_COMPLETE: usize = 4 * 1024 * 1024;
 
@@ -108,18 +112,26 @@ impl<'a> Objects<'a> {
         pool: &str,
         reserve: u64,
         stop: &AtomicBool,
-    ) -> Result<()> {
+    ) -> Result<Seen> {
+        let mut seen = Seen::default();
         sources.for_each_disk(
             stop,
             |root, identity| {
                 // This follows the actual native first Publication. The
                 // retained recovery budget is not a fresh operation budget.
                 self.with_plan(registry, root, identity, stop, |plan| {
-                    plan.require_capacity(InstallAdmission::DecidedRecovery, reserve, stop)
+                    let record = Receipt::read(root)?;
+                    if let Some(record) = &record {
+                        record.require(root, plan.verify(stop)?.bytes())?;
+                    } else {
+                        plan.require_capacity(InstallAdmission::DecidedRecovery, reserve, stop)?;
+                    }
+                    seen.remember(root, record.as_ref())
                 })
             },
             pool,
-        )
+        )?;
+        Ok(seen)
     }
 
     pub(super) fn install(
@@ -128,22 +140,17 @@ impl<'a> Objects<'a> {
         sources: &common_databases::Sources,
         pool: &str,
         common: &[u8],
+        seen: Seen,
         stop: &AtomicBool,
     ) -> Result<Vec<String>> {
         let mut completed = Vec::with_capacity(self.recipes.len());
         sources.for_each_disk(stop, |root, identity| {
             require_bytes(root, SELECTED, common, MAX_PLAN)?;
             let actual = self.with_plan(registry, root, identity, stop, |plan| {
-                let record = root.open_optional_read_regular(&root.path().join(COMPLETE))?;
-                match record {
+                match seen.read(root)? {
                     Some(record) => {
-                        let saved = read_file_bytes(record, MAX_COMPLETE)?;
                         let actual = plan.verify(stop)?;
-                        if saved != actual.bytes() {
-                            return Err(invalid(
-                                "completed original Backup objects changed bytes or inodes",
-                            ));
-                        }
+                        record.require(root, actual.bytes())?;
                         Ok(actual)
                     }
                     None => {

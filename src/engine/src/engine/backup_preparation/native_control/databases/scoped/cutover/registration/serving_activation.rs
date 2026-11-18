@@ -347,7 +347,7 @@ fn prepare_switch(
         ));
     }
     let pool = &prepared.task.selection().first().pool_id;
-    objects.require_capacity(
+    let object_receipts = objects.require_capacity(
         &native.registry,
         &sources,
         pool,
@@ -369,7 +369,9 @@ fn prepare_switch(
     roots.visit(|root| install_preparation_bytes(root, &root.path().join(SELECTED), &selection))?;
     require_bytes(system, INTENT, &selection, MAX_PLAN)?;
     roots.visit(|root| require_bytes(root, SELECTED, &selection, MAX_PLAN))?;
-    let completed_objects = objects.install(&native.registry, &sources, pool, &selection, stop)?;
+    let completed_objects = objects.install(
+        &native.registry, &sources, pool, &selection, object_receipts, stop,
+    )?;
     drop(objects);
     choices.observe_first_publication(&prepared, native.registry.candidate(), stop)?;
     sources.for_each_disk(

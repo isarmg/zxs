@@ -6,14 +6,14 @@ use crate::{
     disk::{DiskRoot, FileStamp, HeldRegular, InstallExchange},
 };
 use data_serialization::{Deserialize, Serialize};
-use platform_io::fs_safety::{EntryName, linux::FileIdentity};
+use platform_io::fs_safety::{EntryName, RelativePath, linux::FileIdentity};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 mod existing;
-pub(crate) use existing::ExistingExchange;
+pub(crate) use existing::{ExistingExchange, OriginalFileStage};
 
 pub(crate) const DISK_DATABASE_NAME: &str = ".zxs-disk.sqlite";
 pub(crate) const DISK_HISTORY_DATABASE_NAME: &str = ".zxs-disk-history.sqlite";
@@ -204,7 +204,6 @@ impl PreparedInstall {
             bytes: bytes.len() as u64,
             digest: blake3::hash(&bytes).to_hex().to_string(),
         };
-        let path = history.join(".zxs-layout/database-installs");
         // Capture is also used by cold read-only move verification. Creating
         // retention directories belongs to prepare_stage, never to observation.
         let mut prepared = Self {
@@ -220,7 +219,7 @@ impl PreparedInstall {
             recovered_displaced: false,
             admission,
         };
-        let generation = path.join(prepared.binding()?);
+        let generation = history.join(prepared.stage_generation()?.as_path());
         if installations_exist(root, history)? && root.optional_metadata(&generation)?.is_some() {
             prepared.resume = prepared.recover_envelope(&root.private_child(&generation)?)?;
         }
@@ -234,12 +233,21 @@ impl PreparedInstall {
         )?)
     }
 
+    fn stage_generation(&self) -> Result<RelativePath> {
+        let path = Path::new(".zxs-layout/database-installs").join(self.binding()?);
+        Ok(RelativePath::new(path)?)
+    }
+
+    fn needs_new_stage(&self) -> bool {
+        self.resume.is_none() && !self.already_current
+    }
+
     pub(crate) fn byte_len(&self) -> usize {
         self.bytes.len()
     }
 
     pub(crate) fn reservation(&self) -> (u64, usize) {
-        if self.resume.is_some() || self.already_current {
+        if !self.needs_new_stage() {
             (0, 0)
         } else {
             (
@@ -386,10 +394,7 @@ impl PreparedInstall {
         let (reserved, entries) = self.reservation();
         self.admission
             .check(root, &self.history, reserved, entries)?;
-        let generation = self
-            .history
-            .join(".zxs-layout/database-installs")
-            .join(self.binding()?);
+        let generation = self.history.join(self.stage_generation()?.as_path());
         root.private_dir(&generation)?;
         let generations = root.private_child(&generation)?;
         let attempt = generations.path().join(crate::new_id("req")?);

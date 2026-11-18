@@ -5,8 +5,18 @@ use crate::database_install::{Envelope, MAX_ENVELOPE, PreparedInstall, Scope, in
 use crate::database_install::InstallAdmission;
 use crate::disk::{DiskRoot, FileStamp, HeldRegular};
 use crate::Result;
-use platform_io::fs_safety::linux::FileIdentity;
+use platform_io::fs_safety::{RelativePath, linux::FileIdentity};
 use std::{path::Path, sync::Arc};
+
+/// Prospective storage only. An attempt gets its own exclusive directory, one
+/// payload and one bounded intent inode (the pending name is renamed in place).
+pub(crate) struct OriginalFileStage {
+    pub(crate) generation: RelativePath,
+    pub(crate) payload: u64,
+}
+impl OriginalFileStage {
+    pub(crate) const INTENT_LIMIT: u64 = MAX_ENVELOPE as u64;
+}
 
 pub(crate) struct ExistingExchange {
     install: PreparedInstall,
@@ -61,6 +71,16 @@ impl ExistingExchange {
 
     pub(crate) fn reservation(&self) -> (u64, usize) {
         self.install.reservation()
+    }
+
+    pub(crate) fn pending_stage(&self) -> Result<Option<OriginalFileStage>> {
+        if !self.install.needs_new_stage() {
+            return Ok(None);
+        }
+        Ok(Some(OriginalFileStage {
+            generation: self.install.stage_generation()?,
+            payload: self.install.source.bytes,
+        }))
     }
 
     pub(crate) fn apply(

@@ -18,7 +18,9 @@ use std::{
 
 mod batch;
 mod capacity;
-pub(crate) use capacity::{BackupServingSpace, require_new_backup_directories};
+pub(crate) use capacity::{
+    BackupOriginalFileSpace, BackupServingSpace, require_new_backup_directories,
+};
 pub(in crate::engine) use capacity::require_new_feedback_capacity;
 mod completion;
 mod execution;

@@ -13,6 +13,9 @@ use std::sync::atomic::AtomicBool;
 mod serving;
 pub(crate) use serving::BackupServingSpace;
 
+mod original_files;
+pub(crate) use original_files::BackupOriginalFileSpace;
+
 mod layout;
 pub(crate) use layout::require_new_backup_directories;
 pub(in crate::engine) use layout::require_new_feedback_capacity;
@@ -136,7 +139,7 @@ impl EntryCost {
 pub(super) struct Census<'a> {
     root: &'a DiskRoot,
     unit: NonZeroU64,
-    // Only the last file's contiguous ancestor chain, never one FD per entry.
+    // Only the last leaf's contiguous ancestor chain, never one FD per entry.
     parents: Vec<(RelativePath, bool)>,
     previous: Option<RelativePath>,
     needed: Needed,
@@ -182,8 +185,11 @@ impl<'a> Census<'a> {
     /// True means only that a regular, single-link file exists. A caller
     /// enforcing exact retained bytes must still read and compare that file.
     pub(super) fn file_present(&mut self, path: PathBuf, length: u64) -> Result<bool> {
-        let file = RelativePath::new(path)?;
-        let path = file.as_path();
+        self.named_entry(RelativePath::new(path)?, EntryCost::File(length))
+    }
+
+    fn named_entry(&mut self, leaf: RelativePath, cost: EntryCost) -> Result<bool> {
+        let path = leaf.as_path();
         if self.previous.as_ref().is_some_and(|previous| {
             path <= previous.as_path() || path.starts_with(previous.as_path())
         }) {
@@ -209,8 +215,8 @@ impl<'a> Census<'a> {
             present = self.entry(&dir, present, EntryCost::Directory)?;
             self.parents.push((dir, present));
         }
-        let present = self.entry(&file, present, EntryCost::File(length))?;
-        self.previous = Some(file);
+        let present = self.entry(&leaf, present, cost)?;
+        self.previous = Some(leaf);
         Ok(present)
     }
 
@@ -226,7 +232,7 @@ impl<'a> Census<'a> {
         self.require_with_reserve(reserve)
     }
 
-    pub(super) fn require_with_reserve(self, reserve: u64) -> Result<()> {
+    pub(super) fn require_with_reserve(&self, reserve: u64) -> Result<()> {
         // Sampling the free counts after the whole census matters for large
         // plans. External users may still consume space after this observation.
         let space = Space::observe(self.root)?;

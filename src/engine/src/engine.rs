@@ -9,7 +9,9 @@ use std::{
 };
 
 mod backup_preparation;
-pub(crate) use backup_preparation::{BackupServingSpace, require_new_backup_directories};
+pub(crate) use backup_preparation::{
+    BackupOriginalFileSpace, BackupServingSpace, require_new_backup_directories,
+};
 pub use backup_preparation::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,

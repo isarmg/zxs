@@ -303,7 +303,21 @@ fn required_exchange_does_not_adopt_empty_or_matching_successors_from_another_ro
     };
     a.write_atomic(&a.path().join(leaf), b"original", false).unwrap();
     let mut first = capture(&a).unwrap();
+    let pending = first.pending_stage().unwrap().unwrap();
+    assert_eq!(pending.payload, b"successor".len() as u64);
+    assert!(!a.path().join(pending.generation.as_path()).exists());
+    assert!(first.apply(&a, &mut |phase| {
+        if phase == "after_database_intent" {
+            Err(invalid("intent durable before exchange"))
+        } else {
+            Ok(())
+        }
+    }).is_err());
+    assert_eq!(a.read_bytes(&a.path().join(leaf), 1024).unwrap(), b"original");
+    let mut first = capture(&a).unwrap();
+    assert!(first.pending_stage().unwrap().is_none());
     first.apply(&a, &mut |_| Ok(())).unwrap();
+    assert!(capture(&a).unwrap().pending_stage().unwrap().is_none());
     let current = HeldRegular::capture(&a, leaf, 1024).unwrap().unwrap();
     first.require_installed(&a, current.stamp()).unwrap();
     capture(&a).unwrap().require_installed(&a, current.stamp()).unwrap();

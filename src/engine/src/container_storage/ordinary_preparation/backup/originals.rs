@@ -3,7 +3,7 @@
 //! replicas, current Config guesses and legacy locators cannot supply it.
 use super::*;
 use crate::container_storage::{backup_databases, file_database};
-use crate::database_install::{ExistingExchange, InstallAdmission, Scope};
+use crate::database_install::{ExistingExchange, InstallAdmission, OriginalFileStage, Scope};
 use crate::disk::{FileStamp, HeldRegular};
 use crate::engine::fresh_layout::directory_error;
 use crate::engine::membership_transition::{PublishedBackupOriginal, PublishedBackupPayload};
@@ -184,6 +184,13 @@ struct Object {
     exchange: ExistingExchange,
 }
 
+struct HistorySpace<'a> {
+    current: &'a DiskRoot,
+    retained_bytes: u64,
+    retained_entries: usize,
+    pending: Vec<OriginalFileStage>,
+}
+
 pub(crate) struct BackupOriginalCompletion(Vec<u8>);
 impl BackupOriginalCompletion {
     pub(crate) fn bytes(&self) -> &[u8] {
@@ -336,25 +343,39 @@ impl<'a> BackupOriginalImage<'a> {
         &self, admission: InstallAdmission, reserve: u64, stop: &AtomicBool,
     ) -> Result<()> {
         self.source.require(stop)?;
-        let mut total = COMPLETION_RESERVE.checked_add(reserve).ok_or(Failure::ContainerBudget)?;
+        let mut space = crate::engine::BackupOriginalFileSpace::capture(self.source.root())?;
+        let mut retained_floor = 0u64;
         let mut histories = BTreeMap::new();
         for object in &self.objects {
             preparation_checkpoint(stop)?;
             object.file.verify(self.source.root())?;
             let (bytes, entries) = object.exchange.reservation();
-            let entry = histories.entry(&object.file.history)
-                .or_insert((&object.file.current, 0u64, 0usize));
-            entry.1 = entry.1.checked_add(bytes).ok_or(Failure::ContainerBudget)?;
-            entry.2 = entry.2.checked_add(entries).ok_or(Failure::ContainerBudget)?;
-            total = total.checked_add(bytes).ok_or(Failure::ContainerBudget)?;
+            let current = &object.file.current;
+            let anchor = current.directory_identity(current.path())?;
+            let key = (anchor.device, anchor.inode, &object.file.history);
+            let entry = histories.entry(key).or_insert_with(|| HistorySpace {
+                current, retained_bytes: 0, retained_entries: 0, pending: Vec::new(),
+            });
+            entry.retained_bytes = entry.retained_bytes.checked_add(bytes)
+                .ok_or(Failure::ContainerBudget)?;
+            entry.retained_entries = entry.retained_entries.checked_add(entries)
+                .ok_or(Failure::ContainerBudget)?;
+            if let Some(stage) = object.exchange.pending_stage()? {
+                entry.pending.push(stage);
+            }
+            retained_floor = retained_floor.checked_add(bytes).ok_or(Failure::ContainerBudget)?;
         }
-        for (history, (root, bytes, entries)) in histories {
-            admission.check(root, history, bytes, entries)?;
+        for ((_, _, history), work) in histories {
+            // The per-history admission quota is distinct from the filesystem's
+            // free inodes. DecidedRecovery never re-arms the fresh quota.
+            admission.check(work.current, history, work.retained_bytes, work.retained_entries)?;
+            if !work.pending.is_empty() {
+                let held = work.current.private_child(history)?;
+                space.add_history(&held, work.pending, stop)?;
+            }
         }
-        if self.source.root().available()? < total {
-            return Err(Failure::BackupRootSpace.into());
-        }
-        Ok(())
+        self.source.require(stop)?;
+        space.require(retained_floor, COMPLETION_RESERVE, reserve, MAX_COMPLETE as u64)
     }
 
     fn read(&self, object: &Object, stop: &AtomicBool) -> Result<FileStamp> {
