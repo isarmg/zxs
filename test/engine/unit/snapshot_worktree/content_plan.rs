@@ -67,6 +67,31 @@ fn exact_files_share_the_business_operation_on_one_state_but_cannot_install_it()
             None => assert_eq!(projected, entry),
         }
     }
+    // Enrich a manifest made from the actual admitted file/version selectors
+    // with another spelling of one occurrence. This is the manifest-level
+    // alias case, not a claim that ordinary copy creates FILE aliases.
+    let original = capture.source_node.manifest();
+    let selected = &plan.rows[0];
+    let source_type = SnapshotFileSource::Container {
+        branch: selected.base.branch_id(), node: selected.base.node_id() };
+    let mut original_entries = original.entries().to_vec();
+    let mut alias = original_entries.iter().find(|e| e.path == selected.edit.path).unwrap().clone();
+    alias.path = PortablePath::parse("zz-untouched-alias.txt").unwrap();
+    original_entries.push(alias.clone());
+    let alias_source = crate::working_tree::snapshot::AdmittedSnapshotManifest::prepare(original.repository_id(),
+        storage_contract::working_tree::SnapshotNodeId::generate().unwrap(), OperationId::generate().unwrap(), original_entries).unwrap();
+    let rebuilt = crate::snapshot_worktree::commit::content::plan::replace_occurrences(&alias_source, plan.destination_node, plan.publish_operation,
+        plan.rows.iter().zip(&projection.rows).map(|(input, output)| (&input.edit.path, input.original,
+            SnapshotFileSource::Container { branch: input.base.branch_id(), node: input.base.node_id() }, &output.file))).unwrap();
+    assert_eq!(rebuilt.entries().iter().find(|entry| entry.path == alias.path), Some(&alias));
+    assert_eq!(rebuilt.payloads()[&selected.original.version_id].source_path, alias.path);
+    assert_eq!(rebuilt.payloads()[&selected.edit.material.version_id].source_path, selected.edit.path);
+    let mut duplicate = projection.rows[0].file.clone();
+    duplicate.path = alias.path.clone();
+    assert!(crate::snapshot_worktree::commit::content::plan::replace_occurrences(&alias_source, plan.destination_node,
+        plan.publish_operation, [(&selected.edit.path, selected.original, source_type, &projection.rows[0].file),
+        (&alias.path, selected.original, source_type, &duplicate)]).is_err(),
+        "two selected paths referring to one FILE are not two independent versions");
     assert_ne!(plan.rows[0].commit, plan.rows[1].commit);
     let mut forged = plan.clone();
     forged.rows.swap(0, 1);

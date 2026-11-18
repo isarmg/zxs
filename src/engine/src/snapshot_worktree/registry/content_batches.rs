@@ -9,7 +9,7 @@ use crate::directory_worktree::ledger::{LedgerError, content_checkpoints};
 use crate::directory_worktree::projection::FileResult;
 use crate::persist::snapshot_worktree::{NodeAllocation, content_batch::{Publication as ResultRecord, Reservation}};
 use crate::snapshot_worktree::{RegistrationError, Result};
-use crate::working_tree::snapshot::{AdmittedSnapshotManifest, SnapshotEntryContent, SnapshotFileSource, MAX_VERSIONS};
+use crate::working_tree::snapshot::{AdmittedSnapshotManifest, SnapshotFileSource, MAX_VERSIONS};
 use std::collections::BTreeSet;
 use storage_contract::{FileNodeId, OperationId, Principal};
 use storage_contract::file_draft::FileWorkingState;
@@ -177,7 +177,6 @@ impl<'a> ReceiptIndex<'a> {
             || value.prepared_node.preparation == plan.root.directory_id
             || self.directory_ids.contains_key(&value.prepared_node.preparation)
         { return Err(RegistrationError::Completion(operation)); }
-        let mut entries = source.manifest().entries().to_vec();
         let mut expected_protection = Vec::with_capacity(plan.rows.len());
         for (input, output) in plan.rows.iter().zip(&value.rows) {
             let material = input.edit.material;
@@ -207,23 +206,18 @@ impl<'a> ReceiptIndex<'a> {
             { return Err(RegistrationError::Completion(operation)); }
             expected_protection.push(crate::persist::file_draft::content_protection_for_owner(input.owner, &output.content)
                 .map_err(RegistrationError::Publication)?);
-            let i = entries.binary_search_by(|e| e.path.key().cmp(input.edit.path.key()))
-                .map_err(|_| RegistrationError::CommitScope)?;
-            if entries[i].path != input.edit.path || entries[i].content != (SnapshotEntryContent::File {
-                material: input.original, source: SnapshotFileSource::Container {
-                    branch: input.base.branch_id(), node: input.base.node_id(),
-                },
-            }) { return Err(RegistrationError::CommitScope); }
-            entries[i].content = SnapshotEntryContent::File { material, source: output.file.source };
+
         }
         // The native footer uses the order of actual Prepared versions. Those
         // are issued in original path order on this one producer.
-        if expected_protection.as_slice() != protection || entries != value.prepared_node.entries
+        let manifest = crate::snapshot_worktree::commit::content::plan::replace_occurrences(source.manifest(),
+            plan.destination_node, operation, plan.rows.iter().zip(&value.rows).map(|(input, output)| (
+                &input.edit.path, input.original, SnapshotFileSource::Container { branch: input.base.branch_id(),
+                    node: input.base.node_id() }, &output.file)))?;
+        if expected_protection.as_slice() != protection || manifest.entries() != value.prepared_node.entries
             || content_checkpoints(plan.before, &plan.events(&value.rows)).map_err(RegistrationError::Ledger)?
                 != [value.committing, value.completed]
         { return Err(RegistrationError::Completion(operation)); }
-        let manifest = AdmittedSnapshotManifest::prepare(plan.source.repository_id, plan.destination_node,
-            operation, entries).map_err(RegistrationError::Manifest)?;
         if manifest.reference() != value.prepared_node.binding.reference() { return Err(RegistrationError::Source); }
         let node = NodePlan { request: source.plan.request.clone(), host: plan.host.clone(),
             allocated: NodeAllocation { repository: plan.source.repository_id, branch: plan.source.branch_id,

@@ -6,7 +6,7 @@ use crate::business::file_draft::worktree_content::{Trace, advance};
 use crate::engine::{PlanningContext, Prepared};
 use crate::persist::snapshot_worktree::content_batch::{Input, Output, Reservation};
 use crate::snapshot_worktree::{RegistrationError, ReservedFileVersion, Result};
-use crate::working_tree::snapshot::{AdmittedSnapshotManifest, SnapshotEntryContent};
+use crate::working_tree::snapshot::{AdmittedSnapshotManifest, SnapshotEntryContent, SnapshotFile, SnapshotFileSource};
 use crate::State;
 use std::sync::Arc;
 use storage_contract::{OperationId, Principal, Sequence};
@@ -102,7 +102,6 @@ impl Originals {
             .map_err(RegistrationError::Publication)?;
         let mut versions = Vec::with_capacity(self.rows.len());
         let mut results = Vec::with_capacity(self.rows.len());
-        let mut entries = self.source_node.manifest().entries().to_vec();
         for (i, row) in self.rows.iter().enumerate() {
             let body = self.body(i).map_err(RegistrationError::Publication)?;
             let mut issuer = ReservedFileVersion::for_original(&self.state, row);
@@ -112,21 +111,41 @@ impl Originals {
             if frozen.is_some_and(|rows| rows[i] != row.input(&result)) {
                 return Err(RegistrationError::CommitScope);
             }
-            let occurrence = entries.binary_search_by(|entry| entry.path.key().cmp(row.edit.path.key()))
-                .map_err(|_| RegistrationError::Source)?;
-            let entry = &mut entries[occurrence];
-            if entry.path != result.path || !matches!(&entry.content,
-                SnapshotEntryContent::File { material, .. } if *material == row.original)
-            {
-                return Err(RegistrationError::CommitScope);
-            }
-            entry.content = SnapshotEntryContent::File {
-                material: result.file.material, source: result.file.source,
-            };
             results.push(result);
         }
-        let manifest = AdmittedSnapshotManifest::prepare(self.source.repository_id, destination, operation, entries)
-            .map_err(RegistrationError::Manifest)?;
+        let manifest = replace_occurrences(self.source_node.manifest(), destination, operation, self.rows.iter().zip(&results)
+            .map(|(row, output)| (&row.edit.path, row.original,
+                SnapshotFileSource::Container { branch: row.base.branch_id(), node: row.base.node_id() }, &output.file)))?;
         Ok(Projection { state, versions, rows: results, manifest })
     }
+}
+
+/// One full-manifest constructor for planning and verified receipt replay.
+/// A row addresses its complete original path + FILE selector, never its
+/// content hash or all appearances of that FileId. Untouched aliases keep
+/// their own spelling/selection/version even when their bytes match a save.
+pub(in crate::snapshot_worktree) fn replace_occurrences<'a>(
+    source: &AdmittedSnapshotManifest, destination: SnapshotNodeId, operation: OperationId,
+    replacements: impl IntoIterator<Item=(&'a name_policy::PortablePath, SnapshotFile, SnapshotFileSource,
+        &'a crate::directory_worktree::projection::FileResult)>,
+) -> Result<AdmittedSnapshotManifest> {
+    let mut entries = source.entries().to_vec();
+    let mut last = None;
+    let mut selected = std::collections::BTreeSet::new();
+    for (path, original, selector, result) in replacements {
+        if last.is_some_and(|key| key >= path.key()) || !selected.insert(original.file_id)
+            || selected.len() > crate::working_tree::snapshot::MAX_VERSIONS
+            || result.path != *path || result.material.file_id != original.file_id
+            || result.material.version_id == original.version_id
+        { return Err(RegistrationError::CommitScope); }
+        let at = entries.binary_search_by(|e| e.path.key().cmp(path.key())).map_err(|_| RegistrationError::CommitScope)?;
+        let entry = &mut entries[at];
+        if entry.path != *path || entry.content != (SnapshotEntryContent::File { material: original, source: selector }) {
+            return Err(RegistrationError::CommitScope);
+        }
+        entry.content = SnapshotEntryContent::File { material: result.material, source: result.source };
+        last = Some(path.key());
+    }
+    if selected.is_empty() { return Err(RegistrationError::CommitScope); }
+    AdmittedSnapshotManifest::prepare(source.repository_id(), destination, operation, entries).map_err(RegistrationError::Manifest)
 }
