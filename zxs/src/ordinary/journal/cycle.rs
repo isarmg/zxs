@@ -3,7 +3,7 @@
 //! a sealed intent nor a complete frame above the floor enters this view.
 //! No new on-disk fields, native permissions, local files or mutable index.
 use super::{Commit,Decision,Delta,Frame,Journal,Placement,Saved};
-use crate::{BranchId,FileId,HistoryId,NodeId,OperationId,VersionId,VolumeId,fs::invalid,
+use crate::{BranchId,FileId,HistoryId,NodeId,OperationId,VersionId,VersionStorageId,VolumeId,fs::invalid,
     ordinary::interval::types::Predecessor};
 use std::io;
 
@@ -12,22 +12,23 @@ use std::io;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct Parent{
     pub file:FileId,pub history:HistoryId,pub branch:BranchId,pub node:NodeId,pub version:VersionId,
-    pub operation:OperationId,pub decision:[u8;32],pub revision:u64,pub length:u64,
+    pub storage:VersionStorageId,pub creation:[u8;32],pub operation:OperationId,pub decision:[u8;32],pub revision:u64,pub length:u64,
 }
 impl Parent{
     pub(in crate::ordinary) fn full(f:&Commit)->Self{let o=&f.original;Self{file:o.file,history:o.history,
-        branch:o.branch,node:o.node,version:o.version,operation:o.op,decision:f.digest,revision:1,length:o.content.bytes}}
+        branch:o.branch,node:o.node,version:o.version,storage:o.storage,creation:o.creation,operation:o.op,decision:f.digest,revision:1,length:o.content.bytes}}
     pub(in crate::ordinary) fn incremental(d:&Delta)->Self{let o=&d.original;Self{file:o.file,history:o.history,
-        branch:o.branch,node:o.node,version:o.version,operation:o.op,decision:d.digest,revision:o.revision,length:o.logical}}
+        branch:o.branch,node:o.node,version:o.version,storage:o.storage,creation:o.creation,operation:o.op,decision:d.digest,revision:o.revision,length:o.logical}}
     pub(in crate::ordinary) fn predecessor(self,last:Option<&Saved>)->Predecessor{match last{
         None=>Predecessor{op:self.operation,decision:self.decision,revision:self.revision,length:self.length},
         Some(s)=>Predecessor{op:s.original.op,decision:s.digest,revision:s.original.revision(),length:s.original.result},
     }}
-    fn accepts(self,s:&Saved,last:Option<&Saved>)->bool{let o=&s.original;
+    pub(in crate::ordinary) fn owns(self,s:&Saved)->bool{let o=&s.original;
         o.file==self.file&&o.history==self.history&&o.branch==self.branch&&o.node==self.node&&o.version==self.version&&
-        o.commit==self.decision&&o.base_len==self.length&&o.predecessor==self.predecessor(last)
+        o.commit==self.decision&&o.base_len==self.length&&o.birth==self.creation
     }
-    fn child(self,d:&Delta,last:&Saved)->bool{let o=&d.original;
+    fn accepts(self,s:&Saved,last:Option<&Saved>)->bool{self.owns(s)&&s.original.predecessor==self.predecessor(last)}
+    pub(super) fn child(self,d:&Delta,last:&Saved)->bool{let o=&d.original;
         o.file==self.file&&o.history==self.history&&o.branch==self.branch&&o.parent==self.node&&o.parent_version==self.version&&
         o.parent_decision==self.decision&&o.parent_length==self.length&&o.working==last.original.op&&o.working_decision==last.digest&&
         o.revision==last.original.revision()&&o.logical==last.original.result

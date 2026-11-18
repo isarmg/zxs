@@ -5,7 +5,7 @@ pub(in crate::ordinary) mod allocation;
 pub(in crate::ordinary) mod map;
 pub(in crate::ordinary) mod physical;
 use super::{allocation as common,draft::types::SaveFrame,formal::{self,types::{Commit,FormalNode},FormalObservation},
-    interval::{types::Saved,physical::{Composed,Operands}},journal::{self,Decision,Journal},wire::{self,Frame},Cut,CreationStatus,publish_sealed};
+    interval::{types::Saved,physical::{Composed,Operands}},journal::{self,Decision,Journal,WorkWindow},wire::{self,Frame},Cut,CreationStatus,publish_sealed};
 use self::{allocation::DeltaAllocation,map::Map,physical::{Input,Verified},types::{Delta,Original}};
 use crate::{FileId,OperationId,fs::{self,invalid},pool::lease::{Access,LocalPool}};
 use std::{io,path::Path};
@@ -31,7 +31,7 @@ pub fn formal_receipt(system:&Path,op:OperationId)->io::Result<Option<FormalObse
         Some(_)=>CreationStatus::Prepared,None=>CreationStatus::Reserved,
     },published:None}))
 }
-struct SourceCut<'a>{c:&'a Frame,initial:&'a SaveFrame,parent:&'a Commit,edge:&'a Saved,map:Map,req:[u8;32]}
+struct SourceCut<'a>{c:&'a Frame,initial:&'a SaveFrame,first:&'a Commit,work:WorkWindow<'a>,edge:&'a Saved,map:Map,req:[u8;32]}
 enum Choice<'a>{Done(FormalNode),Active(SourceCut<'a>)}
 fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,rev:u64)->io::Result<Choice<'a>>{
     p.require_business_op(op)?;let req=types::request(p.id(),fs::local_uid(),op,id,rev)?;
@@ -44,12 +44,16 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,rev:u64)->io::
     if s.delta(id).is_some_and(|d|d.original.op!=op){return Err(invalid("this formal producer requires the original FULL as the current parent"));}
     let c=s.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE"))?;
     let initial=s.saved(id).ok_or_else(||invalid("original FILE has no first saved revision"))?;
-    let parent=s.head(id).ok_or_else(||invalid("INCR requires a real published formal parent"))?;
-    let edge=s.interval(id).ok_or_else(||invalid("no changed working revision to commit"))?;
+    let first=s.head(id).ok_or_else(||invalid("INCR requires a real published formal parent"))?;
+    let work=s.submission_input(id,op)?;let parent=work.parent();
+    // Until additional immutable packs, historical reads and custody are a
+    // single complete feature, no producer admits an incremental baseline.
+    if parent!=journal::cycle::Parent::full(first){return Err(invalid("this producer only publishes the first formal INCR"));}
+    let edge=work.last().ok_or_else(||invalid("no changed working revision to commit"))?;
     if edge.original.revision()!=rev{return Err(invalid("requested working revision is not the exact current original"));}
-    let map=Map::derive(parent.original.content.bytes,s.intervals(id))?;
+    let map=Map::derive(parent.length,work.rows())?;
     if let Some(a)=&s.incrementing{a.original.require(s.placement(id)?,parent,edge,&map)?;}else{s.room_for(wire::MAX_FRAME)?;}
-    Ok(Choice::Active(SourceCut{c,initial,parent,edge,map,req}))
+    Ok(Choice::Active(SourceCut{c,initial,first,work,edge,map,req}))
 }
 enum Source{Done(FormalNode),Input(Input)}
 fn source(system:&Path,op:OperationId,id:FileId,rev:u64)->io::Result<Source>{
@@ -57,19 +61,19 @@ fn source(system:&Path,op:OperationId,id:FileId,rev:u64)->io::Result<Source>{
     let x=match choice(&p,&s,op,id,rev)?{Choice::Done(r)=>return Ok(Source::Done(r)),Choice::Active(x)=>x};
     let site=s.placement(id)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&s,x.c,x.initial)?;
     let a=s.incrementing.as_ref();let o=match a{
-        Some(a)=>a.original.clone(),None=>Original::select(op,fs::local_uid(),site,x.parent,x.edge,&x.map)?,
+        Some(a)=>a.original.clone(),None=>Original::select(op,fs::local_uid(),site,x.work.parent(),x.edge,&x.map)?,
     };
     if a.is_none()&&!s.free_content_ids(o.node,o.version,o.storage){return Err(invalid("new formal identity already used"));}
     let decided=s.delta(id);let sealed=s.pending.as_ref().map(|seal|seal.frame.delta()).transpose()?.or(decided);
-    let parent=site.full(&dir,x.parent)?;
-    let actual=site.full(&dir,x.parent)?;
+    let parent=site.full(&dir,x.first)?;
+    let actual=site.full(&dir,x.first)?;
     let (working,published)=if let Some(d)=decided{
         (None,Some(physical::Body::open(&dir,actual,d)?))
     }else{
-        let set=Operands::capture(&dir,site,x.parent.original.content.bytes,s.intervals(id))?;
+        let set=Operands::capture(&dir,site,x.work.parent().length,x.work.rows())?;
         (Some(Composed::new(dir.duplicate()?,actual,set)?),None)
     };
-    let retained=s.intervals(id).cloned().collect();v.require_current()?;
+    let retained=x.work.rows().cloned().collect();v.require_current()?;
     Ok(Source::Input(Input::open(dir,o,x.map,working,published,parent,a,sealed,retained)?))
 }
 fn commit_inner(system:&Path,op:OperationId,id:FileId,rev:u64,mut cut:impl FnMut(Cut)->io::Result<()>)->io::Result<FormalNode>{
@@ -81,7 +85,7 @@ fn writer(system:&Path,op:OperationId,id:FileId,rev:u64,verified:Verified,cut:&m
     let x=match choice(&p,&s,op,id,rev)?{Choice::Done(r)=>return Ok(r),Choice::Active(x)=>x};
     let req=x.req;let site=s.placement(id)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&s,x.c,x.initial)?;let o=verified.original();
     if o.op!=op||o.uid!=fs::local_uid(){return Err(invalid("different explicit INCR principal or operation"));}
-    o.require(site,x.parent,x.edge,&x.map)?;v.require_current()?;verified.require_source(&dir,o)?;
+    o.require(site,x.work.parent(),x.edge,&x.map)?;v.require_current()?;verified.require_source(&dir,o)?;
     if let Some(a)=&s.incrementing{if a.original!=*o||a.request!=req{return Err(invalid("different original INCR reservation"));}}
     else{
         if !s.free_content_ids(o.node,o.version,o.storage){return Err(invalid("formal INCR identity collision"));}
@@ -101,7 +105,7 @@ fn writer(system:&Path,op:OperationId,id:FileId,rev:u64,verified:Verified,cut:&m
     let x=match choice(&p,&held,op,id,rev)?{Choice::Done(r)=>return Ok(r),Choice::Active(x)=>x};
     let site=held.placement(id)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&held,x.c,x.initial)?;
     if x.req!=req{return Err(invalid("different original request after named INCR feedback"));}
-    verified.original().require(site,x.parent,x.edge,&x.map)?;verified.require_source(&dir,verified.original())?;
+    verified.original().require(site,x.work.parent(),x.edge,&x.map)?;verified.require_source(&dir,verified.original())?;
     drop(x);
     let now=held.incrementing.take().ok_or_else(||invalid("original INCR reservation disappeared during verification"))?;
     if now.stamp!=a.stamp||now.bytes!=a.bytes{return Err(invalid("original held INCR reservation was replaced"));}

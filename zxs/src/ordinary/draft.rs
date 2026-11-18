@@ -32,19 +32,21 @@ pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)
         // obstructed. Do not use the old draft as the body, or require it for
         // the selected node. Complete-inventory and retirement verify it separately.
         let site=state.placement(c.create.file)?;let base=site.full(&dir,f)?.user_read()?;
+        let work=state.active_work(c.create.file)?;
         if let Some(d)=state.delta(c.create.file){
+            if work.last().is_some(){return Err(invalid("INCR-based working output is not admitted by this reader"));}
             return Ok(Some(Body::Incr(site.incremental(&dir,base,d)?)));
         }
         if let Some(a)=state.incrementing.as_ref().filter(|a|a.original.file==c.create.file){
-            let m=super::delta::map::Map::derive(f.original.content.bytes,state.intervals(c.create.file))?;
+            let m=super::delta::map::Map::derive(work.parent().length,work.rows())?;
             super::delta::physical::inspect(&dir,a,&m,state.pending.as_ref().map(|p|p.frame.delta()).transpose()?)?;
         }
         if let Some(a)=state.editing.as_ref().filter(|a|a.original.file==c.create.file){
             let sealed=state.pending.as_ref().map(|p|p.frame.span()).transpose()?;
             super::interval::physical::inspect(&dir,a,sealed)?;
         }
-        if state.interval(c.create.file).is_some(){
-            let set=super::interval::physical::Operands::capture(&dir,site,f.original.content.bytes,state.intervals(c.create.file))?;
+        if work.last().is_some(){
+            let set=super::interval::physical::Operands::capture(&dir,site,work.parent().length,work.rows())?;
             return Ok(Some(Body::Composed(super::interval::physical::Composed::new(dir,base,set)?)));
         }
         return Ok(Some(Body::Formal(base)));
@@ -76,7 +78,7 @@ pub(super) fn capture_current(system:&Path,id:FileId)->io::Result<(CurrentFile,O
     let c=state.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published original FILE"))?;
     let volume=pool.ordinary(state.volume_of(c))?;let body=admit_current_held(&state,&volume,c)?;
     volume.root.file.sync_all()?;volume.require_current()?;
-    Ok((CurrentFile{file:FileInfo::at(c,state.volume_of(c)),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.delta(id).map(super::delta::types::Delta::receipt).or_else(||state.head(id).map(super::formal::types::Commit::receipt)),edit:if state.delta(id).is_some(){None}else{state.interval(id).map(super::interval::types::Saved::receipt)}},body))
+    Ok((CurrentFile{file:FileInfo::at(c,state.volume_of(c)),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.delta(id).map(super::delta::types::Delta::receipt).or_else(||state.head(id).map(super::formal::types::Commit::receipt)),edit:if state.head(id).is_some(){state.active_work(id)?.last().map(super::interval::types::Saved::receipt)}else{None}},body))
 }
 /// Inspect actual original FILE and (if present) its named working record and
 /// authenticated chunk head. This is not a whole-content verification scan.

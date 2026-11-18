@@ -48,7 +48,7 @@ fn round_trip(cross:bool){
     {
         let(_,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let site=s.placement(r.id).unwrap();
         let initial=&s.intervals(r.id).next().unwrap().original;
-        assert_eq!(initial.volume,f.to);let parent=s.head(r.id).unwrap();assert!(initial.matches(site,parent,None));
+        assert_eq!(initial.volume,f.to);let parent=crate::ordinary::journal::cycle::Parent::full(s.head(r.id).unwrap());assert!(initial.matches(site,parent,None));
         let mut false_source=initial.clone();false_source.volume=f.from;
         assert!(!false_source.matches(site,parent,None));assert_eq!(site.birth().create.volume,f.from);
     }

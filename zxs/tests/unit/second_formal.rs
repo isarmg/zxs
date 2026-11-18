@@ -330,3 +330,32 @@ fn successful_sink_flush_cannot_hide_a_changed_pinned_full_or_increment(){
         assert_eq!(out.flushes,1);assert_eq!(out.got.as_slice(),if incremental{b"aXcd"}else{b"abcd"});
     }
 }
+
+#[test]
+#[ignore="two private registered native filesystems and genuine original publication cut"]
+fn formal_input_window_switches_only_on_confirmation_and_old_operations_never_own_new_work(){
+    let t=Fixture::new(b"abcdef");let file=t.base.file;let other=create_empty(&t.system,OperationId::new().unwrap(),t.vol,"other").unwrap();
+    let first=t.edit(1,1,b"x",LengthPolicy::KeepOrGrow);let last=t.edit(2,4,b"yz",LengthPolicy::KeepOrGrow);
+    let op=OperationId::new().unwrap();let next=OperationId::new().unwrap();
+    assert!(commit_inner(&t.system,op,file,3,|c|if c==Cut::FrameSynced{Err(io::Error::other("above the confirmation floor"))}else{Ok(())}).is_err());
+    {
+        let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();let w=s.active_work(file).unwrap();
+        assert_eq!(w.parent().node,t.base.node);assert_eq!(w.rows().map(|r|r.original.op).collect::<Vec<_>>(),[first,last]);
+        let d=s.pending.as_ref().unwrap().frame.delta().unwrap();assert!(s.published_work(d).is_err());assert!(s.delta(file).is_none());
+        assert_eq!(s.submission_input(file,op).unwrap().last().unwrap().original.op,last);
+    }
+    assert!(commit_inner(&t.system,op,file,3,|c|if c==Cut::Decision{Err(io::Error::other("original cleanup not complete"))}else{Ok(())}).is_err());
+    let receipt=formal_receipt(&t.system,op).unwrap().unwrap();let child=receipt.published.unwrap();assert!(t.work(first).exists());
+    {
+        let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();
+        let active=s.submission_input(file,next).unwrap();assert_eq!(active.parent().node,child.node);assert!(active.last().is_none());
+        let spent=s.submission_input(file,op).unwrap();assert_eq!(spent.parent().node,t.base.node);
+        assert_eq!(spent.rows().map(|v|v.original.op).collect::<Vec<_>>(),[first,last]);
+        assert!(s.submission_input(other.file,op).is_err());let mut wrong=s.delta(file).unwrap().clone();wrong.original.working=first;
+        assert!(s.published_work(&wrong).is_err());assert!(s.submission_input(file,last).is_err());
+        assert_eq!(current_info(&t.system,file).unwrap().head,Some(child.clone()));assert!(current_info(&t.system,file).unwrap().edit.is_none());
+    }
+    assert_eq!(commit_working(&t.system,op,file,3).unwrap(),child);assert!(!t.work(first).exists()&&!t.work(last).exists());
+    osfs::rename(&t.data,t.top.0.join("offline-original-volume")).unwrap();
+    assert_eq!(commit_working(&t.system,op,file,3).unwrap(),child);
+}

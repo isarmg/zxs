@@ -51,7 +51,7 @@ impl<'a> Selected<'a>{
         // just because its name was issued. Never read versions from a draft.
         let child=s.delta(c.create.file).map(|x|(&x.original,d.is_some())).or_else(||s.incrementing.as_ref()
             .filter(|a|a.original.file==c.create.file).map(|a|(&a.original,false)));
-        let dir=directory_at(&v,s,c,working_names(s,c,self.first,true),Some((&f.original,true)),child)?;
+        let dir=directory_at(&v,s,c,working_names(s,c,self.first,true)?,Some((&f.original,true)),child)?;
         let material=self.bind(&dir,f,d)?;v.root.file.sync_all()?;v.require_current()?;Ok(material)
     }
 }

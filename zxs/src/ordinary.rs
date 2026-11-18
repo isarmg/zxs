@@ -226,10 +226,10 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
             let dir=formal::directory(&volume,&state,f,saved)?;
             let _=draft::material::Reader::current_if_named(&dir,&saved.original,&saved.material)?;
         }
-        if state.delta(f.create.file).is_some()&&state.incrementing.as_ref().is_some_and(|a|a.original.file==f.create.file){
+        if let Some(d)=state.incrementing.as_ref().filter(|a|a.original.file==f.create.file).and_then(|a|state.decided(a.original.op)){
             let saved=state.saved(f.create.file).ok_or_else(||invalid("no FILE origin for INCR cleanup inventory"))?;
             let dir=formal::directory(&volume,&state,f,saved)?;
-            for original in state.intervals(f.create.file){interval::physical::inspect_retained_name(&dir,original)?;}
+            for original in state.published_work(d.delta()?)?.rows(){interval::physical::inspect_retained_name(&dir,original)?;}
         }
     }
     volume.root.file.sync_all()?;volume.require_current()?;

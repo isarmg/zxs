@@ -84,7 +84,7 @@ impl<'p> LifecycleGrant<'p>{
             (s.before_handoff(m)?,child,Some(&a.original))
         }else{
             let prior=s.placement(r.id)?;let child=s.delta(r.id);
-            if child.is_none()&&s.interval(r.id).is_some(){return Err(invalid("dirty original revision cannot change custody"));}
+            if s.active_work(r.id)?.last().is_some(){return Err(invalid("dirty original revision cannot change custody"));}
             let original=if let Some(a)=&s.moving{
                 if a.original.op!=r.op||a.request!=digest||a.original.purpose.call()!=r.call{
                     return Err(invalid("another original custody operation must complete"));}

@@ -48,17 +48,20 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,rev:u64)->io
 /// Enroll every actual old working name from this FILE's authenticated prefix.
 /// Current explicitly requires every retained extent. A historical read admits
 /// issued names if present, never adopts their bytes or requires them available.
-pub(in crate::ordinary) fn working_names(s:&Journal,c:&Frame,w:&SaveFrame,history:bool)->Vec<(OperationId,bool)>{
+pub(in crate::ordinary) fn working_names(s:&Journal,c:&Frame,w:&SaveFrame,history:bool)->io::Result<Vec<(OperationId,bool)>>{
     let file=c.create.file;
-    if s.head(file).is_none(){return vec![(w.original.op,true)];}
-    if s.committing.as_ref().is_some_and(|a|a.original.file==file){return vec![(w.original.op,false)];}
-    let done=s.delta(file).is_some();
-    if done&&!s.incrementing.as_ref().is_some_and(|a|a.original.file==file){return Vec::new();}
-    let mut names:Vec<_>=s.intervals(file).map(|e|(e.original.op,!done&&!history)).collect();
+    if s.head(file).is_none(){return Ok(vec![(w.original.op,true)]);}
+    if s.committing.as_ref().is_some_and(|a|a.original.file==file){return Ok(vec![(w.original.op,false)]);}
+    let mut names:Vec<_>=s.active_work(file)?.rows().map(|e|(e.original.op,!history)).collect();
+    // A confirmed original can still be cleaning *its own* spent working
+    // inputs. Don't admit all old issued spellings, or require absent cleanup.
+    if let Some(a)=s.incrementing.as_ref().filter(|a|a.original.file==file){
+        if let Some(d)=s.decided(a.original.op){names.extend(s.published_work(d.delta()?)?.rows().map(|e|(e.original.op,false)));}
+    }
     if let Some(a)=s.editing.as_ref().filter(|a|a.original.file==file){
         if s.decided(a.original.op).is_none(){names.push((a.original.op,!history&&s.pending.is_some()));}
     }
-    names
+    Ok(names)
 }
 fn directory_at(v:&FileVolume<'_>,s:&Journal,c:&Frame,work:Vec<(OperationId,bool)>,
     f:Option<(&Original,bool)>,d:Option<(&super::delta::types::Original,bool)>)->io::Result<HeldDir>{
@@ -73,7 +76,7 @@ pub(in crate::ordinary) fn directory(v:&FileVolume<'_>,s:&Journal,c:&Frame,w:&Sa
     let formal=f.map(|f|(&f.original,true)).or_else(||a.map(|a|(&a.original,false)));
     let delta=s.delta(c.create.file).map(|d|(&d.original,true)).or_else(||s.incrementing.as_ref()
         .filter(|i|i.original.file==c.create.file).map(|i|(&i.original,s.pending.is_some())));
-    let dir=directory_at(v,s,c,working_names(s,c,w,false),formal,delta)?;
+    let dir=directory_at(v,s,c,working_names(s,c,w,false)?,formal,delta)?;
     if let Some(a)=a{
         let sealed=s.pending.as_ref().map(|p|p.frame.formal()).transpose()?;
         physical::inspect_prepared(&dir,a,sealed.or(f))?;

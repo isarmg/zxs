@@ -2,7 +2,7 @@
 //! save or a second independent FILE. The completed SYSTEM decision is small:
 //! it binds the whole immutable local INCR; the variable run map stays there.
 use crate::{BranchId,FileId,HistoryId,NodeId,OperationId,PoolId,VersionId,VersionStorageId,VolumeId,fs::invalid};
-use crate::ordinary::{draft::types::DraftClaim,formal::types::{Commit as Parent,FormalNode,FormalStorage},
+use crate::ordinary::{draft::types::DraftClaim,formal::types::{FormalNode,FormalStorage},journal::cycle::Parent,
     interval::types::Saved,wire::{self,Envelope,In,NativeObject}};
 use super::map::Map;
 use crate::ordinary::placement::Placement;
@@ -21,23 +21,23 @@ pub(in crate::ordinary) struct Original{
     pub node:NodeId,pub version:VersionId,pub storage:VersionStorageId,pub name:String,
 }
 impl Original{
-    pub fn select(op:OperationId,uid:u32,place:Placement<'_>,p:&Parent,w:&Saved,m:&Map)->io::Result<Self>{
+    pub fn select(op:OperationId,uid:u32,place:Placement<'_>,p:Parent,w:&Saved,m:&Map)->io::Result<Self>{
         let c=place.birth();
         let o=Self{op,uid,file:c.create.file,history:c.create.history,volume:place.volume(),creation:c.digest,
-            branch:p.original.branch,parent:p.original.node,parent_version:p.original.version,parent_decision:p.digest,parent_length:p.original.content.bytes,
+            branch:p.branch,parent:p.node,parent_version:p.version,parent_decision:p.decision,parent_length:p.length,
             working:w.original.op,working_decision:w.digest,revision:w.original.revision(),logical:m.logical,changed:m.changed,rows:m.rows(),map:m.digest()?,
             node:NodeId::new()?,version:VersionId::new()?,storage:VersionStorageId::fresh()?,name:c.create.name.clone()};
         o.require(place,p,w,m)?;Ok(o)
     }
-    pub fn require(&self,place:Placement<'_>,p:&Parent,w:&Saved,m:&Map)->io::Result<()>{
+    pub fn require(&self,place:Placement<'_>,p:Parent,w:&Saved,m:&Map)->io::Result<()>{
         let c=place.birth();
-        if self.file!=c.create.file||self.history!=c.create.history||self.volume!=place.volume()||w.original.volume!=place.volume()||self.creation!=c.digest||
-            self.name!=c.create.name||p.original.file!=self.file||p.original.creation!=c.digest||self.branch!=p.original.branch||
-            self.parent!=p.original.node||self.parent_version!=p.original.version||self.parent_decision!=p.digest||self.parent_length!=p.original.content.bytes||
-            w.original.file!=self.file||w.original.node!=self.parent||w.original.commit!=p.digest||self.working!=w.original.op||
+        if place.retained().is_some()||!p.owns(w)||self.file!=c.create.file||self.history!=c.create.history||self.volume!=place.volume()||w.original.volume!=place.volume()||self.creation!=c.digest||
+            self.name!=c.create.name||p.file!=self.file||p.creation!=c.digest||self.branch!=p.branch||
+            self.parent!=p.node||self.parent_version!=p.version||self.parent_decision!=p.decision||self.parent_length!=p.length||
+            w.original.file!=self.file||w.original.node!=self.parent||w.original.commit!=p.decision||self.working!=w.original.op||
             self.working_decision!=w.digest||self.revision!=w.original.revision()||self.logical!=w.original.result||
             self.logical!=m.logical||self.changed!=m.changed||self.rows!=m.rows()||self.map!=m.digest()?||
-            self.node==self.parent||self.version==self.parent_version||self.storage==p.original.storage{
+            self.node==self.parent||self.version==self.parent_version||self.storage==p.storage{
             return Err(invalid("formal INCR did not originate on this exact FILE, branch, parent and saved working cut"));
         }Ok(())
     }

@@ -32,7 +32,7 @@ fn selection(s:&Journal,id:FileId)->io::Result<(&Frame,&Commit,Option<&Delta>)>{
     let d=s.delta(id);
     if s.placed(id).is_some()||s.allocated.as_ref().is_some_and(|a|a.file==id)||s.saving.as_ref().is_some_and(|a|a.original.file==id)
         ||s.committing.as_ref().is_some_and(|a|a.original.file==id)||s.editing.as_ref().is_some_and(|a|a.original.file==id)
-        ||s.incrementing.as_ref().is_some_and(|a|a.original.file==id)||(d.is_none()&&s.interval(id).is_some()){
+        ||s.incrementing.as_ref().is_some_and(|a|a.original.file==id)||s.active_work(id)?.last().is_some(){
         return Err(invalid("dirty or unfinished FILE cannot provide a complete clean handoff"));
     }
     Ok((c,parent,d))

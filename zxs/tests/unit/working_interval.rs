@@ -271,10 +271,10 @@ fn repeated_original_edits_reconstruct_exact_intersections_and_never_revive_trun
     assert_eq!(osfs::read_dir(t.dir()).unwrap().count(),3+receipts.len());
     let (_,_,state)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();
     let first=state.decided(receipts[0].operation).unwrap().span().unwrap();let second=state.decided(receipts[1].operation).unwrap().span().unwrap();
-    let birth=state.file(id).unwrap();let head=state.head(id).unwrap();let source=&second.original;
-    assert!(source.matches(birth,head,Some(first)));assert!(!source.matches(birth,head,None));
-    let mut wrong=source.clone();wrong.predecessor.decision[0]^=1;assert!(!wrong.matches(birth,head,Some(first)));
-    let mut wrong=source.clone();wrong.predecessor.op=second.original.op;assert!(!wrong.matches(birth,head,Some(first)));
+    let site=state.placement(id).unwrap();let head=crate::ordinary::journal::cycle::Parent::full(state.head(id).unwrap());let source=&second.original;
+    assert!(source.matches(site,head,Some(first)));assert!(!source.matches(site,head,None));
+    let mut wrong=source.clone();wrong.predecessor.decision[0]^=1;assert!(!wrong.matches(site,head,Some(first)));
+    let mut wrong=source.clone();wrong.predecessor.op=second.original.op;assert!(!wrong.matches(site,head,Some(first)));
 }
 
 #[test]

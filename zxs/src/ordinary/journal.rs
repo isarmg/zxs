@@ -12,6 +12,8 @@ use std::{collections::{BTreeMap,BTreeSet},ffi::CStr,io};
 
 pub(in crate::ordinary) mod credits;
 pub(in crate::ordinary) mod cycle;
+mod windows;
+pub(in crate::ordinary) use windows::WorkWindow;
 use credits::{Credits,Effect};
 
 pub(crate) const MAX_JOURNAL:usize=8*1024*1024;
@@ -80,7 +82,7 @@ struct OriginalIndex{
     ops:BTreeSet<OperationId>,files:BTreeMap<FileId,usize>,entries:BTreeSet<EntryId>,histories:BTreeSet<HistoryId>,
     names:BTreeSet<(VolumeId,String)>,tickets:BTreeSet<OperationId>,native:BTreeSet<fs::Birth>,saved:BTreeMap<FileId,usize>,
     formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,branches:BTreeSet<BranchId>,
-    versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,usize>,moves:BTreeMap<FileId,usize>,
+    versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,Vec<usize>>,moves:BTreeMap<FileId,usize>,
 }
 impl OriginalIndex{
     fn birth<'a>(&self,id:FileId,frames:&'a[Decision])->io::Result<&'a Frame>{
@@ -112,21 +114,18 @@ impl OriginalIndex{
     }
     fn original_span<'a>(&self,o:&span_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<Placement<'a>>{
         let place=self.placement(o.file,ds)?;
-        let f=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("interval save has no original formal FILE baseline"))?.formal()?;
-        let prior=self.spans.get(&o.file).and_then(|ids|ids.last()).map(|&i|ds[i].span()).transpose()?;
-        if !o.matches(place,f,prior)||!allow.file(o.volume,o.uid,place.directory().entity,&place.directory().birth,false){
+        let w=self.work(o.file,ds)?;
+        if !o.matches(place,w.parent(),w.last())||!allow.file(o.volume,o.uid,place.directory().entity,&place.directory().birth,false){
             return Err(invalid("interval save is not bound to this registered FILE and original formal node"));
         }
         Ok(place)
     }
     fn delta_source<'a>(&self,o:&delta_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<Placement<'a>>{
         let place=self.placement(o.file,ds)?;
-        let p=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("no formal parent for INCR"))?.formal()?;
-        let indices=self.spans.get(&o.file).ok_or_else(||invalid("no original working chain for INCR"))?;
-        let selected:Vec<&Saved>=indices.iter().map(|&i|ds[i].span()).collect::<io::Result<_>>()?;
-        let last=selected.last().copied().ok_or_else(||invalid("no original saved working edge for INCR"))?;
-        let map=DeltaMap::derive(p.original.content.bytes,selected.iter().copied())?;
-        o.require(place,p,last,&map)?;
+        let w=self.work(o.file,ds)?;
+        let last=w.last().ok_or_else(||invalid("no original saved working edge for INCR"))?;
+        let map=DeltaMap::derive(w.parent().length,w.rows())?;
+        o.require(place,w.parent(),last,&map)?;
         if self.deltas.contains_key(&o.file)||self.nodes.contains_key(&o.node)||self.versions.contains(&o.version)||self.storage.contains(&o.storage)
             ||!allow.file(o.volume,o.uid,place.directory().entity,&place.directory().birth,false){return Err(invalid("conflicting formal INCR identity or owner"));}
         Ok(place)
@@ -135,8 +134,8 @@ impl OriginalIndex{
         // Every input here belongs to the same already-verified prefix.
         let before=self.placement(o.file,ds)?;let c=before.birth();
         let f=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("handoff requires original first FULL"))?.formal()?;
-        let d=self.deltas.get(&o.file).map(|&i|ds[i].delta()).transpose()?;
-        if d.is_none()&&self.spans.get(&o.file).is_some_and(|v|!v.is_empty()){return Err(invalid("cannot hand off a dirty working chain"));}
+        let d=self.deltas.get(&o.file).and_then(|v|v.last()).map(|&i|ds[i].delta()).transpose()?;
+        if self.work(o.file,ds)?.last().is_some(){return Err(invalid("cannot hand off a dirty working chain"));}
         if self.tickets.contains(&o.ticket)||self.ops.contains(&o.ticket)||self.tickets.contains(&o.op)||self.ops.contains(&o.op){
             return Err(invalid("an original operation or custody ticket has already been used"));}
         registered_handoff(o,allow,before,f,d,self.names.contains(&(o.from,o.name.clone())),self.names.contains(&(o.to,o.name.clone())))?;
@@ -203,7 +202,7 @@ impl OriginalIndex{
             Decision::Formal(f)=>{let o=&f.original;self.formal.insert(o.file,index);self.nodes.insert(o.node,index);
                 self.branches.insert(o.branch);self.versions.insert(o.version);self.storage.insert(o.storage);
                 self.native.insert(f.materials.node.birth.clone());self.native.insert(f.materials.raw.birth.clone());}
-            Decision::Delta(d)=>{let o=&d.original;self.deltas.insert(o.file,index);self.nodes.insert(o.node,index);
+            Decision::Delta(d)=>{let o=&d.original;self.deltas.entry(o.file).or_default().push(index);self.nodes.insert(o.node,index);
                 self.versions.insert(o.version);self.storage.insert(o.storage);self.native.insert(d.material.object.birth.clone());}
             Decision::Span(s)=>{self.spans.entry(s.original.file).or_default().push(index);self.native.insert(s.material.object.birth.clone());}
         }
@@ -233,7 +232,7 @@ fn registered_handoff(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'_>,f:&Com
 
 pub(crate) struct Journal{
     credits:Credits,
-    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,usize>,moves:BTreeMap<FileId,usize>,pub(super) moving:Option<MoveAllocation>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
+    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,Vec<usize>>,moves:BTreeMap<FileId,usize>,pub(super) moving:Option<MoveAllocation>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
     pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) incrementing:Option<DeltaAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
 }
 impl Journal{
@@ -356,7 +355,12 @@ impl Journal{
                     match ds[..ds.len()-1].iter().rposition(|d|matches!(d,Decision::Move(old) if old.original.file==id)){
                         Some(i)=>{idx.moves.insert(id,i);},None=>{idx.moves.remove(&id);}
                     }
-                },Decision::Delta(d)=>{idx.deltas.remove(&d.original.file);idx.nodes.remove(&d.original.node);},Decision::Span(s)=>{
+                },Decision::Delta(d)=>{
+                    // This complete-but-unacknowledged child is not a visible
+                    // baseline. Preserve any earlier authenticated formal child.
+                    windows::hide_last(&mut idx.deltas,d.original.file,ds.len()-1)?;
+                    idx.nodes.remove(&d.original.node);
+                },Decision::Span(s)=>{
                     let chain=idx.spans.get_mut(&s.original.file).ok_or_else(||invalid("missing original span chain"))?;
                     if chain.pop()!=Some(ds.len()-1){return Err(invalid("wrong unconfirmed working edge"));}
                 },Decision::Formal(f)=>{idx.formal.remove(&f.original.file);idx.nodes.remove(&f.original.node);},
@@ -465,14 +469,16 @@ impl Journal{
     pub(super) fn ticket_used(&self,ticket:OperationId)->bool{
         self.on_all().any(|c|c.create.attempt==ticket)||self.moves().any(|m|m.original.ticket==ticket)||self.decided(ticket).is_some()
     }
+    #[cfg(test)]
     pub(super) fn intervals(&self,id:FileId)->impl DoubleEndedIterator<Item=&Saved>{
+        // Test-only whole-history audit. Production callers must specify a
+        // current working cut or the original confirmed submission instead.
         self.spans.get(&id).into_iter().flatten().map(move |&i|match &self.decisions[i]{
             Decision::Span(s)=>s,_=>unreachable!("only admitted working decisions enter this per-FILE index"),
         })
     }
-    pub(super) fn interval(&self,id:FileId)->Option<&Saved>{self.intervals(id).next_back()}
     pub(super) fn head(&self,id:FileId)->Option<&Commit>{self.decisions.get(*self.formal.get(&id)?)?.formal().ok()}
-    pub(super) fn delta(&self,file:FileId)->Option<&Delta>{self.decisions.get(*self.deltas.get(&file)?)?.delta().ok()}
+    pub(super) fn delta(&self,file:FileId)->Option<&Delta>{self.decisions.get(*self.deltas.get(&file)?.last()?)?.delta().ok()}
     pub(super) fn delta_node(&self,file:FileId,node:NodeId)->Option<&Delta>{
         self.decisions.get(*self.nodes.get(&node)?)?.delta().ok().filter(|d|d.original.file==file)
     }

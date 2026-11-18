@@ -1,7 +1,7 @@
 //! One explicitly saved edit over an exact formal or already-saved working revision. The stamped SHA
 //! is for the supplied extent, never a fabricated whole-output hash.
 use crate::{FileId,HistoryId,BranchId,VersionId,NodeId,VolumeId,PoolId,OperationId,fs::invalid};
-use crate::ordinary::{draft::types::DraftClaim,formal::types::Commit as Base,wire::{In,Envelope,NativeObject,encode}};
+use crate::ordinary::{draft::types::DraftClaim,journal::cycle::Parent,wire::{In,Envelope,NativeObject,encode}};
 use crate::ordinary::placement::Placement;
 use std::io;
 
@@ -66,22 +66,22 @@ pub(in crate::ordinary) struct Original{
     pub predecessor:Predecessor,pub edit:SpanEdit,pub result:u64,
 }
 impl Original{
-    pub fn select(op:OperationId,uid:u32,place:Placement<'_>,f:&Base,previous:Option<&Saved>,revision:u64,edit:SpanEdit)->io::Result<Self>{
+    pub fn select(op:OperationId,uid:u32,place:Placement<'_>,p:Parent,previous:Option<&Saved>,revision:u64,edit:SpanEdit)->io::Result<Self>{
         let c=place.birth();
-        if previous.is_some_and(|e|e.original.volume!=place.volume())||f.original.file!=c.create.file||f.original.creation!=c.digest{return Err(invalid("different original FILE for interval"));}
-        let predecessor=crate::ordinary::journal::cycle::Parent::full(f).predecessor(previous);
+        if p.file!=c.create.file||p.history!=c.create.history||p.creation!=c.digest||place.retained().is_some()||
+            previous.is_some_and(|e|e.original.volume!=place.volume()||!p.owns(e)){return Err(invalid("different original FILE or working cycle for interval"));}
+        let predecessor=p.predecessor(previous);
         if revision!=predecessor.revision||revision==u64::MAX{return Err(invalid("working revision changed; refusing stale write"));}
-        Ok(Self{op,uid,file:c.create.file,history:c.create.history,volume:place.volume(),birth:c.digest,commit:f.digest,
-            branch:f.original.branch,node:f.original.node,version:f.original.version,base_len:f.original.content.bytes,predecessor,edit,
-            result:edit.result(predecessor.length)?})
+        Ok(Self{op,uid,file:c.create.file,history:c.create.history,volume:place.volume(),birth:c.digest,commit:p.decision,
+            branch:p.branch,node:p.node,version:p.version,base_len:p.length,predecessor,edit,result:edit.result(predecessor.length)?})
     }
     pub fn revision(&self)->u64{self.predecessor.revision+1}
-    pub fn matches(&self,place:Placement<'_>,f:&Base,previous:Option<&Saved>)->bool{
+    pub fn matches(&self,place:Placement<'_>,p:Parent,previous:Option<&Saved>)->bool{
         let c=place.birth();
-        self.file==c.create.file&&self.history==c.create.history&&self.volume==place.volume()&&self.birth==c.digest&&
-            self.commit==f.digest&&self.file==f.original.file&&self.branch==f.original.branch&&self.node==f.original.node&&
-            self.version==f.original.version&&self.base_len==f.original.content.bytes&&
-            !previous.is_some_and(|e|e.original.volume!=place.volume())&&self.predecessor==crate::ordinary::journal::cycle::Parent::full(f).predecessor(previous)&&self.edit.result(self.predecessor.length).ok()==Some(self.result)
+        place.retained().is_none()&&self.file==c.create.file&&self.history==c.create.history&&self.volume==place.volume()&&self.birth==c.digest&&
+            p.creation==self.birth&&p.history==self.history&&self.commit==p.decision&&self.file==p.file&&self.branch==p.branch&&self.node==p.node&&
+            self.version==p.version&&self.base_len==p.length&&!previous.is_some_and(|e|e.original.volume!=place.volume()||!p.owns(e))&&
+            self.predecessor==p.predecessor(previous)&&self.edit.result(self.predecessor.length).ok()==Some(self.result)
     }
     pub fn put(&self,b:&mut Vec<u8>){
         for id in [&self.op.0,&self.file.0,&self.history.0,&self.volume.0]{b.extend_from_slice(id);}
