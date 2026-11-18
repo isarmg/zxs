@@ -7471,6 +7471,21 @@
           "compile_target": "wasm32-unknown-unknown"
         }
       ]
+    },
+    "file-original-timeline-browser": {
+      "reason": "Future isolated packaged Chrome run uses two real versions between an original path and original frozen deletion. Source checks and harness compilation do not execute the real browser, verify physical graph closure, or claim end-to-end acceptance.",
+      "python_tests": [
+        "test_release_acceptance"
+      ],
+      "rust_targets": [
+        {
+          "mode": "check",
+          "package": "browser-smoke",
+          "manifest": "tools/browser-smoke/Cargo.toml",
+          "kind": "bin",
+          "name": "browser-smoke"
+        }
+      ]
     }
   },
   "rules": [
@@ -13843,7 +13858,8 @@
       "path": "test/tools/browser-smoke/runner/main.rs",
       "groups": [
         "legacy-directory-branch-web-retirement",
-        "real-browser-first-commit-delivery"
+        "real-browser-first-commit-delivery",
+        "file-original-timeline-browser"
       ]
     },
     {
@@ -17238,7 +17254,8 @@
       "path": "src/web/src/files/lifecycle.rs",
       "groups": [
         "container-lifecycle-web",
-        "file-original-timeline-navigation"
+        "file-original-timeline-navigation",
+        "file-original-timeline-browser"
       ]
     },
     {
@@ -21143,13 +21160,15 @@
     {
       "path": ".github/scripts/release-acceptance.sh",
       "groups": [
-        "real-browser-first-commit-delivery"
+        "real-browser-first-commit-delivery",
+        "file-original-timeline-browser"
       ]
     },
     {
       "path": "test/ci/test_release_acceptance.py",
       "groups": [
-        "real-browser-first-commit-delivery"
+        "real-browser-first-commit-delivery",
+        "file-original-timeline-browser"
       ]
     },
     {
@@ -22199,25 +22218,29 @@
     {
       "path": "src/web/src/files/lifecycle/interval.rs",
       "groups": [
-        "file-original-timeline-navigation"
+        "file-original-timeline-navigation",
+        "file-original-timeline-browser"
       ]
     },
     {
       "path": "src/web/src/files/lifecycle/rail.rs",
       "groups": [
-        "file-original-timeline-navigation"
+        "file-original-timeline-navigation",
+        "file-original-timeline-browser"
       ]
     },
     {
       "path": "src/web/src/files/lifecycle/navigation.rs",
       "groups": [
-        "file-original-timeline-navigation"
+        "file-original-timeline-navigation",
+        "file-original-timeline-browser"
       ]
     },
     {
       "path": "src/web/src/files/version_tree/interval.rs",
       "groups": [
-        "file-original-timeline-navigation"
+        "file-original-timeline-navigation",
+        "file-original-timeline-browser"
       ]
     },
     {
@@ -22230,6 +22253,24 @@
       "path": "test/web/unit/files/lifecycle_navigation.rs",
       "groups": [
         "file-original-timeline-navigation"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/file_timeline.rs",
+      "groups": [
+        "file-original-timeline-browser"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/file_timeline/fixture.rs",
+      "groups": [
+        "file-original-timeline-browser"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/file_timeline/probe.js",
+      "groups": [
+        "file-original-timeline-browser"
       ]
     }
   ],

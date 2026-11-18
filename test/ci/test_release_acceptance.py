@@ -8,6 +8,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ReleaseAcceptance(unittest.TestCase):
+    def test_file_timeline_uses_an_isolated_real_source_and_packaged_browser(self):
+        script = (ROOT / '.github/scripts/release-acceptance.sh').read_text()
+        self.assertIn('--server-container-image zxs-debian13-service-runtime --file-timeline-only', script)
+        runner = (ROOT / 'test/tools/browser-smoke/runner/main.rs').read_text()
+        self.assertIn('file_timeline::seed(&temp)', runner)
+        self.assertIn('file_timeline::run(&browser, &origin, &password, timeline)', runner)
+        self.assertIn('if !file_timeline_only { seed_files(&temp)?; }', runner)
+
     def test_real_cross_tab_first_commit_has_an_independent_native_pool_and_packaged_binary(self):
         script = (ROOT / '.github/scripts/release-acceptance.sh').read_text()
         self.assertIn('--server-container-image zxs-debian13-service-runtime --first-commit-only', script)

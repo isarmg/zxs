@@ -30,6 +30,11 @@ cargo run --locked --offline --release -p browser-smoke -- \
 cargo run --locked --offline --release -p browser-smoke -- \
   --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-service-runtime --first-commit-only
 
+# A separate genuine path/delete/undo source and a full later window prove
+# cross-page focus and cancellation against the same copied service ELF.
+cargo run --locked --offline --release -p browser-smoke -- \
+  --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-service-runtime --file-timeline-only
+
 # CI explicitly opts into a separate review-only scenario after the full suite.
 # Keep the same copied ELF and do not pass incompatible screenshot arguments.
 if [[ "$foreign_review" == 1 ]]; then

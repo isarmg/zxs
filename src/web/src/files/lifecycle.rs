@@ -428,6 +428,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <button
                     class="zxs-button"
                     disabled=disabled
+                    data-zxs-lifecycle-load="true"
                     on:click=load_first
                 >
                     {t("查看／刷新记录", "View / refresh records")}
@@ -442,6 +443,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <button
                     class="zxs-button"
                     disabled=dismiss_disabled
+                    data-zxs-lifecycle-dismiss="true"
                     on:click=dismiss
                 >
                     {t("收起记录", "Dismiss records")}

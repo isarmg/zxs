@@ -34,6 +34,7 @@ mod disk_health;
 mod disk_tree;
 mod error_feedback;
 mod file_pagination;
+mod file_timeline;
 mod file_row_visual;
 mod file_rows;
 mod fixture;
@@ -531,6 +532,7 @@ fn run() -> Result<()> {
     let mut screenshot: Option<PathBuf> = None;
     let mut contour_evidence: Option<PathBuf> = None;
     let mut first_commit_only = false;
+    let mut file_timeline_only = false;
     let mut placement_only = false;
     let mut foreign_review_only = false;
     while let Some(arg) = args.next() {
@@ -539,6 +541,7 @@ fn run() -> Result<()> {
             "--embedded-web" => embedded_web = true,
             "--placement-only" => placement_only = true,
             "--first-commit-only" => first_commit_only = true,
+            "--file-timeline-only" => file_timeline_only = true,
             "--foreign-review-only" => foreign_review_only = true,
             "--server-container-image" => {
                 server_container_image = Some(
@@ -559,11 +562,14 @@ fn run() -> Result<()> {
             }
             _ => {
                 return Err(format!(
-                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--server-container-image IMAGE] [--screenshot PNG] [--contour-evidence DIR] [--placement-only] [--foreign-review-only] [--first-commit-only]"
+                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--server-container-image IMAGE] [--screenshot PNG] [--contour-evidence DIR] [--placement-only] [--foreign-review-only] [--first-commit-only] [--file-timeline-only]"
                 )
                 .into());
             }
         }
+    }
+    if file_timeline_only && (first_commit_only || placement_only || foreign_review_only || contour_evidence.is_some() || screenshot.is_some()) {
+        return Err("--file-timeline-only requires its own isolated native pool".into());
     }
     if first_commit_only && (placement_only || foreign_review_only || contour_evidence.is_some() || screenshot.is_some()) {return Err("--first-commit-only requires its own isolated native pool".into());}
     if contour_evidence.is_some() && screenshot.is_some() {
@@ -594,8 +600,9 @@ fn run() -> Result<()> {
     let mut entropy = [0u8; 24];
     File::open("/dev/urandom")?.read_exact(&mut entropy)?;
     let password: String = entropy.iter().map(|b| format!("{b:02x}")).collect();
-    fixture::initialize_management(&temp,&password,first_commit_only)?;
-    let first_commit_slot=if first_commit_only{Some(fixture::seed_first_commit(&temp)?)}else{seed_files(&temp)?;None};
+    fixture::initialize_management(&temp,&password,first_commit_only || file_timeline_only)?;
+    let timeline = file_timeline_only.then(|| file_timeline::seed(&temp)).transpose()?;
+    let first_commit_slot=if first_commit_only{Some(fixture::seed_first_commit(&temp)?)}else{if !file_timeline_only { seed_files(&temp)?; } None};
     let server_port = port()?;
     let driver_port = port()?;
     let origin = format!("http://127.0.0.1:{server_port}");
@@ -674,7 +681,9 @@ fn run() -> Result<()> {
                 .ok_or("missing WebDriver session")?
                 .to_owned(),
         };
-        let result = if let Some((slot, observed, nested))=&first_commit_slot {
+        let result = if let Some(timeline) = &timeline {
+            file_timeline::run(&browser, &origin, &password, timeline)
+        } else if let Some((slot, observed, nested))=&first_commit_slot {
             first_commit_tabs::run(&browser,&origin,&password,slot)
                 .and_then(|()| automatic_files::run(&browser,&origin,&password,slot,observed))
                 .and_then(|()| nested_picks::run(&browser,&origin,&password,slot,nested))
