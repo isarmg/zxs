@@ -4,7 +4,7 @@
 
 文档只维护当前使用、设计、开发、验证和发行所需的说明。历史改进过程、评审报告、单次测试结果和发布日志不在此重复保存；提交历史、CI 产物及 GitHub Release 承担相应查询用途。维护文档以中文为主。
 
-**先看[文件容器的使用边界与验证状态](file-only-migration.md)。** 普通目录是路径，文件才有自己的容器和历史。旧章节或设计记录中提到的目录初始化、暂存与提交、目录分支、Worktree 或整树拆分，不是当前产品入口，也不是兼容操作。[目标磁盘布局](file-only-migration.md#disk-target)区分 FILE 容器与系统盘，并说明回收盘、备份和跨盘 MOVE 的边界；较早的盘格式图不是新池部署说明。
+**先看[文件容器的使用边界与验证状态](file-only-migration.md)。** 普通目录是路径，文件才有自己的容器和历史。旧章节或设计记录中提到的目录初始化、暂存与提交、目录分支、Worktree 或整树拆分，不是当前产品入口，也不是兼容操作。[目标磁盘布局](file-only-migration.md#disk-target)区分 FILE 容器与系统盘，并说明回收盘、主数据盘直达备份盘和跨盘 MOVE 的边界；较早的盘格式图不是新池部署说明。
 
 ## 使用与运维
 
@@ -18,7 +18,7 @@
 | 主题 | 规范 |
 | --- | --- |
 | 总体 | [需求](01-requirements.md)、[概念与不变量](02-concepts-and-invariants.md)、[架构](03-architecture.md)、[平台与入口](04-platforms-and-access.md) |
-| 存储模型 | [命名与路径](05-naming-and-paths.md)、[文件历史与分支](06-history-and-branches.md)、[数据模型](07-data-model.md)、[盘格式](08-full-storage-and-disk-format.md)、[备份拓扑](09-backup-topology.md) |
+| 存储模型 | [命名与路径](05-naming-and-paths.md)、[文件历史与分支](06-history-and-branches.md)、[数据模型](07-data-model.md)、[盘格式](08-full-storage-and-disk-format.md)、[直连备份](09-backup-topology.md) |
 | 一致性与安全 | [事务恢复](10-transactions-and-recovery.md)、[写入](11-write-semantics.md)、[读取](12-reading-and-cache.md)、[保留删除](13-retention-and-deletion.md)、[权限](14-security-and-permissions.md) |
 | 接口与维护 | [API 与错误](15-api-and-errors.md)、[客户端](16-client-interfaces.md)、[生命周期](17-lifecycle-and-maintenance.md)、[故障处理](18-failure-handling.md)、[容量与性能](19-capacity-and-performance.md) |
 

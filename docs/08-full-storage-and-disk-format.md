@@ -1,6 +1,6 @@
 # 08 全量存储、盘格式与单盘恢复
 
-[文档目录](README.md) · [上一章：数据模型、身份与索引](07-data-model.md) · [下一章：用户指定的分层备份拓扑](09-backup-topology.md)
+[文档目录](README.md) · [上一章：数据模型、身份与索引](07-data-model.md) · [下一章：用户指定的直连备份](09-backup-topology.md)
 
 <a id="s08"></a>
 
@@ -238,7 +238,7 @@ Snapshot 必须携带 `format: "radix-map-roots"`、十进制 UInt64 字符串 `
 
 ---
 
-[文档目录](README.md) · [上一章：数据模型、身份与索引](07-data-model.md) · [下一章：用户指定的分层备份拓扑](09-backup-topology.md)
+[文档目录](README.md) · [上一章：数据模型、身份与索引](07-data-model.md) · [下一章：用户指定的直连备份](09-backup-topology.md)
 
 
 ### 新布局普通 Add 的根准备证据
