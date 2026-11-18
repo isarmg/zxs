@@ -165,3 +165,26 @@ fn container_tags_rejects_wrong_context_and_generation_exhaustion() {
         ErrorCode::ResourceLimit,
     );
 }
+
+#[test]
+fn ordinary_new_files_with_equal_content_never_borrow_the_first_identity_or_tags() {
+    let (root, mut engine, repository) = setup();
+    let first = save(&mut engine, &repository.main_branch_id, "first.bin", b"equal bytes");
+    let selected = request(&first, &repository, 0, &["first only"]);
+    engine.replace_container_tags(&selected, &"admin".parse().unwrap(),
+        OperationId::generate().unwrap()).unwrap();
+    let second = save(&mut engine, &repository.main_branch_id, "second.bin", b"equal bytes");
+    assert_ne!(first.entry_id, second.entry_id);
+    assert_ne!(first.file_id, second.file_id);
+    assert_ne!(first.version_id, second.version_id);
+    let first_id: FileId = first.file_id.parse().unwrap();
+    let second_id: FileId = second.file_id.parse().unwrap();
+    let first_body = &engine.state().versions[&first.version_id];
+    let second_body = &engine.state().versions[&second.version_id];
+    assert_eq!(first_body.content_hash, second_body.content_hash);
+    assert!(second_body.source_version_ids.is_empty());
+    drop(engine);
+    let engine = Engine::open(&root.path().join("system")).unwrap();
+    assert_eq!(engine.state().container_tags[&first_id].tags(), &selected.tags);
+    assert_eq!(engine.state().container_tags[&second_id], ContainerTags::empty());
+}

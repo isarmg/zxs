@@ -8,21 +8,8 @@ use crate::snapshot_worktree::copy_source::PublishedSnapshotFile;
 use crate::{Engine, Error, Result, State};
 use std::sync::Arc;
 use storage_contract::file_container::ContainerNamespace;
-use storage_contract::file_container_tags::ContainerTags;
 use storage_contract::file_draft::{BirthRequest, DraftLocation};
-use storage_contract::{EntryId, FileId, OperationId, Principal, Sequence};
-
-/// Normal Workspace creation and independent first creation use one native
-/// FileId allocator and empty FILE tag registration. An existing FILE's tags,
-/// body parents, names and branch history are never cloned into the new FILE.
-pub(crate) fn allocate_file(next: &mut State) -> Result<FileId> {
-    let file = FileId::generate()?;
-    if next.file_containers.contains_key(&file) || next.container_tags.contains_key(&file) {
-        return Err(invalid());
-    }
-    next.container_tags.insert(file, ContainerTags::empty());
-    Ok(file)
-}
+use storage_contract::{EntryId, OperationId, Principal, Sequence};
 
 pub(crate) struct IndependentFirst {
     target: DraftLocation,
@@ -96,7 +83,7 @@ impl IndependentFirst {
         }
 
         let mut next = unborn::begin(previous, Sequence::new(context.next_slot))?;
-        let file = allocate_file(&mut next)?;
+        let file = crate::business::file_tags::new_file_identity(&mut next)?;
         let entry = EntryId::generate()?;
         unborn::require_fresh(previous, file, entry)?;
         let binding = namespace.namespace_for_birth(&destination.path, entry)?;

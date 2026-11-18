@@ -1576,7 +1576,7 @@ impl crate::engine::PlanningContext<'_> {
                     }
                     let file_id = match existing.as_ref() {
                         Some(entry) => entry.file_id.clone(),
-                        None => super::file_draft::independent_first::allocate_file(state)?.to_string(),
+                        None => super::file_tags::new_file_identity(state)?.to_string(),
                     };
                     if existing.is_some() {
                         super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,request.operation_id)?;

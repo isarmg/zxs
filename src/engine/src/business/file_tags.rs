@@ -10,6 +10,18 @@ pub(crate) fn invalid() -> Error {
     Error::ContainerTags(crate::ContainerTagsError::Publication)
 }
 
+/// The ordinary FILE producer owns its stable identity and empty mutable tag
+/// row. No directory repository, Worktree, archive or imported tag/history
+/// participates in making an independent FILE.
+pub(in crate::business) fn new_file_identity(next: &mut State) -> Result<FileId> {
+    let id = FileId::generate()?;
+    if next.file_containers.contains_key(&id) || next.container_tags.contains_key(&id) {
+        return Err(invalid());
+    }
+    next.container_tags.insert(id, ContainerTags::empty());
+    Ok(id)
+}
+
 pub(crate) fn context(
     state: &State,
     current: Option<&CurrentNamespaces>,
