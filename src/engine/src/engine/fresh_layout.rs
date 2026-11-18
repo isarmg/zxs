@@ -162,9 +162,7 @@ pub(super) struct CreatedRoots {
 }
 impl CreatedRoots {
     pub(super) fn create(config: &ValidatedConfig, resources: &DiskResources) -> Result<Self> {
-        if !config.storage_roots.is_empty() || config.generation().is_some() {
-            return Err(FreshLayoutError::InitializationInput.into());
-        }
+        config.require_initialization_input()?;
         // Allocate every logical identity before the first mkdir. No filename,
         // observed inode or later Placement is used to generate an identity.
         let operation = OperationId::generate()?;

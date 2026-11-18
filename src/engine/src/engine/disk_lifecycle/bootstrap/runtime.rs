@@ -129,7 +129,7 @@ fn initial_configuration(
             source,
         ))
     })?;
-    let projected = ValidatedConfig::try_from(config)?.with_workspace_limits(workspace_limits)?;
+    let projected = ValidatedConfig::from_stored_layout(config)?.with_workspace_limits(workspace_limits)?;
     let matches = match relation {
         InitialProjection::Exact => storage_contract::canonical_json(&projected)?
             == storage_contract::canonical_json(expected)?,

@@ -552,6 +552,7 @@ impl Engine {
     /// # Errors
     /// Returns filesystem, disk identity, canonical root overlap or initialization errors.
     pub fn initialize_validated(root: &Path, config: ValidatedConfig) -> Result<Self> {
+        config.require_initialization_input()?;
         if root.join("config.json").try_exists()? {
             return Err(Error::new(
                 storage_contract::ErrorCode::AlreadyInitialized,
@@ -591,6 +592,7 @@ impl Engine {
         config: ValidatedConfig,
         directories: Vec<File>,
     ) -> Result<Self> {
+        config.require_initialization_input()?;
         let root = existing_private_dir(root)?.path().to_path_buf();
         let selection = crate::authority_selection::SelectionGuard::legacy(&root)?;
         if root.join("config.json").try_exists()? {
@@ -819,7 +821,7 @@ impl Engine {
             ErrorCode::RecoveryRequired,
             "system projection is unavailable; use explicit retained metadata roots for management recovery",
         ))?;
-        let config = ValidatedConfig::try_from(config)?.with_workspace_limits(workspace_limits)?;
+        let config = ValidatedConfig::from_stored_layout(config)?.with_workspace_limits(workspace_limits)?;
         Ok((root, config))
     }
 

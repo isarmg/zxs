@@ -87,6 +87,30 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    /// The same input type serves explicit initialization and cold reads. Only
+    /// a fresh request may omit its physical bindings; discovery must reject
+    /// that shape before opening the projected storage paths or writer locks.
+    pub(crate) fn from_stored_layout(config: Config) -> Result<Self> {
+        let config = Self::try_from(config)?;
+        config.require_stored_layout()?;
+        Ok(config)
+    }
+
+    fn require_stored_layout(&self) -> Result<()> {
+        if self.storage_roots.is_empty() {
+            return Err(super::fresh_layout::FreshLayoutError::Registration.into());
+        }
+        // Nonempty roots already closed over every configured disk in TryFrom.
+        Ok(())
+    }
+
+    pub(crate) fn require_initialization_input(&self) -> Result<()> {
+        if !self.storage_roots.is_empty() || self.generation().is_some() {
+            return Err(super::fresh_layout::FreshLayoutError::InitializationInput.into());
+        }
+        Ok(())
+    }
+
     pub(super) fn with_created_layout(
         &self,
         created: &super::fresh_layout::CreatedRoots,
@@ -346,6 +370,7 @@ impl ValidatedConfig {
     }
 
     pub(crate) fn verify_saved_metadata_membership(&self, saved: &Self) -> Result<()> {
+        saved.require_stored_layout()?;
         if !self.same_metadata_membership(saved) {
             return Err(Error::new(
                 ErrorCode::PublicationInvalid,
@@ -410,7 +435,7 @@ impl ValidatedConfig {
 /// Admit one recovery input against its own anchor. Selection still requires a
 /// configured majority and later checks every input seal against that winner.
 pub(super) fn read_recovery_anchor(path: &Path, seal: &DiskSeal) -> Result<ValidatedConfig> {
-    let original = ValidatedConfig::try_from(read_json::<Config>(
+    let original = ValidatedConfig::from_stored_layout(read_json::<Config>(
         &path.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
     )?)?;
     let config =

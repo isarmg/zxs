@@ -785,3 +785,53 @@ fn membership_anchor_fault_is_isolated_when_original_quorum_remains() {
         assert!(reopened.take_recovery_warnings().seals.is_empty());
     }
 }
+
+#[test]
+fn stored_unbound_request_refuses_recovery_and_inventory_before_storage_lookup() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let unavailable = temp.path().join("never-open-this-disk");
+    std::fs::create_dir(&system).unwrap();
+    std::fs::set_permissions(&system, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let request = Config::development(crate::test_disks([unavailable.clone()])).unwrap();
+    let encoded = storage_contract::canonical_json(&request).unwrap();
+    let path = system.join("config.json");
+    std::fs::write(&path, &encoded).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert!(ValidatedConfig::try_from(request.clone()).is_ok());
+    let expected = ErrorCode::DiskIdentityMismatch;
+    assert_eq!(ValidatedConfig::from_stored_layout(request).unwrap_err().code(), expected);
+    assert_eq!(Engine::open(&system).err().unwrap().code(), expected);
+    assert_eq!(crate::WorkspaceInventory::open(&system).err().unwrap().code(), expected);
+    assert_eq!(std::fs::read(&path).unwrap(), encoded);
+    assert_eq!(std::fs::read_dir(&system).unwrap().count(), 1);
+    assert!(!unavailable.exists());
+}
+
+#[test]
+fn explicit_initialization_rejects_observed_roots_before_creating_any_destinations() {
+    let temp = tempfile::tempdir().unwrap();
+    let disk = temp.path().join("original");
+    let system = temp.path().join("system");
+    let request = Config::development(crate::test_disks([disk])).unwrap();
+    let unbound = ValidatedConfig::try_from(request.clone()).unwrap();
+    let engine = Engine::initialize(&system, request).unwrap();
+    let bound = engine.config.clone();
+    // An original voter match alone cannot turn an unbound saved anchor into
+    // installed storage. This also guards detached archives and local proofs.
+    assert!(bound.same_metadata_membership(&unbound));
+    assert_eq!(bound.verify_saved_metadata_membership(&unbound).unwrap_err().code(),
+        ErrorCode::DiskIdentityMismatch);
+    let original_config = std::fs::read(system.join("config.json")).unwrap();
+    let new_system = temp.path().join("uncreated-system");
+    let new_disk = temp.path().join("uncreated-disk");
+    let relocated = bound.with_disk_roots(vec![new_disk.clone()]).unwrap();
+    assert_eq!(Engine::initialize_validated(&new_system, relocated).err().unwrap().code(),
+        ErrorCode::ConfigInvalid);
+    assert!(!new_system.exists());
+    assert!(!new_disk.exists());
+    assert_eq!(std::fs::read(system.join("config.json")).unwrap(), original_config);
+}

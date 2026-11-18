@@ -32,7 +32,7 @@ impl WorkspaceInventory {
     /// inferred. Stop the daemon first and exhaust the iterator to finish a scan.
     pub fn open(root: &Path) -> Result<Self> {
         let root = existing_private_dir(root)?.path().to_owned();
-        let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?;
+        let config = ValidatedConfig::from_stored_layout(read_json::<Config>(&root.join("config.json"))?)?;
         let disks = DiskResources::open(&config, true)?;
         let locks = crate::engine::config::acquire_locks(&root, &disks)?;
         Ok(Self {

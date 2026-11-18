@@ -34,7 +34,7 @@ pub(crate) fn read_local_disk_configuration(
     seal: &DiskSeal,
     read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
 ) -> Result<ValidatedConfig> {
-    let saved = ValidatedConfig::try_from(decode_strict::<Config>(&read(
+    let saved = ValidatedConfig::from_stored_layout(decode_strict::<Config>(&read(
         &root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
     )?)?)?;
     let config = match &seal.format {
@@ -70,7 +70,7 @@ pub(crate) fn verify_local_membership(
     metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<ValidatedConfig> {
     let saved = (|| {
-        ValidatedConfig::try_from(decode_strict::<Config>(&read(
+        ValidatedConfig::from_stored_layout(decode_strict::<Config>(&read(
             &root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
         )?)?)
     })();
