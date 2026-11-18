@@ -27,6 +27,11 @@ fn full_body_table_requires_complete_named_versions_and_original_inodes() {
     let bodies = rows.clean_full_bodies(&ctx, projection.previous()).unwrap();
     assert_eq!(bodies.pages().entries(), 2);
     assert_eq!(bodies.names.len(), 2);
+    let material = bodies.material(&rows).unwrap();
+    assert_eq!(material.identity, file);
+    assert_eq!(material.logical_root, rows.rows());
+    assert_eq!(material.representation, rows.representation());
+    assert_eq!(&material.body_inventory, bodies.pages().root());
 
     let physical = bodies.version_dir.path();
     let unknown = physical.join("unselected-extra");

@@ -120,6 +120,38 @@ fn read_body(dir: &DiskRoot, name: &EntryName, version: &FileVersion,
 }
 
 impl CleanFileBodies {
+    /// The descriptor for just this one measured clean FILE. Installation of
+    /// an enclosing manifest/decision is the complete graph owner's job.
+    pub(in crate::engine::scope_closure) fn material(
+        &self, source: &ResidentFileRows,
+    ) -> Result<crate::engine::scope_closure::schema::Material<FileId>> {
+        self.recheck(source)?;
+        Ok(crate::engine::scope_closure::schema::Material {
+            scope: crate::engine::scope_closure::schema::Scope::File, identity: source.file(),
+            logical_root: source.rows(), representation: source.representation(),
+            body_inventory: self.pages.root().clone(),
+        })
+    }
+
+    /// No publication selection happens here. An external original receipt
+    /// still has to select this exact material in its full inventory.
+    pub(in crate::engine::scope_closure) fn verify_retained(
+        &self, config: &ValidatedConfig, disk: &DiskConfig, root: &DiskRoot,
+        source: &ResidentFileRows, expected: &crate::engine::scope_closure::schema::Material<FileId>,
+    ) -> Result<()> {
+        if config.storage_roots.get(&disk.disk_id.parse::<DiskId>()?).is_none_or(|r| r.registration != self.registration)
+            || self.material(source)? != *expected {
+            return Err(rejected());
+        }
+        fresh_layout::verify_root(config, disk, root)?;
+        self.pages.verify(disk, root, &expected.body_inventory)?;
+        source.with_image(|resident| expected.representation.verify(root, Schema::File,
+            crate::container_storage::file_database::MAX_BYTES, |retained| {
+                if retained == resident { Ok(()) } else { Err(rejected()) }
+            }))?;
+        self.recheck(source)?;
+        fresh_layout::verify_root(config, disk, root)
+    }
     pub(in crate::engine) fn pages(&self) -> &OrdinalPages { &self.pages }
     /// A named replacement, changed body, extra version or moved original
     /// parent invalidates this measurement even if the digest is unchanged.

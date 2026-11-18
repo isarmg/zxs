@@ -5,10 +5,10 @@ use crate::engine::{
     disk_catalog::genesis::GenesisDiskImages,
     index::preparation::SystemEncodingInput,
     scope_closure::{
-        PreparedImage, Schema, ScopeClosureError,
+        PreparedImage, ScopeClosureError,
         objects::{Domain, PreparedObject},
         schema::{
-            Closure, Counts, DiskManifest, Material, Membership, Origin, Scope, SystemMaterial,
+            Closure, Counts, DiskManifest, Material, Membership, Origin, Scope,
             Totals,
         },
     },
@@ -19,7 +19,7 @@ use crate::metadata_map::{Encoder, ProofMeasure, Reference};
 use crate::{Result, State, ValidatedConfig};
 use std::{borrow::Cow, collections::BTreeMap};
 use storage_contract::working_tree::{DiskRegistrationIdentity, MaterialCommitment, RootBinding};
-use storage_contract::{DiskId, Generation, OperationId, PoolId, Sequence};
+use storage_contract::{DiskId, OperationId, PoolId, Sequence};
 
 const PREPARATION_LIMIT: usize = 64 * 1024 * 1024;
 pub(super) const MAX_DISKS: usize = 32;
@@ -269,28 +269,6 @@ fn prepare_system(
     empty: &Reference,
     state: &AdmittedState,
 ) -> Result<(PreparedObject, PreparedImage, usize)> {
-    let input = SystemEncodingInput::new(state, &|| Ok(()))?;
-    let bytes = input.encode(&|| Ok(()))?;
-    let logical_root = input.verified_scope_root(&bytes, &|| Ok(()))?;
-    let image = PreparedImage::new(Schema::System, bytes);
-    let material = Material {
-        scope: Scope::System,
-        identity: pool_id,
-        logical_root,
-        representation: image.representation(),
-        body_inventory: empty.clone(),
-    };
-    let bytes = storage_contract::canonical_json(&material)?.len();
-    let object = PreparedObject::new(
-        Domain::System,
-        &SystemMaterial {
-            pool_id,
-            sequence: Sequence::new(0),
-            business_generation: Generation::new(state.state().business_generation),
-            topology_generation: Generation::new(state.state().topology_generation),
-            configuration_hash,
-            material,
-        },
-    )?;
-    Ok((object, image, bytes))
+    let frozen = super::system::FrozenSystem::original(pool_id, configuration_hash, empty, state, &|| Ok(()))?;
+    Ok(frozen.into_parts())
 }

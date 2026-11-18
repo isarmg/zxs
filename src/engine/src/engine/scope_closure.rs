@@ -16,6 +16,7 @@ pub(in crate::engine) use publication::{HistoryReference, VerifiedScopeSnapshot}
 mod readback;
 mod schema;
 pub(in crate::engine) mod snapshot_bodies;
+pub(in crate::engine) mod system;
 pub(in crate::engine) use images::{PreparedImage, Representation, Schema};
 pub(super) use genesis::{GenesisPreparation, initial_state};
 

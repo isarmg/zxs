@@ -88,7 +88,7 @@ pub(super) struct FrozenCandidate {
     histories: Vec<PreparedMetadataObject>,
     candidate: Candidate,
     candidate_object: PreparedMetadataObject,
-    system: Vec<u8>,
+    system: crate::engine::scope_closure::system::FrozenSystem,
     manifest: Vec<u8>,
     objects: Vec<Object>,
     ordinary_bytes: u64,
@@ -111,6 +111,11 @@ impl FrozenCandidate {
         checkpoint(cancellation)?;
         let outcome = native.candidate_draft()?;
         Self::require_same_files(engine, projection, native, &outcome)?;
+        // Freeze the non-secret SYSTEM rows and exact whole SQLite bytes
+        // from this joint outcome, before deriving any enclosing hash.
+        let system = crate::engine::scope_closure::system::FrozenSystem::move_candidate(
+            &engine.config, &outcome, &|| checkpoint(cancellation),
+        )?;
         let snapshot = crate::journal::prepare_snapshot(outcome.state(), MAX_METADATA)?;
         let (history_root, histories) = crate::history_package::prepare_history_manifests_bounded(
             outcome.state(),
@@ -172,9 +177,6 @@ impl FrozenCandidate {
             Some((&snapshot, &history_root)),
         )?;
         let candidate_object = PreparedMetadataObject::new("candidate", &candidate, MAX_METADATA)?;
-        let system = crate::engine::index::preparation::encode_move_candidate(&outcome, &|| {
-            checkpoint(cancellation)
-        })?;
         let mut frozen = Self {
             outcome,
             snapshot,
@@ -290,7 +292,7 @@ impl FrozenCandidate {
             });
             artifacts.push(store::Artifact::Scoped {
                 name: SYSTEM,
-                bytes: &self.system,
+                bytes: self.system.bytes(),
             });
         }
         artifacts

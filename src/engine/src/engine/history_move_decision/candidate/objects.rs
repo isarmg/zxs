@@ -32,7 +32,7 @@ impl FrozenCandidate {
                 .ok_or_else(budget)?;
             if objects.len() == MAX_OBJECTS
                 || bytes
-                    .checked_add(self.system.len() as u64)
+                    .checked_add(self.system.bytes().len() as u64)
                     .ok_or_else(budget)?
                     > MAX_BYTES
             {

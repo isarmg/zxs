@@ -41,15 +41,6 @@ pub(in crate::engine) fn encode_move_draft(
     })
 }
 
-/// Candidate outcome remains private and unaccepted. Encoding it does not
-/// create a published index, final operation receipt or journal decision.
-pub(in crate::engine) fn encode_move_candidate(
-    draft: &crate::business::NativeMoveCandidate,
-    checkpoint: &impl Fn() -> Result<()>,
-) -> Result<Vec<u8>> {
-    encode_state(draft.state(), checkpoint)
-}
-
 /// One bounded immutable SYSTEM encoder input. This value contains no proof of
 /// a live database or target binding. Reused bytes still require verify().
 pub(in crate::engine) struct SystemEncodingInput<'a> {
@@ -63,6 +54,14 @@ impl<'a> SystemEncodingInput<'a> {
         checkpoint: &impl Fn() -> Result<()>,
     ) -> Result<Self> {
         Self::from_state(admitted.state(), checkpoint)
+    }
+
+    /// The typed joint operation already determined this candidate's exact
+    /// business result. It is still not an admitted/public State.
+    pub(in crate::engine) fn move_candidate(
+        candidate: &'a crate::business::NativeMoveCandidate, checkpoint: &impl Fn() -> Result<()>,
+    ) -> Result<Self> {
+        Self::from_state(candidate.state(), checkpoint)
     }
 
     fn from_state(state: &'a State, checkpoint: &impl Fn() -> Result<()>) -> Result<Self> {
