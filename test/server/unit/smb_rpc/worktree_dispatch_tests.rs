@@ -365,3 +365,48 @@ fn worktree_dispatch_exact_lost_reply_pending_guard_and_committed_handle_reject_
     drop(reservation);
     assert_eq!(inventory(&setup.shared.spool), before_spool);
 }
+
+#[test]
+fn same_name_restore_never_revives_a_read_descriptor_or_buffered_listing_from_the_hidden_mount() {
+    use storage_contract::snapshot_worktree::mount_change::{MountAction,MountChange,MountOutcome,RestoreNaming};
+    let setup = setup();
+    let authority = identity(&setup.shared);
+    let mut share = share(&setup);
+    for (name,body) in [("file.txt", b"committed one".as_slice()),("other.txt",b"committed two".as_slice())] {
+        let (out,file) = open(&mut share,&format!("p/worktree-main-001/{name}"),true,true);
+        write(&mut share,&out,&file,body);
+        call(&mut share,Request::Flush { handle: out.handle });
+        call(&mut share,Request::Close { handle: out.handle });
+    }
+    let held_status = setup.backend.inner.directory_worktree_status(&authority,setup.target).unwrap();
+    let commit = CommitWorktree { target: setup.target, expected: held_status.revision,
+        operation_id: OperationId::generate().unwrap(), message: "two exact occurrences".into() };
+    let committed = setup.backend.inner.commit_directory_worktree(&authority,commit).unwrap();
+    let (old_file,_fd) = open(&mut share,"p/worktree-main-001/file.txt",false,false);
+    let (old_dir,_d) = open(&mut share,"p/worktree-main-001",false,false);
+    let hide = MountChange { target: setup.target, expected: held_status.revision, operation_id: OperationId::generate().unwrap(),
+        action: MountAction::Hide { committed,visible: held_status.visible } };
+    let named = named_session(Arc::clone(&setup.shared),&setup.repository.main_branch_id);
+    assert!(setup.backend.inner.change_directory_worktree_mount(&named.identity, hide.clone()).is_err());
+    let owner = setup.repository.repository_id.parse().unwrap();
+    let hidden = setup.backend.inner.change_directory_worktree_mount(&authority,hide.clone()).unwrap();
+    assert_eq!(hidden.outcome,MountOutcome::Hidden {});
+    assert!(setup.backend.inner.directory_worktree_mount_receipt(&named.identity,owner,hide.operation_id).is_err());
+    let stale = |s: &mut DefaultShare| {
+        assert!(s.dispatch(Request::Read {handle:old_file.handle,offset:0,length:12}).is_err());
+        for restart in [false,true] {
+            assert!(s.dispatch(Request::ReadDirectory {handle:old_dir.handle,restart}).is_err());
+        }
+    };
+    stale(&mut share);
+    assert_eq!(read(&mut share,"p/worktree-main-002/file.txt"),b"original immutable body");
+    let restore = MountChange { target: setup.target, expected: held_status.revision, operation_id: OperationId::generate().unwrap(),
+        action: MountAction::Restore { deletion: hide.operation_id,naming:RestoreNaming::OriginalOrAutomatic {} } };
+    assert!(setup.backend.inner.change_directory_worktree_mount(&named.identity,restore.clone()).is_err());
+    let restored = setup.backend.inner.change_directory_worktree_mount(&authority,restore.clone()).unwrap();
+    assert_eq!(restored.outcome,MountOutcome::Restored {name:Name::parse(held_status.name.as_str()).unwrap()});
+    stale(&mut share);
+    assert_eq!(read(&mut share,"p/worktree-main-001/file.txt"),b"committed one");
+    assert_eq!(setup.backend.inner.directory_worktree_mount_receipt(&authority,owner,hide.operation_id).unwrap(),hidden);
+    assert_eq!(setup.backend.inner.directory_worktree_mount_receipt(&authority,owner,restore.operation_id).unwrap(),restored);
+}

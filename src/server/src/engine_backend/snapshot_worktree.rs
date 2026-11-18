@@ -6,6 +6,7 @@ pub(super) mod history;
 pub(super) mod instances;
 pub(super) mod root;
 pub(super) mod outcome;
+pub(super) mod mount;
 pub(super) mod transport;
 
 use super::{EngineBackend, error_registry};

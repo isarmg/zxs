@@ -885,6 +885,17 @@ impl Backend for EngineBackend {
     > {
         snapshot_worktree::outcome::creation(self, identity, repository, operation)
     }
+    fn change_directory_worktree_mount(
+        &self, identity: &Identity, request: storage_contract::snapshot_worktree::mount_change::MountChange,
+    ) -> Result<storage_contract::snapshot_worktree::mount_change::MountChangeReceipt, ApiError> {
+        snapshot_worktree::mount::change(self, identity, request)
+    }
+    fn directory_worktree_mount_receipt(
+        &self, identity: &Identity, repository: storage_contract::RepositoryId,
+        operation: storage_contract::OperationId,
+    ) -> Result<storage_contract::snapshot_worktree::mount_change::MountChangeReceipt, ApiError> {
+        snapshot_worktree::mount::receipt(self, identity, repository, operation)
+    }
     fn directory_worktree_commit_receipt(
         &self, identity: &Identity, repository: storage_contract::RepositoryId,
         operation: storage_contract::OperationId,

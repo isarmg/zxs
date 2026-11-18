@@ -6,6 +6,7 @@ pub(crate) mod history;
 pub(crate) mod instances;
 pub(crate) mod root;
 pub(crate) mod outcome;
+pub(crate) mod mount;
 pub(crate) mod transport;
 
 use crate::{ApiError, AppState};

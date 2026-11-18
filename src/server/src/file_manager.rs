@@ -52,6 +52,14 @@ pub(crate) fn routes() -> Router<AppState> {
             "/api/repositories/{repository}/directory-worktrees",
             get(http_snapshot_worktree::instances::read),
         )
+        .route(
+            "/api/repositories/{repository}/directory-worktrees/mount-changes/{operation}",
+            get(http_snapshot_worktree::mount::receipt),
+        )
+        .route(
+            "/api/directory-worktrees/{worktree}/mount-changes",
+            post(http_snapshot_worktree::mount::change),
+        )
         .route("/api/directory-worktrees", post(http_snapshot_worktree::create))
         .route(
             "/api/directory-worktrees/{worktree}",

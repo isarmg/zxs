@@ -772,6 +772,18 @@ macro_rules! methods {
                     let _ = (identity, repository, operation);
                     Err($crate::ApiError::unsupported())
                 }
+                fn change_directory_worktree_mount(
+                    &self, identity: &$crate::Identity,
+                    request: storage_contract::snapshot_worktree::mount_change::MountChange,
+                ) -> Result<storage_contract::snapshot_worktree::mount_change::MountChangeReceipt, $crate::ApiError> {
+                    let _ = (identity, request); Err($crate::ApiError::unsupported())
+                }
+                fn directory_worktree_mount_receipt(
+                    &self, identity: &$crate::Identity,
+                    repository: storage_contract::RepositoryId, operation: storage_contract::OperationId,
+                ) -> Result<storage_contract::snapshot_worktree::mount_change::MountChangeReceipt, $crate::ApiError> {
+                    let _ = (identity, repository, operation); Err($crate::ApiError::unsupported())
+                }
                 fn directory_worktree_commit_receipt(
                     &self,
                     identity: &$crate::Identity,
