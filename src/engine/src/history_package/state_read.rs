@@ -192,6 +192,9 @@ fn validate_with(state: &State, ledger: impl FnOnce(&State) -> Result<()>) -> Re
             ));
         }
     }
+    for receipt in state.operations.values().filter(|receipt| crate::persist::file_adoption::is_kind(&receipt.kind)) {
+        crate::persist::file_adoption::original(state, receipt)?;
+    }
     ledger(state)?;
     crate::file_deletion::publication::admit_current(state)?;
     // Event polling seeks by sequence while preserving ordinal array order.

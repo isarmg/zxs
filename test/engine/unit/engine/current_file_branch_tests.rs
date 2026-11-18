@@ -357,7 +357,25 @@ fn disk_exit_current_file_create_select_default_merge_and_restart_preserve_histo
             operation_id: operation,
         })
     };
+    let source = fixture.engine.state().clone();
     let result = merge(&mut fixture.engine).unwrap();
+    let admitted = fixture.engine.state();
+    crate::persist::file_adoption::transition(&source, admitted, &result, false).unwrap();
+    let merge_id = result.result["merge_id"].as_str().unwrap();
+    for corruption in ["actor", "head", "actor_record", "invented_edge", "wrong_chosen", "request", "material"] {
+        let mut graph = admitted.clone();
+        let mut original = result.clone();
+        match corruption {
+            "actor" => graph.file_branch_merges.get_mut(merge_id).unwrap().principal = "forged".parse().unwrap(),
+            "actor_record" => { graph.operation_principals.insert(operation, "another".into()); },
+            "head" => { graph.file_branch_merges.get_mut(merge_id).unwrap().input_node_ids.swap(0, 1); },
+            "invented_edge" => graph.file_branch_merges.get_mut(merge_id).unwrap().parent_node_ids.push(fixture.first.version_id.clone()),
+            "wrong_chosen" => { original.result["chosen_node_id"] = json_codec::json!(inputs[1].expected_node_id); },
+            "request" => { original.result["merge_request"]["location"] = json_codec::json!({"repository_id":fixture.repository.repository_id,"path":"other"}); },
+            _ => {}
+        }
+        assert!(crate::persist::file_adoption::transition(&source, &graph, &original, corruption == "material").is_err(), "{corruption}");
+    }
     assert_eq!(result.result["version_id"], fixture.first.version_id);
     assert_eq!(result.result["reused_node"], true);
     assert!(

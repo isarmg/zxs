@@ -132,6 +132,7 @@ impl ContainerPreparation {
         draft_read: Option<&std::sync::Arc<crate::container_storage::ReadDraftDigest>>,
     ) -> Result<Self> {
         validate_state(context.state)?;
+        crate::persist::file_adoption::transition(context.state, &next, result, !prepared.is_empty())?;
         // Every old writer must still see Unborn names as occupied. This pure
         // union check precedes capacity admission and all physical preparation.
         let mut current_repositories = BTreeSet::new();
@@ -914,6 +915,7 @@ fn verify_transition_read<'a>(
         });
     }
     let result = next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
+    crate::persist::file_adoption::transition(previous, next, result, !candidate.versions.is_empty())?;
     let (mut directories, additions) = super::directories::project(
         config, previous, next, result, Some(&next.namespace_directories),
     )?;
