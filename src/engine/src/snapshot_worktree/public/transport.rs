@@ -74,3 +74,7 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/snapshot_worktree/complete_resaves.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/snapshot_worktree/content_overlay.rs"]
+mod content_overlay;

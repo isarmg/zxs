@@ -59,6 +59,7 @@ pub(crate) struct ReceiptIndex<'a> {
     directory_ids: BTreeMap<DirectoryId, (RootId, EntryId)>,
     directory_entities: BTreeMap<(RootId, LocalEntityIdentity), EntryId>,
     edits: BTreeMap<OperationId, EditRecordEntry<'a>>,
+    edit_versions: BTreeMap<storage_contract::VersionId, OperationId>,
     files: BTreeMap<OperationId, files::FileRecord<'a>>,
     retained: Option<crate::retained_names::RetainedDiskRegistry>,
     added_files: BTreeMap<WorktreeId, Vec<crate::directory_worktree::ledger::AddedFile>>,
@@ -202,7 +203,6 @@ struct Allocations {
     worktrees: BTreeSet<WorktreeId>,
     hosts: BTreeSet<(RootId, DirectoryId)>,
     mounts: BTreeSet<(RootId, DirectoryId, NameKey)>,
-    edit_versions: BTreeSet<storage_contract::VersionId>,
 }
 
 pub(super) struct PublishedNode<'a> {
@@ -482,7 +482,8 @@ impl<'a> ReceiptIndex<'a> {
             directories: BTreeMap::new(),
             directory_ids: BTreeMap::new(),
             directory_entities: BTreeMap::new(),
-            edits: BTreeMap::new(), files: BTreeMap::new(), retained: None,
+            edits: BTreeMap::new(), edit_versions: BTreeMap::new(),
+            files: BTreeMap::new(), retained: None,
             added_files: BTreeMap::new(), active_file_edits: BTreeMap::new(),
             heads: BTreeMap::new(),
             pending_edits: BTreeMap::new(),
@@ -561,7 +562,7 @@ impl<'a> ReceiptIndex<'a> {
                     index.complete_worktree(receipt, completion)?;
                 }
                 Record::ReserveEdit(plan) => {
-                    index.reserve_edit(receipt, plan, commitment, &mut allocations)?;
+                    index.reserve_edit(receipt, plan, commitment)?;
                 }
                 Record::CompleteEdit(completion) => index.complete_edit(receipt, completion)?,
                 Record::ReserveCommit(plan) => {

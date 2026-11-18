@@ -189,8 +189,8 @@ fn complete_resaves_keep_original_occurrence_and_move_only_exact_current_revisio
         &LookupPath::parse("file.txt").unwrap()).unwrap(), original_metadata);
     engine.check_directory_worktree_edit(target, &second.path, revision_b).unwrap();
     assert!(engine.check_directory_worktree_edit(target, &second.path, revision_a).is_err());
-    assert!(engine.check_directory_worktree_edit(target,
-        &name_policy::PortablePath::parse("other.txt").unwrap(), revision_b).is_err());
+    engine.check_directory_worktree_edit(target,
+        &name_policy::PortablePath::parse("other.txt").unwrap(), revision_b).unwrap();
     assert_eq!(revision_b.generation, revision_a.generation.next().unwrap());
     assert_ne!(revision_b.manifest, revision_a.manifest);
     assert_eq!(engine.state().versions, initial_versions);
@@ -212,7 +212,7 @@ fn complete_resaves_keep_original_occurrence_and_move_only_exact_current_revisio
     let mut different_occurrence = second.clone();
     different_occurrence.operation_id = OperationId::generate().unwrap();
     different_occurrence.expected = revision_b;
-    different_occurrence.path = name_policy::PortablePath::parse("other.txt").unwrap();
+    different_occurrence.path = name_policy::PortablePath::parse("not-an-original.txt").unwrap();
     assert!(engine.edit_directory_worktree(&different_occurrence, &principal,
         source(source_directory.path(), "different", b)).is_err());
     assert_eq!(engine.state().sequence, sequence);

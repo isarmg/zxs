@@ -178,7 +178,6 @@ impl State {
                 if edits.is_empty() {
                     return Err(LedgerError::Chain);
                 }
-                admit_edits(source, edits)?;
                 if matches!(self.namespace, NamespaceState::Edited { .. }) {
                     let view = self.projection(source)?;
                     if edits.iter().any(|edit| !view.contains_source_file(&edit.path)) {
@@ -187,17 +186,10 @@ impl State {
                         ));
                     }
                 }
-                let mut merged = self.edits.clone();
-                for edit in edits {
-                    if self.versions.contains(&edit.material.version_id) {
-                        return Err(LedgerError::OperationConflict);
-                    }
-                    match merged.binary_search_by(|old| old.path.key().cmp(edit.path.key())) {
-                        Ok(index) => merged[index] = edit.clone(),
-                        Err(index) => merged.insert(index, edit.clone()),
-                    }
+                if edits.iter().any(|edit| self.versions.contains(&edit.material.version_id)) {
+                    return Err(LedgerError::OperationConflict);
                 }
-                admit_edits(source, &merged)?;
+                let merged = merge_original_edits(source, &self.edits, edits)?;
                 if matches!(self.namespace, NamespaceState::Edited { .. })
                     || !self.added.is_empty()
                 {
@@ -420,6 +412,23 @@ fn event_commitment(event: &Event) -> Result<MaterialCommitment, LedgerError> {
     let bytes = storage_contract::canonical_json(event).map_err(LedgerError::Codec)?;
     Ok(commitment(&bytes))
 }
+/// Receipts and physical frames must describe the same complete overlay.
+/// A new version replaces only its exact original occurrence, never a sibling.
+pub(crate) fn merge_original_edits(
+    source: &AdmittedSnapshotManifest, previous: &[EditRecord], changes: &[EditRecord],
+) -> Result<Vec<EditRecord>, LedgerError> {
+    admit_edits(source, changes)?;
+    let mut merged = previous.to_vec();
+    for edit in changes {
+        match merged.binary_search_by(|old| old.path.key().cmp(edit.path.key())) {
+            Ok(index) => merged[index] = edit.clone(),
+            Err(index) => merged.insert(index, edit.clone()),
+        }
+    }
+    admit_edits(source, &merged)?;
+    Ok(merged)
+}
+
 fn admit_edits(source: &AdmittedSnapshotManifest, edits: &[EditRecord]) -> Result<(), LedgerError> {
     if edits.len() > source.entries().len() {
         return Err(LedgerError::Budget);

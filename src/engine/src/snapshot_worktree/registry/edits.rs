@@ -1,8 +1,10 @@
 //! The owning SYSTEM receipt, not an observed ledger tail, selects each revision.
-use crate::directory_worktree::ledger::{EditLeaf, LedgerError, revision_commitment_with_files};
+use crate::directory_worktree::ledger::{
+    EditLeaf, EditRecord, LedgerError, merge_original_edits, revision_commitment_with_files,
+};
 use crate::persist::snapshot_worktree::{EditCompletion, EditReservation};
 use crate::snapshot_worktree::registry::{
-    Allocations, CompletionOwner, Publication, Receipt, ReceiptIndex, require_completion,
+    CompletionOwner, Publication, Receipt, ReceiptIndex, require_completion,
 };
 use crate::snapshot_worktree::{RegistrationError, Result};
 use crate::working_tree::snapshot::{SnapshotEntryContent, SnapshotFile, SnapshotFileSource};
@@ -28,9 +30,8 @@ pub(in crate::snapshot_worktree) enum EditRetry {
 }
 
 impl<'a> ReceiptIndex<'a> {
-    /// A new sealed revision may replace only the same original occurrence at
-    /// any admitted snapshot depth. Its parents come from the immutable source,
-    /// not a new physical namespace. Multi-file edits and rebase remain separate.
+    /// Each explicit save addresses a real original occurrence at its exact
+    /// spelling. Its parents come from the immutable source, not a path search.
     pub(in crate::snapshot_worktree) fn require_edit_scope(
         &self,
         target: WorktreeHandle,
@@ -41,10 +42,13 @@ impl<'a> ReceiptIndex<'a> {
         if current.revision() != expected || current.published_node().is_some() {
             return Err(RegistrationError::EditScope);
         }
-        if let Some(previous) = self.active_file_edits.get(&target.worktree_id) {
-            if previous.len() != 1 || previous[0].path != *path {
-                return Err(RegistrationError::EditScope);
-            }
+        let entries = current.source().manifest().entries();
+        let selected = entries.binary_search_by(|entry| entry.path.key().cmp(path.key()))
+            .map_err(|_| RegistrationError::EditScope)?;
+        if entries[selected].path != *path || !matches!(entries[selected].content,
+            SnapshotEntryContent::File { source: SnapshotFileSource::Container { .. }, .. })
+        {
+            return Err(RegistrationError::EditScope);
         }
         Ok(())
     }
@@ -73,7 +77,6 @@ impl<'a> ReceiptIndex<'a> {
         receipt: Receipt<'a>,
         plan: EditReservation,
         commitment: MaterialCommitment,
-        allocations: &mut Allocations,
     ) -> Result<()> {
         let operation = receipt.original.operation_id;
         if plan.request.operation_id != operation {
@@ -96,16 +99,21 @@ impl<'a> ReceiptIndex<'a> {
             || plan.original.version_id == plan.version
             || self.source.versions.get(&plan.version.to_string())
                 .is_some_and(|version| version.version_sequence <= receipt.original.sequence)
-            || !allocations.edit_versions.insert(plan.version)
         {
             return Err(RegistrationError::Source);
         }
-        current.source().manifest().validate_material_replacements(&[(
-            plan.request.path.clone(), SnapshotFile {
-                file_id: plan.original.file_id, version_id: plan.version,
-                size: plan.request.size, content_hash: plan.request.content_hash,
-            },
-        )]).map_err(RegistrationError::Manifest)?;
+        let mut replacements = self.active_edits(plan.request.target).iter()
+            .filter(|edit| edit.path != plan.request.path)
+            .map(|edit| (edit.path.clone(), edit.material)).collect::<Vec<_>>();
+        replacements.push((plan.request.path.clone(), SnapshotFile {
+            file_id: plan.original.file_id, version_id: plan.version,
+            size: plan.request.size, content_hash: plan.request.content_hash,
+        }));
+        current.source().manifest().validate_material_replacements(&replacements)
+            .map_err(RegistrationError::Manifest)?;
+        if self.edit_versions.insert(plan.version, operation).is_some() {
+            return Err(RegistrationError::Source);
+        }
         let worktree = plan.request.target.worktree_id;
         self.reserve_completion(
             operation, plan.completion, CompletionOwner::Edit(operation),
@@ -115,6 +123,24 @@ impl<'a> ReceiptIndex<'a> {
             receipt, plan, commitment, publication: Publication::Reserved,
         });
         Ok(())
+    }
+
+    pub(in crate::snapshot_worktree) fn active_edits(&self, target: WorktreeHandle) -> &[EditRecord] {
+        self.active_file_edits.get(&target.worktree_id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Look up the actual reserve and completion of this active version. The
+    /// version allocation index is built from the real ordered original receipts.
+    pub(in crate::snapshot_worktree) fn original_edit(
+        &self, target: WorktreeHandle, edit: &EditRecord,
+    ) -> Result<(&EditReservation, &EditCompletion)> {
+        let entry = self.edit_versions.get(&edit.material.version_id)
+            .and_then(|reserve| self.edits.get(reserve)).ok_or(RegistrationError::Source)?;
+        match &entry.publication {
+            Publication::Complete(complete) if entry.plan.request.target == target
+                && complete.edit == *edit => Ok((&entry.plan, complete)),
+            _ => Err(RegistrationError::Source),
+        }
     }
 
     pub(super) fn complete_edit(
@@ -138,13 +164,17 @@ impl<'a> ReceiptIndex<'a> {
         let worktree_source = self.worktrees.get(worktree_reserve)
             .ok_or(RegistrationError::Source)?.plan.request.source;
         let source = self.node(worktree_source)?;
+        let merged = merge_original_edits(
+            source.manifest(), self.active_edits(plan.request.target),
+            std::slice::from_ref(&completion.edit),
+        ).map_err(RegistrationError::Ledger)?;
         let expected = WorktreeRevision {
             generation: plan.request.expected.generation.next()
                 .map_err(|source| RegistrationError::Ledger(LedgerError::Lifecycle(
                     crate::directory_worktree::lifecycle::LifecycleError::Generation(source),
                 )))?,
             manifest: revision_commitment_with_files(
-                source.manifest(), std::slice::from_ref(&completion.edit), &[],
+                source.manifest(), &merged, &[],
                 self.added(plan.request.target),
             ).map_err(RegistrationError::Ledger)?,
         };
@@ -171,7 +201,7 @@ impl<'a> ReceiptIndex<'a> {
         self.heads.insert(worktree, LedgerHead {
             checkpoint: completion.checkpoint, revision: completion.revision,
         });
-        self.active_file_edits.insert(worktree, vec![completion.edit.clone()]);
+        self.active_file_edits.insert(worktree, merged);
         self.pending_edits.remove(&worktree);
         reserved.publication = Publication::Complete(completion);
         Ok(())

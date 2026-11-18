@@ -241,21 +241,13 @@ impl<'a> ReceiptIndex<'a> {
         &crate::persist::snapshot_worktree::EditCompletion)>
     {
         let revision = self.worktree_for_commit(target, owner)?.revision();
-        // Select by the current independently decided revision, never operation
-        // ordering, filename, hash or the first historical edit for this file.
-        let mut entries = self.edits.values().filter_map(|entry| {
-            if entry.plan.request.target != target {
-                return None;
-            }
-            match &entry.publication {
-                Publication::Complete(completed) if completed.revision == revision => {
-                    Some((&entry.plan, completed))
-                }
-                Publication::Complete(_) | Publication::Reserved => None,
-            }
-        });
-        let current = entries.next().ok_or(RegistrationError::CommitScope)?;
-        if entries.next().is_some() {
+        // The independent single-file/fork path cannot publish just the last
+        // save from a multiple-occurrence worktree.
+        let [edit] = self.active_edits(target) else {
+            return Err(RegistrationError::CommitScope);
+        };
+        let current = self.original_edit(target, edit)?;
+        if current.1.revision != revision {
             return Err(RegistrationError::CommitScope);
         }
         Ok(current)
