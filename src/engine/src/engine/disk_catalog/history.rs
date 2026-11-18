@@ -11,7 +11,7 @@ pub(in crate::engine) use stored::{Predecessor, StoredHistory, Through};
 mod postdecision;
 mod maintenance;
 mod offline;
-pub(super) use offline::fold_stored as fold_prepared;
+pub(super) use offline::{fold_stored as fold_prepared, no_sidecars};
 #[cfg(test)]
 pub(super) use offline::fold as fold_export;
 pub(in crate::engine::disk_catalog) mod preparation;
@@ -155,6 +155,11 @@ impl LocalImage {
         Self { hash: storage_contract::ContentHash::from_digest(blake3::hash(bytes)), bytes: bytes.len() }
     }
 
+    fn matches(self, bytes: &[u8]) -> bool {
+        self.bytes == bytes.len()
+            && self.hash == storage_contract::ContentHash::from_digest(blake3::hash(bytes))
+    }
+
     /// Pin both the previous inode and its name while strict SQL and native
     /// checks run. An equal-row rewrite or a live SQLite sidecar is not the
     /// preceding captured representation.
@@ -194,6 +199,20 @@ struct CapturedHistory {
     view: DiskHistorySnapshot,
     binding: Binding,
 }
+#[derive(Clone, Copy)]
+enum PreviousAlias {
+    NativeRebuild,
+    Ordinary(Option<LocalImage>),
+}
+
+struct InstallHistory {
+    header: DiskHistoryHeader,
+    binding: Binding,
+    logical_root: storage_contract::working_tree::MaterialCommitment,
+    changes: usize,
+    bytes: Vec<u8>,
+}
+
 struct Changes {
     rows: Vec<DiskHistoryRecord>,
     bytes: usize,
@@ -328,21 +347,40 @@ impl Engine {
         slot: &str,
         captured: CapturedHistory,
     ) -> Result<DiskHistoryReceipt> {
-        let (disk, identity, handle) = self.catalog_disk(slot)?;
         let CapturedHistory { view, binding } = captured;
-        if view.header.identity != identity {
+        let captured = StoredHistory::from_replayed(&view, binding.through)?;
+        let logical_root = captured.logical_root()?;
+        let bytes = database::encode(&captured)?;
+        let material = InstallHistory {
+            header: view.header,
+            changes: view.changes.len(),
+            binding,
+            logical_root,
+            bytes,
+        };
+        self.install_history_alias(slot, material, PreviousAlias::NativeRebuild)
+    }
+
+    fn install_history_alias(
+        &self,
+        slot: &str,
+        material: InstallHistory,
+        previous: PreviousAlias,
+    ) -> Result<DiskHistoryReceipt> {
+        let InstallHistory { header, binding, logical_root, changes, bytes } = material;
+        let (disk, identity, handle) = self.catalog_disk(slot)?;
+        if header.identity != identity {
             return Err(invalid("disk history target registration changed"));
         }
         let lease = handle.root.admit_io()?;
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
-        let captured = StoredHistory::from_replayed(&view, binding.through)?;
-        let records_hash = captured.logical_root()?.hash().to_string();
-        let bytes = database::encode(&captured)?;
         let database_bytes = bytes.len();
         let physical = LocalImage::new(&bytes);
         let root = &handle.root;
         let inode = root.directory_identity(root.path())?;
+        offline::no_sidecars(root, DiskDatabaseReadScope::History)?;
+        let mut found_prior = false;
         let prepared = PreparedInstall::capture(
             root,
             root.path(),
@@ -353,8 +391,20 @@ impl Engine {
             ),
             bytes,
             MAX_DATABASE_BYTES,
-            |bytes| database::read(bytes, &identity).map(|_| ()),
+            |bytes| {
+                if let PreviousAlias::Ordinary(prior) = previous
+                    && !prior.is_some_and(|expected| expected.matches(bytes))
+                {
+                    return Err(invalid("named DISK history is not the captured prior image"));
+                }
+                database::read(bytes, &identity)?;
+                found_prior = true;
+                Ok(())
+            },
         )?;
+        if matches!(previous, PreviousAlias::Ordinary(Some(_))) && !found_prior {
+            return Err(invalid("captured prior DISK history is missing; preserve the original"));
+        }
         let (reserved, entries) = prepared.reservation();
         InstallAdmission::NewOperation.check(root, root.path(), reserved, entries)?;
         if reserved.saturating_add(self.config.metadata_reserve_bytes) > root.available()? {
@@ -363,9 +413,15 @@ impl Engine {
                 "disk history must preserve metadata recovery headroom",
             ));
         }
+        offline::no_sidecars(root, DiskDatabaseReadScope::History)?;
         prepared.apply(root, &mut |_| lease.check_running())?;
         physical.read(root, |bytes| {
-            if database::read(bytes, &identity)? != captured {
+            let installed = database::read(bytes, &identity)?;
+            if installed.logical_root()? != logical_root
+                || installed.header.through != binding.through
+                || installed.header.publications != header.publications
+                || installed.changes.len() != changes
+            {
                 return Err(invalid("installed disk history differs from authenticated publications"));
             }
             Ok(())
@@ -374,11 +430,11 @@ impl Engine {
         validate_stored_seal(&handle.seal, &named)?;
         lease.check_running()?;
         Ok(DiskHistoryReceipt {
-            header: view.header,
-            changes: view.changes.len(),
+            header,
+            changes,
             binding,
             physical,
-            records_hash,
+            records_hash: logical_root.hash().to_string(),
             database_bytes,
         })
     }

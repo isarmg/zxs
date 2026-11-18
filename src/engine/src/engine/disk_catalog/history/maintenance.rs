@@ -52,6 +52,7 @@ pub struct DiskHistoryStatus {
 /// proven not to change this disk's rows. It is never loaded from SQLite.
 #[derive(Clone)]
 struct Coverage {
+    epoch: crate::engine::provenance::MetadataEpoch,
     physical: LocalImage,
     binding: Binding,
     persisted: DiskHistoryHeader,
@@ -61,7 +62,10 @@ struct Coverage {
 
 enum Availability {
     Tracked(Box<Coverage>),
-    Unavailable(Arc<DiskHistoryFailure>),
+    Unavailable {
+        failure: Arc<DiskHistoryFailure>,
+        last_physical: Option<LocalImage>,
+    },
 }
 
 struct Entry {
@@ -75,9 +79,16 @@ impl Entry {
         self.identity == *identity && self.config.same_admission(&engine.config)
     }
 
+    fn last_physical(&self) -> Option<LocalImage> {
+        match &self.availability {
+            Availability::Tracked(coverage) => Some(coverage.physical),
+            Availability::Unavailable { last_physical, .. } => *last_physical,
+        }
+    }
+
     fn visible(&self, state: &Arc<State>) -> DiskHistoryMaintenanceState {
         match &self.availability {
-            Availability::Unavailable(failure) => {
+            Availability::Unavailable { failure, .. } => {
                 DiskHistoryMaintenanceState::Unavailable(Arc::clone(failure))
             }
             Availability::Tracked(coverage) if self.state.ptr_eq(&Arc::downgrade(state)) => {
@@ -137,6 +148,7 @@ impl Engine {
 
     pub(super) fn record_history_install(&mut self, receipt: &DiskHistoryReceipt) {
         self.record_history_coverage(Coverage {
+            epoch: self.metadata_integrity.capture(),
             physical: receipt.physical,
             binding: receipt.binding.clone(),
             persisted: receipt.header.clone(),
@@ -159,6 +171,9 @@ impl Engine {
     }
 
     fn record_history_failure(&mut self, identity: DiskRegistrationIdentity, source: Error) {
+        let last_physical = self.catalog_maintenance.histories.entries.get(&identity.slot_id)
+            .filter(|entry| entry.binding_matches(&identity, self))
+            .and_then(Entry::last_physical);
         let failure = Arc::new(DiskHistoryFailure {
             sequence: self.state.sequence,
             source,
@@ -171,7 +186,7 @@ impl Engine {
                 identity,
                 config: self.config.clone(),
                 state: Arc::downgrade(&self.state),
-                availability: Availability::Unavailable(failure),
+                availability: Availability::Unavailable { failure, last_physical },
             },
         );
     }
@@ -218,7 +233,7 @@ impl Engine {
             let matching = entry.filter(|entry| entry.binding_matches(&identity, self));
             if unchanged
                 && matching
-                    .is_some_and(|entry| matches!(entry.availability, Availability::Unavailable(_)))
+                    .is_some_and(|entry| matches!(entry.availability, Availability::Unavailable { .. }))
             {
                 continue; // explicit rebuild/cold open/local change retries
             }
@@ -252,6 +267,84 @@ impl Engine {
             .histories
             .entries
             .retain(|slot, _| registered.contains(slot));
+    }
+
+    /// A process-local shortcut must end at this exact State allocation,
+    /// original registration and Snapshot. Reopen the actual old bytes; a cold
+    /// or incomplete shortcut cannot claim all previous change rows.
+    pub(in crate::engine::disk_catalog::history) fn tracked_history_for_next(
+        &self,
+        identity: &DiskRegistrationIdentity,
+    ) -> Result<Option<DiskHistorySnapshot>> {
+        let entry = self.catalog_maintenance.histories.entries.get(&identity.slot_id);
+        let Some(entry) = entry.filter(|entry| {
+            entry.binding_matches(identity, self) && entry.state.ptr_eq(&Arc::downgrade(&self.state))
+        }) else {
+            return Ok(None);
+        };
+        let Availability::Tracked(coverage) = &entry.availability else {
+            return Ok(None);
+        };
+        if !coverage.epoch.matches(&self.metadata_integrity)
+            || coverage.observed.through_sequence != self.state.sequence
+            || coverage.observed.through_snapshot != self.snapshot
+        {
+            return Ok(None);
+        }
+        let stored = self.read_tracked_disk_history(coverage)?;
+        Ok(Some(DiskHistorySnapshot {
+            header: coverage.observed.clone(),
+            changes: stored.changes,
+        }))
+    }
+
+    pub(in crate::engine::disk_catalog::history) fn advance_frozen_disk_histories(
+        &mut self,
+        previous: &Arc<State>,
+        candidate: &Candidate,
+        candidate_hash: &str,
+        mut images: BTreeMap<storage_contract::DiskId, preparation::ordinary::HistoryAlias>,
+        mut rejected: Option<(DiskRegistrationIdentity, Error)>,
+    ) {
+        for identity in self.disk_history_targets() {
+            if let Some((_, source)) = rejected.take_if(|(disk, _)| *disk == identity) {
+                self.record_history_failure(identity, source);
+                continue;
+            }
+            let mut install = || -> Result<()> {
+                let image = images.remove(&identity.disk_id.parse::<storage_contract::DiskId>()?)
+                    .ok_or_else(|| invalid("original fixed DISK history image is missing"))?;
+                let (changed, body) = image.after(&self.config, &identity, candidate, candidate_hash)?;
+                let entry = self.catalog_maintenance.histories.entries.get(&identity.slot_id)
+                    .filter(|entry| entry.binding_matches(&identity, self));
+                if !changed && entry.is_some_and(|entry| {
+                    matches!(entry.availability, Availability::Unavailable { .. })
+                }) {
+                    return Ok(());
+                }
+                let prior = PreviousAlias::Ordinary(entry.and_then(Entry::last_physical));
+                let tracked = entry.and_then(|entry| match &entry.availability {
+                    Availability::Tracked(coverage) if entry.state.ptr_eq(&Arc::downgrade(previous)) => {
+                        Some(coverage.as_ref().clone())
+                    }
+                    _ => None,
+                });
+                if !changed && let Some(mut coverage) = tracked {
+                    // The immutable prepared image already advances the header.
+                    // Keep an unchanged, explicitly older maintenance alias
+                    // intact, exactly as before this raw-image handoff.
+                    coverage.observed = body.header;
+                    self.record_history_coverage(coverage);
+                    return Ok(());
+                }
+                let receipt = self.install_history_alias(&identity.slot_id, body, prior)?;
+                self.record_history_install(&receipt);
+                Ok(())
+            };
+            if let Err(source) = install() {
+                self.record_history_failure(identity, source);
+            }
+        }
     }
 
     fn extend_disk_history(

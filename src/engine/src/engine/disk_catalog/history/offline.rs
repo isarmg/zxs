@@ -195,7 +195,7 @@ pub(super) fn inspect_with_original(
     })
 }
 
-pub(super) fn no_sidecars(root: &DiskRoot, scope: DiskDatabaseReadScope) -> Result<()> {
+pub(in crate::engine::disk_catalog) fn no_sidecars(root: &DiskRoot, scope: DiskDatabaseReadScope) -> Result<()> {
     for (selected, leaf) in [
         (scope.current(), DISK_DATABASE_NAME),
         (scope.history(), DISK_HISTORY_DATABASE_NAME),

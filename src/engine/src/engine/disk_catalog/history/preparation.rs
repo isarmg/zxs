@@ -7,6 +7,8 @@ use std::sync::atomic::AtomicBool;
 
 mod backup;
 mod prospective;
+pub(in crate::engine::disk_catalog::history) mod ordinary;
+pub(in crate::engine) use ordinary::OrdinaryDiskAliases;
 pub(in crate::engine) use prospective::FrozenDiskPair;
 
 const MAX_DISKS: usize = 32;

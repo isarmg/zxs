@@ -192,6 +192,12 @@ fn original_prefix_freezes_identical_complete_history_before_current_hashes_are_
                 let disk = fixture.engine.disk(&pair.registration.slot_id)?;
                 let root = &fixture.engine.disk_resources.get(disk)?.root;
                 let before = pair.history();
+                // The real ordinary producer consumed these exact frozen
+                // bytes at D3, not a second postdecision SQL encoding.
+                let alias = std::fs::read(disk.root.join(crate::database_install::DISK_HISTORY_DATABASE_NAME))?;
+                let crate::engine::scope_closure::Representation::Sqlite { image_hash, image_bytes, .. } = before.1;
+                assert_eq!(image_hash, storage_contract::ContentHash::from_digest(blake3::hash(&alias)));
+                assert_eq!(image_bytes, alias.len() as u64);
                 pair.install_at(&fixture.engine.config, disk, root)?;
                 before.1.verify(root, crate::engine::scope_closure::Schema::DiskHistory, MAX_DATABASE_BYTES, |bytes| {
                     let actual = database::read(bytes, &pair.registration)?;

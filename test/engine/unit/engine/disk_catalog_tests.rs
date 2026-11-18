@@ -212,3 +212,24 @@ fn invalid_bulk_target_list_has_no_partial_database_creation() {
 
 #[path = "disk_catalog_rescue_tests.rs"]
 mod rescue;
+
+#[test]
+fn ordinary_publications_preserve_a_swapped_history_alias_without_adopting_or_repairing_it() {
+    let (_temp, mut engine) = fixture();
+    let left = repository(&mut engine, "history-prior", "P01");
+    save(&mut engine, &left, "first.txt");
+    let root = engine.disk("P01").unwrap().root.clone();
+    let path = root.join(crate::database_install::DISK_HISTORY_DATABASE_NAME);
+    let mut unknown = std::fs::read(&path).unwrap();
+    unknown[68..72].copy_from_slice(&0x005a5853u32.to_be_bytes());
+    std::fs::write(&path, &unknown).unwrap();
+    for name in ["second.txt", "third.txt"] {
+        let before = engine.state().sequence;
+        save(&mut engine, &left, name);
+        assert!(engine.state().sequence > before);
+        assert_eq!(std::fs::read(&path).unwrap(), unknown);
+        let status = engine.disk_history_statuses().into_iter()
+            .find(|entry| entry.identity.slot_id == "P01").unwrap();
+        assert!(matches!(status.state, DiskHistoryMaintenanceState::Unavailable(_)));
+    }
+}

@@ -128,6 +128,16 @@ impl Engine {
         &mut self,
         previous: Option<&Arc<State>>,
     ) {
+        self.refresh_disk_aliases_with(previous, |engine, identity| {
+            engine.rebuild_disk_catalog(&identity.slot_id)
+        });
+    }
+
+    pub(super) fn refresh_disk_aliases_with(
+        &mut self,
+        previous: Option<&Arc<State>>,
+        mut install: impl FnMut(&mut Engine, &DiskRegistrationIdentity) -> Result<DiskCatalogReceipt>,
+    ) {
         if self.move_is_retained() {
             return;
         }
@@ -173,7 +183,7 @@ impl Engine {
                     continue;
                 }
             }
-            if let Err(source) = self.rebuild_disk_catalog(&identity.slot_id) {
+            if let Err(source) = install(self, &identity) {
                 let failure = Arc::new(DiskCatalogFailure {
                     sequence: self.state.sequence,
                     source,

@@ -752,6 +752,10 @@ impl Engine {
         let members = self.members();
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_payloads")?;
+        // The full proposal already contains actual birth feedback. Freeze its
+        // exact DISK material from the independently admitted *prior* prefix.
+        // No hash of this prospective Candidate/Snapshot is an input.
+        let disk_aliases = super::disk_catalog::OrdinaryDiskAliases::capture(self, &next, &result)?;
         let candidate_object = PreparedMetadataObject::new("candidate", &candidate, MAX_METADATA)?;
         let hash = candidate_object.hash.clone();
         self.next_slot = candidate.sequence.checked_add(1).ok_or_else(|| {
@@ -886,8 +890,7 @@ impl Engine {
         self.blocked = false;
         // Projection failure is observable separately, never a false failure
         // or rollback of this already durable authoritative publication.
-        self.refresh_published_disk_catalogs(Some(&previous));
-        self.advance_published_disk_histories(&previous, &candidate, &hash);
+        disk_aliases.install_after_publication(self, &previous, &candidate, &hash);
         Ok(result)
     }
     pub(crate) fn prepare_payload(&self, p: &Prepared) -> Result<()> {

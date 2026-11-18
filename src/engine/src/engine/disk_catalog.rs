@@ -22,7 +22,7 @@ pub(in crate::engine) use move_draft::{
 mod history;
 mod maintenance;
 pub(in crate::engine) mod root_install;
-pub(in crate::engine) use history::preparation::{FrozenDiskPair, PreparedDiskScopes};
+pub(in crate::engine) use history::preparation::{FrozenDiskPair, OrdinaryDiskAliases, PreparedDiskScopes};
 pub use history::{
     DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRebuildSource,
     DiskDatabaseReconstruction, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,
@@ -241,16 +241,33 @@ impl Engine {
     /// attempt is safely repeated from the same admitted State and held root.
     pub fn rebuild_disk_catalog(&mut self, slot: &str) -> Result<DiskCatalogReceipt> {
         self.require_write()?;
-        let (disk, identity, handle) = self.catalog_disk(slot)?;
+        let (_, identity, _) = self.catalog_disk(slot)?;
+        let captured = snapshot(&self.state, identity)?;
+        let records_hash = storage_contract::object_hash("disk-current-catalog", &captured)?;
+        let bytes = database::encode(&captured, &records_hash)?;
+        self.install_current_alias(captured, records_hash, bytes)
+    }
+
+    // Both ordinary publication and explicit native-source rebuild use the
+    // same preserving installer. The former supplies its pre-decision bytes.
+    fn install_current_alias(
+        &mut self,
+        captured: DiskCatalogSnapshot,
+        records_hash: String,
+        bytes: Vec<u8>,
+    ) -> Result<DiskCatalogReceipt> {
+        let (disk, identity, handle) = self.catalog_disk(&captured.identity.slot_id)?;
+        if captured.identity != identity || captured.source_sequence != self.state.sequence {
+            return Err(invalid("frozen current DISK image differs from its decided registration"));
+        }
         let lease = handle.root.admit_io()?;
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
-        let captured = snapshot(&self.state, identity.clone())?;
-        let records_hash = storage_contract::object_hash("disk-current-catalog", &captured)?;
-        let bytes = database::encode(&captured, &records_hash)?;
+        let physical = blake3::hash(&bytes);
         let database_bytes = bytes.len();
         let root = &handle.root;
         let inode = root.directory_identity(root.path())?;
+        history::no_sidecars(root, DiskDatabaseReadScope::Current)?;
         let prepared = PreparedInstall::capture(
             root,
             root.path(),
@@ -271,9 +288,10 @@ impl Engine {
                 "disk catalog must preserve metadata recovery headroom",
             ));
         }
+        history::no_sidecars(root, DiskDatabaseReadScope::Current)?;
         prepared.apply(root, &mut |_| lease.check_running())?;
         let stored = root.read_bytes(&root.path().join(DISK_DATABASE_NAME), MAX_DATABASE_BYTES)?;
-        if database::read(&stored, &identity)? != captured {
+        if blake3::hash(&stored) != physical || database::read(&stored, &identity)? != captured {
             return Err(invalid(
                 "installed disk catalog differs from its admitted snapshot",
             ));
@@ -281,6 +299,7 @@ impl Engine {
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
         lease.check_running()?;
+        history::no_sidecars(root, DiskDatabaseReadScope::Current)?;
         let receipt = DiskCatalogReceipt {
             identity,
             source_sequence: captured.source_sequence,
