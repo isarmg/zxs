@@ -218,3 +218,109 @@ fn unacknowledged_edit_is_not_reissued_or_rebased_if_automatic_publication_inter
     assert_eq!(engine.operation(saved.operation_id).unwrap(),saved);
     assert_eq!(engine.operation(decided.operation_id).unwrap(),decided);
 }
+
+#[test]
+fn idle_automatic_writer_rejects_renamed_reselected_and_independently_copied_occurrences() {
+    for change in ["rename","selection","copy"] {
+        let (fixture,mut engine)=Fixture::new();
+        let target=&fixture.targets[0];
+        let actor:Principal="admin".parse().unwrap();
+        let op=||OperationId::generate().unwrap();
+        let repo=target.repository.to_string();
+        let file=target.file.to_string();
+        let initial=engine.file_draft_base(target).unwrap();
+        // Allocate the destination/fork before A, not as an intervening
+        // operation masquerading as the tested identity change.
+        let fork=(change=="selection").then(||engine.create_file_branch(&file,&initial.version_id().to_string(),
+            &storage_contract::BranchName::parse("another selected source").unwrap(),actor.as_str(),op())
+            .unwrap().branch_id.unwrap());
+        let destination=(change=="copy").then(||{
+            let slot=engine.config().disks[1].slot_id.clone();
+            engine.create_repository(&storage_contract::RepositoryName::parse("unrelated actual copy").unwrap(),
+                &slot,1,actor.as_str(),op()).unwrap()
+        });
+        mode(&mut engine,target,&actor,CommitMode::Automatic);
+        let mut held=engine.open_native_working(target,&actor,true).unwrap();
+        engine.write_native_working(&mut held,&actor,0,b"A's real publication").unwrap();
+        let a=engine.flush_native_working(&mut held,&actor).unwrap().unwrap();
+        let job=engine.prepare_automatic_file(target.file).unwrap().execute().unwrap();
+        let published=engine.finish_automatic_file(job).unwrap();
+        match change {
+            "rename" => {
+                engine.file_namespace(&repo,crate::NamespaceOperation::parse(
+                    crate::NamespaceOperationKind::Rename,target.path.as_str(),Some("renamed.txt")).unwrap(),
+                    actor.as_str(),op()).unwrap();
+                assert_eq!(engine.state().file_containers[&target.file].namespace.name.as_str(),"renamed.txt");
+            }
+            "selection" => {
+                let branch=fork.unwrap();
+                engine.select_file_branch_at(&repo,&target.path,&file,&branch,actor.as_str(),op()).unwrap();
+                assert_eq!(engine.file_draft_base(target).unwrap().branch_id().to_string(),branch);
+            }
+            "copy" => {
+                let destination=destination.unwrap();
+                let (source_head,target_head)={
+                    let state=engine.state();
+                    (state.branches[&state.repositories[&repo].main_branch_id].head_commit_id.clone(),
+                        state.branches[&destination.main_branch_id].head_commit_id.clone())
+                };
+                engine.copy_file_history(&crate::FileHistoryCopyRequest{
+                    source_repository_id:repo,source_path:target.path.as_str().to_owned(),expected_source_head:source_head,
+                    target_repository_id:destination.repository_id,target_name:"fork.txt".into(),
+                    expected_target_head:target_head,
+                },actor.as_str(),op()).unwrap();
+                let copied=engine.list_tree(&destination.main_branch_id).unwrap();
+                assert_eq!(copied.len(),1);
+                assert_ne!(copied[0].file_id,file);
+                assert_ne!(copied[0].entry_id,target.entry.to_string());
+            }
+            _ => unreachable!(),
+        }
+        let sequence=engine.state().sequence;
+        assert!(engine.write_native_working(&mut held,&actor,1,b"must not edit another source").is_err());
+        assert_eq!(held.operation(),Some(a.operation_id));
+        assert_eq!(engine.state().sequence,sequence);
+        assert_eq!(engine.operation(a.operation_id).unwrap(),a);
+        assert_eq!(engine.operation(published.operation_id).unwrap(),published);
+    }
+}
+
+#[test]
+fn a_deleted_or_hidden_projection_cannot_issue_or_rebind_an_idle_writer() {
+    let (fixture,mut engine)=Fixture::new();
+    let target=&fixture.targets[0];
+    let actor:Principal="admin".parse().unwrap();
+    mode(&mut engine,target,&actor,CommitMode::Automatic);
+    let mut h=engine.open_native_working(target,&actor,true).unwrap();
+    engine.write_native_working(&mut h,&actor,0,b"a real saved range").unwrap();
+    let saved=engine.flush_native_working(&mut h,&actor).unwrap().unwrap();
+    let task=engine.prepare_automatic_file(target.file).unwrap().execute().unwrap();
+    let published=engine.finish_automatic_file(task).unwrap();
+    let file=storage_contract::history_window::HistoryFileId::parse(&target.file.to_string()).unwrap();
+    let repository=storage_contract::history_window::HistoryRepositoryId::parse(&target.repository.to_string()).unwrap();
+    let path=name_policy::LookupPath::parse(target.path.as_str()).unwrap();
+    let loc=crate::FileDeletionTarget{file_id:&file,repository_id:&repository,path:&path};
+    let deletion=OperationId::generate().unwrap();
+    assert!(engine.soft_delete_file(crate::DeleteFileRequest{target:loc,principal:actor.as_str(),operation_id:deletion}).is_err());
+    assert!(engine.state().file_deletions.get(file.as_str()).is_none());
+    assert!(!engine.state().operations.contains_key(&deletion));
+    // Rejection probe only, never a published FILE deletion. Use the effective
+    // heads from the real read-only preflight; keep the installed decision,
+    // placement, controller and operation count untouched to exercise rejection
+    // of the wrong source, not the broader intervening-operation guard.
+    let pre=engine.file_deletion_preflight(loc,&Default::default()).unwrap();
+    let node=storage_contract::FileDeletionNode{
+        node_id:crate::new_id("fdel").unwrap(),repository_id:target.repository.to_string(),
+        history_tree_id:pre.repository().history_tree_id.clone(),file_id:file.to_string(),
+        path:target.path.clone(),branch_heads:pre.branches().iter().map(|r|
+            (r.branch().branch_id.clone(),r.node_id().to_owned())).collect(),
+        parent_node_ids:pre.parent_node_ids().to_vec(),operation_id:deletion,author:actor.as_str().into(),
+        sequence:engine.state().sequence,created_at:0,
+    };
+    let admitted=std::sync::Arc::clone(&engine.state);
+    std::sync::Arc::make_mut(&mut engine.state).file_deletions.insert(file.to_string(),node);
+    assert!(engine.write_native_working(&mut h,&actor,1,b"untrusted hidden view").is_err());
+    engine.state=admitted;
+    assert_eq!(h.operation(),Some(saved.operation_id));
+    assert_eq!(engine.operation(published.operation_id).unwrap(),published);
+}

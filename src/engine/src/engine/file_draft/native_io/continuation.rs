@@ -81,6 +81,7 @@ impl Acknowledged {
     ) -> Result<Option<NativeReader>> {
         let context=engine.planning_context();
         let state=context.state;
+        if state.file_deletions.contains_key(&target.file.to_string()) { return Err(stale()); }
         let record=state.file_containers.get(&target.file).ok_or_else(stale)?;
         let FileWorkingState::Automatic {revision,controller,body:AutomaticBody::Clean {}}=&record.working
             else {return Ok(None)};
@@ -121,7 +122,6 @@ impl Acknowledged {
         let body=FileNodeId::Version(id.parse()?);
         if origin!=&proved || codec::digest(&out.request,actor.as_str())?!=published.request_digest
             || origin.ancestors.iter().copied().ne(self.parents.iter().map(|(id,_)|*id))
-            || state.file_deletions.contains_key(&target.file.to_string())
             || crate::node_retirement_engine::is_retired(state,id)
             || crate::node_retirement_engine::is_retired(state,&self.base.version_id().to_string())
             || request.target!=*target || request.saved!=self.save || request.base!=self.base
