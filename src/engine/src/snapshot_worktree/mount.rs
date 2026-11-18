@@ -101,7 +101,17 @@ fn fresh(
     let record = Record::ReserveCleanMount(plan.clone());
     let commitment = record.commitment().map_err(RegistrationError::Codec)?;
     open(engine, &base, &plan, actor, commitment)?.frame(false)?;
-    super::publication::publish_new(engine, request.operation_id, actor, &record)?;
+    let slot = engine.next_slot;
+    let blocked = engine.blocked;
+    if let Err(source) = super::publication::publish_new(engine, request.operation_id, actor, &record) {
+        if engine.state().operations.get(&request.operation_id).is_some_and(|r| r.kind == record.kind()) {
+            return Err(RegistrationError::DirectoryResponse { operation: request.operation_id, source: Box::new(source) });
+        }
+        if slot != engine.next_slot || (!blocked && engine.blocked) {
+            return Err(RegistrationError::MountReservationUncertain(Box::new(source)));
+        }
+        return Err(source);
+    }
     #[cfg(feature = "fault-injection")]
     engine.failpoint("after_worktree_clean_mount_reserve").map_err(RegistrationError::Publication)?;
     Ok(())
@@ -114,8 +124,11 @@ pub(super) fn reserve(
     initial(engine)?;
     engine.require_unstarted_mount_slot(request, actor, None).map_err(RegistrationError::Publication)?;
     fresh(engine, request, actor)?;
-    let index = engine.snapshot_receipts()?;
-    index.clean_mount_receipt(index.mount_owner(request.target)?, request.operation_id, actor)
+    let outcome = || {
+        let index = engine.snapshot_receipts()?;
+        index.clean_mount_receipt(index.mount_owner(request.target)?, request.operation_id, actor)
+    };
+    outcome().map_err(|source| RegistrationError::DirectoryResponse { operation:request.operation_id, source:Box::new(source) })
 }
 
 pub(super) fn change(

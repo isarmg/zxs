@@ -44,6 +44,8 @@ pub(crate) enum RegistrationError {
         #[source]
         source: Box<RegistrationError>,
     },
+    #[error("the original mount reservation may have entered its native slot; do not issue a replacement")]
+    MountReservationUncertain(#[source] Box<RegistrationError>),
     #[error("directory receipt has no admitted original outcome in this prefix: {0}")]
     OriginalReceiptUnavailable(storage_contract::OperationId),
     #[error("checking the directory receipt against its admitted original and visible outcome")]

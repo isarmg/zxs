@@ -51,7 +51,7 @@ impl SnapshotWorktreeError {
             | RegistrationError::EditScope | RegistrationError::CommitScope => {
                 ErrorCode::UnsupportedOperation
             }
-            RegistrationError::DirectoryResponse { .. }
+            RegistrationError::DirectoryResponse { .. } | RegistrationError::MountReservationUncertain(_)
             | RegistrationError::Pending(_) | RegistrationError::OriginalReceiptUnavailable(_)
             | RegistrationError::CommitWorkspaceRelease { .. } => {
                 ErrorCode::RecoveryRequired
