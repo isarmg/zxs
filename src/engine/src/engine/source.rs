@@ -17,6 +17,10 @@ use std::{
 pub(crate) enum ReadSource {
     External(PathBuf),
     VerifiedReplica(Arc<super::reads::VerifiedReplicaSource>),
+    OriginalBody {
+        source: Arc<crate::snapshot_worktree::OriginalBody>,
+        path: PathBuf,
+    },
     Container {
         scope: Arc<crate::container_storage::ObservedContainerReplica>,
         version: crate::FileVersion,
@@ -42,6 +46,11 @@ pub(crate) enum ReadSource {
 }
 
 impl ReadSource {
+    pub(crate) fn original_body(source: Arc<crate::snapshot_worktree::OriginalBody>) -> Self {
+        let path = source.path().to_owned();
+        Self::OriginalBody { source, path }
+    }
+
     pub(crate) fn external(path: impl Into<PathBuf>) -> Self {
         Self::External(path.into())
     }
@@ -112,6 +121,7 @@ impl ReadSource {
         match self {
             Self::External(path) => open_regular(path).map(ReadFile::from),
             Self::VerifiedDraft { source, path } => source.open(path),
+            Self::OriginalBody { source, path } => source.open(path),
             Self::SelectedWorking { selection, index, path } => selection.open_born(*index, path),
             Self::WorkingFull { source, path } => source.open(path),
             Self::VerifiedReplica(source) => source.open(),
@@ -131,7 +141,7 @@ impl ReadSource {
 
     pub(crate) fn path(&self) -> &Path {
         match self {
-            Self::External(path) | Self::Disk { path, .. }
+            Self::External(path) | Self::Disk { path, .. } | Self::OriginalBody { path, .. }
             | Self::VerifiedDraft { path, .. } | Self::Container { path, .. }
             | Self::WorkingFull { path, .. } | Self::SelectedWorking { path, .. } => path,
             Self::VerifiedReplica(source) => source.path(),
@@ -142,6 +152,9 @@ impl ReadSource {
         let path = self.path().join(child);
         match self {
             Self::External(_) => Self::External(path),
+            Self::OriginalBody { source, .. } => Self::OriginalBody {
+                source: Arc::clone(source), path,
+            },
             // Joining is not authority over another draft or a child path.
             // The retained source's exact-path gate rejects it on open.
             Self::WorkingFull { source, .. } => Self::WorkingFull {

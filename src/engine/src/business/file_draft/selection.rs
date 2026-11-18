@@ -21,6 +21,37 @@ pub(crate) fn resolve(state: &State, target: &DraftLocation) -> Result<Selection
     if target.path.parent().is_some() {
         return Err(Error::FileDraft(Failure::UnsupportedScope));
     }
+    let repository = state.repositories.get(&target.repository.to_string())
+        .ok_or_else(missing)?;
+    let main = state.branches.get(&repository.main_branch_id).ok_or_else(missing)?;
+    let mut entries = state.commits.get(&main.head_commit_id)
+        .ok_or_else(missing)?.entries.clone();
+    let names = super::super::namespace::container_name::current_names(state, &entries)?;
+    super::super::namespace::container_name::apply_file_names(&mut entries, &names)?;
+    let tree = super::super::NamespaceTree::from_current_state(
+        state, &repository.repository_id, &entries,
+    );
+    let entry = tree.get_key(target.path.key()).ok_or_else(missing)?;
+    from_visible_entry(state, target, entry)
+}
+
+/// The worktree owner supplies this row from its one live, admitted ordinary
+/// root. Selection, FILE baseline and placement are still checked here.
+pub(crate) fn from_worktree_namespace(
+    state: &State, target: &DraftLocation, namespace: crate::NamespaceTree<'_>,
+) -> Result<Selection> {
+    let entry = namespace.get_key(target.path.key()).ok_or_else(missing)?;
+    if entry.path != target.path || namespace.initialized_repository_id(target.path.key())
+        .is_some_and(|owner| owner != target.repository.to_string())
+    {
+        return Err(missing());
+    }
+    from_visible_entry(state, target, entry)
+}
+
+fn from_visible_entry(
+    state: &State, target: &DraftLocation, entry: &crate::Entry,
+) -> Result<Selection> {
     let record = state.file_containers.get(&target.file).ok_or_else(missing)?;
     let repository = state.repositories.get(&target.repository.to_string())
         .ok_or_else(missing)?;
@@ -33,14 +64,6 @@ pub(crate) fn resolve(state: &State, target: &DraftLocation) -> Result<Selection
     {
         return Err(missing());
     }
-    let mut entries = state.commits.get(&main.head_commit_id)
-        .ok_or_else(missing)?.entries.clone();
-    let names = super::super::namespace::container_name::current_names(state, &entries)?;
-    super::super::namespace::container_name::apply_file_names(&mut entries, &names)?;
-    let tree = super::super::NamespaceTree::from_current_state(
-        state, &repository.repository_id, &entries,
-    );
-    let entry = tree.get_key(target.path.key()).ok_or_else(missing)?;
     if entry.kind != NamespaceEntryKind::File || entry.file_id != target.file.to_string()
         || entry.entry_id != target.entry.to_string()
     {

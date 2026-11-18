@@ -32,6 +32,8 @@ pub enum SnapshotSourceError {
     Encoding(#[source] crate::persist::snapshot_worktree::CodecError),
     #[error("reserved worktree version differs from its exact FILE publication: {0}")]
     ReservedVersion(FileId),
+    #[error("opening the exact sealed worktree occurrence for the FILE batch")]
+    OriginalBody(#[source] Box<super::SnapshotWorktreeError>),
     #[error("whole Backup cannot transfer the registered immutable snapshot {0}")]
     BackupRegisteredSnapshot(OperationId),
     #[error("checking permanent snapshot registration before whole Backup")]
@@ -51,6 +53,7 @@ impl SnapshotSourceError {
             Self::BackupRegisteredSnapshot(_) => ErrorCode::UnsupportedOperation,
             Self::BackupRegistration(source) => source.code(),
             Self::WorktreeMounts(source) => source.code(),
+            Self::OriginalBody(source) => source.code(),
             Self::Budget | Self::Manifest(SnapshotManifestError::Budget) => {
                 ErrorCode::ResourceLimit
             }

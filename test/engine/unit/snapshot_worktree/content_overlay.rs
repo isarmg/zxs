@@ -82,3 +82,6 @@ fn siblings_survive_resave_and_cold_reopen_without_publishing_either_file() {
     drop(engine);
     check(&Engine::open(&fixture.system).unwrap());
 }
+
+#[path = "content_plan.rs"]
+mod plan;

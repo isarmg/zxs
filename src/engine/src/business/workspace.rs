@@ -1227,6 +1227,15 @@ impl crate::engine::PlanningContext<'_> {
 }
 
 impl crate::engine::PlanningContext<'_> {
+    /// Only an actual worktree producer can issue this original occurrence's
+    /// saved VersionId. No standalone FILE operation is submitted here.
+    pub(crate) fn build_original_content_version(
+        &self, state: &mut State, pending: &mut Vec<Prepared>, input: VersionBuild<'_>,
+        reserved: &mut crate::snapshot_worktree::ReservedFileVersion,
+    ) -> Result<FileVersion> {
+        self.build_version_with_reserved(state, pending, input, None, Some(reserved), None)
+    }
+
     pub(crate) fn build_draft_version(
         &self, state: &mut State, pending: &mut Vec<Prepared>, input: VersionBuild<'_>,
         read: &crate::container_storage::ReadDraftDigest,

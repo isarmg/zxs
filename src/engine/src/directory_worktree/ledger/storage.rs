@@ -532,6 +532,9 @@ impl<'a> HeldWorktreeLedger<'a> {
     pub(crate) fn file_results(&self) -> &[FileResult] {
         &self.state.file_results
     }
+    pub(crate) fn require_existing_content_scope(&self) -> Result<(), LedgerError> {
+        self.state.require_publication_scope()
+    }
     pub(crate) fn dirty_edits(&self) -> Vec<&super::record::EditRecord> {
         self.state.dirty_edits()
     }

@@ -349,7 +349,7 @@ impl State {
         }
         Ok(())
     }
-    fn require_publication_scope(&self) -> Result<(), LedgerError> {
+    pub(super) fn require_publication_scope(&self) -> Result<(), LedgerError> {
         // Publication still associates FILE results with original paths. Until
         // durable obligations cover removed and renamed occurrences, neither a
         // directory commit nor files-before-delete can consume this namespace.

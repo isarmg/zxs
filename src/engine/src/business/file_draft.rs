@@ -12,7 +12,9 @@ mod selection;
 pub(crate) mod selected;
 pub(crate) mod unborn;
 pub(crate) mod worktree;
-pub(crate) use selection::{resolve, validate as validate_working_record};
+pub(crate) mod worktree_content;
+pub(crate) use selection::{from_worktree_namespace, resolve, validate as validate_working_record};
+pub(crate) use allocations::Allocation;
 mod publication;
 pub(crate) use publication::{
     Outcome, apply, draft_content_hash, draft_matches_base, plan_change, plan_incremental, verify_working_transition,

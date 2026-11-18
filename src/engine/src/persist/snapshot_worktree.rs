@@ -2,6 +2,7 @@
 pub(crate) mod historical;
 pub(crate) mod files;
 pub(crate) mod added_commit;
+pub(crate) mod content_batch;
 pub(crate) use historical::{CommitRouting, HistoricalCommit, HistoricalFile, HistoricalReady};
 use crate::directory_worktree::ledger::{Binding as LedgerBinding, Checkpoint, EditRecord};
 use crate::working_tree::snapshot::{

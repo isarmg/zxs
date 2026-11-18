@@ -3,6 +3,7 @@
 //! ledger/SYSTEM tail on retry. Earlier uncertain preparations remain Pending.
 mod recovery;
 mod added;
+pub(crate) mod content;
 mod transfer;
 pub(crate) use transfer::ReservedDirectoryTransfer;
 mod version;

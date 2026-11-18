@@ -1,0 +1,118 @@
+//! All rows use the real FILE version/branch/root producer in the same order
+//! on one prospective State. Reservation fixes the exact allocation trace;
+//! replaying that trace is not permission to decide or install its output.
+use super::{OriginalRow, Originals};
+use crate::business::file_draft::worktree_content::{Trace, advance};
+use crate::engine::{PlanningContext, Prepared};
+use crate::persist::snapshot_worktree::content_batch::{Input, Output, Reservation};
+use crate::snapshot_worktree::{RegistrationError, ReservedFileVersion, Result};
+use crate::working_tree::snapshot::{AdmittedSnapshotManifest, SnapshotEntryContent};
+use crate::State;
+use std::sync::Arc;
+use storage_contract::{OperationId, Principal, Sequence};
+use storage_contract::working_tree::SnapshotNodeId;
+
+pub(in crate::snapshot_worktree) struct Projection {
+    pub(in crate::snapshot_worktree) state: State,
+    pub(in crate::snapshot_worktree) versions: Vec<Prepared>,
+    pub(in crate::snapshot_worktree) rows: Vec<Output>,
+    pub(in crate::snapshot_worktree) manifest: AdmittedSnapshotManifest,
+}
+
+impl OriginalRow {
+    fn input(&self, result: &Output) -> Input {
+        Input {
+            edit_operation: self.edit_operation, edit_completion: self.edit_completion,
+            edit: self.edit.clone(), original: self.original, base: self.base,
+            owner: self.owner, namespace: self.namespace.clone(), owner_root: self.owner_root,
+            owner_entity: self.owner_entity, history: self.history, branch_base: self.branch_base,
+            clean: self.clean.clone(), commit: result.commit, tree: result.tree,
+            allocations: result.content.allocations.clone(),
+        }
+    }
+}
+
+impl Originals {
+    fn require_context(&self, context: &PlanningContext<'_>) -> Result<()> {
+        if !Arc::ptr_eq(&self.state, context.state) || !self.config.same_admission(context.config)
+            || !Arc::ptr_eq(&self.resources, context.disk_resources)
+            || context.current_namespaces.is_some() || context.config.generation().is_some()
+        {
+            return Err(RegistrationError::PublicationChanged);
+        }
+        Ok(())
+    }
+
+    pub(in crate::snapshot_worktree) fn plan_reserve(
+        &self, context: &PlanningContext<'_>, principal: &Principal,
+    ) -> Result<Reservation> {
+        let destination_node = SnapshotNodeId::generate().map_err(RegistrationError::Allocation)?;
+        let publish_operation = OperationId::generate().map_err(RegistrationError::Allocation)?;
+        if context.state.operations.contains_key(&publish_operation)
+            || publish_operation == self.request.operation_id || destination_node == self.source.node_id
+        {
+            return Err(RegistrationError::Identity);
+        }
+        let prepared = self.project(context, principal, destination_node, publish_operation, None)?;
+        let rows = self.rows.iter().zip(&prepared.rows).map(|(row, result)| row.input(result)).collect();
+        Ok(Reservation {
+            request: self.request.clone(), source: self.source, source_binding: self.source_node.binding(),
+            host: self.host.clone(), root: self.root, ordinary_head: self.ordinary_head,
+            ordinary_generation: self.ordinary_generation, instance: self.sparse.binding(), ledger: self.ledger,
+            before: self.before, destination_node, publish_operation, rows,
+        })
+    }
+
+    pub(in crate::snapshot_worktree) fn project_reserved(
+        &self, context: &PlanningContext<'_>, principal: &Principal, frozen: &Reservation,
+    ) -> Result<Projection> {
+        if self.request != frozen.request || self.source != frozen.source || self.host != frozen.host
+            || self.root != frozen.root || self.source_node.binding() != frozen.source_binding
+            || self.ordinary_head != frozen.ordinary_head || self.ordinary_generation != frozen.ordinary_generation
+            || self.sparse.binding() != frozen.instance || self.ledger != frozen.ledger || self.before != frozen.before
+            || self.rows.len() != frozen.rows.len()
+        {
+            return Err(RegistrationError::CommitScope);
+        }
+        self.project(context, principal, frozen.destination_node, frozen.publish_operation, Some(&frozen.rows))
+    }
+
+    fn project(
+        &self, context: &PlanningContext<'_>, principal: &Principal,
+        destination: SnapshotNodeId, operation: OperationId, frozen: Option<&[Input]>,
+    ) -> Result<Projection> {
+        self.require_context(context)?;
+        let sequence = Sequence::new(context.state.sequence).next().map_err(|error|
+            RegistrationError::Ledger(crate::directory_worktree::ledger::LedgerError::Sequence(error)))?;
+        let mut state = crate::business::file_draft::unborn::begin(context.state, sequence)
+            .map_err(RegistrationError::Publication)?;
+        let mut versions = Vec::with_capacity(self.rows.len());
+        let mut results = Vec::with_capacity(self.rows.len());
+        let mut entries = self.source_node.manifest().entries().to_vec();
+        for (i, row) in self.rows.iter().enumerate() {
+            let body = self.body(i).map_err(RegistrationError::Publication)?;
+            let mut issuer = ReservedFileVersion::for_original(&self.state, row);
+            let trace = frozen.map_or(Trace::Allocate, |rows| Trace::Exact(&rows[i].allocations));
+            let result = advance(context, &mut state, &mut versions, row, &body, &mut issuer,
+                operation, principal, &self.request.message, trace).map_err(RegistrationError::Publication)?;
+            if frozen.is_some_and(|rows| rows[i] != row.input(&result)) {
+                return Err(RegistrationError::CommitScope);
+            }
+            let occurrence = entries.binary_search_by(|entry| entry.path.key().cmp(row.edit.path.key()))
+                .map_err(|_| RegistrationError::Source)?;
+            let entry = &mut entries[occurrence];
+            if entry.path != result.path || !matches!(&entry.content,
+                SnapshotEntryContent::File { material, .. } if *material == row.original)
+            {
+                return Err(RegistrationError::CommitScope);
+            }
+            entry.content = SnapshotEntryContent::File {
+                material: result.file.material, source: result.file.source,
+            };
+            results.push(result);
+        }
+        let manifest = AdmittedSnapshotManifest::prepare(self.source.repository_id, destination, operation, entries)
+            .map_err(RegistrationError::Manifest)?;
+        Ok(Projection { state, versions, rows: results, manifest })
+    }
+}
