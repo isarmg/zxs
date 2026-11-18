@@ -1166,3 +1166,30 @@ fn held_edit_body(bytes: &[u8]) -> (tempfile::TempDir, crate::ReadFile) {
     let file = fs::File::open(path).unwrap();
     (directory, file.into())
 }
+
+#[test]
+fn scoped_nested_host_requires_every_original_ordinary_component_without_initializing_a_repository() {
+    use crate::container_storage::namespace_host::ScopedHostChain;
+    let mut f = LiveFixture::new();
+    let repository = f.engine.repository_for_branch(&f.request.source.branch_id.to_string()).unwrap()
+        .repository_id.clone();
+    let path = name_policy::PortablePath::parse("Upper/Kept").unwrap();
+    f.engine.file_namespace(&repository, crate::NamespaceOperation::Mkdir { path: path.clone() },
+        "admin", OperationId::generate().unwrap()).unwrap();
+    let axes = f.engine.snapshot_root_context(repository.parse().unwrap()).unwrap();
+    let mut source = axes.source;
+    source.root = Some(name_policy::LookupPath::parse(path.as_str()).unwrap());
+    let real = prepare_namespace_host(&mut f.engine, &source, axes.host.root_id,
+        axes.host.expected_root_generation, OperationId::generate().unwrap()).unwrap();
+    let (requested, evidence) = real.reservation_evidence(&f.engine).unwrap();
+    let ctx = f.engine.planning_context();
+    let root = ctx.namespace_host_root(evidence.namespace.repository_id, evidence.namespace.branch_id).unwrap();
+    let entered = ScopedHostChain::open(&ctx, &root, requested, &evidence).unwrap();
+    assert_eq!(entered.steps().len(), 2);
+    assert_eq!(entered.steps(), evidence.directories.as_slice());
+    assert!(!entered.held().path().join(crate::persist::layout::SNAPSHOT_REPOSITORY.as_path()).exists());
+    let mut wrong = evidence.clone();
+    wrong.directories.swap(0, 1);
+    assert!(ScopedHostChain::open(&ctx, &root, requested, &wrong).is_err());
+    entered.require(root.common().unwrap()).unwrap();
+}

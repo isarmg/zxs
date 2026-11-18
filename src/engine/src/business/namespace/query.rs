@@ -254,3 +254,22 @@ impl MetadataView {
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/business/namespace/query_tests.rs"]
 mod tests;
+
+
+impl crate::engine::PlanningContext<'_> {
+    /// Ordinary main namespace selected by this held context (including its
+    /// current registry projection), not an arbitrary State's naked tree.
+    pub(crate) fn scope_host_tree(&self, address: storage_contract::snapshot_worktree::NamespaceHostAddress)
+        -> Result<NamespaceTree<'_>> {
+        let name = address.branch_id.to_string();
+        let repository = self.repository_for_branch(&name)?;
+        let branch = self.state.branches.get(&name)
+            .ok_or_else(|| Error::new(ErrorCode::BranchNotFound, "snapshot host branch missing"))?;
+        if repository.repository_id != address.repository_id.to_string() || repository.main_branch_id != name
+            || branch.state == BranchState::Migrated {
+            return Err(Error::new(ErrorCode::StateInvalid, "snapshot host is not this ordinary main branch"));
+        }
+        let entries = self.named_namespaces()?.branch(address.branch_id, branch.head_commit_id.parse()?)?.entries();
+        Ok(NamespaceTree::from_current_state(self.state, &repository.repository_id, entries))
+    }
+}

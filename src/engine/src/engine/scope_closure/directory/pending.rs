@@ -54,6 +54,7 @@ impl PendingRepository {
             && manifest.operation_id() == reserve && source.branch_id == host.namespace.branch_id)?;
         let host = BoundHost::initial(context, *requested, host)?;
         let mut rows = KeyedBuilder::new(MAX_ROWS);
+        host.append_steps(orig, &mut rows)?;
         rows.push(&Key::Branch { branch_id: allocated.branch }, &Row { source: orig,
             value: Branch { branch_id: allocated.branch, name: branch_name, creation_operation: reserve,
                 state: BranchState::Pending { reservation: reserve } } })?;

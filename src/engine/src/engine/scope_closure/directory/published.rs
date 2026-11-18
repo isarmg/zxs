@@ -37,6 +37,7 @@ impl PublishedRepository {
         let installed_by = first.handle.publication;
         let host = BoundHost::initial(ctx, initial.request.host, initial.host)?;
         let mut rows = KeyedBuilder::new(MAX_ROWS);
+        host.append_steps(origin(initial.original)?, &mut rows)?;
         let mut body = OrdinalBuilder::new(MAX_ROWS);
         let here = facts.nodes.get(&facts.head.node_id).ok_or_else(reject)?;
         check(here.handle == facts.head)?;
@@ -54,7 +55,7 @@ impl PublishedRepository {
             rows.push(&Key::Node { node_id: id }, &Row { source: origin(n.publication)?,
                 value: Node { handle: n.handle, reservation: n.reservation, binding: n.binding,
                     parent: n.parent.map_or(Parent::Initial {}, |handle| Parent::Node { handle }) } })?;
-            let pin = ScopedNodeFiles::open(&host.held, n.binding, n.manifest)?;
+            let pin = ScopedNodeFiles::open(host.held(), n.binding, n.manifest)?;
             let manifest = pin.manifest();
             let mut leaves = BTreeMap::new();
             for (id, file) in manifest.files() {
@@ -76,9 +77,9 @@ impl PublishedRepository {
     /// unaccounted sparse instance. A check never adopts the extra names.
     pub(in crate::engine) fn require(&self, config: &ValidatedConfig) -> Result<()> {
         self.host.check(config)?;
-        ScopedNodeFiles::require_repository_names(&self.host.held, self.entity, self.nodes.keys().copied())?;
+        ScopedNodeFiles::require_repository_names(self.host.held(), self.entity, self.nodes.keys().copied())?;
         for node in self.nodes.values() {
-            node.require(&self.host.held)?;
+            node.require(self.host.held())?;
             node.require_no_instances()?;
         }
         self.host.check(config)

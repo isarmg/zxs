@@ -15,6 +15,8 @@ use storage_contract::snapshot_worktree::{
 use storage_contract::working_tree::{BindingLifecycle, RootId};
 use storage_contract::{BranchId, EntryId, Generation, OperationId, RepositoryId};
 
+mod scope;
+pub(crate) use scope::ScopedHostChain;
 mod preparation;
 pub(crate) use preparation::{
     NamespacePreparationError, NamespacePreparationObservation, PreparedNamespaceHost,
@@ -290,40 +292,7 @@ impl<'a> NamespaceHost<'a> {
     }
 
     fn components(&self) -> Result<Vec<Component>> {
-        let path = match self.address.directory {
-            NamespaceDirectoryId::Repository(repository) => {
-                if repository != self.address.repository_id {
-                    return Err(NamespaceHostError::Directory);
-                }
-                return Ok(Vec::new());
-            }
-            NamespaceDirectoryId::Entry(entry) => {
-                let key = entry.to_string();
-                self.snapshot.tree().visible_entries().find(|item| {
-                    item.kind == NamespaceEntryKind::Directory && item.entry_id == key
-                }).ok_or(NamespaceHostError::Directory)?.path.clone()
-            }
-        };
-        require_ordinary(&path)?;
-        let mut paths = vec![path.clone()];
-        let mut parent = path.parent();
-        while let Some(path) = parent {
-            if paths.len() == crate::working_tree::admission::MAX_DIRECTORY_DEPTH {
-                return Err(NamespaceHostError::Depth);
-            }
-            parent = path.parent();
-            paths.push(path);
-        }
-        let tree = self.snapshot.tree();
-        paths.into_iter().rev().map(|path| {
-            let entry = tree.get_key(path.key())
-                .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
-                .ok_or(NamespaceHostError::Directory)?;
-            Ok(Component {
-                entry: entry.entry_id.parse().map_err(NamespaceHostError::Identity)?,
-                name: LookupName::parse(entry.path.file_name()).map_err(NamespaceHostError::Name)?,
-            })
-        }).collect()
+        components_in(self.address, self.snapshot.tree())
     }
 
     fn held_root(&self, root: RootId, generation: Generation) -> Result<&DiskRoot> {
@@ -369,6 +338,42 @@ impl<'a> NamespaceHost<'a> {
         Ok(opened)
     }
 }
+
+fn components_in(address: NamespaceHostAddress, tree: crate::business::namespace::NamespaceTree<'_>) -> Result<Vec<Component>> {
+        let path = match address.directory {
+            NamespaceDirectoryId::Repository(repository) => {
+                if repository != address.repository_id {
+                    return Err(NamespaceHostError::Directory);
+                }
+                return Ok(Vec::new());
+            }
+            NamespaceDirectoryId::Entry(entry) => {
+                let key = entry.to_string();
+                tree.visible_entries().find(|item| {
+                    item.kind == NamespaceEntryKind::Directory && item.entry_id == key
+                }).ok_or(NamespaceHostError::Directory)?.path.clone()
+            }
+        };
+        require_ordinary(&path)?;
+        let mut paths = vec![path.clone()];
+        let mut parent = path.parent();
+        while let Some(path) = parent {
+            if paths.len() == crate::working_tree::admission::MAX_DIRECTORY_DEPTH {
+                return Err(NamespaceHostError::Depth);
+            }
+            parent = path.parent();
+            paths.push(path);
+        }
+        paths.into_iter().rev().map(|path| {
+            let entry = tree.get_key(path.key())
+                .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
+                .ok_or(NamespaceHostError::Directory)?;
+            Ok(Component {
+                entry: entry.entry_id.parse().map_err(NamespaceHostError::Identity)?,
+                name: LookupName::parse(entry.path.file_name()).map_err(NamespaceHostError::Name)?,
+            })
+        }).collect()
+    }
 
 fn require_component(
     root: RootId,

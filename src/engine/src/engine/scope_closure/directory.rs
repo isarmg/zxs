@@ -28,11 +28,15 @@ fn origin(receipt: &crate::OperationResult) -> Result<Origin> {
         request_digest: MaterialCommitment::from_digest(hash.digest()) })
 }
 
+fn host_error(e: crate::container_storage::namespace_host::NamespaceHostError) -> crate::Error {
+    crate::business::file_draft::worktree::failure(crate::snapshot_worktree::RegistrationError::NamespaceHost(e))
+}
+
 struct BoundHost {
     native: Host,
     disk: DiskConfig,
     handle: Arc<DiskHandle>,
-    held: DiskRoot,
+    chain: crate::container_storage::namespace_host::ScopedHostChain,
 }
 impl BoundHost {
     /// The initial registered ordinary root is actually held here. Pending
@@ -41,26 +45,31 @@ impl BoundHost {
         evidence: &crate::persist::snapshot_worktree::HostEvidence) -> Result<Self> {
         let ns = evidence.namespace;
         let root = ctx.namespace_host_root(ns.repository_id, ns.branch_id)?;
-        let binding = root.binding();
-        check(evidence.directories.is_empty() && matches!(ns.directory,
-            storage_contract::snapshot_worktree::NamespaceDirectoryId::Repository(id) if id == ns.repository_id)
-            && binding.registration == evidence.registration && binding.root_id == requested.root_id
-            && binding.generation == requested.expected_root_generation && binding.root_entity == evidence.root_entity
-            && binding.roots.common_data == evidence.common_data && evidence.common_data.directory_id == requested.directory_id)?;
-        let common = root.common()?;
-        let held = common.private_child_matching(common.path(), crate::working_tree::records::file_identity(evidence.common_data.entity))?;
+        let chain = crate::container_storage::namespace_host::ScopedHostChain::open(ctx, &root, requested, evidence)
+            .map_err(host_error)?;
         let value = Self { native: Host { namespace: ns, registration: evidence.registration.clone(),
-            root_id: requested.root_id, directory_id: requested.directory_id, host_entity: evidence.common_data.entity },
-            disk: root.disk().clone(), handle: Arc::clone(ctx.disk_resources.get(root.disk())?), held };
+            root_id: requested.root_id, directory_id: requested.directory_id, host_entity: evidence.host().entity },
+            disk: root.disk().clone(), handle: Arc::clone(ctx.disk_resources.get(root.disk())?), chain };
         value.check(ctx.config)?;
         Ok(value)
+    }
+    fn held(&self) -> &DiskRoot { self.chain.held() }
+    fn append_steps(&self, selecting: Origin, rows: &mut super::ordinal::KeyedBuilder) -> Result<()> {
+        for (i, original) in self.chain.steps().iter().enumerate() {
+            // The native initialization selected this exact original binding
+            // for THIS host. Its own (possibly earlier mkdir) creator remains
+            // immutable inside original.directory.operation_id.
+            rows.push(&record::Key::HostStep { ordinal: Sequence::new(i as u64) },
+                &record::Row { source: selecting, value: record::HostStep { original } })?;
+        }
+        Ok(())
     }
     fn check(&self, config: &ValidatedConfig) -> Result<()> {
         fresh_layout::verify_root(config, &self.disk, &self.handle.root)?;
         let common = self.handle.content_root()?;
         let expected = crate::working_tree::records::file_identity(self.native.host_entity);
-        check(self.held.directory_identity(self.held.path())? == expected
-            && common.directory_identity(common.path())? == expected
+        self.chain.require(common).map_err(host_error)?;
+        check(self.held().directory_identity(self.held().path())? == expected
             && fresh_layout::registration(config, &self.disk) == self.native.registration)
     }
 }
