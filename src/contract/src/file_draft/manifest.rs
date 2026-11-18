@@ -2,6 +2,8 @@
 //!
 //! This value is the working field of the one authoritative container record.
 //! It is not a Version, a full-file content hash, or permission to open a path.
+pub mod packed;
+
 use crate::file_container::ContainerEntity;
 use crate::{FileId, Generation, GenerationExhausted, Id, OperationId};
 use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};

@@ -10,6 +10,7 @@ use std::{
 };
 
 mod install;
+mod working_pack;
 mod worktree_io;
 mod worktree_move;
 pub(crate) use worktree_move::{FileMoveError, FileMoveFault, FrozenFileMove};

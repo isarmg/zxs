@@ -47,6 +47,11 @@ pub(crate) fn working_extent(
         .expect("invariant: typed working extent identity is one relative entry")
 }
 
+/// A pack stays private unless the original FILE decision references its sealed identity.
+pub(crate) fn working_pack(id: storage_contract::file_draft::manifest::packed::PackId) -> EntryName {
+    EntryName::new(id.to_string()).expect("invariant: working pack identity is one relative entry")
+}
+
 /// A private full materialization is not a Version, draft payload or extent.
 /// Its identity is never accepted as published state or reconstructed by name.
 pub(crate) enum WorkingFull {}
