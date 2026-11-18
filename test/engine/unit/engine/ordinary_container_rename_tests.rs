@@ -208,6 +208,14 @@ fn new_main_name_creates_only_its_new_body_and_non_main_actions_never_rename_ear
     assert_eq!(versions_after.len(),3);
     assert_eq!(versions_after.iter().filter(|v|v.creation_name=="file.txt").count(),2);
     assert_eq!(versions_after.iter().filter(|v|v.creation_name=="renamed.txt").count(),1);
+    let view = engine.metadata_view();
+    assert_eq!(view.installed_version_name(&original[0]).unwrap(),
+        format!("{}-file.txt", original[0].storage_id));
+    let mut forged = original[0].clone();
+    forged.creation_name = "renamed.txt".into();
+    assert_eq!(view.installed_version_name(&forged).unwrap_err().code(),
+        storage_contract::ErrorCode::VersionNotFound);
+    drop(view);
 
     let key=file.to_string();
     let branch=engine.create_file_branch(&key,&original[0].version_id,

@@ -332,12 +332,16 @@ impl MetadataView {
         crate::container_storage::current_container_name(self.state.0.as_ref(), &file.to_string())
     }
 
-    /// Derive only the actual Version's installed leaf, independent of this view's current name.
-    pub fn installed_version_name(
-        &self,
-        version: &FileVersion,
-    ) -> Result<String> {
-        crate::container_storage::installed_version_name(version)
+    /// Return the name recorded by this view. The projection neither grants
+    /// a body read nor proves that the corresponding replica is available.
+    pub fn installed_version_name(&self, version: &FileVersion) -> Result<String> {
+        let original = self.state.0.versions.get(&version.version_id)
+            .filter(|original| std::ptr::eq(*original, version) || *original == version)
+            .ok_or_else(|| Error::new(
+                ErrorCode::VersionNotFound,
+                "the version does not match the original record in this metadata view",
+            ))?;
+        crate::container_storage::installed_version_name(original)
     }
 
     /// Read-only business fields for listing and history projection only.
