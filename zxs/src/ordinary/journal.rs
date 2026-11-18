@@ -10,6 +10,9 @@ use super::delta::{allocation::{self as delta_allocation,DeltaAllocation},map::M
 use crate::{BranchId,NodeId,VersionId,VersionStorageId,fs::{self,HeldDir,invalid},Entity,EntryId,HistoryId,PoolId,OperationId,FileId,VolumeId};
 use std::{collections::{BTreeMap,BTreeSet},ffi::CStr,io};
 
+pub(in crate::ordinary) mod credits;
+use credits::{Credits,Effect};
+
 pub(crate) const MAX_JOURNAL:usize=8*1024*1024;
 pub(in crate::ordinary) const MAX_DECISIONS:usize=8192;
 pub(super) const INTENT:&CStr=c"FILE-INTENT";
@@ -41,6 +44,9 @@ impl Decision{
     fn digest(&self)->[u8;32]{match self{Self::Create(f)=>f.digest,Self::Save(f)=>f.digest,Self::Formal(f)=>f.digest,Self::Span(f)=>f.digest,Self::Delta(f)=>f.digest,Self::Move(m)=>m.digest}}
     pub(super) fn request(&self)->[u8;32]{match self{Self::Create(f)=>f.request,Self::Save(f)=>f.request,Self::Formal(f)=>f.request,Self::Span(f)=>f.request,Self::Delta(f)=>f.request,Self::Move(m)=>m.request}}
     pub(super) fn bytes(&self)->&[u8]{match self{Self::Create(f)=>&f.bytes,Self::Save(f)=>&f.bytes,Self::Formal(f)=>&f.bytes,Self::Span(f)=>&f.bytes,Self::Delta(f)=>&f.bytes,Self::Move(m)=>&m.bytes}}
+    fn effect(&self)->Effect{
+        match self{Self::Move(m)=>m.original.effect(),Self::Create(_)|Self::Save(_)|Self::Formal(_)|Self::Span(_)|Self::Delta(_)=>Effect::Ordinary}
+    }
     pub(super) fn op(&self)->OperationId{match self{Self::Create(f)=>f.create.op,Self::Save(f)=>f.original.op,Self::Formal(f)=>f.original.op,Self::Span(f)=>f.original.op,Self::Delta(f)=>f.original.op,Self::Move(m)=>m.original.op}}
 }
 
@@ -69,6 +75,7 @@ use super::placement::Placement;
 type Allowed<'a>=dyn Fn(VolumeId,u32,Entity,&fs::Birth,bool)->bool+'a;
 #[derive(Default)]
 struct OriginalIndex{
+    credits:Credits,
     ops:BTreeSet<OperationId>,files:BTreeMap<FileId,usize>,entries:BTreeSet<EntryId>,histories:BTreeSet<HistoryId>,
     names:BTreeSet<(VolumeId,String)>,tickets:BTreeSet<OperationId>,native:BTreeSet<fs::Birth>,saved:BTreeMap<FileId,usize>,
     formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,branches:BTreeSet<BranchId>,
@@ -137,8 +144,9 @@ impl OriginalIndex{
         }
         o.require_history(c,f,d)?;Ok((c,f,d))
     }
-    fn admit(&self,f:&Decision,frames:&[Decision],prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
-        if frames.len()>=MAX_DECISIONS||f.seq()!=frames.len() as u64+1||f.previous()!=prev||self.ops.contains(&f.op()){
+    fn admit(&self,f:&Decision,frames:&[Decision],used:usize,prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
+        self.credits.room(frames.len(),used,f.bytes().len(),f.effect())?;
+        if f.seq()!=frames.len() as u64+1||f.previous()!=prev||self.ops.contains(&f.op()){
             return Err(invalid("repeated operation or nonconsecutive original FILE decision"));
         }
         match f{
@@ -181,7 +189,8 @@ impl OriginalIndex{
         }
         Ok(())
     }
-    fn remember(&mut self,d:&Decision,index:usize){
+    fn remember(&mut self,d:&Decision,index:usize)->io::Result<()>{
+        self.credits.apply(d.effect(),d.digest())?;
         self.ops.insert(d.op());
         match d{
             Decision::Move(m)=>{let o=&m.original;self.moves.insert(o.file,index);self.tickets.insert(o.ticket);
@@ -198,10 +207,12 @@ impl OriginalIndex{
                 self.versions.insert(o.version);self.storage.insert(o.storage);self.native.insert(d.material.object.birth.clone());}
             Decision::Span(s)=>{self.spans.entry(s.original.file).or_default().push(index);self.native.insert(s.material.object.birth.clone());}
         }
+        Ok(())
     }
 }
 
 pub(crate) struct Journal{
+    credits:Credits,
     decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,usize>,moves:BTreeMap<FileId,usize>,pub(super) moving:Option<MoveAllocation>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
     pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) incrementing:Option<DeltaAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
 }
@@ -212,8 +223,8 @@ impl Journal{
         let mut input=tail;let mut ds=Vec::new();let mut prev=genesis;let mut idx=OriginalIndex::default();idx.ops.insert(initial_op);
         while !input.is_empty(){
             let Some(n)=Frame::size(input)? else{break};if input.len()<n{break;}
-            let f=Decision::read(pool,&input[..n])?;idx.admit(&f,&ds,prev,&allowed)?;
-            prev=f.digest();idx.remember(&f,ds.len());ds.push(f);input=&input[n..];
+            let f=Decision::read(pool,&input[..n])?;idx.admit(&f,&ds,tail.len()-input.len(),prev,&allowed)?;
+            prev=f.digest();idx.remember(&f,ds.len())?;ds.push(f);input=&input[n..];
         }
         let (mut allocated,mut saving,mut committing,mut editing,mut incrementing,mut moving)=(None,None,None,None,None,None);
         if let Some((stamp,bytes))=system.record(allocation::NAME,move_allocation::MAX)?{
@@ -275,6 +286,13 @@ impl Journal{
                 allocated=Some(a);
             }
         }
+        // A newly reserved, not-yet-appended slot must still fit including
+        // all original return credits. If it is the exact complete last frame,
+        // admission already checked its predecessor; never charge it twice.
+        let slot=moving.as_ref().map(|a|(a.seq,a.original.effect())).or_else(||
+            [allocated.as_ref().map(|a|a.seq),saving.as_ref().map(|a|a.seq),committing.as_ref().map(|a|a.seq),
+             editing.as_ref().map(|a|a.seq),incrementing.as_ref().map(|a|a.seq)].into_iter().flatten().next().map(|seq|(seq,Effect::Ordinary)));
+        if let Some((seq,e))=slot{if seq==ds.len() as u64+1{idx.credits.room(ds.len(),tail.len()-input.len(),MAX_FRAME,e)?;}}
         let pending=Intent::read(system,pool)?;
         if let Some(p)=&pending{
             let matches=match &p.frame{
@@ -289,7 +307,7 @@ impl Journal{
             if ds.last().is_some_and(|d|d.bytes()==p.frame.bytes()){
                 if !input.is_empty(){return Err(invalid("unattributed tail after open decided intent"));}
             }else{
-                idx.admit(&p.frame,&ds,prev,&allowed)?;
+                idx.admit(&p.frame,&ds,tail.len()-input.len(),prev,&allowed)?;
                 if !p.frame.bytes().starts_with(input)||(tail.len()-input.len()).checked_add(p.frame.bytes().len()).filter(|n|*n<=MAX_JOURNAL).is_none(){
                     return Err(invalid("SYSTEM suffix is not the originally reserved FILE decision"));
                 }
@@ -304,6 +322,7 @@ impl Journal{
                 return Err(invalid("SYSTEM frames do not satisfy the acknowledged frontier"));
             }
             frame_bytes=before;unconfirmed=last.bytes().len();
+            idx.credits.before_unconfirmed(last.effect(),last.digest())?;
             // The replay indices must never expose an otherwise complete but
             // not yet confirmed last frame (including a first working revision).
             match last {Decision::Move(m)=>{
@@ -316,7 +335,7 @@ impl Journal{
                 Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{idx.files.remove(&f.create.file);}}
             ds.pop();
         }
-        Ok(Self{decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
+        Ok(Self{credits:idx.credits,decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
     }
     pub(super) fn frontier(&self)->(u64,[u8;32]){
         (self.decisions.len() as u64,self.decisions.last().map_or(self.genesis,Decision::digest))
@@ -326,12 +345,14 @@ impl Journal{
         if self.tail!=f.bytes().len()||!self.pending.as_ref().is_some_and(|p|p.frame.bytes()==f.bytes())||f.seq()!=seq+1||f.previous()!=prev{
             return Err(invalid("no complete original frame for this acknowledgement"));
         }
-        self.room_for(f.bytes().len())?;
+        self.room_for_effect(f.bytes().len(),f.effect())?;
         Ok((fs::frontier(seq,self.frame_bytes,prev),fs::frontier(f.seq(),self.frame_bytes+f.bytes().len(),f.digest())))
     }
     pub(super) fn room_for(&self,n:usize)->io::Result<()>{
-        if self.decisions.len()>=MAX_DECISIONS||self.frame_bytes.checked_add(n).filter(|v|*v<=MAX_JOURNAL).is_none(){return Err(invalid("SYSTEM decision budget reached"));}
-        Ok(())
+        self.room_for_effect(n,Effect::Ordinary)
+    }
+    pub(in crate::ordinary) fn room_for_effect(&self,n:usize,e:Effect)->io::Result<()>{
+        self.credits.room(self.decisions.len(),self.frame_bytes,n,e)
     }
     pub(super) fn decided(&self,op:OperationId)->Option<&Decision>{self.decisions.iter().find(|d|d.op()==op)}
     pub(super) fn operation(&self,op:OperationId)->Option<&Frame>{self.decided(op)?.creation().ok()}

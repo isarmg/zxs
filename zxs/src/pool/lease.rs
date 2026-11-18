@@ -1,6 +1,7 @@
 //! Leases used by ordinary operations. A registration receipt or diagnostic
 //! PoolInfo cannot be converted into either of these capabilities.
 use super::*;
+pub(crate) mod recycle;
 
 #[derive(Clone,Copy)]
 pub(crate) enum Access { Read, Incoming, Write }
@@ -45,17 +46,39 @@ impl LocalPool {
     /// Open only the requested original ordinary volume. Neither a recycle
     /// root nor an unrelated absent data root is a substitute or a prerequisite.
     pub(crate) fn ordinary(&self, id: VolumeId) -> io::Result<FileVolume<'_>> {
-        let (index, volume) = self.registration.info.volumes.iter().enumerate()
-            .find(|(_,v)| v.id == id)
-            .ok_or_else(|| invalid("volume is not in the original pool registration"))?;
-        if volume.volume.role != Role::File {
-            return Err(invalid("ordinary FILE operations require an ordinary FILE volume"));
+        let index = self.index_for(id,Role::File)?;
+        let root = self.open_root(index,Role::File)?;
+        let volume=FileVolume{pool:self,index,root};
+        volume.require_current()?;
+        Ok(volume)
+    }
+    fn index_for(&self,id:VolumeId,role:Role)->io::Result<usize>{
+        self.registration.info.volumes.iter().position(|r|r.id==id && r.volume.role==role)
+            .ok_or_else(||invalid("volume is not registered with the required role"))
+    }
+    // Neither method chooses a role or interprets a directory listing. In
+    // particular there is no conversion from a recycle root to FileVolume.
+    fn open_root(&self,index:usize,role:Role)->io::Result<HeldDir>{
+        let row=self.registration.info.volumes.get(index).filter(|v|v.volume.role==role)
+            .ok_or_else(||invalid("wrong original volume role"))?;
+        let root=HeldDir::open(&row.volume.path)?;
+        match self.access { Access::Read|Access::Incoming=>root.share()?,Access::Write=>root.exclusive()? }
+        Ok(root)
+    }
+    fn check_root(&self,index:usize,role:Role,root:&HeldDir)->io::Result<()>{
+        let r=self.registration.info.volumes.get(index).filter(|r|r.volume.role==role)
+            .ok_or_else(||invalid("wrong original volume role"))?;
+        root.require_named()?;
+        if root.entity!=r.volume.entity || root.path.as_os_str()!=r.volume.path.as_os_str(){
+            return Err(invalid("selected root is not its registered physical directory"));
         }
-        let root = HeldDir::open(&volume.volume.path)?;
-        match self.access { Access::Read | Access::Incoming => root.share()?, Access::Write => root.exclusive()? }
-        let result = FileVolume { pool: self, index, root };
-        result.require_current()?;
-        Ok(result)
+        let all=self.registration.info.volumes.iter().map(|r|r.volume.entity).collect();
+        root.reject_registered_ancestors(&all)?;
+        self.registration.require_root(index,root)?;
+        if root.label()?.as_deref()!=Some(self.registration.label(index).as_slice()){
+            return Err(invalid("selected root lost its native pool or role binding"));
+        }
+        Ok(())
     }
 }
 
@@ -67,17 +90,6 @@ pub(crate) struct FileVolume<'a> {
 impl FileVolume<'_> {
     pub(crate) fn id(&self) -> VolumeId { self.pool.registration.info.volumes[self.index].id }
     pub(crate) fn require_current(&self) -> io::Result<()> {
-        let original = &self.pool.registration.info.volumes[self.index].volume;
-        self.root.require_named()?;
-        if self.root.entity != original.entity {
-            return Err(invalid("selected FILE root is not its original physical directory"));
-        }
-        let entities = self.pool.registration.info.volumes.iter().map(|r|r.volume.entity).collect();
-        self.root.reject_registered_ancestors(&entities)?;
-        self.pool.registration.require_root(self.index, &self.root)?;
-        if self.root.label()?.as_deref() != Some(self.pool.registration.label(self.index).as_slice()) {
-            return Err(invalid("selected ordinary root has lost its native role binding"));
-        }
-        Ok(())
+        self.pool.check_root(self.index,Role::File,&self.root)
     }
 }

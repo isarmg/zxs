@@ -136,6 +136,9 @@ impl Record {
     }
 
     pub(super) fn digest(&self)->[u8;32]{self.digest}
+    pub(super) fn original_root(&self,i:usize)->(Entity,&fs::Birth){
+        (self.info.volumes[i].volume.entity,&self.roots[i])
+    }
     pub(super) fn allows_file(&self,volume:VolumeId,uid:u32,entity:Entity,birth:&fs::Birth,root:bool)->bool{
         uid==self.actor_uid && self.info.volumes.iter().enumerate().any(|(i,r)|
             r.id==volume && r.volume.role==Role::File && r.volume.entity.device==entity.device

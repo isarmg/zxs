@@ -79,7 +79,7 @@ pub(super) fn perform(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Resu
                 if i.frame.bytes()!=m.bytes{return Err(invalid("original MOVE sealed different targets"));}
             }else{
                 if wire::envelope(p.id(),&m.bytes)?.digest!=m.digest{return Err(invalid("MOVE frame digest mismatch"));}
-                s.room_for(m.bytes.len())?;hook(Cut::BeforeIntent)?;Intent::seal(&p.system,&m.bytes)?;
+                s.room_for_effect(m.bytes.len(),m.original.effect())?;hook(Cut::BeforeIntent)?;Intent::seal(&p.system,&m.bytes)?;
             }
             hook(Cut::Intent)?;
             ordinary::publish_sealed(p,r.op,req,|d|{if d.moved()?!=&m{return Err(invalid("different frozen custody decision"));}current()},|c|hook(c))?;

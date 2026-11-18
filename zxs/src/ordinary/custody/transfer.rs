@@ -39,6 +39,9 @@ pub(super) fn check_private_paths(old:&fs::HeldDir,new:&fs::HeldDir,ticket:Opera
     }Ok(())
 }
 impl Origin{
+    // Initial ordinary-root MOVE is not a deletion or a restore. New
+    // lifecycle origins will require their own authenticated command domain.
+    pub(in crate::ordinary) fn effect(&self)->crate::ordinary::journal::credits::Effect{crate::ordinary::journal::credits::Effect::Ordinary}
     pub(super) fn select(op:OperationId,p:&Prepared<'_>,ticket:OperationId)->io::Result<Self>{
         let src=p.source();let (c,f,d)=src.originals();
         let o=Self{op,uid:fs::local_uid(),file:src.file(),entry:c.create.entry,history:src.history(),from:src.volume(),to:p.volume(),epoch:0,
