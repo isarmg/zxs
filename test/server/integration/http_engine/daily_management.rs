@@ -82,16 +82,10 @@ async fn retained_web_forms_and_backend_legacy_operations_execute_real_http() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let admin = login(&app, "admin", "integration-test-password").await;
-    let repo = apply(
-        &app,
-        &admin,
-        Kind::Repository,
-        &fields(&[("name", "Web managed"), ("slot", "P01"), ("copies", "1")]),
-    )
-    .await;
-    let id = repo.value["repository_id"].as_str().unwrap();
-    let branch = repo.value["main_branch_id"].as_str().unwrap();
-    let history = repo.value["history_tree_id"].as_str().unwrap();
+    let repo = ordinary_root(&app, &admin).await;
+    let id = repo["repository_id"].as_str().unwrap();
+    let branch = repo["main_branch_id"].as_str().unwrap();
+    let history = repo["history_tree_id"].as_str().unwrap();
     // Retired account/grant/SMB binding forms are not representable by Kind.
     assert!(matches!(
         request::build(Kind::Inspect, &fields(&[]), &new_id("op").unwrap()),
@@ -147,36 +141,6 @@ async fn retained_web_forms_and_backend_legacy_operations_execute_real_http() {
     )
     .await;
     let commit = current["head_commit_id"].as_str().unwrap();
-    let created = success(
-        &app,
-        &admin,
-        "POST",
-        &format!("/api/repositories/{id}/branches"),
-        Some(json!({
-            "source_commit_id": commit, "name": "API branch", "operation_id": new_id("op").unwrap()
-        })),
-    )
-    .await;
-    assert_eq!(created["name"], "API branch");
-    assert_eq!(created["fork_commit_id"], commit);
-    assert_eq!(created["history_tree_id"], history);
-    let link = success(
-        &app,
-        &admin,
-        "POST",
-        &format!("/api/history-trees/{history}/merge-links"),
-        Some(json!({
-            "source_branch_id": branch, "source_commit_id": commit,
-            "target_branch_id": created["branch_id"].as_str().unwrap(), "target_commit_id": commit,
-            "operation_id": new_id("op").unwrap()
-        })),
-    )
-    .await;
-    assert_eq!(link["history_tree_id"], history);
-    assert_eq!(link["source_branch_id"], branch);
-    assert_eq!(link["source_commit_id"], commit);
-    assert_eq!(link["target_branch_id"], created["branch_id"]);
-    assert_eq!(link["target_commit_id"], commit);
     for publish in [false, true] {
         let created = success(
             &app,
@@ -204,14 +168,39 @@ async fn retained_web_forms_and_backend_legacy_operations_execute_real_http() {
             assert_eq!(result.value["commit_state"], "PUBLISHED");
         }
     }
+    // FILE link endpoints belong to two actual branches of ONE ordinary file.
+    // Publish after the namespace-plan fixture; FILE branches deliberately do
+    // not make a whole-namespace historical-save plan eligible.
+    manager_upload(&app, &admin, "review.txt", b"one formal FILE node").await;
+    let page = success(&app, &admin, "GET", "/api/file-manager/disks/P01/entries", None).await;
+    let entry = page["entries"].as_array().unwrap().iter().find(|e| e["name"] == "review.txt").unwrap();
+    let file = entry["file_id"].as_str().unwrap();
+    let mut sides = Vec::new();
+    for name in ["source", "target"] {
+        let created = success(&app, &admin, "POST", &format!("/api/file-manager/files/{file}/branches"),
+            Some(json!({"source_version_id":entry["version_id"],"name":name,"operation_id":new_id("op").unwrap()}))).await;
+        let id = created["result"]["branch_id"].as_str().unwrap();
+        let side = success(&app, &admin, "GET", &format!("/api/branches/{id}"), None).await;
+        assert_eq!(side["file_id"], file);
+        sides.push(side);
+    }
+    let link = success(&app, &admin, "POST", &format!("/api/history-trees/{history}/merge-links"),
+        Some(json!({"source_branch_id":sides[0]["branch_id"],"source_commit_id":sides[0]["head_commit_id"],
+            "target_branch_id":sides[1]["branch_id"],"target_commit_id":sides[1]["head_commit_id"],
+            "operation_id":new_id("op").unwrap()}))).await;
+    assert_eq!(link["history_tree_id"], history);
+    assert_eq!(link["source_branch_id"], sides[0]["branch_id"]);
+    assert_eq!(link["source_commit_id"], sides[0]["head_commit_id"]);
+    assert_eq!(link["target_branch_id"], sides[1]["branch_id"]);
+    assert_eq!(link["target_commit_id"], sides[1]["head_commit_id"]);
     success(&app, &admin, "GET", "/api/admin/check", None).await;
 }
 #[test]
 fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
     assert!(matches!(
         request::build(
-            Kind::Repository,
-            &fields(&[("name", "test"), ("slot", "P01"), ("copies", "0")]),
+            Kind::Policy,
+            &fields(&[("id", "p"), ("repository", "r"), ("copies", "0"), ("generation", "0")]),
             "op_test"
         ),
         Err(InputError::ZeroCopies)

@@ -44,9 +44,7 @@ async fn plan_read_and_cancel_preserve_raw_shapes_and_permanent_replay() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo = success(&app, &token, "POST", "/api/repositories", Some(json!({
-        "name":"Plan HTTP", "primary_slot_id":"P01", "target_copies":1, "operation_id":new_id("op").unwrap()
-    }))).await;
+    let repo = ordinary_root(&app, &token).await;
     let branch = success(
         &app,
         &token,

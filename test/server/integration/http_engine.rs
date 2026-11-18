@@ -154,6 +154,44 @@ fn application(root: &Path) -> Router {
     .unwrap();
     configured_application(root, config)
 }
+fn add_second_primary(config: &mut Config, root: &Path) {
+    config.disks.push(storage_contract::DiskConfig {
+        slot_id: "P02".into(), name: name_policy::Name::parse("Second primary").unwrap(),
+        disk_id: new_id("disk").unwrap(), root: root.join("P02"), level: 1,
+        upstream_slot_id: None, metadata_member: false, binding_generation: 1, capacity_bytes: None,
+    });
+}
+
+fn application_with_second_primary(root: &Path) -> Router {
+    let mut config = Config::development(test_disks([root.join("d1"), root.join("d2"), root.join("d3")])).unwrap();
+    add_second_primary(&mut config, root);
+    configured_application(root, config)
+}
+
+/// Exercise ordinary lazy disk registration. The new session has no content,
+/// and aborting exactly that session leaves its namespace history unchanged.
+async fn ordinary_slot_root(app: &Router, actor: &str, slot: &str) -> Value {
+    let registered = |owners: &Value| -> Option<Value> {
+        let mut matches = owners["repositories"].as_array().unwrap().iter()
+            .filter(|r| r["primary_slot_id"] == slot && r["file_manager_root"] == true);
+        let owner = matches.next().cloned();
+        assert!(matches.next().is_none(), "multiple ordinary roots on {slot}");
+        owner
+    };
+    if let Some(owner) = registered(&success(app, actor, "GET", "/api/repositories", None).await) {
+        return owner;
+    }
+    let session = success(app, actor, "POST", &format!("/api/file-manager/disks/{slot}/write-sessions"),
+        Some(json!({"path":"unused-root-probe.txt"}))).await;
+    let id = session["workspace_id"].as_str().unwrap();
+    success(app, actor, "POST", &format!("/api/workspaces/{id}/abort"), Some(json!({}))).await;
+    registered(&success(app, actor, "GET", "/api/repositories", None).await).unwrap()
+}
+
+async fn ordinary_root(app: &Router, actor: &str) -> Value {
+    ordinary_slot_root(app, actor, "P01").await
+}
+
 fn configured_application(root: &Path, config: Config) -> Router {
     let engine = Engine::initialize(&root.join("system"), config).unwrap();
     let backend = Arc::new(EngineBackend::new(engine));
@@ -200,17 +238,7 @@ async fn pool_upload_limit_is_checked_before_creating_spooled_bytes() {
     config.max_file_bytes = 16;
     let app = configured_application(root.path(), config);
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo = success(
-        &app,
-        &token,
-        "POST",
-        "/api/repositories",
-        Some(json!({
-            "name":"Small limit", "primary_slot_id":"P01", "target_copies":1,
-            "operation_id":new_id("op").unwrap()
-        })),
-    )
-    .await;
+    let repo = ordinary_root(&app, &token).await;
     let workspace = success(
         &app,
         &token,
@@ -1811,7 +1839,7 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
 #[tokio::test]
 async fn directory_branches_compose_shared_files_and_refuse_partial_selection() {
     let root = tempfile::tempdir().unwrap();
-    let app = application(root.path());
+    let app = application_with_second_primary(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &token, "folder/a.txt", b"A").await;
     manager_upload(&app, &token, "folder/nested/b.txt", b"B").await;
@@ -2194,28 +2222,15 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         .0,
         StatusCode::FORBIDDEN
     );
-    success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Earlier collection","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op").unwrap()}))).await;
-    let listing = success(
-        &app,
-        &token,
-        "GET",
-        "/api/file-manager/disks/P01/entries",
-        None,
-    )
-    .await;
-    assert_eq!(listing["directory_branches_supported"], false);
-    assert_eq!(
-        send(
-            &app,
-            Some(&token),
-            "POST",
-            "/api/file-manager/disks/P01/directory-branches",
-            Some(json!({"path":"","name":"root partial forbidden","operation_id":new_id("op").unwrap(),"source":source}))
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
+    // A reviewed source from the first root cannot act on a different
+    // registered primary. This uses actual stable repository identities.
+    let other = ordinary_slot_root(&app, &token, "P02").await;
+    assert_ne!(other["repository_id"], repository);
+    let (status, rejected) = send(&app, Some(&token), "POST",
+        "/api/file-manager/disks/P02/directory-branches",
+        Some(json!({"path":"","name":"wrong-root","operation_id":new_id("op").unwrap(),"source":source}))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(rejected["error"]["code"], "DIRECTORY_BRANCH_CONFLICT");
 }
 
 #[tokio::test]
@@ -2223,7 +2238,10 @@ async fn durable_http_save_seals_the_real_manifest_and_keeps_original_publicatio
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"HTTP repository","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op").unwrap()}))).await;
+    let repo = ordinary_root(&app, &token).await;
+    success(&app, &token, "PUT", &format!("/api/policies/{}", new_id("policy").unwrap()),
+        Some(json!({"repository_id":repo["repository_id"],"path_prefix":"",
+            "target_copies":3,"expected_generation":"0","operation_id":new_id("op").unwrap()}))).await;
     let branch = repo["main_branch_id"].as_str().unwrap();
     let workspace = success(
         &app,
@@ -2493,7 +2511,7 @@ async fn authentication_applies_to_direct_content_graph_and_write_paths() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let admin = login(&app, "admin", "integration-test-password").await;
-    let repo = success(&app, &admin, "POST", "/api/repositories", Some(json!({"name":"Private","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
+    let repo = ordinary_root(&app, &admin).await;
     manager_upload(&app, &admin, "Private/body.txt", b"authenticated content").await;
     let listing = success(
         &app,
@@ -2558,17 +2576,7 @@ async fn historical_plan_publishes_atomically_and_management_rules_use_generatio
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo = success(
-        &app,
-        &token,
-        "POST",
-        "/api/repositories",
-        Some(json!({
-            "name":"Historical HTTP", "primary_slot_id":"P01", "target_copies":1,
-            "operation_id":new_id("op").unwrap()
-        })),
-    )
-    .await;
+    let repo = ordinary_root(&app, &token).await;
     let repository = repo["repository_id"].as_str().unwrap();
     let branch = repo["main_branch_id"].as_str().unwrap();
     let history = repo["history_tree_id"].as_str().unwrap();
@@ -3232,7 +3240,7 @@ async fn manager_checkpoint_and_select(
 #[tokio::test]
 async fn default_directory_branch_is_shared_authorized_and_persistent() {
     let root = tempfile::tempdir().unwrap();
-    let app = application(root.path());
+    let app = application_with_second_primary(root.path());
     let admin = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &admin, "one.txt", b"frozen parent").await;
     manager_upload(&app, &admin, "folder/two.txt", b"second parent").await;
@@ -3569,9 +3577,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         .0,
         StatusCode::UNAUTHORIZED
     );
-    let empty = success(&app, &admin, "POST", "/api/repositories", Some(json!({
-        "name":"Empty view","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op").unwrap()
-    }))).await;
+    let empty = ordinary_slot_root(&app, &admin, "P02").await;
     let empty_id = empty["repository_id"].as_str().unwrap();
     let empty_default = success(
         &app,
@@ -4968,17 +4974,7 @@ async fn engine_upload_generation_conflicts_reach_http_as_conflicts() {
     )
     .unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo = success(
-        &app,
-        &token,
-        "POST",
-        "/api/repositories",
-        Some(json!({
-            "name":"Cross-entry uploads", "primary_slot_id":"P01", "target_copies":1,
-            "operation_id":new_id("op").unwrap()
-        })),
-    )
-    .await;
+    let repo = ordinary_root(&app, &token).await;
     let workspace = success(
         &app,
         &token,
@@ -5052,17 +5048,7 @@ async fn interrupted_new_upload_generation_reports_its_own_durable_progress() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo = success(
-        &app,
-        &token,
-        "POST",
-        "/api/repositories",
-        Some(json!({
-            "name":"Upload generations", "primary_slot_id":"P01", "target_copies":3,
-            "operation_id":new_id("op").unwrap()
-        })),
-    )
-    .await;
+    let repo = ordinary_root(&app, &token).await;
     let workspace = success(
         &app,
         &token,
@@ -5160,17 +5146,7 @@ async fn directory_git_initialization_accepts_root_but_requires_a_string_path() 
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo = success(
-        &app,
-        &token,
-        "POST",
-        "/api/repositories",
-        Some(json!({
-            "name":"Root scope", "primary_slot_id":"P01", "target_copies":3,
-            "operation_id":new_id("op").unwrap()
-        })),
-    )
-    .await;
+    let repo = ordinary_root(&app, &token).await;
     let namespace = success(
         &app,
         &token,
@@ -5276,7 +5252,7 @@ async fn workspace_capacity_is_live_for_the_single_administrator() {
     assert_eq!(before["global"]["records"]["used"], "0");
     assert_eq!(before["principal"]["records"]["used"], "0");
     assert_eq!(before["warning"], "ok");
-    let repo = success(&app, &admin, "POST", "/api/repositories", Some(json!({"name":"Capacity","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
+    let repo = ordinary_root(&app, &admin).await;
     success(
         &app,
         &admin,
@@ -5325,7 +5301,7 @@ async fn removed_account_and_grant_routes_cannot_create_a_second_identity() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo = success(&app, &token, "POST", "/api/repositories", Some(json!({"name":"Single identity","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
+    let repo = ordinary_root(&app, &token).await;
     for admin in [false, true] {
         assert_eq!(send(&app, Some(&token), "POST", "/api/admin/accounts", Some(json!({"username":"second-account","password":"second-account-password","admin":admin,"repositories":[],"disabled":false}))).await.0, StatusCode::NOT_FOUND);
     }
@@ -5865,7 +5841,7 @@ async fn disk_mkdir_rejects_raw_mutations_before_any_lazy_root_or_disk_write() {
         let app = application(root.path());
         let token = login(&app, "admin", "integration-test-password").await;
         if existing {
-            success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
+            ordinary_root(&app, &token).await;
             success(
                 &app,
                 &token,
@@ -5928,6 +5904,7 @@ async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
     ]))
     .unwrap();
     config.max_entries = 1;
+    add_second_primary(&mut config, root.path());
     let app = configured_application(root.path(), config);
     let token = login(&app, "admin", "integration-test-password").await;
     let before = manager_disk_files(root.path());
@@ -5944,7 +5921,9 @@ async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
     assert_eq!(rejected["error"]["code"], "RESOURCE_LIMIT_EXCEEDED");
     assert_eq!(manager_disk_files(root.path()), before);
     let used = new_id("op").unwrap();
-    success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":used}))).await;
+    // Consume this operation on another real primary, keeping P01 freshly unbound.
+    let other_receipt = success(&app, &token, "POST", "/api/file-manager/disks/P02/namespace",
+        Some(json!({"kind":"mkdir","path":"other","operation_id":used}))).await;
     let before = manager_disk_files(root.path());
     let (status, rejected) = send(
         &app,
@@ -5957,47 +5936,15 @@ async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(rejected["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
     assert_eq!(manager_disk_files(root.path()), before);
-    for path in ["Existing", "existing"] {
-        assert_eq!(
-            send(
-                &app,
-                Some(&token),
-                "POST",
-                route,
-                Some(json!({"kind":"mkdir","path":path,"operation_id":new_id("op").unwrap()}))
-            )
-            .await
-            .0,
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(manager_disk_files(root.path()), before);
-    }
-    let mut receipts = Vec::new();
-    for (display, relative) in [("Existing/Café", "Café"), ("root-folder", "root-folder")] {
-        let request = json!({"kind":"mkdir","path":display,"operation_id":new_id("op").unwrap()});
-        let receipt = success(&app, &token, "POST", route, Some(request.clone())).await;
-        let entries = success(
-            &app,
-            &token,
-            "GET",
-            &format!(
-                "/api/file-manager/disks/P01/entries?{}",
-                url_encoding::form::Serializer::new(String::new())
-                    .append_pair("path", display)
-                    .finish()
-            ),
-            None,
-        )
-        .await;
-        let repo = entries["context"]["repository_id"].as_str().unwrap();
-        assert_eq!(receipt["request_digest"],storage_contract::object_hash("request",&json!({"kind":"file.namespace","principal":"admin","body":{"repository_id":repo,"change":{"kind":"mkdir","path":relative,"destination":null}}})).unwrap());
-        if display.starts_with("Existing/") {
-            let mut alias = request.clone();
-            alias["path"] = "EXISTING/Café".into();
-            receipts.push((alias, receipt.clone()));
-        }
-        receipts.push((request, receipt));
-    }
+    let original = success(&app, &token, "GET", &format!("/api/operations/{used}"), None).await;
+    assert_eq!(original["operation_id"], other_receipt["operation_id"]);
+    assert_eq!(original["request_digest"], other_receipt["request_digest"]);
+    let request = json!({"kind":"mkdir","path":"Café","operation_id":new_id("op").unwrap()});
+    let receipt = success(&app, &token, "POST", route, Some(request.clone())).await;
+    let owner = ordinary_root(&app, &token).await;
+    assert_eq!(receipt["request_digest"],storage_contract::object_hash("request",&json!({"kind":"file.namespace","principal":"admin",
+        "body":{"repository_id":owner["repository_id"],"change":{"kind":"mkdir","path":"Café","destination":null}}})).unwrap());
+    let receipts = [(request, receipt)];
     drop(app);
     let system = root.path().join("system");
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
@@ -6125,28 +6072,11 @@ async fn disk_write_sessions_parse_before_lazy_root_and_remain_fresh_workspaces(
         manager_disk_files(root.path()) == bytes,
         "backup request created a root"
     );
-    success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
-    let bytes = manager_disk_files(root.path());
-    assert_eq!(
-        send(
-            &app,
-            Some(&token),
-            "POST",
-            route,
-            Some(json!({"path":"existing"}))
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert!(
-        manager_disk_files(root.path()) == bytes,
-        "workspace over repository root changed disk bytes"
-    );
-    for (display, relative) in [
-        ("Existing/Café.txt", "Café.txt"),
-        ("root-file.txt", "root-file.txt"),
-    ] {
+    // An existing ordinary parent is not a virtual repository prefix.
+    success(&app, &token, "POST", "/api/file-manager/disks/P01/namespace",
+        Some(json!({"kind":"mkdir","path":"Existing","operation_id":new_id("op").unwrap()}))).await;
+    for display in ["Existing/Café.txt", "root-file.txt"] {
+        let relative = display;
         let request = json!({"path":display});
         let first = success(&app, &token, "POST", route, Some(request.clone())).await;
         let second = success(&app, &token, "POST", route, Some(request)).await;
@@ -6306,7 +6236,7 @@ async fn historical_prepare_preserves_history_admission_and_fresh_plan_contract(
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Prepare","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
+    let repo = ordinary_root(&app, &token).await;
     let history = repo["history_tree_id"].as_str().unwrap();
     let branch = repo["main_branch_id"].as_str().unwrap();
     let head = success(

@@ -458,8 +458,6 @@ async fn backup_path_collisions_are_rejected_for_every_session_without_overwriti
     let repo = primary["context"]["repository_id"].as_str().unwrap();
     let public_version = primary["entries"][0]["version_id"].as_str().unwrap();
     configure(&app, &admin, repo, "docs", "WorkBackup/nested", "冷备份").await;
-    let private=success(&app,&admin,"POST","/api/repositories",Some(json!({"name":"Private","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op").unwrap()}))).await;
-    let private_repo = private["repository_id"].as_str().unwrap();
     manager_upload(
         &app,
         &admin,
@@ -471,11 +469,12 @@ async fn backup_path_collisions_are_rejected_for_every_session_without_overwriti
     let private_version = private_entries["entries"][0]["version_id"]
         .as_str()
         .unwrap();
+    assert_ne!(public_version, private_version);
     configure(
         &app,
         &admin,
-        private_repo,
-        "report.txt",
+        repo,
+        "Private/report.txt",
         "workbackup/nested",
         "PrivateOnly",
     )
@@ -499,7 +498,7 @@ async fn backup_path_collisions_are_rejected_for_every_session_without_overwriti
         b"private body must not leak"
     );
     // Every authenticated session belongs to the same administrator, so
-    // colliding repository projections remain explicit rather than hidden by ACLs.
+    // two distinct FILEs cannot collapse to one case-folded backup path.
     let session = login(&app, "admin", "integration-test-password").await;
     let (status, same_conflict) = send(
         &app,
@@ -544,8 +543,8 @@ async fn backup_path_collisions_are_rejected_for_every_session_without_overwriti
     configure(
         &app,
         &admin,
-        private_repo,
-        "report.txt",
+        repo,
+        "Private/report.txt",
         "WorkBackup/nested/report.txt",
         "PrivateOnly",
     )
@@ -599,17 +598,17 @@ async fn administrator_discovers_historical_primary_routes_and_all_required_back
     }
     let app = configured_application(root.path(), config);
     let admin = login(&app, "admin", "integration-test-password").await;
-    let repo=success(&app,&admin,"POST","/api/repositories",Some(json!({"name":"Mixed","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
+    let repo = ordinary_root(&app, &admin).await;
     let id = repo["repository_id"].as_str().unwrap();
-    manager_upload(&app, &admin, "Mixed/a.txt", b"first primary").await;
-    let first = listing(&app, &admin, "P01", "Mixed").await["entries"][0]["version_id"]
+    manager_upload(&app, &admin, "a.txt", b"first primary").await;
+    let first = listing(&app, &admin, "P01", "").await["entries"][0]["version_id"]
         .as_str()
         .unwrap()
         .to_owned();
     success(&app,&admin,"PUT",&format!("/api/primary-placement-rules/{}",new_id("rule").unwrap()),Some(json!({"repository_id":id,
         "path_prefix":"a.txt","primary_slot_id":"P02","expected_generation":"0","operation_id":new_id("op").unwrap()}))).await;
-    manager_upload(&app, &admin, "Mixed/a.txt", b"second primary").await;
-    let second = listing(&app, &admin, "P01", "Mixed").await["entries"][0]["version_id"]
+    manager_upload(&app, &admin, "a.txt", b"second primary").await;
+    let second = listing(&app, &admin, "P01", "").await["entries"][0]["version_id"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -628,10 +627,10 @@ async fn administrator_discovers_historical_primary_routes_and_all_required_back
     assert_eq!(error["error"]["code"], "BACKUP_PREFIX_REQUIRED");
     success(&app,&admin,"PUT",&route,Some(json!({"path":"a.txt","target_copies":2,"backup_prefixes":{"B01":"first","B02":"second"},
         "expected_scope_id":before["scope"]["id"],"expected_generation":"0","operation_id":new_id("op").unwrap()}))).await;
-    // Another history on the same primary contributes a distinct C01 route;
-    // the sole administrator sees both histories without per-account filtering.
-    success(&app,&admin,"POST","/api/repositories",Some(json!({"name":"Hidden","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op").unwrap()}))).await;
-    manager_upload(&app, &admin, "Hidden/secret.txt", b"not admitted").await;
+    // A different FILE under the same ordinary registered owner reaches C01
+    // through its own explicit policy, independently of a.txt's second version.
+    manager_upload(&app, &admin, "Hidden/secret.txt", b"separate protected body").await;
+    configure(&app, &admin, id, "Hidden/secret.txt", "hidden-backup", "hidden-cold").await;
 
     let session = login(&app, "admin", "integration-test-password").await;
     let disks = success(&app, &session, "GET", "/api/file-manager/disks", None).await;
@@ -645,6 +644,10 @@ async fn administrator_discovers_historical_primary_routes_and_all_required_back
         visible,
         ["P01", "P02", "B01", "B02", "C01"].into_iter().collect()
     );
+    let peer = listing(&app, &session, "C01", "hidden-cold").await;
+    assert_eq!(peer["entries"][0]["name"], "secret.txt");
+    assert_eq!(version_bytes(&app, &session, peer["entries"][0]["version_id"].as_str().unwrap()).await,
+        b"separate protected body");
     let old = listing(&app, &session, "B01", "first").await;
     read_only_listing(&old);
     assert_eq!(old["entries"][0]["version_id"], first);

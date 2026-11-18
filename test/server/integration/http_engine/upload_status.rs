@@ -39,17 +39,7 @@ async fn checksum_failure_status_survives_recovery_and_requires_new_generation_f
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo = success(
-        &app,
-        &token,
-        "POST",
-        "/api/repositories",
-        Some(json!({
-            "name":"Status", "primary_slot_id":"P01", "target_copies":3,
-            "operation_id":new_id("op").unwrap()
-        })),
-    )
-    .await;
+    let repo = ordinary_root(&app, &token).await;
     let workspace = success(
         &app,
         &token,

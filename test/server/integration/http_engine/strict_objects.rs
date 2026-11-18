@@ -100,7 +100,19 @@ async fn operation_id_boundary_preserves_error_codes_and_canonical_wire() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let before = success(&app, &token, "GET", "/api/repositories", None).await;
+    manager_upload(&app, &token, "report.txt", b"durable source").await;
+    let page = success(&app, &token, "GET", "/api/file-manager/disks/P01/entries", None).await;
+    let file = page["entries"][0]["file_id"].as_str().unwrap();
+    let version = page["entries"][0]["version_id"].as_str().unwrap();
+    let mut targets = Vec::new();
+    for name in ["Zero", "NonV4"] {
+        let created = success(&app, &token, "POST", &format!("/api/file-manager/files/{file}/branches"),
+            Some(json!({"name":name,"source_version_id":version,"operation_id":new_id("op").unwrap()}))).await;
+        let id = created["result"]["branch_id"].as_str().unwrap();
+        targets.push(format!("/api/branches/{id}"));
+    }
+    let archive = format!("{}/archive", targets[0]);
+    let before = success(&app, &token, "GET", &targets[0], None).await;
     for (operation, code) in [
         (None, "INVALID_REQUEST"),
         (Some(Value::Null), "INVALID_REQUEST"),
@@ -116,16 +128,16 @@ async fn operation_id_boundary_preserves_error_codes_and_canonical_wire() {
         ),
         (Some(json!("wrong")), "INVALID_ID"),
     ] {
-        let mut body = json!({"name":"Boundary","primary_slot_id":"P01","target_copies":1});
+        let mut body = json!({});
         if let Some(operation) = operation {
             body["operation_id"] = operation;
         }
         let (status, rejected) =
-            send(&app, Some(&token), "POST", "/api/repositories", Some(body)).await;
+            send(&app, Some(&token), "POST", &archive, Some(body)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
         assert_eq!(rejected["error"]["code"], code);
         assert_eq!(
-            success(&app, &token, "GET", "/api/repositories", None).await,
+            success(&app, &token, "GET", &targets[0], None).await,
             before
         );
     }
@@ -151,24 +163,13 @@ async fn operation_id_boundary_preserves_error_codes_and_canonical_wire() {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(rejected["error"]["code"], "INVALID_REQUEST");
     }
-    for (name, operation) in [
-        ("Zero", "op_00000000000000000000000000000000"),
-        ("NonV4", "op_ffffffffffffffffffffffffffffffff"),
-    ] {
-        let body =
-            json!({"name":name,"primary_slot_id":"P01","target_copies":1,"operation_id":operation});
-        let created = success(
-            &app,
-            &token,
-            "POST",
-            "/api/repositories",
-            Some(body.clone()),
-        )
-        .await;
-        assert_eq!(
-            success(&app, &token, "POST", "/api/repositories", Some(body)).await,
-            created
-        );
+    for (target, operation) in targets.iter().zip([
+        "op_00000000000000000000000000000000", "op_ffffffffffffffffffffffffffffffff",
+    ]) {
+        let body = json!({"operation_id":operation});
+        let path = format!("{target}/archive");
+        let created = success(&app, &token, "POST", &path, Some(body.clone())).await;
+        assert_eq!(success(&app, &token, "POST", &path, Some(body)).await, created);
         let receipt = success(
             &app,
             &token,
