@@ -32,23 +32,33 @@ def require_native_writer():
     raise Rejected("native no-replace rename unavailable; no files or settings were changed")
 
 
+def rename_new_at(fd, source, target, *, expected_source=None):
+    require_native_writer()
+    if any(not n or n in (".","..") or Path(n).name != n for n in (source,target)):
+        raise Rejected("expected sibling directory entry names")
+    if expected_source is not None:
+        actual = os.stat(source,dir_fd=fd,follow_symlinks=False)
+        if not stat.S_ISDIR(actual.st_mode) or not os.path.samestat(actual,expected_source):
+            raise Rejected("original staging directory was replaced; nothing was moved")
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        fn, flags = libc.renameat2, 1  # Linux RENAME_NOREPLACE
+    elif sys.platform == "darwin" and hasattr(libc, "renameatx_np"):
+        fn, flags = libc.renameatx_np, 4  # Darwin RENAME_EXCL
+    else: raise Rejected("native no-replace rename not available; the old version is untouched")
+    fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    fn.restype = ctypes.c_int
+    if fn(fd, os.fsencode(source), fd, os.fsencode(target), flags) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+
+
 def rename_new(source: Path, target: Path):
     require_native_writer()
     if source.parent != target.parent:
         raise Rejected("atomic publication requires a same-directory temporary sibling")
     fd = os.open(source.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        libc = ctypes.CDLL(None, use_errno=True)
-        if sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
-            fn, flags = libc.renameat2, 1  # Linux RENAME_NOREPLACE
-        elif sys.platform == "darwin" and hasattr(libc, "renameatx_np"):
-            fn, flags = libc.renameatx_np, 4  # Darwin RENAME_EXCL
-        else: raise Rejected("native no-replace rename not available; the old version is untouched")
-        fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-        fn.restype = ctypes.c_int
-        if fn(fd, os.fsencode(source.name), fd, os.fsencode(target.name), flags) != 0:
-            code = ctypes.get_errno()
-            raise OSError(code, os.strerror(code))
+    try: rename_new_at(fd, source.name, target.name)
     finally: os.close(fd)
 
 

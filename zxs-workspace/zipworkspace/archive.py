@@ -133,7 +133,9 @@ def read_archive(path, *, managed=True, sink: Path | None = None, internal=False
     path = Path(path)
     if not internal and path.suffix.lower() != (".zxs" if managed else ".zip"):
         raise Rejected("use .zxs for a repository, or the separate .zip import command")
-    return _read_checked(path.open("rb"), managed=managed, sink=sink)
+    if not managed and sink is not None:
+        raise Rejected("ordinary import requires a fresh held destination, not an existing output path")
+    return _read_checked(path.open("rb"), managed=managed, sink=_PathSink(sink) if sink is not None else None)
 
 
 def read_managed_document(document, *, display_name: str):
@@ -147,6 +149,24 @@ def read_managed_document(document, *, display_name: str):
         return _read_checked(nullcontext(document), managed=True, sink=None)
     finally:
         document.seek(position)
+
+
+class _PathSink:
+    """Adapter for the existing managed checkout's private scratch path."""
+    def __init__(self, path): self.path = path
+    def mkdir(self, name): (self.path / name).mkdir(mode=0o700, exist_ok=False)
+    def file(self, name): return (self.path / name).open("xb")
+    def sync(self, rows):
+        dirs = [self.path/name for name,(directory,_,__) in rows.items() if directory]
+        for directory in sorted(dirs, key=lambda p:len(p.parts), reverse=True) + [self.path]:
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+
+
+def read_plain_document(document, *, output=None):
+    """Read one borrowed ordinary Store ZIP. Only an explicit held output can receive its bytes."""
+    return _read_checked(nullcontext(document), managed=False, sink=output)[1]
 
 
 def _read_checked(source, *, managed, sink):
@@ -177,12 +197,12 @@ def _read_checked(source, *, managed, sink):
                 # Only private freshly created sinks are passed by our callers.
                 for name, (is_dir, _, _) in sorted(manifest.rows.items()):
                     if is_dir:
-                        (sink / name).mkdir(mode=0o700, exist_ok=False)
+                        sink.mkdir(name)
             for info, name, directory in items:
                 h = hashlib.sha256()
                 written = 0
                 with z.open(info) as source:
-                    target = (sink / name).open("xb") if sink is not None and not directory else None
+                    target = sink.file(name) if sink is not None and not directory else None
                     try:
                         while block := source.read(CHUNK):
                             written += len(block)
@@ -200,11 +220,7 @@ def _read_checked(source, *, managed, sink):
                 if not directory: manifest.rows[name] = (False, written, h.hexdigest())
             if sink is not None:
                 # Child data/name durability precedes publishing a visible checkout.
-                dirs = [sink/name for name,(directory,_,__) in manifest.rows.items() if directory]
-                for directory in sorted(dirs, key=lambda p:len(p.parts), reverse=True) + [sink]:
-                    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                    try: os.fsync(fd)
-                    finally: os.close(fd)
+                sink.sync(manifest.rows)
             if marker and manifest.digest() != marker.tree:
                 raise Rejected("repository marker disagrees with the complete directory")
         if before != stamp(f):

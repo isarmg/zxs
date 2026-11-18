@@ -81,15 +81,8 @@ def locked(state):
 
 def import_zip(archive, dest):
     require_native_writer()
-    dest = Path(dest).absolute()
-    if dest.exists() or dest.is_symlink(): raise Rejected("checkout needs a fresh destination")
-    # On failure a private incomplete stage may survive; do not remove or
-    # recursively clean an unknown name in a user-selected parent directory.
-    stage = Path(tempfile.mkdtemp(prefix=".zip-checkout-", dir=dest.parent))
-    _, manifest = read_archive(archive, managed=False, sink=stage)
-    rename_new(stage, dest)
-    sync_dir(dest.parent)
-    return manifest
+    from .plain_import import execute, inspect
+    return execute(inspect(archive, dest))
 
 
 def checkout(archive, dest, store, state, *, expected=None):

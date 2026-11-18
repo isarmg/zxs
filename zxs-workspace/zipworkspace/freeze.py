@@ -73,6 +73,18 @@ def _scan(rootfd, frozen=None, *, hash_files=False):
     return facts, manifest
 
 
+def observe_held(fd, expected):
+    """Hash all real descendants of this particular open directory, then recheck the generation."""
+    before = os.fstat(fd)
+    if (before.st_dev,before.st_ino) != expected or not expected[1] or not stat.S_ISDIR(before.st_mode):
+        raise Rejected("not the original held output directory")
+    facts, tree = _scan(fd, hash_files=True)
+    after, _ = _scan(fd)
+    if facts != after or _sig(before) != _sig(os.fstat(fd)):
+        raise Rejected("imported directory changed during readback")
+    return tree
+
+
 def observe_tree(source: Path):
     """Read back actual named files without making a second private data copy."""
     _native()

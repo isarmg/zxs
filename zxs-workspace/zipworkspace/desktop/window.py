@@ -4,6 +4,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMainWindow, QProgressBar, QTabWidget, QVBoxLayout, QWidget
 
 from .archive_pane import ArchivePane
+from .import_pane import ImportPane
 from .widgets import label
 
 
@@ -20,6 +21,8 @@ class Window(QMainWindow):
         self.tabs = QTabWidget()
         self.archive = ArchivePane(self)
         self.tabs.addTab(self.archive, "快照与历史")
+        self.plain_import = ImportPane(self)
+        self.tabs.addTab(self.plain_import, "导入普通 ZIP")
         layout.addWidget(self.tabs)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
