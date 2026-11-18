@@ -29,15 +29,15 @@ fn observed(state: RwSignal<State>) -> impl IntoView {
                     </dl>
                     <p class="zxs-row">{t(
                         concat!(
-                            "可在上述 SMB 路径保存已有文件。普通保存只更新此实例工作稿，不创建目录历史节点；",
-                            "保存后先刷新此实例，再显式提交。当前仅支持同一个原始文件的完整覆盖保存，",
-                            "新增、删除和改名不在此入口范围。",
+                            "在上述 SMB 路径保存只改本实例的工作稿，不创建目录历史节点。",
+                            "可以整批提交受支持的已有文件修改；单个普通新增文件使用独立的提交路径。",
+                            "保存后先刷新实例再显式提交。此入口不支持新建目录、删除内容或改名。",
                         ),
                         concat!(
-                            "Save an existing file through this SMB path. Ordinary saves update ",
-                            "only this instance, not directory history. Refresh this instance ",
-                            "after saving, then commit explicitly. This slice supports complete ",
-                            "replacement saves of one original file, not add/delete/rename.",
+                            "A save through this SMB path updates only this instance, not directory history. ",
+                            "Supported edits to existing files can be committed together; a single new ordinary file uses a separate commit path. ",
+                            "Refresh the instance after saving, then commit explicitly. ",
+                            "This entry does not create directories, delete content or rename entries.",
                         ),
                     )}</p>
                     <label class="zxs-stack">
@@ -151,6 +151,7 @@ pub(in crate::files::directory_snapshot) fn view(state: RwSignal<State>) -> impl
             })>
                 <p role="status">{t("正在读取实例状态…", "Reading instance status…")}</p>
             </Show>
+            {super::mount::view(state)}
             {instances::view(state)}
             {observed(state)}
         </section>

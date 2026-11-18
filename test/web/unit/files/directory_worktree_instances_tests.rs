@@ -20,6 +20,7 @@ fn listing(state: &crate::ui::State) -> DirectoryWorktrees {
         .status
         .clone();
     let other = storage_contract::snapshot_worktree::WorktreeStatus {
+        visible: OperationId::from_random([81; 16]),
         target: WorktreeHandle {
             publication: OperationId::from_random([81; 16]),
             worktree_id: WorktreeId::from_random([82; 16]),

@@ -46,6 +46,7 @@ fn handle() -> WorktreeHandle {
 
 fn observed_status() -> WorktreeStatus {
     WorktreeStatus {
+        visible: handle().publication,
         target: handle(),
         original: source(),
         parent_directory_id: DirectoryId::from_random([7; 16]),

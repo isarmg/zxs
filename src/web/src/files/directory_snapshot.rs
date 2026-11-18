@@ -194,6 +194,7 @@ pub(crate) struct Model {
     // One best-effort protected GET for a recovered directory original, when
     // storage actually becomes readable. Never arm on a not-yet-sent write.
     observe_on_restore: Option<storage_contract::OperationId>,
+    mount_pending: Option<storage_contract::OperationId>,
     worktree: worktree::Model,
 }
 

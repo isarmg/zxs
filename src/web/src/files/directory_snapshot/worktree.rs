@@ -3,6 +3,7 @@
 mod bookmark;
 mod history;
 mod instances;
+mod mount;
 mod requests;
 mod view;
 
@@ -52,6 +53,7 @@ struct Observed {
 
 #[derive(Clone, Default)]
 pub(super) struct Model {
+    mount: mount::Model,
     history: history::Model,
     instances: instances::Model,
     reference: Option<bookmark::Reference>,
@@ -75,6 +77,7 @@ impl Model {
         self.cancel_read();
         self.history.invalidate();
         self.instances.invalidate();
+        self.mount.cancel();
     }
 
     fn cancel_read(&mut self) {
@@ -182,7 +185,7 @@ fn status(
         WorktreeCreationRequest::Named(request) => {
             status.original != request.source
                 || status.parent_directory_id != request.parent_directory_id
-                || status.name != name_policy::LookupName::from(&request.name)
+                || (status.visible == target.publication && status.name != name_policy::LookupName::from(&request.name))
         }
         WorktreeCreationRequest::Automatic(request) => {
             status.original != request.source
@@ -219,7 +222,8 @@ pub(super) fn remember_publication(
             *repository,
             *target,
         )),
-        wire::Publication::Registered(_)
+        wire::Publication::MountChanged { .. }
+        | wire::Publication::Registered(_)
         | wire::Publication::Initialized(_)
         | wire::Publication::Committed(_) => Ok(()),
     }
@@ -230,6 +234,7 @@ pub(super) fn accept_publication(
     record: &wire::Record,
     value: &wire::Publication,
 ) {
+    mount::accepted(state, record, value);
     let target = match value {
         wire::Publication::WorktreeCreated { repository, target }
         | wire::Publication::WorktreeCommitted {
@@ -240,7 +245,8 @@ pub(super) fn accept_publication(
             }
             *target
         }
-        wire::Publication::Registered(_)
+        wire::Publication::MountChanged { .. }
+        | wire::Publication::Registered(_)
         | wire::Publication::Initialized(_)
         | wire::Publication::Committed(_) => return,
     };
@@ -263,7 +269,8 @@ pub(super) fn accept_publication(
         wire::Command::AllocateWorktree { request, .. } => {
             Some(WorktreeCreationRequest::Automatic(request.clone()))
         }
-        wire::Command::RegisterRoot { .. }
+        wire::Command::MountChange { .. }
+        | wire::Command::RegisterRoot { .. }
         | wire::Command::Initialize { .. }
         | wire::Command::Commit { .. }
         | wire::Command::CommitWorktree { .. } => None,

@@ -155,6 +155,71 @@ fn review_view(state: RwSignal<State>) -> impl IntoView {
     }
 }
 
+pub(super) fn original_text<T: data_serialization::Serialize>(value: &T, label: String) -> AnyView {
+    match json_codec::to_string(value) {
+        Ok(text) => view! {
+            <label>
+                {label}
+                <textarea class="zxs-input" readonly prop:value=text></textarea>
+            </label>
+        }.into_any(),
+        Err(error) => view! {
+            <p role="alert">{format!("{}: {error}", t("无法显示原回执", "Could not display this original"))}</p>
+        }.into_any(),
+    }
+}
+
+fn mount_result(
+    state: RwSignal<State>, repository: storage_contract::RepositoryId,
+    receipt: storage_contract::snapshot_worktree::mount_change::MountChangeReceipt,
+) -> AnyView {
+    use storage_contract::snapshot_worktree::mount_change::MountOutcome;
+    let in_scope = state.with_untracked(|s| {
+        s.files.directory_snapshot.owns(s)
+            && Target::capture(s).is_some_and(|t| t.repository == repository)
+    });
+    if !in_scope { return ().into_any(); }
+    let summary = match &receipt.outcome {
+        MountOutcome::Hidden {} => t(
+            "原操作已隐藏当时的挂载，实例和内容仍保留。请保留原回执。",
+            "The original operation hid that occurrence. The instance and content remain. Keep the receipt.",
+        ),
+        MountOutcome::Restored { name } => format!("{}: {name}",
+            t("原操作恢复时的实际名称", "Actual name at the original restore")),
+        MountOutcome::Pending {} => t("原挂载操作仍在处理。", "The original mount change is pending."),
+    };
+    let original = original_text(&receipt, t(
+        "确切原请求与结果，可复制", "Exact original request and result, ready to copy",
+    ));
+    view! {
+        <div class="zxs-stack" data-zxs-mount-result="">
+            <p class="zxs-row" role="status">{summary}</p>
+            {original}
+        </div>
+    }.into_any()
+}
+
+fn mount_recovery(s: &State) -> Option<AnyView> {
+    let m = &s.files.directory_snapshot;
+    let p = m.pending.as_ref().filter(|_| m.owns(s))?;
+    let super::Command::MountChange { request, .. } = &p.record.command else { return None; };
+    let description = if p.phase == Phase::Settled {
+        t("结果已核对，只需清理本机原件。", "Outcome confirmed. Only local cleanup remains.")
+    } else if m.mount_pending == Some(request.operation_id) {
+        t("上次查询或提交返回同一原操作仍在处理。", "The last response reported this original operation as pending.")
+    } else {
+        t("结果未确定。只有重新读到同一原请求仍在处理才可重发。",
+            "Outcome not confirmed. Resending requires a fresh read of this exact pending request.")
+    };
+    let original = original_text(request, t("原挂载请求", "Original mount request"));
+    Some(view! {
+        <div class="zxs-stack" data-zxs-mount-original="">
+            <p role="status">{description}</p>
+            {original}
+        </div>
+    }.into_any())
+}
+
 fn publication_view(state: RwSignal<State>) -> impl IntoView {
     move || {
         state
@@ -175,6 +240,9 @@ fn publication_view(state: RwSignal<State>) -> impl IntoView {
                         ),
                         snapshot.node_id.to_string(),
                     ),
+                    Publication::MountChanged { repository, receipt } => {
+                        return mount_result(state, repository, receipt);
+                    }
                     Publication::Registered(root) => (
                         t(
                             "空盘根已登记；可继续初始化 .zxs。",
@@ -213,7 +281,7 @@ fn publication_view(state: RwSignal<State>) -> impl IntoView {
                     <p class="zxs-row" role="status" data-zxs-directory-snapshot-result="">
                         {format!("{text} {identity}")}
                     </p>
-                }
+                }.into_any()
             })
     }
 }
@@ -310,6 +378,7 @@ pub(crate) fn recovery_view(state: RwSignal<State>) -> impl IntoView {
         <Show when=move ||state.with(blocks_writes)>
             <aside class="zxs-surface zxs-stack" data-zxs-directory-snapshot-recovery="">
                 <h2>{t("目录快照 / worktree：原请求恢复", "Snapshot / worktree: original-request recovery")}</h2>
+                {move || state.with(mount_recovery)}
                 <p>{t(
                     "保留原账号、目录、分支、选集及操作编号。刷新不自动重发；查询只读永久回执，重试只发送原请求，不改选最新工作稿。",
                     concat!(

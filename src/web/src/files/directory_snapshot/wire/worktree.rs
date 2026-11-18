@@ -38,6 +38,7 @@ pub(super) fn committed(
 
 pub(super) fn lookup(record: &Record, value: Value) -> Result<LookupResult, api::Error> {
     match &record.command {
+        Command::MountChange {repository,request} => super::mount::lookup(*repository,request,value),
         Command::CreateWorktree {
             repository,
             request,
@@ -59,14 +60,7 @@ pub(super) fn lookup(record: &Record, value: Value) -> Result<LookupResult, api:
             source,
             request,
         } => {
-            let original = object_field(&value, "request")?;
-            object_field(original, "target")?;
-            object_field(original, "expected")?;
-            let result = object_field(&value, "result")?;
-            if result.get("state").and_then(Value::as_str) == Some("complete") {
-                object_field(result, "snapshot")?;
-            }
-            let receipt: WorktreeCommitReceipt = decode(value)?;
+            let receipt = commit_receipt(value)?;
             if receipt.repository_id != *repository || receipt.request != *request {
                 return Err(invalid(
                     "the worktree commit receipt differs from the original",
@@ -97,6 +91,17 @@ pub(super) fn lookup(record: &Record, value: Value) -> Result<LookupResult, api:
             Err(invalid("this original request has no outcome lookup"))
         }
     }
+}
+
+pub(in crate::files::directory_snapshot) fn commit_receipt(value: Value) -> Result<WorktreeCommitReceipt, api::Error> {
+    let original = object_field(&value, "request")?;
+    object_field(original, "target")?;
+    object_field(original, "expected")?;
+    let result = object_field(&value, "result")?;
+    if result.get("state").and_then(Value::as_str) == Some("complete") {
+        object_field(result, "snapshot")?;
+    }
+    decode(value)
 }
 
 fn creation_lookup(

@@ -45,9 +45,9 @@ fn owns(s: &State, epoch: u64, original: &Arc<Original>, phase: Phase) -> bool {
 }
 fn query_available(s: &State, original: &Original) -> bool {
     // A directory publication receipt and historical Named creation read are
-    // read-only. Preserve the existing availability gate for other families.
+    // read-only, as is an exact mount-change observation. All other gates are unchanged.
     match original.command {
-        Command::Commit { .. } | Command::CreateWorktree { .. } => s.management.storage.readable(),
+        Command::Commit { .. } | Command::CreateWorktree { .. } | Command::MountChange { .. } => s.management.storage.readable(),
         _ => s.management.storage.writable(),
     }
 }
@@ -99,6 +99,7 @@ pub(in crate::files::directory_snapshot) fn retain_and_send(
             });
             m.error = None;
             m.publication = None;
+            m.mount_pending = None;
             m.observed = None;
             m.observe_on_restore = None;
             s.files.mutation_pending = true;
@@ -135,6 +136,7 @@ fn existing(state: Session, action: Action) {
                 Action::First => return None,
             };
             s.files.directory_snapshot.observe_on_restore = None;
+            s.files.directory_snapshot.mount_pending = None;
             s.files.directory_snapshot.pending.as_mut()?.phase = action.phase();
             s.files.mutation_pending = true;
             Some((s.session_epoch, original))
@@ -223,6 +225,15 @@ fn ended(s: &mut State, epoch: u64, original: &Arc<Original>, phase: Phase) -> b
     true
 }
 
+fn finish_after_send(
+    state: Session, epoch: u64, original: &Arc<Original>, slot: &Slot,
+    result: Result<wire::Publication, api::Error>, rejected_fresh: bool,
+) {
+    if state.try_update(|s| ended(s, epoch, original, Phase::Sending)) == Some(true) {
+        finish(state, epoch, original, slot, result, rejected_fresh);
+    }
+}
+
 async fn run(
     state: Session,
     epoch: u64,
@@ -288,7 +299,12 @@ async fn run(
         }
         match read {
             Ok(wire::LookupResult::Pending) => {
-                state.update(|s| s.files.directory_snapshot.error = None)
+                state.update(|s| {
+                    s.files.directory_snapshot.error = None;
+                    if matches!(original.command, Command::MountChange { .. }) {
+                        s.files.directory_snapshot.mount_pending = Some(original.command.operation());
+                    }
+                });
             }
             Ok(wire::LookupResult::DirectoryObserved(observation)) => {
                 state.update(|s| observe(s, epoch, original, observation));
@@ -300,27 +316,64 @@ async fn run(
         }
         return Ok(());
     }
+    if action == Action::Retry && let Command::MountChange { repository, request } = &original.command {
+        // This is a user-initiated exact resend, never a background replay.
+        // A generic 404 conceals multiple causes and cannot authorize a POST.
+        let url = original.command.outcome_endpoint()
+            .ok_or_else(|| wire::invalid("missing original mount query"))?;
+        let observed = wire::mount::settled(*repository, request, api::request("GET", &url, None).await);
+        if state.try_with_untracked(|s| owns(s, epoch, original, Phase::Sending)) != Some(true) {
+            return Ok(());
+        }
+        match observed {
+            Ok(None) => {
+                slot.verify(original)?;
+                if !state.with_untracked(|s| s.management.storage.writable()) {
+                    return Err(wire::invalid("storage is no longer writable"));
+                }
+            }
+            Ok(Some(done)) => {
+                finish_after_send(state, epoch, original, slot, Ok(done), false);
+                return Ok(());
+            }
+            Err(error) => {
+                finish_after_send(state, epoch, original, slot, Err(error), false);
+                return Ok(());
+            }
+        }
+    }
     let body = original.command.body()?;
     let response = api::request("POST", &original.command.endpoint(), Some(body)).await;
     if state.try_with_untracked(|s| owns(s, epoch, original, Phase::Sending)) != Some(true) {
         return Ok(());
     }
-    let (result, rejected_fresh) = match response {
-        Ok(value) if matches!(original.command, Command::Initialize { .. }) => (
+    let (result, rejected_fresh) = match (response, &original.command) {
+        (Ok(value), Command::MountChange { repository, request }) => {
+            match wire::mount::settled(*repository, request, Ok(value)) {
+                Ok(None) => {
+                    let _ = state.try_update(|s| if ended(s, epoch, original, Phase::Sending) {
+                        s.files.directory_snapshot.mount_pending = Some(original.command.operation());
+                        s.files.directory_snapshot.error = None;
+                    });
+                    return Ok(());
+                }
+                Ok(Some(done)) => (Ok(done), false),
+                Err(error) => (Err(error), false),
+            }
+        }
+        (Ok(value), Command::Initialize { .. }) => (
             super::verify_initialization(original, value)
                 .await
                 .and_then(|v| original.result(v)),
             false,
         ),
-        Ok(value) => (original.result(value), false),
-        Err(error) => {
+        (Ok(value), _) => (original.result(value), false),
+        (Err(error), _) => {
             let rejected = action == Action::First && !error.mutation_outcome_unknown();
             (Err(error), rejected)
         }
     };
-    if state.try_update(|s| ended(s, epoch, original, Phase::Sending)) == Some(true) {
-        finish(state, epoch, original, slot, result, rejected_fresh);
-    }
+    finish_after_send(state, epoch, original, slot, result, rejected_fresh);
     Ok(())
 }
 
@@ -398,6 +451,7 @@ fn finish(
                 };
                 p.phase = Phase::Settled;
                 m.publication = Some(publication);
+                m.mount_pending = None;
                 m.observed = None;
                 m.error = None;
                 m.clear_review();

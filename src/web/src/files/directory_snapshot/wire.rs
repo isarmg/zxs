@@ -1,6 +1,8 @@
 //! Browser-boundary DTOs and immutable requests for the formal `.zxs` path.
 mod directory;
 mod worktree;
+pub(super) mod mount;
+pub(super) use worktree::commit_receipt as worktree_commit_receipt;
 use crate::api;
 use data_serialization::{Deserialize, Serialize};
 pub(super) use directory::DirectoryObservation;
@@ -146,6 +148,7 @@ pub(super) fn unborn(value: Value, target: DraftLocation) -> Result<Candidate, a
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Command {
+    MountChange { repository: RepositoryId, request: storage_contract::snapshot_worktree::mount_change::MountChange },
     RegisterRoot {
         slot: SlotId,
         operation_id: OperationId,
@@ -176,6 +179,7 @@ pub(super) enum Command {
 impl Command {
     pub(super) fn operation(&self) -> OperationId {
         match self {
+            Self::MountChange { request, .. } => request.operation_id,
             Self::RegisterRoot { operation_id, .. } => *operation_id,
             Self::Initialize { request, .. } => request.operation_id,
             Self::Commit { request, .. } => request.operation_id,
@@ -187,6 +191,7 @@ impl Command {
 
     pub(super) fn endpoint(&self) -> String {
         match self {
+            Self::MountChange { request, .. } => format!("/api/directory-worktrees/{}/mount-changes",request.target.worktree_id),
             Self::RegisterRoot { slot, .. } => format!(
                 "/api/file-manager/disks/{}/snapshot-root",
                 api::segment(slot.as_str()),
@@ -210,12 +215,14 @@ impl Command {
             | Self::Initialize { .. }
             | Self::Commit { .. }
             | Self::AllocateWorktree { .. }
+            | Self::MountChange { .. }
             | Self::CommitWorktree { .. } => true,
         }
     }
 
     pub(super) fn body(&self) -> Result<Value, api::Error> {
         let result = match self {
+            Self::MountChange { request, .. } => json_codec::to_value(request),
             Self::RegisterRoot { operation_id, .. } => json_codec::to_value(RegisterSnapshotRoot {
                 operation_id: *operation_id,
             }),
@@ -234,6 +241,7 @@ impl Command {
 
     pub(super) fn outcome_endpoint(&self) -> Option<String> {
         match self {
+            Self::MountChange { repository, request } => Some(format!("/api/repositories/{repository}/directory-worktrees/mount-changes/{}",request.operation_id)),
             Self::CreateWorktree {
                 repository,
                 request,
@@ -299,7 +307,8 @@ impl Record {
 
     fn validate(&self) -> Result<(), api::Error> {
         match &self.command {
-            Command::RegisterRoot { .. }
+            Command::MountChange { .. }
+            | Command::RegisterRoot { .. }
             | Command::CreateWorktree { .. }
             | Command::AllocateWorktree { .. } => {}
             Command::CommitWorktree { request, .. } => {
@@ -372,6 +381,7 @@ impl Record {
             Some("create_worktree" | "allocate_worktree") => {
                 object_field(object_field(command, "request")?, "source")?;
             }
+            Some("mount_change") => { mount::request_shape(object_field(command,"request")?)?; }
             Some("commit_worktree") => {
                 object_field(command, "source")?;
                 let request = object_field(command, "request")?;
@@ -412,6 +422,10 @@ impl Record {
 
     pub(super) fn result(&self, value: Value) -> Result<Publication, api::Error> {
         match &self.command {
+            Command::MountChange { .. } => match self.lookup_result(value)? {
+                LookupResult::Complete(done) => Ok(done),
+                _ => Err(invalid("the original mount change has not completed")),
+            },
             Command::CreateWorktree { repository, .. }
             | Command::AllocateWorktree { repository, .. } => worktree::created(*repository, value),
             Command::CommitWorktree {
@@ -450,6 +464,7 @@ pub(super) enum LookupResult {
 
 #[derive(Clone, Debug)]
 pub(super) enum Publication {
+    MountChanged { repository: RepositoryId, receipt: storage_contract::snapshot_worktree::mount_change::MountChangeReceipt },
     WorktreeCreated {
         repository: RepositoryId,
         target: WorktreeHandle,

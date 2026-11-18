@@ -662,7 +662,7 @@
       ]
     },
     "directory-web-worktree-management": {
-      "reason": "Check the Web controls for creating, listing, reopening and explicitly committing a selected exact registered worktree and original-operation recovery. Complete bounded lists and fresh status admission run native Web and Wasm, not a browser or external SMB.",
+      "reason": "Check the Web controls for creating, listing, reopening and explicitly committing a selected exact registered worktree and original-operation recovery. Complete bounded lists and fresh status admission run native Web and Wasm, not a browser or external SMB. Known clean-mount Hide and Restore are bounded to the exact reviewed instance, commit proof, original visible/deletion identity, and the current principal. Only a matching original Pending permits explicit resend.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -672,9 +672,10 @@
           "prefixes": [
             "files::directory_snapshot::worktree::tests::",
             "files::directory_snapshot::worktree::history::tests::",
-            "files::directory_snapshot::worktree::instances::tests::"
+            "files::directory_snapshot::worktree::instances::tests::",
+            "files::directory_snapshot::worktree::mount::tests::"
           ],
-          "max_tests": 10
+          "max_tests": 15
         },
         {
           "package": "web-app",
@@ -21954,7 +21955,8 @@
     {
       "path": "src/web/src/files/directory_snapshot.rs",
       "groups": [
-        "nested-directory-web-selection"
+        "nested-directory-web-selection",
+        "directory-web-worktree-management"
       ]
     },
     {
@@ -21966,13 +21968,15 @@
     {
       "path": "src/web/src/files/directory_snapshot/view.rs",
       "groups": [
-        "nested-directory-web-selection"
+        "nested-directory-web-selection",
+        "directory-web-worktree-management"
       ]
     },
     {
       "path": "src/web/src/files/directory_snapshot/wire.rs",
       "groups": [
-        "nested-directory-web-selection"
+        "nested-directory-web-selection",
+        "directory-web-worktree-management"
       ]
     },
     {
@@ -22076,7 +22080,8 @@
     {
       "path": "src/web/src/files/directory_snapshot/requests/delivery.rs",
       "groups": [
-        "nested-directory-web-selection"
+        "nested-directory-web-selection",
+        "directory-web-worktree-management"
       ]
     },
     {
@@ -22500,6 +22505,42 @@
       "path": "test/engine/integration/branch_alias_operations/file_history_merge_scenarios.rs",
       "groups": [
         "original-file-body-adoption"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/mount.rs",
+      "groups": [
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/mount/original.rs",
+      "groups": [
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/worktree/mount/view.rs",
+      "groups": [
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_snapshot/wire/mount.rs",
+      "groups": [
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/worktree_clean_mount.rs",
+      "groups": [
+        "directory-web-worktree-management"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree/mount_change.rs",
+      "groups": [
+        "directory-web-worktree-management"
       ]
     }
   ],

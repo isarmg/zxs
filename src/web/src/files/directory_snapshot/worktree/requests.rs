@@ -64,7 +64,7 @@ pub(super) fn commit(state: RwSignal<State>) {
     }
 }
 
-fn submit(
+pub(super) fn submit(
     state: RwSignal<State>,
     capture: fn(&State, storage_contract::OperationId) -> Option<wire::Command>,
 ) {
