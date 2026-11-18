@@ -47,6 +47,7 @@ fn merge(state: &mut State, id: &str, result: &str, parents: &[&str]) {
             merge_id: id.into(),
             history_tree_id: "history".into(),
             file_id: "file".into(),
+            original_inputs: Vec::new(),
             input_branch_ids: Vec::new(),
             input_node_ids: Vec::new(),
             chosen_node_id: result.into(),

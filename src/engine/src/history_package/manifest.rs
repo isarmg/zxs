@@ -19,7 +19,7 @@ use storage_contract::{
     MergeLink, Placement, PlacementRule, ProtectionPolicy, Repository,
     SUPPORTED_CHECKSUM_CHUNK_BYTES, SharedRecords, State, validate_id,
 };
-use storage_contract::{BranchKind, BranchState, FileMetadataKind};
+use storage_contract::{BranchKind, BranchState};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
@@ -660,6 +660,16 @@ impl HistoryManifest {
         if !self.file_metadata_nodes.is_empty() {
             return Err(invalid("adopting an existing FILE node cannot create metadata content"));
         }
+        // Original FILE branch publication is an independent immutable witness,
+        // including in a strictly remapped history package. Actor/edge labels
+        // on an isolated merge row cannot attest to themselves.
+        let mut writes = BTreeMap::new();
+        for commit in self.commits.values().filter(|c| c.kind == "file_metadata") {
+            if let Some(node)=commit.provenance.as_deref()
+                && writes.insert((commit.operation_id,node),commit).is_some() {
+                return Err(invalid("ambiguous original FILE adoption commit"));
+            }
+        }
         for (id, event) in &self.file_branch_merges {
             validate_id(id, "fmerge")?;
 
@@ -678,6 +688,38 @@ impl HistoryManifest {
                 || !event.is_existing_adoption()
             {
                 return Err(invalid("FILE merge fact differs from the chosen existing node"));
+            }
+            let decided = writes.get(&(event.operation_id,event.chosen_node_id.as_str()))
+                .ok_or_else(||invalid("FILE adoption has no original branch publication"))?;
+            let [parent] = decided.parent_commit_ids.as_slice() else {return Err(invalid("FILE adoption has no unique prior branch commit"))};
+            let previous=self.commits.get(parent).ok_or_else(||invalid("FILE adoption prior branch commit is missing"))?;
+            if decided.author!=event.principal.as_str() || decided.sequence!=event.sequence
+                || decided.history_tree_id!=event.history_tree_id
+                || !decided.entries.iter().any(|e|e.kind==NamespaceEntryKind::File && e.file_id==event.file_id && e.version_id==result.version_id) {
+                return Err(invalid("FILE adoption actor, sequence or published selected body disagrees"));
+            }
+            for (n,original) in event.original_inputs.iter().enumerate() {
+                let branch=self.branches.get(&original.branch_id).ok_or_else(||invalid("original selected FILE branch missing"))?;
+                if branch.file_id.as_ref()!=Some(&event.file_id) || branch.history_tree_id!=event.history_tree_id
+                    || [ &original.source_node_id,&original.expected_node_id ].iter().any(|id|!self.file_node_version(id).is_ok_and(|v|
+                        v.file_id==event.file_id && v.history_tree_id==event.history_tree_id)) {
+                    return Err(invalid("original selected FILE source or expected HEAD has another owner"));
+                }
+                let input=&event.input_branch_ids[n];
+                let observed=&event.input_node_ids[n];
+                let expected_body=self.file_node_version(observed)?;
+                if input==&event.surviving_branch_id {
+                    if !previous.entries.iter().any(|e|e.kind==NamespaceEntryKind::File && e.file_id==event.file_id && e.version_id==expected_body.version_id) {
+                        return Err(invalid("FILE adoption survivor prior HEAD differs from its original input"))
+                    }
+                } else {
+                    let original_branch=self.branches.get(input).ok_or_else(||invalid("FILE adoption retired input branch missing"))?;
+                    let commit=self.commits.get(&original_branch.head_commit_id).ok_or_else(||invalid("retired branch commit missing"))?;
+                    if original_branch.state!=BranchState::Merged || original_branch.file_node_id.as_ref().is_some_and(|head|head!=observed)
+                        || !commit.entries.iter().any(|e|e.kind==NamespaceEntryKind::File && e.file_id==event.file_id && e.version_id==expected_body.version_id) {
+                        return Err(invalid("FILE adoption retired branch differs from its original input"))
+                    }
+                }
             }
             for (branch, node) in event.input_branch_ids.iter().zip(&event.input_node_ids) {
                 let branch = self

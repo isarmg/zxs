@@ -217,7 +217,13 @@ pub(in crate::business) fn project(
         .values()
         .filter(|merge| merge.file_id == source.file)
     {
+        if !original.is_existing_adoption() {return Err(crate::business::file_tags::invalid())}
         let mut merge = original.clone();
+        for input in &mut merge.original_inputs {
+            input.branch_id=mapped(&input.branch_id)?;
+            input.source_node_id=mapped(&input.source_node_id)?;
+            input.expected_node_id=mapped(&input.expected_node_id)?;
+        }
         merge.merge_id = mapped(&merge.merge_id)?;
         merge.file_id = file.clone();
         merge.history_tree_id = target.history_tree_id.clone();

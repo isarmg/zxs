@@ -3446,12 +3446,14 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
     assert_eq!(original.principal.as_str(), "alice");
     assert!(baseline.file_metadata_nodes.is_empty());
     offline_check_history_package(&package).unwrap();
-    for corruption in ["unknown_chosen", "different_result", "invented_parent", "not_reused"] {
+    for corruption in ["unknown_chosen", "different_result", "invented_parent", "not_reused", "actor", "retired_head"] {
         let mut manifest = baseline.clone();
         let event = manifest.file_branch_merges.get_mut(&first_merge).unwrap();
         match corruption {
             "unknown_chosen" => { event.chosen_node_id = new_id("ver").unwrap(); }
             "different_result" => { event.result_node_id = event.input_node_ids[1].clone(); }
+            "actor" => {event.principal="forged".parse().unwrap();}
+            "retired_head" => {event.input_node_ids[1]=event.input_node_ids[0].clone();event.original_inputs[1].source_node_id=event.input_node_ids[1].clone();}
             "invented_parent" => { event.parent_node_ids.push(event.input_node_ids[0].clone()); }
             _ => { event.reused_node = false; }
         }

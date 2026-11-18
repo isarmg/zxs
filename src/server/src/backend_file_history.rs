@@ -242,6 +242,7 @@ struct HistoryMergeResponse {
 impl From<storage_contract::FileBranchMerge> for HistoryMergeResponse {
     fn from(merge: storage_contract::FileBranchMerge) -> Self {
         let storage_contract::FileBranchMerge {
+            original_inputs: _,
             merge_id,
             history_tree_id,
             file_id,

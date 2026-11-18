@@ -244,7 +244,11 @@ impl<'a> Validation<'a> {
             }
             "merge" => {
                 let row: FileBranchMerge = decode_local(body.as_bytes())?;
-                if !row.is_existing_adoption() {
+                if !row.is_existing_adoption() || row.input_branch_ids.len()<2
+                    || row.input_branch_ids.len()!=row.input_node_ids.len()
+                    || row.original_inputs.iter().any(|v|v.branch_id.parse::<storage_contract::BranchId>().is_err()
+                        || v.source_node_id.parse::<storage_contract::FileNodeId>().is_err()
+                        || v.expected_node_id.parse::<storage_contract::FileNodeId>().is_err()) {
                     return Err(super::invalid("FILE merge contains a fabricated result or ancestry"));
                 }
                 self.scope(&row.history_tree_id)?;

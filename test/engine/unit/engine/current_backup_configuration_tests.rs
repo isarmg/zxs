@@ -772,6 +772,7 @@ fn every_state_field_rejects_an_unplanned_change_in_live_and_cold_backup_publica
             merge_id: "unexpected".into(),
                     history_tree_id: history.clone(),
                     file_id: file.clone(),
+                    original_inputs: Vec::new(),
                     input_branch_ids: vec![branch.clone()],
                     input_node_ids: vec![version.clone()],
                     chosen_node_id: version.clone(),

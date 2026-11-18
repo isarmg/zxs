@@ -126,6 +126,7 @@ fn historical_nodes_on_one_branch_merge_without_changing_original_heads_or_defau
         event.input_node_ids,
         [base.version_id.clone(), middle.clone()]
     );
+    assert_eq!(event.original_inputs.as_slice(), inputs.as_slice());
     assert!(event.input_branch_ids.iter().all(|id| id != &source));
     let helper = &p.engine.state().branches[&event.input_branch_ids[1]];
     assert_eq!(helper.name, format!("history-merge-{operation}-2"));

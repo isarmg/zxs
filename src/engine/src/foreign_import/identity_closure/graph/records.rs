@@ -310,6 +310,7 @@ impl Remap<'_> {
             file_id,
             input_branch_ids,
             input_node_ids,
+            original_inputs,
             chosen_node_id,
             result_node_id,
             surviving_branch_id,
@@ -324,6 +325,11 @@ impl Remap<'_> {
         self.replace(Domain::File, file_id)?;
         self.ids(Domain::Branch, input_branch_ids)?;
         self.nodes(input_node_ids)?;
+        for input in original_inputs {
+            self.replace(Domain::Branch,&mut input.branch_id)?;
+            input.source_node_id=self.node(&input.source_node_id)?;
+            input.expected_node_id=self.node(&input.expected_node_id)?;
+        }
         *chosen_node_id = self.node(chosen_node_id)?;
         *result_node_id = self.node(result_node_id)?;
         self.replace(Domain::Branch, surviving_branch_id)?;

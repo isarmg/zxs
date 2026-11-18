@@ -423,12 +423,8 @@ fn disk_exit_history_merge_recovery_rejects_request_actor_graph_and_occurrence_t
                     .insert(event.input_branch_ids[1].clone(), fixture.file_main.clone());
             }
             4 => {
-                forged
-                    .file_metadata_nodes
-                    .get_mut(&event.result_node_id)
-                    .unwrap()
-                    .parent_node_ids
-                    .clear();
+                forged.file_branch_merges.get_mut(&event.merge_id).unwrap()
+                    .parent_node_ids.push(event.chosen_node_id.clone());
             }
             5 => {
                 forged

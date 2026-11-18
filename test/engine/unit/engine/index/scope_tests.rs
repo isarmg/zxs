@@ -453,6 +453,7 @@ fn file_merge(id: &str, file: &str, history: &str) -> FileBranchMerge {
             merge_id: id.into(),
         history_tree_id: history.into(),
         file_id: file.into(),
+        original_inputs: Vec::new(),
         input_branch_ids: vec!["branch".into()],
         input_node_ids: vec!["a".into()],
         chosen_node_id: "a".into(),

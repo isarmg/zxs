@@ -469,6 +469,9 @@ pub struct FileBranchMerge {
     pub merge_id: String,
     pub history_tree_id: String,
     pub file_id: String,
+    /// The actual user-selected branch, source and observed HEAD; distinct from
+    /// same-operation helper branches used by a historical selection.
+    pub original_inputs: Vec<FileHistoryMergeInput>,
     pub input_branch_ids: Vec<String>,
     pub input_node_ids: Vec<String>,
     pub chosen_node_id: String,
@@ -486,6 +489,8 @@ impl FileBranchMerge {
     pub fn is_existing_adoption(&self) -> bool {
         self.reused_node && self.parent_node_ids.is_empty()
             && self.chosen_node_id == self.result_node_id
+            && self.original_inputs.len() == self.input_node_ids.len()
+            && self.original_inputs.iter().map(|v| &v.source_node_id).eq(self.input_node_ids.iter())
     }
 }
 
@@ -497,7 +502,7 @@ pub struct FileMergeInput {
 }
 
 /// A frozen historical source, separate from its branch's current CAS head.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct FileHistoryMergeInput {
     pub branch_id: String,

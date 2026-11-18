@@ -261,6 +261,7 @@ impl Engine {
                         operation_id: request.operation_id,
                     },
                     file_merges::MergeResultPolicy::HistoricalSources {
+                        original: request.inputs,
                         current_inputs: current_inputs.as_ref(),
                     },
                 )?;

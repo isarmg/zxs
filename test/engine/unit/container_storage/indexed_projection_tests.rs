@@ -394,6 +394,7 @@ impl Fixture {
             merge_id: id("fmerge", number),
                 history_tree_id: h1.clone(),
                 file_id: file.clone(),
+                original_inputs: Vec::new(),
                 input_branch_ids: vec![id("br", 2), id("br", 3)],
                 input_node_ids: vec![id("ver", 1), id("ver", 2)],
                 chosen_node_id: id("ver", 2),

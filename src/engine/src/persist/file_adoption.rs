@@ -104,7 +104,15 @@ pub(crate) fn original(state:&State, receipt:&OperationResult) -> Result<Sources
         }
         _ => return Err(invalid()),
     };
-    if sources.len() != event.input_node_ids.len() {return Err(invalid())}
+    if sources.len() != event.input_node_ids.len() || sources.len()!=event.original_inputs.len() {return Err(invalid())}
+    for (n,source) in event.original_inputs.iter().enumerate() {
+        let (branch,node)=sources.at(n);
+        let fence=match &sources {
+            Sources::Branches(v)=>&v[n].expected_node_id, Sources::Historical{inputs,..}=>&inputs[n].expected_node_id,
+        };
+        if source.branch_id!=branch || source.source_node_id!=node || &source.expected_node_id!=fence {return Err(invalid())}
+        real_body(state,event,fence)?;
+    }
     for (n,head) in event.input_node_ids.iter().enumerate() {
         let (branch,node) = sources.at(n);
         if head != node {return Err(invalid())}

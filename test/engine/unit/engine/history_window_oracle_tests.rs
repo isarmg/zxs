@@ -233,6 +233,7 @@ pub(super) fn fixture() -> MetadataView {
             merge_id: id("fmerge", n),
                 history_tree_id: HISTORY.into(),
                 file_id: FILE.into(),
+                original_inputs: Vec::new(),
                 input_branch_ids: (0..19).map(|index| id("br", index)).collect(),
                 input_node_ids: (0..19).map(|index| id("ver", index % 17)).collect(),
                 chosen_node_id: id("ver", 7),

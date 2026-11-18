@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) enum MergeResultPolicy<'a> {
     ExplicitBranches,
     HistoricalSources {
+        original: &'a [storage_contract::FileHistoryMergeInput],
         current_inputs: Option<&'a super::file_history_merges::CurrentHistoryMergeInputs>,
     },
 }
@@ -538,6 +539,12 @@ pub(super) fn merge_change(
             merge_id: merge_id.clone(),
             history_tree_id: body.history_tree_id.clone(),
             file_id: file.into(),
+            original_inputs: match policy {
+                MergeResultPolicy::HistoricalSources { original, .. } => original.to_vec(),
+                MergeResultPolicy::ExplicitBranches => inputs.iter().map(|i| storage_contract::FileHistoryMergeInput {
+                    branch_id:i.branch_id.clone(),source_node_id:i.expected_node_id.clone(),expected_node_id:i.expected_node_id.clone(),
+                }).collect(),
+            },
             input_branch_ids: inputs.iter().map(|input| input.branch_id.clone()).collect(),
             input_node_ids: heads,
             chosen_node_id: chosen_node.into(),

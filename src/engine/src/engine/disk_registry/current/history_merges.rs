@@ -172,6 +172,7 @@ impl<'a> VerifiedHistoryMerge<'a> {
             &event.chosen_node_id,
         )?;
         if !result_matches(receipt, event, &version)
+            || event.original_inputs != input.inputs
             || event.input_branch_ids.len() != input.inputs.len()
             || event.input_branch_ids.iter().collect::<BTreeSet<_>>().len() != input.inputs.len()
             || event.input_node_ids
