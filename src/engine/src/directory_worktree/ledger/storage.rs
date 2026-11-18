@@ -594,3 +594,36 @@ fn verify_inventory(directory: &DiskRoot, checkpoint: Checkpoint) -> Result<(), 
     }
     Ok(())
 }
+
+/// Hash the actual two canonical frame encodings, not sequence arithmetic.
+pub(crate) fn content_checkpoints(before: Checkpoint, events: &[Event; 2])
+    -> Result<[Checkpoint; 2], LedgerError>
+{
+    let (_, committing) = event_frame(before, &events[0])?;
+    let (_, completed) = event_frame(committing, &events[1])?;
+    Ok([committing, completed])
+}
+
+impl HeldWorktreeLedger<'_> {
+    /// The on-media ledger owns cumulative bytes and current phase. Checking
+    /// them cannot advance the inode or manufacture permission to append.
+    pub(crate) fn preview_content(&self, events: &[Event; 2])
+        -> Result<[Checkpoint; 2], LedgerError>
+    {
+        self.state.require_publication_scope()?;
+        let (first, committing) = event_frame(self.checkpoint, &events[0])?;
+        let (second, completed) = event_frame(committing, &events[1])?;
+        bounded_total(bounded_total(self.bytes, first.len())?, second.len())?;
+        let Event::Completed { publication: expected, files: expected_files } = &events[1]
+            else { return Err(LedgerError::FileResults); };
+        let mut logical = self.state.clone();
+        let mut verify = |p: &Publication, files: &[FileResult]| {
+            if p == expected && files == expected_files { Ok(()) } else { Err(LedgerError::FileResults) }
+        };
+        for (event, checkpoint) in events.iter().zip([committing, completed]) {
+            logical.apply(self.source.manifest(), event, checkpoint, &mut verify,
+                &mut |_, _| Err(LedgerError::FileResults))?;
+        }
+        Ok([committing, completed])
+    }
+}

@@ -86,6 +86,11 @@ impl ReceiptIndex<'_> {
                 }
             }
         }
+        for record in self.content_batches.values() {
+            if let Some(complete) = record.complete() {
+                visit(&complete.node, Some(record.plan.source))?;
+            }
+        }
         for working in self.working.values() {
             if let Some((node, parent)) = working.history_node() {
                 visit(node.plan, Some(parent))?;

@@ -84,8 +84,15 @@ pub(crate) fn content_protection_for_file(
     previous: &State, file: storage_contract::FileId,
     content: &crate::business::file_draft::PublishedContent,
 ) -> Result<Protection> {
+    content_protection_for_owner(previous.file_containers.get(&file).ok_or_else(invalid)?.owner_disk, content)
+}
+
+/// The worktree batch proves the original per-row owner at its decision;
+/// a later move of a container must not rewrite historical protection.
+pub(crate) fn content_protection_for_owner(
+    owner: DiskId, content: &crate::business::file_draft::PublishedContent,
+) -> Result<Protection> {
     let placement = &content.placement;
-    let owner = previous.file_containers.get(&file).ok_or_else(invalid)?.owner_disk;
     let slot = placement.route_slot_ids.first().ok_or_else(invalid)?;
     if placement.route_slot_ids.len() != 1 || placement.target_copies != 1
         || placement.primary_slot_id != *slot

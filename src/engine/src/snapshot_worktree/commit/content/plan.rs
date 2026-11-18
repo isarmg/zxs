@@ -54,13 +54,27 @@ impl Originals {
             return Err(RegistrationError::Identity);
         }
         let prepared = self.project(context, principal, destination_node, publish_operation, None)?;
+        self.repository.require_held_source(&self.source_node).map_err(RegistrationError::NodeReadback)?;
+        self.repository.require_free_content_node(destination_node).map_err(RegistrationError::NodeReadback)?;
+        for (row, result) in self.rows.iter().zip(&prepared.rows) {
+            let path = row.container.body_path(&result.content.version).map_err(RegistrationError::Publication)?;
+            if row.container.container().map_err(RegistrationError::Publication)?
+                .optional_metadata(&path).map_err(RegistrationError::Publication)?.is_some()
+            { return Err(RegistrationError::Identity); }
+        }
         let rows = self.rows.iter().zip(&prepared.rows).map(|(row, result)| row.input(result)).collect();
-        Ok(Reservation {
+        let frozen = Reservation {
             request: self.request.clone(), source: self.source, source_binding: self.source_node.binding(),
             host: self.host.clone(), root: self.root, ordinary_head: self.ordinary_head,
             ordinary_generation: self.ordinary_generation, instance: self.sparse.binding(), ledger: self.ledger,
             before: self.before, destination_node, publish_operation, rows,
-        })
+        };
+        let ledger = crate::directory_worktree::ledger::HeldWorktreeLedger::reopen(&self.source_node,
+            self.ledger, self.before, |_, _| Err(crate::directory_worktree::ledger::LedgerError::PublicationPending))
+            .map_err(RegistrationError::Ledger)?;
+        if ledger.instance() != self.sparse.binding() { return Err(RegistrationError::CommitScope); }
+        ledger.preview_content(&frozen.events(&prepared.rows)).map_err(RegistrationError::Ledger)?;
+        Ok(frozen)
     }
 
     pub(in crate::snapshot_worktree) fn project_reserved(

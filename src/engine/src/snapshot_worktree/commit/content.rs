@@ -47,6 +47,7 @@ pub(crate) struct Originals {
     pub(crate) ordinary_head: CommitId,
     pub(crate) ordinary_generation: Generation,
     pub(crate) source_node: HeldSnapshotNode,
+    pub(crate) repository: crate::working_tree::snapshot::PinnedSnapshotRepository,
     pub(crate) sparse: Arc<HeldSparseWorktree>,
     pub(crate) ledger: Binding,
     pub(crate) before: Checkpoint,
@@ -89,17 +90,33 @@ impl Originals {
     pub(in crate::snapshot_worktree) fn capture(
         engine: &Engine, index: &ReceiptIndex<'_>, request: &CommitWorktree,
     ) -> Result<Self> {
+        Self::capture_inner(engine, index, request, None)
+    }
+
+    pub(in crate::snapshot_worktree) fn retained(
+        engine: &Engine, index: &ReceiptIndex<'_>, grant: &crate::snapshot_worktree::registry::FrozenContent<'_>,
+    ) -> Result<Self> {
+        Self::capture_inner(engine, index, &grant.plan().request, Some(grant))
+    }
+
+    fn capture_inner(
+        engine: &Engine, index: &ReceiptIndex<'_>, request: &CommitWorktree,
+        owned: Option<&crate::snapshot_worktree::registry::FrozenContent<'_>>,
+    ) -> Result<Self> {
         index.require_source(engine.state())?;
         if engine.admitted_current_namespaces().map_err(RegistrationError::Publication)?.is_some()
             || engine.config.generation().is_some()
         {
             return Err(RegistrationError::InitialOnly);
         }
-        let registered = index.worktree(request.target)?;
+        let registered = match owned {
+            Some(grant) => index.registered_for_content(grant)?,
+            None => index.worktree(request.target)?,
+        };
         let source = registered.source().handle();
         let host = registered.source().host().clone();
         let root = registered.source().initialization().host;
-        if index.commit_head(source)? != source || registered.revision() != request.expected
+        if (owned.is_none() && index.commit_head(source)? != source) || registered.revision() != request.expected
             || registered.published_node().is_some() || !registered.added_files().is_empty()
             || registered.reservation().request.parent_directory_id != root.directory_id
             || !host.directories.is_empty()
@@ -109,6 +126,15 @@ impl Originals {
         crate::snapshot_worktree::edit::require_mount(engine, registered.reservation())?;
         registered.checkpoint().require_publication_frames().map_err(RegistrationError::Ledger)?;
         let source_node = index.reopen_node(engine, source)?;
+        let ordinary = engine.namespace_host_root(host.namespace.repository_id, host.namespace.branch_id)
+            .map_err(RegistrationError::Publication)?;
+        let local = ordinary.binding();
+        if local.registration != host.registration || local.root_entity != host.root_entity
+            || local.roots.common_data != host.common_data || local.root_id != root.root_id
+            || local.generation != root.expected_root_generation || local.roots.common_data.directory_id != root.directory_id
+        { return Err(RegistrationError::Source); }
+        let repository = source_node.pin_repository(ordinary.common().map_err(RegistrationError::Publication)?)
+            .map_err(RegistrationError::NodeReadback)?;
         let ledger = registered.reopen(&source_node)?.into_ledger();
         let active = index.active_edits(request.target);
         if active.is_empty() || active.len() > crate::working_tree::snapshot::MAX_VERSIONS
@@ -187,8 +213,22 @@ impl Originals {
         }
         Ok(Self {
             state: Arc::clone(&engine.state), config: engine.config.clone(), resources: Arc::clone(&engine.disk_resources),
-            request: request.clone(), source, host, root, ordinary_head, ordinary_generation, source_node,
+            request: request.clone(), source, host, root, ordinary_head, ordinary_generation, source_node, repository,
             sparse, ledger: ledger_binding, before, rows,
         })
     }
+}
+
+/// Only the exact live capture can initiate occupancy. The local result is
+/// never a grant: a caller must recover the original from the installed prefix.
+pub(in crate::snapshot_worktree) fn reserve(
+    engine: &mut Engine, original: Originals, principal: &storage_contract::Principal,
+) -> Result<()> {
+    let plan = original.plan_reserve(&engine.planning_context(), principal)?;
+    let operation = plan.request.operation_id;
+    let record = crate::persist::snapshot_worktree::Record::ReserveContentBatch(plan);
+    // Keep the full physical observations through native metadata preparation.
+    crate::snapshot_worktree::publication::publish_new(engine, operation, principal, &record)?;
+    drop(original);
+    Ok(())
 }

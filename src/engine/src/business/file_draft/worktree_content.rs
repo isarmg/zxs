@@ -99,3 +99,52 @@ pub(crate) fn advance(
         content: PublishedContent { version, placement, allocations },
     })
 }
+
+/// No archive or pathname grants admission. During occupancy, every ordinary
+/// write (including an unrelated command on the same ordinary branch) must
+/// preserve exactly these selected heads, working revisions and named owners.
+pub(crate) fn require_frozen(state: &State, plan: &crate::persist::snapshot_worktree::content_batch::Reservation)
+    -> Result<()>
+{
+    let repository = state.repositories.get(&plan.host.namespace.repository_id.to_string()).ok_or_else(invalid)?;
+    let ordinary = state.branches.get(&repository.main_branch_id).ok_or_else(invalid)?;
+    if !repository.file_manager_root || ordinary.branch_id != plan.host.namespace.branch_id.to_string()
+        || ordinary.generation != plan.ordinary_generation.get() || ordinary.head_commit_id != plan.ordinary_head.to_string()
+        || ordinary.state != crate::BranchState::Active
+    { return Err(invalid()); }
+    let mut entries = state.commits.get(&ordinary.head_commit_id).ok_or_else(invalid)?.entries.clone();
+    let names = crate::business::namespace::container_name::current_names(state, &entries)?;
+    crate::business::namespace::container_name::apply_file_names(&mut entries, &names)?;
+    let tree = crate::NamespaceTree::from_current_state(state, &repository.repository_id, &entries);
+    let mut ids = Vec::new();
+    for input in &plan.rows {
+        let target = storage_contract::file_draft::DraftLocation {
+            repository: plan.host.namespace.repository_id, path: input.edit.path.clone(),
+            entry: input.namespace.entry, file: input.original.file_id,
+        };
+        let selected = super::from_worktree_namespace(state, &target, tree)?;
+        let container = state.file_containers.get(&target.file).ok_or_else(invalid)?;
+        let replica = container.replicas.get(&input.owner).ok_or_else(invalid)?;
+        let branch = state.branches.get(&input.base.branch_id().to_string()).ok_or_else(invalid)?;
+        let version = state.versions.get(&input.original.version_id.to_string()).ok_or_else(invalid)?;
+        if input.base != selected.base || input.history != selected.history
+            || input.history != container.history_tree_id || input.clean != container.working
+            || input.namespace != container.namespace || input.owner != container.owner_disk
+            || input.owner_root != replica.root_id || input.owner_entity != replica.entity
+            || version.logical_size != input.original.size || version.content_hash != input.original.content_hash
+            || branch.head_commit_id != input.branch_base.to_string()
+            || selected.placement.primary_slot_id != plan.host.registration.slot_id
+            || selected.placement.binding_generations.get(&plan.host.registration.slot_id)
+                != Some(&plan.host.registration.binding_generation)
+            || state.versions.contains_key(&input.edit.material.version_id.to_string())
+            || input.allocations.len() > super::trace_limit(state, &target)?
+        { return Err(invalid()); }
+        // Validate the actual per-container short storage ID before freezing.
+        crate::container_storage::allocate_version_storage_id(
+            state, &target.file.to_string(), input.edit.material.version_id,
+        )?;
+        ids.extend(input.allocations.iter().copied());
+    }
+    drop(Replay::new(state, &ids)?);
+    Ok(())
+}

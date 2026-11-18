@@ -84,6 +84,16 @@ impl PinnedSnapshotRepository {
         HeldSnapshotNode::prepare(&self.repository, manifest, source)
     }
 
+    pub(crate) fn require_free_content_node(&self, node: storage_contract::working_tree::SnapshotNodeId)
+        -> Result<(), SnapshotStoreError>
+    {
+        let name = layout::node(node);
+        if self.repository.optional_metadata(&self.repository.path().join(name.as_path()))
+            .map_err(SnapshotStoreError::Disk)?.is_some()
+        { return Err(SnapshotStoreError::Entries); }
+        Ok(())
+    }
+
     pub(crate) fn require_prepared(&self, node: &HeldSnapshotNode)
         -> Result<(), SnapshotStoreError>
     {

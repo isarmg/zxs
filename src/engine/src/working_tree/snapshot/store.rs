@@ -79,6 +79,13 @@ impl SnapshotNodeBinding {
             || self.files_entity == source.files_entity
             || self.worktrees_entity == source.worktrees_entity
     }
+    pub(crate) fn independent_node(self, source: Self) -> bool {
+        let introduced = [self.node_entity, self.files_entity, self.worktrees_entity];
+        let reserved = [source.repository_entity, source.node_entity, source.files_entity, source.worktrees_entity];
+        self.same_repository(source) && introduced.into_iter().all(|id| id.inode() != 0
+            && id.device() == source.repository_entity.device() && !reserved.contains(&id))
+            && introduced.into_iter().collect::<BTreeSet<_>>().len() == introduced.len()
+    }
     pub(crate) fn same_repository(self, source: Self) -> bool {
         self.reference.repository == source.reference.repository
             && self.repository_entity == source.repository_entity

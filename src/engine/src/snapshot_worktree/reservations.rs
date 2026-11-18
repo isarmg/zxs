@@ -11,6 +11,7 @@ impl PlanningContext<'_> {
             return Ok(());
         }
         self.snapshot_receipts().and_then(|index| {
+            index.require_pending_content(next)?;
             index.require_mount_namespace(next, self.config.max_entries)
         }).map_err(|source| Error::SnapshotSource(Box::new(
             SnapshotSourceError::WorktreeMounts(Box::new(source.into())),

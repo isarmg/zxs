@@ -79,3 +79,61 @@ fn exact_files_share_the_business_operation_on_one_state_but_cannot_install_it()
     assert!(capture.project_reserved(&ctx, &principal, &forged).is_err());
     assert_eq!(fixture.media(), media);
 }
+
+#[test]
+fn durable_reservation_freezes_both_file_branches_without_publishing_and_reopens_only_original() {
+    use crate::snapshot_worktree::registry::ContentRetry;
+    use storage_contract::file_draft::{CommitMode, DraftCommand};
+    use storage_contract::snapshot_worktree::outcome::WorktreeCommitOutcome;
+    let (fixture, mut engine) = Fixture::new();
+    let scratch = tempfile::tempdir().unwrap();
+    let principal: Principal = "admin".parse().unwrap();
+    let other_principal: Principal = "different".parse().unwrap();
+    let repository = fixture.targets[0].repository;
+    let root = engine.snapshot_root_context(repository).unwrap();
+    let instance = engine.allocate_directory_worktree(&AllocateWorktree {
+        source: fixture.source, parent_directory_id: root.host.directory_id,
+        expected_root_generation: root.host.expected_root_generation,
+        operation_id: OperationId::generate().unwrap(), naming: WorktreeNaming::Automatic,
+    }, &principal).unwrap();
+    for target in &fixture.targets {
+        save(&mut engine, instance, &principal, scratch.path(), target.path.as_str(), b"both saved");
+    }
+    let request = CommitWorktree { target: instance,
+        expected: engine.directory_worktree_status(instance).unwrap().revision,
+        message: "one batch".into(), operation_id: OperationId::generate().unwrap() };
+    let branches = engine.state().branches.clone();
+    let versions = engine.state().versions.clone();
+    let index = engine.snapshot_receipts().unwrap();
+    let captured = Originals::capture(&engine, &index, &request).unwrap();
+    drop(index);
+    crate::snapshot_worktree::commit::content::reserve(&mut engine, captured, &principal).unwrap();
+    drop(engine);
+    let mut engine = Engine::open(&fixture.system).unwrap();
+    assert_eq!(engine.state().versions, versions);
+    assert_eq!(engine.state().branches, branches);
+    assert!(engine.directory_worktree_status(instance).is_err());
+    assert!(engine.directory_worktree_commit_receipt(repository, request.operation_id, &other_principal).is_err());
+    let public = engine.directory_worktree_commit_receipt(repository, request.operation_id, &principal).unwrap();
+    assert_eq!(public.request, request);
+    assert_eq!(public.result, WorktreeCommitOutcome::Pending {});
+    for target in &fixture.targets {
+        let mode = DraftCommand::SetMode { target: target.clone(),
+            expected: engine.file_working_state(target).unwrap().revision(), mode: CommitMode::Manual };
+        let operation = OperationId::generate().unwrap();
+        assert!(engine.change_file_working(&mode, &principal, operation).is_err());
+        assert!(!engine.state().operations.contains_key(&operation));
+    }
+    let index = engine.snapshot_receipts().unwrap();
+    let mut other = request.clone();
+    other.message.push_str(" differing intent");
+    assert!(index.retry_content(&other, &principal).is_err());
+    assert!(index.retry_content(&request, &other_principal).is_err());
+    let ContentRetry::Reserved(frozen) = index.retry_content(&request, &principal).unwrap().unwrap()
+        else { panic!("a reservation must never answer Complete"); };
+    let original = Originals::retained(&engine, &index, &frozen).unwrap();
+    let projection = original.project_reserved(&engine.planning_context(), &principal, frozen.plan()).unwrap();
+    assert_eq!(projection.rows.len(), 2);
+    assert_eq!(engine.state().versions, versions);
+    assert_eq!(engine.state().branches, branches);
+}

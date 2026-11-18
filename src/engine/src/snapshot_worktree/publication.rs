@@ -219,6 +219,7 @@ fn publish_planned(
 /// receipts on replay or bypass full byte, state and inode admission on append.
 fn require_new_ledger_capacity(record: &Record) -> Result<()> {
     match record {
+        Record::ReserveContentBatch(plan) => plan.before.require_publication_frames(),
         Record::ReserveEdit(plan) => plan.before.next_frame_sequence().map(|_| ()),
         Record::ReserveCommit(plan) => plan.before.require_publication_frames(),
         Record::ReserveHistoricalCommit(plan) => plan.before.require_publication_frames(),
@@ -227,7 +228,7 @@ fn require_new_ledger_capacity(record: &Record) -> Result<()> {
         | Record::ReserveAllocatedWorktree(_) | Record::CompleteWorktree(_)
         | Record::CompleteEdit(_) | Record::PrepareHistoricalCommit(_) | Record::PublishCommitNode(_)
         | Record::CompleteCommit(_) | Record::BirthFile(_) | Record::SaveFile(_)
-        | Record::CompleteFile(_) | Record::PublishAddedFile(_) | Record::PublishAddedNode(_)
+        | Record::CompleteFile(_) | Record::PublishContentBatch(_) | Record::PublishAddedFile(_) | Record::PublishAddedNode(_)
         | Record::CompleteAddedCommit(_) => Ok(()),
     }.map_err(RegistrationError::Ledger)
 }

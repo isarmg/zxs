@@ -24,6 +24,9 @@ use storage_contract::{
     BranchName, CommitState, EntryId, OperationId, Principal, ProtectionAtPublish, VersionId,
 };
 
+pub(crate) const CONTENT_RESERVE: &str = "snapshot.worktree.content-reserve";
+pub(crate) const CONTENT_PUBLISH: &str = "snapshot.worktree.content-publish";
+
 pub(crate) const ADDED_RESERVE: &str = "snapshot.worktree.added-reserve";
 pub(crate) const ADDED_FIRST: &str = "snapshot.worktree.added-first";
 pub(crate) const ADDED_NODE: &str = "snapshot.worktree.added-node";
@@ -221,6 +224,8 @@ pub(crate) struct EditCompletion {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", content = "record", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Record {
+    ReserveContentBatch(content_batch::Reservation),
+    PublishContentBatch(content_batch::Publication),
     ReserveAddedCommit(added_commit::AddedCommit),
     PublishAddedFile(added_commit::AddedFirst),
     PublishAddedNode(CommitNode),
@@ -283,6 +288,11 @@ pub enum CodecError {
 impl Record {
     fn request(&self) -> Result<json_codec::Value, CodecError> {
         match self {
+            Self::ReserveContentBatch(record) => json_codec::to_value(&record.request)
+                .map_err(CodecError::Value),
+            Self::PublishContentBatch(record) => content_batch::publish_request(
+                record.reserve, record.reservation,
+            ),
             Self::ReserveNode(record) => PublicationEncoding::node_request(&record.request),
             Self::BirthFile(record) => {
                 json_codec::to_value(&record.request).map_err(CodecError::Value)
@@ -326,6 +336,8 @@ impl Record {
 
     pub(crate) fn kind(&self) -> &'static str {
         match self {
+            Self::ReserveContentBatch(_) => CONTENT_RESERVE,
+            Self::PublishContentBatch(_) => CONTENT_PUBLISH,
             Self::ReserveAddedCommit(_) => ADDED_RESERVE,
             Self::PublishAddedFile(_) => ADDED_FIRST,
             Self::PublishAddedNode(_) => ADDED_NODE,
@@ -401,7 +413,7 @@ impl PublicationEncoding {
 
 fn indexed_kind(kind: &str) -> bool {
     matches!(kind,
-        ADDED_RESERVE | ADDED_FIRST | ADDED_NODE | ADDED_COMPLETE
+        CONTENT_RESERVE | CONTENT_PUBLISH | ADDED_RESERVE | ADDED_FIRST | ADDED_NODE | ADDED_COMPLETE
             | FILE_BIRTH | FILE_SAVE | FILE_COMPLETE | NODE_RESERVE | NODE_COMPLETE
             | WORKTREE_RESERVE | WORKTREE_ALLOCATE | WORKTREE_COMPLETE
             | EDIT_RESERVE | EDIT_COMPLETE | COMMIT_RESERVE | HISTORICAL_RESERVE | HISTORICAL_READY
@@ -426,7 +438,7 @@ pub(crate) fn decode(receipt: &OperationResult) -> Result<Option<Decoded>, Codec
         return Err(CodecError::Kind);
     }
     if receipt.commit_state != CommitState::Published
-        || receipt.protection_at_publish != if receipt.kind == ADDED_FIRST {
+        || receipt.protection_at_publish != if matches!(receipt.kind.as_str(), ADDED_FIRST | CONTENT_PUBLISH) {
             ProtectionAtPublish::TargetMet
         } else { ProtectionAtPublish::NotApplicable }
         || receipt.commit_id.is_some()
@@ -476,6 +488,9 @@ pub(crate) fn decode(receipt: &OperationResult) -> Result<Option<Decoded>, Codec
             blocks.len() > storage_contract::file_draft::manifest::MAX_WORKING_BLOCKS
         })
     { return Err(CodecError::Budget); }
+    if matches!(receipt.kind.as_str(), CONTENT_RESERVE | CONTENT_PUBLISH) {
+        content_batch::require_shape(receipt, record.ok_or(CodecError::Kind)?)?;
+    }
     if receipt.kind == ADDED_FIRST {
         let content = record.and_then(|record| record.get("content"))
             .ok_or(CodecError::Publication)?;
@@ -503,9 +518,12 @@ pub(crate) fn decode(receipt: &OperationResult) -> Result<Option<Decoded>, Codec
     if envelope.snapshot_worktree.kind() != receipt.kind {
         return Err(CodecError::Kind);
     }
-    if (receipt.kind == ADDED_FIRST && envelope.version_protection.len() != 1)
-        || (receipt.kind != ADDED_FIRST && !envelope.version_protection.is_empty())
-    {
+    let required = match &envelope.snapshot_worktree {
+        Record::PublishAddedFile(_) => 1,
+        Record::PublishContentBatch(value) => value.rows.len(),
+        _ => 0,
+    };
+    if envelope.version_protection.len() != required {
         return Err(CodecError::Publication);
     }
     Ok(Some(Decoded {
@@ -525,7 +543,7 @@ impl Decoded {
             operation_id: operation, kind: self.record.kind().into(),
             commit_id: None, history_tree_id: None, branch_id: None,
             commit_state: CommitState::Published,
-            protection_at_publish: if self.record.kind() == ADDED_FIRST {
+            protection_at_publish: if matches!(self.record.kind(), ADDED_FIRST | CONTENT_PUBLISH) {
                 ProtectionAtPublish::TargetMet
             } else { ProtectionAtPublish::NotApplicable },
             current_health: storage_contract::CurrentHealth::Healthy,

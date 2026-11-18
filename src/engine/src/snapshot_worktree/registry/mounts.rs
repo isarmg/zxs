@@ -35,6 +35,7 @@ impl ReceiptIndex<'_> {
             | Record::ReserveHistoricalCommit(_) | Record::PrepareHistoricalCommit(_)
             | Record::PublishCommitNode(_) | Record::CompleteCommit(_) | Record::BirthFile(_)
             | Record::SaveFile(_) | Record::CompleteFile(_) | Record::ReserveAddedCommit(_)
+            | Record::ReserveContentBatch(_) | Record::PublishContentBatch(_)
             | Record::PublishAddedFile(_) | Record::PublishAddedNode(_)
             | Record::CompleteAddedCommit(_) => return Ok(()),
         };

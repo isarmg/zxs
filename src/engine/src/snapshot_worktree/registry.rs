@@ -28,6 +28,8 @@ mod edits;
 mod files;
 mod commits;
 mod added_commits;
+mod content_batches;
+pub(super) use content_batches::{ContentRetry, FrozenContent};
 pub(crate) use added_commits::PublishedAddedCommitTail;
 pub(super) use added_commits::AddedCommitRetry;
 mod historical;
@@ -68,6 +70,9 @@ pub(crate) struct ReceiptIndex<'a> {
     pending_edits: BTreeMap<WorktreeId, OperationId>,
     commits: BTreeMap<OperationId, CommitRecord<'a>>,
     added_commits: BTreeMap<OperationId, added_commits::AddedCommitRecord<'a>>,
+    content_batches: BTreeMap<OperationId, content_batches::BatchRecord<'a>>,
+    content_instances: BTreeMap<WorktreeId, OperationId>,
+    frozen_content: BTreeMap<storage_contract::BranchId, OperationId>,
     historical: BTreeMap<OperationId, historical::HistoricalRecord<'a>>,
     working: BTreeMap<OperationId, WorkingRecord<'a>>,
     // Only complete indexed publications set this exact handle. Keeping the
@@ -168,6 +173,7 @@ enum CompletionOwner {
     Worktree(OperationId),
     Edit(OperationId),
     File(OperationId),
+    ContentBatch(OperationId),
     AddedFirst,
     AddedNode(OperationId),
     AddedCommit,
@@ -182,6 +188,7 @@ impl CompletionOwner {
             Self::Worktree(_) => snapshot_worktree::WORKTREE_COMPLETE,
             Self::Edit(_) => snapshot_worktree::EDIT_COMPLETE,
             Self::File(_) => snapshot_worktree::FILE_COMPLETE,
+            Self::ContentBatch(_) => snapshot_worktree::CONTENT_PUBLISH,
             Self::AddedFirst => snapshot_worktree::ADDED_FIRST,
             Self::AddedNode(_) => snapshot_worktree::ADDED_NODE,
             Self::AddedCommit => snapshot_worktree::ADDED_COMPLETE,
@@ -256,6 +263,7 @@ pub(super) struct PublishedWorktree<'a> {
     revision: storage_contract::snapshot_worktree::WorktreeRevision,
     publication: Option<&'a CommitRecord<'a>>,
     added_publication: Option<&'a added_commits::AddedCommitRecord<'a>>,
+    content_publication: Option<&'a content_batches::BatchRecord<'a>>,
     added: &'a [crate::directory_worktree::ledger::AddedFile],
 }
 
@@ -305,6 +313,9 @@ impl PublishedWorktree<'_> {
         publication: &crate::directory_worktree::lifecycle::Publication,
         files: &[crate::directory_worktree::projection::FileResult],
     ) -> std::result::Result<(), crate::directory_worktree::ledger::LedgerError> {
+        if let Some(entry) = self.content_publication {
+            return entry.require_publication(publication, files);
+        }
         let entry = self.publication
             .ok_or(crate::directory_worktree::ledger::LedgerError::PublicationPending)?;
         if *publication != entry.plan.publication_at(entry.routing)
@@ -488,6 +499,8 @@ impl<'a> ReceiptIndex<'a> {
             heads: BTreeMap::new(),
             pending_edits: BTreeMap::new(),
             commits: BTreeMap::new(), added_commits: BTreeMap::new(),
+            content_batches: BTreeMap::new(), content_instances: BTreeMap::new(),
+            frozen_content: BTreeMap::new(),
             historical: BTreeMap::new(),
             working: BTreeMap::new(),
             branch_heads: BTreeMap::new(),
@@ -537,6 +550,12 @@ impl<'a> ReceiptIndex<'a> {
             let commitment = decoded.record.commitment().map_err(RegistrationError::Codec)?;
             let receipt = Receipt { original, principal };
             match decoded.record {
+                Record::ReserveContentBatch(plan) => {
+                    index.reserve_content(receipt, plan, commitment, &mut allocations)?;
+                }
+                Record::PublishContentBatch(value) => {
+                    index.publish_content(receipt, value, &decoded.protection)?;
+                }
                 Record::ReserveAddedCommit(plan) => {
                     index.reserve_added_commit(receipt, plan, commitment, &mut allocations)?;
                 }
@@ -580,6 +599,7 @@ impl<'a> ReceiptIndex<'a> {
                 Record::CompleteCommit(completion) => index.complete_commit(receipt, completion)?,
             }
         }
+        index.require_pending_content(source)?;
         Ok(index)
     }
 
@@ -594,6 +614,9 @@ impl<'a> ReceiptIndex<'a> {
     pub(super) fn node(&self, handle: SnapshotHandle) -> Result<PublishedNode<'_>> {
         if self.working.contains_key(&handle.publication) {
             return self.working_node(handle);
+        }
+        if let Some(CompletionOwner::ContentBatch(reserve)) = self.completions.get(&handle.publication) {
+            return self.content_node(*reserve, handle);
         }
         if let Some(CompletionOwner::AddedNode(reserve)) =
             self.completions.get(&handle.publication)
@@ -656,6 +679,8 @@ impl<'a> ReceiptIndex<'a> {
             revision: head.revision,
             publication: self.worktree_publication(handle),
             added_publication: self.worktree_added_publication(handle),
+            content_publication: self.content_instances.get(&handle.worktree_id)
+                .and_then(|op| self.content_batches.get(op)).filter(|e| e.complete().is_some()),
             added: self.added(handle),
         })
     }

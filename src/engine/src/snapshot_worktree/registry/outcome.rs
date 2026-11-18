@@ -71,6 +71,16 @@ impl ReceiptIndex<'_> {
         operation: OperationId,
         principal: &Principal,
     ) -> Result<WorktreeCommitReceipt> {
+        if let Some(record) = self.content_batches.get(&operation) {
+            if record.receipt.principal != *principal || record.plan.host.namespace.repository_id != repository {
+                return Err(RegistrationError::Digest(operation));
+            }
+            return Ok(WorktreeCommitReceipt { repository_id: repository, request: record.plan.request.clone(),
+                result: match record.complete() {
+                    None => WorktreeCommitOutcome::Pending {},
+                    Some(_) => WorktreeCommitOutcome::Complete { snapshot: record.plan.handle() },
+                } });
+        }
         if let Some(record) = self.added_commits.get(&operation) {
             if record.receipt.principal != *principal
                 || self.node(record.plan.source)?.host().namespace.repository_id != repository
