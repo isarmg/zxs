@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct FileRow {
+    pub site: storage_contract::file_container::site::FileSiteWitness,
     pub working: storage_contract::file_draft::FileWorkingState,
     pub container_tags: storage_contract::file_container_tags::ContainerTags,
     pub file_id: String,
@@ -172,6 +173,12 @@ impl<'a> Validation<'a> {
         let (owner, own_id) = match kind {
             "file" => {
                 let row: FileRow = decode_local(body.as_bytes())?;
+                // Standalone portable/retained rows do not carry a native
+                // move issuer. Do not turn valid-looking hashes into grants.
+                if row.site != (storage_contract::file_container::site::FileSite::Created {})
+                    .witness(row.file_id.parse()?)? {
+                    return Err(super::invalid("unsupported or substituted FILE site witness"));
+                }
                 if let Some(branch) = &row.selected_branch_id {
                     storage_contract::validate_id(branch, "br")?;
                 }

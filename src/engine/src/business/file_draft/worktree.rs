@@ -65,6 +65,7 @@ pub(crate) fn birth(
     next.file_containers.insert(
         plan.target.file,
         FileContainerRecord {
+            site: storage_contract::file_container::site::FileSite::Created {},
             history_tree_id: plan.history,
             owner_disk: plan.owner,
             created_by: operation,

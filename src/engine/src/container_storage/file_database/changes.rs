@@ -13,8 +13,8 @@ pub(crate) fn affected(previous: &State, next: &State) -> BTreeSet<String> {
             .chain(next.file_containers.keys()).copied().collect(),
     };
     for file in working_keys {
-        if previous.file_containers.get(&file).map(|record| &record.working)
-            != next.file_containers.get(&file).map(|record| &record.working)
+        if previous.file_containers.get(&file).map(|record| (&record.working,&record.site))
+            != next.file_containers.get(&file).map(|record| (&record.working,&record.site))
         {
             files.insert(file.to_string());
         }

@@ -64,7 +64,11 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
     }
     for (file, history) in files {
         let record = state.file_containers.get(&file).ok_or(Failure::ContainerShape)?;
-        if record.history_tree_id != history
+        // A parsed lifecycle label is not the missing original move/restore.
+        // Leave new physical states fenced until their actual cold transition
+        // and independent FILE/DISK/SYSTEM installer can issue them.
+        if !matches!(record.site,storage_contract::file_container::site::FileSite::Created {})
+            || record.history_tree_id != history
             || !record.replicas.contains_key(&record.owner_disk)
             || record.working.revision().generation().get() == 0
             || (!current.contains(&file)
@@ -234,6 +238,7 @@ impl ContainerPreparation {
                 }
                 let namespace = super::namespace::file_target(&next, file, history)?;
                 next.file_containers.insert(file, FileContainerRecord {
+                    site: storage_contract::file_container::site::FileSite::Created {},
                     history_tree_id: history,
                     owner_disk: disk.disk_id.parse()?,
                     created_by: result.operation_id,
@@ -483,7 +488,8 @@ impl<'a> PublishedReplicaSource<'a> {
 /// Current/retained is the whole-container lifecycle, not version headness.
 /// The retained transaction has not been implemented for this physical format.
 pub(crate) fn require_current_container(state: &State, file: FileId) -> Result<()> {
-    if state.file_deletions.contains_key(&file.to_string()) {
+    if state.file_deletions.contains_key(&file.to_string()) || state.file_containers.get(&file)
+        .is_some_and(|r| !matches!(r.site,storage_contract::file_container::site::FileSite::Created {})) {
         return Err(Failure::WholeContainerLifecycleUnsupported.into());
     }
     Ok(())
@@ -963,6 +969,7 @@ fn verify_transition_read<'a>(
                 return Err(Failure::ContainerScope.into());
             }
             expected.insert(file, FileContainerRecord {
+                site: storage_contract::file_container::site::FileSite::Created {},
                 history_tree_id: version.history_tree_id.parse()?,
                 owner_disk: disk.disk_id.parse()?,
                 created_by: candidate.operation_id,

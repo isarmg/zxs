@@ -21,6 +21,7 @@ pub(crate) struct ReviewedFileSite {
     pub(crate) base: DraftBase,
     pub(crate) history: HistoryTreeId,
     pub(crate) file_birth: OperationId,
+    pub(crate) previous: storage_contract::file_container::site::FileSite,
     pub(crate) owner: DiskId,
     pub(crate) replica: ContainerReplica,
     pub(crate) root: RootBinding,
@@ -46,7 +47,7 @@ impl HeldRetainedEndpoints {
         context.require_write()?;
         let state=context.state;
         let record=state.file_containers.get(&target.file).ok_or(Failure::ContainerScope)?;
-        if context.config.generation().is_some() || context.current_namespaces.is_some()
+        if !matches!(record.site,storage_contract::file_container::site::FileSite::Created {}) || context.config.generation().is_some() || context.current_namespaces.is_some()
             || state.operations.contains_key(&operation) || state.file_deletions.contains_key(&target.file.to_string())
             || target.path.parent().is_some() || record.namespace.parent!=ContainerParent::Root
             || !matches!(record.working,FileWorkingState::ManualClean{..}) || record.replicas.len()!=1
@@ -106,7 +107,7 @@ impl HeldRetainedEndpoints {
         let result=Self {
             state:Arc::downgrade(state), resources:Arc::downgrade(context.disk_resources), source,
             facts:ReviewedFileSite {target:target.clone(),base:selection.base,history:selection.history,
-                file_birth:record.created_by,owner:id,replica:replica.clone(),root:root.clone(),
+                file_birth:record.created_by,previous:record.site.clone(),owner:id,replica:replica.clone(),root:root.clone(),
                 allocation,operation,actor:actor.clone()},
         };
         result.require_unmoved(engine)?;
@@ -127,7 +128,7 @@ impl HeldRetainedEndpoints {
         let disk=self.source.disk();
         if owner.binding()!=&self.facts.root || !std::ptr::eq(owner.common()?,disk.content_root()?)
             || !std::ptr::eq(owner.deleted()?,disk.deleted_root()?)
-            || record.owner_disk!=self.facts.owner || record.created_by!=self.facts.file_birth
+            || record.site!=self.facts.previous || record.owner_disk!=self.facts.owner || record.created_by!=self.facts.file_birth
             || record.replicas.len()!=1 || record.replicas.get(&self.facts.owner)!=Some(&self.facts.replica)
         {return Err(Failure::RootIdentity.into())}
         require_areas(disk,&self.facts.root,self.facts.replica.entity)?;

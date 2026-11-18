@@ -7,6 +7,7 @@ use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 
 pub mod retained;
+pub mod site;
 
 /// Fixed-width wire evidence makes an unobserved preparation's metadata bound
 /// independent of the eventual device/inode numbers. Zero is a budget shape,
@@ -201,6 +202,8 @@ pub struct FileContainerRecord {
     pub owner_disk: DiskId,
     pub created_by: OperationId,
     pub namespace: ContainerNamespace,
+    /// Mandatory native location. There is no missing-field/old-format default.
+    pub site: site::FileSite,
     pub working: FileWorkingState,
     pub replicas: BTreeMap<DiskId, ContainerReplica>,
 }

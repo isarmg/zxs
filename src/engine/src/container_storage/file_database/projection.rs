@@ -66,6 +66,9 @@ fn with_events(
         ));
     }
     let state = view.state();
+    let file_id=file.parse::<storage_contract::FileId>()?;
+    let record=state.file_containers.get(&file_id)
+        .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerShape)?;
     let memberships = view.owners().file_rows(file);
     let mut rows = SCHEMA.records();
     let mut nodes = file_nodes::NodeProjection::new(state);
@@ -73,9 +76,8 @@ fn with_events(
         "file",
         file,
         &FileRow {
-            working: state.file_containers.get(&file.parse::<storage_contract::FileId>()?)
-                .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerShape)?
-                .working.clone(),
+            site: record.site.witness(file_id)?,
+            working: record.working.clone(),
             file_id: file.to_owned(),
             container_tags: state.container_tags
                 .get(&file.parse::<storage_contract::FileId>()?)

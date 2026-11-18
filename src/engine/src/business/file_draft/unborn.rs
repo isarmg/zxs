@@ -142,6 +142,7 @@ fn birth_record(
     require_fresh(namespace.state(), birth.file, birth.entry)?;
     let binding: ContainerNamespace = namespace.namespace_for_birth(&birth.path, birth.entry)?;
     Ok(FileContainerRecord {
+        site: storage_contract::file_container::site::FileSite::Created {},
         history_tree_id: namespace.history(),
         owner_disk: birth.owner,
         created_by: operation,
