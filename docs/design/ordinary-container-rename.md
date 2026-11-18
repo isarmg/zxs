@@ -55,5 +55,5 @@ ContainerPreparation／verify_transition 保留所有旧 replica occurrence，�
 
 - A 名创建的旧 Version、主分支改为 B、B 名下新增 Version：三盘有效副本只移动各自的外层原目录；两个不同叶名持有原 ID、inode 与字节。独立文件分支改名或选择不更名该容器，不制造新 BODY。
 - 外层目标碰撞或已有未知、被替换的 BODY：拒绝覆盖、收养或继续错误尾写；保留原实体。Pending 不借未经全员 FINALIZE 的外部改名恢复。
-- 从原决定冷开、丢失回包重试，以及对应恢复、历史导出、受控 HTTP/管理读取均核相同的原版本。普通下载名和 Worktree 显示名按[命名合同](../adr/container-current-name.md)分别判断。
+- 从原决定冷开、丢失回包重试，以及对应恢复、历史导出、受控 HTTP/管理读取均核相同的原版本。受控下载名与当时的存储名按[命名合同](../adr/container-current-name.md)分别判断。
 - 此处不证明跨父目录移动／整容器删除、断盘改名、混合内容改名、真实 SMB、备份 900 秒或浏览器交互已经验收。
