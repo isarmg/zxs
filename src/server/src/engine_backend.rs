@@ -415,7 +415,7 @@ impl Backend for EngineBackend {
             Ok(status) if matches!(status.phase, Blocked | Copying | SourceChanged | Verifying) => {
                 Err(ApiError::conflict(
                     status.error_code.unwrap_or(storage_contract::ErrorCode::RecoveryRequired),
-                    format!("backup preparation {} did not finish; inspect the original task after restart", status.operation_id),
+                    &format!("backup preparation {} did not finish; inspect the original task after restart", status.operation_id),
                 ))
             }
             Ok(_) => Ok(()),
