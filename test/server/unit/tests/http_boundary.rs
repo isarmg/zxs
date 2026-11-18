@@ -38,14 +38,14 @@ async fn contract_input_routes_keep_exact_error_envelopes() {
     for (method, path, input, expected) in [
         (
             "POST",
-            "/api/repositories",
-            json!({"name":"../bad","primary_slot_id":"P01","target_copies":1,"operation_id":"bad"}),
+            "/api/file-manager/disks/P01/namespace",
+            json!({"kind":"mkdir","path":"../bad","operation_id":"bad"}),
             invalid_id(),
         ),
         (
             "POST",
-            "/api/repositories/repository/branches",
-            json!({"source_commit_id":"source","name":"../bad","operation_id":"bad"}),
+            "/api/file-manager/files/file/branches",
+            json!({"source_version_id":"version","name":"../bad","operation_id":"bad"}),
             invalid_id(),
         ),
         (
@@ -237,7 +237,7 @@ async fn routing_failures_keep_status_allow_and_error_fields() {
     let app = application(root.path());
     for (method, path, allowed) in [
         ("POST", "/api/capabilities", "GET,HEAD"),
-        ("DELETE", "/api/repositories", "GET,HEAD,POST"),
+        ("DELETE", "/api/repositories", "GET,HEAD"),
         ("GET", "/api/auth/login", "POST"),
         ("OPTIONS", "/healthz", "GET,HEAD"),
     ] {
@@ -274,6 +274,25 @@ async fn routing_failures_keep_status_allow_and_error_fields() {
         assert_error(response, StatusCode::NOT_FOUND, "NOT_FOUND", false).await;
     }
     let (token, _, _) = authenticated(&app).await;
+    // The two old creators share their paths with still-readable collections.
+    // Even a well-formed authenticated request is a method refusal, not an
+    // administrative write, missing body, or backend admission failure.
+    for (path, body) in [
+        ("/api/repositories", json!({"name":"Repository","primary_slot_id":"P01","target_copies":1,
+            "operation_id":storage_contract::OperationId::generate().unwrap()})),
+        ("/api/repositories/repository/branches", json!({"source_commit_id":"source","name":"Side",
+            "operation_id":storage_contract::OperationId::generate().unwrap()})),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder().method("POST").uri(path)
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json_codec::to_vec(&body).unwrap())).unwrap()
+        ).await.unwrap();
+        assert_eq!(response.headers()[header::ALLOW], "GET,HEAD");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_error(response, StatusCode::METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED", false).await;
+    }
     let response = app
         .oneshot(
             Request::builder()
@@ -302,7 +321,7 @@ async fn bounded_json_routes_return_payload_too_large() {
     for (path, limit) in [
         ("/api/auth/login", 8 * 1024),
         ("/api/auth/password", 16 * 1024),
-        ("/api/repositories", 1024 * 1024),
+        ("/api/file-manager/disks/P01/namespace", 1024 * 1024),
     ] {
         let response = app
             .clone()
@@ -1148,20 +1167,6 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             "/api/history-trees/history/merge-links",
             Some(
                 json!({"source_branch_id":"source","source_commit_id":"source_commit","target_branch_id":"target","target_commit_id":"target_commit","operation_id":"op_00000000000000000000000000000000"}),
-            ),
-        ),
-        (
-            "POST",
-            "/api/repositories",
-            Some(
-                json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":"op_00000000000000000000000000000000"}),
-            ),
-        ),
-        (
-            "POST",
-            "/api/repositories/repo/branches",
-            Some(
-                json!({"source_commit_id":"source","name":"Side","operation_id":"op_00000000000000000000000000000000"}),
             ),
         ),
         (

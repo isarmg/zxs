@@ -255,21 +255,9 @@ impl Backend for TestBackend {
     fn create_repository(
         &self,
         _identity: &crate::auth::Identity,
-        request: crate::CreateRepository,
+        _request: crate::CreateRepository,
     ) -> Result<storage_contract::Repository, crate::ApiError> {
-        Ok(storage_contract::Repository {
-            repository_id: "repository".into(),
-            name: request.name.as_str().into(),
-            history_tree_id: "history".into(),
-            main_branch_id: "branch".into(),
-            primary_slot_id: request.primary_slot_id,
-            target_copies: request.target_copies,
-            name_policy: name_policy::NAME_POLICY.into(),
-            unicode_version: name_policy::UNICODE_VERSION.into(),
-            smb_enabled: true,
-            smb_binding_generation: 1,
-            file_manager_root: false,
-        })
+        Err(crate::ApiError::unsupported())
     }
     fn create_branch(
         &self,
@@ -852,50 +840,40 @@ async fn cookie_mutations_require_csrf_and_foreign_origins_are_rejected() {
     let root = crate::tests::private_tempdir();
     let app = application(root.path());
     let (token, csrf, cookie) = authenticated(&app).await;
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/repositories")
-                .header("cookie", &cookie)
-                .header("host", "127.0.0.1:7400")
-                .header("origin", "http://127.0.0.1:7400")
-                .body(Body::from(json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate().unwrap()}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    // The cookie must authorize a live session mutation, not an unavailable
+    // repository creator. A rejected request must leave this same session usable.
+    let logout = || {
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/logout")
+            .header("cookie", &cookie)
+            .header("host", "127.0.0.1:7400")
+            .header("origin", "http://127.0.0.1:7400")
+    };
+    let response = app.clone().oneshot(logout().body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/repositories")
-                .header("cookie", &cookie)
-                .header("x-csrf-token", csrf)
-                .header("host", "127.0.0.1:7400")
-                .header("origin", "http://127.0.0.1:7400")
-                .body(Body::from(json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate().unwrap()}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let me = || {
+        Request::builder()
+            .uri("/api/auth/me")
+            .header("authorization", format!("Bearer {token}"))
+            .header("host", "127.0.0.1:7400")
+    };
+    assert_eq!(
+        app.clone().oneshot(me().body(Body::empty()).unwrap()).await.unwrap().status(),
+        StatusCode::OK,
+    );
+    let response = app.clone().oneshot(
+        me().header("origin", "https://foreign.invalid").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = app.clone().oneshot(
+        logout().header("x-csrf-token", csrf).body(Body::empty()).unwrap(),
+    ).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/auth/me")
-                .header("authorization", format!("Bearer {token}"))
-                .header("origin", "https://foreign.invalid")
-                .header("host", "127.0.0.1:7400")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        app.oneshot(me().body(Body::empty()).unwrap()).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED,
+    );
 }
 
 #[tokio::test]

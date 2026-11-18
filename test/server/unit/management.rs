@@ -26,13 +26,7 @@ fn managed_readiness_exposes_real_index_failure_without_rejecting_published_oper
     let index = data.join("index.sqlite");
     let projected_before = projection_failure::fail_projection(&index);
     engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("published").unwrap(),
-            "P01",
-            1,
-            "admin",
-            operation,
-        )
+        .create_disk_root("P01", "admin", operation)
         .unwrap();
     assert_eq!(engine.state().sequence, before + 1);
     assert_eq!(
@@ -199,14 +193,15 @@ async fn missing_data_disks_leave_login_diagnostics_and_health_usable() {
             .0,
         StatusCode::UNAUTHORIZED
     );
-    let invalid = request(&app, "/api/repositories", Some(token), Some(json!({}))).await;
+    let ordinary_mkdir = "/api/file-manager/disks/P01/namespace";
+    let invalid = request(&app, ordinary_mkdir, Some(token), Some(json!({}))).await;
     assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
     let (status, error) = request(
         &app,
-        "/api/repositories",
+        ordinary_mkdir,
         Some(token),
         Some(json!({
-            "name":"Unavailable", "primary_slot_id":"P01", "target_copies":3,
+            "kind":"mkdir", "path":"Unavailable",
             "operation_id":storage_contract::OperationId::generate().unwrap()
         })),
     )
@@ -628,8 +623,13 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
             .iter()
             .all(|disk| disk.level == 1 && disk.upstream_slot_id.is_none())
     );
-    let (code, repository) = request(&app, "/api/repositories", Some(token), Some(json!({"name":"single-copy","primary_slot_id":"D01","target_copies":1,"operation_id":storage_contract::new_id("op").unwrap()}))).await;
-    assert_eq!(code, StatusCode::OK, "{repository:?}");
+    let slot = &config.disks.first().unwrap().slot_id;
+    let (code, created) = request(
+        &app, &format!("/api/file-manager/disks/{slot}/namespace"), Some(token),
+        Some(json!({"kind":"mkdir","path":"ordinary","operation_id":storage_contract::OperationId::generate().unwrap()})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{created:?}");
     if remove_data_disk {
         drop(app);
         drop(backend);
@@ -1170,13 +1170,7 @@ async fn background_reopen_uses_local_workspace_limits_and_authenticated_capacit
     config.max_retained_workspaces_per_principal = 1;
     let mut engine = storage_engine::Engine::initialize(&data, config.clone()).unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("capacity").unwrap(),
-            "P01",
-            1,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "admin", storage_contract::OperationId::generate().unwrap())
         .unwrap();
     engine
         .create_workspace(&repo.main_branch_id, "admin")

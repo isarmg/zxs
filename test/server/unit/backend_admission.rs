@@ -1168,15 +1168,11 @@ fn workspace_body(method: &str, path: &str) -> Value {
         json!({"version_ids":["version"]})
     } else if method == "POST" && path == "/api/history-trees/history/split-plans" {
         json!({"cut_commit_id":"cut"})
-    } else if method == "POST" && path == "/api/repositories" {
-        json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST"
         && path.starts_with("/api/file-manager/files/")
         && path.ends_with("/branches")
     {
         json!({"source_version_id":"version","name":"Side","operation_id":"op_00000000000000000000000000000000"})
-    } else if method == "POST" && path.ends_with("/branches") {
-        json!({"source_commit_id":"source","name":"Side","operation_id":"op_00000000000000000000000000000000"})
     } else if path.starts_with("/api/file-manager/disks/") && path.ends_with("/directory-branches")
     {
         json!({
@@ -1331,8 +1327,6 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
         "/api/repositories/repo_00000000000000000000000000000000/directory-git/stage",
     ),
     ("POST", "/api/branches/branch/archive"),
-    ("POST", "/api/repositories/repo/branches"),
-    ("POST", "/api/repositories"),
     ("POST", "/api/history-trees/history/merge-links"),
     ("GET", "/api/commits/commit"),
     ("GET", "/api/history-trees/history/graph"),
