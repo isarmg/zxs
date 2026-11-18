@@ -103,9 +103,8 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `GET /api/system/status` | 管理员读取真实 CPU、内存、磁盘容量及 CPU/磁盘功耗；不可用值为 null，功耗另含原因代码 |
 | `GET /api/system/history?range={range}` | 管理员读取后台监测历史；1min/30min/1h/24h/1month（最近30天），最多361个真实聚合点，与文件操作历史分离 |
 | `GET /api/capabilities` | 协议、命名策略、上传范围、全量能力及入口限制 |
-| `GET /api/repositories` | 当前系统仓库列表 |
+| `GET /api/repositories`、`GET /api/repositories/{repo}` | 读取已登记根的列表或详情 |
 | `GET /api/repositories/{repo}/branches` | 分支及归档状态 |
-| `POST /api/repositories/{repo}/branches` | 兼容目录快照入口：从指定提交登记各文件引用，不复制来源正文 |
 | `POST /api/branches/{branch}/archive` | 显式归档 |
 | `GET /api/branches/{branch}/tree` | 固定提交下的目录列表 |
 | `POST /api/branches/{branch}/resolve` | 把路径解析为条目与确定版本 |

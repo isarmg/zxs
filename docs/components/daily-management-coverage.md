@@ -7,8 +7,7 @@ Web 管理页使用 `src/web/src/admin/request.rs` 的 HTTP 请求构建器。�
 | 管理功能 | HTTP 端点 | Web 入口 |
 |---|---|---|
 | 当前管理员 | POST /api/auth/login；GET /api/auth/me；POST /api/auth/logout、/api/auth/password | 登录、只读用户名、退出和改密；无账户 CRUD、角色或准入表单 |
-| 创建仓库 | POST /api/repositories | 仓库表单 |
-| 仓库列表 | GET /api/repositories | 查看仓库 |
+| 已登记根 | GET /api/repositories；GET /api/repositories/{id} | 文件管理器从已登记磁盘进入 |
 | 磁盘 | GET /api/admin/disks | 查看磁盘 / 现有文件管理器磁盘导航 |
 | 备份拓扑 | GET /api/backup-topologies/default | 查看拓扑 |
 | 路径保护策略 | GET/PUT /api/policies/{id} | 查看当前值；策略表单仅创建／更新无稳定 scope 的现行路径规则，要求显式预期代数 |
@@ -18,7 +17,7 @@ Web 管理页使用 `src/web/src/admin/request.rs` 的 HTTP 请求构建器。�
 | 目录树 | GET /api/branches/{id}/tree | 查看分支树 / 现有文件管理器浏览 |
 | 文件历史 | GET /api/files/{id}/history | 查看文件历史 / 现有文件详情 |
 | 历史图 | GET /api/history-trees/{id}/graph | 查看历史图 / 现有历史树 |
-| 创建历史分支 | POST /api/repositories/{id}/branches | 历史分支表单，包含源提交和名称 |
+| 创建文件分支 | POST /api/file-manager/files/{file}/branches | 文件详情：选择该文件自己的源版本，可用 source_node_id 固定来源节点 |
 | 关系合并标记 | POST /api/history-trees/{id}/merge-links | 合并链接表单，包含精确的源/目标分支和提交 |
 | 命名空间 | POST /api/file-manager/disks/{slot}/namespace 或 /namespace-batch | 现有文件夹创建/重命名/移动/复制/删除控件；不新增内容传输 |
 | 历史内容清理 | POST /api/history-trees/{id}/purge-plans | 清理预览，显式版本 ID |

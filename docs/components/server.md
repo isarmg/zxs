@@ -156,13 +156,13 @@ server libtest，并拒绝编译诊断、不完整产物、缺测试、零测试
 | `/api/repositories/{repo}/default-branch` | GET/PUT Web/SMB 共用默认根目录分支 |
 | `/api/file-manager/files/{file}/nodes/{node}` | PATCH 文件路径节点独立备注，最多128 UTF-8字节 |
 | `/api/file-manager/files/{file}/branches/{branch}` | PATCH 公共文件分支标签，元数据修改，不生成版本或目录子树 |
-| `/api/file-manager/files/{file}/history`、`/branches`、`/select`、`/metadata` | GET 文件版本/分支/备注；POST 创建、选择文件分支或更新文件备注 |
+| `/api/file-manager/files/{file}/history`、`/branches`、`/select`、`/metadata` | GET 文件版本/分支/备注；POST 从指定版本创建文件分支（可用 source_node_id 固定来源节点）、选择文件分支或更新文件备注 |
 | `/api/file-manager/versions/{version}/metadata`、`/api/file-manager/history` | POST 版本备注；GET 最近实际文件操作 |
 | `/api/system/status` | GET 管理员 CPU、内存与磁盘真实容量采样 |
-| `/api/repositories`、`/api/repositories/{repo}` | GET 列表/详情，POST 建仓 |
+| `/api/repositories`、`/api/repositories/{repo}` | GET 已登记根的列表／详情 |
 | `/api/repositories/{repo}/smb-binding` | GET/PUT 显式 SMB 分支绑定 |
 | `/api/repositories/{repo}/directory-git`、`/initialize`、`/stage`、`/children/stage` | GET 准确目录仓库状态；POST 显式初始化、暂存自身与孩子准确 HEAD，见[目录 Git 边界](server/src/directory-git.md) |
-| `/api/repositories/{repo}/branches` | GET 分支、POST 登记独立待写入分支 |
+| `/api/repositories/{repo}/branches` | GET 此根的分支及归档状态 |
 | `/api/branches/{branch}`、`/tree`、`/resolve` | GET 元信息/目录树、POST 路径解析 |
 | `/api/branches/{branch}/write-sessions`、`/archive` | POST 工作区写会话或归档 |
 | `/api/workspaces`、`/api/workspaces/{workspace}` | POST 创建、GET 状态；可绑定历史提交 |
