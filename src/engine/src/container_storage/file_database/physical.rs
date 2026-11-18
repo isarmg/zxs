@@ -71,10 +71,15 @@ impl HeldFileImage {
 /// valid local header and this type alone cannot establish a native frontier.
 pub(crate) struct ResidentFileImage {
     handle: HeldFileImage,
+    _permit: crate::engine::PayloadProofReservation,
     pub(crate) file: storage_contract::FileId,
     pub(crate) history: storage_contract::HistoryTreeId,
     pub(crate) sequence: u64,
     pub(crate) records: storage_contract::ContentHash,
+    // Native FILE decides these exact version and working records. Physical
+    // sources below must not be selected by path, label or current head.
+    pub(crate) working: storage_contract::file_draft::FileWorkingState,
+    pub(crate) versions: Vec<(crate::FileVersion, crate::ContentState)>,
 }
 
 impl ResidentFileImage {
@@ -82,6 +87,8 @@ impl ResidentFileImage {
         holder: &crate::container_storage::ObservedContainerReplica,
         file: storage_contract::FileId, history: storage_contract::HistoryTreeId,
     ) -> Result<Self> {
+        let permit = crate::engine::payload_proof_budget().reserve(1)
+            .ok_or_else(|| crate::Error::new(crate::ErrorCode::ResourceLimit, "FILE image descriptor budget exhausted"))?;
         let root = holder.container()?;
         let handle = HeldFileImage::open(root)?;
         // Read the actual SQLite pages and run the full native FILE owner,
@@ -95,10 +102,39 @@ impl ResidentFileImage {
         }
         handle.require_named(holder.container()?)?;
         let records = rows.records_hash.parse().map_err(|_| invalid("invalid verified FILE record commitment"))?;
-        Ok(Self { handle, file, history, sequence: rows.sequence, records })
+        let mut working = None;
+        let mut versions = Vec::new();
+        for row in &rows.records {
+            match row.kind {
+                "file" => {
+                    let value: super::rows::FileRow = super::rows::decode_local(row.body.as_bytes())?;
+                    if working.replace(value.working).is_some() { return Err(invalid("duplicate native FILE row")); }
+                }
+                "version" => {
+                    let value: super::rows::VersionRow = super::rows::decode_local(row.body.as_bytes())?;
+                    versions.push((value.version, value.content_state));
+                }
+                // These rows have already passed the complete SQLite closure.
+                // They are not full BODY occurrences.
+                "branch" | "path_change" | "metadata" | "deletion" | "lifecycle" | "merge" | "merge_link" => {}
+                _ => return Err(invalid("unknown native FILE row kind")),
+            }
+        }
+        let working = working.ok_or_else(|| invalid("missing native FILE row"))?;
+        Ok(Self { handle, _permit: permit, file, history, sequence: rows.sequence, records, versions, working })
     }
 
     pub(crate) fn bytes(&self) -> &[u8] { self.handle.held.bytes() }
+
+    /// Complete original logical rows; equality does not change the on-disk
+    /// header or promote an unrelated State sequence into a FILE writer.
+    pub(crate) fn require_rows(&self, view: crate::state_projection::StateProjection<'_>) -> Result<()> {
+        let expected = super::CapturedMaterial::from_projection(view, &self.file.to_string(), &self.history.to_string())?;
+        if expected.records_hash != self.records.to_string() {
+            return Err(invalid("resident FILE rows differ from the complete selected native projection"));
+        }
+        Ok(())
+    }
 
     pub(crate) fn require_named(&self, holder: &crate::container_storage::ObservedContainerReplica) -> Result<()> {
         self.handle.require_named(holder.container()?)

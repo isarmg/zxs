@@ -1,6 +1,8 @@
 //! Independently held SQLite half of one FILE material. A logical FILE
 //! commitment is not its raw representation, physical bodies, lifecycles,
 //! authority to install bytes, or coverage of any other registration.
+pub(in crate::engine) mod clean_bodies;
+
 use super::{Representation, Schema, ScopeClosureError as Failure};
 use crate::{
     DiskConfig, Result, State, ValidatedConfig,
