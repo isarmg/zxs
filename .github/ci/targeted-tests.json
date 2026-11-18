@@ -6248,10 +6248,11 @@
             "engine_backend::automatic_mode_tests::real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_cold",
             "engine_backend::automatic_mode_tests::accepted_auto_rpc_save_cold_completes_before_mode_switch_and_replays_only_original_request",
             "engine_backend::automatic_mode_tests::live_auto_generation_after_one_mode_switch_saves_a_shared_draft_without_history",
-            "smb_rpc::tests::native_dispatch_tests::live_automatic_save_becomes_manual_draft_through_the_production_dispatcher",
-            "smb_rpc::tests::native_dispatch_tests::old_automatic_handle_cannot_publish_after_switching_back_to_automatic"
+            "smb_rpc::tests::native_dispatch_tests::same_native_smb_handle_continues_after_its_own_automatic_publication",
+            "smb_rpc::tests::native_dispatch_tests::old_native_writer_refuses_an_intervening_manual_mode_even_after_its_own_publication",
+            "smb_rpc::tests::native_dispatch_tests::restoring_automatic_mode_does_not_resurrect_an_old_native_writer"
           ],
-          "max_tests": 6
+          "max_tests": 7
         },
         {
           "package": "storage-server",
@@ -7556,9 +7557,10 @@
           "kind": "lib",
           "exact": [
             "engine::history_window::read::lifecycle::tests::closed_interval_uses_the_real_saved_body_and_the_deletions_frozen_branch_heads",
-            "engine::history_window::read::lifecycle::tests::two_native_existing_selections_bound_real_content_only_at_the_exact_final_decision"
+            "engine::history_window::read::lifecycle::tests::two_native_existing_selections_bound_real_content_only_at_the_exact_final_decision",
+            "engine::history_window::read::lifecycle::tests::copied_merge_uses_the_original_command_and_only_destination_node_identities"
           ],
-          "max_tests": 2,
+          "max_tests": 3,
           "timeout_seconds": 900
         }
       ]
@@ -7633,6 +7635,136 @@
             "core"
           ],
           "mode": "check"
+        }
+      ]
+    },
+    "native-disk-original-inventory": {
+      "reason": "Read the selected held DISK namespace and FILE occurrences, exact paged ordinal coverage, registered empty Unborn body inventory and SYSTEM material. These measurements do not prove integrated subsequent FILE/DISK/SYSTEM publication or cold recovery.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::scope_closure::inventory::tests::paged_original_ordinals_keep_independent_coverage",
+            "engine::scope_closure::inventory::tests::one_inclusion_walk_requires_every_file_and_namespace_occurrence_but_not_backup_material",
+            "engine::scope_closure::system::tests::original_nonzero_system_descriptor_uses_all_rows_of_its_actual_state_and_configuration",
+            "engine::scope_closure::file::clean_bodies::tests::full_body_table_requires_complete_named_versions_and_original_inodes",
+            "engine::scope_closure::file::clean_bodies::tests::real_unborn_birth_requires_its_file_and_existing_empty_history_directory",
+            "snapshot_worktree::tests::actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node",
+            "snapshot_worktree::tests::scoped_nested_host_requires_every_original_ordinary_component_without_initializing_a_repository"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "frozen-move-selected-original-objects": {
+      "reason": "An isolated native Move candidate must reconstruct from its original selected participants and every dependency. This is not cutover acceptance.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "exact": [
+            "move_candidate::exact_candidate_and_all_dependencies_reconstruct_after_cold_start_without_voting",
+            "move_candidate::missing_one_original_members_object_does_not_fallback_to_other_complete_members"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900,
+          "name": "file_history_copy"
+        }
+      ]
+    },
+    "ordinary-workspace-file-origin": {
+      "reason": "Validate the real original Workspace single-FILE producer, raw material/canonical sealed provenance, source identity and cold retry. No historical-data migration or blanket attribution of other producers.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "persist::workspace_file_origin::tests::native_original_binds_real_occurrence_single_event_and_principal_after_reopen",
+            "persist::workspace_file_origin::tests::complete_before_after_and_real_prepared_body_reject_one_field_substitutions",
+            "persist::workspace_file_origin::tests::wire_uses_its_real_sealed_manifest_and_cannot_be_relabelled_native",
+            "persist::workspace_file_origin::tests::actual_escaped_envelope_counts_the_last_byte_including_nested_wire_fields",
+            "engine::workspace_provenance::tests::original_workspace_decision_is_manual_only_and_survives_exact_cold_retry"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "physical-packed-working-material": {
+      "reason": "Check flat working ranges, physical pack index/length and chunk readback, original held inode, cold reads, current-State configured quota, and replacement peak. The ten-GiB layout arithmetic is not 100-GiB throughput or a real Samba measurement.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "file_draft::manifest::packed::tests::private_chunk_index_is_frame_independent_and_bound_to_one_pack_length_and_id",
+            "file_draft::manifest::packed::tests::ten_gib_is_one_physical_segment_while_rollover_is_not_a_logical_file_ceiling",
+            "file_draft::manifest::ranges::tests::ten_separately_flushed_ten_gib_edits_map_to_ten_flat_runs_not_transport_frames",
+            "file_draft::manifest::ranges::tests::last_write_wins_preserves_both_old_offsets_and_explicit_zero_is_not_a_base_gap",
+            "file_draft::manifest::ranges::tests::fragmented_ranges_and_distinct_pack_limits_are_separate_and_failure_preserves_original"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "container_storage::ordinary_preparation::working::pack::tests::frame_fragments_share_one_inode_and_a_cold_range_checks_only_its_selected_chunks",
+            "container_storage::ordinary_preparation::working::pack::tests::partial_and_replaced_pack_names_never_become_accepted_material",
+            "container_storage::ordinary_preparation::working::write::capacity_tests::packed_working_quota_is_bound_to_one_state_and_charges_retained_plus_replacement",
+            "container_storage::ordinary_preparation::working::write::capacity_tests::packed_configured_peak_rejects_overflow_and_preexisting_excess_even_for_an_empty_stage",
+            "business::file_draft::tests::unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "native-acknowledged-file-writer": {
+      "reason": "Same native writer can continue only from its own acknowledged Automatic save; unacknowledged data, renamed, copied, reselected and mode-changed sources do not grant continuation. Not live Samba acceptance.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "snapshot_worktree::drafts::native_tests::automatic_nodes::same_idle_writer_reopens_only_its_acknowledged_automatic_body_for_the_next_range",
+            "snapshot_worktree::drafts::native_tests::automatic_nodes::unacknowledged_edit_is_not_reissued_or_rebased_if_automatic_publication_intervenes",
+            "snapshot_worktree::drafts::native_tests::automatic_nodes::idle_automatic_writer_rejects_renamed_reselected_and_independently_copied_occurrences",
+            "snapshot_worktree::drafts::native_tests::automatic_nodes::a_deleted_or_hidden_projection_cannot_issue_or_rebind_an_idle_writer"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "formal-mounted-file-head": {
+      "reason": "Inner explicit mounted FILE selection reads its formal branch HEAD and held body, rather than a saved/inherited body, a draft or newer unrelated fork. No outer commit/API closure is implied.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "snapshot_worktree::public::transport::content_overlay::publish::mounted_file_head::selected_worktree_occurrence_reads_latest_head_of_its_branch_not_its_saved_or_inherited_body",
+            "snapshot_worktree::public::transport::content_overlay::publish::mounted_file_head::formal_merge_head_retains_its_node_while_selecting_its_older_body_not_the_newer_fork_or_private_edit"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
         }
       ]
     }
@@ -8303,7 +8435,8 @@
     {
       "path": "src/engine/src/container_storage/ordinary_preparation/working/write.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "physical-packed-working-material"
       ]
     },
     {
@@ -8397,7 +8530,8 @@
     {
       "path": "src/engine/src/engine/file_draft/native_io.rs",
       "groups": [
-        "worktree-added-native"
+        "worktree-added-native",
+        "native-acknowledged-file-writer"
       ]
     },
     {
@@ -8798,7 +8932,8 @@
     {
       "path": "src/engine/src/container_storage/ordinary_preparation/working.rs",
       "groups": [
-        "ordinary-manual-incremental"
+        "ordinary-manual-incremental",
+        "physical-packed-working-material"
       ]
     },
     {
@@ -21415,7 +21550,8 @@
     {
       "path": "test/engine/unit/snapshot_worktree/draft_gateway/automatic_nodes.rs",
       "groups": [
-        "automatic-management-observation"
+        "automatic-management-observation",
+        "native-acknowledged-file-writer"
       ]
     },
     {
@@ -22529,7 +22665,8 @@
     {
       "path": "test/engine/unit/engine/scope_clean_file_bodies.rs",
       "groups": [
-        "resident-file-original-bodies"
+        "resident-file-original-bodies",
+        "native-disk-original-inventory"
       ]
     },
     {
@@ -22688,6 +22825,253 @@
       "path": "src/engine/src/persist/snapshot_worktree/mount_change.rs",
       "groups": [
         "worktree-clean-mount-originals"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/namespace_host/scope.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_move_decision/candidate/objects.rs",
+      "groups": [
+        "frozen-move-selected-original-objects"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/directory.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/directory/census.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/directory/instances.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/directory/ordinary.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/directory/pending.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/directory/published.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/directory/record.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/file/census.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/inventory.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/inventory/row.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/system.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/local_material.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/local_material/group.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/local_material/ordinary.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/scope_inventory_rows.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/scope_system_material.rs",
+      "groups": [
+        "native-disk-original-inventory"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/workspace_file_origin.rs",
+      "groups": [
+        "ordinary-workspace-file-origin"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/workspace_file_origin/input.rs",
+      "groups": [
+        "ordinary-workspace-file-origin"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/workspace_file_origin/subject.rs",
+      "groups": [
+        "ordinary-workspace-file-origin"
+      ]
+    },
+    {
+      "path": "test/engine/unit/workspace_file_origin_tests.rs",
+      "groups": [
+        "ordinary-workspace-file-origin"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft/manifest/packed.rs",
+      "groups": [
+        "physical-packed-working-material"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft/manifest/ranges.rs",
+      "groups": [
+        "physical-packed-working-material"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/working/pack.rs",
+      "groups": [
+        "physical-packed-working-material"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/working/proof.rs",
+      "groups": [
+        "physical-packed-working-material"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/owned/working_pack.rs",
+      "groups": [
+        "physical-packed-working-material"
+      ]
+    },
+    {
+      "path": "test/contract/unit/packed_draft_ranges.rs",
+      "groups": [
+        "physical-packed-working-material"
+      ]
+    },
+    {
+      "path": "test/contract/unit/packed_working_material.rs",
+      "groups": [
+        "physical-packed-working-material"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/working_pack.rs",
+      "groups": [
+        "physical-packed-working-material"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/working_save_capacity.rs",
+      "groups": [
+        "physical-packed-working-material"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/selection.rs",
+      "groups": [
+        "formal-mounted-file-head"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/mounted_file_head.rs",
+      "groups": [
+        "formal-mounted-file-head"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft/native_io/continuation.rs",
+      "groups": [
+        "native-acknowledged-file-writer",
+        "ordinary-smb-manual-draft"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/read/lifecycle/copy_merges.rs",
+      "groups": [
+        "original-file-timeline-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/workspace_provenance.rs",
+      "groups": [
+        "ordinary-workspace-file-origin"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/workspace_provenance_tests.rs",
+      "groups": [
+        "ordinary-workspace-file-origin"
+      ]
+    },
+    {
+      "path": "test/tools/contract-check/fixtures/history-window/merge-inputs.json",
+      "groups": [
+        "container-tags-contract"
+      ]
+    },
+    {
+      "path": "test/tools/contract-check/fixtures/history-window/merge-parents.json",
+      "groups": [
+        "container-tags-contract"
+      ]
+    },
+    {
+      "path": "test/tools/contract-check/fixtures/history-window/merges.json",
+      "groups": [
+        "container-tags-contract"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/projection/selection.rs",
+      "groups": [
+        "formal-mounted-file-head"
       ]
     }
   ],
