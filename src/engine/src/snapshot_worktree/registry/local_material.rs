@@ -46,11 +46,12 @@ pub(crate) struct NodeDirectoryMaterial<'a> {
     pub(crate) initialization: InitialDirectoryMaterial<'a>,
     pub(crate) nodes: BTreeMap<SnapshotNodeId, LocalNode<'a>>,
     pub(crate) head: SnapshotHandle,
+    pub(crate) instances: BTreeMap<WorktreeId, LocalInstance<'a>>,
 }
 impl ReceiptIndex<'_> {
-    /// No incomplete instance is skipped. All native commit/edit/added and
-    /// clean-hide/restore operations require a registered worktree, so this
-    /// affirmative subset cannot silently drop any such source or checkpoint.
+    /// No incomplete instance is skipped. All supported open allocations and
+    /// settled genesis instances are retained. Pending edits and advanced
+    /// ledgers require their actual native phase and refuse this subproducer.
     pub(crate) fn original_node_directory(&self, repository: SnapshotRepositoryId)
         -> Result<NodeDirectoryMaterial<'_>> {
         self.node_directory(repository, None)
@@ -64,6 +65,20 @@ impl ReceiptIndex<'_> {
         let index = self.planned_index(next, result, principal, &Record::CompleteNode(*completion))?;
         Ok(consume(index.node_directory(completion.binding.reference().repository, Some(result))?))
     }
+    pub(crate) fn with_planned_instance_directory<T>(
+        &self, next: &State, result: &OperationResult, principal: &Principal, record: &Record,
+        consume: impl FnOnce(NodeDirectoryMaterial<'_>) -> T,
+    ) -> Result<T> {
+        let index = self.planned_index(next, result, principal, record)?;
+        let repo = match record {
+            Record::ReserveWorktree(p) => p.request.source.repository_id,
+            Record::ReserveAllocatedWorktree(p) => p.resolved.request.source.repository_id,
+            Record::CompleteWorktree(p) => index.worktrees.get(&p.reserve)
+                .ok_or(RegistrationError::Source)?.plan.request.source.repository_id,
+            _ => return Err(RegistrationError::Source),
+        };
+        Ok(consume(index.node_directory(repo, Some(result))?))
+    }
     fn node_directory<'r>(&'r self, repository: SnapshotRepositoryId, planned: Option<&'r OperationResult>)
         -> Result<NodeDirectoryMaterial<'r>> {
         let mut originals = self.nodes.values().filter(|n| n.plan.allocated.repository == repository);
@@ -74,7 +89,6 @@ impl ReceiptIndex<'_> {
         let Some((&(_, b), &head)) = heads.next() else { return Err(RegistrationError::Source); };
         if originals.next().is_some() || heads.next().is_some() || b != branch
             || self.pending_branches.keys().any(|(r, _)| *r == repository)
-            || self.worktrees.values().any(|w| w.plan.request.source.repository_id == repository)
         { return Err(RegistrationError::Source); }
         let prefix = self.originals.reborrow(self.source).map_err(RegistrationError::OriginalReceipt)?;
         let published = |op| planned.filter(|p| p.operation_id == op)
@@ -109,10 +123,35 @@ impl ReceiptIndex<'_> {
                 _ => return Err(RegistrationError::Source),
             }
         }
+        let mut instances = BTreeMap::new();
+        for wt in self.worktrees.values().filter(|wt| wt.plan.request.source.repository_id == repository) {
+            let id = wt.plan.allocated.worktree;
+            let source = wt.plan.request.source;
+            if nodes.get(&source.node_id).is_none_or(|n| n.handle != source || n.manifest.reference() != wt.plan.material)
+                || wt.plan.host != initial.plan.host || self.pending_edits.contains_key(&id)
+                || self.added_files.get(&id).is_some_and(|v| !v.is_empty()) || instances.len() >= 65_536
+            { return Err(RegistrationError::Source); }
+            let complete = match &wt.publication {
+                Publication::Reserved if !self.heads.contains_key(&id) => None,
+                Publication::Complete(c) if self.heads.get(&id).is_some_and(|h|
+                    h.checkpoint == c.checkpoint && c.checkpoint == c.binding.initial_checkpoint()
+                    && h.revision.generation.get() == 0) =>
+                        Some((*c, published(wt.plan.allocated.completion)?)),
+                _ => return Err(RegistrationError::Source),
+            };
+            let row = LocalInstance { plan: &wt.plan, reserve: wt.receipt.original, commitment: wt.commitment, complete };
+            if instances.insert(id, row).is_some() { return Err(RegistrationError::Identity); }
+        }
         Ok(NodeDirectoryMaterial { initialization: InitialDirectoryMaterial {
             original: initial.receipt.original, request: &initial.plan.request, host: &initial.plan.host,
             allocated: initial.plan.allocated, branch_name: &initial.plan.branch_name, manifest: &initial.manifest,
             commitment: initial.commitment,
-        }, nodes, head })
+        }, nodes, head, instances })
     }
+}
+
+pub(crate) struct LocalInstance<'a> {
+    pub(crate) plan: &'a WorktreeReservation, pub(crate) reserve: &'a OperationResult,
+    pub(crate) commitment: MaterialCommitment,
+    pub(crate) complete: Option<(WorktreeCompletion, &'a OperationResult)>,
 }

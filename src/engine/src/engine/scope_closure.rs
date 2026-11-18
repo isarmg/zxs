@@ -112,8 +112,8 @@ pub(crate) fn measure_initial_directory_reservation(
     Ok((pending.reservation(), pending.root(), pending.host_entity()))
 }
 
-/// Read-only diagnostics of the original complete node-only repository. A
-/// pending or genuinely sparse repository cannot use this subproducer.
+/// Read-only diagnostics of supported original node histories and sparse
+/// creations. Later unsupported phases refuse rather than omit an instance.
 pub(crate) fn measure_published_directory_nodes(
     engine: &crate::Engine, repository: storage_contract::working_tree::SnapshotRepositoryId,
 ) -> Result<(storage_contract::working_tree::MaterialCommitment, usize, usize,

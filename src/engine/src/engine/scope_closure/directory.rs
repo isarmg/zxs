@@ -3,6 +3,7 @@
 mod record;
 mod pending;
 mod published;
+mod instances;
 pub(in crate::engine) use published::PublishedRepository;
 pub(in crate::engine) use pending::PendingRepository;
 use super::{

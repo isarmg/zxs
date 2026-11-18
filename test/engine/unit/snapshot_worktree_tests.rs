@@ -942,9 +942,14 @@ fn planned_record(
 fn exact_receipt_chain_reopens_actual_empty_instance_and_original_material() {
     let mut fixture = LiveFixture::new();
     let node = fixture.publish_node();
+    let previous = crate::engine::scope_closure::measure_published_directory_nodes(&fixture.engine, node.repository_id).unwrap();
     let (request, handle) = fixture.create(node);
+    let complete = crate::engine::scope_closure::measure_published_directory_nodes(&fixture.engine, node.repository_id).unwrap();
+    assert_ne!(previous.0, complete.0, "creation changes its original native repository material");
+    assert_eq!((previous.1, previous.2, previous.3), (complete.1, complete.2, complete.3));
     let receipts = fixture.engine.state().operations.clone();
     let mut fixture = fixture.cold();
+    assert_eq!(crate::engine::scope_closure::measure_published_directory_nodes(&fixture.engine, node.repository_id).unwrap(), complete);
     let index = fixture.engine.snapshot_receipts().unwrap();
     assert!(std::ptr::eq(index.source(), fixture.engine.state()));
     let registered = index.worktree(handle).unwrap();
@@ -955,7 +960,7 @@ fn exact_receipt_chain_reopens_actual_empty_instance_and_original_material() {
     let instance = reopened.worktrees_directory().path().join(
         crate::persist::layout::worktree::instance(handle.worktree_id).as_path(),
     );
-    assert_eq!(fs::read_dir(instance).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(&instance).unwrap().count(), 0);
     let view = session.read(ReadMaterial::Original).unwrap();
     let page = view.directory(None, None, NonZeroU16::new(2).unwrap()).unwrap();
     assert_eq!(page.entries.len(), 2);
@@ -968,6 +973,11 @@ fn exact_receipt_chain_reopens_actual_empty_instance_and_original_material() {
     drop(session);
     drop(registered);
     drop(index);
+    let unexpected = instance.join("unregistered-body");
+    std::fs::write(&unexpected, b"not a settled genesis delta").unwrap();
+    assert!(crate::engine::scope_closure::measure_published_directory_nodes(&fixture.engine, node.repository_id).is_err());
+    assert_eq!(std::fs::read(&unexpected).unwrap(), b"not a settled genesis delta");
+    std::fs::remove_file(&unexpected).unwrap();
     assert_eq!(create_worktree(&mut fixture.engine, &request, &principal()).unwrap(), handle);
     assert_eq!(fixture.engine.state().operations, receipts);
 }

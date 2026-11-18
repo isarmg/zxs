@@ -99,9 +99,17 @@ impl ScopedNodeFiles {
         }
         Ok(())
     }
-    pub(crate) fn require_no_instances(&self) -> crate::Result<()> {
-        if self.node.worktrees.root_entries().map_err(dir_error)?.next().transpose()?.is_some() { return Err(rejected()); }
-        Ok(())
+    pub(crate) fn source(&self) -> &HeldSnapshotNode { &self.node }
+    pub(crate) fn require_instance_names(&self, settled: &BTreeSet<EntryName>, reserved: &BTreeSet<EntryName>)
+        -> crate::Result<()> {
+        let mut required = settled.clone();
+        for entry in self.node.worktrees.root_entries().map_err(dir_error)? {
+            let name = entry?;
+            // A promised creation leaf may or may not have been physically
+            // staged. Neither presence nor absence contributes an inode here.
+            if !required.remove(&name) && !reserved.contains(&name) { return Err(rejected()); }
+        }
+        if required.is_empty() { Ok(()) } else { Err(rejected()) }
     }
     pub(crate) fn require_repository_names(host: &DiskRoot, entity: LocalEntityIdentity,
                                           nodes: impl Iterator<Item = SnapshotNodeId>) -> crate::Result<()> {

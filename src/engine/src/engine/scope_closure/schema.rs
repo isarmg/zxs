@@ -35,6 +35,7 @@ pub(super) enum Membership {
 #[serialization(rename_all = "snake_case")]
 pub(super) enum Scope {
     Directory,
+    Worktree,
     File,
     DiskCurrent,
     DiskHistory,

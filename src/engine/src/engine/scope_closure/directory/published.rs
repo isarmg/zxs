@@ -1,6 +1,6 @@
-//! Full permitted node-only repository, including non-HEAD nodes. Sparse
-//! instances/pending later operations have different owners and are NOT
-//! skipped or certified as empty by this producer.
+//! Complete original branch, node history and supported sparse creations.
+//! Later ledger phases have different owners and are NOT skipped or
+//! certified as empty by this producer.
 use super::{record::*, *};
 use crate::engine::scope_closure::{OrdinalBuilder, ordinal::KeyedBuilder, snapshot_bodies::{BodyLeaf, NodeBodies, OriginalLeaf}};
 use crate::persist::{layout::snapshot as layout, snapshot_worktree::NodeCompletion};
@@ -11,7 +11,7 @@ use storage_contract::{Principal, working_tree::{LocalEntityIdentity, SnapshotNo
 
 pub(in crate::engine) struct PublishedRepository {
     host: BoundHost, frozen: FrozenDirectory, nodes: BTreeMap<SnapshotNodeId, ScopedNodeFiles>,
-    entity: LocalEntityIdentity, installed_by: OperationId,
+    entity: LocalEntityIdentity, installed_by: OperationId, instances: super::instances::Instances,
 }
 impl PublishedRepository {
     pub(in crate::engine) fn original(ctx: &PlanningContext<'_>, repo: SnapshotRepositoryId) -> Result<Self> {
@@ -24,6 +24,13 @@ impl PublishedRepository {
         check(receipt.sequence == ctx.next_slot)?;
         ctx.snapshot_receipts().map_err(crate::business::file_draft::worktree::failure)?
             .with_planned_node_directory(next, receipt, principal, completion, |facts| Self::from_facts(ctx, facts))
+            .map_err(crate::business::file_draft::worktree::failure)?
+    }
+    pub(in crate::engine) fn planned_instance(ctx: &PlanningContext<'_>, next: &crate::State,
+        receipt: &crate::OperationResult, principal: &Principal, record: &crate::persist::snapshot_worktree::Record) -> Result<Self> {
+        check(receipt.sequence == ctx.next_slot)?;
+        ctx.snapshot_receipts().map_err(crate::business::file_draft::worktree::failure)?
+            .with_planned_instance_directory(next, receipt, principal, record, |facts| Self::from_facts(ctx, facts))
             .map_err(crate::business::file_draft::worktree::failure)?
     }
     fn from_facts(ctx: &PlanningContext<'_>, facts: NodeDirectoryMaterial<'_>) -> Result<Self> {
@@ -67,9 +74,11 @@ impl PublishedRepository {
             NodeBodies::append_rows(manifest, &leaves, &mut body)?;
             nodes.insert(id, pin);
         }
+        let instances = super::instances::Instances::prepare(&mut rows, &nodes, facts.instances)?;
         let frozen = FrozenDirectory::new(repo, &host, reserve, rows.finish()?, body.finish()?)?;
-        frozen.bytes()?;
-        let value = Self { host, frozen, nodes, entity, installed_by };
+        frozen.bytes()?.checked_add(instances.bytes()).filter(|n| *n <= 64 * 1024 * 1024)
+            .ok_or(Failure::Budget)?;
+        let value = Self { host, frozen, nodes, entity, installed_by, instances };
         value.require(ctx.config)?;
         Ok(value)
     }
@@ -80,8 +89,8 @@ impl PublishedRepository {
         ScopedNodeFiles::require_repository_names(self.host.held(), self.entity, self.nodes.keys().copied())?;
         for node in self.nodes.values() {
             node.require(self.host.held())?;
-            node.require_no_instances()?;
         }
+        self.instances.require(&self.nodes)?;
         self.host.check(config)
     }
     pub(in crate::engine) fn root(&self) -> MaterialCommitment { self.frozen.descriptor.hash() }
@@ -95,15 +104,18 @@ impl PublishedRepository {
             directory_id: h.directory_id, material: &self.frozen.material },
             ownership: Ownership::Original { registration: &h.registration },
             location: Location::Entry { root_id: h.root_id, parent_directory_id: h.directory_id, name },
-            lifecycle: Lifecycle::Current {}, entity: self.entity, operation_id: self.installed_by })
+            lifecycle: Lifecycle::Current {}, entity: self.entity, operation_id: self.installed_by })?;
+        self.instances.append(&self.host, rows)
     }
     pub(in crate::engine) fn stage_original(&self, config: &ValidatedConfig) -> Result<()> {
         self.require(config)?;
+        self.instances.stage(&self.host)?;
         self.frozen.stage(&self.host, config)?;
         self.require(config)
     }
     pub(in crate::engine) fn verify_original(&self, config: &ValidatedConfig) -> Result<()> {
         self.require(config)?;
+        self.instances.verify(&self.host)?;
         self.frozen.verify(&self.host, config)?;
         self.require(config)
     }

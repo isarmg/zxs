@@ -1,4 +1,6 @@
 mod published;
+mod scope;
+pub(crate) use scope::ScopedGenesis;
 
 use crate::directory_worktree::projection::{FileResult, SparseProjection};
 use crate::directory_worktree::projection::namespace::NamespaceChange;

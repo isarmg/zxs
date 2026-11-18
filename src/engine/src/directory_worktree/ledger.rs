@@ -15,6 +15,7 @@ pub(crate) use leaf::EditLeaf;
 pub(crate) use record::{AddedFile, AddedFileResult, Checkpoint, EditRecord, Event};
 pub(crate) use state::{revision_commitment, revision_commitment_with_files};
 pub(crate) use storage::{
+    ScopedGenesis,
     Binding, HeldWorktreeLedger, LedgerPreparationError, PendingPublication, RecoveredLedger,
 };
 
