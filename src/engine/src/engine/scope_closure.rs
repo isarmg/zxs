@@ -9,6 +9,7 @@ pub(in crate::engine) use anchor::{Anchor, FixedGenesis};
 mod genesis;
 pub(in crate::engine) mod file;
 mod images;
+mod inventory;
 mod objects;
 mod ordinal;
 pub(in crate::engine) use ordinal::{OrdinalBuilder, OrdinalPages};

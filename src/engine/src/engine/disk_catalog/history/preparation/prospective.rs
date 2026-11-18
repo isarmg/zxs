@@ -32,6 +32,17 @@ impl FrozenDiskPair {
         })
     }
 
+    /// Bind physically observed local subgraphs to this exact prospective
+    /// complete pair, not an unrelated metadata slot or the prior frontier.
+    pub(in crate::engine) fn require_planned_publication(
+        &self, config: &ValidatedConfig, prior: Option<&str>, receipt: &crate::OperationResult,
+    ) -> Result<()> {
+        if self.through != Through::planned(config, prior, receipt.sequence, receipt.operation_id, &receipt.request_digest)? {
+            return Err(ScopeClosureError::PublicationMismatch.into());
+        }
+        Ok(())
+    }
+
     pub(in crate::engine) fn current(&self) -> (MaterialCommitment, Representation) {
         (self.current_root, self.current.representation())
     }

@@ -147,6 +147,8 @@ impl VerifiedScopeSnapshot {
         let empty = super::OrdinalBuilder::new(0).finish()?;
         empty.verify(disk, root, &history.body_inventory)?;
         Ok(HistoryReference {
+            inventory: manifest.inventory, selected_registration: manifest.registration,
+            inventory_entries: manifest.counts.inventory_entries, selected_sequence: self.sequence,
             current_root: manifest.disk_current.logical_root,
             current_representation: manifest.disk_current.representation,
             both_have_no_bodies: manifest.disk_current.body_inventory == history.body_inventory,
@@ -158,6 +160,12 @@ impl VerifiedScopeSnapshot {
 }
 
 pub(in crate::engine) struct HistoryReference {
+    /// Authenticated address; it does not by itself establish any row's
+    /// coverage, physical bytes or authority to repair.
+    pub(in crate::engine) inventory: metadata_map::Reference,
+    pub(super) selected_registration: DiskRegistrationIdentity,
+    pub(super) inventory_entries: u64,
+    pub(super) selected_sequence: Sequence,
     pub(in crate::engine) current_root: MaterialCommitment,
     pub(in crate::engine) current_representation: super::Representation,
     // The physical, canonical empty history-body page was already read on

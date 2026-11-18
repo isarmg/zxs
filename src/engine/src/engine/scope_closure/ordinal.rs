@@ -42,6 +42,14 @@ impl OrdinalBuilder {
         Ok(())
     }
 
+    /// Consume only a sequential producer's original complete occurrences.
+    /// Typed keyed native rows must not be reinterpreted as disk ordinals.
+    pub(super) fn into_occurrences(mut self) -> Result<Vec<json_codec::Value>> {
+        let n = self.rows.len();
+        (0..n).map(|i| self.rows.remove(&format!("{i:020}"))
+            .ok_or_else(|| Failure::PageMismatch.into())).collect()
+    }
+
     pub(in crate::engine) fn finish(self) -> Result<OrdinalPages> {
         let entries = self.rows.len();
         let mut encoder = Encoder::new(PAGE_LIMIT);

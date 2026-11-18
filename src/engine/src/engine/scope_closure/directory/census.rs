@@ -114,6 +114,22 @@ impl NamespaceCensus {
         view.require(ctx.config)?;
         Ok(view)
     }
+    pub(in crate::engine) fn planned(ctx: &PlanningContext<'_>, disk: &DiskConfig, next: &crate::State,
+        receipt: &crate::OperationResult, principal: &Principal, record: &Record,
+        pair: &crate::engine::disk_catalog::FrozenDiskPair) -> Result<Self> {
+        let (registration, root) = DirectoryCensus::holder(ctx,disk)?;
+        check(ctx.next_slot == receipt.sequence && pair.registration == registration)?;
+        pair.require_planned_publication(ctx.config, ctx.snapshot.as_deref(), receipt)?;
+        let binding = ctx.config.storage_roots.get(&disk.disk_id.parse::<DiskId>()?).ok_or_else(reject)?;
+        let index = ctx.snapshot_receipts().map_err(crate::business::file_draft::worktree::failure)?;
+        index.with_planned_namespaces(next, receipt, principal, record, binding, |ordinary, directories| {
+            let view = Self {
+                ordinary: super::OrdinaryDirectories::from_originals(ctx,disk,ordinary)?,
+                directories: DirectoryCensus::from_sources(ctx,disk,registration,root,directories)? };
+            view.require(ctx.config)?;
+            Ok(view)
+        }).map_err(crate::business::file_draft::worktree::failure)?
+    }
     pub(in crate::engine) fn require(&self, config: &ValidatedConfig) -> Result<()> {
         self.ordinary.require(config)?;
         self.directories.require(config)
@@ -121,5 +137,23 @@ impl NamespaceCensus {
     pub(in crate::engine) fn append_to(&self, config: &ValidatedConfig, rows: &mut OrdinalBuilder) -> Result<()> {
         self.ordinary.append_to(config, rows)?;
         self.directories.append_to(config, rows)
+    }
+}
+
+impl NamespaceCensus {
+    /// Complete namespace section on the original registered local holder;
+    /// deliberately not a whole disk-health result or a recovery decision.
+    pub(in crate::engine) fn verify_retained(&self, ctx: &PlanningContext<'_>,
+        selected: &crate::engine::scope_closure::HistoryReference) -> Result<usize> {
+        let disk = &self.directories.disk;
+        check(Arc::ptr_eq(&self.directories.root, ctx.disk_resources.get(disk)?))?;
+        self.require(ctx.config)?;
+        let mut actual = OrdinalBuilder::new(65_536);
+        self.append_to(ctx.config, &mut actual)?;
+        let n = selected.require_section(disk, &self.directories.root.root, self.directories.registration(),
+            ctx.state.sequence, crate::engine::scope_closure::inventory::Section::Namespace, actual)?;
+        self.directories.verify_original(ctx.config)?;
+        self.require(ctx.config)?;
+        Ok(n)
     }
 }

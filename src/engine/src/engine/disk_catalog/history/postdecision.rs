@@ -131,18 +131,44 @@ impl Original {
     }
 
     pub(in crate::engine) fn verify_catalogs(self, root: &DiskRoot) -> Result<VerifiedCatalogs> {
-        let (history, current) = self.with_holder(root, |original, selected| {
-            if !selected.both_have_no_bodies
-                || super::offline::fold_stored(&original.expected, Some(&original.current))?
-                    != original.current
-            {
-                return Err(invalid("original DISK current and complete history do not agree"));
-            }
-            verify_current_image(root, &original.current, selected.current_root, selected.current_representation)
-        })?;
+        let (history, current) = self.with_holder(root, |original, selected| original.current_image(root, selected))?;
         Ok(VerifiedCatalogs { history, current })
     }
 
+    fn current_image(&self, root: &DiskRoot, selected: &HistoryReference) -> Result<VerifiedCurrent> {
+        if !selected.both_have_no_bodies
+            || super::offline::fold_stored(&self.expected, Some(&self.current))? != self.current {
+            return Err(invalid("original DISK current and complete history do not agree"));
+        }
+        verify_current_image(root, &self.current, selected.current_root, selected.current_representation)
+    }
+
+    /// Join this exact original prefix and BOTH actual DISK images to its
+    /// complete selected ordinary-directory/repository/Worktree section.
+    /// A different installed Engine state cannot supply older rows. This
+    /// does not claim the remaining FILE, Backup or SYSTEM scopes are healthy.
+    pub(in crate::engine) fn verify_current_namespaces(self, engine: &Engine) -> Result<(VerifiedCatalogs, usize)> {
+        let ctx = engine.planning_context();
+        if ctx.config.generation().is_some() || ctx.state.sequence != self.header.through_sequence
+            || ctx.snapshot.as_deref() != self.header.through_snapshot.as_deref() {
+            return Err(invalid("the namespace reader is not at the selected original DISK frontier"));
+        }
+        let id = self.header.identity.disk_id.parse::<DiskId>()?;
+        let disk = ctx.config.disks.iter().find(|d| d.disk_id == self.header.identity.disk_id)
+            .ok_or_else(|| invalid("selected namespace registration is unavailable"))?;
+        if ctx.config.storage_roots.get(&id) != self.configuration.storage_roots.get(&id) {
+            return Err(invalid("selected namespace root binding changed"));
+        }
+        let root = &ctx.disk_resources.get(disk)?.root;
+        let owners = crate::engine::scope_closure::directory::NamespaceCensus::original(&ctx,disk)?;
+        let (history, (current, n)) = self.with_holder(root, |original, selected| {
+            let n = owners.verify_retained(&ctx, selected)?;
+            let current = original.current_image(root, selected)?;
+            owners.require(ctx.config)?;
+            Ok((current, n))
+        })?;
+        Ok((VerifiedCatalogs { history, current }, n))
+    }
     /// Only this caller-selected, held target is addressed after capture. No
     /// peer reads, adopting a mutable catalog alias, or SQLite re-encoding.
     fn with_holder<T>(

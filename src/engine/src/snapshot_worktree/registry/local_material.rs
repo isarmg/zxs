@@ -241,6 +241,13 @@ impl<'s> ReceiptIndex<'s> {
         let index = self.planned_index(next, result, principal, record)?;
         Ok(consume(index.project_directories(registration, Some(result))?))
     }
+    pub(crate) fn with_planned_namespaces<T>(&self, next: &State, result: &OperationResult, principal: &Principal,
+        record: &Record, binding: &storage_contract::working_tree::RootBinding,
+        consume: impl FnOnce(BTreeMap<DirectoryId, OrdinaryOriginal<'_>>, BTreeMap<SnapshotRepositoryId, LocalDirectory<'_>>) -> T)
+        -> Result<T> {
+        let ix = self.planned_index(next, result, principal, record)?;
+        Ok(consume(ix.ordinary_originals(binding)?, ix.project_directories(&binding.registration, Some(result))?))
+    }
     fn project_directories<'a>(&'a self, registration: &storage_contract::working_tree::DiskRegistrationIdentity,
         planned: Option<&'a OperationResult>) -> Result<BTreeMap<SnapshotRepositoryId, LocalDirectory<'a>>> {
         let mut result = BTreeMap::new();
