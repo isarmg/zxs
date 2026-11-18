@@ -84,15 +84,34 @@ fn writer(system:&Path,op:OperationId,file:FileId,rev:u64,e:SpanEdit,checked:Ver
         }
     }
     if s.pending.is_none(){
-        let f=Saved::new(p.id(),a.seq,a.previous,a.original.clone(),a.digest,material)?;
+        let f=Saved::new(p.id(),a.seq,a.previous,a.original.clone(),a.digest,material.clone())?;
         if !a.matches(Decision::read(p.id(),&f.bytes)?.span()?){return Err(invalid("cannot seal original working range"));}
         s.room_for(f.bytes.len())?;cut(Cut::BeforeIntent)?;journal::Intent::seal(&p.system,&f.bytes)?;
     }
     drop(s);cut(Cut::Intent)?;
-    let seal=publish_sealed(&p,op,request,|d|{
-        v.require_current()?;checked.base_current(&dir)?;let f=d.span()?;
-        if !a.matches(f)||bound.feedback(&dir)?!=f.material{return Err(invalid("original span or baseline changed before decision"));}Ok(())
-    },|s|cut(s))?;
+    // A fully appended, fsynced original frame is still above the
+    // acknowledgement floor. Use the same real FILE, old working operands
+    // and named extent checks there as an interrupted original must on reopen.
+    let check=|now:&crate::fs::HeldDir,f:&Saved|->io::Result<()>{
+        v.require_current()?;checked.base_current(now)?;
+        if !a.matches(f)||f.material!=material||bound.feedback(now)?!=material{return Err(invalid("original span or baseline changed before decision"));}
+        Ok(())
+    };
+    let seal=publish_sealed(&p,op,request,|d|check(&dir,d.span()?),|step|{
+        cut(step)?;
+        if step==Cut::FrameSynced{
+            let(_,fresh)=p.snapshot()?;
+            let active=fresh.editing.as_ref().ok_or_else(||invalid("lost the original interval reservation"))?;
+            let sealed=fresh.pending.as_ref().ok_or_else(||invalid("original interval intent missing"))?.frame.span()?;
+            if active.stamp!=a.stamp||active.bytes!=a.bytes||active.original!=a.original||fresh.decided(op).is_some(){
+                return Err(invalid("different interval reservation or acknowledgement at original confirmation"));}
+            fresh.confirmed_file_cycle(file)?.require_captured(op,edge)?;
+            let c=fresh.file(file).ok_or_else(||invalid("original FILE no longer exists at confirmation"))?;
+            let w=fresh.saved(file).ok_or_else(||invalid("original FILE first save missing at confirmation"))?;
+            let now=formal::directory(&v,&fresh,c,w)?;
+            check(&now,sealed)?;
+        }Ok(())
+    })?;
     let f=seal.frame.span()?;cut(Cut::Decision)?;v.require_current()?;checked.base_current(&dir)?;
     if bound.feedback(&dir)?!=f.material{return Err(invalid("published interval cannot reopen"));}cut(Cut::Installation)?;
     p.system.remove_original_record(journal::INTENT,&seal.stamp,&seal.bytes)?;cut(Cut::IntentReleased)?;

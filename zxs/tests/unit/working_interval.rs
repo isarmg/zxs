@@ -330,3 +330,50 @@ fn disappearance_of_a_prior_extent_at_sink_flush_does_not_silently_certify_the_f
     let mut out=Unlink{path:t.extent(first),bytes:Vec::new()};assert!(read_current_range_to(&t.system,id,0,1,&mut out).is_err());
     assert_eq!(out.bytes,b"2");let mut old=Vec::new();read_node_to(&t.system,id,t.base.node,&mut old).unwrap();assert_eq!(old,b"base");
 }
+
+#[test]
+#[ignore="native registered test filesystems; exact sync-before-floor collisions"]
+fn a_fsynced_interval_stays_unconfirmed_on_late_extent_or_parent_replacement_or_extra_name(){
+    for cause in 0..3{
+        let t=Fixtures::new(b"abcde");let id=t.base.file;
+        let prior=OperationId::new().unwrap();let old=save_interval(&t.system,prior,id,1,edit(1,b"X",LengthPolicy::KeepOrGrow),Cursor::new(b"X")).unwrap();
+        let op=OperationId::new().unwrap();let request=edit(3,b"Y",LengthPolicy::KeepOrGrow);
+        let at=match cause{0=>t.extent(op),1=>t.extent(prior),_=>t.dir().join("not-issued-for-any-operation")};
+        let hold=t.root.0.join("exact-leaf-held-outside-original");
+        let newcomer=t.root.0.join("unchanged-foreign-occupant");
+        let mut bytes=Vec::new();let mut inode=None;let mut hit=false;
+        let hot=save_inner(&t.system,op,id,2,request,Cursor::new(b"Y"),|step|{
+            if step==Cut::FrameSynced{
+                if cause<2{bytes=osfs::read(&at)?;osfs::rename(&at,&hold)?;}else{bytes=b"unrelated original data".to_vec();}
+                osfs::write(&at,&bytes)?;osfs::set_permissions(&at,osfs::Permissions::from_mode(0o600))?;
+                inode=Some(osfs::metadata(&at)?.ino());hit=true;
+            }Ok(())
+        });assert!(hit&&hot.is_err());
+        let receipt=||interval_receipt(&t.system,op).unwrap().unwrap();
+        assert_eq!(receipt().status,CreationStatus::DecisionAwaitingConfirmation);assert!(receipt().published.is_none());
+        assert_eq!(interval_receipt(&t.system,prior).unwrap().unwrap().published,Some(old.clone()));
+        assert!(save_interval(&t.system,op,id,2,request,Never).is_err());
+        assert_eq!(receipt().status,CreationStatus::DecisionAwaitingConfirmation);
+        assert_eq!(Some(osfs::metadata(&at).unwrap().ino()),inode);assert_eq!(osfs::read(&at).unwrap(),bytes);
+        osfs::rename(&at,&newcomer).unwrap();if cause<2{osfs::rename(&hold,&at).unwrap();}
+        let mut before=Vec::new();let current=read_current_to(&t.system,id,&mut before).unwrap();
+        assert_eq!(current.edit,Some(old));assert_eq!(before,b"aXcde");
+        let result=save_interval(&t.system,op,id,2,request,Never).unwrap();
+        assert_eq!(receipt().published,Some(result.clone()));assert_eq!(result.revision,3);
+        let mut after=Vec::new();read_current_to(&t.system,id,&mut after).unwrap();assert_eq!(after,b"aXcYe");
+        assert_eq!(Some(osfs::metadata(&newcomer).unwrap().ino()),inode);assert_eq!(osfs::read(newcomer).unwrap(),bytes);
+    }
+}
+#[test]
+#[ignore="native registered test filesystems; original already acknowledged"]
+fn postconfirmation_interval_fault_does_not_roll_back_its_historical_receipt(){
+    let t=Fixtures::new(b"abc");let id=t.base.file;let op=OperationId::new().unwrap();let r=edit(0,b"x",LengthPolicy::KeepOrGrow);
+    let extra=t.dir().join("late-unowned");let keep=t.root.0.join("foreign-still-owned");
+    assert!(save_inner(&t.system,op,id,1,r,Cursor::new(b"x"),|step|if step==Cut::Decision{
+        osfs::write(&extra,b"unrelated")?;Err(io::Error::other("already acknowledged"))
+    }else{Ok(())}).is_err());
+    let original=interval_receipt(&t.system,op).unwrap().unwrap().published.unwrap();
+    assert!(read_current_to(&t.system,id,&mut Vec::new()).is_err());
+    assert_eq!(osfs::read(&extra).unwrap(),b"unrelated");osfs::rename(extra,keep).unwrap();
+    assert_eq!(save_interval(&t.system,op,id,1,r,Never).unwrap(),original);
+}
