@@ -399,3 +399,38 @@ fn real_path_facts_are_rejected_before_foreign_capture_changes_original_bytes() 
     assert_eq!(fixture.source.state().operations[&renamed.operation_id], renamed);
     assert!(!fixture.target.disks[1].root.exists());
 }
+
+#[test]
+fn complete_foreign_action_never_falls_through_to_empty_disk_add_or_fences_the_current_pool() {
+    use std::os::unix::fs::PermissionsExt;
+    let Fixture { _temp: temp, source, mut current, target, recipe } = fixture();
+    let low = &target.disks[1];
+    fs::create_dir(&low.root).unwrap();
+    fs::set_permissions(&low.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let high = &target.disks[2];
+    let preview = crate::foreign_import::tests::inspect(&high.root).unwrap();
+    let seal = preview.original_seal().to_vec();
+    let baseline = &recipe.identities().baseline;
+    let request = || ForeignIdentityTargetRequest {
+        proposed_configuration: target.clone(), operation_id: baseline.operation_id,
+        request_digest: baseline.request_digest.parse().unwrap(),
+        chain_digest: baseline.chain_digest.parse().unwrap(),
+        registration_proposal_digest: baseline.registration_proposal_digest.parse().unwrap(),
+    };
+    let directories = || [low, high].into_iter().map(|disk| crate::PendingMemberDirectory {
+        disk_id: disk.disk_id.clone(), directory: std::fs::File::open(&disk.root).unwrap(),
+    }).collect();
+    let state = canonical_json(current.state()).unwrap();
+    assert_eq!(current.begin_foreign_membership_handoff(request(), &preview, "admin", directories())
+        .err().unwrap().code(), ErrorCode::WriterAlreadyActive);
+    drop(source);
+    // The selected high is now exclusively obtainable but this lower has no
+    // native capsule. It must stay empty; in particular no Add reservation.
+    assert!(current.begin_foreign_membership_handoff(request(), &preview, "admin", directories()).is_err());
+    assert_eq!(fs::read_dir(&low.root).unwrap().count(), 0);
+    assert_eq!(fs::read(high.root.join(crate::persist::layout::DISK_IDENTITY.as_path())).unwrap(), seal);
+    assert!(current.membership_fence_status().is_none());
+    assert_eq!(canonical_json(current.state()).unwrap(), state);
+    assert!(!temp.path().join("current-system/foreign-enrollment").exists());
+    save(&mut current, "still-writable", 1);
+}

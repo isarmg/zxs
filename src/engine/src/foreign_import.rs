@@ -17,6 +17,7 @@ pub use intent::{
 };
 mod mapping;
 mod migration;
+pub(crate) use migration::{LockedCapsuleParent, PreservedSourceInventory};
 mod model;
 pub use migration::{
     ForeignDatabaseStatus, ForeignHistoryGraphStatus, ForeignIdentityClosureStatus,

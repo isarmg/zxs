@@ -112,6 +112,11 @@ pub(crate) static DISK_IDENTITY: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("disk.json").expect("invariant: disk identity uses one canonical entry")
 });
 
+/// Existing helper material name, observed only under the original selected lower parent.
+pub(crate) static FOREIGN_CHAIN_CAPSULE: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("foreign-chain-material").expect("invariant: Foreign capsule has one entry name")
+});
+
 /// Serializes writers of a system or control directory.
 pub(crate) static CONTROL_WRITER_LOCK: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("writer.lock").expect("invariant: control writer lock uses one canonical entry")

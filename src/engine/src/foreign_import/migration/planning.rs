@@ -99,6 +99,20 @@ impl ForeignMigrationPlan {
             return Err(changed("source changed after migration review"));
         }
         let budget = InspectionBudget::from_limits(source.limits);
+        let inventory = Inventory::capture(&source.root, &budget)?;
+        Self::from_inventory(source, operation_id, placement, names, inventory, budget)
+    }
+
+    // A retained complete source scan can issue each lower's existing native
+    // plan without rereading the same highest data once for every lower level.
+    pub(super) fn from_inventory(
+        source: &ForeignImportPreview,
+        operation_id: OperationId,
+        placement: Placement,
+        names: Option<&BTreeMap<ForeignPrimaryOrigin, String>>,
+        inventory: Inventory,
+        budget: InspectionBudget,
+    ) -> Result<Self> {
         let record = PlanRecord {
             format: FORMAT.into(),
             operation_id,
@@ -109,7 +123,7 @@ impl ForeignMigrationPlan {
             source_local: PhysicalBinding::of(&source.root)?,
             placement,
             groups: groups(source, names)?,
-            inventory: Inventory::capture(&source.root, &budget)?,
+            inventory,
             budget,
         };
         record.validate()?;

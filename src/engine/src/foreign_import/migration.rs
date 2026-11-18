@@ -13,6 +13,9 @@ pub use history_graph::ForeignHistoryGraphStatus;
 pub use identity_closure::ForeignIdentityClosureStatus;
 mod inventory;
 mod planning;
+mod preserved;
+pub(crate) use preserved::PreservedSourceInventory;
+pub(crate) use transaction::LockedCapsuleParent;
 mod projection;
 mod transaction;
 pub use databases::{ForeignDatabaseStatus, ForeignOriginalDatabasesReport};
@@ -186,7 +189,7 @@ pub struct ForeignMigrationTransaction {
     intent: Intent,
     digest: ForeignEvidenceDigest,
     published: bool,
-    _lock: AdvisoryLock,
+    _lock: std::sync::Arc<AdvisoryLock>,
 }
 
 /// Read-only local progress. Reserved includes incomplete staging windows.

@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
@@ -57,7 +58,17 @@ impl ForeignMigrationTransaction {
         expected: &ForeignEvidenceDigest,
     ) -> Result<Self> {
         let (parent, name) = open_parent(destination, Some(parent))?;
-        let lock = AdvisoryLock::directory(&parent.directory(parent.path())?)?;
+        let lock = Arc::new(AdvisoryLock::directory(&parent.directory(parent.path())?)?);
+        Self::from_published_parent(parent, name, lock, operation, expected)
+    }
+
+    fn from_published_parent(
+        parent: DiskRoot,
+        name: String,
+        lock: Arc<AdvisoryLock>,
+        operation: &OperationId,
+        expected: &ForeignEvidenceDigest,
+    ) -> Result<Self> {
         let intent: Intent =
             decode_strict(&parent.read_bytes(&reservation_path(&parent, operation), MAX_INTENT)?)?;
         intent.plan.validate()?;
@@ -194,7 +205,7 @@ impl ForeignMigrationTransaction {
             intent,
             digest: *expected,
             published,
-            _lock: lock,
+            _lock: Arc::new(lock),
         };
         transaction.check_names()?;
         if !published {
@@ -203,13 +214,7 @@ impl ForeignMigrationTransaction {
         let replica = transaction.verify_replica()?;
         projection::Projection::from_replica(&transaction.intent.plan, &replica)?
             .verify(&transaction.capsule, &transaction.intent.plan.budget)?;
-        if transaction
-            .capsule
-            .read_bytes(&transaction.capsule.path().join("intent.json"), MAX_INTENT)?
-            != canonical_json(&transaction.intent)?
-        {
-            return Err(changed("published capsule portable intent differs"));
-        }
+        transaction.require_portable_intent()?;
         transaction.check_names()?;
         Ok(ForeignMigrationStatus::Published)
     }
@@ -365,6 +370,15 @@ impl ForeignMigrationTransaction {
         })?)
     }
 
+    pub(super) fn require_portable_intent(&self) -> Result<()> {
+        if self.capsule.read_bytes(&self.capsule.path().join("intent.json"), MAX_INTENT)?
+            != canonical_json(&self.intent)?
+        {
+            return Err(changed("published capsule portable intent differs"));
+        }
+        Ok(())
+    }
+
     pub(super) fn verify_replica(&self) -> Result<ForeignImportPreview> {
         verify_replica(&self.capsule, &self.intent.plan)
     }
@@ -418,6 +432,40 @@ impl ForeignMigrationTransaction {
             }
         }
         Ok(())
+    }
+}
+
+/// Holds every lower reservation simultaneously without retaining a separate
+/// potentially large decoded native plan for every lower at the same time.
+/// An observation opened from this owner shares the same original lock.
+pub(crate) struct LockedCapsuleParent {
+    root: DiskRoot,
+    lock: Arc<AdvisoryLock>,
+}
+
+impl LockedCapsuleParent {
+    pub(crate) fn capture(root: DiskRoot) -> Result<Self> {
+        let lock = Arc::new(AdvisoryLock::directory(&root.directory(root.path())?)?);
+        let result = Self { root, lock };
+        result.recheck()?;
+        Ok(result)
+    }
+
+    pub(crate) fn recheck(&self) -> Result<()> {
+        DiskRoot::from_directory(
+            self.root.path().into(), self.root.directory(self.root.path())?,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn observe(
+        &self, operation: &OperationId, expected: &ForeignEvidenceDigest,
+    ) -> Result<ForeignMigrationTransaction> {
+        let path = self.root.path().join(crate::persist::layout::FOREIGN_CHAIN_CAPSULE.as_path());
+        let (parent, name) = open_parent(&path, Some(self.root.directory(self.root.path())?))?;
+        ForeignMigrationTransaction::from_published_parent(
+            parent, name, Arc::clone(&self.lock), operation, expected,
+        )
     }
 }
 
@@ -507,7 +555,7 @@ fn open_reserved(
         intent,
         digest,
         published,
-        _lock: lock,
+        _lock: Arc::new(lock),
     };
     transaction.check_names()?;
     Ok(transaction)

@@ -1069,3 +1069,59 @@ fn incomplete_source_frontier_cannot_supply_foreign_original_state_scopes() {
     source.checkpoint.authority_hash = Some("a".repeat(64));
     assert!(source.visit_original_states(|_, _, _, _| Ok(())).is_err());
 }
+
+#[test]
+fn preserved_original_and_capsule_require_actual_noninterchangeable_byte_inventories() {
+    use super::preserved::PreservedMaterial;
+    let fixture = fixture();
+    let path = &fixture.engine.config().disks[2].root;
+    let source = inspect(path);
+    let high = DiskRoot::open(path).unwrap();
+    let original = PreservedSourceInventory::capture(&source, &high).unwrap();
+    let other = DiskRoot::open(&fixture.engine.config().disks[3].root).unwrap();
+    assert!(PreservedSourceInventory::capture(&source, &other).is_err());
+    let PreservedMaterial::Source {
+        original_registration, seal_byte_length, seal_bytes_digest,
+        journal_byte_length, journal_bytes_digest, source_inventory_hash, ..
+    } = original.material() else { panic!("highest root must be original source") };
+    assert_eq!(original_registration, source.source().registration());
+    assert_eq!(*seal_byte_length, source.original_seal().len() as u64);
+    assert_eq!(seal_bytes_digest.digest(), blake3::hash(source.original_seal()));
+    let log = fs::read(&source.journal_path).unwrap();
+    assert_eq!(*journal_byte_length, log.len() as u64);
+    assert_eq!(journal_bytes_digest.digest(), blake3::hash(&log));
+
+    let operation = OperationId::generate().unwrap();
+    let chain = "a".repeat(64).parse().unwrap();
+    let target = chain_parent(&fixture, "preserved-lower");
+    let destination = target.join(crate::persist::layout::FOREIGN_CHAIN_CAPSULE.as_path());
+    let native = ForeignMigrationPlan::chain_material(&source, operation, &chain, 1).unwrap();
+    let expected = original.lower_plan(operation, &chain, 1).unwrap();
+    assert_eq!(native.digest(), expected.digest());
+    let mut tx = native.begin(&destination).unwrap();
+    tx.copy_source(&source).unwrap();
+    tx.seal().unwrap();
+    tx.publish(None).unwrap();
+    let lower = LockedCapsuleParent::capture(DiskRoot::open(&target).unwrap()).unwrap();
+    let owner = lower.observe(&operation, expected.digest()).unwrap();
+    assert!(original.capture_lower(&owner, &expected).is_err(), "no three-scope completion");
+    owner.prepare_original_databases().unwrap();
+    let result = original.capture_lower(&owner, &expected).unwrap();
+    let PreservedMaterial::Lower { capsule_plan_digest, capsule_inventory_hash, .. } = result else {
+        panic!("a lower cannot claim the high source");
+    };
+    assert_eq!(&capsule_plan_digest, expected.digest());
+    assert_ne!(&capsule_inventory_hash, source_inventory_hash);
+    let wrong = original.lower_plan(OperationId::generate().unwrap(), &chain, 1).unwrap();
+    assert!(original.capture_lower(&owner, &wrong).is_err());
+    let portable = destination.join("intent.json");
+    let prior = fs::read(&portable).unwrap();
+    fs::write(&portable, b"{}").unwrap();
+    assert!(original.capture_lower(&owner, &expected).is_err());
+    assert_eq!(fs::read(&portable).unwrap(), b"{}");
+    fs::write(&portable, prior).unwrap();
+    let extra = path.join("foreign-unrecognized-retained-file");
+    fs::write(&extra, b"preserve me").unwrap();
+    assert!(original.recheck().is_err());
+    assert_eq!(fs::read(extra).unwrap(), b"preserve me");
+}

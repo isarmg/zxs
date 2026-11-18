@@ -28,6 +28,7 @@ pub use backup::{
     BackupRegistryDecisionHash,
 };
 mod complete_chain;
+mod preserved;
 pub use abort::MembershipAbortStatus;
 mod decision;
 mod effect;
@@ -378,32 +379,11 @@ impl Engine {
         principal: &str,
         directories: Vec<PendingMemberDirectory>,
     ) -> Result<MembershipFenceStatus> {
-        let operation = request.operation_id;
-        let target = ValidatedConfig::try_from(request.proposed_configuration.clone())?;
-        let recipe = match self
-            .membership_fence
-            .as_ref()
-            .and_then(|fence| fence.intent.foreign.as_ref())
-        {
-            Some(recipe) => {
-                recipe.recheck_request_source(&request, source)?;
-                recipe.clone()
-            }
-            None => {
-                let names = self.capture_foreign_identity_target(request)?;
-                self.capture_foreign_admission_recipe(&names, source)?
-            }
-        };
-        self.require_addition_chain(&target)?;
-        self.begin_membership_handoff_prepared(
-            target,
-            None,
-            Some(recipe),
-            principal,
-            operation,
-            Some(directories),
-            None,
-        )
+        self.observe_preserved_foreign_handoff(request, source, principal, directories)?;
+        // A SYSTEM-only provenance preparation is not a membership fence.
+        // Never route this request through ordinary empty-disk Add, even when
+        // this signature cannot express a prepared-only result.
+        Err(preserved::NotAdmitted.into())
     }
 
     fn begin_membership_handoff_with_effect(
