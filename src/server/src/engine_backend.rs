@@ -836,9 +836,9 @@ impl Backend for EngineBackend {
         snapshot_worktree::root::register(self, identity, slot, request)
     }
     fn snapshot_root_context(
-        &self, identity: &Identity, repository: storage_contract::RepositoryId,
+        &self, identity: &Identity, repository: storage_contract::RepositoryId, child: Option<name_policy::LookupPath>,
     ) -> Result<storage_contract::snapshot_worktree::SnapshotRootContext, ApiError> {
-        snapshot_worktree::context(self, identity, repository)
+        snapshot_worktree::context(self, identity, repository, child)
     }
     fn directory_snapshot_head(
         &self, identity: &Identity, repository: storage_contract::RepositoryId,

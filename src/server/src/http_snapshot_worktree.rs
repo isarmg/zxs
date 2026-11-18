@@ -48,12 +48,18 @@ pub(crate) struct StatusQuery {
     publication: storage_contract::OperationId,
 }
 
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct ContextQuery {
+    child: Option<name_policy::LookupPath>,
+}
+
 pub(crate) async fn context(
     State(state): State<AppState>, Authenticated(identity): Authenticated,
-    ApiPath(repository): ApiPath<storage_contract::RepositoryId>,
+    ApiPath(repository): ApiPath<storage_contract::RepositoryId>, ApiQuery(query): ApiQuery<ContextQuery>,
 ) -> Result<Json<SnapshotRootContext>, ApiError> {
     crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
-        .run(move |backend| backend.snapshot_root_context(&identity, repository))
+        .run(move |backend| backend.snapshot_root_context(&identity, repository, query.child))
         .await.map(Json)
 }
 

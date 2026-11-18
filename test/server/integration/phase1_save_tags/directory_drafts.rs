@@ -487,3 +487,35 @@ async fn authenticated_mixed_directory_commit_publishes_once_and_keeps_unselecte
     assert_eq!(fixture.json("GET", &unborn_status(&untouched), None).await, untouched_before);
     assert_eq!(working(&fixture, &unselected).await, unselected_before);
 }
+
+#[tokio::test]
+async fn authenticated_root_context_returns_only_a_registered_direct_child_and_creates_its_distinct_instance() {
+    let fixture=fixture().await;
+    fixture.save("D01","root.txt",b"real root file").await;
+    let (root_file,_) = target(&fixture,"D01","root.txt").await;
+    fixture.json("POST","/api/file-manager/disks/D01/namespace",Some(json!({
+        "kind":"mkdir","path":"Folder","operation_id":OperationId::generate().unwrap(),
+    }))).await;
+    fixture.save("D01","Folder/inner.txt",b"real child file").await;
+    let outer=initialize(&fixture,&root_file).await;
+    let route=format!("/api/repositories/{}/snapshot-root-context",root_file["repository"].as_str().unwrap());
+    let root=fixture.json("GET",&route,None).await;
+    let child_route=format!("{route}?child=folder");
+    assert_eq!(response(&fixture,false,"GET",&child_route,None).await.0,StatusCode::UNAUTHORIZED);
+    for suffix in ["?child=Folder%2Finner.txt","?child=Folder&child=Folder","?child=.zxs"] {
+        assert!(!response(&fixture,true,"GET",&format!("{route}{suffix}"),None).await.0.is_success());
+    }
+    let child=fixture.json("GET",&child_route,None).await;
+    assert_eq!(child["source"]["root"],"Folder");
+    assert_eq!(child["host"]["root_id"],root["host"]["root_id"]);
+    assert_ne!(child["host"]["directory_id"],root["host"]["directory_id"]);
+    let request=json!({"host":child["host"],"source":child["source"],"operation_id":OperationId::generate().unwrap()});
+    let inner=fixture.json("POST","/api/directory-snapshots",Some(request.clone())).await;
+    assert_ne!(inner["repository_id"],outer["repository_id"]);
+    assert_eq!(fixture.json("POST","/api/directory-snapshots",Some(request)).await,inner);
+    let target=fixture.json("POST","/api/directory-worktrees",Some(json!({
+        "source":inner,"naming":"automatic","parent_directory_id":root["host"]["directory_id"],
+        "expected_root_generation":root["host"]["expected_root_generation"],"operation_id":OperationId::generate().unwrap(),
+    }))).await;
+    assert!(target["worktree_id"].is_string());
+}

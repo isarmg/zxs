@@ -44,10 +44,15 @@ pub(in crate::engine_backend) fn error(source: storage_engine::SnapshotWorktreeE
 
 pub(super) fn context(
     backend: &EngineBackend, identity: &Identity, repository: storage_contract::RepositoryId,
+    child: Option<name_policy::LookupPath>,
 ) -> Result<SnapshotRootContext, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
     management(&current)?;
-    engine.snapshot_root_context(repository).map_err(error)
+    super::repository(&engine,&repository.to_string())?;
+    match child {
+        None => engine.snapshot_root_context(repository),
+        Some(path) => engine.snapshot_direct_child_context(repository,&path),
+    }.map_err(error)
 }
 
 pub(super) fn initialize(

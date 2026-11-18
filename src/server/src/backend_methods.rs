@@ -702,8 +702,9 @@ macro_rules! methods {
                     &self,
                     identity: &$crate::Identity,
                     repository: storage_contract::RepositoryId,
+                    child: Option<name_policy::LookupPath>,
                 ) -> Result<storage_contract::snapshot_worktree::SnapshotRootContext, $crate::ApiError> {
-                    let _ = (identity, repository);
+                    let _ = (identity, repository, child);
                     Err($crate::ApiError::unsupported())
                 }
                 fn directory_snapshot_head(
