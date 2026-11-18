@@ -1,6 +1,7 @@
 use crate::DiskRegistrationIdentity;
 use crate::persist::layout;
-use platform_io::fs_safety::{EntryName, linux::FileIdentity};
+pub(crate) use crate::namespace_roots::{file_identity, local_entity};
+use platform_io::fs_safety::EntryName;
 use std::collections::BTreeMap;
 #[path = "admission.rs"]
 pub(crate) mod admission;
@@ -12,16 +13,6 @@ pub(crate) use storage_contract::working_tree::{
     SnapshotRepositoryLocation, StorageLayout, ThreeRootBinding, WorkingTreeCatalog,
     ZxsLifecycleBindings,
 };
-
-pub(crate) fn local_entity(identity: FileIdentity) -> LocalEntityIdentity {
-    LocalEntityIdentity::new(identity.device, identity.inode)
-}
-pub(crate) fn file_identity(identity: LocalEntityIdentity) -> FileIdentity {
-    FileIdentity {
-        device: identity.device(),
-        inode: identity.inode(),
-    }
-}
 
 /// Bounded structural closure only: ordering, names, parents, replicas and entities.
 /// It proves neither authenticated origin nor completeness against FILE/route state.

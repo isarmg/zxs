@@ -39,6 +39,7 @@ pub use directory_layout::LayoutError as DirectoryLayoutError;
 mod degraded_recovery;
 mod directory_conversion;
 mod name_budget;
+mod namespace_roots;
 pub use directory_conversion::{
     DirectoryConversionConfirmation, DirectoryConversionDigest, DirectoryConversionPreview,
     DirectoryExportOutcome, DirectoryImportFailure, DirectoryImportProgress,

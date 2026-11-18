@@ -1,21 +1,19 @@
 //! Bounded structural closure and explicit root registration comparison only.
 use crate::DiskRegistrationIdentity;
+use crate::namespace_roots::{self, MAX_SOURCE_CHAIN};
 use crate::persist::layout;
 use crate::working_tree::records::{
     BindingLifecycle, ContainerBinding, ContainerPlacementRole, CurrentRootSelection,
     DirectoryBinding, DirectoryId,
     LocalEntityIdentity, ReplicaBinding, ReplicaId, ReplicaObject,
-    ReplicaPurpose, RootBinding, RootId, SnapshotRepositoryLocation, StorageLayout,
+    ReplicaPurpose, RootId, SnapshotRepositoryLocation, StorageLayout,
     StructuralContainerPlacement, StructurallyValidWorkingTreeCatalog, WorkingTreeCatalog,
 };
 use name_policy::LookupName;
 use platform_io::fs_safety::{EntryName, linux::FileIdentity};
 use std::collections::{BTreeMap, BTreeSet};
-use storage_contract::{DiskId, PoolId};
 
 pub(crate) const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
-pub(crate) const MAX_ROOTS: usize = 256;
-pub(crate) const MAX_SOURCE_CHAIN: usize = 32;
 pub(crate) const MAX_CATALOG_ROWS: usize = 32_768;
 pub(crate) const MAX_DIRECTORY_DEPTH: usize = 64;
 
@@ -99,58 +97,20 @@ pub(crate) fn select_root<'a>(
     Ok(CurrentRootSelection { tree: view, binding })
 }
 
-fn root_structure(binding: &RootBinding) -> Result<(), AdmissionError> {
-    source_chain_structure(&binding.registration, &binding.source_chain)?;
-    let mut ids = BTreeSet::new();
-    let mut entities = BTreeSet::from([binding.root_entity]);
-    for local in [
-        &binding.roots.common_data,
-        &binding.roots.deleted_data,
-        &binding.roots.zxs_data,
-        &binding.roots.zxs_lifecycles.common_data,
-        &binding.roots.zxs_lifecycles.deleted_data,
-    ] {
-        if !ids.insert(local.directory_id) {
-            return Err(AdmissionError::DuplicateIdentity);
-        }
-        if local.entity.inode() == 0 || local.entity.device() != binding.root_entity.device()
-            || !entities.insert(local.entity)
-        {
-            return Err(AdmissionError::PhysicalIdentity);
+impl From<namespace_roots::Error> for AdmissionError {
+    fn from(source: namespace_roots::Error) -> Self {
+        use namespace_roots::Error as Root;
+        match source {
+            Root::Budget => Self::Budget,
+            Root::Format => Self::Format,
+            Root::Registration => Self::Registration,
+            Root::Identifier(source) => Self::RegistrationIdentifier(source),
+            Root::Slot(source) => Self::RegistrationSlot(source),
+            Root::SourceChain => Self::SourceChain,
+            Root::DuplicateIdentity => Self::DuplicateIdentity,
+            Root::PhysicalIdentity => Self::PhysicalIdentity,
         }
     }
-    Ok(())
-}
-
-fn source_chain_structure(
-    owner: &DiskRegistrationIdentity,
-    sources: &[DiskRegistrationIdentity],
-) -> Result<(), AdmissionError> {
-    registration(owner)?;
-    if sources.len() > MAX_SOURCE_CHAIN {
-        return Err(AdmissionError::Budget);
-    }
-    let mut chain = BTreeSet::new();
-    let mut slots = BTreeSet::new();
-    chain.insert(owner.disk_id.as_str());
-    slots.insert(owner.slot_id.as_str());
-    for source in sources {
-        registration(source)?;
-        if source.pool_id != owner.pool_id
-            || !chain.insert(source.disk_id.as_str())
-            || !slots.insert(source.slot_id.as_str())
-        {
-            return Err(AdmissionError::SourceChain);
-        }
-    }
-    Ok(())
-}
-
-fn registration(identity: &DiskRegistrationIdentity) -> Result<(), AdmissionError> {
-    identity.pool_id.parse::<PoolId>().map_err(AdmissionError::RegistrationIdentifier)?;
-    identity.disk_id.parse::<DiskId>().map_err(AdmissionError::RegistrationIdentifier)?;
-    name_policy::SlotId::parse(&identity.slot_id).map_err(AdmissionError::RegistrationSlot)?;
-    Ok(())
 }
 
 /// Validate relationships within the supplied records without authenticating
@@ -159,7 +119,12 @@ pub(crate) fn validate_catalog_structure(
     catalog: &WorkingTreeCatalog,
 ) -> Result<StructurallyValidWorkingTreeCatalog<'_>, AdmissionError> {
     counts(catalog)?;
-    let roots = root_index(catalog)?;
+    let namespace_roots::Structure { by_id: roots, mut entities, area_ids } =
+        namespace_roots::inspect(catalog.storage_layout, catalog.roots.iter())?;
+    // The bounded catalog stores an ordered array; Config stores a keyed map.
+    if catalog.roots.windows(2).any(|pair| pair[0].root_id >= pair[1].root_id) {
+        return Err(AdmissionError::Order);
+    }
     let directories = ordered_index(&catalog.directories, |row| row.directory_id)?;
     let replicas = ordered_index(&catalog.replicas, |row| row.replica_id)?;
     ordered_index(&catalog.containers, |row| row.replica_id)?;
@@ -168,32 +133,8 @@ pub(crate) fn validate_catalog_structure(
         catalog, roots, directories, replicas,
         containers: BTreeMap::new(),
     };
-    let mut entities = BTreeSet::new();
-    let mut directory_ids = BTreeSet::new();
-    for root in &catalog.roots {
-        for entity in [
-            root.root_entity,
-            root.roots.common_data.entity,
-            root.roots.deleted_data.entity,
-            root.roots.zxs_data.entity,
-            root.roots.zxs_lifecycles.common_data.entity,
-            root.roots.zxs_lifecycles.deleted_data.entity,
-        ] {
-            if !entities.insert(entity) {
-                return Err(AdmissionError::PhysicalIdentity);
-            }
-        }
-        for id in [
-            root.roots.common_data.directory_id,
-            root.roots.deleted_data.directory_id,
-            root.roots.zxs_data.directory_id,
-            root.roots.zxs_lifecycles.common_data.directory_id,
-            root.roots.zxs_lifecycles.deleted_data.directory_id,
-        ] {
-            if !directory_ids.insert(id) || view.directories.contains_key(&id) {
-                return Err(AdmissionError::DuplicateIdentity);
-            }
-        }
+    if view.directories.keys().any(|id| area_ids.contains(id)) {
+        return Err(AdmissionError::DuplicateIdentity);
     }
     let mut names = BTreeSet::new();
     admit_directories(&view, &mut entities, &mut names)?;
@@ -214,8 +155,7 @@ fn counts(catalog: &WorkingTreeCatalog) -> Result<(), AdmissionError> {
         catalog.snapshot_repositories.len(),
         catalog.replicas.len(),
     ];
-    if catalog.roots.len() > MAX_ROOTS
-        || lengths.iter().any(|length| *length > MAX_CATALOG_ROWS)
+    if lengths.iter().any(|length| *length > MAX_CATALOG_ROWS)
         || lengths.iter().sum::<usize>() > MAX_CATALOG_ROWS
     {
         return Err(AdmissionError::Budget);
@@ -238,38 +178,6 @@ fn ordered_index<T, K: Copy + Ord>(
         index.insert(id, row);
     }
     Ok(index)
-}
-
-fn root_index<'a>(
-    catalog: &'a WorkingTreeCatalog,
-) -> Result<BTreeMap<RootId, &'a RootBinding>, AdmissionError> {
-    let roots = ordered_index(&catalog.roots, |row| row.root_id)?;
-    let mut registrations = BTreeSet::new();
-    let mut slots = BTreeSet::new();
-    let pool = catalog.roots.first().map(|root| &root.registration.pool_id);
-    for root in &catalog.roots {
-        if root.layout != catalog.storage_layout {
-            return Err(AdmissionError::Format);
-        }
-        root_structure(root)?;
-        if Some(&root.registration.pool_id) != pool {
-            return Err(AdmissionError::Registration);
-        }
-        if !registrations.insert(root.registration.disk_id.as_str())
-            || !slots.insert(root.registration.slot_id.as_str())
-        {
-            return Err(AdmissionError::DuplicateIdentity);
-        }
-        for (offset, source) in root.source_chain.iter().enumerate() {
-            let upstream = catalog.roots.iter().find(|candidate| {
-                candidate.registration == *source
-            }).ok_or(AdmissionError::SourceChain)?;
-            if upstream.source_chain != root.source_chain[offset + 1..] {
-                return Err(AdmissionError::SourceChain);
-            }
-        }
-    }
-    Ok(roots)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]

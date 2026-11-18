@@ -4,15 +4,12 @@
 use crate::{Config, DiskConfig, ErrorCode, Result, ValidatedConfig};
 use crate::disk::{DiskResources, DiskRoot};
 use crate::persist::layout;
-use crate::working_tree::{
-    admission,
-    records::{file_identity, local_entity},
-};
+use crate::namespace_roots::{self, file_identity, local_entity};
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{DiskId, Generation, OperationId};
 use storage_contract::working_tree::{
     DirectoryId, DiskRegistrationIdentity, RootBinding, RootId,
-    StorageLayout, WorkingTreeCatalog,
+    StorageLayout,
 };
 
 pub(in crate::engine) mod root_areas;
@@ -253,7 +250,7 @@ pub(in crate::engine) fn source_chain(
     let mut seen = BTreeSet::from([disk.slot_id.as_str()]);
     let mut chain = Vec::new();
     while let Some(slot) = source {
-        if !seen.insert(slot) || chain.len() == admission::MAX_SOURCE_CHAIN {
+        if !seen.insert(slot) || chain.len() == namespace_roots::MAX_SOURCE_CHAIN {
             return Err(FreshLayoutError::Registration.into());
         }
         let parent = config.disks.iter().find(|disk| disk.slot_id.eq_ignore_ascii_case(slot))
@@ -273,6 +270,8 @@ pub(super) fn validate_roots(config: &Config) -> Result<()> {
     if config.storage_roots.len() != config.disks.len() {
         return Err(FreshLayoutError::Registration.into());
     }
+    namespace_roots::inspect(StorageLayout::UnifiedWorkingTreeV1, config.storage_roots.values())
+        .map_err(|source| FreshLayoutError::Structure(std::io::Error::other(source)))?;
     for disk in &config.disks {
         let binding = config.storage_roots.get(&disk.disk_id.parse::<DiskId>()?)
             .ok_or(FreshLayoutError::Registration)?;
@@ -282,15 +281,6 @@ pub(super) fn validate_roots(config: &Config) -> Result<()> {
             return Err(FreshLayoutError::Registration.into());
         }
     }
-    let mut roots: Vec<_> = config.storage_roots.values().cloned().collect();
-    roots.sort_by_key(|binding| binding.root_id);
-    let catalog = WorkingTreeCatalog {
-        storage_layout: StorageLayout::UnifiedWorkingTreeV1,
-        roots, directories: Vec::new(), containers: Vec::new(),
-        snapshot_repositories: Vec::new(), replicas: Vec::new(),
-    };
-    admission::validate_catalog_structure(&catalog)
-        .map_err(|source| FreshLayoutError::Structure(std::io::Error::other(source)))?;
     Ok(())
 }
 

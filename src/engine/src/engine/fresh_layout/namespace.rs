@@ -51,7 +51,7 @@ impl PlanningContext<'_> {
         validate_stored_seal(&seal, &handle.seal)?;
         let common = handle.content_root()?;
         let entity = common.directory_identity(common.path())?;
-        if entity != crate::working_tree::records::file_identity(root.roots.common_data.entity) {
+        if entity != crate::namespace_roots::file_identity(root.roots.common_data.entity) {
             return Err(Failure::RootIdentity.into());
         }
         // Genesis already owns this exact empty common directory. We do not
@@ -107,7 +107,7 @@ impl RegisteredNamespaceRoot<'_> {
         self.common()?;
         let deleted = self.resources.get(self.disk)?.deleted_root()?;
         if deleted.directory_identity(deleted.path())?
-            != crate::working_tree::records::file_identity(
+            != crate::namespace_roots::file_identity(
                 self.origin.genesis.roots.deleted_data.entity,
             )
         {
@@ -126,7 +126,7 @@ impl RegisteredNamespaceRoot<'_> {
         validate_stored_seal(&seal, &handle.seal)?;
         let common = handle.content_root()?;
         if common.directory_identity(common.path())?
-            != crate::working_tree::records::file_identity(
+            != crate::namespace_roots::file_identity(
                 self.origin.genesis.roots.common_data.entity,
             )
         {

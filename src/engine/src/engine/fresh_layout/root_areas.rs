@@ -4,7 +4,7 @@
 use crate::engine::fresh_layout::{FreshLayoutError as Failure, directory_error};
 use crate::disk::{DirectoryCreateOutcome, DiskRoot};
 use crate::persist::layout;
-use crate::working_tree::records::{file_identity, local_entity};
+use crate::namespace_roots::{file_identity, local_entity};
 use crate::Result;
 use platform_io::fs_safety::EntryName;
 use storage_contract::working_tree::{
