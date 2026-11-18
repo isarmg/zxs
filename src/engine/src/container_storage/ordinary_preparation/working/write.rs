@@ -1,20 +1,18 @@
 //! Private ordered edits over one published held source. Exclusive immutable
-//! extents may be prepared here; only the native publication can acknowledge a save.
+//! packs may be prepared here; only the native publication can acknowledge a save.
 use crate::business::file_draft::DraftError as Failure;
 use crate::container_storage::ordinary_preparation::working::{
-    HeldExtent, HeldUnbornReader, changed,
+    HeldPack, HeldUnbornReader, changed, pack::PendingPack,
 };
-use crate::disk::{DiskResources, NewEntryCopyError};
-use crate::engine::{PayloadProofReservation, PlanningContext};
-use crate::persist::layout;
+use crate::disk::DiskResources;
+use crate::engine::PlanningContext;
 use crate::{Error, Result, State, ValidatedConfig};
 use std::collections::BTreeMap;
-use std::io::Cursor;
 use std::sync::Arc;
-use storage_contract::file_container::ContainerEntity;
 use storage_contract::file_draft::manifest::{
-    ExtentHash, MAX_WORKING_BLOCKS, WorkingManifest, WorkingSave, WORKING_BLOCK_BYTES,
-    WorkingBlock, WorkingExtent, WorkingExtentId,
+    WorkingManifest, WorkingSave, WORKING_IO_BYTES,
+    packed::{PACK_BYTES, PackId, PackOrigin, physical_bytes_for},
+    ranges::{MAX_LIVE_PACKS, ReadSpan, RunSource},
 };
 use storage_contract::file_draft::UnbornBody;
 use storage_contract::{OperationId};
@@ -61,21 +59,19 @@ impl SourceReader {
             Self::Manual(reader) => reader.retained_base_bytes(),
         }
     }
-    fn extent(&self, block: WorkingBlock) -> Result<&HeldExtent> {
+    fn pack(&self, id: PackId) -> Result<&HeldPack> {
         match self {
-            Self::Unborn(reader) => reader.material.extents.get(&block.index())
-                .ok_or_else(changed),
-            Self::Manual(reader) => reader.extent(block),
+            Self::Unborn(r) => r.material.packs.get(&id).ok_or_else(changed),
+            Self::Manual(r) => r.pack(id),
         }
     }
-    fn base_block(
-        &self, index: u64, retained: u64, buffer: &mut [u8; WORKING_BLOCK_BYTES as usize],
-    ) -> Result<()> {
+    fn base_range(&self, offset: u64, retained: u64, buffer: &mut [u8]) -> Result<()> {
         match self {
-            Self::Unborn(_) => { buffer.fill(0); Ok(()) }
-            Self::Manual(reader) => reader.base_block(index, retained, buffer),
+            Self::Unborn(_) => { buffer.fill(0); Ok(()) },
+            Self::Manual(r) => r.base_range(offset, retained, buffer),
         }
     }
+
 }
 
 
@@ -124,12 +120,6 @@ impl Source {
     }
 }
 
-struct CreatedExtent {
-    held: HeldExtent,
-    // Do not release accounting while the actual inode-preventing descriptor lives.
-    _reservation: PayloadProofReservation,
-}
-
 enum Editing {
     Active(WorkingSave),
     Failed,
@@ -137,12 +127,13 @@ enum Editing {
 
 /// Connection-local edit state, not a durable accepted-write log. A failed frame
 /// poisons this batch and cannot later be flushed as if its partial copies had
-/// succeeded. Unrecorded extents are preserved, never adopted or auto-cleaned.
+/// succeeded. Unrecorded packs are preserved, never adopted or auto-cleaned.
 pub(crate) struct WorkingWriteSession {
     source: Source,
     operation: OperationId,
     editing: Editing,
-    created: BTreeMap<WorkingExtentId, CreatedExtent>,
+    pending: BTreeMap<PackId, PendingPack>,
+    current: Option<PackId>,
     changed: bool,
     retained_base_bytes: u64,
 }
@@ -194,7 +185,7 @@ impl WorkingWriteSession {
         };
         let retained_base_bytes = source.reader.retained_base_bytes();
         Ok(Self {
-            source, operation, editing: Editing::Active(batch), created: BTreeMap::new(),
+            source, operation, editing: Editing::Active(batch), pending: BTreeMap::new(), current: None,
             changed: false, retained_base_bytes,
         })
     }
@@ -208,180 +199,124 @@ impl WorkingWriteSession {
 
     pub(crate) fn logical_size(&self, context: &PlanningContext<'_>) -> Result<u64> {
         self.source.require_context(context)?;
-        Ok(self.active()?.view().logical_size())
+        Ok(self.active()?.logical_size())
     }
 
-    /// Read this ordered batch, including prepared but not yet saved extents.
-    /// It is never advertised as an acknowledged Save or a full Version.
-    pub(crate) fn read_at(
-        &self,
-        context: &PlanningContext<'_>,
-        output: &mut [u8],
-        offset: u64,
-    ) -> Result<usize> {
+    /// Connection-local read, not a Save. Authenticate only touched ranges.
+    pub(crate) fn read_at(&self, context: &PlanningContext<'_>, output: &mut [u8], offset: u64) -> Result<usize> {
         self.source.require_context(context)?;
-        if output.len() > WORKING_BLOCK_BYTES as usize {
-            return Err(Error::FileDraft(Failure::Size));
-        }
-        let view = self.active()?.view();
-        let count = view.logical_size().saturating_sub(offset).min(output.len() as u64) as usize;
-        let mut buffer = [0; WORKING_BLOCK_BYTES as usize];
+        if output.len() > WORKING_IO_BYTES as usize { return Err(Error::FileDraft(Failure::Size)); }
+        let batch = self.active()?;
+        let count = batch.logical_size().saturating_sub(offset).min(output.len() as u64) as usize;
+        let root = &self.source.reader.scope().held;
         let mut copied = 0;
         while copied < count {
-            let position = offset + copied as u64;
-            let index = position / WORKING_BLOCK_BYTES;
-            let within = (position % WORKING_BLOCK_BYTES) as usize;
-            self.read_block(view, index, &mut buffer)?;
-            let take = (count - copied).min(buffer.len() - within);
-            output[copied..copied + take].copy_from_slice(&buffer[within..within + take]);
-            copied += take;
+            let at = offset + copied as u64;
+            let (span, bytes) = batch.span(at, offset + count as u64).map_err(manifest_error)?;
+            let end = copied + bytes as usize;
+            let slice = &mut output[copied..end];
+            match span {
+                ReadSpan::Gap => self.source.reader.base_range(at, self.retained_base_bytes, slice)?,
+                ReadSpan::Zero => slice.fill(0),
+                ReadSpan::Data { pack, offset } => match self.pending.get(&pack) {
+                    Some(pending) => pending.read_at(root, slice, offset)?,
+                    None => self.source.reader.pack(pack)?.read_at(root, slice, offset)?,
+                },
+            }
+            copied = end;
         }
         self.source.require_context(context)?;
         Ok(count)
     }
 
-    fn require_capacity(&self, context: &PlanningContext<'_>, bytes: u64) -> Result<()> {
-        let disk = context.config.disks.iter().find(|disk| {
-            disk.disk_id == self.source.reader.scope().disk.seal.disk_id
-        }).ok_or(Error::FileDraft(Failure::SourceChanged))?;
-        let prepared: u64 = self.created.values()
-            .map(|extent| extent.held.block.extent().bytes()).sum();
-        let used = context.used_bytes(&disk.slot_id).saturating_add(prepared);
-        let available = self.source.reader.scope().disk.root.available()?;
-        if bytes.saturating_add(context.config.metadata_reserve_bytes) > available
-            || disk.capacity_bytes.is_some_and(|limit| bytes > limit.saturating_sub(used))
-        {
-            return Err(Error::FileDraft(Failure::WorkingCapacity));
-        }
-        Ok(())
-    }
-
-    fn read_block(
-        &self,
-        manifest: &WorkingManifest,
-        index: u64,
-        buffer: &mut [u8; WORKING_BLOCK_BYTES as usize],
-    ) -> Result<()> {
-        let Some(block) = manifest.block(index) else {
-            return self.source.reader.base_block(index, self.retained_base_bytes, buffer);
-        };
-        let held = match self.created.get(&block.extent().id()) {
-            Some(created) => &created.held,
-            None => self.source.reader.extent(block)?,
-        };
-        if held.block.extent() != block.extent() {
-            return Err(changed());
-        }
-        held.read_block(self.source.reader.scope(), buffer)?;
-        buffer[block.retained_bytes() as usize..].fill(0);
-        Ok(())
-    }
-
-    fn create_extent(&mut self, index: u64, bytes: &[u8]) -> Result<WorkingExtent> {
-        if self.created.len() == MAX_WORKING_BLOCKS {
-            return Err(Error::FileDraft(Failure::Size));
-        }
-        let reservation = crate::engine::payload_proof_budget().reserve(1)
-            .ok_or(Error::FileDraft(Failure::Size))?;
-        let id = WorkingExtentId::generate()?;
-        let name = layout::container::working_extent(id);
-        let hash = ExtentHash::of_bytes(bytes);
+    // All private uploads (also bytes overwritten later in this FLUSH) still
+    // occupy disk until actual cleanup. Never spend credit for old live packs.
+    fn require_capacity(&self, context: &PlanningContext<'_>, data: u64) -> Result<()> {
+        let capacity = || Error::FileDraft(Failure::WorkingCapacity);
         let scope = self.source.reader.scope();
-        scope.verify()?;
-        crate::container_storage::version_names::check_target_name(&scope.held, &name)?;
-        let receipt = scope.held.copy_new_entry_verified_synced(
-            &name,
-            &mut Cursor::new(bytes),
-            platform_io::payload::Expectation {
-                bytes: bytes.len() as u64,
-                blake3: Some(hash.digest()),
-            },
-        ).map_err(|error| match error {
-            NewEntryCopyError::Admission(source) | NewEntryCopyError::Published { source, .. } => {
-                source
+        let disk = context.config.disks.iter().find(|disk| disk.disk_id == scope.disk.seal.disk_id)
+            .ok_or(Error::FileDraft(Failure::SourceChanged))?;
+        let stat = scope.disk.root.filesystem_statistics()?;
+        let unit = stat.f_bsize.max(stat.f_frsize);
+        if unit == 0 || stat.f_frsize == 0 { return Err(capacity()); }
+        let round = |n: u64| n.div_ceil(unit).checked_mul(unit).ok_or_else(capacity);
+        let mut extra = data;
+        let mut outstanding = 0u64;
+        let mut all = 0u64;
+        for (&id, pending) in &self.pending {
+            let remaining = pending.remaining()?;
+            let current = PACK_BYTES - remaining;
+            let added = if self.current == Some(id) { extra.min(remaining) } else { 0 };
+            extra -= added;
+            let physical = physical_bytes_for(current + added).map_err(manifest_error)?;
+            all = all.checked_add(physical).ok_or_else(capacity)?;
+            // The checksum trailer has not yet been flushed. Held data bytes
+            // are already reflected in f_bavail, but never deduct more than that.
+            outstanding = outstanding.checked_add(round(physical - current)?).ok_or_else(capacity)?;
+        }
+        if extra != 0 {
+            if self.pending.len() == MAX_LIVE_PACKS || (stat.f_files != 0 && stat.f_favail == 0) {
+                return Err(capacity());
             }
-            NewEntryCopyError::Payload(source) => source.into(),
-        })?;
-        let extent = WorkingExtent::from_observation(
-            id,
-            ContainerEntity::new(receipt.identity.device, receipt.identity.inode),
-            bytes.len() as u64,
-            hash,
-        ).map_err(manifest_error)?;
-        let held = HeldExtent::capture(scope, WorkingBlock::new(index, extent))?;
-        scope.verify()?;
-        self.created.insert(id, CreatedExtent { held, _reservation: reservation });
-        Ok(extent)
+            let physical = physical_bytes_for(extra).map_err(manifest_error)?;
+            all = all.checked_add(physical).ok_or_else(capacity)?;
+            outstanding = outstanding.checked_add(round(physical)?).ok_or_else(capacity)?;
+        }
+        let available = stat.f_bavail.checked_mul(stat.f_frsize).ok_or_else(capacity)?;
+        if outstanding.checked_add(context.config.metadata_reserve_bytes).ok_or_else(capacity)? > available
+            || disk.capacity_bytes.is_some_and(|limit| context.used_bytes(&disk.slot_id)
+                .checked_add(all).is_none_or(|needed| needed > limit))
+        { return Err(capacity()); }
+        Ok(())
     }
 
-    fn replace_write_blocks(
-        &mut self,
-        batch: &mut WorkingSave,
-        offset: u64,
-        bytes: &[u8],
-    ) -> Result<()> {
-        let end = offset.checked_add(bytes.len() as u64)
-            .ok_or(Error::FileDraft(Failure::Size))?;
-        let length = batch.view().logical_size().max(end);
-        if end > self.source.config.max_file_bytes {
-            return Err(Error::FileDraft(Failure::Size));
-        }
-        let first = offset / WORKING_BLOCK_BYTES;
-        let last = (end - 1) / WORKING_BLOCK_BYTES;
-        let count = usize::try_from(last - first + 1)
-            .map_err(|source| Error::FileDraft(Failure::WorkingCount(source)))?;
-        if self.created.len().checked_add(count).is_none_or(|n| n > MAX_WORKING_BLOCKS) {
-            return Err(Error::FileDraft(Failure::Size));
-        }
-        let mut replacements = Vec::with_capacity(count);
-        let mut buffer = [0; WORKING_BLOCK_BYTES as usize];
-        for index in first..=last {
-            self.read_block(batch.view(), index, &mut buffer)?;
-            let start = index * WORKING_BLOCK_BYTES;
-            let from = offset.max(start);
-            let to = start + (end - start).min(WORKING_BLOCK_BYTES);
-            buffer[(from - start) as usize..(to - start) as usize]
-                .copy_from_slice(&bytes[(from - offset) as usize..(to - offset) as usize]);
-            let retained = (length - start).min(WORKING_BLOCK_BYTES) as usize;
-            let extent = if matches!(self.source.reader, SourceReader::Unborn(_))
-                && buffer[..retained].iter().all(|byte| *byte == 0) {
-                None
-            } else {
-                Some(self.create_extent(index, &buffer[..retained])?)
-            };
-            replacements.push((index, extent));
-        }
-        batch.write_blocks(offset, bytes.len() as u64, &replacements).map_err(manifest_error)
-    }
-
-    /// This bounded call either prepares all supplied bytes or returns an error.
-    /// The count is not Saved and the transport ordinal is not SaveGeneration.
-    pub(crate) fn write_at(
-        &mut self,
-        context: &PlanningContext<'_>,
-        offset: u64,
-        bytes: &[u8],
-    ) -> Result<usize> {
+    /// Only spend changed bytes. A covering zero write is an explicit logical
+    /// run; it never drops a block back onto a nonzero historical base.
+    pub(crate) fn write_at(&mut self, context: &PlanningContext<'_>, offset: u64, bytes: &[u8]) -> Result<usize> {
         self.source.require_context(context)?;
-        self.active()?;
-        if bytes.len() > WORKING_BLOCK_BYTES as usize {
+        let max = self.active()?.maximum();
+        if bytes.len() > WORKING_IO_BYTES as usize || offset.checked_add(bytes.len() as u64).is_none_or(|end| end > max) {
             return Err(Error::FileDraft(Failure::Size));
         }
-        if bytes.is_empty() {
-            return Ok(0);
-        }
-        let end = offset.checked_add(bytes.len() as u64)
-            .ok_or(Error::FileDraft(Failure::Size))?;
-        if end > context.config.max_file_bytes {
-            return Err(Error::FileDraft(Failure::Size));
-        }
-        let touched = (end - 1) / WORKING_BLOCK_BYTES - offset / WORKING_BLOCK_BYTES + 1;
-        self.require_capacity(context, touched * WORKING_BLOCK_BYTES)?;
-        let Editing::Active(mut batch) = std::mem::replace(&mut self.editing, Editing::Failed)
-        else {
+        if bytes.is_empty() { return Ok(0); }
+        let sequential = match self.current.and_then(|id| self.pending.get(&id)) {
+            Some(active) => self.active()?.continues_data(offset, active.id(), PACK_BYTES - active.remaining()?),
+            None => false,
+        };
+        // Standalone zero is explicit. If it extends an actual append, storing
+        // the submitted zeros keeps a long mixed sequential write in one run.
+        let zero = !sequential && bytes.iter().all(|&value| value == 0);
+        self.require_capacity(context, if zero { 0 } else { bytes.len() as u64 })?;
+        let Editing::Active(mut batch) = std::mem::replace(&mut self.editing, Editing::Failed) else {
             return Err(Error::FileDraft(Failure::WorkingEditFailed));
         };
-        self.replace_write_blocks(&mut batch, offset, bytes)?;
+        if zero {
+            batch.write(offset, bytes.len() as u64, RunSource::Zero {}).map_err(manifest_error)?;
+        } else {
+            let root = &self.source.reader.scope().held;
+            let origin = PackOrigin { file: self.source.reader.file(), operation: self.operation };
+            let mut pos = 0;
+            while pos < bytes.len() {
+                let pending = self.current.and_then(|id| self.pending.get(&id));
+                let (id, remaining, create) = match pending {
+                    Some(p) if p.remaining()? > 0 => (p.id(), p.remaining()?, false),
+                    _ => (PackId::generate()?, PACK_BYTES, true),
+                };
+                let take = remaining.min((bytes.len() - pos) as u64) as usize;
+                let physical = PACK_BYTES - remaining;
+                batch.write(offset + pos as u64, take as u64, RunSource::Data { pack: id, offset: physical })
+                    .map_err(manifest_error)?;
+                if create {
+                    if self.pending.contains_key(&id) { return Err(changed()); }
+                    self.pending.insert(id, PendingPack::create(root, id, origin)?);
+                    self.current = Some(id);
+                }
+                if self.pending.get_mut(&id).ok_or_else(changed)?.append(root, &bytes[pos..pos + take])? != physical {
+                    return Err(changed());
+                }
+                pos += take;
+            }
+        }
         self.source.require_context(context)?;
         self.editing = Editing::Active(batch);
         self.changed = true;
@@ -395,7 +330,7 @@ impl WorkingWriteSession {
         new_length: u64,
     ) -> Result<()> {
         self.source.require_context(context)?;
-        if self.active()?.view().logical_size() != old_length {
+        if self.active()?.logical_size() != old_length {
             return Err(Error::FileDraft(Failure::WorkingLength));
         }
         let Editing::Active(mut batch) = std::mem::replace(&mut self.editing, Editing::Failed)
@@ -417,9 +352,19 @@ impl WorkingWriteSession {
         self.source.require_context(context)?;
         self.active()?;
         if !self.changed { return Ok(None); }
-        let Editing::Active(batch) = self.editing else {
+        self.require_capacity(context, 0)?;
+        let Editing::Active(mut batch) = self.editing else {
             return Err(Error::FileDraft(Failure::WorkingEditFailed));
         };
+        let live = batch.references();
+        let mut created = BTreeMap::new();
+        for (id, pending) in self.pending {
+            if live.contains(&id) {
+                let held = pending.seal(&self.source.reader.scope().held)?;
+                batch.seal_pack(held.evidence()).map_err(manifest_error)?;
+                created.insert(id, held);
+            } // Unreferenced partial retained on disk, never adopted or deleted here.
+        }
         let manifest = batch.finish().map_err(manifest_error)?;
         let body = match &self.source.reader {
             SourceReader::Unborn(_) => SavedBody::Unborn,
@@ -433,7 +378,7 @@ impl WorkingWriteSession {
             source: self.source,
             operation: self.operation,
             manifest,
-            created: self.created,
+            created,
             body,
         };
         result.require_context(context)?;
@@ -441,7 +386,7 @@ impl WorkingWriteSession {
     }
 }
 
-/// Actual prepared extent feedback. There is deliberately no raw constructor,
+/// Actual prepared packed-material feedback. There is deliberately no raw constructor,
 /// serde implementation, saved receipt, FULL claim, or protection capability.
 #[derive(Clone, Copy)]
 enum SavedBody {
@@ -454,7 +399,7 @@ pub(crate) struct PreparedWorkingSave {
     source: Source,
     operation: OperationId,
     manifest: WorkingManifest,
-    created: BTreeMap<WorkingExtentId, CreatedExtent>,
+    created: BTreeMap<PackId, HeldPack>,
 }
 
 impl PreparedWorkingSave {
@@ -552,15 +497,13 @@ impl PreparedWorkingSave {
         if self.manifest.operation() != self.operation {
             return Err(Error::FileDraft(Failure::Publication));
         }
-        for block in self.manifest.blocks() {
-            let held = match self.created.get(&block.extent().id()) {
-                Some(created) => &created.held,
-                None => self.source.reader.extent(*block)?,
+        for &pack in self.manifest.packs() {
+            let held = match self.created.get(&pack.id()) {
+                Some(fresh) => fresh,
+                None => self.source.reader.pack(pack.id())?,
             };
-            if held.block.extent() != block.extent() {
-                return Err(changed());
-            }
-            held.require_named(self.source.reader.scope())?;
+            if held.evidence() != pack { return Err(changed()); }
+            held.validate(&self.source.reader.scope().held)?;
         }
         Ok(())
     }

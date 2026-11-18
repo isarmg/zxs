@@ -121,83 +121,62 @@ fn draft_material_uses_its_own_identity_and_full_width_size() {
 #[test]
 fn unborn_batch_shrink_reextend_preserves_zero_tail_in_one_save_generation() {
     use crate::file_container::ContainerEntity;
-    use crate::file_draft::manifest::{
-        ExtentHash, SaveGeneration, WorkingSave, WorkingExtent, WorkingExtentId,
-    };
+    use crate::file_draft::manifest::{SaveGeneration, WorkingSave, WorkingManifest,
+        packed::{AppendIndex, PackId, PackOrigin}, ranges::{ReadSpan, RunSource}};
     let file = crate::FileId::from_random([21; 16]);
     let operation = crate::OperationId::from_random([22; 16]);
-    // Codec/geometry facts only. These inode numbers are not an engine source.
-    let first = WorkingExtent::from_observation(
-        WorkingExtentId::from_random([23; 16]), ContainerEntity::new(7, 8),
-        8, ExtentHash::of_bytes(b"abcdefgh"),
-    ).unwrap();
+    let id = PackId::from_random([23; 16]);
+    let mut index = AppendIndex::default(); index.append(b"abcdefgh").unwrap();
+    let (pack, _) = index.finish(id, PackOrigin { file, operation }, ContainerEntity::new(7, 8)).unwrap();
     let mut batch = WorkingSave::first(file, operation, 128);
-    batch.write_blocks(0, 8, &[(0, Some(first))]).unwrap();
-    batch.resize(3).unwrap();
-    batch.resize(8).unwrap();
-    assert_eq!(batch.view().generation(), SaveGeneration::first());
-    assert_eq!(batch.view().logical_size(), 8);
-    assert_eq!(batch.view().block(0).unwrap().retained_bytes(), 3);
+    batch.write(0, 8, RunSource::Data { pack: id, offset: 0 }).unwrap();
+    batch.seal_pack(pack).unwrap();
+    let uncut = batch.finish().unwrap();
+    let mut batch = uncut.begin_save(crate::OperationId::from_random([28; 16]), 128).unwrap();
+    batch.resize(3).unwrap(); batch.resize(8).unwrap(); batch.resize(6).unwrap(); batch.resize(8).unwrap();
     let first_save = batch.finish().unwrap();
+    assert_eq!(first_save.retained_prefix(), Some(3));
+    assert_eq!(first_save.logical_size(), 8);
+    assert_eq!(first_save.span(0, 8).unwrap(), (ReadSpan::Data { pack: id, offset: 0 }, 3));
+    assert_eq!(first_save.span(3, 8).unwrap(), (ReadSpan::Gap, 5));
     let wire = canonical_json(&first_save).unwrap();
-    let reopened: manifest::WorkingManifest = json_codec::from_slice(&wire).unwrap();
-    assert_eq!(reopened, first_save);
-    assert_eq!(reopened.block(0).unwrap().retained_bytes(), 3);
-
+    let reopened: WorkingManifest = json_codec::from_slice(&wire).unwrap();
+    assert_eq!(first_save, reopened);
+    reopened.require_successor_of(&uncut, 128).unwrap();
     let retained = reopened.begin_save(crate::OperationId::from_random([26; 16]), 128)
         .unwrap().finish().unwrap();
     retained.require_successor_of(&reopened, 128).unwrap();
     let mut resurrected = json_codec::to_value(&retained).unwrap();
-    resurrected["blocks"][0]["retained_bytes"] = "8".into();
-    let resurrected: manifest::WorkingManifest = json_codec::from_value(resurrected).unwrap();
-    assert!(resurrected.require_successor_of(&reopened, 128).is_err());
-    let mut renamed_extent = json_codec::to_value(&retained).unwrap();
-    renamed_extent["blocks"][0]["extent"]["id"] =
-        WorkingExtentId::from_random([27; 16]).to_string().into();
-    let renamed_extent: manifest::WorkingManifest =
-        json_codec::from_value(renamed_extent).unwrap();
-    assert!(renamed_extent.require_successor_of(&reopened, 128).is_err());
-
-    let uncut = manifest::WorkingManifest::first(
-        file, crate::OperationId::from_random([28; 16]), 8,
-        vec![manifest::WorkingBlock::new(0, first)], 128,
-    ).unwrap();
-    let mut two_cuts = uncut.begin_save(crate::OperationId::from_random([29; 16]), 128)
-        .unwrap();
-    two_cuts.resize(3).unwrap();
-    two_cuts.resize(8).unwrap();
-    two_cuts.resize(6).unwrap();
-    let two_cuts = two_cuts.finish().unwrap();
-    two_cuts.require_successor_of(&uncut, 128).unwrap();
-    let mut restored_tail = json_codec::to_value(&two_cuts).unwrap();
-    assert_eq!(restored_tail["truncation"]["retained_prefix"], "3");
-    assert_eq!(restored_tail["truncation"]["old_visible_length"], "8");
-    restored_tail["blocks"][0]["retained_bytes"] = "6".into();
-    let restored_tail: manifest::WorkingManifest =
-        json_codec::from_value(restored_tail).unwrap();
-    assert!(restored_tail.require_successor_of(&uncut, 128).is_err());
-
-    let mut successor = reopened.begin_save(crate::OperationId::from_random([24; 16]), 128)
-        .unwrap();
-    let before = successor.view().clone();
-    assert!(successor.write_blocks(8, 1, &[]).is_err());
-    assert_eq!(successor.view(), &before);
-    assert!(successor.resize(129).is_err());
-    assert_eq!(successor.view(), &before);
-    let replacement = WorkingExtent::from_observation(
-        WorkingExtentId::from_random([25; 16]), ContainerEntity::new(7, 9),
-        9, ExtentHash::of_bytes(b"abc\0\0\0\0\0x"),
-    ).unwrap();
-    successor.write_blocks(8, 1, &[(0, Some(replacement))]).unwrap();
-    successor.resize(10).unwrap();
-    let second_save = successor.finish().unwrap();
-    assert_eq!(second_save.generation(), SaveGeneration::first().next().unwrap());
-    assert_eq!(second_save.block(0).unwrap().retained_bytes(), 9);
-    assert_ne!(second_save.commitment(), first_save.commitment());
-    let working = UnbornWorking::birth().saved(file, first_save, 128).unwrap();
+    resurrected["runs"][0]["bytes"] = "8".into();
+    let restored: WorkingManifest = json_codec::from_value(resurrected).unwrap();
+    assert!(restored.require_successor_of(&reopened, 128).is_err());
+    let mut moved = json_codec::to_value(&retained).unwrap();
+    moved["runs"][0]["source"]["offset"] = "1".into();
+    let moved: WorkingManifest = json_codec::from_value(moved).unwrap();
+    assert!(moved.require_successor_of(&reopened, 128).is_err());
+    let mut renamed = json_codec::to_value(&retained).unwrap();
+    let other = PackId::from_random([27; 16]).to_string();
+    renamed["pack_list"][0]["id"] = other.clone().into(); renamed["runs"][0]["source"]["pack"] = other.into();
+    let renamed: WorkingManifest = json_codec::from_value(renamed).unwrap();
+    assert!(renamed.require_successor_of(&reopened, 128).is_err());
+    let mut hidden = json_codec::to_value(&retained).unwrap();
+    hidden["runs"] = json_codec::Value::Array(Vec::new()); hidden["pack_list"] = json_codec::Value::Array(Vec::new());
+    let hidden: WorkingManifest = json_codec::from_value(hidden).unwrap();
+    assert!(hidden.require_successor_of(&reopened, 128).is_err());
+    let mut successor = uncut.begin_save(crate::OperationId::from_random([24; 16]), 128).unwrap();
+    assert!(successor.write(8, 0, RunSource::Zero {}).is_err());
+    assert!(successor.resize(129).is_err()); assert_eq!(successor.logical_size(), 8);
+    successor.write(6, 3, RunSource::Zero {}).unwrap(); successor.resize(10).unwrap();
+    let second = successor.finish().unwrap();
+    assert_eq!(second.generation(), SaveGeneration::first().next().unwrap());
+    assert_eq!(second.span(6, 10).unwrap(), (ReadSpan::Zero, 3));
+    assert_eq!(second.span(9, 10).unwrap(), (ReadSpan::Gap, 1));
+    assert_ne!(second.commitment(), uncut.commitment());
+    let working = UnbornWorking::birth().saved(file, uncut, 128).unwrap();
     assert_eq!(working.mode(), CommitMode::Manual);
-    assert!(working.saved(file, second_save.clone(), 128).is_ok());
-    assert!(UnbornWorking::birth().saved(file, second_save, 128).is_err());
+    assert!(working.saved(file, second.clone(), 128).is_ok());
+    assert!(UnbornWorking::birth().saved(file, second, 128).is_err());
+
 }
 
 #[test]
@@ -208,12 +187,17 @@ fn unborn_manifest_rejects_missing_unknown_duplicate_and_cross_generation_bytes(
     let first = WorkingSave::first(file, operation, u64::MAX).finish().unwrap();
     let value = json_codec::to_value(&first).unwrap();
     for field in ["file", "operation", "generation", "previous", "logical_size", "truncation",
-        "blocks"]
+        "pack_list", "runs"]
     {
         let mut missing = value.clone();
         missing.as_object_mut().unwrap().remove(field);
         assert!(json_codec::from_value::<WorkingManifest>(missing).is_err());
     }
+    let mut old_blocks = value.clone();
+    old_blocks.as_object_mut().unwrap().remove("runs");
+    old_blocks.as_object_mut().unwrap().remove("pack_list");
+    old_blocks["blocks"] = json_codec::Value::Array(Vec::new());
+    assert!(json_codec::from_value::<WorkingManifest>(old_blocks).is_err());
     let mut unknown = value.clone();
     unknown["base_version"] = VersionId::from_random([33; 16]).to_string().into();
     assert!(json_codec::from_value::<WorkingManifest>(unknown).is_err());
@@ -221,7 +205,7 @@ fn unborn_manifest_rejects_missing_unknown_duplicate_and_cross_generation_bytes(
     wrong_generation["generation"] = "2".into();
     assert!(json_codec::from_value::<WorkingManifest>(wrong_generation).is_err());
     let encoded = String::from_utf8(canonical_json(&first).unwrap()).unwrap();
-    let duplicate = encoded.replacen("\"blocks\":[]", "\"blocks\":[],\"blocks\":[]", 1);
+    let duplicate = encoded.replacen("\"runs\":[]", "\"runs\":[],\"runs\":[]", 1);
     assert_ne!(duplicate, encoded);
     assert!(json_codec::from_str::<WorkingManifest>(&duplicate).is_err());
     let working = FileWorkingState::Unborn { working: UnbornWorking::birth() };

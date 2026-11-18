@@ -2,7 +2,9 @@ use super::*;
 use crate::{Config, Engine};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use storage_contract::Mode;
+use storage_contract::{FileId, Mode, OperationId};
+
+fn origin() -> PackOrigin { PackOrigin { file: FileId::from_random([3; 16]), operation: OperationId::from_random([4; 16]) } }
 
 fn setup() -> (tempfile::TempDir, Engine, DiskRoot) {
     let temp = tempfile::tempdir().unwrap();
@@ -27,7 +29,7 @@ fn setup() -> (tempfile::TempDir, Engine, DiskRoot) {
 fn frame_fragments_share_one_inode_and_a_cold_range_checks_only_its_selected_chunks() {
     let (_temp, _engine, root) = setup();
     let id = PackId::generate().unwrap();
-    let mut upload = PendingPack::create(&root, id).unwrap();
+    let mut upload = PendingPack::create(&root, id, origin()).unwrap();
     let frame = vec![0x31; 64 * 1024];
     for n in 0..32 { assert_eq!(upload.append(&root, &frame).unwrap(), n * frame.len() as u64); }
     let tail = b"end";
@@ -39,9 +41,9 @@ fn frame_fragments_share_one_inode_and_a_cold_range_checks_only_its_selected_chu
     let held = upload.seal(&root).unwrap();
     let pack = held.evidence();
     assert_eq!(pack.data_bytes(), 2 * VERIFY_CHUNK + 3);
-    assert_eq!(pack.physical_bytes(), pack.data_bytes() + 3 * 32);
+    assert_eq!(pack.physical_bytes(), pack.data_bytes() + 4 * 32);
     assert_eq!(root.entries(root.path()).unwrap().count(), 1);
-    assert!(PendingPack::create(&root, id).is_err());
+    assert!(PendingPack::create(&root, id, origin()).is_err());
     drop(held);
     let path = root.path().join(working_pack(id).as_path());
     // Corrupt an unrelated data chunk after dropping the live capture. A cold
@@ -64,7 +66,7 @@ fn frame_fragments_share_one_inode_and_a_cold_range_checks_only_its_selected_chu
 fn partial_and_replaced_pack_names_never_become_accepted_material() {
     let (_temp, _engine, root) = setup();
     let id = PackId::generate().unwrap();
-    let mut upload = PendingPack::create(&root, id).unwrap();
+    let mut upload = PendingPack::create(&root, id, origin()).unwrap();
     upload.append(&root, b"original").unwrap();
     let path = root.path().join(working_pack(id).as_path());
     let parked = root.path().join("old");
@@ -73,5 +75,5 @@ fn partial_and_replaced_pack_names_never_become_accepted_material() {
     assert!(upload.seal(&root).is_err());
     assert_eq!(fs::read(&parked).unwrap(), b"original");
     assert_eq!(fs::read(&path).unwrap(), b"original");
-    assert!(PendingPack::create(&root, id).is_err());
+    assert!(PendingPack::create(&root, id, origin()).is_err());
 }

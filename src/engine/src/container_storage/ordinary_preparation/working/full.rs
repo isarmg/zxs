@@ -14,7 +14,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use storage_contract::ContentHash;
-use storage_contract::file_draft::manifest::WORKING_BLOCK_BYTES;
+use storage_contract::file_draft::manifest::WORKING_IO_BYTES;
 
 enum FullSelection {
     Ordinary(Arc<SelectedWorkingSources>),
@@ -36,7 +36,7 @@ struct Merged<'a> {
 
 impl Read for Merged<'_> {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
-        let count = output.len().min(WORKING_BLOCK_BYTES as usize);
+        let count = output.len().min(WORKING_IO_BYTES as usize);
         let read = self.source.read_at(&mut output[..count], self.offset)
             .map_err(io::Error::other)?;
         self.offset += read as u64;

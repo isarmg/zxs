@@ -458,23 +458,16 @@ pub(crate) fn decode(receipt: &OperationResult) -> Result<Option<Decoded>, Codec
     }) {
         return Err(CodecError::Budget);
     }
-    if record.and_then(|record| record.get("request"))
-        .and_then(|request| request.get("manifest"))
-        .and_then(|manifest| manifest.get("blocks"))
-        .and_then(json_codec::Value::as_array)
-        .is_some_and(|blocks| {
-            blocks.len() > storage_contract::file_draft::manifest::MAX_WORKING_BLOCKS
-        })
-    {
-        return Err(CodecError::Budget);
+    // Bound both canonical collections before cloning any nested working material.
+    use storage_contract::file_draft::manifest::ranges::{MAX_LIVE_PACKS, MAX_LIVE_RUNS};
+    let manifests = [record.and_then(|r| r.get("request")).and_then(|v| v.get("manifest")),
+        record.and_then(|r| r.get("added")).and_then(|v| v.get("working"))
+            .and_then(|v| v.get("body")).and_then(|v| v.get("manifest"))];
+    for manifest in manifests.into_iter().flatten() {
+        if [("pack_list", MAX_LIVE_PACKS), ("runs", MAX_LIVE_RUNS)].into_iter().any(|(name, max)| {
+            manifest.get(name).and_then(json_codec::Value::as_array).is_some_and(|entries| entries.len() > max)
+        }) { return Err(CodecError::Budget); }
     }
-    if record.and_then(|record| record.get("added"))
-        .and_then(|added| added.get("working")).and_then(|working| working.get("body"))
-        .and_then(|body| body.get("manifest")).and_then(|manifest| manifest.get("blocks"))
-        .and_then(json_codec::Value::as_array).is_some_and(|blocks| {
-            blocks.len() > storage_contract::file_draft::manifest::MAX_WORKING_BLOCKS
-        })
-    { return Err(CodecError::Budget); }
     if receipt.kind == ADDED_FIRST {
         let content = record.and_then(|record| record.get("content"))
             .ok_or(CodecError::Publication)?;

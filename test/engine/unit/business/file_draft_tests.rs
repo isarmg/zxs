@@ -177,12 +177,12 @@ fn unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node
 
     // Multiple accepted edits belong to one immutable save, not one generation
     // per frame. Truncation must mask both old blocks and the old partial tail.
-    use storage_contract::file_draft::manifest::{SaveGeneration, WORKING_BLOCK_BYTES};
+    use storage_contract::file_draft::manifest::{SaveGeneration, WORKING_IO_BYTES};
     use std::sync::Arc;
     let save_operation = OperationId::generate().unwrap();
     let mut writer = engine.begin_unborn_write(&target, save_operation).unwrap();
     assert_eq!(writer.write_at(&engine.planning_context(), 0, b"draft original tail").unwrap(), 19);
-    let last = WORKING_BLOCK_BYTES + 7;
+    let last = WORKING_IO_BYTES + 7;
     assert_eq!(writer.write_at(&engine.planning_context(), last, b"x").unwrap(), 1);
     writer.truncate(&engine.planning_context(), last + 1, 3).unwrap();
     writer.truncate(&engine.planning_context(), 3, last + 1).unwrap();
@@ -264,9 +264,9 @@ fn unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node
     assert_eq!(engine.state().branches, before.branches);
     assert_eq!(engine.state().commits, before.commits);
 
-    let block = second_request.manifest.blocks()[0];
-    let extent = container.join(crate::persist::layout::container::working_extent(
-        block.extent().id(),
+    let pack = second_request.manifest.packs()[0];
+    let extent = container.join(crate::persist::layout::container::working_pack(
+        pack.id(),
     ).as_path());
     let identity = fs::metadata(&extent).unwrap();
     let extent_bytes = fs::read(&extent).unwrap();
@@ -382,8 +382,8 @@ fn unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node
         assert!(Arc::ptr_eq(&original, engine.planning_context().state));
         drop(original);
         drop(engine);
-        let extent = container.join(crate::persist::layout::container::working_extent(
-            request.manifest.blocks()[0].extent().id(),
+        let extent = container.join(crate::persist::layout::container::working_pack(
+            request.manifest.packs()[0].id(),
         ).as_path());
         let identity = fs::metadata(&extent).unwrap();
         let parked = temporary.path().join("accepted-unborn-extent");
@@ -436,8 +436,8 @@ fn unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node
         let storage_contract::file_draft::UnbornBody::Saved { manifest } = working.body() else {
             panic!("the real earlier saves provide the accepted source manifest");
         };
-        let original_extent = container.join(crate::persist::layout::container::working_extent(
-            manifest.blocks()[0].extent().id(),
+        let original_extent = container.join(crate::persist::layout::container::working_pack(
+            manifest.packs()[0].id(),
         ).as_path());
         let identity = fs::metadata(&original_extent).unwrap();
         let parked = temporary.path().join("first-commit-original-extent");

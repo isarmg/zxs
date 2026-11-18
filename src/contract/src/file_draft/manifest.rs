@@ -1,27 +1,19 @@
-//! Immutable bounded blocks for an unpublished body or an overlay on one exact base.
+//! Immutable, bounded packed ranges for an unpublished body or an overlay on one exact base.
 //!
 //! This value is the working field of the one authoritative container record.
 //! It is not a Version, a full-file content hash, or permission to open a path.
 pub mod packed;
+pub mod ranges;
+use packed::WorkingPack;
+use ranges::{LogicalRun, MAX_LIVE_PACKS, MAX_LIVE_RUNS, RunSource, RunTable, ReadSpan};
 
-use crate::file_container::ContainerEntity;
-use crate::{FileId, Generation, GenerationExhausted, Id, OperationId};
+use crate::{FileId, Generation, GenerationExhausted, OperationId};
 use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::{fmt, str::FromStr};
 
-/// Fixed block geometry is part of this private candidate's format, not an
-/// HTTP-frame limit. Transport fragments cannot each become a save generation.
-pub const WORKING_BLOCK_BYTES: u64 = 65_536;
-pub const MAX_WORKING_BLOCKS: usize = 4096;
-
-pub mod kind {
-    pub enum WorkingExtent {}
-    impl crate::IdKind for WorkingExtent {
-        const PREFIX: &'static str = "wextent";
-    }
-}
-pub type WorkingExtentId = Id<kind::WorkingExtent>;
+/// Bound on a transport edit/read fragment; not a disk allocation or logical-file limit.
+pub const WORKING_IO_BYTES: u64 = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serialization(transparent)]
@@ -41,9 +33,9 @@ impl SaveGeneration {
     }
 }
 
-/// Hashes exactly one immutable extent, never the visible merged file.
+/// Commitment to one private pack index; not a hash of the merged file.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ExtentHash([u8; 32]);
+pub struct PackIndexCommitment([u8; 32]);
 
 /// Commits to the complete manifest, including scope, predecessor, truncation
 /// and physical extent identities. It cannot be converted into ContentHash.
@@ -54,15 +46,13 @@ pub struct ManifestCommitment([u8; 32]);
 pub enum ManifestError {
     #[error("working material digest is not canonical lowercase hexadecimal")]
     Digest,
-    #[error("working material exceeds its bounded block or length domain")]
+    #[error("working material exceeds its bounded pack, interval or length domain")]
     Budget,
-    #[error("working material does not have canonical, unique block identities")]
-    Blocks,
     #[error("working material lacks an observed immutable extent identity")]
     Entity,
     #[error("working material predecessor or truncation generation is inconsistent")]
     Predecessor,
-    #[error("working material replacement does not cover the exact write blocks")]
+    #[error("working material logical range or authenticated pack index is inconsistent")]
     Coverage,
     #[error("working material save generation is exhausted")]
     Generation(#[source] GenerationExhausted),
@@ -82,16 +72,6 @@ fn parse_digest(value: &str) -> Result<[u8; 32], ManifestError> {
         *byte = digit(pair[0]) * 16 + digit(pair[1]);
     }
     Ok(bytes)
-}
-
-impl ExtentHash {
-    pub fn of_bytes(bytes: &[u8]) -> Self {
-        Self(*blake3::hash(bytes).as_bytes())
-    }
-
-    pub fn digest(self) -> blake3::Hash {
-        blake3::Hash::from_bytes(self.0)
-    }
 }
 
 macro_rules! digest_wire {
@@ -120,74 +100,8 @@ macro_rules! digest_wire {
         }
     };
 }
-digest_wire!(ExtentHash);
+digest_wire!(PackIndexCommitment);
 digest_wire!(ManifestCommitment);
-
-/// Serialized feedback is descriptive. The engine must observe this very inode
-/// through the admitted container, verify all bytes, then retain the descriptor.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct WorkingExtent {
-    id: WorkingExtentId,
-    entity: ContainerEntity,
-    #[serialization(with = "crate::u64_string")]
-    bytes: u64,
-    hash: ExtentHash,
-}
-
-impl WorkingExtent {
-    pub fn from_observation(
-        id: WorkingExtentId,
-        entity: ContainerEntity,
-        bytes: u64,
-        hash: ExtentHash,
-    ) -> Result<Self, ManifestError> {
-        let value = Self { id, entity, bytes, hash };
-        value.validate()?;
-        Ok(value)
-    }
-
-    fn validate(self) -> Result<(), ManifestError> {
-        if self.entity.inode() == 0 {
-            return Err(ManifestError::Entity);
-        }
-        if self.bytes == 0 || self.bytes > WORKING_BLOCK_BYTES {
-            return Err(ManifestError::Blocks);
-        }
-        Ok(())
-    }
-
-    pub const fn id(self) -> WorkingExtentId { self.id }
-    pub const fn entity(self) -> ContainerEntity { self.entity }
-    pub const fn bytes(self) -> u64 { self.bytes }
-    pub const fn hash(self) -> ExtentHash { self.hash }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct WorkingBlock {
-    #[serialization(with = "crate::u64_string")]
-    index: u64,
-    extent: WorkingExtent,
-    /// Truncation can retain a prefix of an older extent. Re-extension never
-    /// increases this field; the remainder is zero until a new write replaces it.
-    #[serialization(with = "crate::u64_string")]
-    retained_bytes: u64,
-}
-
-impl WorkingBlock {
-    pub fn new(index: u64, extent: WorkingExtent) -> Self {
-        Self { index, extent, retained_bytes: extent.bytes() }
-    }
-
-    pub const fn index(self) -> u64 { self.index }
-    pub const fn extent(self) -> WorkingExtent { self.extent }
-    pub const fn retained_bytes(self) -> u64 { self.retained_bytes }
-
-    fn start(self) -> Result<u64, ManifestError> {
-        self.index.checked_mul(WORKING_BLOCK_BYTES).ok_or(ManifestError::Budget)
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -222,7 +136,8 @@ pub struct WorkingManifest {
     logical_size: u64,
     /// Mandatory null means no shrink has occurred. Missing is not null.
     truncation: Option<Truncation>,
-    blocks: Vec<WorkingBlock>,
+    pack_list: Vec<WorkingPack>,
+    runs: RunTable,
 }
 
 #[derive(Deserialize)]
@@ -236,36 +151,16 @@ struct WireManifest {
     logical_size: u64,
     #[serialization(deserialize_with = "required_truncation")]
     truncation: Option<Truncation>,
-    #[serialization(deserialize_with = "bounded_blocks")]
-    blocks: Vec<WorkingBlock>,
+    #[serialization(deserialize_with = "bounded_packs")]
+    pack_list: Vec<WorkingPack>,
+    #[serialization(deserialize_with = "bounded_runs")]
+    runs: Vec<LogicalRun>,
 }
-
-fn bounded_blocks<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<WorkingBlock>, D::Error> {
-    struct Blocks;
-    impl<'de> data_serialization::de::Visitor<'de> for Blocks {
-        type Value = Vec<WorkingBlock>;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("a bounded immutable working-block sequence")
-        }
-
-        fn visit_seq<A: data_serialization::de::SeqAccess<'de>>(
-            self,
-            mut sequence: A,
-        ) -> Result<Self::Value, A::Error> {
-            let mut blocks = Vec::new();
-            while let Some(block) = sequence.next_element()? {
-                if blocks.len() == MAX_WORKING_BLOCKS {
-                    return Err(data_serialization::de::Error::custom(ManifestError::Budget));
-                }
-                blocks.push(block);
-            }
-            Ok(blocks)
-        }
-    }
-    deserializer.deserialize_seq(Blocks)
+fn bounded_packs<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<WorkingPack>, D::Error> {
+    ranges::bounded::<D, WorkingPack, MAX_LIVE_PACKS>(d)
+}
+fn bounded_runs<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<LogicalRun>, D::Error> {
+    ranges::bounded::<D, LogicalRun, MAX_LIVE_RUNS>(d)
 }
 
 fn required_truncation<'de, D: Deserializer<'de>>(
@@ -284,7 +179,8 @@ impl<'de> Deserialize<'de> for WorkingManifest {
             previous: wire.previous,
             logical_size: wire.logical_size,
             truncation: wire.truncation,
-            blocks: wire.blocks,
+            pack_list: wire.pack_list,
+            runs: RunTable::from_wire(wire.runs),
         };
         value.validate(u64::MAX).map_err(data_serialization::de::Error::custom)?;
         Ok(value)
@@ -292,28 +188,8 @@ impl<'de> Deserialize<'de> for WorkingManifest {
 }
 
 impl WorkingManifest {
-    pub fn first(
-        file: FileId,
-        operation: OperationId,
-        logical_size: u64,
-        blocks: Vec<WorkingBlock>,
-        maximum: u64,
-    ) -> Result<Self, ManifestError> {
-        let value = Self {
-            file,
-            operation,
-            generation: SaveGeneration::first(),
-            previous: ManifestPrevious::Birth {},
-            logical_size,
-            truncation: None,
-            blocks,
-        };
-        value.validate(maximum)?;
-        Ok(value)
-    }
-
     pub fn validate(&self, maximum: u64) -> Result<(), ManifestError> {
-        if self.logical_size > maximum || self.blocks.len() > MAX_WORKING_BLOCKS {
+        if self.logical_size > maximum {
             return Err(ManifestError::Budget);
         }
         match self.previous {
@@ -333,25 +209,11 @@ impl WorkingManifest {
         }) {
             return Err(ManifestError::Predecessor);
         }
-        let mut identities = BTreeSet::new();
-        let mut ids = BTreeSet::new();
-        let mut last = None;
-        for block in &self.blocks {
-            block.extent.validate()?;
-            let start = block.start()?;
-            if last.is_some_and(|index| index >= block.index)
-                || !ids.insert(block.extent.id())
-                || !identities.insert(block.extent.entity())
-                || start >= self.logical_size
-                || block.retained_bytes == 0
-                || block.retained_bytes > block.extent.bytes()
-                || block.retained_bytes > self.logical_size - start
-            {
-                return Err(ManifestError::Blocks);
-            }
-            last = Some(block.index);
+        if self.pack_list.iter().any(|p| p.origin().file != self.file
+            || (matches!(self.previous, ManifestPrevious::Birth {}) && p.origin().operation != self.operation)) {
+            return Err(ManifestError::Predecessor);
         }
-        Ok(())
+        self.runs.validate(&self.pack_list, self.logical_size)
     }
 
     pub const fn file(&self) -> FileId { self.file }
@@ -359,21 +221,20 @@ impl WorkingManifest {
     pub const fn generation(&self) -> SaveGeneration { self.generation }
     pub const fn previous(&self) -> ManifestPrevious { self.previous }
     pub const fn logical_size(&self) -> u64 { self.logical_size }
-    pub fn blocks(&self) -> &[WorkingBlock] { &self.blocks }
+    pub fn packs(&self) -> &[WorkingPack] { &self.pack_list }
+    pub fn runs(&self) -> &[LogicalRun] { self.runs.runs() }
+    pub fn allocated_bytes(&self) -> u64 { self.pack_list.iter().map(|p| p.physical_bytes()).sum() }
+    pub fn span(&self, start: u64, end: u64) -> Result<(ReadSpan, u64), ManifestError> {
+        if end > self.logical_size { return Err(ManifestError::Coverage); }
+        self.runs.at(start, end)
+    }
 
     pub fn retained_prefix(&self) -> Option<u64> {
         self.truncation.map(|cut| cut.retained_prefix)
     }
 
-    pub fn block(&self, index: u64) -> Option<WorkingBlock> {
-        self.blocks.binary_search_by_key(&index, |block| block.index)
-            .ok().map(|position| self.blocks[position])
-    }
-
-    /// Retained extents are immutable occurrences, not reusable byte buffers.
-    /// A successor may drop or shorten one, but cannot move it to another block,
-    /// change its hash or resurrect the prefix removed by an earlier truncate.
-    /// New extents still require the engine's actual EXCL/readback product.
+    /// A retained physical slice cannot move, grow past a cut, change identity
+    /// or disappear back into a gap. New packs belong to this exact Save.
     pub fn require_successor_of(
         &self,
         previous: &Self,
@@ -396,32 +257,26 @@ impl WorkingManifest {
         {
             return Err(ManifestError::Predecessor);
         }
-        let by_id: BTreeMap<_, _> = previous.blocks.iter()
-            .map(|block| (block.extent.id(), block)).collect();
-        let by_entity: BTreeSet<_> = previous.blocks.iter()
-            .map(|block| block.extent.entity()).collect();
-        let cut = self.truncation.filter(|cut| cut.generation == self.generation);
-        for block in &self.blocks {
-            let retained_limit = cut.map_or(block.retained_bytes, |cut| {
-                cut.retained_prefix.saturating_sub(block.index * WORKING_BLOCK_BYTES)
-            });
-            match by_id.get(&block.extent.id()) {
-                Some(old) if old.index == block.index && old.extent == block.extent
-                    && block.retained_bytes <= old.retained_bytes
-                    && block.retained_bytes <= retained_limit => {}
+        let old: BTreeMap<_, _> = previous.packs().iter().map(|p| (p.id(), p)).collect();
+        let entities: BTreeSet<_> = previous.packs().iter().map(|p| p.entity()).collect();
+        for pack in self.packs() {
+            match old.get(&pack.id()) {
+                Some(&original) if original == pack => (),
                 Some(_) => return Err(ManifestError::Predecessor),
-                None if by_entity.contains(&block.extent.entity()) => {
-                    return Err(ManifestError::Entity);
+                None if entities.contains(&pack.entity()) || pack.origin().operation != self.operation => {
+                    return Err(ManifestError::Predecessor);
                 }
-                None => {}
+                None => (),
             }
         }
-        Ok(())
+        let cut = self.truncation.filter(|cut| cut.generation == self.generation);
+        if self.logical_size < previous.logical_size && cut.is_none() { return Err(ManifestError::Predecessor); }
+        self.runs.retains(&previous.runs, &old.keys().copied().collect(), cut.map(|c| c.retained_prefix))
     }
 
     pub fn commitment(&self) -> ManifestCommitment {
         let mut hash = blake3::Hasher::new();
-        hash.update(b"zxs:unborn-working-manifest:v1\0");
+        hash.update(b"zxs:packed-working-manifest\0");
         hash.update(self.file.to_string().as_bytes());
         hash.update(self.operation.to_string().as_bytes());
         hash.update(&self.generation.0.get().to_le_bytes());
@@ -444,15 +299,26 @@ impl WorkingManifest {
                 hash.update(&cut.retained_prefix.to_le_bytes());
             }
         }
-        hash.update(&(self.blocks.len() as u64).to_le_bytes());
-        for block in &self.blocks {
-            hash.update(&block.index.to_le_bytes());
-            hash.update(block.extent.id().to_string().as_bytes());
-            hash.update(&block.extent.entity().device().to_le_bytes());
-            hash.update(&block.extent.entity().inode().to_le_bytes());
-            hash.update(&block.extent.bytes().to_le_bytes());
-            hash.update(&block.extent.hash().0);
-            hash.update(&block.retained_bytes.to_le_bytes());
+        hash.update(&(self.pack_list.len() as u64).to_le_bytes());
+        for &pack in &self.pack_list {
+            hash.update(pack.id().to_string().as_bytes());
+            hash.update(pack.origin().file.to_string().as_bytes());
+            hash.update(pack.origin().operation.to_string().as_bytes());
+            hash.update(&pack.entity().device().to_le_bytes());
+            hash.update(&pack.entity().inode().to_le_bytes());
+            hash.update(&pack.data_bytes().to_le_bytes());
+            hash.update(&pack.index_digest());
+        }
+        hash.update(&(self.runs().len() as u64).to_le_bytes());
+        for &run in self.runs() {
+            hash.update(&run.start().to_le_bytes());
+            hash.update(&run.bytes().to_le_bytes());
+            match run.source() {
+                RunSource::Zero {} => { hash.update(&[0]); }
+                RunSource::Data { pack, offset } => {
+                    hash.update(&[1]); hash.update(pack.to_string().as_bytes()); hash.update(&offset.to_le_bytes());
+                }
+            }
         }
         ManifestCommitment(*hash.finalize().as_bytes())
     }
@@ -500,7 +366,8 @@ impl WorkingSave {
                 previous: ManifestPrevious::Birth {},
                 logical_size: 0,
                 truncation: None,
-                blocks: Vec::new(),
+                pack_list: Vec::new(),
+                runs: RunTable::default(),
             },
             maximum,
         }
@@ -514,80 +381,54 @@ impl WorkingSave {
         Ok(value)
     }
 
-    pub fn view(&self) -> &WorkingManifest { &self.next }
-
-    /// Read/modify/write of every affected block is verified by the actual
-    /// held-source producer. None means an observed all-zero block, never an
-    /// unreadable extent. An error leaves the entire prior edit batch intact.
-    pub fn write_blocks(
-        &mut self,
-        offset: u64,
-        accepted: u64,
-        replacements: &[(u64, Option<WorkingExtent>)],
-    ) -> Result<(), ManifestError> {
-        let end = offset.checked_add(accepted).ok_or(ManifestError::Budget)?;
-        if accepted == 0 || end > self.maximum || replacements.len() > MAX_WORKING_BLOCKS {
-            return Err(ManifestError::Coverage);
+    pub fn continues_data(&self, at: u64, pack: packed::PackId, physical: u64) -> bool {
+        self.next.runs.continues_data(at, pack, physical)
+    }
+    pub fn maximum(&self) -> u64 { self.maximum }
+    pub fn logical_size(&self) -> u64 { self.next.logical_size }
+    pub fn span(&self, start: u64, end: u64) -> Result<(ReadSpan, u64), ManifestError> {
+        self.next.span(start, end)
+    }
+    pub fn write(&mut self, start: u64, bytes: u64, source: RunSource) -> Result<(), ManifestError> {
+        let end = start.checked_add(bytes).ok_or(ManifestError::Budget)?;
+        if end > self.maximum { return Err(ManifestError::Budget); }
+        self.next.runs.replace(start, bytes, source)?;
+        self.next.logical_size = self.next.logical_size.max(end);
+        Ok(())
+    }
+    pub fn references(&self) -> BTreeSet<packed::PackId> { self.next.runs.references() }
+    pub fn seal_pack(&mut self, pack: WorkingPack) -> Result<(), ManifestError> {
+        if pack.origin().file != self.next.file || pack.origin().operation != self.next.operation {
+            return Err(ManifestError::Predecessor);
         }
-        let first = offset / WORKING_BLOCK_BYTES;
-        let last = (end - 1) / WORKING_BLOCK_BYTES;
-        if last - first >= MAX_WORKING_BLOCKS as u64
-            || replacements.len() as u64 != last - first + 1
-            || replacements.iter().enumerate().any(|(ordinal, (index, _))| {
-                *index != first + ordinal as u64
-            })
-        {
-            return Err(ManifestError::Coverage);
-        }
-        let mut candidate = self.next.clone();
-        candidate.logical_size = candidate.logical_size.max(end);
-        candidate.blocks.retain(|block| block.index < first || block.index > last);
-        for &(index, extent) in replacements {
-            if let Some(extent) = extent {
-                let start = index.checked_mul(WORKING_BLOCK_BYTES).ok_or(ManifestError::Budget)?;
-                if extent.bytes() != (candidate.logical_size - start).min(WORKING_BLOCK_BYTES) {
-                    return Err(ManifestError::Coverage);
-                }
-                candidate.blocks.push(WorkingBlock::new(index, extent));
+        match self.next.pack_list.binary_search_by_key(&pack.id(), |p| p.id()) {
+            Ok(_) => Err(ManifestError::Entity),
+            Err(index) => {
+                // At most the old retained set plus the selected new set can be pending final pruning.
+                if self.next.pack_list.len() == 2 * MAX_LIVE_PACKS { return Err(ManifestError::Budget); }
+                self.next.pack_list.insert(index, pack); Ok(())
             }
         }
-        candidate.blocks.sort_by_key(|block| block.index);
-        candidate.validate(self.maximum)?;
-        self.next = candidate;
-        Ok(())
     }
 
     pub fn resize(&mut self, length: u64) -> Result<(), ManifestError> {
         if length > self.maximum { return Err(ManifestError::Budget); }
         if length == self.next.logical_size { return Ok(()); }
-        let mut candidate = self.next.clone();
-        if length < candidate.logical_size {
-            // Keep the tightest cut in this save. Shrink -> extend -> shrink
-            // must not replace an earlier zero-tail obligation with a wider one.
-            if !candidate.truncation.is_some_and(|cut| {
-                cut.generation == candidate.generation && cut.retained_prefix <= length
+        if length < self.next.logical_size {
+            if !self.next.truncation.is_some_and(|cut| {
+                cut.generation == self.next.generation && cut.retained_prefix <= length
             }) {
-                candidate.truncation = Some(Truncation {
-                    generation: candidate.generation,
-                    old_visible_length: candidate.logical_size,
-                    retained_prefix: length,
-                });
+                self.next.truncation = Some(Truncation { generation: self.next.generation,
+                    old_visible_length: self.next.logical_size, retained_prefix: length });
             }
-            candidate.blocks.retain_mut(|block| {
-                // Every current block already passed validate before this edit.
-                let start = block.index * WORKING_BLOCK_BYTES;
-                if start >= length { return false; }
-                block.retained_bytes = block.retained_bytes.min(length - start);
-                true
-            });
+            self.next.runs.truncate(length);
         }
-        candidate.logical_size = length;
-        candidate.validate(self.maximum)?;
-        self.next = candidate;
+        self.next.logical_size = length;
         Ok(())
     }
-
-    pub fn finish(self) -> Result<WorkingManifest, ManifestError> {
+    pub fn finish(mut self) -> Result<WorkingManifest, ManifestError> {
+        let referenced = self.references();
+        self.next.pack_list.retain(|pack| referenced.contains(&pack.id()));
         self.next.validate(self.maximum)?;
         Ok(self.next)
     }

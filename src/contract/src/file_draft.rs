@@ -252,12 +252,10 @@ impl FileWorkingState {
         match self {
             Self::Unborn { working } => match working.body() {
                 UnbornBody::Empty {} => 0,
-                UnbornBody::Saved { manifest } => manifest.blocks().iter()
-                    .map(|block| block.extent().bytes()).sum(),
+                UnbornBody::Saved { manifest } => manifest.allocated_bytes(),
             },
             Self::ManualDirty { payload, .. } => payload.logical_size(),
-            Self::ManualIncremental { manifest, .. } => manifest.material().blocks().iter()
-                .map(|block| block.extent().bytes()).sum(),
+            Self::ManualIncremental { manifest, .. } => manifest.material().allocated_bytes(),
             Self::Automatic { .. } | Self::ManualClean { .. } => 0,
         }
     }

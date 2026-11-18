@@ -11,7 +11,7 @@ use platform_io::fs_safety::linux::FileIdentity;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use storage_contract::file_container::ContainerEntity;
 use storage_contract::file_draft::manifest::{ManifestError, packed::{
-    AppendIndex, CheckedIndex, PackId, VERIFY_CHUNK, WorkingPack,
+    AppendIndex, CheckedIndex, PackId, PackOrigin, VERIFY_CHUNK, WorkingPack,
 }};
 
 fn manifest_error(error: ManifestError) -> Error { Error::FileDraft(Failure::WorkingManifest(error)) }
@@ -47,17 +47,18 @@ pub(super) struct PendingPack {
     file: DiskFile,
     stamp: FileStamp,
     index: Option<AppendIndex>,
+    origin: PackOrigin,
     _fd: PayloadProofReservation,
 }
 impl PendingPack {
-    pub(super) fn create(root: &DiskRoot, id: PackId) -> Result<Self> {
+    pub(super) fn create(root: &DiskRoot, id: PackId, origin: PackOrigin) -> Result<Self> {
         let location = Location::capture(root, id)?;
         let fd = descriptor()?;
         let file = root.create_private_working_pack(id)?;
         let metadata = file.metadata()?;
         if metadata.len() != 0 { return Err(changed()); }
         location.matches(root, &metadata)?;
-        Ok(Self { location, file, stamp: FileStamp::from_metadata(&metadata),
+        Ok(Self { location, file, origin, stamp: FileStamp::from_metadata(&metadata),
             index: Some(AppendIndex::default()), _fd: fd })
     }
     fn index(&self) -> Result<&AppendIndex> {
@@ -98,7 +99,7 @@ impl PendingPack {
         let metadata = self.file.metadata()?;
         let entity = ContainerEntity::new(metadata.dev(), metadata.ino());
         let index = self.index.ok_or(Error::FileDraft(Failure::WorkingEditFailed))?;
-        let (pack, trailer) = index.finish(self.location.id, entity).map_err(manifest_error)?;
+        let (pack, trailer) = index.finish(self.location.id, self.origin, entity).map_err(manifest_error)?;
         self.file.write_all_at(&trailer, pack.data_bytes())?;
         self.file.sync_all()?;
         root.sync_dir(root.path())?;
@@ -108,20 +109,12 @@ impl PendingPack {
         // Pin the original even while opening its immutable, separately held
         // read descriptor. The checked index must come from the actual trailer.
         let held = HeldPack::capture(root, pack)?;
-        let mut buffer = vec![0; VERIFY_CHUNK as usize];
-        let mut at = 0;
-        while at < pack.data_bytes() {
-            let count = (pack.data_bytes() - at).min(VERIFY_CHUNK) as usize;
-            held.file.read_exact_at(&mut buffer[..count], at)?;
-            verify_chunk(&buffer[..count], held.index.expected_chunk(at / VERIFY_CHUNK))?;
-            at += count as u64;
-        }
-        held.validate(root)?;
+        held.verify_full(root)?;
         Ok(held)
     }
 }
 
-pub(super) struct HeldPack {
+pub(in crate::container_storage::ordinary_preparation) struct HeldPack {
     location: Location,
     pack: WorkingPack,
     file: ReadFile,
@@ -130,7 +123,7 @@ pub(super) struct HeldPack {
     _fd: PayloadProofReservation,
 }
 impl HeldPack {
-    pub(super) fn capture(root: &DiskRoot, pack: WorkingPack) -> Result<Self> {
+    pub(in crate::container_storage::ordinary_preparation) fn capture(root: &DiskRoot, pack: WorkingPack) -> Result<Self> {
         let location = Location::capture(root, pack.id())?;
         let fd = descriptor()?;
         let file = root.open_read_entry(&working_pack(pack.id()))?;
@@ -147,13 +140,25 @@ impl HeldPack {
         result.validate(root)?;
         Ok(result)
     }
-    pub(super) fn evidence(&self) -> WorkingPack { self.pack }
-    pub(super) fn validate(&self, root: &DiskRoot) -> Result<()> {
+    pub(super) fn verify_full(&self, root: &DiskRoot) -> Result<()> {
+        self.validate(root)?;
+        let mut buffer = vec![0; self.pack.data_bytes().min(VERIFY_CHUNK) as usize];
+        let mut at = 0;
+        while at < self.pack.data_bytes() {
+            let count = (self.pack.data_bytes() - at).min(VERIFY_CHUNK) as usize;
+            self.file.read_exact_at(&mut buffer[..count], at)?;
+            verify_chunk(&buffer[..count], self.index.expected_chunk(at / VERIFY_CHUNK))?;
+            at += count as u64;
+        }
+        self.validate(root)
+    }
+    pub(in crate::container_storage::ordinary_preparation) fn evidence(&self) -> WorkingPack { self.pack }
+    pub(in crate::container_storage::ordinary_preparation) fn validate(&self, root: &DiskRoot) -> Result<()> {
         let metadata = self.file.metadata()?;
         if self.stamp != FileStamp::from_metadata(&metadata) { return Err(changed()); }
         self.location.matches(root, &metadata)
     }
-    pub(super) fn read_at(&self, root: &DiskRoot, output: &mut [u8], offset: u64) -> Result<()> {
+    pub(in crate::container_storage::ordinary_preparation) fn read_at(&self, root: &DiskRoot, output: &mut [u8], offset: u64) -> Result<()> {
         self.validate(root)?;
         read_checked(self.pack.data_bytes(), offset, output, |n| self.index.expected_chunk(n),
             |buffer, position| self.file.read_exact_at(buffer, position))?;

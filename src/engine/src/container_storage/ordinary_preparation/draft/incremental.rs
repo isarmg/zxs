@@ -1,15 +1,15 @@
-//! A held immutable version plus observed immutable replacement blocks.
+//! A held immutable version plus independently authenticated packed ranges.
 use crate::business::file_draft::DraftError as Failure;
 use crate::container_storage::ordinary_preparation::ObservedContainerReplica;
 use crate::container_storage::ordinary_preparation::draft::HeldDraft;
-use crate::container_storage::ordinary_preparation::working::HeldExtent;
+use crate::container_storage::ordinary_preparation::working::{HeldPack, held_packs};
 use crate::engine::PayloadProofReservation;
 use crate::file_stamp::FileStamp;
 use crate::{Error, FileVersion, ReadFile, Result, State};
 use std::collections::BTreeMap;
 use std::os::unix::fs::FileExt;
 use std::sync::Arc;
-use storage_contract::file_draft::manifest::{WORKING_BLOCK_BYTES, WorkingBlock};
+use storage_contract::file_draft::manifest::{packed::PackId, ranges::ReadSpan};
 use storage_contract::file_draft::{DraftBase, FileWorkingState, IncrementalManifest};
 use storage_contract::FileId;
 
@@ -24,7 +24,7 @@ pub(in crate::container_storage::ordinary_preparation) struct HeldManualMaterial
     file: ReadFile,
     checksums: storage_contract::ChecksumManifest,
     stamp: FileStamp,
-    extents: BTreeMap<u64, HeldExtent>,
+    packs: BTreeMap<PackId, HeldPack>,
     _reservation: PayloadProofReservation,
 }
 
@@ -53,13 +53,8 @@ impl HeldManualMaterial {
         {
             return Err(changed());
         }
-        let blocks = manifest.map_or(&[][..], |manifest| manifest.material().blocks());
-        let count = blocks
-            .len()
-            .checked_add(1)
-            .ok_or(Error::FileDraft(Failure::Size))?;
-        let reservation = crate::engine::payload_proof_budget()
-            .reserve(count)
+        let packs = manifest.map_or(&[][..], |m| m.material().packs());
+        let reservation = crate::engine::payload_proof_budget().reserve(1)
             .ok_or(Error::FileDraft(Failure::Size))?;
         let path = scope.body_path_for_material(version)?;
         // The authoritative version metadata commits to this existing sidecar.
@@ -73,10 +68,7 @@ impl HeldManualMaterial {
         let file = ReadFile::from(scope.held.open_leased_regular(&path)?);
         if file.logical_size()? != version.logical_size { return Err(changed()); }
         let stamp = FileStamp::from_metadata(&file.metadata()?);
-        let mut extents = BTreeMap::new();
-        for &block in blocks {
-            extents.insert(block.index(), HeldExtent::observe(scope, block)?);
-        }
+        let packs = held_packs(scope, packs, false)?;
         let result = Self {
             working: scope.record.working.clone(),
             base,
@@ -84,7 +76,7 @@ impl HeldManualMaterial {
             file,
             checksums,
             stamp,
-            extents,
+            packs,
             _reservation: reservation,
         };
         result.validate(scope)?;
@@ -103,71 +95,65 @@ impl HeldManualMaterial {
         {
             return Err(changed());
         }
-        for held in self.extents.values() {
-            held.require_named(scope)?;
+        for held in self.packs.values() {
+            held.validate(&scope.held)?;
         }
         Ok(())
     }
 
-    fn base_block(
-        &self,
-        scope: &ObservedContainerReplica,
-        index: u64,
-        retained: u64,
-        buffer: &mut [u8; WORKING_BLOCK_BYTES as usize],
-    ) -> Result<()> {
-        self.validate(scope)?;
-        buffer.fill(0);
-        let start = index
-            .checked_mul(WORKING_BLOCK_BYTES)
-            .ok_or(Error::FileDraft(Failure::Size))?;
-        let bytes = retained
-            .min(self.version.logical_size)
-            .saturating_sub(start)
-            .min(WORKING_BLOCK_BYTES) as usize;
-        if bytes > 0 {
-            let chunk_bytes = u64::from(self.checksums.chunk_bytes);
-            let chunk = start / chunk_bytes;
-            let chunk_start = chunk * chunk_bytes;
-            let count = (self.version.logical_size - chunk_start).min(chunk_bytes) as usize;
-            let expected = blake3::Hash::from_bytes(self.checksums.chunks[chunk as usize]);
-            let verified = platform_io::payload::read_verified_chunk(count, expected, |chunk| {
-                self.file.read_exact_at(chunk, chunk_start)
-            })?;
-            let within = (start - chunk_start) as usize;
-            buffer[..bytes].copy_from_slice(&verified[within..within + bytes]);
+    fn base_range(&self, offset: u64, retained: u64, output: &mut [u8]) -> Result<()> {
+        // A gap spans the bound old base only as far as its retained prefix;
+        // the rest is sparse zero even after a later re-extension.
+        output.fill(0);
+        let count = retained.min(self.version.logical_size).saturating_sub(offset)
+            .min(output.len() as u64) as usize;
+        let chunk_bytes = u64::from(self.checksums.chunk_bytes);
+        if chunk_bytes == 0 { return Err(changed()); }
+        let mut copied = 0;
+        while copied < count {
+            let at = offset + copied as u64;
+            let ordinal = at / chunk_bytes;
+            let start = ordinal * chunk_bytes;
+            let len = (self.version.logical_size - start).min(chunk_bytes) as usize;
+            let expected = self.checksums.chunks.get(usize::try_from(ordinal).map_err(|_| changed())?)
+                .ok_or_else(changed)?;
+            let verified = platform_io::payload::read_verified_chunk(len, blake3::Hash::from_bytes(*expected),
+                |bytes| self.file.read_exact_at(bytes, start))?;
+            let within = (at - start) as usize;
+            let take = (count - copied).min(len - within);
+            output[copied..copied + take].copy_from_slice(&verified[within..within + take]);
+            copied += take;
         }
-        self.validate(scope)
+        Ok(())
     }
 
-    pub(super) fn read_at(
-        &self,
-        scope: &ObservedContainerReplica,
-        output: &mut [u8],
-        offset: u64,
-    ) -> Result<usize> {
+    pub(super) fn read_at(&self, scope: &ObservedContainerReplica, output: &mut [u8], offset: u64) -> Result<usize> {
         self.validate(scope)?;
         let manifest = self.working.incremental();
         let length = manifest.map_or(self.version.logical_size, |m| m.material().logical_size());
         let retained = manifest.map_or(self.version.logical_size, |m| m.retained_base_bytes());
         let count = length.saturating_sub(offset).min(output.len() as u64) as usize;
-        let mut buffer = [0; WORKING_BLOCK_BYTES as usize];
         let mut copied = 0;
         while copied < count {
-            let position = offset + copied as u64;
-            let index = position / WORKING_BLOCK_BYTES;
-            let within = (position % WORKING_BLOCK_BYTES) as usize;
-            match self.extents.get(&index) {
-                Some(extent) => extent.read_block(scope, &mut buffer)?,
-                None => self.base_block(scope, index, retained, &mut buffer)?,
+            let at = offset + copied as u64;
+            let (span, bytes) = match manifest {
+                None => (ReadSpan::Gap, (count - copied) as u64),
+                Some(m) => m.material().span(at, offset + count as u64)
+                    .map_err(|e| Error::FileDraft(Failure::WorkingManifest(e)))?,
+            };
+            let end = copied + bytes as usize;
+            match span {
+                ReadSpan::Zero => output[copied..end].fill(0),
+                ReadSpan::Gap => self.base_range(at, retained, &mut output[copied..end])?,
+                ReadSpan::Data { pack, offset } => self.packs.get(&pack).ok_or_else(changed)?
+                    .read_at(&scope.held, &mut output[copied..end], offset)?,
             }
-            let take = (count - copied).min(buffer.len() - within);
-            output[copied..copied + take].copy_from_slice(&buffer[within..within + take]);
-            copied += take;
+            copied = end;
         }
         self.validate(scope)?;
         Ok(count)
     }
+
 }
 
 pub(crate) struct HeldManualReader {
@@ -242,30 +228,17 @@ impl HeldManualReader {
         self.require_source()?;
         self.material.read_at(&self.scope, output, offset)
     }
-    pub(crate) fn base_block(
-        &self,
-        index: u64,
-        retained: u64,
-        output: &mut [u8; WORKING_BLOCK_BYTES as usize],
+    pub(in crate::container_storage::ordinary_preparation) fn base_range(
+        &self, offset: u64, retained: u64, output: &mut [u8],
     ) -> Result<()> {
         self.require_source()?;
-        self.material
-            .base_block(&self.scope, index, retained, output)
+        self.material.base_range(offset, retained, output)?;
+        self.require_source()
     }
-    pub(in crate::container_storage::ordinary_preparation) fn extent(
-        &self,
-        block: WorkingBlock,
-    ) -> Result<&HeldExtent> {
-        let held = self
-            .material
-            .extents
-            .get(&block.index())
-            .ok_or_else(changed)?;
-        if held.block.extent() != block.extent() {
-            return Err(changed());
-        }
-        Ok(held)
+    pub(in crate::container_storage::ordinary_preparation) fn pack(&self, id: PackId) -> Result<&HeldPack> {
+        self.material.packs.get(&id).ok_or_else(changed)
     }
+
 }
 
 /// Only an explicit commit reads the complete merged body. This non-serializable

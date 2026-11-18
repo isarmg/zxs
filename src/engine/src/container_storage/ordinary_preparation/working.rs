@@ -1,20 +1,18 @@
-//! Same-container immutable extent observation and bounded merged reads.
+//! Same-container immutable packed material and bounded merged reads.
 //! This module neither installs a candidate nor turns a manifest hash into FULL.
 use super::ObservedContainerReplica;
 use crate::business::file_draft::DraftError as Failure;
-use crate::file_stamp::FileStamp;
-use crate::persist::layout;
-use crate::{Error, ReadFile, Result};
+use crate::{Error, Result};
 use std::collections::BTreeMap;
-use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::Arc;
 use storage_contract::file_draft::UnbornBody;
 use storage_contract::file_draft::manifest::{
-    ExtentHash, ManifestCommitment, SaveGeneration, WORKING_BLOCK_BYTES, WorkingBlock,
+    ManifestCommitment, SaveGeneration, WORKING_IO_BYTES, packed::{PackId, WorkingPack}, ranges::ReadSpan,
 };
 use storage_contract::{ContentHash, FileId};
 
 mod pack;
+pub(in crate::container_storage::ordinary_preparation) use pack::HeldPack;
 mod full;
 pub(crate) use full::PreparedUnbornFull;
 mod write;
@@ -24,78 +22,23 @@ fn changed() -> Error {
     Error::FileDraft(Failure::WorkingMaterialChanged)
 }
 
-pub(in crate::container_storage::ordinary_preparation) struct HeldExtent {
-    pub(in crate::container_storage::ordinary_preparation) block: WorkingBlock,
-    file: ReadFile,
-    stamp: FileStamp,
-}
-
-impl HeldExtent {
-    pub(in crate::container_storage::ordinary_preparation) fn capture(
-        scope: &ObservedContainerReplica, block: WorkingBlock,
-    ) -> Result<Self> {
-        let result = Self::observe(scope, block)?;
-        let mut buffer = [0; WORKING_BLOCK_BYTES as usize];
-        result.read_block(scope, &mut buffer)?;
-        Ok(result)
+pub(in crate::container_storage::ordinary_preparation) fn held_packs(
+    scope: &ObservedContainerReplica, packs: &[WorkingPack], verify_complete: bool,
+) -> Result<BTreeMap<PackId, HeldPack>> {
+    let mut held = BTreeMap::new();
+    for &pack in packs {
+        let item = HeldPack::capture(&scope.held, pack)?;
+        if verify_complete { item.verify_full(&scope.held)?; }
+        held.insert(pack.id(), item);
     }
-
-    pub(in crate::container_storage::ordinary_preparation) fn observe(
-        scope: &ObservedContainerReplica, block: WorkingBlock,
-    ) -> Result<Self> {
-        let extent = block.extent();
-        let name = layout::container::working_extent(extent.id());
-        let file = scope.held.open_read_entry(&name)?;
-        let metadata = file.metadata()?;
-        let identity = extent.entity();
-        if metadata.dev() != identity.device() || metadata.ino() != identity.inode()
-            || metadata.nlink() != 1 || metadata.len() != extent.bytes()
-        {
-            return Err(changed());
-        }
-        let result = Self { block, file, stamp: FileStamp::from_metadata(&metadata) };
-        result.require_named(scope)?;
-        Ok(result)
-    }
-
-    pub(in crate::container_storage::ordinary_preparation) fn require_named(
-        &self, scope: &ObservedContainerReplica,
-    ) -> Result<()> {
-        self.file.check_running()?;
-        let name = layout::container::working_extent(self.block.extent().id());
-        let named = scope.held.open_read_entry(&name)?;
-        if FileStamp::from_metadata(&self.file.metadata()?) != self.stamp
-            || FileStamp::from_metadata(&named.metadata()?) != self.stamp
-        {
-            return Err(changed());
-        }
-        Ok(())
-    }
-
-    pub(in crate::container_storage::ordinary_preparation) fn read_block(
-        &self,
-        scope: &ObservedContainerReplica,
-        buffer: &mut [u8; WORKING_BLOCK_BYTES as usize],
-    ) -> Result<()> {
-        self.require_named(scope)?;
-        buffer.fill(0);
-        let bytes = self.block.extent().bytes() as usize;
-        // The fixed block bound was admitted before allocating or opening any
-        // extents. FileExt retains the real disk lease for every physical read.
-        self.file.read_exact_at(&mut buffer[..bytes], 0)?;
-        if ExtentHash::of_bytes(&buffer[..bytes]) != self.block.extent().hash() {
-            return Err(changed());
-        }
-        buffer[self.block.retained_bytes() as usize..].fill(0);
-        self.require_named(scope)
-    }
+    Ok(held)
 }
 
 /// The exact immutable body retained by both publication and subsequent reads.
 /// It does not own a container Arc, so attaching it to that occurrence has no cycle.
 pub(super) struct HeldUnbornMaterial {
     body: UnbornBody,
-    extents: BTreeMap<u64, HeldExtent>,
+    packs: BTreeMap<PackId, HeldPack>,
     _reservation: crate::engine::PayloadProofReservation,
 }
 
@@ -112,25 +55,20 @@ impl HeldUnbornMaterial {
             return Err(Error::FileDraft(Failure::UnsupportedScope));
         }
         let body = working.body().clone();
-        let blocks = match &body {
+        let packs = match &body {
             UnbornBody::Empty {} => &[][..],
             UnbornBody::Saved { manifest } => {
                 manifest.validate(maximum).map_err(|source| {
                     Error::FileDraft(Failure::WorkingManifest(source))
                 })?;
                 if manifest.file() != scope.file { return Err(changed()); }
-                manifest.blocks()
+                manifest.packs()
             }
         };
-        let count = blocks.len().checked_add(1)
+        let reservation = crate::engine::payload_proof_budget().reserve(1)
             .ok_or(Error::FileDraft(Failure::Size))?;
-        let reservation = crate::engine::payload_proof_budget().reserve(count)
-            .ok_or(Error::FileDraft(Failure::Size))?;
-        let mut extents = BTreeMap::new();
-        for &block in blocks {
-            extents.insert(block.index(), HeldExtent::capture(scope, block)?);
-        }
-        let result = Self { body, extents, _reservation: reservation };
+        let packs = held_packs(scope, packs, true)?;
+        let result = Self { body, packs, _reservation: reservation };
         result.validate(scope)?;
         scope.verify_entity()?;
         Ok(result)
@@ -140,8 +78,8 @@ impl HeldUnbornMaterial {
         if scope.record.working.unborn().map(|working| working.body()) != Some(&self.body) {
             return Err(changed());
         }
-        for extent in self.extents.values() {
-            extent.require_named(scope)?;
+        for pack in self.packs.values() {
+            pack.validate(&scope.held)?;
         }
         Ok(())
     }
@@ -160,7 +98,7 @@ pub(super) fn populate(
 }
 
 /// Captures one immutable save, not today's mutable path or a new authorization.
-/// A later read shares the original observed extents and their descriptor budget.
+/// A later read shares the original observed packs and their descriptor budget.
 pub(crate) struct HeldUnbornReader {
     scope: Arc<ObservedContainerReplica>,
     material: Arc<HeldUnbornMaterial>,
@@ -226,25 +164,26 @@ impl HeldUnbornReader {
     }
 
     /// A bounded range read returns only bytes verified through the exact held
-    /// block. It never exposes a sparse OS FD whose holes pretend to be a base.
+    /// range. It never exposes a sparse OS FD whose holes pretend to be a base.
     pub(crate) fn read_at(&self, output: &mut [u8], offset: u64) -> Result<usize> {
         self.require_source()?;
         let length = self.logical_size();
         if output.is_empty() || offset >= length { return Ok(0); }
         let count = (length - offset).min(output.len() as u64) as usize;
-        let mut block = [0; WORKING_BLOCK_BYTES as usize];
+        let UnbornBody::Saved { manifest } = &self.material.body else { return Err(changed()); };
         let mut written = 0;
         while written < count {
             let position = offset + written as u64;
-            let index = position / WORKING_BLOCK_BYTES;
-            let within = (position % WORKING_BLOCK_BYTES) as usize;
-            let take = (count - written).min(block.len() - within);
-            match self.material.extents.get(&index) {
-                Some(extent) => extent.read_block(&self.scope, &mut block)?,
-                None => block.fill(0),
+            let (span, bytes) = manifest.span(position, offset + count as u64).map_err(|source| {
+                Error::FileDraft(Failure::WorkingManifest(source))
+            })?;
+            let end = written + bytes as usize;
+            match span {
+                ReadSpan::Gap | ReadSpan::Zero => output[written..end].fill(0),
+                ReadSpan::Data { pack, offset } => self.material.packs.get(&pack).ok_or_else(changed)?
+                    .read_at(&self.scope.held, &mut output[written..end], offset)?,
             }
-            output[written..written + take].copy_from_slice(&block[within..within + take]);
-            written += take;
+            written = end;
         }
         self.require_source()?;
         Ok(count)
@@ -254,7 +193,7 @@ impl HeldUnbornReader {
     /// proves no independent FULL installation and no historical publication.
     pub(crate) fn full_digest(&self) -> Result<ReadWorkingDigest<'_>> {
         let mut hash = blake3::Hasher::new();
-        let mut block = [0; WORKING_BLOCK_BYTES as usize];
+        let mut block = [0; WORKING_IO_BYTES as usize];
         let mut offset = 0;
         while offset < self.logical_size() {
             let read = self.read_at(&mut block, offset)?;

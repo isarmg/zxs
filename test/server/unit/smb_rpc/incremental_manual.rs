@@ -9,7 +9,7 @@ use std::io::Read;
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use storage_contract::OperationId;
-use storage_contract::file_draft::manifest::{WORKING_BLOCK_BYTES, WorkingExtentId};
+use storage_contract::file_draft::manifest::{WORKING_IO_BYTES, packed::{PackId, CheckedIndex, VERIFY_CHUNK, physical_bytes_for}};
 use storage_contract::file_draft::{DraftLocation, FileWorkingState};
 
 #[path = "incremental_http.rs"]
@@ -20,7 +20,7 @@ fn bytes(client: &mut Direct, handle: u64, length: usize) -> Vec<u8> {
     let mut output = vec![0; length];
     let mut offset = 0;
     while offset < output.len() {
-        let end = (offset + WORKING_BLOCK_BYTES as usize).min(output.len());
+        let end = (offset + WORKING_IO_BYTES as usize).min(output.len());
         let Reply::Read(bytes) = client.call(Request::Read {
             handle,
             offset: offset as u64,
@@ -43,7 +43,7 @@ fn bytes(client: &mut Direct, handle: u64, length: usize) -> Vec<u8> {
     output
 }
 
-fn extents(root: &Path) -> BTreeMap<WorkingExtentId, PathBuf> {
+fn extents(root: &Path) -> BTreeMap<PackId, PathBuf> {
     let mut result = BTreeMap::new();
     let mut pending = vec![root.to_owned()];
     while let Some(directory) = pending.pop() {
@@ -55,7 +55,7 @@ fn extents(root: &Path) -> BTreeMap<WorkingExtentId, PathBuf> {
             }
             if kind.is_file()
                 && let Some(name) = entry.file_name().to_str()
-                && let Ok(id) = name.parse::<WorkingExtentId>()
+                && let Ok(id) = name.parse::<PackId>()
             {
                 assert!(result.insert(id, entry.path()).is_none());
             }
@@ -86,16 +86,16 @@ fn ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_byt
     fs::set_permissions(&spool, fs::Permissions::from_mode(0o700)).unwrap();
     fs::create_dir(spool.join("empty-directory")).unwrap();
     let mut client = Direct::start_with_limit(root.path(), engine, auth, 1024 * 1024);
-    let original: Vec<_> = (0..8 * WORKING_BLOCK_BYTES)
+    let original: Vec<_> = (0..8 * WORKING_IO_BYTES)
         .map(|index| (index % 251) as u8)
         .collect();
     let (new, placeholder) = client.open("p/incremental.bin", true, true);
     assert_eq!(new.data_io, OpenIo::NativeWorking);
-    for (index, block) in original.chunks(WORKING_BLOCK_BYTES as usize).enumerate() {
+    for (index, block) in original.chunks(WORKING_IO_BYTES as usize).enumerate() {
         client.write(
             new.handle,
             WorkingPosition::At {
-                offset: index as u64 * WORKING_BLOCK_BYTES,
+                offset: index as u64 * WORKING_IO_BYTES,
             },
             block,
         );
@@ -187,10 +187,10 @@ fn ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_byt
     assert_eq!(
         extents(root.path()),
         prior_extents,
-        "open must not copy any working blocks"
+        "open must not copy any working packs"
     );
     let mut first = original.clone();
-    let offset = WORKING_BLOCK_BYTES as usize - 3;
+    let offset = WORKING_IO_BYTES as usize - 3;
     let patch = b"explicit cross-block range";
     first[offset..offset + patch.len()].copy_from_slice(patch);
     client.write(
@@ -213,20 +213,20 @@ fn ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_byt
         Some(snapshot.working.incremental().unwrap().material().commitment()));
     let persisted = json_codec::to_value(&snapshot.working).unwrap();
     assert!(persisted["payload"].get("content_hash").is_none());
-    assert_eq!(snapshot.working.material_bytes(), 2 * WORKING_BLOCK_BYTES);
+    assert_eq!(snapshot.working.material_bytes(), physical_bytes_for(patch.len() as u64).unwrap());
     assert_eq!(
         snapshot
             .working
             .incremental()
             .unwrap()
             .material()
-            .blocks()
+            .runs()
             .len(),
-        2
+        1
     );
     let (pinned, _) = client.open("p/incremental.bin", false, false);
     let mut latest = first.clone();
-    let offset = 5 * WORKING_BLOCK_BYTES as usize + 11;
+    let offset = 5 * WORKING_IO_BYTES as usize + 11;
     latest[offset..offset + 4].fill(0);
     client.write(
         writer.handle,
@@ -244,7 +244,7 @@ fn ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_byt
         "old read retains its original save"
     );
     assert_eq!(bytes(&mut client, writer.handle, latest.len()), latest);
-    let retained = WORKING_BLOCK_BYTES as usize + 10;
+    let retained = WORKING_IO_BYTES as usize + 10;
     client.call(Request::WorkingResize {
         handle: writer.handle,
         length: retained as u64,
@@ -254,7 +254,7 @@ fn ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_byt
         length: original.len() as u64,
     });
     latest[retained..].fill(0);
-    let offset = 5 * WORKING_BLOCK_BYTES as usize + 3;
+    let offset = 5 * WORKING_IO_BYTES as usize + 3;
     latest[offset..offset + 3].copy_from_slice(b"end");
     client.write(
         writer.handle,
@@ -276,12 +276,12 @@ fn ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_byt
         Some(snapshot.working.incremental().unwrap().material().commitment()));
     let persisted = json_codec::to_value(&snapshot.working).unwrap();
     assert!(persisted["payload"].get("content_hash").is_none());
-    assert_eq!(snapshot.working.material_bytes(), 3 * WORKING_BLOCK_BYTES);
+    assert_eq!(snapshot.working.material_bytes(), physical_bytes_for(patch.len() as u64).unwrap()
+        + physical_bytes_for(3).unwrap());
     let material = snapshot.working.incremental().unwrap().material();
     let after_extents = extents(root.path());
-    assert_eq!(after_extents.len() - prior_extents.len(), 4);
-    for block in material.blocks() {
-        let extent = block.extent();
+    assert_eq!(after_extents.len() - prior_extents.len(), 2);
+    for &extent in material.packs() {
         let path = &after_extents[&extent.id()];
         let metadata = fs::metadata(path).unwrap();
         assert_eq!(
@@ -289,11 +289,13 @@ fn ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_byt
             (extent.entity().device(), extent.entity().inode())
         );
         assert_eq!(metadata.nlink(), 1);
-        assert_eq!(metadata.len(), extent.bytes());
-        assert_eq!(
-            blake3::hash(&fs::read(path).unwrap()),
-            extent.hash().digest()
-        );
+        assert_eq!(metadata.len(), extent.physical_bytes());
+        let mut data = fs::read(path).unwrap();
+        let trailer = data.split_off(extent.data_bytes() as usize);
+        let index = CheckedIndex::from_trailer(extent, trailer).unwrap();
+        for (n, part) in data.chunks(VERIFY_CHUNK as usize).enumerate() {
+            assert_eq!(index.expected_chunk(n as u64), Some(*blake3::hash(part).as_bytes()));
+        }
     }
     // Disconnect a successfully flushed writer without manufacturing a second save.
     client.call(Request::Close {
@@ -332,9 +334,9 @@ fn ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_byt
         latest
     );
     let draft_route = format!("/api/file-manager/files/{}/draft?{query}", target.file);
-    for (start, end) in [(3, 21), (WORKING_BLOCK_BYTES as usize - 8,
-        WORKING_BLOCK_BYTES as usize + 30), (3 * WORKING_BLOCK_BYTES as usize,
-        3 * WORKING_BLOCK_BYTES as usize + 27)]
+    for (start, end) in [(3, 21), (WORKING_IO_BYTES as usize - 8,
+        WORKING_IO_BYTES as usize + 30), (3 * WORKING_IO_BYTES as usize,
+        3 * WORKING_IO_BYTES as usize + 27)]
     {
         let (etag, body) = web.range(&draft_route, start, end, latest.len());
         assert_eq!(body, latest[start..=end]);
@@ -371,8 +373,8 @@ fn ordinary_manual_ranges_and_tcp_commit_retain_exact_base_draft_and_version_byt
     assert_eq!(metadata.len(), latest.len() as u64);
     assert_eq!(metadata.nlink(), 1);
     assert_ne!((metadata.dev(), metadata.ino()), original_inode);
-    for block in material.blocks() {
-        let entity = block.extent().entity();
+    for pack in material.packs() {
+        let entity = pack.entity();
         assert_ne!(
             (metadata.dev(), metadata.ino()),
             (entity.device(), entity.inode())
