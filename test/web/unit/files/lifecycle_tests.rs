@@ -1,14 +1,14 @@
 use super::*;
 use crate::files::{history, test_entries};
 use json_codec::json;
-use storage_contract::file_lifecycle::{Cursor, Timestamp};
+use storage_contract::file_lifecycle::{Cursor, Interval, IntervalBody, References, Timestamp};
 use storage_contract::history_window::{HistoryRepositoryId, HistoryTreeId};
 
-fn id(prefix: &str, number: u64) -> String {
+pub(super) fn id(prefix: &str, number: u64) -> String {
     format!("{prefix}_{number:032x}")
 }
 
-fn target() -> Target {
+pub(super) fn target() -> Target {
     Target {
         epoch: 1,
         navigation: 2,
@@ -29,7 +29,7 @@ fn target() -> Target {
     }
 }
 
-fn deletion(number: u64) -> Event {
+pub(super) fn deletion(number: u64) -> Event {
     event(
         number,
         Detail::Delete {
@@ -46,10 +46,12 @@ fn event(number: u64, detail: Detail) -> Event {
         sequence: number,
         detail,
         occurred_at,
+        principal: "owner".parse().unwrap(),
+        references: References::Open {},
     }
 }
 
-fn path_event(number: u64, source: u64) -> Event {
+pub(super) fn path_event(number: u64, source: u64) -> Event {
     event(
         number,
         Detail::PathChanged {
@@ -66,22 +68,23 @@ fn path_event(number: u64, source: u64) -> Event {
     )
 }
 
-fn page(target: &Target, first: u64, count: u64, more: bool) -> Page {
+pub(super) fn page(target: &Target, first: u64, count: u64, more: bool) -> Page {
     let request = target.request(None).unwrap();
     let events = (first..first + count).map(deletion).collect::<Vec<_>>();
     let observation_sequence = 100;
-    let next_cursor = more.then(|| Cursor {
-        binding: request.binding(&target.context, observation_sequence),
-        after_operation_id: events.last().unwrap().operation_id,
-        after_sequence: events.last().unwrap().sequence,
-        after_source_id: events.last().unwrap().source_id(),
-    });
+    let next_cursor = more.then(|| Cursor::local(
+        request.binding(&target.context, observation_sequence), events.last().unwrap(),
+    ));
+    let intervals = events.windows(2).map(|w| Interval {
+        older: w[0].event_key(), newer: w[1].event_key(), body: IntervalBody::Open {},
+    }).collect();
     Page {
         file_id: target.file.clone(),
         history_root: target.root,
         context: target.context.clone(),
         observation_sequence,
         events,
+        intervals,
         next_cursor,
     }
 }
@@ -124,6 +127,9 @@ fn lifecycle_decoder_rejects_an_oversized_valid_page_within_the_transport_cap() 
             event
         })
         .collect();
+    response.intervals = response.events.windows(2).map(|w| Interval {
+        older: w[0].event_key(), newer: w[1].event_key(), body: IntervalBody::Open {},
+    }).collect();
     let encoded = json_codec::to_vec(&response).unwrap();
     assert!(encoded.len() > storage_contract::file_lifecycle::MAX_RESPONSE_BYTES);
     assert!(encoded.len() < storage_contract::client_protocol::MAX_RESPONSE_BYTES);
@@ -136,6 +142,7 @@ fn lifecycle_decoder_rejects_an_oversized_valid_page_within_the_transport_cap() 
     assert_eq!(error.code, storage_contract::ErrorCode::InvalidResponse);
 
     response.events.truncate(1);
+    response.intervals.clear();
     assert!(decode(
         json_codec::to_value(&response).unwrap(),
         &request,
@@ -163,14 +170,14 @@ fn lifecycle_request_keeps_location_identity_and_replaces_one_bounded_page() {
     assert!(model.request(true).unwrap().is_none());
     let first = page(&target, 1, PAGE_SIZE as u64, true);
     let admitted = decode(json_codec::to_value(&first).unwrap(), &request, &target.context).unwrap();
-    model.complete(&target, generation, Ok(admitted));
+    model.complete(&target, generation, &target.request(None).unwrap(), Ok(admitted));
     let next = model.request(true).unwrap().unwrap();
     assert_eq!(next.cursor, first.next_cursor);
     assert!(endpoint(&next).contains("cursor="));
     let generation = model.begin();
     let last = page(&target, 17, 1, false);
     let admitted = decode(json_codec::to_value(&last).unwrap(), &next, &target.context).unwrap();
-    model.complete(&target, generation, Ok(admitted));
+    model.complete(&target, generation, &next, Ok(admitted));
     assert_eq!(model.page.as_ref().unwrap().events, last.events);
     assert!(model.request(true).unwrap().is_none());
     assert!(model.request(false).unwrap().unwrap().cursor.is_none());
@@ -183,15 +190,15 @@ fn lifecycle_close_and_superseding_reads_reject_late_success_and_failure() {
     model.set_target(Some(target.clone()));
     let closed = model.begin();
     model.close();
-    model.complete(&target, closed, Ok(page(&target, 1, 1, false)));
+    model.complete(&target, closed, &target.request(None).unwrap(), Ok(page(&target, 1, 1, false)));
     assert!(model.page.is_none());
     let current = model.begin();
-    model.complete(&target, closed, Err(failed()));
+    model.complete(&target, closed, &target.request(None).unwrap(), Err(failed()));
     assert!(model.loading && model.error.is_none());
-    model.complete(&target, current, Ok(page(&target, 2, 1, false)));
+    model.complete(&target, current, &target.request(None).unwrap(), Ok(page(&target, 2, 1, false)));
     assert!(!model.loading);
     assert_eq!(model.page.as_ref().unwrap().events[0].sequence, 2);
-    model.complete(&target, closed, Ok(page(&target, 1, 1, false)));
+    model.complete(&target, closed, &target.request(None).unwrap(), Ok(page(&target, 1, 1, false)));
     assert_eq!(model.page.as_ref().unwrap().events[0].sequence, 2);
 }
 
@@ -221,9 +228,9 @@ fn lifecycle_target_changes_clear_records_and_fence_old_completions() {
         let mut model = Model::default();
         model.set_target(Some(original.clone()));
         let generation = model.begin();
-        model.complete(&original, generation, Ok(page(&original, 1, 1, false)));
+        model.complete(&original, generation, &original.request(None).unwrap(), Ok(page(&original, 1, 1, false)));
         model.set_target(Some(changed));
-        model.complete(&original, generation, Err(failed()));
+        model.complete(&original, generation, &original.request(None).unwrap(), Err(failed()));
         assert!(model.page.is_none() && model.error.is_none() && !model.loading);
     }
 }
@@ -234,9 +241,9 @@ fn lifecycle_read_error_keeps_the_actual_error_and_is_not_an_empty_success() {
     let mut model = Model::default();
     model.set_target(Some(target.clone()));
     let generation = model.begin();
-    model.complete(&target, generation, Ok(page(&target, 1, 1, false)));
+    model.complete(&target, generation, &target.request(None).unwrap(), Ok(page(&target, 1, 1, false)));
     let generation = model.begin();
-    model.complete(&target, generation, Err(failed()));
+    model.complete(&target, generation, &target.request(None).unwrap(), Err(failed()));
     assert!(model.page.is_none() && !model.loading);
     let error = model.error.as_ref().unwrap();
     assert_eq!(error.code, storage_contract::ErrorCode::HistoryChanged);
@@ -336,13 +343,13 @@ fn lifecycle_incomplete_source_is_an_error_not_an_empty_or_final_page() {
     let mut model = Model::default();
     model.set_target(Some(target.clone()));
     let generation = model.begin();
-    model.complete(&target, generation, Ok(page(&target, 1, PAGE_SIZE as u64, true)));
+    model.complete(&target, generation, &target.request(None).unwrap(), Ok(page(&target, 1, PAGE_SIZE as u64, true)));
     let generation = model.begin();
     let mut error = failed();
     error.code = storage_contract::ErrorCode::PublicationInvalid;
     error.status = 500;
     error.message = "retained lifecycle evidence is incomplete".into();
-    model.complete(&target, generation, Err(error));
+    model.complete(&target, generation, &target.request(None).unwrap(), Err(error));
     assert!(model.page.is_none());
     assert_eq!(
         model.error.as_ref().unwrap().code,
@@ -380,12 +387,9 @@ fn lifecycle_path_members_share_an_operation_without_sharing_cards_or_cursors() 
 
     let mut first_page = page(&target, 1, 1, false);
     first_page.events = vec![first.clone()];
-    first_page.next_cursor = Some(Cursor {
-        binding: request.binding(&target.context, first_page.observation_sequence),
-        after_operation_id: first.operation_id,
-        after_sequence: first.sequence,
-        after_source_id: first.source_id(),
-    });
+    first_page.next_cursor = Some(Cursor::local(
+        request.binding(&target.context, first_page.observation_sequence), &first,
+    ));
     // A short nonempty page may continue at another member of the same operation.
     let admitted = decode(
         json_codec::to_value(&first_page).unwrap(),
@@ -400,7 +404,7 @@ fn lifecycle_path_members_share_an_operation_without_sharing_cards_or_cursors() 
     let mut model = Model::default();
     model.set_target(Some(target.clone()));
     let generation = model.begin();
-    model.complete(&target, generation, Ok(admitted));
+    model.complete(&target, generation, &target.request(None).unwrap(), Ok(admitted));
     let next = model.request(true).unwrap().unwrap();
     assert_eq!(next.cursor, first_page.next_cursor);
     assert!(endpoint(&next).contains(&format!("%3A{}", first.source_id())));
@@ -413,7 +417,7 @@ fn lifecycle_path_members_share_an_operation_without_sharing_cards_or_cursors() 
     )
     .unwrap();
     let generation = model.begin();
-    model.complete(&target, generation, Ok(admitted));
+    model.complete(&target, generation, &next, Ok(admitted));
     assert_eq!(model.page.as_ref().unwrap().events, vec![second]);
     assert!(model.request(true).unwrap().is_none());
 
@@ -444,15 +448,15 @@ fn lifecycle_refresh_after_changed_history_keeps_only_current_page_links() {
     let mut model = Model::default();
     model.set_target(Some(target.clone()));
     let initial = model.begin();
-    model.complete(&target, initial, Ok(page(&target, 1, 2, true)));
+    model.complete(&target, initial, &target.request(None).unwrap(), Ok(page(&target, 1, 2, true)));
     let paging = model.begin();
-    model.complete(&target, paging, Err(failed()));
+    model.complete(&target, paging, &target.request(None).unwrap(), Err(failed()));
     assert!(model.page.is_none());
     assert!(model.request(false).unwrap().unwrap().cursor.is_none());
 
     let refreshing = model.begin();
-    model.complete(&target, refreshing, Ok(page(&target, 3, 1, false)));
-    model.complete(&target, paging, Ok(page(&target, 2, 1, false)));
+    model.complete(&target, refreshing, &target.request(None).unwrap(), Ok(page(&target, 3, 1, false)));
+    model.complete(&target, paging, &target.request(None).unwrap(), Ok(page(&target, 2, 1, false)));
     let visible = model.page.unwrap();
     assert_eq!(visible.events.len(), 1);
     assert_eq!(

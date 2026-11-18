@@ -4,12 +4,17 @@ use crate::{
     files::{history::DecodeError, page::Entry},
     ui::{State, accept_read_response},
 };
+use std::sync::Arc;
 use storage_contract::{
     OperationId,
     file_lifecycle::{Detail, Event, Page, PathLocation, Request, SourceId},
     history_window::{HistoryFileId, HistoryResolvedContext, HistoryRoot},
 };
 use web_interface::{i18n::t, prelude::*, tasks::spawn_local};
+
+mod interval;
+mod navigation;
+mod rail;
 
 const PAGE_SIZE: usize = 16;
 
@@ -68,7 +73,9 @@ struct Model {
     generation: u64,
     loading: bool,
     cancellation: Option<api::ReadCancellation>,
-    page: Option<Page>,
+    page: Option<Arc<Page>>,
+    page_request: Option<Request>,
+    located: Option<crate::files::history::focus::Anchor>,
     error: Option<api::Error>,
 }
 impl Model {
@@ -87,6 +94,7 @@ impl Model {
         self.cancel();
         self.target = target;
         self.page = None;
+        self.page_request = None;
         self.error = None;
     }
 
@@ -116,7 +124,7 @@ impl Model {
         self.target.as_ref() == Some(target) && self.generation == generation
     }
 
-    fn complete(&mut self, target: &Target, generation: u64, result: Result<Page, api::Error>) {
+    fn complete(&mut self, target: &Target, generation: u64, request: &Request, result: Result<Page, api::Error>) {
         if !self.current(target, generation) {
             return;
         }
@@ -126,11 +134,17 @@ impl Model {
             Ok(page) => {
                 // One bounded page replaces another. Pages never accumulate
                 // into an apparently complete operation timeline.
-                self.page = Some(page);
+                // An identical refresh may keep its DOM owner; after dismiss,
+                // owner/route change or an error the same values get a new owner.
+                if self.page_request.as_ref() != Some(request) || self.page.as_deref() != Some(&page) {
+                    self.page = Some(Arc::new(page));
+                }
+                self.page_request = Some(request.clone());
                 self.error = None;
             }
             Err(error) => {
                 self.page = None;
+                self.page_request = None;
                 self.error = Some(error);
             }
         }
@@ -139,6 +153,7 @@ impl Model {
     fn close(&mut self) {
         self.cancel();
         self.page = None;
+        self.page_request = None;
         self.error = None;
     }
 }
@@ -192,6 +207,7 @@ fn load(state: RwSignal<State>, model: RwSignal<Model>, next: bool) {
             return;
         }
     };
+    navigation::Controls { state, model }.relinquish();
     let generation = model
         .try_update(|model| {
             let generation = model.begin();
@@ -209,7 +225,7 @@ fn load(state: RwSignal<State>, model: RwSignal<Model>, next: bool) {
         {
             return;
         }
-        let _ = model.try_update(|model| model.complete(&target, generation, result));
+        let _ = model.try_update(|model| model.complete(&target, generation, &request, result));
     });
 }
 
@@ -219,6 +235,7 @@ fn action_label(detail: &Detail) -> String {
         Detail::Undo { .. } => t("恢复", "Restored"),
         Detail::Import { .. } => t("导入已删除状态", "Imported an already-deleted state"),
         Detail::PathChanged { .. } => t("路径变更", "Path changed"),
+        Detail::Merged { .. } => t("合并", "Merged"),
     }
 }
 
@@ -253,6 +270,12 @@ fn detail_view(detail: &Detail) -> AnyView {
                 </p>
             }
             .into_any()
+        }
+        Detail::Merged { merge_id, survivor } => {
+            view! { <div class="zxs-stack zxs-stack--flush">
+                <p class="zxs-row">{format!("{}: {merge_id}", t("原合并记录", "Original merge record"))}</p>
+                <p class="zxs-row">{format!("{}: {survivor}", t("保留的分支", "Surviving branch"))}</p>
+            </div> }.into_any()
         }
         Detail::PathChanged {
             event_id,
@@ -305,64 +328,10 @@ fn event_time(event: &Event) -> String {
     }
 }
 
-fn event_view(file: HistoryFileId, event: Event) -> impl IntoView {
-    let operation = event.operation_id.to_string();
-    let anchor = event_anchor(&file, &event);
-    let link = event_link(&anchor);
-    let action = action_label(&event.detail);
-    let marker = format!("{action} · {}", event.sequence);
-    let source = event.source_id().to_string();
-    let marker_label = format!("{marker} · {source}");
-    let detail = detail_view(&event.detail);
-    view! {
-        <div
-            class="zxs-lifecycle-event"
-            role="listitem"
-        >
-            <a
-                class="zxs-lifecycle-marker"
-                href=link
-                aria-label=marker_label
-            >
-                {marker}
-            </a>
-            <article
-                class="zxs-lifecycle-record zxs-content-panel zxs-frame zxs-stack zxs-stack--flush"
-                id=anchor
-                tabindex="-1"
-                data-zxs-lifecycle-operation=operation
-                data-zxs-lifecycle-source=source
-            >
-                <p
-                    class="zxs-row"
-                    role="heading"
-                    {web_interface::attr::custom::custom_attribute("aria-level", "4")}
-                >
-                    {action}
-                </p>
-                <p class="zxs-row">
-                    {event_time(&event)}
-                </p>
-                <p class="zxs-row">
-                    {format!("{}: {}", t("操作", "Operation"), event.operation_id)}
-                </p>
-                {detail}
-                <p class="zxs-row">
-                    {format!(
-                        "{}: {}",
-                        t("保留记录序号", "Retained record sequence"),
-                        event.sequence,
-                    )}
-                </p>
-            </article>
-        </div>
-    }
-}
-
 fn page_status(page: &Page) -> String {
     if page.events.is_empty() {
         t(
-            "此页没有已验证的删除、恢复或路径记录。",
+            "此页没有已验证的操作记录。",
             "This page has no verified lifecycle records.",
         )
     } else if page.next_cursor.is_some() {
@@ -375,42 +344,19 @@ fn page_status(page: &Page) -> String {
     }
 }
 
-fn page_view(page: Page) -> impl IntoView {
-    let status = page_status(&page);
-    let file = StoredValue::new(page.file_id);
-    let each = move || page.events.clone();
-    let children = move |event| event_view(file.get_value(), event);
-    view! {
-        <div class="zxs-stack">
-            <p class="zxs-row" role="status">
-                {status}
-            </p>
-            <p class="zxs-row">
-                {format!(
-                    "{}: {}",
-                    t("观察状态序号", "Observed state sequence"),
-                    page.observation_sequence,
-                )}
-            </p>
-            <div
-                class="zxs-lifecycle-rail"
-                role="list"
-            >
-                <For
-                    each=each
-                    key=event_identity
-                    children=children
-                />
-            </div>
-        </div>
-    }
-}
-
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     let model = RwSignal::new(Model::default());
     let target = Memo::new(move |_| state.with(Target::capture));
-    Effect::new(move |_| model.update(|model| model.set_target(target.get())));
+    let controls = navigation::Controls { state, model };
+    Effect::new(move |_| {
+        let selected = target.get();
+        if model.with_untracked(|m| m.target != selected) {
+            controls.relinquish();
+            model.update(|m| m.set_target(selected));
+        }
+    });
     on_cleanup(move || {
+        controls.relinquish();
         let _ = model.try_update(Model::cancel);
     });
     let disabled =
@@ -427,30 +373,36 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     });
     let load_first = move |_| load(state, model, false);
     let load_next = move |_| load(state, model, true);
-    let dismiss = move |_| model.update(Model::close);
+    let dismiss = move |_| { controls.relinquish(); model.update(Model::close); };
     let error_visible = move || model.with(|model| model.error.is_some());
     let error_message = move || model.with(|model| {
         model.error.as_ref().map(ToString::to_string).unwrap_or_default()
     });
-    let visible_page = move || model.with(|model| model.page.clone()).map(page_view);
+    let origin = Memo::new(move |_| {
+        let current = target.get();
+        model.with(|m| {
+            (m.target == current).then(|| navigation::Origin::capture(m)).flatten()
+        })
+    });
+    let visible_page = rail::page_view(navigation::Controls { state, model }, origin);
     view! {
         <section
             class="zxs-entry-section zxs-file-lifecycle zxs-stack"
             aria-busy=busy
         >
             <h3 class="zxs-row">
-                {t("删除、恢复与路径记录", "Deletion, restoration and path records")}
+                {t("文件操作与内容时间线", "File operations and content timeline")}
             </h3>
             <p class="zxs-row">
                 {t(
                     concat!(
-                        "只显示已验证的删除、恢复、已删除状态导入及本容器路径变更。",
+                        "只显示已验证的删除、恢复、已删除状态导入、合并及本容器路径变更。",
                         "复制保留的原路径来源不在此展示，也不冒充本容器新操作。",
                         "操作有独立身份，不是内容版本或可写节点。",
                     ),
                     concat!(
                         "Shows verified deletion, restoration, already-deleted import ",
-                        "and this container's path changes. ",
+                        "merges and this container's path changes. ",
                         "Copied path sources remain audit evidence, not records displayed here ",
                         "or new operations on this container. ",
                         "Record identities are not content versions or writable nodes.",

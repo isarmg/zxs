@@ -17,6 +17,7 @@ use storage_contract::history_window::HistoryField;
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_interface::{html, i18n::t, prelude::*, svg};
 
+pub(super) mod interval;
 mod observers;
 mod refresh;
 
@@ -182,6 +183,7 @@ struct Geometry {
     width: f64,
     height: f64,
     paths: BTreeMap<(String, String), String>,
+    guides: BTreeMap<String, String>,
 }
 impl Geometry {
     fn path(&self, edge: &(String, String)) -> String {
@@ -433,7 +435,7 @@ fn edge_paths(
         .collect()
 }
 
-fn measure(root: &web_sys::Element, layout: &Layout) -> Geometry {
+fn measure(root: &web_sys::Element, layout: &Layout, tips: Option<&[String]>) -> Geometry {
     let bounds = root.get_bounding_client_rect();
     let depths = layout
         .levels
@@ -471,6 +473,7 @@ fn measure(root: &web_sys::Element, layout: &Layout) -> Geometry {
         width: bounds.width().max(1.),
         height: bounds.height().max(1.),
         paths: edge_paths(layout, &boxes),
+        guides: tips.map(|tips| interval::guides(tips, &boxes)).unwrap_or_default(),
     }
 }
 
@@ -479,6 +482,7 @@ fn observe(
     links: NodeRef<svg::Svg>,
     layout: Memo<Layout>,
     geometry: RwSignal<Geometry>,
+    interval_tips: Option<StoredValue<Vec<String>>>,
 ) {
     root.on_load(move |element| {
         let element: web_sys::Element = element.unchecked_into();
@@ -486,14 +490,18 @@ fn observe(
         let initially_centered = std::rc::Rc::new(std::cell::Cell::new(false));
         let update =
             move || {
-                let next = measure(&update_root, &layout.get_untracked());
+                let tree = layout.get_untracked();
+                let next = match interval_tips {
+                    Some(tips) => tips.with_value(|tips| measure(&update_root, &tree, Some(tips))),
+                    None => measure(&update_root, &tree, None),
+                };
                 if geometry.with_untracked(|old| old != &next) {
                     geometry.set(next);
                 }
                 // A wide tree initially reveals its newest tip rather than an empty
                 // left corner. This belongs to this mounted tree only: refreshes, note
                 // edits and later resizes never take the user's scroll position.
-                if !initially_centered.get()
+                if interval_tips.is_none() && !initially_centered.get()
                 && let (Some(scroll), Some(first_tip)) = (
                     update_root.parent_element(),
                     update_root.query_selector(
@@ -591,7 +599,7 @@ fn window(state: RwSignal<State>) -> impl IntoView {
     let geometry = RwSignal::new(Geometry::default());
     let root = NodeRef::<html::Div>::new();
     let links = NodeRef::<svg::Svg>::new();
-    observe(root, links, tree, geometry);
+    observe(root, links, tree, geometry, None);
     view! {
         <p class="zxs-row zxs-history-window-boundary">{t(
             "此窗口只展示已加载节点之间的关系，窗口边界不代表完整历史的起点或分支末端。",
@@ -640,7 +648,7 @@ where
     let geometry = RwSignal::new(Geometry::default());
     let root = NodeRef::<html::Div>::new();
     let links = NodeRef::<svg::Svg>::new();
-    observe(root, links, tree, geometry);
+    observe(root, links, tree, geometry, None);
     view! {
         <div class="zxs-version-tree-scroll" aria-label=t("关联文件联合树","Related file history graph")>
             <div class="zxs-version-tree-canvas" node_ref=root>

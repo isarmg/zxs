@@ -786,6 +786,7 @@ fn stale_cyclic_response_does_not_invalidate_a_successor_window() {
 #[test]
 fn only_the_original_admitted_anchor_can_focus_after_the_page_has_mounted() {
     let mut state = loaded_state();
+    state.files.history_loading = false;
     let node = HistoryNodeId::parse(NODE).unwrap();
     let read = state.files.history_generation;
     let anchor = history::focus::Anchor::from_page(&state, read, &node).unwrap();
@@ -805,4 +806,27 @@ fn only_the_original_admitted_anchor_can_focus_after_the_page_has_mounted() {
     state.files.cancel_history();
     assert!(state.files.history_focus.is_none());
     assert!(!anchor.current(&state));
+}
+
+#[test]
+fn detached_location_keeps_the_previous_window_until_the_exact_proven_node_is_installed() {
+    let mut state = loaded_state();
+    state.files.history_loading = false;
+    let previous = state.files.file_history.clone();
+    let owner = UninstalledAnchor::capture(&state, NEXT_NODE).unwrap().unwrap();
+    let mut other = state.clone();
+    other.files.history_editors += 1;
+    assert!(!owner.current(&other));
+    other = state.clone();
+    other.files.cancel_history(); // A newer read of the very same FILE and root.
+    assert!(!owner.current(&other));
+    let absent = response(&owner.target, &owner.request, NODE, NODE);
+    assert!(owner.install(&mut state, absent).is_err());
+    assert_eq!(previous, state.files.file_history);
+    assert!(state.files.history_focus.is_none());
+    let accepted = UninstalledAnchor::capture(&state, NEXT_NODE).unwrap().unwrap();
+    let different = response(&accepted.target, &accepted.request, NODE, NEXT_NODE);
+    assert!(accepted.install(&mut state, different).unwrap());
+    assert!(state.files.file_history.nodes().iter().any(|row| row.id() == NEXT_NODE));
+    assert!(state.files.history_focus.as_ref().unwrap().current(&state));
 }

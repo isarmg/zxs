@@ -321,6 +321,59 @@ pub(crate) fn anchor_history_node(state: RwSignal<State>, id: String) {
     }
 }
 
+/// A lifecycle source must still authorize its *original* occurrence after
+/// reading this bounded window. Keep the page detached until that second read;
+/// beginning a normal page read, selection, session or editor supersedes it.
+pub(in crate::files) struct UninstalledAnchor {
+    target: Target,
+    request: HistoryWindowRequest,
+    generation: u64,
+}
+impl UninstalledAnchor {
+    pub(in crate::files) fn capture(state: &State, id: &str) -> Result<Option<Self>, api::Error> {
+        if !super::history_navigation_ready(state) { return Ok(None); }
+        let Some(target) = Target::capture(state) else { return Ok(None) };
+        let request = make_request(&target, HistoryCollection::Nodes, None, Some(id), true)?;
+        Ok(Some(Self { target, request, generation: state.files.history_generation }))
+    }
+
+    pub(in crate::files) fn current(&self, state: &State) -> bool {
+        self.target.current(state)
+            && super::history_navigation_ready(state)
+            && state.files.history_generation == self.generation
+            && state.files.file_history.identity().is_some_and(|id|
+                self.target.resolved.as_ref() == Some(&id.context)
+                && Some(id.history_root) == self.request.history_root
+                && self.request.file_id == id.file_id)
+    }
+
+    pub(in crate::files) async fn receive(
+        &self, cancel: api::ReadCancellation,
+    ) -> Result<HistoryWindowPage, api::Error> {
+        fetch_page(&self.target, &self.request, cancel).await
+    }
+
+    pub(in crate::files) fn install(
+        self, state: &mut State, page: HistoryWindowPage,
+    ) -> Result<bool, api::Error> {
+        if !self.current(state) { return Ok(false); }
+        // Validate/install on a detached copy so a rejected location cannot
+        // invalidate the window or editors the person is currently viewing.
+        let mut history = (*state.files.file_history).clone();
+        history.install_nodes(page, &self.target.entry, true).map_err(api::Error::from)?;
+        if let Some(branch) = &state.files.file_preview { history.browse_branch(branch); }
+        let Some(node) = self.request.anchor_node_id.as_ref().filter(|node|
+            history.nodes().iter().any(|row| row.id() == node.as_str())) else {
+            return Err(invalid_request("The original node is absent from the anchored page."));
+        };
+        state.files.cancel_history();
+        state.files.file_history = history.into();
+        state.files.history_focus =
+            history::focus::Anchor::from_page(state, state.files.history_generation, node);
+        Ok(true)
+    }
+}
+
 fn begin_nodes(
     state: RwSignal<State>,
     target: Target,

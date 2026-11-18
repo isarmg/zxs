@@ -45,7 +45,15 @@
 }
 .zxs-lifecycle-record { scroll-margin-block-start: 1rem; overflow-wrap: anywhere; }
 .zxs-lifecycle-record:is(:target, :focus-visible),
-.zxs-version-node:focus-visible {
+.zxs-version-node[tabindex="-1"]:focus {
   outline: 2px solid var(--zxs-action-primary, Highlight);
   outline-offset: 2px;
 }
+.zxs-lifecycle-relations { display: grid; gap: .3rem; padding-inline-start: 1.25rem; }
+.zxs-lifecycle-node-link { max-inline-size: 100%; overflow-wrap: anywhere; white-space: normal; }
+.zxs-interval-open { color: var(--zxs-block-muted); }
+.zxs-interval { min-inline-size: 0; }
+.zxs-interval-boundary { border-block-end: 1px dashed currentColor; color: var(--zxs-block-muted); }
+.zxs-version-tree-canvas.zxs-interval-canvas { padding: 1.75rem 1.25rem 1rem; gap: max(1.5rem, var(--zxs-block-gap)); border-block-start: 1px dashed var(--zxs-block-muted); }
+.zxs-interval-node { box-sizing: border-box; overflow-wrap: anywhere; padding: .6rem; }
+.zxs-interval-guide { fill: none; stroke: var(--zxs-block-muted); stroke-dasharray: 3 4; stroke-width: 1.5; }

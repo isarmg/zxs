@@ -7445,7 +7445,7 @@
       ]
     },
     "file-original-timeline-navigation": {
-      "reason": "An explicit history locate focuses only its mounted original card, after the exact authorized page, without adopting a stale navigation, editor or session. No browser execution is implied by this inventory.",
+      "reason": "Scoped Web source: rank only complete adjacent original event intervals, distinguish real parents from arrow-free branch guides, and locate only an actual mounted node after both an anchored read and original session-bound page readback. The WASM compile target is not a live browser run.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -7453,9 +7453,14 @@
           "manifest": "src/web/Cargo.toml",
           "kind": "lib",
           "exact": [
-            "files::actions::history::tests::only_the_original_admitted_anchor_can_focus_after_the_page_has_mounted"
+            "files::actions::history::tests::only_the_original_admitted_anchor_can_focus_after_the_page_has_mounted",
+            "files::actions::history::tests::detached_location_keeps_the_previous_window_until_the_exact_proven_node_is_installed",
+            "files::lifecycle::interval::tests::a_shared_ancestor_a_short_branch_and_a_real_merge_keep_their_longest_parent_ranks",
+            "files::lifecycle::interval::tests::only_two_adjacent_original_events_can_close_even_an_empty_interval",
+            "files::lifecycle::navigation::tests::missing_borrowed_or_replaced_event_relations_cannot_become_an_anchor",
+            "files::lifecycle::navigation::tests::a_section_jump_cannot_borrow_a_node_from_another_interval_or_observation"
           ],
-          "max_tests": 1,
+          "max_tests": 6,
           "timeout_seconds": 120
         },
         {
@@ -8823,7 +8828,8 @@
     {
       "path": "src/web/src/files/actions/mod.rs",
       "groups": [
-        "directory-web-selection"
+        "directory-web-selection",
+        "file-original-timeline-navigation"
       ]
     },
     {
@@ -17231,14 +17237,16 @@
     {
       "path": "src/web/src/files/lifecycle.rs",
       "groups": [
-        "container-lifecycle-web"
+        "container-lifecycle-web",
+        "file-original-timeline-navigation"
       ]
     },
     {
       "path": "src/web/public/styles/components/history.css",
       "groups": [
         "container-lifecycle-web",
-        "web-directory-history-retirement"
+        "web-directory-history-retirement",
+        "file-original-timeline-navigation"
       ]
     },
     {
@@ -17251,7 +17259,8 @@
     {
       "path": "test/web/unit/files/lifecycle_tests.rs",
       "groups": [
-        "container-lifecycle-web"
+        "container-lifecycle-web",
+        "file-original-timeline-navigation"
       ]
     },
     {
@@ -22183,6 +22192,42 @@
     },
     {
       "path": "src/web/src/files/history/focus.rs",
+      "groups": [
+        "file-original-timeline-navigation"
+      ]
+    },
+    {
+      "path": "src/web/src/files/lifecycle/interval.rs",
+      "groups": [
+        "file-original-timeline-navigation"
+      ]
+    },
+    {
+      "path": "src/web/src/files/lifecycle/rail.rs",
+      "groups": [
+        "file-original-timeline-navigation"
+      ]
+    },
+    {
+      "path": "src/web/src/files/lifecycle/navigation.rs",
+      "groups": [
+        "file-original-timeline-navigation"
+      ]
+    },
+    {
+      "path": "src/web/src/files/version_tree/interval.rs",
+      "groups": [
+        "file-original-timeline-navigation"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/lifecycle_interval.rs",
+      "groups": [
+        "file-original-timeline-navigation"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/lifecycle_navigation.rs",
       "groups": [
         "file-original-timeline-navigation"
       ]

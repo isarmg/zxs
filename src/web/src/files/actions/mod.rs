@@ -5,6 +5,8 @@ mod history;
 mod mutation;
 mod operation;
 
+pub(in crate::files) use history::UninstalledAnchor;
+
 pub(crate) use history::{
     anchor_history_node, close_history_field, close_history_relation, history_aux_loading,
     load_file_history, load_history_field, load_history_merges, open_history_merge_inputs,
