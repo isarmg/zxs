@@ -8,7 +8,7 @@ from unittest import mock
 import zipfile
 from zipworkspace.archive import read_archive
 from zipworkspace.model import Commit, Manifest, Rejected
-from zipworkspace import worktree as w
+from zipworkspace import plain_import, worktree as w
 from zipworkspace import publish as media
 
 
@@ -95,9 +95,9 @@ class Repo(unittest.TestCase):
         with self.assertRaises(Rejected): read_archive(copy)
         with self.assertRaises(Rejected): read_archive(plain)
         dest = self.root / "import"
-        w.import_zip(plain, dest)
-        self.assertEqual((dest / "hello").read_bytes(), b"ok")
-        with self.assertRaises(Rejected): w.import_zip(plain, dest)
+        self.assertEqual(plain_import.inspect(plain, dest).count, 1)
+        with self.assertRaises(plain_import.DestinationUnavailable): w.import_zip(plain, dest)
+        self.assertFalse(dest.exists())
 
     def test_malformed_tree_is_never_exposed_at_destination(self):
         for i, names in enumerate((["../off"], ["a/file", "A/file2"], ["file", "file/dir"], ["CON.txt"])):
@@ -105,7 +105,9 @@ class Repo(unittest.TestCase):
             with zipfile.ZipFile(path, "w") as z:
                 for name in names: z.writestr(name, b"123")
             dest = self.root / "out"
-            with self.assertRaises(Rejected): w.import_zip(path, dest)
+            with self.assertRaises(Rejected) as invalid: plain_import.inspect(path, dest)
+            self.assertNotIsInstance(invalid.exception, plain_import.DestinationUnavailable)
+            with self.assertRaises(plain_import.DestinationUnavailable): w.import_zip(path, dest)
             self.assertFalse(dest.exists())
         self.assertFalse((self.root / "off").exists())
 

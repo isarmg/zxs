@@ -164,9 +164,9 @@ class _PathSink:
             finally: os.close(fd)
 
 
-def read_plain_document(document, *, output=None):
-    """Read one borrowed ordinary Store ZIP. Only an explicit held output can receive its bytes."""
-    return _read_checked(nullcontext(document), managed=False, sink=output)[1]
+def read_plain_document(document):
+    """Verify all entries on a borrowed ordinary ZIP without extracting anything."""
+    return _read_checked(nullcontext(document), managed=False, sink=None)[1]
 
 
 def _read_checked(source, *, managed, sink):

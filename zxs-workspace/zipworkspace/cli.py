@@ -27,7 +27,8 @@ def main(args=None):
     browse.add_argument("--cursor", help="the previous page's next_cursor in this folder")
     browse.add_argument("--limit", type=int, default=100, choices=range(1, MAX_PAGE+1), metavar="1..256")
     add("checkout", "archive worktree store state", "check out the selected directory snapshot, never a guessed head")
-    add("import-zip", "archive worktree", "import an ordinary unencrypted Store .zip into a new directory")
+    plain = add("import-zip", "archive worktree", "verify an ordinary Store .zip; destination writes unavailable")
+    plain.add_argument("--preview", action="store_true", help="verify the archive and show the proposed target without writing")
     add("status", "state", "show this checkout's recorded base and pending original")
     auto=add("checkout-auto","archive parent store state","allocate a collision-safe fresh local checkout name")
     auto.add_argument("name")
@@ -60,7 +61,14 @@ def main(args=None):
         elif ns.action == "checkout":
             marker = w.checkout(ns.archive, ns.worktree, ns.store, ns.state); result = {"checked_out": marker.operation}
         elif ns.action == "import-zip":
-            tree = w.import_zip(ns.archive, ns.worktree); result = {"imported_entries": len(tree.rows)}
+            if ns.preview:
+                from .plain_import import inspect
+                preview = inspect(ns.archive, ns.worktree)
+                result = {"preview_only": True, "write_available": False, "source": str(preview.source),
+                          "proposed_directory": str(preview.target), "archive_sha256": preview.sha256,
+                          "tree_sha256": preview.tree, "entries": preview.count, "data_bytes": preview.size}
+            else:
+                tree = w.import_zip(ns.archive, ns.worktree); result = {"imported_entries": len(tree.rows)}
         elif ns.action == "checkout-auto":
             path, marker = opening.begin(ns.archive,ns.parent,ns.name,ns.store,ns.state,automatic=True)
             result = {"checked_out":marker.operation,"worktree":str(path),"original":opening.status(ns.state)}

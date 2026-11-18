@@ -5,7 +5,7 @@ from pathlib import Path
 import stat
 
 from .document import native_identity
-from .model import Rejected, member_name, new_id
+from .model import Rejected, member_name
 
 
 def _flags():
@@ -45,18 +45,6 @@ class Parent:
                 raise Rejected("held child is not the original directory")
             yield fd
         finally: os.close(fd)
-
-    @contextmanager
-    def stage(self):
-        name = ".zip-checkout-" + new_id()
-        self.check()
-        os.mkdir(name, 0o700, dir_fd=self.fd)
-        identity = self.child(name)
-        with self.hold(name, identity) as fd:
-            m = os.fstat(fd)
-            if m.st_uid != os.geteuid() or m.st_mode & 0o077:
-                raise Rejected("destination cannot provide private scratch owned by this user")
-            yield self.path / name, identity, fd
 
 
 @contextmanager

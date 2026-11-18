@@ -22,7 +22,7 @@ class Window(QMainWindow):
         self.archive = ArchivePane(self)
         self.tabs.addTab(self.archive, "快照与历史")
         self.plain_import = ImportPane(self)
-        self.tabs.addTab(self.plain_import, "导入普通 ZIP")
+        self.tabs.addTab(self.plain_import, "核验普通 ZIP")
         layout.addWidget(self.tabs)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)

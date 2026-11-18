@@ -80,8 +80,8 @@ def locked(state):
 
 
 def import_zip(archive, dest):
-    require_native_writer()
-    from .plain_import import execute, inspect
+    from .plain_import import execute, inspect, require_writer
+    require_writer()  # Refuse before reading a large file; preview is a separate action.
     return execute(inspect(archive, dest))
 
 
