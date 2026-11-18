@@ -117,15 +117,39 @@ fn writer(system:&Path,op:OperationId,id:FileId,rev:u64,verified:Verified,cut:&m
         }
     }
     if held.pending.is_none(){
-        let f=Delta::new(p.id(),a.seq,a.previous,a.original.clone(),a.digest,material)?;
+        let f=Delta::new(p.id(),a.seq,a.previous,a.original.clone(),a.digest,material.clone())?;
         if !a.matches(Decision::read(p.id(),&f.bytes)?.delta()?){return Err(invalid("cannot seal original formal INCR"));}
         held.room_for(f.bytes.len())?;cut(Cut::BeforeIntent)?;journal::Intent::seal(&p.system,&f.bytes)?;
     }
     drop(held);cut(Cut::Intent)?;
+    // No new scan of the logical FILE here. These are the exact named FD,
+    // prior full-read feedback and frozen input census already held by this
+    // writer. A complete journal frame does not itself confirm their names.
+    let check=|now:&crate::fs::HeldDir|->io::Result<()>{
+        v.require_current()?;verified.require_source(now,verified.original())?;
+        if bound.feedback(now)?!=material{return Err(invalid("original named INCR changed before acknowledgement"));}Ok(())
+    };
     let seal=publish_sealed(&p,op,req,|d|{
-        let f=d.delta()?;v.require_current()?;verified.require_source(&dir,&f.original)?;
-        if !a.matches(f)||bound.feedback(&dir)?!=f.material{return Err(invalid("formal INCR or held input changed before the original decision"));}Ok(())
-    },|s|cut(s))?;
+        let f=d.delta()?;
+        if !a.matches(f)||f.original!=*verified.original()||f.material!=material{return Err(invalid("sealed INCR differs from the exact verified originals"));}
+        check(&dir)
+    },|step|{
+        cut(step)?;
+        if step==Cut::FrameSynced{
+            // A known inode census alone cannot account for an unexpected
+            // additional name. Use the same physical directory admission as
+            // a cold retry of this now-complete, still-unconfirmed intent.
+            let(_,frozen)=p.snapshot()?;
+            let original=frozen.incrementing.as_ref().ok_or_else(||invalid("original incremental reservation no longer present"))?;
+            let sealed=frozen.pending.as_ref().ok_or_else(||invalid("original incremental intent no longer present"))?.frame.delta()?;
+            if original.stamp!=a.stamp||original.bytes!=a.bytes||!a.matches(sealed)||sealed.material!=material{
+                return Err(invalid("changed incremental reservation or sealed FILE target before confirmation"));}
+            let c=frozen.file(id).ok_or_else(||invalid("original FILE disappeared at confirmation"))?;
+            let saved=frozen.saved(id).ok_or_else(||invalid("original FILE working origin disappeared at confirmation"))?;
+            let now=formal::directory(&v,&frozen,c,saved)?;check(&now)?;
+        }
+        Ok(())
+    })?;
     let f=seal.frame.delta()?;cut(Cut::Decision)?;let (_,s)=p.snapshot()?;
     let site=s.placement(id)?;v.require_current()?;
     if bound.feedback(&dir)?!=f.material{return Err(invalid("confirmed native INCR cannot reopen"));}

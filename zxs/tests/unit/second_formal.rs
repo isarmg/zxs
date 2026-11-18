@@ -225,6 +225,65 @@ fn equal_working_revision_and_bytes_do_not_turn_an_old_working_edge_into_a_forma
 
 
 #[test]
+#[ignore="two private native filesystems; late original replacement before and after the floor"]
+fn incr_never_raises_the_floor_over_a_late_replaced_source_or_target_and_never_rolls_back_a_confirmed_child(){
+    for (point,replace_target) in [(Cut::FrameSynced,true),(Cut::FrameSynced,false),(Cut::Decision,true)]{
+        let t=Fixture::new(b"abcde");let file=t.base.file;let work=t.edit(1,1,b"XY",LengthPolicy::KeepOrGrow);
+        let folder=t.data.join("original");let before:std::collections::BTreeSet<_>=osfs::read_dir(&folder).unwrap().map(|v|v.unwrap().file_name()).collect();
+        let op=OperationId::new().unwrap();let real=t.top.0.join("original-role");let other=t.top.0.join("unrelated-inode");
+        let mut changed=None;
+        assert!(commit_inner(&t.system,op,file,2,|step|{
+            if step==point{
+                let path=if replace_target{let mut new=osfs::read_dir(&folder)?.collect::<io::Result<Vec<_>>>()?.into_iter()
+                    .filter(|p|!before.contains(&p.file_name()));
+                    let name=new.next().expect("only new original INCR").path();assert!(new.next().is_none());name
+                }else{t.work(work)};
+                let old=osfs::read(&path)?;osfs::rename(&path,&real)?;osfs::write(&path,&old)?;
+                osfs::set_permissions(&path,osfs::Permissions::from_mode(0o600))?;
+                let ino=osfs::metadata(&path)?.ino();assert_ne!(ino,osfs::metadata(&real)?.ino());changed=Some((path,ino,old));
+            }Ok(())
+        }).is_err());
+        let(path,ino,bytes)=changed.unwrap();let decided=point==Cut::Decision;
+        let status=formal_receipt(&t.system,op).unwrap().unwrap();
+        assert_eq!(status.status,if decided{CreationStatus::PublishedInstallationUnconfirmed}else{CreationStatus::DecisionAwaitingConfirmation});
+        assert_eq!(status.published.is_some(),decided);
+        {let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();assert_eq!(s.delta(file).is_some(),decided);
+            assert_eq!(s.head(file).unwrap().original.node,t.base.node);assert!(s.incrementing.is_some()&&s.pending.is_some());}
+        let mut full=Vec::new();read_node_to(&t.system,file,t.base.node,&mut full).unwrap();assert_eq!(full,b"abcde");
+        assert!(t.work(work).exists());assert!(commit_working(&t.system,op,file,2).is_err());
+        assert_eq!(formal_receipt(&t.system,op).unwrap().unwrap(),status);assert_eq!(osfs::metadata(&path).unwrap().ino(),ino);
+        assert_eq!(osfs::read(&path).unwrap(),bytes);
+        if let Some(child)=&status.published{let mut got=Vec::new();assert!(read_node_to(&t.system,file,child.node,&mut got).is_err());assert!(got.is_empty());}
+        // Only return the actual issued input/target. Never touch the
+        // third-party object merely for having been at this spelling.
+        osfs::rename(&path,&other).unwrap();osfs::rename(&real,&path).unwrap();
+        let done=commit_working(&t.system,op,file,2).unwrap();if let Some(n)=status.published{assert_eq!(n,done);}
+        let mut got=Vec::new();read_node_to(&t.system,file,done.node,&mut got).unwrap();assert_eq!(got,b"aXYde");
+        assert!(!t.work(work).exists());assert_eq!(osfs::read(&other).unwrap(),bytes);assert_eq!(osfs::metadata(&other).unwrap().ino(),ino);
+    }
+}
+
+#[test]
+#[ignore="two private native filesystems; extra unissued entry between synced frame and acknowledgement"]
+fn an_extra_file_at_the_acknowledgement_boundary_blocks_hot_and_cold_without_consuming_the_draft(){
+    let t=Fixture::new(b"abcde");let id=t.base.file;let work=t.edit(1,1,b"XY",LengthPolicy::KeepOrGrow);
+    let foreign=t.data.join("original").join("unissued-user-entry");let op=OperationId::new().unwrap();let mut seen=0;
+    assert!(commit_inner(&t.system,op,id,2,|phase|{
+        if phase==Cut::FrameSynced{let mut f=osfs::OpenOptions::new().create_new(true).write(true).open(&foreign)?;
+            io::Write::write_all(&mut f,b"preserve me")?;f.sync_all()?;seen+=1;}Ok(())
+    }).is_err());assert_eq!(seen,1);
+    let ino=osfs::metadata(&foreign).unwrap().ino();let receipt=formal_receipt(&t.system,op).unwrap().unwrap();
+    assert_eq!(receipt.status,CreationStatus::DecisionAwaitingConfirmation);assert!(receipt.published.is_none());
+    assert!(commit_working(&t.system,op,id,2).is_err());assert_eq!(formal_receipt(&t.system,op).unwrap().unwrap(),receipt);
+    assert!(t.work(work).exists());assert_eq!(osfs::metadata(&foreign).unwrap().ino(),ino);assert_eq!(osfs::read(&foreign).unwrap(),b"preserve me");
+    let mut none=Vec::new();assert!(read_current_to(&t.system,id,&mut none).is_err());assert!(none.is_empty());
+    let parked=t.top.0.join("unrelated-original");osfs::rename(&foreign,&parked).unwrap();
+    let child=commit_working(&t.system,op,id,2).unwrap();let mut got=Vec::new();read_node_to(&t.system,id,child.node,&mut got).unwrap();
+    assert_eq!(got,b"aXYde");assert!(!t.work(work).exists());assert_eq!(osfs::metadata(&parked).unwrap().ino(),ino);
+    assert_eq!(osfs::read(&parked).unwrap(),b"preserve me");
+}
+
+#[test]
 #[ignore="two private registered native filesystems, real original FULL and submitted INCR"]
 fn fixed_node_and_working_parent_do_not_substitute_each_other_or_borrow_a_replacement(){
     let t=Fixture::new(b"abcdefgh");let file=t.base.file;
