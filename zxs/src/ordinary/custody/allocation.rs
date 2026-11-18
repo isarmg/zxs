@@ -24,7 +24,7 @@ impl Progress{
         if i<4{Ok(Self(3+i as u8))}else{Err(invalid("unknown original retirement role"))}
     }
     pub(super) fn authorized(self)->Option<usize>{(3..=6).contains(&self.0).then(||(self.0-3)as usize)}
-    fn allows_next(self,count:usize,next:Self)->bool{
+    pub(super) fn allows_next(self,count:usize,next:Self)->bool{
         if !(3..=4).contains(&count)||self<Progress::ARMED{return false;}
         if next==Progress::EMPTY{return self.authorized()==Some(count-1);}
         next.0==self.0+1&&next.authorized().is_some_and(|i|i<count)
@@ -88,6 +88,30 @@ impl MoveAllocation{
             Self::write_original(&p.system,p.id(),&original,seq+1,previous)?;Ok(original)
         })
     }
+    /// No incoming Origin argument. Issue from these very anonymous held
+    /// bytes inside both native writer leases; or return the identical
+    /// already issued original (including the one stored deletion time).
+    /// Private to the paired lifecycle implementation, never a public action.
+    pub(super) fn reserve_lifecycle(system:&std::path::Path,ready:&crate::pool::lease::recycle::incoming::PreparedIncoming<'_>)->io::Result<Origin>{
+        ready.with_writer(system,|turn|{
+            let o=super::incoming::proposed(&turn)?;let(p,_)=turn.require()?;let(_,s)=p.snapshot()?;
+            let mut prior=None;let seq=if let Some(a)=s.moving.as_ref(){
+                if a.original!=o||a.request!=o.request_digest(p.id())?||a.opened()||s.pending.is_some(){
+                    return Err(invalid("not the same original reservation"));}
+                prior=a.stage().cloned();a.seq
+            }else{
+                s.check_new_lifecycle_origin(&p.journal_registration(),&o)?;let(count,previous)=s.frontier();let seq=count+1;
+                turn.require()?;Self::write_original(&p.system,p.id(),&o,seq,previous)?;seq
+            };
+            // The old grant is stale after write_original: read the actual
+            // native envelope/digest, original inode, phase, and frontier.
+            let(_,now)=p.snapshot()?;let a=now.moving.as_ref().ok_or_else(||invalid("missing original lifecycle reservation"))?;
+            let(count,previous)=now.frontier();
+            if a.original!=o||a.request!=o.request_digest(p.id())?||a.seq!=seq||seq!=count+1||a.previous!=previous||
+                a.opened()||a.stage()!=prior.as_ref()||now.pending.is_some()||now.decided(o.op).is_some(){
+                return Err(invalid("wrong original reservation readback"));}a.confirm_phase(p)?;Ok(o)
+        })
+    }
     fn write_original(sys:&HeldDir,pool:PoolId,o:&Origin,seq:u64,previous:[u8;32])->io::Result<()>{
         if seq==0{return Err(invalid("invalid initial MOVE sequence"));}
         let req=o.request_digest(pool)?;
@@ -118,6 +142,20 @@ impl MoveAllocation{
         let next=Phase{stage:Some(fresh.witness(v,self)?),step:Progress::STAGING};next.check(&self.original)?;
         p.system.bind_attempt(NAME,&self.stamp,MAX,&self.phase.bytes(self.digest)?,&next.bytes(self.digest)?)
     }
+    pub(super) fn bind_created(&self,t:&crate::pool::lease::recycle::incoming::FreshStageTurn<'_,'_>)->io::Result<()>{
+        let(p,_,slot,entity,birth)=t.require()?;let(_,s)=p.snapshot()?;
+        if !matches!(p.access,crate::pool::lease::Access::Write)||self.phase!=Phase::default()||
+            self.original.purpose==super::purpose::Purpose::Ordinary||s.pending.is_some()||s.decided(self.original.op).is_some()||
+            !s.moving.as_ref().is_some_and(|a|a.digest==self.digest&&a.stamp==self.stamp&&a.original==self.original){
+            return Err(invalid("not the live unbound dedicated reservation"));}
+        let st=Stage{slot,directory:NativeObject{entity,birth}};
+        let next=Phase{stage:Some(st.clone()),step:Progress::STAGING};next.check(&self.original)?;
+        t.require()?;p.system.bind_attempt(NAME,&self.stamp,MAX,&self.phase.bytes(self.digest)?,&next.bytes(self.digest)?)?;
+        let(_,now)=p.snapshot()?;let a=now.moving.as_ref().filter(|a|a.digest==self.digest&&a.original==self.original&&
+            a.stamp.birth==self.stamp.birth&&a.stamp.stat.entity()==self.stamp.stat.entity()&&a.phase==next)
+            .ok_or_else(||invalid("private directory binding does not reopen on the original reservation"))?;
+        if now.decided(self.original.op).is_some()||now.pending.is_some(){return Err(invalid("unexpected decision during target binding"));}a.confirm_phase(p)
+    }
     pub(super) fn confirm_opened(&self,p:&crate::pool::lease::LocalPool,v:&crate::pool::lease::FileVolume<'_>,verified:&super::placed::Reopened,
         after_set:impl FnOnce()->io::Result<()>)->io::Result<()>{
         if !matches!(p.access,crate::pool::lease::Access::Write)||!std::ptr::eq(v.pool,p){return Err(invalid("not the selected target writer"));}
@@ -135,6 +173,25 @@ impl MoveAllocation{
         }
         let next=Phase{stage:a.phase.stage.clone(),step:Progress::OPEN};next.check(&a.original)?;
         p.system.bind_attempt_at(NAME,&a.stamp,MAX,&a.phase.bytes(a.digest)?,&next.bytes(a.digest)?,after_set)
+    }
+    pub(super) fn confirm_lifecycle_target(&self,p:&crate::pool::lease::LocalPool,g:&super::admission::LifecycleGrant<'_>,end:&crate::pool::lease::recycle::CustodyEnd<'_,'_>,checked:&super::target::Checked,after:impl FnOnce()->io::Result<()>)->io::Result<()>{
+        let s=g.live_cut(p)?;let(m,a)=s.confirmed_handoff(g.request().op)?;
+        if !matches!(p.access,crate::pool::lease::Access::Write)||!end.belongs(g,super::admission::Side::Target)||!checked.installed()||
+            m!=&checked.goal.frame||a.stamp!=self.stamp||a.digest!=self.digest||a.opened(){return Err(invalid("not the complete installed original target writer"));}
+        end.sync_installed(checked)?;
+        let next=Phase{stage:a.phase.stage.clone(),step:Progress::OPEN};next.check(&a.original)?;
+        p.system.bind_attempt_at(NAME,&a.stamp,MAX,&a.phase.bytes(a.digest)?,&next.bytes(a.digest)?,after)
+    }
+    pub(super) fn step_lifecycle(&self,p:&crate::pool::lease::LocalPool,g:&super::admission::LifecycleGrant<'_>,
+        old:&crate::pool::lease::recycle::CustodyEnd<'_,'_>,new:&crate::pool::lease::recycle::CustodyEnd<'_,'_>,
+        source:&super::LifecycleRetiring,dst:&super::target::Checked,wanted:Progress,after:impl FnOnce()->io::Result<()>)->io::Result<()>{
+        let s=g.live_cut(p)?;let(m,a)=s.confirmed_handoff(g.request().op)?;
+        if a.digest!=self.digest||a.stamp!=self.stamp||m!=&dst.goal.frame||!a.opened()||
+            !(wanted==Progress::ARMED&&a.progress()==Progress::OPEN||a.progress().allows_next(m.original.role_count(),wanted)){
+            return Err(invalid("wrong exact dedicated retirement transition"));}
+        source.can_advance(p,g,old,new,dst,wanted)?;
+        let next=Phase{stage:a.phase.stage.clone(),step:wanted};next.check(&a.original)?;
+        p.system.bind_attempt_at(NAME,&a.stamp,MAX,&a.phase.bytes(a.digest)?,&next.bytes(a.digest)?,after)
     }
     pub(super) fn begin_verified_retirement(&self,p:&crate::pool::lease::LocalPool,old:&crate::pool::lease::FileVolume<'_>,
         new:&crate::pool::lease::FileVolume<'_>,source:&super::retire::VerifiedSource,dest:&super::placed::Reopened,

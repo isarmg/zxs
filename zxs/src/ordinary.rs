@@ -1,9 +1,9 @@
 //! First ordinary vertical path: a real, initially empty manual FILE in a
 //! selected registered ordinary root. Creation does not publish a version.
 mod custody;
-pub(crate) use custody::{LifecycleSource,IncomingSelection};
+pub(crate) use custody::{LifecycleSource,IncomingSelection,KnownStage,LifecycleTarget,LifecycleScan,LifecycleChecked,LifecyclePrevious,LifecycleOriginals,LifecycleRetiring};
 pub(crate) use custody::admission::{LifecycleGrant,Side};
-pub use custody::{move_file,move_receipt,MoveReceipt,MoveStatus};
+pub use custody::{apply_recycle,recycle_receipt,list_retained,DeletionKey,DeletionTime,RestoreTarget,RecycleAction,RecycleKind,RecycleReceipt,RecycleCursor,RecycleFilter,RecyclePage,RetainedEntry,move_file,move_receipt,MoveReceipt,MoveStatus};
 mod wire;
 mod content;
 mod indexed;
@@ -48,7 +48,7 @@ pub struct CreationReceipt{pub status:CreationStatus,pub file:FileInfo}
 /// Complete current business entries. Separately reported issued private
 /// slots have not been certified as FILEs or as safe to remove.
 #[derive(Clone,Debug,Eq,PartialEq)]
-pub struct RootFiles{pub files:Vec<FileInfo>,pub reserved_private_entries:usize,pub pending_moves:Vec<MoveReceipt>}
+pub struct RootFiles{pub files:Vec<FileInfo>,pub reserved_private_entries:usize,pub pending_moves:Vec<MoveReceipt>,pub pending_lifecycle:Vec<RecycleReceipt>}
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 enum Cut { Reservation,UnboundMkdir,MoveLeafLinked,MoveInstalled,MoveTargetFlagBeforeSync,MoveTargetChecked,MoveRetireFlagBeforeSync,MoveSourceAdmitted,MoveSourceIsolated,MoveEraseFlagBeforeSync,MoveLeafRetired,MoveEmptyFlagBeforeSync,MoveEmptyConfirmed,MoveDirectoryUnlinked,FormalIndex,IncrLinked,WorkUnlinked,WorkReleased,BeforeIntent,Intent,FrameSynced,MarkedBeforeSync,Decision,Installation,IntentReleased,Release }
@@ -234,7 +234,7 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
     }
     volume.root.file.sync_all()?;volume.require_current()?;
     if volume.root.names()?.into_iter().collect::<BTreeSet<_>>()!=actual{return Err(invalid("root changed during FILE enumeration"));}
-    files.sort_by(|a,b|a.name.cmp(&b.name));Ok(RootFiles{files,reserved_private_entries,pending_moves:handoff.pending})
+    files.sort_by(|a,b|a.name.cmp(&b.name));Ok(RootFiles{files,reserved_private_entries,pending_moves:handoff.pending,pending_lifecycle:handoff.lifecycle})
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! Derived only while replaying the same original SYSTEM prefix. No credit
 //! is a physical placement, access decision, persisted counter or promise
-//! of live disk space. No current FILE opcode can mint a retention credit.
+//! of live disk space. Only a confirmed, admitted original deletion creates one.
 use super::{MAX_DECISIONS,MAX_JOURNAL};
 use crate::{FileId,OperationId,fs::invalid,ordinary::wire::MAX_FRAME};
 use std::{collections::BTreeMap,io};

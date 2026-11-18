@@ -32,6 +32,7 @@ impl LocalPool {
         Ok((Self { system, registration, access },stamp,journal))
     }
 
+    pub(crate) fn journal_registration(&self)->super::JournalRegistration<'_>{super::JournalRegistration(&self.registration)}
     pub(crate) fn id(&self)->PoolId{self.registration.info.id}
     pub(crate) fn require_business_op(&self,op:OperationId)->io::Result<()>{
         if op==self.registration.info.initialized_by{return Err(invalid("operation ID already belongs to pool initialization"));}

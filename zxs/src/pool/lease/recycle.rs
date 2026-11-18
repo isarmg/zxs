@@ -6,6 +6,7 @@ use crate::ordinary::{LifecycleGrant,Side};
 use crate::{Entity,Role,VolumeId,fs::{self,Birth,HeldDir,invalid},pool::{format::Record,require_system}};
 use std::io;
 pub(crate) mod incoming;
+mod retirement;
 
 #[derive(Debug,Clone,Copy,Eq,PartialEq)]
 pub(crate) enum Direction{ToRecycle,FromRecycle}
@@ -54,6 +55,15 @@ impl Route<'_>{
 /// cleanup must use its own original decision, including offline-source cases.
 pub(crate) struct Observed<'p>{pool:&'p LocalPool,route:Route<'p>,ordinary:FileVolume<'p>,recycle:HeldDir}
 impl LocalPool{
+    /// Read only the original register; the FILE or recycle root may be offline.
+    pub(crate) fn lifecycle_register(&self)->(Entity,Birth){
+        (self.registration.origin,self.registration.origin_birth.clone())
+    }
+    pub(crate) fn recycle_for(&self,ordinary:VolumeId)->io::Result<VolumeId>{
+        let bin=self.registration.info.volumes.get(1).filter(|r|r.volume.role==Role::Recycle)
+            .ok_or_else(||invalid("missing original dedicated recycle role"))?.id;
+        let _=self.registered_dedicated(Direction::ToRecycle,ordinary,bin)?;Ok(bin)
+    }
     pub(crate) fn registered_dedicated(&self,direction:Direction,from:VolumeId,to:VolumeId)->io::Result<Route<'_>>{
         self.registration.dedicated_route(fs::local_uid(),direction,from,to)
     }
@@ -97,6 +107,32 @@ impl CustodyEnd<'_, '_>{
     pub(crate) fn target_present(&self)->io::Result<bool>{
         if self.side!=Side::Target{return Err(invalid("not this operation's target"));}
         self.require_current()?;let v=self.root.entry_present(self.grant.name(Side::Target))?;self.require_current()?;Ok(v)
+    }
+    // May expose pins for the exact selected FILE only, never its recycle
+    // root. Authority and exact frame are re-established for each opening.
+    fn target_child(&self,goal:&crate::ordinary::LifecycleTarget)->io::Result<HeldDir>{
+        if self.side!=Side::Target||!matches!(self.pool.access,Access::Incoming|Access::Write){return Err(invalid("not a bounded lifecycle target observation"));}
+        self.require_current()?;let name=goal.name(self.pool,self.grant)?;
+        goal.namespace(self.pool,self.grant,self.role,&self.root.names()?)?;
+        let d=self.root.child_directory(&name)?.ok_or_else(||invalid("original lifecycle target is unavailable"))?;
+        self.require_current()?;Ok(d)
+    }
+    pub(crate) fn check_target_child(&self,goal:&crate::ordinary::LifecycleTarget,held:&HeldDir)->io::Result<()>{
+        let d=self.target_child(goal)?;
+        if d.path!=held.path||d.entity!=held.entity||Birth::read(&d.file)?!=Birth::read(&held.file)?||!d.same_mount(held)?{
+            return Err(invalid("different original dedicated target FILE or private stage"));}
+        held.require_named()?;self.require_current()
+    }
+    pub(crate) fn read_target(&self,goal:&crate::ordinary::LifecycleTarget)->io::Result<crate::ordinary::LifecycleScan>{
+        let dir=self.target_child(goal)?;goal.start(self.pool,self.grant,self,dir)
+    }
+    pub(crate) fn install_checked(&self,checked:&crate::ordinary::LifecycleChecked,after:impl FnOnce()->io::Result<()>)->io::Result<()>{
+        checked.require(self.pool,self.grant,self)?;let(old,new,entity,birth)=checked.install_names(self.pool,self.grant)?;
+        self.root.handoff_directory(&old,&self.root,&new,entity,&birth,after)
+    }
+    pub(crate) fn sync_installed(&self,checked:&crate::ordinary::LifecycleChecked)->io::Result<()>{
+        if !matches!(self.pool.access,Access::Write)||!checked.installed(){return Err(invalid("not an installed original lifecycle target"));}
+        checked.require(self.pool,self.grant,self)?;self.root.file.sync_all()?;checked.require(self.pool,self.grant,self)
     }
     fn source_child(&self)->io::Result<HeldDir>{
         if self.side!=Side::Source||!matches!(self.pool.access,Access::Incoming|Access::Write){

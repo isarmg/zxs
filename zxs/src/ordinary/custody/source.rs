@@ -58,9 +58,11 @@ impl Clean{
     /// source fallback when R is unavailable, and no opening A just because
     /// a later B-native FILE/INCR was first created there. A completed
     /// decision must use target observation and exact retirement instead.
-    pub(super) fn capture_lifecycle(system:&Path,r:Request)->io::Result<Self>{
+    #[cfg(test)]
+    pub(super) fn capture_lifecycle(system:&Path,r:Request)->io::Result<Self>{Self::capture_checked(system,r,|_|Ok(()))}
+    pub(super) fn capture_checked(system:&Path,r:Request,check:impl FnOnce(&LocalPool)->io::Result<()>)->io::Result<Self>{
         if r.call==Call::Move{return Err(invalid("ordinary MOVE uses its own source selection"));}
-        let(p,_,_)=LocalPool::with_snapshot(system,Access::Incoming)?;
+        let(p,_,_)=LocalPool::with_snapshot(system,Access::Incoming)?;check(&p)?;
         let grant=LifecycleGrant::capture(&p,r)?;let end=p.custody_end(&grant,Side::Source)?;
         end.read_clean_source()
     }
@@ -98,7 +100,7 @@ impl Clean{
         volume.require_current()?;let root=NativeObject{entity:volume.root.entity,birth:fs::Birth::read(&volume.root.file)?};
         let clean=Self::at_held_sites(volume.pool.id(),volume.id(),root,dir,c,f,d,sites)?;volume.require_current()?;Ok(clean)
     }
-    fn at_held_sites(pool:PoolId,volume:VolumeId,root:NativeObject,dir:HeldDir,c:&Frame,f:&Commit,d:Option<&Delta>,sites:&Sites)->io::Result<Self>{
+    pub(super) fn at_held_sites(pool:PoolId,volume:VolumeId,root:NativeObject,dir:HeldDir,c:&Frame,f:&Commit,d:Option<&Delta>,sites:&Sites)->io::Result<Self>{
         if sites.incr.is_some()!=d.is_some(){return Err(invalid("incomplete original FILE placement"));}
         material::verify_header_at(&dir,&c.create,&sites.directory,&sites.local)?;
         let local=material::custody_lease_at(&dir,&c.create,&sites.local,false)?;
@@ -199,6 +201,14 @@ impl Verified{
                 return Err(invalid("reopened material is not the original MOVE role, directory and exact named content"));
         }
         v.require_current()?;self.source.exact_names()?;v.require_current()
+    }
+    pub(super) fn require_at_lifecycle(&self,end:&CustodyEnd<'_,'_>,goal:&super::target::Goal)->io::Result<()>{
+        let m=&goal.frame;let sites=&m.target;
+        if self.volume()!=end.id()||self.source.root!=m.original.dst_root||self.file()!=m.original.file||
+            self.source.dir.entity!=sites.directory.entity||fs::Birth::read(&self.source.dir.file)?!=sites.directory.birth||
+            self.objects().iter().any(|row|sites.at(row.kind)!=Some(&row.original)){
+            return Err(invalid("not the selected lifecycle destination incarnation"));}
+        end.check_target_child(goal,&self.source.dir)?;self.source.exact_names()?;end.check_target_child(goal,&self.source.dir)
     }
     pub(super) fn digest(&self)->io::Result<[u8;32]>{
         let mut h=crate::hash::Sha256::new();h.update(b"ZXS/FILE/ALL-CLEAN-MATERIAL\0")?;

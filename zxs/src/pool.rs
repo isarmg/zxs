@@ -37,6 +37,18 @@ fn verify_claims(selection:&Selection,record:&Record,allow_missing:bool)->io::Re
     Ok(())
 }
 
+/// The authenticated record already read from the exact original SYSTEM inode.
+/// Native replay cannot mix a pool/initializer/digest from another register,
+/// infer a role from a pathname, or pass a permissive per-disk predicate.
+pub(crate) struct JournalRegistration<'a>(&'a Record);
+impl JournalRegistration<'_>{
+    pub(crate) fn basis(&self)->(PoolId,OperationId,[u8;32]){(self.0.info.id,self.0.info.initialized_by,self.0.digest())}
+    pub(crate) fn file(&self,id:VolumeId,uid:u32,e:Entity,b:&fs::Birth,root:bool)->bool{self.0.allows_file(id,uid,e,b,root)}
+    pub(crate) fn dedicated(&self,uid:u32,d:lease::recycle::Direction,f:(VolumeId,Entity,&fs::Birth),t:(VolumeId,Entity,&fs::Birth))->bool{
+        self.0.dedicated_route(uid,d,f.0,t.0).is_ok_and(|route|route.matches(f,t))
+    }
+}
+
 struct Published {stamp:fs::OriginalStamp,record:Record,journal:crate::ordinary::journal::Journal}
 fn published(dir:&HeldDir)->io::Result<Option<Published>>{
     published_with_sync(dir,|dir,stamp|dir.confirm_record_sync(READY,stamp,MAX_SYSTEM))
@@ -49,8 +61,7 @@ fn published_with_sync(dir:&HeldDir,confirm:impl FnOnce(&HeldDir,&fs::OriginalSt
     }
     require_system(dir,&record)?;
     let frontier=dir.read_frontier(READY,&stamp,MAX_SYSTEM)?;
-    let journal=crate::ordinary::journal::Journal::read(dir,record.info.id,record.info.initialized_by,record.digest(),tail,frontier,
-        |v,uid,entity,birth,root|record.allows_file(v,uid,entity,birth,root))?;
+    let journal=crate::ordinary::journal::Journal::read(dir,JournalRegistration(&record),tail,frontier)?;
     confirm(dir,&stamp)?;
     Ok(Some(Published{stamp,record,journal}))
 }

@@ -295,6 +295,9 @@ fn a_move_waiting_for_its_source_keeps_unrelated_reads_but_not_new_writes_until_
     f.all_history()
 }
 
+#[path="recycle_pair.rs"]
+mod recycle_pair;
+
 #[test]
 #[ignore="private registered roots on two or three filesystems; hot and cold late conflict for both custody methods"]
 fn a_complete_unconfirmed_move_does_not_override_a_late_competing_final_name_in_either_method(){

@@ -2,6 +2,7 @@
 //! First isolate it by non-replacing rename within its original root. The
 //! original allocation authorizes at most one role's unlink at a time.
 //! Loss of a business name, or even both names, is not proof of retirement.
+pub(super) mod dedicated;
 use super::{allocation::Progress,command::Request,destination::Method,finish::history,placed::{self,Reopened},
     source::{self,Leaf},transfer::{Moved,Sites}};
 use crate::{fs::{self,HeldDir,invalid,stream::PinnedRegular},ordinary::{self,Cut,delta::types::Delta,formal::types::Commit,wire::{Frame,NativeObject}},
@@ -29,24 +30,32 @@ impl VerifiedSource{
         dir.file.sync_all()?;v.root.confirm_absence(&g.business)?;v.root.file.sync_all()?;g.require(v,m)
     }
 }
-fn business(m:&Moved)->io::Result<CString>{CString::new(m.original.name.as_bytes()).map_err(|_|invalid("invalid original source name"))}
+fn business(m:&Moved)->io::Result<CString>{m.original.purpose.leaves(m.original.file,m.original.op,&m.original.name).map(|(from,_)|from)}
 impl SourceRetirement{
     fn capture(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Option<&Delta>,exclusive:bool)->io::Result<Self>{
         placed::root(v,&m.original.src_root)?;
         if v.id()!=m.original.from||m.original.mode!=Method::Transfer{return Err(invalid("not this original transfer source"));}
         let business=business(m)?;let quarantine=m.original.quarantine_name();
-        let (addr,dir)=match(v.root.child_directory(&business)?,v.root.child_directory(&quarantine)?){
+        let(_,s)=v.pool.snapshot()?;let prior=s.before_handoff(m)?;
+        let sites=m.require_at(prior,f,d)?;let previous=prior.transfer();
+        let g=Self::capture_selected(m,step,c,f,d,exclusive,sites,previous,v.root.child_directory(&business)?,v.root.child_directory(&quarantine)?)?;
+        g.require(v,m)?;Ok(g)
+    }
+    fn capture_selected(m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Option<&Delta>,exclusive:bool,sites:Sites,previous:Option<&Moved>,
+        live:Option<HeldDir>,priv_name:Option<HeldDir>)->io::Result<Self>{
+        let business=business(m)?;let quarantine=m.original.quarantine_name();
+        let (addr,dir)=match(live,priv_name){
             (Some(dir),None) if step<=Progress::ARMED=>(Address::Business,Some(dir)),
             (None,Some(dir)) if step>=Progress::ARMED=>(Address::Isolated,Some(dir)),
             (None,None) if step==Progress::EMPTY=>(Address::EmptyGone,None),
             _=>return Err(invalid("source not at its exact authorized business/quarantine name; do not infer retirement from absence")),
         };
-        let sites=Sites::birthplace(c,f,d);let rows=placed::roles(c,f,d,&sites)?;
+        let rows=placed::roles(c,f,d,&sites)?;
         let order=rows.iter().rev().map(|r|r.name.clone()).collect();
         let mut g=Self{frame:m.clone(),initial:step,addr,exclusive,dir,original:sites.directory.clone(),business,quarantine,order,remaining:Vec::new()};
         if let Some(ref dir)=g.dir{
-            if exclusive{dir.exclusive()?;}
             if dir.entity!=sites.directory.entity||fs::Birth::read(&dir.file)?!=sites.directory.birth{return Err(invalid("unrecognized source occupant; leave untouched"));}
+            if exclusive{dir.exclusive()?;dir.require_named()?;sites.directory.birth.require(&fs::Birth::read(&dir.file)?)?;}
             for (i,role) in rows.into_iter().rev().enumerate(){
                 let present=dir.pin_stream(&role.name,role.len)?.is_some();
                 let allowed=if step==Progress::EMPTY{!present}else{match step.authorized(){
@@ -54,12 +63,15 @@ impl SourceRetirement{
                 }};
                 if !allowed{return Err(invalid("source role disappeared or reappeared outside its exact authorized unlink"));}
                 if present{
-                    let pin=placed::held_role(dir,&role,None)?;if exclusive{pin.file.try_lock().map_err(io::Error::from)?;}
+                    // A B-native later INCR does not inherit A->B's token;
+                    // an actual old transferred role must retain that token.
+                    let allocation=previous.filter(|x|x.original.mode==Method::Transfer&&x.target.at(role.kind)==Some(role.original)).map(|x|x.allocation);
+                    let pin=placed::held_role(dir,&role,allocation)?;if exclusive{pin.file.try_lock().map_err(io::Error::from)?;}
                     g.remaining.push(Remnant{index:i,kind:role.kind,name:role.name,pin});
                 }
             }
         }
-        g.require(v,m)?;Ok(g)
+        Ok(g)
     }
     fn verify(self,dest:&Reopened)->io::Result<VerifiedSource>{
         if !self.exclusive{return Err(invalid("source inventory is not a retirement lease"));}
@@ -74,7 +86,9 @@ impl SourceRetirement{
         placed::root(v,&m.original.src_root)?;
         let (n,other)=if self.addr==Address::Business{(&self.business,&self.quarantine)}else{(&self.quarantine,&self.business)};
         if v.root.entry_present(other)?{return Err(invalid("other source name occupied; do not alter either name"));}
-        let named=v.root.child_directory(n)?;
+        self.require_named_dir(v.root.child_directory(n)?)?;v.require_current()
+    }
+    fn require_named_dir(&self,named:Option<HeldDir>)->io::Result<()>{
         match(&self.dir,named){
             (Some(dir),Some(actual))=>{
                 if dir.entity!=self.original.entity||actual.entity!=self.original.entity||!dir.same_mount(&actual)?||
@@ -86,7 +100,7 @@ impl SourceRetirement{
             },
             (None,None) if self.addr==Address::EmptyGone&&self.initial==Progress::EMPTY=>{},
             _=>return Err(invalid("original source address changed")),
-        }v.require_current()
+        }Ok(())
     }
 }
 fn exact_progress(p:&LocalPool,m:&Moved)->io::Result<Progress>{

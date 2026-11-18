@@ -15,7 +15,13 @@ impl Existing{
             if a.original.mode==Method::Transfer&&sealed.is_some(){return Err(invalid("sealed transfer has no original stage"));}
             return Ok(None)
         };
-        let dir=bound_dir(v,a,stage)?;let listed=dir.names()?;let mut found:BTreeSet<_>=listed.iter().cloned().collect();
+        let dir=bound_dir(v,a,stage)?;
+        Ok(Some(Self::capture_roles(src,a,sealed,stage,dir)?))
+    }
+    pub(super) fn capture_roles(src:&Verified,a:&MoveAllocation,sealed:Option<&Moved>,stage:&Stage,dir:HeldDir)->io::Result<Self>{
+        if a.stage()!=Some(stage)||dir.entity!=stage.directory.entity||fs::Birth::read(&dir.file)?!=stage.directory.birth||
+            sealed.is_some_and(|m|!a.matches(m)){return Err(invalid("not an authenticated original private transfer directory"));}
+        let listed=dir.names()?;let mut found:BTreeSet<_>=listed.iter().cloned().collect();
         if listed.len()!=found.len(){return Err(invalid("duplicate namespace entry in MOVE stage"));}
         let mut parts=BTreeMap::new();let mut gap=false;
         for item in src.objects(){
@@ -31,7 +37,7 @@ impl Existing{
             parts.insert(item.kind,(item.clone(),p));
         }
         if !found.is_empty(){return Err(invalid("unknown target stage occupant; no replacement or deletion"));}
-        Ok(Some(Self{stage:stage.clone(),dir,allocation:a.digest,parts}))
+        Ok(Self{stage:stage.clone(),dir,allocation:a.digest,parts})
     }
     pub(super) fn contains(&self,k:Leaf)->bool{self.parts.contains_key(&k)}
     pub(super) fn len(&self)->usize{self.parts.len()}
@@ -45,11 +51,14 @@ impl Existing{
     }
     pub(super) fn require(&self,v:&FileVolume<'_>,a:&MoveAllocation)->io::Result<()>{
         if a.digest!=self.allocation||a.stage()!=Some(&self.stage){return Err(invalid("different reservation or stage on retry"));}
-        let d=bound_dir(v,a,&self.stage)?;
-        if d.entity!=self.dir.entity||fs::Birth::read(&d.file)?!=fs::Birth::read(&self.dir.file)?{return Err(invalid("held MOVE stage was replaced"));}
+        let d=bound_dir(v,a,&self.stage)?;self.require_directory(a,&d)
+    }
+    pub(super) fn require_directory(&self,a:&MoveAllocation,d:&HeldDir)->io::Result<()>{
+        if a.digest!=self.allocation||a.stage()!=Some(&self.stage){return Err(invalid("changed original custody stage at recheck"));}
+        if d.entity!=self.dir.entity||!d.same_mount(&self.dir)?||fs::Birth::read(&d.file)?!=fs::Birth::read(&self.dir.file)?{return Err(invalid("held MOVE stage was replaced"));}
         let expected:BTreeSet<_>=self.parts.values().map(|(x,_)|x.name.to_bytes().to_vec()).collect();
         let actual=d.names()?;if actual.len()!=expected.len()||actual.iter().any(|n|!expected.contains(n)){return Err(invalid("target stage changed since capture"));}
-        for (x,p) in self.parts.values(){p.named(&d,&x.name)?;}Ok(())
+        for (x,p) in self.parts.values(){p.named(d,&x.name)?;}Ok(())
     }
 }
 pub(super) fn bound_dir(v:&FileVolume<'_>,a:&MoveAllocation,stage:&Stage)->io::Result<HeldDir>{

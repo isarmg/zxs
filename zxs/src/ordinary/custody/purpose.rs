@@ -34,6 +34,7 @@ impl Call{
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct DeletedAt{seconds:u64,nanos:u32}
 impl DeletedAt{
+    pub(super) fn parts(self)->(u64,u32){(self.seconds,self.nanos)}
     pub(super) fn now()->io::Result<Self>{
         let d=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|invalid("cannot record a canonical UTC deletion timestamp"))?;
         Self::new(d.as_secs(),d.subsec_nanos())
@@ -73,7 +74,7 @@ impl Purpose{
         match tag{0|1=>Ok(Self::Ordinary),2=>Ok(Self::Delete{previous:r.fixed()?,at:DeletedAt::new(r.u64()?,r.u32()?)?}),
             3=>Ok(Self::Restore{deleted_by:OperationId(r.id()?),previous:r.fixed()?}),_=>Err(invalid("unknown custody purpose"))}
     }
-    pub(super) fn check_transfer(self,method:Method,from:&wire::NativeObject,to:&wire::NativeObject)->io::Result<()>{
+    pub(in crate::ordinary) fn check_transfer(self,method:Method,from:&wire::NativeObject,to:&wire::NativeObject)->io::Result<()>{
         self.tag(method)?;
         let same_device=from.entity.device==to.entity.device;let same_fs=from.birth.filesystem()==to.birth.filesystem();
         if method==Method::Rename&&!(same_device&&same_fs) || self!=Self::Ordinary&&(same_device||same_fs){

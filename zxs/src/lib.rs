@@ -5,7 +5,7 @@ mod hash;
 mod identity;
 mod pool;
 mod ordinary;
-pub use ordinary::{move_file,move_receipt,MoveReceipt,MoveStatus,commit_working,formal_receipt,FormalStorage,LengthPolicy,SpanEdit,SpanReceipt,SpanObservation,save_interval,interval_receipt,read_current_range_to,FormalNode,FormalObservation,commit_first,first_commit_receipt,read_node_to,read_node_range_to,CurrentFile,DraftClaim,DraftReceipt,FirstSaveObservation,DRAFT_CHUNK,save_first,first_save_receipt,read_current_to,current_info,FileInfo,RootFiles,CreationStatus,CreationReceipt,create_empty,creation_receipt,read_initial_file,list_initial_files};
+pub use ordinary::{apply_recycle,recycle_receipt,list_retained,DeletionKey,DeletionTime,RestoreTarget,RecycleAction,RecycleKind,RecycleReceipt,RecycleCursor,RecycleFilter,RecyclePage,RetainedEntry,move_file,move_receipt,MoveReceipt,MoveStatus,commit_working,formal_receipt,FormalStorage,LengthPolicy,SpanEdit,SpanReceipt,SpanObservation,save_interval,interval_receipt,read_current_range_to,FormalNode,FormalObservation,commit_first,first_commit_receipt,read_node_to,read_node_range_to,CurrentFile,DraftClaim,DraftReceipt,FirstSaveObservation,DRAFT_CHUNK,save_first,first_save_receipt,read_current_to,current_info,FileInfo,RootFiles,CreationStatus,CreationReceipt,create_empty,creation_receipt,read_initial_file,list_initial_files};
 pub use identity::{BranchId,NodeId,VersionId,VersionStorageId,EntryId, FileId, HistoryId, OperationId, PoolId, VolumeId};
 pub use pool::{initialize, inspect, PoolInfo, RegisteredVolume};
 pub use fs::Entity;

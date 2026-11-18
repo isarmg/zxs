@@ -33,7 +33,12 @@ pub(super) fn held_role(dir:&HeldDir,r:&Role<'_>,token_from:Option<[u8;32]>)->io
     p.named(dir,&r.name)?;Ok(p)
 }
 pub(super) fn complete(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<HeldDir>{
-    m.require_history(c,f,d)?;root(v,&m.original.dst_root)?;
+    if m.original.purpose==super::purpose::Purpose::Ordinary{m.require_history(c,f,d)?;}else{
+        let(_,s)=v.pool.snapshot()?;let(actual,p,child)=super::finish::frozen(&s,m)?;
+        if !matches!(m.original.purpose,super::purpose::Purpose::Restore{..})||actual.digest!=c.digest||p.digest!=f.digest||
+            child.map(|v|v.digest)!=d.map(|v|v.digest){return Err(invalid("not this confirmed ordinary restore target's exact frozen history"));}
+    }
+    root(v,&m.original.dst_root)?;
     if v.id()!=m.original.to{return Err(invalid("wrong registered MOVE destination"));}
     let dir=v.root.child_directory(name)?.ok_or_else(||invalid("decided FILE not yet installed at its original target"))?;
     material::verify_header_at(&dir,&c.create,&m.target.directory,&m.target.local)?;
@@ -74,6 +79,15 @@ impl Reopened{
     pub(super) fn input(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<TargetInput>{
         let dir=complete(v,name,m,c,f,d)?;dir.share()?;
         Ok(TargetInput{clean:Clean::at_original_sites(v,dir,c,f,d,&m.target)?,decision:m.clone(),name:name.to_owned()})
+    }
+    pub(super) fn input_lifecycle(p:&crate::pool::lease::LocalPool,id:crate::VolumeId,m:&Moved,name:CString,dir:HeldDir,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<TargetInput>{
+        if id!=m.original.to{return Err(invalid("wrong dedicated destination"));}
+        let clean=Clean::at_held_sites(p.id(),id,m.original.dst_root.clone(),dir,c,f,d,&m.target)?;
+        Ok(TargetInput{clean,decision:m.clone(),name})
+    }
+    pub(super) fn require_lifecycle(&self,end:&crate::pool::lease::recycle::CustodyEnd<'_,'_>,goal:&super::target::Goal,name:&CStr)->io::Result<()>{
+        if self.name.as_c_str()!=name||self.decision!=goal.frame{return Err(invalid("target proof belongs to another frame or address"));}
+        self.verified.require_at_lifecycle(end,goal)
     }
     pub(super) fn verify(input:TargetInput)->io::Result<Self>{
         let TargetInput{clean,decision:m,name}=input;let verified=clean.verify()?;

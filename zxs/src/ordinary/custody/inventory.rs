@@ -1,10 +1,10 @@
 //! Separate original-issued private names, the one current business name and
 //! non-serving remnants. Unknown names may never disappear from a full list.
-use super::{destination::Method,finish::history,placed,retire,staging,transfer::Sites};
+use super::{destination::Method,finish::history,placed,retire,staging};
 use crate::{FileId,OperationId,fs::invalid,ordinary::{allocation,journal::Journal,material},pool::lease::FileVolume};
 use std::{collections::{BTreeMap,BTreeSet},ffi::CString,io};
 #[derive(Default)]
-pub(in crate::ordinary) struct View{pub pending:Vec<super::command::MoveReceipt>,pub deferred:Option<FileId>,pub hidden:BTreeSet<Vec<u8>>,pub named_stage:Option<Vec<u8>>}
+pub(in crate::ordinary) struct View{pub pending:Vec<super::command::MoveReceipt>,pub lifecycle:Vec<super::recycle::RecycleReceipt>,pub deferred:Option<FileId>,pub hidden:BTreeSet<Vec<u8>>,pub named_stage:Option<Vec<u8>>}
 pub(in crate::ordinary) fn view(s:&Journal,v:&FileVolume<'_>,tickets:&mut BTreeMap<OperationId,u8>)->io::Result<View>{
     let mut seen=View::default();
     for m in s.moves().filter(|m|m.original.to==v.id()){
@@ -13,7 +13,11 @@ pub(in crate::ordinary) fn view(s:&Journal,v:&FileVolume<'_>,tickets:&mut BTreeM
     let Some(a)=s.moving.as_ref().filter(|a|a.original.to==v.id()||a.original.from==v.id())else{return Ok(seen)};
     let o=&a.original;
     let req=super::command::Request{call:o.purpose.call(),op:o.op,id:o.file,from:o.from,to:o.to,epoch:o.epoch};
-    seen.pending.push(req.observe(v.pool,s)?.ok_or_else(||invalid("pending original MOVE lacks its receipt"))?);
+    if req.call==super::purpose::Call::Move{
+        seen.pending.push(req.observe(v.pool,s)?.ok_or_else(||invalid("pending ordinary MOVE lacks its receipt"))?);
+    }else{
+        seen.lifecycle.push(super::recycle::receipt(v.pool,s,req)?.ok_or_else(||invalid("dedicated handoff lacks its exact original receipt"))?);
+    }
     let moved=s.placed(o.file).filter(|m|m.original.op==o.op);
     if v.id()==o.from{
         if let Some(m)=moved{
@@ -37,7 +41,9 @@ pub(in crate::ordinary) fn view(s:&Journal,v:&FileVolume<'_>,tickets:&mut BTreeM
         let dir=staging::bound_dir(v,a,st)?;let c=s.file(o.file).ok_or_else(||invalid("missing MOVE origin"))?;
         let f=s.head(o.file).ok_or_else(||invalid("missing FULL"))?;
         let d=if let Some(m)=moved{super::finish::frozen(s,m)?.2}else{s.delta(o.file)};
-        o.require_history(c,f,d)?;let previous=Sites::birthplace(c,f,d);let rows=placed::roles(c,f,d,&previous)?;
+        o.require_history(c,f,d)?;
+        let before=if let Some(m)=moved{s.before_handoff(m)?}else{s.placement(o.file)?};
+        before.require_next(o)?;let previous=before.sites(f,d)?;let rows=placed::roles(c,f,d,&previous)?;
         let sealed=s.pending.as_ref().map(|p|p.frame.moved()).transpose()?.or(moved);
         let mut names:BTreeSet<_>=dir.names()?.into_iter().collect();let mut gap=false;
         for role in rows{

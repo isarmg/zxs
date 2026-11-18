@@ -1,5 +1,5 @@
 use std::{env, ffi::OsStr, io, path::PathBuf, process::ExitCode};
-const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH | file-move OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-move-receipt OP SYSTEM FILE FROM TO PLACEMENT_EPOCH";
+const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH | file-move OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-move-receipt OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-delete[-receipt] OP SYSTEM FILE FROM EPOCH | file-restore[-receipt] OP SYSTEM FILE DELETE_OP DELETE_SHA256 RETAINED_EPOCH original|VOLUME | recycle-list SYSTEM LIMIT SOURCE_OR_ALL SINCE_OR_DASH THROUGH_OR_DASH [CURSOR]";
 fn bad(message:&'static str)->io::Error {io::Error::new(io::ErrorKind::InvalidInput,message)}
 fn show(scope:&str,info:zxs::PoolInfo) {
     println!("{scope}");
@@ -51,6 +51,15 @@ fn run() -> io::Result<()> {
                 };
                 eprintln!("Original MOVE {}: {detail}.",m.operation);
             }
+            for m in &listed.pending_lifecycle{
+                let detail=match (m.kind,m.status){
+                    (zxs::RecycleKind::Delete,zxs::MoveStatus::DecidedTargetPending)=>"deletion decided, hidden from ordinary FILEs; retained installation pending",
+                    (zxs::RecycleKind::Delete,zxs::MoveStatus::TargetReopenedSourcePending)=>"retained target was reopened; original source cleanup pending",
+                    (zxs::RecycleKind::Restore,zxs::MoveStatus::DecidedTargetPending)=>"restoration decided, ordinary target not open for new reads",
+                    (zxs::RecycleKind::Restore,zxs::MoveStatus::TargetReopenedSourcePending)=>"restored target is current on this checked volume; recycle source cleanup pending",
+                    _=>"not yet decided; previous custody remains authoritative",
+                };eprintln!("Original {:?} {} FILE {}: {detail}.",m.kind,m.operation,m.file);
+            }
             if listed.reserved_private_entries!=0{
                 eprintln!("{} issued private slot(s) occupied: not current FILEs; contents and ownership not confirmed, nothing removed.",listed.reserved_private_entries);
             }
@@ -64,6 +73,36 @@ fn run() -> io::Result<()> {
                 else{zxs::move_receipt(&system,op,id,from,to,epoch)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such original MOVE"))?};
             println!("Original MOVE {:?}: {} FILE {} entry {} history {} {}@{} -> {}@{} name {} decision {:?}",
                 r.status,r.operation,r.file,r.entry,r.history,r.from,r.source_epoch,r.to,r.destination_epoch,r.name,r.decision_sequence);Ok(())
+        }
+        Some("file-delete"|"file-delete-receipt"|"file-restore"|"file-restore-receipt")=>{
+            let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let file=word(&mut args)?.parse()?;
+            let (what,epoch)=if matches!(action.to_str(),Some("file-delete"|"file-delete-receipt")){
+                let from=word(&mut args)?.parse()?;let epoch=number(&word(&mut args)?)?;
+                (zxs::RecycleAction::Delete{file,from},epoch)
+            }else{
+                let operation=word(&mut args)?.parse()?;let deleted=zxs::DeletionKey::from_hex(file,operation,&word(&mut args)?)?;
+                let epoch=number(&word(&mut args)?)?;let dest=word(&mut args)?;
+                let target=if dest=="original"{zxs::RestoreTarget::Original}else{zxs::RestoreTarget::Volume(dest.parse()?)};
+                (zxs::RecycleAction::Restore{deleted,target},epoch)
+            };
+            end(&mut args)?;
+            let r=if matches!(action.to_str(),Some("file-delete-receipt"|"file-restore-receipt")){
+                zxs::recycle_receipt(&system,op,epoch,what)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such original dedicated FILE operation"))?
+            }else{zxs::apply_recycle(&system,op,epoch,what)?};
+            show_recycle(&r);Ok(())
+        }
+        Some("recycle-list")=>{
+            let system=path(&mut args)?;let limit=word(&mut args)?.parse::<u16>().map_err(|_|bad("invalid page limit"))?;
+            let source=word(&mut args)?;let ordinary_source=if source=="all"{None}else{Some(source.parse()?)};
+            let since_unix_seconds=optional_number(&word(&mut args)?)?;let through_unix_seconds=optional_number(&word(&mut args)?)?;
+            let cursor=args.next().map(|v|v.into_string().map_err(|_|bad("non-ASCII cursor"))?.parse::<zxs::RecycleCursor>()).transpose()?;
+            end(&mut args)?;let filter=zxs::RecycleFilter{ordinary_source,since_unix_seconds,through_unix_seconds};
+            let page=zxs::list_retained(&system,filter,limit,cursor.as_ref())?;
+            println!("Retained at SYSTEM sequence {} {} (original metadata only; storage availability not inspected):",
+                page.as_of_sequence,hex_digest(&page.as_of_digest));
+            for item in page.entries{show_recycle(&item.original);println!("  retained-by-this-original-now {}",item.retained_by_this_deletion_now);
+                if let Some(restore)=item.pending_restore{print!("  pending ");show_recycle(&restore);}}
+            if let Some(c)=page.next{println!("next {c}");}Ok(())
         }
         Some("file-save")=>{
             let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let file=word(&mut args)?.parse()?;
@@ -157,6 +196,16 @@ fn run() -> io::Result<()> {
         }
         _=>Err(bad(USAGE))
     }
+}
+fn number(s:&str)->io::Result<u64>{s.parse().map_err(|_|bad("invalid nonnegative integer"))}
+fn optional_number(s:&str)->io::Result<Option<u64>>{if s=="-"{Ok(None)}else{number(s).map(Some)}}
+fn show_recycle(r:&zxs::RecycleReceipt){
+    println!("Original {:?} {:?}: {} FILE {} entry {} history {} {}@{} -> {}@{} name {:?} decision-sequence {:?} decision {}",
+        r.kind,r.status,r.operation,r.file,r.entry,r.history,r.from,r.source_epoch,r.to,r.destination_epoch,r.name,r.decision_sequence,
+        r.decision.as_ref().map(hex_digest).unwrap_or_else(||"unconfirmed".to_owned()));
+    println!("  deletion {} issued-utc-unix {}.{:09} delete-decision {} (original outcome, not an online health check)",
+        r.delete_operation,r.deleted_at.unix_seconds,r.deleted_at.nanos,
+        r.deletion.map(|key|hex_digest(&key.decision)).unwrap_or_else(||"unconfirmed".to_owned()));
 }
 fn show_edit(e:&zxs::SpanReceipt){
     println!("Working interval: FILE {} revision {} base node {} offset {} changed bytes {} logical bytes {} original decision {}",

@@ -32,7 +32,7 @@ impl LifecycleGrant<'_>{
     }
     /// The exact journal returned is the same one checked here. The caller
     /// cannot combine its older undecided snapshot with a later live grant.
-    fn live_cut(&self,p:&LocalPool)->io::Result<Journal>{
+    pub(super) fn live_cut(&self,p:&LocalPool)->io::Result<Journal>{
         if !std::ptr::eq(p,self.pool){return Err(invalid("lifecycle operand belongs to a different SYSTEM cut"));}
         let(_,s)=p.snapshot()?;let now=LifecycleGrant::from_same_cut(p,&s,self.request)?;
         if now.stage!=self.stage||now.prior!=self.prior||now.source!=self.source||now.target!=self.target||

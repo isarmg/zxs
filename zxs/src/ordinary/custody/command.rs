@@ -11,8 +11,8 @@ pub enum MoveStatus{Reserved,Prepared,AwaitingDecisionConfirmation,DecidedTarget
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub struct MoveReceipt{pub operation:OperationId,pub file:FileId,pub entry:EntryId,pub history:HistoryId,pub from:VolumeId,pub to:VolumeId,
     pub source_epoch:u64,pub destination_epoch:u64,pub name:String,pub decision_sequence:Option<u64>,pub status:MoveStatus}
-fn result(o:&Origin,seq:Option<u64>,status:MoveStatus)->MoveReceipt{MoveReceipt{operation:o.op,file:o.file,entry:o.entry,history:o.history,
-    from:o.from,to:o.to,source_epoch:o.epoch,destination_epoch:1,name:o.name.clone(),decision_sequence:seq,status}}
+fn result(o:&Origin,seq:Option<u64>,status:MoveStatus)->io::Result<MoveReceipt>{Ok(MoveReceipt{operation:o.op,file:o.file,entry:o.entry,history:o.history,
+    from:o.from,to:o.to,source_epoch:o.epoch,destination_epoch:o.epoch.checked_add(1).ok_or_else(||invalid("custody epoch exhausted"))?,name:o.name.clone(),decision_sequence:seq,status})}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]pub(super) struct Request{pub call:Call,pub op:OperationId,pub id:FileId,pub from:VolumeId,pub to:VolumeId,pub epoch:u64}
 impl Request{
     pub(super) fn digest(self,p:&LocalPool)->io::Result<[u8;32]>{p.require_business_op(self.op)?;
@@ -25,13 +25,13 @@ impl Request{
                 if !a.matches(m){return Err(invalid("original MOVE reservation differs"));}
                 if a.opened(){a.confirm_phase(p)?;MoveStatus::TargetReopenedSourcePending}else{MoveStatus::DecidedTargetPending}
             }else{MoveStatus::OriginalPublished};
-            return Ok(Some(result(&m.original,Some(m.seq),status)));
+            return Ok(Some(result(&m.original,Some(m.seq),status)?));
         }
         let Some(a)=s.moving.as_ref().filter(|a|a.original.op==self.op)else{return Ok(None)};
         if a.request!=req{return Err(invalid("wrong original MOVE request, actor or roots"));}
         let status=match &s.pending{None=>MoveStatus::Reserved,Some(i)if s.tail==i.frame.bytes().len()=>MoveStatus::AwaitingDecisionConfirmation,
             Some(_)=>MoveStatus::Prepared};
-        Ok(Some(result(&a.original,None,status)))
+        Ok(Some(result(&a.original,None,status)?))
     }
 }
 pub fn move_receipt(system:&Path,op:OperationId,id:FileId,from:VolumeId,to:VolumeId,epoch:u64)->io::Result<Option<MoveReceipt>>{
@@ -41,7 +41,7 @@ pub fn move_file(system:&Path,op:OperationId,id:FileId,from:VolumeId,to:VolumeId
     perform(system,Request{call:Call::Move,op,id,from,to,epoch},&mut |_|Ok(()))
 }
 pub(super) fn perform(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<MoveReceipt>{
-    if r.call!=Call::Move{return Err(invalid("paired lifecycle publication is not yet available"));}
+    if r.call!=Call::Move{return Err(invalid("ordinary MOVE cannot execute a dedicated lifecycle request"));}
     let decided={
         let(p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;
         match r.observe(&p,&s)?{
