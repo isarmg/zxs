@@ -3,9 +3,11 @@
 mod record;
 mod pending;
 mod census;
-pub(in crate::engine) use census::DirectoryCensus;
+pub(in crate::engine) use census::{DirectoryCensus, NamespaceCensus};
 mod published;
 mod instances;
+mod ordinary;
+pub(in crate::engine) use ordinary::OrdinaryDirectories;
 pub(in crate::engine) use published::PublishedRepository;
 pub(in crate::engine) use pending::PendingRepository;
 use super::{

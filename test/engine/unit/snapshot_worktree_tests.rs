@@ -1212,9 +1212,13 @@ fn scoped_nested_host_requires_every_original_ordinary_component_without_initial
     let mut f = LiveFixture::new();
     let repository = f.engine.repository_for_branch(&f.request.source.branch_id.to_string()).unwrap()
         .repository_id.clone();
+    let first = crate::engine::scope_closure::measure_disk_namespace_inventory(&f.engine, "P01").unwrap();
     let path = name_policy::PortablePath::parse("Upper/Kept").unwrap();
     f.engine.file_namespace(&repository, crate::NamespaceOperation::Mkdir { path: path.clone() },
         "admin", OperationId::generate().unwrap()).unwrap();
+    let measured = crate::engine::scope_closure::measure_disk_namespace_inventory(&f.engine, "P01").unwrap();
+    assert_eq!(measured.0, first.0 + 2);
+    assert_ne!(measured.1, first.1);
     let axes = f.engine.snapshot_root_context(repository.parse().unwrap()).unwrap();
     let mut source = axes.source;
     source.root = Some(name_policy::LookupPath::parse(path.as_str()).unwrap());
@@ -1231,4 +1235,13 @@ fn scoped_nested_host_requires_every_original_ordinary_component_without_initial
     wrong.directories.swap(0, 1);
     assert!(ScopedHostChain::open(&ctx, &root, requested, &wrong).is_err());
     entered.require(root.common().unwrap()).unwrap();
+    let location = entered.held().path().to_path_buf();
+    let parked = f._temp.path().join("kept-original-host");
+    std::fs::rename(&location, &parked).unwrap();
+    std::fs::create_dir(&location).unwrap();
+    assert!(crate::engine::scope_closure::measure_disk_namespace_inventory(&f.engine, "P01").is_err());
+    assert!(location.is_dir(), "a rejected replacement was not deleted");
+    std::fs::remove_dir(&location).unwrap();
+    std::fs::rename(parked, location).unwrap();
+    assert_eq!(crate::engine::scope_closure::measure_disk_namespace_inventory(&f.engine, "P01").unwrap(), measured);
 }

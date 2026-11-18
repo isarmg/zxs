@@ -21,7 +21,7 @@ mod commit;
 pub(crate) mod drafts;
 pub use source::SnapshotSourceError;
 pub(crate) use registry::{
-    InitialDirectoryMaterial, LocalDirectory, LocalInstance, NodeDirectoryMaterial,
+    InitialDirectoryMaterial, LocalDirectory, LocalInstance, NodeDirectoryMaterial, OrdinaryOriginal,
     DirectoryRegistration, PublishedAddedCommitTail, PublishedCommitTail, ReceiptIndex,
     RegisteredNamespaceDirectories,
     require_backup_snapshot_scope,

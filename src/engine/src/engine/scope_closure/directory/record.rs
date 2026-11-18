@@ -119,6 +119,7 @@ pub(super) enum Lifecycle { Pending { reservation: OperationId }, Current {} }
 #[derive(Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Object<'a> {
+    OrdinaryDirectory { directory_id: DirectoryId },
     Worktree { worktree_id: WorktreeId, material: &'a super::super::schema::Material<WorktreeId> },
     DirectoryRepository { repository_id: SnapshotRepositoryId, directory_id: DirectoryId,
         material: &'a super::super::schema::Material<RepositoryIdentity> },

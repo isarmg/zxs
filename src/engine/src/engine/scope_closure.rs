@@ -134,3 +134,14 @@ pub(crate) fn measure_disk_directory_inventory(engine: &crate::Engine, slot: &st
     let frozen = rows.finish()?;
     Ok((frozen.entries(), frozen.root().hash().to_owned()))
 }
+
+/// Complete supported per-disk namespace section; no FILE ownership, quorum
+/// availability or permission to repair is implied by a successful reading.
+pub(crate) fn measure_disk_namespace_inventory(engine: &crate::Engine, slot: &str) -> Result<(usize, String)> {
+    let ctx = engine.planning_context();
+    let namespaces = directory::NamespaceCensus::original(&ctx, ctx.disk(slot)?)?;
+    let mut rows = OrdinalBuilder::new(65_536);
+    namespaces.append_to(ctx.config, &mut rows)?;
+    let frozen = rows.finish()?;
+    Ok((frozen.entries(), frozen.root().hash().to_owned()))
+}

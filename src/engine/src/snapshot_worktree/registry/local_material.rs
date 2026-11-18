@@ -3,6 +3,8 @@
 //! registration or a handle minted from a disk scan.
 use super::*;
 mod group;
+mod ordinary;
+pub(crate) use ordinary::OrdinaryOriginal;
 use group::Group;
 use crate::working_tree::snapshot::AdmittedSnapshotManifest;
 use storage_contract::{BranchName, snapshot_worktree::InitializeSnapshot};

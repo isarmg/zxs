@@ -30,7 +30,7 @@ impl DirectoryCensus {
             Self::from_sources(ctx, disk, registration.clone(), root, sources))
             .map_err(crate::business::file_draft::worktree::failure)?
     }
-    fn holder(ctx: &PlanningContext<'_>, disk: &DiskConfig) -> Result<(DiskRegistrationIdentity, Arc<DiskHandle>)> {
+    pub(super) fn holder(ctx: &PlanningContext<'_>, disk: &DiskConfig) -> Result<(DiskRegistrationIdentity, Arc<DiskHandle>)> {
         let id = disk.disk_id.parse::<DiskId>()?;
         let binding = ctx.config.storage_roots.get(&id).ok_or_else(reject)?;
         let reg = fresh_layout::registration(ctx.config, disk);
@@ -39,7 +39,7 @@ impl DirectoryCensus {
         fresh_layout::verify_root(ctx.config, disk, &root.root)?;
         Ok((reg, root))
     }
-    fn from_sources(ctx: &PlanningContext<'_>, disk: &DiskConfig, registration: DiskRegistrationIdentity,
+    pub(super) fn from_sources(ctx: &PlanningContext<'_>, disk: &DiskConfig, registration: DiskRegistrationIdentity,
         root: Arc<DiskHandle>, sources: BTreeMap<SnapshotRepositoryId, LocalDirectory<'_>>) -> Result<Self> {
         let mut repositories = BTreeMap::new();
         let mut bytes = 0usize;
@@ -91,5 +91,35 @@ impl DirectoryCensus {
             match r { Entry::Pending(p) => p.verify_original(config)?, Entry::Bound(p) => p.verify_original(config)? }
         }
         self.require(config)
+    }
+}
+
+/// All supported ordinary directories AND directory repository/instance
+/// entries, with one authentication of the selected prefix. A mixed-disk
+/// publisher must still supply FILE, native disk images, changes, etc.
+pub(in crate::engine) struct NamespaceCensus {
+    pub(in crate::engine) ordinary: super::OrdinaryDirectories,
+    pub(in crate::engine) directories: DirectoryCensus,
+}
+impl NamespaceCensus {
+    pub(in crate::engine) fn original(ctx: &PlanningContext<'_>, disk: &DiskConfig) -> Result<Self> {
+        let (registration, root) = DirectoryCensus::holder(ctx,disk)?;
+        let binding = ctx.config.storage_roots.get(&disk.disk_id.parse::<DiskId>()?).ok_or_else(reject)?;
+        let index = ctx.snapshot_receipts().map_err(crate::business::file_draft::worktree::failure)?;
+        let ordinary = index.ordinary_originals(binding).map_err(crate::business::file_draft::worktree::failure)?;
+        let directories = index.original_directories(&registration).map_err(crate::business::file_draft::worktree::failure)?;
+        let view = Self {
+            ordinary: super::OrdinaryDirectories::from_originals(ctx, disk, ordinary)?,
+            directories: DirectoryCensus::from_sources(ctx, disk, registration, root, directories)? };
+        view.require(ctx.config)?;
+        Ok(view)
+    }
+    pub(in crate::engine) fn require(&self, config: &ValidatedConfig) -> Result<()> {
+        self.ordinary.require(config)?;
+        self.directories.require(config)
+    }
+    pub(in crate::engine) fn append_to(&self, config: &ValidatedConfig, rows: &mut OrdinalBuilder) -> Result<()> {
+        self.ordinary.append_to(config, rows)?;
+        self.directories.append_to(config, rows)
     }
 }
