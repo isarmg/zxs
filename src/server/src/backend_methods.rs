@@ -1208,15 +1208,6 @@ macro_rules! methods {
                     Err($crate::ApiError::unsupported())
                 }
 
-                fn reconcile_directory_layout(
-                    &self,
-                    _identity: &$crate::Identity,
-                    _repository: &str,
-                    _request: storage_contract::directory_git::DirectoryLayoutReconcileBody,
-                ) -> Result<storage_contract::directory_git::DirectoryLayoutResult, $crate::ApiError> {
-                    Err($crate::ApiError::unsupported())
-                }
-
                 fn initialize_directory_git(
                     &self,
                     _identity: &$crate::Identity,

@@ -79,7 +79,6 @@ mod http_content_matches;
 mod http_detached_history;
 mod http_directory_git;
 mod http_directory_history;
-mod http_directory_layout;
 mod http_directory_staging;
 mod http_file_history_source;
 mod http_file_lifecycle;
@@ -1143,10 +1142,6 @@ fn router_shared(
         .route(
             "/api/repositories/{repo}/directory-git",
             get(http_directory_git::read),
-        )
-        .route(
-            "/api/repositories/{repo}/directory-layout/reconcile",
-            post(http_directory_layout::reconcile),
         )
         .route(
             "/api/repositories/{repo}/directory-git/initialize",
