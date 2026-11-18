@@ -65,7 +65,7 @@ struct OriginalIndex{
     ops:BTreeSet<OperationId>,files:BTreeMap<FileId,usize>,entries:BTreeSet<EntryId>,histories:BTreeSet<HistoryId>,
     names:BTreeSet<(VolumeId,String)>,tickets:BTreeSet<OperationId>,native:BTreeSet<fs::Birth>,saved:BTreeMap<FileId,usize>,
     formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,branches:BTreeSet<BranchId>,
-    versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,spans:BTreeMap<FileId,usize>,
+    versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,spans:BTreeMap<FileId,Vec<usize>>,
 }
 impl OriginalIndex{
     fn birth<'a>(&self,id:FileId,frames:&'a[Decision])->io::Result<&'a Frame>{
@@ -93,7 +93,8 @@ impl OriginalIndex{
     fn original_span<'a>(&self,o:&span_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<&'a Frame>{
         let c=self.birth(o.file,ds)?;
         let f=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("interval save has no original formal FILE baseline"))?.formal()?;
-        if !o.matches(c,f)||!allow(o.volume,o.uid,c.create.directory.entity,&c.create.directory.birth,false){
+        let prior=self.spans.get(&o.file).and_then(|ids|ids.last()).map(|&i|ds[i].span()).transpose()?;
+        if !o.matches(c,f,prior)||!allow(o.volume,o.uid,c.create.directory.entity,&c.create.directory.birth,false){
             return Err(invalid("interval save is not bound to this registered FILE and original formal node"));
         }
         Ok(c)
@@ -125,7 +126,7 @@ impl OriginalIndex{
                 }
             }
             Decision::Span(s)=>{let o=&s.original;let c=self.original_span(o,frames,allow)?;let n=&s.material.object;
-                if self.spans.contains_key(&o.file)||self.native.contains(&n.birth)||n.entity.device!=c.create.directory.entity.device||
+                if self.native.contains(&n.birth)||n.entity.device!=c.create.directory.entity.device||
                     n.birth.filesystem()!=c.create.directory.birth.filesystem(){return Err(invalid("not an independent changed extent on the original FILE"));}
             }
         }
@@ -141,13 +142,13 @@ impl OriginalIndex{
             Decision::Formal(f)=>{let o=&f.original;self.formal.insert(o.file,index);self.nodes.insert(o.node,index);
                 self.branches.insert(o.branch);self.versions.insert(o.version);self.storage.insert(o.storage);
                 self.native.insert(f.materials.node.birth.clone());self.native.insert(f.materials.raw.birth.clone());}
-            Decision::Span(s)=>{self.spans.insert(s.original.file,index);self.native.insert(s.material.object.birth.clone());}
+            Decision::Span(s)=>{self.spans.entry(s.original.file).or_default().push(index);self.native.insert(s.material.object.birth.clone());}
         }
     }
 }
 
 pub(crate) struct Journal{
-    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,usize>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
+    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
     pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
 }
 impl Journal{
@@ -163,11 +164,15 @@ impl Journal{
         let (mut allocated,mut saving,mut committing,mut editing)=(None,None,None,None);
         if let Some((stamp,bytes))=system.record(allocation::NAME,allocation::MAX)?{
             if bytes.starts_with(span_allocation::MAGIC){
-                let a=SpanAllocation::from_bytes(pool,stamp,bytes)?;idx.original_span(&a.original,&ds,&allowed)?;
+                let a=SpanAllocation::from_bytes(pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Span(f) if a.matches(f)));
-                if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op)||idx.spans.contains_key(&a.original.file)){
+                if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op)){
                     return Err(invalid("working interval reservation conflicts with original frontier"));
                 }
+                // When an already-appended frame exactly equals this still-open
+                // original, its predecessor was checked before remember(). A fresh
+                // reservation must instead use the currently admitted FILE edge.
+                if !last{idx.original_span(&a.original,&ds,&allowed)?;}
                 editing=Some(a);
             }else if bytes.starts_with(formal_allocation::MAGIC){
                 let a=FormalAllocation::from_bytes(pool,stamp,bytes)?;idx.original_formal(&a.original,&ds,&allowed)?;
@@ -225,7 +230,10 @@ impl Journal{
             frame_bytes=before;unconfirmed=last.bytes().len();
             // The replay indices must never expose an otherwise complete but
             // not yet confirmed last frame (including a first working revision).
-            match last {Decision::Span(s)=>{idx.spans.remove(&s.original.file);},Decision::Formal(f)=>{idx.formal.remove(&f.original.file);idx.nodes.remove(&f.original.node);},
+            match last {Decision::Span(s)=>{
+                    let chain=idx.spans.get_mut(&s.original.file).ok_or_else(||invalid("missing original span chain"))?;
+                    if chain.pop()!=Some(ds.len()-1){return Err(invalid("wrong unconfirmed working edge"));}
+                },Decision::Formal(f)=>{idx.formal.remove(&f.original.file);idx.nodes.remove(&f.original.node);},
                 Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{idx.files.remove(&f.create.file);}}
             ds.pop();
         }
@@ -252,7 +260,12 @@ impl Journal{
     pub(super) fn named(&self,v:VolumeId,name:&str)->Option<&Frame>{self.on(v).find(|f|f.create.name==name)}
     pub(super) fn on_all(&self)->impl Iterator<Item=&Frame>{self.decisions.iter().filter_map(|d|d.creation().ok())}
     pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|f.create.volume==v)}
-    pub(super) fn interval(&self,id:FileId)->Option<&Saved>{self.decisions.get(*self.spans.get(&id)?)?.span().ok()}
+    pub(super) fn intervals(&self,id:FileId)->impl DoubleEndedIterator<Item=&Saved>{
+        self.spans.get(&id).into_iter().flatten().map(move |&i|match &self.decisions[i]{
+            Decision::Span(s)=>s,_=>unreachable!("only admitted working decisions enter this per-FILE index"),
+        })
+    }
+    pub(super) fn interval(&self,id:FileId)->Option<&Saved>{self.intervals(id).next_back()}
     pub(super) fn head(&self,id:FileId)->Option<&Commit>{self.decisions.get(*self.formal.get(&id)?)?.formal().ok()}
     pub(super) fn node(&self,file:FileId,node:NodeId)->Option<&Commit>{
         self.decisions.get(*self.nodes.get(&node)?)?.formal().ok().filter(|f|f.original.file==file)

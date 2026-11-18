@@ -148,16 +148,16 @@ pub(super) fn working_directory_held(volume:&FileVolume<'_>,c:&Creation,working:
 /// Receipt-selected working, raw FULL and node are the only optional native
 /// names. Before a decision the index may have been linked alone; raw-first,
 /// a missing required leaf or any extra entry is never an admitted state.
-pub(super) fn directory_with(volume:&FileVolume<'_>,c:&Creation,working:Option<(OperationId,bool)>,
+pub(super) fn directory_with(volume:&FileVolume<'_>,c:&Creation,working:impl IntoIterator<Item=(OperationId,bool)>,
     formal:Option<(&super::formal::types::Original,bool)>)->io::Result<HeldDir>{
     if volume.id()!=c.volume{return Err(invalid("wrong current FILE role or volume"));}
     let dir=volume.root.child_directory(&destination(&c.name)?)?.ok_or_else(||invalid("current FILE container not installed"))?;
-    let mut names=dir.names()?;
-    let mut take=|name:&CStr|->bool{
-        if let Some(i)=names.iter().position(|n|n.as_slice()==name.to_bytes()){names.swap_remove(i);true}else{false}
-    };
+    let listed=dir.names()?;let count=listed.len();
+    let mut names:std::collections::BTreeSet<_>=listed.into_iter().collect();
+    if names.len()!=count{return Err(invalid("duplicate names during FILE enumeration"));}
+    let mut take=|name:&CStr|names.remove(name.to_bytes());
     if !take(LOCAL){return Err(invalid("original FILE record missing"));}
-    if let Some((op,required))=working{
+    for (op,required) in working{
         if !take(&super::draft::material::leaf(op))&&required{return Err(invalid("required FILE working body is unnamed"));}
     }
     if let Some((o,required))=formal{
@@ -168,6 +168,18 @@ pub(super) fn directory_with(volume:&FileVolume<'_>,c:&Creation,working:Option<(
     verify_header(&dir,c)?;
     if volume.root.child_directory(&staging(c.attempt,c.slot))?.is_some(){return Err(invalid("both original FILE names present"));}
     Ok(dir)
+}
+/// One existing FILE birth registration is the read lease for an immutable
+/// working cut; no new sidecar or owner. Future retirement must acquire an
+/// exclusive lease on this same native inode before removing used material.
+pub(super) fn read_lease(dir:&HeldDir,c:&Creation)->io::Result<fs::stream::PinnedRegular>{
+    let bytes=empty_material(c.file,c.history,c.op,&c.name);
+    let pin=dir.pin_stream(LOCAL,bytes.len() as u64)?.ok_or_else(||invalid("original FILE birth unavailable for read lease"))?;
+    pin.file.try_lock_shared().map_err(io::Error::from)?;
+    if NativeObject::stamp(&pin.stamp)!=c.local{return Err(invalid("foreign FILE read lease"));}
+    let mut actual=vec![0;bytes.len()];fs::stream::read_at(&pin.file,&mut actual,0)?;
+    if actual!=bytes||crate::hash::digest(&actual)?!=c.local_digest{return Err(invalid("FILE lease does not cover the original local birth"));}
+    pin.named(dir,LOCAL)?;Ok(pin)
 }
 pub(super) fn require_staged(volume:&FileVolume<'_>,c:&Creation)->io::Result<()>{
     if volume.id()!=c.volume{return Err(invalid("wrong owner volume for staged FILE"));}

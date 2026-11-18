@@ -1,8 +1,10 @@
-//! One dirty interval (or explicit resize) on an actual clean, formal FILE.
+//! One native decision per changed extent or explicit resize, relative to an
+//! original confirmed FILE revision rooted in its exact formal baseline.
 //! Original namespace/custody and the formal branch/node are not changed.
 pub(super) mod types;
 pub(super) mod allocation;
 pub(super) mod physical;
+mod layout;
 use super::{allocation as ordinary_allocation,draft::{self,Body},formal::{self,types::Commit,physical::HistoryBody},
     journal::{self,Decision,Journal},wire::Frame,publish_sealed,Cut,CreationStatus,CurrentFile};
 use self::{allocation::SpanAllocation,types::{Original,Saved,SpanEdit,SpanReceipt},physical::{Capture,Verified}};
@@ -36,8 +38,8 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,revision:u64,e
     }
     let c=s.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published FILE"))?;
     let f=s.head(id).ok_or_else(||invalid("interval editing requires an original formal FILE baseline"))?;
-    if s.interval(id).is_some_and(|e|e.original.op!=op){return Err(invalid("this FILE already has working revision 2"));}
-    let o=Original::select(op,fs::local_uid(),c,f,edit)?;
+    let prior=s.intervals(id).rev().find(|e|e.original.op!=op);
+    let o=Original::select(op,fs::local_uid(),c,f,prior,revision,edit)?;
     if s.editing.as_ref().is_some_and(|a|a.original!=o){return Err(invalid("original interval base differs"));}
     if s.editing.is_none(){s.room_for(super::wire::MAX_FRAME)?;}
     Ok(Choice::Active(c,f,o,req))
@@ -49,8 +51,10 @@ fn source(system:&Path,op:OperationId,id:FileId,rev:u64,edit:SpanEdit)->io::Resu
     let (c,f,o)=match choice(&p,&s,op,id,rev,edit)?{Choice::Done(r)=>return Ok(Source::Done(r)),Choice::Active(c,f,o,_)=>(c,f,o)};
     let w=s.saved(id).ok_or_else(||invalid("formal original lacks its first confirmed save"))?;
     let v=p.ordinary(c.create.volume)?;let dir=formal::directory(&v,&s,c,w)?;
-    let base=HistoryBody::current(&dir,f)?;v.require_current()?;
-    Ok(Source::Input(Capture::open(dir,base,o,s.editing.as_ref(),s.pending.is_some()||s.interval(id).is_some())?))
+    let base=HistoryBody::current(&dir,f)?;
+    let prior=physical::Operands::capture(&dir,c,f.original.content.bytes,s.intervals(id).filter(|r|r.original.op!=op))?;
+    v.require_current()?;
+    Ok(Source::Input(Capture::open(dir,base,prior,o,s.editing.as_ref(),s.pending.is_some()||s.decided(op).is_some())?))
 }
 pub fn save_interval(system:&Path,op:OperationId,file:FileId,revision:u64,e:SpanEdit,body:impl Read)->io::Result<SpanReceipt>{
     save_inner(system,op,file,revision,e,body,|_|Ok(()))
@@ -93,7 +97,7 @@ fn writer(system:&Path,op:OperationId,file:FileId,rev:u64,e:SpanEdit,checked:Ver
     p.system.remove_original_record(journal::INTENT,&seal.stamp,&seal.bytes)?;cut(Cut::IntentReleased)?;
     p.system.remove_original_record(ordinary_allocation::NAME,&a.stamp,&a.bytes)?;cut(Cut::Release)?;Ok(f.receipt())
 }
-/// Random current reads apply to a clean formal or its first edited revision.
+/// Random current reads apply to a clean formal or a confirmed working revision.
 /// The initial uncommitted single-stream representation offers current full
 /// reads only; do not hide a whole-prefix scan behind a random-read contract.
 pub fn read_current_range_to(system:&Path,file:FileId,offset:u64,length:u64,mut out:impl Write)->io::Result<CurrentFile>{

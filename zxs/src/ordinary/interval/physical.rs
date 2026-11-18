@@ -63,7 +63,8 @@ pub(in crate::ordinary) fn inspect(dir:&HeldDir,a:&SpanAllocation,sealed:Option<
         }
     }Ok(())
 }
-pub(in crate::ordinary) struct Composed{pub base:HistoryBody,pub extent:Stored}
+mod cut;
+pub(in crate::ordinary) use cut::{Composed,Operands};
 // The logical revision depends on all three held operands, even when a
 // particular output slice is a pure zero gap or uses only one of the two
 // sources. fstat the already pinned originals; never read unrelated BODY
@@ -82,53 +83,24 @@ impl<W:Write,C:FnMut()->io::Result<()>> Write for CheckedOutput<W,C>{
         (self.check)()?;self.out.flush()?;after_output(&mut self.check)
     }
 }
-impl Composed{
-    pub(in crate::ordinary) fn unchanged(&self)->io::Result<()>{self.base.unchanged()?;self.extent.named.pin.unchanged()}
-    pub(in crate::ordinary) fn size(&self)->u64{self.extent.named.original.result}
-    pub(in crate::ordinary) fn write_range(&self,at:u64,len:u64,out:impl Write)->io::Result<()>{
-        self.unchanged()?;
-        let mut out=CheckedOutput{out,check:||self.unchanged()};
-        let o=&self.extent.named.original;
-        let end=at.checked_add(len).filter(|e|*e<=o.result).ok_or_else(||invalid("read exceeds chosen working revision"))?;
-        if len==0{
-            self.base.write_range(0,0,io::sink())?;self.extent.range(0,0,io::sink())?;return self.unchanged();
-        }
-        // These nonoverlapping regions are fixed by one original. A gap
-        // beyond the old length is an explicit logical zero, not observed absence.
-        let patch_start=o.edit.offset;let patch_end=o.edit.end();let mut pos=at;
-        let zeros=[0u8;64*1024];
-        while pos<end{
-            if pos>=patch_start&&pos<patch_end{
-                let high=end.min(patch_end);self.extent.range(pos-patch_start,high-pos,&mut out)?;pos=high;
-            }else{
-                let high=if pos<patch_start{end.min(patch_start)}else{end};
-                if pos<o.base_len{
-                    let stop=high.min(o.base_len);self.base.write_range(pos,stop-pos,&mut out)?;pos=stop;
-                }else{
-                    let mut left=high-pos;while left!=0{let n=left.min(zeros.len() as u64) as usize;out.write_all(&zeros[..n])?;left-=n as u64;}pos=high;
-                }
-            }
-        }self.unchanged()
-    }
-}
 enum Part{Anonymous(File),Named(Named)}
-pub(super) struct Capture{dir:HeldDir,base:HistoryBody,o:Original,part:Part}
+pub(super) struct Capture{dir:HeldDir,base:HistoryBody,prior:Operands,o:Original,part:Part}
 pub(super) struct Verified{capture:Capture,stamp:fs::OriginalStamp,head:[u8;32],index:[u8;32]}
 impl Capture{
-    pub(super) fn open(dir:HeldDir,base:HistoryBody,o:Original,a:Option<&SpanAllocation>,sealed:bool)->io::Result<Self>{
+    pub(super) fn open(dir:HeldDir,base:HistoryBody,prior:Operands,o:Original,a:Option<&SpanAllocation>,sealed:bool)->io::Result<Self>{
         dir.exclusive()?;
         let part=match Named::open(&dir,&o)?{
             Some(n)=>{n.prepared(a.ok_or_else(||invalid("unreserved existing material at the new working name"))?)?;Part::Named(n)}
             None if sealed=>return Err(invalid("decided or sealed extent cannot be rebuilt from new input")),
             None=>Part::Anonymous(dir.anonymous_record()?.0),
         };
-        Ok(Self{dir,base,o,part})
+        Ok(Self{dir,base,prior,o,part})
     }
     pub(super) fn verify(self,input:impl Read)->io::Result<Verified>{
         // Check the original formal node's exact authenticated index and named
         // raw identity. Do not read/copy unrelated 100 GiB base content merely
         // to save a few changed bytes. A future read checks contributing blocks.
-        self.base.write_range(0,0,io::sink())?;
+        self.base.write_range(0,0,io::sink())?;self.prior.verify_indexes(&self.dir)?;
         let o=&self.o;let (body,table,total)=shape(o)?;
         let (stamp,head,index)=match &self.part{
             Part::Anonymous(f)=>{
@@ -155,7 +127,7 @@ impl Verified{
         if self.capture.o!=*o||self.capture.dir.entity!=dir.entity||fs::Birth::read(&self.capture.dir.file)?!=fs::Birth::read(&dir.file)?{
             return Err(invalid("working interval no longer has its selected registered FILE"));
         }
-        self.capture.dir.require_named()?;self.capture.base.require(dir)?;
+        self.capture.dir.require_named()?;self.capture.base.require(dir)?;self.capture.prior.require(dir)?;
         match &self.capture.part{
             Part::Anonymous(f)=>if stream::anonymous_stamp(f)?!=self.stamp{return Err(invalid("private incoming extent changed"));},
             Part::Named(n)=>n.require(dir)?,
@@ -172,7 +144,7 @@ impl Verified{
         if NativeObject::stamp(&bound.pin.stamp)!=NativeObject::stamp(&self.stamp)||bound.head!=self.head{return Err(invalid("different native extent was installed"));}
         dir.file.sync_all()?;Ok(Bound(Stored{named:bound,index:self.index}))
     }
-    pub(super) fn base_current(&self,dir:&HeldDir)->io::Result<()>{self.capture.dir.require_named()?;self.capture.base.require(dir)}
+    pub(super) fn base_current(&self,dir:&HeldDir)->io::Result<()>{self.capture.dir.require_named()?;self.capture.base.require(dir)?;self.capture.prior.require(dir)}
 }
 pub(super) struct Bound(Stored);
 impl Bound{pub(super) fn feedback(&self,dir:&HeldDir)->io::Result<Material>{self.0.named.require(dir)?;dir.file.sync_all()?;Ok(self.0.facts())}}

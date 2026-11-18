@@ -55,7 +55,7 @@ fn overwrite_append_zero_gap_resize_grow_and_truncate_choose_only_real_contribut
         assert_eq!(status.edit,Some(r.clone()));assert_eq!(status.head,Some(t.base.clone()));assert_eq!(full,expected);
         for start in 0..=expected.len(){let mut got=Vec::new();read_current_range_to(&t.system,id,start as u64,(expected.len()-start) as u64,&mut got).unwrap();assert_eq!(got,&expected[start..]);}
         let mut original=Vec::new();read_node_to(&t.system,id,t.base.node,&mut original).unwrap();assert_eq!(original,b"abcdef");
-        assert!(save_interval(&t.system,OperationId::new().unwrap(),id,2,e,Never).is_err());
+        assert!(save_interval(&t.system,OperationId::new().unwrap(),id,3,e,Never).is_err());
         assert!(save_interval(&t.system,OperationId::new().unwrap(),id,1,e,Never).is_err());
         assert_eq!(save_interval(&t.system,op,id,1,e,Never).unwrap(),r);
     }
@@ -152,6 +152,15 @@ fn four_kib_overwrite_on_a_real_hundred_gib_formal_file_uses_only_one_changed_ex
     let mut got=Vec::new();read_current_range_to(&system,file,at-1,4098,&mut got).unwrap();
     assert_eq!(got.len(),4098);assert_eq!(got[0],0x61);assert_eq!(got[4097],0x61);assert_eq!(&got[1..4097],&change[..]);
     let mut old=Vec::new();crate::read_node_range_to(&system,file,base.node,at,4096,&mut old).unwrap();assert_eq!(old,vec![0x61;4096]);
+    // Repeated realistic small edits, without reuploading or allocating the 100 GiB base.
+    let b=OperationId::new().unwrap();let c=OperationId::new().unwrap();
+    save_interval(&system,b,file,2,edit(at+1,b"B",LengthPolicy::KeepOrGrow),Cursor::new(b"B")).unwrap();
+    save_interval(&system,c,file,3,edit(at+4096,b"C",LengthPolicy::KeepOrGrow),Cursor::new(b"C")).unwrap();
+    let latest=osfs::metadata(&raw).unwrap();assert_eq!((latest.len(),latest.ino(),latest.blocks()),(total,original.ino(),original.blocks()));
+    for small in [op,b,c]{assert!(osfs::metadata(root.join(format!("working-{small}"))).unwrap().len()<8*1024);}
+    let mut bytes=Vec::new();let result=read_current_range_to(&system,file,at,4097,&mut bytes).unwrap();
+    assert_eq!(result.edit.unwrap().revision,4);assert_eq!(bytes[0],0x70);assert_eq!(bytes[1],b'B');
+    assert!(bytes[2..4096].iter().all(|b|*b==0x70));assert_eq!(bytes[4096],b'C');
 }
 #[test]
 #[ignore="two private native test filesystems"]
@@ -225,4 +234,92 @@ fn same_inode_and_length_do_not_authenticate_a_damaged_selected_extent_or_its_li
         let mut selected=Vec::new();assert!(read_current_range_to(&t.system,id,2,1,&mut selected).is_err());assert!(selected.is_empty());
         let mut old=Vec::new();read_node_to(&t.system,id,t.base.node,&mut old).unwrap();assert_eq!(old,b"history");
     }
+}
+
+#[test]
+#[ignore="two private native registered filesystems"]
+fn repeated_original_edits_reconstruct_exact_intersections_and_never_revive_truncated_data(){
+    let t=Fixtures::new(b"0123456789");let id=t.base.file;
+    let mut receipts=Vec::new();
+    for (revision,at,data,how) in [
+        (1,2,b"ABCDE".as_slice(),LengthPolicy::KeepOrGrow),(2,4,b"xy".as_slice(),LengthPolicy::KeepOrGrow),
+        (3,0,b"".as_slice(),LengthPolicy::Set(5)),(4,0,b"".as_slice(),LengthPolicy::Set(12)),
+        (5,9,b"QQ".as_slice(),LengthPolicy::KeepOrGrow),
+    ]{
+        let e=edit(at,data,how);let op=OperationId::new().unwrap();
+        let r=save_interval(&t.system,op,id,revision,e,Cursor::new(data)).unwrap();
+        assert_eq!((r.revision,r.source_revision),(revision+1,revision));receipts.push(r);
+    }
+    let expected=b"01ABx\0\0\0\0QQ\0";
+    let mut bytes=Vec::new();assert_eq!(read_current_to(&t.system,id,&mut bytes).unwrap().edit.as_ref(),receipts.last());assert_eq!(&bytes[..],expected);
+    for (i,&actual) in expected.iter().enumerate(){
+        let mut one=Vec::new();read_current_range_to(&t.system,id,i as u64,1,&mut one).unwrap();assert_eq!(&one[..],&[actual]);
+    }
+    for r in &receipts{assert_eq!(save_interval(&t.system,r.operation,id,r.source_revision,r.edit,Never).unwrap(),*r);}
+    let reg=t.system.join("REGISTRATION");let original=osfs::read(&reg).unwrap();
+    let other=OperationId::new().unwrap();assert!(save_interval(&t.system,other,id,2,receipts[0].edit,Never).is_err());
+    assert!(interval_receipt(&t.system,other).unwrap().is_none());assert_eq!(original,osfs::read(&reg).unwrap());
+    assert!(save_interval(&t.system,receipts[1].operation,id,receipts[1].revision,receipts[1].edit,Never).is_err());
+    let mut old=Vec::new();read_node_to(&t.system,id,t.base.node,&mut old).unwrap();assert_eq!(old,b"0123456789");
+    assert_eq!(osfs::read_dir(t.dir()).unwrap().count(),3+receipts.len());
+    let (_,_,state)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();
+    let first=state.decided(receipts[0].operation).unwrap().span().unwrap();let second=state.decided(receipts[1].operation).unwrap().span().unwrap();
+    let birth=state.file(id).unwrap();let head=state.head(id).unwrap();let source=&second.original;
+    assert!(source.matches(birth,head,Some(first)));assert!(!source.matches(birth,head,None));
+    let mut wrong=source.clone();wrong.predecessor.decision[0]^=1;assert!(!wrong.matches(birth,head,Some(first)));
+    let mut wrong=source.clone();wrong.predecessor.op=second.original.op;assert!(!wrong.matches(birth,head,Some(first)));
+}
+
+#[test]
+#[ignore="two private native registered filesystems"]
+fn an_unconfirmed_successor_frame_restores_the_actual_previous_working_edge_on_cold_reopen(){
+    for stop in [Cut::Reservation,Cut::BeforeIntent,Cut::Intent,Cut::FrameSynced,Cut::MarkedBeforeSync,Cut::IntentReleased]{
+        let t=Fixtures::new(b"abcdef");let id=t.base.file;let prior=OperationId::new().unwrap();let next=OperationId::new().unwrap();
+        let a=save_interval(&t.system,prior,id,1,edit(2,b"X",LengthPolicy::KeepOrGrow),Cursor::new(b"X")).unwrap();
+        let e=edit(3,b"Y",LengthPolicy::KeepOrGrow);
+        save_inner(&t.system,next,id,2,e,Cursor::new(b"Y"),|c|if c==stop{Err(io::Error::other("interrupt next revision"))}else{Ok(())}).unwrap_err();
+        let confirmed=matches!(stop,Cut::MarkedBeforeSync|Cut::IntentReleased);let mut bytes=Vec::new();
+        let got=read_current_to(&t.system,id,&mut bytes).unwrap();
+        assert_eq!(got.edit.unwrap().revision,if confirmed{3}else{2});assert_eq!(&bytes[..],if confirmed{b"abXYef"}else{b"abXdef"});
+        assert_eq!(interval_receipt(&t.system,prior).unwrap().unwrap().published,Some(a));
+        assert_eq!(interval_receipt(&t.system,next).unwrap().unwrap().published.is_some(),confirmed);
+        let r=if stop==Cut::Reservation{save_interval(&t.system,next,id,2,e,Cursor::new(b"Y")).unwrap()}
+            else{save_interval(&t.system,next,id,2,e,Never).unwrap()};
+        assert_eq!((r.revision,r.decision_sequence),(3,5));
+        let mut final_bytes=Vec::new();read_current_to(&t.system,id,&mut final_bytes).unwrap();assert_eq!(final_bytes,b"abXYef");
+    }
+}
+
+#[test]
+#[ignore="two private native registered filesystems"]
+fn next_save_during_output_does_not_retarget_a_frozen_read_or_confuse_a_lost_old_response(){
+    let t=Fixtures::new(b"12345678");let id=t.base.file;let r=save_interval(&t.system,OperationId::new().unwrap(),id,1,
+        edit(2,b"abc",LengthPolicy::KeepOrGrow),Cursor::new(b"abc")).unwrap();
+    struct Advance<'a>{t:&'a Fixtures,op:OperationId,bytes:Vec<u8>,done:bool}
+    impl Write for Advance<'_>{
+        fn write(&mut self,b:&[u8])->io::Result<usize>{
+            if !self.done{self.done=true;save_interval(&self.t.system,self.op,self.t.base.file,2,edit(2,b"Z",LengthPolicy::KeepOrGrow),Cursor::new(b"Z"))?;}
+            self.bytes.extend_from_slice(b);Ok(b.len())
+        }
+        fn flush(&mut self)->io::Result<()>{Ok(())}
+    }
+    let mut out=Advance{t:&t,op:OperationId::new().unwrap(),bytes:Vec::new(),done:false};
+    let seen=read_current_to(&t.system,id,&mut out).unwrap();assert_eq!(seen.edit,Some(r.clone()));assert_eq!(out.bytes,b"12abc678");
+    let mut latest=Vec::new();assert_eq!(read_current_to(&t.system,id,&mut latest).unwrap().edit.unwrap().revision,3);
+    assert_eq!(latest,b"12Zbc678");assert_eq!(save_interval(&t.system,r.operation,id,1,r.edit,Never).unwrap(),r);
+}
+
+#[test]
+#[ignore="two private native registered filesystems"]
+fn disappearance_of_a_prior_extent_at_sink_flush_does_not_silently_certify_the_frozen_revision(){
+    let t=Fixtures::new(b"base");let id=t.base.file;let first=OperationId::new().unwrap();
+    save_interval(&t.system,first,id,1,edit(0,b"1",LengthPolicy::KeepOrGrow),Cursor::new(b"1")).unwrap();
+    save_interval(&t.system,OperationId::new().unwrap(),id,2,edit(0,b"2",LengthPolicy::KeepOrGrow),Cursor::new(b"2")).unwrap();
+    struct Unlink{path:PathBuf,bytes:Vec<u8>}
+    impl Write for Unlink{
+        fn write(&mut self,b:&[u8])->io::Result<usize>{self.bytes.extend_from_slice(b);Ok(b.len())}
+        fn flush(&mut self)->io::Result<()>{osfs::remove_file(&self.path)}
+    }
+    let mut out=Unlink{path:t.extent(first),bytes:Vec::new()};assert!(read_current_range_to(&t.system,id,0,1,&mut out).is_err());
+    assert_eq!(out.bytes,b"2");let mut old=Vec::new();read_node_to(&t.system,id,t.base.node,&mut old).unwrap();assert_eq!(old,b"base");
 }

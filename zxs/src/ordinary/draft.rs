@@ -32,13 +32,13 @@ pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)
         // obstructed. Do not use the old draft as the body, or require it for
         // the selected node. Complete-inventory and retirement verify it separately.
         let base=super::formal::physical::HistoryBody::current(&dir,f)?;
-        if let Some(e)=state.interval(c.create.file){
-            let extent=super::interval::physical::Stored::reopen(&dir,&e.original,&e.material)?;
-            return Ok(Some(Body::Composed(super::interval::physical::Composed{base,extent})));
-        }
         if let Some(a)=state.editing.as_ref().filter(|a|a.original.file==c.create.file){
             let sealed=state.pending.as_ref().map(|p|p.frame.span()).transpose()?;
             super::interval::physical::inspect(&dir,a,sealed)?;
+        }
+        if state.interval(c.create.file).is_some(){
+            let set=super::interval::physical::Operands::capture(&dir,c,f.original.content.bytes,state.intervals(c.create.file))?;
+            return Ok(Some(Body::Composed(super::interval::physical::Composed::new(dir,base,set)?)));
         }
         return Ok(Some(Body::Formal(base)));
     }
@@ -83,7 +83,7 @@ pub fn read_current_to(system:&Path,id:FileId,mut output:impl Write)->io::Result
     finish_output(&body,&mut output)?;Ok(info)
 }
 pub(super) fn finish_output(body:&Option<Body>,out:&mut impl Write)->io::Result<()>{
-    if let Some(Body::Composed(c))=body{c.unchanged()?;out.flush()?;c.unchanged()}else{out.flush()}
+    if let Some(Body::Composed(c))=body{c.unchanged()?;out.flush()?;c.finish()}else{out.flush()}
 }
 pub fn first_save_receipt(system:&Path,op:OperationId)->io::Result<Option<FirstSaveObservation>>{
     let (_pool,_,s)=LocalPool::with_snapshot(system,Access::Read)?;

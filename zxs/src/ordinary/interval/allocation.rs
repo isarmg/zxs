@@ -11,7 +11,7 @@ pub(in crate::ordinary) struct SpanAllocation {
 }
 impl SpanAllocation {
     pub fn reserve(sys:&HeldDir,pool:PoolId,original:Original,seq:u64,previous:[u8;32])->io::Result<()>{
-        let req=request(pool,original.uid,original.op,original.file,1,original.edit)?;
+        let req=request(pool,original.uid,original.op,original.file,original.predecessor.revision,original.edit)?;
         let (f,entity)=sys.anonymous_record()?;let mut b=MAGIC.to_vec();
         NativeObject{entity,birth:fs::Birth::read(&f)?}.put(&mut b);
         b.extend_from_slice(&pool.0);original.put(&mut b);b.extend_from_slice(&seq.to_be_bytes());
@@ -25,7 +25,7 @@ impl SpanAllocation {
         let mut r=In(body.strip_prefix(MAGIC).ok_or_else(||invalid("unknown working interval reservation"))?);
         if NativeObject::get(&mut r)?!=NativeObject::stamp(&stamp)||PoolId(r.id()?)!=pool{return Err(invalid("not the original SYSTEM working interval reservation"));}
         let original=Original::get(&mut r)?;let seq=r.u64()?;let previous=r.fixed()?;let req=r.fixed()?;r.end()?;
-        if seq==0||request(pool,original.uid,original.op,original.file,1,original.edit)?!=req{return Err(invalid("working interval reservation recipe differs"));}
+        if seq==0||request(pool,original.uid,original.op,original.file,original.predecessor.revision,original.edit)?!=req{return Err(invalid("working interval reservation recipe differs"));}
         Ok(Self{original,seq,previous,request:req,digest,stamp,bytes})
     }
     pub fn matches(&self,f:&Saved)->bool{
