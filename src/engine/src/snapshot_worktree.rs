@@ -13,6 +13,7 @@ mod reopen;
 mod reservations;
 mod prepare;
 mod initialize;
+pub(crate) mod direct_child;
 mod publication;
 mod instance;
 mod source;
@@ -139,6 +140,8 @@ pub(crate) enum RegistrationError {
     SelectedFileBranch,
     #[error("the exact FILE version has no verified placement on the registered host disk")]
     SelectedFileDisk,
+    #[error("this ordinary directory holds a reserved or published native snapshot repository; moving or hiding its host is not yet supported")]
+    DirectChildHost,
     #[error("this directory commit requires one dirty file at its exact original FILE head")]
     CommitScope,
     #[error("reading the independently sealed worktree edit")]

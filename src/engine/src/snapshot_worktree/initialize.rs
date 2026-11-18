@@ -18,22 +18,29 @@ pub(crate) fn initialize_root(
         index.reopen_node(engine, handle)?;
         return Ok(handle);
     }
-    if request.source.root.is_some() {
-        return Err(RegistrationError::RootOnly);
-    }
     if engine.admitted_current_namespaces().map_err(RegistrationError::Publication)?.is_some()
         || engine.config.generation().is_some()
     {
         return Err(RegistrationError::InitialOnly);
     }
+    let selected = request.source.root.as_ref().map(|child| {
+        let ordinary = engine.repository_for_branch(&request.source.branch_id.to_string())
+            .map_err(RegistrationError::Publication)?.repository_id.parse().map_err(RegistrationError::Allocation)?;
+        let selected = super::direct_child::DirectChild::capture(engine, &index, ordinary, child)?;
+        if selected.context.host != request.host || selected.context.source != request.source {
+            return Err(RegistrationError::PublicationChanged);
+        }
+        Ok(selected)
+    }).transpose()?;
+    drop(index);
     let host = prepare_namespace_host(
         engine, &request.source, request.host.root_id,
         request.host.expected_root_generation, request.operation_id,
     )?;
-    host.require_root_source(engine).map_err(RegistrationError::NamespaceHost)?;
-    let (actual_host, _) = host.reservation_evidence(engine)
+    let (actual_host, evidence) = host.reservation_evidence(engine)
         .map_err(RegistrationError::NamespaceHost)?;
-    if actual_host != request.host {
+    if actual_host != request.host || selected.as_ref().is_some_and(|child|
+        evidence.directories.as_slice() != std::slice::from_ref(&child.directory)) {
         return Err(RegistrationError::Host);
     }
     let allocated = NodeAllocation {

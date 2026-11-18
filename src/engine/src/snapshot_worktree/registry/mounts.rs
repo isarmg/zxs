@@ -19,6 +19,7 @@ impl ReceiptIndex<'_> {
     pub(in crate::snapshot_worktree) fn require_mount_namespace(
         &self, next: &crate::State, maximum: usize,
     ) -> Result<()> {
+        self.require_direct_child_hosts(next)?;
         let plans = self.worktrees.values().filter_map(|record| {
             self.mount_claim(record).map(|mount| (&record.plan.host, mount))
         });

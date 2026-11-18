@@ -48,3 +48,16 @@ impl<'context, 'source> PhysicalRequirements<'context, 'source> {
         Ok(())
     }
 }
+
+impl PlanningContext<'_> {
+    /// The child initializer copies each distinct FULL into its own node. Use
+    /// the same registered-disk limit and free-space gate before NODE_RESERVE
+    /// and again before creating .zxs; this is not a disk-space lease.
+    pub(crate) fn require_first_directory_space(&self, disk: &DiskConfig,
+        manifest: &crate::working_tree::snapshot::AdmittedSnapshotManifest) -> Result<()> {
+        let mut required = PhysicalRequirements::new(self);
+        required.add(disk, u64::try_from(manifest.encoded_len()).map_err(|_| Failure::PhysicalBytesOverflow)?)?;
+        for file in manifest.files().values() { required.add(disk,file.size)?; }
+        required.check()
+    }
+}

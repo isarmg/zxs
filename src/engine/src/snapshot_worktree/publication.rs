@@ -25,6 +25,7 @@ pub(crate) struct PublishedNodeReservation {
     commitment: MaterialCommitment,
     observation: NamespacePreparationObservation,
     after_namespace: NamespaceSnapshot,
+    child: Option<super::direct_child::InitialBodies>,
 }
 
 impl PublishedNodeReservation {
@@ -42,6 +43,16 @@ impl PublishedNodeReservation {
         {
             return Err(RegistrationError::PublicationChanged);
         }
+        Ok(())
+    }
+
+    pub(crate) fn require_ready(&self, engine:&Engine, manifest:&AdmittedSnapshotManifest) -> Result<()> {
+        if let Some(held) = &self.child { held.require_ready(engine, manifest)?; }
+        Ok(())
+    }
+
+    pub(crate) fn require_original_names(&self) -> Result<()> {
+        if let Some(held) = &self.child { held.require_named()?; }
         Ok(())
     }
 
@@ -68,22 +79,29 @@ impl PublishedNodeReservation {
         {
             return Err(SnapshotStoreError::Entries);
         }
+        if let Some(held) = &self.child {
+            return held.open(file).map(OriginalPayload::Owner);
+        }
         let opened = engine.open_content(&file.version_id.to_string())
             .map_err(SnapshotStoreError::Disk)?;
         if opened.size != file.size || opened.content_hash != file.content_hash {
             return Err(SnapshotStoreError::Entries);
         }
-        Ok(OriginalPayload { opened })
+        Ok(OriginalPayload::Ordinary(opened))
     }
 }
 
 /// The actual BODY reader's read lease survives for the complete verified copy.
-pub(crate) struct OriginalPayload {
-    opened: OpenedContent,
+pub(crate) enum OriginalPayload {
+    Ordinary(OpenedContent),
+    Owner(crate::ReadFile),
 }
 impl Read for OriginalPayload {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.opened.file.read(buffer)
+        match self {
+            Self::Ordinary(opened) => opened.file.read(buffer),
+            Self::Owner(body) => body.read(buffer),
+        }
     }
 }
 
@@ -94,7 +112,7 @@ pub(super) fn reserve(
     allocated: NodeAllocation,
     principal: &Principal,
 ) -> Result<(Arc<PublishedNodeReservation>, AdmittedSnapshotManifest)> {
-    host.require_root_source(engine).map_err(RegistrationError::NamespaceHost)?;
+    host.require_snapshot_source(engine).map_err(RegistrationError::NamespaceHost)?;
     host.require_request(request).map_err(RegistrationError::NamespaceHost)?;
     let (address, evidence) = host.reservation_evidence(engine)
         .map_err(RegistrationError::NamespaceHost)?;
@@ -112,7 +130,7 @@ pub(super) fn reserve(
         request.operation_id, input, None,
         |engine, next, _| {
             let manifest = source::construct(
-                engine, next, &request.source, allocated.repository,
+                engine, next, &request.source, &evidence, allocated.repository,
                 allocated.node, request.operation_id,
             )?;
             let plan = NodeReservation {
@@ -126,6 +144,7 @@ pub(super) fn reserve(
         },
     ).map_err(RegistrationError::Publication)?;
     let (plan, manifest) = constructed.ok_or(RegistrationError::Operation(request.operation_id))?;
+    let child = super::direct_child::InitialBodies::capture(engine, &plan.host, &manifest)?;
     let commitment = Record::ReserveNode(plan.clone()).commitment()
         .map_err(RegistrationError::Codec)?;
     publish_planned(
@@ -139,7 +158,7 @@ pub(super) fn reserve(
     }
     Ok((Arc::new(PublishedNodeReservation {
         before, after: Arc::clone(&engine.state), plan,
-        principal: principal.clone(), commitment, observation, after_namespace,
+        principal: principal.clone(), commitment, observation, after_namespace, child,
     }), manifest))
 }
 

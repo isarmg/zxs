@@ -21,16 +21,22 @@ pub(crate) struct PreparedNamespaceNode {
 }
 
 impl PreparedNamespaceHost {
-    pub(crate) fn require_root_source(
+    pub(crate) fn require_snapshot_source(
         &self,
         engine: &Engine,
     ) -> std::result::Result<(), NamespaceHostError> {
         self.require_engine(engine)?;
-        if self.source_request.root.is_some() || !self.evidence.directories.is_empty() {
-            return Err(NamespaceHostError::RootMount);
-        }
         let source = NamespaceHost::for_request(engine, &self.source_request)?;
-        source.require_root_inventory(false)
+        let selected = crate::snapshot_worktree::direct_child::Window::new(
+            &self.snapshot, &self.evidence, self.source_request.root.as_ref(),
+        )?;
+        let (count, rows) = selected.rows(&self.snapshot);
+        if count > crate::working_tree::snapshot::MAX_ENTRIES {
+            return Err(NamespaceHostError::RootInventory);
+        }
+        let common = source.held_root(self.root,self.generation)?;
+        let host = self.directories.last().unwrap_or(common);
+        source.require_inventory(host, false, rows)
     }
 
     pub(crate) fn prepare_node(
@@ -49,12 +55,16 @@ impl PreparedNamespaceHost {
         // publication product for this exact before/after pair and prepared host.
         self.state = Arc::clone(reservation.after());
         self.snapshot = reservation.after_namespace().clone();
-        self.require_root_source(engine).map_err(RegistrationError::NamespaceHost)?;
+        self.require_snapshot_source(engine).map_err(RegistrationError::NamespaceHost)?;
+        reservation.require_ready(engine, &manifest)?;
         let source = NamespaceHost::for_request(engine, &self.source_request)
             .map_err(RegistrationError::NamespaceHost)?;
         let common = source.held_root(self.root, self.generation)
             .map_err(RegistrationError::NamespaceHost)?;
-        let created = common.create_private_entry(&layout::SNAPSHOT_REPOSITORY);
+        // The nested repository is private to this actual direct child, not a
+        // second repository under the enclosing root's .zxs.
+        let host = self.directories.last().unwrap_or(common);
+        let created = host.create_private_entry(&layout::SNAPSHOT_REPOSITORY);
         let (repository, identity) = match created {
             DirectoryCreateOutcome::Rejected(source)
             | DirectoryCreateOutcome::Uncertain { source, .. } => {
@@ -62,7 +72,7 @@ impl PreparedNamespaceHost {
             }
             DirectoryCreateOutcome::Created { directory, identity, durability } => {
                 durability.map_err(RegistrationError::RepositoryPreparation)?;
-                common.sync_private_entry_matching(&layout::SNAPSHOT_REPOSITORY, identity)
+                host.sync_private_entry_matching(&layout::SNAPSHOT_REPOSITORY, identity)
                     .map_err(RegistrationError::RepositoryPreparation)?;
                 (directory, identity)
             }
@@ -95,11 +105,13 @@ impl PreparedNamespaceNode {
             return Err(RegistrationError::PublicationChanged);
         }
         self.host.require_engine(engine).map_err(RegistrationError::NamespaceHost)?;
+        self.reservation.require_original_names()?;
         let source = NamespaceHost::for_request(engine, &self.host.source_request)
             .map_err(RegistrationError::NamespaceHost)?;
         let common = source.held_root(self.host.root, self.host.generation)
             .map_err(RegistrationError::NamespaceHost)?;
-        HeldSnapshotNode::reopen_at_host(common, self.node.binding())
+        let host = self.host.directories.last().unwrap_or(common);
+        HeldSnapshotNode::reopen_at_host(host, self.node.binding())
             .map_err(RegistrationError::NodeReadback)?;
         Ok(())
     }

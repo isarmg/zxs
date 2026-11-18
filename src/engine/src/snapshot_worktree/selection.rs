@@ -42,15 +42,13 @@ pub(crate) struct InnerOccurrence {
 }
 pub(crate) struct HeldBranchFile {
     facts: InnerOccurrence,
-    file: ReadFile,
-    _body_directory: crate::disk::DiskRoot,
-    _reservation: crate::engine::PayloadProofReservation,
+    body: crate::engine::HeldDirectoryFileBody,
 }
 impl HeldBranchFile {
     pub(crate) fn facts(&self) -> &InnerOccurrence { &self.facts }
     /// Only an authorized enclosing writer may copy. This is the original
     /// held immutable source, never a worktree write, tentative RANGE, or MOVE.
-    pub(crate) fn reader(&mut self) -> &mut ReadFile { &mut self.file }
+    pub(crate) fn reader(&mut self) -> &mut ReadFile { self.body.reader() }
 
     pub(crate) fn capture(engine: &Engine,pick: &Pick<'_>) -> Result<Self> {
         let index = engine.snapshot_receipts()?;
@@ -63,7 +61,7 @@ impl HeldBranchFile {
         let registered = index.worktree(pick.worktree)?;
         if registered.mount.presence != super::registry::Presence::Visible(pick.visible)
             || registered.revision() != pick.revision { return Err(RegistrationError::PublicationChanged); }
-        let reservation = crate::engine::payload_proof_budget().reserve(9).ok_or_else(||
+        let _mount_descriptors = crate::engine::payload_proof_budget().reserve(7).ok_or_else(||
             RegistrationError::Publication(crate::engine::fresh_layout::FreshLayoutError::ContainerBudget.into()))?;
         let mount = registered.mount.mount.clone();
         let host = registered.source().host().clone();
@@ -125,15 +123,13 @@ impl HeldBranchFile {
             commit_operation:commit.operation_id, commit_sequence:commit.sequence, generation: Generation::new(branch.generation),
             node: node.parse().map_err(RegistrationError::Allocation)?, body_sequence:material.version_sequence,storage:material.storage_id,
             version,history:container.history_tree_id,size:material.logical_size,hash:material.content_hash };
-        let (held, parent, body_name, parent_id) = engine.open_directory_file_body(selected.file,version,disk)
-            .map_err(RegistrationError::Publication)?;
-        let body = local_entity(platform_io::fs_safety::linux::FileIdentity::from_metadata(
-            &held.metadata().map_err(|e| RegistrationError::Publication(e.into()))?));
+        let held = engine.open_directory_file_body(selected.file,version,disk).map_err(RegistrationError::Publication)?;
+        let (parent,name,body) = held.identity();
         let facts = InnerOccurrence { worktree:pick.worktree, visible:pick.visible,revision:pick.revision,host,mount,
             source,source_node,published,sparse:session.instance(),ledger:registered.binding(),checkpoint:registered.checkpoint(),
             selected,head,container_namespace:container.namespace.clone(),container_creation:container.created_by,
-            container:replica.entity,body_parent:local_entity(parent_id),body_name,body };
-        Ok(Self { facts,file:held,_body_directory:parent,_reservation:reservation })
+            container:replica.entity,body_parent:local_entity(parent),body_name:name.clone(),body:local_entity(body) };
+        Ok(Self { facts,body:held })
     }
 
     /// A detached prepare can never install against a changed branch, mount,

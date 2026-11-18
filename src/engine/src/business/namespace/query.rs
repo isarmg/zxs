@@ -101,6 +101,13 @@ impl<'a> NamespaceTree<'a> {
         self.entries.iter().filter(move |entry| self.visible(entry))
     }
 
+    /// Physical initialization needs both the original range's cardinality
+    /// (including hidden rows for its bound) and only its visible descendants.
+    pub(crate) fn selected_descendants(self, key: &'a str) -> (usize, impl Iterator<Item = &'a Entry> + 'a) {
+        let selected = super::sorted_descendants(self.entries,key);
+        (selected.len(), selected.iter().filter(move |entry| self.visible(entry)))
+    }
+
     fn visible(self, entry: &Entry) -> bool {
         (entry.kind != NamespaceEntryKind::File
             || self
@@ -150,6 +157,25 @@ impl<'a> NamespaceTree<'a> {
                 })
                 .map(|entry| entry.entry_id.as_str())
         })
+    }
+}
+
+impl NamespaceTree<'_> {
+    /// Only for the original top-level ordinary directory selected as host of
+    /// an independent snapshot repository. A same-name replacement cannot keep
+    /// the registration alive. FILE names and branch HEADs are irrelevant here.
+    pub(crate) fn contains_registered_direct_child(
+        state: &State, owner: &storage_contract::file_container::NamespaceDirectoryRecord,
+    ) -> bool {
+        let Some(repository) = state.repositories.get(&owner.repository.to_string()) else { return false; };
+        let Some(branch) = state.branches.get(&repository.main_branch_id) else { return false; };
+        let Some(main) = state.commits.get(&branch.head_commit_id) else { return false; };
+        if !repository.file_manager_root || branch.branch_id != owner.branch.to_string()
+            || branch.history_tree_id != repository.history_tree_id || main.history_tree_id != branch.history_tree_id
+        { return false; }
+        NamespaceTree::from_current_state(state, &repository.repository_id, &main.entries)
+            .get_key(&owner.name.key()).is_some_and(|entry| entry.kind == NamespaceEntryKind::Directory
+                && entry.entry_id == owner.entry.to_string() && entry.path.as_str() == owner.name.as_str())
     }
 }
 

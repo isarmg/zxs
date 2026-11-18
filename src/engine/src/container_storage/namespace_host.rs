@@ -210,8 +210,16 @@ impl<'a> NamespaceHost<'a> {
             return Err(NamespaceHostError::RootInventory);
         }
         let common = self.root.common().map_err(NamespaceHostError::Source)?;
+        self.require_inventory(common, has_repository,
+            self.snapshot.tree().visible_entries().map(|entry| (entry, entry.path.clone())))
+    }
+
+    /// The relative name is emitted by the admitted namespace window. Lookup,
+    /// FILE and original ordinary directory identity always use the whole row.
+    fn require_inventory<'r>(&self, physical: &DiskRoot, has_repository: bool,
+        rows: impl Iterator<Item=(&'r crate::Entry, PortablePath)>) -> Result<()> {
         let mut expected = BTreeSet::new();
-        for entry in self.snapshot.tree().visible_entries() {
+        for (entry, relative) in rows {
             require_ordinary(&entry.path)?;
             if entry.kind == NamespaceEntryKind::Directory {
                 let id = entry.entry_id.parse::<EntryId>()
@@ -229,7 +237,7 @@ impl<'a> NamespaceHost<'a> {
                     &self.engine.config, &self.engine.disk_resources, self.engine.state(),
                     id, owner,
                 ).map_err(NamespaceHostError::Source)?;
-                if entry.path.parent().is_none() {
+                if relative.parent().is_none() {
                     expected.insert(crate::persist::layout::namespace::directory(&record.name));
                 }
                 continue;
@@ -250,7 +258,7 @@ impl<'a> NamespaceHost<'a> {
             {
                 return Err(NamespaceHostError::RootInventory);
             }
-            if entry.path.parent().is_none() {
+            if relative.parent().is_none() {
                 expected.insert(crate::persist::layout::namespace::directory(
                     &record.namespace.name,
                 ));
@@ -259,7 +267,7 @@ impl<'a> NamespaceHost<'a> {
         if has_repository {
             expected.insert(crate::persist::layout::SNAPSHOT_REPOSITORY.clone());
         }
-        for entry in common.root_entries().map_err(NamespaceHostError::Physical)? {
+        for entry in physical.root_entries().map_err(NamespaceHostError::Physical)? {
             let entry = entry.map_err(|source| NamespaceHostError::Physical(
                 DirectoryIoError::Filesystem(source),
             ))?;

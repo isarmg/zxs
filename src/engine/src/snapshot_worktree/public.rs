@@ -88,7 +88,8 @@ impl SnapshotWorktreeError {
             ) => {
                 ErrorCode::UnsupportedOperation
             }
-            RegistrationError::SelectedFileUnmapped | RegistrationError::SelectedFileBranch => ErrorCode::UnsupportedOperation,
+            RegistrationError::SelectedFileUnmapped | RegistrationError::SelectedFileBranch
+            | RegistrationError::DirectChildHost => ErrorCode::UnsupportedOperation,
             RegistrationError::HistoryCursor
             | RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Cursor) => {
                 ErrorCode::ListingChanged
@@ -127,6 +128,18 @@ impl Engine {
     /// Resolve the real published file-manager root, not the same-looking
     /// directory or a Config entry. The subsequent command revalidates it.
     pub fn snapshot_root_context(&self, repository: RepositoryId) -> Result<SnapshotRootContext> {
+        self.admitted_snapshot_root_context(repository).map_err(Into::into)
+    }
+
+    /// The caller chooses an existing child, not a directory identity or disk locator.
+    pub fn snapshot_direct_child_context(&self, repository: RepositoryId, child: &name_policy::LookupPath)
+        -> Result<SnapshotRootContext> {
+        let index = self.snapshot_receipts()?;
+        Ok(super::direct_child::DirectChild::capture(self, &index, repository, child)?.context)
+    }
+
+    pub(in crate::snapshot_worktree) fn admitted_snapshot_root_context(&self, repository: RepositoryId)
+        -> super::Result<SnapshotRootContext> {
         let repository = self.state().repositories.get(&repository.to_string())
             .ok_or(RegistrationError::Source)?;
         let branch_id = repository.main_branch_id.parse().map_err(RegistrationError::Allocation)?;

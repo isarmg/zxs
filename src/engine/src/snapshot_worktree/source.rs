@@ -74,13 +74,11 @@ pub(super) fn construct(
     engine: &Engine,
     next: &mut State,
     source: &SnapshotNamespace,
+    host: &crate::persist::snapshot_worktree::HostEvidence,
     repository: SnapshotRepositoryId,
     node: SnapshotNodeId,
     operation: OperationId,
 ) -> crate::Result<AdmittedSnapshotManifest> {
-    if source.root.is_some() {
-        return Err(reject(SnapshotSourceError::RootFiles));
-    }
     let branch_key = source.branch_id.to_string();
     let owner = engine.repository_for_branch(&branch_key)?;
     let branch = engine.state().branches.get(&branch_key)
@@ -91,17 +89,18 @@ pub(super) fn construct(
         return Err(reject(SnapshotSourceError::Namespace));
     }
     let snapshot = engine.namespace_snapshot(&branch_key)?;
-    if snapshot.entries().len() > crate::working_tree::snapshot::MAX_ENTRIES {
+    let scope = super::direct_child::Window::new(&snapshot, host, source.root.as_ref())
+        .map_err(|_| reject(SnapshotSourceError::Namespace))?;
+    let (count, rows) = scope.rows(&snapshot);
+    if count > crate::working_tree::snapshot::MAX_ENTRIES {
         return Err(reject(SnapshotSourceError::Budget));
     }
-    let mut current = engine.state().commits.get(&branch.head_commit_id)
-        .cloned().ok_or_else(|| reject(SnapshotSourceError::Namespace))?;
-    current.entries = snapshot.entries().to_vec();
+    let mut lazy_root = None;
     let mut entries = Vec::new();
-    for entry in snapshot.tree().visible_entries() {
+    for (entry, relative) in rows {
         if entry.kind == NamespaceEntryKind::Directory {
             entries.push(SnapshotEntry {
-                path: entry.path.clone(),
+                path: relative,
                 content: SnapshotEntryContent::Directory {},
             });
             continue;
@@ -134,8 +133,17 @@ pub(super) fn construct(
             .ok_or_else(|| reject(SnapshotSourceError::File(file)))?;
         let selected = if selected.file_id.as_deref() == Some(entry.file_id.as_str()) {
             context.branch_id.clone()
-        } else if context.branch_id == branch_key && context.node_id.is_none() {
-            ensure_shared_file_branch(next, &current, entry)?
+        } else if source.root.is_none() && context.branch_id == branch_key && context.node_id.is_none() {
+            // Only the original full-root initializer has the authority to mint a
+            // lazy FILE branch. A mounted-file child needs a real existing FILE
+            // source and must not clone an unrelated enclosing namespace.
+            if lazy_root.is_none() {
+                let mut current = engine.state().commits.get(&branch.head_commit_id)
+                    .cloned().ok_or_else(|| reject(SnapshotSourceError::Namespace))?;
+                current.entries = snapshot.entries().to_vec();
+                lazy_root = Some(current);
+            }
+            ensure_shared_file_branch(next, lazy_root.as_ref().expect("invariant: requested root FILE source was captured"), entry)?
         } else {
             return Err(reject(SnapshotSourceError::File(file)));
         };
@@ -155,7 +163,7 @@ pub(super) fn construct(
             return Err(reject(SnapshotSourceError::Selection(file)));
         }
         entries.push(SnapshotEntry {
-            path: entry.path.clone(),
+            path: relative,
             content: SnapshotEntryContent::File {
                 material,
                 source: SnapshotFileSource::Container {

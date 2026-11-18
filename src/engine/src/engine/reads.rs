@@ -1,4 +1,6 @@
 //! Verified replicas, read leases, offline export and disk observations.
+mod directory;
+pub(crate) use directory::HeldDirectoryFileBody;
 use super::provenance::MetadataReadContext;
 use super::{Engine, OpenedContent, ReadLease, ReadSource};
 use crate::error::BackupReadError;
@@ -110,38 +112,6 @@ impl Engine {
         ) -> Result<T>,
     ) -> Result<T> {
         self.with_matching_replica(version_id,None,read)
-    }
-
-    /// Select *only* the already registered owner slot. A valid backup on a
-    /// different disk must not satisfy a same-disk directory source.
-    pub(crate) fn open_directory_file_body(
-        &self, file: storage_contract::FileId, version: storage_contract::VersionId,
-        disk: &storage_contract::DiskConfig,
-    ) -> Result<(ReadFile, DiskRoot, platform_io::fs_safety::EntryName,
-        platform_io::fs_safety::linux::FileIdentity)> {
-        use platform_io::fs_safety::{EntryName, linux::FileIdentity};
-        use std::io::{Seek, SeekFrom};
-        let invalid = || super::fresh_layout::FreshLayoutError::ContainerScope;
-        self.with_matching_replica(&version.to_string(), Some(disk), |scope, material, v, lease| {
-            if v.file_id != file.to_string() { return Err(invalid().into()); }
-            let container = material.container()?;
-            let versions = container.path().join(crate::persist::layout::VERSIONS.as_path());
-            let address = material.body_path()?;
-            if address.parent() != Some(versions.as_path()) { return Err(invalid().into()); }
-            let name = EntryName::new(address.file_name().ok_or_else(invalid)?).map_err(|_| invalid())?;
-            let parent_id = container.directory_identity(&versions)?;
-            let parent = container.private_child_matching(&versions, parent_id)?;
-            let mut held = verify_read_payload(material, v, lease)?;
-            let entity = FileIdentity::from_metadata(&held.metadata()?);
-            let named = parent.open_read_entry(&name)?;
-            if FileIdentity::from_metadata(&named.metadata()?) != entity
-                || container.directory_identity(&versions)? != parent_id || material.body_path()? != address
-            {
-                return Err(invalid().into());
-            }
-            held.seek(SeekFrom::Start(0))?;
-            Ok((ReadFile::in_container(held, Arc::clone(scope)), parent, name, parent_id))
-        })
     }
 
     fn with_matching_replica<T>(

@@ -148,6 +148,7 @@ pub use directory_snapshot_source::{
     VerifiedDirectorySnapshotSource,
 };
 mod reads;
+pub(crate) use reads::HeldDirectoryFileBody;
 pub use reads::{ContentReadPlan, RangeContent, WorkspaceReadPlan};
 mod read_view;
 pub(crate) mod named_namespaces;

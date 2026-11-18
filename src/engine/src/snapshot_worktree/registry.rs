@@ -38,6 +38,7 @@ pub(super) use added_commits::AddedCommitRetry;
 mod historical;
 mod drafts;
 mod discovery;
+mod direct_child;
 mod history;
 mod mounts;
 mod outcome;
@@ -754,6 +755,7 @@ impl<'a> ReceiptIndex<'a> {
         if !allocations.hosts.insert((plan.request.host.root_id, plan.request.host.directory_id)) {
             return Err(RegistrationError::Host);
         }
+        self.require_direct_child_reserve(&plan)?;
         self.register_directories(&plan)?;
         self.reserve_completion(
             operation,
