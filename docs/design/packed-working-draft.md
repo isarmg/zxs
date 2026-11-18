@@ -18,6 +18,13 @@
 
 自动路径仍按批准的 [008c584c 自动发表策略](https://github.com/isarmg/zxs/blob/008c584cc73305984785f4ff77fbe416a1e36857/docs/adr/shared-draft-automatic-publication.md#L36-L46) 顺序：100 GiB 原 FILE 上先保存 A 的 10 GiB，再保存 B 的 20 GiB；每次已确认保存只记一次，两次都进入同一 60 秒的 20 次限流统计，不因后来只建一个 FULL 节点合并成一次。A 尚未永久决定时，B 使原 A 准备过时，重新捕获 A+B 的最新平坦视图；若 A 已永久决定，则以原回执收尾，不清除后来的 B 脏代数。区间有重叠时只在重叠段取 B，不重叠时两段均保留。空间峰值不能扣除仍由原决定、旧 reader 或未知 partial 持有的 pack；同时计入目标 FULL／已保留与本次临时输出。该顺序不是本材料层新增的自动控制器或测试通过声明。
 
+## 100 GiB 实机验收前提（尚未执行）
+
+- **服务端上限**：`--max-upload-bytes` 的 CLI 默认值是 `1,073,741,824` 字节（1 GiB），也限制原生 SMB 工作稿。握手取后端能力与服务端限制的较小值；每帧实际核对的是写入**末端偏移**，resize 则核对新逻辑长度，不是只检查本帧大小。默认配置无法完成十次 10 GiB 的场景。受控验收实例须明确给服务端至少 `107374182400` 字节（100 GiB）的额度。见 [CLI 默认值](../../src/server/src/main.rs)、[SMB 桥接](../../src/server/src/lib.rs)、[握手取小值](../../src/server/src/smb_rpc/transport.rs) 和 [写入／resize 准入](../../src/server/src/smb_rpc/native.rs)。
+- **池端与实盘**：独立确认该池的 `max_file_bytes` 允许 100 GiB、`max_workspace_bytes` 不小于它，且配置的校验块大小能容纳相应的清单；开发配置的 1 TiB 文件上限不会抬高服务端限制。原登记目标盘须有足够**真实可用**空间保留原始 FULL、仍占用的旧稿及 partial、本次新 pack 与校验尾表，并为生成正式节点时的独立 FULL、临时副本和元数据预留留出峰值。声明逻辑额度不能替代逐盘空间、inode 和 FD 准入。见 [池端配置校验](../../src/engine/src/engine/config.rs) 与 [逐盘实际成本](../19-capacity-and-performance.md#s19-01)。
+
+这些是以后测试环境的显式前提，不更改产品默认、不代表用测试跑过 100 GiB，也不把几何用例或小文件 dispatcher 用例当作真实 Samba 的测量。
+
 ## 原生范围证据
 
 `ObservedContainerReplica::capture_packed_working_files` 只从这次已经准入的 FILE 取原清单及已持有 pack。为了给盘范围写入者完整的原物理证据，它在可停止的有限窗口内读完每个实际 pack，逐块认证，再核对实际完整尾表并计算**整个物理文件**的 BLAKE3。索引承诺、单一区间或整份逻辑正文哈希均不能代替它。只有全套成功才返回结果；`require_current` 再核对选中的容器与所有命名实体。`None` 仅指未选择打包稿，不证明目录空、FULL 完整或没有未知 partial；独立的原生 FILE 行、根登记、决定与发布后续仍由调用者负责。
