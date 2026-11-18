@@ -959,3 +959,65 @@ fn closed_interval_uses_the_real_saved_body_and_the_deletions_frozen_branch_head
         engine.file_node_parents(file.as_str(),&head).unwrap());
     assert!(branches.iter().any(|b|b.branch.to_string()==branch && b.node.to_string()==head));
 }
+
+#[test]
+fn copied_merge_uses_the_original_command_and_only_destination_node_identities() {
+    use storage_contract::file_lifecycle::{LinkRole, References};
+    let (at, mut engine, file, version)=actual_with_disks(4);
+    initialize_file_branch_owner(&mut engine,&version);
+    let history=engine.state.versions[version.as_str()].history_tree_id.clone();
+    let origin=engine.state.repositories[&engine.state.histories[&history].repository_id].clone();
+    let generate=||OperationId::generate().unwrap();
+    let added=engine.create_file_branch(file.as_str(),version.as_str(),
+        &storage_contract::BranchName::parse("source selection").unwrap(),"admin",generate())
+        .unwrap().branch_id.unwrap();
+    let main=engine.state.branches.values().find(|b|b.file_id.as_deref()==Some(file.as_str())
+        && b.branch_id!=added && b.state==crate::BranchState::Active).unwrap().branch_id.clone();
+    let inputs=[&main,&added].map(|branch|storage_contract::FileMergeInput {
+        branch_id:branch.clone(),expected_node_id:engine.file_branch_head(branch).unwrap(),
+    });
+    let op=generate();
+    let decision=engine.merge_file_branches(crate::FileBranchMergeRequest {file_id:file.as_str(),inputs:&inputs,
+        chosen_node_id:version.as_str(),surviving_branch_id:&main,location:None,principal:"admin",operation_id:op}).unwrap();
+    let target=engine.create_repository(&storage_contract::RepositoryName::parse("copied merges").unwrap(),
+        "D04",1,"admin",generate()).unwrap();
+    let transfer=generate();
+    engine.copy_file_history(&crate::FileHistoryCopyRequest {
+        source_repository_id:origin.repository_id,source_path:"file.txt".into(),
+        expected_source_head:engine.state.branches[&origin.main_branch_id].head_commit_id.clone(),
+        target_repository_id:target.repository_id,target_name:"copy.txt".into(),
+        expected_target_head:engine.state.branches[&target.main_branch_id].head_commit_id.clone(),
+    },"admin",transfer).unwrap();
+    let copied=engine.list_tree(&target.main_branch_id).unwrap().into_iter().find(|e|e.path()=="copy.txt").unwrap();
+    let file=HistoryFileId::parse(&copied.file_id).unwrap();
+    let mapped=|id:&str|crate::business::history_copy::identity(transfer,id).unwrap();
+    let local_merge=mapped(decision.result["merge_id"].as_str().unwrap());
+    let expected=storage_contract::FileNodeId::Version(copied.version_id.parse().unwrap());
+    assert_eq!(expected.to_string(),mapped(version.as_str()));
+    drop(engine);
+    let engine=Engine::open(&at.path().join("state")).unwrap();
+    let request=request_for(&engine,&file,64);
+    let capture=||engine.capture_file_lifecycle(request.clone(),HistoryWindowCancellation::new()).unwrap();
+    let page=capture().page().unwrap();
+    let event=page.events.iter().find(|e|e.operation_id==op).unwrap();
+    assert!(matches!(&event.detail,Detail::Merged {merge_id,..} if merge_id.to_string()==local_merge));
+    assert_eq!(event.principal.as_str(),"admin");
+    let References::Complete {links}=&event.references else {panic!("exact native transfer correspondence")};
+    for (n,input) in inputs.iter().enumerate() {
+        assert!(matches!(links[n].role,LinkRole::MergeInput {branch} if branch.to_string()==mapped(&input.branch_id)));
+        assert_eq!(links[n].node.unwrap().to_string(),mapped(&input.expected_node_id));
+    }
+    assert!(links.iter().filter(|l|matches!(l.role,LinkRole::Chosen|LinkRole::Result))
+        .all(|l|l.node==Some(expected)));
+    // The original receipt is independently checked, not borrowed from an
+    // accessible similarly named source. A retained target commit can show
+    // the fact without granting any link when the sealed command isn't there.
+    let mut absent=capture();
+    absent.source.operations.remove(&op);
+    let absent=absent.page().unwrap();
+    assert!(matches!(absent.events.iter().find(|e|e.operation_id==op).unwrap().references,References::Open{}));
+    let mut substituted=capture();
+    let row=substituted.source.file_branch_merges.get_mut(&local_merge).unwrap();
+    row.original_inputs[0].expected_node_id=version.as_str().into();
+    assert!(substituted.page().is_err());
+}

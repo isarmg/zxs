@@ -15,6 +15,7 @@ use storage_contract::history_window::{
 };
 
 mod navigation;
+mod copy_merges;
 
 struct EventBudget {
     count: usize,
@@ -266,7 +267,7 @@ impl FileLifecycleRead {
         }
         let checked = admission.as_deref().map(|verified| verified.paths(&self.request.file_id));
         self.append_path_events(source.path_ledger(), checked, &mut events, &mut budget)?;
-        self.merge_events(&mut events, &mut budget)?;
+        self.merge_events(source.view(), &mut events, &mut budget)?;
         events.sort_by_key(Event::order_key);
         self.read.cancellation.checkpoint()?;
         for pair in events.windows(2) {

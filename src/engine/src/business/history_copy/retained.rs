@@ -18,7 +18,7 @@ pub(crate) fn bounded<T: Serialize + ?Sized>(value: &T) -> Result<()> {
     bounded_bytes(value).map(|_| ())
 }
 
-fn bounded_bytes<T: Serialize + ?Sized>(value: &T) -> Result<usize> {
+pub(crate) fn bounded_bytes<T: Serialize + ?Sized>(value: &T) -> Result<usize> {
     // Count compact serialized bytes without allocating an output/Value copy.
     // Object key ordering does not change this encoded-length limit.
     struct Limit {

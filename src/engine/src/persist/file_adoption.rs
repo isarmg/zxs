@@ -45,9 +45,47 @@ impl Sources {
             Self::Historical {inputs,..} => (&inputs[index].branch_id,&inputs[index].source_node_id),
         }
     }
+    pub(crate) fn expected(&self, n: usize) -> &str {
+        match self {
+            Self::Branches(inputs) => &inputs[n].expected_node_id,
+            Self::Historical { inputs, .. } => &inputs[n].expected_node_id,
+        }
+    }
+
 }
 
-fn real_body<'a>(state:&'a State, event:&FileBranchMerge, id:&str) -> Result<&'a crate::FileVersion> {
+/// Decode the original command with its own canonical digest. This does not
+/// open a FILE graph, grant a cross-FILE read, or prove a copied occurrence.
+pub(crate) fn command_sources(
+    receipt: &OperationResult, author: &str, file: &str, chosen: &str, survivor: &str,
+) -> Result<Sources> {
+    match receipt.kind.as_str() {
+        "file.branches.merge" => {
+            let raw=receipt.result.get("merge_request").ok_or_else(invalid)?;
+            if Engine::native_request_digest(&receipt.kind, author, raw)? != receipt.request_digest {
+                return Err(invalid());
+            }
+            let input: BranchSelection=json_codec::from_value(raw.clone())?;
+            let _ = location(input.location)?;
+            if input.file_id!=file || input.chosen_node_id!=chosen || input.surviving_branch_id!=survivor {
+                return Err(invalid());
+            }
+            Ok(Sources::Branches(input.inputs))
+        }
+        "file.history.merge" => {
+            let inputs: Vec<FileHistoryMergeInput>=json_codec::from_value(receipt.result.get("source_inputs").ok_or_else(invalid)?.clone())?;
+            let name=BranchName::parse(receipt.result.get("name").and_then(json_codec::Value::as_str).ok_or_else(invalid)?)?;
+            let location=location(json_codec::from_value(receipt.result.get("location").ok_or_else(invalid)?.clone())?)?;
+            let request=crate::FileHistoryMergeRequest {file_id:file, inputs:&inputs, chosen_node_id:chosen,
+                name:&name, location:location.as_ref(), principal:author, operation_id:receipt.operation_id};
+            if request.native_digest()? != receipt.request_digest {return Err(invalid())}
+            Ok(Sources::Historical {inputs,name,location})
+        }
+        _ => Err(invalid()),
+    }
+}
+
+pub(crate) fn real_body<'a>(state:&'a State, event:&FileBranchMerge, id:&str) -> Result<&'a crate::FileVersion> {
     let version = if let Some(path) = state.file_path_nodes.get(id) {
         if path.file_id != event.file_id || path.history_tree_id != event.history_tree_id {return Err(invalid())}
         path.version_id.as_str()
@@ -81,36 +119,17 @@ pub(crate) fn original(state:&State, receipt:&OperationResult) -> Result<Sources
     let retired:Vec<_> = event.input_branch_ids.iter().filter(|b| *b != &event.surviving_branch_id)
         .collect::<BTreeSet<_>>().into_iter().collect();
     if receipt.result["merged_branch_ids"] != json_codec::json!(retired) {return Err(invalid())}
-    let sources = match receipt.kind.as_str() {
-        "file.branches.merge" => {
-            let body = receipt.result.get("merge_request").ok_or_else(invalid)?;
-            if Engine::native_request_digest(&receipt.kind,author,body)? != receipt.request_digest {return Err(invalid())}
-            let input:BranchSelection = json_codec::from_value(body.clone())?;
-            let _ = location(input.location)?;
-            if input.file_id != event.file_id || input.chosen_node_id != event.chosen_node_id
-                || input.surviving_branch_id != event.surviving_branch_id
-                || !input.inputs.iter().map(|v| &v.branch_id).eq(event.input_branch_ids.iter()) {return Err(invalid())}
-            Sources::Branches(input.inputs)
-        }
-        "file.history.merge" => {
-            let inputs:Vec<FileHistoryMergeInput> = json_codec::from_value(receipt.result.get("source_inputs").ok_or_else(invalid)?.clone())?;
-            let name=BranchName::parse(field("name")?)?;
-            let location = location(json_codec::from_value(receipt.result.get("location").ok_or_else(invalid)?.clone())?)?;
-            let request = crate::FileHistoryMergeRequest { file_id:&event.file_id, inputs:&inputs,
-                chosen_node_id:&event.chosen_node_id, name:&name, location:location.as_ref(),
-                principal:author, operation_id:event.operation_id };
-            if request.native_digest()? != receipt.request_digest || event.input_branch_ids.first() != Some(&event.surviving_branch_id) {return Err(invalid())}
-            Sources::Historical {inputs,name,location}
-        }
-        _ => return Err(invalid()),
-    };
+    let sources=command_sources(receipt, author, &event.file_id, &event.chosen_node_id, &event.surviving_branch_id)?;
+    match &sources {
+        Sources::Branches(inputs) if !inputs.iter().map(|i| &i.branch_id).eq(event.input_branch_ids.iter()) => return Err(invalid()),
+        Sources::Historical { .. } if event.input_branch_ids.first() != Some(&event.surviving_branch_id) => return Err(invalid()),
+        _ => {}
+    }
     if sources.len() != event.input_node_ids.len() || sources.len()!=event.original_inputs.len() {return Err(invalid())}
     for (n,source) in event.original_inputs.iter().enumerate() {
         let (branch,node)=sources.at(n);
-        let fence=match &sources {
-            Sources::Branches(v)=>&v[n].expected_node_id, Sources::Historical{inputs,..}=>&inputs[n].expected_node_id,
-        };
-        if source.branch_id!=branch || source.source_node_id!=node || &source.expected_node_id!=fence {return Err(invalid())}
+        let fence=sources.expected(n);
+        if source.branch_id!=branch || source.source_node_id!=node || source.expected_node_id!=fence {return Err(invalid())}
         real_body(state,event,fence)?;
     }
     for (n,head) in event.input_node_ids.iter().enumerate() {

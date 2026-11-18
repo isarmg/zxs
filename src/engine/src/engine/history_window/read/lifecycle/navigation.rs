@@ -1,6 +1,6 @@
 //! Exact original relationships within the already captured FILE read scope.
 //! Never substitute the current HEAD, text, a digest or a deletion/merge ID.
-use super::{Event, EventBudget, FileLifecycleRead};
+use super::{Event, EventBudget, FileLifecycleRead, copy_merges::{Budget,Transfer,Witnesses}};
 use crate::{Result, engine::history_window::{nodes,HistoryCancellationCheckpoint}};
 use storage_contract::file_lifecycle::*;
 use storage_contract::FileNodeId;
@@ -35,40 +35,75 @@ impl FileLifecycleRead {
         }
         Ok(References::Complete{links})
     }
-    pub(super) fn merge_events(&self, events:&mut Vec<Event>, budget:&mut EventBudget) -> Result<()> {
-        let mut work=0usize;
+    pub(super) fn merge_events(
+        &self, view:crate::state_projection::lifecycles::LifecycleView<'_>,
+        events:&mut Vec<Event>, budget:&mut EventBudget,
+    ) -> Result<()> {
+        let mut work=Budget::default();
+        let mut transfer=None;
+        let mut witnesses=None;
         for merge in self.source.file_branch_merges.values() {
-            work=work.checked_add(1).filter(|v|*v<=MAX_AUDIT_EVENTS).ok_or_else(|| LifecycleError::Bytes.into_error())?;
+            work.members(1)?;
             self.read.cancellation.checkpoint()?;
             if merge.file_id!=self.scope().file || merge.history_tree_id!=self.scope().history {continue}
-            let Some(original) = self.source.operations.get(&merge.operation_id) else {continue};
-            // A destination copy can legitimately retain the upstream actor/op,
-            // but cannot reissue it as a local native decision or lend its FILE.
-            if !crate::persist::file_adoption::is_kind(&original.kind)
-                || original.result["merge_id"].as_str()!=Some(merge.merge_id.as_str()) {continue}
             if !self.allowed_branch(&merge.surviving_branch_id) {continue}
-            work=work.checked_add(merge.input_node_ids.len()).filter(|v|*v<=MAX_AUDIT_EVENTS).ok_or_else(|| LifecycleError::Bytes.into_error())?;
-            let original_inputs=crate::persist::file_adoption::original(&self.source,original)?;
-            let references = if original_inputs.len()>MAX_LINKS-2
-                || (0..original_inputs.len()).any(|n| !self.allowed_branch(original_inputs.at(n).0)) {
+            work.members(merge.original_inputs.len())?;
+            let original=self.source.operations.get(&merge.operation_id);
+            let native=original.filter(|r| crate::persist::file_adoption::is_kind(&r.kind)
+                && r.result["merge_id"].as_str()==Some(merge.merge_id.as_str()));
+            let exact=if let Some(receipt)=native {
+                work.encoded(&receipt.result)?;
+                // The native verifier checks actual request, actor and all
+                // original source/expected HEADs against *this* FILE graph.
+                crate::persist::file_adoption::original(&self.source,receipt)?;
+                true
+            } else {
+                if transfer.is_none() {
+                    transfer=Some(Transfer::capture(view,self.scope().history,&mut work)?);
+                }
+                let Some(copy)=transfer.as_ref().and_then(Option::as_ref) else {continue};
+                if merge.sequence>copy.cutoff {continue}
+                if witnesses.is_none() {witnesses=Some(Witnesses::capture(self,&mut work)?)}
+                witnesses.as_ref().expect("initialized above").require(self,merge,&mut work)?;
+                merge.original_inputs.len()<=MAX_LINKS-2 && copy.exact(self,merge,original,&mut work)?
+            };
+            let references=if !exact || merge.original_inputs.len()>MAX_LINKS-2 {
                 References::Open{}
             } else {
-                let mut links=Vec::with_capacity(original_inputs.len()+2);
-                for n in 0..original_inputs.len() {
-                    let (branch,id)=original_inputs.at(n);
-                    links.push(NodeLink{role:LinkRole::MergeInput{branch:branch.parse()?},node:self.body_at(id)?});
+                let mut links=Vec::with_capacity(merge.original_inputs.len()+2);
+                let mut authorized=true;
+                for source in &merge.original_inputs {
+                    self.read.cancellation.checkpoint()?;
+                    if !self.allowed_branch(&source.branch_id) {authorized=false;break}
+                    links.push(NodeLink {role:LinkRole::MergeInput {branch:source.branch_id.parse()?},
+                        node:self.body_at(&source.source_node_id)?});
                 }
-                links.push(NodeLink{role:LinkRole::Chosen,node:self.body_at(&merge.chosen_node_id)?});
-                links.push(NodeLink{role:LinkRole::Result,node:self.body_at(&merge.result_node_id)?});
-                if links[..original_inputs.len()].iter().map(|r|(r.role,r.node)).collect::<BTreeSet<_>>().len()!=original_inputs.len() {
+                if !authorized || links.iter().map(|r|(r.role,r.node)).collect::<BTreeSet<_>>().len()!=links.len() {
                     References::Open{}
-                } else { References::Complete{links} }
+                } else {
+                    links.push(NodeLink{role:LinkRole::Chosen,node:self.body_at(&merge.chosen_node_id)?});
+                    links.push(NodeLink{role:LinkRole::Result,node:self.body_at(&merge.result_node_id)?});
+                    References::Complete{links}
+                }
             };
             let event=Event { operation_id:merge.operation_id, sequence:merge.sequence, principal:merge.principal.clone(),
                 references, occurred_at:None, detail:Detail::Merged{merge_id:merge.merge_id.parse()?,survivor:merge.surviving_branch_id.parse()?} };
             budget.admit(&event)?; events.push(event);
         }
         Ok(())
+    }
+
+    fn native_boundary(&self, event: &Event) -> bool {
+        let Some(receipt)=self.source.operations.get(&event.operation_id) else {return false};
+        if receipt.sequence!=event.sequence {return false}
+        match &event.detail {
+            Detail::Import { .. } => false,
+            // The source pool sequence on a copied event is not evidence of
+            // a complete interval in this destination, even with exact links.
+            Detail::Merged { merge_id,.. } => crate::persist::file_adoption::is_kind(&receipt.kind)
+                && receipt.result["merge_id"].as_str()==Some(merge_id.to_string().as_str()),
+            _ => true,
+        }
     }
 
     /// A complete original enumeration is shared by all neighboring boundaries
@@ -125,8 +160,7 @@ impl FileLifecycleRead {
             let Some((mut nodes,_))=candidate else{continue};
             let upper=&events[k+1];
             if section.older.sequence>=section.newer.sequence
-                || [ &events[k], upper ].iter().any(|e| matches!(e.detail,Detail::Import{..})
-                    || !self.source.operations.contains_key(&e.operation_id)) {continue}
+                || [ &events[k], upper ].iter().any(|e| !self.native_boundary(e)) {continue}
             // A native deletion freezes every FILE branch HEAD. Other events
             // (including an undo that cites an earlier tombstone) do not.
             let mut branches=Vec::new();
