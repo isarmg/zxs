@@ -178,6 +178,7 @@ impl ReceiptIndex<'_> {
         self.with_worktree(engine, target, |original, session| {
             let worktree = session.worktree();
             Ok(WorktreeStatus {
+                visible: target.publication,
                 target, original,
                 parent_directory_id: worktree.mount().parent,
                 name: worktree.mount().name.clone(),

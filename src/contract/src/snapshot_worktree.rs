@@ -10,6 +10,7 @@ pub mod outcome;
 pub mod creation;
 pub mod history;
 pub mod instances;
+pub mod mount_change;
 
 use crate::working_tree::{
     DirectoryId, RootId, SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId,
@@ -150,6 +151,8 @@ pub struct SnapshotRootContext {
 #[serialization(deny_unknown_fields)]
 pub struct WorktreeStatus {
     pub target: WorktreeHandle,
+    /// Creation completion or last completed restore request, never the content revision.
+    pub visible: OperationId,
     pub original: SnapshotHandle,
     pub parent_directory_id: DirectoryId,
     pub name: name_policy::LookupName,
