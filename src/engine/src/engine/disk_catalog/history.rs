@@ -182,6 +182,38 @@ impl Changes {
         before: &DiskCatalogSnapshot,
         after: &DiskCatalogSnapshot,
     ) -> Result<()> {
+        visit_changes(before, after, |change| self.push(candidate, hash, change))
+    }
+
+    fn push(
+        &mut self,
+        candidate: &crate::journal::Candidate,
+        hash: &str,
+        change: DiskHistoryChange,
+    ) -> Result<()> {
+        let record = DiskHistoryRecord {
+            sequence: candidate.sequence,
+            operation_id: candidate.operation_id,
+            candidate_hash: hash.into(),
+            snapshot_hash: candidate.snapshot_hash.clone(),
+            change,
+        };
+        let bytes = crate::disk::encode_metadata(&record, MAX_RECORD_BYTES)?.len();
+        if self.rows.len() == MAX_CHANGES || bytes > MAX_RECORD_BYTES - self.bytes {
+            return Err(budget());
+        }
+        self.bytes += bytes;
+        self.rows.push(record);
+        Ok(())
+    }
+}
+
+/// One deterministic source of local changes for already-decided replay and
+/// prospective physical preparation. The delta itself has no enclosing hashes.
+fn visit_changes(
+    before: &DiskCatalogSnapshot, after: &DiskCatalogSnapshot,
+    mut visit: impl FnMut(DiskHistoryChange) -> Result<()>,
+) -> Result<()> {
         let mut directories = BTreeMap::new();
         for row in &before.backup_directories {
             directories.insert(row.key(), (Some(row), None));
@@ -204,7 +236,7 @@ impl Changes {
                 },
                 (None, None) => unreachable!("invariant: every union entry has a local row"),
             };
-            self.push(candidate, hash, change)?;
+            visit(change)?;
         }
         let mut rows = BTreeMap::new();
         for row in &before.versions {
@@ -230,33 +262,11 @@ impl Changes {
                 },
                 (None, None) => unreachable!("invariant: every union entry has a local row"),
             };
-            self.push(candidate, hash, change)?;
+            visit(change)?;
         }
         Ok(())
     }
 
-    fn push(
-        &mut self,
-        candidate: &crate::journal::Candidate,
-        hash: &str,
-        change: DiskHistoryChange,
-    ) -> Result<()> {
-        let record = DiskHistoryRecord {
-            sequence: candidate.sequence,
-            operation_id: candidate.operation_id,
-            candidate_hash: hash.into(),
-            snapshot_hash: candidate.snapshot_hash.clone(),
-            change,
-        };
-        let bytes = crate::disk::encode_metadata(&record, MAX_RECORD_BYTES)?.len();
-        if self.rows.len() == MAX_CHANGES || bytes > MAX_RECORD_BYTES - self.bytes {
-            return Err(budget());
-        }
-        self.bytes += bytes;
-        self.rows.push(record);
-        Ok(())
-    }
-}
 
 impl Engine {
     /// Reconstruct a bounded disk-local history from every published State in

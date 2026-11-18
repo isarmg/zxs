@@ -146,7 +146,17 @@ impl Databases {
                 ));
             }
         }
-        scopes.observe(candidate, hash, admitted, &stop)?;
+        if storage_contract::object_hash("candidate", candidate)? != hash {
+            return Err(invalid("move database preparation lost the original candidate selection"));
+        }
+        let result = admitted.state().operations.get(&candidate.operation_id)
+            .ok_or_else(|| invalid("original move snapshot has no matching request"))?;
+        if result.request_digest != candidate.request_digest || candidate.sequence != result.sequence {
+            return Err(invalid("original move snapshot and request differ"));
+        }
+        let frozen = scopes.freeze_next(
+            &engine.state, admitted.state(), candidate.previous_snapshot.as_deref(), result, &stop,
+        )?;
         let admission = if decided {
             InstallAdmission::DecidedRecovery
         } else {
@@ -154,7 +164,8 @@ impl Databases {
         };
         let mut pairs = Vec::new();
         let mut bytes = 0u64;
-        scopes.finish(admitted, &stop, |identity, current, history| {
+        for pair in frozen {
+            let (identity, current, history) = pair.into_bytes();
             bytes = bytes
                 .checked_add(current.len() as u64 + history.len() as u64)
                 .ok_or_else(limit)?;
@@ -195,8 +206,7 @@ impl Databases {
                 expected,
                 pending,
             });
-            Ok(())
-        })?;
+        }
         Ok(Self { pairs })
     }
     pub(super) fn stage(&mut self, engine: &Engine) -> Result<()> {

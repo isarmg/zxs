@@ -22,7 +22,7 @@ pub(in crate::engine) use move_draft::{
 mod history;
 mod maintenance;
 pub(in crate::engine) mod root_install;
-pub(in crate::engine) use history::preparation::PreparedDiskScopes;
+pub(in crate::engine) use history::preparation::{FrozenDiskPair, PreparedDiskScopes};
 pub use history::{
     DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRebuildSource,
     DiskDatabaseReconstruction, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,

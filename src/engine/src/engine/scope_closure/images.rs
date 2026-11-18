@@ -129,6 +129,8 @@ impl PreparedImage {
         }
     }
 
+    pub(in crate::engine) fn into_bytes(self) -> Vec<u8> { self.bytes }
+
     pub(in crate::engine) fn bytes(&self) -> usize {
         self.bytes.len()
     }

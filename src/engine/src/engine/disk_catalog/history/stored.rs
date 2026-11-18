@@ -11,7 +11,7 @@ pub(in crate::engine) enum Predecessor {
     Snapshot { snapshot_hash: MaterialCommitment },
 }
 
-fn commitment(value: &str) -> Result<MaterialCommitment> {
+pub(super) fn commitment(value: &str) -> Result<MaterialCommitment> {
     let hash = value.parse::<storage_contract::ContentHash>()
         .map_err(|_| invalid("invalid canonical publication commitment in DISK history"))?;
     Ok(MaterialCommitment::from_digest(hash.digest()))

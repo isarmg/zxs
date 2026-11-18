@@ -170,3 +170,46 @@ fn physical_history_carries_original_request_not_its_own_enclosing_hashes() {
         Ok(())
     }).unwrap();
 }
+
+#[test]
+fn original_prefix_freezes_identical_complete_history_before_current_hashes_are_known() {
+    let fixture = Fixture::new();
+    let stop = AtomicBool::new(false);
+    let mut open = Some(PreparedDiskScopes::new(&fixture.engine.config).unwrap());
+    let mut prior = crate::engine::scope_closure::initial_state();
+    let mut actual = None;
+    crate::engine::disk_catalog::visit_published_prefix(
+        &fixture.engine, fixture.engine.state().sequence, &|| Ok(()), |source| {
+            let candidate = source.candidate();
+            if candidate.sequence == fixture.engine.state().sequence {
+                let next = source.admitted().state();
+                let result = &next.operations[&candidate.operation_id];
+                let mut frozen = open.take().unwrap().freeze_next(
+                    &prior, next, candidate.previous_snapshot.as_deref(), result, &stop,
+                )?;
+                assert_eq!(frozen.len(), 1);
+                let pair = frozen.pop().unwrap();
+                let disk = fixture.engine.disk(&pair.registration.slot_id)?;
+                let root = &fixture.engine.disk_resources.get(disk)?.root;
+                let before = pair.history();
+                pair.install_at(root)?;
+                before.1.verify(root, crate::engine::scope_closure::Schema::DiskHistory, MAX_DATABASE_BYTES, |bytes| {
+                    let actual = database::read(bytes, &pair.registration)?;
+                    assert_eq!(actual.logical_root()?, before.0);
+                    Ok(())
+                })?;
+                actual = Some(pair.into_bytes());
+            } else {
+                open.as_mut().unwrap().observe_published(&source, &stop)?;
+                prior = source.admitted().state().clone();
+            }
+            Ok(())
+        }
+    ).unwrap();
+    let (_, expected_current, expected_history) = actual.unwrap();
+    fixture.scopes().finish(&fixture.admitted, &stop, |_, current, history| {
+        assert_eq!(current, expected_current);
+        assert_eq!(history, expected_history);
+        Ok(())
+    }).unwrap();
+}

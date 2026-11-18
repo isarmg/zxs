@@ -6,6 +6,8 @@ use crate::journal::Candidate;
 use std::sync::atomic::AtomicBool;
 
 mod backup;
+mod prospective;
+pub(in crate::engine) use prospective::FrozenDiskPair;
 
 const MAX_DISKS: usize = 32;
 const MAX_SET_BYTES: usize = 64 * 1024 * 1024;
