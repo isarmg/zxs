@@ -390,7 +390,8 @@ impl Fixture {
             .insert(id("ver", 2), vec![id("fmeta", 3)]);
         for number in [2, 1] {
             let event = FileBranchMerge {
-                merge_id: id("fmerge", number),
+                principal: "admin".parse().unwrap(),
+            merge_id: id("fmerge", number),
                 history_tree_id: h1.clone(),
                 file_id: file.clone(),
                 input_branch_ids: vec![id("br", 2), id("br", 3)],
@@ -581,13 +582,7 @@ fn empty_history_descriptor_preserves_file_global_relations_without_local_rows()
     let history = id("history", 2);
     let transition = ProjectionTransition::new(state, state, None).unwrap();
     let mut description = projection::FileDescription::new(transition.next(), &fixture.file);
-    let mut nodes = crate::business::file_nodes::NodeProjection::from_merge_events(
-        state,
-        state
-            .file_branch_merges
-            .values()
-            .filter(|event| event.file_id == fixture.file),
-    );
+    let mut nodes = crate::business::file_nodes::NodeProjection::new(state);
     let actual = description.encode_history(&history, state, &mut nodes).unwrap();
     let expected: Value = json_codec::from_slice(&full_descriptor(
         state,

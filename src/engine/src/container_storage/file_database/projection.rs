@@ -68,13 +68,7 @@ fn with_events(
     let state = view.state();
     let memberships = view.owners().file_rows(file);
     let mut rows = SCHEMA.records();
-    let mut nodes = file_nodes::NodeProjection::from_merge_events(
-        state,
-        memberships
-            .into_iter()
-            .flat_map(|rows| rows.merges.keys())
-            .map(|id| &state.file_branch_merges[id]),
-    );
+    let mut nodes = file_nodes::NodeProjection::new(state);
     rows.add(
         "file",
         file,

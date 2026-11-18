@@ -379,10 +379,8 @@ impl<'a> Query<'a> {
                     && nodes::node(self.state, self.scope(), node).is_some(),
             );
         }
-        let mut parents = 0usize;
-        for parent in &merge.parent_node_ids {
-            self.cancel.checkpoint()?;
-            parents += usize::from(nodes::node(self.state, self.scope(), parent).is_some());
+        if !merge.is_existing_adoption() {
+            return Err(crate::Error::new(storage_contract::ErrorCode::StateInvalid, "invalid FILE adoption fact"));
         }
         Ok(HistoryMergeSummary {
             merge_id: HistoryMergeId::parse(&merge.merge_id)?,
@@ -393,7 +391,7 @@ impl<'a> Query<'a> {
             reused_node: merge.reused_node,
             operation_id: merge.operation_id,
             input_count: u64::try_from(inputs).map_err(Error::IntegerRange)?,
-            parent_count: u64::try_from(parents).map_err(Error::IntegerRange)?,
+            parent_count: 0,
         })
     }
 

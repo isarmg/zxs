@@ -420,42 +420,16 @@ impl<'a> ParentPreviews<'a> {
 }
 
 fn capture_parent_previews(
-    reader: &ScopeReader<'_, '_>,
+    _reader: &ScopeReader<'_, '_>,
     query: &Query<'_>,
     selected: &[NodePick],
 ) -> Result<Vec<Captured<String>>> {
     let mut previews = ParentPreviews::new(selected.len());
-    let positions = selected
-        .iter()
-        .enumerate()
-        .map(|(index, pick)| (pick.id.as_str(), index))
-        .collect::<BTreeMap<_, _>>();
     for (index, pick) in selected.iter().enumerate() {
-        for parent in nodes::base_parents(query.state, &pick.id) {
-            query.cancel.checkpoint()?;
-            if nodes::node(query.state, query.scope(), parent).is_some() {
-                previews.offer(index, parent);
-            }
-        }
-    }
-    if !selected.is_empty() {
-        // Consume the entire authenticated stream even when every preview is
-        // full. Only the selected page's node IDs and <=256 parents are retained.
-        for merge in reader.merges() {
-            query.cancel.checkpoint()?;
-            let merge = merge?;
-            let Some(&index) = positions.get(merge.result_node_id.as_str()) else {
-                continue;
-            };
-            for parent in &merge.parent_node_ids {
-                query.cancel.checkpoint()?;
-                if parent != &merge.result_node_id
-                    && nodes::node(query.state, query.scope(), parent).is_some()
-                {
-                    previews.offer(index, parent);
-                }
-            }
-        }
+        nodes::visit_parents(query.state, query.scope(), &pick.id, query.cancel, |parent| {
+            previews.offer(index, parent);
+            Ok(())
+        })?;
     }
     Ok(previews.finish())
 }

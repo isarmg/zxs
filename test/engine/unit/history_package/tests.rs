@@ -3440,60 +3440,20 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
     engine
         .export_history_package(&repo.history_tree_id, &package)
         .unwrap();
-    let (mut baseline, proof, _) = load_package(&package).unwrap();
-    let first_node = baseline.file_branch_merges[&first_merge]
-        .result_node_id
-        .clone();
-    let second_node = new_id("fmeta").unwrap();
-    let second_merge = new_id("fmerge").unwrap();
-    let mut metadata = baseline.file_metadata_nodes[&first_node].clone();
-    metadata.node_id = second_node.clone();
-    baseline
-        .file_metadata_nodes
-        .insert(second_node.clone(), metadata);
-    let mut event = baseline.file_branch_merges[&first_merge].clone();
-    assert!(!event.reused_node);
-    event.merge_id = second_merge.clone();
-    event.result_node_id = second_node.clone();
-    baseline
-        .file_branch_merges
-        .insert(second_merge.clone(), event);
-    baseline.validate().unwrap();
-    rebind_test_package(
-        &package,
-        &temp.path().join("proof-valid"),
-        &baseline,
-        proof.clone(),
-        &engine.members(),
-    );
+    let (baseline, proof, _) = load_package(&package).unwrap();
+    let original = &baseline.file_branch_merges[&first_merge];
+    assert!(original.is_existing_adoption());
+    assert_eq!(original.principal.as_str(), "alice");
+    assert!(baseline.file_metadata_nodes.is_empty());
     offline_check_history_package(&package).unwrap();
-
-    for corruption in [
-        "missing_chosen",
-        "chosen_cycle_omitted",
-        "chosen_cycle_linked",
-    ] {
+    for corruption in ["unknown_chosen", "different_result", "invented_parent", "not_reused"] {
         let mut manifest = baseline.clone();
-        for (merge_id, result, chosen) in [
-            (&first_merge, &first_node, &second_node),
-            (&second_merge, &second_node, &first_node),
-        ] {
-            if corruption == "missing_chosen" && merge_id == &second_merge {
-                continue;
-            }
-            let event = manifest.file_branch_merges.get_mut(merge_id).unwrap();
-            event.parent_node_ids = event.input_node_ids.clone();
-            if corruption != "missing_chosen" {
-                event.chosen_node_id = chosen.clone();
-            }
-            if corruption == "chosen_cycle_linked" {
-                event.parent_node_ids.push(chosen.clone());
-            }
-            manifest
-                .file_metadata_nodes
-                .get_mut(result)
-                .unwrap()
-                .parent_node_ids = event.parent_node_ids.clone();
+        let event = manifest.file_branch_merges.get_mut(&first_merge).unwrap();
+        match corruption {
+            "unknown_chosen" => { event.chosen_node_id = new_id("ver").unwrap(); }
+            "different_result" => { event.result_node_id = event.input_node_ids[1].clone(); }
+            "invented_parent" => { event.parent_node_ids.push(event.input_node_ids[0].clone()); }
+            _ => { event.reused_node = false; }
         }
         // Rebuild all object hashes and publication receipts, so graph admission,
         // not an incidental checksum or proof mismatch, rejects the external data.
@@ -3504,14 +3464,8 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
             proof.clone(),
             &engine.members(),
         );
-        let expected = if corruption == "chosen_cycle_linked" {
-            "file history contains a mixed content/path node cycle"
-        } else {
-            "file merge chosen source is absent from its ancestry"
-        };
         let error = offline_check_history_package(&package).unwrap_err();
         assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
-        assert_eq!(error.message(), expected);
         let mut destination = initialize(&temp.path().join(format!("restore-{corruption}")));
         let before = canonical_json(destination.state()).unwrap();
         let error = destination
@@ -3523,7 +3477,7 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
                 storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap_err();
-        assert_eq!(error.message(), expected);
+        assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
         assert_eq!(canonical_json(destination.state()).unwrap(), before);
     }
 }

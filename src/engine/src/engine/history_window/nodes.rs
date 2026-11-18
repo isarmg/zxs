@@ -341,28 +341,6 @@ pub(super) fn visit_parents<'a>(
     scope: Scope<'_>,
     id: &str,
     cancel: &HistoryWindowCancellation,
-    visit: impl FnMut(&'a str) -> Result<()>,
-) -> Result<()> {
-    visit_parents_from(
-        state,
-        scope,
-        id,
-        cancel,
-        state.file_branch_merges.values().map(|merge| {
-            #[cfg(test)]
-            PARENT_MERGE_HEADERS.with(|count| count.set(count.get() + 1));
-            Ok(merge)
-        }),
-        visit,
-    )
-}
-
-pub(super) fn visit_parents_from<'a>(
-    state: &'a State,
-    scope: Scope<'_>,
-    id: &str,
-    cancel: &HistoryWindowCancellation,
-    merges: impl Iterator<Item = Result<&'a crate::FileBranchMerge>>,
     mut visit: impl FnMut(&'a str) -> Result<()>,
 ) -> Result<()> {
     let mut remaining = 1_048_576usize;
@@ -382,21 +360,6 @@ pub(super) fn visit_parents_from<'a>(
         cancel.checkpoint()?;
         if node(state, scope, parent).is_some() {
             visit(parent)?;
-        }
-    }
-    for merge in merges {
-        let merge = merge?;
-        cancel.checkpoint()?;
-        if merge.file_id == scope.file
-            && merge.history_tree_id == scope.history
-            && merge.result_node_id == id
-        {
-            for parent in &merge.parent_node_ids {
-                cancel.checkpoint()?;
-                if parent != id && node(state, scope, parent).is_some() {
-                    visit(parent)?;
-                }
-            }
         }
     }
     Ok(())

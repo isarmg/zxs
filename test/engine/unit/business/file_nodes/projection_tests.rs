@@ -43,6 +43,7 @@ fn merge(state: &mut State, id: &str, result: &str, parents: &[&str]) {
     state.file_branch_merges.insert(
         id.into(),
         FileBranchMerge {
+            principal: "admin".parse().unwrap(),
             merge_id: id.into(),
             history_tree_id: "history".into(),
             file_id: "file".into(),
@@ -348,7 +349,7 @@ fn batch_matches_public_single_node_results_including_partial_errors_and_scope()
 }
 
 #[test]
-fn batch_consumes_merge_iterator_once_and_does_not_cache_across_requests() {
+fn batch_ancestry_ignores_even_mutated_merge_event_edges() {
     const NODES: usize = 1024;
     const MERGES: usize = 257;
     let mut state = State::default();
@@ -382,18 +383,11 @@ fn batch_consumes_merge_iterator_once_and_does_not_cache_across_requests() {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        // Observe the existing iterator boundary, not a test-only business hook.
-        let visits = std::cell::Cell::new(0);
-        let events = engine.state.file_branch_merges.values().inspect(|_| {
-            visits.set(visits.get() + 1);
-        });
-        let mut projection = NodeProjection::from_merge_events(&engine.state, events);
-        assert_eq!(visits.get(), MERGES);
+        let mut projection = NodeProjection::new(&engine.state);
         let actual = projection.summaries(FileNodeProjectionRequest {
             file_id: "file",
             node_ids: &ids,
         });
-        assert_eq!(visits.get(), MERGES);
         let public = engine.project_file_nodes(FileNodeProjectionRequest {
             file_id: "file",
             node_ids: &ids,
@@ -414,6 +408,6 @@ fn batch_consumes_merge_iterator_once_and_does_not_cache_across_requests() {
     });
     assert_eq!(
         fresh["1023"].as_ref().unwrap().parent_node_ids,
-        ["1022", "0", "body"]
+        ["1022"]
     );
 }

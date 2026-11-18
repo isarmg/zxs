@@ -126,9 +126,9 @@ fn disk_exit_history_merge_uses_readable_old_nodes_of_hidden_source_head_and_res
     )
     .unwrap();
     let result_branch = result.branch_id.clone().unwrap();
-    assert_eq!(result.result["reused_node"], false);
+    assert_eq!(result.result["reused_node"], true);
     assert_eq!(result.result["directory_branch_ids"], json_codec::json!([]));
-    assert_ne!(result.result["node_id"], inputs[1].source_node_id);
+    assert_eq!(result.result["node_id"], inputs[1].source_node_id);
     assert_eq!(result.result["version_id"], inputs[1].source_node_id);
     for (id, branch) in &previous.branches {
         assert_eq!(fixture.engine.state.branches.get(id), Some(branch));

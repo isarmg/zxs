@@ -768,7 +768,8 @@ fn every_state_field_rejects_an_unplanned_change_in_live_and_cold_backup_publica
             state.file_branch_merges.insert(
                 "unexpected".into(),
                 FileBranchMerge {
-                    merge_id: "unexpected".into(),
+                    principal: "admin".parse().unwrap(),
+            merge_id: "unexpected".into(),
                     history_tree_id: history.clone(),
                     file_id: file.clone(),
                     input_branch_ids: vec![branch.clone()],

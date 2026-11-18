@@ -359,7 +359,7 @@ fn disk_exit_current_file_create_select_default_merge_and_restart_preserve_histo
     };
     let result = merge(&mut fixture.engine).unwrap();
     assert_eq!(result.result["version_id"], fixture.first.version_id);
-    assert_eq!(result.result["reused_node"], false);
+    assert_eq!(result.result["reused_node"], true);
     assert!(
         result.result["directory_branch_ids"]
             .as_array()

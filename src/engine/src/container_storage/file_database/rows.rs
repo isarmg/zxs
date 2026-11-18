@@ -216,15 +216,7 @@ impl<'a> Validation<'a> {
                 // authoritative projection verifies that provenance separately.
                 (row.file_id.to_string(), row.event_id.to_string())
             }
-            "metadata" => {
-                let row: MetadataRow = decode_local(body.as_bytes())?;
-                self.node(
-                    &row.node.node_id,
-                    &row.node.history_tree_id,
-                    row.node.sequence,
-                )?;
-                (row.node.file_id, row.node.node_id)
-            }
+            "metadata" => return Err(super::invalid("a FILE merge cannot mint a metadata node")),
             "deletion" => {
                 let row: DeletionRow = decode_local(body.as_bytes())?;
                 validate_deletion(&row)?;
@@ -252,6 +244,9 @@ impl<'a> Validation<'a> {
             }
             "merge" => {
                 let row: FileBranchMerge = decode_local(body.as_bytes())?;
+                if !row.is_existing_adoption() {
+                    return Err(super::invalid("FILE merge contains a fabricated result or ancestry"));
+                }
                 self.scope(&row.history_tree_id)?;
                 self.sequence(row.sequence)?;
                 (row.file_id, row.merge_id)

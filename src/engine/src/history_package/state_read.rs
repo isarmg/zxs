@@ -176,6 +176,11 @@ pub(crate) fn validate(state: &State) -> Result<()> {
 }
 
 fn validate_with(state: &State, ledger: impl FnOnce(&State) -> Result<()>) -> Result<()> {
+    if !state.file_metadata_nodes.is_empty()
+        || state.file_branch_merges.values().any(|event| !event.is_existing_adoption())
+    {
+        return Err(crate::business::file_tags::invalid());
+    }
     if !state.file_path_nodes.is_empty() {
         return Err(crate::persist::path_changes::invalid());
     }

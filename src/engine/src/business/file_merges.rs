@@ -5,24 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy)]
 pub(super) enum MergeResultPolicy<'a> {
-    ReuseChosenInput,
-    AlwaysNewNode {
+    ExplicitBranches,
+    HistoricalSources {
         current_inputs: Option<&'a super::file_history_merges::CurrentHistoryMergeInputs>,
     },
-}
-
-fn reaches(state: &State, start: &str, needle: &str) -> bool {
-    let mut queue = vec![start.to_owned()];
-    let mut seen = BTreeSet::new();
-    while let Some(node) = queue.pop() {
-        if node == needle {
-            return true;
-        }
-        if seen.insert(node.clone()) {
-            queue.extend(super::file_nodes::node_parents(state, &node));
-        }
-    }
-    false
 }
 
 fn advance_current_merge_branch(
@@ -401,7 +387,10 @@ impl Engine {
             request.operation_id,
             body,
             |engine, state, _| {
-                merge_change(engine, state, request, MergeResultPolicy::ReuseChosenInput)
+                let original = request.body();
+                let mut result = merge_change(engine, state, request, MergeResultPolicy::ExplicitBranches)?;
+                result["merge_request"] = original;
+                Ok(result)
             },
         )
     }
@@ -433,8 +422,8 @@ pub(super) fn merge_change(
     let body = state.versions[&version].clone();
     let repository = engine.repository_for_history(&body.history_tree_id)?;
     let historical_inputs = match policy {
-        MergeResultPolicy::AlwaysNewNode { current_inputs, .. } => current_inputs,
-        MergeResultPolicy::ReuseChosenInput => None,
+        MergeResultPolicy::HistoricalSources { current_inputs, .. } => current_inputs,
+        MergeResultPolicy::ExplicitBranches => None,
     };
     let branches = inputs
         .iter()
@@ -539,41 +528,9 @@ pub(super) fn merge_change(
     // A merge adopts real bytes, including when the chosen node is historical.
     // Replica admission excludes retired resources before any target access.
     engine.valid_replica(&version)?;
-    let reused = matches!(policy, MergeResultPolicy::ReuseChosenInput)
-        && heads.iter().any(|head| head == chosen_node);
-    let mut parents = heads.iter().cloned().collect::<BTreeSet<_>>();
-    parents.insert(chosen_node.into());
-    let result = if reused {
-        chosen_node.to_owned()
-    } else {
-        new_id("fmeta")?
-    };
-    let edges = if reused {
-        parents
-            .into_iter()
-            .filter(|parent| parent != &result && !reaches(state, parent, &result))
-            .collect::<Vec<_>>()
-    } else {
-        parents.into_iter().collect::<Vec<_>>()
-    };
-    if !reused {
-        state.file_metadata_nodes.insert(
-            result.clone(),
-            FileMetadataNode {
-                node_id: result.clone(),
-                history_tree_id: body.history_tree_id.clone(),
-                file_id: file.into(),
-                version_id: version.clone(),
-                parent_node_ids: edges.clone(),
-                branch_id: survivor.into(),
-                kind: FileMetadataKind::Merge,
-                operation_id: operation,
-                author: principal.into(),
-                sequence: state.sequence,
-                created_at: now()?,
-            },
-        );
-    }
+    // Selection republishes branch visibility; it does not create content or
+    // append parents to any previously published node.
+    let result = chosen_node.to_owned();
     let merge_id = new_id("fmerge")?;
     state.file_branch_merges.insert(
         merge_id.clone(),
@@ -586,8 +543,9 @@ pub(super) fn merge_change(
             chosen_node_id: chosen_node.into(),
             result_node_id: result.clone(),
             surviving_branch_id: survivor.into(),
-            reused_node: reused,
-            parent_node_ids: edges,
+            reused_node: true,
+            parent_node_ids: Vec::new(),
+            principal: principal.parse().map_err(|_| super::file_tags::invalid())?,
             operation_id: operation,
             sequence: state.sequence,
         },
@@ -648,7 +606,7 @@ pub(super) fn merge_change(
     Ok(
         json!({"file_id":file,"merge_id":merge_id,"history_tree_id":body.history_tree_id,
                     "branch_id":survivor,"surviving_branch_id":survivor,"node_id":result,"version_id":version,
-                    "chosen_node_id":chosen_node,"reused_node":reused,"directory_branch_ids":affected,
+                    "chosen_node_id":chosen_node,"reused_node":true,"directory_branch_ids":affected,
                     "merged_branch_ids":branches.into_iter().filter(|branch|branch!=survivor).collect::<Vec<_>>()}),
     )
 }

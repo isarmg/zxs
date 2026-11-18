@@ -229,7 +229,8 @@ pub(super) fn fixture() -> MetadataView {
         state.file_branch_merges.insert(
             id("fmerge", n),
             FileBranchMerge {
-                merge_id: id("fmerge", n),
+                principal: "admin".parse().unwrap(),
+            merge_id: id("fmerge", n),
                 history_tree_id: HISTORY.into(),
                 file_id: FILE.into(),
                 input_branch_ids: (0..19).map(|index| id("br", index)).collect(),

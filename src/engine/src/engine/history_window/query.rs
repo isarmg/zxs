@@ -638,16 +638,10 @@ impl<'a> Query<'a> {
 
     fn merge_parent_page(&self, id: &str) -> Result<HistoryWindowPage> {
         let merge = self.merge(id)?;
-        let mut selector = Selector::new(self.member_position()?, self.request.limit.get())?;
-        for (ordinal, parent) in merge.parent_node_ids.iter().enumerate() {
-            self.cancel.checkpoint()?;
-            if nodes::node(self.state, self.scope(), parent).is_some() {
-                selector.offer(
-                    u64::try_from(ordinal).map_err(Error::IntegerRange)?,
-                    parent.as_str(),
-                );
-            }
+        if !merge.is_existing_adoption() {
+            return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "invalid FILE adoption fact"));
         }
+        let selector = Selector::<u64, &str>::new(self.member_position()?, self.request.limit.get())?;
         let selection = selector.finish()?;
         let page = self.member_cursors(&selection)?;
         let parents = selection

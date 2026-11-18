@@ -80,19 +80,7 @@ pub(crate) fn base_parents(state: &State, node: &str) -> Vec<String> {
 }
 
 pub(crate) fn node_parents(state: &State, node: &str) -> Vec<String> {
-    let mut parents = base_parents(state, node);
-    for event in state
-        .file_branch_merges
-        .values()
-        .filter(|m| m.result_node_id == node)
-    {
-        for parent in &event.parent_node_ids {
-            if parent != node && !parents.contains(parent) {
-                parents.push(parent.clone());
-            }
-        }
-    }
-    parents
+    base_parents(state, node)
 }
 
 fn display_parents(state: &State, parents: &[String]) -> Result<Vec<String>> {
@@ -139,44 +127,15 @@ pub(crate) fn belongs_to_branch(state: &State, branch: &str, head: &str, source:
 /// merge provenance from a later publication must never enter this projection.
 pub(crate) struct NodeProjection<'a> {
     state: &'a State,
-    merges: std::collections::BTreeMap<&'a str, Vec<&'a FileBranchMerge>>,
 }
 
 impl<'a> NodeProjection<'a> {
     pub(crate) fn new(state: &'a State) -> Self {
-        Self::from_merge_events(state, state.file_branch_merges.values())
-    }
-
-    pub(crate) fn from_merge_events(
-        state: &'a State,
-        events: impl IntoIterator<Item = &'a FileBranchMerge>,
-    ) -> Self {
-        let mut merges = std::collections::BTreeMap::<_, Vec<_>>::new();
-        // Preserve the original map iteration order within each result node.
-        for event in events {
-            merges
-                .entry(event.result_node_id.as_str())
-                .or_default()
-                .push(event);
-        }
-        Self {
-            state,
-            merges,
-        }
+        Self { state }
     }
 
     pub(crate) fn parents(&self, node: &str) -> Vec<String> {
-        let mut parents = base_parents(self.state, node);
-        if let Some(events) = self.merges.get(node) {
-            for event in events {
-                for parent in &event.parent_node_ids {
-                    if parent != node && !parents.contains(parent) {
-                        parents.push(parent.clone());
-                    }
-                }
-            }
-        }
-        parents
+        base_parents(self.state, node)
     }
 
     fn summaries(
@@ -258,8 +217,8 @@ impl MetadataView {
 
 impl Engine {
     /// Project requested nodes against this immutable state in one batch.
-    /// Merge events are scanned once globally, while first-parent tag prefixes
-    /// are shared within this call. The result preserves per-node lookup errors;
+    /// An independent merge decision never contributes immutable content edges.
+    /// The result preserves per-node lookup errors;
     /// one invalid node does not suppress other rows. Nothing is retained across
     /// calls or publications, and this does not paginate or validate the graph.
     pub fn project_file_nodes(

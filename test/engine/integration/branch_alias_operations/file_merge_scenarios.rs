@@ -41,7 +41,7 @@ fn inputs(pool: &Pool, branches: &[&str]) -> Vec<FileMergeInput> {
 }
 
 #[test]
-fn adopting_an_arbitrary_third_node_creates_one_metadata_node_and_only_participating_views_advance()
+fn adopting_a_third_body_records_an_independent_fact_and_only_participating_views_advance()
 {
     let mut p = Pool::new();
     p.save("docs/report.txt", b"base");
@@ -64,6 +64,7 @@ fn adopting_an_arbitrary_third_node_creates_one_metadata_node_and_only_participa
     let involved = p.register("docs", "involved");
     let old_involved = p.branch(&involved).head_tree_id;
     let versions = p.engine.state().versions.len();
+    let parents = p.engine.file_node_parents(&base.file_id, &chosen).unwrap();
     let request = inputs(&p, &[&left, &right]);
     let operation = storage_contract::OperationId::generate().unwrap();
     let receipt = p
@@ -79,18 +80,16 @@ fn adopting_an_arbitrary_third_node_creates_one_metadata_node_and_only_participa
         })
         .unwrap();
     let node = receipt.result["node_id"].as_str().unwrap().to_owned();
-    assert!(node.starts_with("fmeta_"));
+    assert_eq!(node, chosen);
+    assert_eq!(receipt.result["reused_node"], true);
     assert_eq!(p.engine.state().versions.len(), versions);
-    let metadata = &p.engine.state().file_metadata_nodes[&node];
-    assert_eq!(metadata.kind, storage_contract::FileMetadataKind::Merge);
-    assert_eq!(metadata.version_id, chosen);
-    assert_eq!(
-        metadata
-            .parent_node_ids
-            .iter()
-            .collect::<std::collections::BTreeSet<_>>(),
-        [&left_node, &right_node, &chosen].into_iter().collect()
-    );
+    assert!(p.engine.state().file_metadata_nodes.is_empty());
+    assert_eq!(p.engine.file_node_parents(&base.file_id, &node).unwrap(), parents);
+    let event = &p.engine.state().file_branch_merges[receipt.result["merge_id"].as_str().unwrap()];
+    assert!(event.is_existing_adoption());
+    assert_eq!(event.operation_id, operation);
+    assert_eq!(event.principal.as_str(), "admin");
+    assert_eq!(event.input_node_ids, [left_node, right_node.clone()]);
     assert_ne!(p.branch(&involved).head_tree_id, old_involved);
     assert_eq!(p.entry(&involved, "docs/report.txt").version_id, chosen);
     assert_eq!(p.branch(&frozen).head_tree_id, frozen_tree);

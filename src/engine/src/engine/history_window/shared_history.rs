@@ -205,7 +205,7 @@ fn metadata_events(
     Ok(())
 }
 
-fn ancestry(state: &State, history: &str, events: &mut Events, scan: &mut Scan<'_>) -> Result<()> {
+fn ancestry(state: &State, _history: &str, events: &mut Events, scan: &mut Scan<'_>) -> Result<()> {
     let ids = events.nodes.keys().cloned().collect::<Vec<_>>();
     for id in &ids {
         scan.record()?;
@@ -214,14 +214,6 @@ fn ancestry(state: &State, history: &str, events: &mut Events, scan: &mut Scan<'
             crate::node_retirement_engine::live_parents(state, parents, || scan.record())?;
         for parent in parents {
             events.parent(id, parent, scan)?;
-        }
-    }
-    for merge in state.file_branch_merges.values() {
-        scan.record()?;
-        if merge.history_tree_id == history && events.nodes.contains_key(&merge.result_node_id) {
-            for parent in &merge.parent_node_ids {
-                events.parent(&merge.result_node_id, parent, scan)?;
-            }
         }
     }
     Ok(())

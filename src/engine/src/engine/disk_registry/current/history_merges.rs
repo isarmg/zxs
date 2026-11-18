@@ -3,7 +3,7 @@
 //! receipt and immutable merge graph, not a temporary allowlist or global ID.
 use super::*;
 use crate::{
-    Branch, FileBranchMerge, FileHistoryMergeRequest, FileMetadataKind, FileMetadataNode,
+    Branch, FileBranchMerge, FileHistoryMergeRequest,
     OperationResult,
 };
 use data_serialization::Deserialize;
@@ -85,7 +85,7 @@ fn result_matches(receipt: &OperationResult, event: &FileBranchMerge, version: &
     fields
         .iter()
         .all(|(key, value)| receipt.result[*key].as_str() == Some(*value))
-        && receipt.result["reused_node"].as_bool() == Some(false)
+        && receipt.result["reused_node"].as_bool() == Some(true)
         && receipt.result["directory_branch_ids"]
             .as_array()
             .is_some_and(Vec::is_empty)
@@ -133,7 +133,7 @@ struct VerifiedHistoryMerge<'a> {
     previous: &'a State,
     next: &'a State,
     event: &'a FileBranchMerge,
-    node: &'a FileMetadataNode,
+    chosen_version: String,
     input: ReceiptInput,
     versions: Vec<String>,
 }
@@ -181,36 +181,11 @@ impl<'a> VerifiedHistoryMerge<'a> {
                     .map(|source| source.source_node_id.clone())
                     .collect::<Vec<_>>()
             || event.input_branch_ids.first() != Some(&event.surviving_branch_id)
-            || event.reused_node
-            || previous
-                .file_metadata_nodes
-                .contains_key(&event.result_node_id)
-        {
-            return Err(invalid());
-        }
-        let node = next
-            .file_metadata_nodes
-            .get(&event.result_node_id)
-            .ok_or_else(invalid)?;
-        let parents = event
-            .input_node_ids
-            .iter()
-            .chain(std::iter::once(&event.chosen_node_id))
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        if node.node_id != event.result_node_id
-            || node.file_id != event.file_id
-            || node.history_tree_id != event.history_tree_id
-            || node.branch_id != event.surviving_branch_id
-            || node.version_id != version
-            || node.kind != FileMetadataKind::Merge
-            || node.operation_id != event.operation_id
-            || node.author != *principal
-            || node.sequence != next.sequence
-            || node.parent_node_ids != parents
-            || event.parent_node_ids != parents
+            || !event.is_existing_adoption()
+            || event.principal.as_str() != principal
+            || next.file_metadata_nodes != previous.file_metadata_nodes
+            || next.file_node_parents != previous.file_node_parents
+            || next.versions != previous.versions
         {
             return Err(invalid());
         }
@@ -229,7 +204,7 @@ impl<'a> VerifiedHistoryMerge<'a> {
             previous,
             next,
             event,
-            node,
+            chosen_version: version,
             input,
             versions: prepared.versions,
         })
@@ -244,7 +219,7 @@ impl<'a> VerifiedHistoryMerge<'a> {
             previous,
             next,
             event,
-            node: _,
+            chosen_version: _,
             input,
             versions,
         } = self;
@@ -300,7 +275,7 @@ impl<'a> VerifiedHistoryMerge<'a> {
             previous,
             next,
             event,
-            node,
+            chosen_version,
             ..
         } = self;
         if previous.branches.contains_key(&branch.branch_id)
@@ -320,11 +295,11 @@ impl<'a> VerifiedHistoryMerge<'a> {
                 return Err(invalid());
             };
             if branch.state != BranchState::Active
-                || branch.file_node_id.as_deref() != Some(node.node_id.as_str())
+                || branch.file_node_id.as_deref() != Some(event.chosen_node_id.as_str())
                 || !branch.pending_file_versions.is_empty()
                 || next.file_branch_aliases.contains_key(&branch.branch_id)
                 || head.kind != "file_metadata"
-                || head.provenance.as_deref() != Some(node.node_id.as_str())
+                || head.provenance.as_deref() != Some(event.chosen_node_id.as_str())
                 || !head.pending_file_versions.is_empty()
                 || head.namespace_deletions.is_some()
             {
@@ -345,7 +320,7 @@ impl<'a> VerifiedHistoryMerge<'a> {
             if previous.commits.contains_key(&commit.commit_id)
                 || commit.history_tree_id != event.history_tree_id
                 || commit.operation_id != event.operation_id
-                || commit.author != node.author
+                || commit.author != event.principal.as_str()
                 || commit.sequence != next.sequence
             {
                 return Err(invalid());
@@ -370,13 +345,13 @@ impl<'a> VerifiedHistoryMerge<'a> {
             return Err(invalid());
         }
         if survivor {
-            let size = next.versions[&node.version_id].logical_size;
+            let size = next.versions[chosen_version].logical_size;
             let mut expected = pending.entries.clone();
             for entry in expected
                 .iter_mut()
                 .filter(|entry| entry.kind == NamespaceEntryKind::File)
             {
-                entry.version_id = node.version_id.clone();
+                entry.version_id = chosen_version.clone();
                 entry.size = size;
             }
             if head.entries != expected {

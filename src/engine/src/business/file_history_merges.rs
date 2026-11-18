@@ -260,7 +260,7 @@ impl Engine {
                         principal: request.principal,
                         operation_id: request.operation_id,
                     },
-                    file_merges::MergeResultPolicy::AlwaysNewNode {
+                    file_merges::MergeResultPolicy::HistoricalSources {
                         current_inputs: current_inputs.as_ref(),
                     },
                 )?;

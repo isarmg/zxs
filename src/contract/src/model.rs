@@ -461,8 +461,8 @@ pub struct FileDeletionNode {
 }
 
 /// Merge provenance is separate from immutable content/path parent proofs.
-/// Reusing an existing head records every input even when an ancestry edge
-/// must be omitted to keep the displayed history acyclic.
+/// An existing selection has an authenticated author and no produced content
+/// parent edge. It may select an old node absent from the input branch heads.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct FileBranchMerge {
@@ -476,9 +476,17 @@ pub struct FileBranchMerge {
     pub surviving_branch_id: String,
     pub reused_node: bool,
     pub parent_node_ids: Vec<String>,
+    pub principal: crate::Principal,
     pub operation_id: crate::OperationId,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
+}
+
+impl FileBranchMerge {
+    pub fn is_existing_adoption(&self) -> bool {
+        self.reused_node && self.parent_node_ids.is_empty()
+            && self.chosen_node_id == self.result_node_id
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

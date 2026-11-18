@@ -54,12 +54,12 @@ pub(super) fn select(reader: &ScopeReader<'_, '_>, query: &Query<'_>) -> Result<
                 _ => Err(invalid("parent cursor position required")),
             })?;
             let mut selector = Selector::new(position, query.request.limit.get())?;
-            nodes::visit_parents_from(
+            nodes::visit_parents(
                 query.state,
                 query.scope(),
                 node_id.as_str(),
                 query.cancel,
-                reader.merges(),
+
                 |parent| {
                     selector.offer(parent, parent);
                     Ok(())

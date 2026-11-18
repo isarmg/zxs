@@ -449,7 +449,8 @@ fn scope_branch_corruption_never_returns_partial_or_foreign_membership() {
 
 fn file_merge(id: &str, file: &str, history: &str) -> FileBranchMerge {
     FileBranchMerge {
-        merge_id: id.into(),
+        principal: "admin".parse().unwrap(),
+            merge_id: id.into(),
         history_tree_id: history.into(),
         file_id: file.into(),
         input_branch_ids: vec!["branch".into()],

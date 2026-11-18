@@ -252,6 +252,7 @@ impl From<storage_contract::FileBranchMerge> for HistoryMergeResponse {
             surviving_branch_id,
             reused_node,
             parent_node_ids,
+            principal: _,
             operation_id,
             sequence,
         } = merge;

@@ -93,17 +93,9 @@ fn historical_nodes_on_one_branch_merge_without_changing_original_heads_or_defau
     .unwrap();
     let target = receipt.result["branch_id"].as_str().unwrap().to_owned();
     let result_node = receipt.result["node_id"].as_str().unwrap();
-    assert!(result_node.starts_with("fmeta_"));
-    assert!(
-        inputs
-            .iter()
-            .all(|input| input.source_node_id != result_node)
-    );
-    assert_eq!(receipt.result["reused_node"], false);
-    assert_eq!(
-        p.engine.state().file_metadata_nodes[result_node].version_id,
-        middle
-    );
+    assert_eq!(result_node, middle);
+    assert_eq!(receipt.result["reused_node"], true);
+    assert!(p.engine.state().file_metadata_nodes.is_empty());
     for (node, parents) in original_parents {
         assert_eq!(
             p.engine.file_node_parents(&base.file_id, &node).unwrap(),
@@ -330,12 +322,9 @@ fn historical_merge_reads_frozen_aliases_and_can_adopt_an_outside_result_node() 
     )
     .unwrap();
     let node = result.result["node_id"].as_str().unwrap();
-    assert!(node.starts_with("fmeta_"));
-    assert_eq!(result.result["reused_node"], false);
-    assert_eq!(
-        p.engine.state().file_metadata_nodes[node].version_id,
-        chosen
-    );
+    assert_eq!(node, chosen);
+    assert_eq!(result.result["reused_node"], true);
+    assert!(p.engine.state().file_metadata_nodes.is_empty());
     assert_eq!(p.engine.state().versions.len(), before.versions.len());
     for (id, branch) in &before.branches {
         assert_eq!(&p.engine.state().branches[id], branch);
@@ -472,9 +461,9 @@ fn historical_source_lookup_proves_other_branch_ancestors_without_changing_histo
     )
     .unwrap();
     let event = &p.engine.state().file_branch_merges[result.result["merge_id"].as_str().unwrap()];
+    assert!(event.is_existing_adoption());
+    assert_eq!(event.chosen_node_id, ancestor);
     for input in &inputs {
-        assert!(event.parent_node_ids.contains(&input.source_node_id));
+        assert!(event.input_node_ids.contains(&input.source_node_id));
     }
-    assert!(event.parent_node_ids.contains(&ancestor));
-    assert!(!event.reused_node);
 }

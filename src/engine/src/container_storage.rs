@@ -1797,13 +1797,7 @@ fn prepare_names_inner(
             let description =
                 description.get_or_insert_with(|| projection::FileDescription::new(view, &file));
             let nodes = node_projection.get_or_insert_with(|| {
-                let events = view
-                    .owners()
-                    .file_rows(&file)
-                    .into_iter()
-                    .flat_map(|rows| rows.merges.keys())
-                    .map(|key| &next.file_branch_merges[key]);
-                crate::business::file_nodes::NodeProjection::from_merge_events(next, events)
+                crate::business::file_nodes::NodeProjection::new(next)
             });
             let descriptor = match encoded_histories.entry(history_id.clone()) {
                 std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),

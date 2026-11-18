@@ -657,30 +657,8 @@ impl HistoryManifest {
             graph.insert(id, node.parent_node_ids.clone());
         }
         self.validate_file_deletions()?;
-        for (id, node) in &self.file_metadata_nodes {
-            validate_id(id, "fmeta")?;
-
-            let body = self
-                .versions
-                .get(&node.version_id)
-                .ok_or_else(|| invalid("file metadata body version is missing"))?;
-            let branch = self
-                .branches
-                .get(&node.branch_id)
-                .ok_or_else(|| invalid("file metadata public branch is missing"))?;
-            if node.node_id != *id
-                || node.history_tree_id != self.history.history_tree_id
-                || body.file_id != node.file_id
-                || body.history_tree_id != node.history_tree_id
-                || branch.file_id.as_deref() != Some(node.file_id.as_str())
-                || branch.branch_kind != BranchKind::File
-                || branch.history_tree_id != node.history_tree_id
-                || node.author.is_empty()
-                || node.parent_node_ids.is_empty()
-            {
-                return Err(invalid("file metadata identity or scope differs"));
-            }
-            graph.insert(id, node.parent_node_ids.clone());
+        if !self.file_metadata_nodes.is_empty() {
+            return Err(invalid("adopting an existing FILE node cannot create metadata content"));
         }
         for (id, event) in &self.file_branch_merges {
             validate_id(id, "fmerge")?;
@@ -697,15 +675,9 @@ impl HistoryManifest {
                 || inputs.len() != event.input_branch_ids.len()
                 || event.input_branch_ids.len() != event.input_node_ids.len()
                 || !inputs.contains(&event.surviving_branch_id)
-                || (event.reused_node && !event.input_node_ids.contains(&event.chosen_node_id))
-                || event.reused_node != (event.result_node_id == event.chosen_node_id)
+                || !event.is_existing_adoption()
             {
-                return Err(invalid("file merge provenance identity or result differs"));
-            }
-            if !event.reused_node && !event.parent_node_ids.contains(&event.chosen_node_id) {
-                return Err(invalid(
-                    "file merge chosen source is absent from its ancestry",
-                ));
+                return Err(invalid("FILE merge fact differs from the chosen existing node"));
             }
             for (branch, node) in event.input_branch_ids.iter().zip(&event.input_node_ids) {
                 let branch = self
@@ -720,38 +692,6 @@ impl HistoryManifest {
                     || node.history_tree_id != event.history_tree_id
                 {
                     return Err(invalid("file merge input escapes its file or history"));
-                }
-            }
-            if !event.reused_node
-                && !self
-                    .file_metadata_nodes
-                    .get(&event.result_node_id)
-                    .is_some_and(|node| {
-                        node.kind == FileMetadataKind::Merge
-                            && node.parent_node_ids == event.parent_node_ids
-                            && node.branch_id == event.surviving_branch_id
-                    })
-            {
-                return Err(invalid("file merge revision metadata differs"));
-            }
-            let permitted = event
-                .input_node_ids
-                .iter()
-                .chain(std::iter::once(&event.chosen_node_id))
-                .collect::<BTreeSet<_>>();
-            let mut unique = BTreeSet::new();
-            for parent in &event.parent_node_ids {
-                if !permitted.contains(parent)
-                    || parent == &event.result_node_id
-                    || !unique.insert(parent)
-                {
-                    return Err(invalid("file merge graph edge is not a unique input"));
-                }
-                let parents = graph
-                    .get_mut(event.result_node_id.as_str())
-                    .ok_or_else(|| invalid("file merge result graph node is missing"))?;
-                if !parents.contains(parent) {
-                    parents.push(parent.clone());
                 }
             }
         }

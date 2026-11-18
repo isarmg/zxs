@@ -315,6 +315,7 @@ impl Remap<'_> {
             surviving_branch_id,
             parent_node_ids,
             reused_node: _,
+            principal: _,
             operation_id: _,
             sequence: _,
         } = value;

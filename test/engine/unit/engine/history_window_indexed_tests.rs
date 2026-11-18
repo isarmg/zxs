@@ -1470,12 +1470,12 @@ fn batched_parent_preview_controlled_comparison() {
                                         - used
                                         - (selected.entries.len() - index - 1);
                                     let mut selector = Selector::new(Position::Start, budget)?;
-                                    nodes::visit_parents_from(
+                                    nodes::visit_parents(
                                         query.state,
                                         query.scope(),
                                         &pick.id,
                                         &cancel,
-                                        reader.merges(),
+
                                         |parent| {
                                             selector.offer(parent, ());
                                             Ok(())
