@@ -95,8 +95,11 @@ class ArchivePane(QWidget):
 
     def show_selection(self, selected):
         self.selection = selected
-        marker = selected.node.marker
-        self.details.setText(f"{selected.node.path}\n仓库 {marker.repo}  ·  分支 {marker.branch}  ·  第 {marker.generation} 代\n节点 {marker.operation}  ·  归档 SHA-256 {selected.node.sha256}")
+        marker = selected.browser.commit
+        evidence = (f"原归档 SHA-256：{selected.exact.sha256}" if selected.exact is not None
+                    else "成员内容已完整核验；未计算原 ZIP 字节摘要。")
+        self.details.setText(f"{selected.path}\n仓库 {marker.repo}  ·  分支 {marker.branch}  ·  第 {marker.generation} 代\n"
+                             f"节点 {marker.operation}  ·  整树 SHA-256：{marker.tree}\n{evidence}")
         self.reload.setEnabled(self.store is not None)
         self.views.setCurrentIndex(0)
         self.show_folder("")
@@ -119,7 +122,7 @@ class ArchivePane(QWidget):
         self.views.setCurrentIndex(1)
 
     def show_history(self):
-        chain, missing = self.catalog.history(self.selection.node.marker.operation)
+        chain, missing = self.catalog.history(self.selection.browser.commit.operation)
         self.history.rows.replace(((m.operation, m.branch, str(m.generation), m.parent or "起点"),
                                    self.catalog.select_node(m.operation)) for m in chain)
         self.owner.inform("历史不完整。缺少原始父节点：" + missing if missing else "已沿原始父节点读到仓库起点。")

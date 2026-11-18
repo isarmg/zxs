@@ -14,6 +14,7 @@ class Node:
     marker: Commit
     path: Path
     sha256: str
+    observed: tuple[int, int, int, int, int]  # Original held slot, never persisted in the ZIP.
 
 
 def _origin(path):
@@ -24,10 +25,11 @@ def _origin(path):
 
 def _load(path, *, expected=None):
     with named_document(path) as doc:
-        if expected is not None and stamp(doc) != expected:
+        observed = stamp(doc)
+        if expected is not None and observed != expected:
             raise Rejected("opened archive is not the inventoried slot")
         marker, _ = read_managed_document(doc, display_name=path.name)
-        node = Node(marker, path, archive_sha(doc))
+        node = Node(marker, path, archive_sha(doc), observed)
         if expected is not None and stamp(doc) != expected:
             raise Rejected("inventoried slot changed while reading")
         return node
@@ -44,8 +46,8 @@ def _members(store, repo):
 
 
 class Catalog:
-    def __init__(self, anchor: Path, store: Path, *, expected_store=None):
-        self.anchor = _load(Path(anchor))
+    def __init__(self, anchor: Path, store: Path, *, expected_store=None, expected_anchor=None):
+        self.anchor = _load(Path(anchor), expected=expected_anchor)
         self.store = Path(store).absolute()
         store_id = native_identity(self.store.stat(follow_symlinks=False), stat.S_IFDIR)
         if expected_store is not None and store_id != expected_store:
