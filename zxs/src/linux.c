@@ -157,7 +157,7 @@ ssize_t zxs_native_birth(int fd, unsigned char *out, size_t cap) {
     (void)fd; (void)out; (void)cap; errno=ENOTSUP; return -1;
 #endif
 }
-int zxs_open_pinned_record(int pin) {
+int zxs_open_pinned_record(int pin, int write) {
     struct stat st;
     if (fstat(pin,&st)<0) return -1;
     if (!S_ISREG(st.st_mode)) { errno=EINVAL; return -1; }
@@ -166,6 +166,55 @@ int zxs_open_pinned_record(int pin) {
     if (n<0 || (size_t)n>=sizeof path) { errno=EOVERFLOW; return -1; }
     int fds=proc_fd_directory();
     if (fds<0) return -1;
-    int result=openat(fds,path,O_RDONLY|O_NONBLOCK|O_NOCTTY|O_CLOEXEC);
+    int result=openat(fds,path,(write ? O_RDWR : O_RDONLY)|O_NONBLOCK|O_NOCTTY|O_CLOEXEC);
     int e=errno; close(fds); errno=e; return result;
+}
+
+int zxs_mkdir_private(int fd,const char *name) { return mkdirat(fd,name,0700); }
+int zxs_remove_name(int fd,const char *name) { return unlinkat(fd,name,0); }
+
+/* Return length-prefixed opaque names, without opening any entry. Refuse the
+ * directory rather than supplying an incomplete name scope on budget failure. */
+ssize_t zxs_root_names(int fd,unsigned char *out,size_t cap) {
+    int held=zxs_open_directory(fd,".");
+    if (held<0) return -1;
+    DIR *dir=fdopendir(held);
+    if (!dir) { int e=errno; close(held); errno=e; return -1; }
+    size_t used=0,count=0; int error=0;
+    for (;;) {
+        errno=0; struct dirent *entry=readdir(dir);
+        if (!entry) { error=errno; break; }
+        if (!strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+        size_t n=strlen(entry->d_name);
+        if (!n || n>255 || ++count>8192 || 1+n>cap-used) { error=EOVERFLOW; break; }
+        out[used++]=(unsigned char)n; memcpy(out+used,entry->d_name,n); used+=n;
+    }
+    if (closedir(dir)<0 && !error) error=errno;
+    if (error) { errno=error; return -1; }
+    return (ssize_t)used;
+}
+
+int zxs_put_material_token(int fd,const unsigned char *value,size_t n) {
+    return fsetxattr(fd,"user.zxs.initial-file",value,n,XATTR_CREATE);
+}
+ssize_t zxs_get_material_token(int fd,unsigned char *value,size_t n) {
+    return fgetxattr(fd,"user.zxs.initial-file",value,n);
+}
+
+/* The one original SYSTEM inode carries only this lower bound on confirmed
+ * frames. Missing, short and oversized attributes are never treated as zero. */
+ssize_t zxs_get_frontier(int fd,unsigned char *out,size_t len) {
+    return fgetxattr(fd,"user.zxs.confirmed-frontier",out,len);
+}
+int zxs_set_frontier(int fd,const unsigned char *value,size_t len,int create) {
+    return fsetxattr(fd,"user.zxs.confirmed-frontier",value,len,create?XATTR_CREATE:XATTR_REPLACE);
+}
+
+/* Only on the original transient SYSTEM allocation, never a resident
+ * per-volume store. An absent binding is invalid, not a new empty one. */
+ssize_t zxs_get_stage(int fd,unsigned char *out,size_t len) {
+    return fgetxattr(fd,"user.zxs.create-stage",out,len);
+}
+int zxs_set_stage(int fd,const unsigned char *value,size_t len,int create) {
+    return fsetxattr(fd,"user.zxs.create-stage",value,len,create?XATTR_CREATE:XATTR_REPLACE);
 }

@@ -5,10 +5,12 @@ use super::*;
 use std::ffi::CStr;
 use std::os::unix::ffi::OsStrExt;
 mod format;
+pub(crate) mod lease;
 use format::{MAX_RECORD, Record};
 
 const PENDING:&CStr=c"INITIALIZING";
-const READY:&CStr=c"REGISTRATION";
+pub(crate) const READY:&CStr=c"REGISTRATION";
+pub(crate) const MAX_SYSTEM:usize=MAX_RECORD+crate::ordinary::journal::MAX_JOURNAL;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegisteredVolume {pub id:VolumeId,pub volume:ObservedVolume}
@@ -35,11 +37,40 @@ fn verify_claims(selection:&Selection,record:&Record,allow_missing:bool)->io::Re
     Ok(())
 }
 
+struct Published {stamp:fs::OriginalStamp,record:Record,journal:crate::ordinary::journal::Journal}
+fn published(dir:&HeldDir)->io::Result<Option<Published>>{
+    published_with_sync(dir,|dir,stamp|dir.confirm_record_sync(READY,stamp,MAX_SYSTEM))
+}
+fn published_with_sync(dir:&HeldDir,confirm:impl FnOnce(&HeldDir,&fs::OriginalStamp)->io::Result<()>)->io::Result<Option<Published>>{
+    let Some((stamp,bytes))=dir.record(READY,MAX_SYSTEM)? else{return Ok(None)};
+    let (record,tail)=Record::prefix(&bytes)?;
+    if record.origin!=stamp.stat.entity()||record.origin_birth!=stamp.birth||record.actor_uid!=fs::local_uid(){
+        return Err(invalid("SYSTEM journal is not its original registered inode"));
+    }
+    require_system(dir,&record)?;
+    let frontier=dir.read_frontier(READY,&stamp,MAX_SYSTEM)?;
+    let journal=crate::ordinary::journal::Journal::read(dir,record.info.id,record.info.initialized_by,record.digest(),tail,frontier,
+        |v,uid,entity,birth,root|record.allows_file(v,uid,entity,birth,root))?;
+    confirm(dir,&stamp)?;
+    Ok(Some(Published{stamp,record,journal}))
+}
+
+#[cfg(test)]
+pub(crate) fn reject_unconfirmed_for_test(system:&Path,confirm:impl FnOnce(&HeldDir,&fs::OriginalStamp)->io::Result<()>)->io::Result<()>{
+    let dir=HeldDir::open(system)?;dir.share()?;
+    published_with_sync(&dir,confirm)?.ok_or_else(||invalid("expected original SYSTEM register"))?;
+    Ok(())
+}
+
 fn current_record(dir:&HeldDir,name:&CStr)->io::Result<Option<(fs::OriginalStamp,Record)>>{
+    if name==READY{return Ok(published(dir)?.map(|r|(r.stamp,r.record)));}
     dir.record(name,MAX_RECORD)?.map(|(stamp,b)|{
         let r=Record::read(b)?;
         if r.origin!=stamp.stat.entity() || r.origin_birth!=stamp.birth || r.actor_uid!=fs::local_uid() {
             return Err(invalid("registration is not its original SYSTEM inode or local owner"));
+        }
+        if dir.read_frontier(name,&stamp,MAX_RECORD)?!=fs::frontier(0,0,r.digest()){
+            return Err(invalid("unpublished SYSTEM registration does not have its original genesis frontier"));
         }
         Ok((stamp,r))
     }).transpose()
@@ -88,6 +119,7 @@ fn initialize_inner(op:OperationId, system:&Path, recycle:&Path, files:&[PathBuf
         let (original,origin)=sys.anonymous_record()?;
         let own_birth=fs::Birth::read(&original)?;
         let r=Record::new(&selection,op,origin,own_birth,roots)?;
+        fs::initial_frontier(&original,r.digest())?;
         // This is the first visible write and occurs only on selected SYSTEM.
         // Verified complete bytes are published atomically from an unnamed inode.
         sys.add_record(original,PENDING,&r.bytes)?;
@@ -141,8 +173,8 @@ fn require_system(dir:&HeldDir,r:&Record)->io::Result<()>{
     dir.require_named()
 }
 fn require_original(dir:&HeldDir,name:&CStr,stamp:&fs::OriginalStamp,r:&Record)->io::Result<()>{
-    let observed=dir.record(name,MAX_RECORD)?.ok_or_else(||invalid("original registration disappeared"))?;
-    if &observed.0!=stamp||observed.1!=r.bytes{return Err(invalid("original registration inode or bytes changed"));}
+    let observed=current_record(dir,name)?.ok_or_else(||invalid("original registration disappeared"))?;
+    if &observed.0!=stamp||observed.1.bytes!=r.bytes{return Err(invalid("original registration inode or bytes changed"));}
     dir.require_named()
 }
 

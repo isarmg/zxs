@@ -30,3 +30,4 @@ macro_rules! id {
     }
 }
 id!(OperationId); id!(PoolId); id!(VolumeId);
+id!(FileId); id!(EntryId); id!(HistoryId);

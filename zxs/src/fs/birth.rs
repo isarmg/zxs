@@ -5,7 +5,7 @@ use std::{io,os::fd::AsRawFd};
 pub(crate) const MAX_BIRTH:usize=16+4+128;
 unsafe extern "C" { fn zxs_native_birth(fd:std::os::raw::c_int,out:*mut u8,cap:usize)->isize; }
 
-#[derive(Clone,Debug,Eq,PartialEq)]
+#[derive(Clone,Debug,Eq,Ord,PartialEq,PartialOrd)]
 pub(crate) struct Birth(Vec<u8>);
 impl Birth {
     pub(crate) fn read(file:&File)->io::Result<Self>{

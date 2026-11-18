@@ -9,6 +9,9 @@ use std::os::unix::{ffi::OsStrExt, fs::{MetadataExt, PermissionsExt}};
 use std::path::{Component, Path, PathBuf};
 
 mod mounts;
+mod relative;
+mod frontier;
+pub(crate) use frontier::{frontier,initial_frontier,initial_attempt_binding,Frontier};
 mod birth;
 pub(crate) use birth::{Birth,MAX_BIRTH};
 
@@ -18,7 +21,12 @@ unsafe extern "C" {
     fn zxs_read_label(fd: c_int, bytes: *mut u8, len: usize) -> isize;
     fn zxs_claim(fd: c_int, bytes: *const u8, len: usize) -> c_int;
     fn zxs_pin_record(fd: c_int, name: *const c_char) -> c_int;
-    fn zxs_open_pinned_record(pin:c_int)->c_int;
+    fn zxs_open_pinned_record(pin:c_int,write:c_int)->c_int;
+    fn zxs_mkdir_private(fd:c_int,name:*const c_char)->c_int;
+    fn zxs_remove_name(fd:c_int,name:*const c_char)->c_int;
+    fn zxs_put_material_token(fd:c_int,value:*const u8,n:usize)->c_int;
+    fn zxs_get_material_token(fd:c_int,value:*mut u8,n:usize)->isize;
+    fn zxs_root_names(fd:c_int,out:*mut u8,cap:usize)->isize;
     fn zxs_anonymous_file(fd: c_int) -> c_int;
     fn zxs_link_anonymous(file: c_int, dir: c_int, name: *const c_char) -> c_int;
     fn zxs_rename_fresh(from: c_int, old: *const c_char, to: c_int, next: *const c_char) -> c_int;
@@ -122,7 +130,9 @@ impl HeldDir {
 
     pub(crate) fn require_named(&self) -> io::Result<()> {
         let current = Self::open(&self.path)?;
-        if current.entity != self.entity { return Err(invalid("selected directory was replaced")); }
+        if current.entity != self.entity || mounts::id(&current.file)? != mounts::id(&self.file)? {
+            return Err(invalid("selected directory or its named mount was replaced"));
+        }
         Ok(())
     }
 
@@ -178,7 +188,7 @@ fn os_result(rc: c_int) -> io::Result<()> {
 pub(crate) struct FileStamp {
     dev: u64, ino: u64, len: u64, ctime: (i64,i64), mtime: (i64,i64),
 }
-impl FileStamp { pub(crate) fn entity(self)->Entity {Entity{device:self.dev,inode:self.ino}} }
+impl FileStamp { pub(crate) fn entity(self)->Entity {Entity{device:self.dev,inode:self.ino}} pub(crate) fn size(self)->u64{self.len} }
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(crate) struct OriginalStamp { pub(crate) stat:FileStamp,pub(crate) birth:Birth }
 fn record_stamp(file: &File, max: u64) -> io::Result<FileStamp> {
@@ -233,7 +243,7 @@ impl HeldDir {
         if stamp.dev!=self.entity.device||mounts::id(&pin)?!=mount{return Err(invalid("foreign SYSTEM record mount"));}
         // SAFETY: pin is already checked private, regular and on the held mount.
         // Reopen its proc FD, not the name examined earlier.
-        let fd=unsafe{zxs_open_pinned_record(pin.as_raw_fd())};
+        let fd=unsafe{zxs_open_pinned_record(pin.as_raw_fd(),0)};
         if fd<0{return Err(io::Error::last_os_error());}
         let mut f=unsafe{File::from_raw_fd(fd)};
         if record_stamp(&f,max as u64)?!=stamp||mounts::id(&f)?!=mount{return Err(invalid("pinned SYSTEM object changed"));}
@@ -278,4 +288,11 @@ pub(crate) fn require_selected_lineages(roots:&[(crate::Role,HeldDir)])->io::Res
     let mounts=mounts::Mounts::read()?;
     for (_,d) in roots {d.require_named()?; d.check_ancestors(&selected,&mounts)?;}
     Ok(())
+}
+
+/// The token belongs only to the original physical preparation. It is not
+/// portable FILE history or a second custody decision.
+pub(crate) fn set_preparation_token(f:&File,token:&[u8;32])->io::Result<()>{
+    // SAFETY: called on our still-anonymous new material; key is create-only.
+    os_result(unsafe{zxs_put_material_token(f.as_raw_fd(),token.as_ptr(),token.len())})
 }

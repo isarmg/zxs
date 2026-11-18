@@ -64,11 +64,15 @@ impl Record {
     }
 
     pub(super) fn read(bytes:Vec<u8>)->io::Result<Self>{
-        if bytes.len()>MAX_RECORD || bytes.len()<MAGIC.len()+16+16+2+32 {return Err(invalid_record());}
-        let (content,hash)=bytes.split_at(bytes.len()-32);
-        let digest=crate::hash::digest(content)?;
-        if &digest[..]!=hash {return Err(invalid_record());}
-        let mut input=content.strip_prefix(MAGIC).ok_or_else(invalid_record)?;
+        let (record,tail)=Self::prefix(&bytes)?;
+        if !tail.is_empty(){return Err(invalid_record());}
+        Ok(record)
+    }
+    // REGISTRATION begins with exactly the same self-delimiting immutable
+    // genesis as INITIALIZING. Business frames follow its original checksum;
+    // they are never part of the root label and never replace the genesis.
+    pub(super) fn prefix(image:&[u8])->io::Result<(Self,&[u8])>{
+        let mut input=image.strip_prefix(MAGIC).ok_or_else(invalid_record)?;
         fn take<'a>(input:&mut &'a [u8],len:usize)->io::Result<&'a [u8]> {
             let all=*input;
             let (part,rest)=all.split_at_checked(len).ok_or_else(invalid_record)?;
@@ -117,14 +121,25 @@ impl Record {
             }
             volumes.push(RegisteredVolume{id:volume_id,volume:ObservedVolume {role,path,entity}});
         }
-        if !input.is_empty(){return Err(invalid_record());}
+        let end=image.len()-input.len();
+        if end+32>MAX_RECORD{return Err(invalid_record());}
+        let digest=crate::hash::digest(&image[..end])?;
+        if take(&mut input,32)?!=digest.as_slice(){return Err(invalid_record());}
+        let bytes=image[..end+32].to_vec();
         Self::distinct_recycle(&roots)?;
         if origin.device!=volumes[0].volume.entity.device || origin_birth.filesystem()!=roots[0].filesystem(){return Err(invalid_record());}
         let recycle=volumes[1].volume.entity.device;
         if volumes.iter().any(|v|v.volume.role!=Role::Recycle && v.volume.entity.device==recycle) {
             return Err(invalid_record());
         }
-        Ok(Self{info:PoolInfo{id:pool,initialized_by:op,volumes},bytes,digest,origin,actor_uid,origin_birth,roots})
+        Ok((Self{info:PoolInfo{id:pool,initialized_by:op,volumes},bytes,digest,origin,actor_uid,origin_birth,roots},input))
+    }
+
+    pub(super) fn digest(&self)->[u8;32]{self.digest}
+    pub(super) fn allows_file(&self,volume:VolumeId,uid:u32,entity:Entity,birth:&fs::Birth,root:bool)->bool{
+        uid==self.actor_uid && self.info.volumes.iter().enumerate().any(|(i,r)|
+            r.id==volume && r.volume.role==Role::File && r.volume.entity.device==entity.device
+                && self.roots[i].filesystem()==birth.filesystem() && (!root || (r.volume.entity==entity && &self.roots[i]==birth)))
     }
 
     pub(super) fn label(&self,index:usize)->Vec<u8>{
