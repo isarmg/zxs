@@ -104,10 +104,50 @@ impl Engine {
     fn with_replica<T>(
         &self,
         version_id: &str,
-        mut read: impl FnMut(
+        read: impl FnMut(
             &Arc<crate::container_storage::ObservedContainerReplica>,
             &VersionMaterial<'_>, &FileVersion, &DiskIoLease,
         ) -> Result<T>,
+    ) -> Result<T> {
+        self.with_matching_replica(version_id,None,read)
+    }
+
+    /// Select *only* the already registered owner slot. A valid backup on a
+    /// different disk must not satisfy a same-disk directory source.
+    pub(crate) fn open_directory_file_body(
+        &self, file: storage_contract::FileId, version: storage_contract::VersionId,
+        disk: &storage_contract::DiskConfig,
+    ) -> Result<(ReadFile, DiskRoot, platform_io::fs_safety::EntryName,
+        platform_io::fs_safety::linux::FileIdentity)> {
+        use platform_io::fs_safety::{EntryName, linux::FileIdentity};
+        use std::io::{Seek, SeekFrom};
+        let invalid = || super::fresh_layout::FreshLayoutError::ContainerScope;
+        self.with_matching_replica(&version.to_string(), Some(disk), |scope, material, v, lease| {
+            if v.file_id != file.to_string() { return Err(invalid().into()); }
+            let container = material.container()?;
+            let versions = container.path().join(crate::persist::layout::VERSIONS.as_path());
+            let address = material.body_path()?;
+            if address.parent() != Some(versions.as_path()) { return Err(invalid().into()); }
+            let name = EntryName::new(address.file_name().ok_or_else(invalid)?).map_err(|_| invalid())?;
+            let parent_id = container.directory_identity(&versions)?;
+            let parent = container.private_child_matching(&versions, parent_id)?;
+            let mut held = verify_read_payload(material, v, lease)?;
+            let entity = FileIdentity::from_metadata(&held.metadata()?);
+            let named = parent.open_read_entry(&name)?;
+            if FileIdentity::from_metadata(&named.metadata()?) != entity
+                || container.directory_identity(&versions)? != parent_id || material.body_path()? != address
+            {
+                return Err(invalid().into());
+            }
+            held.seek(SeekFrom::Start(0))?;
+            Ok((ReadFile::in_container(held, Arc::clone(scope)), parent, name, parent_id))
+        })
+    }
+
+    fn with_matching_replica<T>(
+        &self, version_id: &str, only: Option<&storage_contract::DiskConfig>,
+        mut read: impl FnMut(&Arc<crate::container_storage::ObservedContainerReplica>,
+            &VersionMaterial<'_>, &FileVersion, &DiskIoLease) -> Result<T>,
     ) -> Result<T> {
         if self
             .state
@@ -134,7 +174,9 @@ impl Engine {
         })?;
         let mut first_error: Option<Error> = None;
         for slot in &placement.route_slot_ids {
+            if only.is_some_and(|disk| disk.slot_id != *slot) { continue; }
             let d = self.disk(slot)?;
+            if only.is_some_and(|disk| disk != d) { return Err(super::fresh_layout::FreshLayoutError::Registration.into()); }
             let candidate = (|| {
                 let disk = self.disk_resources.get(d)?;
                 let lease = disk.root.admit_io()?;

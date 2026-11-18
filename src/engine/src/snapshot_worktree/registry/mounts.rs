@@ -108,6 +108,18 @@ impl ReceiptIndex<'_> {
         })
     }
 
+    /// Same candidate-time namespace fence as ordinary writes, restricted to
+    /// the selected original mount (including stable named-share / Unborn collisions).
+    pub(in crate::snapshot_worktree) fn require_selection_mount(
+        &self, host: &HostEvidence, mount: &Mount, root: &RootBinding,
+        target: WorktreeHandle, maximum: usize,
+    ) -> Result<()> {
+        if self.mount_handles(host.namespace, root, Some(&mount.name), 1)?.as_slice() != [target] {
+            return Err(RegistrationError::Mount);
+        }
+        self.require_unoccupied(self.source, maximum, std::iter::once((host, mount.clone())))
+    }
+
     pub(in crate::snapshot_worktree) fn mount_handles(
         &self,
         namespace: NamespaceHostAddress,

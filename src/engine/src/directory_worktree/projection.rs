@@ -1,6 +1,7 @@
 //! Existing-file sparse edits retain logical paths while physical bodies move.
 pub(crate) mod namespace;
 mod added;
+pub(crate) mod selection;
 use crate::directory_worktree::ledger::{AddedFile, AddedFileResult};
 pub(crate) mod obligations;
 use data_serialization::{Deserialize, Serialize};

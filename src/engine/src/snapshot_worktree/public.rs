@@ -88,6 +88,7 @@ impl SnapshotWorktreeError {
             ) => {
                 ErrorCode::UnsupportedOperation
             }
+            RegistrationError::SelectedFileUnmapped | RegistrationError::SelectedFileBranch => ErrorCode::UnsupportedOperation,
             RegistrationError::HistoryCursor
             | RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Cursor) => {
                 ErrorCode::ListingChanged

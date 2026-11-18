@@ -179,6 +179,30 @@ impl<'a> HeldReadView<'a> {
     pub(crate) fn stamp(&self) -> ViewStamp {
         self.stamp
     }
+    /// Select branch routing, not the view's own BODY. A completed directory
+    /// must also admit its independently bound published node at this cut.
+    pub(crate) fn select_file_branch(&self, path: &PortablePath) -> Result<
+        Option<crate::directory_worktree::projection::selection::FileBranchOccurrence>, ViewError,
+    > {
+        self.ledger.admit_read_view().map_err(ViewError::Ledger)?;
+        match &self.backing {
+            Backing::Sparse { projection, .. } => Ok(projection.select_file_branch(path)),
+            Backing::Published { node } => {
+                let projection = self.ledger.projection().map_err(ViewError::Ledger)?;
+                let Some(selected) = projection.select_file_branch(path) else { return Ok(None); };
+                let entries = node.manifest().entries();
+                let index = entries.binary_search_by(|e| e.path.key().cmp(path.key())).map_err(|_| ViewError::Binding)?;
+                let row = &entries[index];
+                if row.path != *path || !matches!(row.content, SnapshotEntryContent::File {
+                    material, source: crate::working_tree::snapshot::SnapshotFileSource::Container {branch,node},
+                } if material.file_id == selected.file && branch == selected.branch && node == selected.routed_from) {
+                    return Err(ViewError::Binding);
+                }
+                Ok(Some(selected))
+            }
+        }
+    }
+
     /// Size, hash and reader come from the same selected occurrence. A fresh
     /// open still verifies the live ledger and the exact physical body.
     pub(crate) fn open_file(&self, path: &LookupPath) -> Result<OpenedWorktreeFile, ViewError> {

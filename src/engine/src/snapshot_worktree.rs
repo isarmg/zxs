@@ -20,6 +20,7 @@ mod edit;
 pub(crate) mod additions;
 mod commit;
 pub(crate) mod mount;
+pub(crate) mod selection;
 pub(crate) use commit::content::scope::{OriginalContentScope, ContentMaterial, BodyLocation, LedgerStage, NodeImage, PhysicalLeaf, ScopeSource};
 pub(crate) use commit::content::{OriginalRow, OriginalBody, recovery::ObservedOriginalContent, material::{OriginalContentInput, PreparedOriginalContent}};
 pub(crate) mod drafts;
@@ -132,6 +133,12 @@ pub(crate) enum RegistrationError {
     EditName(#[source] crate::name_budget::NameBudgetError),
     #[error("opening the independently bound sparse worktree")]
     EditInstance(#[source] crate::directory_worktree::store::WorktreeStoreError),
+    #[error("the selected visible worktree occurrence has no formally mapped FILE branch")]
+    SelectedFileUnmapped,
+    #[error("the occurrence does not belong to this active FILE branch and history")]
+    SelectedFileBranch,
+    #[error("the exact FILE version has no verified placement on the registered host disk")]
+    SelectedFileDisk,
     #[error("this directory commit requires one dirty file at its exact original FILE head")]
     CommitScope,
     #[error("reading the independently sealed worktree edit")]
