@@ -36,3 +36,23 @@ fn paged_original_ordinals_keep_independent_coverage() {
     verifier.leaf(page(&[(0,"ordinary_directory","a")])).unwrap();
     assert!(verifier.leaf(page(&[(0,"file_container","other")])).is_err());
 }
+
+#[test]
+fn one_inclusion_walk_requires_every_file_and_namespace_occurrence_but_not_backup_material() {
+    fn files() -> OrdinalBuilder {
+        let mut rows = OrdinalBuilder::new(2);
+        rows.push(&item("file_container","born-a")).unwrap();
+        rows.push(&item("file_container","born-b")).unwrap();
+        rows
+    }
+    let verify = |last: &str| {
+        let mut all = Subset::new(Section::Namespace,5,expected())?;
+        all.include(Section::File,files())?;
+        all.leaf(page(&[(3,"worktree","b"),(4,"file_container",last)]))?;
+        all.leaf(page(&[(0,"ordinary_directory","a"),(1,"file_container","born-a"),(2,"backup_replica","not-selected")]))?;
+        all.finish()
+    };
+    assert_eq!(verify("born-b").unwrap(),4);
+    assert!(verify("born-a").is_err());
+    assert!(verify("other").is_err());
+}

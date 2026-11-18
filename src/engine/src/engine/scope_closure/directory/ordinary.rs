@@ -10,7 +10,7 @@ use platform_io::fs_safety::linux::FileIdentity;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use storage_contract::{BranchId, DiskId, EntryId, RepositoryId, snapshot_worktree::{NamespaceDirectoryId, NamespaceHostAddress},
     working_tree::{BindingLifecycle, DirectoryId, DiskRegistrationIdentity, RootId}};
-struct Held { original: NamespaceDirectoryBinding, at: DiskRoot, pending: Option<OperationId> }
+struct Held { namespace: Namespace, original: NamespaceDirectoryBinding, at: DiskRoot, pending: Option<OperationId> }
 pub(in crate::engine) struct OrdinaryDirectories {
     disk: DiskConfig, root: Arc<DiskHandle>, registration: DiskRegistrationIdentity,
     root_id: RootId, anchor: DirectoryId, anchor_entity: FileIdentity, rows: BTreeMap<DirectoryId, Held>,
@@ -81,7 +81,7 @@ impl OrdinaryDirectories {
                 let name = layout::directory(&d.name);
                 let at = actual_parent.private_entry_matching(&name, crate::working_tree::records::file_identity(d.entity))
                     .map_err(directory_error)?;
-                rows.insert(id, Held { original: x.binding.clone(), at, pending: x.pending });
+                rows.insert(id, Held { namespace: ns, original: x.binding.clone(), at, pending: x.pending });
                 queue.push_back(id);
             }
         }
@@ -105,6 +105,53 @@ impl OrdinaryDirectories {
             p.private_entry_matching(&layout::directory(&dir.name), entity).map_err(directory_error)?;
         }
         Ok(())
+    }
+    pub(in crate::engine::scope_closure) fn require_owner(
+        &self, root: &Arc<DiskHandle>, registration: &DiskRegistrationIdentity,
+    ) -> Result<()> { check(Arc::ptr_eq(root,&self.root) && registration == &self.registration) }
+    /// Join an original FILE to the exact already-admitted ordinary parent.
+    /// A display path, backup prefix, logical deletion or Worktree cannot
+    /// introduce an owner with a missing parent or an invented replica id.
+    pub(in crate::engine::scope_closure) fn file_parent(
+        &self, ctx: &PlanningContext<'_>, source: &storage_contract::file_container::FileContainerRecord,
+    ) -> Result<DirectoryId> {
+        use storage_contract::file_container::ContainerParent;
+        let ns = &source.namespace;
+        let id = self.disk.disk_id.parse::<DiskId>()?;
+        let replica = source.replicas.get(&id).ok_or_else(reject)?;
+        check(source.owner_disk == id && replica.root_id == self.root_id && replica.prefixes.is_empty())?;
+        match &ns.parent {
+            ContainerParent::Root => Ok(self.anchor),
+            ContainerParent::Directory(entry) => {
+                let d = ctx.state.namespace_directories.get(entry).ok_or_else(reject)?;
+                let r = d.replicas.get(&id).ok_or_else(reject)?;
+                let held = self.rows.get(&r.preparation).ok_or_else(reject)?;
+                check(d.entry == *entry && d.owner_disk == id && held.pending.is_none()
+                    && (ns.repository, ns.branch) == (d.repository, d.branch)
+                    && held.namespace == (d.repository, d.branch) && held.original.entry == *entry
+                    && r.root_id == self.root_id && r.source_chain.is_empty() && r.source_prefixes.is_empty()
+                    && r.lifecycle == BindingLifecycle::Current && held.original.directory.entity ==
+                        storage_contract::working_tree::LocalEntityIdentity::new(r.entity.device(), r.entity.inode()))?;
+                Ok(r.preparation)
+            }
+            ContainerParent::Worktree { .. } => Err(reject()),
+        }
+    }
+
+    pub(in crate::engine::scope_closure) fn require_file_entry(
+        &self, parent: DirectoryId, name: &name_policy::LookupName,
+        source: &crate::container_storage::ObservedContainerReplica, entity: storage_contract::working_tree::LocalEntityIdentity,
+    ) -> Result<()> {
+        check(Arc::ptr_eq(source.disk(), &self.root))?;
+        let directory = if parent == self.anchor { self.root.content_root()? } else {
+            let held = self.rows.get(&parent).ok_or_else(reject)?;
+            check(held.pending.is_none())?;
+            &held.at
+        };
+        let id = crate::working_tree::records::file_identity(entity);
+        let named = directory.private_entry_matching(&layout::directory(name), id).map_err(directory_error)?;
+        let original = source.container()?;
+        check(named.path() == original.path() && original.held_identity().map_err(directory_error)? == id)
     }
     pub(in crate::engine) fn append_to(&self, cfg: &ValidatedConfig, out: &mut OrdinalBuilder) -> Result<()> {
         self.require(cfg)?;

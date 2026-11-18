@@ -2,6 +2,7 @@
 //! commitment is not its raw representation, physical bodies, lifecycles,
 //! authority to install bytes, or coverage of any other registration.
 pub(in crate::engine) mod clean_bodies;
+pub(in crate::engine) mod census;
 
 use super::{Representation, Schema, ScopeClosureError as Failure};
 use crate::{

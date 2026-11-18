@@ -136,11 +136,15 @@ impl Original {
     }
 
     fn current_image(&self, root: &DiskRoot, selected: &HistoryReference) -> Result<VerifiedCurrent> {
+        self.with_current_image(root,selected,|| Ok(())).map(|(current,())| current)
+    }
+    fn with_current_image<T>(&self, root: &DiskRoot, selected: &HistoryReference,
+        owners: impl FnOnce() -> Result<T>) -> Result<(VerifiedCurrent,T)> {
         if !selected.both_have_no_bodies
             || super::offline::fold_stored(&self.expected, Some(&self.current))? != self.current {
             return Err(invalid("original DISK current and complete history do not agree"));
         }
-        verify_current_image(root, &self.current, selected.current_root, selected.current_representation)
+        with_current_image(root, &self.current, selected.current_root, selected.current_representation,owners)
     }
 
     /// Join this exact original prefix and BOTH actual DISK images to its
@@ -148,6 +152,18 @@ impl Original {
     /// A different installed Engine state cannot supply older rows. This
     /// does not claim the remaining FILE, Backup or SYSTEM scopes are healthy.
     pub(in crate::engine) fn verify_current_namespaces(self, engine: &Engine) -> Result<(VerifiedCatalogs, usize)> {
+        self.with_current_domains(engine, |owners, ctx, selected| owners.verify_retained(ctx, selected))
+    }
+    /// Actual FILE object and all local clean body bytes join the same
+    /// original candidate/current/history and the one held namespace. No
+    /// mutation, other-disk coverage, Backup, SYSTEM or terminal verdict.
+    pub(in crate::engine) fn verify_current_local_owners(self, engine: &Engine) -> Result<(VerifiedCatalogs, usize)> {
+        self.with_current_domains(engine, |owners, ctx, selected| owners.verify_with_files(ctx, selected))
+    }
+    fn with_current_domains(self, engine: &Engine,
+        verify: impl FnOnce(&crate::engine::scope_closure::directory::NamespaceCensus,
+            &crate::engine::PlanningContext<'_>, &HistoryReference) -> Result<usize>,
+    ) -> Result<(VerifiedCatalogs, usize)> {
         let ctx = engine.planning_context();
         if ctx.config.generation().is_some() || ctx.state.sequence != self.header.through_sequence
             || ctx.snapshot.as_deref() != self.header.through_snapshot.as_deref() {
@@ -160,12 +176,13 @@ impl Original {
             return Err(invalid("selected namespace root binding changed"));
         }
         let root = &ctx.disk_resources.get(disk)?.root;
-        let owners = crate::engine::scope_closure::directory::NamespaceCensus::original(&ctx,disk)?;
         let (history, (current, n)) = self.with_holder(root, |original, selected| {
-            let n = owners.verify_retained(&ctx, selected)?;
-            let current = original.current_image(root, selected)?;
-            owners.require(ctx.config)?;
-            Ok((current, n))
+            original.with_current_image(root, selected, || {
+                let owners = crate::engine::scope_closure::directory::NamespaceCensus::original(&ctx,disk)?;
+                let n = verify(&owners, &ctx, selected)?;
+                owners.require(ctx.config)?;
+                Ok(n)
+            })
         })?;
         Ok((VerifiedCatalogs { history, current }, n))
     }
@@ -272,21 +289,27 @@ pub(super) fn verify_current_image(
     logical_root: MaterialCommitment,
     representation: Representation,
 ) -> Result<VerifiedCurrent> {
+    with_current_image(root,expected,logical_root,representation,|| Ok(())).map(|(catalog,())| catalog)
+}
+fn with_current_image<T>(
+    root: &DiskRoot, expected: &DiskCatalogSnapshot, logical_root: MaterialCommitment,
+    representation: Representation, owners: impl FnOnce() -> Result<T>,
+) -> Result<(VerifiedCurrent,T)> {
     let original = MaterialCommitment::from_digest(storage_contract::canonical_object_digest(
         "disk-current-catalog", expected,
     )?);
     if logical_root != original {
         return Err(invalid("DISK current logical root differs from the original terminal State"));
     }
-    let catalog = representation.verify(root, Schema::DiskCurrent, MAX_DATABASE_BYTES, |bytes| {
+    let (catalog, local) = representation.verify(root, Schema::DiskCurrent, MAX_DATABASE_BYTES, |bytes| {
         let actual = super::super::database::read(bytes, &expected.identity)?;
         if actual != *expected {
             return Err(invalid("DISK current SQLite does not contain the exact selected State"));
         }
-        Ok(actual)
+        Ok((actual,owners()?))
     })?;
     let Representation::Sqlite { image_hash, image_bytes, .. } = representation else {
         return Err(invalid("native material cannot be a DISK current SQLite image"));
     };
-    Ok(VerifiedCurrent { logical_root, image_hash, image_bytes, catalog })
+    Ok((VerifiedCurrent { logical_root, image_hash, image_bytes, catalog },local))
 }

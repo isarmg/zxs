@@ -33,6 +33,19 @@ fn full_body_table_requires_complete_named_versions_and_original_inodes() {
     assert_eq!(material.representation, rows.representation());
     assert_eq!(&material.body_inventory, bodies.pages().root());
 
+    let parents = crate::engine::scope_closure::directory::OrdinaryDirectories::original(&ctx, &ctx.config.disks[0]).unwrap();
+    let complete = super::super::census::ResidentFiles::original(&ctx, &ctx.config.disks[0], &parents).unwrap();
+    let mut inventory = OrdinalBuilder::new(2);
+    complete.append_to(&mut inventory).unwrap();
+    let actual = inventory.into_occurrences().unwrap();
+    assert_eq!(actual.len(), 1);
+    let row = &actual[0];
+    assert_eq!(row["object"]["kind"], "file_container");
+    assert_eq!(row["object"]["file_id"], file.to_string());
+    assert_eq!(row["object"]["material"], json_codec::to_value(&material).unwrap());
+    assert_eq!(row["ownership"]["kind"], "original");
+    assert_eq!(row["location"]["name"], "visible.txt");
+    assert_eq!(row["lifecycle"]["kind"], "current");
     let physical = bodies.version_dir.path();
     let unknown = physical.join("unselected-extra");
     std::fs::write(&unknown, b"unselected").unwrap();
@@ -47,4 +60,5 @@ fn full_body_table_requires_complete_named_versions_and_original_inodes() {
     std::fs::set_permissions(&replacement, std::fs::metadata(&leaf).unwrap().permissions()).unwrap();
     std::fs::rename(replacement, leaf).unwrap();
     assert!(bodies.recheck(&rows).is_err());
+    assert!(complete.require(ctx.config, &parents).is_err());
 }

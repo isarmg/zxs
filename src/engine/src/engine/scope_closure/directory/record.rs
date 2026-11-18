@@ -106,16 +106,7 @@ pub(super) struct Pending {
 #[serialization(deny_unknown_fields)]
 pub(super) struct PlannedEntry<'a> { pub entry: &'a SnapshotEntry }
 
-#[derive(Serialize)]
-#[serialization(tag = "kind", rename_all = "snake_case")]
-pub(super) enum Ownership<'a> { Original { registration: &'a DiskRegistrationIdentity } }
-#[derive(Serialize)]
-#[serialization(tag = "kind", rename_all = "snake_case")]
-pub(super) enum Location<'a> { Anchor { root_id: RootId, directory_id: DirectoryId },
-    Entry { root_id: RootId, parent_directory_id: DirectoryId, name: &'a str } }
-#[derive(Serialize)]
-#[serialization(tag = "kind", rename_all = "snake_case")]
-pub(super) enum Lifecycle { Pending { reservation: OperationId }, Current {} }
+pub(super) use super::super::inventory::row::{InventoryRow, Lifecycle, Location, Ownership};
 #[derive(Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Object<'a> {
@@ -126,12 +117,7 @@ pub(super) enum Object<'a> {
     DirectoryRepositoryReservation { repository_id: SnapshotRepositoryId, directory_id: DirectoryId,
         reserve_operation: OperationId, material: &'a super::super::schema::Material<RepositoryIdentity> },
 }
-#[derive(Serialize)]
-#[serialization(deny_unknown_fields)]
-pub(super) struct InventoryRow<'a> {
-    pub object: Object<'a>, pub ownership: Ownership<'a>, pub location: Location<'a>, pub lifecycle: Lifecycle,
-    pub entity: LocalEntityIdentity, pub operation_id: OperationId,
-}
+
 
 
 #[derive(Serialize)]

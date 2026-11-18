@@ -141,6 +141,25 @@ impl NamespaceCensus {
 }
 
 impl NamespaceCensus {
+    /// Same read-only original cutoff for the supported namespace and FILE
+    /// owners. Unselected Backup remains unverified. One inclusion walk
+    /// covers both sets, regardless of physical radix traversal order.
+    pub(in crate::engine) fn verify_with_files(&self, ctx: &PlanningContext<'_>,
+        selected: &crate::engine::scope_closure::HistoryReference) -> Result<usize> {
+        let d = &self.directories;
+        check(Arc::ptr_eq(&d.root, ctx.disk_resources.get(&d.disk)?))?;
+        let files = crate::engine::scope_closure::file::census::ResidentFiles::original(ctx,&d.disk,&self.ordinary)?;
+        let mut ns_rows = OrdinalBuilder::new(65_536);
+        let mut file_rows = OrdinalBuilder::new(65_536);
+        self.append_to(ctx.config, &mut ns_rows)?;
+        files.append_to(&mut file_rows)?;
+        let n = selected.require_business_sections(&d.disk, &d.root.root, d.registration(),
+            ctx.state.sequence, ns_rows, file_rows)?;
+        d.verify_original(ctx.config)?;
+        files.verify_retained(ctx.config,&self.ordinary)?;
+        self.require(ctx.config)?;
+        Ok(n)
+    }
     /// Complete namespace section on the original registered local holder;
     /// deliberately not a whole disk-health result or a recovery decision.
     pub(in crate::engine) fn verify_retained(&self, ctx: &PlanningContext<'_>,
