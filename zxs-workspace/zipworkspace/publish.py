@@ -1,5 +1,6 @@
 """A closed matching temporary sibling is the ONLY file eligible to publish."""
 from __future__ import annotations
+from contextlib import ExitStack, contextmanager
 import ctypes
 import errno
 import hashlib
@@ -8,7 +9,8 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
-from .archive import read_archive, stamp
+from .archive import read_archive, read_managed_document, stamp
+from .document import archive_sha as hash_document, native_identity
 from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected
 
 
@@ -79,53 +81,152 @@ def digest_file(path: Path):
     return h.hexdigest()
 
 
-def confirm_final(target: Path, marker: Commit, archive_sha: str):
+class StoreReadback:
+    """An observation of one currently selected store. Not a persistent store registration."""
+
+    def __init__(self, path, fd):
+        self.path, self.fd = path, fd
+        self.identity = native_identity(os.fstat(fd), stat.S_IFDIR)
+
+    def check_store(self):
+        try:
+            named = self.path.stat(follow_symlinks=False)
+        except FileNotFoundError as err:
+            raise Uncertain("the selected archive store disappeared; original outcome unknown") from err
+        if native_identity(named, stat.S_IFDIR) != self.identity:
+            raise Uncertain("the selected archive store changed; original outcome unknown")
+
+    def confirm(self, marker, expected_sha, *, uploaded_fd=None):
+        self.check_store()
+        name = marker.filename
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+        try:
+            fd = os.open(name, flags, dir_fd=self.fd)
+        except FileNotFoundError as err:
+            # Only this openat can report an absent slot, never a late missing
+            # name or an absent STORE. Absence does not reserve the slot.
+            self.check_store()
+            if uploaded_fd is not None:
+                raise Uncertain("published slot is unavailable after the original rename") from err
+            return False
+        try:
+            with os.fdopen(fd, "rb", closefd=False) as doc:
+                identity = native_identity(os.fstat(fd), stat.S_IFREG)
+                if uploaded_fd is not None and native_identity(os.fstat(uploaded_fd), stat.S_IFREG) != identity:
+                    raise Uncertain("published slot is not the inode whose upload just completed")
+                observed = stamp(doc)  # Post-rename: rename itself can change ctime.
+
+                def check_slot():
+                    try:
+                        named = os.stat(name, dir_fd=self.fd, follow_symlinks=False)
+                    except FileNotFoundError as err:
+                        raise Uncertain("the original archive slot disappeared during readback") from err
+                    if (native_identity(named, stat.S_IFREG) != identity
+                            or (named.st_size, named.st_mtime_ns, named.st_ctime_ns) != observed[2:]
+                            or stamp(doc) != observed):
+                        raise Uncertain("different archive or generation in the original slot")
+                    self.check_store()
+
+                check_slot()
+                actual_sha = hash_document(doc)
+                check_slot()
+                if actual_sha != expected_sha:
+                    raise Conflict("branch slot contains different bytes; candidate retained locally")
+                actual, _ = read_managed_document(doc, display_name=name)
+                check_slot()
+                if actual != marker:
+                    raise Conflict("another commit occupies this immutable slot")
+                # Flush the actual verified file and its actual directory. A
+                # failure (including unsupported provider durability) is not success.
+                os.fsync(fd)
+                os.fsync(self.fd)
+                check_slot()
+                return True
+        finally:
+            os.close(fd)
+
+
+@contextmanager
+def held_store(path):
+    if (os.name != "posix" or not all(hasattr(os, flag) for flag in
+            ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK", "O_CLOEXEC"))
+            or os.open not in os.supports_dir_fd or os.stat not in os.supports_dir_fd):
+        raise Rejected("cannot verify a named archive beneath its original store on this platform")
+    path = Path(path).absolute()
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        if digest_file(target) != archive_sha: raise Conflict("branch slot already contains a different archive; candidate retained locally")
-    except FileNotFoundError: return False
-    found, _ = read_archive(target)
-    if found != marker or digest_file(target) != archive_sha:
-        raise Conflict("a different archive occupies this immutable commit slot")
-    sync_dir(target.parent)
-    return True
+        store = StoreReadback(path, fd)
+        store.check_store()
+        yield store
+    finally:
+        os.close(fd)
+
+
+def confirm_final(target: Path, marker: Commit, archive_sha: str):
+    if target.name != marker.filename:
+        raise Rejected("the requested name is not the original branch slot")
+    with held_store(target.parent) as store:
+        return store.confirm(marker, archive_sha)
 
 
 def publish(local: Path, store: Path, marker: Commit, archive_sha: str):
+    with held_store(store) as scope:
+        return _publish(local, scope, marker, archive_sha)
+
+
+@contextmanager
+def _pin_upload(scope, name, writer):
+    """Transfer identity from the live writable upload to an independent read-only handle."""
+    scope.check_store()
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=scope.fd)
+    try:
+        if native_identity(os.fstat(fd), stat.S_IFREG) != native_identity(os.fstat(writer.fileno()), stat.S_IFREG):
+            raise Uncertain("temporary upload name changed before its writer closed")
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _publish(local, scope, marker, archive_sha):
+    store = scope.path
     target = store / marker.filename
-    if confirm_final(target, marker, archive_sha): return target
+    if scope.confirm(marker, archive_sha): return target
     if digest_file(local) != archive_sha or read_archive(local, internal=True)[0] != marker:
         raise Rejected("saved local candidate no longer matches the original operation")
-    fd, name = tempfile.mkstemp(prefix=".zip-workspace-", suffix=".partial", dir=store)
-    stage = Path(name)
-    # No speculative path deletion on failure: if an outside writer replaced
-    # a temporary name it must not be removed as if it were ours.
-    with os.fdopen(fd, "wb") as out, local.open("rb") as src:
-        original = os.fstat(out.fileno())
-        while block := src.read(CHUNK): out.write(block)
-        out.flush(); os.fsync(out.fileno())
-    # Reopen after the uploader has completely closed the file. Keep the exact
-    # uploaded inode alive throughout the no-replace syscall and final check.
-    heldfd = os.open(stage, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        held = os.fstat(heldfd)
-        if not os.path.samestat(original, held):
-            raise Rejected("temporary upload name was replaced before verification")
-        if digest_file(stage) != archive_sha or read_archive(stage, internal=True)[0] != marker:
-            raise Rejected("temporary upload does not reproduce the frozen snapshot")
-        sync_dir(store)
-        if not os.path.samestat(held, os.stat(stage, follow_symlinks=False)):
+    # No path deletion or replacement if a temporary entry is lost. Pin the
+    # independent read FD while the actual writer is still alive, then close
+    # ALL writable handles before checking even the first ZIP byte for publication.
+    with ExitStack() as reader:
+        with ExitStack() as writer:
+            fd, name = tempfile.mkstemp(prefix=".zip-workspace-", suffix=".partial", dir=store)
+            writer.callback(os.close, fd)
+            stage = Path(name)
+            out = writer.enter_context(os.fdopen(fd, "wb", closefd=False))
+            with local.open("rb") as src:
+                while block := src.read(CHUNK): out.write(block)
+            out.flush(); os.fsync(fd)
+            heldfd = reader.enter_context(_pin_upload(scope, stage.name, out))
+        with os.fdopen(heldfd, "rb", closefd=False) as uploaded:
+            observed = stamp(uploaded)
+            if (hash_document(uploaded) != archive_sha
+                    or read_managed_document(uploaded, display_name=marker.filename)[0] != marker
+                    or stamp(uploaded) != observed):
+                raise Rejected("temporary upload does not reproduce the frozen snapshot")
+        scope.check_store()
+        os.fsync(scope.fd)
+        scope.check_store()
+        named = os.stat(stage.name, dir_fd=scope.fd, follow_symlinks=False)
+        if (native_identity(named, stat.S_IFREG) + (named.st_size, named.st_mtime_ns, named.st_ctime_ns)
+                != observed):
             raise Rejected("temporary name no longer identifies the uploaded file")
         try:
             rename_new(stage, target)
         except OSError as err:
             # A lost reply is not evidence of failure. Durable logical identity
             # is the original operation/marker and the exact entire ZIP digest.
-            if confirm_final(target, marker, archive_sha): return target
+            if scope.confirm(marker, archive_sha): return target
             if err.errno in (errno.EOPNOTSUPP, errno.ENOSYS, errno.EINVAL):
                 raise Rejected("destination does not support native atomic no-replace rename") from err
             raise Uncertain("publication outcome unknown; retry only the recorded local operation") from err
-        if not os.path.samestat(held, os.stat(target, follow_symlinks=False)) or not confirm_final(target, marker, archive_sha):
-            raise Uncertain("published name changed; inspect only the original operation")
+        scope.confirm(marker, archive_sha, uploaded_fd=heldfd)
         return target
-    finally:
-        os.close(heldfd)
