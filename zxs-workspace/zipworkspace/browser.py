@@ -65,6 +65,12 @@ class ArchiveBrowser:
     def commit(self) -> Commit:
         return self._commit
 
+    def verified_entries(self):
+        """Iterate the admitted rows, including empty and implicit directories; no archive I/O."""
+        for parent, children in self._children.items():
+            for entry in children:
+                yield (f"{parent}/{entry.name}" if parent else entry.name), entry
+
     def list_directory(
         self, directory: str = "", *, cursor: str | None = None, limit: int = 100
     ) -> DirectoryPage:

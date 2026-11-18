@@ -2,6 +2,7 @@
 from pathlib import Path
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QTabWidget, QVBoxLayout, QWidget
 
+from .comparison_pane import ComparisonPane
 from .selection import Selection, StoreSelection
 from .widgets import Table, button, label
 
@@ -43,6 +44,8 @@ class ArchivePane(QWidget):
         self.views.addTab(folder, "文件")
         self.history = self.make_table(("节点 ID", "分支", "代", "父节点"), "历史", "查看选中的历史快照")
         self.branches = self.make_table(("分支", "最高观察代", "已核验分支头", "缺失父节点"), "分支", "查看选中的分支头")
+        self.comparison = ComparisonPane(owner)
+        self.views.addTab(self.comparison, "与本机文件夹比较")
         self.clear_document()
 
     def make_table(self, headers, title, action):
@@ -62,6 +65,7 @@ class ArchivePane(QWidget):
 
     def clear_document(self):
         self.selection = self.next_cursor = None
+        self.comparison.set_snapshot(None)
         self.clear_catalog()
         self.details.setText("尚未打开快照")
         self.at.setText("")
@@ -95,6 +99,7 @@ class ArchivePane(QWidget):
 
     def show_selection(self, selected):
         self.selection = selected
+        self.comparison.set_snapshot(selected)
         marker = selected.browser.commit
         evidence = (f"原归档 SHA-256：{selected.exact.sha256}" if selected.exact is not None
                     else "成员内容已完整核验；未计算原 ZIP 字节摘要。")

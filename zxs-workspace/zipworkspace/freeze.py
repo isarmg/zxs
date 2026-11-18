@@ -22,7 +22,7 @@ def _dir_flags():
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
-def _scan(rootfd, frozen=None, *, hash_files=False):
+def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False):
     facts = {}
     manifest = Manifest()
     rootdev = os.fstat(rootfd).st_dev
@@ -35,6 +35,8 @@ def _scan(rootfd, frozen=None, *, hash_files=False):
             for entry in entries:
                 path = f"{prefix}/{entry.name}" if prefix else entry.name
                 before = entry.stat(follow_symlinks=False)
+                if require_ids and not before.st_ino:
+                    raise Rejected("cannot verify a member's native identity")
                 is_dir = stat.S_ISDIR(before.st_mode)
                 if not is_dir and not stat.S_ISREG(before.st_mode):
                     raise Rejected("checkout contains a link or non-regular entry")
@@ -73,15 +75,15 @@ def _scan(rootfd, frozen=None, *, hash_files=False):
     return facts, manifest
 
 
-def observe_held(fd, expected):
+def observe_held(fd, expected, *, require_ids=False):
     """Hash all real descendants of this particular open directory, then recheck the generation."""
     before = os.fstat(fd)
     if (before.st_dev,before.st_ino) != expected or not expected[1] or not stat.S_ISDIR(before.st_mode):
         raise Rejected("not the original held output directory")
-    facts, tree = _scan(fd, hash_files=True)
-    after, _ = _scan(fd)
+    facts, tree = _scan(fd, hash_files=True, require_ids=require_ids)
+    after, _ = _scan(fd, require_ids=require_ids)
     if facts != after or _sig(before) != _sig(os.fstat(fd)):
-        raise Rejected("imported directory changed during readback")
+        raise Rejected("selected directory changed during readback")
     return tree
 
 

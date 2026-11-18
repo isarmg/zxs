@@ -41,8 +41,14 @@ class Window(QMainWindow):
         self.tabs.setEnabled(False)
         self.inform(title)
         self.progress.show()
-        self.pending = (self.pool.submit(work), apply, failed)
         self.timer.start(125)
+        try:
+            future = self.pool.submit(work)
+        except BaseException:
+            self.timer.stop(); self.progress.hide(); self.tabs.setEnabled(True)
+            raise
+        self.pending = (future, apply, failed)
+        return future
 
     def poll(self):
         if self.pending is None: return
