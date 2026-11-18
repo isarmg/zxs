@@ -2,6 +2,7 @@
 //! mounts of a *different* directory repository. No discover-all, no persisted
 //! shadow registry, no source edit. Caller must authorize both the outer write
 //! and the actual selected inner resources; this guard is not that grant.
+pub(crate) mod projection;
 use super::{HeldBranchFile, InnerOccurrence, Pick};
 use crate::persist::snapshot_worktree::HostEvidence;
 use crate::snapshot_worktree::{RegistrationError, Result, instance::MountParent, registry::ReceiptIndex};

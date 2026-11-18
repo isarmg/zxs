@@ -134,12 +134,27 @@ fn distinct_child_mount_uses_outer_parent_claim_and_yields_only_the_selected_cur
     let mut bytes = Vec::new(); selected.bodies().next().unwrap().1.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes,b"unchanged nested original");
     selected.require_current(&engine).unwrap();
+    let projection = selected.project_new_mounts(&engine,storage_contract::working_tree::SnapshotNodeId::generate().unwrap(),
+        OperationId::generate().unwrap()).unwrap();
+    let manifest = projection.manifest();
+    // The same actual FILE/Version occurs at its original path and this
+    // independent mounted path; only one physical FULL is charged for it.
+    let file_at = |path:&str| manifest.entries().iter().find(|entry|entry.path.as_str()==path).unwrap().content;
+    let crate::working_tree::snapshot::SnapshotEntryContent::File {material,source:stable} = file_at("worktree-main-002/Child/existing.txt") else {panic!("expected selected file")};
+    let src = projection.source().occurrences().next().unwrap().1;
+    assert_eq!(stable,crate::working_tree::snapshot::SnapshotFileSource::Container {branch:src.selected.branch,node:src.head.node});
+    assert_eq!(file_at("Folder/Child/existing.txt"),file_at("worktree-main-002/Child/existing.txt"));
+    assert!(!manifest.entries().iter().any(|row|row.path.as_str().starts_with("worktree-main-001")));
+    assert_eq!(manifest.entries().len(),8);
+    assert_eq!(projection.independent_bytes(),manifest.encoded_len() as u64+manifest.files().values().map(|file|file.size).sum::<u64>());
+    let mut full=Vec::new(); projection.open_body(&material).unwrap().read_to_end(&mut full).unwrap();
+    assert_eq!(full,bytes);
     let own = engine.directory_worktree_status(same).unwrap();
     let own_path = fixture.targets[0].path.clone();
     assert!(HeldMountedFiles::capture(&engine,fixture.source,&[Pick { worktree:same,
         visible:own.visible,revision:own.revision,path:&own_path }]).is_err());
     assert_eq!(fixture.media(),prior);
-    drop(selected); drop(engine);
+    drop(projection); drop(engine);
     let mut engine = Engine::open(&fixture.system).unwrap();
     let media = fixture.media();
     assert_eq!(engine.allocate_directory_worktree(&auto,&actor).unwrap(),target);
