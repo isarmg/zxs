@@ -60,7 +60,7 @@ impl PreparedRootDatabases {
         let current = database::read(&current_bytes, identity)?;
         let history = history::read_for_root_install(&history_bytes, identity)?;
         if current.source_sequence != sequence
-            || history.header.through_sequence != sequence
+            || history.header.through.sequence() != sequence
             || history::fold_prepared(&history, Some(&current))? != current
         {
             return Err(invalid(
@@ -95,8 +95,8 @@ impl PreparedRootDatabases {
             |old| {
                 let old = history::read_for_root_install(old, identity)?;
                 history::fold_prepared(&old, None)?;
-                if old.header.through_sequence > sequence
-                    || (old.header.through_sequence == sequence && old != history)
+                if old.header.through.sequence() > sequence
+                    || (old.header.through.sequence() == sequence && old != history)
                 {
                     return Err(invalid("existing root history claims another publication"));
                 }

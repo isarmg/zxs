@@ -103,7 +103,7 @@ fn supplied_disk_bytes_are_decoded_and_compared_before_storage() {
                 let mut current = current.clone();
                 let mut history = history.clone();
                 if change_history {
-                    history.header.through_sequence += 1;
+                    history.header.publications += 1;
                 } else {
                     current.source_sequence += 1;
                 }
@@ -130,4 +130,43 @@ fn cancellation_after_supplied_encoding_prevents_storage() {
         |_, _, _| panic!("cancelled encoding must not be stored"),
     );
     assert_eq!(result.unwrap_err().code(), ErrorCode::OperationAborted);
+}
+
+#[test]
+fn physical_history_carries_original_request_not_its_own_enclosing_hashes() {
+    use super::super::stored::RowSource;
+    let fixture = Fixture::new();
+    let sources = fixture.scopes();
+    let through = sources.through;
+    let identity = sources.disks[0].header.identity.clone();
+    let stop = AtomicBool::new(false);
+    let mut previous = None;
+    let mut native_last = None;
+    crate::engine::disk_catalog::visit_published_prefix(
+        &fixture.engine, fixture.engine.state().sequence, &|| Ok(()), |entry| {
+            previous = entry.candidate().previous_snapshot.clone();
+            native_last = Some((entry.candidate_hash().as_str().to_owned(), entry.candidate().snapshot_hash.clone()));
+            Ok(())
+        },
+    ).unwrap();
+    let (candidate, final_snapshot) = native_last.unwrap();
+    sources.finish(&fixture.admitted, &stop, |_, _, bytes| {
+        let stored = database::read(&bytes, &identity)?;
+        assert_eq!(stored.header.through, through);
+        let encoded = String::from_utf8(storage_contract::canonical_json(&stored)?).unwrap();
+        assert!(!encoded.contains(&candidate));
+        assert!(!encoded.contains(&final_snapshot));
+        assert!(encoded.contains(&previous.as_ref().unwrap()[..]));
+        let current = stored.changes.iter().find(|r| r.sequence == through.sequence()).unwrap();
+        assert_eq!(current.source, RowSource::ThisPublication {});
+        let mut forged = stored.clone();
+        let current = forged.changes.iter_mut().find(|r| r.sequence == through.sequence()).unwrap();
+        current.operation_id = OperationId::generate()?;
+        let rehashed = database::encode(&forged)?;
+        assert!(database::read(&rehashed, &identity).is_err());
+        let mut transplant = identity.clone();
+        transplant.binding_generation += 1;
+        assert!(database::read(&bytes, &transplant).is_err());
+        Ok(())
+    }).unwrap();
 }

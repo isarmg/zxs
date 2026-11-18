@@ -5,9 +5,13 @@ use crate::database_install::DISK_HISTORY_DATABASE_NAME;
 use std::collections::BTreeMap;
 
 mod database;
+mod stored;
+pub(in crate::engine) use stored::{StoredHistory, Through};
 mod maintenance;
 mod offline;
-pub(super) use offline::fold as fold_prepared;
+pub(super) use offline::fold_stored as fold_prepared;
+#[cfg(test)]
+pub(super) use offline::fold as fold_export;
 pub(in crate::engine::disk_catalog) mod preparation;
 mod replay;
 pub(super) use maintenance::Maintenance;
@@ -27,7 +31,7 @@ const MAX_CHANGES: usize = 65_536;
 pub(super) fn read_for_root_install(
     bytes: &[u8],
     identity: &DiskRegistrationIdentity,
-) -> Result<DiskHistorySnapshot> {
+) -> Result<StoredHistory> {
     database::read(bytes, identity)
 }
 
@@ -134,15 +138,26 @@ pub struct DiskHistoryReceipt {
     pub changes: usize,
     pub records_hash: String,
     pub database_bytes: usize,
+    binding: Binding,
 }
 
-fn digest(snapshot: &DiskHistorySnapshot) -> Result<String> {
-    Ok(storage_contract::object_hash(
-        "disk-local-inventory-changes",
-        snapshot,
-    )?)
+/// Boundaries supplied by the completed replay or the completed native write;
+/// an isolated SQLite is never allowed to construct a resolved current source.
+#[derive(Clone, Debug)]
+struct Binding {
+    through: Through,
+    candidate: Option<String>,
 }
-
+impl Binding {
+    fn genesis() -> Self { Self { through: Through::Genesis {}, candidate: None } }
+    fn published(config: &ValidatedConfig, candidate: &crate::journal::Candidate, hash: &str) -> Result<Self> {
+        Ok(Self { through: Through::from_candidate(config, candidate)?, candidate: Some(hash.into()) })
+    }
+}
+struct CapturedHistory {
+    view: DiskHistorySnapshot,
+    binding: Binding,
+}
 struct Changes {
     rows: Vec<DiskHistoryRecord>,
     bytes: usize,
@@ -265,17 +280,19 @@ impl Engine {
     fn install_disk_history(
         &self,
         slot: &str,
-        captured: DiskHistorySnapshot,
+        captured: CapturedHistory,
     ) -> Result<DiskHistoryReceipt> {
         let (disk, identity, handle) = self.catalog_disk(slot)?;
-        if captured.header.identity != identity {
+        let CapturedHistory { view, binding } = captured;
+        if view.header.identity != identity {
             return Err(invalid("disk history target registration changed"));
         }
         let lease = handle.root.admit_io()?;
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
-        let records_hash = digest(&captured)?;
-        let bytes = database::encode(&captured, &records_hash)?;
+        let captured = StoredHistory::from_replayed(&view, binding.through)?;
+        let records_hash = captured.logical_root()?.hash().to_string();
+        let bytes = database::encode(&captured)?;
         let database_bytes = bytes.len();
         let root = &handle.root;
         let inode = root.directory_identity(root.path())?;
@@ -313,8 +330,9 @@ impl Engine {
         validate_stored_seal(&handle.seal, &named)?;
         lease.check_running()?;
         Ok(DiskHistoryReceipt {
-            header: captured.header,
-            changes: captured.changes.len(),
+            header: view.header,
+            changes: view.changes.len(),
+            binding,
             records_hash,
             database_bytes,
         })
@@ -325,27 +343,34 @@ impl Engine {
     /// older coverage, not as a current or independently recoverable catalog.
     /// This read never repairs, truncates or adopts the stored database.
     pub fn disk_history_observation(&self, slot: &str) -> Result<DiskHistoryObservation> {
+        let material = self.disk_databases_from_original(slot, DiskDatabaseReadScope::History)?;
+        Ok(DiskHistoryObservation {
+            verified_sequence: self.state.sequence,
+            snapshot: material.into_history().ok_or_else(|| invalid("selected original history is absent"))?,
+        })
+    }
+
+    /// The on-disk coverage is a requested boundary, never an election. Read
+    /// through the original descriptor while the entire native prefix is verified.
+    pub(in crate::engine::disk_catalog) fn disk_databases_from_original(
+        &self, slot: &str, scope: DiskDatabaseReadScope,
+    ) -> Result<DiskDatabaseMaterial> {
         let (disk, identity, handle) = self.catalog_disk(slot)?;
         let lease = handle.root.admit_io()?;
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
-        let bytes = handle.root.read_bytes(
-            &handle.root.path().join(DISK_HISTORY_DATABASE_NAME),
-            MAX_DATABASE_BYTES,
+        let material = offline::inspect_with_original(
+            &handle.root, &identity, scope, |stored| {
+                let expected = replay::capture(self, identity.clone(), stored.header.through.sequence())?;
+                if stored != StoredHistory::from_replayed(&expected.view, expected.binding.through)? {
+                    return Err(invalid("disk history differs from its authenticated publication prefix"));
+                }
+                Ok(expected.view)
+            },
         )?;
-        let stored = database::read(&bytes, &identity)?;
-        let expected = replay::capture(self, identity, stored.header.through_sequence)?;
-        if stored != expected {
-            return Err(invalid(
-                "disk history differs from its authenticated publication prefix",
-            ));
-        }
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
         lease.check_running()?;
-        Ok(DiskHistoryObservation {
-            verified_sequence: self.state.sequence,
-            snapshot: stored,
-        })
+        Ok(material)
     }
 }

@@ -21,14 +21,8 @@ fn captured(
         .find(|row| row.slot_id == "P01")
         .unwrap()
         .identity();
+    let material = engine.disk_databases_from_original("P01", scope).unwrap();
     drop(engine);
-    let material = inspect_disk_database_material(
-        fs::File::open(&root).unwrap(),
-        root.clone(),
-        &identity,
-        scope,
-    )
-    .unwrap();
     (temp, root, identity, material)
 }
 
@@ -41,10 +35,10 @@ fn rehash(mut archive: json_codec::Value) -> Vec<u8> {
 }
 
 #[test]
-fn standalone_rescue_rebuilds_both_families_after_original_system_and_disk_are_gone() {
+fn standalone_export_rebuilds_current_but_cannot_invent_the_final_request_after_source_loss() {
     let (temp, root, identity, material) = captured(DiskDatabaseReadScope::Both);
     let expected_current = material.current().unwrap().clone();
-    let expected_history = material.history().unwrap().clone();
+    assert!(!material.history().unwrap().changes.is_empty());
     let expected_fold = material.history_inventory().unwrap().clone();
     let archive = material.archive_bytes().unwrap();
     drop(material);
@@ -68,13 +62,9 @@ fn standalone_rescue_rebuilds_both_families_after_original_system_and_disk_are_g
         assert_eq!(image.source_sequence(), expected.source_sequence);
         assert!(!root.exists());
     }
-    let image =
-        reconstruct_disk_database_material(&archive, &identity, DiskDatabaseRebuildSource::History)
-            .unwrap();
-    assert_eq!(
-        history::read_for_root_install(image.database_bytes(), &identity).unwrap(),
-        expected_history
-    );
+    assert!(reconstruct_disk_database_material(
+        &archive, &identity, DiskDatabaseRebuildSource::History
+    ).is_err());
     assert!(!root.exists());
 }
 
@@ -211,15 +201,12 @@ fn selected_sqlite_sidecars_are_preserved_and_unselected_sidecars_are_not_inspec
             .is_err()
         );
     }
-    assert!(
-        inspect_disk_database_material(
-            fs::File::open(&root).unwrap(),
-            root.clone(),
-            &identity,
-            DiskDatabaseReadScope::History
-        )
-        .is_ok()
-    );
+    // History alone cannot furnish the enclosing native receipt. The
+    // existing diagnostic must preserve the selected and unselected files.
+    assert!(inspect_disk_database_material(
+        fs::File::open(&root).unwrap(), root.clone(), &identity,
+        DiskDatabaseReadScope::History
+    ).is_err());
     assert_eq!(fs::read(sidecar).unwrap(), b"unknown pending bytes");
     assert_eq!(fs::read(root.join(DISK_DATABASE_NAME)).unwrap(), original);
 }
@@ -263,22 +250,9 @@ fn disk_rescue_readback_does_not_mix_current_and_history_families() {
         DiskDatabaseRebuildSource::StoredCurrent,
     )
     .unwrap();
-    let history =
-        reconstruct_disk_database_material(&archive, &identity, DiskDatabaseRebuildSource::History)
-            .unwrap();
-    history
-        .verify_database_bytes(history.database_bytes())
-        .unwrap();
-    assert!(
-        current
-            .verify_database_bytes(history.database_bytes())
-            .is_err()
-    );
-    assert!(
-        history
-            .verify_database_bytes(current.database_bytes())
-            .is_err()
-    );
+    let physical = fs::read(_root.join(crate::database_install::DISK_HISTORY_DATABASE_NAME)).unwrap();
+    assert!(current.verify_database_bytes(&physical).is_err());
+    assert!(reconstruct_disk_database_material(&archive, &identity, DiskDatabaseRebuildSource::History).is_err());
     assert!(
         current
             .verify_database_bytes(b"not a SQLite database")

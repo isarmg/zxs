@@ -1,6 +1,7 @@
 //! Bounded in-memory SQLite codec. Stored digests check representation only;
 //! the caller must still derive the entire prefix from admitted publications.
 use super::super::codec;
+use super::stored::{StoredHeader, StoredHistory, StoredRow};
 use super::*;
 use sqlite_access::{Executor, Row, SqliteConnection};
 
@@ -10,7 +11,8 @@ const IDENTITY: &str = "CREATE TABLE identity(singleton INTEGER PRIMARY KEY CHEC
 const CHANGES: &str =
     "CREATE TABLE changes(ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),body TEXT NOT NULL) STRICT";
 
-pub(super) fn encode(snapshot: &DiskHistorySnapshot, hash: &str) -> Result<Vec<u8>> {
+pub(super) fn encode(snapshot: &StoredHistory) -> Result<Vec<u8>> {
+    let hash = snapshot.logical_root()?.hash().to_string();
     let header = crate::disk::encode_metadata(&snapshot.header, MAX_HEADER_BYTES)?;
     crate::sqlite_connection::materialize(MAX_DATABASE_BYTES, budget, async |connection| {
         connection.execute(IDENTITY).await?;
@@ -18,7 +20,7 @@ pub(super) fn encode(snapshot: &DiskHistorySnapshot, hash: &str) -> Result<Vec<u
         sqlite_access::query("INSERT INTO identity VALUES(1,?,?,?)")
             .bind(FORMAT)
             .bind(std::str::from_utf8(&header).expect("invariant: metadata is UTF-8"))
-            .bind(hash)
+            .bind(&hash)
             .execute(&mut *connection)
             .await?;
         for (ordinal, row) in snapshot.changes.iter().enumerate() {
@@ -36,7 +38,7 @@ pub(super) fn encode(snapshot: &DiskHistorySnapshot, hash: &str) -> Result<Vec<u
 pub(super) fn read(
     bytes: &[u8],
     identity: &DiskRegistrationIdentity,
-) -> Result<DiskHistorySnapshot> {
+) -> Result<StoredHistory> {
     if bytes.len() > MAX_DATABASE_BYTES {
         return Err(budget());
     }
@@ -48,7 +50,7 @@ pub(super) fn read(
 async fn read_connection(
     connection: &mut SqliteConnection,
     identity: &DiskRegistrationIdentity,
-) -> Result<DiskHistorySnapshot> {
+) -> Result<StoredHistory> {
     crate::sqlite_connection::require_schema(
         connection,
         &[
@@ -73,7 +75,7 @@ async fn read_connection(
         return Err(invalid("disk history header format or size differs"));
     }
     let bytes: Vec<u8> = row.try_get(3)?;
-    let header: DiskHistoryHeader = storage_contract::decode_strict(&bytes)?;
+    let header: StoredHeader = storage_contract::decode_strict(&bytes)?;
     if bytes.len() != length
         || header.identity != *identity
         || header.publications as usize > MAX_PUBLICATIONS
@@ -81,29 +83,32 @@ async fn read_connection(
     {
         return Err(invalid("disk history scope or canonical header differs"));
     }
-    let changes = read_changes(connection, header.through_sequence).await?;
-    let snapshot = DiskHistorySnapshot { header, changes };
-    if digest(&snapshot)? != row.try_get::<String, _>(4)? {
+    header.require_shape()?;
+    let changes = read_changes(connection, &header).await?;
+    let snapshot = StoredHistory { header, changes };
+    if snapshot.logical_root()?.hash().to_string() != row.try_get::<String, _>(4)? {
         return Err(invalid(
             "disk history rows differ from their recorded digest",
         ));
     }
+    super::offline::fold_stored(&snapshot, None)?;
     crate::sqlite_integrity::verify(connection).await?;
     Ok(snapshot)
 }
 
 async fn read_changes(
     connection: &mut SqliteConnection,
-    through: u64,
-) -> Result<Vec<DiskHistoryRecord>> {
+    header: &StoredHeader,
+) -> Result<Vec<StoredRow>> {
     let mut total = 0;
     codec::HISTORY_ROWS
         .read(
             connection,
             MAX_CHANGES,
             &mut total,
-            |previous: Option<&DiskHistoryRecord>, value| {
-                validate_record(value, through)?;
+            |previous: Option<&StoredRow>, value| {
+                header.require_source(value)?;
+                validate_record(&value.change)?;
                 if previous.is_some_and(|previous| {
                     (previous.sequence, previous.change.key())
                         >= (value.sequence, value.change.key())
@@ -118,12 +123,7 @@ async fn read_changes(
         .await
 }
 
-fn validate_record(record: &DiskHistoryRecord, through: u64) -> Result<()> {
-    if record.sequence == 0 || record.sequence > through {
-        return Err(invalid(
-            "disk history change lies outside its declared coverage",
-        ));
-    }
+pub(super) fn validate_record(change: &DiskHistoryChange) -> Result<()> {
     let row = |row: &DiskCatalogVersion| -> Result<()> {
         storage_contract::validate_id(&row.version.version_id, "ver")?;
         storage_contract::validate_id(&row.version.file_id, "file")?;
@@ -133,7 +133,7 @@ fn validate_record(record: &DiskHistoryRecord, through: u64) -> Result<()> {
         }
         Ok(())
     };
-    match &record.change {
+    match change {
         DiskHistoryChange::BackupDirectoryEntered { after } => after.validate()?,
         DiskHistoryChange::BackupDirectoryDeparted { before } => before.validate()?,
         DiskHistoryChange::BackupDirectoryChanged { before, after } => {

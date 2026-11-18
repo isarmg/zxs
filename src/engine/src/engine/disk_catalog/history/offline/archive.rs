@@ -101,7 +101,7 @@ impl DiskDatabaseReconstruction {
                 super::super::super::database::read(bytes, &expected.identity)? == *expected
             }
             ReconstructedSnapshot::History(expected) => {
-                database::read(bytes, &expected.header.identity)? == *expected
+                database::read(bytes, &expected.header.identity)?.genesis_view()? == *expected
             }
         };
         if !matches {
@@ -158,7 +158,17 @@ pub fn reconstruct_disk_database_material(
     let mut material = input.material;
     validate_scope(&material, expected)?;
     let current = material.current.as_ref().map(current_image).transpose()?;
-    let history = material.history.as_ref().map(history_image).transpose()?;
+    if let Some(rows) = &material.history {
+        if rows.changes.len() > MAX_CHANGES || rows.header.publications as usize > MAX_PUBLICATIONS {
+            return Err(budget());
+        }
+        let mut total = 0;
+        for row in &rows.changes {
+            charge(row, &mut total)?;
+            database::validate_record(&row.change)?;
+        }
+    }
+
     let inventory = material
         .history
         .as_ref()
@@ -178,7 +188,7 @@ pub fn reconstruct_disk_database_material(
                 .history
                 .take()
                 .ok_or_else(|| invalid("archive has no retained history database"))?;
-            let (bytes, hash) = history.expect("invariant: present history was encoded above");
+            let (bytes, hash) = history_image(&snapshot)?;
             (bytes, hash, ReconstructedSnapshot::History(snapshot))
         }
         DiskDatabaseRebuildSource::CurrentFromHistory => {
@@ -274,9 +284,14 @@ fn history_image(snapshot: &DiskHistorySnapshot) -> Result<(Vec<u8>, String)> {
     for row in &snapshot.changes {
         charge(row, &mut total)?;
     }
-    let hash = digest(snapshot)?;
-    let bytes = database::encode(snapshot, &hash)?;
-    if database::read(&bytes, &snapshot.header.identity)? != *snapshot {
+    if snapshot.header.through_sequence != 0 {
+        return Err(Error::new(ErrorCode::RecoveryRequired,
+            "a resolved record export has no original request and predecessor for a physical DISK history; preserve it"));
+    }
+    let stored = StoredHistory::from_replayed(snapshot, Through::Genesis {})?;
+    let hash = stored.logical_root()?.hash().to_string();
+    let bytes = database::encode(&stored)?;
+    if database::read(&bytes, &snapshot.header.identity)? != stored {
         return Err(invalid(
             "rebuilt history database differs from its complete rescue records",
         ));

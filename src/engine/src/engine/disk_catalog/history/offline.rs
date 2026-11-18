@@ -72,6 +72,7 @@ impl DiskDatabaseMaterial {
     pub fn history_inventory(&self) -> Option<&DiskCatalogSnapshot> {
         self.history_inventory.as_ref()
     }
+    pub(super) fn into_history(self) -> Option<DiskHistorySnapshot> { self.history }
     pub fn relation(&self) -> &DiskDatabaseRelation {
         &self.relation
     }
@@ -89,6 +90,14 @@ pub fn inspect_disk_database_material(
     scope: DiskDatabaseReadScope,
 ) -> Result<DiskDatabaseMaterial> {
     let root = DiskRoot::from_directory(path, directory)?;
+    inspect_with_original(&root, expected, scope, |stored| stored.genesis_view())
+}
+pub(super) fn inspect_with_original(
+    root: &DiskRoot,
+    expected: &DiskRegistrationIdentity,
+    scope: DiskDatabaseReadScope,
+    resolve: impl FnOnce(StoredHistory) -> Result<DiskHistorySnapshot>,
+) -> Result<DiskDatabaseMaterial> {
     let mut seal = HeldRegular::capture_entry(&root, &layout::DISK_IDENTITY, MAX_METADATA)?
         .ok_or_else(|| invalid("disk database inspection requires an existing disk seal"))?;
     seal.release_bytes();
@@ -120,7 +129,7 @@ pub fn inspect_disk_database_material(
     };
     let history = history_file
         .as_ref()
-        .map(|file| database::read(file.bytes(), expected))
+        .map(|file| resolve(database::read(file.bytes(), expected)?))
         .transpose()?;
     if let Some(file) = &mut history_file {
         file.release_bytes();
@@ -256,47 +265,67 @@ pub(in crate::engine::disk_catalog) fn fold(
     current: Option<&DiskCatalogSnapshot>,
 ) -> Result<DiskCatalogSnapshot> {
     validate_header(history)?;
-    let covered_current =
-        current.filter(|current| current.source_sequence <= history.header.through_sequence);
-    let mut compared = false;
-    let mut active = BTreeMap::<&str, &DiskCatalogVersion>::new();
-    let mut directories = BTreeMap::<(&str, &str, &str, &str), &DiskCatalogDirectory>::new();
-    let mut previous = None::<&DiskHistoryRecord>;
-    let mut operations = std::collections::BTreeSet::new();
-    let mut groups = 0u32;
-    for record in &history.changes {
-        for hash in [&record.candidate_hash, &record.snapshot_hash] {
+    for row in &history.changes {
+        for hash in [&row.candidate_hash, &row.snapshot_hash] {
             hash.parse::<storage_contract::ContentHash>()
                 .map_err(|source| Error::from(std::io::Error::other(source)))?;
         }
+    }
+    if let Some(last) = history.changes.last()
+        && last.sequence == history.header.through_sequence
+        && history.header.through_snapshot.as_ref() != Some(&last.snapshot_hash) {
+        return Err(invalid("disk history final change differs from its coverage snapshot"));
+    }
+    fold_rows(&history.header.identity, history.header.through_sequence, history.header.publications,
+        history.changes.iter().map(|r| (r.sequence,r.operation_id,(&r.candidate_hash,&r.snapshot_hash),&r.change)), current)
+}
+
+pub(in crate::engine::disk_catalog) fn fold_stored(
+    history: &StoredHistory, current: Option<&DiskCatalogSnapshot>,
+) -> Result<DiskCatalogSnapshot> {
+    history.header.require_shape()?;
+    fold_rows(&history.header.identity, history.header.through.sequence(), history.header.publications,
+        history.changes.iter().map(|r| (r.sequence,r.operation_id,r.source,&r.change)), current)
+}
+
+fn fold_rows<'a, S: Eq>(
+    identity: &DiskRegistrationIdentity, through: u64, publications: u32,
+    rows: impl Iterator<Item = (u64, OperationId, S, &'a DiskHistoryChange)>,
+    current: Option<&DiskCatalogSnapshot>,
+) -> Result<DiskCatalogSnapshot> {
+    let covered_current = current.filter(|current| current.source_sequence <= through);
+    let mut compared = false;
+    let mut active = BTreeMap::<&str, &DiskCatalogVersion>::new();
+    let mut directories = BTreeMap::<(&str, &str, &str, &str), &DiskCatalogDirectory>::new();
+    let mut previous = None::<(u64, OperationId, S, &'a DiskHistoryChange)>;
+    let mut operations = std::collections::BTreeSet::new();
+    let mut groups = 0u32;
+    for (sequence, operation, source, change) in rows {
+        if sequence == 0 || sequence > through || previous.as_ref().is_some_and(|p|
+            (p.0, p.3.key()) >= (sequence, change.key())) {
+            return Err(invalid("disk history changes are outside canonical coverage/order"));
+        }
         if !compared
             && let Some(current) = covered_current
-            && record.sequence > current.source_sequence
+            && sequence > current.source_sequence
         {
             compare_current(&active, &directories, current)?;
             compared = true;
         }
-        match previous {
-            Some(previous) if previous.sequence == record.sequence => {
-                if previous.operation_id != record.operation_id
-                    || previous.candidate_hash != record.candidate_hash
-                    || previous.snapshot_hash != record.snapshot_hash
-                {
-                    return Err(invalid(
-                        "one history sequence claims different publication identities",
-                    ));
+        match &previous {
+            Some((old_seq, old_operation, old_source, _)) if *old_seq == sequence => {
+                if *old_operation != operation || *old_source != source {
+                    return Err(invalid("one history sequence claims different publication identities"));
                 }
             }
             _ => {
-                if !operations.insert(record.operation_id) {
-                    return Err(invalid(
-                        "one operation appears at different history sequence slots",
-                    ));
+                if !operations.insert(operation) {
+                    return Err(invalid("one operation appears at different history sequence slots"));
                 }
-                groups += 1; // bounded by MAX_CHANGES during SQLite decode
+                groups += 1;
             }
         }
-        match &record.change {
+        match change {
             DiskHistoryChange::BackupDirectoryEntered { after } => {
                 if directories.insert(after.key(), after).is_some() {
                     return Err(invalid(
@@ -344,19 +373,11 @@ pub(in crate::engine::disk_catalog) fn fold(
         if active.len() + directories.len() > MAX_ROWS {
             return Err(budget());
         }
-        previous = Some(record);
+        previous = Some((sequence, operation, source, change));
     }
-    if groups > history.header.publications {
+    if groups > publications {
         return Err(invalid(
             "disk history change groups exceed the declared publication count",
-        ));
-    }
-    if let Some(last) = previous
-        && last.sequence == history.header.through_sequence
-        && history.header.through_snapshot.as_ref() != Some(&last.snapshot_hash)
-    {
-        return Err(invalid(
-            "disk history final change differs from its coverage snapshot",
         ));
     }
     if !compared && let Some(current) = covered_current {
@@ -382,8 +403,8 @@ pub(in crate::engine::disk_catalog) fn fold(
         backup_directories.push(row.clone());
     }
     Ok(DiskCatalogSnapshot {
-        identity: history.header.identity.clone(),
-        source_sequence: history.header.through_sequence,
+        identity: identity.clone(),
+        source_sequence: through,
         versions,
         backup_directories,
     })

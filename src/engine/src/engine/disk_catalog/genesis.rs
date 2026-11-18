@@ -3,15 +3,15 @@
 use crate::Result;
 use crate::disk::DiskRoot;
 use crate::engine::disk_catalog::{
-    DiskCatalogSnapshot, DiskHistoryHeader, DiskHistorySnapshot, PreparedDiskScopes, database,
-    history,
+    DiskCatalogSnapshot, PreparedDiskScopes, database,
+    history::{self, StoredHistory},
 };
 use crate::engine::scope_closure::{PreparedImage, Representation, Schema, ScopeClosureError};
 use storage_contract::working_tree::{DiskRegistrationIdentity, MaterialCommitment};
 
 pub(in crate::engine) struct GenesisDiskImages {
     current: DiskCatalogSnapshot,
-    history: DiskHistorySnapshot,
+    history: StoredHistory,
     current_image: PreparedImage,
     history_image: PreparedImage,
 }
@@ -67,17 +67,9 @@ impl GenesisDiskImages {
     }
 }
 
-fn empty_rows(identity: DiskRegistrationIdentity) -> (DiskCatalogSnapshot, DiskHistorySnapshot) {
+fn empty_rows(identity: DiskRegistrationIdentity) -> (DiskCatalogSnapshot, StoredHistory) {
     let current = DiskCatalogSnapshot::empty(identity.clone());
-    let history = DiskHistorySnapshot {
-        header: DiskHistoryHeader {
-            identity,
-            through_sequence: 0,
-            through_snapshot: None,
-            publications: 0,
-        },
-        changes: Vec::new(),
-    };
+    let history = StoredHistory::genesis(identity);
     (current, history)
 }
 

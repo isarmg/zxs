@@ -233,7 +233,8 @@ pub(super) fn capture(
     engine: &Engine,
     identity: DiskRegistrationIdentity,
     through: u64,
-) -> Result<DiskHistorySnapshot> {
+) -> Result<CapturedHistory> {
+    let mut binding = Binding::genesis();
     let mut header = DiskHistoryHeader {
         identity: identity.clone(),
         through_sequence: 0,
@@ -253,6 +254,7 @@ pub(super) fn capture(
             header.through_sequence = candidate.sequence;
             header.through_snapshot = Some(candidate.snapshot_hash.clone());
             header.publications += 1;
+            binding = Binding::published(&engine.config, candidate, hash)?;
             Ok(())
         };
     if engine
@@ -277,10 +279,7 @@ pub(super) fn capture(
             "disk history prefix differs from the admitted current snapshot",
         ));
     }
-    Ok(DiskHistorySnapshot {
-        header,
-        changes: changes.rows,
-    })
+    Ok(CapturedHistory { view: DiskHistorySnapshot { header, changes: changes.rows }, binding })
 }
 
 #[cfg(test)]

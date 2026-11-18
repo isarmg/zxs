@@ -102,7 +102,7 @@ fn offline_fold_keeps_old_empty_directory_path_after_a_rename() {
         ],
         2,
     );
-    let recovered = history::fold_prepared(&material, Some(&current(before.clone(), 1))).unwrap();
+    let recovered = history::fold_export(&material, Some(&current(before.clone(), 1))).unwrap();
     assert_eq!(recovered, current(after, 2));
     assert!(recovered.versions.is_empty());
     assert!(matches!(&material.changes[1].change,
@@ -125,7 +125,7 @@ fn offline_directory_fold_rejects_forged_predecessor_and_current_rows() {
         )],
         1,
     );
-    assert!(history::fold_prepared(&missing, None).is_err());
+    assert!(history::fold_export(&missing, None).is_err());
     let material = history(
         vec![record(
             1,
@@ -134,7 +134,7 @@ fn offline_directory_fold_rejects_forged_predecessor_and_current_rows() {
         )],
         1,
     );
-    assert!(history::fold_prepared(&material, Some(&current(after, 1))).is_err());
+    assert!(history::fold_export(&material, Some(&current(after, 1))).is_err());
 }
 
 #[test]

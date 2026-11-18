@@ -52,6 +52,7 @@ pub struct DiskHistoryStatus {
 /// proven not to change this disk's rows. It is never loaded from SQLite.
 #[derive(Clone)]
 struct Coverage {
+    binding: Binding,
     persisted: DiskHistoryHeader,
     observed: DiskHistoryHeader,
     records_hash: String,
@@ -135,6 +136,7 @@ impl Engine {
 
     pub(super) fn record_history_install(&mut self, receipt: &DiskHistoryReceipt) {
         self.record_history_coverage(Coverage {
+            binding: receipt.binding.clone(),
             persisted: receipt.header.clone(),
             observed: receipt.header.clone(),
             records_hash: receipt.records_hash.clone(),
@@ -306,9 +308,9 @@ impl Engine {
         let mut changes = Changes::retained(retained.changes)?;
         changes.append(candidate, candidate_hash, &before, &after)?;
         let slot = identity.slot_id.clone();
-        let captured = DiskHistorySnapshot {
-            header: coverage.observed,
-            changes: changes.rows,
+        let captured = CapturedHistory {
+            view: DiskHistorySnapshot { header: coverage.observed, changes: changes.rows },
+            binding: Binding::published(&self.config, candidate, candidate_hash)?,
         };
         let receipt = self.install_disk_history(&slot, captured)?;
         self.record_history_install(&receipt);
@@ -331,7 +333,7 @@ impl Engine {
             MAX_DATABASE_BYTES,
         )?;
         let stored = database::read(&bytes, identity)?;
-        if stored.header != coverage.persisted || digest(&stored)? != coverage.records_hash {
+        if stored.logical_root()?.hash().to_string() != coverage.records_hash {
             return Err(invalid(
                 "disk history bytes differ from the previously authenticated prefix",
             ));
@@ -339,6 +341,6 @@ impl Engine {
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
         lease.check_running()?;
-        Ok(stored)
+        stored.resolved(&coverage.persisted, &coverage.binding)
     }
 }

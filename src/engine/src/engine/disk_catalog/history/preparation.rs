@@ -19,6 +19,8 @@ struct DiskScope {
 
 pub(in crate::engine) struct PreparedDiskScopes {
     disks: Vec<DiskScope>,
+    config: ValidatedConfig,
+    through: Through,
 }
 
 impl PreparedDiskScopes {
@@ -29,7 +31,7 @@ impl PreparedDiskScopes {
                 "prepared disk scopes require at most 32 fixed genesis bindings",
             ));
         }
-        Ok(Self::from_disks(&config.pool_id, config.disks.iter()))
+        Ok(Self::from_disks(config, config.disks.iter()))
     }
 
     pub(in crate::engine) fn new_for_move(engine: &Engine) -> Result<Self> {
@@ -46,7 +48,7 @@ impl PreparedDiskScopes {
             ));
         }
         Ok(Self::from_disks(
-            &engine.config.pool_id,
+            &engine.config,
             engine.config.disks.iter().filter(|disk| {
                 enabled.iter().any(|identity| {
                     identity.slot_id == disk.slot_id
@@ -57,13 +59,14 @@ impl PreparedDiskScopes {
         ))
     }
 
-    fn from_disks<'a>(pool: &str, disks: impl Iterator<Item = &'a crate::DiskConfig>) -> Self {
+    fn from_disks<'a>(config: &ValidatedConfig, disks: impl Iterator<Item = &'a crate::DiskConfig>) -> Self {
         Self {
+            config: config.clone(), through: Through::Genesis {},
             disks: disks
                 .map(|disk| DiskScope {
                     header: DiskHistoryHeader {
                         identity: DiskRegistrationIdentity {
-                            pool_id: pool.into(),
+                            pool_id: config.pool_id.clone(),
                             disk_id: disk.disk_id.clone(),
                             slot_id: disk.slot_id.clone(),
                             binding_generation: disk.binding_generation,
@@ -73,7 +76,7 @@ impl PreparedDiskScopes {
                         publications: 0,
                     },
                     previous: DiskCatalogSnapshot::empty(DiskRegistrationIdentity {
-                        pool_id: pool.into(),
+                        pool_id: config.pool_id.clone(),
                         disk_id: disk.disk_id.clone(),
                         slot_id: disk.slot_id.clone(),
                         binding_generation: disk.binding_generation,
@@ -129,6 +132,7 @@ impl PreparedDiskScopes {
         admitted: &AdmittedState,
         stop: &AtomicBool,
     ) -> Result<()> {
+        let through = Through::from_candidate(&self.config, candidate)?;
         let mut total = self
             .disks
             .iter()
@@ -166,6 +170,7 @@ impl PreparedDiskScopes {
             disk.header.through_snapshot = Some(candidate.snapshot_hash.clone());
             disk.header.publications += 1;
         }
+        self.through = through;
         Ok(())
     }
 
@@ -188,7 +193,7 @@ impl PreparedDiskScopes {
         stop: &AtomicBool,
         mut encode: impl FnMut(
             &DiskCatalogSnapshot,
-            &DiskHistorySnapshot,
+            &StoredHistory,
         ) -> Result<(Vec<u8>, Vec<u8>)>,
         mut store: impl FnMut(DiskRegistrationIdentity, Vec<u8>, Vec<u8>) -> Result<()>,
     ) -> Result<()> {
@@ -202,10 +207,9 @@ impl PreparedDiskScopes {
                     "prepared disk prefix differs from the admitted frozen State",
                 ));
             }
-            let history = DiskHistorySnapshot {
-                header: disk.header,
-                changes: disk.changes.rows,
-            };
+            let history = StoredHistory::from_replayed(&DiskHistorySnapshot {
+                header: disk.header, changes: disk.changes.rows,
+            }, self.through)?;
             let (current_bytes, history_bytes) = encode(&current, &history)?;
             preparation_checkpoint(stop)?;
             if super::super::database::read(&current_bytes, &current.identity)? != current
@@ -222,11 +226,11 @@ impl PreparedDiskScopes {
 
     pub(in crate::engine) fn encode_pair(
         current: &DiskCatalogSnapshot,
-        history: &DiskHistorySnapshot,
+        history: &StoredHistory,
     ) -> Result<(Vec<u8>, Vec<u8>)> {
         let current_hash = storage_contract::object_hash("disk-current-catalog", current)?;
         let current_bytes = super::super::database::encode(current, &current_hash)?;
-        let history_bytes = database::encode(history, &digest(history)?)?;
+        let history_bytes = database::encode(history)?;
         Ok((current_bytes, history_bytes))
     }
 }
