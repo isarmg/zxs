@@ -22,6 +22,7 @@ ARCHIVE=$(
 
 ```sh
 python3 -m zipworkspace inspect "$ARCHIVE"
+python3 -m zipworkspace browse "$ARCHIVE" --limit 40
 python3 -m zipworkspace checkout "$ARCHIVE" demo/second demo/store demo/states/second
 python3 -m zipworkspace history "$ARCHIVE" demo/store
 python3 -m zipworkspace branches "$ARCHIVE" demo/store
@@ -43,6 +44,7 @@ python3 -m zipworkspace commit demo/states/second --fork --writers-stopped
 - 同代竞争留下的未发布候选可用 `fork-pending STATE OPERATION` 明确另起分支。分叉采用已冻结的原候选，不包含冲突后写入工作树的新字节；原件继续保留。
 - 普通未加密 Store ZIP 可用 `python3 -m zipworkspace import-zip archive.zip NEW_DIRECTORY` 导入，再 `init`。拒绝压缩/加密成员、链接、设备、重复路径、路径穿越和常见跨平台别名。保留普通文件字节、目录层级、精确名称和空目录；不承诺保留 ACL、xattr、硬链接语义或纳秒时间戳。
 - 一份归档足以恢复其完整目录，**不等于**拥有所有历史。祖先档案不在当前存储位置时，`history` 明确返回缺失父操作。
+- 只看目录不必签出：`browse "$ARCHIVE" "选中的文件夹"` 返回直接子项、文件字节数和 SHA-256，空文件夹也会显示。用上一页的 `next_cursor` 继续同一快照和目录；新快照不会接用旧游标。[只读应用接口](docs/design.md#read-only-archive-browser)同样先核验整个归档，不创建工作树。
 
 运行本项目测试：
 

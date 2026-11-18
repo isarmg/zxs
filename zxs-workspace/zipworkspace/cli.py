@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import zipfile
 from .archive import read_archive
+from .browser import ArchiveBrowser, MAX_PAGE
 from .model import Rejected
 from . import worktree as w
 from . import lifecycle, refs, opening
@@ -21,6 +22,10 @@ def main(args=None):
         return s
     add("init", "worktree store state", "register an existing directory; do not commit it")
     add("inspect", "archive", "fully validate a typed .zxs repository archive")
+    browse = add("browse", "archive", "list a verified snapshot directory without extracting")
+    browse.add_argument("directory", nargs="?", default="", help="exact archive-relative folder (default: root)")
+    browse.add_argument("--cursor", help="the previous page's next_cursor in this folder")
+    browse.add_argument("--limit", type=int, default=100, choices=range(1, MAX_PAGE+1), metavar="1..256")
     add("checkout", "archive worktree store state", "check out the selected directory snapshot, never a guessed head")
     add("import-zip", "archive worktree", "import an ordinary unencrypted Store .zip into a new directory")
     add("status", "state", "show this checkout's recorded base and pending original")
@@ -49,6 +54,9 @@ def main(args=None):
         elif ns.action == "inspect":
             marker, tree = read_archive(ns.archive)
             result = {"commit": asdict(marker), "entries": len(tree.rows), "data_bytes": tree.total}
+        elif ns.action == "browse":
+            browser = ArchiveBrowser.open(ns.archive)
+            result = asdict(browser.list_directory(ns.directory, cursor=ns.cursor, limit=ns.limit))
         elif ns.action == "checkout":
             marker = w.checkout(ns.archive, ns.worktree, ns.store, ns.state); result = {"checked_out": marker.operation}
         elif ns.action == "import-zip":

@@ -1,5 +1,6 @@
 """Budget the central directory before ZipFile allocates it; verify stored data."""
 from __future__ import annotations
+from contextlib import nullcontext
 import hashlib
 import os
 from pathlib import Path
@@ -132,7 +133,24 @@ def read_archive(path, *, managed=True, sink: Path | None = None, internal=False
     path = Path(path)
     if not internal and path.suffix.lower() != (".zxs" if managed else ".zip"):
         raise Rejected("use .zxs for a repository, or the separate .zip import command")
-    with path.open("rb") as f:
+    return _read_checked(path.open("rb"), managed=managed, sink=sink)
+
+
+def read_managed_document(document, *, display_name: str):
+    """Verify one selected open file without closing it, reopening its name, or extracting."""
+    if not display_name or "/" in display_name or "\\" in display_name or Path(display_name).suffix.lower() != ".zxs":
+        raise Rejected("select a managed .zxs document")
+    if not document.seekable() or not stat.S_ISREG(os.fstat(document.fileno()).st_mode):
+        raise Rejected("select a seekable regular file or a completed private copy")
+    position = document.tell()
+    try:
+        return _read_checked(nullcontext(document), managed=True, sink=None)
+    finally:
+        document.seek(position)
+
+
+def _read_checked(source, *, managed, sink):
+    with source as f:
         before = stamp(f)
         expected_count, central_at = bounded_directory(f)
         with zipfile.ZipFile(f, "r") as z:
