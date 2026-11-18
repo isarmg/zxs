@@ -348,6 +348,7 @@ impl DiskRoot {
             version.checksum_chunk_bytes,
             max_bytes,
             Some(version),
+            ".zxs-full-",
             &mut |progress| match progress {
                 FullCopyProgress::Check => operation.check_running(),
                 // Once the name changes, its directory barrier still belongs
