@@ -161,6 +161,13 @@ fn four_kib_overwrite_on_a_real_hundred_gib_formal_file_uses_only_one_changed_ex
     let mut bytes=Vec::new();let result=read_current_range_to(&system,file,at,4097,&mut bytes).unwrap();
     assert_eq!(result.edit.unwrap().revision,4);assert_eq!(bytes[0],0x70);assert_eq!(bytes[1],b'B');
     assert!(bytes[2..4096].iter().all(|b|*b==0x70));assert_eq!(bytes[4096],b'C');
+    let next=crate::commit_working(&system,OperationId::new().unwrap(),file,4).unwrap();
+    assert!(matches!(next.kind,crate::FormalStorage::Incremental{parent,changed,..} if parent==base.node&&changed.bytes==4097));
+    let actual=osfs::metadata(root.join(format!("{}-large",next.storage))).unwrap();
+    assert!(actual.len()<12*1024);assert!(actual.blocks()*512<total/1024);
+    assert_eq!(osfs::metadata(&raw).unwrap().ino(),original.ino());
+    let mut published=Vec::new();crate::read_node_range_to(&system,file,next.node,at,4097,&mut published).unwrap();
+    assert_eq!(published,bytes);for old in [op,b,c]{assert!(!root.join(format!("working-{old}")).exists());}
 }
 #[test]
 #[ignore="two private native test filesystems"]

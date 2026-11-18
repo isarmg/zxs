@@ -34,7 +34,7 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,rev:u64)->io
         let f=d.formal()?;if f.request!=req{return Err(invalid("different initial formal commit request for original operation"));}
         if !s.committing.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(f.receipt()));}
     }
-    if s.editing.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
+    if s.incrementing.is_some()||s.editing.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
         return Err(invalid("another original FILE operation needs completion"));
     }
     let c=s.file(file).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE for formal commit"))?;
@@ -46,11 +46,13 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,rev:u64)->io
 /// Enroll every actual old working name from this FILE's authenticated prefix.
 /// Current explicitly requires every retained extent. A historical read admits
 /// issued names if present, never adopts their bytes or requires them available.
-fn working_names(s:&Journal,c:&Frame,w:&SaveFrame,history:bool)->Vec<(OperationId,bool)>{
+pub(in crate::ordinary) fn working_names(s:&Journal,c:&Frame,w:&SaveFrame,history:bool)->Vec<(OperationId,bool)>{
     let file=c.create.file;
     if s.head(file).is_none(){return vec![(w.original.op,true)];}
     if s.committing.as_ref().is_some_and(|a|a.original.file==file){return vec![(w.original.op,false)];}
-    let mut names:Vec<_>=s.intervals(file).map(|e|(e.original.op,!history)).collect();
+    let done=s.delta(file).is_some();
+    if done&&!s.incrementing.as_ref().is_some_and(|a|a.original.file==file){return Vec::new();}
+    let mut names:Vec<_>=s.intervals(file).map(|e|(e.original.op,!done&&!history)).collect();
     if let Some(a)=s.editing.as_ref().filter(|a|a.original.file==file){
         if s.decided(a.original.op).is_none(){names.push((a.original.op,!history&&s.pending.is_some()));}
     }
@@ -60,33 +62,43 @@ pub(in crate::ordinary) fn directory(v:&FileVolume<'_>,s:&Journal,c:&Frame,w:&Sa
     let a=s.committing.as_ref().filter(|a|a.original.file==c.create.file);
     let f=s.head(c.create.file);
     let formal=f.map(|f|(&f.original,true)).or_else(||a.map(|a|(&a.original,false)));
-    let dir=container::directory_with(v,&c.create,working_names(s,c,w,false),formal)?;
+    let delta=s.delta(c.create.file).map(|d|(&d.original,true)).or_else(||s.incrementing.as_ref()
+        .filter(|i|i.original.file==c.create.file).map(|i|(&i.original,s.pending.is_some())));
+    let dir=container::directory_all(v,&c.create,working_names(s,c,w,false),formal,delta)?;
     if let Some(a)=a{
         let sealed=s.pending.as_ref().map(|p|p.frame.formal()).transpose()?;
         physical::inspect_prepared(&dir,a,sealed.or(f))?;
     }
     Ok(dir)
 }
-fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<(FormalNode,HistoryBody)>{
-        let (p,_,s)=LocalPool::with_snapshot(system,Access::Read)?;
-        let f=s.node(file,node).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such published node in this FILE"))?;
-        let c=s.file(file).ok_or_else(||invalid("formal node lacks original FILE"))?;
-        let w=s.saved(file).ok_or_else(||invalid("formal node lacks its original saved-revision decision"))?;
-        let v=p.ordinary(c.create.volume)?;
-        // A historical original never borrows an unrelated dirty extent,
-        // even when it has disappeared. Complete current reads are stricter.
-        let dir=container::directory_with(&v,&c.create,working_names(&s,c,w,true),Some((&f.original,true)))?;
-        let body=HistoryBody::current(&dir,f)?;v.root.file.sync_all()?;v.require_current()?;
-        Ok((f.receipt(),body))
+enum NodeBody{Full(HistoryBody),Incr(super::delta::physical::Body)}
+fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<(FormalNode,NodeBody)>{
+    let (p,_,s)=LocalPool::with_snapshot(system,Access::Read)?;
+    let selected_delta=s.delta_node(file,node);
+    let f=if selected_delta.is_some(){s.head(file)}else{s.node(file,node)}.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such published node in this FILE"))?;
+    let c=s.file(file).ok_or_else(||invalid("formal node lacks original FILE"))?;
+    let w=s.saved(file).ok_or_else(||invalid("formal node lacks its original save"))?;let v=p.ordinary(c.create.volume)?;
+    let incr=s.delta(file).map(|d|(&d.original,selected_delta.is_some())).or_else(||s.incrementing.as_ref()
+        .filter(|a|a.original.file==file).map(|a|(&a.original,false)));
+    let dir=container::directory_all(&v,&c.create,working_names(&s,c,w,true),Some((&f.original,true)),incr)?;
+    let parent=HistoryBody::current(&dir,f)?;
+    let result=match selected_delta{
+        None=>(f.receipt(),NodeBody::Full(parent)),
+        Some(d)=>{
+            (d.receipt(),NodeBody::Incr(super::delta::physical::Body::open(&dir,parent,d)?))
+        }
+    };
+    v.root.file.sync_all()?;v.require_current()?;Ok(result)
 }
 pub fn read_node_to(system:&Path,file:FileId,node:NodeId,mut out:impl Write)->io::Result<FormalNode>{
     let (receipt,body)=open_node(system,file,node)?;
-    body.write_to(&mut out)?;out.flush()?;Ok(receipt)
+    match &body{NodeBody::Full(b)=>b.write_to(&mut out)?,NodeBody::Incr(b)=>b.whole(&mut out)?,}
+    out.flush()?;if let NodeBody::Incr(b)=body{b.unchanged()?;}Ok(receipt)
 }
-/// Strict half-open [offset,offset+length) on an immutable original FULL.
 pub fn read_node_range_to(system:&Path,file:FileId,node:NodeId,offset:u64,length:u64,mut out:impl Write)->io::Result<FormalNode>{
     let (receipt,body)=open_node(system,file,node)?;
-    body.write_range(offset,length,&mut out)?;out.flush()?;Ok(receipt)
+    match &body{NodeBody::Full(b)=>b.write_range(offset,length,&mut out)?,NodeBody::Incr(b)=>b.range(offset,length,&mut out)?,}
+    out.flush()?;if let NodeBody::Incr(b)=body{b.unchanged()?;}Ok(receipt)
 }
 enum Source{Done(FormalNode),Input(Input)}
 fn source(system:&Path,op:OperationId,file:FileId,revision:u64)->io::Result<Source>{

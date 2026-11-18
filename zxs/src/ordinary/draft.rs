@@ -12,10 +12,10 @@ use std::{io::{self,Read,Write},path::Path};
 
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub struct CurrentFile{pub file:FileInfo,pub working:Option<DraftReceipt>,pub head:Option<super::FormalNode>,pub edit:Option<super::SpanReceipt>}
-pub(super) enum Body{Working(Reader),Formal(super::formal::physical::HistoryBody),Composed(super::interval::physical::Composed)}
+pub(super) enum Body{Working(Reader),Formal(super::formal::physical::HistoryBody),Composed(super::interval::physical::Composed),Incr(super::delta::physical::Body)}
 impl Body{
     fn write_to(&self,out:impl Write)->io::Result<()>{
-        match self{Self::Working(b)=>b.write_to(out),Self::Formal(b)=>b.write_to(out),Self::Composed(b)=>b.write_range(0,b.size(),out)}
+        match self{Self::Working(b)=>b.write_to(out),Self::Formal(b)=>b.write_to(out),Self::Composed(b)=>b.write_range(0,b.size(),out),Self::Incr(b)=>b.whole(out)}
     }
 }
 #[derive(Clone,Debug,Eq,PartialEq)]
@@ -32,6 +32,13 @@ pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)
         // obstructed. Do not use the old draft as the body, or require it for
         // the selected node. Complete-inventory and retirement verify it separately.
         let base=super::formal::physical::HistoryBody::current(&dir,f)?;
+        if let Some(d)=state.delta(c.create.file){
+            return Ok(Some(Body::Incr(super::delta::physical::Body::open(&dir,base,d)?)));
+        }
+        if let Some(a)=state.incrementing.as_ref().filter(|a|a.original.file==c.create.file){
+            let m=super::delta::map::Map::derive(f.original.content.bytes,state.intervals(c.create.file))?;
+            super::delta::physical::inspect(&dir,a,&m,state.pending.as_ref().map(|p|p.frame.delta()).transpose()?)?;
+        }
         if let Some(a)=state.editing.as_ref().filter(|a|a.original.file==c.create.file){
             let sealed=state.pending.as_ref().map(|p|p.frame.span()).transpose()?;
             super::interval::physical::inspect(&dir,a,sealed)?;
@@ -69,7 +76,7 @@ pub(super) fn capture_current(system:&Path,id:FileId)->io::Result<(CurrentFile,O
     let c=state.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published original FILE"))?;
     let volume=pool.ordinary(c.create.volume)?;let body=admit_current_held(&state,&volume,c)?;
     volume.root.file.sync_all()?;volume.require_current()?;
-    Ok((CurrentFile{file:FileInfo::from_frame(c),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.head(id).map(super::formal::types::Commit::receipt),edit:state.interval(id).map(super::interval::types::Saved::receipt)},body))
+    Ok((CurrentFile{file:FileInfo::from_frame(c),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.delta(id).map(super::delta::types::Delta::receipt).or_else(||state.head(id).map(super::formal::types::Commit::receipt)),edit:if state.delta(id).is_some(){None}else{state.interval(id).map(super::interval::types::Saved::receipt)}},body))
 }
 /// Inspect actual original FILE and (if present) its named working record and
 /// authenticated chunk head. This is not a whole-content verification scan.
@@ -83,7 +90,7 @@ pub fn read_current_to(system:&Path,id:FileId,mut output:impl Write)->io::Result
     finish_output(&body,&mut output)?;Ok(info)
 }
 pub(super) fn finish_output(body:&Option<Body>,out:&mut impl Write)->io::Result<()>{
-    if let Some(Body::Composed(c))=body{c.unchanged()?;out.flush()?;c.finish()}else{out.flush()}
+    if let Some(Body::Composed(c))=body{c.unchanged()?;out.flush()?;c.finish()}else if let Some(Body::Incr(b))=body{b.unchanged()?;out.flush()?;b.unchanged()}else{out.flush()}
 }
 pub fn first_save_receipt(system:&Path,op:OperationId)->io::Result<Option<FirstSaveObservation>>{
     let (_pool,_,s)=LocalPool::with_snapshot(system,Access::Read)?;
@@ -109,7 +116,7 @@ fn choice<'a>(pool:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,claim:Dra
         // A completed historical receipt neither opens today's data path nor consumes input.
         if !s.saving.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(f.receipt()));}
     }
-    if s.editing.is_some()||s.committing.is_some()||s.allocated.is_some()||s.saving.as_ref().is_some_and(|a|a.original.op!=op||a.request!=request){
+    if s.incrementing.is_some()||s.editing.is_some()||s.committing.is_some()||s.allocated.is_some()||s.saving.as_ref().is_some_and(|a|a.original.op!=op||a.request!=request){
         return Err(invalid("different original FILE operation needs completion"));
     }
     let c=s.file(file).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE at first SAVE cutoff"))?;

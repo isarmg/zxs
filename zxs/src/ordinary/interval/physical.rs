@@ -54,6 +54,40 @@ impl Stored{
             head:n.head,digest:self.index}.write_range(at,len,out,||n.pin.unchanged())
     }
 }
+/// Strict whole-container inventory admits a retired spelling only when its
+/// actual still-present object is the exact originally confirmed working leaf.
+/// Absence during an already published cleanup is allowed, not proof of success.
+pub(in crate::ordinary) fn inspect_retained_name(dir:&HeldDir,s:&super::types::Saved)->io::Result<()>{
+    if let Some(n)=Named::open(dir,&s.original)?{
+        if NativeObject::stamp(&n.pin.stamp)!=s.material.object||n.head!=s.material.chain{
+            return Err(invalid("unknown replacement at an original working cleanup name"));
+        }
+        n.require(dir)?;
+    }Ok(())
+}
+/// Slow, read-only pass before taking the final SYSTEM writer. A missing
+/// operand can enter the cleanup plan only on an already-confirmed original.
+pub(in crate::ordinary) fn cleanup_witness(dir:&HeldDir,s:&super::types::Saved,decided:bool)->io::Result<Option<fs::OriginalStamp>>{
+    let o=&s.original;let Some(n)=Named::open(dir,o)? else{
+        return if decided{Ok(None)}else{Err(invalid("unpublished INCR working original missing"))};
+    };
+    if NativeObject::stamp(&n.pin.stamp)!=s.material.object||n.head!=s.material.chain{return Err(invalid("displaced working original in cleanup"));}
+    let (head,index)=scan(&n.pin.file,o,||n.pin.unchanged())?;
+    if head!=s.material.chain||index!=s.material.index{return Err(invalid("unexpected working bytes; preserve them"));}
+    n.require(dir)?;Ok(Some(n.pin.stamp.clone()))
+}
+/// Only after verified publication and with an exclusive lease on the FILE
+/// birth record. No content-sized pass while holding the final SYSTEM writer.
+pub(in crate::ordinary) fn retire_verified(dir:&HeldDir,s:&super::types::Saved,witness:&Option<fs::OriginalStamp>,after_unlink:impl FnOnce()->io::Result<()>)->io::Result<()>{
+    let o=&s.original;let name=crate::ordinary::draft::material::leaf(o.op);
+    match (Named::open(dir,o)?,witness){
+        (None,None)=>dir.confirm_absence(&name),
+        (Some(n),Some(st)) if n.pin.stamp==*st&&NativeObject::stamp(st)==s.material.object&&n.head==s.material.chain=>{
+            n.pin.file.try_lock().map_err(io::Error::from)?;dir.release_verified_work(&name,&n.pin,after_unlink)
+        }
+        _=>Err(invalid("working original changed since cleanup verification; preserve it")),
+    }
+}
 pub(in crate::ordinary) fn inspect(dir:&HeldDir,a:&SpanAllocation,sealed:Option<&super::types::Saved>)->io::Result<()>{
     let n=Named::open(dir,&a.original)?;
     if let Some(n)=&n{n.prepared(a)?;}
@@ -65,24 +99,6 @@ pub(in crate::ordinary) fn inspect(dir:&HeldDir,a:&SpanAllocation,sealed:Option<
 }
 mod cut;
 pub(in crate::ordinary) use cut::{Composed,Operands};
-// The logical revision depends on all three held operands, even when a
-// particular output slice is a pure zero gap or uses only one of the two
-// sources. fstat the already pinned originals; never read unrelated BODY
-// blocks or rehash an unrelated LOCAL index just to prove the cut stayed put.
-struct CheckedOutput<W,C>{out:W,check:C}
-fn after_output(check:&mut impl FnMut()->io::Result<()>)->io::Result<()>{
-    // The sink has already accepted bytes. An interrupted fstat can retry
-    // only that observation, never signal write_all to repeat the payload.
-    loop{match check(){Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,r=>return r}}
-}
-impl<W:Write,C:FnMut()->io::Result<()>> Write for CheckedOutput<W,C>{
-    fn write(&mut self,bytes:&[u8])->io::Result<usize>{
-        (self.check)()?;let n=self.out.write(bytes)?;after_output(&mut self.check)?;Ok(n)
-    }
-    fn flush(&mut self)->io::Result<()>{
-        (self.check)()?;self.out.flush()?;after_output(&mut self.check)
-    }
-}
 enum Part{Anonymous(File),Named(Named)}
 pub(super) struct Capture{dir:HeldDir,base:HistoryBody,prior:Operands,o:Original,part:Part}
 pub(super) struct Verified{capture:Capture,stamp:fs::OriginalStamp,head:[u8;32],index:[u8;32]}
@@ -148,19 +164,3 @@ impl Verified{
 }
 pub(super) struct Bound(Stored);
 impl Bound{pub(super) fn feedback(&self,dir:&HeldDir)->io::Result<Material>{self.0.named.require(dir)?;dir.file.sync_all()?;Ok(self.0.facts())}}
-
-#[cfg(test)]
-mod checked_output_tests{
-    use super::*;
-    #[test]
-    fn interrupted_post_write_check_retries_observation_not_already_delivered_bytes(){
-        let mut seen=Vec::new();let mut checks=0u8;
-        {
-            let mut out=CheckedOutput{out:&mut seen,check:||{
-                checks+=1;if checks==2{return Err(io::Error::from(io::ErrorKind::Interrupted));}Ok(())
-            }};
-            out.write_all(b"one payload").unwrap();
-        }
-        assert_eq!(checks,3);assert_eq!(seen,b"one payload");
-    }
-}

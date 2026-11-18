@@ -5,16 +5,17 @@ use super::{allocation::{self,Allocation},draft::{allocation::{self as save_allo
     formal::{allocation::{self as formal_allocation,FormalAllocation},types::{self as formal_types,Commit}},
     interval::{allocation::{self as span_allocation,SpanAllocation},types::{self as span_types,Saved}},
     wire::{self,Frame,In,NativeObject,MAX_FRAME}};
+use super::delta::{allocation::{self as delta_allocation,DeltaAllocation},map::Map as DeltaMap,types::{self as delta_types,Delta}};
 use crate::{BranchId,NodeId,VersionId,VersionStorageId,fs::{self,HeldDir,invalid},Entity,EntryId,HistoryId,PoolId,OperationId,FileId,VolumeId};
 use std::{collections::{BTreeMap,BTreeSet},ffi::CStr,io};
 
 pub(crate) const MAX_JOURNAL:usize=8*1024*1024;
-const MAX_DECISIONS:usize=8192;
+pub(in crate::ordinary) const MAX_DECISIONS:usize=8192;
 pub(super) const INTENT:&CStr=c"FILE-INTENT";
 const INTENT_MAGIC:&[u8]=b"ZXS/ORIGINAL-FILE-INTENT\0";
 const MAX_INTENT:usize=MAX_FRAME+256;
 
-pub(super) enum Decision{Create(Frame),Save(SaveFrame),Formal(Commit),Span(Saved)}
+pub(super) enum Decision{Create(Frame),Save(SaveFrame),Formal(Commit),Span(Saved),Delta(Delta)}
 impl Decision{
     pub(super) fn read(pool:PoolId,bytes:&[u8])->io::Result<Self>{
         let e=wire::envelope(pool,bytes)?;
@@ -23,19 +24,21 @@ impl Decision{
             2=>Ok(Self::Save(SaveFrame::from_envelope(pool,bytes,e)?)),
             3=>Ok(Self::Formal(Commit::from_envelope(pool,bytes,e)?)),
             4=>Ok(Self::Span(Saved::from_envelope(pool,bytes,e)?)),
+            5=>Ok(Self::Delta(Delta::from_envelope(pool,bytes,e)?)),
             _=>Err(invalid("unknown original SYSTEM command")),
         }
     }
     pub(super) fn creation(&self)->io::Result<&Frame>{match self{Self::Create(f)=>Ok(f),_=>Err(invalid("original command is not FILE creation"))}}
     pub(super) fn save(&self)->io::Result<&SaveFrame>{match self{Self::Save(f)=>Ok(f),_=>Err(invalid("original command is not a first SAVE"))}}
     pub(super) fn formal(&self)->io::Result<&Commit>{match self{Self::Formal(f)=>Ok(f),_=>Err(invalid("original command is not a formal FILE commit"))}}
+    pub(super) fn delta(&self)->io::Result<&Delta>{match self{Self::Delta(d)=>Ok(d),_=>Err(invalid("not a formal incremental decision"))}}
     pub(super) fn span(&self)->io::Result<&Saved>{match self{Self::Span(s)=>Ok(s),_=>Err(invalid("not an original working interval save"))}}
-    pub(super) fn seq(&self)->u64{match self{Self::Create(f)=>f.seq,Self::Save(f)=>f.seq,Self::Formal(f)=>f.seq,Self::Span(f)=>f.seq}}
-    fn previous(&self)->[u8;32]{match self{Self::Create(f)=>f.previous,Self::Save(f)=>f.previous,Self::Formal(f)=>f.previous,Self::Span(f)=>f.previous}}
-    fn digest(&self)->[u8;32]{match self{Self::Create(f)=>f.digest,Self::Save(f)=>f.digest,Self::Formal(f)=>f.digest,Self::Span(f)=>f.digest}}
-    pub(super) fn request(&self)->[u8;32]{match self{Self::Create(f)=>f.request,Self::Save(f)=>f.request,Self::Formal(f)=>f.request,Self::Span(f)=>f.request}}
-    pub(super) fn bytes(&self)->&[u8]{match self{Self::Create(f)=>&f.bytes,Self::Save(f)=>&f.bytes,Self::Formal(f)=>&f.bytes,Self::Span(f)=>&f.bytes}}
-    pub(super) fn op(&self)->OperationId{match self{Self::Create(f)=>f.create.op,Self::Save(f)=>f.original.op,Self::Formal(f)=>f.original.op,Self::Span(f)=>f.original.op}}
+    pub(super) fn seq(&self)->u64{match self{Self::Create(f)=>f.seq,Self::Save(f)=>f.seq,Self::Formal(f)=>f.seq,Self::Span(f)=>f.seq,Self::Delta(f)=>f.seq}}
+    fn previous(&self)->[u8;32]{match self{Self::Create(f)=>f.previous,Self::Save(f)=>f.previous,Self::Formal(f)=>f.previous,Self::Span(f)=>f.previous,Self::Delta(f)=>f.previous}}
+    fn digest(&self)->[u8;32]{match self{Self::Create(f)=>f.digest,Self::Save(f)=>f.digest,Self::Formal(f)=>f.digest,Self::Span(f)=>f.digest,Self::Delta(f)=>f.digest}}
+    pub(super) fn request(&self)->[u8;32]{match self{Self::Create(f)=>f.request,Self::Save(f)=>f.request,Self::Formal(f)=>f.request,Self::Span(f)=>f.request,Self::Delta(f)=>f.request}}
+    pub(super) fn bytes(&self)->&[u8]{match self{Self::Create(f)=>&f.bytes,Self::Save(f)=>&f.bytes,Self::Formal(f)=>&f.bytes,Self::Span(f)=>&f.bytes,Self::Delta(f)=>&f.bytes}}
+    pub(super) fn op(&self)->OperationId{match self{Self::Create(f)=>f.create.op,Self::Save(f)=>f.original.op,Self::Formal(f)=>f.original.op,Self::Span(f)=>f.original.op,Self::Delta(f)=>f.original.op}}
 }
 
 pub(super) struct Intent{pub frame:Decision,pub stamp:fs::OriginalStamp,pub bytes:Vec<u8>}
@@ -65,7 +68,7 @@ struct OriginalIndex{
     ops:BTreeSet<OperationId>,files:BTreeMap<FileId,usize>,entries:BTreeSet<EntryId>,histories:BTreeSet<HistoryId>,
     names:BTreeSet<(VolumeId,String)>,tickets:BTreeSet<OperationId>,native:BTreeSet<fs::Birth>,saved:BTreeMap<FileId,usize>,
     formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,branches:BTreeSet<BranchId>,
-    versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,spans:BTreeMap<FileId,Vec<usize>>,
+    versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,usize>,
 }
 impl OriginalIndex{
     fn birth<'a>(&self,id:FileId,frames:&'a[Decision])->io::Result<&'a Frame>{
@@ -99,6 +102,18 @@ impl OriginalIndex{
         }
         Ok(c)
     }
+    fn delta_source<'a>(&self,o:&delta_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<&'a Frame>{
+        let c=self.birth(o.file,ds)?;
+        let p=self.formal.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("no formal parent for INCR"))?.formal()?;
+        let indices=self.spans.get(&o.file).ok_or_else(||invalid("no original working chain for INCR"))?;
+        let selected:Vec<&Saved>=indices.iter().map(|&i|ds[i].span()).collect::<io::Result<_>>()?;
+        let last=selected.last().copied().ok_or_else(||invalid("no original saved working edge for INCR"))?;
+        let map=DeltaMap::derive(p.original.content.bytes,selected.iter().copied())?;
+        o.require(c,p,last,&map)?;
+        if self.deltas.contains_key(&o.file)||self.nodes.contains_key(&o.node)||self.versions.contains(&o.version)||self.storage.contains(&o.storage)
+            ||!allow(o.volume,o.uid,c.create.directory.entity,&c.create.directory.birth,false){return Err(invalid("conflicting formal INCR identity or owner"));}
+        Ok(c)
+    }
     fn admit(&self,f:&Decision,frames:&[Decision],prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
         if frames.len()>=MAX_DECISIONS||f.seq()!=frames.len() as u64+1||f.previous()!=prev||self.ops.contains(&f.op()){
             return Err(invalid("repeated operation or nonconsecutive original FILE decision"));
@@ -125,8 +140,13 @@ impl OriginalIndex{
                     return Err(invalid("formal FULL and node must be separate new originals on the one admitted FILE owner"));
                 }
             }
+            Decision::Delta(d)=>{
+                let c=self.delta_source(&d.original,frames,allow)?;let n=&d.material.object;
+                if self.native.contains(&n.birth)||n.entity.device!=c.create.directory.entity.device||n.birth.filesystem()!=c.create.directory.birth.filesystem(){
+                    return Err(invalid("formal INCR is not new immutable material on its original FILE volume"));}
+            }
             Decision::Span(s)=>{let o=&s.original;let c=self.original_span(o,frames,allow)?;let n=&s.material.object;
-                if self.native.contains(&n.birth)||n.entity.device!=c.create.directory.entity.device||
+                if self.deltas.contains_key(&o.file)||self.native.contains(&n.birth)||n.entity.device!=c.create.directory.entity.device||
                     n.birth.filesystem()!=c.create.directory.birth.filesystem(){return Err(invalid("not an independent changed extent on the original FILE"));}
             }
         }
@@ -142,14 +162,16 @@ impl OriginalIndex{
             Decision::Formal(f)=>{let o=&f.original;self.formal.insert(o.file,index);self.nodes.insert(o.node,index);
                 self.branches.insert(o.branch);self.versions.insert(o.version);self.storage.insert(o.storage);
                 self.native.insert(f.materials.node.birth.clone());self.native.insert(f.materials.raw.birth.clone());}
+            Decision::Delta(d)=>{let o=&d.original;self.deltas.insert(o.file,index);self.nodes.insert(o.node,index);
+                self.versions.insert(o.version);self.storage.insert(o.storage);self.native.insert(d.material.object.birth.clone());}
             Decision::Span(s)=>{self.spans.entry(s.original.file).or_default().push(index);self.native.insert(s.material.object.birth.clone());}
         }
     }
 }
 
 pub(crate) struct Journal{
-    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
-    pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
+    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,usize>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
+    pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) incrementing:Option<DeltaAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
 }
 impl Journal{
     pub(crate) fn read(system:&HeldDir,pool:PoolId,initial_op:OperationId,genesis:[u8;32],tail:&[u8],floor:fs::Frontier,
@@ -161,9 +183,17 @@ impl Journal{
             let f=Decision::read(pool,&input[..n])?;idx.admit(&f,&ds,prev,&allowed)?;
             prev=f.digest();idx.remember(&f,ds.len());ds.push(f);input=&input[n..];
         }
-        let (mut allocated,mut saving,mut committing,mut editing)=(None,None,None,None);
+        let (mut allocated,mut saving,mut committing,mut editing,mut incrementing)=(None,None,None,None,None);
         if let Some((stamp,bytes))=system.record(allocation::NAME,allocation::MAX)?{
-            if bytes.starts_with(span_allocation::MAGIC){
+            if bytes.starts_with(delta_allocation::MAGIC){
+                let a=DeltaAllocation::from_bytes(pool,stamp,bytes)?;
+                let last=ds.last().is_some_and(|d|matches!(d,Decision::Delta(f) if a.matches(f)));
+                if !last{
+                    if ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op){return Err(invalid("not the original INCR frontier"));}
+                    idx.delta_source(&a.original,&ds,&allowed)?;
+                }
+                incrementing=Some(a);
+            }else if bytes.starts_with(span_allocation::MAGIC){
                 let a=SpanAllocation::from_bytes(pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Span(f) if a.matches(f)));
                 if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op)){
@@ -172,7 +202,7 @@ impl Journal{
                 // When an already-appended frame exactly equals this still-open
                 // original, its predecessor was checked before remember(). A fresh
                 // reservation must instead use the currently admitted FILE edge.
-                if !last{idx.original_span(&a.original,&ds,&allowed)?;}
+                if !last{if idx.deltas.contains_key(&a.original.file){return Err(invalid("working reservation did not select the current formal HEAD"));}idx.original_span(&a.original,&ds,&allowed)?;}
                 editing=Some(a);
             }else if bytes.starts_with(formal_allocation::MAGIC){
                 let a=FormalAllocation::from_bytes(pool,stamp,bytes)?;idx.original_formal(&a.original,&ds,&allowed)?;
@@ -207,6 +237,7 @@ impl Journal{
                 Decision::Create(f)=>allocated.as_ref().is_some_and(|a|a.matches(f)),
                 Decision::Save(f)=>saving.as_ref().is_some_and(|a|a.matches(f)),
                 Decision::Formal(f)=>committing.as_ref().is_some_and(|a|a.matches(f)),
+                Decision::Delta(f)=>incrementing.as_ref().is_some_and(|a|a.matches(f)),
                 Decision::Span(f)=>editing.as_ref().is_some_and(|a|a.matches(f)),
             };
             if !matches{return Err(invalid("sealed FILE material has no matching original reservation"));}
@@ -230,14 +261,14 @@ impl Journal{
             frame_bytes=before;unconfirmed=last.bytes().len();
             // The replay indices must never expose an otherwise complete but
             // not yet confirmed last frame (including a first working revision).
-            match last {Decision::Span(s)=>{
+            match last {Decision::Delta(d)=>{idx.deltas.remove(&d.original.file);idx.nodes.remove(&d.original.node);},Decision::Span(s)=>{
                     let chain=idx.spans.get_mut(&s.original.file).ok_or_else(||invalid("missing original span chain"))?;
                     if chain.pop()!=Some(ds.len()-1){return Err(invalid("wrong unconfirmed working edge"));}
                 },Decision::Formal(f)=>{idx.formal.remove(&f.original.file);idx.nodes.remove(&f.original.node);},
                 Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{idx.files.remove(&f.create.file);}}
             ds.pop();
         }
-        Ok(Self{decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,pending,allocated,saving,committing,editing,tail:unconfirmed,genesis,frame_bytes})
+        Ok(Self{decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,pending,allocated,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
     }
     pub(super) fn frontier(&self)->(u64,[u8;32]){
         (self.decisions.len() as u64,self.decisions.last().map_or(self.genesis,Decision::digest))
@@ -267,11 +298,22 @@ impl Journal{
     }
     pub(super) fn interval(&self,id:FileId)->Option<&Saved>{self.intervals(id).next_back()}
     pub(super) fn head(&self,id:FileId)->Option<&Commit>{self.decisions.get(*self.formal.get(&id)?)?.formal().ok()}
+    pub(super) fn delta(&self,file:FileId)->Option<&Delta>{self.decisions.get(*self.deltas.get(&file)?)?.delta().ok()}
+    pub(super) fn delta_node(&self,file:FileId,node:NodeId)->Option<&Delta>{
+        self.decisions.get(*self.nodes.get(&node)?)?.delta().ok().filter(|d|d.original.file==file)
+    }
+    pub(super) fn free_content_ids(&self,node:NodeId,version:VersionId,storage:VersionStorageId)->bool{
+        !self.decisions.iter().any(|d|match d{
+            Decision::Formal(f)=>{let o=&f.original;o.node==node||o.version==version||o.storage==storage},
+            Decision::Delta(f)=>{let o=&f.original;o.node==node||o.version==version||o.storage==storage},
+            _=>false,
+        })
+    }
     pub(super) fn node(&self,file:FileId,node:NodeId)->Option<&Commit>{
         self.decisions.get(*self.nodes.get(&node)?)?.formal().ok().filter(|f|f.original.file==file)
     }
     pub(super) fn require_free_formal_ids(&self,o:&formal_types::Original)->io::Result<()>{
-        if self.decisions.iter().filter_map(|d|d.formal().ok()).any(|d|{
+        if !self.free_content_ids(o.node,o.version,o.storage)||self.decisions.iter().filter_map(|d|d.formal().ok()).any(|d|{
             let p=&d.original;p.file==o.file||p.node==o.node||p.version==o.version||p.branch==o.branch||p.storage==o.storage
         }){return Err(invalid("first formal identity already used"));}Ok(())
     }

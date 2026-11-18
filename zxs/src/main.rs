@@ -84,11 +84,11 @@ fn run() -> io::Result<()> {
         Some("file-commit")=>{
             let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let file=word(&mut args)?.parse()?;
             let rev=word(&mut args)?.parse::<u64>().map_err(|_|bad("invalid expected working revision"))?;end(&mut args)?;
-            let f=zxs::commit_first(&system,op,file,rev)?;show_node(&f);Ok(())
+            let f=zxs::commit_working(&system,op,file,rev)?;show_node(&f);Ok(())
         }
         Some("file-commit-receipt")=>{
             let system=path(&mut args)?;let op=word(&mut args)?.parse()?;end(&mut args)?;
-            let r=zxs::first_commit_receipt(&system,op)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such original formal commit"))?;
+            let r=zxs::formal_receipt(&system,op)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such original formal commit"))?;
             println!("Original formal commit {:?}: operation {} FILE {}",r.status,r.operation,r.file);
             if let Some(f)=r.published{show_node(&f);}Ok(())
         }
@@ -144,9 +144,12 @@ fn show_edit(e:&zxs::SpanReceipt){
     println!("Working interval: FILE {} revision {} base node {} offset {} changed bytes {} logical bytes {} original decision {}",
         e.file,e.revision,e.base_node,e.edit.offset,e.edit.input.bytes,e.logical_bytes,e.decision_sequence);
 }
+fn hex_digest(digest:&[u8;32])->String{digest.iter().map(|v|format!("{v:02x}")).collect()}
 fn show_node(f:&zxs::FormalNode){
-    println!("Published manual FULL: FILE {} main {} node {} version {} storage {} created-name {} length {} from SAVE {} revision {} decision {}",
-        f.file,f.branch,f.node,f.version,f.storage,f.creation_name,f.body.bytes,f.created_from_save,f.working_revision,f.decision_sequence);
+    let kind=match &f.kind{zxs::FormalStorage::Full=>"FULL".to_owned(),zxs::FormalStorage::Incremental{parent,parent_version,changed}=>
+        format!("INCR parent {parent} parent-version {parent_version} packed-bytes {} packed-sha256 {}",changed.bytes,hex_digest(&changed.sha256))};
+    println!("Published manual {kind}: FILE {} main {} node {} version {} storage {} created-name {} length {} body-sha256 {} from SAVE {} revision {} decision {}",
+        f.file,f.branch,f.node,f.version,f.storage,f.creation_name,f.body.bytes,hex_digest(&f.body.sha256),f.created_from_save,f.working_revision,f.decision_sequence);
 }
 fn main() -> ExitCode {
     match run() {Ok(())=>ExitCode::SUCCESS,Err(error)=>{eprintln!("zxs: {error}");ExitCode::FAILURE}}

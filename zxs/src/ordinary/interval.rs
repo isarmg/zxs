@@ -4,7 +4,7 @@
 pub(super) mod types;
 pub(super) mod allocation;
 pub(super) mod physical;
-mod layout;
+pub(in crate::ordinary) mod layout;
 use super::{allocation as ordinary_allocation,draft::{self,Body},formal::{self,types::Commit,physical::HistoryBody},
     journal::{self,Decision,Journal},wire::Frame,publish_sealed,Cut,CreationStatus,CurrentFile};
 use self::{allocation::SpanAllocation,types::{Original,Saved,SpanEdit,SpanReceipt},physical::{Capture,Verified}};
@@ -33,9 +33,10 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,revision:u64,e
         let r=d.span()?;if r.request!=req{return Err(invalid("different original interval request under same operation"));}
         if !s.editing.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(r.receipt()));}
     }
-    if s.allocated.is_some()||s.saving.is_some()||s.committing.is_some()||s.editing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
+    if s.incrementing.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.is_some()||s.editing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
         return Err(invalid("different original FILE operation needs completion"));
     }
+    if s.delta(id).is_some(){return Err(invalid("this working editor does not yet support a formal INCR base"));}
     let c=s.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published FILE"))?;
     let f=s.head(id).ok_or_else(||invalid("interval editing requires an original formal FILE baseline"))?;
     let prior=s.intervals(id).rev().find(|e|e.original.op!=op);
@@ -104,6 +105,7 @@ pub fn read_current_range_to(system:&Path,file:FileId,offset:u64,length:u64,mut 
     let (info,body)=draft::capture_current(system,file)?;
     match &body{
         Some(Body::Formal(b))=>b.write_range(offset,length,&mut out)?,
+        Some(Body::Incr(b))=>b.range(offset,length,&mut out)?,
         Some(Body::Composed(b))=>b.write_range(offset,length,&mut out)?,
         Some(Body::Working(_))=>return Err(io::Error::new(io::ErrorKind::Unsupported,"first uncommitted draft supports full sequential read only")),
         None if offset==0&&length==0=>{},

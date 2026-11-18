@@ -5,16 +5,16 @@ use crate::fs::invalid;
 use std::{collections::BTreeMap,io};
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(super) enum From{Base,Extent(usize),Zero}
+pub(in crate::ordinary) enum From{Base,Extent(usize),Zero}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 struct Piece{end:u64,from:From,source:u64} // map key is the logical beginning
-pub(super) struct Layout{len:u64,parts:BTreeMap<u64,Piece>}
+pub(in crate::ordinary) struct Layout{len:u64,parts:BTreeMap<u64,Piece>}
 impl Layout{
-    pub(super) fn base(len:u64)->Self{
+    pub(in crate::ordinary) fn base(len:u64)->Self{
         let mut parts=BTreeMap::new();if len!=0{parts.insert(0,Piece{end:len,from:From::Base,source:0});}
         Self{len,parts}
     }
-    pub(super) fn len(&self)->u64{self.len}
+    pub(in crate::ordinary) fn len(&self)->u64{self.len}
     fn split(&mut self,at:u64)->io::Result<()>{
         let Some((&start,&p))=self.parts.range(..=at).next_back() else{return Ok(())};
         if start==at||p.end<=at{return Ok(());}
@@ -25,7 +25,7 @@ impl Layout{
         let covered:Vec<u64>=self.parts.range(start..end).map(|(&k,_)|k).collect();
         for k in covered{self.parts.remove(&k);}
     }
-    pub(super) fn apply(&mut self,prior:u64,e:SpanEdit,result:u64,which:usize)->io::Result<()>{
+    pub(in crate::ordinary) fn apply(&mut self,prior:u64,e:SpanEdit,result:u64,which:usize)->io::Result<()>{
         if self.len!=prior||e.result(prior)?!=result{return Err(invalid("range map loses its authenticated prior size"));}
         if result<prior{self.split(result)?;self.discard(result,prior);}
         else if result>prior{self.parts.insert(prior,Piece{end:result,from:From::Zero,source:0});}
@@ -35,7 +35,7 @@ impl Layout{
         }
         self.len=result;Ok(())
     }
-    pub(super) fn visit(&self,at:u64,n:u64,mut f:impl FnMut(From,u64,u64)->io::Result<()>)->io::Result<()>{
+    pub(in crate::ordinary) fn visit(&self,at:u64,n:u64,mut f:impl FnMut(From,u64,u64)->io::Result<()>)->io::Result<()>{
         let end=at.checked_add(n).filter(|e|*e<=self.len).ok_or_else(||invalid("read exceeds selected working revision"))?;
         if n==0{return Ok(());}
         let first=*self.parts.range(..=at).next_back().ok_or_else(||invalid("missing start of working material"))?.0;

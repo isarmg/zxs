@@ -84,11 +84,13 @@ impl Commit{
     pub fn receipt(&self)->FormalNode{
         let o=&self.original;
         FormalNode{file:o.file,history:o.history,branch:o.branch,node:o.node,version:o.version,storage:o.storage,created_by:o.op,
-            created_from_save:o.save,working_revision:1,creation_name:o.creation_name.clone(),body:o.content,decision_sequence:self.seq}
+            created_from_save:o.save,working_revision:1,creation_name:o.creation_name.clone(),body:o.content,decision_sequence:self.seq,kind:FormalStorage::Full}
     }
 }
 #[derive(Clone,Debug,Eq,PartialEq)]
+pub enum FormalStorage{Full,Incremental{parent:NodeId,parent_version:VersionId,changed:DraftClaim}}
+#[derive(Clone,Debug,Eq,PartialEq)]
 pub struct FormalNode{
     pub file:FileId,pub history:HistoryId,pub branch:BranchId,pub node:NodeId,pub version:VersionId,pub storage:VersionStorageId,
-    pub created_by:OperationId,pub created_from_save:OperationId,pub working_revision:u64,pub creation_name:String,pub body:DraftClaim,pub decision_sequence:u64,
+    pub created_by:OperationId,pub created_from_save:OperationId,pub working_revision:u64,pub creation_name:String,pub body:DraftClaim,pub decision_sequence:u64,pub kind:FormalStorage,
 }

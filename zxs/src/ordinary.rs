@@ -3,12 +3,15 @@
 mod wire;
 mod content;
 mod indexed;
+mod output;
 mod interval;
 pub use interval::{save_interval,interval_receipt,read_current_range_to,SpanObservation};
 pub use interval::types::{SpanEdit,LengthPolicy,SpanReceipt};
 mod formal;
+mod delta;
+pub use delta::{commit_working,formal_receipt};
 pub use formal::{commit_first,first_commit_receipt,read_node_to,read_node_range_to,FormalObservation};
-pub use formal::types::FormalNode;
+pub use formal::types::{FormalNode,FormalStorage};
 mod draft;
 pub use draft::{save_first,first_save_receipt,read_current_to,current_info,CurrentFile,FirstSaveObservation};
 pub use draft::types::{DraftClaim,DraftReceipt,DRAFT_CHUNK};
@@ -42,7 +45,7 @@ pub struct CreationReceipt{pub status:CreationStatus,pub file:FileInfo}
 pub struct RootFiles{pub files:Vec<FileInfo>,pub reserved_private_entries:usize}
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-enum Cut { Reservation,UnboundMkdir,FormalIndex,WorkReleased,BeforeIntent,Intent,FrameSynced,MarkedBeforeSync,Decision,Installation,IntentReleased,Release }
+enum Cut { Reservation,UnboundMkdir,FormalIndex,IncrLinked,WorkUnlinked,WorkReleased,BeforeIntent,Intent,FrameSynced,MarkedBeforeSync,Decision,Installation,IntentReleased,Release }
 
 fn expected(pool:&LocalPool,op:OperationId,v:VolumeId,name:&str)->io::Result<[u8;32]>{
     wire::request_digest(pool.id(),op,fs::local_uid(),v,name)
@@ -68,7 +71,7 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
             return Ok(FileInfo::from_frame(done)); // Do not open a later same-named root.
         }
     }
-    if state.editing.is_some()||state.saving.is_some()||state.committing.is_some(){return Err(invalid("a different original FILE command needs completion"));}
+    if state.incrementing.is_some()||state.editing.is_some()||state.saving.is_some()||state.committing.is_some(){return Err(invalid("a different original FILE command needs completion"));}
     if let Some(a)=&state.allocated{
         if a.op!=op || a.request!=request {return Err(invalid("another original FILE allocation needs completion"));}
     }else{
@@ -210,6 +213,11 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
             let saved=state.saved(f.create.file).ok_or_else(||invalid("no original saved source for formal cleanup inventory"))?;
             let dir=formal::directory(&volume,&state,f,saved)?;
             let _=draft::material::Reader::current_if_named(&dir,&saved.original,&saved.material)?;
+        }
+        if state.delta(f.create.file).is_some()&&state.incrementing.as_ref().is_some_and(|a|a.original.file==f.create.file){
+            let saved=state.saved(f.create.file).ok_or_else(||invalid("no FILE origin for INCR cleanup inventory"))?;
+            let dir=formal::directory(&volume,&state,f,saved)?;
+            for original in state.intervals(f.create.file){interval::physical::inspect_retained_name(&dir,original)?;}
         }
     }
     volume.root.file.sync_all()?;volume.require_current()?;

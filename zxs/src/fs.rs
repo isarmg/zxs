@@ -203,6 +203,10 @@ fn record_stamp(file: &File, max: u64) -> io::Result<FileStamp> {
 }
 
 impl HeldDir {
+    /// Same open directory, not a fresh lookup; retains the existing flock.
+    pub(crate) fn duplicate(&self)->io::Result<Self>{
+        Ok(Self{file:self.file.try_clone()?,path:self.path.clone(),entity:self.entity})
+    }
     pub(crate) fn exclusive(&self) -> io::Result<()> {
         self.file.try_lock().map_err(io::Error::from)
     }

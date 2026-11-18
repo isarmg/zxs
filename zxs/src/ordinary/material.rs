@@ -150,6 +150,10 @@ pub(super) fn working_directory_held(volume:&FileVolume<'_>,c:&Creation,working:
 /// a missing required leaf or any extra entry is never an admitted state.
 pub(super) fn directory_with(volume:&FileVolume<'_>,c:&Creation,working:impl IntoIterator<Item=(OperationId,bool)>,
     formal:Option<(&super::formal::types::Original,bool)>)->io::Result<HeldDir>{
+    directory_all(volume,c,working,formal,None)
+}
+pub(super) fn directory_all(volume:&FileVolume<'_>,c:&Creation,working:impl IntoIterator<Item=(OperationId,bool)>,
+    formal:Option<(&super::formal::types::Original,bool)>,incr:Option<(&super::delta::types::Original,bool)>)->io::Result<HeldDir>{
     if volume.id()!=c.volume{return Err(invalid("wrong current FILE role or volume"));}
     let dir=volume.root.child_directory(&destination(&c.name)?)?.ok_or_else(||invalid("current FILE container not installed"))?;
     let listed=dir.names()?;let count=listed.len();
@@ -164,6 +168,7 @@ pub(super) fn directory_with(volume:&FileVolume<'_>,c:&Creation,working:impl Int
         let node=take(&o.node_name());let raw=take(&o.body_name());
         if (raw&&!node)||(required&&(!node||!raw)){return Err(invalid("missing or unordered formal FILE material"));}
     }
+    if let Some((o,required))=incr{if !take(&o.leaf())&&required{return Err(invalid("required original incremental node is missing"));}}
     if !names.is_empty(){return Err(invalid("unknown material in the selected FILE"));}
     verify_header(&dir,c)?;
     if volume.root.child_directory(&staging(c.attempt,c.slot))?.is_some(){return Err(invalid("both original FILE names present"));}
@@ -173,9 +178,13 @@ pub(super) fn directory_with(volume:&FileVolume<'_>,c:&Creation,working:impl Int
 /// working cut; no new sidecar or owner. Future retirement must acquire an
 /// exclusive lease on this same native inode before removing used material.
 pub(super) fn read_lease(dir:&HeldDir,c:&Creation)->io::Result<fs::stream::PinnedRegular>{
+    custody_lease(dir,c,false)
+}
+pub(super) fn retirement_lease(dir:&HeldDir,c:&Creation)->io::Result<fs::stream::PinnedRegular>{custody_lease(dir,c,true)}
+fn custody_lease(dir:&HeldDir,c:&Creation,retire:bool)->io::Result<fs::stream::PinnedRegular>{
     let bytes=empty_material(c.file,c.history,c.op,&c.name);
     let pin=dir.pin_stream(LOCAL,bytes.len() as u64)?.ok_or_else(||invalid("original FILE birth unavailable for read lease"))?;
-    pin.file.try_lock_shared().map_err(io::Error::from)?;
+    if retire{pin.file.try_lock().map_err(io::Error::from)?;}else{pin.file.try_lock_shared().map_err(io::Error::from)?;}
     if NativeObject::stamp(&pin.stamp)!=c.local{return Err(invalid("foreign FILE read lease"));}
     let mut actual=vec![0;bytes.len()];fs::stream::read_at(&pin.file,&mut actual,0)?;
     if actual!=bytes||crate::hash::digest(&actual)?!=c.local_digest{return Err(invalid("FILE lease does not cover the original local birth"));}
