@@ -21150,6 +21150,12 @@
       ]
     },
     {
+      "path": "src/engine/src/directory_worktree/names.rs",
+      "groups": [
+        "nested-ordinary-and-smb-birth"
+      ]
+    },
+    {
       "path": "test/engine/unit/snapshot_worktree/mounted_path_budget.rs",
       "groups": [
         "nested-ordinary-and-smb-birth"
