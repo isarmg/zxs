@@ -2,6 +2,8 @@
 //! These are borrowed projections of the existing native records, not a second
 //! registration or a handle minted from a disk scan.
 use super::*;
+mod group;
+use group::Group;
 use crate::working_tree::snapshot::AdmittedSnapshotManifest;
 use storage_contract::{BranchName, snapshot_worktree::InitializeSnapshot};
 
@@ -14,18 +16,21 @@ pub(crate) struct InitialDirectoryMaterial<'a> {
     pub(crate) manifest: &'a AdmittedSnapshotManifest,
     pub(crate) commitment: MaterialCommitment,
 }
-impl ReceiptIndex<'_> {
+impl<'s> ReceiptIndex<'s> {
     /// Before the first native node is bound nothing can derive a worktree
     /// from it. A head, selected completion or an already-created instance
     /// contradicts this particular proof rather than widening its scope.
     pub(crate) fn initial_pending_material(
         &self, repository: SnapshotRepositoryId,
     ) -> Result<InitialDirectoryMaterial<'_>> {
-        let mut nodes = self.nodes.values().filter(|n| n.plan.allocated.repository == repository);
-        let node = nodes.next().ok_or(RegistrationError::Source)?;
-        if nodes.next().is_some() || !matches!(node.publication, Publication::Reserved)
-            || self.branch_heads.keys().any(|(r, _)| *r == repository)
-            || self.worktrees.values().any(|w| w.plan.request.source.repository_id == repository)
+        let mut groups = self.scope_groups(|n| n.plan.allocated.repository == repository)?;
+        let g = groups.remove(&repository).ok_or(RegistrationError::Source)?;
+        self.initial_pending_group(&g)
+    }
+    fn initial_pending_group<'r>(&'r self, g: &Group<'r,'s>) -> Result<InitialDirectoryMaterial<'r>> {
+        let node = g.initial;
+        if !matches!(node.publication, Publication::Reserved) || g.locked_branch || !g.heads.is_empty()
+            || !g.trees.is_empty() || !g.edits.is_empty() || !g.working.is_empty()
             || self.source.operations.contains_key(&node.plan.allocated.completion)
         { return Err(RegistrationError::Source); }
         Ok(InitialDirectoryMaterial { original: node.receipt.original, request: &node.plan.request,
@@ -48,7 +53,7 @@ pub(crate) struct NodeDirectoryMaterial<'a> {
     pub(crate) head: SnapshotHandle,
     pub(crate) instances: BTreeMap<WorktreeId, LocalInstance<'a>>,
 }
-impl ReceiptIndex<'_> {
+impl<'s> ReceiptIndex<'s> {
     /// No incomplete instance is skipped. All supported open allocations and
     /// settled genesis instances are retained. Pending edits and advanced
     /// ledgers require their actual native phase and refuse this subproducer.
@@ -90,18 +95,22 @@ impl ReceiptIndex<'_> {
     }
     fn node_directory<'r>(&'r self, repository: SnapshotRepositoryId, planned: Option<&'r OperationResult>)
         -> Result<NodeDirectoryMaterial<'r>> {
-        let mut originals = self.nodes.values().filter(|n| n.plan.allocated.repository == repository);
-        let initial = originals.next().ok_or(RegistrationError::Source)?;
+        let mut groups = self.scope_groups(|n| n.plan.allocated.repository == repository)?;
+        let g = groups.remove(&repository).ok_or(RegistrationError::Source)?;
+        self.node_group(repository, &g, planned)
+    }
+    fn node_group<'r>(&'r self, repository: SnapshotRepositoryId, g: &Group<'r,'s>,
+                      planned: Option<&'r OperationResult>) -> Result<NodeDirectoryMaterial<'r>> {
+        let initial = g.initial;
         let Publication::Complete(binding) = &initial.publication else { return Err(RegistrationError::Source); };
         let branch = initial.plan.allocated.branch;
-        let mut heads = self.branch_heads.iter().filter(|((r, _), _)| *r == repository);
-        let Some((&(_, b), &head)) = heads.next() else { return Err(RegistrationError::Source); };
-        if originals.next().is_some() || heads.next().is_some() || b != branch
-            || self.pending_branches.keys().any(|(r, _)| *r == repository)
-        { return Err(RegistrationError::Source); }
-        let prefix = self.originals.reborrow(self.source).map_err(RegistrationError::OriginalReceipt)?;
-        let published = |op| planned.filter(|p| p.operation_id == op)
-            .or_else(|| prefix.receipt(op).map(|(r, _)| r)).ok_or(RegistrationError::Operation(op));
+        let [(b, head)] = g.heads.as_slice() else { return Err(RegistrationError::Source); };
+        let head = *head;
+        if *b != branch || g.locked_branch { return Err(RegistrationError::Source); }
+        let published = |op| match planned.filter(|p| p.operation_id == op) {
+            Some(p) => Ok(p),
+            None => self.originals.receipt(self.source, op).map(|(r, _)| r).map_err(RegistrationError::OriginalReceipt),
+        };
         let first = initial.plan.handle();
         let mut nodes = BTreeMap::from([(first.node_id, LocalNode {
             handle: first, parent: None, reservation: initial.receipt.original.operation_id,
@@ -109,7 +118,7 @@ impl ReceiptIndex<'_> {
         })]);
         // Same-branch ordinary combined directory commits can create a real
         // successor with no sparse instance. Keep all of them, not only HEAD.
-        for record in self.working.values() {
+        for &record in &g.working {
             let Some((node, parent)) = record.history_node() else { continue };
             let here = node.handle();
             if here.repository_id != repository { continue; }
@@ -136,14 +145,8 @@ impl ReceiptIndex<'_> {
         // masquerade as an ordinary edit with the same final revision.
         let mut edits = BTreeMap::<WorktreeId, BTreeMap<Sequence, LocalEdit<'_>>>::new();
         let mut pending_edits = BTreeMap::new();
-        for e in self.edits.values() {
+        for &e in &g.edits {
             let target = e.plan.request.target;
-            let Some(CompletionOwner::Worktree(at)) = self.completions.get(&target.publication) else {
-                return Err(RegistrationError::Source);
-            };
-            let owner = self.worktrees.get(at).ok_or(RegistrationError::Source)?;
-            if owner.plan.request.source.repository_id != repository { continue; }
-            if target.worktree_id != owner.plan.allocated.worktree { return Err(RegistrationError::Source); }
             let Publication::Complete(c) = &e.publication else {
                 if pending_edits.insert(target.worktree_id, LocalPendingEdit { plan: &e.plan, reserve: e.receipt.original,
                     commitment: e.commitment }).is_some() { return Err(RegistrationError::Source); }
@@ -156,7 +159,7 @@ impl ReceiptIndex<'_> {
                 || group.insert(c.checkpoint.sequence, row).is_some() { return Err(RegistrationError::Source); }
         }
         let mut instances = BTreeMap::new();
-        for wt in self.worktrees.values().filter(|wt| wt.plan.request.source.repository_id == repository) {
+        for &wt in &g.trees {
             let id = wt.plan.allocated.worktree;
             let source = wt.plan.request.source;
             let pending = pending_edits.remove(&id);
@@ -218,4 +221,41 @@ pub(crate) struct LocalEdit<'a> {
 pub(crate) struct LocalPendingEdit<'a> {
     pub(crate) plan: &'a crate::persist::snapshot_worktree::EditReservation,
     pub(crate) reserve: &'a OperationResult, pub(crate) commitment: MaterialCommitment,
+}
+
+
+/// Complete list over the ORIGINAL initialization registrations on one
+/// selected holder. Descendants cannot create an unrelated repository by
+/// naming its ID. This is a catalogue of directory sources only.
+pub(crate) enum LocalDirectory<'a> { Reserved(InitialDirectoryMaterial<'a>), Bound(NodeDirectoryMaterial<'a>) }
+impl<'s> ReceiptIndex<'s> {
+    pub(crate) fn original_directories(&self, registration: &storage_contract::working_tree::DiskRegistrationIdentity)
+        -> Result<BTreeMap<SnapshotRepositoryId, LocalDirectory<'_>>> {
+        self.project_directories(registration, None)
+    }
+    pub(crate) fn with_planned_directories<T>(&self, next: &State, result: &OperationResult, principal: &Principal,
+        record: &Record, registration: &storage_contract::working_tree::DiskRegistrationIdentity,
+        consume: impl FnOnce(BTreeMap<SnapshotRepositoryId, LocalDirectory<'_>>) -> T) -> Result<T> {
+        let index = self.planned_index(next, result, principal, record)?;
+        Ok(consume(index.project_directories(registration, Some(result))?))
+    }
+    fn project_directories<'a>(&'a self, registration: &storage_contract::working_tree::DiskRegistrationIdentity,
+        planned: Option<&'a OperationResult>) -> Result<BTreeMap<SnapshotRepositoryId, LocalDirectory<'a>>> {
+        let mut result = BTreeMap::new();
+        let mut hosts = BTreeSet::new();
+        for (repo, group) in self.scope_groups(|n| n.plan.host.registration == *registration)? {
+            let node = group.initial;
+            let host = node.plan.host.host();
+            if result.len() >= 65_536 || host.directory_id != node.plan.request.host.directory_id
+                || !hosts.insert((node.plan.request.host.root_id, host.directory_id)) || result.contains_key(&repo) {
+                return Err(RegistrationError::Source);
+            }
+            let cut = match &node.publication {
+                Publication::Reserved => LocalDirectory::Reserved(self.initial_pending_group(&group)?),
+                Publication::Complete(_) => LocalDirectory::Bound(self.node_group(repo, &group, planned)?),
+            };
+            result.insert(repo, cut);
+        }
+        Ok(result)
+    }
 }

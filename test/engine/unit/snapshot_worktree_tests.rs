@@ -190,6 +190,11 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         original.open_payload(material.version_id).unwrap().read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, BODY);
     }
+    let first_disk_census = crate::engine::scope_closure::measure_disk_directory_inventory(&engine, &slots[0]).unwrap();
+    let other_disk_census = crate::engine::scope_closure::measure_disk_directory_inventory(&engine, &slots[1]).unwrap();
+    assert_eq!(first_disk_census.0, 1);
+    assert_eq!(other_disk_census.0, 0);
+    assert_ne!(first_disk_census.1, other_disk_census.1);
     let measured_nodes = crate::engine::scope_closure::measure_published_directory_nodes(&engine, handle.repository_id).unwrap();
     assert_eq!((measured_nodes.1, measured_nodes.2), (1, 1));
     assert!(crate::engine::scope_closure::measure_initial_directory_reservation(&engine, handle.repository_id).is_err());
@@ -319,6 +324,9 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     let file_head = engine.file_branch_head(&selected.branch_id).unwrap();
     let original_versions = engine.state().versions.clone();
     let (_edit_source_directory, mut edit_source) = held_edit_body(edited_body);
+    // One repository and one distinct settled sparse instance on the owner, not on its peer.
+    assert_eq!(crate::engine::scope_closure::measure_disk_directory_inventory(&engine, &slots[0]).unwrap().0, 2);
+    assert_eq!(crate::engine::scope_closure::measure_disk_directory_inventory(&engine, &slots[1]).unwrap(), other_disk_census);
     let clean_scope = crate::engine::scope_closure::measure_published_directory_nodes(&engine, handle.repository_id).unwrap();
     let revision = edit_worktree(&mut engine, &edit, &mut edit_source, &principal()).unwrap();
     let edited_scope = crate::engine::scope_closure::measure_published_directory_nodes(&engine, handle.repository_id).unwrap();
@@ -826,6 +834,8 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         &mut engine, &host, &pending, allocated, &principal(),
     ).unwrap();
     assert!(crate::engine::scope_closure::measure_published_directory_nodes(&engine, allocated.repository).is_err());
+    let pending_disk_census = crate::engine::scope_closure::measure_disk_directory_inventory(&engine, &slots[1]).unwrap();
+    assert_eq!(pending_disk_census.0, 1, "an uncompleted first reservation is not an empty disk");
     let measured = crate::engine::scope_closure::measure_initial_directory_reservation(&engine, allocated.repository).unwrap();
     assert_eq!(measured.0, pending.operation_id);
     assert!(crate::engine::scope_closure::measure_initial_directory_reservation(

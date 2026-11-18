@@ -44,7 +44,7 @@ impl PendingRepository {
         let facts = index.initial_pending_material(repo).map_err(crate::business::file_draft::worktree::failure)?;
         Self::from_facts(context, facts)
     }
-    fn from_facts(context: &PlanningContext<'_>, facts: InitialDirectoryMaterial<'_>) -> Result<Self> {
+    pub(super) fn from_facts(context: &PlanningContext<'_>, facts: InitialDirectoryMaterial<'_>) -> Result<Self> {
         let InitialDirectoryMaterial { original, request, host, allocated, branch_name, manifest, commitment } = facts;
         let InitializeSnapshot { host: requested, source, operation_id } = request;
         let orig = origin(original)?;
@@ -74,6 +74,7 @@ impl PendingRepository {
         frozen.bytes()?;
         Ok(Self { host, frozen })
     }
+    pub(in crate::engine) fn require(&self, config: &ValidatedConfig) -> Result<()> { self.host.check(config) }
     pub(in crate::engine) fn root(&self) -> MaterialCommitment { self.frozen.descriptor.hash() }
     pub(in crate::engine) fn reservation(&self) -> OperationId { self.frozen.header.initialization_operation_id }
     pub(in crate::engine) fn bytes(&self) -> Result<usize> { self.frozen.bytes() }

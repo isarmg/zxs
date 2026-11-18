@@ -2,6 +2,8 @@
 //! A prepared subgroup cannot certify a different repository or a whole disk.
 mod record;
 mod pending;
+mod census;
+pub(in crate::engine) use census::DirectoryCensus;
 mod published;
 mod instances;
 pub(in crate::engine) use published::PublishedRepository;

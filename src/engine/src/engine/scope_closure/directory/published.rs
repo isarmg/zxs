@@ -33,7 +33,7 @@ impl PublishedRepository {
             .with_planned_instance_directory(next, receipt, principal, record, |facts| Self::from_facts(ctx, facts))
             .map_err(crate::business::file_draft::worktree::failure)?
     }
-    fn from_facts(ctx: &PlanningContext<'_>, facts: NodeDirectoryMaterial<'_>) -> Result<Self> {
+    pub(super) fn from_facts(ctx: &PlanningContext<'_>, facts: NodeDirectoryMaterial<'_>) -> Result<Self> {
         let initial = &facts.initialization;
         let repo = initial.allocated.repository;
         let reserve = initial.original.operation_id;
@@ -92,6 +92,9 @@ impl PublishedRepository {
         }
         self.instances.require(&self.nodes)?;
         self.host.check(config)
+    }
+    pub(in crate::engine) fn bytes(&self) -> Result<usize> {
+        self.frozen.bytes()?.checked_add(self.instances.bytes()).ok_or_else(|| Failure::Budget.into())
     }
     pub(in crate::engine) fn root(&self) -> MaterialCommitment { self.frozen.descriptor.hash() }
     pub(in crate::engine) fn counts(&self) -> (usize, usize) { (self.nodes.len(), self.frozen.body.entries()) }

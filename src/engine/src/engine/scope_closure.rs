@@ -122,3 +122,15 @@ pub(crate) fn measure_published_directory_nodes(
     let (nodes, bodies) = held.counts();
     Ok((held.root(), nodes, bodies, held.entity()))
 }
+
+/// The directory contribution on precisely one registered disk, not its full
+/// mixed FILE/DISK/SYSTEM inventory and not proof of an offline empty disk.
+pub(crate) fn measure_disk_directory_inventory(engine: &crate::Engine, slot: &str) -> Result<(usize, String)> {
+    let ctx = engine.planning_context();
+    let disk = ctx.disk(slot)?;
+    let all = directory::DirectoryCensus::original(&ctx, disk)?;
+    let mut rows = OrdinalBuilder::new(65_536);
+    all.append_to(ctx.config, &mut rows)?;
+    let frozen = rows.finish()?;
+    Ok((frozen.entries(), frozen.root().hash().to_owned()))
+}
