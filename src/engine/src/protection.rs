@@ -177,33 +177,40 @@ impl crate::engine::PlanningContext<'_> {
                 "repository does not exist",
             )
         })?;
-        let primary = self
-            .state
-            .placement_rules
-            .values()
-            .filter(|r| r.repository_id == repository && applies(&r.path_prefix, path))
-            .max_by_key(|r| {
-                r.path_prefix
-                    .split('/')
-                    .filter(|component| !component.is_empty())
-                    .count()
-            })
-            .map(|r| r.primary_slot_id.clone())
-            .unwrap_or_else(|| repo.primary_slot_id.clone());
-        let current_entries = self.current_branch_entries(&repo.main_branch_id)?;
-        let policy = backup_paths::effective_policy_in(
-            self.state,
-            current_entries,
-            repository,
-            file_id,
-            path,
-        );
-        let copies = policy
-            .map(|p| p.target_copies)
-            .unwrap_or(repo.target_copies);
-        let copies = self.current_namespaces.map_or(copies, |view| {
-            view.inherited_backup_copies(repo, policy, &primary, copies)
+        let entries = self.current_branch_entries(&repo.main_branch_id)?;
+        let settings = file_policy_at(self.state, repo, entries, file_id, path);
+        let copies = self.current_namespaces.map_or(settings.copies, |view| {
+            view.inherited_backup_copies(repo, settings.policy, settings.primary, settings.copies)
         });
-        Ok((primary, copies))
+        Ok((settings.primary.to_owned(), copies))
     }
+}
+
+/// Settings selected by this repository's exact named namespace. Initial uses
+/// these settings directly; Current applies its own admitted routing override.
+/// This is not a route, registration, physical proof, or permission to mutate.
+pub(crate) struct FilePolicyAt<'a> {
+    pub(crate) primary: &'a str,
+    pub(crate) copies: u32,
+    policy: Option<&'a ProtectionPolicy>,
+}
+
+pub(crate) fn file_policy_at<'a>(
+    state: &'a State,
+    repository: &'a Repository,
+    entries: &[Entry],
+    file: Option<&str>,
+    path: &str,
+) -> FilePolicyAt<'a> {
+    let primary = state.placement_rules.values()
+        .filter(|r| r.repository_id == repository.repository_id && applies(&r.path_prefix, path))
+        .max_by_key(|r| {
+            r.path_prefix.split('/').filter(|component| !component.is_empty()).count()
+        })
+        .map_or(repository.primary_slot_id.as_str(), |r| r.primary_slot_id.as_str());
+    let policy = backup_paths::effective_policy_in(
+        state, entries, &repository.repository_id, file, path,
+    );
+    let copies = policy.map_or(repository.target_copies, |p| p.target_copies);
+    FilePolicyAt { primary, copies, policy }
 }

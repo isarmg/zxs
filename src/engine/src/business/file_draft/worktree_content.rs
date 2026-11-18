@@ -108,7 +108,8 @@ pub(crate) fn require_frozen(state: &State, plan: &crate::persist::snapshot_work
 {
     let repository = state.repositories.get(&plan.host.namespace.repository_id.to_string()).ok_or_else(invalid)?;
     let ordinary = state.branches.get(&repository.main_branch_id).ok_or_else(invalid)?;
-    if !repository.file_manager_root || ordinary.branch_id != plan.host.namespace.branch_id.to_string()
+    if !repository.file_manager_root || repository.repository_id != plan.host.namespace.repository_id.to_string()
+        || ordinary.branch_id != plan.host.namespace.branch_id.to_string()
         || ordinary.generation != plan.ordinary_generation.get() || ordinary.head_commit_id != plan.ordinary_head.to_string()
         || ordinary.state != crate::BranchState::Active
     { return Err(invalid()); }
@@ -123,6 +124,18 @@ pub(crate) fn require_frozen(state: &State, plan: &crate::persist::snapshot_work
             entry: input.namespace.entry, file: input.original.file_id,
         };
         let selected = super::from_worktree_namespace(state, &target, tree)?;
+        // A rule edit need not touch the ordinary head or old Version placement.
+        // Freeze only the route of the reserved *new* FILE occurrence. Unrelated
+        // settings and equivalent rewrites remain available while this is Pending.
+        let file = target.file.to_string();
+        if state.file_backup_policies.get(&file).is_some_and(|id| {
+            !state.protection_policies.contains_key(id)
+        }) {
+            return Err(invalid());
+        }
+        let policy = crate::protection::file_policy_at(
+            state, repository, &entries, Some(&file), target.path.as_str(),
+        );
         let container = state.file_containers.get(&target.file).ok_or_else(invalid)?;
         let replica = container.replicas.get(&input.owner).ok_or_else(invalid)?;
         let branch = state.branches.get(&input.base.branch_id().to_string()).ok_or_else(invalid)?;
@@ -133,6 +146,7 @@ pub(crate) fn require_frozen(state: &State, plan: &crate::persist::snapshot_work
             || input.owner_root != replica.root_id || input.owner_entity != replica.entity
             || version.logical_size != input.original.size || version.content_hash != input.original.content_hash
             || branch.head_commit_id != input.branch_base.to_string()
+            || policy.copies != 1 || !policy.primary.eq_ignore_ascii_case(&plan.host.registration.slot_id)
             || selected.placement.primary_slot_id != plan.host.registration.slot_id
             || selected.placement.binding_generations.get(&plan.host.registration.slot_id)
                 != Some(&plan.host.registration.binding_generation)

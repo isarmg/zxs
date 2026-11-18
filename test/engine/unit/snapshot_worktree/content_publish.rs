@@ -210,3 +210,69 @@ fn abandoned_occupancy_prepare_is_not_a_permanent_reservation_or_permission_to_r
     assert_eq!(engine.state().events.len(), before + 2);
     assert_closed(&engine, &request, handle, fixture.source, other);
 }
+
+#[test]
+fn pending_originals_freeze_only_their_effective_future_file_routes_in_live_and_cold_slots() {
+    use crate::snapshot_worktree::commit::content::{self, Originals};
+
+    let (fixture, mut engine, principal, request, other) = prepare();
+    let repository = fixture.targets[0].repository.to_string();
+    let first = fixture.targets[0].file.to_string();
+    let (primary, copies) = engine.new_file_placement_for_file(
+        &repository, Some(&first), "first.txt",
+    ).unwrap();
+    assert_eq!(copies, 1);
+    let other_slot = engine.config().disks.iter().find(|d| d.level == 1 && d.slot_id != primary)
+        .unwrap().slot_id.clone();
+    let policy = crate::new_id("policy").unwrap();
+    engine.update_protection_policy(crate::ProtectionPolicyUpdate {
+        policy_id: &policy,
+        repository_id: &repository,
+        path_prefix: "Folder",
+        target_copies: 1,
+        expected_generation: 0,
+        principal: principal.as_str(),
+        operation_id: OperationId::generate().unwrap(),
+    }).unwrap();
+
+    let originals = {
+        let receipts = engine.snapshot_receipts().unwrap();
+        Originals::capture(&engine, &receipts, &request).unwrap()
+    };
+    content::reserve(&mut engine, originals, &principal).unwrap();
+    let place = |engine: &mut Engine, path: &str, slot: &str, operation| {
+        engine.update_placement_rule(crate::PlacementRuleUpdate {
+            rule_id: &crate::new_id("rule").unwrap(),
+            repository_id: &repository,
+            path_prefix: path,
+            primary_slot_id: slot,
+            expected_generation: 0,
+            principal: principal.as_str(),
+            operation_id: operation,
+        })
+    };
+    let blocked = OperationId::generate().unwrap();
+    assert!(place(&mut engine, "FIRST.txt", &other_slot, blocked).is_err());
+    assert!(!engine.state().operations.contains_key(&blocked));
+    // Same effective slot on a reserved nested occurrence; different slot on
+    // the untouched third FILE. Neither change can thaw a reserved original.
+    place(&mut engine, "Folder/Child", &primary, OperationId::generate().unwrap()).unwrap();
+    place(&mut engine, "second.txt", &other_slot, OperationId::generate().unwrap()).unwrap();
+    drop(engine);
+
+    let mut engine = Engine::open(&fixture.system).unwrap();
+    let fences = engine.snapshot_receipts().unwrap().content_replay_fences();
+    let reserved = &engine.state().operations[&request.operation_id];
+    fences.require_next(engine.state(), reserved).unwrap();
+    let mut moved = engine.state().clone();
+    let rule = moved.placement_rules.values().find(|r| r.path_prefix == "Folder/Child")
+        .unwrap().rule_id.clone();
+    moved.placement_rules.get_mut(&rule).unwrap().primary_slot_id = other_slot;
+    assert!(fences.require_next(&moved, reserved).is_err());
+    let mut extra_copy = engine.state().clone();
+    extra_copy.protection_policies.get_mut(&policy).unwrap().target_copies = 2;
+    assert!(fences.require_next(&extra_copy, reserved).is_err());
+
+    let handle = engine.commit_directory_worktree(&request, &principal).unwrap();
+    assert_closed(&engine, &request, handle, fixture.source, other);
+}
