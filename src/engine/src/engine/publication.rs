@@ -808,7 +808,7 @@ impl Engine {
             ).retryable()
         })?;
         if let Some(directory) = &directory {
-            directory.require_candidate(&candidate)?;
+            directory.require_context(&self.planning_context(), &candidate)?;
         }
         if let Some(reuse) = reused_dependencies {
             reuse.admit(&self.planning_context(), &config_hash)?;

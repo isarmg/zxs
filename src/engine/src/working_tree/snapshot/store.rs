@@ -75,6 +75,7 @@ pub(crate) struct SnapshotNodeBinding {
     worktrees_entity: LocalEntityIdentity,
 }
 impl SnapshotNodeBinding {
+    pub(crate) fn files_entity(self) -> LocalEntityIdentity { self.files_entity }
     pub(crate) fn reference(self) -> SnapshotReference {
         self.reference
     }
@@ -363,3 +364,23 @@ fn incomplete(
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/working_tree/snapshot/store_tests.rs"]
 mod tests;
+
+impl HeldSnapshotNode {
+    /// Scope material must identify the actual file re-read under this held
+    /// node/files parent. Do not turn a SnapshotFile hash into an inode.
+    pub(crate) fn observed_manifest_entity(&self) -> Result<(LocalEntityIdentity, LocalEntityIdentity), SnapshotStoreError> {
+        let mut file = self.node.open_read_entry(&layout::MANIFEST).map_err(SnapshotStoreError::Disk)?;
+        let verified = file.verify_full(platform_io::payload::Expectation {
+            bytes: self.manifest.bytes().len() as u64, blake3: Some(blake3::hash(self.manifest.bytes())),
+        }).map_err(SnapshotStoreError::Payload)?;
+        Ok((self.binding.node_entity, local_entity(verified.identity)))
+    }
+
+    pub(crate) fn observed_body_entity(&self, version: VersionId)
+        -> Result<(EntryName, LocalEntityIdentity, LocalEntityIdentity), SnapshotStoreError> {
+        let file = self.open_payload(version)?;
+        let name = layout::file(self.manifest.payloads().get(&version).ok_or(SnapshotStoreError::Entries)?);
+        let identity = FileIdentity::from_metadata(&file.metadata().map_err(SnapshotStoreError::Io)?);
+        Ok((name, self.binding.files_entity, local_entity(identity)))
+    }
+}

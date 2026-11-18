@@ -53,6 +53,7 @@ pub(crate) struct SparseWorktreeBinding {
     worktree_entity: LocalEntityIdentity,
 }
 impl SparseWorktreeBinding {
+    pub(crate) fn worktree_entity(self) -> LocalEntityIdentity { self.worktree_entity }
     pub(crate) fn worktree(self) -> WorktreeId {
         self.worktree
     }

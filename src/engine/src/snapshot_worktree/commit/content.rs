@@ -4,6 +4,7 @@
 pub(in crate::snapshot_worktree) mod plan;
 pub(crate) mod material;
 pub(crate) mod recovery;
+pub(crate) mod scope;
 use crate::container_storage::ObservedContainerReplica;
 use crate::directory_worktree::ledger::{Binding, Checkpoint, EditRecord};
 use crate::directory_worktree::lifecycle::Phase;

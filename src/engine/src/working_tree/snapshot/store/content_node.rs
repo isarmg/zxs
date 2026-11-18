@@ -71,6 +71,9 @@ impl HeldContentNode {
         write().map_err(|e| incomplete(reference, Some(id), e))
     }
 
+    /// Borrowed only for owner-verified scope material. Not an installed node.
+    pub(crate) fn staged_node(&self) -> &HeldSnapshotNode { &self.node }
+
     pub(crate) fn facts(&self) -> PreparedNode {
         PreparedNode { preparation: self.preparation, binding: self.node.binding,
             entries: self.node.manifest.entries().to_vec() }

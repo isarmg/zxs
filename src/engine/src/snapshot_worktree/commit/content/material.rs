@@ -115,18 +115,21 @@ impl OriginalContentInput {
         let result = Publication { reserve: self.plan.request.operation_id, reservation: self.commitment,
             prepared_node: node.facts(), rows: self.projection.rows, committing: self.checkpoints[0], completed: self.checkpoints[1] };
         let held = PreparedOriginalContent { originals: self.originals, plan: self.plan, result,
-            principal: self.principal, node, _permit: permit };
+            principal: self.principal, node, scope_entities: std::sync::OnceLock::new(), _permit: permit };
         held.require_before(context)?;
         Ok((held, self.projection.state, self.projection.versions))
     }
 }
 
 pub(crate) struct PreparedOriginalContent {
-    originals: Originals,
-    plan: Reservation,
-    result: Publication,
+    pub(super) originals: Originals,
+    pub(super) plan: Reservation,
+    pub(super) result: Publication,
     principal: Principal,
-    node: HeldContentNode,
+    pub(super) node: HeldContentNode,
+    // Only after a DISK producer actually visited these selected leaves.
+    // Current-call physical identities, never a durable/global scope digest.
+    pub(super) scope_entities: std::sync::OnceLock<Box<[storage_contract::working_tree::LocalEntityIdentity]>>,
     _permit: BudgetedOriginalContent,
 }
 
@@ -137,6 +140,7 @@ impl PreparedOriginalContent {
     pub(crate) fn require_before(&self, ctx: &PlanningContext<'_>) -> Result<()> {
         self.originals.require_context(ctx)?;
         require_original_ledger(&self.originals.source_node, &self.plan, &self.result)?;
+        self.recheck_material_scope()?;
         let host = ctx.namespace_host_root(self.plan.host.namespace.repository_id, self.plan.host.namespace.branch_id)
             .map_err(RegistrationError::Publication)?;
         let original = HeldSnapshotNode::reopen_at_host(host.common().map_err(RegistrationError::Publication)?,

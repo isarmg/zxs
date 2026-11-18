@@ -151,6 +151,53 @@ fn durable_reservation_freezes_both_file_branches_without_publishing_and_reopens
         held.result().prepared_node.preparation).as_path());
     let final_name = fixture.snapshot_path().join(crate::persist::layout::snapshot::node(frozen.plan().destination_node).as_path());
     assert!(stage.is_dir() && !final_name.exists());
+    // The scoped DISK consumer sees two precisely different frame futures,
+    // every original/after occurrence and held sparse inodes, not a directory
+    // root reconstructed from a global State or a matching file hash.
+    use crate::snapshot_worktree::{BodyLocation, ContentMaterial, LedgerStage, NodeImage};
+    let scope = held.material_scope(&engine.planning_context()).unwrap();
+    assert_eq!(scope.worktree().0, request.target);
+    assert_eq!(scope.operations(), (request.operation_id, frozen.plan().publish_operation));
+    assert_eq!(scope.nodes().0, frozen.plan().source_binding);
+    assert_eq!(*scope.revision(), request.expected);
+    assert_eq!(scope.host().0.registration, frozen.plan().host.registration);
+    let mut before = 0;
+    let mut future = Vec::new(); let mut moves = Vec::new(); let mut roots = Vec::new();
+    scope.visit(|row| {
+        match row {
+            ContentMaterial::Manifest { image, file, canonical, .. } => {
+                assert_eq!(file.hash, ContentHash::from_digest(blake3::hash(canonical)));
+                roots.push(image);
+            }
+            ContentMaterial::Body { image: NodeImage::Destination, location: BodyLocation::ReservedMove {
+                held, destination_parent, .. }, material, .. } => {
+                assert_eq!(material.content_hash, held.hash);
+                assert_ne!(held.parent, destination_parent);
+                moves.push(held.entity);
+            }
+            ContentMaterial::Frame { stage, checkpoint, bytes, hash, .. } => {
+                assert_eq!(hash, ContentHash::from_digest(blake3::hash(bytes)));
+                match stage {
+                    LedgerStage::Original { entity } => { assert_ne!(entity.inode(), 0); before += 1; }
+                    LedgerStage::ProspectiveCommit | LedgerStage::ProspectiveCompleted => future.push(checkpoint),
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }).unwrap();
+    assert_eq!(roots, [NodeImage::Source, NodeImage::Destination]);
+    assert_eq!(before, frozen.plan().before.sequence.get() as usize + 1);
+    assert_eq!(future, [held.result().committing, held.result().completed]);
+    assert_eq!(moves.len(), 2);
+    assert_ne!(moves[0], moves[1]);
+    drop(scope);
+    let manifest = stage.join(crate::persist::layout::snapshot::MANIFEST.as_path());
+    let kept = stage.parent().unwrap().join("preserved-tested-manifest");
+    fs::rename(&manifest, &kept).unwrap(); fs::copy(&kept, &manifest).unwrap();
+    assert!(held.require_before(&engine.planning_context()).is_err(), "a scope-consuming decision cannot adopt equal manifest bytes at a different inode");
+    fs::remove_file(&manifest).unwrap(); fs::rename(&kept, &manifest).unwrap();
+    held.require_before(&engine.planning_context()).unwrap();
     assert_eq!(fs::read_dir(stage.join(crate::persist::layout::snapshot::FILES.as_path())).unwrap().count(), 0);
     for (source, destination, material) in &dirty {
         let bytes = fs::read(sparse.join(source.as_path())).unwrap();
