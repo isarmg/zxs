@@ -7335,9 +7335,12 @@
             "engine::disk_catalog::tests::rescue::standalone_export_rebuilds_current_but_cannot_invent_the_final_request_after_source_loss",
             "engine::disk_catalog::tests::rescue::selected_sqlite_sidecars_are_preserved_and_unselected_sidecars_are_not_inspected",
             "engine::disk_catalog::tests::rescue::disk_rescue_readback_does_not_mix_current_and_history_families",
-            "engine::scope_closure::tests::an_original_snapshot_digest_without_a_scope_root_is_not_local_publication_evidence"
+            "engine::scope_closure::tests::an_original_snapshot_digest_without_a_scope_root_is_not_local_publication_evidence",
+            "engine::scope_closure::ordinal::tests::canonical_order_spans_pages_without_deduplicating_occurrences",
+            "engine::scope_closure::ordinal::tests::an_oversized_singleton_or_a_row_in_a_proved_empty_table_is_not_truncated",
+            "engine::disk_catalog::history::preparation::encoding_tests::selected_current_image_requires_original_full_rows_and_exact_page_bytes"
           ],
-          "max_tests": 11,
+          "max_tests": 14,
           "timeout_seconds": 900
         },
         {
@@ -7374,7 +7377,7 @@
       ]
     },
     "worktree-existing-content-batch": {
-      "reason": "Exercise multiple edited original occurrences surviving cold reopen, one prospective FILE projection, exact Pending reservation and held node staging without moving sparse originals. Do not infer completed atomic publication or SMB execution from a reservation.",
+      "reason": "Cover multiple original-path saves, held node staging and per-occurrence scope material, one finalized native business candidate and exact cold retry. Fault-injection cases exercise install boundaries and competing instances. This set does not test real Samba, arbitrary namespace edits or complete integration with the pool scope graph.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -7384,7 +7387,40 @@
           "exact": [
             "snapshot_worktree::public::transport::content_overlay::siblings_survive_resave_and_cold_reopen_without_publishing_either_file",
             "snapshot_worktree::public::transport::content_overlay::plan::exact_files_share_the_business_operation_on_one_state_but_cannot_install_it",
-            "snapshot_worktree::public::transport::content_overlay::plan::durable_reservation_freezes_both_file_branches_without_publishing_and_reopens_only_original"
+            "snapshot_worktree::public::transport::content_overlay::plan::durable_reservation_freezes_both_file_branches_without_publishing_and_reopens_only_original",
+            "snapshot_worktree::public::transport::content_overlay::publish::one_business_candidate_closes_all_existing_occurrences_and_lost_response_replays_without_allocation"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "snapshot_worktree::public::transport::content_overlay::publish::original_reservation_and_only_its_native_slot_survive_every_physical_install_boundary",
+            "snapshot_worktree::public::transport::content_overlay::publish::two_dirty_instances_competing_for_the_same_heads_never_publish_a_replacement_or_implicit_fork"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "backup-selected-disk-prefix": {
+      "reason": "Read the original fixed genesis on each archive; the real multi-target serving fixture rejects a repeated selection or an earlier occupied binding even when the final source is empty. This checks DISK evidence, not all scope materials or completion of cutover.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "engine::backup_preparation::native_control::archive::format_tests::detached_archive_supplies_exact_genesis_to_its_first_disk_publication",
+            "engine::backup_preparation::native_control::archive::format_tests::backup_freeze_refuses_one_original_holder_with_same_config_but_another_scope",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::serving::cost_tests::real_native_serving_component_costs_keep_all_admission_and_readback"
           ],
           "max_tests": 3,
           "timeout_seconds": 900
@@ -8939,7 +8975,8 @@
       "path": "src/engine/src/protection/backup_paths/directory_namespaces.rs",
       "groups": [
         "automatic-backup-entry",
-        "ordinary-backup-listing-regression"
+        "ordinary-backup-listing-regression",
+        "backup-selected-disk-prefix"
       ]
     },
     {
@@ -12191,7 +12228,8 @@
     {
       "path": "src/engine/src/engine/recovery/workspace_receipts.rs",
       "groups": [
-        "file-metadata-plan"
+        "file-metadata-plan",
+        "worktree-existing-content-batch"
       ]
     },
     {
@@ -19907,7 +19945,8 @@
     {
       "path": "src/engine/src/directory_worktree/ledger/storage/published.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "worktree-existing-content-batch"
       ]
     },
     {
@@ -22029,6 +22068,60 @@
     },
     {
       "path": "test/engine/unit/snapshot_worktree/content_plan.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/scope_closure/ordinal.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/scope_ordinal_pages.rs",
+      "groups": [
+        "original-decision-disk-images"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/preparation/backup.rs",
+      "groups": [
+        "backup-selected-disk-prefix"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/workspace_receipts/content.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/commit/content/recovery.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/commit/content/scope.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree/content_publish.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/working_tree/snapshot/store.rs",
+      "groups": [
+        "worktree-existing-content-batch"
+      ]
+    },
+    {
+      "path": "src/engine/src/working_tree/snapshot/store/preparation_input.rs",
       "groups": [
         "worktree-existing-content-batch"
       ]
