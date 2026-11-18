@@ -9,6 +9,9 @@ use storage_contract::ContentHash;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(in crate::engine) enum Schema {
+    // The SQLite owner's existing single schema, not an upgrade selector.
+    #[serialization(rename = "file-container-working-state-v1")]
+    File,
     #[serialization(rename = "disk-current-local-catalog")]
     DiskCurrent,
     #[serialization(rename = "disk-local-inventory-changes")]
@@ -28,7 +31,7 @@ pub(in crate::engine) enum Representation {
     },
 }
 impl Representation {
-    fn new(schema: Schema, bytes: &[u8]) -> Self {
+    pub(in crate::engine) fn new(schema: Schema, bytes: &[u8]) -> Self {
         Self::Sqlite {
             schema,
             image_hash: ContentHash::from_digest(blake3::hash(bytes)),

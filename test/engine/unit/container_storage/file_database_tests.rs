@@ -1244,3 +1244,35 @@ fn held_file_scope_preserves_unknown_sidecars_and_rejects_byte_equal_replacement
     assert!(proved.require_named(&held).is_err());
     assert_eq!(std::fs::read(preserved).unwrap(), expected.bytes());
 }
+
+#[test]
+fn resident_file_image_reads_actual_whole_sqlite_and_rejects_equal_byte_name_replacement() {
+    let fixture = Fixture::new();
+    let ctx = fixture.engine.planning_context();
+    let file = fixture.file.file_id.parse::<storage_contract::FileId>().unwrap();
+    let record = ctx.state.file_containers.get(&file).unwrap();
+    let disk = ctx.config.disks.iter().find(|disk| disk.disk_id == record.owner_disk.to_string()).unwrap();
+    let holder = crate::engine::fresh_layout::containers::observe_replica(
+        ctx.config, ctx.disk_resources, ctx.state, file, disk,
+    ).unwrap();
+    let observed = ResidentFileImage::read(&holder, file, record.history_tree_id).unwrap();
+    let container = holder.container().unwrap();
+    let name = container.path().join(NAME);
+    let original = std::fs::read(&name).unwrap();
+    assert_eq!(observed.bytes(), original.as_slice());
+    assert_eq!(observed.file, file);
+    assert_eq!(observed.history, record.history_tree_id);
+    assert!(observed.sequence > 0 && observed.sequence <= ctx.state.sequence);
+    assert_eq!(observed.records.to_string(), verify_snapshot(&original).unwrap().records_hash);
+    assert!(ResidentFileImage::read(&holder, file, storage_contract::HistoryTreeId::from_random([83; 16])).is_err());
+
+    let extra = container.path().join(format!("{NAME}-wal"));
+    std::fs::write(&extra, b"not part of an immutable FILE").unwrap();
+    assert!(observed.require_named(&holder).is_err());
+    std::fs::remove_file(extra).unwrap();
+    let replacement = container.path().join("different-inode");
+    std::fs::write(&replacement, &original).unwrap();
+    std::fs::set_permissions(&replacement, std::fs::metadata(&name).unwrap().permissions()).unwrap();
+    std::fs::rename(replacement, name).unwrap();
+    assert!(observed.require_named(&holder).is_err());
+}

@@ -6,6 +6,7 @@ use storage_contract::{Generation, OperationId};
 mod anchor;
 pub(in crate::engine) use anchor::{Anchor, FixedGenesis};
 mod genesis;
+pub(in crate::engine) mod file;
 mod images;
 mod objects;
 mod ordinal;

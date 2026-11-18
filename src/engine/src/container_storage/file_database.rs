@@ -10,6 +10,7 @@ pub(super) mod changes;
 pub(super) mod install;
 mod material;
 pub(in crate::container_storage) mod physical;
+pub(crate) use physical::ResidentFileImage;
 mod projection;
 mod rows;
 pub(super) use material::{read_material, reconstruct_material};
