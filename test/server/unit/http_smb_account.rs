@@ -162,6 +162,7 @@ async fn application_with_authority(
     http_routing::Router,
     String,
     Option<std::sync::Arc<crate::smb_account_binding::Authority>>,
+    crate::HttpWork,
 ) {
     let root = crate::tests::private_tempdir();
     let mut auth =
@@ -191,7 +192,7 @@ async fn application_with_authority(
         runtime.telemetry.clone(),
     ));
     let authority = runtime.smb_account.clone();
-    let app = crate::router_shared(
+    let (app, http_work) = crate::router_shared(
         runtime.backend,
         runtime.auth,
         config,
@@ -199,19 +200,20 @@ async fn application_with_authority(
         spool,
         runtime.smb_account,
     )
-    .unwrap()
-    .layer(Extension(shutdown));
-    (root, app, token, authority)
+    .unwrap();
+    (root, app.layer(Extension(shutdown)), token, authority, http_work)
 }
 
-async fn application(smb: bool) -> (tempfile::TempDir, http_routing::Router, String) {
-    let (root, app, token, _) = application_with_authority(smb).await;
-    (root, app, token)
+async fn application(
+    smb: bool,
+) -> (tempfile::TempDir, http_routing::Router, String, crate::HttpWork) {
+    let (root, app, token, _, http_work) = application_with_authority(smb).await;
+    (root, app, token, http_work)
 }
 
 #[tokio::test]
 async fn account_route_requires_auth_and_exposes_configuration_without_secrets() {
-    let (_root, app, token) = application(true).await;
+    let (_root, app, token, _http_work) = application(true).await;
     for (token, status) in [
         (None, StatusCode::UNAUTHORIZED),
         (Some(token.as_str()), StatusCode::OK),
@@ -245,7 +247,7 @@ async fn account_route_requires_auth_and_exposes_configuration_without_secrets()
 
 #[tokio::test]
 async fn password_endpoint_rejects_disabled_service_unknown_fields_and_cookie_csrf() {
-    let (_root, app, token) = application(false).await;
+    let (_root, app, token, _http_work) = application(false).await;
     let csrf = authentication::derive_csrf_token(&token).unwrap();
     for (body, include_csrf, expected) in [
         (
@@ -307,7 +309,7 @@ async fn json_request(
 }
 #[tokio::test]
 async fn account_save_reauthenticates_and_rejects_unlisted_stale_or_unauthenticated_mutations() {
-    let (_root, app, token) = application(true).await;
+    let (_root, app, token, _http_work) = application(true).await;
     for (username, password, expected) in [
         ("outside", "long-test-password", StatusCode::FORBIDDEN),
         ("other", "synthetic-incorrect-secret", StatusCode::FORBIDDEN),
@@ -340,7 +342,7 @@ async fn account_save_reauthenticates_and_rejects_unlisted_stale_or_unauthentica
 }
 #[tokio::test]
 async fn account_selection_requires_same_origin_and_csrf() {
-    let (_root, app, token) = application(true).await;
+    let (_root, app, token, _http_work) = application(true).await;
     let response=app.oneshot(HttpRequest::builder().method("POST").uri("/api/smb/account")
         .header("host","localhost:7400").header("origin","http://localhost:7400")
         .header("cookie",format!("zxs_session={token}"))
@@ -435,7 +437,7 @@ async fn read_account_batch(app: &http_routing::Router, token: &str) -> Vec<SmbA
 
 #[tokio::test(flavor = "current_thread")]
 async fn account_get_does_not_wait_for_slow_smb_operation_or_pending_switch() {
-    let (_root, app, token, authority) = application_with_authority(true).await;
+    let (_root, app, token, authority, _http_work) = application_with_authority(true).await;
     let authority = authority.unwrap();
     let (entered, admitted) = tokio::sync::oneshot::channel();
     let (release_operation, finish_operation) = std::sync::mpsc::channel();

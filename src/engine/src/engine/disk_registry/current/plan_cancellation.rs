@@ -115,6 +115,7 @@ fn verify_cancelled_plan(
 ) -> Result<()> {
     Engine::require_actor(principal)?;
     storage_contract::validate_id(id, "plan")?;
+    crate::ordinary_authority::plan_input(&cancelled.kind, &cancelled.input)?;
     if cancelled.plan_id != id
         || cancelled.principal != principal
         || cancelled.state != PlanState::Cancelled

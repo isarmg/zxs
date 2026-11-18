@@ -6,20 +6,15 @@ fn op() -> OperationId {
 }
 fn fixture() -> (tempfile::TempDir, Engine) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development(crate::test_disks([temp.path().join("primary")])).unwrap();
+    let config = Config::independent_roots(storage_contract::Mode::Development,
+        crate::test_disks([temp.path().join("one"), temp.path().join("two"), temp.path().join("three")])
+    ).unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     (temp, engine)
 }
-fn repository(engine: &mut Engine, name: &str) -> Repository {
-    engine
-        .create_repository(
-            &RepositoryName::parse(name).unwrap(),
-            "P01",
-            1,
-            "admin",
-            op(),
-        )
-        .unwrap()
+fn repository(engine: &mut Engine) -> Repository {
+    let slot = format!("D{:02}", engine.state.repositories.len() + 1);
+    engine.create_disk_root(&slot, "admin", op()).unwrap()
 }
 fn save(engine: &mut Engine, repo: &Repository, path: &str) {
     let workspace = engine
@@ -103,8 +98,8 @@ fn real_publications_store_complete_global_receipts_and_exterior_path_rows_then_
             .records
             .is_empty()
     );
-    let left = repository(&mut engine, "left");
-    let right = repository(&mut engine, "right");
+    let left = repository(&mut engine);
+    let right = repository(&mut engine);
     save(&mut engine, &left, "a.txt");
     save(&mut engine, &right, "other.txt");
     rename(&mut engine, &left, "a.txt", "b.txt");
@@ -162,8 +157,8 @@ fn real_publications_store_complete_global_receipts_and_exterior_path_rows_then_
 #[test]
 fn cursor_is_state_and_family_bound_and_invalid_limits_do_not_disable_the_database() {
     let (_temp, mut engine) = fixture();
-    repository(&mut engine, "one");
-    repository(&mut engine, "two");
+    repository(&mut engine);
+    repository(&mut engine);
     let cursor = engine
         .system_operation_records(None, 1)
         .unwrap()
@@ -198,7 +193,7 @@ fn cursor_is_state_and_family_bound_and_invalid_limits_do_not_disable_the_databa
         .unwrap()
         .next
         .unwrap();
-    repository(&mut engine, "three");
+    repository(&mut engine);
     assert!(
         matches!(engine.system_operation_records(Some(&cursor), 1), Err(SystemChangeReadError::Request(error)) if error.code()==ErrorCode::HistoryChanged)
     );
@@ -216,14 +211,13 @@ fn missing_extra_mutated_rows_order_keys_marker_and_schema_fail_closed_and_latch
         "PRAGMA ignore_check_constraints=ON;UPDATE system_changes SET sequence_key=X'01' WHERE kind=0",
         "UPDATE current_state SET sequence='99999'",
         "DROP INDEX system_change_order",
-        "DROP TABLE system_changes;CREATE VIEW system_changes AS SELECT 0 AS kind,'' AS id,X'0000000000000000' AS sequence_key,'{}' AS payload",
         "CREATE TRIGGER injected_change AFTER INSERT ON system_changes BEGIN SELECT RAISE(ABORT,'injected');END",
         "UPDATE system_changes SET payload=hex(zeroblob(200000)) WHERE kind=0",
         "UPDATE system_changes SET payload=CAST(zeroblob(67108865) AS TEXT) WHERE kind=0",
     ] {
         let (_temp, mut engine) = fixture();
-        repository(&mut engine, "one");
-        repository(&mut engine, "two");
+        repository(&mut engine);
+        repository(&mut engine);
         let expected = expected_operations(&engine);
         sql(&engine, statement);
         assert!(
@@ -243,12 +237,12 @@ fn missing_extra_mutated_rows_order_keys_marker_and_schema_fail_closed_and_latch
 #[test]
 fn projection_failure_never_rolls_back_an_already_published_operation() {
     let (temp, mut engine) = fixture();
-    repository(&mut engine, "before");
+    repository(&mut engine);
     sql(
         &engine,
         "CREATE TRIGGER fail_system_change BEFORE INSERT ON system_changes BEGIN SELECT RAISE(ABORT,'injected');END;",
     );
-    let published = repository(&mut engine, "after");
+    let published = repository(&mut engine);
     assert_eq!(
         engine.state.repositories[&published.repository_id],
         published
@@ -267,8 +261,8 @@ fn projection_failure_never_rolls_back_an_already_published_operation() {
 #[test]
 fn exact_delta_handles_replacement_removal_unsigned_order_and_unknown_lineage() {
     let (_temp, mut engine) = fixture();
-    repository(&mut engine, "one");
-    repository(&mut engine, "two");
+    repository(&mut engine);
+    repository(&mut engine);
     let base = Arc::clone(&engine.state);
     let state = Arc::make_mut(&mut engine.state);
     state.begin_tracking();
@@ -292,7 +286,7 @@ fn exact_delta_handles_replacement_removal_unsigned_order_and_unknown_lineage() 
 #[test]
 fn retained_path_projection_is_not_filtered_by_current_placement() {
     let (_temp, mut engine) = fixture();
-    let repo = repository(&mut engine, "paths");
+    let repo = repository(&mut engine);
     save(&mut engine, &repo, "before");
     rename(&mut engine, &repo, "before", "after");
     let fact = path_facts(&engine).pop().unwrap();
@@ -353,8 +347,8 @@ fn retained_path_projection_is_not_filtered_by_current_placement() {
 #[test]
 fn payload_byte_budget_pages_without_omitting_the_boundary_row() {
     let (_temp, mut engine) = fixture();
-    repository(&mut engine, "one");
-    repository(&mut engine, "two");
+    repository(&mut engine);
+    repository(&mut engine);
     let base = Arc::clone(&engine.state);
     let state = Arc::make_mut(&mut engine.state);
     state.begin_tracking();
@@ -382,7 +376,7 @@ fn payload_byte_budget_pages_without_omitting_the_boundary_row() {
 #[test]
 fn named_database_replacement_is_preserved_and_not_read_as_current_system_history() {
     let (_temp, mut engine) = fixture();
-    repository(&mut engine, "one");
+    repository(&mut engine);
     let path = engine.root.join("index.sqlite");
     std::fs::rename(&path, engine.root.join("original-index.sqlite")).unwrap();
     std::fs::write(&path, b"unknown replacement").unwrap();
@@ -412,8 +406,8 @@ fn catalog(engine: &Engine, kind: SystemCatalogKind, limit: usize) -> Vec<System
 #[test]
 fn global_catalog_retains_full_namespace_rows_across_repositories_and_cold_rebuild() {
     let (temp, mut engine) = fixture();
-    let left = repository(&mut engine, "left");
-    let right = repository(&mut engine, "right");
+    let left = repository(&mut engine);
+    let right = repository(&mut engine);
     save(&mut engine, &left, "folder/same.txt");
     save(&mut engine, &right, "folder/same.txt");
     rename(&mut engine, &left, "folder/same.txt", "folder/moved.txt");
@@ -446,7 +440,7 @@ fn global_catalog_retains_full_namespace_rows_across_repositories_and_cold_rebui
 #[test]
 fn catalog_location_replacements_removals_and_long_keys_have_exact_projection() {
     let (_temp, mut engine) = fixture();
-    let repo = repository(&mut engine, "files");
+    let repo = repository(&mut engine);
     save(&mut engine, &repo, "before.txt");
     let file = engine
         .state
@@ -462,7 +456,7 @@ fn catalog_location_replacements_removals_and_long_keys_have_exact_projection() 
     next.sequence += 1;
     next.file_locations.insert(file.clone(), "after.txt".into());
     let long_key = "selection-key".repeat(100);
-    next.directory_selections
+    next.file_selections
         .insert(long_key.clone(), "selection".into());
     engine.update_index(&before);
     assert_eq!(
@@ -473,7 +467,7 @@ fn catalog_location_replacements_removals_and_long_keys_have_exact_projection() 
         }]
     );
     assert!(
-        catalog(&engine, SystemCatalogKind::DirectorySelection, 10)
+        catalog(&engine, SystemCatalogKind::FileSelection, 10)
             .iter()
             .any(|record| record.id == long_key)
     );
@@ -482,11 +476,11 @@ fn catalog_location_replacements_removals_and_long_keys_have_exact_projection() 
     next.begin_tracking();
     next.sequence += 1;
     next.file_locations.remove(&file);
-    next.directory_selections.remove(&long_key);
+    next.file_selections.remove(&long_key);
     engine.update_index(&before);
     assert!(catalog(&engine, SystemCatalogKind::FileLocation, 10).is_empty());
     assert!(
-        !catalog(&engine, SystemCatalogKind::DirectorySelection, 10)
+        !catalog(&engine, SystemCatalogKind::FileSelection, 10)
             .iter()
             .any(|record| record.id == long_key)
     );
@@ -495,8 +489,8 @@ fn catalog_location_replacements_removals_and_long_keys_have_exact_projection() 
 #[test]
 fn catalog_cursor_cannot_cross_family_or_publication() {
     let (_temp, mut engine) = fixture();
-    repository(&mut engine, "left");
-    repository(&mut engine, "right");
+    repository(&mut engine);
+    repository(&mut engine);
     let page = engine
         .system_catalog_records(SystemCatalogKind::Repository, None, 1)
         .unwrap();
@@ -509,7 +503,7 @@ fn catalog_cursor_cannot_cross_family_or_publication() {
         engine.system_operation_records(Some(cursor), 1),
         Err(SystemChangeReadError::Request(_))
     ));
-    repository(&mut engine, "third");
+    repository(&mut engine);
     assert!(matches!(
         engine.system_catalog_records(SystemCatalogKind::Repository, Some(cursor), 1),
         Err(SystemChangeReadError::Request(_))
@@ -525,7 +519,7 @@ fn catalog_rejects_missing_and_extra_first_rows_without_false_empty_success() {
         "UPDATE system_changes SET payload='{}' WHERE kind=2",
     ] {
         let (_temp, mut engine) = fixture();
-        repository(&mut engine, "repo");
+        repository(&mut engine);
         sql(&engine, statement);
         assert!(matches!(
             engine.system_catalog_records(SystemCatalogKind::Repository, None, 1),
@@ -538,7 +532,7 @@ fn catalog_rejects_missing_and_extra_first_rows_without_false_empty_success() {
 #[test]
 fn container_tag_catalog_coexists_with_permanent_audit_families() {
     let (_temp, mut engine) = fixture();
-    let repository = repository(&mut engine, "tag-catalog");
+    let repository = repository(&mut engine);
     save(&mut engine, &repository, "file.txt");
     let page = engine.system_catalog_records(SystemCatalogKind::ContainerTags, None, 10).unwrap();
     assert_eq!(page.records.len(), 1);
@@ -562,4 +556,40 @@ fn container_tag_catalog_coexists_with_permanent_audit_families() {
     });
     assert_eq!(counts.0, 1);
     assert!(counts.1 > 0);
+}
+
+#[test]
+fn file_catalog_refuses_foreign_relations_and_out_of_domain_rows_before_recreation() {
+    use sqlite_access::sqlite::SqliteConnectOptions;
+
+    crate::sqlite_connection::run(SqliteConnectOptions::new().in_memory(true), async |connection| {
+        connection.execute("CREATE TABLE untouched(payload TEXT); INSERT INTO untouched VALUES('keep')").await?;
+        assert!(recreate_projection(connection).await.is_err());
+        let kept: String = sqlite_access::query_scalar("SELECT payload FROM untouched")
+            .fetch_one(&mut *connection).await?;
+        assert_eq!(kept, "keep");
+        connection.execute("CREATE VIEW system_changes AS SELECT 0 AS kind FROM untouched").await?;
+        assert!(recreate_projection(connection).await.is_err());
+        let kind: String = sqlite_access::query_scalar("SELECT type FROM sqlite_schema WHERE name='system_changes'")
+            .fetch_one(&mut *connection).await?;
+        assert_eq!(kind, "view");
+        Ok(())
+    }).unwrap();
+
+    crate::sqlite_connection::run(SqliteConnectOptions::new().in_memory(true), async |connection| {
+        recreate_projection(connection).await.map_err(Error::from)?;
+        for kind in [6, 7, 8, 13, 14, 16, 25] {
+            assert!(sqlite_access::query("INSERT INTO system_changes VALUES(?,'alien',X'0000000000000000','{}')")
+                .bind(kind).execute(&mut *connection).await.is_err());
+        }
+        connection.execute("PRAGMA ignore_check_constraints=ON").await?;
+        connection.execute("INSERT INTO system_changes VALUES(6,'unknown',X'0000000000000000','preserve')").await?;
+        connection.execute("PRAGMA ignore_check_constraints=OFF").await?;
+        assert!(check_schema(connection).await.is_err());
+        assert!(recreate_projection(connection).await.is_err());
+        let kept: String = sqlite_access::query_scalar("SELECT payload FROM system_changes WHERE kind=6")
+            .fetch_one(&mut *connection).await?;
+        assert_eq!(kept, "preserve");
+        Ok(())
+    }).unwrap();
 }

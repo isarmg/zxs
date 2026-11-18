@@ -388,14 +388,6 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.commit_plan(identity, request)
     }
-    fn prepare_historical_save(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.enter();
-        self.inner.prepare_historical_save(identity, request)
-    }
     fn prepare_purge(
         &self,
         identity: &crate::auth::Identity,
@@ -403,14 +395,6 @@ impl Backend for PausedBackend {
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         self.enter();
         self.inner.prepare_purge(identity, request)
-    }
-    fn prepare_split(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareSplit, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.enter();
-        self.inner.prepare_split(identity, request)
     }
     fn namespace_batch(
         &self,
@@ -975,9 +959,7 @@ enum Request {
     Plan,
     PlanCancel,
     PlanCommit,
-    PrepareHistoricalSave,
     PreparePurge,
-    PrepareSplit,
     RegisterDisk,
     NamespaceBatch,
     SelectFileBranch,
@@ -1292,36 +1274,12 @@ impl Request {
                     },
                 )
                 .map(|_| ()),
-            Self::PrepareHistoricalSave => backend
-                .prepare_historical_save(
-                    identity,
-                    Ok(crate::PrepareHistoricalSave {
-                        history_tree_id: "history".into(),
-                        options: Ok(storage_contract::HistoricalSaveOptions {
-                            source_commit_id: "commit".into(),
-                            name: "Saved branch".into(),
-                            workspace_id: None,
-                            primary_slot_id: None,
-                            target_copies: None,
-                        }),
-                    }),
-                )
-                .map(|_| ()),
             Self::PreparePurge => backend
                 .prepare_purge(
                     identity,
                     Ok(crate::PreparePurge {
                         history_tree_id: "history".into(),
                         version_ids: Ok(vec!["second".into(), "first".into(), "second".into()]),
-                    }),
-                )
-                .map(|_| ()),
-            Self::PrepareSplit => backend
-                .prepare_split(
-                    identity,
-                    Ok(crate::PrepareSplit {
-                        history_tree_id: "history".into(),
-                        cut_commit_id: Ok("cut".into()),
                     }),
                 )
                 .map(|_| ()),
@@ -1425,7 +1383,6 @@ impl Request {
                     identity,
                     crate::CreateWorkspace {
                         branch_id: fixture.repo.main_branch_id.clone(),
-                        source_commit_id: None,
                     },
                 )
                 .map(|_| ()),
@@ -1810,11 +1767,9 @@ impl Request {
 fn prepare_unknown_fields(
     backend: &dyn Backend,
     identity: &Identity,
-) -> [Result<storage_contract::Plan, ApiError>; 3] {
+) -> [Result<storage_contract::Plan, ApiError>; 1] {
     [
-        backend.prepare_historical_save(identity, Err(ApiError::invalid("unknown field surprise"))),
         backend.prepare_purge(identity, Err(ApiError::invalid("unknown field surprise"))),
-        backend.prepare_split(identity, Err(ApiError::invalid("unknown field surprise"))),
     ]
 }
 
@@ -1841,9 +1796,7 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 assert_eq!(error.status, 400);
             }
             let requests = vec![
-                Request::PrepareSplit,
                 Request::PreparePurge,
-                Request::PrepareHistoricalSave,
                 Request::BackupConfiguration,
                 Request::ConfigureBackups,
                 Request::Plan,
@@ -2176,9 +2129,7 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::Plan,
         Request::PlanCancel,
         Request::PlanCommit,
-        Request::PrepareHistoricalSave,
         Request::PreparePurge,
-        Request::PrepareSplit,
         Request::RegisterDisk,
         Request::NamespaceBatch,
         Request::SelectFileBranch,

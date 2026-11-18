@@ -203,7 +203,6 @@ error_codes! {
     ResourceLimit => "RESOURCE_LIMIT",
     ResourceLimitExceeded => "RESOURCE_LIMIT_EXCEEDED",
     ResponseTooLarge => "RESPONSE_TOO_LARGE",
-    RestoreBackupConflict => "RESTORE_BACKUP_CONFLICT",
     RouteIncomplete => "ROUTE_INCOMPLETE",
     RouteTargetUnavailable => "ROUTE_TARGET_UNAVAILABLE",
     SaveModeUnsupported => "SAVE_MODE_UNSUPPORTED",

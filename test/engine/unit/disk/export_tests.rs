@@ -193,7 +193,7 @@ fn verified_export_compares_checksum_commitment_before_publication() {
     );
 }
 
-fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersion) {
+fn purged_body() -> (tempfile::TempDir, Engine, Config, FileVersion) {
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let root = temporary.path().join("source");
@@ -207,13 +207,7 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
     .unwrap();
     let mut engine = Engine::initialize(&root.join("system"), config.clone()).unwrap();
     let repository = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Tombstones").unwrap(),
-            "P01",
-            3,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "owner", OperationId::generate().unwrap())
         .unwrap();
     let mut saved = Vec::new();
     for bytes in [b"old", b"new"] {
@@ -241,16 +235,8 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
                 .clone(),
         ));
     }
-    let (cut, old) = &saved[0];
-    let plan = match state {
-        "PURGED" => engine
-            .create_purge_plan(&repository.history_tree_id, vec![old.clone()], "owner")
-            .unwrap(),
-        "MIGRATED" => engine
-            .create_split_plan(&repository.history_tree_id, cut, "owner")
-            .unwrap(),
-        _ => panic!("unexpected tombstone state"),
-    };
+    let old = &saved[0].1;
+    let plan = engine.create_purge_plan(&repository.history_tree_id, vec![old.clone()], "owner").unwrap();
     engine
         .commit_plan(
             &plan.plan_id,
@@ -258,15 +244,16 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
-    assert_eq!(engine.state().content_states[old].as_str(), state);
+    assert_eq!(engine.state().content_states[old], ContentState::Purged);
     let version = engine.state().versions[old].clone();
     (temporary, engine, config, version)
 }
 
 #[test]
 fn offline_tombstones_bind_retained_version_metadata_and_directory() {
-    for state in ["PURGED", "MIGRATED"] {
-        let (temporary, engine, config, version) = tombstoned_body(state);
+    {
+        let state = "PURGED";
+        let (temporary, engine, config, version) = purged_body();
         drop(engine);
         let disk = &config.disks[0];
         let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
@@ -357,47 +344,18 @@ fn offline_tombstones_bind_retained_version_metadata_and_directory() {
 }
 
 #[test]
-fn restored_tombstones_need_no_source_payload_proofs() {
-    for state in ["PURGED", "MIGRATED"] {
-        let (temporary, engine, _config, version) = tombstoned_body(state);
-        let package = temporary.path().join("package");
-        let exported = engine
-            .export_history_package(&version.history_tree_id, &package)
-            .unwrap();
-        assert!(exported.tombstones > 0);
-        drop(engine);
-        fs::remove_dir_all(temporary.path().join("source")).unwrap();
-        let root = temporary.path().join("restored");
-        let config = Config::development(crate::test_disks(
-            [
-                root.join("primary"),
-                root.join("backup"),
-                root.join("third"),
-            ],
-        ))
-        .unwrap();
-        let mut restored = Engine::initialize(&root.join("system"), config.clone()).unwrap();
-        restored
-            .restore_history_package(
-                &package,
-                "P01",
-                3,
-                "owner",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
-        assert_eq!(
-            restored.state().content_states[&version.version_id].as_str(),
-            state
-        );
-        drop(restored);
-        for disk in &config.disks {
-            // Imported retained identities have no local payload to purge and
-            // therefore do not fabricate an original payload publication proof.
-            assert!(!version_dir(disk, &version.history_tree_id, &version.version_id).exists());
-            assert!(offline_check(&disk.root).unwrap().issues.is_empty());
-        }
-    }
+fn registered_restore_keeps_a_purged_file_tombstone_without_needing_the_purged_bytes() {
+    let (temporary, engine, config, version) = purged_body();
+    let package = temporary.path().join("package");
+    assert!(engine.export_history_package(&version.history_tree_id, &package).unwrap().tombstones > 0);
+    assert!(crate::offline_check_history_package(&package).unwrap().tombstones > 0);
+    let roots = config.disks.iter().map(|d| d.root.clone()).collect::<Vec<_>>();
+    drop(engine);
+    let recovered = Engine::restore_from_disks(&temporary.path().join("new-system"), &roots).unwrap();
+    assert_eq!(recovered.state().content_states[&version.version_id], ContentState::Purged);
+    assert_eq!(recovered.state().versions[&version.version_id], version);
+    assert_eq!(recovered.open_content(&version.version_id).err().unwrap().code(), ErrorCode::ContentPurged);
+    for disk in &config.disks { assert!(offline_check(&disk.root).unwrap().issues.is_empty()); }
 }
 
 #[test]

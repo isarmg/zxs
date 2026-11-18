@@ -110,8 +110,10 @@ fn management_views_and_bounded_json_transport_remain() {
     }
     let detail = std::fs::read_to_string(root.join("files/detail.rs")).unwrap();
     for required in [
-        "batch::Kind::Rename",
-        "Kind::Delete",
+        "key.mutation_entry(s)",
+        "relocation::available",
+        "relocation::start",
+        "deletion::start",
         "backup::view",
         "NoteTarget::File",
         "select_branch",
@@ -129,8 +131,9 @@ fn management_views_and_bounded_json_transport_remain() {
         "disk_roots",
         "go_directory",
         "file_table",
-        "batch::view",
-        "directory_branch",
+        "inline::Target::CreateDirectory",
+        "relocation::start",
+        "open_current_directory",
     ] {
         assert!(
             view.contains(required),
@@ -152,19 +155,16 @@ fn detail_rename_has_no_path_only_namespace_fallback() {
 
 #[test]
 fn tag_input_labels_do_not_also_label_action_buttons() {
-    // Source-level HTML structure guard.
+    // Headless source check of the template's established implicit label.
+    // The packaged browser additionally inspects the DOM's resolved .labels/.control.
     let source = include_str!("../../../../src/web/src/files/tags/view.rs");
-    let labels = source.split("<label ").skip(1).collect::<Vec<_>>();
-    assert!(!labels.is_empty());
-    for label in labels {
-        let (contents, _) = label.split_once("</label>").expect("label must close");
-        assert!(
-            contents.contains("<input "),
-            "the tag field must remain labeled"
-        );
-        assert!(
-            !contents.contains("<button "),
-            "an action button cannot share the input's label"
-        );
+    let mut count = 0;
+    for part in source.split("<label").skip(1) {
+        let (inside, _) = part.split_once("</label>").expect("label must close");
+        assert_eq!(inside.matches("<input").count(), 1, "one label per tag editor input");
+        assert!(inside.contains("新增标签") && inside.contains("Add tag"));
+        assert!(!inside.contains("<button"), "button cannot share an input's label");
+        count += 1;
     }
+    assert_ne!(count, 0, "tag editor must supply a label");
 }

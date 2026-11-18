@@ -29,21 +29,11 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
         .state()
         .repositories
         .values()
-        .find(|repository| repository.name == "browser-fixtures")
+        .find(|repository| repository.file_manager_root && repository.primary_slot_id == "P01")
         .unwrap();
-    assert_eq!(repository.name, "browser-fixtures");
-    let root_git = engine
-        .directory_git_status(&repository.repository_id, "")
-        .unwrap();
-    assert!(root_git.initialized && root_git.head_tree_id.is_some());
-    assert!(
-        !root_git.staged && !root_git.needs_restage,
-        "the notice lifecycle must start from a committed, clean independent repository: {root_git:?}"
-    );
     let entries = engine.list_tree(&repository.main_branch_id).unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].path.as_str(), FILE);
-    let versions = engine.file_history(&entries[0].file_id).unwrap();
+    let file = entries.iter().find(|entry| entry.path() == FILE_PATH).unwrap();
+    let versions = engine.file_history(&file.file_id).unwrap();
     assert_eq!(versions.len(), 2);
     for (version, expected) in versions.iter().zip(PAYLOADS) {
         let mut content = engine.open_content(&version.version_id).unwrap();
@@ -52,7 +42,7 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
         assert_eq!(bytes, expected.as_bytes());
     }
     let request = HistoryWindowRequest {
-        file_id: HistoryFileId::parse(&entries[0].file_id).unwrap(),
+        file_id: HistoryFileId::parse(&file.file_id).unwrap(),
         collection: HistoryCollection::Nodes,
         location: None,
         history_root: None,
@@ -97,46 +87,20 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
         assert!(branch.alias_of.is_none());
         let head = branch.node_id.as_ref().unwrap();
         assert!(nodes.iter().any(|node| node.node_id == *head));
-        assert_eq!(head.as_str(), entries[0].version_id);
+        assert_eq!(head.as_str(), file.version_id);
     }
-    let naming = engine
-        .state()
-        .repositories
-        .values()
-        .find(|repository| repository.name == NAMING_REPOSITORY)
-        .unwrap();
-    assert_ne!(naming.repository_id, repository.repository_id);
-    let naming_entries = engine.list_tree(&naming.main_branch_id).unwrap();
-    assert_eq!(naming_entries.len(), 1);
-    assert_eq!(naming_entries[0].path.as_str(), FILE);
-    assert_ne!(naming_entries[0].file_id, entries[0].file_id);
-    let mut content = engine.open_content(&naming_entries[0].version_id).unwrap();
+    let naming = entries.iter().find(|entry| entry.path() == NAMING_FILE_PATH).unwrap();
+    assert_ne!(file.file_id, naming.file_id);
+    let mut content = engine.open_content(&naming.version_id).unwrap();
     let mut bytes = Vec::new();
     content.file.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, PAYLOADS[0].as_bytes());
-    let naming_git = engine
-        .directory_git_status(&naming.repository_id, "")
-        .unwrap();
-    assert!(naming_git.initialized);
-    assert_eq!(naming_git.repository_id, naming.repository_id);
-    assert_eq!(naming_git.directory_id, naming.repository_id);
-    assert_eq!(naming_git.path, "");
-    assert!(naming_git.directory_branch_id.is_some());
-    assert!(naming_git.head_tree_id.is_some());
-    assert!(
-        !naming_git.staged && !naming_git.unstaged && !naming_git.needs_restage,
-        "batch naming must start from the same committed source without Web initialization"
-    );
     drop(content);
     drop(engine);
     let error = seed_files(&temporary).unwrap_err();
     assert!(error.to_string().contains("fresh disposable pool"));
     let engine = Engine::open(&temporary.path().join("pool")).unwrap();
-    assert_eq!(engine.file_history(&entries[0].file_id).unwrap().len(), 2);
-    assert_eq!(
-        engine.directory_git_status(&naming_git.repository_id, "").unwrap(),
-        naming_git
-    );
+    assert_eq!(engine.file_history(&file.file_id).unwrap().len(), 2);
 }
 
 #[test]

@@ -23,7 +23,7 @@ struct Target {
 }
 impl Target {
     fn capture(state: &State) -> Option<Self> {
-        if !state.session_active() || state.files.directory_preview.is_some()
+        if !state.session_active()
             || state.files.file_preview.is_some()
         {
             return None;

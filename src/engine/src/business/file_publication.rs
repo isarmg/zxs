@@ -1,4 +1,4 @@
-//! Publish immutable file nodes into only the directory references they target.
+//! Publish immutable FILE nodes into their own branch and current ordinary namespace.
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -134,216 +134,11 @@ pub(super) fn advance_branch_with_ids(
     Ok(())
 }
 
-fn matches(
-    context: &FileContext,
-    entry: &Entry,
-    branches: &BTreeSet<String>,
-    node: Option<&str>,
-) -> bool {
-    branches.contains(&context.branch_id)
-        && node.is_none_or(|node| context.node_id.as_deref().unwrap_or(&entry.version_id) == node)
-}
-
-fn advance(context: &mut FileContext, branch: &str, node: &str, materialize: bool) -> Result<()> {
-    context.branch_id = branch.into();
-    context.node_id = Some(node.into());
-    if materialize {
-        context.inherited_from = None;
-    }
-    context.selection_generation =
-        context.selection_generation.checked_add(1).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::ResourceLimit,
-                "file context generation exhausted",
-            )
-        })?;
-    Ok(())
-}
-
-/// A rewrite is keyed by the original immutable subtree, rather than by its
-/// mutable named branch. A parent may freeze an older child composition.
-struct Publication<'a> {
-    file: &'a str,
-    branches: &'a BTreeSet<String>,
-    source: Option<&'a str>,
-    target_branch: &'a str,
-    target_node: &'a str,
-    version: &'a str,
-    size: u64,
-    principal: &'a str,
-    operation: OperationId,
-    maximum: usize,
-    rewrites: BTreeMap<String, String>,
-    visiting: BTreeSet<String>,
-}
-impl Publication<'_> {
-    fn rewrite(&mut self, state: &mut State, tree_id: &str) -> Result<String> {
-        self.rewrite_projected(state, tree_id, None)
-    }
-    fn rewrite_projected(
-        &mut self,
-        state: &mut State,
-        tree_id: &str,
-        projection: Option<&DirectoryBranch>,
-    ) -> Result<String> {
-        let cache_key = projection
-            .filter(|branch| !branch.materialized)
-            .map(|branch| format!("{tree_id}:{}", branch.directory_branch_id))
-            .unwrap_or_else(|| tree_id.into());
-        if let Some(done) = self.rewrites.get(&cache_key) {
-            return Ok(done.clone());
-        }
-        if !self.visiting.insert(cache_key.clone()) {
-            return Err(Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "directory references contain a cycle",
-            ));
-        }
-        let mut tree = state.directory_trees.get(tree_id).cloned().ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "frozen child subtree missing",
-            )
-        })?;
-        if let Some(branch) = projection.filter(|branch| !branch.materialized) {
-            // Pending scopes reuse an ancestor tree with their own inheritance
-            // intent. Only a changed projection acquires its own subtree.
-            tree.directory_branch_id = branch.directory_branch_id.clone();
-            tree.file_contexts = branch.file_contexts.clone();
-            tree.file_branches = branch.file_branches.clone();
-            tree.inherited_files = branch.inherited_files.clone();
-            tree.directory_refs = branch.directory_refs.clone();
-        }
-        let mut changed = false;
-        for entry in tree
-            .entries
-            .iter_mut()
-            .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == self.file)
-        {
-            let mut context = tree
-                .file_contexts
-                .get(entry.lookup_key())
-                .cloned()
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::StateInvalid,
-                        "frozen file path context missing",
-                    )
-                })?;
-            if !matches(&context, entry, self.branches, self.source) {
-                continue;
-            }
-            advance(
-                &mut context,
-                self.target_branch,
-                self.target_node,
-                self.source.is_none(),
-            )?;
-            entry.version_id = self.version.into();
-            entry.size = self.size;
-            tree.file_contexts
-                .insert(entry.lookup_key().to_owned(), context);
-            changed = true;
-        }
-        for reference in tree.directory_refs.values_mut() {
-            let rewritten = self.rewrite(state, &reference.tree_id)?;
-            if rewritten != reference.tree_id {
-                reference.tree_id = rewritten;
-                changed = true;
-            }
-        }
-        if changed {
-            // Compatibility caches never override the exact path contexts.
-            if let Some(entry) = tree
-                .entries
-                .iter()
-                .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == self.file)
-                && let Some(context) = tree.file_contexts.get(entry.lookup_key())
-            {
-                tree.file_branches
-                    .insert(self.file.into(), context.branch_id.clone());
-                if let Some(origin) = &context.inherited_from {
-                    tree.inherited_files
-                        .insert(self.file.into(), origin.clone());
-                } else {
-                    tree.inherited_files.remove(self.file);
-                }
-            }
-            let previous = state.commits.get(&tree.commit_id).ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::StateInvalid,
-                    "frozen directory commit missing",
-                )
-            })?;
-            let mut full = tree.entries.clone();
-            let key = name_policy::path_key(&tree.path);
-            full.extend(
-                previous
-                    .entries
-                    .iter()
-                    .filter(|entry| {
-                        entry.kind == NamespaceEntryKind::Directory
-                            && (entry.lookup_key() == key
-                                || namespace::is_descendant(&key, entry.lookup_key()))
-                    })
-                    .cloned(),
-            );
-            validate_entries(&mut full, self.maximum)?;
-            let id = new_id("commit")?;
-            let pending = full
-                .iter()
-                .filter(|entry| entry.kind == NamespaceEntryKind::File)
-                .filter_map(|entry| {
-                    let context = tree.file_contexts.get(entry.lookup_key())?;
-                    (context.inherited_from.is_some()
-                        || state
-                            .branches
-                            .get(&context.branch_id)
-                            .is_some_and(|branch| {
-                                branch.pending_file_versions.contains_key(&entry.file_id)
-                            }))
-                    .then(|| (entry.file_id.clone(), entry.version_id.clone()))
-                })
-                .collect();
-            state.commits.insert(
-                id.clone(),
-                Commit {
-                    namespace_deletions: None,
-                    commit_id: id.clone(),
-                    history_tree_id: previous.history_tree_id.clone(),
-                    kind: "file_node_publication".into(),
-                    parent_commit_ids: vec![previous.commit_id.clone()],
-                    tree_id: new_id("tree")?,
-                    sequence: state.sequence,
-                    operation_id: self.operation,
-                    author: self.principal.into(),
-                    message: "Publish exact file references".into(),
-                    entries: full,
-                    pending_file_versions: pending,
-                    provenance: None,
-                },
-            );
-            tree.tree_id = new_id("dtree")?;
-            tree.parent_tree_id = Some(tree_id.into());
-            tree.commit_id = id;
-            tree.sequence = state.sequence;
-            state
-                .directory_trees
-                .insert(tree.tree_id.clone(), tree.clone());
-        }
-        self.visiting.remove(&cache_key);
-        self.rewrites.insert(cache_key, tree.tree_id.clone());
-        Ok(tree.tree_id)
-    }
-}
-
-/// Publish only matching exact references. Historical child compositions are
-/// rewritten from their own frozen tree, never replaced by a child's new HEAD.
-/// No payload, version proof, namespace path or physical owner is changed.
+/// Owner and writable FILE inputs have already been checked by the merge planner.
+/// No other body, folder, branch or saved historical tree is updated.
 pub(crate) struct NodePublication<'a> {
     pub(crate) file: &'a str,
     pub(crate) matching_branches: &'a BTreeSet<String>,
-    pub(crate) matching_node: Option<&'a str>,
     pub(crate) target_branch: &'a str,
     pub(crate) target_node: &'a str,
     pub(crate) principal: &'a str,
@@ -351,193 +146,89 @@ pub(crate) struct NodePublication<'a> {
     pub(crate) maximum: usize,
 }
 
-pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Result<Vec<String>> {
-    let NodePublication {
-        file,
-        matching_branches,
-        matching_node,
-        target_branch,
-        target_node,
-        principal,
-        operation,
-        maximum,
-    } = input;
-    let version = super::file_nodes::node_version(state, file, target_node)?;
-    let body = &state.versions[&version];
-    let logical_size = body.logical_size;
-    let repo = state
-        .repositories
-        .values()
-        .find(|repo| repo.history_tree_id == body.history_tree_id)
-        .cloned()
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::RepositoryNotFound,
-                "file repository missing",
-            )
-        })?;
-    let originals = state
-        .directory_branches
-        .values()
-        .filter(|branch| branch.repository_id == repo.repository_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut publication = Publication {
-        file,
-        branches: matching_branches,
-        source: matching_node,
-        target_branch,
-        target_node,
-        version: &version,
-        size: logical_size,
-        principal,
-        operation,
-        maximum,
-        rewrites: BTreeMap::new(),
-        visiting: BTreeSet::new(),
-    };
-    let mut affected = Vec::new();
-    for original in &originals {
-        let rewritten =
-            publication.rewrite_projected(state, &original.head_tree_id, Some(original))?;
-        if rewritten == original.head_tree_id {
+pub(super) fn publish_node(
+    engine: &Engine,
+    state: &mut State,
+    repository: &Repository,
+    input: &NodePublication<'_>,
+) -> Result<()> {
+    let version = super::file_nodes::node_version(state, input.file, input.target_node)?;
+    let size = state.versions[&version].logical_size;
+    let root = &repository.main_branch_id;
+    let current = engine.namespace_tree(root)?;
+    let mut entries = current.entries().to_vec();
+    let mut changed = false;
+    for (index, entry) in entries.iter_mut().enumerate().filter(|(_, entry)| {
+        entry.kind == NamespaceEntryKind::File && entry.file_id == input.file
+    }) {
+        if current.visible_entry(index).is_none() {
             continue;
         }
-        let tree = &state.directory_trees[&rewritten];
-        let mut updated = original.clone();
-        updated.head_tree_id = rewritten;
-        updated.commit_id = tree.commit_id.clone();
-        updated.entries = tree.entries.clone();
-        updated.file_contexts = tree.file_contexts.clone();
-        updated.file_branches = tree.file_branches.clone();
-        updated.inherited_files = tree.inherited_files.clone();
-        updated.directory_refs = tree.directory_refs.clone();
-        updated.materialized = true;
-        updated.sequence = state.sequence;
-        state
-            .directory_branches
-            .insert(updated.directory_branch_id.clone(), updated);
-        affected.push(original.directory_branch_id.clone());
-    }
-    // A currently selected child may itself be a frozen, non-head tree.
-    // Advance only that exact composition and keep its mutable named HEAD apart.
-    let selections = state.directory_tree_selections.clone();
-    for (directory, tree) in selections {
-        let Some(selected) = state
-            .directory_selections
-            .get(&directory)
-            .and_then(|id| state.directory_branches.get(id))
-        else {
-            continue;
-        };
-        if selected.repository_id != repo.repository_id {
+        let mut context = namespace::file_context::context_at_key(
+            state, &repository.repository_id, entry.lookup_key(),
+        ).ok_or_else(|| Error::new(ErrorCode::FileBranchConflict, "current FILE selection missing"))?;
+        if !input.matching_branches.contains(&context.branch_id) {
             continue;
         }
-        let projection = originals.iter().find(|branch| {
-            branch.directory_branch_id == selected.directory_branch_id
-                && branch.head_tree_id == tree
-        });
-        let rewritten = publication.rewrite_projected(state, &tree, projection)?;
-        if rewritten != tree {
-            state.directory_tree_selections.insert(directory, rewritten);
+        if context.inherited_from.is_some() {
+            return Err(Error::new(
+                ErrorCode::FileBranchConflict, "merge needs an ordinary FILE selection",
+            ));
         }
-    }
-    let main = state
-        .branches
-        .get(&repo.main_branch_id)
-        .cloned()
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "repository main branch missing",
-            )
-        })?;
-    let previous = state.commits.get(&main.head_commit_id).ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::StateInvalid,
-            "repository head missing",
-        )
-    })?;
-    let mut entries = previous.entries.clone();
-    let mut changed_paths = Vec::new();
-    for entry in entries
-        .iter_mut()
-        .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
-    {
-        let Some(mut context) =
-            directory::context_at_key(state, &repo.repository_id, entry.lookup_key())
-        else {
-            continue;
-        };
-        if !matches(&context, entry, matching_branches, matching_node) {
-            continue;
-        }
-        advance(
-            &mut context,
-            target_branch,
-            target_node,
-            matching_node.is_none(),
-        )?;
+        context.branch_id = input.target_branch.into();
+        context.node_id = Some(input.target_node.into());
+        context.selection_generation = context.selection_generation.checked_add(1)
+            .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "file selection exhausted"))?;
         entry.version_id = version.clone();
-        entry.size = logical_size;
+        entry.size = size;
         state.file_contexts.insert(
-            directory::context_key_from_key(&repo.repository_id, entry.lookup_key()),
+            namespace::file_context::context_key_from_key(
+                &repository.repository_id, entry.lookup_key(),
+            ),
             context,
         );
-        changed_paths.push(entry.path().to_owned());
+        changed = true;
     }
-    if !changed_paths.is_empty() {
-        validate_entries(&mut entries, maximum)?;
-        let id = new_id("commit")?;
-        let pending = directory::snapshot_pending(state, &entries);
-        state.commits.insert(
-            id.clone(),
-            Commit {
-                namespace_deletions: None,
-                commit_id: id.clone(),
-                history_tree_id: repo.history_tree_id.clone(),
-                kind: "file_node_publication".into(),
-                parent_commit_ids: vec![previous.commit_id.clone()],
-                tree_id: new_id("tree")?,
-                sequence: state.sequence,
-                operation_id: operation,
-                author: principal.into(),
-                message: "Publish current file references".into(),
-                entries,
-                pending_file_versions: pending,
-                provenance: None,
-            },
-        );
-        let main = state
-            .branches
-            .get_mut(&repo.main_branch_id)
-            .expect("checked namespace");
-        main.head_commit_id = id;
-        main.generation = main.generation.checked_add(1).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::ResourceLimit,
-                "branch generation exhausted",
-            )
-        })?;
-        if matching_node.is_none() {
-            main.pending_file_versions.remove(file);
-        }
-        state
-            .file_selections
-            .insert(file.into(), target_branch.into());
-        if matching_node.is_none() {
-            state.file_write_origins.remove(file);
-        }
-        if originals.is_empty() {
-            affected.extend(directory::record_directory_edits(
-                state,
-                &repo.repository_id,
-                &changed_paths,
-                None,
-            )?);
-        }
+    if !changed {
+        return Ok(());
     }
-    affected.sort();
-    affected.dedup();
-    Ok(affected)
+    validate_entries(&mut entries, input.maximum)?;
+    if let Some(view) = engine.admitted_current_namespaces()? {
+        view.validate_draft(root, &entries)?;
+        view.remove_hidden_contexts(state, &repository.repository_id, root);
+    }
+    let pending = namespace::file_context::selected_pending(state, repository, &entries)?;
+    let live = entries.iter()
+        .filter(|entry| entry.kind == NamespaceEntryKind::File)
+        .map(|entry| entry.file_id.clone())
+        .collect::<BTreeSet<_>>();
+    let main = &engine.state().branches[root];
+    let id = new_id("commit")?;
+    state.commits.insert(
+        id.clone(),
+        Commit {
+            namespace_deletions: None,
+            commit_id: id.clone(),
+            history_tree_id: repository.history_tree_id.clone(),
+            kind: "file_node_publication".into(),
+            parent_commit_ids: vec![main.head_commit_id.clone()],
+            tree_id: new_id("tree")?,
+            sequence: state.sequence,
+            operation_id: input.operation,
+            author: input.principal.into(),
+            message: "Publish current file references".into(),
+            entries,
+            pending_file_versions: pending,
+            provenance: None,
+        },
+    );
+    let main = state.branches.get_mut(root).expect("invariant: admitted ordinary namespace root");
+    main.head_commit_id = id;
+    main.pending_file_versions.retain(|file, _| live.contains(file) && file != input.file);
+    main.generation = main.generation.checked_add(1).ok_or_else(|| {
+        Error::new(ErrorCode::ResourceLimit, "branch generation exhausted")
+    })?;
+    state.file_selections.insert(input.file.into(), input.target_branch.into());
+    state.file_write_origins.remove(input.file);
+    Ok(())
 }

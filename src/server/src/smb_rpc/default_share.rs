@@ -1,4 +1,4 @@
-//! Default SMB namespace: fixed primary-disk roots and existing named repositories.
+//! The default SMB share exposes primary disks and their registered ordinary namespaces.
 //! Routing never merges histories; each open handle retains its original session.
 use super::session::DispatchError;
 use super::*;
@@ -160,6 +160,9 @@ impl DefaultShare {
         &mut self,
         repository: storage_contract::Repository,
     ) -> Result<SessionKey, ApiError> {
+        if !repository.file_manager_root {
+            return Err(ApiError::forbidden());
+        }
         if !repository.smb_enabled {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::SmbRebindRequired,
@@ -306,17 +309,7 @@ impl DefaultShare {
                         SmbPathIntent::Lookup
                     },
                 )?;
-                let root_entry_id = matches!(&location.relative_path, SmbRelativePath::Root)
-                    .then(|| location.repository.repository_id.clone());
-                let prefix = if location.repository.file_manager_root {
-                    slot.directory_name()?.as_str().to_owned()
-                } else {
-                    format!(
-                        "{}/{}",
-                        slot.directory_name()?.as_str(),
-                        location.repository.name
-                    )
-                };
+                let prefix = slot.directory_name()?.as_str();
                 let key = self.session_key(location.repository)?;
                 let session = self
                     .sessions
@@ -324,10 +317,7 @@ impl DefaultShare {
                     .expect("invariant: selected session was inserted");
                 let (mut opened, descriptor) =
                     session.open_typed(location.relative_path, options)?;
-                opened.path = full_path(&prefix, &opened.path);
-                if let Some(entry_id) = root_entry_id {
-                    opened.entry_id = entry_id;
-                }
+                opened.path = full_path(prefix, &opened.path);
                 let local = opened.handle;
                 (
                     opened,
@@ -359,30 +349,10 @@ impl DefaultShare {
             }
             Location::Path { slot, path: within } => {
                 let location = self.resolve_at(&slot, within, SmbPathIntent::Lookup)?;
-                let root_entry_id = matches!(&location.relative_path, SmbRelativePath::Root)
-                    .then(|| location.repository.repository_id.clone());
-                let prefix = if location.repository.file_manager_root {
-                    slot.directory_name()?.as_str().to_owned()
-                } else {
-                    format!(
-                        "{}/{}",
-                        slot.directory_name()?.as_str(),
-                        location.repository.name
-                    )
-                };
+                let prefix = slot.directory_name()?.as_str();
                 let key = self.session_key(location.repository)?;
                 let mut result = self.sessions[&key].stat_typed(&location.relative_path)?;
-                result.path = full_path(&prefix, &result.path);
-                if let Some(entry_id) = root_entry_id {
-                    result.entry_id = entry_id;
-                }
-                if result.name.is_empty() {
-                    result.name = prefix
-                        .rsplit('/')
-                        .next()
-                        .expect("invariant: prefix contains a slot")
-                        .into();
-                }
+                result.path = full_path(prefix, &result.path);
                 return Ok(Reply::Stat(result));
             }
         };
@@ -414,27 +384,6 @@ impl DefaultShare {
                 return Err(ApiError::invalid(
                     "only rename accepts a destination or replacement",
                 ));
-            }
-            // Worktree namespace edits are not ordinary container moves. Check
-            // both paths before any reservation or root-directory publication.
-            for text in std::iter::once(path.as_str()).chain(destination.as_deref()) {
-                if let Location::Path { slot, path } = self.locate(text)? {
-                    match self.resolve_at(&slot, path, SmbPathIntent::Lookup) {
-                        Ok(location) => {
-                            let key = self.pin_binding(location.repository)?;
-                            if let SmbRelativePath::Entry(path) = location.relative_path
-                                && self.shared.backend.smb_worktree_locate(
-                                    &self.bound_identity(&key), &key.branch, &path,
-                                )?.is_some()
-                            {
-                                return Err(ApiError::unsupported());
-                            }
-                        }
-                        Err(error) if error.code
-                            == storage_contract::ErrorCode::DirectoryNotFound => {}
-                        Err(error) => return Err(error),
-                    }
-                }
             }
             let mkdir = if kind == NamespaceOperation::Mkdir {
                 let Location::Path { slot, path } = self.locate(&path)? else {
@@ -472,9 +421,7 @@ impl DefaultShare {
                 Some((slot, path)) => self.resolve_at(slot, path.clone().into(), intent)?,
                 None => self.resolve(&path, intent)?,
             };
-            if let Some((slot, path)) = mkdir
-                && source.repository.file_manager_root
-            {
+            if let Some((slot, path)) = mkdir {
                 // The ordinary layout admits the exact native file.namespace
                 // Mkdir receipt, not an implicit directory delta in workspace.commit.
                 let key = self.pin_binding(source.repository)?;

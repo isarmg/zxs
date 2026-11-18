@@ -145,28 +145,13 @@ async fn supplied_source_identity_rejects_bad_types_without_creating_workspace()
         assert_eq!(response["error"]["code"], "INVALID_REQUEST");
         assert_eq!(workspace_records(root.path()), before);
     }
-    // A one-workspace budget also detects any silently created live workspace.
-    let historical = success(
-        &app,
-        &token,
-        "POST",
-        "/api/workspaces",
-        Some(json!({"branch_id":branch,"source_commit_id":old_commit})),
-    )
-    .await;
-    assert_eq!(historical["purpose"], "historical_branch");
-    assert_eq!(historical["base_head"], old_commit);
-    success(
-        &app,
-        &token,
-        "POST",
-        &format!(
-            "/api/workspaces/{}/abort",
-            historical["workspace_id"].as_str().unwrap()
-        ),
-        Some(json!({})),
-    )
-    .await;
+    // Even a real old commit cannot open a second, branch-wide history.
+    let (status, rejected) = send(&app, Some(&token), "POST", "/api/workspaces",
+        Some(json!({"branch_id":branch,"source_commit_id":old_commit}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(rejected["error"]["code"], "INVALID_REQUEST");
+    assert_eq!(workspace_records(root.path()), before);
+    // Only the current ordinary workspace consumes the one-slot budget.
     let current = success(
         &app,
         &token,

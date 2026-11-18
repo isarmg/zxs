@@ -15,8 +15,8 @@ pub(crate) use history::{
 pub(crate) use super::mkdir::start as create_directory;
 pub(crate) use browse::{
     change_page, edit_search, go_directory, go_directory_details, go_root, load_disks,
-    load_entries, open_disk, open_disk_directory, open_preview_origin, preview_directory_branch,
-    preview_directory_snapshot, refresh_directory, return_to_default, return_to_default_file,
+    load_entries, open_disk, open_disk_directory,
+    refresh_directory, return_to_default_file,
     search, select_entry,
 };
 pub(crate) use mutation::{
@@ -49,21 +49,13 @@ pub(crate) fn history_navigation_ready(state: &State) -> bool {
 /// Shared by write actions and their controls. Check before generating IDs,
 /// creating drafts, or scheduling any browser/network work.
 pub(crate) fn write_allowed(state: &State) -> bool {
-    state.files.directory_preview.is_none()
-        && state.files.file_preview.is_none()
-        && default_write_allowed(state)
-        && state.files.writable
+    state.files.file_preview.is_none() && default_write_allowed(state)
 }
 
 pub(crate) fn default_write_allowed(state: &State) -> bool {
     state.session_active()
         && state.management.storage.writable()
-        && (state.files.writable || state.files.directory_preview.is_some())
-        && state
-            .files
-            .directory_preview
-            .as_ref()
-            .is_none_or(|preview| preview.branch().is_some())
+        && state.files.writable
         && !state.files.loading
         && !pending(state)
 }
@@ -73,7 +65,6 @@ pub(crate) fn pending(state: &State) -> bool {
         || super::deletion::blocks_writes(state)
         || super::mkdir::blocks_writes(state)
         || super::unborn::blocks_writes(state)
-        || super::directory_snapshot::blocks_writes(state)
         || state
             .files
             .operations

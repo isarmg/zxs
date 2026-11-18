@@ -164,20 +164,7 @@ impl crate::DirectoryReadSnapshot {
                     }
                 }).collect()
         } else { Vec::new() };
-        if repo.file_manager_root && repo.main_branch_id == branch {
-            let owner = repo.repository_id.parse().map_err(ApiError::contract_input)?;
-            for mount in engine.directory_worktree_mounts(owner)
-                .map_err(super::snapshot_worktree::error)?
-            {
-                unborn.push(smb_protocol::protocol::DirectoryEntry::Worktree {
-                    target: mount.target, relative_path: None,
-                    path: name_policy::PortablePath::parse(mount.name.as_str())
-                        .map_err(ApiError::invalid_source)?,
-                    kind: storage_contract::NamespaceEntryKind::Directory, size: 0,
-                });
-            }
-            unborn.sort_by(|left, right| left.path().key().cmp(right.path().key()));
-        }
+        unborn.sort_by(|left, right| left.path().key().cmp(right.path().key()));
         Ok(Self {
             unborn: std::sync::Arc::new(unborn),
             branch_id: branch.into(),
@@ -217,6 +204,11 @@ impl DirectorySnapshot {
             selection,
         } = request;
         let repository = repo_for_branch(engine, branch)?;
+        if !repository.file_manager_root || engine.ordinary_root_for_slot(&repository.primary_slot_id)
+            .map_err(error)?.is_none_or(|owner| owner.repository_id != repository.repository_id) {
+            return Err(ApiError::conflict(storage_contract::ErrorCode::SmbRebindRequired,
+                "SMB directory requires its original registered disk namespace"));
+        }
         let snapshot = match &selection {
             crate::DirectorySelection::Page {
                 snapshot: Some(snapshot),
@@ -244,12 +236,6 @@ impl DirectorySnapshot {
             if directory.is_none_or(|entry| {
                 entry.kind != storage_contract::NamespaceEntryKind::Directory
                     || entry.entry_id != entry_id
-                    || !storage_contract::directory_git::current_entry_visible(
-                        &engine.state().directory_git_repositories,
-                        &repository.repository_id,
-                        entries,
-                        entry,
-                    )
             }) {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::SmbRebindRequired,
@@ -265,7 +251,6 @@ impl DirectorySnapshot {
             },
             crate::DirectorySelection::Page { after, .. } => DirectoryPageProjection::page(
                 engine.state(),
-                &repository.repository_id,
                 &snapshot.commit_id,
                 entries,
                 &snapshot.unborn,
@@ -291,7 +276,6 @@ struct DirectoryPageProjection {
 impl DirectoryPageProjection {
     fn page(
         state: &storage_contract::State,
-        repository: &str,
         commit_id: &str,
         entries: &[storage_contract::Entry],
         unborn: &[smb_protocol::protocol::DirectoryEntry],
@@ -365,12 +349,6 @@ impl DirectoryPageProjection {
                 || rest.contains('/')
                 || (entry.kind == storage_contract::NamespaceEntryKind::File
                     && state.file_deletions.contains_key(&entry.file_id))
-                || !storage_contract::directory_git::current_entry_visible(
-                    &state.directory_git_repositories,
-                    repository,
-                    entries,
-                    entry,
-                )
             {
                 continue;
             }

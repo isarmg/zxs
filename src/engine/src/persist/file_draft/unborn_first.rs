@@ -1,7 +1,7 @@
 //! Original explicit first-commit request and exact constructor facts.
 //! Decoding descriptions never grants source, Version or working-clear authority.
 use super::{Protection, codec, content_protection};
-use crate::business::file_draft::{PublishedContent, invalid, trace_limit};
+use crate::business::file_draft::{PublishedContent, PublicationGraph, invalid};
 use crate::{Engine, OperationResult, Result, State};
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::file_draft::manifest::{ManifestCommitment, SaveGeneration};
@@ -148,7 +148,7 @@ pub(crate) fn decode(previous: &State, receipt: &OperationResult) -> Result<Deco
     if placement.get("binding_generations").and_then(json_codec::Value::as_object)
         .ok_or_else(invalid)?.len() != 1
         || content.get("allocations").and_then(json_codec::Value::as_array)
-            .ok_or_else(invalid)?.len() > trace_limit(previous, &request.target)?
+            .ok_or_else(invalid)?.len() > PublicationGraph::First.limit(previous, &request.target)?
     {
         return Err(invalid());
     }

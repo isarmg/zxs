@@ -155,7 +155,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     <h3>{t("确认撤销此删除节点", "Confirm undoing this deletion node")}</h3>
                     <p><code>{node.path.as_str().to_owned()}</code></p>
                     <p><code>{node.file_id.clone()}</code>" · "<code>{node.node_id.clone()}</code></p>
-                    <p>{t("刚才已重新读取并完整核对同一个删除节点。确认后只撤销此 D，解除同一文件全部保留路径与分支的删除冻结；不会创建正文、切换目录分支、提交目录或回滚其它文件。当前所有者、权限和准确节点仍由服务端在发布时核验。", "The same complete deletion node was read and checked again. Confirmation only removes this D and releases the deletion freeze for all retained paths and branches of this file. It does not create content, switch folder branches, commit a folder or roll back other files. The server rechecks current owners, permission and the exact node when publishing.")}</p>
+                    <p>{t("刚才已重新读取并完整核对同一个删除节点。确认后只撤销此 D，解除同一文件全部保留路径与分支的删除冻结；不会创建正文或回滚其它文件。当前所有者、权限和准确节点仍由服务端在发布时核验。", "The same complete deletion node was read and checked again. Confirmation only removes this D and releases the deletion freeze for all retained paths and branches of this file. It does not create content or roll back other files. The server rechecks current owners, permission and the exact node when publishing.")}</p>
                     <div class="zxs-row">
                         <button class="zxs-button" data-undo-file-deletion=""
                             disabled=move ||state.with(|s|reviewed(s,epoch,generation).is_none())

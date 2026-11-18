@@ -85,41 +85,6 @@ fn upload_arguments(workspace: &str, item: &str, path: &str, source: &UploadSour
         "fd": source.file.as_raw_fd(), "size": source.size, "hash": source.hash})
 }
 
-fn recorded_directory_request() -> storage_contract::directory_history::DirectoryHistoryRequest {
-    storage_contract::directory_history::DirectoryHistoryRequest::parse(
-        "repo_00000000000000000000000000000000",
-        "entry_00000000000000000000000000000000",
-        storage_contract::directory_history::DirectoryHistoryCollection::Nodes,
-        std::collections::BTreeMap::from([("limit".into(), "7".into())]),
-    )
-    .unwrap()
-}
-fn recorded_directory_page() -> storage_contract::directory_history::DirectoryHistoryPage {
-    use storage_contract::directory_history::*;
-    DirectoryHistoryPage {
-        identity: DirectoryHistoryIdentity {
-            repository_id: "repo_00000000000000000000000000000000".into(),
-            directory_id: "entry_00000000000000000000000000000000".into(),
-            history_tree_id: "history_00000000000000000000000000000000".into(),
-            history_root: storage_contract::history_window::HistoryRoot::parse(&"1".repeat(64))
-                .unwrap(),
-            collection: DirectoryHistoryCollection::Nodes,
-            limit: 7,
-        },
-        current: DirectoryHistoryCurrent {
-            committed_tree_id: None,
-            staged: false,
-            directory_branch_id: None,
-            tree_id: None,
-        },
-        nodes: vec![],
-        branches: vec![],
-        page: DirectoryHistoryPagination {
-            previous_cursor: None,
-            next_cursor: None,
-        },
-    }
-}
 
 fn recorded_history_request() -> storage_contract::history_window::HistoryWindowRequest {
     use storage_contract::history_window::*;
@@ -454,7 +419,7 @@ impl Backend for RecordingBackend {
         self.record(
             "create_workspace",
             Some(identity),
-            json!({"branch_id":command.branch_id,"source_commit_id":command.source_commit_id}),
+            json!({"branch_id":command.branch_id}),
         )?;
         Ok(storage_contract::Workspace {
             workspace_id: "created-workspace".into(),
@@ -952,27 +917,6 @@ impl Backend for RecordingBackend {
         )?;
         Ok(recorded_operation(operation_id, "commit_plan"))
     }
-    fn prepare_historical_save(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        let request = request?;
-        self.record(
-            "prepare_historical_save",
-            Some(identity),
-            json!({"history_tree_id":request.history_tree_id,"options":request.options?}),
-        )?;
-        Ok(storage_contract::Plan {
-            plan_id: "plan".into(),
-            kind: "historical_save".into(),
-            principal: identity.principal.clone(),
-            expected_sequence: 7,
-            digest: "digest".into(),
-            input: json!({}),
-            state: storage_contract::PlanState::Ready,
-        })
-    }
     fn prepare_purge(
         &self,
         identity: &crate::auth::Identity,
@@ -987,23 +931,6 @@ impl Backend for RecordingBackend {
         Ok(storage_contract::Plan {
             plan_id: "purge-plan".into(),
             kind: "purge".into(),
-            principal: identity.principal.clone(),
-            expected_sequence: 7,
-            digest: "digest".into(),
-            input: json!({}),
-            state: storage_contract::PlanState::Ready,
-        })
-    }
-    fn prepare_split(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareSplit, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        let request = request?;
-        self.record("prepare_split",Some(identity),json!({"history_tree_id":request.history_tree_id,"cut_commit_id":request.cut_commit_id?}))?;
-        Ok(storage_contract::Plan {
-            plan_id: "split-plan".into(),
-            kind: "split".into(),
             principal: identity.principal.clone(),
             expected_sequence: 7,
             digest: "digest".into(),
@@ -1067,14 +994,11 @@ impl Backend for RecordingBackend {
             slot_id: request.slot_id().into(),
             path: request.path().into(),
             backup: false,
-            preview: false,
+            writable: true,
             entries: vec![],
             selected_entry: None,
             context: None,
             directory_file_count: 0,
-            directory_branches: vec![],
-            directory_branches_supported: false,
-            default_branch_scope: false,
             total_entries: 0,
             snapshot: "listing-snapshot".into(),
             previous_cursor: None,
@@ -1241,20 +1165,6 @@ impl Backend for RecordingBackend {
             json!({"route":request.route(),"query":request.query_fields()}),
         )?;
         Err(sentinel_error("file_history_source"))
-    }
-    fn directory_history(
-        &self,
-        identity: &Identity,
-        request: storage_contract::directory_history::DirectoryHistoryRequest,
-        cancellation: storage_contract::history_window::HistoryWindowCancellation,
-    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, ApiError> {
-        *self.history_cancellation.lock().unwrap() = Some(cancellation);
-        self.record(
-            "directory_history",
-            Some(identity),
-            json!({"route":request.route(),"query":request.query_fields()}),
-        )?;
-        Ok(recorded_directory_page())
     }
     fn history_window(
         &self,
@@ -2070,9 +1980,7 @@ impl Fixture {
             ("cancel_plan", backend.cancel_plan(identity,Ok(crate::CancelPlan {plan_id:"plan".into(),operation_id:Ok(operation_id)})).map(|operation| { assert_eq!(operation,recorded_operation(operation_id,"cancel_plan")); json!({"returned_by":"cancel_plan"}) })),
             ("register_disk", backend.register_disk(identity).map(|never| match never {})),
             ("commit_plan", backend.commit_plan(identity,Ok(crate::CommitPlan {plan_id:"plan".into(),plan_digest:"digest".into(),operation_id:Ok(operation_id)})).map(|operation| { assert_eq!(operation,recorded_operation(operation_id,"commit_plan")); json!({"returned_by":"commit_plan"}) })),
-            ("prepare_historical_save", {backend.prepare_historical_save(identity,Ok(crate::PrepareHistoricalSave {history_tree_id:"history".into(),options:Ok(storage_contract::HistoricalSaveOptions {source_commit_id:"commit".into(),name:"Saved branch".into(),workspace_id:None,primary_slot_id:None,target_copies:None})})).map(|plan|{assert_eq!(plan.plan_id,"plan");assert_eq!(plan.expected_sequence,7);json!({"returned_by":"prepare_historical_save"})})}),
             ("prepare_purge", {backend.prepare_purge(identity,Ok(crate::PreparePurge {history_tree_id:"history".into(),version_ids:Ok(vec!["second".into(),"first".into(),"second".into()])})).map(|plan|{assert_eq!(plan.plan_id,"purge-plan");assert_eq!(plan.expected_sequence,7);json!({"returned_by":"prepare_purge"})})}),
-            ("prepare_split", {backend.prepare_split(identity,Ok(crate::PrepareSplit {history_tree_id:"history".into(),cut_commit_id:Ok("cut".into())})).map(|plan|{assert_eq!(plan.plan_id,"split-plan");assert_eq!(plan.expected_sequence,7);json!({"returned_by":"prepare_split"})})}),
             ("namespace_batch", {
                 backend.namespace_batch(identity,crate::NamespaceBatch {slot_id:"P01".into(),request:storage_contract::DirectoryNamespaceBatch {kind:storage_contract::DirectoryBatchKind::Delete,items:vec![]},operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"namespace_batch"));json!({"returned_by":"namespace_batch"})})
             }),
@@ -2196,12 +2104,6 @@ impl Fixture {
                     assert_eq!(versions[0].logical_size, u64::MAX);
                     assert_eq!(versions[0].file_id, "file");
                     json!({"returned_by":"file_history"})
-                }),
-            ),
-            (
-                "directory_history",
-                backend.directory_history(identity,recorded_directory_request(),storage_contract::history_window::HistoryWindowCancellation::new()).map(|page|{
-                    assert_eq!(page,recorded_directory_page());json!({"returned_by":"directory_history"})
                 }),
             ),
             (
@@ -2360,7 +2262,6 @@ impl Fixture {
                         identity,
                         crate::CreateWorkspace {
                             branch_id: "branch".into(),
-                            source_commit_id: Some("source".into()),
                         },
                     )
                     .map(|workspace| {
@@ -2693,7 +2594,6 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"repository_id":"repository"}),
         json!({"file_id":"file","location":{"repository_id":"repository","path":"Café/report.txt","key":"café/report.txt"}}),
         json!({"file_id":"file"}),
-        json!({"route":recorded_directory_request().route(),"query":recorded_directory_request().query_fields()}),
         json!({"file_id":"file_00000000000000000000000000000000",
             "collection":{"kind":"nodes"},
             "location":{"repository_id":"repo_00000000000000000000000000000000","path":"Café/report.txt","key":"café/report.txt"},
@@ -2713,7 +2613,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"branch_id":"branch"}),
         json!({"workspace_id":"workspace","change":{"kind":"mkdir","path":"File.txt","destination":null}}),
         json!({"workspace":"workspace","logical_size":42}),
-        json!({"branch_id":"branch","source_commit_id":"source"}),
+        json!({"branch_id":"branch"}),
         json!({"workspace_id":"workspace"}),
         json!({"workspace":"workspace","branch":"branch","path":"File.txt","key":"file.txt","published":false}),
         json!({"workspace":"workspace","branch":"branch","path":"File.txt","key":"file.txt","published":true}),

@@ -10,7 +10,6 @@ fn near_entry_limit(remaining: usize) -> Image<'static> {
         manifest: Vec::new(),
         placement: EntityPlacement::empty(),
         file_units: 0,
-        directory_repositories: 0,
         bodies: 0,
         body_bytes: 0,
     };

@@ -53,8 +53,8 @@ pub(super) struct Prefix {
     pub(super) path: String,
 }
 impl Capture {
-    /// Preview only the disk-name portion. The server appends the full primary
-    /// logical path, including the named repository when it is not a disk root.
+    /// Preview only the retained upstream disk-name portion. The server appends
+    /// the ordinary primary path, with no synthetic namespace-name component.
     pub(super) fn prefixes(
         &self,
         routes: &[Vec<String>],

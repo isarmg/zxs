@@ -204,7 +204,7 @@ impl<'a> BackupOriginalImage<'a> {
     {
         source.require(stop)?;
         let state = source.original().state();
-        if !state.directory_git_repositories.is_empty() || !state.file_deletions.is_empty() {
+        if !state.file_deletions.is_empty() {
             return Err(Failure::BackupLayoutUnsupported.into());
         }
         let mut selected = BTreeSet::new();
@@ -240,9 +240,7 @@ impl<'a> BackupOriginalImage<'a> {
         {
             preparation_checkpoint(stop)?;
             let (scope, bytes) = database.into_parts();
-            let backup_databases::Scope::File { file, history } = scope else {
-                return Err(Failure::BackupLayoutUnsupported.into());
-            };
+            let backup_databases::Scope::File { file, history } = scope;
             let id = file.parse::<FileId>()?;
             if !selected.remove(&id) {
                 continue;

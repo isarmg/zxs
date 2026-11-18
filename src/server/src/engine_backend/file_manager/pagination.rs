@@ -8,8 +8,6 @@ struct RequestFingerprint<'a> {
     lowercase_unicode: (u8, u8, u8),
     order: &'static str,
     path: &'a str,
-    #[serialization(skip_serializing_if = "Option::is_none")]
-    preview: &'a Option<(String, String)>,
     query: &'a str,
     slot: &'a str,
     unicode: &'static str,
@@ -41,7 +39,6 @@ impl PageRequest {
             query,
             cursor,
             selected,
-            preview,
         } = input;
         let path = path.as_ref().map(|path| path.key()).unwrap_or("");
         let fingerprint = RequestFingerprint {
@@ -49,7 +46,6 @@ impl PageRequest {
             lowercase_unicode: std::char::UNICODE_VERSION,
             order: "directory-lowercase-normalized-name-path-identity",
             path,
-            preview: &preview,
             query: &query,
             slot: &slot_id,
             unicode: name_policy::UNICODE_VERSION,

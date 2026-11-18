@@ -32,7 +32,7 @@ fn registering_a_disk_keeps_an_exact_backup_and_atomically_replaces_the_draft() 
     assert_eq!(saved.disks.len(), 4);
     assert_eq!(
         json_codec::to_value(&saved).unwrap()["pool_semantic_format"],
-        "manual-directory-v1"
+        "file-containers"
     );
     assert_eq!(saved.disks.last().unwrap().slot_id, "D01");
     assert_eq!(saved.disks.last().unwrap().name.as_str(), "Additional primary");
@@ -48,8 +48,8 @@ fn unsupported_pool_format_draft_is_rejected_without_backup_or_device_access() {
     for marker in [
         None,
         Some(json_codec::Value::Null),
-        Some(json!("manual-directory-v2")),
-        Some(json!({"manual-directory-v1": null})),
+        Some(json!("manual-directory-v1")),
+        Some(json!({"file-containers": null})),
     ] {
         let root = tempfile::tempdir().unwrap();
         let draft = Config::development(named_roots(root.path())).unwrap();
@@ -209,7 +209,7 @@ fn templates_accept_one_or_many_disks_without_initializing_them() {
         assert_eq!(config.disks.len(), count);
         assert_eq!(
             json_codec::to_value(&config).unwrap()["pool_semantic_format"],
-            "manual-directory-v1"
+            "file-containers"
         );
         let config = ValidatedConfig::try_from(config).unwrap();
         assert!(config.disks.iter().all(|disk| !disk.root.exists()));

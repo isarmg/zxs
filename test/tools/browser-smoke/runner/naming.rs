@@ -34,7 +34,7 @@ fn open_scope(browser: &Browser, name: &str) -> Result<()> {
 pub(super) fn run(browser: &Browser) -> Result<()> {
     // The persisted source is established by the private server-side fixture.
     // Naming still exercises the real source identity without retired Web writes.
-    open_scope(browser, super::fixture::NAMING_REPOSITORY)?;
+    open_scope(browser, super::fixture::NAMING_FOLDER)?;
     browser.script(r#"
         const original = window.fetch;
         const unrelatedKey='zxs:browser-smoke:recovery-unrelated',unrelatedValue='keep this unrelated record';
@@ -47,7 +47,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         }};
         window.fetch = async function(...args) {
             const request=args[0], url=new URL(request.url,location.href);
-            if(request.method==='POST' && (/^\/api\/file-manager\/disks\/[^/]+\/(namespace|namespace-batch)$/.test(url.pathname)||/^\/api\/file-manager\/files\/[^/]+\/branches$/.test(url.pathname))) {
+            if(request.method==='POST' && (/^\/api\/file-manager\/disks\/[^/]+\/(namespace|object-move)$/.test(url.pathname)||/^\/api\/file-manager\/files\/[^/]+\/branches$/.test(url.pathname))) {
                 const body=await request.clone().json();
                 if(url.pathname.endsWith('/namespace')){
                     const keys=[];
@@ -213,43 +213,12 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             let checkbox=browser.element("xpath", "//tr[.//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']]//input[@type='checkbox']")?;
             browser.click(&checkbox)?;
             browser.click(&browser.button("Rename", "重命名")?)?;
-            // The private fixture established this real source. Batch review
-            // must reuse its identity rather than create another scope.
-            wait_for("registered and selected batch source scope", || {
-                let scope = browser.script(r#"
-                    const editor=document.querySelector('.zxs-batch-editor');
-                    const sources=[...editor.querySelectorAll('.zxs-batch-scopes input')];
-                    const input=editor.querySelector('.zxs-batch-entry input');
-                    return {ready:input&&!input.disabled&&sources.length===1&&sources[0].checked&&!sources[0].disabled,
-                        sources:sources.length,error:editor.querySelector('.zxs-inline-error').textContent};
-                "#)?;
-                if scope["ready"] == true {
-                    Ok(())
-                } else {
-                    Err(format!("registered source scope is not ready: {scope}").into())
-                }
-            })?;
+            browser.css("[data-zxs-object-move] input[autocomplete='off']")?;
             no_write(browser, 4)?;
-            println!(
-                "PASS persisted source repository and selected-entry read before batch NFC review"
-            );
-            let codepoints = browser.script(&format!(
-                "const input=document.querySelector('.zxs-batch-entry input');input.value={};input.dispatchEvent(new Event('input',{{bubbles:true}}));return Array.from(input.value,ch=>ch.codePointAt(0))",
-                json!("e\u{301}")
-            ))?;
-            if codepoints != json!([0x65, 0x301]) {
-                return Err(format!("batch NFC input must remain decomposed: {codepoints}").into());
-            }
-            browser.click(&browser.button("Apply selected operation", "执行所选操作")?)?;
-            browser.button("Confirm NFC name", "确认使用 NFC 名称")?;
-            no_write(browser, 4)?;
-            browser.click(&browser.button("Confirm NFC name", "确认使用 NFC 名称")?)?;
-            wait_for("batch submits only the confirmed target name", || {
-                if browser.script("const p=window.__zxsNaming.writes;return p.length===5&&p[4].body.items.length===1&&p[4].body.items[0].source.path==='browser-smoke.txt'&&p[4].body.items[0].target.path==='é'&&!document.querySelector('.zxs-batch-entry input').disabled")? == true { Ok(()) } else { Err("batch confirmation request missing".into()) }
-            })?;
+            // Opening the real ordinary relocation editor captures the selected
+            // object only. Canceling before destination review must never write.
             browser.click(&browser.button("Cancel", "取消")?)?;
-            // Registering the source refreshes the listing and clears its
-            // selection. Cleanup must set a postcondition, not invert it.
+            // Cleanup sets the actual postcondition, not a guessed toggle.
             let checkbox = browser.css(".zxs-entry-checkbox")?;
             let checked = browser
                 .command("GET", &format!("/element/{checkbox}/selected"), None)?
@@ -259,8 +228,8 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             if checked {
                 browser.click(&checkbox)?;
             }
-            wait_for("naming hands off an unchecked row and closed batch", || {
-                let snapshot = browser.script("const check=document.querySelector('.zxs-entry-checkbox');return {checked:check?.checked,batchOpen:!!document.querySelector('.zxs-batch-editor')}")?;
+            wait_for("naming hands off an unchecked row and closed relocation editor", || {
+                let snapshot = browser.script("const check=document.querySelector('.zxs-entry-checkbox');return {checked:check?.checked,batchOpen:!!document.querySelector('[data-zxs-object-move]')}")?;
                 if snapshot["checked"] == false && snapshot["batchOpen"] == false {
                     println!("PASS naming handoff: {snapshot}");
                     Ok(())

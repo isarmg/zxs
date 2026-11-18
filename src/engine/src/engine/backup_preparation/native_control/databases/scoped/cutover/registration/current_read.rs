@@ -12,7 +12,7 @@ pub struct BackupCurrentReadReport {
     pub targets: usize,
     pub branch_scopes: usize,
     pub readable_branch_scopes: usize,
-    pub directory_scopes: usize,
+    pub registered_folders: usize,
     pub entries_per_target: usize,
     pub deleted_files: usize,
     pub unavailable_versions: usize,
@@ -22,7 +22,7 @@ pub struct BackupCurrentReadReport {
 struct Counts {
     branches: usize,
     readable_branches: usize,
-    directories: usize,
+    registered_folders: usize,
     entries: usize,
     deletions: usize,
     unavailable: usize,
@@ -32,7 +32,7 @@ fn count(view: &BackupNamespaceAdmission<'_>, stop: &AtomicBool) -> Result<Count
     let mut result = Counts {
         branches: state.branches.len(),
         readable_branches: 0,
-        directories: state.directory_branches.len(),
+        registered_folders: state.namespace_directories.len(),
         entries: 0,
         deletions: state.file_deletions.len(),
         unavailable: state
@@ -57,18 +57,6 @@ fn count(view: &BackupNamespaceAdmission<'_>, stop: &AtomicBool) -> Result<Count
         result.entries = result
             .entries
             .checked_add(view.branch(id)?.1.len())
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorCode::ResourceLimit,
-                    "Backup namespace entry count overflow",
-                )
-            })?;
-    }
-    for id in state.directory_branches.keys() {
-        preparation_checkpoint(stop)?;
-        result.entries = result
-            .entries
-            .checked_add(view.directory(id)?.1.len())
             .ok_or_else(|| {
                 Error::new(
                     ErrorCode::ResourceLimit,
@@ -116,7 +104,7 @@ pub(super) fn observe(
         targets: prepared.targets.len(),
         branch_scopes: counts.branches,
         readable_branch_scopes: counts.readable_branches,
-        directory_scopes: counts.directories,
+        registered_folders: counts.registered_folders,
         entries_per_target: counts.entries,
         deleted_files: counts.deletions,
         unavailable_versions: counts.unavailable,

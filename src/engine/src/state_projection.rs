@@ -5,7 +5,7 @@
 use crate::{Result, State};
 use json_codec::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use storage_contract::{ContentState, MapChanges, NamespaceEntryKind, SharedRecords};
+use storage_contract::{ContentState, MapChanges, SharedRecords};
 mod files;
 pub(crate) mod lifecycles;
 mod move_receipts;
@@ -17,10 +17,6 @@ macro_rules! projection_maps {
         container_tags => ContainerTags, file, "container_tags";
         branches => Branches, history, "branches";
         file_selections => FileSelections, selected_file, "file_selections";
-        directory_branches => DirectoryBranches, repository, "directory_branches";
-        directory_git_repositories => DirectoryGitRepositories, repository, "directory_git_repositories";
-        directory_trees => DirectoryTrees, directory_tree, "directory_trees";
-        file_write_origins => FileWriteOrigins, file, "file_write_origins";
         file_contexts => FileContexts, context, "file_contexts";
         file_path_nodes => FilePathNodes, history, "file_path_nodes";
         file_metadata_nodes => FileMetadataNodes, history, "file_metadata_nodes";
@@ -29,12 +25,9 @@ macro_rules! projection_maps {
         file_branch_aliases => FileBranchAliases, alias, "file_branch_aliases";
         file_node_parents => FileNodeParents, version, "file_node_parents";
         file_path_notes => FilePathNotes, node_note, "file_path_notes";
-        directory_tree_selections => DirectoryTreeSelections, directory, "directory_tree_selections";
         file_locations => FileLocations, file, "file_locations";
         file_backup_paths => FileBackupPaths, file, "file_backup_paths";
         file_backup_policies => FileBackupPolicies, file, "file_backup_policies";
-        directory_selections => DirectorySelections, selected_directory, "directory_selections";
-        directory_selection_generations => DirectorySelectionGenerations, directory, "directory_selection_generations";
         file_selection_generations => FileSelectionGenerations, file, "file_selection_generations";
         file_notes => FileNotes, file, "file_notes";
         version_notes => VersionNotes, version, "version_notes";
@@ -112,6 +105,8 @@ macro_rules! define_fields {
                     sequence: _, business_generation: _, topology_generation: _,
                     control_auth: _, events: _, operations: _, operation_principals: _, plans: _,
                     histories: _, repositories: _, file_containers: _, namespace_directories: _,
+                    file_write_origins: _, directory_branches: _, directory_git_repositories: _, directory_trees: _,
+                    directory_tree_selections: _, directory_selections: _, directory_selection_generations: _,
                     $($field: _,)*
                 } = after;
                 let mut writes = Self {
@@ -151,9 +146,6 @@ macro_rules! owner_for {
     (file, $state:ident, $index:ident, $key:ident, $field:ident) => {
         $index.file_histories($key).cloned().collect()
     };
-    (directory, $state:ident, $index:ident, $key:ident, $field:ident) => {
-        $index.directories.owners($key)
-    };
     (context, $state:ident, $index:ident, $key:ident, $field:ident) => {
         $key.split_once('/')
             .map(|(repository, _)| $index.repositories.owners(repository))
@@ -171,23 +163,6 @@ macro_rules! owner_for {
             .get($key)
             .and_then(|branch| $state.branches.get(branch))
             .map(|branch| branch.history_tree_id.as_str()))
-    };
-    (directory_tree, $state:ident, $index:ident, $key:ident, $field:ident) => {
-        directory_branch_owners(
-            $state,
-            $index,
-            $state
-                .directory_trees
-                .get($key)
-                .map(|tree| tree.directory_branch_id.as_str()),
-        )
-    };
-    (selected_directory, $state:ident, $index:ident, $key:ident, $field:ident) => {
-        directory_branch_owners(
-            $state,
-            $index,
-            $state.directory_selections.get($key).map(String::as_str),
-        )
     };
     (node_note, $state:ident, $index:ident, $key:ident, $field:ident) => {
         $state
@@ -235,12 +210,6 @@ macro_rules! field_value {
             .get($key)
             .map(|_| json_codec::to_value(content_state($state, $key)))
             .transpose()?)
-    };
-    (directory_selection_generations, $state:ident, $key:ident) => {
-        Ok($state
-            .directory_selection_generations
-            .get($key)
-            .map(|value| Value::String(value.to_string())))
     };
     (file_selection_generations, $state:ident, $key:ident) => {
         Ok($state
@@ -296,16 +265,6 @@ fn content_state(state: &State, key: &str) -> ContentState {
 }
 fn one(owner: Option<&str>) -> BTreeSet<String> {
     owner.into_iter().map(str::to_owned).collect()
-}
-fn directory_branch_owners(
-    state: &State,
-    index: &DerivedOwners,
-    branch: Option<&str>,
-) -> BTreeSet<String> {
-    branch
-        .and_then(|id| state.directory_branches.get(id))
-        .map(|branch| index.repositories.owners(&branch.repository_id))
-        .unwrap_or_default()
 }
 fn exact_keys<K: Ord + Clone>(changes: MapChanges<K>) -> Option<BTreeSet<K>> {
     match changes {
@@ -425,10 +384,7 @@ struct FileVersions(SharedRecords<SharedRecords<SharedRecords<()>>>);
 pub(crate) struct DerivedOwners {
     repositories: References,
     files: FileVersions,
-    directories: References,
     selected_files: References,
-    selected_directories: References,
-    directory_trees: References,
     repository_rows: SharedRecords<Rows>,
     history_rows: SharedRecords<Rows>,
     file_rows: SharedRecords<FileRows>,
@@ -455,7 +411,6 @@ impl Writes {
     fn file(&mut self, key: &str) {
         for field in [
             Field::ContainerTags,
-            Field::FileWriteOrigins,
             Field::FileLocations,
             Field::FileBackupPaths,
             Field::FileBackupPolicies,
@@ -465,10 +420,6 @@ impl Writes {
         ] {
             self.row(field, key);
         }
-    }
-    fn directory(&mut self, key: &str) {
-        self.row(Field::DirectoryTreeSelections, key);
-        self.row(Field::DirectorySelectionGenerations, key);
     }
     fn version(&mut self, key: &str) {
         for field in [
@@ -560,6 +511,8 @@ impl<'a> ProjectionTransition<'a> {
         after: &'a State,
         baseline: Option<&'a DerivedOwners>,
     ) -> Result<Self> {
+        crate::ordinary_authority::tables(before)?;
+        crate::ordinary_authority::tables(after)?;
         let previous = match baseline {
             Some(index) => std::borrow::Cow::Borrowed(index),
             None => std::borrow::Cow::Owned(DerivedOwners::from_state(before)),
@@ -620,29 +573,16 @@ impl DerivedOwners {
             index
                 .repositories
                 .add(&history.repository_id, &history.history_tree_id);
-            index
-                .directories
-                .add(&history.repository_id, &history.history_tree_id);
         }
         for (key, version) in state.versions.iter() {
             index
                 .files
                 .add(&version.file_id, &version.history_tree_id, key);
         }
-        for commit in state.commits.values() {
-            index.commit_directories(commit, true);
-        }
         for (key, branch) in state.file_selections.iter() {
             index.selected_files.add(branch, key);
         }
-        for (key, branch) in state.directory_selections.iter() {
-            index.selected_directories.add(branch, key);
-        }
-        for (key, tree) in state.directory_trees.iter() {
-            index.directory_trees.add(&tree.directory_branch_id, key);
-        }
         for field in [
-            Field::DirectoryBranches,
             Field::PlacementRules,
             Field::ProtectionPolicies,
             Field::FileContexts,
@@ -684,19 +624,6 @@ impl DerivedOwners {
             }
         }
     }
-    fn commit_directories(&mut self, commit: &storage_contract::Commit, add: bool) {
-        for entry in &commit.entries {
-            if entry.kind == NamespaceEntryKind::Directory {
-                if add {
-                    self.directories
-                        .add(&entry.entry_id, &commit.history_tree_id);
-                } else {
-                    self.directories
-                        .remove(&entry.entry_id, &commit.history_tree_id);
-                }
-            }
-        }
-    }
     fn repository_row(&mut self, state: &State, field: Field, key: &str, add: bool) {
         let repository = repository_key(state, field, key);
         let Some(repository) = repository else {
@@ -727,20 +654,9 @@ impl DerivedOwners {
         self.selected_files
             .each(branch, |key| writes.row(Field::FileSelections, key));
     }
-    fn directory_branch_dependents(&self, branch: &str, writes: &mut Writes) {
-        self.directory_trees
-            .each(branch, |key| writes.row(Field::DirectoryTrees, key));
-        self.selected_directories
-            .each(branch, |key| writes.row(Field::DirectorySelections, key));
-    }
     fn repository_dependents(&self, repository: &str, writes: &mut Writes) {
         if let Some(rows) = self.repository_rows.get(repository) {
             rows.dirty(writes);
-            if let Some(branches) = rows.0.get(&Field::DirectoryBranches) {
-                for branch in branches.keys() {
-                    self.directory_branch_dependents(branch, writes);
-                }
-            }
         }
     }
 }
@@ -834,20 +750,6 @@ impl DerivedOwners {
                 owners.branch_dependents(key, &mut affected);
             }
         }
-        for key in &writes.rows[&Field::DirectoryBranches] {
-            if before
-                .directory_branches
-                .get(key)
-                .map(|branch| &branch.repository_id)
-                != after
-                    .directory_branches
-                    .get(key)
-                    .map(|branch| &branch.repository_id)
-            {
-                index.directory_branch_dependents(key, &mut affected);
-                owners.directory_branch_dependents(key, &mut affected);
-            }
-        }
         for field in [Field::FilePathNodes, Field::FileMetadataNodes] {
             for key in &writes.rows[&field] {
                 affected.row(Field::FilePathNotes, key);
@@ -900,10 +802,6 @@ impl DerivedOwners {
 
 fn repository_key<'a>(state: &'a State, field: Field, key: &'a str) -> Option<&'a str> {
     match field {
-        Field::DirectoryBranches => state
-            .directory_branches
-            .get(key)
-            .map(|r| r.repository_id.as_str()),
         Field::PlacementRules => state
             .placement_rules
             .get(key)
@@ -933,19 +831,6 @@ fn change_reference(index: &mut References, key: &str, previous: Option<&str>, n
     }
 }
 
-fn commit_references(commit: Option<&storage_contract::Commit>) -> BTreeMap<(&str, &str), usize> {
-    let mut references = BTreeMap::new();
-    if let Some(commit) = commit {
-        for entry in &commit.entries {
-            if entry.kind == NamespaceEntryKind::Directory {
-                *references
-                    .entry((entry.entry_id.as_str(), commit.history_tree_id.as_str()))
-                    .or_default() += 1;
-            }
-        }
-    }
-    references
-}
 
 impl DerivedOwners {
     fn update_dependencies(
@@ -959,12 +844,6 @@ impl DerivedOwners {
             let previous = before.histories.get(key).map(|h| h.repository_id.as_str());
             let next = after.histories.get(key).map(|h| h.repository_id.as_str());
             change_reference(&mut self.repositories, key, previous, next);
-            change_reference(&mut self.directories, key, previous, next);
-            if previous != next {
-                for repository in previous.into_iter().chain(next) {
-                    affected.directory(repository);
-                }
-            }
         }
         for key in &writes.rows[&Field::Versions] {
             let previous = before
@@ -999,29 +878,6 @@ impl DerivedOwners {
                 affected.version(key);
             }
         }
-        for key in &writes.rows[&Field::Commits] {
-            if before.commits.get(key) == after.commits.get(key) {
-                continue;
-            }
-            let previous = commit_references(before.commits.get(key));
-            let next = commit_references(after.commits.get(key));
-            for (&(directory, history), &count) in &previous {
-                let retained = next.get(&(directory, history)).copied().unwrap_or(0);
-                for _ in retained..count {
-                    if self.directories.remove(directory, history) {
-                        affected.directory(directory);
-                    }
-                }
-            }
-            for (&(directory, history), &count) in &next {
-                let retained = previous.get(&(directory, history)).copied().unwrap_or(0);
-                for _ in retained..count {
-                    if self.directories.add(directory, history) {
-                        affected.directory(directory);
-                    }
-                }
-            }
-        }
         for key in &writes.rows[&Field::FileSelections] {
             change_reference(
                 &mut self.selected_files,
@@ -1030,30 +886,7 @@ impl DerivedOwners {
                 after.file_selections.get(key).map(String::as_str),
             );
         }
-        for key in &writes.rows[&Field::DirectorySelections] {
-            change_reference(
-                &mut self.selected_directories,
-                key,
-                before.directory_selections.get(key).map(String::as_str),
-                after.directory_selections.get(key).map(String::as_str),
-            );
-        }
-        for key in &writes.rows[&Field::DirectoryTrees] {
-            change_reference(
-                &mut self.directory_trees,
-                key,
-                before
-                    .directory_trees
-                    .get(key)
-                    .map(|tree| tree.directory_branch_id.as_str()),
-                after
-                    .directory_trees
-                    .get(key)
-                    .map(|tree| tree.directory_branch_id.as_str()),
-            );
-        }
         for field in [
-            Field::DirectoryBranches,
             Field::PlacementRules,
             Field::ProtectionPolicies,
             Field::FileContexts,

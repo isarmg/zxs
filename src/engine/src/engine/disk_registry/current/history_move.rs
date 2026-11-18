@@ -107,26 +107,6 @@ impl CurrentNamespaces {
                 }),
             );
         }
-        if op.kind == OBJECT_MOVE_KIND {
-            // verify_transition above has already admitted every imported and
-            // retained branch, including nonselected nested repository branches.
-            // Do not reclassify those branches as newly-created current forks.
-            for (id, branch) in super::changed_directory_branches(previous, next) {
-                if previous.directory_branches.get(id) == Some(branch) {
-                    continue;
-                }
-                let repository = next
-                    .repositories
-                    .get(&branch.repository_id)
-                    .ok_or_else(invalid)?;
-                let owner = view
-                    .branches
-                    .get(&repository.main_branch_id)
-                    .ok_or_else(invalid)?;
-                let scope = self.project_directory_scope(branch, owner);
-                Arc::make_mut(&mut view.directories).insert(id.clone(), scope);
-            }
-        }
         view.reserve_history_copy_identities(previous, next);
         Ok(Some(view))
     }

@@ -408,7 +408,6 @@ fn original_databases(target: &ManagedPool, plan: &Plan) -> Result<databases::Ob
             || report.database_bytes != first.database_bytes
             || report.original_disks != first.original_disks
             || report.file_databases != first.file_databases
-            || report.directory_databases != first.directory_databases
     }) {
         return Err("required lower targets disagree on the complete original State or database scopes; no peer fills another target".into());
     }

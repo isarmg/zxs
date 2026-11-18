@@ -29,7 +29,7 @@ fn oversized_seed() -> (tempfile::TempDir, Engine, Repository, Entry, Entry) {
     // database installations exhausting their unchanged retention budget.
     for batch in 0..41 {
         let count = if batch == 40 { 95 } else { 100 };
-        let receipt = engine
+        engine
             .merge_file_history(storage_engine::FileHistoryMergeRequest {
                 file_id: &a.file_id,
                 inputs: &inputs[..count],
@@ -40,7 +40,6 @@ fn oversized_seed() -> (tempfile::TempDir, Engine, Repository, Entry, Entry) {
                 operation_id: OperationId::generate().unwrap(),
             })
             .unwrap();
-        assert_eq!(receipt.result["directory_branch_ids"], json!([]));
         assert_eq!(engine.file_branch_head(&branch).unwrap(), expected);
     }
     assert_eq!(

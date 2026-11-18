@@ -46,6 +46,7 @@ impl CurrentNamespaces {
         if source.branch_id == target.branch_id
             || source.history_tree_id != link.history_tree_id
             || target.history_tree_id != link.history_tree_id
+            || source.file_id.is_none()
             || source.file_id != target.file_id
             || history.history_tree_id != link.history_tree_id
             || repository.repository_id != history.repository_id
@@ -98,6 +99,9 @@ impl CurrentNamespaces {
                 return Err(invalid());
             }
             if cursor == selected {
+                if !crate::business::holds_file_endpoint(state, branch, commit) {
+                    return Err(invalid());
+                }
                 break;
             }
             cursor = commit.parent_commit_ids.first().ok_or_else(invalid)?;

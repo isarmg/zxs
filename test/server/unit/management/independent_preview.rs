@@ -154,7 +154,7 @@ fn independent_preview_rejects_wrong_format_corruption_and_execution_fields() {
     assert_eq!(bytes(&path), before);
 }
 
-fn http_app(f: &Fixture) -> http_routing::Router {
+fn http_app(f: &Fixture) -> (http_routing::Router, crate::HttpWork) {
     let config = crate::ServerConfig::new(&f.backend.inner.management_root);
     let spool = crate::http_spool::HttpSpool::open_blocking(&config);
     let telemetry =
@@ -215,7 +215,7 @@ async fn actual_http_independent_preview_keeps_source_unchanged_and_auth_boundar
         fs::remove_file(entry.unwrap().path()).unwrap();
     }
     let source = observed(&f, &path);
-    let app = http_app(&f);
+    let (app, _http_work) = http_app(&f);
     let before = bytes(&path);
     let known = bytes(&f.known);
     let input = json_codec::to_vec(&IndependentDiskPreviewRequest {
@@ -308,7 +308,7 @@ async fn actual_http_independent_preview_rejects_replaced_source_without_writes(
     let f = fixture();
     let path = independent(&f);
     let source = observed(&f, &path);
-    let app = http_app(&f);
+    let (app, _http_work) = http_app(&f);
     let original = bytes(&path);
     let moved = path.with_extension("moved");
     fs::rename(&path, &moved).unwrap();

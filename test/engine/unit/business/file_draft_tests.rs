@@ -108,7 +108,16 @@ fn unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node
 
     // The real producer now uses the ordinary budget/EXCL/Candidate pipeline.
     // The earlier discarded logical plan never granted a physical identity.
+    // The later-registry listing gate uses a positive absence proof only;
+    // the actual native birth below must immediately invalidate that proof.
+    engine.require_projected_unborn_absence(request.repository).unwrap();
     let published = engine.create_unborn_file(&request, &principal, operation).unwrap();
+    assert_eq!(engine.require_projected_unborn_absence(request.repository)
+        .unwrap_err().code(), crate::ErrorCode::UnsupportedOperation);
+    assert!(engine.native_current_entries(request.repository).unwrap().iter().any(|row| {
+        matches!(row, crate::NativeCurrentEntry::Unborn { target, .. }
+            if target.repository == request.repository && target.path == request.path)
+    }));
     let decoded = crate::persist::file_draft::birth::decode(&published).unwrap();
     let target = decoded.target().clone();
     let record = engine.state().file_containers[&target.file].clone();
@@ -1187,35 +1196,71 @@ fn fresh_pool_format_refuses_unmarked_system_and_disk_before_recovery_writes() {
 
     let config_path = system.join("config.json");
     let seal_path = disk.join(crate::persist::layout::DISK_IDENTITY.as_path());
-    let unmark = |bytes: &[u8]| {
+    let anchor_path = disk.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path());
+    let old_geometry = |bytes: &[u8]| {
+        let mut value: json_codec::Value = json_codec::from_slice(bytes).unwrap();
+        let roots = value["storage_roots"].as_object_mut().unwrap();
+        assert_eq!(roots.len(), 1);
+        for root in roots.values_mut() {
+            let old = root.as_object_mut().unwrap().remove("areas").unwrap();
+            root["layout"] = "unified_working_tree_v1".into();
+            root["roots"] = old;
+        }
+        json_codec::to_vec(&value).unwrap()
+    };
+    let change_format = |bytes: &[u8], replacement: Option<&str>| {
         let mut value: json_codec::Value = json_codec::from_slice(bytes).unwrap();
         let original = value.as_object_mut().unwrap().remove("pool_semantic_format");
-        assert_eq!(original.unwrap(), "manual-directory-v1");
+        assert_eq!(original.unwrap(), "file-containers");
+        if let Some(token) = replacement { value["pool_semantic_format"] = token.into(); }
         json_codec::to_vec(&value).unwrap()
     };
     let config = fs::read(&config_path).unwrap();
     let seal = fs::read(&seal_path).unwrap();
+    let anchor = fs::read(&anchor_path).unwrap();
+    let journal = disk.join("metadata/application-log").join(crate::persist::layout::JOURNAL.as_path());
+    let log = fs::read(&journal).ok();
+    for replacement in [None, Some("manual-directory-v1")] {
+        // Keep the genuine former full descriptor shape and original
+        // physical registration, not only a malformed token on a new map.
+        let unsupported = old_geometry(&change_format(&config, replacement));
+        fs::write(&config_path, &unsupported).unwrap();
+        let inode = fs::metadata(&config_path).unwrap().ino();
+        let error = Engine::open(&system).err().expect("unrecognized SYSTEM must reject");
+        assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        assert_eq!(fs::metadata(&config_path).unwrap().ino(), inode);
+        assert_eq!(fs::read(&config_path).unwrap(), unsupported);
+        assert_eq!(fs::read(&seal_path).unwrap(), seal);
+        assert_eq!(fs::read(&journal).ok(), log);
+        fs::write(&config_path, &config).unwrap();
 
-    let without_config_marker = unmark(&config);
-    fs::write(&config_path, &without_config_marker).unwrap();
-    let inode = fs::metadata(&config_path).unwrap().ino();
-    let error = Engine::open(&system).err().expect("unmarked SYSTEM must reject");
-    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
-    assert_eq!(fs::metadata(&config_path).unwrap().ino(), inode);
-    assert_eq!(fs::read(&config_path).unwrap(), without_config_marker);
-    assert_eq!(fs::read(&seal_path).unwrap(), seal);
-    fs::write(&config_path, config).unwrap();
-
-    let without_disk_marker = unmark(&seal);
-    fs::write(&seal_path, &without_disk_marker).unwrap();
-    let inode = fs::metadata(&seal_path).unwrap().ino();
-    let error = Engine::restore_from_disks(&replacement_system, &[disk])
-        .err()
-        .expect("unmarked disk must reject explicit recovery");
-    assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch);
+        let unsupported = change_format(&seal, replacement);
+        fs::write(&seal_path, &unsupported).unwrap();
+        let inode = fs::metadata(&seal_path).unwrap().ino();
+        let error = Engine::restore_from_disks(&replacement_system, std::slice::from_ref(&disk))
+            .err().expect("unrecognized disk must reject explicit recovery");
+        assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch);
+        assert!(!replacement_system.exists());
+        assert_eq!(fs::metadata(&seal_path).unwrap().ino(), inode);
+        assert_eq!(fs::read(&seal_path).unwrap(), unsupported);
+        assert_eq!(fs::read(&journal).ok(), log);
+        fs::write(&seal_path, &seal).unwrap();
+    }
+    // Merely relabeling the SYSTEM or an explicitly supplied recovery anchor
+    // cannot bless previous root descriptors. No replacement SYSTEM is born.
+    let unsupported = old_geometry(&config);
+    fs::write(&config_path, &unsupported).unwrap();
+    assert!(Engine::open(&system).is_err());
+    assert_eq!(fs::read(&config_path).unwrap(), unsupported);
+    fs::write(&config_path, &config).unwrap();
+    let unsupported = old_geometry(&anchor);
+    fs::write(&anchor_path, &unsupported).unwrap();
+    assert!(Engine::restore_from_disks(&replacement_system, std::slice::from_ref(&disk)).is_err());
     assert!(!replacement_system.exists());
-    assert_eq!(fs::metadata(&seal_path).unwrap().ino(), inode);
-    assert_eq!(fs::read(&seal_path).unwrap(), without_disk_marker);
-    fs::write(&seal_path, seal).unwrap();
+    assert_eq!(fs::read(&anchor_path).unwrap(), unsupported);
+    assert_eq!(fs::read(&seal_path).unwrap(), seal);
+    assert_eq!(fs::read(&journal).ok(), log);
+    fs::write(&anchor_path, anchor).unwrap();
+
     drop(Engine::open(&system).unwrap());
 }

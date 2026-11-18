@@ -19,7 +19,7 @@ const modes = writable => writable ? ['Read/write directory', '读写目录'] : 
 // This scenario follows a current namespace entry, not only equal content.
 const identityFields = ['entry_id', 'file_id', 'repository_id', 'repository_path', 'version_id', 'node_id', 'size'];
 const mutationLabels = [
-    ['New folder', '新建文件夹'], ['Move', '移动'], ['Copy', '复制'],
+    ['New folder', '新建文件夹'], ['Move', '移动'],
     ['Rename', '重命名'], ['Delete', '删除'],
     ['Primary placement', '主盘规则'], ['Backup settings', '备份设置']
 ];
@@ -55,7 +55,7 @@ function directoryView() {
             const matching = controls.filter(button => labels.includes(text(button)));
             return matching.length === 1 && matching[0].disabled;
         }) && !document.querySelector('[data-zxs-set-directory-default]')
-            && !controls.some(button => ['Create folder branch', '创建目录分支'].includes(text(button)))
+            && !controls.some(button => ['Create folder branch', '创建目录分支', 'Copy', '复制', 'Separate file', '分离为独立文件'].includes(text(button)))
             && table?.querySelector('thead input[type=checkbox]')?.disabled === true};
 }
 function validPath(path) {
@@ -127,20 +127,27 @@ const p = window.__zxsBackupBrowse = {
         const body = read.body, backup = slot !== 'P01';
         if (!read.fullQuery || !body || body.slot_id !== slot || body.path !== path || !validPath(path)
             || body.writable !== !backup || (backup ? body.backup !== true : Object.hasOwn(body, 'backup'))
-            || Object.hasOwn(body, 'preview')
+            || ['preview','directory_branches','directory_branches_supported','default_branch_scope'].some(key => Object.hasOwn(body, key))
             || typeof body.snapshot !== 'string' || !body.snapshot || body.selected_entry !== null
             || body.previous_cursor !== null || body.next_cursor !== null
             || !Array.isArray(body.entries) || body.entries.length > 200
             || body.total_entries !== String(body.entries.length))
             throw new Error('backup navigation requires an exact complete real directory page');
-        if (backup && (body.context !== null || body.directory_branches_supported !== false
-            || body.default_branch_scope !== false || !Array.isArray(body.directory_branches)
-            || body.directory_branches.length !== 0))
+        if (backup && body.context !== null)
             throw new Error('backup directory exposed mutable repository context');
+        if (!backup) {
+            const c = body.context;
+            if (c === null ? path !== '' || body.entries.length !== 0 || body.directory_file_count !== '0'
+                : !c || c.repository_path !== path || ['repository_id','branch_id','base_head']
+                    .some(key => typeof c[key] !== 'string' || c[key].length === 0))
+                throw new Error('primary folder lacks the complete registered context');
+        }
         const paths = new Set(), names = new Set();
         for (const entry of body.entries) {
             if (typeof entry.entry_id !== 'string' || !entry.entry_id)
                 throw new Error('backup navigation entry identity is missing');
+            if (!backup && (entry.repository_id !== body.context.repository_id || entry.repository_path !== entry.path))
+                throw new Error('primary entry is not in the observed registered folder');
             if (backup && entry.kind === 'directory' && ['repository_id', 'repository_path', 'container', 'selected_branch_id']
                 .some(key => Object.hasOwn(entry, key)))
                 throw new Error('virtual backup directory exposed repository or file context');
@@ -183,7 +190,7 @@ const p = window.__zxsBackupBrowse = {
                 || identityFields.some(key => typeof entry[key] !== 'string' || entry[key].length === 0))
                 throw new Error('the seeded repository did not return its one identified real file');
             const backup = body.slot_id !== 'P01';
-            if (entry.container !== true || entry.repository_path !== 'browser-smoke.txt'
+            if (entry.container !== true || entry.repository_path !== 'browser-fixtures/browser-smoke.txt'
                 || entry.read_only !== backup || (backup ? entry.historical_only !== false : Object.hasOwn(entry, 'historical_only')))
                 throw new Error('seeded entry is not the expected current file container');
             if (body.slot_id === 'P01') {

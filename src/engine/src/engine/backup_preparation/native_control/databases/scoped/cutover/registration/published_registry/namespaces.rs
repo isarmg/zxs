@@ -3,11 +3,8 @@
 use super::*;
 
 /// Identity scope, not a caller-provided path, historical commit or write plan.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum BackupNamespaceScope {
-    BranchHead(String),
-    DirectoryHead(String),
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BackupNamespaceScope(pub storage_contract::BranchId);
 
 /// One frozen read page. A soft-deleted entry retains its exact D node; content
 /// retirement remains visible and never creates permission to read a body.
@@ -25,21 +22,11 @@ pub struct BackupNamespacePage {
 }
 
 impl BackupNamespaceScope {
-    pub(in super::super) fn validate(&self) -> Result<()> {
-        match self {
-            Self::BranchHead(id) => validate_id(id, "br")?,
-            Self::DirectoryHead(id) => validate_id(id, "dbr")?,
-        }
-        Ok(())
-    }
     pub(in super::super) fn entries<'a>(
         &self,
         admitted: &'a crate::engine::disk_registry::current::backup::BackupNamespaceAdmission<'_>,
     ) -> Result<(&'a str, &'a [Entry])> {
-        match self {
-            Self::BranchHead(id) => admitted.branch(id),
-            Self::DirectoryHead(id) => admitted.directory(id),
-        }
+        admitted.branch(&self.0.to_string())
     }
 }
 
@@ -53,7 +40,6 @@ pub(in super::super) fn read_page(
     limit: usize,
 ) -> Result<BackupNamespacePage> {
     name_policy::validate_slot(slot)?;
-    scope.validate()?;
     if !(1..=256).contains(&limit) {
         return Err(Error::new(
             ErrorCode::InvalidRequest,
@@ -129,7 +115,7 @@ pub(in super::super) fn read_page(
             publication_hash: admitted.publication_hash().to_owned(),
             registry: admitted.registry().clone(),
             target_slot_id: slot.to_owned(),
-            scope: scope.clone(),
+            scope,
             head_id: head.to_owned(),
             entries: entries[offset..end].to_vec(),
             file_deletions,

@@ -8,8 +8,6 @@ use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{HistoryTreeId, OperationId, Principal, Sequence};
 
-pub(crate) const RESTORE_KIND: &str = "history.restore";
-pub(crate) const RESTORED_FIELD: &str = "restored_path_audit";
 pub(crate) type Sources = BTreeMap<OperationId, PathAuditSource>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -188,33 +186,11 @@ pub(crate) fn merge(target: &mut Sources, source: Sources) -> Result<()> {
     validate_sources(target)
 }
 
-pub(crate) fn restored(receipt: &OperationResult) -> Result<Sources> {
-    if receipt.kind != RESTORE_KIND {
-        return Err(invalid());
-    }
-    let value = receipt.result.get(RESTORED_FIELD).ok_or_else(invalid)?;
-    retained::bounded(value)?;
-    let sources: Sources = json_codec::from_value(value.clone())
-        .map_err(|source| Error::PathChange(PathChangeError::Encoding(source)))?;
-    validate_sources(&sources)?;
-    for source in sources.values() {
-        if source.operation.sequence >= receipt.sequence
-            || source.projections.iter().any(|row| {
-                receipt.history_tree_id.as_deref() != Some(row.history_tree_id.to_string().as_str())
-            })
-        {
-            return Err(invalid());
-        }
-    }
-    Ok(sources)
-}
-
 pub(crate) fn carrier(state: &State, id: OperationId) -> Result<Option<PathAuditCarrier>> {
     let receipt = state.operations.get(&id).ok_or_else(invalid)?;
     let native = path_changes::is_kind(&receipt.kind);
     let copied = crate::state_projection::lifecycles::history_copy_owner(receipt);
-    if !native && receipt.kind != RESTORE_KIND
-        && matches!(copied, crate::state_projection::lifecycles::DeletionOwner::Other)
+    if !native && matches!(copied, crate::state_projection::lifecycles::DeletionOwner::Other)
     {
         return Ok(None);
     }
@@ -225,9 +201,7 @@ pub(crate) fn carrier(state: &State, id: OperationId) -> Result<Option<PathAudit
         return Err(invalid());
     }
     let mut sources = Sources::new();
-    if receipt.kind == RESTORE_KIND {
-        sources = restored(receipt)?;
-    } else if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
+    if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
         let movement = crate::business::object_move::read_result(receipt)?;
         if movement.retained_lifecycle.iter().any(|prefix| !prefix.path_changes.is_empty()) {
             let histories = movement.path_changes.iter().map(|fact| fact.history_tree_id)
@@ -462,7 +436,7 @@ pub(crate) fn portable(manifest: &HistoryManifest, sequence: u64) -> Result<Sour
 
 /// One index for one immutable ledger admission. Source receipts are hashed
 /// once per encountered carrier, never rediscovered with an all-State scan for
-/// every restore. The index is derived evidence, not a persistent authority.
+/// every retained copy. The index is derived evidence, not a persistent authority.
 #[derive(Clone, PartialEq, Eq)]
 struct SourceProof(String);
 
@@ -496,29 +470,4 @@ impl<'a> CollisionIndex<'a> {
         }
         Ok(())
     }
-}
-
-pub(crate) fn check_collisions(
-    state: &State,
-    incoming: &Sources,
-    restore_operation: OperationId,
-) -> Result<()> {
-    if incoming.contains_key(&restore_operation) {
-        return Err(invalid());
-    }
-    let mut index = CollisionIndex::new(state);
-    index.admit(incoming)?;
-    for id in state.operations.keys() {
-        match carrier(state, *id)? {
-            Some(PathAuditCarrier::Complete { sources, .. }) => index.admit(&sources)?,
-            Some(PathAuditCarrier::Unsupported { operation, .. }) => {
-                let movement = crate::business::object_move::read_result(&operation)?;
-                for prefix in &movement.retained_lifecycle {
-                    index.admit(&prefix.path_audit)?;
-                }
-            }
-            None => {}
-        }
-    }
-    Ok(())
 }

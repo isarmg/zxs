@@ -183,8 +183,12 @@ impl Record {
         operation: OperationId,
         name: &str,
     ) -> Result<Self, api::Error> {
+        if name_policy::path_key(&state.files.directory) != name_policy::path_key(&state.files.repository_path) {
+            return Err(failure("The folder listing differs from its registered namespace path."));
+        }
+        // Use the observed ordinary path for both the sent command and its original digest.
         let path = name_policy::PortablePath::parse(&super::super::model::join_path(
-            &state.files.directory,
+            &state.files.repository_path,
             name,
         ))
         .map_err(|source| decode_error(source.into()))?;
@@ -199,11 +203,7 @@ impl Record {
             Namespace::Repository {
                 repository: HistoryRepositoryId::parse(&state.files.repository_id)
                     .map_err(decode_error)?,
-                path: name_policy::PortablePath::parse(&super::super::model::join_path(
-                    &state.files.repository_path,
-                    name,
-                ))
-                .map_err(|source| decode_error(source.into()))?,
+                path: path.clone(),
             }
         };
         let stored = Stored {
@@ -313,9 +313,7 @@ impl Record {
                 name_policy::validate_slot(&movement.target_slot_id)
                     .map_err(|source| decode_error(source.into()))?;
                 let source = movement.source_path.as_str();
-                if source != display_path
-                    && display_path.split_once('/').map(|(_, tail)| tail) != Some(source)
-                {
+                if source != display_path {
                     return Err(failure(
                         "The original object paths do not share one namespace.",
                     ));
@@ -324,9 +322,7 @@ impl Record {
             }
             Namespace::FileRelocation { relocation } => {
                 let source = relocation.source.as_str();
-                if source != display_path
-                    && display_path.split_once('/').map(|(_, tail)| tail) != Some(source)
-                {
+                if source != display_path {
                     return Err(failure(
                         "The original file paths do not share one namespace.",
                     ));
@@ -339,11 +335,7 @@ impl Record {
                 None
             }
             Namespace::Repository { repository, path } => {
-                // A named repository removes exactly one displayed component;
-                // a disk-root repository keeps the complete displayed path.
-                if path.as_str() != display_path
-                    && display_path.split_once('/').map(|(_, tail)| tail) != Some(path.as_str())
-                {
+                if path.as_str() != display_path {
                     return Err(failure(
                         "The original folder paths do not share one namespace.",
                     ));

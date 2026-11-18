@@ -24,7 +24,7 @@ mod native_control;
 pub use native_control::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
-    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
     BackupNamespaceScope, BackupNativeMetadataReport, BackupOrdinaryServingReport,
@@ -883,11 +883,10 @@ impl Engine {
                 "backup history closure is empty or exceeds the admitted entry budget",
             ));
         }
-        // FILE histories do not include independently published .zxs snapshot
-        // bodies. Their actual permanent index must pass before any task or
-        // target write; neither a directory name nor an allocated node is proof
-        // of a completed snapshot. The target-bound transfer is not implemented.
-        self.require_backup_snapshot_scope()
+        // Refuse a mixed visible prefix before opening an intent. This is a
+        // domain check, not original evidence: freeze still opens the actual
+        // Candidate, Publication, seal and complete fixed snapshot.
+        crate::ordinary_authority::decoded_records(&self.state)
     }
 
     fn backup_history_plans(&self) -> Result<Vec<PreparedHistoryPackage>> {
@@ -997,3 +996,7 @@ fn spawn(
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/backup_preparation_status_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/backup_snapshot_scope_tests.rs"]
+mod receipt_scope_tests;

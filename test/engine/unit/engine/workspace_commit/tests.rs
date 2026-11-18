@@ -216,13 +216,7 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
     )
     .unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("shared state").unwrap(),
-            "P01",
-            1,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "admin", OperationId::generate().unwrap())
         .unwrap();
     let mut commits = Vec::new();
     for bytes in [b"first".as_slice(), b"second".as_slice()] {
@@ -248,13 +242,6 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
     let old_version = engine.state.commits[&commits[0]].entries[0]
         .version_id
         .clone();
-    let options = HistoricalSaveOptions {
-        source_commit_id: commits[0].clone(),
-        name: "historical preview".into(),
-        workspace_id: None,
-        primary_slot_id: None,
-        target_copies: None,
-    };
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
         .unwrap();
@@ -283,19 +270,12 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
             .code(),
         storage_contract::ErrorCode::CommitPreparationBusy
     );
-    assert_eq!(
-        engine
-            .create_historical_save_plan(&repo.history_tree_id, options.clone(), "admin")
-            .unwrap_err()
-            .code(),
-        storage_contract::ErrorCode::CommitPreparationBusy
-    );
     assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert_eq!(canonical_json(engine.state()).unwrap(), frozen_bytes);
     // Retain only a test-owned immutable view, without bypassing live admission.
     drop(preparation);
     let purge = engine
-        .create_purge_plan(&repo.history_tree_id, vec![old_version], "admin")
+        .create_purge_plan(&repo.history_tree_id, vec![old_version.clone()], "admin")
         .unwrap();
     assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert_eq!(canonical_json(frozen.as_ref()).unwrap(), frozen_bytes);
@@ -305,17 +285,17 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
 
     let with_purge = Arc::clone(&engine.state);
     let with_purge_bytes = canonical_json(with_purge.as_ref()).unwrap();
-    let historical = engine
-        .create_historical_save_plan(&repo.history_tree_id, options, "admin")
+    let second = engine
+        .create_purge_plan(&repo.history_tree_id, vec![old_version], "second reviewer")
         .unwrap();
     assert!(Arc::ptr_eq(&with_purge, &engine.state));
     assert_eq!(
         canonical_json(with_purge.as_ref()).unwrap(),
         with_purge_bytes
     );
-    assert!(!with_purge.plans.contains_key(&historical.plan_id));
-    assert!(!engine.state.plans.contains_key(&historical.plan_id));
-    assert_eq!(engine.plan(&historical.plan_id).unwrap(), historical);
+    assert!(!with_purge.plans.contains_key(&second.plan_id));
+    assert!(!engine.state.plans.contains_key(&second.plan_id));
+    assert_eq!(engine.plan(&second.plan_id).unwrap(), second);
     assert!(!engine.state.plans.contains_key(&purge.plan_id));
     assert_eq!(engine.plan(&purge.plan_id).unwrap(), purge);
 

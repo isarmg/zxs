@@ -5,7 +5,6 @@ use std::{collections::BTreeMap, os::unix::fs::DirBuilderExt};
 use storage_engine::{CommitRequest, Config, DiskConfig, Engine, OperationId, Repository};
 
 pub(super) const PRINCIPAL: &str = "smoke-admin";
-pub(super) const REPOSITORY: &str = "placement-e2e";
 const FUTURE: &str = "future/note.txt";
 const PROTECTED: &str = "protected/note.txt";
 const NEW_BODY: &[u8] = b"version created after the real browser placement update\n";
@@ -68,13 +67,7 @@ impl Fixture {
             });
         }
         let mut engine = Engine::initialize(&pool, config)?;
-        let repository = engine.create_repository(
-            &storage_engine::RepositoryName::parse(REPOSITORY)?,
-            "P01",
-            1,
-            PRINCIPAL,
-            OperationId::generate()?,
-        )?;
+        let repository = engine.create_disk_root("P01", PRINCIPAL, OperationId::generate()?)?;
         save(
             &mut engine,
             &repository,
@@ -97,10 +90,11 @@ impl Fixture {
             principal: PRINCIPAL,
             operation_id: OperationId::generate()?,
         })?;
-        // The browser's later read-only branch must come from an explicitly
-        // initialized, committed directory repository, never an implicit scope.
-        crate::fixture::initialize_directory_fixture(&mut engine, &repository, "future")?;
-        crate::fixture::commit_directory_fixture(&mut engine, &repository.repository_id, "future")?;
+        // Valid empty ZIP; the FILE manager must treat it exactly like any
+        // other file. No directory container, ZIP parser or mount is involved.
+        let mut zip = [0u8; 22];
+        zip[..4].copy_from_slice(b"PK\x05\x06");
+        save(&mut engine, &repository, "future/project.zxs", &zip)?;
         let entries = engine.list_tree(&repository.main_branch_id)?;
         let entry = |path: &str| {
             entries

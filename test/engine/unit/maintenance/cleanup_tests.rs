@@ -101,17 +101,9 @@ fn blocked_cleanup(engine: &Engine, version: &str) -> (PathBuf, Vec<PathBuf>) {
 
 #[test]
 fn published_maintenance_retry_finishes_cleanup_without_republishing() {
-    for kind in ["purge", "split"] {
-        let (_temporary, mut engine, repo, cut, first, last) = fixture();
-        let plan = if kind == "purge" {
-            engine
-                .create_purge_plan(&repo.history_tree_id, vec![first.clone()], "admin")
-                .unwrap()
-        } else {
-            engine
-                .create_split_plan(&repo.history_tree_id, &cut, "admin")
-                .unwrap()
-        };
+    {
+        let (_temporary, mut engine, repo, _cut, first, last) = fixture();
+        let plan = engine.create_purge_plan(&repo.history_tree_id, vec![first.clone()], "admin").unwrap();
         let (blocker, payloads) = blocked_cleanup(&engine, &first);
         let operation = storage_contract::OperationId::generate().unwrap();
         assert_eq!(
@@ -120,7 +112,7 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::UnsafePath,
-            "{kind}"
+            "purge"
         );
         let receipt = engine.operation(operation).unwrap();
         assert_eq!(
@@ -153,7 +145,7 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::UnsafePath,
-            "a retry must not report cleanup success while the fault remains: {kind}"
+            "a retry must not report cleanup success while the fault remains"
         );
         fs::remove_dir(&blocker).unwrap();
         let retried = engine
@@ -162,14 +154,9 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
         assert_eq!(retried.result, receipt.result);
         assert_eq!(retried.request_digest, receipt.request_digest);
         assert_eq!(canonical_json(engine.state()).unwrap(), published);
-        assert!(payloads.iter().all(|path| !path.exists()), "{kind}");
+        assert!(payloads.iter().all(|path| !path.exists()), "purge");
         assert!(blocker.is_file(), "cleanup writes the proven tombstone");
-        let retained = if kind == "purge" {
-            last.as_str()
-        } else {
-            receipt.result["version_mapping"][&last].as_str().unwrap()
-        };
-        let mut content = engine.open_content(retained).unwrap();
+        let mut content = engine.open_content(&last).unwrap();
         let mut bytes = Vec::new();
         content.file.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, b"latest body");

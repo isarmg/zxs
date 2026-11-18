@@ -1,4 +1,4 @@
-//! Default share resolution and live default-branch reads use the real engine/RPC.
+//! Default share resolution and live ordinary FILE branch reads use the real engine/RPC.
 use super::*;
 use std::{os::unix::net::UnixStream, thread::JoinHandle};
 
@@ -9,7 +9,7 @@ mod object_move_tests;
 #[path = "phase1_new_file_tests.rs"]
 mod phase1_new_file_tests;
 
-fn empty_fixture(two_primaries: bool) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
+pub(super) fn empty_fixture(two_primaries: bool) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
     empty_fixture_with_mounts(two_primaries, ["p", "b"])
 }
 
@@ -340,8 +340,8 @@ fn default_share_creates_one_internal_root_on_write_and_reuses_it_after_real_rpc
 
 #[test]
 fn default_share_missing_stat_before_first_create_keeps_the_namespace_unchanged() {
-    for named_repository in [false, true] {
-        let (_temp, shared, _backend) = if named_repository {
+    for existing_root in [false, true] {
+        let (_temp, shared, _backend) = if existing_root {
             let (temp, shared, backend, _branch) = fixture();
             (temp, shared, backend)
         } else {
@@ -361,16 +361,12 @@ fn default_share_missing_stat_before_first_create_keeps_the_namespace_unchanged(
                 path: "p/default.txt".into(),
             },
         );
-        assert!(
-            matches!(
-                reply,
-                Response::Error {
-                    code: storage_contract::ErrorCode::DirectoryNotFound,
-                    ..
-                }
-            ),
-            "{reply:?}"
-        );
+        let expected = if existing_root {
+            storage_contract::ErrorCode::NotFound
+        } else {
+            storage_contract::ErrorCode::DirectoryNotFound
+        };
+        assert!(matches!(reply, Response::Error { code, .. } if code == expected), "{reply:?}");
         assert!(descriptor.is_none());
         assert_eq!(
             shared
@@ -444,66 +440,43 @@ fn default_share_keeps_primary_paths_separate_and_refuses_nonempty_move_target()
 }
 
 #[test]
-fn default_share_preserves_named_repository_beside_new_disk_root() {
-    let (_temp, shared, _backend, _branch) = fixture();
-    let before = shared
-        .backend
-        .repositories_snapshot(&identity(&shared))
-        .unwrap();
+fn default_share_reuses_one_registered_root_and_does_not_wrap_files_in_a_repository_name() {
+    let (_temp, shared, _backend, branch) = fixture();
+    let before = repository(&shared);
     let (mut stream, worker, reply) = wire(shared.clone(), "alice");
     assert!(matches!(reply, Response::Ok { .. }), "{reply:?}");
-    assert_eq!(directory(&mut stream, "p"), vec!["资料"]);
-    assert_eq!(directory(&mut stream, "p/资料"), vec!["report.txt"]);
-    let (old, _fd) = open(&mut stream, "p/资料/report.txt", false, false);
+    assert_eq!(directory(&mut stream, "p"), vec!["report.txt"]);
+    let (old, _fd) = open(&mut stream, "p/report.txt", false, false);
     assert_eq!(read_rpc(&mut stream, old.handle, 0, 3), b"old");
     let (created, fd) = open(&mut stream, "p/new.txt", true, true);
     save(&mut stream, &created, &fd, b"new");
-    assert_eq!(directory(&mut stream, "p"), vec!["资料", "new.txt"]);
-    let after = shared
-        .backend
-        .repositories_snapshot(&identity(&shared))
-        .unwrap();
-    assert_eq!(after.len(), before.len() + 1);
-    assert!(after.contains(&before[0]));
-    let (reply, _) = binding_tests::exchange(
-        &mut stream,
-        Request::Namespace {
-            kind: smb_protocol::protocol::NamespaceOperation::Rename,
-            path: "p/new.txt".into(),
-            destination: Some("p/资料/moved.txt".into()),
-            replace: false,
-            operation_id: new_id("op").unwrap(),
-        },
-    );
-    assert!(
-        matches!(
-            reply,
-            Response::Error {
-                code: storage_contract::ErrorCode::UnsupportedOperation,
-                ..
-            }
-        ),
-        "{reply:?}"
-    );
+    let mut paths = directory(&mut stream, "p");
+    paths.sort();
+    assert_eq!(paths, vec!["new.txt", "report.txt"]);
+    let after = shared.backend.repositories_snapshot(&identity(&shared)).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].repository_id, before);
+    assert_eq!(after[0].main_branch_id, branch);
     assert_eq!(read_rpc(&mut stream, old.handle, 0, 3), b"old");
     close_wire(stream, worker);
 }
 
 #[test]
-fn live_smb_connection_follows_directory_default_without_rebinding_and_keeps_old_reader() {
-    let (_temp, shared, backend, _branch) = fixture();
-    let (repository, main, draft) = directory_fixture(&shared, &backend);
+fn live_smb_connection_follows_file_branch_without_rebinding_and_keeps_old_reader() {
+    let (_temp, shared, _backend, branch) = fixture();
+    let repository = repository(&shared);
+    let (selected_file, main, draft) = file_selections(&shared, &branch);
     let before = shared
         .backend
         .repository_snapshot(&identity(&shared), &repository)
         .unwrap();
     let (mut stream, worker, reply) = wire(shared.clone(), "alice");
     assert!(matches!(reply, Response::Ok { .. }));
-    let (old_reader, _fd) = open(&mut stream, "p/资料/report.txt", false, false);
-    select_directory(&shared, &backend, &repository, &draft);
-    let (writer, fd) = open(&mut stream, "p/资料/report.txt", true, false);
+    let (old_reader, _fd) = open(&mut stream, "p/report.txt", false, false);
+    select_file(&shared, &selected_file, &draft);
+    let (writer, fd) = open(&mut stream, "p/report.txt", true, false);
     save(&mut stream, &writer, &fd, b"new");
-    let (reader, _fd) = open(&mut stream, "p/资料/report.txt", false, false);
+    let (reader, _fd) = open(&mut stream, "p/report.txt", false, false);
     assert_eq!(read_rpc(&mut stream, reader.handle, 0, 3), b"new");
     okay(
         &mut stream,
@@ -512,8 +485,8 @@ fn live_smb_connection_follows_directory_default_without_rebinding_and_keeps_old
         },
     );
     assert_eq!(read_rpc(&mut stream, old_reader.handle, 0, 3), b"old");
-    select_directory(&shared, &backend, &repository, &main);
-    let (reader, _fd) = open(&mut stream, "p/资料/report.txt", false, false);
+    select_file(&shared, &selected_file, &main);
+    let (reader, _fd) = open(&mut stream, "p/report.txt", false, false);
     assert_eq!(read_rpc(&mut stream, reader.handle, 0, 3), b"old");
     let after = shared
         .backend
@@ -525,12 +498,12 @@ fn live_smb_connection_follows_directory_default_without_rebinding_and_keeps_old
 }
 
 #[test]
-fn default_share_fences_old_writer_when_directory_default_changes() {
-    let (_temp, shared, backend, _branch) = fixture();
-    let (repository, _main, draft) = directory_fixture(&shared, &backend);
+fn default_share_fences_old_writer_when_selected_file_branch_changes() {
+    let (_temp, shared, backend, branch) = fixture();
+    let (selected_file, _main, draft) = file_selections(&shared, &branch);
     let (mut stream, worker, reply) = wire(shared.clone(), "alice");
     assert!(matches!(reply, Response::Ok { .. }));
-    let (old, fd) = open(&mut stream, "p/资料/report.txt", true, false);
+    let (old, fd) = open(&mut stream, "p/report.txt", true, false);
     okay(
         &mut stream,
         Request::PrepareWrite {
@@ -540,13 +513,13 @@ fn default_share_fences_old_writer_when_directory_default_changes() {
         },
     );
     fd.write_all_at(b"bad", 0).unwrap();
-    select_directory(&shared, &backend, &repository, &draft);
+    select_file(&shared, &selected_file, &draft);
     let (reply, _) = binding_tests::exchange(&mut stream, Request::Dirty { handle: old.handle });
     assert!(
         matches!(
             reply,
             Response::Error {
-                code: storage_contract::ErrorCode::DirectoryBranchConflict,
+                code: storage_contract::ErrorCode::FileBranchConflict,
                 ..
             }
         ),
@@ -561,7 +534,7 @@ fn default_share_fences_old_writer_when_directory_default_changes() {
             .is_some_and(|ext| ext == "json")
     }));
     okay(&mut stream, Request::Abort { handle: old.handle });
-    let (reader, _fd) = open(&mut stream, "p/资料/report.txt", false, false);
+    let (reader, _fd) = open(&mut stream, "p/report.txt", false, false);
     assert_eq!(read_rpc(&mut stream, reader.handle, 0, 3), b"old");
     close_wire(stream, worker);
 }
@@ -570,7 +543,7 @@ fn default_share_fences_old_writer_when_directory_default_changes() {
 fn default_share_does_not_revive_closed_namespace_after_disable_and_reenable() {
     let (_temp, shared, _backend, branch) = fixture();
     let (mut stream, worker, _) = wire(shared.clone(), "alice");
-    let (reader, _fd) = open(&mut stream, "p/资料/report.txt", false, false);
+    let (reader, _fd) = open(&mut stream, "p/report.txt", false, false);
     okay(
         &mut stream,
         Request::Close {
@@ -582,7 +555,7 @@ fn default_share_does_not_revive_closed_namespace_after_disable_and_reenable() {
     let (reply, _) = binding_tests::exchange(
         &mut stream,
         Request::Stat {
-            path: "p/资料/report.txt".into(),
+            path: "p/report.txt".into(),
         },
     );
     assert!(
@@ -597,7 +570,7 @@ fn default_share_does_not_revive_closed_namespace_after_disable_and_reenable() {
     );
     close_wire(stream, worker);
     let (mut stream, worker, _) = wire(shared.clone(), "alice");
-    let (reader, _fd) = open(&mut stream, "p/资料/report.txt", false, false);
+    let (reader, _fd) = open(&mut stream, "p/report.txt", false, false);
     assert_eq!(read_rpc(&mut stream, reader.handle, 0, 3), b"old");
     close_wire(stream, worker);
 }
@@ -919,8 +892,11 @@ fn default_disk_open_pages_have_a_separate_bounded_budget_released_on_read_or_cl
 }
 
 #[test]
-fn default_named_directory_identity_and_canonical_paths_match_enumeration_stat_and_open() {
-    let (_temp, shared, _backend, _branch) = fixture();
+fn ordinary_folder_identity_and_canonical_paths_match_default_share_enumeration_stat_and_open() {
+    let (_temp, shared, backend, branch) = fixture();
+    backend.inner.test_with_engine_locked(|engine|
+        seed_ordinary_file(engine, &branch, "资料/report.txt", b"nested"));
+
     let (mut stream, worker, _) = wire(shared.clone(), "alice");
     let (disk, _fd) = open(&mut stream, "P", false, false);
     assert_eq!(disk.path, "p");
@@ -961,7 +937,7 @@ fn default_named_directory_identity_and_canonical_paths_match_enumeration_stat_a
         },
     );
     let contents: smb_protocol::protocol::DirectoryPage = json_codec::from_value(contents).unwrap();
-    assert_eq!(contents.entries[0].published().unwrap().path.as_str(), "report.txt");
+    assert_eq!(contents.entries[0].published().unwrap().path.as_str(), "资料/report.txt");
     let (reader, _fd) = open(&mut stream, "P/资料/report.txt", false, false);
     assert_eq!(reader.path, "p/资料/report.txt");
     let (stat, _) = okay(
@@ -978,21 +954,12 @@ fn default_named_directory_identity_and_canonical_paths_match_enumeration_stat_a
 #[test]
 fn default_mkdir_replay_admission_precedes_any_internal_root_creation() {
     for cause in ["published", "record", "active"] {
-        let (_temp, shared, _backend) = mkdir_admission_fixture(true);
+        let (_temp, shared, backend) = mkdir_admission_fixture(true);
         let operation_id = storage_contract::OperationId::generate().unwrap();
         if cause == "published" {
-            shared
-                .backend
-                .create_repository(
-                    &identity(&shared),
-                    crate::CreateRepository {
-                        name: storage_contract::RepositoryName::parse("Existing").unwrap(),
-                        primary_slot_id: "P02".into(),
-                        target_copies: 1,
-                        operation_id,
-                    },
-                )
-                .unwrap();
+            backend.inner.test_with_engine_locked(|engine| {
+                engine.create_disk_root("P02", "alice", operation_id).unwrap();
+            });
             // The final engine-lock admission also rejects a reused operation,
             // even if a caller's prior protected read has raced with another API.
             let error = shared
@@ -1190,7 +1157,7 @@ fn default_share_rejects_colliding_disk_directory_basenames() {
 }
 
 #[test]
-fn default_resolution_preserves_typed_suffix_and_explicit_repository_root() {
+fn default_resolution_keeps_every_ordinary_component_in_one_registered_root() {
     let (_temp, shared, _backend, _branch) = fixture();
     let resolve = |path: &str, intent| {
         shared.backend.resolve_smb_path(
@@ -1202,29 +1169,19 @@ fn default_resolution_preserves_typed_suffix_and_explicit_repository_root() {
             },
         )
     };
-    let root = resolve("资料", crate::SmbPathIntent::Lookup).unwrap();
-    assert!(!root.repository.file_manager_root);
-    assert!(matches!(root.relative_path, SmbRelativePath::Root));
-    let named = resolve("资料/Cafe\u{301}/FILE.txt", crate::SmbPathIntent::Lookup).unwrap();
-    assert_eq!(
-        named.repository.repository_id,
-        root.repository.repository_id
-    );
-    let SmbRelativePath::Entry(path) = named.relative_path else {
-        panic!("named repository child must retain its path")
-    };
-    assert_eq!(path.as_str(), "Cafe\u{301}/FILE.txt");
-    assert_eq!(path.key(), "café/file.txt");
-    let created = resolve("Café", crate::SmbPathIntent::CreateFile).unwrap();
-    assert!(created.repository.file_manager_root);
-    let root_child = resolve("Cafe\u{301}/FILE.txt", crate::SmbPathIntent::Lookup).unwrap();
-    assert_eq!(
-        root_child.repository.repository_id,
-        created.repository.repository_id
-    );
-    let SmbRelativePath::Entry(path) = root_child.relative_path else {
-        panic!("disk-root child must retain every path component")
-    };
-    assert_eq!(path.as_str(), "Cafe\u{301}/FILE.txt");
-    assert_eq!(path.key(), "café/file.txt");
+    let owner = repository(&shared);
+    for (requested, folded) in [
+        ("资料", "资料"),
+        ("资料/Cafe\u{301}/FILE.txt", "资料/café/file.txt"),
+        ("Cafe\u{301}/FILE.txt", "café/file.txt"),
+    ] {
+        let location = resolve(requested, crate::SmbPathIntent::Lookup).unwrap();
+        assert!(location.repository.file_manager_root);
+        assert_eq!(location.repository.repository_id, owner);
+        let SmbRelativePath::Entry(path) = location.relative_path else {
+            panic!("ordinary names must never select another namespace or lose a component")
+        };
+        assert_eq!(path.as_str(), requested);
+        assert_eq!(path.key(), folded);
+    }
 }

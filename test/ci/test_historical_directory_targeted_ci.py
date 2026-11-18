@@ -53,7 +53,7 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
     def test_server_authorization_fixtures_preserve_the_complete_server_selection(self):
         group = self.policy['groups']['server-authorization']
         self.assertEqual(group['rust_targets'], [self.group['rust_targets'][2]])
-        self.assertEqual(group['rust_targets'][0]['max_tests'], 7)
+        self.assertEqual(group['rust_targets'][0]['max_tests'], 3)
         for path in [
             'test/server/unit/authorized_backend.rs',
             'test/server/unit/engine_backend/revocation_tests.rs',
@@ -197,6 +197,25 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
                 self.assertCountEqual(configurations,
                                       self.policy['groups'][group]['rust_targets'])
 
+    def test_registered_opaque_file_refusal_is_one_real_target_for_both_route_domains(self):
+        path = 'test/server/integration/http_engine/retired_directory_history.rs'
+        case = ('retired_directory_history::'
+                'removed_directory_history_routes_leave_the_registered_opaque_file_unchanged')
+        plan = CI.select_plan(self.policy, [path])
+        self.assertEqual(plan['groups'], ['registered-file-directory-route-refusal'])
+        self.assertEqual(len(plan['rust_targets']), 1)
+        target = plan['rust_targets'][0]
+        self.assertEqual((target['package'], target['name'], target['features']),
+                         ('storage-server', 'http_engine', ['core']))
+        self.assertEqual((target['exact'], target['max_tests']), ([case], 1))
+        self.assertNotIn('prefixes', target)
+        for group in ('directory-history-http-boundary', 'directory-git-status-http-boundary',
+                      'directory-scope-http-boundary', 'historical-directory-runtime'):
+            http, = [t for t in self.policy['groups'][group]['rust_targets']
+                     if t.get('name') == 'http_engine']
+            self.assertEqual((http['exact'], http['max_tests']), ([case], 1))
+            self.assertNotIn('prefixes', http)
+
     def test_native_targets_preserve_core_features_exact_scope_and_each_budget(self):
         targets = self.group['rust_targets']
         self.assertEqual([(target['package'], target.get('kind', 'lib'),
@@ -204,12 +223,14 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
                           for target in targets], [
             ('storage-engine', 'lib', None, [], 6),
             ('storage-engine', 'test', 'directory_git_index', [], 5),
-            ('storage-server', 'lib', None, ['core'], 7),
-            ('storage-server', 'test', 'http_engine', ['core'], 5),
+            ('storage-server', 'lib', None, ['core'], 3),
+            ('storage-server', 'test', 'http_engine', ['core'], 1),
         ])
         self.assertEqual(targets[1]['prefixes'], ['historical_branch::'])
-        self.assertEqual(targets[3]['prefixes'],
-                         ['historical_directory_branch::', 'directory_branch_source::'])
+        self.assertEqual(targets[3]['exact'], [
+            'retired_directory_history::'
+            'removed_directory_history_routes_leave_the_registered_opaque_file_unchanged'])
+        self.assertNotIn('prefixes', targets[3])
         self.assertEqual(len(targets[0]['exact']), 6)
         self.assertTrue(all(target['timeout_seconds'] == 900 for target in targets))
         for target in targets:

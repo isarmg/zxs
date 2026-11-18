@@ -1,4 +1,4 @@
-//! A listing may not grant a preview that its request never selected.
+//! An ordinary listing rejects foreign preview fields; the FILE manager cannot request one.
 //! Only this rejected response is synthetic; the request and root listing are real.
 use super::*;
 
@@ -18,7 +18,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 &&url.searchParams.get('path')===''&&response.ok&&p.pending){
                 const body=await response.clone().json();
                 if(url.searchParams.has('directory_branch_id')||body.slot_id!=='P01'
-                    ||body.path!==''||body.writable!==true||body.backup||body.preview)
+                    ||body.path!==''||body.writable!==true||body.backup||'preview' in body)
                     throw new Error('preview rejection requires a real writable root listing');
                 body.preview=true;body.writable=false;p.pending=false;p.rejected++;
                 return new Response(JSON.stringify(body),{status:200,

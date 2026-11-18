@@ -378,7 +378,7 @@ async fn recovery_preview_http_parses_ids_before_lifecycle_and_keeps_auth_preced
     )
     .unwrap();
     let auth_reader = crate::lock(&fixture.auth).reader();
-    let app = crate::router_shared(
+    let (app, _http_work) = crate::router_shared(
         Arc::new(crate::AuthorizedBackend {
             backend: fixture.backend.clone(),
             auth: auth_reader,

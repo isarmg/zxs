@@ -514,13 +514,7 @@ fn inherited_file_manager_projection_distinguishes_visible_parent_from_own_conte
         ["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
         ["result"]
         .clone();
-    let directory_branch_shape = api["paths"]
-        ["/api/file-manager/disks/{slot}/directory-branches"]["post"]["responses"]["200"]
-        ["content"]["application/json"]["schema"]["properties"]["result"]["properties"]
-        ["branches"]["items"]
-        .clone();
     api["$defs"]["creation"] = creation_shape;
-    api["$defs"]["directory_branch_creation"] = directory_branch_shape;
     api["$ref"] = "#/$defs/creation".into();
     let creation_schema = validator(&api).unwrap();
     let creation = json!({
@@ -536,13 +530,7 @@ fn inherited_file_manager_projection_distinguishes_visible_parent_from_own_conte
     rewritten_receipt["inherited"] = false.into();
     rewritten_receipt["own_version_id"] = storage_contract::new_id("ver").unwrap().into();
     assert!(!creation_schema.is_valid(&rewritten_receipt));
-    api["$ref"] = "#/$defs/directory_branch_creation".into();
-    let directory_branch_schema = validator(&api).unwrap();
-    assert!(directory_branch_schema.is_valid(&json!({
-        "file_id":inherited["file_id"],"branch_id":inherited["selected_branch_id"],"path":"a.txt",
-        "materialized":false,"inherited":true,"own_version_id":null,
-        "version_id":source,"source_version_id":source
-    })));
+
 }
 #[test]
 fn semantic_upload_overflow_is_rejected() {
@@ -673,50 +661,21 @@ fn note_read_shapes_accept_current_valid_notes() {
 }
 
 #[test]
-fn directory_batch_contract_requires_frozen_explicit_mappings() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts/openapi.json");
-    let mut api = read(&path).unwrap();
-    api["$ref"]="#/paths/~1api~1file-manager~1disks~1%7Bslot%7D~1namespace-batch/post/requestBody/content/application~1json/schema".into();
-    let schema = validator(&api).unwrap();
-    let source = json!({"directory_branch_id":storage_contract::new_id("dbr").unwrap(),"expected_tree_id":storage_contract::new_id("dtree").unwrap(),"path":"a/report.txt","entry_id":storage_contract::new_id("entry").unwrap()});
-    let target = json!({"directory_branch_id":storage_contract::new_id("dbr").unwrap(),"expected_tree_id":storage_contract::new_id("dtree").unwrap(),"path":"b/report.txt"});
-    let valid = json!({"kind":"move","operation_id":storage_contract::new_id("op").unwrap(),"items":[{"source":source,"target":target}]});
-    assert!(schema.is_valid(&valid));
-    for kind in ["copy", "rename"] {
-        let mut body = valid.clone();
-        body["kind"] = kind.into();
-        assert!(schema.is_valid(&body));
+fn ordinary_listing_has_no_directory_branch_input_or_response_fields() {
+    let api = read(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts/openapi.json")).unwrap();
+    let op = &api["paths"]["/api/file-manager/disks/{slot}/entries"]["get"];
+    let params = op["parameters"].as_array().unwrap().iter()
+        .map(|p| p["name"].as_str().unwrap()).collect::<BTreeSet<_>>();
+    assert_eq!(params, BTreeSet::from(["slot", "path", "query", "limit", "cursor", "selected_path", "selected_entry_id"]));
+    let page = &op["responses"]["200"]["content"]["application/json"]["schema"];
+    assert_eq!(page["additionalProperties"], false);
+    let fields = page["properties"].as_object().unwrap();
+    for name in ["preview", "directory_branches", "directory_branches_supported", "default_branch_scope"] {
+        assert!(!fields.contains_key(name), "{name}");
     }
-    let mut delete = valid.clone();
-    delete["kind"] = "delete".into();
-    delete["items"][0].as_object_mut().unwrap().remove("target");
-    assert!(schema.is_valid(&delete));
-    for pointer in ["expected_tree_id", "entry_id"] {
-        let mut invalid = valid.clone();
-        invalid["items"][0]["source"]
-            .as_object_mut()
-            .unwrap()
-            .remove(pointer);
-        assert!(!schema.is_valid(&invalid));
+    for name in ["context", "entries", "selected_entry", "directory_file_count", "backup"] {
+        assert!(fields.contains_key(name), "{name}");
     }
-    let mut invalid = valid.clone();
-    invalid["items"][0]["source"]["all_branches"] = true.into();
-    assert!(!schema.is_valid(&invalid));
-    invalid = valid.clone();
-    invalid["items"] = json!([]);
-    assert!(!schema.is_valid(&invalid));
-    invalid = valid.clone();
-    invalid["items"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("target");
-    assert!(!schema.is_valid(&invalid));
-    invalid = valid.clone();
-    invalid["kind"] = "delete".into();
-    assert!(!schema.is_valid(&invalid));
-    invalid = valid;
-    invalid["kind"] = "overwrite".into();
-    assert!(!schema.is_valid(&invalid));
 }
 
 #[test]
@@ -920,6 +879,21 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
                 storage_contract::history_window::HistoryWindowPage,
             > = storage_contract::decode_strict(&json_codec::to_vec(&wire).unwrap());
             assert!(decoded.is_err());
+            continue;
+        }
+        if matches!(name, "backup-prefix-files.json" | "backup-prefix-retained.json" | "backup-prefix-administrator.json") {
+            // Keep the actual historic capture unchanged and reject it as an entire
+            // response. This is a schema projection, not a new native capture:
+            // retain every original FILE, folder, disk, version and read-only fact.
+            assert!(!response.is_valid(&wire), "{name}: superseded listing must not pass");
+            let mut ordinary = wire.clone();
+            let object = ordinary.as_object_mut().unwrap();
+            assert_eq!(object.remove("directory_branches"), Some(json!([])));
+            assert_eq!(object.remove("directory_branches_supported"), Some(json!(false)));
+            assert_eq!(object.remove("default_branch_scope"), Some(json!(false)));
+            response.validate(&ordinary).unwrap_or_else(|error| panic!("{name}: {error}"));
+            ordinary["writable"] = true.into();
+            assert!(!response.is_valid(&ordinary), "{name}: a Backup is not writable");
             continue;
         }
         response

@@ -1337,7 +1337,7 @@ fn verify_publication_evidence(
             ));
         }
     }
-    Ok(())
+    crate::ordinary_authority::operation(&p.result)
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serialization(deny_unknown_fields)]

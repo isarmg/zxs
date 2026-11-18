@@ -933,3 +933,30 @@ fn history_root_borrowed_decode_matches_owned_admission_on_real_objects() {
         assert_eq!(std::fs::read(path).unwrap(), before);
     }
 }
+
+#[test]
+fn portable_history_rejects_each_old_table_even_when_empty_and_hash_valid() {
+    let clean = manifest();
+    let prepared = prepare_encoded(&clean, 1024 * 1024).unwrap();
+    let raw = prepared.objects.last().unwrap();
+    let root: Value = json_codec::from_slice(raw.bytes()).unwrap();
+    for field in ["file_write_origins", "directory_branches", "directory_git_repositories", "directory_trees",
+        "directory_tree_selections", "directory_selections", "directory_selection_generations"]
+    {
+        let mut flat = json_codec::to_value(&clean).unwrap();
+        assert!(flat.get(field).is_none());
+        flat[field] = json!({});
+        assert!(json_codec::from_value::<HistoryManifest>(flat).is_err(), "{field}");
+        let mut mixed = root.clone();
+        // This is an actual already-authenticated empty map; compute a valid
+        // enclosing hash for the wrong schema as well.
+        mixed["maps"][field] = root["maps"]["branches"].clone();
+        let error = resolve(mixed, |_, _| panic!("old history opened a child object"))
+            .err().unwrap();
+        assert_eq!(error.code(), crate::ErrorCode::HistoryPackageInvalid);
+    }
+    let mut runtime = clean;
+    runtime.directory_selections.insert("held".into(), "unsupported".into());
+    assert!(prepare_encoded(&runtime, 1024 * 1024).is_err());
+    assert!(storage_contract::canonical_json(&runtime).is_err());
+}

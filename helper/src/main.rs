@@ -113,7 +113,7 @@ enum Command {
         #[arg(long)]
         accept_permanent_loss: bool,
     },
-    /// Export, verify or restore a complete independently validated history package.
+    /// Export or verify an ordinary FILE history package.
     Package {
         #[command(subcommand)]
         command: PackageCommand,
@@ -152,15 +152,6 @@ enum PackageCommand {
     },
     Check {
         package: PathBuf,
-    },
-    Restore {
-        package: PathBuf,
-        #[arg(long)]
-        primary_slot: String,
-        #[arg(long, default_value_t = 1, value_parser = command_line::value_parser!(u32).range(1..))]
-        copies: u32,
-        #[arg(long)]
-        operation_id: Option<OperationId>,
     },
 }
 fn print(value: impl data_serialization::Serialize) -> Result<()> {
@@ -287,29 +278,6 @@ fn run(args: Args) -> Result<Option<deployment::activation::Handoff>> {
                     Engine::open_with_workspace_limits(&root, retained_workspace_limits)?;
                 report_recovery_warnings(&mut engine);
                 print(engine.export_history_package(&history, &destination)?)
-            }
-            PackageCommand::Restore {
-                package,
-                primary_slot,
-                copies,
-                operation_id,
-            } => {
-                let mut engine =
-                    Engine::open_with_workspace_limits(&root, retained_workspace_limits)?;
-                report_recovery_warnings(&mut engine);
-                let operation = match operation_id {
-                    Some(id) => id,
-                    None => OperationId::generate()?,
-                };
-                let restored = engine.restore_history_package(
-                    &package,
-                    &primary_slot,
-                    copies,
-                    &args.principal,
-                    operation,
-                );
-                report_recovery_warnings(&mut engine);
-                print(restored?)
             }
         },
         Command::RestoreSystem { disks } => {

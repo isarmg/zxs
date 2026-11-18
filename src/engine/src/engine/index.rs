@@ -461,8 +461,9 @@ async fn check_projection_marker(
 async fn recreate_projection(
     connection: &mut sqlite_access::SqliteConnection,
 ) -> std::result::Result<(), ProjectionFailure> {
-    // Transactional replacement removes both obsolete full-State layouts.
-    // A damaged cache may have substituted views for our tables.
+    system_changes::require_rebuild_source(connection).await?;
+    // Only a positively selected current FILE catalog (or a new database)
+    // reaches transactional repair of its disposable read projections.
     for (name, drop_view) in [
         ("current_state", "DROP VIEW current_state"),
         ("entities", "DROP VIEW entities"),

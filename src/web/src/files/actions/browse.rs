@@ -125,7 +125,6 @@ pub(crate) fn refresh_directory(state: RwSignal<State>) {
         s.notices.leave();
         s.files.reset_page();
         s.files.clear_selection();
-        s.files.batch = None;
         s.files.deletion.cancel_review();
         s.files.entries = Default::default();
         s.files.loaded = false;
@@ -163,110 +162,12 @@ pub(crate) fn search(state: RwSignal<State>, query: String) {
 }
 
 /// Choosing a branch is a read. Only the separate default action publishes it.
-pub(crate) fn preview_directory_branch(state: RwSignal<State>, id: String) {
-    let branch = state.with_untracked(|s| {
-        if !s.session_active() || s.files.loading || super::pending(s) {
-            return None;
-        }
-        s.files
-            .directory_branches
-            .iter()
-            .find(|branch| branch.id() == id)
-            .cloned()
-    });
-    let Some(branch) = branch else {
-        return;
-    };
-    state.update(|s| {
-        s.notices.leave();
-        s.files.directory_preview = Some(crate::files::model::DirectoryPreview {
-            source: crate::files::model::DirectoryPreviewSource::Branch(branch),
-            path: s.files.directory.clone(),
-        });
-        s.files.cancel_listing();
-        s.files.reset_page();
-        s.files.clear_selection();
-        s.files.entries = Default::default();
-        s.files.loaded = false;
-        s.files.writable = false;
-    });
-    load_entries(state);
-}
-fn begin_directory_snapshot(
-    state: &mut State,
-    path: String,
-    branch_id: String,
-    tree_id: String,
-) -> bool {
-    if !state.session_active() || state.files.loading || super::pending(state) {
-        return false;
-    }
-    state.notices.leave();
-    state.files.navigate(Navigation::Directory(path.clone()));
-    state.files.directory_preview = Some(crate::files::model::DirectoryPreview {
-        source: crate::files::model::DirectoryPreviewSource::Snapshot { branch_id, tree_id },
-        path,
-    });
-    state.change_page(crate::ui::Page::Files);
-    true
-}
-/// A validated current history page or child-repository status supplies
-/// the committed branch/tree pair for this immutable read target.
-/// Preview never acquires branch-checkout or staging authority.
-pub(crate) fn preview_directory_snapshot(
-    state: RwSignal<State>,
-    path: String,
-    branch_id: String,
-    tree_id: String,
-) {
-    if state.try_update(|state| begin_directory_snapshot(state, path, branch_id, tree_id))
-        == Some(true)
-    {
-        load_entries(state);
-    }
-}
 pub(crate) fn return_to_default_file(state: RwSignal<State>) {
     if !state.with_untracked(|s| s.session_active() && !super::pending(s)) {
         return;
     }
     state.update(|s| s.files.file_preview = None);
     load_file_history(state);
-}
-
-pub(crate) fn return_to_default(state: RwSignal<State>) {
-    if !state.with_untracked(|s| s.session_active() && !super::pending(s)) {
-        return;
-    }
-    state.update(|s| {
-        s.files.directory_preview = None;
-        s.files.file_preview = None;
-        s.files.clear_selection();
-        s.files.reset_page();
-    });
-    load_entries(state);
-}
-
-/// Leave a historical subtree at its source folder, not at a child path that
-/// may exist only in that snapshot. The ordinary details read owns all writes.
-pub(crate) fn open_preview_origin(state: RwSignal<State>) {
-    let root = state.with_untracked(|state| {
-        if !state.session_active() || super::pending(state) {
-            return None;
-        }
-        state
-            .files
-            .directory_preview
-            .as_ref()
-            .map(|preview| preview.path.clone())
-    });
-    let Some(root) = root else {
-        return;
-    };
-    state.update(|state| {
-        state.files.directory_preview = None;
-        state.files.file_preview = None;
-    });
-    go_directory_details(state, root);
 }
 
 pub(crate) fn change_page(state: RwSignal<State>, next: bool) {
@@ -340,17 +241,9 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
     else {
         return;
     };
-    let preview = state.with_untracked(|s| s.files.directory_preview.clone());
     let directory_key = DirectoryKey::navigation(&directory);
     spawn_local(async move {
         let mut endpoint = page_endpoint(&slot, &directory, &query, cursor.as_deref());
-        if let Some(preview) = &preview {
-            endpoint.push_str(&format!(
-                "&directory_branch_id={}&expected_tree_id={}",
-                api::segment(preview.branch_id()),
-                api::segment(preview.tree_id())
-            ));
-        }
         if let Some(selected) = &selected {
             endpoint.push_str(&format!(
                 "&selected_path={}&selected_entry_id={}",
@@ -368,12 +261,6 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
                     super::super::page::PAGE_SIZE,
                     selected.as_ref(),
                 )?;
-                if page.preview() != preview.is_some() {
-                    return Err(crate::files::page::DecodeError::Relation(
-                        "listing preview differs from the requested view",
-                    )
-                    .into());
-                }
                 Ok(page)
             });
         if !accept_read_response(state, epoch, &result)
@@ -388,12 +275,10 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
                 s.files.reset_page();
                 s.files.entries = Default::default();
                 s.files.loaded = false;
-                let preview_changed = s.files.directory_preview.take().is_some();
-                if preview_changed { s.files.clear_selection(); }
-                s.set_file_notice(if preview_changed { t("浏览分支已改变，已返回默认视图；请重新选择分支。", "The browsed branch changed. Returned to the default view; choose the branch again.") } else { t(
+                s.set_file_notice(t(
                     "目录已改变，已返回第一页。",
                     "The folder changed. Returned to the first page.",
-                ) });
+                ));
             });
             request_page(state, true);
             return;
@@ -432,7 +317,6 @@ fn apply_page(state: &mut State, page: Page, requested: Option<&Entry>) {
     state.files.next_cursor = page.next;
     state.files.previous_cursor = page.previous;
     state.files.total_entries = page.total;
-    state.files.directory_branches = page.branches;
     (
         state.files.repository_id,
         state.files.repository_path,
@@ -447,8 +331,6 @@ fn apply_page(state: &mut State, page: Page, requested: Option<&Entry>) {
             )
         })
         .unwrap_or_default();
-    state.files.default_branch_scope = page.default_branch_scope;
-    state.files.directory_branches_supported = page.branches_supported;
     state.files.directory_file_count = page.directory_file_count;
     state.files.writable = page.writable;
     state.files.loaded = true;

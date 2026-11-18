@@ -35,13 +35,12 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 
 ## 15.2 文件管理接口与高级接口基线
 
-路径解析 `Resolve`、目录列表、目录分支作用域查询及文件历史/下载上下文的路径参数按已有名称引用校验，允许规范等价输入，不改写已存储名称。工作区命名空间操作和核心直接命名空间操作的改名/删除源同样使用该规则；创建目录及改名目标仍严格要求 NFC。HTTP 写会话、上传和批量变更的现有严格路径准入不因此放宽。两类校验共用原始输入的字符、保留名、结构和长度限制，仅已有名称引用免除 NFC 输入要求，折叠与持久化键规则不变。
+路径解析 `Resolve`、目录列表及文件历史/下载上下文的路径参数按已有名称引用校验，允许规范等价输入，不改写已存储名称。工作区命名空间操作和核心直接命名空间操作的改名/删除源同样使用该规则；创建目录及改名目标仍严格要求 NFC。HTTP 写会话、上传和命名空间变更的现有严格路径准入不因此放宽。两类校验共用原始输入的字符、保留名、结构和长度限制，仅已有名称引用免除 NFC 输入要求，折叠与持久化键规则不变。
 
 文件列表分页使用 `path/query/limit/cursor`；`limit` 默认 200、范围 1–500。`query` 是名称的 Unicode 小写子串，先在完整直接子项集合过滤，再按目录优先、小写名称、规范化名称、原名称、显示路径、身份确定排序。响应 `total_entries` 是匹配直接子项十进制字符串，`directory_file_count` 仍为未过滤后代文件数。`next_cursor/previous_cursor` 为空表示相应方向结束；`snapshot` 绑定业务代数和磁盘配置。改变盘位、目录、搜索或页大小须丢弃游标；业务状态变化返回 `409 LISTING_CHANGED`，不得静默拼接不同快照。认证发布不改变业务代数，每页仍重新校验当前管理员。游标不是授权凭据，不保持服务端大缓存。
 
-成对提供 `selected_path/selected_entry_id` 时，`selected_entry` 独立于页和搜索按精确条目身份及路径的规范等价键解析当前目录中的条目，并返回已保存的显示拼写；返回 `null` 才表示不存在，不能根据条目不在当前页推断删除。同一身份的不同路径别名仍分别匹配。`selected_path` 的末级名称使用已有名称引用校验，父路径须与本次目录的键一致；显示路径可能额外包含仓库名称前缀，不能把这个前缀计入仓库内存储路径的 200 个 UTF-16 代码单元预算而误拒合法条目。每次最多增加一项投影。目录分支只返回摘要，不携带 `entries/file_contexts/file_branches/inherited_files/directory_refs`；分支数量本身尚未分页。
+成对提供 `selected_path/selected_entry_id` 时，`selected_entry` 独立于页和搜索按精确条目身份及路径的规范等价键解析当前目录中的条目，并返回已保存的显示拼写；返回 `null` 才表示不存在，不能根据条目不在当前页推断删除。同一身份的不同路径别名仍分别匹配。`selected_path` 的末级名称使用已有名称引用校验，父路径须与本次目录的键一致；显示路径可能额外包含仓库名称前缀，不能把这个前缀计入仓库内存储路径的 200 个 UTF-16 代码单元预算而误拒合法条目。每次最多增加一项投影。
 
-批量准备通过只读 `POST /api/repositories/{repo}/directory-branches` 提交 `{path,sources:[{directory_branch_id,expected_tree_id}],entries:[{entry_id,path}]}`。服务器核对捕获的作用域、子树头和直接子项，返回摘要及 `{entry_id,path,selected_path}`；`selected_path` 关联原选择，避免别名子集被误认为唯一身份。源集合为空是权威结果，不得用同路径旧作用域补齐。每个数组最多 500 项、乘积最多 10000，超限明确拒绝；目标选择用 `GET .../directory-branches?path=...&summary=true`。这不是写入授权，最终变更仍重新核对全部身份与树基线，Cookie POST 仍要求 CSRF。 同身份的 NFC / NFD 等价选择视为重复输入；别名匹配按路径键区分，返回的 `selected_path` 保留请求拼写用于关联，`path` 保留已存储拼写。
 
 | 接口 | 用途 |
 | --- | --- |
@@ -77,20 +76,9 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `POST /api/smb/account` | 严格 username/expected_generation/administrator_password 请求；只选服务器预置候选，验证当前 Web 管理密码后持久化新绑定并关闭旧 RPC 连接；返回当前账号状态，过时代际拒绝，不创建或改名系统账户 |
 | `POST /api/smb/password` | 严格 expected_generation/current_password/new_password 请求，不接受账号或目标主机；仅明确成功返回 changed=true；不撤销 Web 会话，不创建/改名 Samba 账户 |
 | `GET /api/file-manager/disks` | 可见磁盘目录入口及只读状态 |
-| `GET /api/file-manager/disks/{slot}/entries?path={path}` | 有界当前目录页、后代文件数与稳定目录分支摘要 |
-| `POST /api/file-manager/disks/{slot}/namespace` | 准备并提交当前目录的创建、重命名或删除 |
-| `POST /api/file-manager/disks/{slot}/namespace-batch` | 显式源分支→目标分支映射；移动、复制、删除、重命名整批检查并发布 |
-| `GET /api/repositories/{repo}/directory-branches?path={path}` | 只读查询冻结分支和条目；省略 path 返回所有作用域，不切换默认分支 |
-| `POST /api/repositories/{repo}/directory-branches` | 只读查询捕获分支及已选直接子项的精确身份/路径事实；不创建操作，不修改状态 |
-| `GET/PUT /api/repositories/{repo}/default-branch` | 查询默认根目录分支；PUT 以 expected_tree_id/expected_head 显式发布根目录或子目录默认组合 |
+| `GET /api/file-manager/disks/{slot}/entries?path={path}` | 当前登记根的普通目录页、精确条目选择和后代文件数；备份条目只读 |
+| `POST /api/file-manager/disks/{slot}/namespace` | 在登记的主盘根下创建普通文件夹（`kind=mkdir`） |
 | `POST /api/file-manager/disks/{slot}/write-sessions` | 取得该盘目录当前文件分支的写会话；随后通过通用工作区接口上传 |
-| `GET /api/repositories/{repo}/directory-git?path={path}` | 只读准确目录仓库、所属祖先、工作树、HEAD、index 代数和直接独立子仓库状态，不隐式初始化 |
-| `POST /api/repositories/{repo}/directory-git/initialize` | `{path,expected_namespace_head,operation_id}`：显式初始化此目录仓库，不递归初始化、不自动提交 |
-| `POST /api/repositories/{repo}/directory-git/stage` | 准确目录、分支、工作树和 index 代数：暂存自身工作内容，不自动纳入孩子的新 HEAD |
-| `POST /api/repositories/{repo}/directory-git/children/stage` | 准确父 index 代数和直接独立孩子已提交 HEAD：只暂存该引用，不替孩子提交 |
-| `POST /api/repositories/{repo}/directory-branches/{id}/commits` | `expected_tree_id`、必填十进制字符串 `expected_index_generation`、`message`、`operation_id`：只提交此仓库的暂存内容和明确子仓库引用 |
-| `POST /api/file-manager/disks/{slot}/directory-branches` | `{path,name,operation_id,source}`：source 绑定当前仓库、目录、分支、工作树、已提交 HEAD、index 代数及 namespace HEAD；登记冻结命名分支，不自动选择 |
-| `POST /api/file-manager/disks/{slot}/directory-branches/from-history` | `{path,name,operation_id,source:{current,tree_id}}`：current 为原七项当前 CAS，tree_id 固定同一目录的历史用户提交；只登记引用，不复制正文或创建占位文件，不自动 checkout |
 | `GET /api/file-manager/files/{file}/history` | 当前根上的统一节点窗口及有界父边预览；可成对传入 repository_id/path 区分别名，支持 limit/cursor 或精确 anchor_node_id |
 | `POST /api/file-manager/files/{file}/branches` | 从选定版本登记公共文件分支；可传 source_node_id 固定路径节点来源，不复制正文或新增节点 |
 | `PATCH /api/file-manager/files/{file}/nodes/{node}` | 设置路径、标签或合并节点的独立备注，最多128 UTF-8字节；空字符串清空，不改正文备注或新增节点 |
@@ -434,9 +422,9 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 
 ### Web 浏览分支与默认发布
 
-文件列表的分支切换只发起 GET 读取，不产生 operation_id、不改变默认命名空间或 SMB。目录预览使用 entries 的 `directory_branch_id` 与 `expected_tree_id` 成对查询，返回 `preview: true`、`writable: false`；游标绑定预览身份，历史读取使用冻结节点而不是当前路径选择。离开预览目录范围或切换硬盘结束预览。
+读取 FILE 的分支和版本不改变当前默认分支，也不发布命名空间变更。普通文件夹列表不接受目录分支或树的选择参数。
 
-右侧“设为默认分支”才发起上述显式 PUT。请求固定当前命名空间 head 及已浏览树／节点，拒绝过期视图；成功后回到默认视图。拒绝保留预览，不确定结果保留原 operation_id 并查询回执，不能生成另一请求掩盖发布状态。预览不授予重命名、删除、写入或批量修改权限。已有低层 select 接口仍是明确的持久化选择命令，不是 Web 浏览接口。
+显式设置 FILE 默认分支时，提交原 FILE、路径、已审阅节点、命名空间 head 和 operation_id。结果不确定时查询原操作，不用新操作号重做。
 
 <a id="历史节点合并"></a>
 
@@ -452,15 +440,9 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 
 <a id="目录只读历史窗口"></a>
 
-### 目录只读历史窗口
+### 文件夹与 FILE 历史
 
-`GET /api/repositories/{repo}/directories/{directory}/history` 读取真实 `DirectoryTree` 节点，`.../history/branches` 读取真实 `DirectoryBranch` 摘要。`directory` 是目录条目的稳定 `entry_id`，根目录为 `repository_id`；路径仅是节点保存的历史属性，不能替代身份。改名沿用身份与历史，删除仍可读取已记录历史，同路径重建是新的身份，不混入旧图。读取不会调用目录 scope 初始化、生成节点或改变默认选择；没有记录的现存目录返回真实空数组。只读备份浏览可用同一仓库/目录身份读取，不能由此获得目录修改权限。
-
-两路返回 `DirectoryHistoryPage`：`identity:{repository_id,directory_id,history_tree_id,history_root,collection,limit}`、`current:{directory_branch_id,tree_id,committed_tree_id,staged}`、`nodes`、`branches`、`page:{previous_cursor,next_cursor}`。非目标集合为空数组；没有当前选择时 current 三个 ID 为 null，staged 为 false。节点只包含显式用户提交，字段为 `tree_id,directory_branch_id,parent_tree_id,parent_endpoint,commit_id,message,path,sequence`；父边沿不可变父链跨过内部暂存检查点，指向前一次用户提交，在页内为 `in_window`，页外为 `outside_window`，首次提交两个父字段均为 null。子目录 composition 引用不是历史父边。分支包含 `directory_branch_id,name,parent_branch_id,head_tree_id,committed_tree_id,staged,materialized,current,sequence`；工作 head 不等于目录提交，尚无用户提交时 committed_tree_id 为 null，不能把内部工作检查点画成用户历史节点。
-
-`limit` 默认 64、最大 128，`sequence` 为十进制字符串；顺序按 sequence 降序再按 ID 升序。`cursor` 是最多 4096 字节的不透明游标，绑定仓库、稳定目录身份、集合、limit 和 exact `history_root`；调用方不可改写游标或跨集合复用。节点路支持 `anchor_tree_id` 从指定真实节点开始，不能与 cursor 同用。`history_root` 可显式提供；续页即使不传 root 也由 cursor 约束。root 变化返回 `HISTORY_CHANGED` (409)，必须重取当前窗口，不混接旧根。非法 scope/query/cursor 为 400，目录身份不存在为 `DIRECTORY_NOT_FOUND` (404)。取消沿既有 `OPERATION_ABORTED` (400)。
-
-每页最多 128 行和 1 MiB 编码 JSON；借用共享 metadata projection，选择扫描真实目录头并在每步检查取消，额外保留 O(limit) 行，不宣称查询 CPU 为 O(limit)。服务端在查询前后重查当前鉴权和 exact root，编码与响应持有同一 admission slot。客户端与浏览器复用 `storage_contract::directory_history::DirectoryHistoryRequest` 和 `DirectoryHistoryPage::validate`，校验稳定身份、root、集合预算、顺序、父边端点与前进游标。这里不提供或宣称目录合并。
+普通文件夹不提供单独的仓库、提交或历史窗口。每个 FILE 的分支、合并来源和版本由该 FILE 的历史接口读取。
 
 历史合并点选来源时，如普通历史摘要没有可证明的 `branch_id`，可按需请求 `GET /api/file-manager/files/{file}/merge-history/source?node_id=...&history_root=...`。返回 `FileHistorySource {file_id,source_node_id,history_root,branch:HistoryBranchSummary}`；branch.node_id 是非空、同次读取的当前 CAS head。服务端校验同文件节点，沿真实父关系寻找独立分支，或使用不可变 metadata/path 节点的明确归属；归档和只读合并别名仍能作来源。没有独立归属返回 `FILE_BRANCH_REQUIRED` (400)，必须先由用户明确从节点创建分支，不能猜当前分支。root 变化返回 `HISTORY_CHANGED` (409)。
 
@@ -470,18 +452,6 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 
 `merge-history` 在派生分支前，对相同 snapshot 完成 CAS、归属与有界祖先预验证；所有输入与 chosen 必须属于同一 history，混用返回 FILE_NODE_NOT_FOUND。`head == source` 与不可变节点明确作者不需要建图；其余来源按 reviewed head 分组，共用一次索引，一次 BFS 同时验证该 head 的所有来源。写请求累计搜索上限为 262,144 次唯一-per-head 节点访问与 1,048,576 次唯一-per-head 父边访问；容器标签不参与该搜索或合并结果选择。前置预算失败不派生分支、不记录新回执、不发布状态。此处有界的是新增祖先搜索，不改变旧分支命名/派生、路径核验、正文健康检查和持久发布的全局扫描或 I/O 成本，也不宣称整个合并耗时为常数。
 
-
-### 目录暂存与显式提交接口
-
-`GET /api/repositories/{repo}/directory-branches/{id}/staging` 读取持久化工作树 ID、最近用户提交及暂存区相对 HEAD 的新增／修改／删除计数；完整工作区与暂存区区分由下述目录 Git 状态接口提供。`POST /api/repositories/{repo}/directory-branches/{id}/commits` 需要 `expected_tree_id`、`expected_index_generation`、非空且不超过 128 UTF-8 字节的单行 `message`、永久 `operation_id`；JSON 严格拒绝未知字段。成功返回普通操作回执，重复同一操作返回原结果；树或暂存代数已变返回 `DIRECTORY_BRANCH_CONFLICT`，不能自动改用新基线提交。
-
-目录提交在同一元数据事务内冻结所选目录已暂存的自有内容及其明确固定的子仓库引用，不增加文件版本、不切换默认命名空间；所选目录外的祖先和兄弟仍保持原暂存状态。文件保存即已持久化，未做目录提交不代表正文只在内存。发布结果未知时按原操作 ID 查询，不另换操作号重做。
-
-## 显式目录仓库边界
-
-目录 Git 初始化、暂存和提交使用独立接口，不把普通文件保存当成目录提交，也不递归提交子仓库。准确目录尚未初始化时，所属祖先可以返回，但列表的 `directory_branches_supported` 仍为 false。旧 `/api/repositories/{repo}/directory-scopes` 公开入口已移除，不自动迁移为 Git 初始化。
-
-状态 GET 必须给 `path`，根为显式空字符串，未知或重复查询字段拒绝。完整响应最多 1 MiB，超限失败而不截断；所有 nullable 字段必须出现。`staged` 与增改删计数对应暂存区相对 HEAD 的变化，必填 `unstaged` 表示工作区尚未暂存的变化，提交不会采用这些后续保存。工作树与 index 代数在暂存/提交时同时复核，独立子仓库边界变化要求重新暂存。结果不明保留原操作 ID 查询，不以新 ID 盲重试。请求、状态与严格整数编码见机器契约，授权和实际归属仍由服务器及核心检查，详见[目录 Git HTTP 边界](components/server/src/directory-git.md)。
 
 ### 同历史域非空内容候选
 

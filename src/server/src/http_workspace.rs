@@ -16,8 +16,6 @@ use http_routing::{
 struct CreateBody {
     #[serialization(deserialize_with = "nonempty")]
     branch_id: String,
-    #[serialization(default, deserialize_with = "supplied_identity")]
-    source_commit_id: Option<String>,
 }
 fn nonempty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let value = String::deserialize(deserializer)?;
@@ -56,7 +54,6 @@ pub(crate) async fn workspace(
     let body: CreateBody = body(request).await?;
     let command = CreateWorkspace {
         branch_id: body.branch_id,
-        source_commit_id: body.source_commit_id,
     };
     crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {

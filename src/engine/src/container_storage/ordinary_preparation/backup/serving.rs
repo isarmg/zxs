@@ -92,7 +92,6 @@ pub(crate) struct BackupServingImage<'a> {
     metadata_bytes: usize,
     pub(crate) bodies: u64,
     pub(crate) body_bytes: u64,
-    pub(crate) directory_repositories: usize,
 }
 
 /// This source exists only inside a complete published target image. It keeps
@@ -128,24 +127,20 @@ impl<'a> BackupServingImage<'a> {
         source.require(stop)?;
         let held = source.layout().hold(source.source(), stop)?;
         let mut image = Self { source, stop, held, files: BTreeMap::new(), manifest: Vec::new(),
-            metadata_bytes: 0, bodies: 0, body_bytes: 0, directory_repositories: 0 };
+            metadata_bytes: 0, bodies: 0, body_bytes: 0 };
         for database in PreparedDatabases::capture(source.published(), stop)?.into_databases() {
             let (scope, bytes) = database.into_parts();
-            match scope {
-                Scope::File { file, history } => {
-                    let file = file.parse::<FileId>()?;
-                    if source.published().state().file_containers.get(&file)
-                        .is_none_or(|record| record.history_tree_id.to_string() != history)
-                    {
-                        return Err(Failure::BackupLayoutEvidence.into());
-                    }
-                    image.add(Key::Database { file }, Data::Bytes(bytes))?;
-                    image.add(Key::Owner { file }, Data::Bytes(crate::canonical_json(
-                        &file.to_string(),
-                    )?))?;
-                }
-                Scope::Directory { .. } => return Err(Failure::BackupLayoutUnsupported.into()),
+            let Scope::File { file, history } = scope;
+            let file = file.parse::<FileId>()?;
+            if source.published().state().file_containers.get(&file)
+                .is_none_or(|record| record.history_tree_id.to_string() != history)
+            {
+                return Err(Failure::BackupLayoutEvidence.into());
             }
+            image.add(Key::Database { file }, Data::Bytes(bytes))?;
+            image.add(Key::Owner { file }, Data::Bytes(crate::canonical_json(
+                &file.to_string(),
+            )?))?;
         }
         let state = source.published().state();
         for (id, version) in state.versions.iter() {

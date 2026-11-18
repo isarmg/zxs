@@ -14,7 +14,7 @@ fn state() -> State {
     state.files.loaded = true;
     state.files.writable = true;
     state.files.slot = "P01".into();
-    state.files.directory = "named/folder".into();
+    state.files.directory = "folder".into();
     state.files.repository_path = "folder".into();
     state.files.repository_id = id("repo", 1);
     state.files.namespace_head = id("commit", 6);
@@ -311,7 +311,7 @@ fn existing_folder_creation_keeps_its_original_post_shape() {
         (
             "POST",
             "/api/file-manager/disks/P01/namespace".into(),
-            json!({"kind":"mkdir","path":"named/folder/new","operation_id":id("op",3)}),
+            json!({"kind":"mkdir","path":"folder/new","operation_id":id("op",3)}),
         )
     );
 }
@@ -442,4 +442,20 @@ fn mkdir_receipts_keep_exact_paths_digests_and_first_root_request_origin() {
     assert!(!root.can_lookup());
     assert!(!root.matches_receipt(&receipt, ReceiptOrigin::Lookup));
     assert!(root.matches_receipt(&receipt, ReceiptOrigin::OriginalRequest));
+}
+
+
+#[test]
+fn mkdir_and_recovery_never_drop_a_leading_display_component() {
+    let mut state = state();
+    state.files.directory = "outer/folder".into();
+    assert!(Record::capture(&state, &"alice".parse().unwrap(), id("op", 11).parse().unwrap(), "new").is_err());
+    state.files.repository_path = "outer/folder".into();
+    let good = Record::capture(&state, &"alice".parse().unwrap(), id("op", 11).parse().unwrap(), "new").unwrap();
+    assert_eq!(good.request().2["path"], "outer/folder/new");
+    let mut changed: Value = json_codec::from_str(&good.bytes).unwrap();
+    changed["path"] = "wrong/outer/folder/new".into();
+    let bytes = json_codec::to_string(&changed).unwrap();
+    assert!(Record::decode(&good.key(), good.principal(), &bytes).is_err());
+    assert_eq!(good.request().2["path"], "outer/folder/new");
 }

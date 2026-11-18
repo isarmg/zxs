@@ -18,7 +18,6 @@ pub struct BackupOrdinaryServingTargetReport {
     pub recipe_hash: String,
     pub entities_hash: String,
     pub whole_files: usize,
-    pub directory_repositories: usize,
     #[serialization(with = "storage_contract::u64_string")]
     pub available_versions: u64,
     #[serialization(with = "storage_contract::u64_string")]
@@ -39,7 +38,6 @@ struct TargetRecipe {
     physical: PhysicalBinding,
     recipe_hash: String,
     whole_files: usize,
-    directory_repositories: usize,
     #[serialization(with = "storage_contract::u64_string")]
     available_versions: u64,
     #[serialization(with = "storage_contract::u64_string")]
@@ -79,7 +77,6 @@ impl<'a> Plan<'a> {
                     physical: PhysicalBinding::of(root)?,
                     recipe_hash: image.hash(),
                     whole_files: image.whole_files(),
-                    directory_repositories: image.directory_repositories,
                     available_versions: image.bodies,
                     content_bytes: image.body_bytes,
                 })
@@ -146,13 +143,6 @@ impl<'a> Plan<'a> {
                             .evidence
                             .report
                             .whole_file_units_per_target
-                        || image.directory_repositories
-                            != prepared
-                                .task
-                                .installation
-                                .evidence
-                                .report
-                                .directory_repositories_per_target
                         || image.bodies != job.total_files
                         || image.body_bytes != job.total_bytes
                     {
@@ -254,7 +244,6 @@ impl<'a> Plan<'a> {
                 recipe_hash: recipe.recipe_hash.clone(),
                 entities_hash: hash,
                 whole_files: recipe.whole_files,
-                directory_repositories: recipe.directory_repositories,
                 available_versions: recipe.available_versions,
                 content_bytes: recipe.content_bytes,
             });

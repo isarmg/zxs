@@ -7,7 +7,6 @@ use crate::journal::RecordType;
 use crate::{disk::*, *};
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, btree_map::Entry},
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -116,12 +115,6 @@ fn workspace_locations(
 
 impl Engine {
     pub(crate) fn persist_workspace(&mut self, w: &Workspace) -> Result<()> {
-        if self.current_namespaces.is_some() && w.purpose == WorkspacePurpose::HistoricalBranch {
-            return Err(Error::new(
-                ErrorCode::HistoricalSaveRequiresBranch,
-                "historical workspace import has not been admitted for the current disk registry",
-            ));
-        }
         let canonical = encode_metadata(w, MAX_METADATA)?;
         self.persist_workspace_as(w, &canonical, WorkspaceRetention::Resident)
     }
@@ -132,6 +125,9 @@ impl Engine {
         canonical: &[u8],
         retention: WorkspaceRetention,
     ) -> Result<()> {
+        if w.purpose != WorkspacePurpose::Normal {
+            return Err(recovery_required("workspace is not an ordinary FILE upload"));
+        }
         let admission = self.check_workspace_budget(w, canonical, retention)?;
         let primary = self.workspace_data_directory(w)?;
         let result = (|| {
@@ -282,20 +278,6 @@ impl Engine {
         let locations = self.workspace_locations()?;
         self.workspaces.clear();
         self.reset_workspace_budget();
-        self.historical_workspace_operations.clear();
-        // Build this derived lookup once per admitted State, rather than scan
-        // permanent operations for every manifest or terminal write.
-        for (id, operation) in self.state.operations.iter() {
-            if operation.kind == "history.historical_save"
-                && let Some(workspace) = operation.result["workspace_id"].as_str()
-            {
-                index_historical_operation(
-                    &mut self.historical_workspace_operations,
-                    workspace,
-                    *id,
-                )?;
-            }
-        }
         // The accounting index is bounded by all admitted metadata bytes, not
         // active record count. No decoded cold manifests or complete path list
         // survive this iteration; each ID is reconciled before admitting another.
@@ -576,41 +558,8 @@ impl Engine {
                 .contains(id)
     }
 
-    pub(crate) fn remember_historical_workspace_operation(
-        &mut self,
-        workspace: &str,
-        operation: OperationId,
-    ) -> Result<()> {
-        index_historical_operation(
-            &mut self.historical_workspace_operations,
-            workspace,
-            operation,
-        )
-    }
-
-    pub(crate) fn historical_workspace_operation(&self, workspace: &str) -> Option<OperationId> {
-        self.historical_workspace_operations.get(workspace).copied()
-    }
-
     fn published_workspace_kind(&self, workspace: &Workspace) -> Result<Option<WorkspaceColdKind>> {
-        match workspace.purpose {
-            WorkspacePurpose::Normal => Ok(self
-                .published_normal_workspace(workspace)?
-                .then_some(WorkspaceColdKind::Published)),
-            WorkspacePurpose::HistoricalBranch => {
-                let Some(completed) = self.historical_workspace_completion_fence(workspace)? else {
-                    return Ok(None);
-                };
-                let terminal = match workspace.state {
-                    WorkspaceState::Committed => workspace.fencing_token == completed,
-                    WorkspaceState::Aborted => completed
-                        .checked_add(1)
-                        .is_some_and(|closed| workspace.fencing_token >= closed),
-                    WorkspaceState::Open | WorkspaceState::Sealed => false,
-                };
-                Ok(terminal.then_some(WorkspaceColdKind::HistoricalPublished))
-            }
-        }
+        Ok(self.published_normal_workspace(workspace)?.then_some(WorkspaceColdKind::Published))
     }
 
     fn published_normal_workspace(&self, workspace: &Workspace) -> Result<bool> {
@@ -734,6 +683,9 @@ impl Engine {
         workspace: &Workspace,
         authoritative: bool,
     ) -> Result<()> {
+        if workspace.purpose != WorkspacePurpose::Normal {
+            return Err(recovery_required("workspace is not an ordinary FILE upload"));
+        }
         if workspace.workspace_id != id {
             return Err(recovery_required(
                 "workspace manifest identity differs from directory",
@@ -821,12 +773,6 @@ impl Engine {
             return Err(recovery_required("workspace context mirrors conflict"));
         };
         let mut expected = mirrors[before].clone();
-        // Historical-save completion does not update selection contexts.
-        if expected.purpose != WorkspacePurpose::Normal {
-            return Err(recovery_required(
-                "historical workspace context mirrors conflict",
-            ));
-        }
         let published = self.workspace_publication_snapshot(&expected)?;
         Self::refresh_workspace_contexts(&published, &mut expected);
         expected.state = WorkspaceState::Committed;
@@ -983,22 +929,6 @@ impl Engine {
                 completion = Some(next);
             }
         }
-        if workspace.purpose == WorkspacePurpose::HistoricalBranch
-            && workspace.state != WorkspaceState::Aborted
-            && let Some(next) = self.historical_workspace_completion_fence(workspace)?
-        {
-            if !matches!(
-                workspace.state,
-                WorkspaceState::Sealed | WorkspaceState::Committed
-            ) || !(workspace.fencing_token == next - 1 || workspace.fencing_token == next)
-                || completion.is_some_and(|other| other != next)
-            {
-                return Err(recovery_required(
-                    "historical workspace plan conflicts with retained fence or state",
-                ));
-            }
-            completion = Some(next);
-        }
         if completion.is_none()
             && let Some(error) = damage
         {
@@ -1024,25 +954,6 @@ impl Engine {
         }
         Ok(completion.is_some())
     }
-}
-
-fn index_historical_operation(
-    index: &mut BTreeMap<String, OperationId>,
-    workspace: &str,
-    operation: OperationId,
-) -> Result<()> {
-    match index.entry(workspace.to_owned()) {
-        Entry::Vacant(entry) => {
-            entry.insert(operation);
-        }
-        Entry::Occupied(entry) if *entry.get() == operation => {}
-        Entry::Occupied(_) => {
-            return Err(recovery_required(
-                "historical workspace has conflicting published operations",
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn workspace_absent(error: &Error) -> bool {
@@ -1132,7 +1043,6 @@ fn workspace_directories_clear(
                         || name == "wire-request.json"
                         || retained_full_generation(entry.as_path())
                 }
-                WorkspaceColdKind::HistoricalPublished => retained_full_generation(entry.as_path()),
             };
             if !retained {
                 return Ok(false);

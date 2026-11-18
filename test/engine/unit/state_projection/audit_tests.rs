@@ -179,61 +179,21 @@ fn malformed_carrier_tracks_new_histories_and_repair_removes_unscoped_membership
 }
 
 #[test]
-fn restore_carrier_indexes_imported_projection_without_reclassifying_source_as_native() {
-    let (_, before, history, source_id) = fixture();
-    let native = path_audit::carrier(&before, source_id).unwrap().unwrap();
-    let PathAuditCarrier::Complete { mut sources, .. } = native else {
+fn detached_audit_receipt_cannot_become_a_native_source_by_renaming_its_kind() {
+    let (_, original, _, id) = fixture();
+    let native = path_audit::carrier(&original, id).unwrap().unwrap();
+    let PathAuditCarrier::Complete { sources, .. } = native else {
         panic!("native rename has complete evidence");
     };
-    let target = "history_ffffffffffffffffffffffffffffffff";
-    let copy_id = OperationId::generate().unwrap();
-    let identity = crate::business::history_copy::identity;
-    for source in sources.values_mut() {
-        let mut derivations = BTreeMap::new();
-        for (file, mut chain) in std::mem::take(&mut source.derivations) {
-            chain.push(copy_id);
-            let mapped = identity(copy_id, &file.to_string()).unwrap().parse().unwrap();
-            derivations.insert(mapped, chain);
-        }
-        source.derivations = derivations;
-        for row in &mut source.projections {
-            row.file_id = identity(copy_id, &row.file_id.to_string()).unwrap().parse().unwrap();
-            row.history_tree_id = target.parse().unwrap();
-            row.branch_id = identity(copy_id, &row.branch_id.to_string()).unwrap().parse().unwrap();
-            row.before_version_id = identity(copy_id, &row.before_version_id.to_string())
-                .unwrap().parse().unwrap();
-            row.after_version_id = identity(copy_id, &row.after_version_id.to_string())
-                .unwrap().parse().unwrap();
-        }
-        source.projections.sort_by_key(|row| {
-            (row.history_tree_id, row.file_id, row.source.event_id)
-        });
-    }
     path_audit::validate_sources(&sources).unwrap();
-    // A receipt-reader fixture, not an admitted restore. Original source bytes,
-    // principal and ID stay intact while the imported target projection differs.
-    let restore_id = OperationId::generate().unwrap();
-    let mut receipt = before.operations[&source_id].clone();
-    receipt.operation_id = restore_id;
-    receipt.kind = path_audit::RESTORE_KIND.into();
-    receipt.sequence += 1;
-    receipt.history_tree_id = Some(target.into());
-    receipt.result = json_codec::json!({"restored_path_audit": &sources});
-    let mut after = candidate(&before);
-    after.operations.insert(restore_id, receipt);
-    after.operation_principals.insert(restore_id, "alice".into());
-    let index = DerivedOwners::from_state(&before);
-    let delta = ProjectionDelta::between(&before, &after, &index).unwrap().unwrap();
-    assert_eq!(delta.owners, DerivedOwners::from_state(&after));
-    assert_eq!(delta.owners.rows(target).unwrap().values(Field::PathAudit, &after).unwrap(),
-        full_audit(&after, target));
-    assert!(!delta.histories.get(&history).and_then(|edits| edits.maps.get(&Field::PathAudit))
-        .is_some_and(|rows| rows.contains_key(&restore_id.to_string())));
-    assert_eq!(after.operations[&source_id], before.operations[&source_id]);
-    let file = sources[&source_id].projections[0].file_id.to_string();
-    let files = delta.owners.file_rows(&file).unwrap();
-    assert!(files.path_operations.contains_key(&restore_id));
-    assert!(!files.history_copies.contains_key(&restore_id));
+    let before = storage_contract::canonical_json(&original.operations[&id]).unwrap();
+    for kind in ["history.restore", "workspace.commit"] {
+        let mut forged = original.operations[&id].clone();
+        forged.kind = kind.into();
+        forged.result = json_codec::json!({"restored_path_audit": &sources});
+        assert!(crate::ordinary_authority::operation(&forged).is_err());
+    }
+    assert_eq!(storage_contract::canonical_json(&original.operations[&id]).unwrap(), before);
 }
 
 #[test]

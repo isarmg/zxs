@@ -74,15 +74,15 @@ fn pool_semantic_format_is_required_and_only_accepts_the_exact_token() {
     assert_eq!(decoded.pool_semantic_format, config.pool_semantic_format);
 
     let mut explicit: json_codec::Value = json_codec::from_slice(&explicit).unwrap();
-    assert_eq!(explicit["pool_semantic_format"], "manual-directory-v1");
+    assert_eq!(explicit["pool_semantic_format"], "file-containers");
     let mut missing = explicit.clone();
     missing.as_object_mut().unwrap().remove("pool_semantic_format");
     assert!(json_codec::from_value::<Config>(missing).is_err());
     for invalid in [
         json_codec::json!(null),
         json_codec::json!(1),
-        json_codec::json!("manual-directory-v2"),
-        json_codec::json!({"manual-directory-v1": null}),
+        json_codec::json!("manual-directory-v1"),
+        json_codec::json!({"file-containers": null}),
     ] {
         explicit["pool_semantic_format"] = invalid;
         assert!(json_codec::from_value::<Config>(explicit.clone()).is_err());

@@ -18,58 +18,6 @@ pub(crate) fn routes() -> Router<AppState> {
             "/api/file-manager/files/{file}/draft",
             get(http_file_draft::content).put(http_file_draft::write),
         )
-        .route(
-            "/api/file-manager/disks/{slot}/snapshot-root",
-            post(http_snapshot_worktree::root::register),
-        )
-        .route(
-            "/api/repositories/{repository}/snapshot-root-context",
-            get(http_snapshot_worktree::context),
-        )
-        .route(
-            "/api/repositories/{repository}/snapshot-head",
-            get(http_snapshot_worktree::discovery::head),
-        )
-        .route(
-            "/api/repositories/{repository}/snapshot-history",
-            get(http_snapshot_worktree::history::read),
-        )
-        .route("/api/directory-snapshots", post(http_snapshot_worktree::initialize))
-        .route("/api/directory-snapshots/commits", post(http_snapshot_worktree::drafts::commit))
-        .route(
-            "/api/directory-snapshots/commits/{operation}",
-            get(http_snapshot_worktree::drafts::receipt),
-        )
-        .route(
-            "/api/repositories/{repository}/directory-worktrees/creations/{operation}",
-            get(http_snapshot_worktree::outcome::creation),
-        )
-        .route(
-            "/api/repositories/{repository}/directory-worktrees/commits/{operation}",
-            get(http_snapshot_worktree::outcome::commit),
-        )
-        .route(
-            "/api/repositories/{repository}/directory-worktrees",
-            get(http_snapshot_worktree::instances::read),
-        )
-        .route("/api/directory-worktrees", post(http_snapshot_worktree::create))
-        .route(
-            "/api/directory-worktrees/{worktree}",
-            get(http_snapshot_worktree::status),
-        )
-        .route(
-            "/api/directory-worktrees/{worktree}/content",
-            get(http_snapshot_worktree::transport::content)
-                .put(http_snapshot_worktree::transport::edit),
-        )
-        .route(
-            "/api/directory-worktrees/{worktree}/commits",
-            post(http_snapshot_worktree::transport::commit),
-        )
-        .route(
-            "/api/file-manager/directory-snapshot-source",
-            get(http_directory_snapshot_source::read),
-        )
         .route("/api/file-manager/disks", get(disks))
         .route(
             "/api/file-manager/detached-history",
@@ -94,18 +42,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/api/file-manager/disks/{slot}/object-move",
             post(http_object_move::submit),
-        )
-        .route(
-            "/api/file-manager/disks/{slot}/namespace-batch",
-            post(http_namespace_batch::submit),
-        )
-        .route(
-            "/api/file-manager/disks/{slot}/directory-branches",
-            post(http_disk_directory::create),
-        )
-        .route(
-            "/api/file-manager/disks/{slot}/directory-branches/from-history",
-            post(http_disk_directory::create_from_history),
         )
         .route(
             "/api/file-manager/files/{file}/node-retirement/preview",

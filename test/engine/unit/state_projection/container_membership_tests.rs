@@ -541,15 +541,8 @@ fn sharing_fixture() -> State {
             "smb_binding_generation":"1"
         })),
     );
-    state.directory_branches.insert("directory-branch".into(), record(json!({
-        "directory_branch_id":"directory-branch", "repository_id":"r1", "directory_id":"directory",
-        "path":"directory", "name":"directory", "parent_branch_id":null, "head_tree_id":"tree",
-        "commit_id":"commit", "entries":[], "file_branches":{}, "materialized":true, "sequence":"1"
-    })));
-    state.directory_trees.insert("tree".into(), record(json!({
-        "tree_id":"tree", "directory_branch_id":"directory-branch", "parent_tree_id":null,
-        "commit_id":"commit", "path":"directory", "entries":[], "file_branches":{}, "sequence":"1"
-    })));
+    state.file_selections.insert("file-a".into(), "b-a".into());
+    state.file_selections.insert("file-b".into(), "b-b".into());
     state
 }
 
@@ -563,7 +556,7 @@ fn branch_label_only_changes_preserve_untouched_membership_backing() {
     let next = transition.next().owners;
     assert!(index.history_rows.shares_storage_with(&next.history_rows));
     assert!(index.files.0.shares_storage_with(&next.files.0));
-    assert!(index.directories.0.shares_storage_with(&next.directories.0));
+    assert!(index.selected_files.0.shares_storage_with(&next.selected_files.0));
     assert_memberships(&after, next);
 }
 
@@ -587,9 +580,9 @@ fn control_and_unowned_rows_do_not_rebuild_unchanged_relations() {
     assert!(index.history_rows.shares_storage_with(&next.history_rows));
     assert!(
         index
-            .directory_trees
+            .branch_links
             .0
-            .shares_storage_with(&next.directory_trees.0)
+            .shares_storage_with(&next.branch_links.0)
     );
     assert_memberships(&after, next);
 }
@@ -611,15 +604,15 @@ fn cold_exact_transitions_share_the_fresh_previous_instead_of_rebuilding_after()
         // All witnessed roots are nonempty. A second full derivation creates
         // new backing; the exact update retains these freshly built roots.
         assert!(!previous.files.0.is_empty());
-        assert!(!previous.directories.0.is_empty());
+        assert!(!previous.selected_files.0.is_empty());
         assert!(!previous.history_rows.is_empty());
         assert!(!previous.repository_rows.is_empty());
         assert!(previous.files.0.shares_storage_with(&next.files.0));
         assert!(
             previous
-                .directories
+                .selected_files
                 .0
-                .shares_storage_with(&next.directories.0)
+                .shares_storage_with(&next.selected_files.0)
         );
         assert!(
             previous
@@ -634,9 +627,9 @@ fn cold_exact_transitions_share_the_fresh_previous_instead_of_rebuilding_after()
         assert!(!previous.files.0.shares_storage_with(&full.files.0));
         assert!(
             !previous
-                .directories
+                .selected_files
                 .0
-                .shares_storage_with(&full.directories.0)
+                .shares_storage_with(&full.selected_files.0)
         );
         assert!(transition.take_history_edits().is_none());
     }
@@ -682,9 +675,9 @@ fn cold_unknown_write_sets_keep_the_full_after_rebuild() {
         assert_eq!(previous, &DerivedOwners::from_state(&before));
         assert!(
             !previous
-                .directories
+                .selected_files
                 .0
-                .shares_storage_with(&next.directories.0)
+                .shares_storage_with(&next.selected_files.0)
         );
         assert!(transition.take_history_edits().is_none());
     }
@@ -702,16 +695,13 @@ fn directory_commit(id: &str, history: &str, directories: &[&str]) -> storage_co
 }
 
 #[test]
-fn cold_shared_directory_owners_follow_commit_insert_rewrite_and_last_removal() {
+fn cold_ordinary_folder_entries_remain_in_their_own_commit_through_rewrite_and_removal() {
     let mut before = sharing_fixture();
     for (id, history) in [("c1", "h1"), ("c2", "h1"), ("c3", "h2")] {
         before
             .commits
             .insert(id.into(), directory_commit(id, history, &["shared"]));
     }
-    before
-        .directory_selection_generations
-        .insert("shared".into(), 1);
     let mut after = candidate(&before);
     after.commits.insert(
         "c4".into(),
@@ -733,12 +723,11 @@ fn cold_shared_directory_owners_follow_commit_insert_rewrite_and_last_removal() 
         assert_cold_transition(&before, &after);
         before = after;
     }
-    assert!(
-        !DerivedOwners::from_state(&before)
-            .directories
-            .0
-            .contains_key("shared")
-    );
+    let owners = DerivedOwners::from_state(&before);
+    for history in ["h1", "h2", "h3"] {
+        let members = owners.rows(history).and_then(|rows| rows.0.get(&Field::Commits));
+        assert!(members.is_none_or(SharedRecords::is_empty));
+    }
 }
 
 #[test]

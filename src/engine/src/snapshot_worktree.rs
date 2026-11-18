@@ -23,7 +23,6 @@ pub use source::SnapshotSourceError;
 pub(crate) use registry::{
     DirectoryRegistration, PublishedAddedCommitTail, PublishedCommitTail, ReceiptIndex,
     RegisteredNamespaceDirectories,
-    require_backup_snapshot_scope,
 };
 pub(crate) use prepare::prepare_namespace_host;
 pub(crate) use initialize::initialize_root;

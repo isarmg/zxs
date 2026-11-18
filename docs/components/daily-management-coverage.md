@@ -19,7 +19,7 @@ Web 管理页使用 `src/web/src/admin/request.rs` 的 HTTP 请求构建器。�
 | 历史图 | GET /api/history-trees/{id}/graph | 查看历史图 / 现有历史树 |
 | 创建文件分支 | POST /api/file-manager/files/{file}/branches | 文件详情：选择该文件自己的源版本，可用 source_node_id 固定来源节点 |
 | 关系合并标记 | POST /api/history-trees/{id}/merge-links | 合并链接表单，包含精确的源/目标分支和提交 |
-| 命名空间 | POST /api/file-manager/disks/{slot}/namespace 或 /namespace-batch | 现有文件夹创建/重命名/移动/复制/删除控件；不新增内容传输 |
+| 普通文件夹 | POST /api/file-manager/disks/{slot}/namespace | 在登记根创建文件夹，不发布目录分支；移动已有对象以其准确身份和父目录为准 |
 | 历史内容清理 | POST /api/history-trees/{id}/purge-plans | 清理预览，显式版本 ID |
 | 历史树拆分 | POST /api/history-trees/{id}/split-plans | 拆分预览，显式切分提交 |
 | 历史保存 | POST /api/history-trees/{id}/historical-save-plans | 历史保存预览；不上传内容；可选 slot/copies |
@@ -39,12 +39,6 @@ Web 管理页使用 `src/web/src/admin/request.rs` 的 HTTP 请求构建器。�
 - 历史保存可引用已有工作区 ID，但管理页不上传、下载或预览文件正文。
 - 整树高级操作受核心支持范围限制；含独立文件分支或目录组合的历史域不能使用未适配的旧整树操作。
 - 首次初始化使用受本机 bootstrap 授权保护的 Web 向导。配置草稿及完整历史包由[离线辅助工具](helper.md)处理；正常服务直接运行 `zxs`，见[服务端](server.md)。
-
-## 非默认分支批量操作
-
-文件夹分支选择器通过仓库 default-branch 接口提交稳定 directory_branch_id、expected_tree_id 和 expected_head；按名称选择的 directory-select 公开路由已退役。批量审阅显式选择源/目标分支；`files/batch/request.rs` 捕获双方 `directory_branch_id`、`expected_tree_id` 和稳定条目 ID。整个批次是分支范围 CAS 事务，不是任意 JSON 控制台；未选分支及 SMB 默认视图不应受影响。
-
-同一批次的源条目始终来自各自的冻结基线，不按前一项的输出继续查找。移动和重命名先腾出所有参与源，再安装目标，因此同一组合内的路径交换及链式重命名不依赖映射顺序；未参与的已有目标仍导致整批失败。当前不支持在一个批次中同时修改默认视图里相互包含的父、子目录组合，核心在修改前返回 `BATCH_SCOPE_CONFLICT`，避免子组合全量替换吞掉父组合修改。此时应把映射统一表达在一个共同祖先组合中，或分批操作并重新读取基线；只读源组合不计入该重叠限制。
 
 ## 检查
 

@@ -12,7 +12,7 @@ mod backup_preparation;
 pub use backup_preparation::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
-    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
     BackupNamespaceScope, BackupNativeMetadataReport, BackupOrdinaryServingReport,
@@ -273,9 +273,6 @@ pub struct Engine {
     original_receipts: Option<Arc<InstalledOriginalReceipts>>,
     pub(crate) named_namespaces: named_namespaces::NameCache,
     pub(crate) workspaces: BTreeMap<String, Workspace>,
-    // Derived lookup only: the published State still proves every historical
-    // plan, actor and request binding before a workspace can retire.
-    historical_workspace_operations: BTreeMap<String, OperationId>,
     pub(crate) current_namespaces: Option<Arc<CurrentNamespaces>>,
     pub(crate) workspace_namespace_baselines: BTreeMap<String, WorkspaceNamespaceBaseline>,
     workspace_budget: workspace_budget::WorkspaceBudget,
@@ -553,12 +550,8 @@ impl Engine {
     /// Returns filesystem, disk identity, canonical root overlap or initialization errors.
     pub fn initialize_validated(root: &Path, config: ValidatedConfig) -> Result<Self> {
         config.require_initialization_input()?;
-        if root.join("config.json").try_exists()? {
-            return Err(Error::new(
-                storage_contract::ErrorCode::AlreadyInitialized,
-                "configuration already exists; use open/recovery",
-            ));
-        }
+        InitializationDisks::require_unconfigured_system(root)?;
+        InitializationDisks::preflight(root, &config)?;
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
         let selection = crate::authority_selection::SelectionGuard::legacy(&root)?;
@@ -595,12 +588,7 @@ impl Engine {
         config.require_initialization_input()?;
         let root = existing_private_dir(root)?.path().to_path_buf();
         let selection = crate::authority_selection::SelectionGuard::legacy(&root)?;
-        if root.join("config.json").try_exists()? {
-            return Err(Error::new(
-                ErrorCode::AlreadyInitialized,
-                "configuration already exists; use open/recovery",
-            ));
-        }
+        InitializationDisks::require_unconfigured_system(&root)?;
         if config
             .disks
             .iter()
@@ -622,6 +610,7 @@ impl Engine {
         selection: crate::authority_selection::SelectionGuard,
     ) -> Result<Self> {
         let disk_resources = initialization.resources();
+        InitializationDisks::require_unconfigured_system(&root)?;
         // Hold the same directory-before-writer lock order as online preparation
         // through all initialization writes and index construction. A losing
         // preparation must not install a reservation into this initializer's root.
@@ -664,7 +653,7 @@ impl Engine {
             disk.root.write_atomic(
                 &d.root.join("README.txt"),
                 concat!(
-                    "ZXS fresh unified layout candidate v1. ",
+                    "ZXS FILE containers. ",
                     "Ordinary full files are stored below common-data/. ",
                     "Use zxs-helper offline-check/offline-export before recovery. ",
                     "Filesystem choice and physical failure-domain independence ",
@@ -719,7 +708,6 @@ impl Engine {
             workspaces: BTreeMap::new(),
             current_namespaces: None,
             workspace_namespace_baselines: BTreeMap::new(),
-            historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
             move_completion: None,
@@ -927,7 +915,6 @@ impl Engine {
             workspaces: BTreeMap::new(),
             current_namespaces: None,
             workspace_namespace_baselines: BTreeMap::new(),
-            historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
             move_completion: None,
@@ -1043,12 +1030,7 @@ impl Engine {
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
         let disks = metadata_roots;
-        if root.join("config.json").try_exists()? {
-            return Err(Error::new(
-                storage_contract::ErrorCode::AlreadyInitialized,
-                "restore requires a new system state directory",
-            ));
-        }
+        InitializationDisks::require_unconfigured_system(root)?;
         if disks.is_empty() {
             return Err(Error::new(
                 storage_contract::ErrorCode::MetadataQuorumUnavailable,

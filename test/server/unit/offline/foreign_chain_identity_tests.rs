@@ -98,7 +98,6 @@ fn fixture() -> (Config, Plan, databases::Observation) {
             manifest_hash: "a".repeat(64),
             original_disks: 1,
             file_databases: 1,
-            directory_databases: 0,
             databases: 4,
             database_bytes: 4096,
         })

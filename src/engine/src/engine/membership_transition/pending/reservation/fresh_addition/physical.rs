@@ -17,7 +17,7 @@ use platform_io::fs_safety::{EntryName, linux::FileIdentity};
 use std::{collections::BTreeMap, sync::Arc};
 use storage_contract::{DiskId, Generation, OperationId, Principal};
 use storage_contract::namespace_root::{
-    DirectoryId, LocalDirectoryBinding, RootBinding, RootId, StorageLayout,
+    DirectoryId, LocalDirectoryBinding, RootBinding, RootId,
 };
 
 pub(super) struct HeldAddition {
@@ -124,7 +124,7 @@ impl HeldAddition {
             disk_id: disk.disk_id.parse()?,
             stage: LocalDirectoryBinding { directory_id: stage_id, entity },
             root: RootBinding {
-                layout: StorageLayout::UnifiedWorkingTreeV1, root_id,
+                root_id,
                 registration, source_chain,
                 root_entity: local_entity(self.physical), roots: areas.binding().clone(),
                 operation_id: operation, generation: Generation::new(1),

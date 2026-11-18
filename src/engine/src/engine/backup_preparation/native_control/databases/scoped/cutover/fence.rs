@@ -49,8 +49,6 @@ impl BackupSourceFenceEvidence {
             || self.report.targets != self.task.topology.nodes
             || self.report.whole_file_units_per_target
                 != self.report.scoped.objects.files_per_target
-            || self.report.directory_repositories_per_target
-                != self.report.scoped.objects.directories_per_target
         {
             return Err(invalid(
                 "backup source fence evidence differs from its exact prepared source and complete target set",

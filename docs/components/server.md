@@ -148,12 +148,8 @@ server libtest，并拒绝编译诊断、不完整产物、缺测试、零测试
 | `/api/auth/login`、`/api/auth/me`、`/api/auth/logout` | POST 登录、GET 当前会话、POST 撤销 |
 | `/api/auth/password` | POST 校验当前密码并更新本账号密码，撤销原有会话 |
 | `/api/smb/account`、`/api/smb/password` | GET 显示生效 SMB 账号、代际、预置候选及客户端可用性；账号 POST 校验当前 Web 管理密码后持久切换候选并撤销旧 RPC 连接；密码 POST 校验代际及当前 Samba 密码后改密，不创建/改名系统账号 |
-| `/api/file-manager/disks`、`/disks/{slot}/entries` | GET 独立磁盘目录、文件列表与冻结目录分支组成 |
-| `/api/file-manager/disks/{slot}/write-sessions`、`/namespace` | POST 当前文件上传会话、仅创建目录（重命名/删除使用带身份和子树前置条件的 namespace-batch） |
-| `/api/file-manager/disks/{slot}/directory-branches` | POST 登记当前显式目录仓库的完整冻结子树；选择走带稳定 ID 和 CAS 的仓库 `default-branch` 接口 |
-| `/api/file-manager/disks/{slot}/namespace-batch` | POST 显式源/目标目录分支映射，原子移动、复制、删除、重命名 |
-| `/api/repositories/{repo}/directory-branches` | GET 全部或指定路径作用域与冻结条目；目录分支标签 PATCH 已退役，历史标签和操作查询保留 |
-| `/api/repositories/{repo}/default-branch` | GET/PUT Web/SMB 共用默认根目录分支 |
+| `/api/file-manager/disks`、`/disks/{slot}/entries` | GET 登记的磁盘、普通文件夹和 FILE；备份目录页只读 |
+| `/api/file-manager/disks/{slot}/write-sessions`、`/namespace` | POST 当前 FILE 上传会话、创建普通文件夹 |
 | `/api/file-manager/files/{file}/nodes/{node}` | PATCH 文件路径节点独立备注，最多128 UTF-8字节 |
 | `/api/file-manager/files/{file}/branches/{branch}` | PATCH 公共文件分支标签，元数据修改，不生成版本或目录子树 |
 | `/api/file-manager/files/{file}/history`、`/branches`、`/select`、`/metadata` | GET 文件版本/分支/备注；POST 从指定版本创建文件分支（可用 source_node_id 固定来源节点）、选择文件分支或更新文件备注 |
@@ -161,7 +157,6 @@ server libtest，并拒绝编译诊断、不完整产物、缺测试、零测试
 | `/api/system/status` | GET 管理员 CPU、内存与磁盘真实容量采样 |
 | `/api/repositories`、`/api/repositories/{repo}` | GET 已登记根的列表／详情 |
 | `/api/repositories/{repo}/smb-binding` | GET/PUT 显式 SMB 分支绑定 |
-| `/api/repositories/{repo}/directory-git`、`/initialize`、`/stage`、`/children/stage` | GET 准确目录仓库状态；POST 显式初始化、暂存自身与孩子准确 HEAD，见[目录 Git 边界](server/src/directory-git.md) |
 | `/api/repositories/{repo}/branches` | GET 此根的分支及归档状态 |
 | `/api/branches/{branch}`、`/tree`、`/resolve` | GET 元信息/目录树、POST 路径解析 |
 | `/api/branches/{branch}/write-sessions`、`/archive` | POST 工作区写会话或归档 |
@@ -454,7 +449,6 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 
 历史节点合并使用 `POST /api/file-manager/files/{file}/merge-history`（客户端 `merge_file_history`）。输入为 `{branch_id,source_node_id,expected_node_id}`，可选择同一分支的不同历史节点，包括只读合并别名；`chosen_node_id` 选择同文件结果，`name` 明确新结果分支名，`confirmed:true` 明确提交。一次 mutation 派生并合并新分支，全部原分支、较新 head 和当前路径引用保持不变；不自动切换默认分支、不复制正文。辅助分支以 operation ID 和输入序号稳定命名，冲突原子拒绝。客户端便捷方法不发送位置条件；需要路径约束时通过 `request` 成对发送 repository_id/path。重试保持全部输入与 operation_id，详见[历史节点合并](../15-api-and-errors.md#历史节点合并)。
 
-目录详情树使用 `GET /api/repositories/{repo}/directories/{directory}/history` 与 `/history/branches`。两路只读、禁止自动初始化 scope，使用共享 DTO 校验、取消 token、response 持有 admission permit、查询前后当前权限和 root 重查。默认 64、最大 128 行，1 MiB JSON 上限。目录身份为 entry_id（根为 repo ID），不是显示路径；只读备份也能查看。详见[目录只读历史窗口](../15-api-and-errors.md#目录只读历史窗口)。
 
 ### 混合目录逐级备份入口
 

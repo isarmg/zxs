@@ -78,7 +78,6 @@ fn context_reservation_bounds_follow_closed_id_families() {
         ("fnode", CONTEXT_NODE_BYTES),
         ("fmeta", CONTEXT_NODE_BYTES),
         ("br", CONTEXT_BRANCH_BYTES),
-        ("dbr", CONTEXT_ORIGIN_BYTES),
     ] {
         let maximum = format!("{prefix}_{}", "f".repeat(32));
         validate_id(&maximum, prefix).unwrap();
@@ -88,7 +87,6 @@ fn context_reservation_bounds_follow_closed_id_families() {
     }
     assert_eq!(CONTEXT_NODE_BYTES, 38);
     assert_eq!(CONTEXT_BRANCH_BYTES, 35);
-    assert_eq!(CONTEXT_ORIGIN_BYTES, 36);
 }
 
 #[test]
@@ -100,13 +98,7 @@ fn exact_context_widths_reserve_every_state_and_maximum_future_fence() {
     )
     .unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("reservation").unwrap(),
-            "P01",
-            1,
-            "bench",
-            OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "bench", OperationId::generate().unwrap())
         .unwrap();
     let mut workspace = engine
         .create_workspace(&repo.main_branch_id, "bench")
@@ -137,7 +129,6 @@ fn exact_context_widths_reserve_every_state_and_maximum_future_fence() {
             let context = future.selected_file_contexts.get_mut(&key).unwrap();
             context.node_id = Some(format!("{prefix}_{}", "f".repeat(32)));
             context.selection_generation = u64::MAX;
-            context.inherited_from = Some(format!("dbr_{}", "f".repeat(32)));
             let actual = canonical_json(&future).unwrap().len();
             let charge = engine.workspace_metadata_charge(&future, actual).unwrap();
             assert_eq!(charge, initial);
@@ -150,7 +141,6 @@ fn exact_context_widths_reserve_every_state_and_maximum_future_fence() {
     let context = workspace.selected_file_contexts.get_mut(&key).unwrap();
     context.node_id = Some("x".repeat(80));
     context.branch_id = "y".repeat(80);
-    context.inherited_from = Some("z".repeat(80));
     let actual = canonical_json(&workspace).unwrap().len();
     assert!(
         engine
@@ -158,4 +148,9 @@ fn exact_context_widths_reserve_every_state_and_maximum_future_fence() {
             .unwrap()
             >= actual as u64
     );
+    // This rejects a forbidden original even if a caller supplied a benign
+    // byte count: the estimator must not clear it before serialization.
+    workspace.selected_file_contexts.get_mut(&key).unwrap().inherited_from =
+        Some(format!("dbr_{}", "f".repeat(32)));
+    assert!(engine.workspace_metadata_charge(&workspace, actual).is_err());
 }

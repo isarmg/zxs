@@ -323,24 +323,10 @@ impl Backend for Probe {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
-    fn prepare_historical_save(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
     fn prepare_purge(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::PreparePurge, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
-    fn prepare_split(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareSplit, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -652,7 +638,7 @@ async fn stalled_real_inventory_keeps_management_responsive_and_uploads_pending(
     let probe = Arc::new(Probe::default());
     let runtime = crate::ManagementRuntime::start(probe.clone(), auth, &config).unwrap();
     let (spool, startup) = HttpSpool::pending();
-    let app = crate::router_shared(
+    let (app, http_work) = crate::router_shared(
         runtime.backend,
         runtime.auth,
         config.clone().admit().unwrap(),
@@ -778,6 +764,7 @@ async fn stalled_real_inventory_keeps_management_responsive_and_uploads_pending(
         storage_contract::ErrorCode::ResourceLimitExceeded
     );
     assert_eq!(std::fs::read(&unknown).unwrap(), b"payload");
+    tokio::time::timeout(DEADLINE, http_work.drain()).await.unwrap().unwrap();
 }
 
 #[tokio::test]

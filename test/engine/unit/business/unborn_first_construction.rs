@@ -150,6 +150,11 @@ fn real_first_construction_accumulates_without_receipts_and_rejects_reused_alloc
                 && entry.version_id == content.version.version_id
         }));
         assert!(content.version.source_version_ids.is_empty());
+        let trace = json_codec::to_value(&content.allocations).unwrap();
+        let kinds = trace.as_array().unwrap().iter()
+            .map(|row| row["kind"].as_str().unwrap()).collect::<Vec<_>>();
+        assert_eq!(kinds, ["commit", "tree", "branch", "commit", "tree"]);
+
         let resolved = crate::business::file_draft::selection::resolve(&next, target).unwrap();
         assert_eq!(resolved.base.node_id(),
             FileNodeId::Version(content.version.version_id.parse().unwrap()));
@@ -162,6 +167,11 @@ fn real_first_construction_accumulates_without_receipts_and_rejects_reused_alloc
     assert_eq!(next.operation_principals, original.operation_principals);
     assert_eq!(next.events, original.events);
     assert_eq!(next.namespace_directories, original.namespace_directories);
+    // Two actual new independent FILE roots, each owning a commit of its
+    // own and a distinct successor of the ordinary namespace root.
+    assert_eq!(next.commits.len(), original.commits.len() + 4);
+    assert_eq!(next.file_selections.len(), original.file_selections.len() + 2);
+
     WorkingNamespace::from_main_state(&next, repository_id, context.config.max_entries).unwrap();
 
     // Replay the real constructor facts into one accumulating State, with no

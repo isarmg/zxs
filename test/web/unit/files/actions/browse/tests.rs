@@ -4,61 +4,6 @@ use crate::files::history::FileHistory;
 use json_codec::Value;
 
 #[test]
-fn explicit_snapshot_navigation_is_read_only_and_preserves_original_operation_fences() {
-    let mut state = State {
-        authenticated: true,
-        page: crate::ui::Page::Details,
-        ..Default::default()
-    };
-    state.files.slot = "P01".into();
-    state.files.directory = "Files".into();
-    state.files.writable = true;
-    state.files.loaded = true;
-    state.files.mutation_pending = true;
-    assert!(!begin_directory_snapshot(
-        &mut state,
-        "Files/folder".into(),
-        "dbr".into(),
-        "tree".into()
-    ));
-    assert_eq!(state.files.directory, "Files");
-    assert!(state.files.directory_preview.is_none());
-    state.files.mutation_pending = false;
-    state.files.loading = true;
-    assert!(!begin_directory_snapshot(
-        &mut state,
-        "Files/folder".into(),
-        "dbr".into(),
-        "tree".into()
-    ));
-    state.files.loading = false;
-    assert!(begin_directory_snapshot(
-        &mut state,
-        "Files/folder".into(),
-        "dbr".into(),
-        "tree".into()
-    ));
-    assert_eq!(state.page, crate::ui::Page::Files);
-    assert_eq!(state.files.directory, "Files/folder");
-    assert_eq!(state.files.slot, "P01");
-    assert!(!state.files.writable || !state.files.loaded);
-    let preview = state.files.directory_preview.as_ref().unwrap();
-    assert_eq!(preview.branch_id(), "dbr");
-    assert_eq!(preview.tree_id(), "tree");
-    assert!(preview.branch().is_none());
-    assert!(!super::super::default_write_allowed(&state));
-    state
-        .files
-        .navigate(Navigation::Directory("Files/folder/child".into()));
-    assert_eq!(
-        state.files.directory_preview.as_ref().unwrap().tree_id(),
-        "tree"
-    );
-    state.files.navigate(Navigation::Directory("Files".into()));
-    assert!(state.files.directory_preview.is_none());
-}
-
-#[test]
 fn navigation_actions_keep_session_authority_and_only_change_the_file_view() {
     use crate::ui::{Page, PasswordChangeState, SessionTransition};
     Owner::new().with(|| {
@@ -665,8 +610,8 @@ fn directory_response(entries: Vec<Value>, selected: Value) -> Value {
     json_codec::json!({"slot_id":"P01","path":"","writable":true,
         "entries":entries,"selected_entry":selected,"context":{"repository_id":"repo",
         "repository_path":"","branch_id":"main","base_head":"head"},
-        "directory_file_count":"10","directory_branches":[],"directory_branches_supported":true,
-        "default_branch_scope":true,"total_entries":"10","snapshot":"snapshot",
+        "directory_file_count":"10",
+        "total_entries":"10","snapshot":"snapshot",
         "next_cursor":"next","previous_cursor":null})
 }
 
@@ -712,7 +657,7 @@ fn admitted_page_applies_all_metadata_and_keeps_independent_selected_details() {
     assert_eq!(state.files.next_cursor.as_deref(), Some("next"));
     assert_eq!(state.files.total_entries, 10);
     assert_eq!(state.files.directory_file_count, 10);
-    assert!(state.files.writable && state.files.loaded && state.files.default_branch_scope);
+    assert!(state.files.writable && state.files.loaded);
 }
 
 #[test]
@@ -802,42 +747,6 @@ fn file_navigation_discards_success_and_late_feedback_but_preserves_receipts() {
             });
         });
     }
-}
-
-#[test]
-fn choosing_a_directory_branch_only_changes_the_local_read_view() {
-    Owner::new().with(|| {
-        let state = RwSignal::new(State {
-            authenticated: true,
-            ..Default::default()
-        });
-        state.update(|s| {
-            // No selected disk means the follow-on GET is not dispatched on the
-            // native runner; a mutation/ID generation here would invoke WASM.
-            s.files.directory = "docs".into();
-            s.files.writable = true;
-            s.files.loaded = true;
-            s.files.namespace_head = "unchanged-head".into();
-            s.files.directory_branches = vec![crate::files::test_entries::branch(
-                json_codec::json!({"directory_branch_id":"draft","path":"docs"}),
-            )];
-        });
-        let generation = state.with_untracked(|s| s.files.generation);
-        preview_directory_branch(state, "draft".into());
-        state.with_untracked(|s| {
-            assert_eq!(
-                s.files.directory_preview.as_ref().unwrap().branch_id(),
-                "draft"
-            );
-            assert_eq!(s.files.namespace_head, "unchanged-head");
-            assert_eq!(s.files.generation, generation + 1);
-            assert!(!s.files.writable && !s.files.loaded);
-            assert!(!s.files.mutation_pending);
-            assert!(s.files.operations.is_empty() && s.files.default_operation.is_none());
-        });
-        return_to_default(state);
-        assert!(state.with_untracked(|s| s.files.directory_preview.is_none()));
-    });
 }
 
 #[test]

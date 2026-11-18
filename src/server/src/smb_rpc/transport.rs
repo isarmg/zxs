@@ -129,10 +129,9 @@ fn run_connection_with_activity(
         if protocol != PROTOCOL {
             return Err(ApiError::invalid("unsupported SMB bridge protocol"));
         }
-        if !REQUIRED_CAPABILITIES
-            .iter()
-            .all(|required| capabilities.iter().any(|value| value == required))
-        {
+        if !smb_protocol::protocol::current_capabilities(
+            capabilities.iter().map(|value| Some(value.as_str())),
+        ) {
             return Err(ApiError::invalid(
                 "SMB bridge requires authenticated sessions, durable generation writes and verified range reads",
             ));
@@ -151,6 +150,9 @@ fn run_connection_with_activity(
         let principal = identity.principal.clone();
         let (session, branch) = if let Some(repository) = repository {
             let repo = shared.backend.repository_snapshot(&identity, &repository)?;
+            if !repo.file_manager_root {
+                return Err(ApiError::forbidden());
+            }
             if !repo.smb_enabled {
                 return Err(ApiError::new(
                     ::http::StatusCode::CONFLICT,

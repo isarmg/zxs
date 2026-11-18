@@ -1,7 +1,7 @@
 //! Driver-owned real smbd smoke. Each cold phase is a new Engine process.
 use crate::auth::AuthStore;
 use crate::engine_backend::EngineBackend;
-use crate::smb_rpc::{ConnectionShutdown, serve_owned};
+use crate::smb_rpc::serve_owned;
 use crate::{ManagementRuntime, ServerConfig, SmbConfig, SpoolLimits};
 use json_codec::json;
 use name_policy::Name;
@@ -119,6 +119,9 @@ async fn system_samba_native_working_fixture() {
     let rpc_backend = Arc::clone(&runtime.backend);
     let rpc_auth = Arc::clone(&runtime.auth);
     let account = runtime.smb_account.clone().unwrap();
+    let mut management = crate::service_lifecycle::ManagementShutdown::new(runtime.backend.clone());
+    management.set_telemetry(runtime.telemetry.clone());
+    let workers = management.smb_connections();
     let app = crate::router_shared(
         runtime.backend,
         runtime.auth,
@@ -129,18 +132,12 @@ async fn system_samba_native_working_fixture() {
     ).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let http = tokio::spawn(async move { http_routing::serve(listener, app).await });
-    let rpc = tokio::spawn(async move {
-        let mut shutdown = ConnectionShutdown::new();
-        let result = serve_owned(
-            smb, rpc_auth, rpc_backend, 4096, shutdown.registry(), account,
-        ).await;
-        shutdown.finish().await?;
-        result
-    });
+    let mut service = super::system_samba_tests::start_fixture_service(
+        listener, app, management, serve_owned(smb, rpc_auth, rpc_backend, 4096, workers, account),
+    );
     tokio::time::timeout(Duration::from_secs(10), async {
         while !socket.exists() {
-            assert!(!rpc.is_finished(), "RPC startup failed");
+            service.require_running("native RPC socket readiness").await;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }).await.unwrap();
@@ -169,7 +166,7 @@ async fn system_samba_native_working_fixture() {
     ).unwrap();
     tokio::time::timeout(Duration::from_secs(180), async {
         loop {
-            assert!(!rpc.is_finished() && !http.is_finished(), "service ended during client I/O");
+            service.require_running("native client completion").await;
             match fs::read(root.join(format!("native-stop-{phase}"))) {
                 Ok(bytes) => {
                     assert_eq!(bytes, b"ok\n");
@@ -181,10 +178,7 @@ async fn system_samba_native_working_fixture() {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }).await.unwrap();
-    http.abort();
-    assert!(http.await.unwrap_err().is_cancelled());
-    rpc.abort();
-    assert!(rpc.await.unwrap_err().is_cancelled());
+    service.finish().await;
     AtomicFile::create(
         &directory,
         &EntryName::new(format!("native-stopped-{phase}")).unwrap(),

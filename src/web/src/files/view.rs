@@ -1,5 +1,5 @@
 use super::{
-    actions, backup, batch, inline,
+    actions, backup, inline, relocation,
     model::breadcrumbs,
     rows::{Row, visible_rows},
 };
@@ -7,7 +7,6 @@ use crate::{format, icons::FileIcon, ui::State};
 use web_interface::components::EmptyState;
 use web_interface::{i18n::t, prelude::*};
 
-mod directory_preview;
 mod disk_read;
 mod disk_status;
 use disk_read::DiskRead;
@@ -156,10 +155,7 @@ fn disk_row(state: RwSignal<State>, disk: super::model::Disk) -> impl IntoView {
 fn directory(state: RwSignal<State>) -> impl IntoView {
     let mutation_disabled = Signal::derive(move || state.with(|s| !actions::write_allowed(s)));
     let path_edit_disabled =
-        Signal::derive(move || state.with(|state| !batch::path_edit_available(state, None)));
-    let batch_disabled = Signal::derive(move || {
-        state.with(|s| !actions::write_allowed(s) || !batch::available(&s.files))
-    });
+        Signal::derive(move || state.with(|state| !relocation::available(state, None)));
     view! {
         <nav class="zxs-breadcrumb zxs-flow" aria-label=t("当前位置","Current location")>
             <button class="zxs-button" on:click=move |_|actions::go_root(state)><FileIcon name="home"/>{t("所有硬盘","All disks")}</button><span aria-hidden="true">"/"</span>
@@ -169,12 +165,9 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
         <div class="zxs-file-toolbar zxs-flow">
             <button class="zxs-button" data-zxs-refresh-directory="" disabled=move ||state.with(|s|!s.session_active()||s.files.loading||actions::pending(s)) on:click=move |_|actions::refresh_directory(state)>{t("刷新文件夹","Refresh folder")}</button>
             {inline::control(state,t("新建文件夹","New folder"),Some("create"),inline::Target::CreateDirectory,mutation_disabled)}
-            <button class="zxs-button" disabled=move ||path_edit_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Move,None)>{t("移动","Move")}</button>
-            <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Copy,None)>{t("复制","Copy")}</button>
-            <button class="zxs-button" disabled=move ||batch_disabled.get()||state.with(|s|!batch::separation_available(&s.files)) on:click=move |_|batch::start(state,batch::Kind::Separate,None)>{t("分离为独立文件","Separate file")}</button>
-            <button class="zxs-button" disabled=move ||path_edit_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Rename,None)><FileIcon name="rename"/>{t("重命名","Rename")}</button>
-            <button class="zxs-button" title=t("单个当前文件，或当前目录仓库本页的 2–100 个文件；整批保留一个原操作，目录项不可选", "One current file, or 2–100 files on this folder repository page; one original operation per batch, no folder entries") disabled=move ||!state.with(super::deletion::available) on:click=move |_|batch::start(state,batch::Kind::Delete,None)><FileIcon name="delete"/>{t("删除","Delete")}</button>
-            <button class="zxs-button" data-zxs-delete-selected-directory="" title=t("当前已初始化所有者下的一个普通子目录，包含空目录；不支持仓库本身或多个目录", "One ordinary child of the currently initialized owner, including an empty folder; not the repository itself or multiple folders") disabled=move ||!state.with(super::deletion::directory_available) on:click=move |_|super::deletion::start_directory(state,None)>{t("软删除整个目录…","Soft-delete whole folder…")}</button>
+            <button class="zxs-button" disabled=move ||path_edit_disabled.get() on:click=move |_|relocation::start(state,None)>{t("移动","Move")}</button>
+            <button class="zxs-button" disabled=move ||path_edit_disabled.get() on:click=move |_|relocation::start(state,None)><FileIcon name="rename"/>{t("重命名","Rename")}</button>
+            <button class="zxs-button" title=t("请选择一个当前可写文件。", "Select one current writable file.") disabled=move ||!state.with(super::deletion::available) on:click=move |_|super::deletion::start(state,None)><FileIcon name="delete"/>{t("删除","Delete")}</button>
             <button class="zxs-button" data-zxs-current-directory-details="true" disabled=move ||state.with(|s|!s.session_active()||actions::pending(s)) on:click=move |_|super::detail::open_current_directory(state)>{t("当前目录详情","Current folder details")}</button>
             <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||!actions::write_allowed(s)) on:click=move |_|super::placement::start_current(state)>{t("主盘规则","Primary placement")}</button>
             <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::recursive::start_current(state)>{t("逐级备份","Recursive backups")}</button>
@@ -197,19 +190,17 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             </label>
         </div>
 
-        {directory_preview::view(state)}
         <Show when=move ||state.with(|s|s.files.checked_entries.len()>1)>
             <p class="zxs-row">{t(
-                "多选软删除仅支持当前已初始化目录工作分支内本页的 2–100 个文件，不包含目录或未加载项。同一稳定文件的全部路径都会隐藏；整批只保留一个原操作，恢复时逐个核对准确 D。",
-                "Multi-file soft deletion supports 2–100 files on this page in the current initialized folder workspace, excluding folders and unloaded entries. All paths of each stable file become hidden. One original operation owns the batch; restoration checks each exact D individually.",
+                "已选择多个条目。移动、重命名和软删除需要选择一个当前可写的对象；软删除仅用于文件。",
+                "Several entries are selected. Select one current writable item to move or rename it. Soft deletion requires one writable file.",
             )}</p>
         </Show>
         {super::relocation::controls(state)}
         {inline::first_folder_hint(state)}
-        <Show when=move ||state.with(|s|s.files.loaded&&!s.files.writable&&s.files.directory_preview.is_none())><p class="zxs-row">{t("此硬盘目录当前只读。","This disk directory is read only.")}</p></Show>
+        <Show when=move ||state.with(|s|s.files.loaded&&!s.files.writable)><p class="zxs-row">{t("此硬盘目录当前只读。","This disk directory is read only.")}</p></Show>
         {backup::view(state)}
         {super::placement::view(state)}
-        {batch::view(state)}
         <div class="zxs-file-layout zxs-stack zxs-surface"><section class="zxs-content-panel zxs-file-list-panel zxs-frame zxs-stack zxs-stack--flush">{file_table(state)}</section></div>
     }
 }

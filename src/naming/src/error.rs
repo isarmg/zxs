@@ -9,7 +9,7 @@ pub enum Error {
     NameEdge,
     #[error("名称包含不支持的字符 U+{0:04X}")]
     UnsupportedCharacter(u32),
-    #[error("名称属于设备保留名")]
+    #[error("名称为系统保留名")]
     ReservedName,
     #[error("名称须明确确认为NFC形式：{0}")]
     NotNormalized(String),

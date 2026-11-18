@@ -16,7 +16,7 @@ async function until(condition) {
 function history() {
     return {kind: 'nodes', identity: {file_id: id('file', 1), history_root: 'a'.repeat(64),
         context: {repository_id: id('repo', 1), history_tree_id: id('history', 1),
-            path: 'browser-smoke.txt', selected_branch_id: id('br', 1), current_node_id: id('ver', 1)}},
+            path: 'browser-fixtures/browser-smoke.txt', selected_branch_id: id('br', 1), current_node_id: id('ver', 1)}},
         page: {previous_cursor: null, next_cursor: null}, edges: [], nodes: [{node_id: id('ver', 1),
             version_id: id('ver', 1), current: true, kind: 'content', size: '7',
             content_hash: 'b'.repeat(64), branch_id: id('br', 1), note: 'retained', parents: {state: 'complete'}}]};
@@ -42,7 +42,7 @@ function fixture() {
         body, receipt, history: base, post: null, outcome: null,
         beforeResponse: null, calls, responses,
         tagsUrl: `${origin}/api/file-manager/files/${base.identity.file_id}/tags`,
-        tagReadUrl: `${origin}/api/file-manager/files/${base.identity.file_id}/tags?repository_id=${context.repository_id}&path=browser-smoke.txt`,
+        tagReadUrl: `${origin}/api/file-manager/files/${base.identity.file_id}/tags?repository_id=${context.repository_id}&path=${encodeURIComponent(context.path)}`,
         historyUrl: `${origin}/api/file-manager/files/${base.identity.file_id}/history`,
         outcomeUrl: `${origin}/api/operations/${operation}/outcome`};
     const original = async (...args) => {

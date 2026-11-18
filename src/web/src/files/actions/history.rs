@@ -81,7 +81,6 @@ fn same_target(current: &Entry, requested: &Entry) -> bool {
         && current.path() == requested.path()
         && current.context() == requested.context()
         && current.backup() == requested.backup()
-        && current.preview() == requested.preview()
         && current.node_id() == requested.node_id()
         && current.version_id() == requested.version_id()
         && current.selected_branch_id() == requested.selected_branch_id()
@@ -120,9 +119,7 @@ fn make_request(
         ));
     }
     let file_id = HistoryFileId::parse(target.entry.file_id()).map_err(local_error)?;
-    let location = (!target.entry.preview())
-        .then(|| super::super::model::file_context(&target.entry))
-        .flatten()
+    let location = super::super::model::file_context(&target.entry)
         .map(|(repository, path)| {
             let repository = HistoryRepositoryId::parse(&repository).map_err(local_error)?;
             let path = name_policy::LookupPath::parse(&path)
@@ -396,7 +393,7 @@ fn begin_nodes(
 }
 
 fn backup_anchor(state: &State, entry: &Entry) -> Option<String> {
-    if !entry.backup() && !entry.preview() {
+    if !entry.backup() {
         return None;
     }
     let stored = entry.node_id()?;

@@ -143,6 +143,81 @@ fn file_database_rows(path: &std::path::Path)
 }
 
 #[test]
+fn ordinary_nested_workspace_creates_only_its_own_file_roots_and_replays_them() {
+    let temporary = tempfile::tempdir().unwrap();
+    let system = temporary.path().join("system");
+    let disk = temporary.path().join("primary");
+    for path in [&system, &disk] {
+        fs::create_dir(path).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = Config::independent_roots(
+        Mode::Development, [(name_policy::Name::parse("Primary").unwrap(), disk)],
+    ).unwrap();
+    let slot = config.disks[0].slot_id.clone();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let root = engine.create_disk_root(&slot, "admin", OperationId::generate().unwrap()).unwrap();
+    let mut saved = Vec::new();
+    let mut selections = Vec::new();
+    // Same bytes, basename and suffix do not identify a FILE or a project.
+    for path in ["one/project.zxs", "two/project.zxs"] {
+        let workspace = engine.create_workspace(&root.main_branch_id, "admin").unwrap();
+        engine.stage_bytes(&workspace.workspace_id, path, b"independent body").unwrap();
+        let command = request(&workspace, "new ordinary FILE");
+        let receipt = engine.commit_workspace(command.clone()).unwrap();
+        let row = engine.namespace_tree(&root.main_branch_id).unwrap().get(path).unwrap().clone();
+        let selected = engine.file_context(&root.repository_id, path).unwrap();
+        let branch = &engine.state().branches[&selected.branch_id];
+        assert_eq!(branch.file_id.as_deref(), Some(row.file_id.as_str()));
+        let first = &engine.state().commits[&branch.head_commit_id];
+        assert_eq!(first.parent_commit_ids.as_slice(), &[receipt.commit_id.clone().unwrap()]);
+        assert_eq!(first.operation_id, command.operation_id);
+        assert_eq!(first.sequence, receipt.sequence);
+        assert!(engine.state().versions[&row.version_id].source_version_ids.is_empty());
+        let parent = engine.namespace_tree(&root.main_branch_id).unwrap().get(
+            path.split_once('/').unwrap().0,
+        ).unwrap().entry_id.parse::<storage_contract::EntryId>().unwrap();
+        let file = row.file_id.parse::<storage_contract::FileId>().unwrap();
+        assert_eq!(engine.state().file_containers[&file].namespace.parent,
+            storage_contract::file_container::ContainerParent::Directory(parent));
+        assert_eq!(engine.state().namespace_directories[&parent.to_string()].created_by, receipt.operation_id);
+        selections.push((row, selected.branch_id.clone(), first.commit_id.clone()));
+        saved.push((command, receipt));
+    }
+    assert_ne!(selections[0].0.file_id, selections[1].0.file_id);
+    assert_ne!(selections[0].0.entry_id, selections[1].0.entry_id);
+    assert_ne!(selections[0].1, selections[1].1);
+
+    let workspace = engine.create_workspace(&root.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "one/project.zxs", b"revised").unwrap();
+    let change = request(&workspace, "only the first FILE");
+    let receipt = engine.commit_workspace(change.clone()).unwrap();
+    let state = engine.state();
+    let changed = &state.commits[&state.branches[&selections[0].1].head_commit_id];
+    assert_eq!(changed.parent_commit_ids.as_slice(), &[selections[0].2.clone()]);
+    assert_eq!(changed.operation_id, change.operation_id);
+    assert_eq!(state.branches[&selections[1].1].head_commit_id, selections[1].2);
+    let survivor = engine.namespace_tree(&root.main_branch_id).unwrap()
+        .get("two/project.zxs").unwrap();
+    assert_eq!(survivor, &selections[1].0);
+    saved.push((change, receipt));
+    drop(engine);
+    let mut reopened = Engine::open(&system).unwrap();
+    let sequence = reopened.state().sequence;
+    for (original, expected) in saved {
+        assert_eq!(reopened.commit_workspace(original).unwrap(), expected);
+    }
+    assert_eq!(reopened.state().sequence, sequence);
+    let newest = reopened.namespace_tree(&root.main_branch_id).unwrap()
+        .get("one/project.zxs").unwrap().clone();
+    assert_eq!(newest.file_id, selections[0].0.file_id);
+    assert_eq!(newest.entry_id, selections[0].0.entry_id);
+    assert_eq!(body(&reopened, &newest.version_id), b"revised");
+    assert_eq!(body(&reopened, &selections[0].0.version_id), b"independent body");
+    assert_eq!(body(&reopened, &selections[1].0.version_id), b"independent body");
+}
+
+#[test]
 fn empty_held_pool_stages_reopens_commits_and_selects_real_file_history() {
     let temporary = tempfile::tempdir().unwrap();
     let system = temporary.path().join("system");

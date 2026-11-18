@@ -18,7 +18,6 @@ mod automatic_backups;
 mod branch;
 mod content;
 mod directory_deletion;
-mod directory_snapshot_source;
 mod directory_scopes;
 mod directory_selection;
 mod disk_monitor;
@@ -28,7 +27,6 @@ mod file_draft;
 mod unborn;
 mod smb_draft;
 mod smb_native;
-mod smb_worktree;
 mod file_history_move;
 mod file_manager;
 mod foreign_identity;
@@ -41,7 +39,6 @@ mod operations;
 mod ordinary_conversion;
 mod read_projection;
 mod storage_addition;
-mod snapshot_worktree;
 pub(crate) mod storage_lifecycle;
 pub(crate) mod storage_readmission;
 mod wire;
@@ -263,6 +260,18 @@ pub(crate) fn capture_event_page<'a>(
         next_cursor,
     })
 }
+/// All generic plan entrances serve only the ordinary FILE purge. Keep the
+/// principal check first, distinct from token decoding or current FILE IO.
+fn owned_purge_plan(engine: &Engine, id: &str, principal: &str) -> Result<storage_contract::Plan, ApiError> {
+    let plan = engine.plan(id).map_err(error)?;
+    if plan.principal != principal { return Err(ApiError::forbidden()); }
+    if plan.kind != "purge" {
+        return Err(ApiError::new(::http::StatusCode::NOT_FOUND,
+            storage_contract::ErrorCode::PlanNotFound, "ordinary FILE plan not found"));
+    }
+    Ok(plan)
+}
+
 fn repo_for_history<'a>(engine: &'a Engine, id: &str) -> Result<&'a Repository, ApiError> {
     repo_for_history_in_state(engine.state(), id)
 }
@@ -424,14 +433,6 @@ impl Backend for EngineBackend {
         }
     }
 
-    fn directory_snapshot_source(
-        &self,
-        identity: &Identity,
-        request: crate::ReadDirectorySnapshotSource,
-        cancellation: storage_contract::history_window::HistoryWindowCancellation,
-    ) -> Result<crate::DirectorySnapshotSourcePreview, ApiError> {
-        directory_snapshot_source::read(self, identity, request, cancellation)
-    }
 
     fn operation(
         &self,
@@ -512,18 +513,10 @@ impl Backend for EngineBackend {
         command: crate::CreateWorkspace,
     ) -> Result<storage_contract::Workspace, ApiError> {
         let (mut engine, current) = self.lock_current(identity)?;
-        let crate::CreateWorkspace {
-            branch_id,
-            source_commit_id,
-        } = command;
-        repo_for_branch(&engine, &branch_id)?;
-        match source_commit_id {
-            Some(source) => {
-                engine.create_historical_workspace(&branch_id, &source, &current.principal)
-            }
-            None => engine.create_workspace(&branch_id, &current.principal),
-        }
-        .map_err(error)
+        repo_for_branch(&engine, &command.branch_id)?;
+        engine
+            .create_workspace(&command.branch_id, &current.principal)
+            .map_err(error)
     }
     fn abort_workspace(&self, identity: &Identity, workspace: &str) -> Result<(), ApiError> {
         let (mut engine, current) = self.lock_current(identity)?;
@@ -682,56 +675,6 @@ impl Backend for EngineBackend {
         repository(&engine, id)?;
         Ok(())
     }
-    fn smb_worktree_mounts(
-        &self, identity: &Identity, branch: &str,
-    ) -> Result<Vec<storage_contract::snapshot_worktree::WorktreeStatus>, ApiError> {
-        smb_worktree::mounts(self, identity, branch)
-    }
-    fn smb_worktree_locate(
-        &self, identity: &Identity, branch: &str, path: &name_policy::LookupPath,
-    ) -> Result<Option<crate::SmbWorktreeLocation>, ApiError> {
-        smb_worktree::locate(self, identity, branch, path)
-    }
-    fn smb_worktree_entry(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
-        path: &name_policy::LookupPath,
-    ) -> Result<crate::SmbWorktreeEntry, ApiError> {
-        smb_worktree::stat(self, identity, target, path)
-    }
-    fn smb_worktree_page(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
-        parent: Option<&name_policy::LookupPath>, cursor: Option<&crate::SmbWorktreeCursor>,
-    ) -> Result<crate::SmbWorktreePage, ApiError> {
-        smb_worktree::page(self, identity, target, parent, cursor)
-    }
-    fn authorize_smb_worktree_page(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
-        parent: Option<&name_policy::LookupPath>, page: &crate::SmbWorktreePage,
-    ) -> Result<(), ApiError> {
-        smb_worktree::check_page(self, identity, target, parent, page)
-    }
-    fn authorize_smb_worktree(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
-        access: crate::SmbWorktreeAccess<'_>,
-    ) -> Result<(), ApiError> {
-        smb_worktree::check(self, identity, target, access)
-    }
-    fn smb_worktree_content(
-        &self, identity: &Identity, file: &crate::SmbWorktreeFile, deadline: std::time::Instant,
-    ) -> Result<Content, ApiError> {
-        smb_worktree::content(self, identity, file, deadline)
-    }
-    fn edit_smb_worktree(
-        &self, identity: &Identity, request: storage_contract::snapshot_worktree::EditWorktree,
-        source: &crate::UploadSource,
-    ) -> Result<storage_contract::snapshot_worktree::WorktreeRevision, ApiError> {
-        smb_worktree::edit(self, identity, request, source)
-    }
-    fn smb_worktree_working_open(
-        &self, identity: &Identity, request: crate::SmbWorktreeWorkingOpen,
-    ) -> Result<crate::SmbNativeHandle, ApiError> {
-        smb_worktree::open_working(self, identity, request)
-    }
     fn smb_native_open(
         &self, identity: &Identity, request: crate::SmbNativeOpen<'_>,
     ) -> Result<Option<crate::SmbNativeHandle>, ApiError> {
@@ -828,89 +771,6 @@ impl Backend for EngineBackend {
         &self, identity: &Identity, request: crate::ReadFileDraft,
     ) -> Result<Content, ApiError> {
         file_draft::content(self, identity, request)
-    }
-    fn register_snapshot_root(
-        &self, identity: &Identity, slot: name_policy::SlotId,
-        request: storage_contract::snapshot_worktree::root::RegisterSnapshotRoot,
-    ) -> Result<storage_contract::snapshot_worktree::root::RegisteredSnapshotRoot, ApiError> {
-        snapshot_worktree::root::register(self, identity, slot, request)
-    }
-    fn snapshot_root_context(
-        &self, identity: &Identity, repository: storage_contract::RepositoryId,
-    ) -> Result<storage_contract::snapshot_worktree::SnapshotRootContext, ApiError> {
-        snapshot_worktree::context(self, identity, repository)
-    }
-    fn directory_snapshot_head(
-        &self, identity: &Identity, repository: storage_contract::RepositoryId,
-    ) -> Result<
-        storage_contract::snapshot_worktree::discovery::DirectorySnapshotHead, ApiError,
-    > {
-        snapshot_worktree::discovery::head(self, identity, repository)
-    }
-    fn directory_snapshot_history(
-        &self, identity: &Identity, repository: storage_contract::RepositoryId,
-        cursor: Option<storage_contract::snapshot_worktree::history::SnapshotHistoryCursor>,
-    ) -> Result<
-        storage_contract::snapshot_worktree::history::DirectorySnapshotHistory, ApiError,
-    > {
-        snapshot_worktree::history::read(self, identity, repository, cursor)
-    }
-    fn initialize_directory_snapshot(
-        &self, identity: &Identity,
-        request: storage_contract::snapshot_worktree::InitializeSnapshot,
-    ) -> Result<storage_contract::snapshot_worktree::SnapshotHandle, ApiError> {
-        snapshot_worktree::initialize(self, identity, request)
-    }
-    fn commit_directory_drafts(
-        &self, identity: &Identity,
-        request: storage_contract::snapshot_worktree::draft_commit::CommitDirectoryDrafts,
-    ) -> Result<
-        storage_contract::snapshot_worktree::draft_commit::DirectoryDraftReceipt, ApiError,
-    > {
-        snapshot_worktree::drafts::commit(self, identity, request)
-    }
-    fn directory_draft_receipt(
-        &self, identity: &Identity,
-        lookup: storage_contract::snapshot_worktree::draft_commit::DirectoryDraftLookup,
-    ) -> Result<
-        storage_contract::snapshot_worktree::draft_commit::DirectoryDraftReceipt, ApiError,
-    > {
-        snapshot_worktree::drafts::read(self, identity, lookup)
-    }
-    fn directory_worktree_creation_receipt(
-        &self, identity: &Identity, repository: storage_contract::RepositoryId,
-        operation: storage_contract::OperationId,
-    ) -> Result<
-        storage_contract::snapshot_worktree::outcome::WorktreeCreationReceipt, ApiError,
-    > {
-        snapshot_worktree::outcome::creation(self, identity, repository, operation)
-    }
-    fn directory_worktree_commit_receipt(
-        &self, identity: &Identity, repository: storage_contract::RepositoryId,
-        operation: storage_contract::OperationId,
-    ) -> Result<
-        storage_contract::snapshot_worktree::outcome::WorktreeCommitReceipt, ApiError,
-    > {
-        snapshot_worktree::outcome::commit(self, identity, repository, operation)
-    }
-    fn create_directory_worktree(
-        &self, identity: &Identity,
-        request: storage_contract::snapshot_worktree::creation::AllocateWorktree,
-    ) -> Result<storage_contract::snapshot_worktree::WorktreeHandle, ApiError> {
-        snapshot_worktree::create(self, identity, request)
-    }
-    fn directory_worktree_instances(
-        &self, identity: &Identity, repository: storage_contract::RepositoryId,
-    ) -> Result<
-        storage_contract::snapshot_worktree::instances::DirectoryWorktrees, ApiError,
-    > {
-        snapshot_worktree::instances::read(self, identity, repository)
-    }
-    fn directory_worktree_status(
-        &self, identity: &Identity,
-        target: storage_contract::snapshot_worktree::WorktreeHandle,
-    ) -> Result<storage_contract::snapshot_worktree::WorktreeStatus, ApiError> {
-        snapshot_worktree::status(self, identity, target)
     }
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
@@ -1289,37 +1149,6 @@ impl Backend for EngineBackend {
             .replace_container_tags(&request.command, &principal, request.operation_id)
             .map_err(error)
     }
-    fn authorize_directory_worktree_edit(
-        &self,
-        identity: &Identity,
-        request: &storage_contract::snapshot_worktree::EditWorktree,
-    ) -> Result<(), ApiError> {
-        snapshot_worktree::transport::authorize_edit(self, identity, request)
-    }
-    fn edit_directory_worktree(
-        &self,
-        identity: &Identity,
-        request: storage_contract::snapshot_worktree::EditWorktree,
-        source: &crate::UploadSource,
-    ) -> Result<storage_contract::snapshot_worktree::WorktreeRevision, ApiError> {
-        snapshot_worktree::transport::edit(self, identity, request, source)
-    }
-    fn commit_directory_worktree(
-        &self,
-        identity: &Identity,
-        request: storage_contract::snapshot_worktree::CommitWorktree,
-    ) -> Result<storage_contract::snapshot_worktree::SnapshotHandle, ApiError> {
-        snapshot_worktree::transport::commit(self, identity, request)
-    }
-    fn directory_worktree_content(
-        &self,
-        identity: &Identity,
-        target: storage_contract::snapshot_worktree::WorktreeHandle,
-        path: name_policy::LookupPath,
-        deadline: std::time::Instant,
-    ) -> Result<Content, ApiError> {
-        snapshot_worktree::transport::content(self, identity, target, path, deadline)
-    }
     fn file_container_tags(
         &self,
         identity: &Identity,
@@ -1362,22 +1191,6 @@ impl Backend for EngineBackend {
         let (mut engine, current) = self.lock_current(identity)?;
         file_manager::write_session(&mut engine, &current, request)
     }
-    fn prepare_historical_save(
-        &self,
-        identity: &Identity,
-        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, ApiError> {
-        let (mut engine, current) = self.lock_current(identity)?;
-        let request = request?;
-        repo_for_history(&engine, &request.history_tree_id)?;
-        engine
-            .create_historical_save_plan(
-                &request.history_tree_id,
-                request.options?,
-                &current.principal,
-            )
-            .map_err(error)
-    }
     fn prepare_purge(
         &self,
         identity: &Identity,
@@ -1390,22 +1203,6 @@ impl Backend for EngineBackend {
             .create_purge_plan(
                 &request.history_tree_id,
                 request.version_ids?,
-                &current.principal,
-            )
-            .map_err(error)
-    }
-    fn prepare_split(
-        &self,
-        identity: &Identity,
-        request: Result<crate::PrepareSplit, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, ApiError> {
-        let (mut engine, current) = self.lock_current(identity)?;
-        let request = request?;
-        repo_for_history(&engine, &request.history_tree_id)?;
-        engine
-            .create_split_plan(
-                &request.history_tree_id,
-                &request.cut_commit_id?,
                 &current.principal,
             )
             .map_err(error)
@@ -2062,112 +1859,7 @@ impl Backend for EngineBackend {
         engine.recheck_file_history_source(&read).map_err(error)?;
         result
     }
-    fn directory_git_status(
-        &self,
-        identity: &Identity,
-        repository_id: &str,
-        path: &str,
-        cancellation: storage_contract::history_window::HistoryWindowCancellation,
-    ) -> Result<storage_contract::directory_git::DirectoryGitStatus, ApiError> {
-        let read = {
-            let (engine, _) = self.lock_current(identity)?;
-            repository(&engine, repository_id)?;
-            engine
-                .capture_directory_git_status(repository_id, path, cancellation)
-                .map_err(error)?
-        };
-        let result = read.status().map_err(error);
-        let (engine, _) = self.lock_current(identity)?;
-        engine.recheck_directory_git_status(&read).map_err(error)?;
-        result
-    }
 
-    fn initialize_directory_git(
-        &self,
-        identity: &Identity,
-        repository_id: &str,
-        request: storage_contract::directory_git::DirectoryGitInitializeBody,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
-        let (mut engine, current) = self.lock_current(identity)?;
-        repository(&engine, repository_id)?;
-        engine
-            .initialize_directory_git(repository_id, &request, &current.principal)
-            .map_err(error)
-    }
-    fn stage_directory_git_child(
-        &self,
-        identity: &Identity,
-        repository_id: &str,
-        request: storage_contract::directory_git::DirectoryGitStageChildBody,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
-        let (mut engine, current) = self.lock_current(identity)?;
-        repository(&engine, repository_id)?;
-        engine
-            .stage_directory_git_child(repository_id, &request, &current.principal)
-            .map_err(error)
-    }
-    fn stage_directory_git_owned(
-        &self,
-        identity: &Identity,
-        repository_id: &str,
-        request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
-        let (mut engine, current) = self.lock_current(identity)?;
-        repository(&engine, repository_id)?;
-        engine
-            .stage_directory_git_owned(repository_id, &request, &current.principal)
-            .map_err(error)
-    }
-    fn directory_staging(
-        &self,
-        identity: &Identity,
-        repository_id: &str,
-        branch: &str,
-    ) -> Result<storage_contract::directory_staging::DirectoryStagingStatus, ApiError> {
-        let (engine, _) = self.lock_current(identity)?;
-        repository(&engine, repository_id)?;
-        engine
-            .directory_staging_status(repository_id, branch)
-            .map_err(error)
-    }
-    fn commit_directory_changes(
-        &self,
-        identity: &Identity,
-        repository_id: &str,
-        branch: &str,
-        request: storage_contract::directory_staging::DirectoryCommitBody,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
-        let (mut engine, current) = self.lock_current(identity)?;
-        repository(&engine, repository_id)?;
-        engine
-            .commit_directory_changes(storage_engine::DirectoryCommitRequest {
-                repository_id,
-                directory_branch_id: branch,
-                expected_tree_id: &request.expected_tree_id,
-                expected_index_generation: request.expected_index_generation,
-                message: &request.message,
-                principal: &current.principal,
-                operation_id: request.operation_id,
-            })
-            .map_err(error)
-    }
-    fn directory_history(
-        &self,
-        identity: &Identity,
-        request: storage_contract::directory_history::DirectoryHistoryRequest,
-        cancellation: storage_contract::history_window::HistoryWindowCancellation,
-    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, ApiError> {
-        let read = {
-            let (engine, _) = self.lock_current(identity)?;
-            engine
-                .capture_directory_history(request, cancellation)
-                .map_err(error)?
-        };
-        let page = read.page().map_err(error);
-        let (engine, _) = self.lock_current(identity)?;
-        engine.recheck_directory_history(&read).map_err(error)?;
-        page
-    }
     fn history_window(
         &self,
         identity: &Identity,
@@ -2504,10 +2196,7 @@ impl Backend for EngineBackend {
 
     fn plan(&self, identity: &Identity, plan_id: &str) -> Result<storage_contract::Plan, ApiError> {
         let (engine, identity) = self.lock_current(identity)?;
-        let plan = engine.plan(plan_id).map_err(error)?;
-        if plan.principal != identity.principal {
-            return Err(ApiError::forbidden());
-        }
+        let plan = owned_purge_plan(&engine, plan_id, &identity.principal)?;
         repo_for_history(&engine, field(&plan.input, "history_tree_id")?)?;
         Ok(plan)
     }
@@ -2518,10 +2207,7 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         let (mut engine, identity) = self.lock_current(identity)?;
         let request = request?;
-        let plan = engine.plan(&request.plan_id).map_err(error)?;
-        if plan.principal != identity.principal {
-            return Err(ApiError::forbidden());
-        }
+        let plan = owned_purge_plan(&engine, &request.plan_id, &identity.principal)?;
         repo_for_history(&engine, field(&plan.input, "history_tree_id")?)?;
         engine
             .cancel_plan(&request.plan_id, &identity.principal, request.operation_id?)

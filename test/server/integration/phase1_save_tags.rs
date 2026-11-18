@@ -6,12 +6,6 @@ mod automatic_backups;
 mod unborn_first;
 #[path = "phase1_save_tags/fresh_working.rs"]
 mod fresh_working;
-#[path = "phase1_save_tags/directory_drafts.rs"]
-mod directory_drafts;
-#[path = "phase1_save_tags/snapshot_discovery.rs"]
-mod snapshot_discovery;
-#[path = "phase1_save_tags/snapshot_root.rs"]
-mod snapshot_root;
 #[path = "phase1_save_tags/content_matches.rs"]
 mod content_matches;
 #[path = "phase1_save_tags/directory_git.rs"]
@@ -503,6 +497,3 @@ async fn same_named_files_on_two_level_one_disks_keep_independent_tags() {
         b"same body"
     );
 }
-
-#[path = "phase1_save_tags/worktree_transport.rs"]
-mod worktree_transport;

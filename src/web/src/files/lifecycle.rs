@@ -47,9 +47,7 @@ impl Target {
     }
 
     fn request(&self, cursor: Option<&str>) -> Result<Request, api::Error> {
-        let location = (!self.entry.preview())
-            .then(|| self.entry.context())
-            .flatten();
+        let location = self.entry.context();
         Request::parse(
             self.file.as_str(),
             &self.root.to_string(),

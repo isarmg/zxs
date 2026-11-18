@@ -19,7 +19,6 @@ fn publish_namespace(
         identity,
         crate::CreateWorkspace {
             branch_id: branch.into(),
-            source_commit_id: None,
         },
     )?;
     for (kind, path) in changes {
@@ -422,26 +421,12 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.commit_plan(identity, request)
     }
-    fn prepare_historical_save(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.inner.prepare_historical_save(identity, request)
-    }
     fn prepare_purge(
         &self,
         identity: &crate::auth::Identity,
         request: Result<crate::PreparePurge, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         self.inner.prepare_purge(identity, request)
-    }
-    fn prepare_split(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareSplit, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.inner.prepare_split(identity, request)
     }
     fn namespace_batch(
         &self,
@@ -896,7 +881,6 @@ fn publication_comparison_uses_entry_identity_in_renamed_commit() {
             &session.identity,
             crate::CreateWorkspace {
                 branch_id: branch.clone(),
-                source_commit_id: None,
             },
         )
         .unwrap();

@@ -1,6 +1,6 @@
 use super::*;
 use crate::files::history::tests::{branch as file_branch, branch_wire, history, update_metadata};
-use crate::files::test_entries::{branch, entry, update};
+use crate::files::test_entries::{entry, update};
 use json_codec::json;
 
 #[test]
@@ -58,7 +58,6 @@ fn navigation_resets_only_location_owned_state() {
         // Enumerate the model so a new state owner requires an explicit choice.
         let mut model = Model {
             unborn: Default::default(),
-            directory_snapshot: Default::default(),
             commit_mode: Default::default(),
             deletion: Default::default(),
             mkdir: Default::default(),
@@ -76,16 +75,12 @@ fn navigation_resets_only_location_owned_state() {
             total_entries: 205,
             listing_failed: true,
             listing_cancellation: None,
-            directory_branches: vec![branch(json!({"current":true}))],
             directory_file_count: 210,
-            directory_branches_supported: true,
             repository_id: "repository".into(),
             repository_path: "old".into(),
             namespace_head: "head".into(),
-            directory_preview: None,
             file_preview: None,
             default_operation: None,
-            default_branch_scope: true,
             loaded: true,
             loading: true,
             generation: 7,
@@ -100,7 +95,6 @@ fn navigation_resets_only_location_owned_state() {
             history_next_draft: 0,
             history_aux: Default::default(),
             checked_entries: [entry_key(&selected)].into_iter().collect(),
-            batch: None,
             merge: None,
             backup: None,
             recursive_backup: None,
@@ -144,16 +138,14 @@ fn navigation_resets_only_location_owned_state() {
         assert_eq!(model.total_entries, 0);
         assert!(model.listing_cancellation.is_none());
         assert_eq!(model.generation, 8);
-        assert!(model.directory_branches.is_empty());
         assert_eq!(model.directory_file_count, 0);
-        assert!(!model.directory_branches_supported && !model.default_branch_scope);
         assert!(model.repository_id.is_empty() && model.repository_path.is_empty());
         assert!(model.selected.is_none() && !model.file_history.loaded());
         assert!(!model.history_loading);
         assert_eq!(model.history_generation, 12);
         assert!(model.checked_entries.is_empty());
         assert!(!crate::files::tags::tests::has_snapshot(&model.container_tags));
-        assert!(model.batch.is_none() && model.merge.is_none());
+        assert!(model.merge.is_none());
         assert!(
             model.backup.is_none()
                 && model.recursive_backup.is_none()
@@ -471,23 +463,6 @@ fn generated_public_file_branch_names_are_editable_only_after_loading_a_real_rec
     assert_eq!(selected_file_branch_record(&model).unwrap().2, "用户改名");
 }
 #[test]
-fn branch_browsing_uses_stable_ids_in_root_and_subfolders() {
-    let branch = branch(
-        json_codec::json!({"directory_branch_id":"directory-a","name":"auto-generated","current":true,"materialized":false}),
-    );
-    assert_eq!(directory_branch_value(&branch), "directory-a");
-    assert_eq!(
-        directory_branch_name(&branch),
-        "auto-generated",
-        "directory records never claim to own pending file content"
-    );
-    let mut invalid =
-        crate::files::test_entries::branch_wire(json!({"name":"main","current":true}));
-    invalid["directory_branch_id"] = Value::Null;
-    assert!(DirectoryBranch::parse(invalid).is_err());
-}
-
-#[test]
 fn selected_branch_rename_uses_the_admitted_state_and_alias_disposition() {
     for (state, alias, read_only) in [
         ("active", None, false),
@@ -760,33 +735,6 @@ fn server_offline_disk_vector_preserves_known_zero_and_unavailable_rows() {
             storage_contract::ErrorCode::IoError
         ))
     );
-}
-
-#[test]
-fn directory_preview_follows_only_descendants_and_never_crosses_disks() {
-    let preview = DirectoryPreview {
-        source: DirectoryPreviewSource::Branch(branch(
-            json!({"directory_branch_id":"draft","path":"Café"}),
-        )),
-        path: "Files/Café".into(),
-    };
-    let mut model = Model {
-        slot: "P01".into(),
-        directory: "Files/Café".into(),
-        directory_preview: Some(preview.clone()),
-        ..Default::default()
-    };
-    model.navigate(Navigation::Directory("Files/CAFÉ/sub".into()));
-    assert!(model.directory_preview.is_some());
-    assert!(viewed_directory_branch(&model).is_none());
-    assert!(!model.writable);
-    model.navigate(Navigation::Directory("Files/Café".into()));
-    assert_eq!(viewed_directory_branch(&model).unwrap().id(), "draft");
-    model.navigate(Navigation::Directory("Files".into()));
-    assert!(model.directory_preview.is_none());
-    model.directory_preview = Some(preview);
-    model.navigate(Navigation::Disk("P02".into()));
-    assert!(model.directory_preview.is_none());
 }
 
 #[test]

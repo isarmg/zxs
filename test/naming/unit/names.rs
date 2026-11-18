@@ -88,3 +88,27 @@ fn typed_path_components_keep_display_keys_and_aggregate_limits() {
     assert_eq!(deepest.as_str().split('/').count(), 32);
     assert_eq!(deepest.join_name(&one), Err(Error::PathTooDeep));
 }
+
+#[test]
+fn namespace_only_reserves_the_exact_folded_private_component() {
+    let parent = PortablePath::parse("normal").unwrap();
+    for spelling in [".zxs", ".ZxS", ".ZXſ"] {
+        assert_eq!(lookup_key(spelling), ".zxs");
+        let label = Name::parse(spelling).unwrap(); // not a namespace path
+        assert_eq!(PortablePath::from_name(&label), Err(Error::ReservedName));
+        assert_eq!(parent.join_name(&label), Err(Error::ReservedName));
+        for path in [
+            spelling.to_owned(), format!("{spelling}/child"),
+            format!("a/{spelling}"), format!("a/{spelling}/child"),
+        ] {
+            assert_eq!(PortablePath::parse(&path), Err(Error::ReservedName));
+            assert_eq!(LookupPath::parse(&path), Err(Error::ReservedName));
+        }
+    }
+    for ordinary in ["project.zxs", ".zxs-note", ".zxs2", ".zxs.notes", ".gitignore"] {
+        let label = Name::parse(ordinary).unwrap();
+        assert_eq!(PortablePath::from_name(&label).unwrap().as_str(), ordinary);
+        let path = parent.join_name(&label).unwrap();
+        assert_eq!(LookupPath::parse(path.as_str()).unwrap().key(), path.key());
+    }
+}

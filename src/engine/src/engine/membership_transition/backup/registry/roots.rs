@@ -15,7 +15,7 @@ use crate::{Result, canonical_json};
 use data_serialization::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::atomic::AtomicBool};
 use storage_contract::{DiskId, Generation, OperationId, decode_strict};
-use storage_contract::namespace_root::{DirectoryId, RootBinding, RootId, StorageLayout};
+use storage_contract::namespace_root::{DirectoryId, RootBinding, RootId};
 
 mod layout_source;
 mod layouts;
@@ -242,7 +242,6 @@ fn create_preparation(
         let areas = HeldRootAreas::create(root, directories)?;
         areas.require_empty()?;
         roots.insert(id, RootBinding {
-            layout: StorageLayout::UnifiedWorkingTreeV1,
             root_id,
             registration: fresh_layout::registration(&config, disk),
             source_chain: fresh_layout::source_chain(&config, disk)?,

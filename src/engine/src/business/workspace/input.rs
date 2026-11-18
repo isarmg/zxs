@@ -22,7 +22,6 @@ pub(crate) trait WorkspaceInput: sealed::Sealed {
     fn selected_file_branch(&self, file: &str) -> Option<&str>;
     fn selected_file_context(&self, key: &str) -> Option<&FileContext>;
     fn selected_file_contexts(&self) -> impl Iterator<Item = &FileContext>;
-    fn directory_selection_generation(&self, key: &str) -> u64;
 }
 
 /// Borrow existing model fields once; source_path is deliberately unavailable.
@@ -92,9 +91,6 @@ impl WorkspaceInput for Workspace {
     }
     fn selected_file_contexts(&self) -> impl Iterator<Item = &FileContext> {
         self.selected_file_contexts.values()
-    }
-    fn directory_selection_generation(&self, key: &str) -> u64 {
-        self.directory_selection_generations.get(key).copied().unwrap_or(0)
     }
 }
 

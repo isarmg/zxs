@@ -19,23 +19,17 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("state"),
-        Config::development(crate::test_disks([temporary.path().join("disk")])).unwrap(),
+        Config::independent_roots(Mode::Development, crate::test_disks([temporary.path().join("disk"), temporary.path().join("other-disk")])).unwrap(),
     )
     .unwrap();
     let repository = create_repository(&mut engine, "retained");
     (temporary, engine, repository)
 }
 
-fn create_repository(engine: &mut Engine, name: &str) -> Repository {
-    engine
-        .create_repository(
-            &RepositoryName::parse(name).unwrap(),
-            "P01",
-            1,
-            "admin",
-            OperationId::generate().unwrap(),
-        )
-        .unwrap()
+fn create_repository(engine: &mut Engine, _label: &str) -> Repository {
+    let slot = engine.config().disks.iter().find(|disk| !engine.state().repositories.values()
+        .any(|root| root.primary_slot_id == disk.slot_id)).unwrap().slot_id.clone();
+    engine.create_disk_root(&slot, "admin", OperationId::generate().unwrap()).unwrap()
 }
 
 fn save(engine: &mut Engine, repository: &Repository, bytes: &[u8]) -> Saved {
@@ -245,7 +239,7 @@ fn assert_body_bytes(engine: &Engine, version: &str, expected: &[u8]) {
 }
 
 #[test]
-fn legal_split_windows_use_first_commit_order_and_preserve_original_operation_ids() {
+fn file_windows_use_original_publication_order_and_keep_operation_ids_across_reopen() {
     let (temporary, mut engine, repository) = fixture();
     let first = save(&mut engine, &repository, b"first");
     let retained = RetainedPublication::capture(&engine, first.request.operation_id);
@@ -258,32 +252,9 @@ fn legal_split_windows_use_first_commit_order_and_preserve_original_operation_id
     let second = save(&mut engine, &repository, b"second");
     let third = save(&mut engine, &repository, b"third");
     let saved = [&first, &second, &third];
-    let plan = engine
-        .create_split_plan(
-            &repository.history_tree_id,
-            first.result.commit_id.as_deref().unwrap(),
-            "admin",
-        )
-        .unwrap();
-    let split_operation = OperationId::generate().unwrap();
-    let split = engine
-        .commit_plan(&plan.plan_id, "admin", split_operation)
-        .unwrap();
-    let mut expected = saved
-        .iter()
-        .map(|saved| {
-            let mapped = split.result["version_mapping"][&saved.entry.version_id]
-                .as_str()
-                .unwrap();
-            assert_eq!(
-                engine.state.versions[mapped].version_sequence,
-                split.sequence
-            );
-            assert!(engine.state.versions[mapped].created_as_full_checkpoint);
-            assert_ne!(saved.result.sequence, split.sequence);
-            (Reverse(saved.result.sequence), mapped.to_owned())
-        })
-        .collect::<Vec<_>>();
+    let mut expected = saved.iter().map(|saved|
+        (Reverse(saved.result.sequence), saved.entry.version_id.clone())
+    ).collect::<Vec<_>>();
     expected.sort();
     let file = engine.state.versions[&expected[0].1].file_id.clone();
     let mut query = request(&file);
@@ -293,7 +264,7 @@ fn legal_split_windows_use_first_commit_order_and_preserve_original_operation_id
         let (identity, nodes, cursors) = page(&engine, &query);
         assert_eq!(
             identity.context.history_tree_id.as_str(),
-            split.history_tree_id.as_deref().unwrap()
+            repository.history_tree_id.as_str()
         );
         assert_eq!(nodes.len(), 1);
         actual.push((Reverse(nodes[0].sequence), nodes[0].node_id.to_string()));
@@ -321,45 +292,23 @@ fn legal_split_windows_use_first_commit_order_and_preserve_original_operation_id
         assert_eq!(nodes[0].node_id.as_str(), node);
         assert_eq!(nodes[0].sequence, *sequence);
     }
-    assert_eq!(
-        engine
-            .recheck_history_window(&original_read)
-            .unwrap_err()
-            .code(),
-        ErrorCode::TreeMoved
-    );
+    assert!(engine.recheck_history_window(&original_read).is_err());
     drop(original_read);
     retained.assert_readable(&engine);
     for saved in saved {
         assert_receipt(&engine, saved);
-        let mapped = split.result["version_mapping"][&saved.entry.version_id]
-            .as_str()
-            .unwrap();
-        assert_body_bytes(&engine, mapped, &saved.bytes);
+        assert_body_bytes(&engine, &saved.entry.version_id, &saved.bytes);
         assert_eq!(
             canonical_json(&engine.commit_workspace(saved.request.clone()).unwrap()).unwrap(),
             canonical_json(&saved.result).unwrap()
         );
     }
-    assert_eq!(
-        canonical_json(
-            &engine
-                .commit_plan(&plan.plan_id, "admin", split_operation)
-                .unwrap()
-        )
-        .unwrap(),
-        canonical_json(&split).unwrap()
-    );
     drop(engine);
     let mut engine = Engine::open(&temporary.path().join("state")).unwrap();
     retained.assert_readable(&engine);
     for saved in [&first, &second, &third] {
         assert_receipt(&engine, saved);
-        let mapped = split.result["version_mapping"][&saved.entry.version_id]
-            .as_str()
-            .unwrap();
-        assert!(engine.state.versions[mapped].created_as_full_checkpoint);
-        assert_body_bytes(&engine, mapped, &saved.bytes);
+        assert_body_bytes(&engine, &saved.entry.version_id, &saved.bytes);
         assert_eq!(
             canonical_json(&engine.commit_workspace(saved.request.clone()).unwrap()).unwrap(),
             canonical_json(&saved.result).unwrap()

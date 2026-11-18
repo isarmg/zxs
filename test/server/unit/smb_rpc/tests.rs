@@ -42,8 +42,6 @@ mod mtime_tests;
 mod manual_draft_tests;
 #[path = "native_dispatch_tests.rs"]
 mod native_dispatch_tests;
-#[path = "worktree_dispatch_tests.rs"]
-mod worktree_dispatch_tests;
 #[path = "named_move_tests.rs"]
 mod named_move_tests;
 #[path = "namespace_tests.rs"]
@@ -90,57 +88,6 @@ impl LostCommitReply {
     }
 }
 impl Backend for LostCommitReply {
-    fn smb_worktree_mounts(
-        &self, identity: &Identity, branch: &str,
-    ) -> Result<Vec<storage_contract::snapshot_worktree::WorktreeStatus>, ApiError> {
-        self.inner.smb_worktree_mounts(identity, branch)
-    }
-    fn smb_worktree_locate(
-        &self, identity: &Identity, branch: &str, path: &name_policy::LookupPath,
-    ) -> Result<Option<crate::SmbWorktreeLocation>, ApiError> {
-        self.inner.smb_worktree_locate(identity, branch, path)
-    }
-    fn smb_worktree_entry(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
-        path: &name_policy::LookupPath,
-    ) -> Result<crate::SmbWorktreeEntry, ApiError> {
-        self.inner.smb_worktree_entry(identity, target, path)
-    }
-    fn smb_worktree_page(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
-        parent: Option<&name_policy::LookupPath>, cursor: Option<&crate::SmbWorktreeCursor>,
-    ) -> Result<crate::SmbWorktreePage, ApiError> {
-        self.inner.smb_worktree_page(identity, target, parent, cursor)
-    }
-    fn authorize_smb_worktree_page(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
-        parent: Option<&name_policy::LookupPath>, page: &crate::SmbWorktreePage,
-    ) -> Result<(), ApiError> {
-        self.inner.authorize_smb_worktree_page(identity, target, parent, page)
-    }
-    fn authorize_smb_worktree(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
-        access: crate::SmbWorktreeAccess<'_>,
-    ) -> Result<(), ApiError> {
-        self.inner.authorize_smb_worktree(identity, target, access)
-    }
-    fn smb_worktree_content(
-        &self, identity: &Identity, file: &crate::SmbWorktreeFile, deadline: std::time::Instant,
-    ) -> Result<Content, ApiError> {
-        self.inner.smb_worktree_content(identity, file, deadline)
-    }
-    fn edit_smb_worktree(
-        &self, identity: &Identity, request: storage_contract::snapshot_worktree::EditWorktree,
-        source: &crate::UploadSource,
-    ) -> Result<storage_contract::snapshot_worktree::WorktreeRevision, ApiError> {
-        let revision = self.inner.edit_smb_worktree(identity, request, source)?;
-        if self.fail.swap(false, Ordering::SeqCst) {
-            return Err(ApiError::io(io::Error::new(io::ErrorKind::BrokenPipe,
-                "lost reply after the real completed worktree save")));
-        }
-        Ok(revision)
-    }
-
     fn smb_file_working(
         &self, identity: &Identity, branch: &str, entry: &storage_contract::Entry,
     ) -> Result<Option<crate::SmbManualFile>, ApiError> {
@@ -613,26 +560,12 @@ impl Backend for LostCommitReply {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.commit_plan(identity, request)
     }
-    fn prepare_historical_save(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.inner.prepare_historical_save(identity, request)
-    }
     fn prepare_purge(
         &self,
         identity: &crate::auth::Identity,
         request: Result<crate::PreparePurge, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         self.inner.prepare_purge(identity, request)
-    }
-    fn prepare_split(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareSplit, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.inner.prepare_split(identity, request)
     }
     fn namespace_batch(
         &self,
@@ -1024,34 +957,38 @@ fn fixture_configure(
     .unwrap();
     configure(&mut config);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
-    let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("资料").unwrap(),
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let workspace = engine
-        .create_workspace(&repo.main_branch_id, "alice")
-        .unwrap();
-    engine
-        .stage_bytes(&workspace.workspace_id, "report.txt", b"old")
-        .unwrap();
-    engine
-        .commit_workspace(CommitRequest {
-            workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate().unwrap(),
-            principal: "alice".into(),
-            expected_head: workspace.base_head,
-            fencing_token: workspace.fencing_token,
-            message: "initial".into(),
-            request_digest: None,
-        })
-        .unwrap();
+    let repo = engine.create_disk_root(
+        "P01", "alice", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    engine.update_protection_policy(storage_engine::ProtectionPolicyUpdate {
+        policy_id: &storage_contract::new_id("policy").unwrap(),
+        repository_id: &repo.repository_id,
+        path_prefix: "",
+        target_copies: 3,
+        expected_generation: 0,
+        principal: "alice",
+        operation_id: storage_contract::OperationId::generate().unwrap(),
+    }).unwrap();
+    seed_ordinary_file(&mut engine, &repo.main_branch_id, "report.txt", b"old");
     let (fixture, shared, backend) = fixture_backend(temp, engine);
     (fixture, shared, backend, repo.main_branch_id)
+}
+
+
+/// Seed real FILEs through the ordinary registered-root Workspace producer, including
+/// all implicit ordinary parents. No directory history, preview or synthetic root.
+fn seed_ordinary_file(engine: &mut Engine, branch: &str, path: &str, bytes: &[u8]) {
+    let workspace = engine.create_workspace(branch, "alice").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, path, bytes).unwrap();
+    engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: storage_contract::OperationId::generate().unwrap(),
+        principal: "alice".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "seed ordinary FILE".into(),
+        request_digest: None,
+    }).unwrap();
 }
 
 fn fixture_backend(
@@ -1189,7 +1126,7 @@ fn read_rpc(wire: &mut FrameStream, handle: u64, offset: u64, length: u32) -> Ve
         .bytes
 }
 
-fn select_pending_file(shared: &Shared, branch: &str) -> String {
+fn file_selections(shared: &Shared, branch: &str) -> (String, String, String) {
     let identity = &identity(shared);
     let tree = shared
         .backend
@@ -1220,376 +1157,39 @@ fn select_pending_file(shared: &Shared, branch: &str) -> String {
         )
         .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         .unwrap();
-    shared
-        .backend
-        .select_file_branch(
-            identity,
-            crate::SelectFileBranch {
-                default_baseline: None,
-                file_id: file.clone(),
-                branch_id: created["result"]["branch_id"].as_str().unwrap().into(),
-                location: None,
-                operation_id: storage_contract::OperationId::generate().unwrap(),
-            },
-        )
-        .unwrap();
+    let main = shared.backend.file_history_snapshot(identity, crate::ReadFileHistory::parse(
+        file.clone(), Some(repository(shared)), Some("report.txt".into()),
+    ).unwrap()).unwrap().selected_branch_id.expect("admitted original FILE branch");
+    let draft = created["result"]["branch_id"].as_str().unwrap().to_owned();
+    assert_ne!(main, draft);
+    (file, main, draft)
+}
+
+fn select_file(shared: &Shared, file: &str, branch: &str) {
+    shared.backend.select_file_branch(
+        &identity(shared),
+        crate::SelectFileBranch {
+            default_baseline: None,
+            file_id: file.into(),
+            branch_id: branch.into(),
+            location: None,
+            operation_id: storage_contract::OperationId::generate().unwrap(),
+        },
+    ).unwrap();
+}
+
+fn select_pending_file(shared: &Shared, branch: &str) -> String {
+    let (file, _main, draft) = file_selections(shared, branch);
+    select_file(shared, &file, &draft);
     file
 }
 
-fn checkpoint_directory_fixture(backend: &LostCommitReply, repository: &str, path: &str) {
-    backend.inner.test_with_engine_locked(|engine| {
-        let repository = engine.state().repositories[repository].clone();
-        crate::tests::directory_git_fixture::checkpoint(engine, &repository, path, "alice");
-    });
-}
-
-fn directory_fixture(shared: &Shared, backend: &LostCommitReply) -> (String, String, String) {
-    let identity = &identity(shared);
-    let repositories = shared.backend.repositories_snapshot(identity).unwrap();
-    let repository = repositories[0].repository_id.clone();
-    checkpoint_directory_fixture(backend, &repository, "");
-    let created = shared
-        .backend
-        .mutate_disk_directory(
-            identity,
-            crate::tests::disk_directory_request(
-                json!({
-                    "slot_id":"P01","path":"资料","name":"draft","operation_id":new_id("op").unwrap()
-                }),
-                crate::DiskDirectoryAction::Create,
-            ),
-        )
-        .and_then(|result| crate::operation_wire::operation_wire(result.into()))
-        .unwrap();
-    let initial = shared
-        .backend
-        .default_directory_branch(identity, &repository)
-        .unwrap();
-    (
-        repository,
-        initial.selected.unwrap().directory_branch_id,
-        created["result"]["directory_branch_id"]
-            .as_str()
-            .unwrap()
-            .to_owned(),
-    )
-}
-
-fn select_directory(shared: &Shared, backend: &LostCommitReply, repository: &str, directory: &str) {
-    checkpoint_directory_fixture(backend, repository, "");
-    let identity = identity(shared);
-    let defaults = shared
-        .backend
-        .default_directory_branch(&identity, repository)
-        .unwrap();
-    let tree = defaults
-        .directory_branches
-        .iter()
-        .find(|branch| branch.directory_branch_id == directory)
-        .unwrap()
-        .head_tree_id
-        .clone();
-    let head = shared
-        .backend
-        .tree_snapshot(
-            &identity,
-            crate::ReadTree {
-                branch: &defaults.namespace_branch_id,
-                commit: None,
-            },
-        )
-        .unwrap()
-        .commit_id;
-    shared
-        .backend
-        .select_default_directory_branch(
-            &identity,
-            crate::SelectDefaultDirectoryBranch {
-                expected_tree_id: tree,
-                expected_head: head,
-                repository_id: repository.into(),
-                directory_branch_id: directory.into(),
-                operation_id: storage_contract::OperationId::generate().unwrap(),
-            },
-        )
-        .unwrap();
-}
-
 #[test]
-fn directory_default_switch_fences_open_and_already_published_writers() {
+fn unix_rpc_file_branch_switch_preserves_read_fds_and_targets_new_writes() {
     let (_temp, shared, backend, branch) = fixture();
-    let (repository, main, draft) = directory_fixture(&shared, &backend);
-    let mut one = session(shared.clone(), &branch);
-    let (opened, file) = open_file(&mut one, true);
-    file.write_all_at(b"new", 0).unwrap();
-    select_directory(&shared, &backend, &repository, &draft);
-    let error = one.dirty(opened.handle).unwrap_err();
-    assert_eq!(
-        error.code,
-        storage_contract::ErrorCode::DirectoryBranchConflict
-    );
-    assert_eq!(error.status, 409);
-    let writer = match &one.handles[&opened.handle] {
-        Handle::Write(w, _) => w,
-        _ => unreachable!(),
-    };
-    assert!(writer.source.is_file());
-    assert!(writer.source.with_extension("work.json").is_file());
-    assert_eq!(backend.uploads.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        one.find(&name_policy::LookupPath::parse("report.txt").unwrap())
-            .unwrap()
-            .unwrap()
-            .size,
-        3
-    );
-    one.close(opened.handle, true).unwrap();
-
-    let (opened, file) = open_file(&mut one, true);
-    file.write_all_at(b"own", 0).unwrap();
-    one.dirty(opened.handle).unwrap();
-    one.flush(opened.handle).unwrap();
-    // Return through another root selection, then to this exact content.
-    // Equal file tuples must still retain the old handle's destination.
-    select_directory(&shared, &backend, &repository, &main);
-    select_directory(&shared, &backend, &repository, &draft);
-    file.write_all_at(b"bad", 0).unwrap();
-    assert_eq!(
-        one.dirty(opened.handle).unwrap_err().code,
-        storage_contract::ErrorCode::DirectoryBranchConflict
-    );
-    assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);
-    let writer = match &one.handles[&opened.handle] {
-        Handle::Write(w, _) => w,
-        _ => unreachable!(),
-    };
-    assert!(writer.dirty && writer.source.is_file());
-    one.close(opened.handle, true).unwrap();
-    let current = one
-        .find(&name_policy::LookupPath::parse("report.txt").unwrap())
-        .unwrap()
-        .unwrap();
-    let content = backend.content(&one.identity, &current.version_id).unwrap();
-    let mut bytes = [0; 3];
-    content.file.read_exact_at(&mut bytes, 0).unwrap();
-    assert_eq!(&bytes, b"own");
-}
-
-#[test]
-fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle() {
-    let (_temp, shared, backend, branch) = fixture();
-    let mut client = named_session(shared.clone(), &branch);
-    for (path, bytes) in [
-        ("a/report.txt", b"source".as_slice()),
-        ("b/stay.txt", b"sibling".as_slice()),
-    ] {
-        let (opened, fd) = client
-            .open(path.into(), true, true, false, false, false)
-            .unwrap();
-        File::from(fd).write_all_at(bytes, 0).unwrap();
-        client.dirty(opened.handle).unwrap();
-        client.close(opened.handle, false).unwrap();
-    }
-    let identity = &identity(&shared);
-    let repo = shared.backend.repositories_snapshot(identity).unwrap()[0]
-        .repository_id
-        .clone();
-    let register = |path: &str, name: &str| {
-        checkpoint_directory_fixture(&backend, &repo, path);
-        shared.backend.mutate_disk_directory(identity, crate::tests::disk_directory_request(json!({
-        "slot_id":"P01","path":format!("资料/{path}"),"name":name,"operation_id":new_id("op").unwrap()
-    }),crate::DiskDirectoryAction::Create)).and_then(|result| crate::operation_wire::operation_wire(result.into())).unwrap()["result"]["directory_branch_id"].as_str().unwrap().to_owned()
-    };
-    let a_m = register("a", "m");
-    let a_n = register("a", "n");
-    let b_l = register("b", "l");
-    let b_p = register("b", "p");
-    for (path, name) in [("a", "m"), ("b", "l")] {
-        shared.backend.mutate_disk_directory(identity, crate::tests::disk_directory_request(json!({
-            "slot_id":"P01","path":format!("资料/{path}"),"name":name,"operation_id":new_id("op").unwrap()
-        }),crate::DiskDirectoryAction::Select)).and_then(|result| crate::operation_wire::operation_wire(result.into())).unwrap();
-    }
-    let scope = |id: &str| {
-        let snapshot = shared
-            .backend
-            .directory_scopes(
-                identity,
-                crate::ReadDirectoryScopes {
-                    repository_id: &repo,
-                    filter: &crate::DirectoryBranchFilter::All,
-                    projection: crate::DirectoryBranchProjection::Summary,
-                },
-            )
-            .unwrap();
-        let crate::DirectoryScopeRows::Summary(rows) = snapshot.branches else {
-            panic!("summary request returned full scopes")
-        };
-        rows.into_iter()
-            .find(|branch| branch.directory_branch_id == id)
-            .unwrap()
-    };
-    let m0 = scope(&a_m);
-    let n0 = scope(&a_n);
-    let l0 = scope(&b_l);
-    let p0 = scope(&b_p);
-    let source = client
-        .find(&name_policy::LookupPath::parse("a/report.txt").unwrap())
-        .unwrap()
-        .unwrap();
-    let (opened, fd) = client
-        .open("a/report.txt".into(), false, false, false, false, false)
-        .unwrap();
-    let _reader = File::from(fd);
-    let reply = client
-        .dispatch(Request::Namespace {
-            operation_id: new_id("op").unwrap(),
-            kind: smb_protocol::protocol::NamespaceOperation::Rename,
-            path: "a/report.txt".into(),
-            destination: Some("b/report.txt".into()),
-            replace: false,
-        })
-        .unwrap();
-    assert!(
-        client
-            .find(&name_policy::LookupPath::parse("a/report.txt").unwrap())
-            .unwrap()
-            .is_none()
-    );
-    let moved = client
-        .find(&name_policy::LookupPath::parse("b/report.txt").unwrap())
-        .unwrap()
-        .unwrap();
-    assert_ne!(moved.file_id, source.file_id);
-    assert_ne!(moved.version_id, source.version_id);
-    let receipt = json_reply(reply);
-    assert_eq!(
-        receipt["operation_kind"],
-        storage_contract::file_relocation::OBJECT_MOVE_KIND
-    );
-    assert_eq!(
-        receipt["result"]["version_mapping"][&source.version_id],
-        moved.version_id
-    );
-    let m1 = scope(&a_m);
-    let l1 = scope(&b_l);
-    assert_ne!(m1.head_tree_id, m0.head_tree_id);
-    assert_ne!(l1.head_tree_id, l0.head_tree_id);
-    assert_eq!(scope(&a_n).head_tree_id, n0.head_tree_id);
-    assert_eq!(scope(&b_p).head_tree_id, p0.head_tree_id);
-    let mut bytes = [0; 6];
-    bytes.copy_from_slice(&read_session(&mut client, opened.handle, 0, 6));
-    assert_eq!(&bytes, b"source");
-    client.close(opened.handle, false).unwrap();
-    let (opened, fd) = client
-        .open("b/report.txt".into(), true, false, false, false, false)
-        .unwrap();
-    File::from(fd).write_all_at(b"edited", 0).unwrap();
-    client.dirty(opened.handle).unwrap();
-    client.close(opened.handle, false).unwrap();
-    assert_eq!(
-        scope(&a_m).head_tree_id,
-        m1.head_tree_id,
-        "source stopped tracking the moved file"
-    );
-    assert_ne!(scope(&b_l).head_tree_id, l1.head_tree_id);
-    assert_eq!(scope(&a_n).head_tree_id, n0.head_tree_id);
-    assert_eq!(scope(&b_p).head_tree_id, p0.head_tree_id);
-    let previous = backend.content(identity, &source.version_id).unwrap();
-    previous.file.read_exact_at(&mut bytes, 0).unwrap();
-    assert_eq!(&bytes, b"source");
-}
-
-#[test]
-fn newly_created_ancestor_selection_fences_an_existing_create_handle() {
-    let (_temp, shared, backend, branch) = fixture();
-    let mut original = session(shared.clone(), &branch);
-    let (opened, file) = original
-        .open("future/new.txt".into(), true, true, false, false, false)
-        .unwrap();
-    let file = File::from(file);
-    let mut creator = session(shared.clone(), &branch);
-    let (other, other_fd) = creator
-        .open("future/other.txt".into(), true, true, false, false, false)
-        .unwrap();
-    File::from(other_fd).write_all_at(b"other", 0).unwrap();
-    creator.dirty(other.handle).unwrap();
-    creator.close(other.handle, false).unwrap();
-    checkpoint_directory_fixture(&backend, &repository(&shared), "future");
-    shared
-        .backend
-        .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
-                "slot_id":"P01","path":"资料/future","name":"alternate","operation_id":new_id("op").unwrap()
-            }),crate::DiskDirectoryAction::Create)).and_then(|result| crate::operation_wire::operation_wire(result.into()))
-        .unwrap();
-    shared
-        .backend
-        .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
-                "slot_id":"P01","path":"资料/future","name":"alternate","operation_id":new_id("op").unwrap()
-            }),crate::DiskDirectoryAction::Select)).and_then(|result| crate::operation_wire::operation_wire(result.into()))
-        .unwrap();
-    file.write_all_at(b"keep", 0).unwrap();
-    assert_eq!(
-        original.dirty(opened.handle).unwrap_err().code,
-        storage_contract::ErrorCode::DirectoryBranchConflict
-    );
-    let writer = match &original.handles[&opened.handle] {
-        Handle::Write(w, _) => w,
-        _ => unreachable!(),
-    };
-    assert!(writer.source.is_file() && writer.dirty);
-    assert!(
-        original
-            .find(&name_policy::LookupPath::parse("future/new.txt").unwrap())
-            .unwrap()
-            .is_none()
-    );
-    original.close(opened.handle, true).unwrap();
-}
-
-#[test]
-fn nested_directory_switch_does_not_fence_an_unrelated_open_file() {
-    let (_temp, shared, backend, branch) = fixture();
-    let mut creator = session(shared.clone(), &branch);
-    let (opened, file) = creator
-        .open("nested/other.txt".into(), true, true, false, false, false)
-        .unwrap();
-    File::from(file).write_all_at(b"other", 0).unwrap();
-    creator.dirty(opened.handle).unwrap();
-    creator.close(opened.handle, false).unwrap();
-    let (repository, _main, _draft) = directory_fixture(&shared, &backend);
-    checkpoint_directory_fixture(&backend, &repository, "nested");
-    shared
-        .backend
-        .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
-                "slot_id":"P01","path":"资料/nested","name":"alternate","operation_id":new_id("op").unwrap()
-            }),crate::DiskDirectoryAction::Create)).and_then(|result| crate::operation_wire::operation_wire(result.into()))
-        .unwrap();
-    let mut one = session(shared.clone(), &branch);
-    let (opened, file) = open_file(&mut one, true);
-    shared
-        .backend
-        .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
-                "slot_id":"P01","path":"资料/nested","name":"alternate","operation_id":new_id("op").unwrap()
-            }),crate::DiskDirectoryAction::Select)).and_then(|result| crate::operation_wire::operation_wire(result.into()))
-        .unwrap();
-    file.write_all_at(b"new", 0).unwrap();
-    one.dirty(opened.handle).unwrap();
-    one.close(opened.handle, false).unwrap();
-    let current = one
-        .find(&name_policy::LookupPath::parse("report.txt").unwrap())
-        .unwrap()
-        .unwrap();
-    let content = backend.content(&one.identity, &current.version_id).unwrap();
-    let mut bytes = [0; 3];
-    content.file.read_exact_at(&mut bytes, 0).unwrap();
-    assert_eq!(&bytes, b"new");
-}
-
-#[test]
-fn unix_rpc_default_switch_preserves_read_fds_and_targets_new_writes() {
-    let (_temp, shared, backend, branch) = fixture();
-    let (repository, main, draft) = directory_fixture(&shared, &backend);
-    select_directory(&shared, &backend, &repository, &draft);
+    let repository = repository(&shared);
+    let (selected_file, main, draft) = file_selections(&shared, &branch);
+    select_file(&shared, &selected_file, &draft);
     let mut initial = session(shared.clone(), &branch);
     let (opened, file) = open_file(&mut initial, true);
     file.write_all_at(b"new", 0).unwrap();
@@ -1635,7 +1235,7 @@ fn unix_rpc_default_switch_preserves_read_fds_and_targets_new_writes() {
     let mut bytes = [0; 3];
     bytes.copy_from_slice(&read_rpc(&mut wire, pinned_open.handle, 0, 3));
     assert_eq!(&bytes, b"new");
-    select_directory(&shared, &backend, &repository, &main);
+    select_file(&shared, &selected_file, &main);
     let (Response::Ok { result }, visible) = rpc(&mut wire, open()) else {
         panic!("read after switch failed")
     };
@@ -1699,7 +1299,7 @@ fn unix_rpc_default_switch_preserves_read_fds_and_targets_new_writes() {
         .unwrap();
     content.file.read_exact_at(&mut bytes, 0).unwrap();
     assert_eq!(&bytes, b"smb");
-    select_directory(&shared, &backend, &repository, &draft);
+    select_file(&shared, &selected_file, &draft);
     let entry = observer
         .find(&name_policy::LookupPath::parse("report.txt").unwrap())
         .unwrap()
@@ -1712,7 +1312,7 @@ fn unix_rpc_default_switch_preserves_read_fds_and_targets_new_writes() {
         .unwrap();
     assert_eq!(
         &bytes, b"new",
-        "saving a different combination preserves the original frozen view"
+        "saving on another FILE branch preserves the first branch's own bytes"
     );
 }
 
@@ -2270,7 +1870,6 @@ fn external_same_file_change_rejects_rebase_and_preserves_work_bytes() {
             &one.identity,
             crate::CreateWorkspace {
                 branch_id: branch.clone(),
-                source_commit_id: None,
             },
         )
         .unwrap();
@@ -2423,11 +2022,17 @@ fn immutable_fixture_payloads(root: &Path) -> Vec<PathBuf> {
     fn visit(root: &Path, found: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(root).unwrap() {
             let path = entry.unwrap().path();
-            if path.is_dir() {
+            let kind = fs::symlink_metadata(&path).unwrap().file_type();
+            if kind.is_dir() {
                 visit(&path, found);
-            } else if path
-                .components()
-                .any(|part| part.as_os_str() == "file-containers")
+            } else if kind.is_file()
+                && path.parent().and_then(Path::file_name).is_some_and(|n| n == "versions")
+                && path.parent().and_then(Path::parent).and_then(Path::file_name)
+                    .is_some_and(|n| n == "report.txt")
+                && path.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
+                    name.strip_suffix("-report.txt").is_some_and(|id|
+                        id.parse::<storage_contract::VersionStorageId>().is_ok())
+                })
                 && fs::read(&path).unwrap() == b"old"
             {
                 found.push(path);
@@ -2931,8 +2536,11 @@ fn oversized_existing_file_is_rejected_before_private_copy() {
 fn hello_rejects_missing_write_reservations_before_admitting_a_session() {
     let (_temp, shared, _backend, _branch) = fixture();
     let repository = repository(&shared);
+    let mut extra = REQUIRED_CAPABILITIES.to_vec();
+    extra.push("unknown-entry-projection");
     for capabilities in [
         None,
+        Some(json!(extra)),
         Some(json!([])),
         Some(json!(["unrelated"])),
         Some(json!([

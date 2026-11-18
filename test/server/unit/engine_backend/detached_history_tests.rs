@@ -42,13 +42,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry) {
     )
     .unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("History").unwrap(),
-            "P01",
-            1,
-            "owner",
-            OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "owner", OperationId::generate().unwrap())
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -377,42 +371,6 @@ fn scoped_file_history_rechecks_deleted_path_but_historical_file_remains_readabl
         .unwrap();
     assert!(historical["path"].is_null());
     assert!(!historical["versions"].as_array().unwrap().is_empty());
-}
-
-#[test]
-fn both_history_reads_recheck_actual_split_scope() {
-    for query in [Query::File, Query::Graph] {
-        let (root, engine, repo, entry) = fixture();
-        let cut = engine.state().branches[&repo.main_branch_id]
-            .head_commit_id
-            .clone();
-        let (backend, _auth, _token, identity) = authenticated(engine, root.path());
-        let (started, observed) = mpsc::sync_channel(1);
-        let (release, resume) = mpsc::sync_channel(1);
-        std::thread::scope(|scope| {
-            let reader = scope.spawn(|| {
-                pause(started, resume);
-                query.read(backend.as_ref(), &identity, &repo, &entry)
-            });
-            observed.recv_timeout(Duration::from_secs(10)).unwrap();
-            let mut writer = backend
-                .engine
-                .try_lock()
-                .expect("projection retained Engine");
-            let plan = writer
-                .create_split_plan(&repo.history_tree_id, &cut, "owner")
-                .unwrap();
-            writer
-                .commit_plan(&plan.plan_id, "owner", OperationId::generate().unwrap())
-                .unwrap();
-            drop(writer);
-            release.send(()).unwrap();
-            assert_eq!(
-                reader.join().unwrap().unwrap_err().code,
-                storage_contract::ErrorCode::TreeMoved
-            );
-        });
-    }
 }
 
 fn replacement(root: &std::path::Path, auth: &AuthStore) -> Engine {

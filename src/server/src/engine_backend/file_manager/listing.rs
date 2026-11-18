@@ -3,54 +3,9 @@
 use super::pagination::{Page, PageRequest, PageSelector};
 use super::*;
 use crate::backend_listing::SortKey;
-/// Only required COW tables and the displayed virtual repositories' namespace
-/// owners, plus O(1) directory projection ownership for branch-choice counts.
-/// No unrelated commit or version table survives the detached scan.
-struct ListingMetadata {
-    #[cfg(test)]
-    sequence: u64,
-    repositories: storage_contract::TrackedMap<Repository>,
-    file_deletions: storage_contract::TrackedMap<storage_contract::FileDeletionNode>,
-    namespaces: BTreeMap<String, storage_engine::NamespaceSnapshot>,
-    directory_branches: storage_contract::TrackedMap<storage_contract::DirectoryBranch>,
-    directory_namespaces: storage_engine::DirectoryNamespaceView,
-    directory_selections: storage_contract::TrackedMap<String>,
-}
-
-impl ListingMetadata {
-    fn capture(engine: &Engine, slot: &str, root: bool) -> Result<Self, ApiError> {
-        let state = engine.state();
-        let namespaces = if root {
-            state
-                .repositories
-                .values()
-                .filter(|repo| repo.primary_slot_id == slot && !repo.file_manager_root)
-                .map(|repo| {
-                    engine
-                        .namespace_snapshot(&repo.main_branch_id)
-                        .map(|namespace| (repo.repository_id.clone(), namespace))
-                        .map_err(error)
-                })
-                .collect::<Result<_, _>>()?
-        } else {
-            BTreeMap::new()
-        };
-        Ok(Self {
-            #[cfg(test)]
-            sequence: state.sequence,
-            repositories: state.repositories.clone(),
-            file_deletions: state.file_deletions.clone(),
-            namespaces,
-            directory_branches: state.directory_branches.clone(),
-            directory_namespaces: engine.directory_namespace_view().map_err(error)?,
-            directory_selections: state.directory_selections.clone(),
-        })
-    }
-}
-
+// Selection holds only this registered namespace and its current Unborn rows.
 #[derive(Clone)]
 enum Candidate {
-    Repository(String),
     Entry(usize),
     Unborn(usize),
 }
@@ -67,15 +22,15 @@ struct DirectoryCapture {
     namespace: storage_engine::NamespaceSnapshot,
     unborn: Vec<(storage_contract::file_draft::DraftLocation,
         storage_contract::file_draft::UnbornWorking)>,
-    preview: Option<storage_engine::DirectoryBranchPreview>,
-    git_initialized: bool,
 }
 
 struct ListingScope {
-    view: ListingMetadata,
+    #[cfg(test)]
+    sequence: u64,
     slot_id: String,
     path: String,
     directory: Option<DirectoryCapture>,
+    writable: bool,
 }
 
 pub(in crate::engine_backend) struct PrimaryListing {
@@ -87,8 +42,6 @@ pub(in crate::engine_backend) struct SelectedListing {
     scope: ListingScope,
     page: Page<Candidate>,
     directory_file_count: usize,
-    directory_branches: Vec<crate::DirectoryBranchChoice>,
-    directory_branches_supported: bool,
 }
 
 pub(in crate::engine_backend) struct ProjectedEntries {
@@ -102,43 +55,28 @@ pub(in crate::engine_backend) fn capture(
 ) -> Result<ListingRead, ApiError> {
     let slot_id = input.slot_id().to_owned();
     let path = input.path().to_owned();
-    let preview = input
-        .preview()
-        .map(|(branch, tree)| (branch.to_owned(), tree.to_owned()));
-    // Preserve cursor/query/snapshot error precedence before disk and path checks.
+    // A cursor is checked before disk and path, but can never grant admission.
     let request = PageRequest::parse(engine, input)?;
-    if disk(engine, &slot_id)?.level != 1 {
-        if preview.is_some() {
-            return Err(ApiError::invalid(
-                "backup directories cannot preview primary branches",
-            ));
-        }
+    let selected_disk = disk(engine, &slot_id)?;
+    if selected_disk.level != 1 {
         return backup_namespace::BackupListingRead::capture(engine, &slot_id, &path, request)
             .map(Box::new)
             .map(ListingRead::Backup);
     }
-    let directory = match resolve_read(engine, &slot_id, &path) {
-        Ok((repository, within)) => Some(DirectoryCapture::capture(
-            engine, repository, within, preview,
-        )?),
-        Err(error)
-            if path.is_empty()
-                && preview.is_none()
-                && matches!(
-                    error.status,
-                    ::http::StatusCode::FORBIDDEN | ::http::StatusCode::NOT_FOUND
-                ) =>
-        {
-            None
-        }
-        Err(error) => return Err(error),
+    let writable = selected_disk.registration_mode == storage_engine::RegistrationMode::Enabled;
+    let directory = match engine.ordinary_metadata_root_for_slot(&slot_id).map_err(error)? {
+        Some(repository) => Some(DirectoryCapture::capture(engine, repository.clone(), &path)?),
+        None if path.is_empty() => None,
+        None => return Err(empty_directory()),
     };
     Ok(ListingRead::Primary(Box::new(PrimaryListing {
         scope: ListingScope {
-            view: ListingMetadata::capture(engine, &slot_id, path.is_empty())?,
+            #[cfg(test)]
+            sequence: engine.state().sequence,
             slot_id,
             path,
             directory,
+            writable,
         },
         request,
     })))
@@ -149,39 +87,11 @@ impl DirectoryCapture {
         engine: &Engine,
         repository: Repository,
         within: &str,
-        preview: Option<(String, String)>,
     ) -> Result<Self, ApiError> {
-        let preview = preview
-            .map(|(branch, tree)| {
-                engine
-                    .preview_directory_branch(&repository.repository_id, &branch, &tree)
-                    .map_err(error)
-            })
-            .transpose()?;
-        let namespace = engine
-            .namespace_snapshot(&repository.main_branch_id)
-            .map_err(error)?;
-        let source_path = preview
-            .as_ref()
-            .map(|preview| preview.source_path(within))
-            .transpose()
-            .map_err(error)?;
-        let within_key = name_policy::path_key(source_path.as_deref().unwrap_or(within));
-        if !within.is_empty()
-            && !preview.as_ref().map_or_else(
-                || {
-                    namespace.tree().get_key(&within_key).is_some_and(|entry| {
-                        entry.kind == storage_contract::NamespaceEntryKind::Directory
-                    })
-                },
-                |preview| {
-                    within_key == name_policy::path_key(&preview.branch().path)
-                        || preview.branch().entries.iter().any(|entry| {
-                            entry.lookup_key() == within_key
-                                && entry.kind == storage_contract::NamespaceEntryKind::Directory
-                        })
-                },
-            )
+        let namespace = engine.namespace_snapshot(&repository.main_branch_id).map_err(error)?;
+        let within_key = name_policy::path_key(within);
+        if !within.is_empty() && !namespace.tree().get_key(&within_key).is_some_and(|entry|
+            entry.kind == storage_contract::NamespaceEntryKind::Directory)
         {
             return Err(ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
@@ -189,38 +99,19 @@ impl DirectoryCapture {
                 "directory not found",
             ));
         }
-        let directory_id = match &preview {
-            Some(preview) => &preview.branch().directory_id,
-            None if within.is_empty() => &repository.repository_id,
-            None => {
-                &namespace
-                    .tree()
-                    .get_key(&within_key)
-                    .expect("invariant: the captured directory was resolved above")
-                    .entry_id
-            }
-        };
-        let git_initialized = engine
-            .state()
-            .directory_git_repositories
-            .contains_key(directory_id);
-        let unborn = if repository.file_manager_root && preview.is_none() {
-            engine.native_current_entries(repository.repository_id.parse()
-                .map_err(ApiError::contract_input)?).map_err(error)?.into_iter()
-                .filter_map(|entry| match entry {
-                    storage_engine::NativeCurrentEntry::Published(_) => None,
-                    storage_engine::NativeCurrentEntry::Unborn { target, working } => {
-                        Some((target, working))
-                    }
-                }).collect()
-        } else { Vec::new() };
+        let id = repository.repository_id.parse().map_err(ApiError::contract_input)?;
+        // The owner supplies only currently admitted rows. It will not treat
+        // an unresolved Unborn after a registry change as an empty namespace.
+        let unborn = engine.native_current_entries(id).map_err(error)?.into_iter()
+            .filter_map(|entry| match entry {
+                storage_engine::NativeCurrentEntry::Unborn { target, working } => Some((target, working)),
+                storage_engine::NativeCurrentEntry::Published(_) => None,
+            }).collect();
         Ok(Self {
             repository, unborn,
             within: within.into(),
             within_key,
             namespace,
-            preview,
-            git_initialized,
         })
     }
 }
@@ -228,56 +119,11 @@ impl DirectoryCapture {
 impl PrimaryListing {
     pub(in crate::engine_backend) fn select(self) -> Result<SelectedListing, ApiError> {
         #[cfg(test)]
-        detached_tests::before_scan(&self.scope.view);
+        detached_tests::before_scan(self.scope.sequence);
         let Self { scope, request } = self;
-        let state = &scope.view;
         let mut page = PageSelector::new(request);
-        let mut directory_branches_supported = scope
-            .directory
-            .as_ref()
-            .is_some_and(|directory| directory.git_initialized);
-        if scope.path.is_empty() {
-            for repo in state
-                .repositories
-                .values()
-                .filter(|repo| repo.primary_slot_id == scope.slot_id && !repo.file_manager_root)
-            {
-                directory_branches_supported = false;
-                page.consider(
-                    SortKey::new(true, &repo.name, &repo.name, &repo.repository_id),
-                    Candidate::Repository(repo.repository_id.clone()),
-                );
-            }
-        }
         let mut directory_file_count = 0;
-        let mut directory_branches = Vec::new();
         if let Some(directory) = &scope.directory {
-            let repo = &directory.repository;
-            if let Some(preview) = &directory.preview {
-                directory_branches_supported &= name_policy::path_key(preview.path())
-                    == name_policy::path_key(&directory.within);
-            }
-            if directory_branches_supported {
-                directory_branches = super::super::directory_scopes::matching_tables(
-                    directory.namespace.tree(),
-                    &state.directory_branches,
-                    repo,
-                    Some(&name_policy::path_key(&directory.within)),
-                )
-                .into_iter()
-                .map(|branch| {
-                    let current = state.directory_selections.get(&branch.directory_id)
-                        == Some(&branch.directory_branch_id);
-                    let entries = state
-                        .directory_namespaces
-                        .entries(&branch.directory_branch_id)
-                        .map_err(error)?;
-                    Ok(crate::DirectoryBranchChoice::capture_entries(
-                        branch, current, entries,
-                    ))
-                })
-                .collect::<Result<_, ApiError>>()?;
-            }
             let prefix = if directory.within.is_empty() {
                 String::new()
             } else {
@@ -292,23 +138,8 @@ impl PrimaryListing {
             }
             // Scan the retained flat namespace, keeping at most limit + 1
             // candidates plus the independently requested selected entry.
-            let entries = directory
-                .preview
-                .as_ref()
-                .map_or(directory.namespace.entries(), |preview| {
-                    preview.branch().entries.as_slice()
-                });
-            for (index, entry) in entries.iter().enumerate() {
-                let visible = match &directory.preview {
-                    None => directory.namespace.tree().visible_entry(index).is_some(),
-                    Some(_) => {
-                        entry.kind != storage_contract::NamespaceEntryKind::File
-                            || !state.file_deletions.contains_key(&entry.file_id)
-                    }
-                };
-                if !visible {
-                    continue;
-                }
+            for (index, _) in directory.namespace.entries().iter().enumerate() {
+                let Some(entry) = directory.namespace.tree().visible_entry(index) else { continue; };
                 let Some(relative) = entry.lookup_key().strip_prefix(&prefix) else {
                     continue;
                 };
@@ -318,27 +149,13 @@ impl PrimaryListing {
                 if relative.contains('/') {
                     continue;
                 }
-                let rebased = directory
-                    .preview
-                    .as_ref()
-                    .map(|preview| preview.entry(index))
-                    .transpose()
-                    .map_err(error)?;
-                let entry = rebased.as_ref().unwrap_or(entry);
-                let display = if repo.file_manager_root {
-                    entry.path().to_owned()
-                } else {
-                    format!("{}/{}", repo.name, entry.path)
-                };
-                page.consider(SortKey::for_entry(entry, display), Candidate::Entry(index));
+                page.consider(SortKey::for_entry(entry, entry.path().to_owned()), Candidate::Entry(index));
             }
         }
         Ok(SelectedListing {
             page: page.finish()?,
             scope,
             directory_file_count,
-            directory_branches,
-            directory_branches_supported,
         })
     }
 }
@@ -350,49 +167,21 @@ fn changed() -> ApiError {
     )
 }
 
-fn unchanged_repository(engine: &Engine, captured: &Repository) -> Result<(), ApiError> {
-    if engine.state().repositories.get(&captured.repository_id) != Some(captured) {
-        return Err(changed());
-    }
-    Ok(())
-}
-
-fn unchanged_namespace(
-    engine: &Engine,
-    captured: &storage_engine::NamespaceSnapshot,
-) -> Result<(), ApiError> {
-    if !engine.namespace_snapshot_matches(&captured.witness()) {
-        return Err(changed());
-    }
-    Ok(())
-}
-
 impl SelectedListing {
     fn authorize_current(&self, engine: &AdmissionEngine) -> Result<(), ApiError> {
         if engine.listing_snapshot() != self.page.snapshot {
             return Err(changed());
         }
-        disk(engine, &self.scope.slot_id)?;
-        if let Some(directory) = &self.scope.directory {
-            unchanged_repository(engine, &directory.repository)?;
-            unchanged_namespace(engine, &directory.namespace)?;
-            if let Some(preview) = &directory.preview {
-                engine
-                    .preview_directory_branch(
-                        &directory.repository.repository_id,
-                        &preview.branch().directory_branch_id,
-                        &preview.branch().head_tree_id,
-                    )
-                    .map_err(error)?;
-            }
-        }
-        for candidate in self.page.values.iter().chain(self.page.selected.iter()) {
-            if let Candidate::Repository(id) = candidate {
-                let state = &self.scope.view;
-                let repo = &state.repositories[id];
-                unchanged_repository(engine, repo)?;
-                unchanged_namespace(engine, &state.namespaces[id])?;
-            }
+        // Re-acquire original registration under the same final authorization
+        // lock; a physical rebind is not required to have changed the journal.
+        let live = disk(engine, &self.scope.slot_id)?.registration_mode == storage_engine::RegistrationMode::Enabled;
+        if live != self.scope.writable { return Err(changed()); }
+        let observed = engine.ordinary_metadata_root_for_slot(&self.scope.slot_id).map_err(error)?;
+        match (&self.scope.directory, observed) {
+            (Some(row), Some(current)) if current == &row.repository
+                && engine.namespace_snapshot_matches(&row.namespace.witness()) => (),
+            (None, None) => (),
+            _ => return Err(changed()),
         }
         Ok(())
     }
@@ -424,33 +213,9 @@ impl SelectedListing {
                     backup: false, historical_only: None,
                 })
             }
-            Candidate::Repository(id) => {
-                let repo = &self.scope.view.repositories[id];
-                Ok(directory(&repo.name, &repo.name, &repo.repository_id))
-            }
             Candidate::Entry(index) => {
-                let repo = &self
-                    .scope
-                    .directory
-                    .as_ref()
-                    .expect("invariant: entry candidates have a captured namespace")
-                    .repository;
-                let prefix = if repo.file_manager_root {
-                    ""
-                } else {
-                    &repo.name
-                };
-                if let Some(preview) = &self
-                    .scope
-                    .directory
-                    .as_ref()
-                    .expect("invariant: candidate has directory")
-                    .preview
-                {
-                    listed_preview_entry(engine, repo, preview, *index, prefix)
-                } else {
-                    listed_current_entry(engine, repo, *index, prefix)
-                }
+                let directory = self.scope.directory.as_ref().ok_or_else(changed)?;
+                listed_current_entry(engine, &directory.repository, *index, self.scope.writable)
             }
         };
         let entries = self
@@ -481,28 +246,15 @@ impl SelectedListing {
                 branch_id: directory.repository.main_branch_id.clone(),
                 base_head: directory.namespace.head_commit_id().into(),
             });
-        let default_branch_scope = self
-            .scope
-            .directory
-            .as_ref()
-            .is_some_and(|directory| directory.within.is_empty());
-        let preview = self
-            .scope
-            .directory
-            .as_ref()
-            .is_some_and(|directory| directory.preview.is_some());
         crate::ListingSnapshot {
             slot_id: self.scope.slot_id,
             path: self.scope.path,
             backup: false,
-            preview,
+            writable: self.scope.writable,
             entries: page.entries,
             selected_entry: page.selected_entry,
             context,
             directory_file_count: self.directory_file_count,
-            directory_branches: self.directory_branches,
-            directory_branches_supported: self.directory_branches_supported,
-            default_branch_scope,
             total_entries: self.page.total,
             snapshot: self.page.snapshot,
             previous_cursor: self.page.previous,
@@ -512,9 +264,9 @@ impl SelectedListing {
 }
 
 #[cfg(test)]
-#[path = "../../../../../test/server/unit/engine_backend/file_manager/listing_tests.rs"]
-mod tests;
-
-#[cfg(test)]
 #[path = "../../../../../test/server/unit/engine_backend/file_manager/listing_detached_tests.rs"]
 mod detached_tests;
+
+#[cfg(test)]
+#[path = "../../../../../test/server/unit/engine_backend/file_manager/planned_offline_listing.rs"]
+mod planned_offline_tests;

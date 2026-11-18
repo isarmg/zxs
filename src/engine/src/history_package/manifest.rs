@@ -4,11 +4,14 @@
 mod timestamp_tests;
 
 #[cfg(test)]
+#[path = "../../../../test/engine/unit/history_package/registered_namespace_tests.rs"]
+mod namespace_tests;
+
+#[cfg(test)]
 #[path = "../../../../test/engine/unit/history_package/integer_tests.rs"]
 mod integer_tests;
 
 use crate::business::{validate_branch_name, validate_entries};
-use crate::directory_contents::DirectoryContents;
 use crate::{Error, ErrorCode, Result};
 use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -34,13 +37,18 @@ pub struct HistoryManifest {
     pub branches: BTreeMap<String, Branch>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_selections: BTreeMap<String, String>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "storage_contract::reject_non_file_table")]
     pub directory_branches: BTreeMap<String, DirectoryBranch>,
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "storage_contract::reject_non_file_table")]
     pub directory_git_repositories:
         BTreeMap<String, storage_contract::directory_git::DirectoryGitRepository>,
-    #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "SharedRecords::is_empty",
+        serialize_with = "storage_contract::reject_non_file_table")]
     pub directory_trees: SharedRecords<DirectoryTree>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "storage_contract::reject_non_file_table")]
     pub file_write_origins: BTreeMap<String, String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_contexts: BTreeMap<String, FileContext>,
@@ -57,7 +65,8 @@ pub struct HistoryManifest {
     pub file_node_parents: BTreeMap<String, Vec<String>>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_path_notes: BTreeMap<String, String>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "storage_contract::reject_non_file_table")]
     pub directory_tree_selections: BTreeMap<String, String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_locations: BTreeMap<String, String>,
@@ -65,13 +74,11 @@ pub struct HistoryManifest {
     pub file_backup_paths: BTreeMap<String, BTreeMap<String, String>>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_backup_policies: BTreeMap<String, String>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "storage_contract::reject_non_file_table")]
     pub directory_selections: BTreeMap<String, String>,
-    #[serialization(
-        default,
-        skip_serializing_if = "BTreeMap::is_empty",
-        with = "storage_contract::u64_string_map"
-    )]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "storage_contract::reject_non_file_table")]
     pub directory_selection_generations: BTreeMap<String, u64>,
     #[serialization(
         default,
@@ -123,6 +130,7 @@ impl HistoryManifest {
 
     /// Build the history projection; reference validation belongs to its caller.
     pub(super) fn project_state(state: &State, history_id: &str) -> Result<Self> {
+        crate::ordinary_authority::tables(state)?;
         let history = state.histories.get(history_id).cloned().ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::HistoryNotFound,
@@ -140,19 +148,6 @@ impl HistoryManifest {
                 )
             })?;
         let repository_id = history.repository_id.clone();
-        let directory_ids = state
-            .commits
-            .values()
-            .filter(|commit| commit.history_tree_id == history_id)
-            .flat_map(|commit| {
-                commit
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
-                    .map(|entry| entry.entry_id.as_str())
-            })
-            .chain(std::iter::once(repository_id.as_str()))
-            .collect::<BTreeSet<_>>();
         let versions = state
             .versions
             .iter()
@@ -179,12 +174,7 @@ impl HistoryManifest {
                 .filter(|(file, _)| file_ids.contains(file.as_str()))
                 .map(|(file, path)| (file.clone(), path.clone()))
                 .collect(),
-            file_write_origins: state
-                .file_write_origins
-                .iter()
-                .filter(|(file, _)| file_ids.contains(file.as_str()))
-                .map(|(file, origin)| (file.clone(), origin.clone()))
-                .collect(),
+            file_write_origins: Default::default(),
             file_contexts: state
                 .file_contexts
                 .iter()
@@ -265,12 +255,7 @@ impl HistoryManifest {
                 .filter(|(file, _)| file_ids.contains(file.as_str()))
                 .map(|(file, generation)| (file.clone(), *generation))
                 .collect(),
-            directory_tree_selections: state
-                .directory_tree_selections
-                .iter()
-                .filter(|(directory, _)| directory_ids.contains(directory.as_str()))
-                .map(|(directory, tree)| (directory.clone(), tree.clone()))
-                .collect(),
+            directory_tree_selections: Default::default(),
             container_tags: state.container_tags.iter()
                 .filter(|(file, _)| file_ids.contains(file.to_string().as_str()))
                 .map(|(file, tags)| (*file, tags.clone()))
@@ -298,41 +283,11 @@ impl HistoryManifest {
                 })
                 .map(|(file, branch)| (file.clone(), branch.clone()))
                 .collect(),
-            directory_branches: state
-                .directory_branches
-                .iter()
-                .filter(|(_, branch)| branch.repository_id == repository_id)
-                .map(|(id, branch)| (id.clone(), branch.clone()))
-                .collect(),
-            directory_git_repositories: state
-                .directory_git_repositories
-                .iter()
-                .filter(|(_, git)| git.repository_id == repository_id)
-                .map(|(id, git)| (id.clone(), git.clone()))
-                .collect(),
-            directory_trees: state.directory_trees.subset(|_, tree| {
-                state
-                    .directory_branches
-                    .get(&tree.directory_branch_id)
-                    .is_some_and(|branch| branch.repository_id == repository_id)
-            }),
-            directory_selections: state
-                .directory_selections
-                .iter()
-                .filter(|(_, selected)| {
-                    state
-                        .directory_branches
-                        .get(*selected)
-                        .is_some_and(|branch| branch.repository_id == repository_id)
-                })
-                .map(|(directory, selected)| (directory.clone(), selected.clone()))
-                .collect(),
-            directory_selection_generations: state
-                .directory_selection_generations
-                .iter()
-                .filter(|(directory, _)| directory_ids.contains(directory.as_str()))
-                .map(|(directory, generation)| (directory.clone(), *generation))
-                .collect(),
+            directory_branches: Default::default(),
+            directory_git_repositories: Default::default(),
+            directory_trees: Default::default(),
+            directory_selections: Default::default(),
+            directory_selection_generations: Default::default(),
             branches: state
                 .branches
                 .iter()
@@ -389,167 +344,40 @@ impl HistoryManifest {
         };
         Ok(manifest)
     }
-    fn validate_directory_snapshot(
-        &self,
-        branch: &DirectoryBranch,
-        contents: DirectoryContents<'_>,
-    ) -> Result<()> {
-        let invalid =
-            |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
-        let history = &self.history.history_tree_id;
-        let commit = self
-            .commits
-            .get(contents.commit_id)
-            .ok_or_else(|| invalid("directory composition commit is outside the history"))?;
-        let scope_key = name_policy::path_key(contents.path);
-        if contents.path.is_empty() {
-            if branch.directory_id != self.repository.repository_id {
-                return Err(invalid(
-                    "root directory identity differs from its repository",
-                ));
-            }
-        } else {
-            name_policy::validate_path(contents.path)?;
-            validate_id(&branch.directory_id, "entry")?;
-            if !commit.entries.iter().any(|entry| {
-                entry.kind == NamespaceEntryKind::Directory
-                    && entry.entry_id == branch.directory_id
-                    && entry.lookup_key() == scope_key
-            }) {
-                return Err(invalid(
-                    "directory composition stable identity is absent from its snapshot",
-                ));
+    fn validate_registered_commit_graph(&self) -> Result<()> {
+        let invalid = |message| Error::new(ErrorCode::HistoryPackageInvalid, message);
+        let main = self.branches.get(&self.repository.main_branch_id)
+            .ok_or_else(|| invalid("registered namespace main branch is absent"))?;
+        if !self.repository.file_manager_root
+            || self.history.main_branch_id.as_ref() != Some(&main.branch_id)
+            || main.branch_kind != BranchKind::Full || main.file_id.is_some()
+            || main.file_node_id.is_some() || main.fork_commit_id != self.history.root_commit_id
+            || self.branches.iter().any(|(key, branch)|
+                key != &main.branch_id && branch.branch_kind != BranchKind::File)
+        {
+            return Err(invalid("only the registered namespace main may be a full branch"));
+        }
+        let mut children = BTreeMap::<&str, Vec<&str>>::new();
+        for (id, commit) in self.commits.iter() {
+            for parent in &commit.parent_commit_ids {
+                children.entry(parent).or_default().push(id);
             }
         }
-        let prefix = format!("{scope_key}/");
-        let mut paths = BTreeSet::new();
-        let mut entries = BTreeMap::<&str, &Entry>::new();
-        let mut files = BTreeSet::new();
-        for entry in contents.entries {
-            Self::validate_entry_envelope(entry)?;
-            if (!scope_key.is_empty() && !entry.lookup_key().starts_with(&prefix))
-                || entry.entry_id == branch.directory_id
-                || !paths.insert(entry.lookup_key())
+        let mut pending = vec![self.history.root_commit_id.as_str()];
+        let mut reached = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if reached.insert(id)
+                && let Some(next) = children.get(id)
             {
-                return Err(invalid(
-                    "directory composition entry escapes its scope or normalized identity",
-                ));
-            }
-            if let Some(previous) = entries.insert(entry.entry_id.as_str(), entry)
-                && (entry.kind != NamespaceEntryKind::File
-                    || previous.kind != NamespaceEntryKind::File
-                    || previous.file_id != entry.file_id)
-            {
-                return Err(invalid(
-                    "directory composition entry identity is reused by different entities",
-                ));
-            }
-            if entry.kind == NamespaceEntryKind::File {
-                let version = self
-                    .versions
-                    .get(&entry.version_id)
-                    .ok_or_else(|| invalid("directory composition version is missing"))?;
-                let shared = contents
-                    .file_branches
-                    .get(&entry.file_id)
-                    .and_then(|id| self.branches.get(id))
-                    .ok_or_else(|| {
-                        invalid("directory composition shared file branch is missing")
-                    })?;
-                files.insert(entry.file_id.as_str());
-                if version.history_tree_id != *history
-                    || version.file_id != entry.file_id
-                    || version.logical_size != entry.size
-                    || shared.history_tree_id != *history
-                    || shared.branch_kind != BranchKind::File
-                    || shared.file_id.as_deref() != Some(entry.file_id.as_str())
-                {
-                    return Err(invalid(
-                        "directory composition file, version or shared branch differs",
-                    ));
-                }
+                pending.extend(next.iter().copied());
             }
         }
-        if contents.file_branches.len() != files.len() {
-            return Err(invalid(
-                "directory composition file branch coverage differs",
-            ));
-        }
-        let file_entries = contents
-            .entries
-            .iter()
-            .filter(|entry| entry.kind == NamespaceEntryKind::File)
-            .collect::<Vec<_>>();
-        if contents.file_contexts.len() != file_entries.len() {
-            return Err(invalid("directory path context coverage differs"));
-        }
-        for entry in file_entries {
-            let context = contents
-                .file_contexts
-                .get(entry.lookup_key())
-                .ok_or_else(|| invalid("directory path write context is missing"))?;
-            self.validate_file_context(context, &entry.file_id, &entry.version_id)?;
-        }
-        for (file, origin) in contents.inherited_files {
-            if !contents.file_branches.contains_key(file)
-                || !self
-                    .directory_branches
-                    .get(origin)
-                    .is_some_and(|origin| origin.repository_id == branch.repository_id)
-            {
-                return Err(invalid(
-                    "inherited write intent escapes its directory history or file scope",
-                ));
-            }
-        }
-        for (directory, reference) in contents.directory_refs {
-            let selected = self
-                .directory_branches
-                .get(&reference.directory_branch_id)
-                .ok_or_else(|| invalid("directory composition child branch is missing"))?;
-            let tree = self
-                .directory_trees
-                .get(&reference.tree_id)
-                .ok_or_else(|| invalid("directory composition child tree is missing"))?;
-            let owner = self
-                .directory_branches
-                .get(&tree.directory_branch_id)
-                .ok_or_else(|| invalid("directory composition child tree owner is missing"))?;
-            if !contents.entries.iter().any(|entry| {
-                entry.kind == NamespaceEntryKind::Directory && &entry.entry_id == directory
-            }) || selected.directory_id != *directory
-                || owner.directory_id != *directory
-                || selected.repository_id != branch.repository_id
-                || owner.repository_id != branch.repository_id
-                || !self.directory_branch_inherits(
-                    &reference.directory_branch_id,
-                    &tree.directory_branch_id,
-                )
-            {
-                return Err(invalid(
-                    "directory composition child reference escapes its stable scope",
-                ));
-            }
+        if reached.len() != self.commits.len() {
+            return Err(invalid("FILE history contains an unreachable commit or cycle"));
         }
         Ok(())
     }
-    fn directory_branch_inherits(&self, selected: &str, ancestor: &str) -> bool {
-        let mut cursor = Some(selected);
-        let mut seen = BTreeSet::new();
-        while let Some(id) = cursor {
-            if id == ancestor {
-                return true;
-            }
-            if !seen.insert(id) {
-                return false;
-            }
-            cursor = self
-                .directory_branches
-                .get(id)
-                .and_then(|branch| branch.parent_branch_id.as_deref());
-        }
-        false
-    }
+
     fn validate_file_context(
         &self,
         context: &FileContext,
@@ -570,12 +398,8 @@ impl HistoryManifest {
                 "file path context belongs to another file or history",
             ));
         }
-        if context
-            .inherited_from
-            .as_ref()
-            .is_some_and(|origin| !self.directory_branches.contains_key(origin))
-        {
-            return Err(invalid("file path inherited context origin is missing"));
+        if context.inherited_from.is_some() {
+            return Err(invalid("file selection must name its own FILE branch"));
         }
         if let Some(node) = &context.node_id {
             let body = self.file_node_version(node)?;
@@ -863,6 +687,12 @@ impl HistoryManifest {
         Ok(())
     }
     pub(crate) fn validate(&self) -> Result<()> {
+        if !self.directory_branches.is_empty() || !self.directory_git_repositories.is_empty()
+            || !self.directory_trees.is_empty() || !self.directory_tree_selections.is_empty()
+            || !self.directory_selections.is_empty() || !self.directory_selection_generations.is_empty()
+        {
+            return Err(Error::new(ErrorCode::HistoryPackageInvalid, "history contains a non-FILE table"));
+        }
         super::path_audit::validate_manifest(self)?;
         if !self.file_path_nodes.is_empty() {
             return Err(crate::persist::path_changes::invalid());
@@ -895,10 +725,14 @@ impl HistoryManifest {
             {
                 return Err(invalid("commit identity or parent closure differs"));
             }
-            if (commit.kind != "directory_commit"
-                && (id == &self.history.root_commit_id) != commit.parent_commit_ids.is_empty())
-                || (commit.kind == "directory_commit" && id == &self.history.root_commit_id)
+            let root = id == &self.history.root_commit_id;
+            if root != (commit.kind == "root") || root != commit.parent_commit_ids.is_empty()
                 || commit.parent_commit_ids.len() > 1
+                || !matches!(commit.kind.as_str(),
+                    "root" | "content" | "namespace" | "file_content" | "file_selection"
+                        | "file_metadata" | "file_node_publication" | "file_branch_root"
+                        | "file_branch_pending" | "file_deletion_restore" | "object_move"
+                        | "file_history_copy" | "file_history_move" | "file_history_projection")
             {
                 return Err(invalid(
                     "history has an invalid namespace root or multi-parent commit",
@@ -973,9 +807,9 @@ impl HistoryManifest {
                 }
             }
         }
-        // Independent directory roots require exact user-commit markers; all
-        // roots still participate in one complete acyclic history closure.
-        self.validate_commit_forest()?;
+        // Every retained ordinary FILE branch and snapshot must descend from
+        // this one registered namespace root, including archived FILE heads.
+        self.validate_registered_commit_graph()?;
         for (id, branch) in &self.branches {
             validate_id(id, "br")?;
             validate_branch_name(&branch.name)?;
@@ -1053,204 +887,13 @@ impl HistoryManifest {
                 ));
             }
         }
-        for (id, branch) in &self.directory_branches {
-            validate_id(id, "dbr")?;
-            validate_branch_name(&branch.name)?;
-            if branch.directory_branch_id != *id
-                || branch.repository_id != self.repository.repository_id
-            {
-                return Err(invalid(
-                    "directory composition identity or repository differs",
-                ));
-            }
-            // Parents are composition records within the same stable directory;
-            // their historical paths may differ after a directory rename.
-            if let Some(parent_id) = branch.parent_branch_id.as_deref() {
-                let previous = self
-                    .directory_branches
-                    .get(parent_id)
-                    .ok_or_else(|| invalid("directory composition parent is missing"))?;
-                if previous.repository_id != branch.repository_id
-                    || previous.directory_id != branch.directory_id
-                {
-                    return Err(invalid(
-                        "directory composition parent escapes its stable directory",
-                    ));
-                }
-            }
-        }
-        // Resolve each edge once rather than walking every ancestor again for
-        // every retained composition in a long directory history.
-        let mut resolved = BTreeSet::new();
-        for id in self.directory_branches.keys() {
-            let mut path = BTreeSet::new();
-            let mut cursor = Some(id.as_str());
-            while let Some(id) = cursor {
-                if resolved.contains(id) {
-                    break;
-                }
-                if !path.insert(id) {
-                    return Err(invalid("directory composition parent cycle"));
-                }
-                cursor = self.directory_branches[id].parent_branch_id.as_deref();
-            }
-            resolved.extend(path);
-        }
-        for (id, tree) in self.directory_trees.iter() {
-            validate_id(id, "dtree")?;
-            let branch = self
-                .directory_branches
-                .get(&tree.directory_branch_id)
-                .ok_or_else(|| invalid("directory tree owner branch is missing"))?;
-            if tree.tree_id != *id {
-                return Err(invalid("directory tree identity differs"));
-            }
-            self.validate_directory_snapshot(branch, DirectoryContents::from(tree))?;
-            if let Some(parent) = &tree.parent_tree_id {
-                let previous = self
-                    .directory_trees
-                    .get(parent)
-                    .and_then(|tree| self.directory_branches.get(&tree.directory_branch_id))
-                    .ok_or_else(|| invalid("directory tree parent or its branch is missing"))?;
-                if previous.repository_id != branch.repository_id
-                    || previous.directory_id != branch.directory_id
-                {
-                    return Err(invalid(
-                        "directory tree parent escapes its stable directory",
-                    ));
-                }
-            }
-        }
-        let mut resolved = BTreeSet::new();
-        for id in self.directory_trees.keys() {
-            let mut path = BTreeSet::new();
-            let mut cursor = Some(id.as_str());
-            while let Some(id) = cursor {
-                if resolved.contains(id) {
-                    break;
-                }
-                if !path.insert(id) {
-                    return Err(invalid("directory tree parent cycle"));
-                }
-                cursor = self.directory_trees[id].parent_tree_id.as_deref();
-            }
-            resolved.extend(path);
-        }
-        for (id, branch) in &self.directory_branches {
-            let head = self
-                .directory_trees
-                .get(&branch.head_tree_id)
-                .ok_or_else(|| invalid("directory branch HEAD tree is missing"))?;
-            let owner = &self.directory_branches[&head.directory_branch_id];
-            if owner.directory_id != branch.directory_id
-                || owner.repository_id != branch.repository_id
-                || branch.commit_id != head.commit_id
-                || branch.path != head.path
-                || branch.file_branches != head.file_branches
-                || branch.directory_refs != head.directory_refs
-                || branch.entries != head.entries
-            {
-                return Err(invalid(
-                    "directory branch projection differs from its HEAD tree",
-                ));
-            }
-            if branch.materialized {
-                if head.directory_branch_id != *id
-                    || branch.file_contexts != head.file_contexts
-                    || branch.sequence != head.sequence
-                    || branch.inherited_files != head.inherited_files
-                {
-                    return Err(invalid(
-                        "completed directory branch HEAD belongs to another branch",
-                    ));
-                }
-            } else {
-                self.validate_directory_snapshot(branch, DirectoryContents::from(branch))?;
-                if branch.sequence < head.sequence {
-                    return Err(invalid(
-                        "directory branch registration precedes its inherited tree",
-                    ));
-                }
-                let mut parent = branch.parent_branch_id.as_deref();
-                let mut inherited = false;
-                while let Some(parent_id) = parent {
-                    if parent_id == head.directory_branch_id {
-                        inherited = true;
-                        break;
-                    }
-                    parent = self.directory_branches[parent_id]
-                        .parent_branch_id
-                        .as_deref();
-                }
-                if !inherited {
-                    return Err(invalid(
-                        "unwritten directory branch HEAD is not inherited from its parent",
-                    ));
-                }
-            }
-        }
-        for (directory, selected) in &self.directory_selections {
-            if !self
-                .directory_branches
-                .get(selected)
-                .is_some_and(|branch| branch.directory_id == *directory)
-            {
-                return Err(invalid(
-                    "selected directory composition is missing or belongs to another directory",
-                ));
-            }
-        }
-        for (directory, tree) in &self.directory_tree_selections {
-            let tree = self
-                .directory_trees
-                .get(tree)
-                .ok_or_else(|| invalid("selected directory tree is missing"))?;
-            if !self
-                .directory_branches
-                .get(&tree.directory_branch_id)
-                .is_some_and(|branch| &branch.directory_id == directory)
-                || !self.directory_selections.contains_key(directory)
-                || !self.directory_branch_inherits(
-                    &self.directory_selections[directory],
-                    &tree.directory_branch_id,
-                )
-            {
-                return Err(invalid(
-                    "selected directory tree escapes its directory scope",
-                ));
-            }
-        }
-        let directory_ids = self
-            .commits
-            .values()
-            .flat_map(|commit| {
-                commit
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
-                    .map(|entry| entry.entry_id.as_str())
-            })
-            .collect::<BTreeSet<_>>();
-        for directory in self.directory_selection_generations.keys() {
-            if directory == &self.repository.repository_id {
-                continue;
-            }
-            validate_id(directory, "entry")?;
-            if !directory_ids.contains(directory.as_str()) {
-                return Err(invalid(
-                    "directory selection generation is outside the history",
-                ));
-            }
-        }
         let file_ids = self
             .versions
             .values()
             .map(|version| version.file_id.as_str())
             .collect::<BTreeSet<_>>();
-        for (file, origin) in &self.file_write_origins {
-            if !file_ids.contains(file.as_str()) || !self.directory_branches.contains_key(origin) {
-                return Err(invalid("current inherited file intent escapes the history"));
-            }
+        if !self.file_write_origins.is_empty() {
+            return Err(invalid("invalid independent write origin in FILE history"));
         }
         let prefix = format!("{}/", self.repository.repository_id);
         let live = self
@@ -1382,7 +1025,6 @@ impl HistoryManifest {
                 return Err(invalid("version checksum metadata is invalid"));
             }
         }
-        self.validate_directory_git()?;
         self.validate_file_nodes()?;
         for (id, link) in &self.merge_links {
             validate_id(id, "link")?;

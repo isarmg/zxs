@@ -189,51 +189,23 @@ fn purged_state_reopens_with_one_damaged_and_one_offline_metadata_member() {
 }
 
 #[test]
-fn migrated_content_does_not_consume_live_payload_budget() {
-    let (_temp, mut engine, repository) = fixture();
-    let mut config = engine.config().clone();
-    for disk in &mut config.disks {
-        disk.capacity_bytes = Some(40);
-    }
-    engine.config = ValidatedConfig::try_from(config).unwrap();
+fn an_explicit_file_purge_releases_only_its_original_payload_byte_budget() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = Config::development(crate::test_disks([temp.path().join("p")])).unwrap();
+    config.disks[0].capacity_bytes = Some(40);
+    let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
+    let repository = engine.create_disk_root("P01", "admin", OperationId::generate().unwrap()).unwrap();
     let original = save(&mut engine, &repository.main_branch_id, b"firstold");
-    let cut = engine.state.branches[&repository.main_branch_id]
-        .head_commit_id
-        .clone();
-    save(&mut engine, &repository.main_branch_id, b"next-old");
+    let retained = save(&mut engine, &repository.main_branch_id, b"next-old");
     assert_eq!(engine.used_bytes("P01"), 16);
-    let split = engine
-        .create_split_plan(&repository.history_tree_id, &cut, "admin")
-        .unwrap();
-    let result = engine
-        .commit_plan(
-            &split.plan_id,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    assert_eq!(
-        engine.state.content_states[&original],
-        storage_contract::ContentState::Migrated
-    );
-    assert_eq!(engine.used_bytes("P01"), 16);
-    let repository =
-        engine.state.repositories[result.result["repository_id"].as_str().unwrap()].clone();
-    // The old copies have been removed. A 17-byte save is admitted into the
-    // 40-byte slot budget (16 retained + 17 new), not double-counted as 49.
-    save(
-        &mut engine,
-        &repository.main_branch_id,
-        b"new payload bytes",
-    );
-    assert_eq!(engine.used_bytes("P01"), 33);
-    assert!(
-        engine
-            .disk_status()
-            .unwrap()
-            .iter()
-            .all(|disk| disk.used_bytes == 33)
-    );
+    let plan = engine.create_purge_plan(&repository.history_tree_id, vec![original.clone()], "admin").unwrap();
+    engine.commit_plan(&plan.plan_id,"admin",OperationId::generate().unwrap()).unwrap();
+    assert_eq!(engine.state.content_states[&original], ContentState::Purged);
+    assert_eq!(engine.state.content_states[&retained], ContentState::Available);
+    assert_eq!(engine.used_bytes("P01"), 8);
+    save(&mut engine, &repository.main_branch_id, b"new payload bytes");
+    assert_eq!(engine.used_bytes("P01"), 25);
+    assert_eq!(engine.disk_status().unwrap()[0].used_bytes, 25);
 }
 
 #[test]

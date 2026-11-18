@@ -137,7 +137,6 @@ pub(crate) struct Image<'a> {
     metadata_bytes: usize,
     pub(crate) bodies: u64,
     pub(crate) body_bytes: u64,
-    pub(crate) directory_repositories: usize,
 }
 
 impl<'a> Image<'a> {
@@ -173,7 +172,6 @@ impl<'a> Image<'a> {
             metadata_bytes: 0,
             bodies: 0,
             body_bytes: 0,
-            directory_repositories: 0,
         };
         let state = admitted.state();
         for history in state.histories.keys() {
@@ -335,29 +333,10 @@ impl<'a> Image<'a> {
         for database in PreparedDatabases::capture(admitted, stop)?.into_databases() {
             preparation_checkpoint(stop)?;
             let (scope, bytes) = database.into_parts();
-            let path = match scope {
-                Scope::File { history, file } => self
-                    .file_homes
-                    .get(&(history, file))
-                    .ok_or_else(|| invalid("ordinary Backup FILE database has no whole entity"))?
-                    .path
-                    .join(super::file_database::NAME),
-                Scope::Directory {
-                    history, directory, ..
-                } => {
-                    let home = self
-                        .directory_homes
-                        .get(&(history.clone(), DirectoryId::parse(&directory)?))
-                        .ok_or_else(|| {
-                            invalid("ordinary Backup directory database has no complete forest")
-                        })?;
-                    self.directory_repositories += 1;
-                    PathBuf::from("histories")
-                        .join(history)
-                        .join(home.to.as_path())
-                        .join(super::directory_database::NAME)
-                }
-            };
+            let Scope::File { history, file } = scope;
+            let path = self.file_homes.get(&(history, file))
+                .ok_or_else(|| invalid("ordinary Backup FILE database has no whole entity"))?
+                .path.join(super::file_database::NAME);
             self.add_file(path, Data::Bytes(bytes))?;
         }
         Ok(())

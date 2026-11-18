@@ -45,17 +45,12 @@ async fn plan_read_and_cancel_preserve_raw_shapes_and_permanent_replay() {
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     let repo = ordinary_root(&app, &token).await;
-    let branch = success(
-        &app,
-        &token,
-        "GET",
-        &format!("/api/branches/{}", repo["main_branch_id"].as_str().unwrap()),
-        None,
-    )
-    .await;
-    let plan = success(&app, &token, "POST", &format!("/api/history-trees/{}/historical-save-plans",repo["history_tree_id"].as_str().unwrap()), Some(json!({
-        "source_commit_id":branch["head_commit_id"], "name":"Prepared", "workspace_id":null, "primary_slot_id":null, "target_copies":null
-    }))).await;
+    manager_upload(&app, &token, "retention.txt", b"first ordinary version").await;
+    let page = success(&app, &token, "GET", "/api/file-manager/disks/P01/entries", None).await;
+    let first = page["entries"].as_array().unwrap().iter().find(|row| row["name"] == "retention.txt").unwrap()["version_id"].as_str().unwrap();
+    manager_upload(&app, &token, "retention.txt", b"second ordinary version").await;
+    let plan = success(&app, &token, "POST", &format!("/api/history-trees/{}/purge-plans",repo["history_tree_id"].as_str().unwrap()),
+        Some(json!({"version_ids":[first]}))).await;
     let path = format!("/api/plans/{}", plan["plan_id"].as_str().unwrap());
     assert_eq!(
         success(&app, &token, "GET", &format!("{path}?unused=kept"), None).await,
@@ -184,8 +179,8 @@ async fn commit_preserves_required_fields_before_lookup_and_format_errors_after_
 }
 
 #[tokio::test]
-async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_receipt() {
-    for split in [false, true] {
+async fn committed_file_purge_http_retry_resumes_cleanup_before_returning_receipt() {
+    {
         let root = tempfile::tempdir().unwrap();
         let system = root.path().join("system");
         let mut engine = Engine::initialize(
@@ -199,10 +194,8 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
         )
         .unwrap();
         let repo = engine
-            .create_repository(
-                &storage_contract::RepositoryName::parse("Cleanup HTTP").unwrap(),
+            .create_disk_root(
                 "P01",
-                3,
                 "admin",
                 storage_contract::OperationId::generate().unwrap(),
             )
@@ -228,37 +221,35 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
                 .commit_id
                 .unwrap()
         };
-        let cut = save(&mut engine, b"old bytes");
+        save(&mut engine, b"old bytes");
         let first = engine.list_tree(&repo.main_branch_id).unwrap()[0]
             .version_id
             .clone();
         save(&mut engine, b"latest bytes");
-        let plan = if split {
-            engine.create_split_plan(&repo.history_tree_id, &cut, "admin")
-        } else {
-            engine.create_purge_plan(&repo.history_tree_id, vec![first.clone()], "admin")
-        }
-        .unwrap();
-        let directories = engine
-            .config()
-            .disks
-            .iter()
-            .map(|disk| {
-                disk.root
-                    .join("histories")
-                    .join(&repo.history_tree_id)
-                    .join("versions")
-                    .join(&first)
-            })
-            .collect::<Vec<_>>();
-        let payloads = directories
-            .iter()
-            .map(|directory| fixture_payload(directory, engine.state()))
-            .collect::<Vec<_>>();
+        let plan = engine.create_purge_plan(&repo.history_tree_id, vec![first.clone()], "admin").unwrap();
+        // Use the retained owner and registered FILE entity; never target a
+        // loose history directory or discover a file from its display name.
+        let version = &engine.state().versions[&first];
+        let file = version.file_id.parse::<storage_contract::FileId>().unwrap();
+        let record = &engine.state().file_containers[&file];
+        let replica = &record.replicas[&record.owner_disk];
+        assert_eq!(record.replicas.len(), 1);
+        assert!(replica.prefixes.is_empty());
+        let owner = engine.config().disks.iter().find(|disk| disk.disk_id == record.owner_disk.to_string()).unwrap();
+        let container = owner.root.join("common-data").join(record.namespace.name.as_str());
+        use std::os::unix::fs::MetadataExt;
+        let actual = std::fs::symlink_metadata(&container).unwrap();
+        assert!(actual.is_dir());
+        assert_eq!((actual.dev(), actual.ino()),(replica.entity.device(),replica.entity.inode()));
+        let directory = owner.root.join("zxs-data/common-data").join(&repo.history_tree_id).join("versions").join(&first);
+        let descriptor: storage_contract::FileVersion = json_codec::from_slice(&std::fs::read(directory.join("version.json")).unwrap()).unwrap();
+        assert_eq!(descriptor.file_id, version.file_id);
+        assert_eq!(descriptor.version_id, first);
+        let payloads = [container.join("versions").join(format!("{}-{}",version.storage_id,version.creation_name))];
         for payload in &payloads {
             assert_eq!(std::fs::read(payload).unwrap(), b"old bytes");
         }
-        let blocker = directories[0].join("purged.json");
+        let blocker = directory.join("purged.json");
         std::fs::create_dir(&blocker).unwrap();
         let backend = Arc::new(EngineBackend::new(engine));
         let auth = backend
@@ -278,11 +269,7 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
             let (_, rejected) = send(&app, Some(&token), "POST", &path, Some(wrong)).await;
             assert_eq!(
                 rejected["error"]["code"],
-                if split {
-                    "SPLIT_PLAN_STALE"
-                } else {
-                    "PLAN_STALE"
-                }
+                "PLAN_STALE"
             );
         }
         let (_, failed) = send(&app, Some(&token), "POST", &path, Some(body.clone())).await;
@@ -299,9 +286,7 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
             "committed"
         );
         assert!(payloads.iter().all(|path| path.exists()));
-        if !split {
-            assert_conditional_content_is_purged(&app, &token, &first).await;
-        }
+        assert_conditional_content_is_purged(&app, &token, &first).await;
         let published_events = success(&app, &token, "GET", "/api/events", None).await;
         let (_, retried_failure) =
             send(&app, Some(&token), "POST", &path, Some(body.clone())).await;
@@ -323,9 +308,7 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
         );
         assert!(payloads.iter().all(|path| !path.exists()));
         assert!(blocker.is_file());
-        if !split {
-            assert_conditional_content_is_purged(&app, &token, &first).await;
-        }
+        assert_conditional_content_is_purged(&app, &token, &first).await;
         drop(app);
         let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
         let auth = backend.open_auth(&system).unwrap();

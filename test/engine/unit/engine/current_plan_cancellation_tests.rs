@@ -151,16 +151,6 @@ impl Fixture {
             .unwrap()
     }
 
-    fn split(&mut self) -> Plan {
-        self.engine
-            .create_split_plan(
-                &self.repository.history_tree_id,
-                self.source.commit_id.as_deref().unwrap(),
-                "admin",
-            )
-            .unwrap()
-    }
-
     fn plan_path(&self, plan: &Plan) -> PathBuf {
         self.temp
             .path()
@@ -224,7 +214,7 @@ fn current_plan_cancellation_keeps_other_local_plans_and_cold_replays_permanentl
     fixture.exit(0, MembershipExitAction::Deregister);
     let (saved, stopped_bytes) = fixture.replace_stopped_root(0);
     let first = fixture.purge("admin");
-    let second = fixture.split();
+    let second = fixture.purge("admin");
     let third = fixture.purge("other");
     let local = files(&fixture.temp.path().join("system/plans"));
     let before = fixture.engine.state.clone();
@@ -422,7 +412,7 @@ fn current_plan_cancellation_busy_keeps_preparation_and_read_tails_owned() {
     fixture.exit(0, MembershipExitAction::Deregister);
     let (saved, stopped_bytes) = fixture.replace_stopped_root(0);
     let plan = fixture.purge("admin");
-    let other = fixture.split();
+    let other = fixture.purge("admin");
     let old_operation = op();
     let old_result = fixture
         .engine
@@ -678,7 +668,7 @@ fn current_plan_cancellation_fast_path_and_cold_replay_reject_closed_write_set_f
         .engine
         .cancel_plan(&first.plan_id, "admin", first_operation)
         .unwrap();
-    let plan = fixture.split();
+    let plan = fixture.purge("admin");
     let previous = fixture.engine.state.clone();
     let view = fixture.engine.current_namespaces.clone().unwrap();
     let operation = op();
@@ -966,35 +956,19 @@ fn current_plan_cancellation_old_receipts_survive_registry_without_a_new_publica
 }
 
 #[test]
-fn current_plan_cancellation_keeps_historical_workspace_and_staged_source() {
+fn current_purge_cancellation_preserves_an_unrelated_sealed_file_workspace() {
     let mut fixture = Fixture::new();
-    let source = fixture.source.commit_id.clone().unwrap();
-    let workspace = fixture
-        .engine
-        .create_historical_workspace(&fixture.repository.main_branch_id, &source, "admin")
-        .unwrap();
+    let workspace = fixture.engine.create_workspace(&fixture.repository.main_branch_id, "admin").unwrap();
     let staged = fixture
         .engine
         .stage_bytes(
             &workspace.workspace_id,
             "live",
-            b"retained historical staging",
+            b"retained ordinary staging",
         )
         .unwrap();
-    let plan = fixture
-        .engine
-        .create_historical_save_plan(
-            &fixture.repository.history_tree_id,
-            HistoricalSaveOptions {
-                source_commit_id: source,
-                name: "cancelled historical preparation".into(),
-                workspace_id: Some(workspace.workspace_id.clone()),
-                primary_slot_id: None,
-                target_copies: None,
-            },
-            "admin",
-        )
-        .unwrap();
+    let plan = fixture.purge("admin");
+    fixture.engine.seal_workspace(&workspace.workspace_id, "admin").unwrap();
     let sealed = fixture.engine.workspace(&workspace.workspace_id).unwrap();
     assert_eq!(sealed.state, WorkspaceState::Sealed);
     let sealed_bytes = canonical_json(&sealed).unwrap();
@@ -1011,12 +985,12 @@ fn current_plan_cancellation_keeps_historical_workspace_and_staged_source() {
     );
     assert_eq!(
         fs::read(&staged.source_path).unwrap(),
-        b"retained historical staging"
+        b"retained ordinary staging"
     );
     assert_eq!(
         fixture
             .engine
-            .commit_historical_save_plan(&plan.plan_id, "admin", op())
+            .commit_plan(&plan.plan_id, "admin", op())
             .unwrap_err()
             .code(),
         ErrorCode::PlanClosed
@@ -1036,7 +1010,7 @@ fn current_plan_cancellation_keeps_historical_workspace_and_staged_source() {
     );
     assert_eq!(
         fs::read(&staged.source_path).unwrap(),
-        b"retained historical staging"
+        b"retained ordinary staging"
     );
     assert_eq!(
         engine
@@ -1096,7 +1070,7 @@ fn current_plan_cancellation_failure_keeps_local_evidence_and_recovers_a_decided
         fixture.exit(0, MembershipExitAction::Deregister);
         let (saved, stopped_bytes) = fixture.replace_stopped_root(0);
         let plan = fixture.purge("admin");
-        let other = fixture.split();
+        let other = fixture.purge("admin");
         let local = files(&fixture.temp.path().join("system/plans"));
         let state = fixture.engine.state.clone();
         let view = fixture.engine.current_namespaces.clone().unwrap();

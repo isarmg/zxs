@@ -272,11 +272,11 @@ fn run(
     progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationRegistryInstalled;
         status.detail = format!(
-            "decision {hash} retains exact native registry {} and Config on all {} original targets, with {} branch and {} directory scopes; frozen read view only, ordinary Current/target writer and source fence release remain unavailable",
+            "decision {hash} retains exact native registry {} and Config on all {} original targets, with {} branch scopes and {} registered folders; frozen read view only, ordinary Current/target writer and source fence release remain unavailable",
             installed.configuration.registry.root_hash(),
             installed.configuration.publication.targets,
             installed.branch_scopes,
-            installed.directory_scopes,
+            installed.registered_folders,
         );
     })?;
     let serving = serving::install(&prepared, &decision, &expected, stop)?;
@@ -336,11 +336,11 @@ fn run(
     progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationCurrentReadAdmitted;
         status.detail = format!(
-            "decision {hash} admits read-only Current namespaces on all {} targets against actual Publication and common database set {}; {} readable branch scopes and {} directory scopes, no active Engine Current/writer or source fence release",
+            "decision {hash} admits read-only Current namespaces on all {} targets against actual Publication and common database set {}; {} readable branch scopes and {} registered folders, no active Engine Current/writer or source fence release",
             current.targets,
             current.common.common_manifest_hash,
             current.readable_branch_scopes,
-            current.directory_scopes,
+            current.registered_folders,
         );
     })?;
     let aliases = database_aliases::install(

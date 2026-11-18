@@ -697,13 +697,10 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
                 node_id: Some(format!("node-{path}")),
                 selection_generation: 7,
                 branch_id: format!("branch-{path}"),
-                inherited_from: Some("inherited".into()),
+                inherited_from: None,
             },
         );
         state.file_selections.insert(file.into(), "branch".into());
-        state
-            .file_write_origins
-            .insert(file.into(), "inherited".into());
     }
     let mut after = vec![before[0].clone(), before[1].clone(), before[0].clone()];
     after[0].version_id = "updated".into();
@@ -711,7 +708,7 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
     // namespace validation rejects duplicates at the caller.
     after[2].entry_id = "different".into();
     let expected = state.file_contexts.clone();
-    super::directory::namespace_locations(
+    super::namespace::locations::apply(
         &mut state,
         "repo",
         &before,
@@ -726,9 +723,7 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
         assert_eq!(state.file_contexts.get(key), expected.get(key));
     }
     assert!(state.file_selections.contains_key("shared"));
-    assert!(state.file_write_origins.contains_key("shared"));
     assert!(!state.file_selections.contains_key("removed"));
-    assert!(!state.file_write_origins.contains_key("removed"));
     assert!(state.file_path_nodes.is_empty());
 }
 

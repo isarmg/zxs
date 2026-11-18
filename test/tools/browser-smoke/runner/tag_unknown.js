@@ -15,7 +15,7 @@ const p = window.__zxsTagUnknown = {
         const source = page?.nodes?.find(node => node.node_id === page.identity.context.current_node_id);
         if (!source || page.kind !== 'nodes' || page.page.next_cursor !== null
             || page.page.previous_cursor !== null || !page.identity.context.selected_branch_id
-            || page.identity.context.path !== 'browser-smoke.txt'
+            || page.identity.context.path !== 'browser-fixtures/browser-smoke.txt'
             || tags?.file_id !== page.identity.file_id
             || tags.context?.repository_id !== page.identity.context.repository_id
             || tags.context?.path !== page.identity.context.path || !Array.isArray(tags.tags)

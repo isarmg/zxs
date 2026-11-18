@@ -114,19 +114,13 @@ fn historical_nodes_on_one_branch_merge_without_changing_original_heads_or_defau
     for (id, node) in &before.file_metadata_nodes {
         assert_eq!(&p.engine.state().file_metadata_nodes[id], node);
     }
-    assert_eq!(
-        receipt.result["directory_branch_ids"],
-        json_codec::json!([])
-    );
+    assert_eq!(receipt.result["surviving_branch_id"].as_str(), Some(target.as_str()));
+    assert_eq!(receipt.result["source_inputs"], json_codec::json!(&inputs));
     assert_eq!(p.engine.state().versions.len(), before.versions.len());
     assert_eq!(p.engine.state().branches.len(), before.branches.len() + 2);
     for (id, branch) in &before.branches {
         assert_eq!(&p.engine.state().branches[id], branch);
     }
-    assert_eq!(
-        p.engine.state().directory_branches,
-        before.directory_branches
-    );
     assert_eq!(p.engine.state().file_contexts, before.file_contexts);
     assert_eq!(p.current_entry("report.txt").version_id, latest);
     let event = &p.engine.state().file_branch_merges[receipt.result["merge_id"].as_str().unwrap()];

@@ -27,12 +27,9 @@ pub(super) struct Review {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Intent {
     Delete(Target),
-    DeleteBatch(Arc<batch::Request>),
-    DeleteDirectory(Arc<directory::Request>),
     Undo(Arc<storage_contract::FileDeletionNode>),
     UndoSummary(Arc<storage_contract::file_deletion_review::Summary>),
     UndoBatch(Arc<batch_restore::Request>),
-    UndoDirectory(Arc<storage_contract::directory_git::DirectoryDeletionNode>),
 }
 #[derive(Clone)]
 pub(super) struct Attempt {
@@ -47,7 +44,6 @@ pub(super) struct Attempt {
 pub(super) fn eligible(entry: &Entry) -> bool {
     entry.kind() == storage_contract::NamespaceEntryKind::File
         && !entry.read_only()
-        && !entry.preview()
         && !entry.backup()
         && !entry.retained_history()
         && entry.context().is_some()
@@ -89,7 +85,7 @@ fn chosen<'a>(state: &'a State, explicit: Option<&'a Entry>) -> Option<&'a Entry
     Some(entry)
 }
 pub(crate) fn available(state: &State) -> bool {
-    chosen(state, None).is_some() || batch::available(state)
+    chosen(state, None).is_some()
 }
 fn identity_error(source: storage_contract::Error) -> api::Error {
     api::Error::invalid_response(
@@ -121,10 +117,6 @@ fn capture(state: &State, explicit: Option<&Entry>) -> Result<Option<Review>, ap
     }))
 }
 pub(crate) fn start(state: RwSignal<State>, entry: Option<Entry>) {
-    if entry.is_none() && state.with_untracked(|s| s.files.checked_entries.len() > 1) {
-        batch::start(state);
-        return;
-    }
     match state.with_untracked(|s| capture(s, entry.as_ref())) {
         Ok(Some(review)) => state.update(|s| {
             s.files.deletion.cancel_review();
@@ -134,8 +126,8 @@ pub(crate) fn start(state: RwSignal<State>, entry: Option<Entry>) {
         Ok(None) => crate::ui::set_notice(
             state,
             t(
-                "请只选择一个当前可写文件。目录、多个文件和只读历史不能使用此软删除入口；不会回退为目录分支删除。",
-                "Select one current writable file. Folders, multiple files and read-only history are not supported here; this never falls back to folder-branch deletion.",
+                "请只选择一个当前可写文件。目录、多个文件和只读历史不能使用此软删除入口。",
+                "Select one current writable file. Folders, multiple files and read-only history are not supported here.",
             ),
         ),
         Err(error) => fail(state, error),
@@ -227,14 +219,12 @@ impl Intent {
                 format!("/api/files/{}/deletion", api::segment(target.file.as_str())),
                 json!({"repository_id":target.repository.as_str(),"path":target.path.as_str(),"operation_id":operation}),
             ),
-            Self::DeleteBatch(request) => request.request(operation),
             Self::UndoBatch(request) => {
                 return (
                     "/api/file-deletion-batches/undo".into(),
                     Body::BatchUndo(request.request(operation_id)),
                 );
             }
-            Self::DeleteDirectory(request) => request.request(operation),
             Self::UndoSummary(summary) => {
                 return (
                     format!("/api/files/{}/deletion/undo-summary", summary.file_id),
@@ -248,13 +238,6 @@ impl Intent {
                 format!("/api/files/{}/deletion/undo", api::segment(&node.file_id)),
                 json!({"deletion_node_id":node.node_id,"operation_id":operation}),
             ),
-            Self::UndoDirectory(node) => (
-                format!(
-                    "/api/repositories/{}/directory-deletions/undo",
-                    api::segment(&node.repository_id)
-                ),
-                json!({"owner_directory_id":node.owner_directory_id,"directory_id":node.directory_id,"deletion_node_id":node.node_id,"operation_id":operation}),
-            ),
         };
         (endpoint, Body::Json(body))
     }
@@ -266,19 +249,13 @@ impl Intent {
                     "repository_id":target.repository.as_str(), "file_id":target.file.as_str(), "path":target.path.key(),
                 }),
             ),
-            Self::DeleteBatch(request) => ("file.delete.batch", request.input()),
             Self::UndoBatch(request) => return request.digest(principal),
             Self::UndoSummary(summary) => return summary::digest(summary, principal),
-            Self::DeleteDirectory(request) => ("directory.delete", request.input()),
             Self::Undo(node) => (
                 "file.delete.undo",
                 json!({
                     "file_id":node.file_id, "deletion_node_id":node.node_id,
                 }),
-            ),
-            Self::UndoDirectory(node) => (
-                "directory.delete.undo",
-                json!({"repository_id":node.repository_id,"owner_directory_id":node.owner_directory_id,"directory_id":node.directory_id,"deletion_node_id":node.node_id}),
             ),
         };
         native_digest(kind, principal, body)
@@ -315,9 +292,7 @@ impl Intent {
                         && node.sequence == sequence
                 )
             }
-            Self::DeleteBatch(request) => request.receipt_matches(id, principal, receipt),
             Self::UndoBatch(request) => request.receipt_matches(receipt),
-            Self::DeleteDirectory(request) => request.receipt_matches(id, principal, receipt),
             Self::Undo(node) => {
                 receipt["operation_kind"] == "file.delete.undo"
                     && wire::publication_sequence(
@@ -328,7 +303,6 @@ impl Intent {
                     && receipt["result"]["restored_file_id"] == node.file_id
                     && receipt["result"]["removed_deletion_node"] == json!(node.as_ref())
             }
-            Self::UndoDirectory(node) => directory::wire::undo_receipt_matches(node, receipt),
             Self::UndoSummary(summary) => summary::receipt_matches(id, summary, receipt),
         }
     }
@@ -494,7 +468,6 @@ pub(crate) fn settle(model: &mut super::super::model::Model, id: &str, status: S
     model.deletion.cancel_review();
     if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
         model.checked_entries.clear();
-        model.deletion.directory.invalidate();
         // Cached D is not restoration authority after another lifecycle event.
         model.deletion.generation += 1;
         model.deletion.loading = false;

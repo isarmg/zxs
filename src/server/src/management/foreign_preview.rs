@@ -110,9 +110,8 @@ fn history_summary(history: &storage_engine::ForeignHistory) -> ForeignHistorySu
             binding_generation: origin.binding_generation(),
         },
         manifest_hash: history.manifest_hash().into(),
-        branches: manifest.branches.len(),
-        directory_branches: manifest.directory_branches.len(),
-        directory_trees: manifest.directory_trees.len(),
+        branches: manifest.branches.values()
+            .filter(|branch| branch.branch_kind == storage_contract::BranchKind::File).count(),
         commit_records: manifest.commits.len(),
         versions: manifest.versions.len(),
         verified_local_versions: 0,

@@ -58,37 +58,14 @@ fn assert_audit_roundtrip(engine: &Engine, history: &str, root: &Path) {
     let before = canonical_json(engine.state()).unwrap();
     engine.export_history_package(history, &package).unwrap();
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
-    let mut restored = initialize(&root.join("audit-restored"));
-    let receipt = restored.restore_history_package(
-        &package, "P01", 3, "restoration-manager", OperationId::generate().unwrap(),
-    ).unwrap();
-    assert_eq!(crate::history_package::path_audit::restored(&receipt).unwrap(), expected);
-    assert!(receipt.sequence > engine.state().sequence);
-    for id in expected.keys() {
-        assert!(!restored.state.operations.contains_key(id));
-    }
-    let mut native = Vec::new();
-    restored.visit_file_path_changes(
-        &crate::HistoryWindowCancellation::new(), |fact| native.push(fact),
-    ).unwrap();
-    assert!(native.is_empty(), "imported source facts are not local native events");
-    let projected = HistoryManifest::from_state(restored.state(), history).unwrap();
-    assert_eq!(
-        crate::history_package::path_audit::portable(&projected, restored.state.sequence).unwrap(),
-        expected
-    );
-    let second = root.join("audited-again");
-    restored.export_history_package(history, &second).unwrap();
-    let mut twice = initialize(&root.join("twice-restored"));
-    let again = twice.restore_history_package(
-        &second, "P01", 3, "second-manager", OperationId::generate().unwrap(),
-    ).unwrap();
-    assert_eq!(crate::history_package::path_audit::restored(&again).unwrap(), expected);
-    assert_eq!(
-        canonical_json(&crate::history_package::path_audit::restored(&again).unwrap()).unwrap(),
-        canonical_json(&expected).unwrap(),
-        "normalized evidence must not grow by nesting previous restore receipts"
-    );
+    let image = disk_image(&package);
+    let (original, proof, report) = load_package(&package).unwrap();
+    assert_eq!(report.history_tree_id, history);
+    assert_eq!(report.publication_sequence, proof.candidate.sequence);
+    let retained = crate::history_package::path_audit::portable(&original, proof.candidate.sequence).unwrap();
+    assert_eq!(retained, expected);
+    assert_eq!(canonical_json(&retained).unwrap(), canonical_json(&expected).unwrap());
+    assert_eq!(disk_image(&package), image, "checking a package must never rewrite the evidence");
 }
 
 #[test]
@@ -102,17 +79,16 @@ fn native_rename_audit_and_audit_free_packages_both_roundtrip() {
         .find(|entry| entry.kind == NamespaceEntryKind::File).unwrap();
     let body = engine.valid_replica(&entry.version_id).unwrap().0.path().to_owned();
     let inode = fs::metadata(&body).unwrap().ino();
-    let proof = canonical_json(&engine.state.versions[&entry.version_id]).unwrap();
+    let original_version_bytes = canonical_json(&engine.state.versions[&entry.version_id]).unwrap();
     let package = temporary.path().join("before-rename");
     engine.export_history_package(&repo.history_tree_id, &package).unwrap();
-    let mut restored = initialize(&temporary.path().join("restored"));
-    restored.restore_history_package(
-        &package, "P01", 3, "alice", OperationId::generate().unwrap(),
-    ).unwrap();
-    assert_eq!(
-        fs::read(restored.valid_replica(&entry.version_id).unwrap().0.path()).unwrap(),
-        b"immutable body"
-    );
+    let (plain, package_proof, report) = load_package(&package).unwrap();
+    assert_eq!(report.publication_sequence, package_proof.candidate.sequence);
+    assert!(crate::history_package::path_audit::portable(&plain, package_proof.candidate.sequence).unwrap().is_empty());
+    let version = &plain.versions[&entry.version_id];
+    assert_eq!(canonical_json(version).unwrap(), original_version_bytes);
+    assert_eq!(fs::read(package_version(&package, &entry.version_id)
+        .join("content").join(&version.creation_name)).unwrap(), b"immutable body");
     engine.file_namespace(
         &repo.repository_id,
         NamespaceOperation::parse(
@@ -120,7 +96,7 @@ fn native_rename_audit_and_audit_free_packages_both_roundtrip() {
         ).unwrap(),
         "alice", OperationId::generate().unwrap(),
     ).unwrap();
-    assert_eq!(canonical_json(&engine.state.versions[&entry.version_id]).unwrap(), proof);
+    assert_eq!(canonical_json(&engine.state.versions[&entry.version_id]).unwrap(), original_version_bytes);
     let renamed_body = engine.valid_replica(&entry.version_id).unwrap().0.path().to_owned();
     assert_eq!(fs::metadata(&renamed_body).unwrap().ino(), inode);
     assert_eq!(fs::read(&renamed_body).unwrap(), b"immutable body");

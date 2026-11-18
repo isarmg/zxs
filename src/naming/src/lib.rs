@@ -25,16 +25,20 @@ impl PortablePath {
             key: path_key(path),
         })
     }
-    /// A name already proves component validity; paths add their aggregate budgets.
+    /// A label already proves character validity; a namespace path also
+    /// excludes private entries and contributes its own aggregate budgets.
     pub fn from_name(name: &Name) -> Result<Self> {
+        require_namespace_component(name.as_str())?;
         validate_path_budget(name.as_str())?;
         Ok(Self {
             display: name.as_str().into(),
             key: name.key(),
         })
     }
-    /// Append one admitted component, checking only the combined path budgets.
+    /// Append one admitted label, also checking its namespace role and the
+    /// combined path budgets. Never reparse the already admitted ancestors.
     pub fn join_name(&self, name: &Name) -> Result<Self> {
+        require_namespace_component(name.as_str())?;
         let display = format!("{}/{}", self.as_str(), name.as_str());
         validate_path_budget(&display)?;
         Ok(Self {
@@ -276,10 +280,21 @@ fn validate_path_budget(path: &str) -> Result<()> {
     }
     Ok(())
 }
+// Private storage entries are not ordinary namespace objects. This check
+// intentionally lives on path components, not arbitrary human metadata
+// labels or the raw OS EntryName used to open actual internal evidence.
+fn require_namespace_component(name: &str) -> Result<()> {
+    if name.starts_with('.') && lookup_key(name) == ".zxs" {
+        return Err(Error::ReservedName);
+    }
+    Ok(())
+}
+
 fn validate_path_inner(path: &str, usage: NameUse) -> Result<()> {
     validate_path_shape(path)?;
     for component in path.split('/') {
         validate_name_inner(component, usage)?;
+        require_namespace_component(component)?;
     }
     Ok(())
 }

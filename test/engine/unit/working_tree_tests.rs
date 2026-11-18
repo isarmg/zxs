@@ -27,7 +27,6 @@ fn root(index: u8, source_chain: Vec<crate::DiskRegistrationIdentity>) -> RootBi
         }
     };
     RootBinding {
-        layout: StorageLayout::UnifiedWorkingTreeV1,
         root_id: RootId::from_random([index; 16]),
         registration: crate::DiskRegistrationIdentity {
             pool_id: PoolId::from_random([1; 16]).to_string(),

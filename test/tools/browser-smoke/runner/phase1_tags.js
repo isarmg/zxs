@@ -28,7 +28,7 @@ const p = window.__zxsPhase1Tags = {
         const node = page?.nodes?.find(node => node.node_id === page.identity.context.current_node_id);
         if (!node || page.kind !== 'nodes' || page.page.next_cursor !== null
             || page.page.previous_cursor !== null || !page.identity.context.selected_branch_id
-            || page.identity.context.path !== 'browser-smoke.txt' || !p.bound(tags, page)
+            || page.identity.context.path !== 'browser-fixtures/browser-smoke.txt' || !p.bound(tags, page)
             || tags.tags.includes(p.label))
             throw new Error('tag fixture needs complete real writable history and container tags');
         p.base = page;

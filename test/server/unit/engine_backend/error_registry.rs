@@ -117,10 +117,6 @@ const PUBLIC_STATUS: &[(ErrorCode, ::http::StatusCode)] = &[
     (ErrorCode::PlanClosed, ::http::StatusCode::CONFLICT),
     (ErrorCode::TreeMoved, ::http::StatusCode::CONFLICT),
     (
-        ErrorCode::RestoreBackupConflict,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (
         ErrorCode::DirectoryBranchIncomplete,
         ::http::StatusCode::CONFLICT,
     ),

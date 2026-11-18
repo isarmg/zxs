@@ -1,6 +1,6 @@
 use super::page::Entry;
 use super::{
-    actions, backup, batch, branch, inline, merge,
+    actions, backup, branch, inline, merge, relocation,
     model::{
         Model, NoteTarget, branch_name, join_path, selected_branch, selected_entry_read_only,
         selected_file_branch_record,
@@ -211,7 +211,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                 selection.with_value(|selection| {
                     selection
                         .action_entry(state)
-                        .is_none_or(|entry| !batch::path_edit_available(state, Some(entry)))
+                        .is_none_or(|entry| !relocation::available(state, Some(entry)))
                 })
             })
     });
@@ -245,7 +245,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
         <article class="zxs-content-panel zxs-entry-content zxs-frame zxs-stack" aria-label=if is_file{t("文件详情","File details")}else{t("文件夹详情","Folder details")}>
             <div class="zxs-file-heading zxs-flow"><h2 class="zxs-row">{move ||entry.with(|entry|entry.as_ref().map(|entry|entry.name().to_owned()).unwrap_or_default())}</h2><div class="zxs-entry-actions zxs-flow">
                 {(!is_file).then(move ||view!{<button class="zxs-button" disabled=move ||folder_navigation_disabled.get() on:click=move |_|if let Some(path)=state.with_untracked(|s|selection.with_value(|key|key.directory_path(s).map(str::to_owned))){actions::go_directory(state,path);}><FileIcon name="folder"/>{t("打开文件夹","Open folder")}</button>})}
-                <Show when=move ||can_modify.get()><button class="zxs-button" disabled=move ||rename_disabled.get() on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){batch::start(state,batch::Kind::Rename,Some(entry));}><FileIcon name="rename"/>{t("重命名","Rename")}</button></Show>
+                <Show when=move ||can_modify.get()><button class="zxs-button" disabled=move ||rename_disabled.get() on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){relocation::start(state,Some(entry));}><FileIcon name="rename"/>{t("重命名","Rename")}</button></Show>
                 {(!is_file).then(move ||view!{<button class="zxs-button" disabled=move ||mutation_disabled.get() on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){super::placement::start_entry(state,entry);}>{t("主盘规则","Primary placement")}</button>})}
                 <button class="zxs-button"
                     disabled=move ||state.with(|s| {
@@ -273,8 +273,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                         })) { backup::start_entry(state, entry); }
                     }>{t("自定义备份前缀", "Custom backup prefixes")}
                 </button>
-                {(!is_file).then(move ||view!{<button class="zxs-button" data-zxs-delete-directory="" disabled=move ||state.with(|s|selection.with_value(|key|key.mutation_entry(s).is_none_or(|entry|!super::deletion::directory_entry_available(s,entry)))) on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){super::deletion::start_directory(state,Some(entry));}><FileIcon name="delete"/>{t("软删除整个目录…","Soft-delete whole folder…")}</button>})}
-                <Show when=move ||can_modify.get()><button class="zxs-button" title=t("软删除同一文件的全部路径与分支；不删除目录本身", "Soft-delete all paths and branches of this file, not the folder itself") disabled=move ||mutation_disabled.get()||!is_file on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){batch::start(state,batch::Kind::Delete,Some(entry));}><FileIcon name="delete"/>{t("软删除文件…","Soft-delete file…")}</button></Show>
+                <Show when=move ||can_modify.get()><button class="zxs-button" title=t("软删除同一文件的全部路径与分支；不删除目录本身", "Soft-delete all paths and branches of this file, not the folder itself") disabled=move ||mutation_disabled.get()||!is_file on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){super::deletion::start(state,Some(entry));}><FileIcon name="delete"/>{t("软删除文件…","Soft-delete file…")}</button></Show>
             </div></div>
             <Show when=move ||entry.with(|entry|entry.as_ref().is_some_and(Entry::retained_history))>
                 <p class="zxs-row" role="status">{t("这是按稳定 file_id 打开的保留历史，不是当前目录中的文件。上方名称来自历史版本记录；不授权普通编辑、改名、软删除或设为默认。永久退役仍须准确选择和完整引用检查。", "This is retained history opened by stable file_id, not a current directory file. The displayed name comes from a historical version. It does not permit ordinary editing, rename, soft deletion or setting a default. Permanent retirement still requires an exact selection and complete reference checks.")}</p>
@@ -284,7 +283,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
             {super::placement::view(state)}
             <dl class="zxs-file-properties"><div><dt class="zxs-row">{move ||entry.with(|entry|if entry.as_ref().is_some_and(Entry::retained_history){t("版本记录名称","Recorded version name")}else{t("位置","Location")})}</dt><dd class="zxs-row">{move ||entry.with(|entry|entry.as_ref().map(|entry|join_path(&state.with(|s|s.files.slot.clone()),entry.path())).unwrap_or_default())}</dd></div><div><dt class="zxs-row">{t("类型","Type")}</dt><dd class="zxs-row">{if is_file{t("文件","File")}else{t("文件夹","Folder")}}</dd></div></dl>
             {(!is_file).then(move ||view!{
-                <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录上下文","Folder context")}</h3><p class="zxs-row">{t("进入此目录详情，查看已有目录上下文并管理布局、放置与备份。", "Open this folder's Details for existing context, layout, placement and backups.")}</p><div class="zxs-file-toolbar zxs-flow"><button class="zxs-button" disabled=move ||folder_navigation_disabled.get()||state.with(actions::pending) on:click=move |_|if let Some(path)=state.with_untracked(|s|selection.with_value(|key|key.directory_path(s).map(str::to_owned))){actions::go_directory(state,path);crate::ui::navigate(state,crate::ui::Page::Details);}>{t("打开此目录详情", "Open this folder's Details")}</button></div></section>
+                <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录上下文","Folder context")}</h3><p class="zxs-row">{t("进入此目录详情，管理放置和备份。", "Open this folder's Details for placement and backups.")}</p><div class="zxs-file-toolbar zxs-flow"><button class="zxs-button" disabled=move ||folder_navigation_disabled.get()||state.with(actions::pending) on:click=move |_|if let Some(path)=state.with_untracked(|s|selection.with_value(|key|key.directory_path(s).map(str::to_owned))){actions::go_directory(state,path);crate::ui::navigate(state,crate::ui::Page::Details);}>{t("打开此目录详情", "Open this folder's Details")}</button></div></section>
             })}
             {super::unborn::view(state)}
             {super::commit_mode::view(state)}
@@ -296,7 +295,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                 <Show when=move ||inherited.get()><p class="zxs-row" role="status">{t("此分支尚未写入，正在显示父版本的元数据；通过 SMB 写入后才保存本分支自己的版本。","This unwritten branch displays its parent version’s metadata. Writing through SMB creates this branch’s own version.")}</p></Show>
                 <section class="zxs-entry-section zxs-file-branches zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件分支","File branches")}</h3><p class="zxs-row">{t("创建时只登记分支并引用父节点，不创建占位文件或复制正文。首次写入后形成自己的版本；切换只浏览历史，设为默认后才更新当前目录的文件引用。","Creating a branch only registers a reference to its parent node, without placeholders or copied content. The first write creates its own version. Switching only browses history; setting the default updates this folder’s file reference.")}</p>
                     <div class="zxs-file-toolbar zxs-flow"><Select label=t("浏览文件分支","Browse file branch") options=options value=value disabled=disabled placeholder=t("请选择本页分支","Choose a branch on this page") on_change=Callback::new(move |branch:String|actions::select_branch(state,branch))/>
-                        <button class="zxs-button" data-zxs-set-file-default="true" disabled=move ||state.with(|s|!actions::default_write_allowed(s)||s.files.file_preview.as_ref().is_none_or(|branch|!branch.writable()||branch.head().is_none())||s.files.directory_preview.is_some()||s.files.history_loading||!s.files.file_history.ready()||selected_entry_read_only(&s.files)) on:click=move |_|actions::set_default_file_branch(state)>{t("设为默认分支","Set as default branch")}</button>
+                        <button class="zxs-button" data-zxs-set-file-default="true" disabled=move ||state.with(|s|!actions::default_write_allowed(s)||s.files.file_preview.as_ref().is_none_or(|branch|!branch.writable()||branch.head().is_none())||s.files.history_loading||!s.files.file_history.ready()||selected_entry_read_only(&s.files)) on:click=move |_|actions::set_default_file_branch(state)>{t("设为默认分支","Set as default branch")}</button>
                         <Show when=move ||state.with(|s|s.files.file_preview.is_some())><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|actions::return_to_default_file(state)>{t("返回默认视图","Return to default view")}</button></Show>
                         <Show when=move ||can_modify.get()>
                         {move ||rename_branch.get().map(|(file,branch_id,name)|inline::control(state,t("重命名文件分支","Rename file branch"),Some("rename"),inline::Target::RenameFileBranch{file,branch_id,name},disabled))}

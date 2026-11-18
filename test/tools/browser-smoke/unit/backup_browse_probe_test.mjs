@@ -17,7 +17,7 @@ function rustJsonRoundtrip(value) {
 const disks = ['P01', 'B01', 'C01'].map((slot_id, index) => ({
     slot_id, name: `real-${slot_id}`, level: index + 1, online: true, writable: index === 0
 }));
-const labels = ['New folder', 'Move', 'Copy', 'Rename', 'Delete', 'Primary placement', 'Backup settings'];
+const labels = ['New folder', 'Move', 'Rename', 'Delete', 'Primary placement', 'Backup settings'];
 const text = value => ({textContent: value});
 const button = (label, disabled = false) => ({...text(label), disabled,
     getAttribute: name => name === 'aria-label' ? null : undefined});
@@ -29,7 +29,7 @@ const base = {entry_id: 'entry-one', name: 'browser-smoke.txt',
     file_id: 'file-one', version_id: 'version-two', materialized: true, inherited: false,
     own_version_id: 'version-two', source_version_id: null,
     content_state: 'AVAILABLE', visible_content_state: 'AVAILABLE',
-    repository_id: 'repository-one', repository_path: 'browser-smoke.txt', container: true,
+    repository_id: 'repository-one', repository_path: 'browser-fixtures/browser-smoke.txt', container: true,
     selected_branch_id: 'branch-main', note: '', node_id: 'node-two', read_only: false};
 function file(path, backup = false) {
     return {...base, path, ...(backup ? {backup: true, read_only: true, historical_only: false} : {})};
@@ -37,18 +37,14 @@ function file(path, backup = false) {
 function directory(path, backup = false) {
     return {entry_id: `directory-${path}`, name: path.split('/').at(-1), path,
         kind: 'directory', size: '0', file_id: '', version_id: '',
-        ...(backup ? {backup: true, read_only: true} : {})};
+        ...(backup ? {backup: true, read_only: true} : {repository_id: 'repository-one', repository_path: path,
+            container: false, selected_branch_id: null, note: ''})};
 }
 function page(slot, path, entries) {
-    const backup = slot !== 'P01', repository = !backup && path === 'browser-fixtures';
+    const backup = slot !== 'P01';
     return {slot_id: slot, path, ...(backup ? {backup: true} : {}), writable: !backup,
-        entries, selected_entry: null, context: repository ? {repository_id: 'repository-one',
-            repository_path: '', branch_id: 'branch-main', base_head: 'commit-two'} : null,
-        directory_branches: repository ? [{directory_branch_id: 'directory-branch',
-            repository_id: 'repository-one', directory_id: 'directory-one', name: 'main',
-            parent_branch_id: null, head_tree_id: 'tree-two', commit_id: 'directory-commit-two',
-            path: '', materialized: true, current: true, sequence: '2', file_count: '1'}] : [],
-        directory_branches_supported: repository, default_branch_scope: repository,
+        entries, selected_entry: null, context: backup ? null : {repository_id: 'repository-one',
+            repository_path: path, branch_id: 'branch-main', base_head: 'commit-two'},
         directory_file_count: String(entries.filter(entry => entry.kind === 'file').length),
         total_entries: String(entries.length), snapshot: 'real-snapshot', previous_cursor: null, next_cursor: null};
 }
@@ -70,7 +66,8 @@ function dom() {
             const current = state.body ? {...view(state.body), ...state.overrides} : null;
             if (selector === '.zxs-breadcrumb button') return state.mode === 'directory' ? current.breadcrumbs.map(text) : [];
             if (selector === '.zxs-file-toolbar button') return labels.map(label => button(label, current?.readonlyControls))
-                .concat(state.overrides.retiredBranch ? [button('Create folder branch', true)] : []);
+                .concat(state.overrides.retiredBranch ? [button('Create folder branch', true)] : [],
+                    state.overrides.retiredCopy ? [button('Copy', true)] : []);
             throw new Error(`unexpected document list selector ${selector}`);
         },
         querySelector(selector) {
@@ -276,7 +273,7 @@ test('actual DOM selectors capture breadcrumb/row kinds and disabled navigation 
     assert.equal(f.p.step('C01', 'P01', after).path, 'P01/browser-fixtures');
     assert.deepEqual(copy(f.p.pages[0].view), view(body));
     for (const overrides of [{ready: false}, {breadcrumbs: ['All disks', 'real-B01', 'P01']},
-        {readonlyNotice: false}, {readonlyControls: false}, {retiredBranch: true}, {retiredDefault: true}, {rows: []},
+        {readonlyNotice: false}, {readonlyControls: false}, {retiredBranch: true}, {retiredCopy: true}, {retiredDefault: true}, {rows: []},
         {rows: [{...view(body).rows[0], checkboxDisabled: false}]},
         {rows: [{...view(body).rows[0], checked: true}]},
         {rows: [{...view(body).rows[0], type: 'File'}]}]) {
@@ -544,7 +541,9 @@ test('host positives use complete current-owned-file and virtual-directory wire 
     assert.equal(backup.backup, true); assert.equal(backup.read_only, true); assert.equal(backup.historical_only, false);
     assert.deepEqual(Object.keys(directory('P01', true)).sort(), ['entry_id', 'name', 'path', 'kind',
         'size', 'file_id', 'version_id', 'backup', 'read_only'].sort());
-    assert.equal(page('P01', '', []).context, null);
+    assert.equal(page('P01', '', []).context.repository_path, '');
+    assert.equal(directory('browser-fixtures').repository_path, 'browser-fixtures');
+    assert.equal(page('B01', '', []).context, null);
     assert.deepEqual(Object.keys(page('P01', 'browser-fixtures', [primary]).context).sort(),
         ['repository_id', 'repository_path', 'branch_id', 'base_head'].sort());
 });
@@ -567,10 +566,29 @@ test('selected backup must be the same current container, not another entry, rep
 
 test('backup prefix directories require an entry identity and remain virtual, without repository/file context', async () => {
     for (const delta of [{entry_id: ''}, {entry_id: undefined}, {repository_id: 'repository-one'},
-        {repository_path: 'browser-smoke.txt'}, {container: false}, {selected_branch_id: null}]) {
+        {repository_path: 'browser-fixtures/browser-smoke.txt'}, {container: false}, {selected_branch_id: null}]) {
         const body = page('B01', '', [{...directory('P01', true), ...delta}]);
         const f = fixture(() => body); await load(f, body);
         assert.throws(() => f.p.page('B01', '', 0), /identity|virtual backup directory/);
         f.p.restore();
+    }
+});
+
+test('primary rows and empty folders require the exact unprefixed root observation', async () => {
+    const path = 'first/browser-fixtures', child = path + '/opaque.zxs';
+    const root = page('P01', '', []), folder = page('P01', path, [directory(child)]);
+    for (const body of [folder, root, {...root, context: null}]) {
+        const f = fixture(() => body); await load(f, body);
+        assert.ok(f.p.page('P01', body.path, 0)); f.p.restore();
+    }
+    for (const body of [
+        {...folder, context: null},
+        {...folder, context: {...folder.context, repository_path: 'browser-fixtures'}},
+        {...root, context: null, directory_file_count: '1'},
+        {...folder, entries: [{...folder.entries[0], repository_id: 'other'}]},
+        {...folder, entries: [{...folder.entries[0], repository_path: 'browser-fixtures/opaque.zxs'}]},
+    ]) {
+        const f = fixture(() => body); await load(f, body);
+        assert.throws(() => f.p.page('P01', body.path, 0), /registered/); f.p.restore();
     }
 });

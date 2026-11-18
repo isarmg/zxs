@@ -1,3 +1,4 @@
+use super::purge::fixtures::{self, PLAN};
 use super::*;
 use crate::management::Storage;
 use json_codec::Value;
@@ -373,10 +374,10 @@ fn respond(model: &mut Model, request: &request::Request, value: Value) {
     }
 }
 fn plan_value() -> Value {
-    json_codec::json!({"plan_id":"p","kind":"purge","principal":"admin","expected_sequence":"4","digest":"reviewed","input":{"history_tree_id":"h"},"state":"ready"})
+    fixtures::plan()
 }
 fn reviewed_plan() -> Option<ValidatedPlan> {
-    let response = Contract::Plan { id: "p".into() }
+    let response = Contract::Plan { id: PLAN.into() }
         .validate(plan_value())
         .unwrap();
     let response::Action::Plan(plan) = response.action else {
@@ -486,7 +487,7 @@ fn plan_queries_install_the_plan_but_cannot_settle_a_mutation() {
     };
     let request = request::query(
         QueryKind::Plan,
-        &[("id".into(), "p".into())].into_iter().collect(),
+        &[("id".into(), PLAN.into())].into_iter().collect(),
     )
     .unwrap();
     respond(&mut model, &request, plan_value());
@@ -500,7 +501,7 @@ fn plan_queries_install_the_plan_but_cannot_settle_a_mutation() {
 
 #[test]
 fn plan_lookup_installs_review_but_read_failures_never_create_a_mutation_fence() {
-    let fields = [("id".into(), "p".into())].into_iter().collect();
+    let fields = [("id".into(), PLAN.into())].into_iter().collect();
     let request = request::query(request::QueryKind::Plan, &fields).unwrap();
     let mut model = Model {
         acknowledged: true,
@@ -585,8 +586,8 @@ fn every_mutation_failure_keeps_its_captured_operation_not_the_current_form() {
 #[test]
 fn successful_commit_and_cancel_clear_the_review_only_after_raw_validation() {
     let operation = "op_00000000000000000000000000000001";
-    let receipt = json_codec::json!({"operation_id":operation,"kind":"plan.cancel","commit_id":null,"history_tree_id":null,"branch_id":null,"commit_state":"PUBLISHED","protection_at_publish":"NOT_APPLICABLE","current_health":"UNKNOWN","request_digest":"digest","sequence":"4","result":{}});
     for commit in [true, false] {
+        let receipt = fixtures::receipt(commit, operation);
         let plan = reviewed_plan();
         let request = request::plan_action(plan.as_ref(), commit, true, operation).unwrap();
         let mut model = Model {
@@ -814,7 +815,7 @@ fn remote_errors_keep_status_request_identity_detail_and_source_in_the_model() {
     let contract = request::operation_outcome("original").contract;
     for status in [400, 409, 500] {
         let mut error = api::Error::from(
-            Contract::Plan { id: "p".into() }
+            Contract::Plan { id: PLAN.into() }
                 .validate(json_codec::json!({"plan_id":"p"}))
                 .unwrap_err(),
         );
@@ -845,7 +846,7 @@ fn remote_errors_keep_status_request_identity_detail_and_source_in_the_model() {
 #[test]
 fn plan_decode_and_identity_failures_cannot_replace_a_review_or_settle_a_fence() {
     use std::error::Error as _;
-    let contract = Contract::Plan { id: "p".into() };
+    let contract = Contract::Plan { id: PLAN.into() };
     for (field, replacement) in [("plan_id", "other"), ("digest", "")] {
         let mut value = plan_value();
         value[field] = replacement.into();

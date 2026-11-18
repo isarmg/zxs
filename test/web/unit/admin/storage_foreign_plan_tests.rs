@@ -51,8 +51,6 @@ fn source() -> ForeignDiskPreview {
                 origin: identity(n),
                 manifest_hash: "f".repeat(64),
                 branches: 1,
-                directory_branches: 1,
-                directory_trees: 2,
                 commit_records: 3,
                 versions: 4,
                 verified_local_versions: 1,

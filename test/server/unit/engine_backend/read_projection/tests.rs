@@ -42,13 +42,7 @@ fn fixture() -> (
     .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Projection").unwrap(),
-            "P01",
-            3,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "owner", storage_contract::OperationId::generate().unwrap())
         .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
     (root, engine, repo, identity)
@@ -198,8 +192,8 @@ fn pending_sources<'a>(
     PendingSources::new(engine, branch, commit, scope)
 }
 
-// Exact pre-optimization behavior used to compare the request-local resolver.
-fn legacy_pending_entry_source<'a>(
+// An independent linear oracle for ordinary FILE membership and its pending source.
+fn ordinary_pending_entry_source<'a>(
     engine: &'a Engine,
     branch: &str,
     commit: &'a storage_contract::Commit,
@@ -212,46 +206,28 @@ fn legacy_pending_entry_source<'a>(
     let visible = commit.entries.iter().find(|visible| {
         visible.lookup_key() == entry.lookup_key() && visible.file_id == entry.file_id
     })?;
-    let current = state.branches.get(branch)?;
-    if current.head_commit_id == commit.commit_id {
-        if let Some(repo) = state
-            .repositories
-            .values()
-            .find(|repo| repo.main_branch_id == branch)
-            && let Some(context) = engine.file_context(&repo.repository_id, entry.path.as_str())
-        {
-            return if context.inherited_from.is_some() {
-                Some(visible.version_id.as_str())
-            } else {
-                state
-                    .branches
-                    .get(&context.branch_id)?
-                    .pending_file_versions
-                    .get(&entry.file_id)
-                    .map(String::as_str)
-            };
-        }
-    } else if let Some(context) = state
-        .directory_trees
-        .values()
-        .filter(|tree| tree.commit_id == commit.commit_id)
-        .find_map(|tree| tree.file_contexts.get(entry.lookup_key()))
-    {
-        return context
-            .inherited_from
-            .as_ref()
-            .map(|_| visible.version_id.as_str());
+    if visible.entry_id != entry.entry_id || visible.version_id != entry.version_id {
+        return None;
     }
-    commit
-        .pending_file_versions
-        .get(&entry.file_id)
-        .filter(|version| **version == entry.version_id)
-        .map(String::as_str)
-        .or_else(|| {
-            (current.head_commit_id == commit.commit_id)
-                .then(|| engine.pending_file_source(branch, &entry.file_id))
-                .flatten()
-        })
+    let current = state.branches.get(branch)?;
+    if current.head_commit_id == commit.commit_id
+        && let Some(repo) = state.repositories.values().find(|repo| repo.main_branch_id == branch)
+        && let Some(context) = engine.file_context(&repo.repository_id, entry.path.as_str())
+    {
+        let selected = state.branches.get(&context.branch_id)?;
+        if selected.history_tree_id != current.history_tree_id
+            || (selected.branch_id != current.branch_id
+                && selected.file_id.as_deref() != Some(entry.file_id.as_str())) {
+            return None;
+        }
+        return selected.pending_file_versions.get(&entry.file_id)
+            .filter(|version| **version == entry.version_id).map(String::as_str);
+    }
+    commit.pending_file_versions.get(&entry.file_id)
+        .filter(|version| **version == entry.version_id).map(String::as_str)
+        .or_else(|| (current.head_commit_id == commit.commit_id)
+            .then(|| engine.pending_file_source(branch, &entry.file_id)).flatten()
+            .filter(|version| *version == entry.version_id))
 }
 
 fn synthetic_commit(
@@ -307,13 +283,13 @@ fn canonical_tree_resolution_eliminates_repeated_entry_matching_at_scale() {
         assert_eq!(resolver.matching_visits(), count * (count + 1) / 2);
         assert_eq!(optimized, checked);
         assert_eq!(optimized, commit.pending_file_versions);
-        // The exact original implementation remains the semantic oracle, not a
+        // The independent linear reference remains the semantic oracle, not a
         // timing threshold. Its loop is also exercised at every requested size.
         let legacy: BTreeMap<_, _> = commit
             .entries
             .iter()
             .filter_map(|entry| {
-                legacy_pending_entry_source(&engine, &repo.main_branch_id, &commit, entry)
+                ordinary_pending_entry_source(&engine, &repo.main_branch_id, &commit, entry)
                     .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect();
@@ -334,7 +310,7 @@ fn checked_entries_and_noncanonical_snapshots_preserve_original_first_match() {
         .entries
         .iter()
         .filter_map(|entry| {
-            legacy_pending_entry_source(&engine, &repo.main_branch_id, &commit, entry)
+            ordinary_pending_entry_source(&engine, &repo.main_branch_id, &commit, entry)
                 .map(|source| (entry.file_id.clone(), source.to_owned()))
         })
         .collect();
@@ -342,7 +318,7 @@ fn checked_entries_and_noncanonical_snapshots_preserve_original_first_match() {
     for entry in &commit.entries {
         assert_eq!(
             resolver.checked(entry),
-            legacy_pending_entry_source(&engine, &repo.main_branch_id, &commit, entry)
+            ordinary_pending_entry_source(&engine, &repo.main_branch_id, &commit, entry)
         );
     }
     duplicate.file_id = "absent-file".into();
@@ -400,7 +376,7 @@ fn real_current_and_historical_tree_sources_match_previous_wire_output() {
             .entries
             .iter()
             .filter_map(|entry| {
-                legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, entry)
+                ordinary_pending_entry_source(&engine, &repo.main_branch_id, commit, entry)
                     .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect();
@@ -425,7 +401,7 @@ fn real_current_and_historical_tree_sources_match_previous_wire_output() {
         for entry in &commit.entries {
             assert_eq!(
                 pending_sources(&engine, &repo.main_branch_id, commit).checked(entry),
-                legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, entry)
+                ordinary_pending_entry_source(&engine, &repo.main_branch_id, commit, entry)
             );
             if commit_id == &current {
                 assert_eq!(
@@ -480,7 +456,7 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
             .entries
             .iter()
             .filter_map(|entry| {
-                legacy_pending_entry_source(engine, branch, commit, entry)
+                ordinary_pending_entry_source(engine, branch, commit, entry)
                     .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect();
@@ -522,14 +498,16 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
         },
     )
     .unwrap();
-    assert!(historical.pending_file_versions.is_empty());
+    let original_map = &engine.state().commits[head].pending_file_versions;
+    assert_eq!(original_map.get(&original.file_id), Some(&original.version_id));
+    assert_eq!(&historical.pending_file_versions, original_map);
     assert_eq!(
         json_codec::to_value(&historical).unwrap(),
         json!({
             "branch_id": main,
             "commit_id": head,
             "entries": engine.state().commits[head].entries,
-            "pending_file_versions": {},
+            "pending_file_versions": original_map,
         })
     );
     save_projection_file(
@@ -545,100 +523,47 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
 }
 
 #[test]
-fn inherited_directory_context_keeps_first_match_and_historical_sources() {
-    let (_root, mut engine, repo, _) = fixture();
-    save_projection_file(
-        &mut engine,
-        &repo.main_branch_id,
-        "folder/data.txt",
-        b"inherited bytes",
-    );
-    checkpoint(&mut engine, &repo, "folder", "owner");
-    engine
-        .create_directory_branches(
-            &repo.repository_id,
-            Some(&name_policy::LookupPath::parse("folder").unwrap()),
-            &storage_contract::BranchName::parse("inherited-view").unwrap(),
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    engine
-        .select_directory_branches(
-            &repo.repository_id,
-            Some(&name_policy::LookupPath::parse("folder").unwrap()),
-            &storage_contract::BranchName::parse("inherited-view").unwrap(),
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let head = engine.state().branches[&repo.main_branch_id]
-        .head_commit_id
-        .clone();
-    let commit = &engine.state().commits[&head];
-    let original = commit
-        .entries
-        .iter()
-        .find(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
-        .unwrap();
-    assert!(
-        engine
-            .file_context(&repo.repository_id, original.path.as_str())
-            .unwrap()
-            .inherited_from
-            .is_some()
-    );
-    assert!(matches!(
-        engine.file_context_for_current_entry(&repo.repository_id, original),
-        Some(std::borrow::Cow::Borrowed(_))
-    ));
-    let resolver = pending_sources(&engine, &repo.main_branch_id, commit);
-    assert_eq!(
-        resolver.checked(original),
-        Some(original.version_id.as_str())
-    );
-    let mut external = original.clone();
-    external.version_id = "not-the-first-visible-version".into();
-    assert_eq!(
-        resolver.checked(&external),
-        Some(original.version_id.as_str())
-    );
-    assert_eq!(
-        resolver.checked(&external),
-        legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, &external)
-    );
-    let expected: BTreeMap<_, _> = commit
-        .entries
-        .iter()
-        .filter_map(|entry| {
-            legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, entry)
-                .map(|source| (entry.file_id.clone(), source.to_owned()))
-        })
-        .collect();
-    assert_eq!(resolver.pending_versions(), expected);
-    save_projection_file(
-        &mut engine,
-        &repo.main_branch_id,
-        "folder/data.txt",
-        b"materialized",
-    );
-    let historical = &engine.state().commits[&head];
-    let expected: BTreeMap<_, _> = historical
-        .entries
-        .iter()
-        .filter_map(|entry| {
-            legacy_pending_entry_source(&engine, &repo.main_branch_id, historical, entry)
-                .map(|source| (entry.file_id.clone(), source.to_owned()))
-        })
-        .collect();
-    let projection = crate::TreeSnapshot::capture(
-        &engine,
-        crate::tests::tree_request(&json!({
-            "branch_id": repo.main_branch_id, "query": {"commit_id": head}
-        })),
-    )
-    .unwrap();
-    assert_eq!(projection.pending_file_versions, expected);
+fn explicit_file_history_keeps_its_original_pending_map_across_live_changes_and_cold_reopen() {
+    let (root, mut engine, repo, _) = fixture();
+    let main = &repo.main_branch_id;
+    save_projection_file(&mut engine, main, "folder/project.zxs", b"equal");
+    save_projection_file(&mut engine, main, "folder/other.zxs", b"equal");
+    let original = engine.namespace_tree(main).unwrap().get("folder/project.zxs").unwrap().clone();
+    let other = engine.namespace_tree(main).unwrap().get("folder/other.zxs").unwrap().clone();
+    assert_ne!(original.file_id, other.file_id);
+    let before = engine.state().branches[main].head_commit_id.clone();
+    let op = || storage_contract::OperationId::generate().unwrap();
+    let created = engine.create_file_branch(&original.file_id, &original.version_id,
+        &storage_contract::BranchName::parse("pending-file").unwrap(), "owner", op()).unwrap();
+    engine.select_file_branch(&original.file_id, created.branch_id.as_deref().unwrap(), "owner", op()).unwrap();
+    let selected = engine.state().branches[main].head_commit_id.clone();
+    assert_ne!(before, selected);
+    let expected = BTreeMap::from([(original.file_id.clone(), original.version_id.clone())]);
+    assert_eq!(engine.state().commits[&selected].pending_file_versions, expected);
+    save_projection_file(&mut engine, main, "folder/project.zxs", b"new version");
+    let now = engine.namespace_tree(main).unwrap().get("folder/project.zxs").unwrap().clone();
+    assert_eq!(now.file_id, original.file_id);
+    assert_ne!(now.version_id, original.version_id);
+    let check = |engine: &Engine| {
+        let read = |commit| crate::TreeSnapshot::capture(engine, crate::ReadTree { branch: main, commit }).unwrap();
+        assert!(read(None).pending_file_versions.is_empty());
+        assert!(read(Some(before.as_str())).pending_file_versions.is_empty());
+        let frozen = read(Some(selected.as_str()));
+        assert_eq!(frozen.pending_file_versions, expected);
+        assert!(frozen.entries.iter().any(|entry| entry == &original));
+        assert!(frozen.entries.iter().any(|entry| entry == &other));
+        let immutable = &engine.state().commits[&selected];
+        let resolver = PendingSources::new(engine, main, immutable, PendingScope::Historical);
+        assert_eq!(resolver.checked(&original), Some(original.version_id.as_str()));
+        for mut wrong in [other.clone(), now.clone()] {
+            wrong.path = original.path.clone();
+            assert_eq!(resolver.checked(&wrong), None, "a matching name is not a FILE occurrence");
+        }
+        assert_eq!(resolver.pending_versions(), expected);
+    };
+    check(&engine);
+    drop(engine);
+    check(&Engine::open(&root.path().join("system")).unwrap());
 }
 
 fn directory_entry(index: usize, path: String) -> storage_contract::Entry {
@@ -683,7 +608,6 @@ fn directory_mtime_uses_the_page_version_even_when_another_version_has_the_same_
         let version = entry.version_id.clone();
         let page = DirectoryPageProjection::page(
             &state,
-            state.repositories.keys().next().unwrap(),
             "frozen",
             &[entry],
             &[],
@@ -727,7 +651,6 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
     loop {
         let page = DirectoryPageProjection::page(
             &state,
-            state.repositories.keys().next().unwrap(),
             "commit_00000000000000000000000000000000",
             &entries,
             &[],
@@ -777,7 +700,6 @@ fn directory_byte_bound_applies_to_utf8_and_long_paths_before_the_count_limit() 
     let state = directory_page_state(&entries);
     let page = DirectoryPageProjection::page(
         &state,
-        state.repositories.keys().next().unwrap(),
         "commit_00000000000000000000000000000000",
         &entries,
         &[],
@@ -928,77 +850,6 @@ fn smb_lookup_rechecks_admission_and_returns_only_current_entry() {
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
-    );
-}
-
-#[test]
-fn namespace_reads_preserve_migrated_branch_error() {
-    let (_root, mut engine, repo, identity) = fixture();
-    save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"first");
-    let cut = engine.state().branches[&repo.main_branch_id]
-        .head_commit_id
-        .clone();
-    save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"second");
-    let plan = engine
-        .create_split_plan(&repo.history_tree_id, &cut, "owner")
-        .unwrap();
-    engine
-        .commit_plan(
-            &plan.plan_id,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let backend = EngineBackend::new(engine);
-    assert_eq!(
-        backend
-            .lookup_at(
-                &identity,
-                &repo.main_branch_id,
-                &cut,
-                &name_policy::LookupPath::parse("file.txt").unwrap()
-            )
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::TreeMoved
-    );
-    assert_eq!(
-        backend
-            .lookup_current(
-                &identity,
-                &repo.main_branch_id,
-                &name_policy::LookupPath::parse("file.txt").unwrap()
-            )
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::TreeMoved
-    );
-    assert_eq!(
-        backend
-            .tree_snapshot(
-                &identity,
-                crate::ReadTree {
-                    branch: &repo.main_branch_id,
-                    commit: None
-                }
-            )
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::TreeMoved
-    );
-    assert_eq!(
-        backend
-            .resolve_entry(
-                &identity,
-                crate::ResolveEntry {
-                    branch: &repo.main_branch_id,
-                    path: &name_policy::LookupPath::parse("file.txt").unwrap(),
-                    commit: None
-                }
-            )
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::TreeMoved
     );
 }
 
@@ -1183,8 +1034,8 @@ mod default_directory_tests;
 #[path = "directory_deletion_tests.rs"]
 mod directory_deletion_tests;
 
-#[path = "directory_scopes_tests.rs"]
-mod directory_scopes_tests;
+#[path = "ordinary_folder_listing_tests.rs"]
+mod ordinary_folder_listing_tests;
 
 #[path = "directory_selection_tests.rs"]
 mod directory_selection_tests;

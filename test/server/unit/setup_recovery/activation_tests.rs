@@ -193,7 +193,7 @@ fn first_pair_genesis_retains_fixed_quorum_and_reopens() {
                 assert_eq!(engine.config().metadata_quorum(), 2);
                 assert_eq!(
                     engine.config().pool_semantic_format,
-                    storage_contract::PoolSemanticFormat::ManualDirectoryV1
+                    storage_contract::PoolSemanticFormat::FileContainers
                 );
                 assert!(
                     engine
@@ -216,13 +216,13 @@ fn first_pair_genesis_retains_fixed_quorum_and_reopens() {
     assert_eq!(engine.config().disks.len(), 2);
     assert_eq!(
         engine.config().pool_semantic_format,
-        storage_contract::PoolSemanticFormat::ManualDirectoryV1
+        storage_contract::PoolSemanticFormat::FileContainers
     );
     let saved: Config = read_control(&f.service.data_root.join("config.json")).unwrap();
     assert_eq!(saved.pool_semantic_format, engine.config().pool_semantic_format);
     for disk in &engine.config().disks {
         let seal: json_codec::Value = read_control(&disk.root.join("disk.json")).unwrap();
-        assert_eq!(seal["pool_semantic_format"], "manual-directory-v1");
+        assert_eq!(seal["pool_semantic_format"], "file-containers");
         let genesis: Config = read_control(
             &disk.root.join("zxs-data/pool-membership/config.json"),
         ).unwrap();
@@ -639,7 +639,7 @@ fn complete_genesis_without_ready_receipt_is_checked_and_completed_not_reinitial
     ];
     for (path, pointer, expected_code) in rejected_formats {
         let original = fs::read(&path).unwrap();
-        for marker in [None, Some(json_codec::Value::String("manual-directory-v2".into()))] {
+        for marker in [None, Some(json_codec::Value::String("manual-directory-v1".into()))] {
             let mut changed: json_codec::Value =
                 storage_contract::decode_strict(&original).unwrap();
             let fields = changed.pointer_mut(pointer).unwrap().as_object_mut().unwrap();

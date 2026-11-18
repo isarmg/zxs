@@ -28,7 +28,7 @@ pub struct BackupPublishedRegistryReport {
     pub configuration: BackupConfigurationReport,
     pub metadata_bytes_per_target: u64,
     pub branch_scopes: usize,
-    pub directory_scopes: usize,
+    pub registered_folders: usize,
 }
 
 #[derive(Serialize)]
@@ -268,7 +268,7 @@ impl Plan {
             configuration: self.resolved.report.clone(),
             metadata_bytes_per_target: self.bytes,
             branch_scopes: state.branches.len(),
-            directory_scopes: state.directory_branches.len(),
+            registered_folders: state.namespace_directories.len(),
         }
     }
 }

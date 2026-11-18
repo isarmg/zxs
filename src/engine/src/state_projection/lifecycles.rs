@@ -208,16 +208,6 @@ pub(crate) enum PathOwner {
 }
 
 pub(crate) fn path_owner(receipt: &OperationResult) -> PathOwner {
-    if receipt.kind == crate::history_package::path_audit::RESTORE_KIND {
-        return match crate::history_package::path_audit::restored(receipt) {
-            Ok(sources) => PathOwner::Files(
-                sources.values()
-                    .flat_map(|source| source.projections.iter().map(|row| row.file_id))
-                    .collect(),
-            ),
-            Err(_) => PathOwner::Malformed,
-        };
-    }
     if !crate::persist::path_changes::is_kind(&receipt.kind) {
         return PathOwner::Other;
     }

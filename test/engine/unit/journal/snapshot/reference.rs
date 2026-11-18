@@ -12,7 +12,7 @@ pub(in crate::journal) fn prepare_reference(
         encoder: Encoder::new(maximum),
         fields: BTreeMap::new(),
     };
-    macro_rules! fields {($($field:ident,)*) => {for field in [$(stringify!($field),)* "directory_selection_generations", "file_selection_generations"] {
+    macro_rules! fields {($($field:ident,)*) => {for field in [$(stringify!($field),)* "file_selection_generations"] {
         let value = logical.remove(field).unwrap_or_else(|| json_codec::json!({}));
         let root = if matches!(field, "operations" | "operation_principals") {
             let map: BTreeMap<OperationId,json_codec::Value> = json_codec::from_value(value)?;

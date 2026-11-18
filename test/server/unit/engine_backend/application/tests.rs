@@ -18,13 +18,7 @@ fn fixture() -> (
     .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Application").unwrap(),
-            "P01",
-            3,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "owner", storage_contract::OperationId::generate().unwrap())
         .unwrap();
     let identity = crate::engine_backend::install_test_administrator(&mut engine, "owner");
     (root, engine, repo, identity)
@@ -464,61 +458,64 @@ fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and
 }
 
 #[test]
-fn merge_link_retry_replays_original_scope_after_split_and_restart() {
+fn merge_link_retry_preserves_both_original_file_endpoints_after_archive_and_restart() {
     let (root, mut engine, repo, owner) = fixture();
+    let op = || storage_contract::OperationId::generate().unwrap();
     let root_commit = engine.state().histories[&repo.history_tree_id]
-        .root_commit_id
-        .clone();
-    let side = engine
-        .create_branch(
-            &root_commit,
-            &storage_contract::BranchName::parse("side").unwrap(),
-            &owner.principal,
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+        .root_commit_id.clone();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, &owner.principal)
         .unwrap();
+    for path in ["file.txt", "other.txt"] {
+        engine.stage_bytes(&workspace.workspace_id, path, b"same bytes").unwrap();
+    }
     engine
-        .stage_bytes(&workspace.workspace_id, "file.txt", b"body")
-        .unwrap();
-    let cut = engine
         .commit_workspace(storage_engine::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate().unwrap(),
+            operation_id: op(),
             principal: owner.principal.clone(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
-            message: "cut".into(),
+            message: "two distinct ordinary files".into(),
             request_digest: None,
         })
-        .unwrap()
-        .commit_id
         .unwrap();
-    let operation_id = storage_contract::OperationId::generate().unwrap();
+    let branch = |engine: &mut Engine, path: &str| {
+        let entry = engine.namespace_tree(&repo.main_branch_id).unwrap()
+            .get(path).unwrap().clone();
+        engine.create_file_branch(
+            &entry.file_id, &entry.version_id,
+            &storage_contract::BranchName::parse("side").unwrap(),
+            &owner.principal, op(),
+        ).unwrap().branch_id.unwrap()
+    };
+    let side = branch(&mut engine, "file.txt");
+    let other = branch(&mut engine, "other.txt");
+    let selected = engine.file_context(&repo.repository_id, "file.txt").unwrap().branch_id;
+    assert_ne!(side, selected);
+    assert_ne!(selected, repo.main_branch_id);
+    let side_head = engine.state().branches[&side].head_commit_id.clone();
+    let selected_head = engine.state().branches[&selected].head_commit_id.clone();
+    let other_head = engine.state().branches[&other].head_commit_id.clone();
+    let operation_id = op();
     let command = || crate::CreateMergeLink {
         history_tree_id: repo.history_tree_id.clone(),
-        source_branch_id: side.branch_id.clone(),
-        source_commit_id: side.head_commit_id.clone(),
-        target_branch_id: repo.main_branch_id.clone(),
-        target_commit_id: cut.clone(),
+        source_branch_id: side.clone(),
+        source_commit_id: side_head.clone(),
+        target_branch_id: selected.clone(),
+        target_commit_id: selected_head.clone(),
         operation_id,
     };
     let mut backend = EngineBackend::new(engine);
     let original = backend.create_merge_link(&owner, command()).unwrap();
-    let mut engine = backend.engine.lock().unwrap();
-    let plan = engine
-        .create_split_plan(&repo.history_tree_id, &cut, &owner.principal)
-        .unwrap();
-    let split = engine
-        .commit_plan(
-            &plan.plan_id,
-            &owner.principal,
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    drop(engine);
+    assert_eq!(original.history_tree_id, repo.history_tree_id);
+    assert_eq!(original.source_branch_id, side);
+    assert_eq!(original.target_branch_id, selected);
+    assert_eq!(original.source_commit_id, side_head);
+    assert_eq!(original.target_commit_id, selected_head);
+    backend.engine.lock().unwrap()
+        .archive_branch(&side, &owner.principal, op()).unwrap();
+    let absent_history = new_id("history").unwrap();
     for reopened in [false, true] {
         if reopened {
             drop(backend);
@@ -538,16 +535,19 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
             storage_contract::ErrorCode::IdempotencyKeyReused
         );
         let mut wrong_history = command();
-        wrong_history.history_tree_id = split.history_tree_id.clone().unwrap();
-        assert!(backend.create_merge_link(&owner, wrong_history).is_err());
-        let mut new_request = command();
-        new_request.operation_id = storage_contract::OperationId::generate().unwrap();
+        wrong_history.history_tree_id = absent_history.clone();
         assert_eq!(
-            backend
-                .create_merge_link(&owner, new_request)
-                .unwrap_err()
-                .code,
-            storage_contract::ErrorCode::TreeMoved
+            backend.create_merge_link(&owner, wrong_history).unwrap_err().status, 404
+        );
+        let mut cross_file = command();
+        cross_file.operation_id = op();
+        cross_file.source_branch_id = selected.clone();
+        cross_file.source_commit_id = selected_head.clone();
+        cross_file.target_branch_id = other.clone();
+        cross_file.target_commit_id = other_head.clone();
+        assert_eq!(
+            backend.create_merge_link(&owner, cross_file).unwrap_err().code,
+            storage_contract::ErrorCode::FileBranchScope
         );
         assert_eq!(
             storage_engine::canonical_json(backend.engine.lock().unwrap().state()).unwrap(),

@@ -340,57 +340,6 @@ fn directory_snapshot_task_admission_is_bounded_and_drop_releases_the_slot() {
     drop(fixture.capture(None, DirectorySnapshotLimits::default()).unwrap());
 }
 
-#[test]
-fn directory_snapshot_split_placeholder_reads_its_actual_inherited_source_version() {
-    let mut fixture = Fixture::new();
-    let saved = fixture.save("report.txt", b"inherited body");
-    let original = fixture.entry("report.txt");
-    let pending = fixture.engine.create_branch(
-        saved.commit_id.as_ref().unwrap(), &BranchName::parse("pending split").unwrap(),
-        "admin", OperationId::generate().unwrap(),
-    ).unwrap();
-    let split = fixture.engine.create_split_plan(
-        &fixture.repository.history_tree_id, &pending.head_commit_id, "admin",
-    ).unwrap();
-    let receipt = fixture.engine.commit_plan(
-        &split.plan_id, "admin", OperationId::generate().unwrap(),
-    ).unwrap();
-    let repository = fixture.engine.state.repositories.values().find(|repository| {
-        Some(&repository.history_tree_id) == receipt.history_tree_id.as_ref()
-    }).unwrap();
-    let placeholder = fixture.engine.namespace_tree(&repository.main_branch_id).unwrap()
-        .get("report.txt").unwrap();
-    let source = fixture.engine.pending_file_source(
-        &repository.main_branch_id, &placeholder.file_id,
-    ).unwrap();
-    // Split remaps the retained body into the new history while the branch
-    // still inherits that body instead of owning a first saved version.
-    assert_ne!(placeholder.file_id, original.file_id);
-    assert_ne!(source, original.version_id.as_str());
-    assert_eq!(placeholder.version_id, source);
-    let inherited = &fixture.engine.state.versions[source];
-    assert_eq!(inherited.file_id, placeholder.file_id);
-    assert_eq!(inherited.history_tree_id, repository.history_tree_id);
-    let mut content = fixture.engine.open_content(source).unwrap();
-    let mut bytes = Vec::new();
-    content.file.read_to_end(&mut bytes).unwrap();
-    assert_eq!(bytes, b"inherited body");
-    drop(content);
-    let plan = fixture.engine.prepare_directory_snapshot_source(
-        repository.main_branch_id.parse().unwrap(), None,
-        DirectorySnapshotLimits::default(), HistoryWindowCancellation::new(),
-    ).unwrap();
-    let preview = fixture.engine.finish_directory_snapshot_preview(verify(plan)).unwrap();
-    assert_eq!(preview.entries.len(), 1);
-    assert_eq!(preview.entries[0].path.as_str(), "report.txt");
-    assert_eq!(preview.entries[0].entry_id.to_string(), placeholder.entry_id);
-    assert_eq!(file(&preview.entries[0]).0.to_string(), placeholder.file_id);
-    assert_eq!(file(&preview.entries[0]).1.to_string(), source);
-    assert_eq!(file(&preview.entries[0]).2, b"inherited body".len() as u64);
-    assert_eq!(file(&preview.entries[0]).3,
-        ContentHash::from_digest(blake3::hash(b"inherited body")));
-    fixture.no_leases();
-}
 
 #[test]
 fn directory_snapshot_keeps_all_alias_paths_and_counts_logical_bytes_per_occurrence() {

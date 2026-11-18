@@ -42,7 +42,6 @@ fn repository(browser: &Browser) -> Result<()> {
         browser.click(&browser.button("All disks","所有硬盘")?)?;
     }
     browser.click(&browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?)?;
-    open_name(browser, fixture::REPOSITORY)?;
     browser.element(
         "xpath",
         "//button[contains(@class,'zxs-file-name')][normalize-space(.)='future']",
@@ -216,35 +215,24 @@ fn close_and_session_delivery(browser: &Browser, fixture: &Fixture, password: &s
     }
     close_editor(browser)
 }
-fn read_only_views(browser: &Browser, fixture: &Fixture, session: &Session) -> Result<()> {
-    session.success(
-        "POST",
-        "/api/file-manager/disks/P01/directory-branches",
-        Some(json!({
-        "path":format!("{}/future",fixture::REPOSITORY),"name":"placement-preview",
-        "operation_id":storage_engine::OperationId::generate()?})),
-    )?;
+fn read_only_views(browser: &Browser, fixture: &Fixture) -> Result<()> {
     repository(browser)?;
     open_name(browser, "future")?;
-    let browse=browser.element("xpath","//div[contains(@class,'zxs-select')][./label[normalize-space(.)='Browse folder branch' or normalize-space(.)='浏览目录分支']]/button[@role='combobox']")?;
-    let panel = browser.command(
-        "GET",
-        &format!("/element/{browse}/attribute/aria-controls"),
-        None,
-    )?;
-    let panel = panel.as_str().ok_or("folder combobox lacks a listbox")?;
-    browser.click(&browse)?;
-    browser.click(&browser.element("xpath", &select_option_xpath(panel, "placement-preview"))?)?;
-    browser.button("Return to default view", "返回默认视图")?;
-    check(
-        browser,
-        "historical directory preview forbids placement writes",
-        r#"
-        const buttons=Array.from(document.querySelectorAll('button')).filter(b=>['Primary placement','主盘规则'].includes(b.textContent.trim()));
-        return buttons.length===1&&buttons[0].disabled&&!document.querySelector('.zxs-placement-review');
-    "#,
-    )?;
-    browser.click(&browser.button("Return to default view", "返回默认视图")?)?;
+    browser.click(&browser.css("[data-zxs-current-directory-details]")?)?;
+    check(browser, "ordinary folder controls exist without a directory repository", r#"
+        const panel=document.querySelector('[data-zxs-current-directory-controls]');
+        if (!panel) return false;
+        const buttons=Array.from(panel.querySelectorAll('button'));
+        const named=(en,zh)=>buttons.some(b=>[en,zh].includes(b.textContent.trim())&&!b.disabled);
+        return !!panel.querySelector('[data-zxs-folder-refresh]:not([disabled])')
+           && !!panel.querySelector('[data-zxs-directory-files]:not([disabled])')
+           && named('New folder','新建文件夹') && named('Primary placement','主盘规则')
+           && named('Recursive backups','逐级备份')
+           && !panel.querySelector('[data-directory-git-refresh],[data-open-preview-origin],[data-review-directory-layout]')
+           && !/Browse folder branch|浏览目录分支|Worktree|工作树|Initialize .zxs|初始化 .zxs/i.test(panel.textContent);
+    "#)?;
+    browser.click(&browser.css("[data-zxs-directory-files]")?)?;
+    browser.element("xpath", "//button[contains(@class,'zxs-file-name')][normalize-space(.)='project.zxs']")?;
     browser.click(&browser.button("All disks", "所有硬盘")?)?;
     browser.click(&browser.css(".zxs-disk-entry[data-slot='B01']:not([disabled])")?)?;
     check(
@@ -409,7 +397,7 @@ fn exercise(browser: &Browser, fixture: &Fixture, password: &str) -> Result<Valu
                 );
             }
             close_editor(browser)?;
-            read_only_views(browser, fixture, &session)?;
+            read_only_views(browser, fixture)?;
             close_and_session_delivery(browser, fixture, password)?;
             evidence=Some(browser.script("const p=window.__zxsPlacement;return {reads:p.reads,writes:p.writes,outcomes:p.outcomes}")?);
             if browser.script("return window.__zxsSmokeErrors")? != json!([]) {

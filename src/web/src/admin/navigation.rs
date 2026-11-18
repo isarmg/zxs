@@ -33,8 +33,8 @@ impl Section {
                 "For everyday backups, use Recursive backups and Custom backup prefixes in file or folder Details. These advanced path rules do not move existing versions; path copy rules do not backfill history. Replacing a disk’s next backup disk is a separate operation that must migrate all data; this form does not perform that migration.",
             ),
             Self::Diagnostics => t(
-                "检查运行状态、查询原操作及已存在的计划。旧整树分支、手工合并连线、清理、拆分和历史保存创建表单已移除；它们不能代替当前文件及目录模型。查询到计划不代表它适用于当前存储，执行仍由核心准入。",
-                "Inspect service state, original operations and existing plans. Legacy whole-history branch, manual merge-link, purge, split and historical-save creation forms have been removed; they do not implement the current file and folder model. A retrieved plan is not proof of current support; the core still admits execution.",
+                "按 ID 查询原操作或已存在的文件版本清理计划。执行前，请核对列出的版本 ID；这些版本的正文将被永久删除。此页不会创建清理计划。",
+                "Look up an original operation or an existing file-version purge plan by ID. Before committing, check the listed version IDs: their content will be permanently deleted. This page does not create a purge plan.",
             ),
         }
     }

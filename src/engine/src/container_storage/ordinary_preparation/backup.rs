@@ -235,7 +235,7 @@ impl BackupTargetLayout {
         let state = source.state();
         crate::engine::fresh_layout::containers::validate_state(state)?;
         crate::engine::fresh_layout::directories::validate_state(state)?;
-        if !state.file_deletions.is_empty() || !state.directory_git_repositories.is_empty() {
+        if !state.file_deletions.is_empty() {
             return Err(Failure::BackupLayoutUnsupported.into());
         }
         let binding = source.binding()?;
@@ -308,7 +308,7 @@ impl BackupTargetLayout {
             .disk_id.parse::<DiskId>()?;
         if self.files.keys().ne(state.file_containers.keys())
             || self.directories.len() != state.namespace_directories.len()
-            || !state.file_deletions.is_empty() || !state.directory_git_repositories.is_empty()
+            || !state.file_deletions.is_empty()
             || state.file_containers.values().any(|record| record.owner_disk != owner
                 || record.replicas.contains_key(&self.disk)
                 || !matches!(record.working,

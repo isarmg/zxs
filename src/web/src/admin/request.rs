@@ -244,7 +244,8 @@ pub(super) fn plan_action(
     acknowledged: bool,
     operation: &str,
 ) -> Result<Request, InputError> {
-    let plan = plan.ok_or(InputError::MissingPlan)?.plan();
+    let review = plan.ok_or(InputError::MissingPlan)?;
+    let plan = review.plan();
     let id = &plan.plan_id;
     if plan.state != storage_contract::PlanState::Ready {
         return Err(InputError::PlanNotReady);
@@ -260,6 +261,7 @@ pub(super) fn plan_action(
             body: Some(json!({"plan_digest":digest,"operation_id":operation})),
             contract: Contract::PlanReceipt {
                 operation: operation.into(),
+                expected: review.completion(true),
             },
         })
     } else {
@@ -269,6 +271,7 @@ pub(super) fn plan_action(
             body: Some(json!({"operation_id":operation})),
             contract: Contract::PlanReceipt {
                 operation: operation.into(),
+                expected: review.completion(false),
             },
         })
     }

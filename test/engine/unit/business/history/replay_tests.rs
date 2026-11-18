@@ -1,241 +1,110 @@
+//! Real ordinary FILE branches, rather than a separate directory repository,
+//! are the only history link and archive operands.
 use super::*;
+use std::os::unix::fs::PermissionsExt;
 
-#[test]
-fn branch_creation_replay_returns_original_record_after_writes_archive_and_reopen() {
-    let root = tempfile::tempdir().unwrap();
-    let mut engine = Engine::initialize(
-        &root.path().join("system"),
-        Config::development(crate::test_disks([root.path().join("primary")])).unwrap(),
-    )
-    .unwrap();
-    let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Branch replay").unwrap(),
-            "P01",
-            1,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let source_workspace = engine
-        .create_workspace(&repo.main_branch_id, "admin")
-        .unwrap();
-    for (path, bytes) in [
-        ("file.txt", b"parent".as_slice()),
-        ("folder/其他.txt", b"other".as_slice()),
-    ] {
-        engine
-            .stage_bytes(&source_workspace.workspace_id, path, bytes)
-            .unwrap();
+fn op() -> OperationId {
+    OperationId::generate().unwrap()
+}
+
+fn fixture() -> (tempfile::TempDir, Engine, Repository) {
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let disk = temp.path().join("primary");
+    for path in [&system, &disk] {
+        std::fs::create_dir(path).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let source = engine
-        .commit_workspace(CommitRequest {
-            workspace_id: source_workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate().unwrap(),
-            principal: "admin".into(),
-            expected_head: source_workspace.base_head,
-            fencing_token: source_workspace.fencing_token,
-            message: "Frozen parent sources".into(),
-            request_digest: None,
-        })
-        .unwrap()
-        .commit_id
-        .unwrap();
-    let operation = storage_contract::OperationId::generate().unwrap();
-    let original = engine
-        .create_branch(
-            &source,
-            &storage_contract::BranchName::parse("side").unwrap(),
-            "admin",
-            operation,
-        )
-        .unwrap();
-    assert_eq!(original.pending_file_versions.len(), 2);
-    let original_bytes = canonical_json(&original).unwrap();
-    let workspace = engine
-        .create_workspace(&original.branch_id, "admin")
-        .unwrap();
-    engine
-        .stage_bytes(&workspace.workspace_id, "file.txt", b"later body")
-        .unwrap();
-    engine
-        .commit_workspace(CommitRequest {
-            workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate().unwrap(),
-            principal: "admin".into(),
-            expected_head: workspace.base_head,
-            fencing_token: workspace.fencing_token,
-            message: "Later branch write".into(),
-            request_digest: None,
-        })
-        .unwrap();
-    engine
-        .archive_branch(
-            &original.branch_id,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    assert_ne!(engine.state().branches[&original.branch_id], original);
-    for reopened in [false, true] {
-        if reopened {
-            drop(engine);
-            engine = Engine::open(&root.path().join("system")).unwrap();
-        }
-        let before = canonical_json(engine.state()).unwrap();
-        assert_eq!(
-            canonical_json(&engine.state().operations[&operation].result["created_branch"])
-                .unwrap(),
-            original_bytes
-        );
-        assert_eq!(
-            engine
-                .create_branch(
-                    &source,
-                    &storage_contract::BranchName::parse("side").unwrap(),
-                    "admin",
-                    operation
-                )
-                .unwrap(),
-            original
-        );
-        for (name, principal) in [("different", "admin"), ("side", "other")] {
-            assert_eq!(
-                engine
-                    .create_branch(
-                        &source,
-                        &storage_contract::BranchName::parse(name).unwrap(),
-                        principal,
-                        operation
-                    )
-                    .unwrap_err()
-                    .code(),
-                storage_contract::ErrorCode::IdempotencyKeyReused
-            );
-        }
-        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    let config = Config::independent_roots(storage_contract::Mode::Development, [
+        (name_policy::Name::parse("Primary").unwrap(), disk),
+    ]).unwrap();
+    let slot = config.disks[0].slot_id.clone();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let repo = engine.create_disk_root(&slot, "admin", op()).unwrap();
+    for path in ["one.txt", "two.txt"] {
+        let workspace = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
+        engine.stage_bytes(&workspace.workspace_id, path, b"same bytes").unwrap();
+        engine.commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id, operation_id: op(), principal: "admin".into(),
+            expected_head: workspace.base_head, fencing_token: workspace.fencing_token,
+            message: "independent FILE".into(), request_digest: None,
+        }).unwrap();
     }
+    (temp, engine, repo)
 }
 
 #[test]
-fn merge_link_retry_keeps_original_result_after_split_and_restart() {
-    for crossing in [false, true] {
-        let root = tempfile::tempdir().unwrap();
-        let mut engine = Engine::initialize(
-            &root.path().join("system"),
-            Config::development(crate::test_disks(
-                [
-                    root.path().join("p"),
-                    root.path().join("b"),
-                    root.path().join("c"),
-                ],
-            ))
-            .unwrap(),
-        )
-        .unwrap();
-        let repo = engine
-            .create_repository(
-                &storage_contract::RepositoryName::parse("Replay").unwrap(),
-                "P01",
-                3,
-                "admin",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
-        let root_commit = engine.state().histories[&repo.history_tree_id]
-            .root_commit_id
-            .clone();
-        let workspace = engine
-            .create_workspace(&repo.main_branch_id, "admin")
-            .unwrap();
-        engine
-            .stage_bytes(&workspace.workspace_id, "file.txt", b"body")
-            .unwrap();
-        let cut = engine
-            .commit_workspace(CommitRequest {
-                workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate().unwrap(),
-                principal: "admin".into(),
-                expected_head: workspace.base_head,
-                fencing_token: workspace.fencing_token,
-                message: "cut".into(),
-                request_digest: None,
-            })
-            .unwrap()
-            .commit_id
-            .unwrap();
-        let side = engine
-            .create_branch(
-                if crossing { &root_commit } else { &cut },
-                &storage_contract::BranchName::parse("side").unwrap(),
-                "admin",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
-        let operation = storage_contract::OperationId::generate().unwrap();
-        let original = engine
-            .add_merge_link(
-                &side.branch_id,
-                &side.head_commit_id,
-                &repo.main_branch_id,
-                &cut,
-                "admin",
-                operation,
-            )
-            .unwrap();
-        let plan = engine
-            .create_split_plan(&repo.history_tree_id, &cut, "admin")
-            .unwrap();
-        engine
-            .commit_plan(
-                &plan.plan_id,
-                "admin",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
-        assert!(
-            !engine
-                .state()
-                .merge_links
-                .contains_key(&original.merge_link_id)
-        );
-        for reopened in [false, true] {
-            if reopened {
-                drop(engine);
-                engine = Engine::open(&root.path().join("system")).unwrap();
-            }
-            let before = canonical_json(engine.state()).unwrap();
-            let replay = engine
-                .add_merge_link(
-                    &side.branch_id,
-                    &side.head_commit_id,
-                    &repo.main_branch_id,
-                    &cut,
-                    "admin",
-                    operation,
-                )
-                .unwrap();
-            assert_eq!(
-                canonical_json(&replay).unwrap(),
-                canonical_json(&original).unwrap()
-            );
-            for (target, actor) in [(&root_commit, "admin"), (&cut, "other")] {
-                assert_eq!(
-                    engine
-                        .add_merge_link(
-                            &side.branch_id,
-                            &side.head_commit_id,
-                            &repo.main_branch_id,
-                            target,
-                            actor,
-                            operation,
-                        )
-                        .unwrap_err()
-                        .code(),
-                    storage_contract::ErrorCode::IdempotencyKeyReused
-                );
-            }
-            assert_eq!(canonical_json(engine.state()).unwrap(), before);
-        }
+fn file_relations_refuse_shared_roots_other_files_and_ancestry_without_this_file() {
+    let (_temp, mut engine, repo) = fixture();
+    let a = engine.namespace_tree(&repo.main_branch_id).unwrap().get("one.txt").unwrap().clone();
+    let side = engine.create_file_branch(&a.file_id, &a.version_id,
+        &storage_contract::BranchName::parse("side").unwrap(), "admin", op())
+        .unwrap().branch_id.unwrap();
+    let primary = engine.file_context(&repo.repository_id, "one.txt").unwrap().branch_id;
+    let other = engine.file_context(&repo.repository_id, "two.txt").unwrap().branch_id;
+    let primary_head = engine.state().branches[&primary].head_commit_id.clone();
+    let side_head = engine.state().branches[&side].head_commit_id.clone();
+    let other_head = engine.state().branches[&other].head_commit_id.clone();
+    let root_head = engine.state().branches[&repo.main_branch_id].head_commit_id.clone();
+    let cut = engine.state().histories[&repo.history_tree_id].root_commit_id.clone();
+    let before = canonical_json(engine.state()).unwrap();
+    for (source, source_commit, target, target_commit, expected) in [
+        (&repo.main_branch_id, &root_head, &repo.main_branch_id, &root_head, ErrorCode::FileBranchRequired),
+        (&primary, &primary_head, &other, &other_head, ErrorCode::FileBranchScope),
+        (&primary, &cut, &side, &side_head, ErrorCode::CommitNotFound),
+        (&primary, &primary_head, &side, &primary_head, ErrorCode::MergeEndpointMismatch),
+    ] {
+        let operation = op();
+        assert_eq!(engine.add_merge_link(source, source_commit, target, target_commit, "admin", operation)
+            .unwrap_err().code(), expected);
+        assert!(!engine.state().operations.contains_key(&operation));
+    }
+    assert_eq!(engine.archive_branch(&repo.main_branch_id, "admin", op()).unwrap_err().code(),
+        ErrorCode::MainBranchRequired);
+    assert_eq!(engine.archive_branch(&primary, "admin", op()).unwrap_err().code(),
+        ErrorCode::FileBranchSelected);
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    let open = engine.create_workspace(&side, "admin").unwrap();
+    assert_eq!(engine.archive_branch(&side, "admin", op()).unwrap_err().code(), ErrorCode::WorkspaceBusy);
+    engine.abort_workspace(&open.workspace_id, "admin").unwrap();
+}
+
+#[test]
+fn original_file_link_branch_creation_and_archive_survive_reselection_and_restart() {
+    let (temp, mut engine, repo) = fixture();
+    let a = engine.namespace_tree(&repo.main_branch_id).unwrap().get("one.txt").unwrap().clone();
+    let primary = engine.file_context(&repo.repository_id, "one.txt").unwrap().branch_id;
+    let name = storage_contract::BranchName::parse("side").unwrap();
+    let create = op();
+    let created = engine.create_file_branch(&a.file_id, &a.version_id, &name, "admin", create).unwrap();
+    let side = created.branch_id.clone().unwrap();
+    let side_head = engine.state().branches[&side].head_commit_id.clone();
+    let primary_head = engine.state().branches[&primary].head_commit_id.clone();
+    let operation = op();
+    let link = engine.add_merge_link(&side, &side_head, &primary, &primary_head, "admin", operation).unwrap();
+    assert_eq!(link.source_branch_id, side);
+    assert_eq!(link.source_commit_id, side_head);
+    assert_eq!(link.target_branch_id, primary);
+    assert_eq!(link.target_commit_id, primary_head);
+    let path = name_policy::PortablePath::parse("one.txt").unwrap();
+    for branch in [&side, &primary] {
+        engine.select_file_branch_at(&repo.repository_id, &path, &a.file_id, branch, "admin", op()).unwrap();
+    }
+    let archive = op();
+    let archived = engine.archive_branch(&side, "admin", archive).unwrap();
+    assert_eq!(engine.state().branches[&side].state, BranchState::Archived);
+    for reopen in [false, true] {
+        if reopen { drop(engine); engine = Engine::open(&temp.path().join("system")).unwrap(); }
+        let before = canonical_json(engine.state()).unwrap();
+        assert_eq!(engine.create_file_branch(&a.file_id, &a.version_id, &name, "admin", create).unwrap(), created);
+        let replay = engine.add_merge_link(&side, &side_head, &primary, &primary_head, "admin", operation).unwrap();
+        assert_eq!(canonical_json(&replay).unwrap(), canonical_json(&link).unwrap());
+        assert_eq!(engine.archive_branch(&side, "admin", archive).unwrap(), archived);
+        assert_eq!(engine.create_file_branch(&a.file_id, &a.version_id, &name, "other", create)
+            .unwrap_err().code(), ErrorCode::IdempotencyKeyReused);
+        assert_eq!(engine.add_merge_link(&side, &side_head, &primary, &side_head, "admin", operation)
+            .unwrap_err().code(), ErrorCode::IdempotencyKeyReused);
+        assert_eq!(engine.archive_branch(&side, "other", archive).unwrap_err().code(), ErrorCode::IdempotencyKeyReused);
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
     }
 }

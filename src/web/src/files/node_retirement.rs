@@ -212,7 +212,6 @@ fn admission_ready(state: &State) -> bool {
         && !actions::pending(state)
         && !state.files.history_loading
         && state.files.file_history.ready()
-        && state.files.directory_preview.is_none()
         && state.files.file_preview.is_none()
         && state.files.file_history.identity().is_some_and(|identity| {
             identity.context.path.is_none() && identity.context.current_node_id.is_none()

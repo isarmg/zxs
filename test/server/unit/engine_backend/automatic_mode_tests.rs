@@ -41,6 +41,7 @@ struct Fronts {
     server: tokio::task::JoinHandle<io::Result<()>>,
     backend: Arc<EngineBackend>,
     app: Router,
+    http_work: crate::HttpWork,
     auth: Arc<Mutex<AuthStore>>,
     token: String,
     username: String,
@@ -69,7 +70,7 @@ impl Fronts {
             .max_blocking_threads(4).enable_all().build().unwrap();
         let backend = Arc::new(EngineBackend::new(engine));
         let auth = backend.protect_auth(auth).unwrap();
-        let (app, auth) = runtime.block_on(async {
+        let (app, auth, http_work) = runtime.block_on(async {
             // These are the same owned components as router()/serve(), retained
             // here so the two genuine transports use one credential owner.
             let config = ServerConfig::new(&root.path().join("state")).admit().unwrap();
@@ -79,15 +80,15 @@ impl Fronts {
                 managed.backend.clone(), managed.telemetry.clone(),
             ));
             let auth = managed.auth.clone();
-            let app = crate::router_shared(
+            let (app, http_work) = crate::router_shared(
                 managed.backend,
                 managed.auth,
                 config,
                 managed.telemetry,
                 spool,
                 managed.smb_account,
-            ).unwrap().layer(http_routing::Extension(shutdown));
-            (app, auth)
+            ).unwrap();
+            (app.layer(http_routing::Extension(shutdown)), auth, http_work)
         });
         let server = runtime.spawn(crate::smb_rpc::serve(SmbConfig {
             socket: root.path().join("run/bridge.sock"),
@@ -100,7 +101,7 @@ impl Fronts {
             },
         }, auth.clone(), backend.clone(), 4 * 1024 * 1024));
         let mut result = Self {
-            root, runtime, server, backend, app, auth, token: String::new(),
+            root, runtime, server, backend, app, http_work, auth, token: String::new(),
             username: credentials.username.clone(),
         };
         let (status, login) = result.http("POST", "/api/auth/login", Some(json!({
@@ -157,16 +158,19 @@ impl Fronts {
     }
 
     fn cold(self) -> (tempfile::TempDir, Engine) {
-        let Self { root, runtime, server, backend, app, auth, token: _, username: _ } = self;
+        let Self { root, runtime, server, backend, app, http_work, auth, token: _, username: _ } = self;
         server.abort();
         assert!(runtime.block_on(server).unwrap_err().is_cancelled());
-        drop(app);
-        drop(auth);
-        drop(backend);
-        // Wait only for the actual embedded management shutdown to release its
-        // writer. Authentication/recovery failures are never retried as locks.
         let engine = runtime.block_on(async {
             let deadline = Instant::now() + Duration::from_secs(3);
+            // Drain the original HTTP slots before dropping the embedded writer,
+            // within the same cold-open deadline used to wait for its release.
+            tokio::time::timeout_at(deadline.into(), http_work.drain()).await
+                .expect("HTTP jobs did not finish before the cold reopen").unwrap();
+            drop(app);
+            drop(auth);
+            drop(backend);
+            // Authentication/recovery failures must not be retried as locks.
             loop {
                 match Engine::open(&root.path().join("state")) {
                     Ok(engine) => break engine,

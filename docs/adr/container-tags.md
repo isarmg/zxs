@@ -129,7 +129,7 @@ SYSTEM 增加 catalog family 39；既有永久审计主体、事件、状态的 
 | `membership-pending` | `admission::inspect_new_root` 解码并比对完整 PendingDiskSeal，启动/晋升另经 marker、predecessor 与 activation namespace 判断 | active seal 门禁不能覆盖此路。新 PendingFormat 不得把旧非空根视为未初始化；无 seal 的旧 staging 还要由 ArchiveBinding 准入拒绝 |
 | native archive | `engine/backup_preparation/native_control/archive.rs::read_observed → verify_observed → original_journals`，随后 snapshot 准入 | typed archived seal 和新 snapshot 都必须准入后才能安装目标材料；外壳新、内层旧仍拒绝 |
 | native serving restore/resume | `prepare_resume → authenticate → native::read → authority::read_archive_base → persistent::read_generation_base` 解码实际 ArchiveRoot、State、candidate、seal | 这些步骤先于 `PreparedBackupResume::into_completed → saved.complete()`；打开已有 writer lock 不创建缺失锁。新 archive/State 格式仍须落实并验证 completed/unfinished 两条路 |
-| history package import | `restore_history_package → load_package → graph::resolve_with_objects → manifest.validate` | 源读取先于业务 mutate/内容安装；不依赖 seal，必须独立拒绝旧 history marker、缺标签 map 和节点标签字段 |
+| 独立 FILE 历史包校验 | `offline_check_history_package → load_package → graph::resolve_with_objects → manifest.validate` | 只读核对原发布和完整标签。缺标签 map 或携带节点级标签字段必须独立拒绝；这里不安装包 |
 | foreign import | `ForeignSource::inspect → foreign_import/inspect.rs::decode_seal → read_local_disk_configuration`，另有 identity closure | inspect 只读不是 commit 准入证明。发布前 source revalidate、manifest projection 和新标签映射须同批闭合 |
 | FILE rescue | `inspect_object_database_material → FileScope::read → file_database::read_material`；重建经 `validate_records → SCHEMA.encode` | 此 API 只生成 SQLite bytes，不安装全局 State；输出文件调用方仍是独立边界。旧 rows 不得通过新 wrapper 重编码并沿用旧 hash |
 | maintenance | 已打开 Engine 的 `create_split_plan/commit_plan` 及 `maintenance.rs` 身份映射 | 计划持久化和安装前须有新标签记录完整证明；不能因启动已准入就漏掉新身份的独立标签 |

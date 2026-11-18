@@ -12,7 +12,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
+        Config::independent_roots(Mode::Development, crate::test_disks([temp.path().join("disk"), temp.path().join("other-disk")])).unwrap(),
     )
     .unwrap();
     let repository = repository(&mut engine, "target");
@@ -20,16 +20,10 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry) {
     (temp, engine, repository, file)
 }
 
-fn repository(engine: &mut Engine, name: &str) -> Repository {
-    engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse(name).unwrap(),
-            "P01",
-            1,
-            "admin",
-            OperationId::generate().unwrap(),
-        )
-        .unwrap()
+fn repository(engine: &mut Engine, _label: &str) -> Repository {
+    let slot = engine.config().disks.iter().find(|disk| !engine.state().repositories.values()
+        .any(|root| root.primary_slot_id == disk.slot_id)).unwrap().slot_id.clone();
+    engine.create_disk_root(&slot, "admin", OperationId::generate().unwrap()).unwrap()
 }
 
 fn save(engine: &mut Engine, repository: &Repository, bytes: &[u8]) -> Entry {
@@ -249,6 +243,7 @@ fn logical_history_roots_do_not_depend_on_write_reuse_or_integrity_epoch() {
 #[test]
 fn a_durable_local_plan_preserves_the_published_state_and_exact_roots_after_restart() {
     let (temp, mut engine, repository, file) = fixture();
+    save(&mut engine, &repository, b"new file HEAD");
     let history = &repository.history_tree_id;
     let published = Arc::clone(&engine.state);
     let old_view = engine.metadata_view();
@@ -261,22 +256,7 @@ fn a_durable_local_plan_preserves_the_published_state_and_exact_roots_after_rest
     let page = retained.page().unwrap();
     let root = old_view.history_root(history).unwrap().to_owned();
     let sequence = engine.state().sequence;
-    let source = engine.state.branches[&repository.main_branch_id]
-        .head_commit_id
-        .clone();
-    let plan = engine
-        .create_historical_save_plan(
-            history,
-            HistoricalSaveOptions {
-                source_commit_id: source,
-                name: "prepared history branch".into(),
-                workspace_id: None,
-                primary_slot_id: None,
-                target_copies: None,
-            },
-            "admin",
-        )
-        .unwrap();
+    let plan = engine.create_purge_plan(history, vec![file.version_id.clone()], "admin").unwrap();
     let new_view = engine.metadata_view();
     // Each view owns a separate projection; only the authoritative published
     // State must keep its identity when a local Ready plan is saved.
@@ -318,28 +298,11 @@ fn unrelated_publication_does_not_publish_local_ready_plans_after_cold_recovery(
     let frozen = Arc::clone(&engine.state);
     let frozen_bytes = canonical_json(frozen.as_ref()).unwrap();
     let root = observed_root(&engine, &target.history_tree_id);
-    let source = engine.state.branches[&target.main_branch_id]
-        .head_commit_id
-        .clone();
-    let purge = engine
-        .create_purge_plan(&target.history_tree_id, vec![original.version_id], "admin")
-        .unwrap();
-    let historical = engine
-        .create_historical_save_plan(
-            &target.history_tree_id,
-            HistoricalSaveOptions {
-                source_commit_id: source,
-                name: "durable local preview".into(),
-                workspace_id: None,
-                primary_slot_id: None,
-                target_copies: None,
-            },
-            "admin",
-        )
-        .unwrap();
+    let purge = engine.create_purge_plan(&target.history_tree_id, vec![original.version_id.clone()], "admin").unwrap();
+    let other_plan = engine.create_purge_plan(&target.history_tree_id, vec![original.version_id], "second reviewer").unwrap();
     assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert_eq!(canonical_json(engine.state()).unwrap(), frozen_bytes);
-    for plan in [&purge, &historical] {
+    for plan in [&purge, &other_plan] {
         assert_eq!(plan.state, PlanState::Ready);
         assert!(!engine.state().plans.contains_key(&plan.plan_id));
         assert_eq!(engine.plan(&plan.plan_id).unwrap(), *plan);
@@ -354,7 +317,7 @@ fn unrelated_publication_does_not_publish_local_ready_plans_after_cold_recovery(
     let published_sequence = engine.state().sequence;
     assert_eq!(observed_root(&engine, &target.history_tree_id), root);
     assert_catalog_matches(&engine);
-    for plan in [&purge, &historical] {
+    for plan in [&purge, &other_plan] {
         assert!(!engine.state().plans.contains_key(&plan.plan_id));
         assert_eq!(engine.plan(&plan.plan_id).unwrap(), *plan);
     }
@@ -374,7 +337,7 @@ fn unrelated_publication_does_not_publish_local_ready_plans_after_cold_recovery(
         assert_eq!(engine.state().plans, frozen.plans);
         assert_eq!(observed_root(&engine, &target.history_tree_id), root);
         assert_catalog_matches(&engine);
-        for plan in [&purge, &historical] {
+        for plan in [&purge, &other_plan] {
             assert!(!engine.state().plans.contains_key(&plan.plan_id));
             assert_eq!(engine.plan(&plan.plan_id).unwrap(), *plan);
         }

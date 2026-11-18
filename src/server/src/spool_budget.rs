@@ -255,7 +255,7 @@ fn discard_restart_uploads(
     for data in covered.values() {
         *references.entry(data.clone()).or_default() += 1;
     }
-    // One-shot draft/worktree HTTP bodies are only descriptor inputs. The
+    // One-shot FILE draft HTTP bodies are only descriptor inputs. The
     // storage engine copies them into its own independently admitted material
     // and never references a spool name. After exclusive restart, an isolated
     // owner sidecar proves this isn't a retained resumable transfer.

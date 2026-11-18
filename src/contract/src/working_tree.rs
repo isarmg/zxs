@@ -9,9 +9,24 @@ use name_policy::LookupName;
 
 pub use crate::namespace_root::{
     BindingLifecycle, DirectoryBinding, DirectoryId, DiskRegistrationIdentity,
-    LocalDirectoryBinding, LocalEntityIdentity, RootBinding, RootId, StorageLayout,
+    LocalDirectoryBinding, LocalEntityIdentity, RootBinding, RootId,
     ThreeRootBinding, ZxsLifecycleBindings,
 };
+
+// Standalone outgoing catalog tag. Not pool, disk seal, or registered root authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum StorageLayout {
+    UnifiedWorkingTreeV1,
+}
+impl<'de> Deserialize<'de> for StorageLayout {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "unified_working_tree_v1" => Ok(Self::UnifiedWorkingTreeV1),
+            _ => Err(data_serialization::de::Error::custom("unsupported storage layout")),
+        }
+    }
+}
 
 pub mod kind {
     use crate::IdKind;

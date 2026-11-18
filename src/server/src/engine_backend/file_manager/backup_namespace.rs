@@ -182,11 +182,7 @@ fn default_backup_path(
                 .map(String::as_str)
         })
         .unwrap_or(&version.creation_name);
-    if repo.file_manager_root {
-        format!("{}/{relative}", repo.primary_slot_id)
-    } else {
-        format!("{}/{}/{relative}", repo.primary_slot_id, repo.name)
-    }
+    format!("{}/{relative}", repo.primary_slot_id)
 }
 fn project(
     engine: &Engine,
@@ -213,7 +209,7 @@ fn project(
             let current = current.map(|index| (index, &namespace.entries()[index]));
             // Resolve against the current entry before overlaying historical content.
             let mut value = if let Some((index, _)) = current {
-                let mut entry = listed_current_entry(engine, repo, index, "")?;
+                let mut entry = listed_current_entry(engine, repo, index, false)?;
                 entry.path = display.into();
                 entry.name = name.into();
                 entry
@@ -361,18 +357,19 @@ impl BackupListingRead {
         request: PageRequest,
     ) -> Result<Self, ApiError> {
         let state = engine.state();
-        let repositories = state
-            .repositories
-            .values()
-            .map(|repo| (repo.history_tree_id.as_str(), repo))
-            .collect::<BTreeMap<_, _>>();
         let mut namespaces = BTreeMap::new();
-        for (history, repo) in repositories {
+        for repo in state.repositories.values() {
+            // Backup keeps its own available material even when a primary is
+            // offline; a detached or duplicate history is not an ordinary root.
+            if !repo.file_manager_root || namespaces.contains_key(&repo.history_tree_id) {
+                return Err(changed());
+            }
+            let history = &repo.history_tree_id;
             let namespace = engine
                 .namespace_snapshot(&repo.main_branch_id)
                 .map_err(error)?;
             namespaces.insert(
-                history.into(),
+                history.clone(),
                 NamespaceCapture {
                     repository_id: repo.repository_id.clone(),
                     namespace,
@@ -699,14 +696,11 @@ impl SelectedListing {
             slot_id: self.scope.slot_id,
             path: self.scope.path,
             backup: true,
-            preview: false,
+            writable: false,
             entries: page.entries,
             selected_entry: page.selected_entry,
             context: None,
             directory_file_count: self.directory_file_count,
-            directory_branches: Vec::new(),
-            directory_branches_supported: false,
-            default_branch_scope: false,
             total_entries: self.page.total,
             snapshot: self.page.snapshot,
             previous_cursor: self.page.previous,

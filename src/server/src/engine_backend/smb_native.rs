@@ -1,6 +1,5 @@
 //! Actual account/SMB binding followed by the core's held native source.
-use crate::engine_backend::{EngineBackend, error, repo_for_branch, repository, smb_worktree};
-use crate::backend_smb_native::NativeSource;
+use crate::engine_backend::{EngineBackend, error, repo_for_branch, repository};
 use crate::{ApiError, Identity, SmbNativeEdit, SmbNativeHandle, SmbNativeOpen};
 use name_policy::PortablePath;
 use storage_contract::file_draft::{BirthRequest, DraftLocation};
@@ -25,7 +24,7 @@ pub(super) fn open(
 ) -> Result<Option<SmbNativeHandle>, ApiError> {
     let (mut engine, current) = backend.lock_current(identity)?;
     let repo = repo_for_branch(&engine, request.branch)?.clone();
-    if !repo.file_manager_root { return Ok(None); }
+    if !repo.file_manager_root { return Err(ApiError::forbidden()); }
     let binding = current.smb_binding.as_ref().ok_or_else(ApiError::forbidden)?;
     if binding.repository_id != repo.repository_id || binding.branch_id != request.branch
         || repo.main_branch_id != request.branch
@@ -103,7 +102,7 @@ pub(super) fn open(
     let (version, mtime) = published.unwrap_or((None,
         smb_protocol::protocol::FileMtime::Unpublished {}));
     Ok(Some(SmbNativeHandle {
-        source: NativeSource::Current { target, held, version, mtime },
+        target, held, version, mtime,
     }))
 }
 
@@ -112,7 +111,13 @@ pub(super) fn stat(
 ) -> Result<Option<smb_protocol::protocol::StatResult>, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
     let repo = repo_for_branch(&engine, branch)?;
-    if !repo.file_manager_root { return Ok(None); }
+    if !repo.file_manager_root { return Err(ApiError::forbidden()); }
+    let binding = current.smb_binding.as_ref().ok_or_else(ApiError::forbidden)?;
+    if binding.repository_id != repo.repository_id || binding.branch_id != branch
+        || repo.main_branch_id != branch
+    {
+        return Err(ApiError::forbidden());
+    }
     let repository = repo.repository_id.parse().map_err(ApiError::contract_input)?;
     for entry in engine.native_current_entries(repository).map_err(error)? {
         if let NativeCurrentEntry::Unborn { target, working } = entry
@@ -135,8 +140,8 @@ pub(super) fn size(
     backend: &EngineBackend, identity: &Identity, file: &SmbNativeHandle,
 ) -> Result<u64, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
-    authorize_source(&engine, &current, &file.source)?;
-    engine.native_working_size(held(&file.source)).map_err(error)
+    authorize(&engine, &current, &file.target)?;
+    engine.native_working_size(&file.held).map_err(error)
 }
 
 pub(super) fn read(
@@ -144,12 +149,12 @@ pub(super) fn read(
     offset: u64, length: u32,
 ) -> Result<bytes::Bytes, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
-    authorize_source(&engine, &current, &file.source)?;
+    authorize(&engine, &current, &file.target)?;
     if length as usize > smb_protocol::protocol::MAX_READ_BYTES {
         return Err(ApiError::limit("native working read exceeds frame budget"));
     }
     let mut output = vec![0; length as usize];
-    let read = engine.read_native_working(held(&file.source), &mut output, offset).map_err(error)?;
+    let read = engine.read_native_working(&file.held, &mut output, offset).map_err(error)?;
     output.truncate(read);
     Ok(output.into())
 }
@@ -159,18 +164,18 @@ pub(super) fn edit(
     edit: SmbNativeEdit<'_>,
 ) -> Result<usize, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
-    let principal = authorize_source(&engine, &current, &file.source)?;
+    let principal = authorize(&engine, &current, &file.target)?;
     match edit {
         SmbNativeEdit::Write { offset, bytes } => {
-            engine.write_native_working(held_mut(&mut file.source), &principal, offset, bytes)
+            engine.write_native_working(&mut file.held, &principal, offset, bytes)
                 .map_err(error)
         }
         SmbNativeEdit::Append { bytes } => {
-            engine.append_native_working(held_mut(&mut file.source), &principal, bytes)
+            engine.append_native_working(&mut file.held, &principal, bytes)
                 .map_err(error)
         }
         SmbNativeEdit::Resize { length } => {
-            engine.resize_native_working(held_mut(&mut file.source), &principal, length)
+            engine.resize_native_working(&mut file.held, &principal, length)
                 .map_err(error)?;
             Ok(0)
         }
@@ -181,30 +186,6 @@ pub(super) fn flush(
     backend: &EngineBackend, identity: &Identity, file: &mut SmbNativeHandle,
 ) -> Result<Option<storage_contract::OperationResult>, ApiError> {
     let (mut engine, current) = backend.lock_current(identity)?;
-    let principal = authorize_source(&engine, &current, &file.source)?;
-    engine.flush_native_working(held_mut(&mut file.source), &principal).map_err(error)
-}
-
-fn authorize_source(
-    engine: &Engine, identity: &Identity, source: &NativeSource,
-) -> Result<Principal, ApiError> {
-    match source {
-        NativeSource::Current { target, .. } => authorize(engine, identity, target),
-        NativeSource::Worktree { target, .. } => {
-            smb_worktree::authorize_target(engine, identity, target.worktree)?;
-            identity.principal.parse().map_err(ApiError::invalid_authenticated_principal)
-        }
-    }
-}
-
-fn held(source: &NativeSource) -> &storage_engine::NativeWorkingFile {
-    match source {
-        NativeSource::Current { held, .. } | NativeSource::Worktree { held, .. } => held,
-    }
-}
-
-fn held_mut(source: &mut NativeSource) -> &mut storage_engine::NativeWorkingFile {
-    match source {
-        NativeSource::Current { held, .. } | NativeSource::Worktree { held, .. } => held,
-    }
+    let principal = authorize(&engine, &current, &file.target)?;
+    engine.flush_native_working(&mut file.held, &principal).map_err(error)
 }

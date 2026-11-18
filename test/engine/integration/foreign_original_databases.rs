@@ -153,7 +153,7 @@ fn original_database_preview_recovers_complete_retained_state_without_writing() 
     assert!(report.file_databases > 0);
     assert_eq!(
         report.databases,
-        1 + 2 * report.original_disks + report.file_databases + report.directory_databases
+        1 + 2 * report.original_disks + report.file_databases
     );
     assert_eq!(fs::read_dir(&parent).unwrap().count(), before);
     assert!(!parent.join("foreign-chain-databases").exists());

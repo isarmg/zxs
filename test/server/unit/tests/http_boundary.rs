@@ -757,24 +757,10 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private plan backend panic detail")
     }
-    fn prepare_historical_save(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        panic!("private directory scope panic detail")
-    }
     fn prepare_purge(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::PreparePurge, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        panic!("private directory scope panic detail")
-    }
-    fn prepare_split(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareSplit, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         panic!("private directory scope panic detail")
     }
@@ -812,39 +798,6 @@ impl Backend for PanickingBackend {
         _request: crate::MutateDiskDirectory,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private directory scope panic detail")
-    }
-    fn directory_git_status(
-        &self,
-        _identity: &crate::auth::Identity,
-        _repository: &str,
-        _path: &str,
-        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
-    ) -> Result<storage_contract::directory_git::DirectoryGitStatus, crate::ApiError> {
-        panic!("private directory_git_status panic detail")
-    }
-    fn initialize_directory_git(
-        &self,
-        _identity: &crate::auth::Identity,
-        _repository: &str,
-        _request: storage_contract::directory_git::DirectoryGitInitializeBody,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        panic!("private initialize_directory_git panic detail")
-    }
-    fn stage_directory_git_child(
-        &self,
-        _identity: &crate::auth::Identity,
-        _repository: &str,
-        _request: storage_contract::directory_git::DirectoryGitStageChildBody,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        panic!("private stage_directory_git_child panic detail")
-    }
-    fn stage_directory_git_owned(
-        &self,
-        _identity: &crate::auth::Identity,
-        _repository: &str,
-        _request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        panic!("private stage_directory_git_owned panic detail")
     }
     fn initialize_directory_scope(
         &self,
@@ -918,14 +871,6 @@ impl Backend for PanickingBackend {
         _cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::file_history_merge::FileHistorySource, crate::ApiError> {
         panic!("private file history source panic detail")
-    }
-    fn directory_history(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: storage_contract::directory_history::DirectoryHistoryRequest,
-        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
-    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, crate::ApiError> {
-        panic!("private directory history panic detail")
     }
     fn history_window(
         &self,
@@ -1175,32 +1120,6 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             Some(json!({"operation_id":"op_00000000000000000000000000000000"})),
         ),
         (
-            "GET",
-            "/api/repositories/repo_00000000000000000000000000000000/directory-git?path=",
-            None,
-        ),
-        (
-            "POST",
-            "/api/repositories/repo_00000000000000000000000000000000/directory-git/stage",
-            Some(
-                json!({"directory_id":"repo_00000000000000000000000000000000","directory_branch_id":"dbr_00000000000000000000000000000000","expected_tree_id":"dtree_00000000000000000000000000000000","expected_index_generation":"1","operation_id":"op_00000000000000000000000000000000"}),
-            ),
-        ),
-        (
-            "POST",
-            "/api/repositories/repo_00000000000000000000000000000000/directory-git/children/stage",
-            Some(
-                json!({"directory_id":"repo_00000000000000000000000000000000","directory_branch_id":"dbr_00000000000000000000000000000000","child_directory_id":"entry_00000000000000000000000000000000","expected_child_head_tree_id":"dtree_00000000000000000000000000000000","expected_index_generation":"1","operation_id":"op_00000000000000000000000000000000"}),
-            ),
-        ),
-        (
-            "POST",
-            "/api/repositories/repo_00000000000000000000000000000000/directory-git/initialize",
-            Some(
-                json!({"path":"","expected_namespace_head":"commit_00000000000000000000000000000000","operation_id":"op_00000000000000000000000000000000"}),
-            ),
-        ),
-        (
             "POST",
             "/api/file-manager/files/file/metadata",
             Some(json!({"note":"","operation_id":"op_00000000000000000000000000000000"})),
@@ -1214,16 +1133,6 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             "PATCH",
             "/api/file-manager/files/file/nodes/node",
             Some(json!({"note":"","operation_id":"op_00000000000000000000000000000000"})),
-        ),
-        (
-            "GET",
-            "/api/repositories/repo_00000000000000000000000000000000/directories/entry_00000000000000000000000000000000/history",
-            None,
-        ),
-        (
-            "GET",
-            "/api/repositories/repo_00000000000000000000000000000000/directories/entry_00000000000000000000000000000000/history/branches",
-            None,
         ),
         (
             "GET",
@@ -1310,18 +1219,8 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ),
         (
             "POST",
-            "/api/history-trees/history/historical-save-plans",
-            Some(json!({"source_commit_id":"commit","name":"Saved branch"})),
-        ),
-        (
-            "POST",
             "/api/history-trees/history/purge-plans",
             Some(json!({"version_ids":["version"]})),
-        ),
-        (
-            "POST",
-            "/api/history-trees/history/split-plans",
-            Some(json!({"cut_commit_id":"cut"})),
         ),
         (
             "POST",

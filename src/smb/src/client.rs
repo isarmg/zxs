@@ -234,7 +234,6 @@ fn remote_errno(code: ErrorCode) -> i32 {
         | ErrorCode::RequestDigestMismatch
         | ErrorCode::RequestTimeout
         | ErrorCode::ResponseTooLarge
-        | ErrorCode::RestoreBackupConflict
         | ErrorCode::RouteIncomplete
         | ErrorCode::RouteTargetUnavailable
         | ErrorCode::SaveModeUnsupported
@@ -470,11 +469,7 @@ impl Client {
                 .get("capabilities")
                 .and_then(Value::as_array)
                 .is_some_and(|capabilities| {
-                    REQUIRED_CAPABILITIES.iter().all(|required| {
-                        capabilities
-                            .iter()
-                            .any(|capability| capability.as_str() == Some(required))
-                    })
+                    crate::protocol::current_capabilities(capabilities.iter().map(Value::as_str))
                 })
         {
             return Err(io::Error::new(

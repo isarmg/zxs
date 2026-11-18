@@ -1,6 +1,8 @@
 //! Exercise retained Web configuration and plan review against real HTTP operations.
-//! Legacy plan creation remains backend API coverage, not a Web form.
+//! Per-FILE purge preparation is reviewed through the same typed plan and receipt.
 use super::*;
+#[path = "../../../../src/web/src/admin/purge.rs"]
+mod purge;
 #[path = "../../../../src/web/src/admin/request.rs"]
 mod request;
 #[path = "../../../../src/web/src/admin/response.rs"]
@@ -24,12 +26,14 @@ impl Applied {
         plan
     }
 }
-fn plan_fixture(id: &str, digest: &str, state: &str) -> response::ValidatedPlan {
+fn plan_fixture(state: &str) -> response::ValidatedPlan {
+    let id = new_id("plan").unwrap();
+    let input = json!({"history_tree_id":storage_contract::HistoryTreeId::generate().unwrap(),
+        "version_ids":[storage_contract::VersionId::generate().unwrap()]});
+    let digest = storage_contract::object_hash("plan", &input).unwrap();
     let value = json!({"plan_id":id,"digest":digest,"state":state,"kind":"purge",
-        "principal":"admin","expected_sequence":"4","input":{"history_tree_id":"h"}});
-    let validated = response::Contract::Plan { id: id.into() }
-        .validate(value)
-        .unwrap();
+        "principal":"admin","expected_sequence":"4","input":input});
+    let validated = response::Contract::Plan { id }.validate(value).unwrap();
     let response::Action::Plan(plan) = validated.action else {
         panic!("expected validated plan")
     };
@@ -78,13 +82,12 @@ async fn apply_request(app: &Router, token: &str, request: request::Request) -> 
     }
 }
 #[tokio::test]
-async fn retained_web_forms_and_backend_legacy_operations_execute_real_http() {
+async fn retained_web_forms_file_plans_and_links_execute_real_http() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let admin = login(&app, "admin", "integration-test-password").await;
     let repo = ordinary_root(&app, &admin).await;
     let id = repo["repository_id"].as_str().unwrap();
-    let branch = repo["main_branch_id"].as_str().unwrap();
     let history = repo["history_tree_id"].as_str().unwrap();
     // Retired account/grant/SMB binding forms are not representable by Kind.
     assert!(matches!(
@@ -132,28 +135,13 @@ async fn retained_web_forms_and_backend_legacy_operations_execute_real_http() {
             StatusCode::CONFLICT
         );
     }
-    let current = success(
-        &app,
-        &admin,
-        "GET",
-        &format!("/api/branches/{branch}"),
-        None,
-    )
-    .await;
-    let commit = current["head_commit_id"].as_str().unwrap();
+    manager_upload(&app, &admin, "plan-review.txt", b"older original FILE node").await;
+    let page = success(&app, &admin, "GET", "/api/file-manager/disks/P01/entries", None).await;
+    let first = page["entries"].as_array().unwrap().iter().find(|e|e["name"]=="plan-review.txt").unwrap()["version_id"].as_str().unwrap();
+    manager_upload(&app, &admin, "plan-review.txt", b"current ordinary FILE node").await;
     for publish in [false, true] {
-        let created = success(
-            &app,
-            &admin,
-            "POST",
-            &format!("/api/history-trees/{history}/historical-save-plans"),
-            Some(json!({
-                "source_commit_id": commit,
-                "name": if publish { "Published snapshot" } else { "Cancelled snapshot" },
-                "workspace_id": null, "primary_slot_id": null, "target_copies": null
-            })),
-        )
-        .await;
+        let created = success(&app, &admin, "POST", &format!("/api/history-trees/{history}/purge-plans"),
+            Some(json!({"version_ids":[first]}))).await;
         let query = request::query(
             request::QueryKind::Plan,
             &fields(&[("id", created["plan_id"].as_str().unwrap())]),
@@ -169,8 +157,6 @@ async fn retained_web_forms_and_backend_legacy_operations_execute_real_http() {
         }
     }
     // FILE link endpoints belong to two actual branches of ONE ordinary file.
-    // Publish after the namespace-plan fixture; FILE branches deliberately do
-    // not make a whole-namespace historical-save plan eligible.
     manager_upload(&app, &admin, "review.txt", b"one formal FILE node").await;
     let page = success(&app, &admin, "GET", "/api/file-manager/disks/P01/entries", None).await;
     let entry = page["entries"].as_array().unwrap().iter().find(|e| e["name"] == "review.txt").unwrap();
@@ -219,24 +205,18 @@ fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
     assert!(matches!(error, InputError::Generation(_)));
     assert!(std::error::Error::source(&error).is_some());
 
-    let plan = plan_fixture("plan/x", "reviewed-digest", "ready");
-    let request = request::plan_action(Some(&plan), true, true, "op_test").unwrap();
-    assert_eq!(request.path, "/api/plans/plan%2Fx/commit");
-    assert_eq!(request.body.unwrap()["plan_digest"], "reviewed-digest");
-    assert!(
-        request::plan_action(
-            Some(&plan_fixture("p", "d", "completed")),
-            true,
-            true,
-            "op_test"
-        )
-        .is_err()
-    );
+    let plan = plan_fixture("ready");
+    let operation = new_id("op").unwrap();
+    let request = request::plan_action(Some(&plan), true, true, &operation).unwrap();
+    assert_eq!(request.path, format!("/api/plans/{}/commit",plan.plan().plan_id));
+    assert_eq!(request.body.unwrap()["plan_digest"], plan.plan().digest);
+    assert!(request::plan_action(Some(&plan_fixture("committed")), true, true, &operation).is_err());
+
 }
 
 #[tokio::test]
-async fn backend_purge_and_split_plans_support_exact_web_review() {
-    for kind in ["purge", "split"] {
+async fn file_purge_plans_support_exact_web_review() {
+    {
         let root = tempfile::tempdir().unwrap();
         let system = root.path().join("system");
         let mut engine = Engine::initialize(
@@ -250,16 +230,13 @@ async fn backend_purge_and_split_plans_support_exact_web_review() {
         )
         .unwrap();
         let repo = engine
-            .create_repository(
-                &storage_contract::RepositoryName::parse("Maintenance fixture").unwrap(),
+            .create_disk_root(
                 "P01",
-                1,
                 "admin",
                 storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let mut first = String::new();
-        let mut cut = String::new();
         for bytes in [b"first".as_slice(), b"second".as_slice()] {
             let ws = engine
                 .create_workspace(&repo.main_branch_id, "admin")
@@ -267,7 +244,7 @@ async fn backend_purge_and_split_plans_support_exact_web_review() {
             engine
                 .stage_bytes(&ws.workspace_id, "fixture.txt", bytes)
                 .unwrap();
-            let op = engine
+            engine
                 .commit_workspace(CommitRequest {
                     workspace_id: ws.workspace_id,
                     operation_id: storage_contract::OperationId::generate().unwrap(),
@@ -282,7 +259,6 @@ async fn backend_purge_and_split_plans_support_exact_web_review() {
                 first = engine.list_tree(&repo.main_branch_id).unwrap()[0]
                     .version_id
                     .clone();
-                cut = op.commit_id.unwrap();
             }
         }
         let backend = Arc::new(EngineBackend::new(engine));
@@ -293,12 +269,8 @@ async fn backend_purge_and_split_plans_support_exact_web_review() {
             .unwrap();
         let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
         let admin = login(&app, "admin", "integration-test-password").await;
-        let path = format!("/api/history-trees/{}/{}-plans", repo.history_tree_id, kind);
-        let input = if kind == "purge" {
-            json!({"version_ids": [first]})
-        } else {
-            json!({"cut_commit_id": cut})
-        };
+        let path = format!("/api/history-trees/{}/purge-plans", repo.history_tree_id);
+        let input = json!({"version_ids":[first]});
         let created = success(&app, &admin, "POST", &path, Some(input.clone())).await;
         let query = request::query(
             request::QueryKind::Plan,

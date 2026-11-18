@@ -17,7 +17,7 @@ pub(in crate::engine) use registration::ServingSwitch;
 pub use registration::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
-    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
     BackupNamespaceScope, BackupNativeMetadataReport, BackupOrdinaryServingReport,
@@ -141,7 +141,6 @@ pub struct BackupCutoverPreparationReport {
     pub replaced_terminal: DiskRegistrationIdentity,
     pub targets: Vec<BackupPreparedTopologyNode>,
     pub whole_file_units_per_target: usize,
-    pub directory_repositories_per_target: usize,
     pub retained_versions_per_target: usize,
 }
 
@@ -188,19 +187,15 @@ fn report(
             preparation_checkpoint(stop)?;
             files.insert(&version.file_id);
         }
-        let current = (
-            files.len(),
-            state.directory_git_repositories.len(),
-            state.versions.len(),
-        );
+        let current = (files.len(), state.versions.len());
         if counts.is_some_and(|old| old != current) {
             return Err(invalid(
-                "one selected topology target omits whole file or directory units",
+                "one selected topology target omits whole FILE units",
             ));
         }
         counts = Some(current);
     }
-    let (files, directories, versions) =
+    let (files, versions) =
         counts.expect("invariant: all selected roots are nonempty");
     Ok(BackupCutoverPreparationReport {
         format: FORMAT.into(),
@@ -210,7 +205,6 @@ fn report(
         replaced_terminal: task.topology.replaced.clone(),
         targets: task.topology.nodes.clone(),
         whole_file_units_per_target: files,
-        directory_repositories_per_target: directories,
         retained_versions_per_target: versions,
     })
 }

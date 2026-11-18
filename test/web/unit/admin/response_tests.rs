@@ -1,3 +1,4 @@
+use super::super::purge::fixtures::{self, HISTORY, PLAN, VERSION, plan};
 use super::super::request::{self, Kind, QueryKind};
 use super::*;
 use json_codec::json;
@@ -15,7 +16,7 @@ fn contract(kind: Kind, fields: &[(&str, &str)]) -> Contract {
     .contract
 }
 fn plan_contract(commit: bool) -> Contract {
-    let validated = Contract::Plan { id: "p".into() }.validate(plan()).unwrap();
+    let validated = Contract::Plan { id: PLAN.into() }.validate(plan()).unwrap();
     let Action::Plan(plan) = validated.action else {
         panic!("expected plan")
     };
@@ -23,11 +24,8 @@ fn plan_contract(commit: bool) -> Contract {
         .unwrap()
         .contract
 }
-fn plan() -> Value {
-    json!({"plan_id":"p","kind":"purge","principal":"admin","expected_sequence":"4","digest":"digest","input":{"history_tree_id":"h"},"state":"ready"})
-}
-fn raw_operation() -> Value {
-    json!({"operation_id":"op_00000000000000000000000000000001", "kind":"plan.cancel", "commit_id":null,"history_tree_id":null,"branch_id":null,"commit_state":"PUBLISHED","protection_at_publish":"NOT_APPLICABLE","current_health":"UNKNOWN","request_digest":"digest","sequence":"4","result":{}})
+fn raw_operation(commit: bool) -> Value {
+    fixtures::receipt(commit, OPERATION)
 }
 fn wire_operation() -> Value {
     let mut value: Value = json_codec::from_str(include_str!(
@@ -59,12 +57,12 @@ fn terminal(value: &Value, operation: &str) -> bool {
 fn operation_contracts_reject_missing_wrong_and_nonterminal_receipts() {
     for commit in [true, false] {
         let c = plan_contract(commit);
-        assert!(c.validate(raw_operation()).is_ok());
+        assert!(c.validate(raw_operation(commit)).is_ok());
         for value in [Value::Null, json!({}), wire_operation()] {
             assert!(c.validate(value).is_err());
         }
         for (key, bad) in [("operation_id", "unrelated"), ("commit_state", "IN_DOUBT")] {
-            let mut value = raw_operation();
+            let mut value = raw_operation(commit);
             value[key] = bad.into();
             assert!(c.validate(value).is_err());
         }
@@ -82,7 +80,7 @@ fn operation_contracts_reject_missing_wrong_and_nonterminal_receipts() {
             ],
         );
         assert!(c.validate(wire_operation()).is_ok());
-        assert!(c.validate(raw_operation()).is_err());
+        assert!(c.validate(raw_operation(false)).is_err());
         let mut value = wire_operation();
         value["operation_id"] = "unrelated".into();
         assert!(c.validate(value).is_err());
@@ -92,7 +90,7 @@ fn operation_contracts_reject_missing_wrong_and_nonterminal_receipts() {
 fn inspection_must_match_original_operation_and_terminal_state() {
     let c = request::operation_outcome(OPERATION).contract;
     assert!(c.validate(wire_operation()).is_ok());
-    assert!(c.validate(raw_operation()).is_err());
+    assert!(c.validate(raw_operation(false)).is_err());
     assert!(terminal(
         &wire_operation(),
         "op_00000000000000000000000000000001"
@@ -168,7 +166,7 @@ fn diagnostic_and_outcome_contracts_cannot_be_interchanged() {
 fn plan_query_checks_identity_and_shape_without_requiring_ready() {
     let request = request::query(
         QueryKind::Plan,
-        &[("id".into(), "p".into())].into_iter().collect(),
+        &[("id".into(), PLAN.into())].into_iter().collect(),
     )
     .unwrap();
     let c = request.contract;
@@ -210,4 +208,55 @@ fn malformed_success_preserves_its_decode_source() {
     let error = plan_contract(true).validate(Value::Null).unwrap_err();
     assert!(matches!(error, ResponseError::Decode(_)));
     assert!(error.source().is_some());
+}
+
+#[test]
+fn only_a_canonical_explicit_file_version_purge_can_be_reviewed() {
+    let query = Contract::Plan { id: PLAN.into() };
+    for kind in ["historical_save", "split", "other"] {
+        let mut value = plan();
+        value["kind"] = kind.into();
+        assert!(query.validate(value).is_err());
+    }
+    let bad_inputs = [
+        json!({"history_tree_id": HISTORY, "cut_commit_id": "commit_00000000000000000000000000000001"}),
+        json!({"history_tree_id": HISTORY, "version_ids": []}),
+        json!({"history_tree_id": HISTORY, "version_ids": [VERSION, VERSION]}),
+        json!({"history_tree_id": HISTORY, "version_ids": ["file_00000000000000000000000000000001"]}),
+        json!({"history_tree_id": "not a history", "version_ids": [VERSION]}),
+        json!({"history_tree_id": HISTORY, "version_ids": [VERSION], "source_commit_id": "extra"}),
+    ];
+    for input in bad_inputs {
+        let mut value = plan();
+        value["digest"] = storage_contract::object_hash_value("plan", &input).unwrap().into();
+        value["input"] = input;
+        assert!(query.validate(value).is_err());
+    }
+    let mut changed = plan();
+    changed["input"]["version_ids"][0] = "ver_00000000000000000000000000000002".into();
+    assert!(query.validate(changed).is_err());
+    let Action::Plan(review) = query.validate(plan()).unwrap().action else {
+        panic!("expected an ordinary FILE purge review");
+    };
+    assert!(review.belongs_to(Some(&"admin".parse().unwrap())));
+    assert!(!review.belongs_to(None));
+    assert!(!review.belongs_to(Some(&"different".parse().unwrap())));
+}
+
+#[test]
+fn plan_receipt_must_match_reviewed_action_plan_and_exact_file_version_set() {
+    for commit in [true, false] {
+        let contract = plan_contract(commit);
+        assert!(contract.validate(raw_operation(!commit)).is_err());
+        let mut wrong_plan = raw_operation(commit);
+        wrong_plan["result"]["plan_id"] = "plan_00000000000000000000000000000002".into();
+        assert!(contract.validate(wrong_plan).is_err());
+        let mut changed = raw_operation(commit);
+        if commit {
+            changed["result"]["purged_versions"] = json!([]);
+        } else {
+            changed["result"]["cancelled_plan_hash"] = "a".repeat(64).into();
+        }
+        assert!(contract.validate(changed).is_err());
+    }
 }

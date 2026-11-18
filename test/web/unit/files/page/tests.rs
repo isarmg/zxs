@@ -40,7 +40,7 @@ pub(crate) fn entry_wire(patch: Value) -> Value {
     let backup = patch["backup"] == true;
     let historical =
         patch["historical_only"] == true || patch.get("repository_path") == Some(&Value::Null);
-    if !directory || patch.get("repository_id").is_some() {
+    if !directory || !backup || patch.get("repository_id").is_some() {
         value = overlay(
             value,
             &json!({"repository_id":"repo", "repository_path":path,
@@ -114,18 +114,6 @@ pub(crate) fn parse_entry(value: Value) -> Result<Entry, api::Error> {
 }
 pub(crate) fn entry(patch: Value) -> Entry {
     super::entry::parse(entry_wire(patch)).unwrap()
-}
-pub(crate) fn branch_wire(patch: Value) -> Value {
-    overlay(
-        json!({"directory_branch_id":"directory", "repository_id":"repo",
-        "directory_id":"directory-id", "name":"main", "parent_branch_id":null,
-        "head_tree_id":"tree", "commit_id":"commit", "path":"", "materialized":true,
-        "current":false, "sequence":"1", "file_count":"0"}),
-        &patch,
-    )
-}
-pub(crate) fn branch(patch: Value) -> DirectoryBranch {
-    DirectoryBranch::parse(branch_wire(patch)).unwrap()
 }
 pub(crate) fn wire(entry: &Entry) -> Value {
     let mut patch = json!({"entry_id":entry.entry_id(), "name":entry.name(), "path":entry.path(),
@@ -234,23 +222,16 @@ fn response(count: usize) -> Value {
     json!({"slot_id":"P01","path":"","writable":true,"entries":entries,"selected_entry":null,
         "total_entries":"100000","snapshot":"snapshot","next_cursor":"next","previous_cursor":null,
         "context":{"repository_id":"repo","repository_path":"","branch_id":"main","base_head":"head"},
-        "directory_file_count":"100000","directory_branches":[],"directory_branches_supported":true,"default_branch_scope":true})
+        "directory_file_count":"100000"})
 }
 fn parse(value: Value) -> Result<Page, api::Error> {
     Page::parse(value, "P01", &ROOT, PAGE_SIZE, None)
 }
 #[test]
 fn destination_request_identity_uses_the_parsed_target_key() {
-    let target = name_policy::PortablePath::parse("Café/资料").unwrap();
-    for prefix in ["", "Repository"] {
-        let directory = DirectoryKey::destination(prefix, Some(&target));
-        let path = crate::files::model::join_path(prefix, target.as_str());
-        assert_eq!(directory.0, name_policy::path_key(&path));
-        assert_eq!(
-            DirectoryKey::destination(prefix, None).0,
-            name_policy::path_key(prefix)
-        );
-    }
+    let target = name_policy::PortablePath::parse("first/Café/资料").unwrap();
+    assert_eq!(DirectoryKey::destination(Some(&target)).0, target.key());
+    assert_eq!(DirectoryKey::destination(None).0, "");
 }
 #[test]
 fn bounds_page_by_request_and_preserves_large_decimal_values() {
@@ -278,9 +259,6 @@ fn every_required_page_field_is_required_even_when_nullable() {
         "previous_cursor",
         "context",
         "directory_file_count",
-        "directory_branches",
-        "directory_branches_supported",
-        "default_branch_scope",
     ] {
         let mut value = response(1);
         value.as_object_mut().unwrap().remove(key);
@@ -354,21 +332,17 @@ fn rejects_truncated_file_shapes_null_identities_and_kind_confusion() {
     }
 }
 #[test]
-fn virtual_current_and_backup_directories_remain_distinct() {
-    let virtual_entry =
-        entry(json!({"kind":"directory", "entry_id":"repo-id", "path":"Repository"}));
-    assert!(virtual_entry.context().is_none());
-    assert_eq!(virtual_entry.file_id(), "");
-    assert_eq!(virtual_entry.version_id(), None);
+fn only_backup_folders_can_be_virtual() {
     let current = entry(json!({"kind":"directory", "repository_id":"repo", "path":"dir"}));
     assert_eq!(current.context(), Some(("repo", "dir")));
-    let backup = entry(
-        json!({"kind":"directory", "entry_id":"backupdir_hash", "path":"P01", "backup":true}),
-    );
-    assert!(backup.backup() && backup.read_only());
-    let mut wrong = wire(&virtual_entry);
-    wrong["note"] = "".into();
-    assert!(super::entry::parse(wrong).is_err());
+    assert_eq!(current.file_id(), "");
+    let backup = entry(json!({"kind":"directory", "path":"retained", "backup":true}));
+    assert!(backup.backup() && backup.read_only() && backup.context().is_none());
+    let mut virtual_primary = wire(&backup);
+    for field in ["backup", "read_only"] {
+        virtual_primary.as_object_mut().unwrap().remove(field);
+    }
+    assert!(parse_entry(virtual_primary).is_err());
 }
 #[test]
 fn pending_empty_source_and_backup_version_override_keep_real_semantics() {
@@ -444,8 +418,7 @@ fn filtered_empty_page_preserves_an_independent_selected_file() {
             "selected_entry":selected.clone(), "total_entries":"0", "snapshot":"snapshot",
             "next_cursor":null, "previous_cursor":null,
             "context":{"repository_id":"repo", "repository_path":"", "branch_id":"main", "base_head":"head"},
-            "directory_file_count":"1", "directory_branches":[],
-            "directory_branches_supported":true, "default_branch_scope":true});
+            "directory_file_count":"1"});
         let page = Page::parse(value, "P01", &ROOT, PAGE_SIZE, Some(&requested))
             .unwrap()
             .into_parts();
@@ -466,38 +439,17 @@ fn canonical_lookup_context_accepts_nfd_without_accepting_malformed_display_path
     value["entries"][0] = wire(&selected);
     value["selected_entry"] = wire(&selected);
     value["context"]["repository_path"] = "Cafe\u{301}".into();
-    value["default_branch_scope"] = false.into();
     let directory = DirectoryKey::navigation("Café");
     assert!(Page::parse(value.clone(), "P01", &directory, PAGE_SIZE, Some(&selected)).is_ok());
     value["entries"][0]["path"] = "Café/../Å.txt".into();
     assert!(Page::parse(value, "P01", &directory, PAGE_SIZE, Some(&selected)).is_err());
 }
 #[test]
-fn branch_summaries_are_complete_and_do_not_invent_same_path_history_constraints() {
-    let mut value = response(1);
-    value["directory_branches"] =
-        json!([branch_wire(json!({"path":"old/location","current":true}))]);
-    assert_eq!(
-        parse(value.clone()).unwrap().into_parts().branches[0].path(),
-        "old/location"
-    );
-    value["directory_branches"][0]["repository_id"] = "other".into();
-    assert!(parse(value).is_err());
-    for field in branch_wire(json!({})).as_object().unwrap().keys() {
-        let mut value = branch_wire(json!({}));
-        value.as_object_mut().unwrap().remove(field);
-        assert!(DirectoryBranch::parse(value).is_err(), "missing {field}");
-    }
-}
-
-#[test]
 fn backup_pages_keep_historical_locations_and_require_disk_read_only_flags() {
     let mut value = response(1);
     value["backup"] = true.into();
     value["writable"] = false.into();
     value["context"] = Value::Null;
-    value["directory_branches_supported"] = false.into();
-    value["default_branch_scope"] = false.into();
     value["entries"][0] = entry_wire(json!({"backup":true, "historical_only":true,
         "path":"stored.txt", "repository_path":null, "version_id":"stored"}));
     let entries = parse(value.clone()).unwrap().into_parts().entries;
@@ -516,7 +468,7 @@ fn backup_pages_keep_historical_locations_and_require_disk_read_only_flags() {
     assert!(parse(value).is_err());
 }
 #[test]
-fn context_branches_and_entry_locations_are_admitted_as_one_observation() {
+fn ordinary_context_and_entry_locations_are_admitted_as_one_observation() {
     for field in ["repository_id", "repository_path", "branch_id", "base_head"] {
         let mut value = response(1);
         value["context"].as_object_mut().unwrap().remove(field);
@@ -532,12 +484,6 @@ fn context_branches_and_entry_locations_are_admitted_as_one_observation() {
     }
     let mut value = response(1);
     value["context"] = Value::Null;
-    assert!(parse(value).is_err());
-    let mut value = response(1);
-    value["directory_branches"] = json!([
-        branch_wire(json!({"current":true})),
-        branch_wire(json!({"directory_branch_id":"other","current":true}))
-    ]);
     assert!(parse(value).is_err());
 }
 #[test]
@@ -645,48 +591,75 @@ fn independent_selection_and_page_share_entity_identity_and_count_constraints() 
 }
 
 #[test]
-fn preview_pages_preserve_body_identity_and_never_grant_write_authority() {
-    let mut value = response(1);
-    value["writable"] = false.into();
-    // Read-only primary listings must declare their preview mode, not silently
-    // change the ordinary primary page's authority contract.
-    assert!(parse(value.clone()).is_err());
-    value["preview"] = true.into();
-    value["entries"][0]["read_only"] = true.into();
-    let page = parse(value.clone()).unwrap();
-    assert!(page.preview());
-    let parts = page.into_parts();
-    assert!(!parts.writable);
-    assert!(parts.entries[0].preview());
-    assert!(parts.entries[0].read_only());
-    assert_eq!(parts.entries[0].version_id(), Some("version"));
-    assert_eq!(parts.context.unwrap().base_head(), "head");
-    value["writable"] = true.into();
-    assert!(parse(value.clone()).is_err());
-    value["writable"] = false.into();
-    value["backup"] = true.into();
-    assert!(parse(value.clone()).is_err());
-    value.as_object_mut().unwrap().remove("backup");
-    value["preview"] = false.into();
-    assert!(parse(value).is_err());
+fn ordinary_file_pages_reject_withdrawn_directory_fields_even_when_empty_or_false() {
+    let mut current = response(1);
+    current["entries"][0] = entry_wire(json!({"path":"project.zxs"}));
+    let page = parse(current.clone()).unwrap().into_parts();
+    assert!(page.writable);
+    assert_eq!(page.entries[0].path(), "project.zxs");
+    for (field, value) in [
+        ("preview", json!(false)),
+        ("preview", json!(true)),
+        ("directory_branches", json!([])),
+        ("directory_branches_supported", json!(false)),
+        ("default_branch_scope", json!(false)),
+    ] {
+        let mut stale = current.clone();
+        stale[field] = value;
+        assert!(parse(stale).is_err(), "unexpected field {field}");
+    }
 }
 
 #[test]
-fn preview_selection_refresh_agrees_with_the_same_entry_in_its_page() {
-    let mut value = response(1);
-    value["preview"] = true.into();
-    value["writable"] = false.into();
-    value["entries"][0]["read_only"] = true.into();
-    let requested = parse(value.clone()).unwrap().into_parts().entries[0].clone();
-    value["selected_entry"] = value["entries"][0].clone();
-    let page = Page::parse(value, "P01", &ROOT, PAGE_SIZE, Some(&requested)).unwrap();
-    let parts = page.into_parts();
-    assert_eq!(parts.selected, Some(parts.entries[0].clone()));
-    assert!(parts.selected.unwrap().preview());
+fn only_a_truly_empty_unregistered_primary_root_can_omit_its_context() {
+    let mut value = response(0);
+    for count in ["total_entries", "directory_file_count"] { value[count] = "0".into(); }
+    value["next_cursor"] = Value::Null;
+    value["context"] = Value::Null;
+    assert!(parse(value.clone()).is_ok());
+    for field in ["total_entries", "directory_file_count"] {
+        let mut forged = value.clone(); forged[field] = "1".into();
+        assert!(parse(forged).is_err());
+    }
+    value["path"] = "actual/child".into();
+    let key = DirectoryKey::navigation("actual/child");
+    assert!(Page::parse(value.clone(), "P01", &key, PAGE_SIZE, None).is_err());
+    value["context"] = json!({"repository_id":"repo","repository_path":"child","branch_id":"main","base_head":"head"});
+    assert!(Page::parse(value.clone(), "P01", &key, PAGE_SIZE, None).is_err());
+    value["context"]["repository_path"] = "actual/child".into();
+    assert!(Page::parse(value, "P01", &key, PAGE_SIZE, None).is_ok());
 }
 
-pub(crate) fn preview_entry(patch: Value) -> Entry {
-    let mut entry = entry(patch);
-    entry.preview = true;
-    entry
+#[test]
+fn registered_ordinary_file_and_folder_use_the_complete_path_never_a_matching_suffix() {
+    for kind in ["file", "directory"] {
+        let key = DirectoryKey::navigation("first/inner");
+        let mut value = response(1);
+        value["path"] = "first/inner".into();
+        value["context"]["repository_path"] = "first/inner".into();
+        value["entries"][0] = entry_wire(json!({"kind":kind,"path":"first/inner/project.zxs"}));
+        assert!(Page::parse(value.clone(), "P01", &key, PAGE_SIZE, None).is_ok());
+        value["entries"][0]["repository_path"] = "inner/project.zxs".into();
+        assert!(Page::parse(value.clone(), "P01", &key, PAGE_SIZE, None).is_err());
+        value["context"]["repository_path"] = "inner".into();
+        assert!(Page::parse(value, "P01", &key, PAGE_SIZE, None).is_err());
+    }
+}
+
+#[test]
+fn registered_stopped_metadata_is_read_only_and_never_an_unregistered_root() {
+    let mut row = response(1);
+    row["writable"] = false.into();
+    row["entries"][0]["read_only"] = true.into();
+    let parts = parse(row.clone()).unwrap().into_parts();
+    assert!(!parts.writable);
+    assert!(parts.context.is_some());
+    row["context"] = Value::Null;
+    assert!(parse(row).is_err());
+    let mut empty = response(0);
+    for field in ["total_entries", "directory_file_count"] { empty[field] = "0".into(); }
+    empty["next_cursor"] = Value::Null;
+    empty["writable"] = false.into();
+    empty["context"] = Value::Null;
+    assert!(parse(empty).is_err());
 }

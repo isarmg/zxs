@@ -19,6 +19,8 @@ use storage_engine::{Config, Engine};
 
 #[path = "incremental_manual.rs"]
 mod incremental_manual;
+#[path = "ordinary_zip.rs"]
+mod ordinary_zip;
 
 struct Direct {
     backend: Arc<EngineBackend>,
@@ -311,9 +313,6 @@ fn native_dispatch_uses_real_engine_and_cold_unborn_content_without_transport() 
     no_file_history(&engine);
     assert_eq!(engine.native_current_entries(target.repository).unwrap().len(), 1);
 }
-
-#[path = "native_worktree_tests.rs"]
-mod worktree;
 
 #[test]
 fn live_automatic_save_becomes_manual_draft_through_the_production_dispatcher() {

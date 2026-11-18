@@ -54,17 +54,11 @@ pub use backend_file_history_move::{
     MoveTargetName, ReplaceCurrentFile,
 };
 mod backend_directory_deletion;
-mod backend_directory_snapshot_source;
-mod http_directory_snapshot_source;
-pub use backend_directory_snapshot_source::{
-    DirectorySnapshotSourcePreview, ReadDirectorySnapshotSource,
-};
 pub use backend_directory_deletion::{
     CurrentDirectoryDeletion, DeleteCurrentDirectory, PrepareCurrentDirectoryDeletion,
     ReadDirectoryDeletions,
 };
 mod backend_file_deletion;
-mod http_directory_deletion;
 mod http_file_deletion;
 pub use backend_file_deletion::{
     DeleteCurrentFile, DeleteFile, FileDeletionSummary, FileDeletionsPage, ReadFileDeletions,
@@ -77,9 +71,6 @@ mod history_window_http;
 mod history_window_query;
 mod http_content_matches;
 mod http_detached_history;
-mod http_directory_git;
-mod http_directory_history;
-mod http_directory_staging;
 mod http_file_history_source;
 mod http_file_lifecycle;
 mod http_node_retirement;
@@ -117,12 +108,6 @@ pub use backend_file_merge::{MergeFileBranches, MergeFileHistory};
 mod backend_file_tags;
 mod backend_file_draft;
 mod backend_unborn;
-mod backend_smb_worktree;
-pub use backend_smb_worktree::{
-    SmbWorktreeAccess, SmbWorktreeCursor, SmbWorktreeEntry, SmbWorktreeFile,
-    SmbWorktreeLocation, SmbWorktreePage, SmbWorktreeEntryContent,
-    SmbWorktreeWorkingOpen, SmbWorktreeWorkingSource,
-};
 mod backend_smb_native;
 pub use backend_smb_native::{SmbNativeEdit, SmbNativeHandle, SmbNativeOpen};
 mod http_unborn;
@@ -153,17 +138,10 @@ pub use backend_disk_write_session::{
 mod backend_plan;
 mod http_plan;
 pub use backend_plan::{CancelPlan, CommitPlan};
-mod backend_historical_save_plan;
-mod http_historical_save_plan;
-pub use backend_historical_save_plan::PrepareHistoricalSave;
 mod backend_purge_plan;
 mod http_purge_plan;
 pub use backend_purge_plan::PreparePurge;
-mod backend_split_plan;
-mod http_split_plan;
-pub use backend_split_plan::PrepareSplit;
 mod backend_namespace_batch;
-mod http_namespace_batch;
 pub use backend_namespace_batch::NamespaceBatch;
 mod backend_file_selection;
 mod http_file_selection;
@@ -178,7 +156,6 @@ pub use backend_listing::{
     ReadListing,
 };
 mod backend_disk_directory;
-mod http_disk_directory;
 pub use backend_directory_scope::InitializeDirectoryScope;
 pub use backend_disk_directory::{DiskDirectoryAction, MutateDiskDirectory};
 mod backend_create_branch;
@@ -224,15 +201,12 @@ pub use backend_directory_selection::{
     SelectedEntryFact,
 };
 mod backend_directory_scopes;
-mod http_directory_selection;
 pub use backend_directory_scopes::{
     DirectoryBranchChoice, DirectoryBranchFilter, DirectoryBranchProjection, DirectoryScopeBranch,
     DirectoryScopeRows, DirectoryScopesSnapshot, ReadDirectoryScopes,
 };
 mod backend_default_directory;
 mod backend_diagnostics;
-mod http_default_directory;
-mod http_directory_scopes;
 pub use backend_default_directory::{
     DefaultDirectoryBranchSnapshot, RenameDirectoryBranch, SelectDefaultDirectoryBranch,
     SelectedDirectoryBranch,
@@ -252,7 +226,6 @@ pub use backend_workspace::{
     WorkspaceWriteSession,
 };
 mod http_workspace;
-mod http_snapshot_worktree;
 mod http_complete_upload;
 pub use backend_read::{
     DirectoryReadSnapshot, DirectorySelection, DirectorySnapshot, DownloadContext, ReadContent,
@@ -1128,46 +1101,6 @@ fn router_shared(
             get(smb_binding).put(update_smb_binding),
         )
         .route(
-            "/api/repositories/{repo}/default-branch",
-            get(default_branch).put(http_default_directory::select),
-        )
-        .route(
-            "/api/repositories/{repo}/directories/{directory}/history",
-            get(http_directory_history::nodes),
-        )
-        .route(
-            "/api/repositories/{repo}/directories/{directory}/history/branches",
-            get(http_directory_history::branches),
-        )
-        .route(
-            "/api/repositories/{repo}/directory-git",
-            get(http_directory_git::read),
-        )
-        .route(
-            "/api/repositories/{repo}/directory-git/initialize",
-            post(http_directory_git::initialize),
-        )
-        .route(
-            "/api/repositories/{repo}/directory-git/children/stage",
-            post(http_directory_git::stage_child),
-        )
-        .route(
-            "/api/repositories/{repo}/directory-git/stage",
-            post(http_directory_git::stage_owned),
-        )
-        .route(
-            "/api/repositories/{repo}/directory-branches",
-            get(http_directory_scopes::read).post(http_directory_selection::read),
-        )
-        .route(
-            "/api/repositories/{repo}/directory-branches/{id}/staging",
-            get(http_directory_staging::read),
-        )
-        .route(
-            "/api/repositories/{repo}/directory-branches/{id}/commits",
-            post(http_directory_staging::commit),
-        )
-        .route(
             "/api/repositories/{repo}/branches",
             get(branches),
         )
@@ -1247,18 +1180,6 @@ fn router_shared(
             post(http_file_deletion::undo),
         )
         .route(
-            "/api/repositories/{repository}/directory-deletions/{owner}",
-            get(http_directory_deletion::list),
-        )
-        .route(
-            "/api/repositories/{repository}/directory-deletions/{owner}/{directory}",
-            get(http_directory_deletion::read),
-        )
-        .route(
-            "/api/repositories/{repository}/directory-deletions/undo",
-            post(http_directory_deletion::undo),
-        )
-        .route(
             "/api/files/{file}/history",
             get(history_window_http::versions),
         )
@@ -1275,14 +1196,6 @@ fn router_shared(
         .route(
             "/api/history-trees/{history}/purge-plans",
             post(http_purge_plan::prepare),
-        )
-        .route(
-            "/api/history-trees/{history}/split-plans",
-            post(http_split_plan::prepare),
-        )
-        .route(
-            "/api/history-trees/{history}/historical-save-plans",
-            post(http_historical_save_plan::prepare),
         )
         .route("/api/plans/{plan}/commit", post(http_plan::commit))
         .route("/api/plans/{plan}", get(http_plan::info))
@@ -1593,21 +1506,7 @@ async fn repository(
         .map(Json)
 }
 
-async fn default_branch(
-    State(state): State<AppState>,
-    http_routing::Extension(identity): http_routing::Extension<Identity>,
-    ApiPath(id): ApiPath<String>,
-    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<backend_default_directory::DefaultDirectoryBranchResponse>, ApiError> {
-    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
-        .run(move |backend| {
-            backend
-                .default_directory_branch(&identity, &id)
-                .map(backend_default_directory::DefaultDirectoryBranchResponse::from)
-        })
-        .await
-        .map(Json)
-}
+
 
 async fn branch_info(
     State(state): State<AppState>,

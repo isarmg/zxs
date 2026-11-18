@@ -58,22 +58,7 @@ fn missing_credentials_do_not_admit_even_a_named_administrator() {
     };
     for result in [
         backend
-            .prepare_historical_save(&caller, Err(ApiError::invalid("unknown field surprise")))
-            .map(|_| ()),
-        backend
             .prepare_purge(&caller, Err(ApiError::invalid("unknown field surprise")))
-            .map(|_| ()),
-        backend
-            .prepare_split(&caller, Err(ApiError::invalid("unknown field surprise")))
-            .map(|_| ()),
-        backend
-            .prepare_historical_save(
-                &caller,
-                Ok(crate::PrepareHistoricalSave {
-                    history_tree_id: "missing".into(),
-                    options: Err(ApiError::invalid("missing options")),
-                }),
-            )
             .map(|_| ()),
         backend
             .prepare_purge(
@@ -81,15 +66,6 @@ fn missing_credentials_do_not_admit_even_a_named_administrator() {
                 Ok(crate::PreparePurge {
                     history_tree_id: "missing".into(),
                     version_ids: Err(ApiError::invalid("missing versions")),
-                }),
-            )
-            .map(|_| ()),
-        backend
-            .prepare_split(
-                &caller,
-                Ok(crate::PrepareSplit {
-                    history_tree_id: "missing".into(),
-                    cut_commit_id: Err(ApiError::invalid("missing cut")),
                 }),
             )
             .map(|_| ()),
@@ -450,6 +426,23 @@ fn upload_system_clock_failure_is_server_error_with_source() {
     );
 }
 
+fn ordinary_purge_source(engine: &mut Engine) -> (Repository, String) {
+    let op = || storage_contract::OperationId::generate().unwrap();
+    let repo = engine.create_disk_root("P01", "admin", op()).unwrap();
+    let mut first = None;
+    for bytes in [b"old".as_slice(), b"current".as_slice()] {
+        let w = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
+        engine.stage_bytes(&w.workspace_id, "plan-file", bytes).unwrap();
+        engine.commit_workspace(storage_engine::CommitRequest {
+            workspace_id: w.workspace_id, expected_head: w.base_head, fencing_token: w.fencing_token,
+            operation_id: op(), principal: "admin".into(), message: String::new(), request_digest: None,
+        }).unwrap();
+        first.get_or_insert_with(|| engine.namespace_tree(&repo.main_branch_id).unwrap()
+            .get("plan-file").unwrap().version_id.clone());
+    }
+    (repo, first.unwrap())
+}
+
 #[test]
 fn typed_plan_cancel_keeps_owner_and_receipt_ordering() {
     let root = crate::tests::private_tempdir();
@@ -459,47 +452,13 @@ fn typed_plan_cancel_keeps_owner_and_receipt_ordering() {
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "admin");
-    let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Plans").unwrap(),
-            "P01",
-            1,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let source = engine
-        .state()
-        .branches
-        .get(&repo.main_branch_id)
-        .unwrap()
-        .head_commit_id
-        .clone();
-    let options = |name: &str| storage_engine::HistoricalSaveOptions {
-        source_commit_id: source.clone(),
-        name: name.into(),
-        workspace_id: None,
-        primary_slot_id: None,
-        target_copies: None,
-    };
-    let own = engine
-        .create_historical_save_plan(&repo.history_tree_id, options("Own"), "admin")
-        .unwrap();
-    let foreign = engine
-        .create_historical_save_plan(&repo.history_tree_id, options("Foreign"), "other")
-        .unwrap();
-    let second = engine
-        .create_historical_save_plan(&repo.history_tree_id, options("Second"), "admin")
-        .unwrap();
-    engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Generation advance").unwrap(),
-            "P01",
-            1,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    let (repo, first) = ordinary_purge_source(&mut engine);
+    let own = engine.create_purge_plan(&repo.history_tree_id, vec![first.clone()], "admin").unwrap();
+    let foreign = engine.create_purge_plan(&repo.history_tree_id, vec![first.clone()], "other").unwrap();
+    let second = engine.create_purge_plan(&repo.history_tree_id, vec![first], "admin").unwrap();
+    engine.file_namespace(&repo.repository_id, NamespaceOperation::parse(
+        storage_contract::NamespaceOperationKind::Mkdir, "later", None).unwrap(),
+        "admin", storage_contract::OperationId::generate().unwrap()).unwrap();
     assert!(engine.state().business_generation > own.expected_sequence);
     let backend = EngineBackend::new(engine);
     assert_eq!(backend.plan(&identity, &own.plan_id).unwrap(), own);
@@ -637,35 +596,8 @@ fn typed_plan_disk_integrity_precedes_cancel_operation_errors_after_reopen() {
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "admin");
-    let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Disk plans").unwrap(),
-            "P01",
-            1,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let source = engine
-        .state()
-        .branches
-        .get(&repo.main_branch_id)
-        .unwrap()
-        .head_commit_id
-        .clone();
-    let plan = engine
-        .create_historical_save_plan(
-            &repo.history_tree_id,
-            storage_engine::HistoricalSaveOptions {
-                source_commit_id: source,
-                name: "Prepared".into(),
-                workspace_id: None,
-                primary_slot_id: None,
-                target_copies: None,
-            },
-            "admin",
-        )
-        .unwrap();
+    let (repo, first) = ordinary_purge_source(&mut engine);
+    let plan = engine.create_purge_plan(&repo.history_tree_id, vec![first], "admin").unwrap();
     drop(engine);
     let path = system.join("plans").join(format!("{}.json", plan.plan_id));
     let mut altered_input = plan.clone();

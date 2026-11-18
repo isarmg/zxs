@@ -827,7 +827,6 @@ fn backend_save(
         identity,
         storage_server::CreateWorkspace {
             branch_id: branch.into(),
-            source_commit_id: None,
         },
     )?;
     let workspace_id = workspace.workspace_id.clone();

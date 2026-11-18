@@ -5,10 +5,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <Show when=move ||state.with(blocks_writes)>
             <aside class="zxs-surface zxs-stack" data-zxs-folder-create-recovery="">
-                <h2>{t("文件路径与目录分支：原请求恢复", "File paths and folder branches: original-request recovery")}</h2>
+                <h2>{t("文件与文件夹路径：原请求恢复", "File and folder paths: original-request recovery")}</h2>
                 <p>{t(
-                    "原账号、请求方法、目标、路径和操作编号已按站点保留；目录分支创建保留原来源，重命名保留原分支身份与名称，默认切换保留原分支和目录依据。导航或刷新只查询原结果，不自动重发。",
-                    "The original account, request method, target, paths and operation ID are retained. Folder branch creation retains its reviewed source; renaming retains the original branch identity and name; default switching retains the original branch and namespace basis. Navigation and refresh only query; they never resend.",
+                    "原账号、请求方法、目标、路径和操作编号已按站点保留。导航或刷新只查询原结果，不自动重发。",
+                    "The original account, request method, target, paths and operation ID are retained. Navigation and refresh only query; they never resend.",
                 )}</p>
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending)
                     on:click=move |_|restore(state)>{t("重新读取本机原请求", "Reload local original requests")}</button>

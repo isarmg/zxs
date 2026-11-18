@@ -13,7 +13,6 @@ pub(crate) struct PreparedForeignDatabases {
     pub(crate) files: BTreeMap<PathBuf, Vec<u8>>,
     pub(crate) original_disks: usize,
     pub(crate) object_files: usize,
-    pub(crate) object_directories: usize,
     bytes: usize,
 }
 impl PreparedForeignDatabases {
@@ -36,7 +35,6 @@ impl PreparedForeignDatabases {
             files: BTreeMap::new(),
             original_disks: 0,
             object_files: objects.file_count(),
-            object_directories: objects.directory_count(),
             bytes: 0,
         };
         result.add(

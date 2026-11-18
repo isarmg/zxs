@@ -40,10 +40,7 @@ fn node(operation: &str) -> storage_contract::FileDeletionNode {
 fn receipt(intent: &Intent, operation: &str) -> Value {
     let (kind, mut result) = match intent {
         Intent::Delete(_) => ("file.delete", json!({"deletion_node":node(operation)})),
-        Intent::DeleteBatch(_)
-        | Intent::DeleteDirectory(_)
-        | Intent::UndoDirectory(_)
-        | Intent::UndoSummary(_)
+        Intent::UndoSummary(_)
         | Intent::UndoBatch(_) => {
             panic!("this fixture constructs complete single-file receipts")
         }
@@ -83,12 +80,11 @@ fn attempt(intent: Intent, operation: &str) -> Attempt {
 fn ordinary_delete_routes_to_one_whole_file_review_without_browser_work_or_batch() {
     Owner::new().with(|| {
         let state = RwSignal::new(ready());
-        crate::files::batch::start(state, crate::files::batch::Kind::Delete, None);
+        crate::files::deletion::start(state, None);
         state.with_untracked(|s| {
             let review = s.files.deletion.review.as_ref().unwrap();
             assert_eq!(review.target, target());
             assert!(review_allowed(s, review.generation));
-            assert!(s.files.batch.is_none());
             assert!(s.files.operations.is_empty());
             assert!(!s.files.mutation_pending);
         });
@@ -115,9 +111,8 @@ fn multiple_missing_read_only_or_directory_selections_never_fall_back_to_batch()
     }
     Owner::new().with(|| {
         let state = RwSignal::new(state);
-        crate::files::batch::start(state, crate::files::batch::Kind::Delete, None);
-        assert!(state.with_untracked(|s| s.files.batch.is_none()
-            && s.files.deletion.review.is_none()
+        crate::files::deletion::start(state, None);
+        assert!(state.with_untracked(|s| s.files.deletion.review.is_none()
             && s.files.operations.is_empty()));
     });
 }

@@ -7,7 +7,6 @@ use crate::{
     OperationId, Repository, Workspace, canonical_json, object_hash,
 };
 use json_codec::json;
-use storage_contract::RepositoryName;
 
 fn request(workspace: &Workspace) -> CommitRequest {
     CommitRequest {
@@ -27,13 +26,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
         &temp.path().join("system"),
         Config::development(crate::test_disks([temp.path().join("primary")])).unwrap(),
     ).unwrap();
-    let repository = engine.create_repository(
-        &RepositoryName::parse("logical workspace").unwrap(),
-        "P01",
-        1,
-        "admin",
-        OperationId::generate().unwrap(),
-    ).unwrap();
+    let repository = engine.create_disk_root("P01", "admin", OperationId::generate().unwrap()).unwrap();
     let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
     engine.stage_bytes(&workspace.workspace_id, "Folder/old.txt", b"old bytes").unwrap();
     engine.commit_workspace(request(&workspace)).unwrap();
@@ -117,7 +110,7 @@ fn logical_workspace_input_preserves_native_request_bytes_and_ordered_edits() {
     for (file, branch) in &workspace.selected_file_branches {
         assert_eq!(workspace.selected_file_branch(file), Some(branch.as_str()));
     }
-    assert_eq!(workspace.directory_selection_generation("not-present"), 0);
+    assert!(workspace.selected_file_context("not-present").is_none());
     let rows = engine.list_tree(&repository.main_branch_id).unwrap();
     let locations = namespace::workspace_upload_locations(&rows, &workspace).unwrap();
     let old_item = workspace.files.values()

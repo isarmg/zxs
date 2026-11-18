@@ -950,48 +950,15 @@ fn current_smb_binding_replays_pre_registry_receipt_without_new_permission_or_pu
 #[test]
 fn local_ready_plans_do_not_leak_into_metadata_publications_or_cold_replay() {
     let mut fixture = Fixture::new();
-    // Historical previews require an active, full-branch history. The binding
-    // fixture already has independent file branches, and D3 forbids new imports.
-    let history = fixture
-        .engine
-        .create_repository(
-            &RepositoryName::parse("local plan source").unwrap(),
-            "D04",
-            1,
-            "admin",
-            op(),
-        )
-        .unwrap();
-    save(
-        &mut fixture.engine,
-        &history.main_branch_id,
-        "source",
-        b"local preview source body",
-    );
-    let source = fixture.engine.state.branches[&history.main_branch_id]
-        .head_commit_id
-        .clone();
+    let history = fixture.repository.clone();
+    save(&mut fixture.engine, &history.main_branch_id, "source", b"eligible old body");
+    let source = entry(&fixture.engine, &history.main_branch_id, "source").version_id;
+    save(&mut fixture.engine, &history.main_branch_id, "source", b"retained current HEAD");
     let published = Arc::clone(&fixture.engine.state);
     let published_bytes = canonical_json(published.as_ref()).unwrap();
-    let plans: Vec<_> = ["first local preview", "second local preview"]
-        .into_iter()
-        .map(|name| {
-            fixture
-                .engine
-                .create_historical_save_plan(
-                    &history.history_tree_id,
-                    HistoricalSaveOptions {
-                        source_commit_id: source.clone(),
-                        name: name.into(),
-                        workspace_id: None,
-                        primary_slot_id: None,
-                        target_copies: None,
-                    },
-                    "admin",
-                )
-                .unwrap()
-        })
-        .collect();
+    let plans: Vec<_> = ["first reviewer", "second reviewer"].into_iter().map(|actor|
+        fixture.engine.create_purge_plan(&history.history_tree_id, vec![source.clone()], actor).unwrap()
+    ).collect();
     assert!(Arc::ptr_eq(&published, &fixture.engine.state));
     assert_eq!(
         canonical_json(fixture.engine.state()).unwrap(),

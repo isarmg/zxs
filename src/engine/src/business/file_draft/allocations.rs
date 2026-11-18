@@ -2,7 +2,31 @@
 use crate::{Result, State};
 use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeSet, VecDeque};
-use storage_contract::{BranchId, CommitId, DirectoryBranchId, DirectoryTreeId, TreeId};
+use storage_contract::{BranchId, CommitId, TreeId, file_draft::DraftLocation};
+
+/// Each command has one native FILE and one ordinary namespace root. Check the
+/// target's actual root before accepting any allocation vector from storage.
+pub(crate) enum PublicationGraph {
+    Revised,
+    First,
+}
+
+impl PublicationGraph {
+    pub(crate) fn limit(self, state: &State, target: &DraftLocation) -> Result<usize> {
+        let repo = state.repositories.get(&target.repository.to_string()).ok_or_else(super::invalid)?;
+        let main = state.branches.get(&repo.main_branch_id).ok_or_else(super::invalid)?;
+        let head = state.commits.get(&main.head_commit_id).ok_or_else(super::invalid)?;
+        if main.history_tree_id != repo.history_tree_id || head.history_tree_id != main.history_tree_id {
+            return Err(super::invalid());
+        }
+        Ok(match self {
+            // The two Commit/Tree pairs advance the existing FILE and the owning namespace.
+            Self::Revised => 4,
+            // Creation additionally allocates this FILE's own independent branch.
+            Self::First => 5,
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serialization(tag = "kind", content = "id", rename_all = "snake_case", deny_unknown_fields)]
@@ -10,8 +34,6 @@ pub(crate) enum Allocation {
     Branch(BranchId),
     Commit(CommitId),
     Tree(TreeId),
-    DirectoryBranch(DirectoryBranchId),
-    DirectoryTree(DirectoryTreeId),
 }
 
 impl Allocation {
@@ -20,8 +42,6 @@ impl Allocation {
             "br" => Ok(Self::Branch(BranchId::generate()?)),
             "commit" => Ok(Self::Commit(CommitId::generate()?)),
             "tree" => Ok(Self::Tree(TreeId::generate()?)),
-            "dbr" => Ok(Self::DirectoryBranch(DirectoryBranchId::generate()?)),
-            "dtree" => Ok(Self::DirectoryTree(DirectoryTreeId::generate()?)),
             _ => Err(super::invalid()),
         }
     }
@@ -31,8 +51,6 @@ impl Allocation {
             Self::Branch(id) => ("br", id.to_string()),
             Self::Commit(id) => ("commit", id.to_string()),
             Self::Tree(id) => ("tree", id.to_string()),
-            Self::DirectoryBranch(id) => ("dbr", id.to_string()),
-            Self::DirectoryTree(id) => ("dtree", id.to_string()),
         };
         if kind != prefix {
             return Err(super::invalid());
@@ -53,12 +71,6 @@ impl Replay {
                 Allocation::Branch(id) => !previous.branches.contains_key(&id.to_string()),
                 Allocation::Commit(id) => !previous.commits.contains_key(&id.to_string()),
                 Allocation::Tree(id) => trees.insert(*id),
-                Allocation::DirectoryBranch(id) => {
-                    !previous.directory_branches.contains_key(&id.to_string())
-                }
-                Allocation::DirectoryTree(id) => {
-                    !previous.directory_trees.contains_key(&id.to_string())
-                }
             };
             if !fresh || !ids.insert(*id) {
                 return Err(super::invalid());

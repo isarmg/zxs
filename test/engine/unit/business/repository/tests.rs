@@ -427,3 +427,128 @@ fn file_manager_root_authority_follows_actual_publication_and_cold_readback() {
     assert_eq!(engine.create_disk_root("P01", "admin", operation).unwrap(), repository);
     assert_eq!(canonical_json(engine.state()).unwrap(), original);
 }
+
+
+#[test]
+fn ordinary_slot_lookup_never_registers_or_substitutes_a_root() {
+    use std::os::unix::fs::PermissionsExt;
+    let temporary = tempfile::tempdir().unwrap();
+    let system = temporary.path().join("system");
+    let disk = temporary.path().join("primary");
+    for path in [&system, &disk] {
+        std::fs::create_dir(path).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = crate::Config::independent_roots(storage_contract::Mode::Development,
+        [(name_policy::Name::parse("Primary").unwrap(), disk.clone())]).unwrap();
+    let mut engine = crate::Engine::initialize(&system, config).unwrap();
+    let empty = crate::canonical_json(engine.state()).unwrap();
+    assert!(engine.ordinary_root_for_slot("d01").unwrap().is_none());
+    assert!(engine.ordinary_root_for_slot("unknown").is_err());
+    assert_eq!(crate::canonical_json(engine.state()).unwrap(), empty);
+
+    let made = engine.create_disk_root("D01", "admin", crate::OperationId::generate().unwrap()).unwrap();
+    let before = crate::canonical_json(engine.state()).unwrap();
+    let selected = engine.ordinary_root_for_slot("d01").unwrap().unwrap();
+    assert_eq!(selected.repository_id, made.repository_id);
+    assert_eq!(selected.main_branch_id, made.main_branch_id);
+    assert_eq!(crate::canonical_json(engine.state()).unwrap(), before);
+    // A same-spelling replacement is not the held registered common root.
+    let common = disk.join(crate::persist::layout::COMMON_DATA_ROOT.as_path());
+    let retained = temporary.path().join("original-common");
+    std::fs::rename(&common, &retained).unwrap();
+    std::fs::create_dir(&common).unwrap();
+    std::fs::set_permissions(&common, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(engine.ordinary_root_for_slot("D01").is_err());
+    assert_eq!(crate::canonical_json(engine.state()).unwrap(), before);
+    std::fs::remove_dir(&common).unwrap();
+    std::fs::rename(retained, common).unwrap();
+    drop(engine);
+    let opened = crate::Engine::open(&system).unwrap();
+    assert_eq!(opened.ordinary_root_for_slot("D01").unwrap().unwrap().repository_id,
+        made.repository_id);
+}
+
+#[test]
+fn disabled_ordinary_metadata_requires_the_original_registry_without_opening_stopped_media() {
+    use crate::{CommitRequest, Engine, MembershipExitAction, OperationId};
+    use std::fs;
+    let temporary = tempfile::tempdir().unwrap();
+    let system = temporary.path().join("system");
+    let mut config = crate::Config::independent_roots(storage_contract::Mode::Development,
+        crate::test_disks((0..4).map(|i| temporary.path().join(format!("disk-{i}")))),
+    ).unwrap();
+    config.disks[3].metadata_member = false;
+    let disk = config.disks[3].clone();
+    let op = || OperationId::generate().unwrap();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let original = engine.create_disk_root(&disk.slot_id, "admin", op()).unwrap();
+    let work = engine.create_workspace(&original.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&work.workspace_id, "proof.zip", b"opaque file bytes").unwrap();
+    engine.commit_workspace(CommitRequest {
+        workspace_id: work.workspace_id, operation_id: op(), principal: "admin".into(),
+        expected_head: work.base_head, fencing_token: work.fencing_token,
+        message: "held original FILE".into(), request_digest: None,
+    }).unwrap();
+    let entry = engine.namespace_tree(&original.main_branch_id).unwrap()
+        .get("proof.zip").unwrap().clone();
+    let original_id = original.repository_id;
+    let exit = |engine: &mut Engine, action| {
+        engine.begin_disk_exit(&disk.disk_id, action, "admin", op()).unwrap();
+        let archive = engine.build_managed_membership_control_archive().unwrap();
+        engine.enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new()).unwrap();
+        engine.resume_membership_joint_decision().unwrap();
+        engine.activate_pending_disk_exit().unwrap();
+    };
+    exit(&mut engine, MembershipExitAction::PlannedOffline);
+    fs::rename(&disk.root, temporary.path().join("physically-stopped")).unwrap();
+    let sentinel = b"this path is not a disk";
+    fs::write(&disk.root, sentinel).unwrap();
+    for reopen in [false, true] {
+        if reopen { drop(engine); engine = Engine::open(&system).unwrap(); }
+        let before = crate::canonical_json(engine.state()).unwrap();
+        let registered = engine.ordinary_metadata_root_for_slot(&disk.slot_id).unwrap().unwrap();
+        assert_eq!(registered.repository_id, original_id);
+        let listed = engine.namespace_tree(&registered.main_branch_id).unwrap()
+            .get("proof.zip").unwrap();
+        assert_eq!(listed, &entry);
+        let projected = engine.native_current_entries(registered.repository_id.parse().unwrap()).unwrap();
+        assert!(matches!(&projected[..], [crate::NativeCurrentEntry::Published(row)] if row == &entry));
+        assert!(engine.ordinary_root_for_slot(&disk.slot_id).is_err());
+        assert!(engine.open_content(&entry.version_id).is_err());
+        assert_eq!(fs::read(&disk.root).unwrap(), sentinel);
+        assert_eq!(crate::canonical_json(engine.state()).unwrap(), before);
+    }
+    exit(&mut engine, MembershipExitAction::Deregister);
+    assert!(engine.ordinary_metadata_root_for_slot(&disk.slot_id).is_err());
+    assert_eq!(fs::read(&disk.root).unwrap(), sentinel);
+}
+
+
+#[test]
+fn ordinary_basis_keeps_the_exact_head_and_requires_its_original_root_creation() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = crate::Engine::initialize(&temp.path().join("system"),
+        crate::Config::development(crate::test_disks([temp.path().join("disk")])).unwrap()).unwrap();
+    let make_root = crate::OperationId::generate().unwrap();
+    let repo = engine.create_disk_root("P01", "admin", make_root).unwrap();
+    let workspace = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "folder/opaque.zip", b"ordinary FILE").unwrap();
+    let save = engine.commit_workspace(crate::CommitRequest {
+        workspace_id: workspace.workspace_id, operation_id: crate::OperationId::generate().unwrap(),
+        principal: "admin".into(), expected_head: workspace.base_head, fencing_token: workspace.fencing_token,
+        message: "ordinary root basis".into(), request_digest: None,
+    }).unwrap();
+    let repository = repo.repository_id.parse().unwrap();
+    let original = crate::canonical_json(engine.state()).unwrap();
+    let (head, entries) = crate::engine::fresh_layout::namespace::ordinary_root_basis(
+        engine.state(), engine.admitted_current_namespaces().unwrap(), repository).unwrap();
+    assert_eq!(Some(head), save.commit_id.as_deref());
+    assert_eq!(entries, engine.list_tree_ref(&repo.main_branch_id).unwrap());
+    assert_eq!(entries.len(), 2);
+    let mut unproved = engine.state().clone();
+    unproved.operations.remove(&make_root);
+    assert!(crate::engine::fresh_layout::namespace::ordinary_root_basis(
+        &unproved, None, repository).is_err());
+    assert_eq!(crate::canonical_json(engine.state()).unwrap(), original);
+}

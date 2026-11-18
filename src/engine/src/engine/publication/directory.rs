@@ -92,6 +92,7 @@ impl crate::engine::PlanningContext<'_> {
     pub(crate) fn prepare_directory_material(
         &self, input: DirectoryPublicationInput, maximum: usize,
     ) -> Result<(DirectoryDecisionInput, PreparedDirectoryFiles)> {
+        crate::ordinary_authority::kind(crate::persist::directory_draft_commit::native::KIND)?;
         let (decision, source, prepared, directory, envelope) = input.into_material(self)
             .map_err(DirectoryPublicationError::into_engine)?;
         let containers = ContainerPreparation::for_working_batch(self, &source, &prepared)?;

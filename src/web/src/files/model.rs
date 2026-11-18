@@ -1,6 +1,6 @@
 use super::{
     history::{FileBranch, FileHistory},
-    page::{DirectoryBranch, Entry},
+    page::Entry,
 };
 use json_codec::Value;
 use std::{collections::BTreeSet, sync::Arc};
@@ -33,7 +33,6 @@ pub(crate) enum Navigation {
 pub(crate) struct Model {
     pub unborn: super::unborn::Model,
     pub commit_mode: super::commit_mode::Model,
-    pub directory_snapshot: super::directory_snapshot::Model,
     pub deletion: super::deletion::Model,
     pub mkdir: super::mkdir::Model,
     pub disks: Vec<Disk>,
@@ -51,16 +50,12 @@ pub(crate) struct Model {
     pub total_entries: u64,
     pub listing_failed: bool,
     pub listing_cancellation: Option<crate::api::ReadCancellation>,
-    pub directory_branches: Vec<DirectoryBranch>,
     pub directory_file_count: u64,
-    pub directory_branches_supported: bool,
     pub repository_id: String,
     pub repository_path: String,
     pub namespace_head: String,
-    pub directory_preview: Option<DirectoryPreview>,
     pub file_preview: Option<FileBranch>,
     pub default_operation: Option<String>,
-    pub default_branch_scope: bool,
     pub loaded: bool,
     pub loading: bool,
     pub generation: u64,
@@ -73,7 +68,6 @@ pub(crate) struct Model {
     pub history_next_draft: u64,
     pub history_aux: super::history::Reads,
     pub checked_entries: BTreeSet<String>,
-    pub batch: Option<super::batch::Draft>,
     pub merge: Option<super::merge::Draft>,
     pub backup: Option<super::backup::Draft>,
     pub recursive_backup: Option<super::backup::recursive::Draft>,
@@ -91,44 +85,6 @@ pub(crate) struct Model {
     /// Editable text; typing and clearing do not change the current listing.
     pub query_draft: String,
 }
-#[derive(Clone, Debug)]
-pub(crate) struct DirectoryPreview {
-    pub source: DirectoryPreviewSource,
-    pub path: String,
-}
-#[derive(Clone, Debug)]
-pub(crate) enum DirectoryPreviewSource {
-    Branch(DirectoryBranch),
-    Snapshot { branch_id: String, tree_id: String },
-}
-impl DirectoryPreview {
-    pub(crate) fn branch(&self) -> Option<&DirectoryBranch> {
-        match &self.source {
-            DirectoryPreviewSource::Branch(branch) => Some(branch),
-            DirectoryPreviewSource::Snapshot { .. } => None,
-        }
-    }
-    pub(crate) fn branch_id(&self) -> &str {
-        match &self.source {
-            DirectoryPreviewSource::Branch(branch) => branch.id(),
-            DirectoryPreviewSource::Snapshot { branch_id, .. } => branch_id,
-        }
-    }
-    pub(crate) fn tree_id(&self) -> &str {
-        match &self.source {
-            DirectoryPreviewSource::Branch(branch) => branch.head_tree_id(),
-            DirectoryPreviewSource::Snapshot { tree_id, .. } => tree_id,
-        }
-    }
-    pub(crate) fn at_directory(&self, path: &str) -> bool {
-        name_policy::path_key(&self.path) == name_policy::path_key(path)
-    }
-    fn contains(&self, path: &str) -> bool {
-        let scope = name_policy::path_key(&self.path);
-        let path = name_policy::path_key(path);
-        scope.is_empty() || path == scope || path.starts_with(&format!("{scope}/"))
-    }
-}
 impl Model {
     /// Reset location-owned state without discarding disk reads or operation
     /// recovery. Session admission and starting the next read belong to actions.
@@ -136,16 +92,6 @@ impl Model {
         self.deletion.cancel_review();
         self.cancel_listing();
         self.reset_page();
-        let preserve_preview = match &destination {
-            Navigation::Directory(path) => self
-                .directory_preview
-                .as_ref()
-                .is_some_and(|preview| preview.contains(path)),
-            Navigation::Root | Navigation::Disk(_) => false,
-        };
-        if !preserve_preview {
-            self.directory_preview = None;
-        }
         match destination {
             Navigation::Root => {
                 self.slot.clear();
@@ -169,15 +115,11 @@ impl Model {
         }
         self.writable = false;
         self.entries = Default::default();
-        self.directory_branches.clear();
         self.directory_file_count = 0;
-        self.directory_branches_supported = false;
         self.repository_id.clear();
         self.repository_path.clear();
         self.namespace_head.clear();
-        self.default_branch_scope = false;
         self.clear_selection();
-        self.batch = None;
     }
 
     /// A recovered store needs a fresh disk snapshot, even if an older read is
@@ -208,7 +150,6 @@ impl Model {
     pub(crate) fn clear_selection(&mut self) {
         self.unborn.clear_review();
         self.commit_mode.clear_review();
-        self.directory_snapshot.clear_review();
         self.cancel_history();
         self.merge = None;
         self.backup = None;
@@ -373,13 +314,6 @@ pub(crate) fn selected_branch(model: &Model) -> String {
         .file_preview
         .as_ref()
         .map(FileBranch::id)
-        .or_else(|| {
-            model
-                .selected
-                .as_ref()
-                .filter(|entry| entry.preview())
-                .and_then(Entry::selected_branch_id)
-        })
         .or_else(|| model.file_history.selected())
         .or_else(|| model.selected.as_ref().and_then(Entry::selected_branch_id))
         .unwrap_or_default()
@@ -408,9 +342,6 @@ pub(crate) fn selected_file_branch_record(model: &Model) -> Option<(String, Stri
     }
     Some((file.to_owned(), id, branch.name().to_owned()))
 }
-pub(crate) fn directory_branch_name(branch: &DirectoryBranch) -> String {
-    display_branch_name(branch.name())
-}
 fn display_branch_name(name: &str) -> String {
     match name {
         "main" => t("主版本", "Main"),
@@ -426,22 +357,6 @@ pub(crate) fn branch_name(branch: &FileBranch) -> String {
         name
     }
 }
-pub(crate) fn directory_branch_value(branch: &DirectoryBranch) -> String {
-    branch.id().to_owned()
-}
-pub(crate) fn viewed_directory_branch(model: &Model) -> Option<&DirectoryBranch> {
-    if let Some(preview) = &model.directory_preview {
-        return preview
-            .at_directory(&model.directory)
-            .then_some(preview.branch())
-            .flatten();
-    }
-    model
-        .directory_branches
-        .iter()
-        .find(|branch| branch.current())
-}
-
 #[cfg(test)]
 #[path = "../../../../test/web/unit/files/model/tests.rs"]
 mod tests;

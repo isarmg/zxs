@@ -487,18 +487,20 @@ pub(super) fn is_file_body_request(url: &str, origin: &str) -> bool {
     path.starts_with("/api/") && (path.ends_with("/content") || path.ends_with("/write-sessions"))
 }
 
-/// The retained directory read context must not expose the retired write controls.
+/// Exercise the actual folder and exclude all retired directory repository controls.
 pub(super) fn directory_controls_retired(browser: &Browser) -> Result<()> {
     browser.click(&browser.css("[data-zxs-current-directory-details]:not([disabled])")?)?;
     browser.css("[data-zxs-current-directory-controls]")?;
-    browser.css("[data-directory-git-initialized='true']")?;
+    browser.css("[data-zxs-folder-refresh]:not([disabled])")?;
     let controls = browser.script(r#"
         return document.querySelectorAll(
             '[data-initialize-directory-git],[data-stage-directory-owned],'+
             '[data-stage-directory-child],[data-commit-directory],'+
-            '[data-zxs-set-directory-default],[data-review-directory-layout],'+
-            '[data-directory-layout-review],[data-confirm-directory-layout],'+
-            '[data-cancel-directory-layout],[data-refresh-directory-layout],[data-directory-layout-result],'+
+            '[data-zxs-set-directory-default],[data-review-directory-layout],[data-directory-git-initialized],'+
+            '[data-directory-layout-review],[data-confirm-directory-layout],[data-cancel-directory-layout],'+
+            '[data-refresh-directory-layout],[data-directory-layout-result],[data-directory-preview],'+
+            '[data-zxs-directory-snapshot],[data-zxs-directory-snapshot-recovery],[data-zxs-worktree],'+
+            '[data-zxs-snapshot-history],[data-zxs-directory-deletions-panel],'+
             'input[aria-label="Folder commit message"],input[aria-label="目录提交说明"]'
         ).length;
     "#)?;
@@ -519,7 +521,7 @@ pub(super) fn directory_controls_retired(browser: &Browser) -> Result<()> {
         "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']",
     )?;
     println!(
-        "PASS directory write and physical reconciliation controls absent; ordinary file navigation remains"
+        "PASS ordinary folder details retain refresh and FILE navigation, without the old directory controls"
     );
     Ok(())
 }
@@ -533,32 +535,23 @@ pub(super) fn is_retired_directory_request(url: &str, origin: &str, method: &str
         return false;
     };
     let (path, query) = relative.split_once('?').unwrap_or((relative, ""));
-    let directory_commit = path
-        .split_once("/directory-branches/")
-        .and_then(|(_, tail)| tail.strip_suffix("/commits"))
-        .is_some_and(|branch| !branch.is_empty() && !branch.contains('/'));
-    let branch_write = !matches!(method, "GET" | "HEAD")
-        && ((path.starts_with("/api/file-manager/disks/")
-            && (path.ends_with("/directory-branches")
-                || path.ends_with("/directory-branches/from-history")))
-            || (path.starts_with("/api/repositories/")
-                && (path.ends_with("/default-branch")
-                    || path.contains("/directory-branches/"))));
-    let repository_action = path.strip_prefix("/api/repositories/")
-        .and_then(|rest| rest.split_once('/'))
-        .filter(|(repository, _)| !repository.is_empty())
-        .map(|(_, action)| action);
-    let retired_post = method == "POST" && (path == "/api/repositories"
-        || matches!(repository_action, Some("branches" | "directory-layout/reconcile")));
-    retired_post || branch_write
-        || path.ends_with("/directory-scopes")
-        || path.ends_with("/directory-select")
-        || path.ends_with("/directory-git/initialize")
-        || path.ends_with("/directory-git/stage")
-        || path.ends_with("/directory-git/children/stage")
-        || directory_commit
-        || (path.ends_with("/entries")
-            && query
-                .split('&')
-                .any(|field| field.split('=').next() == Some("entry")))
+    let segments: Vec<_> = path.trim_start_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["api", "directory-snapshots" | "directory-worktrees", ..]
+        | ["api", "file-manager", "directory-snapshot-source", ..]
+        | ["api", "repositories", _, "directory-git" | "directory-branches" | "directory-scopes"
+            | "directory-deletions" | "directory-worktrees"
+            | "snapshot-head" | "snapshot-history" | "snapshot-root-context" | "default-branch", ..]
+        | ["api", "repositories", _, "directories", _, "history", ..]
+        | ["api", "file-manager", "disks", _, "directory-branches" | "directory-select"
+            | "snapshot-root" | "namespace-batch", ..] => true,
+        ["api", "history-trees", history, "historical-save-plans" | "split-plans"]
+            if !history.is_empty() => method == "POST",
+        ["api", "repositories", repository, "directory-layout", "reconcile"] if !repository.is_empty() => method == "POST",
+        ["api", "repositories"] => method == "POST",
+        ["api", "repositories", repository, "branches"] if !repository.is_empty() => method == "POST",
+        ["api", "file-manager", "disks", _, "entries"] => query.split('&').any(|field|
+            matches!(field.split('=').next(), Some("entry" | "directory_branch_id" | "expected_tree_id"))),
+        _ => false,
+    }
 }

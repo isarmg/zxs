@@ -22,8 +22,8 @@ pub(super) fn first_folder_hint(state: RwSignal<State>) -> impl IntoView {
     view! {
         <Show when=move ||state.with(|state|needs_first_folder(&state.files))>
             <p class="zxs-row" role="status" data-first-folder="">{t(
-                "可用“新建文件夹”开始普通目录操作；建目录不会初始化 .zxs 或隐式提交。若要建立目录快照，请先在本目录详情中“登记空盘根”，再初始化 .zxs。",
-                "Use New folder for ordinary directory operations; it neither initializes .zxs nor commits files. For directory snapshots, open this folder’s Details, register the empty disk root, then initialize .zxs.",
+                "用「新建文件夹」创建普通文件夹，再通过 SMB 存放文件。",
+                "Use New folder to create an ordinary folder, then add files through SMB.",
             )}</p>
         </Show>
     }
@@ -205,7 +205,6 @@ struct Context {
     slot: String,
     directory: String,
     repository: String,
-    directory_branch: String,
     selected: Option<SelectedContext>,
 }
 
@@ -229,13 +228,6 @@ impl Context {
             slot: state.files.slot.clone(),
             directory: state.files.directory.clone(),
             repository: state.files.repository_id.clone(),
-            directory_branch: state
-                .files
-                .directory_branches
-                .iter()
-                .find(|branch| branch.current())
-                .map(|branch| branch.id().to_owned())
-                .unwrap_or_default(),
             selected: state.files.selected.as_ref().map(|entry| SelectedContext {
                 entry: super::model::entry_key(entry),
                 file: entry.file_id().to_owned(),

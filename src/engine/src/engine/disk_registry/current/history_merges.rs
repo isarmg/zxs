@@ -86,9 +86,14 @@ fn result_matches(receipt: &OperationResult, event: &FileBranchMerge, version: &
         .iter()
         .all(|(key, value)| receipt.result[*key].as_str() == Some(*value))
         && receipt.result["reused_node"].as_bool() == Some(false)
-        && receipt.result["directory_branch_ids"]
-            .as_array()
-            .is_some_and(Vec::is_empty)
+        && receipt.result.as_object().is_some_and(|object| {
+            // The request and native finalizer own these exact fields, not
+            // labels, scope IDs or extra publication evidence in an arbitrary result.
+            const OTHER: &[&str] = &["reused_node", "merged_branch_ids", "name", "source_inputs",
+                "location", "timestamp", "membership_epoch", "branch_generation", "version_protection"];
+            object.len() == fields.len() + OTHER.len()
+                && OTHER.iter().all(|key| object.contains_key(*key))
+        })
 }
 
 impl CurrentNamespaces {

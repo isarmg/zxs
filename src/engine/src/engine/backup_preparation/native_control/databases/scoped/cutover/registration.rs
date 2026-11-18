@@ -73,7 +73,7 @@ pub use recovery::{
 };
 pub(super) use runtime::resume;
 pub use writer_routes::{
-    BackupDirectoryWriterRoute, BackupFileWriterRoute, BackupWriterDestination,
+    BackupFileWriterRoute, BackupWriterDestination,
     BackupWriterRoutesReport,
 };
 const FORMAT: &str = "zxs-backup-registry-placement";

@@ -135,7 +135,7 @@ fn publish_first_namespace(
         next, &main, &first, ids,
     )?;
     next.file_contexts.insert(
-        crate::business::directory::context_key_from_key(
+        crate::business::namespace::file_context::context_key_from_key(
             &target.repository.to_string(), target.path.key(),
         ),
         FileContext {
@@ -147,14 +147,6 @@ fn publish_first_namespace(
     );
     next.file_locations.insert(target.file.to_string(), target.path.as_str().into());
     next.file_names.insert(target.file.to_string(), target.path.file_name().into());
-    crate::business::directory::record_projected_directory_edits_with_ids(
-        next,
-        &target.repository.to_string(),
-        &[target.path.as_str().into()],
-        None,
-        None,
-        ids,
-    )?;
     Ok(())
 }
 
@@ -206,7 +198,7 @@ pub(in crate::business::file_draft) fn project(
         || next.placements.contains_key(&commit.content.version.version_id)
         || next.content_states.contains_key(&commit.content.version.version_id)
         || commit.content.allocations.len()
-            > crate::business::file_draft::trace_limit(next, commit.target)?
+            > crate::business::file_draft::PublicationGraph::First.limit(next, commit.target)?
     {
         return Err(invalid());
     }
@@ -348,7 +340,7 @@ impl<'source> FirstContentConstruction<'source> {
             return Err(Error::FileDraft(Failure::Body));
         }
         let placement = next.placements.get(&version.version_id).cloned().ok_or_else(invalid)?;
-        let limit = crate::business::file_draft::trace_limit(next, self.target)?;
+        let limit = crate::business::file_draft::PublicationGraph::First.limit(next, self.target)?;
         let mut allocations = Vec::new();
         publish_first_namespace(
             &self.namespace, next, self.operation, self.target, &version,

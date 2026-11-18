@@ -17,7 +17,7 @@ fn parse(mut body: Map<String, Value>) -> Result<CreateDiskDirectory, ApiError> 
     };
     if !matches!(body.remove("kind"), Some(Value::String(kind)) if kind == "mkdir") {
         return Err(ApiError::invalid(
-            "only mkdir is supported; use identity-bound namespace-batch for existing entries",
+            "this endpoint only creates ordinary directories (kind=mkdir)",
         ));
     }
     let operation = match body.remove("operation_id") {

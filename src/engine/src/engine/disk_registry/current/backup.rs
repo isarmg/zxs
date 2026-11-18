@@ -98,10 +98,7 @@ impl BackupNamespaceReplay {
         published: &'a AdmittedState,
     ) -> Result<BackupNamespaceAdmission<'a>> {
         let mut admitted = self.finish_native(publication, candidate, registry, published)?;
-        for scope in Arc::make_mut(&mut admitted.view.branches)
-            .values_mut()
-            .chain(Arc::make_mut(&mut admitted.view.directories).values_mut())
-        {
+        for scope in Arc::make_mut(&mut admitted.view.branches).values_mut() {
             Arc::make_mut(scope).writable = false;
         }
         Ok(admitted)
@@ -154,10 +151,10 @@ impl BackupNamespaceReplay {
                 return Err(stale());
             }
         }
-        for (id, branch) in &published.state().directory_branches {
-            if self.view.directory_entries(id, &branch.head_tree_id)? != branch.entries.as_slice() {
-                return Err(stale());
-            }
+        // Ordinary nested folders are persisted as registered parent/entry
+        // identities, not as an independent branch or a second tree head.
+        if self.previous.namespace_directories != published.state().namespace_directories {
+            return Err(stale());
         }
         self.view.backup_routing = Some(Arc::new(BackupRouting::capture(
             candidate,
@@ -247,18 +244,6 @@ impl BackupNamespaceAdmission<'_> {
         Ok((
             &branch.head_commit_id,
             self.view.branch_entries(id, &branch.head_commit_id)?,
-        ))
-    }
-    pub(in crate::engine) fn directory(&self, id: &str) -> Result<(&str, &[Entry])> {
-        let branch = self.state().directory_branches.get(id).ok_or_else(|| {
-            Error::new(
-                ErrorCode::DirectoryBranchNotFound,
-                "published Backup directory is absent",
-            )
-        })?;
-        Ok((
-            &branch.head_tree_id,
-            self.view.directory_entries(id, &branch.head_tree_id)?,
         ))
     }
 }

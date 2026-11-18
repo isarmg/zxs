@@ -198,9 +198,6 @@ impl Session {
         end: u64,
         bytes: u64,
     ) -> Result<Value, ApiError> {
-        if let Some(Handle::WorktreeWrite(writer, _)) = self.handles.get_mut(&handle) {
-            return writer.prepare_write(&self.shared, &self.identity, end, bytes);
-        }
         if let Some(Handle::ManualWrite(writer, _)) = self.handles.get_mut(&handle) {
             return writer.prepare_write(&self.shared, &self.identity, end, bytes);
         }
@@ -231,9 +228,6 @@ impl Session {
     pub(super) fn dirty(&mut self, handle: u64) -> Result<Value, ApiError> {
         // The FD has already been modified. Preserve it even when current
         // authorization or rebase validation rejects the operation.
-        if let Some(Handle::WorktreeWrite(writer, _)) = self.handles.get_mut(&handle) {
-            return writer.dirty(&self.shared, &self.identity, self.max_file_bytes);
-        }
         if let Some(Handle::ManualWrite(writer, _)) = self.handles.get_mut(&handle) {
             return writer.dirty(&self.shared, &self.identity, self.max_file_bytes);
         }
@@ -342,9 +336,6 @@ impl Session {
             .get_mut(&handle)
             .ok_or_else(handles::missing_handle)?;
         match opened {
-            Handle::WorktreeWrite(writer, _) => {
-                writer.flush(&self.shared, &self.identity, self.max_file_bytes)
-            }
             Handle::Native(file) => {
                 if !file.writable {
                     self.shared.backend.smb_native_size(&self.identity, &file.file)?;
@@ -371,18 +362,13 @@ impl Session {
                 // No-change acknowledgements still require current authority.
                 opened.authorize_read(&self.shared, &self.identity, &self.branch)?;
                 match opened {
-                    Handle::Read(content, _) | Handle::ReadDraft(content, _)
-                    | Handle::ReadWorktree(content, _) => {
+                    Handle::Read(content, _) | Handle::ReadDraft(content, _) => {
                         content.file.sync_all().map_err(ApiError::io)?;
                     }
                     Handle::Directory(directory) => {
                         directory.file.sync_all().map_err(ApiError::io)?;
                     }
-                    Handle::WorktreeDirectory(directory) => {
-                        directory.file.sync_all().map_err(ApiError::io)?;
-                    }
-                    Handle::Native(_) | Handle::Write(_, _) | Handle::ManualWrite(_, _)
-                    | Handle::WorktreeWrite(_, _) => {}
+                    Handle::Native(_) | Handle::Write(_, _) | Handle::ManualWrite(_, _) => {}
                 }
                 Ok(json!({"saved":true,"changed":false}))
             }
@@ -403,9 +389,7 @@ impl Session {
             .handles
             .remove(&handle)
             .ok_or_else(handles::missing_handle)?;
-        if let Handle::WorktreeWrite(mut writer, _paths) = opened {
-            writer.close(&self.shared, &self.identity, self.max_file_bytes, abort)?;
-        } else if let Handle::Native(mut file) = opened {
+        if let Handle::Native(mut file) = opened {
             if !abort && file.writable {
                 self.shared.backend.smb_native_flush(&self.identity, &mut file.file)?;
             } else {
@@ -461,10 +445,7 @@ impl Session {
             .remove(&handle)
             .ok_or_else(handles::missing_handle)?;
         let mut result = json!({"closed":true,"detached":true});
-        if let Handle::WorktreeWrite(mut writer, _paths) = entry {
-            writer.retain();
-            result["operation_id"] = json!(writer.operation());
-        } else if let Handle::Native(file) = entry {
+        if let Handle::Native(file) = entry {
             result["operation_id"] = json!(file.file.operation());
         } else if let Handle::ManualWrite(mut writer, _paths) = entry {
             writer.retain(&self.identity.principal);

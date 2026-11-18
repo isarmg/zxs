@@ -215,6 +215,72 @@ impl Engine {
         Ok(())
     }
 
+    // A logical candidate, not authority to enumerate or read it. Both the
+    // live and the stopped-media metadata paths validate their own origin.
+    pub(crate) fn ordinary_root_candidate(&self, slot: &str) -> Result<Option<&Repository>> {
+        let mut matches = self.state.repositories.values()
+            .filter(|repository| repository.primary_slot_id == slot);
+        let selected = matches.next();
+        if selected.is_some_and(|repo| !repo.file_manager_root) || matches.next().is_some() {
+            return Err(crate::engine::FreshLayoutError::NamespaceSource.into());
+        }
+        Ok(selected)
+    }
+
+    /// Read the one ordinary namespace registered on this enabled storage slot.
+    /// This never allocates a repository, creates a workspace, or authorizes a
+    /// write. An offline root, duplicate registration or broken original
+    /// remains an error; a Backup read must use its own published source.
+    pub fn ordinary_root_for_slot(&self, slot: &str) -> Result<Option<&Repository>> {
+        use crate::engine::FreshLayoutError as Failure;
+        let disk = self.disk(slot)?;
+        if let Some(current) = self.admitted_current_namespaces()? {
+            // This predicate checks only the registry's live Enabled slot. It
+            // does not perform a write and confers no branch or user rights.
+            current.require_write_slot(&disk.slot_id)?;
+        }
+        if let Some(repository) = self.ordinary_root_candidate(&disk.slot_id)? {
+            let source = self.namespace_host_root(
+                repository.repository_id.parse()?,
+                repository.main_branch_id.parse()?,
+            )?;
+            if source.disk().disk_id != disk.disk_id {
+                return Err(Failure::Registration.into());
+            }
+            self.namespace_tree(&repository.main_branch_id)?;
+            return Ok(Some(repository));
+        }
+
+        // A present native receipt without its current owner is not an
+        // unregistered slot. Strict opening authenticates these original
+        // receipts; a partial or missing FILE namespace cannot be recreated
+        // merely because its display-name row was absent.
+        for receipt in self.state.operations.values() {
+            if let Some(origin) = crate::persist::namespace_root::origin(receipt)?
+                && (origin.genesis.registration.disk_id == disk.disk_id
+                    || origin.genesis.registration.slot_id == disk.slot_id)
+            {
+                return Err(Failure::NamespaceSource.into());
+            }
+            if receipt.kind == "repository.create" {
+                let created = crate::persist::namespace_root::created_repository(receipt)?;
+                if created.file_manager_root && created.primary_slot_id == disk.slot_id {
+                    return Err(Failure::NamespaceSource.into());
+                }
+            }
+        }
+        let held = self.disk_resources.get(disk)?;
+        crate::engine::fresh_layout::verify_root(&self.config, disk, &held.root)?;
+        crate::engine::provenance::validate_owned_seal(
+            &self.disk_resources, disk, &self.metadata_integrity,
+        )?;
+        let common = held.content_root()?;
+        if common.entries(common.path())?.next().transpose()?.is_some() {
+            return Err(Failure::NamespaceSource.into());
+        }
+        Ok(None)
+    }
+
     pub fn create_disk_root(
         &mut self,
         primary: &str,

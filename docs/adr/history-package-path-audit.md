@@ -7,21 +7,17 @@
 原生 rename／batch 的完整原收据及 request digest 不重写，也不按导出文件切片。
 增量投影只依赖实际 operation／principal 写集，不因全局 sequence 改变而重建其他 history。
 
-恢复把原 source 证据放进自身 `history.restore` 永久收据的 `restored_path_audit`。
-它不把原 source operation 插入本地 `State.operations`，不冒充一次本地 rename。
-FILE 路径读取共用 retained typed 事实；原生事件 visitor 仍不把导入来源报告为本地事件。
-再次导出将 carrier 中同一 source 的证据合并，不递归包裹旧 restore 收据。
+历史包是独立的只读证据，不会在别的池注册命名空间或生成本地事件。
+离线核验对照包内原发布序列，检查完整 carrier 中的 receipt、principal 与端点。
 同一原 OperationId 的 receipt／principal 不同即拒绝，完整相同证据才可共享。
-
-已有 restore 明确继承源 publication sequence 的 high-water mark 后再发布；
-因此源 sequence 与导入收据的顺序校验依赖这一明确规则，不是假设两个独立池自然同序。
-重复导入相同 history／repository／file 身份仍由原 ObjectCollision 围栏拒绝。
+SYSTEM 丢失后的正式恢复使用原注册成员的发布以及独立证明过的非投票数据根；
+保留原操作身份和先后关系，不把包的序列写入另一个池。
 
 ## 端点证明与边界
 
 原 event、operation、principal、before／after 路径保持不变。
 copy 只改 typed 目标 file／history／branch／version 投影，并记录 typed copy OperationId
-推导链，逐步重算 file／branch／version 身份以验证目标端点。restore 不修改该链。
+推导链，逐步重算 file／branch／version 身份以验证目标端点。只读核验不修改该链。
 该链证明身份推导，不声称包含每次 copy 的完整原生收据或完整跨池操作历史。
 目标端点另使用原永久 graph ownership verifier，包含冻结 commit 的借用正文闭包。
 既有删除／undo 的 CopiedLifecycle.events 及验证保留，不据此声称新增完整删除审计包迁移。
@@ -44,11 +40,10 @@ foreign identity remap 遇非空 path_audit 在改名或写入前拒绝；空 au
 旧 graph 缺少 path_audit，以及旧 CopiedLifecycle 缺少完整 path_audit 证据，均拒绝读取准入；
 没有 serde default、静默补空、收据改写或自动迁移。拒绝不改输入原字节。
 沿用既有 audit 字节／事件上限，并限制端点推导的累计步骤。
-ledger 每次遍历共用一个原 source proof 冲突索引，不为每个 restore 重扫整个 State。
+ledger 每次遍历共用一个原 source proof 冲突索引，不为每个来源重扫整个 State。
 
 ## 验证状态
 
-实现附带 native／copied／restored 来源、二次导出、cold restore 后 copy、篡改、冲突、
-不完整 batch、旧格式原字节保留以及增量／完整投影一致性的定向回归。
-本地未编译、运行测试或格式化；是否通过由同一提交的 GitHub 定向 CI 工件判定。
-多级备份、完整跨来源 foreign 导入和完整操作历史不属于本次声明。
+定向回归覆盖原生和复制来源、只读包的篡改与冲突、原注册成员恢复后的 FILE 审计、
+不完整 batch、输入原字节保留及增量／完整投影的一致性。源码附带测试不等于已通过。
+多级备份、跨池安装和完整外部操作历史不属于这份决定。

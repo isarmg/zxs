@@ -273,14 +273,6 @@ impl Session {
         replace: bool,
         operation_id: OperationId,
     ) -> Result<Value, ApiError> {
-        for text in std::iter::once(path.as_str()).chain(destination.as_deref()) {
-            let lookup = name_policy::LookupPath::parse(text).map_err(ApiError::invalid_source)?;
-            if self.shared.backend.smb_worktree_locate(
-                &self.identity, &self.branch, &lookup,
-            )?.is_some() {
-                return Err(ApiError::unsupported());
-            }
-        }
         let input = NamespaceInput::parse(kind, path, destination, replace)?;
         if input.kind == NamespaceOperation::Rename
             && let Some(retained) =
@@ -310,6 +302,11 @@ impl Session {
             .shared
             .backend
             .repository_snapshot(&self.identity, &binding.repository_id)?;
+        if !repository.file_manager_root || repository.repository_id != binding.repository_id
+            || repository.main_branch_id != binding.branch_id || self.branch != binding.branch_id
+        {
+            return Err(ApiError::forbidden());
+        }
         let slot = self
             .shared
             .backend
@@ -403,61 +400,6 @@ impl Session {
         result
     }
 
-    fn soft_delete_rmdir(
-        &self,
-        path: &name_policy::LookupPath,
-        operation_id: OperationId,
-        record: &Path,
-    ) -> Result<Option<Value>, ApiError> {
-        let entry = self.find(path)?.ok_or_else(|| {
-            ApiError::new(
-                http::StatusCode::NOT_FOUND,
-                storage_contract::ErrorCode::DirectoryNotFound,
-                "rmdir target missing",
-            )
-        })?;
-        if entry.kind != storage_contract::NamespaceEntryKind::Directory {
-            return Err(ApiError::conflict(
-                storage_contract::ErrorCode::NotDirectory,
-                "rmdir requires a directory",
-            ));
-        }
-        let captured = self.shared.backend.prepare_current_directory_deletion(
-            &self.identity,
-            crate::PrepareCurrentDirectoryDeletion {
-                branch_id: self.branch.clone(),
-                path: path.clone(),
-                expected_entry_id: entry.entry_id,
-            },
-        )?;
-        let Some(captured) = captured else {
-            return Ok(None);
-        };
-        write_namespace_record(
-            record,
-            &json!({
-                "format": "smb-directory-soft-deletion", "principal": self.identity.principal,
-                "branch_id": self.branch, "operation_id": operation_id,
-                "publication_outcome": "unconfirmed", "delete_request": captured,
-            }),
-        )?;
-        let result = self
-            .shared
-            .backend
-            .delete_current_directory(
-                &self.identity,
-                crate::DeleteCurrentDirectory {
-                    captured,
-                    operation_id,
-                },
-            )
-            .and_then(|result| crate::operation_wire::operation_wire(result.into()));
-        if result.is_ok() {
-            cleanup_namespace_record(record);
-        }
-        result.map(Some)
-    }
-
     pub(super) fn namespace_admitted(
         &mut self,
         input: NamespaceInput,
@@ -495,38 +437,21 @@ impl Session {
             let repo = self.shared.backend.repository_snapshot(
                 &self.identity, &binding.repository_id,
             )?;
-            if repo.file_manager_root {
-                if repo.repository_id != binding.repository_id
-                    || repo.main_branch_id != binding.branch_id
-                    || self.branch != binding.branch_id
-                    || repo.smb_binding_generation != binding.generation
-                    || !repo.smb_enabled
-                {
-                    return Err(ApiError::conflict(
-                        storage_contract::ErrorCode::SmbRebindRequired,
-                        "SMB directory target changed; reconnect before starting another operation",
-                    ));
-                }
-                return admission.create_native_directory(
-                    &self.shared, &self.identity, repo.primary_slot_id, path.clone(),
-                );
+            if !repo.file_manager_root || repo.repository_id != binding.repository_id
+                || repo.main_branch_id != binding.branch_id || self.branch != binding.branch_id
+                || repo.smb_binding_generation != binding.generation || !repo.smb_enabled
+            {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::SmbRebindRequired,
+                    "SMB directory target changed; reconnect before starting another operation",
+                ));
             }
+            return admission.create_native_directory(
+                &self.shared, &self.identity, repo.primary_slot_id, path.clone(),
+            );
         }
         let operation_id = admission.operation_id();
         let record = &admission.record;
-        let soft_delete_directory = if kind == NamespaceOperation::Rmdir {
-            match &self.identity.smb_binding {
-                Some(binding) => {
-                    self.shared
-                        .backend
-                        .repository_snapshot(&self.identity, &binding.repository_id)?
-                        .file_manager_root
-                }
-                None => false,
-            }
-        } else {
-            false
-        };
         let _paths = path_reservation::PathReservation::acquire(
             &self.shared,
             std::iter::once((self.branch.as_str(), change.key())).chain(
@@ -536,14 +461,6 @@ impl Session {
             ),
         )?;
         if let storage_contract::NamespaceOperation::Delete { path } = &change {
-            if soft_delete_directory {
-                match self.soft_delete_rmdir(path, operation_id, record) {
-                    Ok(None) => {}
-                    result => {
-                        return result.map(|reply| reply.expect("invariant: None was handled"));
-                    }
-                }
-            }
             if kind == NamespaceOperation::Unlink {
                 match self.soft_delete_unlink(path, operation_id, record) {
                     Ok(None) => {}
@@ -631,12 +548,29 @@ impl Session {
                         "rmdir requires a directory",
                     ));
                 }
-                if nonempty(entry) {
-                    return Err(ApiError::new(
-                        ::http::StatusCode::CONFLICT,
-                        storage_contract::ErrorCode::DirectoryNotEmpty,
-                        "SMB directory removal requires an empty directory",
-                    ));
+                if kind == NamespaceOperation::Rmdir {
+                    // The immutable workspace cannot prove absence of an Unborn FILE.
+                    // Re-open the exact current ordinary folder too; never invoke a
+                    // recursive deletion or a directory-history operation for rmdir.
+                    let current = self.shared.backend.read_directory(
+                        &self.identity,
+                        crate::ReadDirectory {
+                            branch: &self.branch,
+                            entry_id: &entry.entry_id,
+                            path: Some(&entry.path),
+                            selection: crate::DirectorySelection::Page {
+                                snapshot: None, after: None,
+                            },
+                        },
+                    )?;
+                    if current.commit_id != workspace.base_head {
+                        return Err(ApiError::conflict(storage_contract::ErrorCode::WorkspaceChanged,
+                            "ordinary folder changed while checking emptiness"));
+                    }
+                    if nonempty(entry) || !current.entries.is_empty() || current.more {
+                        return Err(ApiError::conflict(storage_contract::ErrorCode::DirectoryNotEmpty,
+                            "SMB directory removal requires an empty ordinary folder"));
+                    }
                 }
             }
             self.shared.backend.stage_namespace(

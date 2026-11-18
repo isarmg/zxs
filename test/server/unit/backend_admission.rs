@@ -391,26 +391,10 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
-    fn prepare_historical_save(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.wait()?;
-        Err(crate::ApiError::unsupported())
-    }
     fn prepare_purge(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::PreparePurge, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.wait()?;
-        Err(crate::ApiError::unsupported())
-    }
-    fn prepare_split(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareSplit, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -483,44 +467,6 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::MutateDiskDirectory,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        self.wait()?;
-        Err(crate::ApiError::unsupported())
-    }
-    fn directory_git_status(
-        &self,
-        _identity: &crate::auth::Identity,
-        _repository: &str,
-        _path: &str,
-        cancellation: storage_contract::history_window::HistoryWindowCancellation,
-    ) -> Result<storage_contract::directory_git::DirectoryGitStatus, crate::ApiError> {
-        self.gate.cancellations.lock().unwrap().push(cancellation);
-        self.wait()?;
-        Err(crate::ApiError::unsupported())
-    }
-    fn initialize_directory_git(
-        &self,
-        _identity: &crate::auth::Identity,
-        _repository: &str,
-        _request: storage_contract::directory_git::DirectoryGitInitializeBody,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        self.wait()?;
-        Err(crate::ApiError::unsupported())
-    }
-    fn stage_directory_git_child(
-        &self,
-        _identity: &crate::auth::Identity,
-        _repository: &str,
-        _request: storage_contract::directory_git::DirectoryGitStageChildBody,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        self.wait()?;
-        Err(crate::ApiError::unsupported())
-    }
-    fn stage_directory_git_owned(
-        &self,
-        _identity: &crate::auth::Identity,
-        _repository: &str,
-        _request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -617,16 +563,6 @@ impl Backend for BackendProbe {
         _request: storage_contract::file_history_merge::FileHistorySourceRequest,
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::file_history_merge::FileHistorySource, crate::ApiError> {
-        self.gate.cancellations.lock().unwrap().push(cancellation);
-        self.wait()?;
-        Err(crate::ApiError::unsupported())
-    }
-    fn directory_history(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: storage_contract::directory_history::DirectoryHistoryRequest,
-        cancellation: storage_contract::history_window::HistoryWindowCancellation,
-    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, crate::ApiError> {
         self.gate.cancellations.lock().unwrap().push(cancellation);
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -1162,12 +1098,8 @@ fn workspace_body(method: &str, path: &str) -> Value {
         json!({"kind":"mkdir","path":"folder","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path == "/api/file-manager/disks/P01/write-sessions" {
         json!({"path":"file.txt"})
-    } else if method == "POST" && path == "/api/history-trees/history/historical-save-plans" {
-        json!({"source_commit_id":"commit","name":"Saved branch"})
     } else if method == "POST" && path == "/api/history-trees/history/purge-plans" {
         json!({"version_ids":["version"]})
-    } else if method == "POST" && path == "/api/history-trees/history/split-plans" {
-        json!({"cut_commit_id":"cut"})
     } else if method == "POST"
         && path.starts_with("/api/file-manager/files/")
         && path.ends_with("/branches")
@@ -1370,9 +1302,7 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/workspaces/workspace/namespace-operations"),
     ("POST", "/api/workspaces/workspace/commit"),
     ("GET", "/api/workspaces/workspace"),
-    ("POST", "/api/history-trees/history/historical-save-plans"),
     ("POST", "/api/history-trees/history/purge-plans"),
-    ("POST", "/api/history-trees/history/split-plans"),
     ("POST", "/api/admin/disks"),
 ];
 
@@ -1846,9 +1776,7 @@ fn queued_backend_job_keeps_auth_and_admission_after_cancellation() {
 #[tokio::test]
 async fn prepare_unknown_fields_reach_backend_before_its_admission_error() {
     for path in [
-        "/api/history-trees/missing/historical-save-plans",
         "/api/history-trees/missing/purge-plans",
-        "/api/history-trees/missing/split-plans",
     ] {
         let root = crate::tests::private_tempdir();
         let (app, gate, _release) = fixture(root.path(), 1, true);
@@ -2573,130 +2501,9 @@ async fn content_match_only_admits_original_node_cursor_and_limit_domains() {
     assert_eq!(gate.calls.load(Ordering::SeqCst), 3);
 }
 
-fn directory_history_route(repository: &str, directory: &str, suffix: &str) -> String {
-    format!("/api/repositories/{repository}/directories/{directory}/history{suffix}")
-}
 
-#[tokio::test]
-async fn directory_history_contract_errors_follow_query_shape_and_capacity() {
-    let root = crate::tests::private_tempdir();
-    let (app, gate, _release) = fixture(root.path(), 0, false);
-    let mut jobs = Vec::new();
-    for _ in 0..HTTP_BACKEND_SLOTS {
-        let app = app.clone();
-        jobs.push(tokio::spawn(async move {
-            request(app, "/api/repositories").await
-        }));
-    }
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
-    )
-    .await
-    .unwrap()
-    .unwrap()
-    .forget();
-    for suffix in ["", "/branches"] {
-        let route = directory_history_route("malformed", "malformed", suffix);
-        for query in ["limit=0", "unknown=true", "cursor=bad"] {
-            overloaded(app.clone(), &format!("{route}?{query}")).await;
-        }
-        for path in [
-            format!("{route}?limit=1&limit=2"),
-            directory_history_route("%FF", "malformed", suffix),
-            directory_history_route("malformed", "%FF", suffix),
-        ] {
-            let response = tokio::time::timeout(Duration::from_secs(5), request(app.clone(), &path))
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        }
-    }
-    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
-    gate.release();
-    for job in jobs {
-        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
-    }
-}
 
-#[tokio::test]
-async fn directory_history_retains_root_child_and_collection_domains() {
-    let root = crate::tests::private_tempdir();
-    let (app, gate, _release) = fixture(root.path(), 0, true);
-    let repo = "repo_00000000000000000000000000000000";
-    let child = "entry_00000000000000000000000000000000";
-    for suffix in ["", "/branches"] {
-        for directory in [repo, child] {
-            let route = directory_history_route(repo, directory, suffix);
-            assert_eq!(
-                request(app.clone(), &format!("{route}?limit=128")).await.status(),
-                StatusCode::NOT_IMPLEMENTED,
-            );
-        }
-        for (repository, directory, query, code) in [
-            ("bad", child, "unknown=true", "INVALID_ID"),
-            (repo, "file_00000000000000000000000000000000", "", "INVALID_ID"),
-            (repo, child, "unknown=true", "INVALID_REQUEST"),
-            (repo, child, "limit=0", "INVALID_REQUEST"),
-            (repo, child, "limit=129", "INVALID_REQUEST"),
-            (repo, child, "cursor=bad", "INVALID_CURSOR"),
-        ] {
-            let route = directory_history_route(repository, directory, suffix);
-            let response = request(app.clone(), &format!("{route}?{query}")).await;
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-            let bytes = http_routing::body::to_bytes(response.into_body(), 4096)
-                .await
-                .unwrap();
-            let result: Value = json_codec::from_slice(&bytes).unwrap();
-            assert_eq!(result["error"]["code"], code);
-            assert!(result["error"].get("source").is_none());
-        }
-    }
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 4);
-    let anchor = "anchor_tree_id=dtree_00000000000000000000000000000000";
-    let nodes = directory_history_route(repo, child, "");
-    assert_eq!(
-        request(app.clone(), &format!("{nodes}?{anchor}")).await.status(),
-        StatusCode::NOT_IMPLEMENTED,
-    );
-    let branches = directory_history_route(repo, child, "/branches");
-    assert_eq!(
-        request(app, &format!("{branches}?{anchor}")).await.status(),
-        StatusCode::BAD_REQUEST,
-    );
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 5);
-}
 
-#[tokio::test]
-async fn directory_history_cancellation_reaches_both_collection_backends() {
-    for suffix in ["", "/branches"] {
-        let root = crate::tests::private_tempdir();
-        let (app, gate, _release) = fixture(root.path(), 0, false);
-        let route = directory_history_route(
-            "repo_00000000000000000000000000000000",
-            "entry_00000000000000000000000000000000",
-            suffix,
-        );
-        let waiter = tokio::spawn(async move { request(app, &route).await });
-        tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
-            .await
-            .unwrap()
-            .unwrap()
-            .forget();
-        assert_eq!(gate.cancellations.lock().unwrap().len(), 1);
-        assert!(!gate.cancellations.lock().unwrap()[0].is_cancelled());
-        waiter.abort();
-        assert!(waiter.await.unwrap_err().is_cancelled());
-        assert!(gate.cancellations.lock().unwrap()[0].is_cancelled());
-        assert_eq!(gate.finished.available_permits(), 0);
-        gate.release();
-        tokio::time::timeout(Duration::from_secs(5), gate.finished.acquire())
-            .await
-            .unwrap()
-            .unwrap()
-            .forget();
-    }
-}
 
 #[tokio::test]
 async fn directory_scope_query_contract_errors_follow_capacity() {
@@ -2783,84 +2590,4 @@ async fn directory_scope_query_admits_only_valid_projection_and_path_combination
         );
     }
     assert_eq!(gate.calls.load(Ordering::SeqCst), 7);
-}
-
-#[tokio::test]
-async fn directory_git_status_input_errors_precede_capacity() {
-    let root = crate::tests::private_tempdir();
-    let (app, gate, _release) = fixture(root.path(), 0, false);
-    let mut jobs = Vec::new();
-    for _ in 0..HTTP_BACKEND_SLOTS {
-        let app = app.clone();
-        jobs.push(tokio::spawn(async move {
-            request(app, "/api/repositories").await
-        }));
-    }
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
-    )
-    .await
-    .unwrap()
-    .unwrap()
-    .forget();
-    let repo = "repo_00000000000000000000000000000000";
-    for (repository, query) in [
-        ("bad", "path="),
-        ("entry_00000000000000000000000000000000", "path="),
-        ("%FF", "path="),
-        (repo, ""),
-        (repo, "path=a&path=b"),
-        (repo, "path=&unknown=true"),
-        (repo, "path=../bad"),
-        (repo, "path=%2Fabsolute"),
-    ] {
-        let route = format!("/api/repositories/{repository}/directory-git?{query}");
-        let response = tokio::time::timeout(Duration::from_secs(5), request(app.clone(), &route))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-    for path in ["", "Cafe%CC%81/Child"] {
-        overloaded(
-            app.clone(),
-            &format!("/api/repositories/{repo}/directory-git?path={path}"),
-        )
-        .await;
-    }
-    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
-    gate.release();
-    for job in jobs {
-        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
-    }
-}
-
-#[tokio::test]
-async fn directory_git_status_only_admits_repository_and_lookup_path_domains() {
-    let root = crate::tests::private_tempdir();
-    let (app, gate, _release) = fixture(root.path(), 0, true);
-    let repo = "repo_00000000000000000000000000000000";
-    for (repository, path) in [
-        ("bad", ""),
-        ("repo_0000000000000000000000000000000A", ""),
-        ("entry_00000000000000000000000000000000", ""),
-        (repo, "../bad"),
-        (repo, "%2Fabsolute"),
-    ] {
-        let route = format!("/api/repositories/{repository}/directory-git?path={path}");
-        let response = request(app.clone(), &route).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let bytes = http_routing::body::to_bytes(response.into_body(), 4096)
-            .await
-            .unwrap();
-        let result: Value = json_codec::from_slice(&bytes).unwrap();
-        assert_eq!(result["error"]["code"], "INVALID_REQUEST");
-        assert!(result["error"].get("source").is_none());
-    }
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
-    for path in ["", "Cafe%CC%81/Child"] {
-        let route = format!("/api/repositories/{repo}/directory-git?path={path}");
-        assert_eq!(request(app.clone(), &route).await.status(), StatusCode::NOT_IMPLEMENTED);
-    }
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
 }

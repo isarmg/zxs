@@ -10,7 +10,7 @@ pub(in crate::engine) use databases::ServingSwitch;
 pub use databases::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
-    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
     BackupNamespaceScope, BackupNativeMetadataReport, BackupOrdinaryServingReport,

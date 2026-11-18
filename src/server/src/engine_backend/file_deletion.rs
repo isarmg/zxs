@@ -107,6 +107,14 @@ impl EngineBackend {
             // visibility, including after undo or another later deletion.
             return engine.soft_delete_file(request).map(Some).map_err(error);
         }
+        // An old or physically replaced root must not use the fallback SMB
+        // structural delete. The original receipt above needs no new mutation.
+        if !repository.file_manager_root || engine.ordinary_root_for_slot(&repository.primary_slot_id)
+            .map_err(error)?.is_none_or(|owner| owner.repository_id != repository.repository_id)
+        {
+            return Err(ApiError::conflict(storage_contract::ErrorCode::SmbRebindRequired,
+                "FILE deletion requires its original registered disk namespace"));
+        }
         let object = engine
             .locate_object(&command.branch_id, &command.path)
             .map_err(error)?
@@ -130,11 +138,6 @@ impl EngineBackend {
                 storage_contract::ErrorCode::WorkspaceChanged,
                 "delete target identity changed",
             ));
-        }
-        // Legacy named namespaces still use structural deletion. An initialized
-        // owner requires the same reversible lifecycle as a disk-root file.
-        if !repository.file_manager_root && object.initialized_repository_id().is_none() {
-            return Ok(None);
         }
         // SMB must not publish a D that the management recovery entrance cannot
         // read. Preserve the captured entry guard above and do not trim parents.

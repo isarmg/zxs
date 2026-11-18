@@ -48,7 +48,7 @@ pub(crate) fn resolve(state: &State, target: &DraftLocation) -> Result<Selection
     }
     // This is the exact path context installed by the real FILE selection.
     // Do not fall back to the main branch or a global file_selections default.
-    let context = state.file_contexts.get(&super::super::directory::context_key_from_key(
+    let context = state.file_contexts.get(&super::super::namespace::file_context::context_key_from_key(
         &repository.repository_id, target.path.key(),
     )).ok_or_else(missing)?;
     let branch = state.branches.get(&context.branch_id).ok_or_else(missing)?;

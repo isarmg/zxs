@@ -210,6 +210,16 @@ pub(crate) fn retained_branch_head(state: &State, branch: &str) -> Result<String
     Ok(node.to_owned())
 }
 
+/// The ordinary namespace's structural main is not an independent FILE branch.
+pub(crate) fn branch_owner(branch: &Branch) -> Result<&str> {
+    branch.file_id.as_deref().filter(|_| branch.branch_kind == BranchKind::File).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::FileBranchRequired,
+            "an independent file branch is required",
+        )
+    })
+}
+
 fn branch_head_record<'a>(state: &'a State, branch: &str) -> Result<(&'a str, &'a str)> {
     let branch = state.branches.get(branch).ok_or_else(|| {
         Error::new(
@@ -217,12 +227,7 @@ fn branch_head_record<'a>(state: &'a State, branch: &str) -> Result<(&'a str, &'
             "file branch missing",
         )
     })?;
-    let file = branch.file_id.as_deref().ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::FileBranchRequired,
-            "an independent file branch is required",
-        )
-    })?;
+    let file = branch_owner(branch)?;
     let node = branch
         .file_node_id
         .as_deref()

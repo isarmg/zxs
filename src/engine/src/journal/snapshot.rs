@@ -11,12 +11,11 @@ macro_rules! state_map_fields {
             histories,branches,commits,
             versions,placements,merge_links,
             history_boundaries,content_states,operations,plans,placement_rules,
-            protection_policies,operation_principals,file_selections,directory_branches,
-            directory_git_repositories,
-            directory_trees,file_write_origins,file_contexts,file_path_nodes,file_metadata_nodes,file_deletions,
+            protection_policies,operation_principals,file_selections,
+            file_contexts,file_path_nodes,file_metadata_nodes,file_deletions,
             file_branch_merges,file_branch_aliases,file_node_parents,file_path_notes,
-            directory_tree_selections,file_locations,file_backup_paths,file_backup_policies,
-            directory_selections,file_notes,version_notes,file_names,
+            file_locations,file_backup_paths,file_backup_policies,
+            file_notes,version_notes,file_names,
         }
     };
 }
@@ -137,6 +136,7 @@ fn prepare_inner(
     maximum: usize,
     previous: Option<(&State, &SnapshotReuse)>,
 ) -> Result<PreparedSnapshot> {
+    crate::ordinary_authority::tables(state)?;
     let mut builder = Builder {
         encoder: Encoder::new(maximum),
         fields: BTreeMap::new(),
@@ -222,7 +222,7 @@ fn prepare_inner(
     }
     macro_rules! fields {
         ($($field:ident,)*) => {{
-            let State { sequence:_, business_generation:_, topology_generation:_, control_auth:_, events:_, directory_selection_generations:_, file_selection_generations:_, $($field:_,)* } = state;
+            let State { sequence:_, business_generation:_, topology_generation:_, control_auth:_, events:_, file_write_origins:_, directory_branches:_, directory_git_repositories:_, directory_trees:_, directory_tree_selections:_, directory_selections:_, directory_selection_generations:_, file_selection_generations:_, $($field:_,)* } = state;
             $(field!($field);)*
         }};
     }
@@ -234,7 +234,7 @@ fn prepare_inner(
             &|key: &String| Cow::Borrowed(key.as_str()))?;
         builder.fields.insert(stringify!($field).into(), FieldRoot::Text(root));
     )* }; }
-    counters!(directory_selection_generations, file_selection_generations);
+    counters!(file_selection_generations);
     fn ordinal(index: &usize) -> Cow<'_, str> {
         Cow::Owned(format!("{index:020}"))
     }
@@ -338,9 +338,9 @@ fn encode_value<T: Serialize>(field: &str, value: &T) -> Result<json_codec::Valu
     SNAPSHOT_FIELD_SERIALIZATIONS.with(|counts| {
         *counts.borrow_mut().entry(field.into()).or_default() += 1;
     });
-    #[cfg(not(test))]
-    let _ = field;
-    Ok(json_codec::to_value(value)?)
+    let value = json_codec::to_value(value)?;
+    crate::ordinary_authority::encoded_row(field, &value)?;
+    Ok(value)
 }
 /// Rare source-loss fallback: reconstruct one exact bound field, never substitute
 /// another graph or catch an installation/collision failure as a source failure.
@@ -352,7 +352,6 @@ pub(super) fn reconstruct_field(
     let mut encoder = Encoder::new(maximum);
     macro_rules! dispatch {($($name:ident,)*)=>{match field {
         $(stringify!($name)=>state.$name.iter().map(|(k,v)|Ok((k.to_string(),encode_value(field,v)?))).collect::<Result<json_codec::Map<_,_>>>()?,)*
-        "directory_selection_generations"=>state.directory_selection_generations.iter().map(|(k,v)|Ok((k.clone(),encode_value(field,&v.to_string())?))).collect::<Result<_>>()?,
         "file_selection_generations"=>state.file_selection_generations.iter().map(|(k,v)|Ok((k.clone(),encode_value(field,&v.to_string())?))).collect::<Result<_>>()?,
         "events"=>state.events.iter().enumerate().map(|(i,event)|Ok((format!("{i:020}"),encode_value(field,event)?))).collect::<Result<_>>()?,
         _=>unreachable!("invariant: snapshot fields use the exhaustive State schema"),
@@ -368,7 +367,7 @@ pub(super) fn reconstruct_field(
 }
 pub(crate) fn validate_schema(snapshot: &Snapshot) -> Result<()> {
     macro_rules! check {($($field:ident,)*)=>{{
-        let fields=[$(stringify!($field),)*"directory_selection_generations","file_selection_generations"];
+        let fields=[$(stringify!($field),)*"file_selection_generations"];
         if snapshot.maps.len()!=fields.len() || fields.iter().any(|field|!snapshot.maps.contains_key(*field)) {
             return Err(Error::new(ErrorCode::ObjectCorrupt,"snapshot map schema differs"));
         }

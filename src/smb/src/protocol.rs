@@ -27,20 +27,28 @@ pub const VERIFIED_READ_CAPABILITY: &str = "verified-range-reads";
 pub const VERSION_MTIME_CAPABILITY: &str = "published-version-mtime";
 /// Peers must distinguish mutable descriptors from ordered native working I/O.
 pub const NATIVE_WORKING_CAPABILITY: &str = "native-working-io";
-/// Added worktree entries carry real container identities without a Version.
-pub const WORKTREE_WORKING_CAPABILITY: &str = "worktree-working-entries";
-/// A committed Added occurrence retains its real identity in its original instance.
-pub const WORKTREE_RETAINED_CAPABILITY: &str = "worktree-retained-entries";
-pub const REQUIRED_CAPABILITIES: [&str; 8] = [
+pub const REQUIRED_CAPABILITIES: [&str; 6] = [
     WRITE_RESERVATION_CAPABILITY,
     AUTHENTICATED_ACCOUNT_CAPABILITY,
     GENERATION_DIRTY_CAPABILITY,
     VERIFIED_READ_CAPABILITY,
     VERSION_MTIME_CAPABILITY,
     NATIVE_WORKING_CAPABILITY,
-    WORKTREE_WORKING_CAPABILITY,
-    WORKTREE_RETAINED_CAPABILITY,
 ];
+
+/// The bridge and VFS ship together. A peer describing any other directory
+/// schema must not receive a handle. Order is immaterial, duplicates are not.
+pub fn current_capabilities<'a>(values: impl Iterator<Item = Option<&'a str>>) -> bool {
+    let mut seen = [false; REQUIRED_CAPABILITIES.len()];
+    for value in values {
+        let Some(index) = REQUIRED_CAPABILITIES.iter().position(|name| Some(*name) == value)
+        else { return false };
+        if std::mem::replace(&mut seen[index], true) {
+            return false;
+        }
+    }
+    seen.into_iter().all(|present| present)
+}
 
 /// A single exact Samba account name, never an alias-to-principal mapping.
 pub fn validate_username(username: &str) -> io::Result<()> {
@@ -454,28 +462,6 @@ pub struct StatResult {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DirectoryEntry {
-    WorktreeRetained {
-        target: storage_contract::snapshot_worktree::additions::WorktreeFileTarget,
-        path: PortablePath,
-        version: storage_contract::VersionId,
-        #[serialization(with = "storage_contract::u64_string")]
-        size: u64,
-        mtime: FileMtime,
-    },
-    WorktreeWorking {
-        target: storage_contract::snapshot_worktree::additions::WorktreeFileTarget,
-        path: PortablePath,
-        #[serialization(with = "storage_contract::u64_string")]
-        logical_size: u64,
-    },
-    Worktree {
-        target: storage_contract::snapshot_worktree::WorktreeHandle,
-        path: PortablePath,
-        relative_path: Option<PortablePath>,
-        kind: storage_contract::NamespaceEntryKind,
-        #[serialization(with = "storage_contract::u64_string")]
-        size: u64,
-    },
     Published { entry: storage_contract::Entry, mtime: FileMtime },
     Unborn {
         target: storage_contract::file_draft::DraftLocation,
@@ -487,58 +473,33 @@ impl DirectoryEntry {
     pub fn published(&self) -> Option<&storage_contract::Entry> {
         match self {
             Self::Published { entry, .. } => Some(entry),
-            Self::Unborn { .. } | Self::Worktree { .. } | Self::WorktreeWorking { .. }
-            | Self::WorktreeRetained { .. } => None,
+            Self::Unborn { .. } => None,
         }
     }
     pub fn mtime(&self) -> FileMtime {
         match self {
-            Self::Published { mtime, .. } | Self::WorktreeRetained { mtime, .. } => *mtime,
-            Self::Unborn { .. } | Self::WorktreeWorking { .. } => FileMtime::Unpublished {},
-            Self::Worktree { kind, .. } => match kind {
-                storage_contract::NamespaceEntryKind::Directory => FileMtime::NotFile {},
-                storage_contract::NamespaceEntryKind::File => FileMtime::Unpublished {},
-            },
+            Self::Published { mtime, .. } => *mtime,
+            Self::Unborn { .. } => FileMtime::Unpublished {},
         }
     }
     pub fn path(&self) -> &PortablePath {
         match self {
             Self::Published { entry, .. } => &entry.path,
             Self::Unborn { target, .. } => &target.path,
-            Self::Worktree { path, .. } | Self::WorktreeWorking { path, .. }
-            | Self::WorktreeRetained { path, .. } => path,
         }
     }
     pub fn entry_id(&self) -> String {
         match self {
             Self::Published { entry, .. } => entry.entry_id.clone(),
             Self::Unborn { target, .. } => target.entry.to_string(),
-            Self::WorktreeWorking { target, .. } | Self::WorktreeRetained { target, .. } => {
-                target.entry.to_string()
-            }
-            Self::Worktree { target, relative_path, .. } => {
-                worktree_entry_id(*target, relative_path.as_ref())
-            }
         }
     }
     pub fn kind(&self) -> storage_contract::NamespaceEntryKind {
         match self {
             Self::Published { entry, .. } => entry.kind,
-            Self::Unborn { .. } | Self::WorktreeWorking { .. } | Self::WorktreeRetained { .. } => {
-                storage_contract::NamespaceEntryKind::File
-            }
-            Self::Worktree { kind, .. } => *kind,
+            Self::Unborn { .. } => storage_contract::NamespaceEntryKind::File,
         }
     }
-}
-
-/// An SMB inode-display key, not a container EntryId or a lookup capability.
-/// Display-prefix rebasing never changes this instance/occurrence identity.
-pub fn worktree_entry_id(
-    target: storage_contract::snapshot_worktree::WorktreeHandle,
-    relative: Option<&PortablePath>,
-) -> String {
-    format!("{}/{}", target.worktree_id, relative.map_or("", |path| path.key()))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

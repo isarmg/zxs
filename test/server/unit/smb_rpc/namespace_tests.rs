@@ -708,26 +708,12 @@ impl Backend for NamespaceFailure {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.commit_plan(identity, request)
     }
-    fn prepare_historical_save(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.inner.prepare_historical_save(identity, request)
-    }
     fn prepare_purge(
         &self,
         identity: &crate::auth::Identity,
         request: Result<crate::PreparePurge, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         self.inner.prepare_purge(identity, request)
-    }
-    fn prepare_split(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareSplit, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.inner.prepare_split(identity, request)
     }
     fn namespace_batch(
         &self,
@@ -1292,7 +1278,7 @@ fn typed_removal_succeeds_and_successful_namespace_records_are_cleaned() {
 }
 
 #[test]
-fn named_initialized_unlink_retains_history_and_can_be_restored() {
+fn registered_ordinary_unlink_retains_file_history_and_can_be_restored() {
     for directory in ["", "nested"] {
         let (_temp, shared, backend, branch) = fixture();
         let path = if directory.is_empty() {
@@ -1301,15 +1287,9 @@ fn named_initialized_unlink_retains_history_and_can_be_restored() {
             "nested/report.txt"
         };
         if !directory.is_empty() {
-            let mut client = session(shared.clone(), &branch);
-            let (opened, fd) = client
-                .open(path.into(), true, true, false, false, false)
-                .unwrap();
-            File::from(fd).write_all_at(b"old", 0).unwrap();
-            client.dirty(opened.handle).unwrap();
-            client.close(opened.handle, false).unwrap();
+            backend.inner.test_with_engine_locked(|engine|
+                seed_ordinary_file(engine, &branch, path, b"old"));
         }
-        checkpoint_directory_fixture(&backend, &repository(&shared), directory);
         let source = session(shared.clone(), &branch)
             .find(&name_policy::LookupPath::parse(path).unwrap())
             .unwrap()
@@ -1870,26 +1850,12 @@ impl Backend for PreparationFailure {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.commit_plan(identity, request)
     }
-    fn prepare_historical_save(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.inner.prepare_historical_save(identity, request)
-    }
     fn prepare_purge(
         &self,
         identity: &crate::auth::Identity,
         request: Result<crate::PreparePurge, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         self.inner.prepare_purge(identity, request)
-    }
-    fn prepare_split(
-        &self,
-        identity: &crate::auth::Identity,
-        request: Result<crate::PrepareSplit, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.inner.prepare_split(identity, request)
     }
     fn namespace_batch(
         &self,

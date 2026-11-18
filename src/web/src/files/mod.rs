@@ -1,6 +1,5 @@
 mod actions;
 mod backup;
-mod batch;
 mod branch;
 mod content_matches;
 mod commit_mode;
@@ -8,7 +7,6 @@ pub use commit_mode::DecodeError as FileCommitModeError;
 mod deletion;
 mod detached_history;
 mod detail;
-mod directory_snapshot;
 mod history;
 mod history_index;
 mod inline;
@@ -26,7 +24,6 @@ mod relocation;
 mod review;
 mod rows;
 mod shared_history;
-mod staging;
 mod tags;
 mod version_tree;
 mod view;
@@ -44,10 +41,6 @@ pub(crate) use mkdir::{restore as restore_folder_creation, view as folder_creati
 pub(crate) use model::{FileOperation, Model, SaveStatus, publication_notice};
 pub(crate) use node_retirement::recovery_view as node_retirement_recovery;
 pub use page::DecodeError as DirectoryPageError;
-pub use directory_snapshot::DecodeError as DirectorySnapshotError;
-pub(crate) use directory_snapshot::{
-    restore as restore_directory_snapshot, recovery_view as directory_snapshot_recovery,
-};
 pub(crate) use relocation::provide as provide_relocation;
 pub(crate) use view::view;
 

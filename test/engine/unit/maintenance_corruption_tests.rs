@@ -1,4 +1,4 @@
-//! Disk admission rejects malformed histories before split can use internal invariants.
+//! Disk admission rejects malformed FILE histories before local plans can rely on them.
 use super::*;
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
@@ -16,13 +16,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
     )
     .unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("split").unwrap(),
-            "P01",
-            3,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "admin", OperationId::generate().unwrap())
         .unwrap();
     let mut commits = Vec::new();
     for bytes in [b"first".as_slice(), b"second".as_slice()] {
@@ -58,7 +52,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
 }
 
 #[test]
-fn snapshot_admission_rejects_broken_split_identities() {
+fn snapshot_admission_rejects_broken_registered_file_commit_identity() {
     for corruption in [
         "missing_prefix",
         "foreign_prefix",
@@ -71,9 +65,8 @@ fn snapshot_admission_rejects_broken_split_identities() {
         "branch_identity",
     ] {
         let (_temporary, mut engine, repo, cut, last) = fixture();
-        let plan = engine
-            .create_split_plan(&repo.history_tree_id, &cut, "admin")
-            .unwrap();
+        let old_version = engine.state.commits[&cut].entries.iter().find(|e| e.kind == NamespaceEntryKind::File).unwrap().version_id.clone();
+        let plan = engine.create_purge_plan(&repo.history_tree_id, vec![old_version], "admin").unwrap();
         let prefix = engine.state.commits[&cut].parent_commit_ids[0].clone();
         match corruption {
             "missing_prefix" => {
@@ -173,7 +166,7 @@ fn snapshot_admission_rejects_broken_split_identities() {
 }
 
 #[test]
-fn snapshot_admission_rejects_broken_crossing_merge_endpoints() {
+fn snapshot_admission_rejects_broken_ordinary_file_merge_endpoints() {
     for corruption in [
         "prefix_branch",
         "prefix_commit",
@@ -183,23 +176,18 @@ fn snapshot_admission_rejects_broken_crossing_merge_endpoints() {
         "link_identity",
     ] {
         let (_temporary, mut engine, repo, cut, _) = fixture();
-        let prefix = engine.state.commits[&cut].parent_commit_ids[0].clone();
-        let outside = engine
-            .create_branch(
-                &prefix,
-                &storage_contract::BranchName::parse("prefix").unwrap(),
-                "admin",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
-        let _plan = engine
-            .create_split_plan(&repo.history_tree_id, &cut, "admin")
-            .unwrap();
+        let file = engine.state.commits[&cut].entries.iter().find(|e| e.kind == NamespaceEntryKind::File).unwrap().clone();
+        let primary = engine.file_context(&repo.repository_id, "file.txt").unwrap().branch_id;
+        let source = engine.state.branches[&primary].head_commit_id.clone();
+        let side = engine.create_file_branch(&file.file_id, &file.version_id,
+            &storage_contract::BranchName::parse("side").unwrap(), "admin", OperationId::generate().unwrap()).unwrap().branch_id.unwrap();
+        let outside = engine.state.branches[&side].clone();
+        let prefix = outside.head_commit_id.clone();
         let mut link = MergeLink {
             merge_link_id: new_id("link").unwrap(),
             history_tree_id: repo.history_tree_id.clone(),
-            source_branch_id: repo.main_branch_id.clone(),
-            source_commit_id: cut,
+            source_branch_id: primary,
+            source_commit_id: source,
             target_branch_id: outside.branch_id.clone(),
             target_commit_id: prefix.clone(),
             author: "admin".into(),
@@ -249,44 +237,6 @@ fn snapshot_admission_rejects_broken_crossing_merge_endpoints() {
             before,
             "{corruption}"
         );
-    }
-}
-
-#[test]
-fn split_generation_overflow_does_not_wrap_or_publish_migration() {
-    for counter in ["branch", "history"] {
-        let (_temporary, mut engine, repo, cut, _) = fixture();
-        let plan = engine
-            .create_split_plan(&repo.history_tree_id, &cut, "admin")
-            .unwrap();
-        if counter == "branch" {
-            std::sync::Arc::make_mut(&mut engine.state)
-                .branches
-                .get_mut(&repo.main_branch_id)
-                .unwrap()
-                .generation = u64::MAX;
-        } else {
-            std::sync::Arc::make_mut(&mut engine.state)
-                .histories
-                .get_mut(&repo.history_tree_id)
-                .unwrap()
-                .generation = u64::MAX;
-        }
-        let before = canonical_json(engine.state()).unwrap();
-        let error = engine
-            .commit_plan(
-                &plan.plan_id,
-                "admin",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap_err();
-        assert_eq!(
-            error.code(),
-            storage_contract::ErrorCode::ResourceLimit,
-            "{counter}"
-        );
-        assert_eq!(canonical_json(engine.state()).unwrap(), before, "{counter}");
-        assert_eq!(engine.plan(&plan.plan_id).unwrap().state.as_str(), "ready");
     }
 }
 
@@ -419,10 +369,9 @@ fn plan_lookup_keeps_persisted_identity_and_digest_validation() {
     )
     .unwrap();
     let expected = engine
-        .save_plan(
-            "split",
+        .save_purge_plan(
             "admin",
-            json!({"history_tree_id":new_id("history").unwrap()}),
+            json!({"history_tree_id":new_id("history").unwrap(),"version_ids":[new_id("ver").unwrap()]}),
         )
         .unwrap();
     std::sync::Arc::make_mut(&mut engine.state)

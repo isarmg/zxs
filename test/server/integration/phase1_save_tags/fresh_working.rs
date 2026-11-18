@@ -61,7 +61,7 @@ async fn draft_bytes(
 }
 
 #[tokio::test]
-async fn fresh_authenticated_draft_and_worktree_survive_cold_exact_retries() {
+async fn fresh_authenticated_file_draft_survives_cold_exact_retries() {
     let fixture = Fixture::new(&["primary"]).await;
     let original_body = b"original HTTP body";
     fixture.save("D01", "original.txt", original_body).await;
@@ -197,48 +197,64 @@ async fn fresh_authenticated_draft_and_worktree_survive_cold_exact_retries() {
     assert_eq!(fixture.history(&file).await, committed_history);
     assert_eq!(fixture.body(entry["version_id"].as_str().unwrap()).await, original_body);
 
-    let context_route = format!("/api/repositories/{repository}/snapshot-root-context");
-    let (status, _) = rejected(&fixture, None, "GET", &context_route, json!({})).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let context = fixture.json("GET", &context_route, None).await;
-    let initialize = json!({
-        "host": context["host"], "source": context["source"],
-        "operation_id": new_id("op").unwrap(),
-    });
-    let mut extra = initialize.clone();
-    extra["path"] = json!("an-unregistered-path");
-    let (status, _) = rejected(
-        &fixture, Some(&fixture.token), "POST", "/api/directory-snapshots", extra,
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    let source = fixture.json("POST", "/api/directory-snapshots", Some(initialize.clone())).await;
-    let create = json!({
-        "source": source,
-        "parent_directory_id": context["host"]["directory_id"],
-        "naming": "automatic",
-        "expected_root_generation": context["host"]["expected_root_generation"],
-        "operation_id": new_id("op").unwrap(),
-    });
-    let worktree = fixture.json("POST", "/api/directory-worktrees", Some(create.clone())).await;
-    let worktree_id = worktree["worktree_id"].as_str().unwrap();
-    let publication = worktree["publication"].as_str().unwrap();
-    let status_route = format!(
-        "/api/directory-worktrees/{worktree_id}?publication={publication}",
-    );
-    let before = fixture.json("GET", &status_route, None).await;
-    assert_eq!(before["original"], source);
-    assert_eq!(before["name"], "worktree-main-001");
-    assert_eq!(before["revision"]["generation"], "0");
-    let wrong = format!(
-        "/api/directory-worktrees/{worktree_id}?publication={}", new_id("op").unwrap(),
-    );
-    let (status, _) = rejected(&fixture, Some(&fixture.token), "GET", &wrong, json!({})).await;
-    assert!(!status.is_success(), "a local worktree ID must not replace its publication");
-    let fixture = fixture.reopen().await;
-    assert_eq!(fixture.json("GET", &status_route, None).await, before);
-    assert_eq!(fixture.json("POST", "/api/directory-snapshots", Some(initialize)).await, source);
-    assert_eq!(fixture.json("POST", "/api/directory-worktrees", Some(create)).await, worktree);
     let final_entry = fixture.entry("D01", "original.txt").await;
     assert_eq!(final_entry["file_id"], selected["file_id"]);
     assert_eq!(final_entry["version_id"], selected["version_id"]);
+}
+
+/// The same ordinary FILE save that makes a real owner, commit and Version
+/// must not grant access to a directory snapshot by any old read or write URL.
+#[tokio::test]
+async fn directory_snapshot_and_worktree_urls_do_not_publish_or_reinterpret_an_ordinary_zip() {
+    let fixture = Fixture::new(&["primary"]).await;
+    let bytes = b"PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+    let saved = fixture.save("D01", "records/project.zxs", bytes).await;
+    let listing = "/api/file-manager/disks/D01/entries?path=records";
+    let before = fixture.json("GET", listing, None).await;
+    let entries = before["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!(entry["name"], "project.zxs");
+    let file = entry["file_id"].as_str().unwrap();
+    let version = entry["version_id"].as_str().unwrap();
+    let history = fixture.history(file).await;
+    let repo = before["context"]["repository_id"].as_str().unwrap();
+    let branch = before["context"]["branch_id"].as_str().unwrap();
+    let operation = saved["operation_id"].as_str().unwrap();
+    let worktree = new_id("worktree").unwrap();
+    let base = format!("/api/repositories/{repo}");
+    let target = format!("/api/directory-worktrees/{worktree}");
+    let routes = [
+        ("POST", "/api/file-manager/disks/D01/snapshot-root".to_owned()),
+        ("GET", format!("{base}/snapshot-root-context")),
+        ("GET", format!("{base}/snapshot-head")),
+        ("GET", format!("{base}/snapshot-history")),
+        ("POST", "/api/directory-snapshots".to_owned()),
+        ("POST", "/api/directory-snapshots/commits".to_owned()),
+        ("GET", format!("/api/directory-snapshots/commits/{operation}")),
+        ("GET", format!("{base}/directory-worktrees/creations/{operation}")),
+        ("GET", format!("{base}/directory-worktrees/commits/{operation}")),
+        ("GET", format!("{base}/directory-worktrees")),
+        ("POST", "/api/directory-worktrees".to_owned()),
+        ("GET", format!("{target}?publication={operation}")),
+        ("GET", format!("{target}/content?publication={operation}&path=project.zxs")),
+        ("PUT", format!("{target}/content")),
+        ("POST", format!("{target}/commits")),
+        ("GET", format!("/api/file-manager/directory-snapshot-source?branch_id={branch}")),
+    ];
+    for (method, route) in &routes {
+        for token in [None, Some(fixture.token.as_str())] {
+            let (status, reply) = rejected(&fixture, token, method, route, json!({})).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {route}: {reply}");
+            assert_eq!(reply["error"]["code"], "NOT_FOUND");
+            // A protected handler denying a lookup is not a removed route.
+            assert_eq!(reply["error"]["message"], "route not found");
+        }
+    }
+    assert_eq!(fixture.json("GET", listing, None).await, before);
+    assert_eq!(fixture.history(file).await, history);
+    assert_eq!(fixture.body(version).await, bytes);
+    let fixture = fixture.reopen().await;
+    assert_eq!(fixture.entry("D01", "records/project.zxs").await, *entry);
+    assert_eq!(fixture.body(version).await, bytes);
 }

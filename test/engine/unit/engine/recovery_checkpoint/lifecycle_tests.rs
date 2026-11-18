@@ -13,9 +13,8 @@ struct LifecycleFixture {
     root: std::path::PathBuf,
     config: Config,
     repository: Repository,
-    historical_plan: Plan,
-    historical_operation: OperationId,
-    historical_result: OperationResult,
+    original_request: CommitRequest,
+    original_result: OperationResult,
     pending: Workspace,
     pending_item: String,
     upload_source: std::path::PathBuf,
@@ -79,44 +78,22 @@ impl LifecycleFixture {
         config.max_workspace_bytes = 8;
         config.max_entries = 2;
         let mut engine = Engine::initialize(&root, config.clone()).unwrap();
-        let repository = engine
-            .create_repository(
-                &RepositoryName::parse("lifecycle").unwrap(),
-                "P01",
-                3,
-                "admin",
-                OperationId::generate().unwrap(),
-            )
-            .unwrap();
+        let repository = engine.create_disk_root(
+            "P01", "admin", OperationId::generate().unwrap(),
+        ).unwrap();
         drop(engine);
         let (mut engine, _) = reopen(&root);
         let old_checkpoint = std::fs::read(path(&config.disks[0])).unwrap();
-        let head = engine.state().branches[&repository.main_branch_id]
-            .head_commit_id
-            .clone();
-        let historical = engine
-            .create_historical_workspace(&repository.main_branch_id, &head, "admin")
-            .unwrap();
+        let original = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
         let upload_source = temp.path().join("source");
-        let (_, historical_full) = two_generations(&mut engine, &historical, &upload_source);
-        let historical_plan = engine
-            .create_historical_save_plan(
-                &repository.history_tree_id,
-                crate::HistoricalSaveOptions {
-                    source_commit_id: head,
-                    name: "retained history".into(),
-                    workspace_id: Some(historical.workspace_id),
-                    primary_slot_id: None,
-                    target_copies: None,
-                },
-                "admin",
-            )
-            .unwrap();
-        let historical_operation = OperationId::generate().unwrap();
-        let historical_result = engine
-            .commit_historical_save_plan(&historical_plan.plan_id, "admin", historical_operation)
-            .unwrap();
-        assert_eq!(historical_result.commit_state, CommitState::Published);
+        let (_, original_full) = two_generations(&mut engine, &original, &upload_source);
+        let original_request = CommitRequest {
+            workspace_id: original.workspace_id, operation_id: OperationId::generate().unwrap(),
+            principal: "admin".into(), expected_head: original.base_head,
+            fencing_token: original.fencing_token, message: "retained FILE".into(), request_digest: None,
+        };
+        let original_result = engine.commit_workspace(original_request.clone()).unwrap();
+        assert_eq!(original_result.commit_state, CommitState::Published);
         let pending = engine
             .create_workspace(&repository.main_branch_id, "admin")
             .unwrap();
@@ -143,13 +120,12 @@ impl LifecycleFixture {
             root,
             config,
             repository,
-            historical_plan,
-            historical_operation,
-            historical_result,
+            original_request,
+            original_result,
             pending,
             pending_item,
             upload_source,
-            full_generations: historical_full.into_iter().chain(pending_full).collect(),
+            full_generations: original_full.into_iter().chain(pending_full).collect(),
             old_checkpoint,
             capacity,
             state,
@@ -166,18 +142,9 @@ impl LifecycleFixture {
         }
     }
 
-    fn assert_original_historical_result(&self, engine: &mut Engine) {
+    fn assert_original_file_result(&self, engine: &mut Engine) {
         let sequence = engine.state().sequence;
-        assert_eq!(
-            engine
-                .commit_historical_save_plan(
-                    &self.historical_plan.plan_id,
-                    "admin",
-                    self.historical_operation,
-                )
-                .unwrap(),
-            self.historical_result
-        );
+        assert_eq!(engine.commit_workspace(self.original_request.clone()).unwrap(), self.original_result);
         assert_eq!(engine.state().sequence, sequence);
     }
 
@@ -255,7 +222,7 @@ fn exercise_lifecycle(recovery: RecoveryPath) {
     assert_eq!(canonical_json(engine.state()).unwrap(), fixture.state);
     assert_eq!(engine.workspace_capacity("admin"), fixture.capacity);
     fixture.assert_full_generations();
-    fixture.assert_original_historical_result(&mut engine);
+    fixture.assert_original_file_result(&mut engine);
     assert_budget_rejections(&fixture, &mut engine);
     let request = CommitRequest {
         workspace_id: fixture.pending.workspace_id.clone(),
@@ -281,7 +248,7 @@ fn exercise_lifecycle(recovery: RecoveryPath) {
     );
     assert_eq!(engine.commit_workspace(request).unwrap(), result);
     assert_eq!(engine.state().sequence, sequence + 1);
-    fixture.assert_original_historical_result(&mut engine);
+    fixture.assert_original_file_result(&mut engine);
     fixture.assert_full_generations();
 }
 
@@ -325,21 +292,21 @@ fn assert_budget_rejections(fixture: &LifecycleFixture, engine: &mut Engine) {
 }
 
 #[test]
-fn checkpoint_hit_preserves_cold_history_full_generations_and_exact_staging_budget() {
+fn checkpoint_hit_preserves_cold_file_full_generations_and_exact_staging_budget() {
     exercise_lifecycle(RecoveryPath::EligibleCheckpoint);
 }
 
 #[test]
-fn corrupt_checkpoint_fallback_preserves_cold_history_full_generations_and_exact_staging_budget() {
+fn corrupt_checkpoint_fallback_preserves_cold_file_full_generations_and_exact_staging_budget() {
     exercise_lifecycle(RecoveryPath::OneCorruptCheckpoint);
 }
 
 #[test]
-fn member_checkpoint_mismatch_preserves_cold_history_full_generations_and_exact_staging_budget() {
+fn member_checkpoint_mismatch_preserves_cold_file_full_generations_and_exact_staging_budget() {
     exercise_lifecycle(RecoveryPath::MemberCheckpointMismatch);
 }
 
 #[test]
-fn torn_tail_recovery_preserves_cold_history_full_generations_and_exact_staging_budget() {
+fn torn_tail_recovery_preserves_cold_file_full_generations_and_exact_staging_budget() {
     exercise_lifecycle(RecoveryPath::TornTail);
 }

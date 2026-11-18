@@ -5,10 +5,11 @@ use name_policy::Name;
 use storage_engine::{CommitRequest, Engine};
 
 const PRINCIPAL: &str = "smoke-admin";
-const FILE: &str = "browser-smoke.txt";
+const FILE_PATH: &str = "browser-fixtures/browser-smoke.txt";
+const NAMING_FILE_PATH: &str = "browser-naming/browser-smoke.txt";
 const FILE_BRANCH: &str = "browser-smoke-alternate";
 const PAYLOADS: [&str; 2] = ["first real version\n", "second real version: 测试\n"];
-pub(super) const NAMING_REPOSITORY: &str = "browser-naming";
+pub(super) const NAMING_FOLDER: &str = "browser-naming";
 
 /// Build a declared three-tier test pool and publish a real management authority.
 /// First activation now creates independent roots, so it must not be repurposed
@@ -95,21 +96,17 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
     if !engine.state().repositories.is_empty() {
         return Err("browser fixture requires a fresh disposable pool with no repositories".into());
     }
-    let repository = engine.create_repository(
-        &storage_engine::RepositoryName::parse("browser-fixtures").unwrap(),
-        "P01",
-        3,
-        PRINCIPAL,
-        storage_engine::OperationId::generate().unwrap(),
-    )?;
-    // Explicit directory commits must exist before and after the content writes,
-    // so the browser verifies user-history edges, never internal save checkpoints.
-    // This is an explicit mutation of this private, test-owned pool only.
-    initialize_directory_fixture(&mut engine, &repository, "")?;
-    commit_directory_fixture(&mut engine, &repository.repository_id, "")?;
+    let repository = engine.create_disk_root("P01", PRINCIPAL, storage_engine::OperationId::generate()?)?;
+    // The backup browser must really see three independently stored copies.
+    // Configure that ordinary path before its first write, not after the fact.
+    engine.update_protection_policy(storage_engine::ProtectionPolicyUpdate {
+        policy_id: &storage_engine::new_id("policy")?, repository_id: &repository.repository_id,
+        path_prefix: "browser-fixtures", target_copies: 3, expected_generation: 0,
+        principal: PRINCIPAL, operation_id: storage_engine::OperationId::generate()?,
+    })?;
     for payload in PAYLOADS {
         let workspace = engine.create_workspace(&repository.main_branch_id, PRINCIPAL)?;
-        engine.stage_bytes(&workspace.workspace_id, FILE, payload.as_bytes())?;
+        engine.stage_bytes(&workspace.workspace_id, FILE_PATH, payload.as_bytes())?;
         engine.commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
             operation_id: storage_engine::OperationId::generate().unwrap(),
@@ -119,14 +116,11 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
             message: "Browser metadata fixture".into(),
             request_digest: None,
         })?;
-        commit_directory_fixture(&mut engine, &repository.repository_id, "")?;
     }
     let entries = engine.list_tree(&repository.main_branch_id)?;
-    let [entry] = entries.as_slice() else {
-        return Err("fixture must contain exactly one file before branching".into());
-    };
-    // A directory commit alone does not create independent file branches. Bind
-    // this pending branch to a real node without adding a version or graph node.
+    let entry = entries.iter().find(|entry| entry.path() == FILE_PATH)
+        .ok_or("ordinary fixture file missing before branching")?;
+    // An explicit FILE branch binds an actual version without copying content.
     engine.create_file_branch_from_node(
         &entry.file_id,
         &entry.version_id,
@@ -135,15 +129,13 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
         PRINCIPAL,
         storage_engine::OperationId::generate().unwrap(),
     )?;
-    seed_naming_scope(&mut engine)?;
+    seed_naming_scope(&mut engine, &repository)?;
     // Reopen from disk before serving: an in-memory-only fixture is insufficient.
     drop(engine);
     let engine = Engine::open(&pool)?;
     let entries = engine.list_tree(&repository.main_branch_id)?;
-    let [entry] = entries.as_slice() else {
-        return Err("fixture must persist exactly one file".into());
-    };
-    if entry.path.as_str() != FILE || engine.file_history(&entry.file_id)?.len() != 2 {
+    let entry = entries.iter().find(|entry| entry.path() == FILE_PATH).ok_or("ordinary file missing after reopen")?;
+    if engine.file_history(&entry.file_id)?.len() != 2 {
         return Err("fixture file path or two-version history did not survive reopen".into());
     }
     let mut content = engine.open_content(&entry.version_id)?;
@@ -155,19 +147,10 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
     Ok(())
 }
 
-// Batch naming still consumes an established directory source. Seed it in this
-// private pool; the Web no longer initializes or commits directory repositories.
-// Keep this identity separate from the file-history fixture.
-fn seed_naming_scope(engine: &mut Engine) -> Result<()> {
-    let repository = engine.create_repository(
-        &storage_engine::RepositoryName::parse(NAMING_REPOSITORY)?,
-        "P01",
-        3,
-        PRINCIPAL,
-        storage_engine::OperationId::generate().unwrap(),
-    )?;
+// A separate ordinary folder and FILE isolate naming edits from the history case.
+fn seed_naming_scope(engine: &mut Engine, repository: &storage_engine::Repository) -> Result<()> {
     let workspace = engine.create_workspace(&repository.main_branch_id, PRINCIPAL)?;
-    engine.stage_bytes(&workspace.workspace_id, FILE, PAYLOADS[0].as_bytes())?;
+    engine.stage_bytes(&workspace.workspace_id, NAMING_FILE_PATH, PAYLOADS[0].as_bytes())?;
     engine.commit_workspace(CommitRequest {
         workspace_id: workspace.workspace_id,
         operation_id: storage_engine::OperationId::generate().unwrap(),
@@ -176,69 +159,6 @@ fn seed_naming_scope(engine: &mut Engine) -> Result<()> {
         fencing_token: workspace.fencing_token,
         message: "Browser naming registration fixture".into(),
         request_digest: None,
-    })?;
-    initialize_directory_fixture(engine, &repository, "")?;
-    commit_directory_fixture(engine, &repository.repository_id, "")?;
-    Ok(())
-}
-
-pub(super) fn initialize_directory_fixture(
-    engine: &mut Engine,
-    repository: &storage_engine::Repository,
-    path: &str,
-) -> Result<()> {
-    let head = engine.state().branches[&repository.main_branch_id]
-        .head_commit_id
-        .clone();
-    engine.initialize_directory_git(
-        &repository.repository_id,
-        &storage_engine::directory_git::DirectoryGitInitializeBody {
-            path: path.into(),
-            expected_namespace_head: head,
-            operation_id: storage_engine::OperationId::generate()?,
-        },
-        PRINCIPAL,
-    )?;
-    Ok(())
-}
-
-pub(super) fn commit_directory_fixture(
-    engine: &mut Engine,
-    repository: &str,
-    path: &str,
-) -> Result<()> {
-    let status = engine.directory_git_status(repository, path)?;
-    if !status.initialized || status.needs_restage {
-        return Err(
-            "directory fixture must explicitly initialize and stage its own repository".into(),
-        );
-    }
-    engine.stage_directory_git_owned(
-        repository,
-        &storage_engine::directory_git::DirectoryGitStageOwnedBody {
-            directory_id: status.directory_id,
-            directory_branch_id: status.directory_branch_id.unwrap(),
-            expected_tree_id: status.working_tree_id.unwrap(),
-            expected_index_generation: status.index_generation,
-            operation_id: storage_engine::OperationId::generate()?,
-        },
-        PRINCIPAL,
-    )?;
-    let status = engine.directory_git_status(repository, path)?;
-    engine.commit_directory_changes(storage_engine::DirectoryCommitRequest {
-        repository_id: repository,
-        directory_branch_id: status
-            .directory_branch_id
-            .as_deref()
-            .ok_or("initialized fixture lacks branch")?,
-        expected_tree_id: status
-            .working_tree_id
-            .as_deref()
-            .ok_or("initialized fixture lacks working tree")?,
-        expected_index_generation: status.index_generation,
-        message: "Reviewed browser directory fixture",
-        principal: PRINCIPAL,
-        operation_id: storage_engine::OperationId::generate()?,
     })?;
     Ok(())
 }

@@ -1,7 +1,7 @@
 //! Phase-one local SMB bridge acceptance through its public listener and Client.
 //! These are real framed Unix RPC/FD/Engine tests, not Samba network tests.
-#[path = "phase1_smb_rpc/directory_rename.rs"]
-mod directory_rename;
+#[path = "phase1_smb_rpc/opaque_file.rs"]
+mod opaque_file;
 #[path = "phase1_smb_rpc/manual_draft.rs"]
 mod manual_draft;
 #[path = "phase1_smb_rpc/native_working.rs"]

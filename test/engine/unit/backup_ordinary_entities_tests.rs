@@ -93,7 +93,6 @@ fn fixture() -> (tempfile::TempDir, DiskRoot, Image<'static>, PathBuf) {
         metadata_bytes: 0,
         bodies: 0,
         body_bytes: 0,
-        directory_repositories: 0,
     };
     image
         .add_home(FileHome {

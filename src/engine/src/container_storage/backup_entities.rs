@@ -3,7 +3,6 @@
 //! Original packages remain untouched; no links, deduplication or source moves.
 use super::{
     backup_databases::{PreparedDatabases, Scope},
-    layout_goals,
     layout_locator::HistoryRelative,
 };
 use crate::{
@@ -79,7 +78,6 @@ pub(crate) struct Image<'a> {
     manifest: Vec<u8>,
     placement: EntityPlacement,
     pub(crate) file_units: usize,
-    pub(crate) directory_repositories: usize,
     pub(crate) bodies: u64,
     pub(crate) body_bytes: u64,
 }
@@ -139,7 +137,6 @@ impl<'a> Image<'a> {
             manifest: Vec::new(),
             placement: EntityPlacement::empty(),
             file_units: 0,
-            directory_repositories: 0,
             bodies: 0,
             body_bytes: 0,
         };
@@ -149,28 +146,11 @@ impl<'a> Image<'a> {
         for database in databases.into_databases() {
             preparation_checkpoint(stop)?;
             let (scope, bytes) = database.into_parts();
-            let path = match scope {
-                Scope::File { history, file } => {
-                    image.file_units += 1;
-                    paths
-                        .files
-                        .get(&(history, file))
-                        .ok_or_else(|| invalid("complete file database has no single entity"))?
-                        .join(super::file_database::NAME)
-                }
-                Scope::Directory {
-                    history, directory, ..
-                } => {
-                    image.directory_repositories += 1;
-                    paths
-                        .directories
-                        .get(&(history, directory))
-                        .ok_or_else(|| {
-                            invalid("directory repository has no complete forest entity")
-                        })?
-                        .join(super::directory_database::NAME)
-                }
-            };
+            let Scope::File { history, file } = scope;
+            image.file_units += 1;
+            let path = paths.files.get(&(history, file))
+                .ok_or_else(|| invalid("complete FILE database has no single entity"))?
+                .join(super::file_database::NAME);
             image.add_file(path, Data::Bytes(bytes))?;
         }
         for version in state.versions.values() {
@@ -321,44 +301,10 @@ mod budget_tests;
 
 struct Paths {
     files: BTreeMap<(String, String), PathBuf>,
-    directories: BTreeMap<(String, String), PathBuf>,
 }
 impl Paths {
     fn build(state: &State, base: &Path, image: &mut Image<'_>, stop: &AtomicBool) -> Result<Self> {
-        let goals = layout_goals::build(state, None)?;
-        let mut paths = Self {
-            files: BTreeMap::new(),
-            directories: BTreeMap::new(),
-        };
-        for history in goals.histories.values() {
-            preparation_checkpoint(stop)?;
-            let anchor = base.join(&history.history_id);
-            for (id, directory) in &history.directories {
-                let path = anchor.join(directory.to.as_path());
-                let key = (history.history_id.clone(), id.as_str().to_owned());
-                if paths.directories.get(&key).is_some_and(|old| old != &path) {
-                    return Err(invalid(
-                        "one directory repository has conflicting image homes",
-                    ));
-                }
-                paths.directories.insert(key, path.clone());
-                image.add_directory(path)?;
-            }
-            for file in history.files.values() {
-                let path = anchor
-                    .join("directory-repositories")
-                    .join(file.root_directory_id.as_str())
-                    .join(file.root_relative_path.as_path());
-                let key = (history.history_id.clone(), file.file_id.clone());
-                // Multiple primary placements of one managed file cannot be
-                // flattened into an apparently complete independent unit.
-                if paths.files.insert(key, path).is_some() {
-                    return Err(invalid(
-                        "managed file is split across original primary layouts",
-                    ));
-                }
-            }
-        }
+        let mut paths = Self { files: BTreeMap::new() };
         for version in state.versions.values() {
             preparation_checkpoint(stop)?;
             let key = (version.history_tree_id.clone(), version.file_id.clone());
@@ -377,9 +323,8 @@ impl Paths {
             };
             paths.files.insert(key, path);
         }
-        // Pure planner supplies all initialized parent/child repositories and
-        // their empty directories. Uninitialized namespace directories remain
-        // separately keyed by outer repository and preserve current spellings.
+        // Plain folders, including empty ones, remain in the registered main namespace.
+        // They own no separate history, database or writer route.
         for repository in state.repositories.values() {
             let branch = &state.branches[&repository.main_branch_id];
             let commit = &state.commits[&branch.head_commit_id];

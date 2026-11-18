@@ -5,8 +5,8 @@ use storage_contract::file_relocation::{OBJECT_MOVE_KIND, ObjectMoveFact};
 
 #[test]
 fn first_default_file_rename_keeps_bytes_and_original_operation() {
-    for named_repository in [false, true] {
-        let (temp, shared, backend) = if named_repository {
+    for existing_root in [false, true] {
+        let (temp, shared, backend) = if existing_root {
             let (temp, shared, backend, _branch) = fixture();
             (temp, shared, backend)
         } else {
@@ -71,8 +71,8 @@ fn first_default_file_rename_keeps_bytes_and_original_operation() {
                 handle: reader.handle,
             },
         );
-        if named_repository {
-            let (reader, _file) = open(&mut stream, "p/资料/report.txt", false, false);
+        if existing_root {
+            let (reader, _file) = open(&mut stream, "p/report.txt", false, false);
             assert_eq!(read_rpc(&mut stream, reader.handle, 0, 4096), b"old");
             okay(
                 &mut stream,

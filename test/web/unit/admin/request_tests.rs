@@ -1,3 +1,4 @@
+use super::super::purge::fixtures::{self, PLAN};
 use super::*;
 #[test]
 fn ordinary_copy_policy_defaults_to_one_actual_copy() {
@@ -107,10 +108,10 @@ fn each_form_constructs_the_exact_request_and_response_context_together() {
 
 #[test]
 fn both_plan_actions_preserve_body_and_use_the_raw_receipt_contract() {
-    let mut value = json!({"plan_id":"p","kind":"purge","principal":"admin","expected_sequence":"4","digest":"reviewed","input":{"history_tree_id":"h"},"state":"ready"});
-    value["plan_id"] = "p/!".into();
+    let mut value = fixtures::plan();
+    let digest = value["digest"].clone();
     let parse = |value| {
-        let response = Contract::Plan { id: "p/!".into() }.validate(value).unwrap();
+        let response = Contract::Plan { id: PLAN.into() }.validate(value).unwrap();
         let super::super::response::Action::Plan(plan) = response.action else {
             panic!("expected plan")
         };
@@ -123,15 +124,15 @@ fn both_plan_actions_preserve_body_and_use_the_raw_receipt_contract() {
         assert_eq!(
             request.path,
             if commit {
-                "/api/plans/p%2F%21/commit"
+                format!("/api/plans/{PLAN}/commit")
             } else {
-                "/api/plans/p%2F%21/cancel"
+                format!("/api/plans/{PLAN}/cancel")
             }
         );
         assert_eq!(
             request.body,
             Some(if commit {
-                json!({"plan_digest":"reviewed","operation_id":"original"})
+                json!({"plan_digest":digest,"operation_id":"original"})
             } else {
                 json!({"operation_id":"original"})
             })
@@ -139,7 +140,7 @@ fn both_plan_actions_preserve_body_and_use_the_raw_receipt_contract() {
         assert_eq!(
             request.contract,
             Contract::PlanReceipt {
-                operation: "original".into()
+                operation: "original".into(), expected: plan.completion(commit),
             }
         );
         assert!(request.contract.is_write());
@@ -166,7 +167,7 @@ fn both_plan_actions_preserve_body_and_use_the_raw_receipt_contract() {
         }
     }
     value["digest"] = "".into();
-    assert!(Contract::Plan { id: "p/!".into() }.validate(value).is_err());
+    assert!(Contract::Plan { id: PLAN.into() }.validate(value).is_err());
 }
 
 #[test]

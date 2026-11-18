@@ -19,7 +19,6 @@ async fn inspect(ListingInput(request): ListingInput) -> Result<Json<Value>, Api
         "limit": request.limit(),
         "query": request.query(),
         "selected": request.selected(),
-        "preview": request.preview(),
         "cursor": request.cursor().map(|cursor| (
             cursor.snapshot.as_str(),
             cursor.request.as_str(),
@@ -68,13 +67,12 @@ async fn listing_input_retains_defaults_lookup_spelling_and_typed_selection() {
             "limit": 200,
             "query": "",
             "selected": null,
-            "preview": null,
             "cursor": null,
         })
     );
     let uri = format!(
         "{ROUTE}?path=Cafe%CC%81&limit=500&query=ZETA&selected_path=CAF%C3%89/File\
-         &selected_entry_id=entry&directory_branch_id=branch&expected_tree_id=tree"
+         &selected_entry_id=entry"
     );
     let (status, value) = send(&app, "GET", &uri, None, Body::empty()).await;
     assert_eq!(status, StatusCode::OK);
@@ -87,7 +85,6 @@ async fn listing_input_retains_defaults_lookup_spelling_and_typed_selection() {
             "limit": 500,
             "query": "zeta",
             "selected": ["café/file", "entry"],
-            "preview": ["branch", "tree"],
             "cursor": null,
         })
     );
@@ -133,6 +130,8 @@ async fn listing_input_preserves_decoded_cursor_and_strict_query_failures() {
         "?path=../bad",
         "?selected_path=item",
         "?directory_branch_id=branch",
+        "?directory_branch_id=branch&expected_tree_id=tree",
+        "?expected_tree_id=tree",
         "?cursor=gg",
     ] {
         let uri = format!("{ROUTE}{suffix}");

@@ -88,7 +88,6 @@ fn fixture() -> (tempfile::TempDir, Engine, BackupTransactionRequest) {
         )
         .unwrap();
     assert_eq!(engine.state().versions.len(), 2);
-    assert!(engine.state().directory_git_repositories.is_empty());
     let paths = vec![
         target(temp.path(), "selected-one"),
         target(temp.path(), "selected-two"),
@@ -179,7 +178,7 @@ fn measured<T>(
         std::io::stderr(),
         "[backup-component-us inclusive] stage={stage} iteration={iteration} target={target} \
          elapsed_us={} ok={} targets=2 files=1 versions=2 body_bytes=40 \
-         namespace_directory_scopes=2 directory_git_objects=0",
+         registered_folders=2",
         start.elapsed().as_micros(),
         result.is_ok(),
     );
@@ -419,6 +418,7 @@ fn measure_original_verification(
     // its own final naming and cancellation checks.
     measured("original_registry_verify", iteration, 0, || prepared.verify(stop))?;
     for (index, target) in prepared.targets.iter().enumerate() {
+        let job = &prepared.task.selection().jobs()[index];
         measured("original_image_capture_verify", iteration, index, || {
             cutover::installation::with_image(
                 installation,
@@ -435,11 +435,6 @@ fn measure_original_verification(
                         canonical_json(&prepared.projection.targets[index].entities)?,
                     );
                     assert_eq!(image.file_units, expected.whole_file_units_per_target);
-                    assert_eq!(
-                        image.directory_repositories,
-                        expected.directory_repositories_per_target,
-                    );
-                    let job = &prepared.task.selection().jobs()[index];
                     assert_eq!(image.bodies, job.total_files);
                     assert_eq!(image.body_bytes, job.total_bytes);
                     image.verify(&target.root, stop)
@@ -619,13 +614,9 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     let registry = published_registry::install(&prepared, &decision, &expected, &stop)?;
     choices.observe_first_publication(&prepared, &candidate, &stop)?;
     assert_eq!(registry.branch_scopes, engine.state().branches.len());
-    assert_eq!(registry.branch_scopes, 2);
-    // Ordinary registered namespace branches are not initialized DirectoryGit
-    // repositories. Both genuine Mkdir paths remain in the native registry.
-    assert_eq!(registry.directory_scopes, engine.state().directory_branches.len());
-    assert_eq!(registry.directory_scopes, 2);
-    assert_eq!(engine.state().namespace_directories.len(), 2);
-    assert!(engine.state().directory_git_repositories.is_empty());
+    // Both real mkdir entries survive, without additional namespace heads.
+    assert_eq!(registry.registered_folders, engine.state().namespace_directories.len());
+    assert_eq!(registry.registered_folders, 2);
     // Real install, never a forged manifest or manually synthesized target tree.
     let installed = install(&prepared, &decision, &expected, &stop)?;
     choices.observe_first_publication(&prepared, &candidate, &stop)?;
@@ -711,7 +702,7 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
                 )
             })?;
         assert_eq!(registry_observed.branch_scopes, installed.registry.branch_scopes);
-        assert_eq!(registry_observed.directory_scopes, installed.registry.directory_scopes);
+        assert_eq!(registry_observed.registered_folders, installed.registry.registered_folders);
         assert_eq!(
             registry_observed.metadata_bytes_per_target,
             installed.registry.metadata_bytes_per_target,
@@ -757,7 +748,6 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
                 PreparedDatabases::capture(&admitted, &stop)
             })?;
             assert_eq!(databases.file_count(), 1);
-            assert_eq!(databases.directory_count(), 0);
             let bytes: BTreeMap<_, _> = databases
                 .databases()
                 .iter()
@@ -791,7 +781,6 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
                 )
             })?;
             assert_eq!(image.file_units, 1);
-            assert_eq!(image.directory_repositories, 0);
             assert_eq!(image.bodies, job.total_files);
             assert_eq!(image.body_bytes, job.total_bytes);
             assert_eq!(

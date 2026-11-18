@@ -1421,6 +1421,53 @@ pub(crate) struct InitializationDisks {
     resources: DiskResources,
 }
 impl InitializationDisks {
+    fn existing(path: &Path) -> Result<Option<DiskRoot>> {
+        // Only a missing component in the no-follow ancestor walk permits a
+        // later create. Failure after opening the directory is never absence.
+        let private = match existing_private_dir(path) {
+            Ok(private) => private,
+            Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
+                if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let path = private.path().to_owned();
+        let held = OpenAt2Root::from_private_directory(private, MountPolicy::SameMount)
+            .map_err(fs_error)?;
+        DiskRoot::held(path, held, None).map(Some)
+    }
+
+    /// A symlink (including a dangling symlink), directory, or other unknown
+    /// entity at the config address is not an unconfigured SYSTEM. Do not open
+    /// its target or allow any other storage side effects while discovering it.
+    pub(crate) fn require_unconfigured_system(system: &Path) -> Result<()> {
+        if let Some(root) = Self::existing(system)?
+            && root.optional_metadata(&root.path().join("config.json"))?.is_some()
+        {
+            return Err(Error::new(ErrorCode::AlreadyInitialized,
+                "SYSTEM configuration address is occupied; existing contents are preserved"));
+        }
+        Ok(())
+    }
+
+    /// Check all named targets before creating even an earlier missing SYSTEM or
+    /// data directory. This observation grants no write authority; the final
+    /// emptiness check still uses the actual retained handles under their locks.
+    pub(crate) fn preflight(system: &Path, config: &ValidatedConfig) -> Result<()> {
+        let system = absolute_path(system)?;
+        for disk in &config.disks {
+            let path = absolute_path(&disk.root)?;
+            if path.starts_with(&system) || system.starts_with(&path) {
+                return Err(Error::new(ErrorCode::ConfigInvalid, "storage and SYSTEM directories must not overlap"));
+            }
+            let Some(root) = Self::existing(&path)? else { continue; };
+            if root.entries(root.path())?.next().transpose()?.is_some() {
+                return Err(Error::new(ErrorCode::DiskAlreadyEnrolled,
+                    "storage initialization requires empty directories; existing contents are preserved"));
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn open(config: &ValidatedConfig) -> Result<Self> {
         let directories = config.disks.iter().map(|disk| {
             Ok(OpenAt2Root::from_private_directory(

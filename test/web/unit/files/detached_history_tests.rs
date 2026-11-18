@@ -20,7 +20,7 @@ fn retained_entry_carries_file_identity_without_forging_a_namespace_location() {
     let file = file();
     let entry = Entry::retained(&file);
     assert!(entry.retained_history() && entry.read_only());
-    assert!(!entry.backup() && !entry.preview());
+    assert!(!entry.backup());
     assert_eq!(entry.file_id(), file.file_id.as_str());
     assert_eq!(entry.entry_id(), file.file_id.as_str());
     assert!(

@@ -1,7 +1,7 @@
 //! Real version construction remains the shared workspace constructor. This
 //! adapter seals its body facts, then uses the same branch/namespace publisher.
 use super::{DraftError as Failure, invalid};
-use super::allocations::{Allocation, Replay};
+use super::allocations::{Allocation, PublicationGraph, Replay};
 use super::selection::Selection;
 use crate::business::workspace::version_build::{self, Content, Effects, Input};
 use crate::{Entry, Error, FileVersion, Placement, Result, State};
@@ -37,18 +37,6 @@ pub(super) fn publish(
         state, &base.branch_id().to_string(), Some(&target.path), principal, operation, None, ids,
     )?;
     Ok(())
-}
-
-pub(crate) fn trace_limit(previous: &State, target: &DraftLocation) -> Result<usize> {
-    let repository = previous.repositories.get(&target.repository.to_string())
-        .ok_or_else(invalid)?;
-    let main = previous.branches.get(&repository.main_branch_id).ok_or_else(invalid)?;
-    let entries = previous.commits.get(&main.head_commit_id).ok_or_else(invalid)?.entries.len();
-    // One FILE commit/tree, one owner main commit/tree, one root snapshot pair.
-    // The root-only pass visits each source file once and may lazily allocate
-    // its shared branch/commit/tree. There is no ancestor recursion in this mode.
-    entries.checked_mul(3).and_then(|n| n.checked_add(8))
-        .ok_or_else(|| Error::FileDraft(Failure::Size))
 }
 
 struct ReplayEffects<'a> {
@@ -113,7 +101,7 @@ pub(super) fn replay(
         || expected.content_states.contains_key(&facts.version.version_id)
         || facts.version.logical_size != payload.logical_size()
         || facts.version.content_hash != hash
-        || facts.allocations.len() > trace_limit(previous, target)?
+        || facts.allocations.len() > PublicationGraph::Revised.limit(previous, target)?
     {
         return Err(invalid());
     }
@@ -215,7 +203,7 @@ pub(super) fn build_planned(
         return Err(Error::FileDraft(Failure::Body));
     }
     let placement = next.placements.get(&version.version_id).cloned().ok_or_else(invalid)?;
-    let limit = trace_limit(context.state, target)?;
+    let limit = PublicationGraph::Revised.limit(context.state, target)?;
     let mut allocations = Vec::new();
     publish(
         next, target, *base, version.version_id.parse()?, message, principal, operation,

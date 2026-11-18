@@ -262,26 +262,6 @@ fn retained_detail_actions_use_current_payload_and_write_permission() {
     assert!(selection.mutation_entry(&state).is_none());
 }
 
-#[test]
-fn frozen_selected_branch_outside_the_page_is_visible_without_a_false_head() {
-    use crate::files::history::tests::branch_wire;
-    let model = Model {
-        selected: Some(crate::files::test_entries::preview_entry(
-            json!({"selected_branch_id":"frozen"}),
-        )),
-        file_history: crate::files::history::tests::history(json!({
-            "selected_branch_id":"live",
-            "branches":[branch_wire(json!({"branch_id":"live","current":true}))],
-        })),
-        ..Default::default()
-    };
-    assert_eq!(selected_branch(&model), "frozen");
-    let options = branch_options(&model);
-    assert_eq!(options.len(), 2);
-    assert_eq!(options[1].value, "frozen");
-    assert!(options[1].disabled);
-}
-
 fn selected_directory_state() -> State {
     let mut state = selected_state();
     state.files.selected = Some(entry(json!({

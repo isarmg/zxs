@@ -72,7 +72,7 @@ pub use engine::ReadView;
 pub use engine::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
-    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupFirstFinalizeReport,
     BackupFirstPublicationHash, BackupFirstPublicationReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
@@ -138,7 +138,6 @@ pub use foreign_import::{
     ForeignPrimaryOrigin, ForeignSourceIdentity, ForeignVersionAvailability,
     PreparedForeignImportIntent,
 };
-mod historical_save;
 pub use engine::{
     DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
     DirectoryNamespaceView, DiskExitPhase, DiskExitStatus, DiskReadmissionPhase,
@@ -162,6 +161,7 @@ pub use engine::{
 };
 mod history_package;
 mod journal;
+mod ordinary_authority;
 #[cfg(feature = "fault-injection")]
 pub use journal::JournalFault;
 mod maintenance;

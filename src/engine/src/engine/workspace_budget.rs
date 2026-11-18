@@ -33,7 +33,6 @@ pub(super) enum WorkspaceRetention {
 pub(super) enum WorkspaceColdKind {
     EmptyAbort,
     Published,
-    HistoricalPublished,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,12 +60,11 @@ pub(super) struct WorkspaceAdmission {
     charge: WorkspaceCharge,
 }
 
-// FileContext references only admitted ver/fnode/fmeta, br and dbr IDs.
+// An ordinary FILE context reserves a ver/fnode/fmeta node, a br branch and its generation.
 // validate_id requires exactly prefix + '_' + 32 hexadecimal bytes. Preserve
 // larger existing values below; these bounds concern newly installed receipts.
 const CONTEXT_NODE_BYTES: usize = "fnode_".len() + 32;
 const CONTEXT_BRANCH_BYTES: usize = "br_".len() + 32;
-const CONTEXT_ORIGIN_BYTES: usize = "dbr_".len() + 32;
 
 /// A reservation cannot hide an impossible post-publication receipt. This
 /// limit is the same canonical-byte bound used by the durable writer/reader.
@@ -171,7 +169,7 @@ impl Engine {
     }
 
     /// Reserve lifecycle changes before publication, including the file-context
-    /// receipt installed by a first inherited save. The closed FileContext ID
+    /// receipt installed by a first selected FILE save. The closed FileContext ID
     /// families have exact upper widths; all states keep the same full lifecycle
     /// reservation. Preserve larger existing values rather than undercharging
     /// recovered records; no terminal metadata or future fence is released.
@@ -215,16 +213,8 @@ impl Engine {
             );
             context.selection_generation = u64::MAX;
             context.branch_id = "x".repeat(context.branch_id.len().max(CONTEXT_BRANCH_BYTES));
-            context.inherited_from = Some(
-                "x".repeat(
-                    context
-                        .inherited_from
-                        .as_ref()
-                        .map_or(CONTEXT_ORIGIN_BYTES, |id| {
-                            id.len().max(CONTEXT_ORIGIN_BYTES)
-                        }),
-                ),
-            );
+            // A directory origin is not an ordinary FILE field. Do not invent
+            // one for capacity, nor erase a rejected value from real input.
         }
         // Do not undercharge unexpected escaped/oversized recovered fields.
         checked_metadata_charge(actual, canonical_json(&reserved)?.len())

@@ -170,7 +170,7 @@ fn utc_history_projection_formats_seconds_and_preserves_missing_times() {
 }
 
 #[test]
-fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() {
+fn restored_registered_root_preserves_original_ordinary_deletion_time_and_file_material() {
     use storage_contract::{CommitRequest, Config, NamespaceOperation};
     use storage_engine::Engine;
 
@@ -181,10 +181,8 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     )
     .unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Audit").unwrap(),
+        .create_disk_root(
             "P01",
-            1,
             "owner",
             storage_contract::OperationId::generate().unwrap(),
         )
@@ -200,6 +198,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
             )
             .unwrap();
     }
+    engine.stage_bytes(&workspace.workspace_id, "retained.zip", b"independent FILE").unwrap();
     let operation_id = storage_contract::OperationId::generate().unwrap();
     let published = engine
         .commit_workspace(CommitRequest {
@@ -229,7 +228,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     };
     let before = deletion_rows(&engine);
     assert_eq!(before.len(), 1);
-    assert_eq!(before[0]["path"], "Audit/transient");
+    assert_eq!(before[0]["path"], "transient");
     assert_eq!(
         before[0]["timestamp"],
         crate::backend_activity::utc_timestamp(timestamp).unwrap()
@@ -237,27 +236,22 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     assert_eq!(before[0]["file_id"], "");
     assert!(before[0]["version_id"].is_null());
 
-    let package = root.path().join("package");
-    engine
-        .export_history_package(&repo.history_tree_id, &package)
-        .unwrap();
-    let restored_root = crate::tests::private_tempdir();
-    let mut restored = Engine::initialize(
-        &restored_root.path().join("system"),
-        Config::development(crate::test_disks([restored_root.path().join("disk")])).unwrap(),
-    )
-    .unwrap();
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            1,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    assert!(!restored.state().operations.contains_key(&operation_id));
-    assert!(restored.state().versions.is_empty());
+    let retained = engine.list_tree(&repo.main_branch_id).unwrap().into_iter()
+        .find(|entry|entry.path() == "retained.zip").unwrap();
+    let original = engine.operation(operation_id).unwrap();
+    drop(engine);
+    // Reconstruct the ordinary registered namespace from the original disk,
+    // never adopt an unregistered history or invent a replacement receipt.
+    let recovered = crate::tests::private_tempdir();
+    let restored = Engine::restore_from_disks(&recovered.path().join("system"),
+        &[root.path().join("disk")]).unwrap();
+    assert_eq!(restored.operation(operation_id).unwrap(), original);
+    assert_eq!(restored.list_tree(&repo.main_branch_id).unwrap().into_iter()
+        .find(|entry|entry.path() == "retained.zip").unwrap(), retained);
+    let mut body = restored.open_content(&retained.version_id).unwrap();
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut body.file, &mut bytes).unwrap();
+    assert_eq!(bytes, b"independent FILE");
     assert_eq!(deletion_rows(&restored), before);
 }
 

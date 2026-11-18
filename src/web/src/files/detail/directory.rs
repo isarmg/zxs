@@ -1,42 +1,9 @@
-//! Current-folder navigation, existing branch context and placement controls.
-use super::super::model::{directory_branch_name, directory_branch_value};
+//! Ordinary folder navigation, placement and backup controls.
 use super::super::{actions, backup, inline};
 use crate::ui::State;
-use web_interface::components::{Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
-    let folder_options = Signal::derive(move || {
-        state.with(|s| {
-            s.files
-                .directory_branches
-                .iter()
-                .map(|branch| {
-                    SelectOption::new(
-                        directory_branch_value(branch),
-                        directory_branch_name(branch),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-    });
-    let folder_value = Signal::derive(move || {
-        state.with(|s| {
-            super::super::model::viewed_directory_branch(&s.files)
-                .map(|branch| branch.id().to_owned())
-                .unwrap_or_default()
-        })
-    });
-    let folder_disabled = Signal::derive(move || {
-        state.with(|s| {
-            !s.session_active()
-                || actions::pending(s)
-                || s.files.loading
-                || !s.files.loaded
-                || !s.files.directory_branches_supported
-                || s.files.directory_branches.is_empty()
-        })
-    });
     let mutation_disabled = Signal::derive(move || state.with(|s| !actions::write_allowed(s)));
     let navigation_disabled = Signal::derive(move || {
         state.with(|s| !s.session_active() || s.files.loading || actions::pending(s))
@@ -44,7 +11,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <article class="zxs-content-panel zxs-entry-content zxs-frame zxs-stack" data-zxs-current-directory-controls="true" aria-label=t("当前目录详情", "Current folder details")>
             <h2 class="zxs-row">{t("当前目录详情", "Current folder details")}</h2>
-            <nav class="zxs-breadcrumb zxs-flow" aria-label=t("目录仓库位置", "Folder repository location")>
+            <nav class="zxs-breadcrumb zxs-flow" aria-label=t("文件夹位置", "Folder location")>
                 <button class="zxs-button" disabled=move ||navigation_disabled.get()
                     on:click=move |_|actions::go_directory_details(state,String::new())>{move ||state.with(|s|s.files.disks.iter().find(|disk|disk.slot_id==s.files.slot).map(|disk|disk.name.clone()))}</button>
                 {move ||super::super::model::breadcrumbs(&state.with(|s|s.files.directory.clone())).into_iter().map(move |(name,path)|view!{
@@ -57,12 +24,8 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <button class="zxs-button" data-zxs-directory-files="" disabled=move ||navigation_disabled.get()
                     on:click=move |_|crate::ui::navigate(state,crate::ui::Page::Files)>{t("查看本目录文件","View this folder’s files")}</button>
                 {inline::control(state,t("新建文件夹","New folder"),Some("create"),inline::Target::CreateDirectory,mutation_disabled)}
-                <button class="zxs-button" data-directory-git-refresh="" disabled=move ||navigation_disabled.get()
-                    on:click=move |_|actions::refresh_directory(state)>{t("刷新目录上下文","Refresh folder context")}</button>
-                <Show when=move ||state.with(|s|s.files.directory_preview.is_some())>
-                    <button class="zxs-button" data-open-preview-origin="" disabled=move ||navigation_disabled.get()
-                        on:click=move |_|actions::open_preview_origin(state)>{t("返回原目录详情", "Return to source folder Details")}</button>
-                </Show>
+                <button class="zxs-button" data-zxs-folder-refresh="" disabled=move ||navigation_disabled.get()
+                    on:click=move |_|actions::refresh_directory(state)>{t("刷新文件夹","Refresh folder")}</button>
             </div>
             {inline::first_folder_hint(state)}
             <p class="zxs-row">{move ||state.with(|s|super::super::model::join_path(&s.files.slot,&s.files.directory))}</p>
@@ -71,13 +34,6 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::recursive::start_current(state)>{t("逐级备份","Recursive backups")}</button>
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::start_current(state)>{t("自定义备份前缀","Custom backup prefixes")}</button>
             </div>
-        <div class="zxs-file-toolbar zxs-flow zxs-surface-end">
-            <Select label=t("浏览目录分支","Browse folder branch") options=folder_options value=folder_value disabled=folder_disabled placeholder=t("尚无目录分支","No folder branches") on_change=Callback::new(move |value:String|actions::preview_directory_branch(state,value))/>
-            <Show when=move ||state.with(|s|s.files.directory_preview.is_some())><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|actions::return_to_default(state)>{t("返回默认视图","Return to default view")}</button></Show>
-            <p class="zxs-row">{t("这里只浏览已有目录分支，不改变默认读取或 SMB 暴露。","Browsing existing folder branches does not change default reads or SMB exposure.")}</p>
-        </div>
-            {super::super::directory_snapshot::view(state)}
-            {super::super::staging::view(state)}
             {backup::view(state)}
             {super::super::placement::view(state)}
         </article>

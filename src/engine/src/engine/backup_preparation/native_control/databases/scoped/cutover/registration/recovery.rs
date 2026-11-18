@@ -217,7 +217,7 @@ impl BackupDecidedTargets {
     /// Read a bounded page from one target's exact published HEAD. Neither a
     /// historical Commit nor caller-supplied entries become a writable Current.
     /// No source/SYSTEM I/O, missing-target fallback or admission is performed.
-    /// The host must authorize the requested branch/directory independently.
+    /// The host must authorize the requested registered branch independently.
     pub fn read_published_namespace(
         &self,
         expected: &BackupFirstPublicationHash,
@@ -320,18 +320,6 @@ impl BackupDecidedTargets {
             .file(history, file)
     }
 
-    /// Resolve a directory repository, including its actual enclosing parent,
-    /// to the same complete target set as its children and retained files.
-    pub fn directory_writer_route(
-        &self,
-        history: &str,
-        directory: &str,
-    ) -> Result<BackupDirectoryWriterRoute> {
-        validate_id(history, "history")?;
-        crate::container_storage::validate_database_directory_id(directory)?;
-        writer_routes::observe(&self.prepared, &self.decision, &AtomicBool::new(false))?
-            .directory(history, directory)
-    }
     /// Rechecks the complete target set and selected decision on every call.
     /// Content is then read from the selected image inode in one full hashing
     /// pass, buffering only this <=4 MiB range. No fallback to another target or

@@ -58,8 +58,6 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 pub enum ErrorSource {
     #[error("{0}")]
     FileCommitMode(#[source] crate::files::FileCommitModeError),
-    #[error("invalid directory snapshot response or request: {0}")]
-    DirectorySnapshot(#[source] crate::files::DirectorySnapshotError),
     #[error("invalid first-commit response or request: {0}")]
     FirstCommitWire(#[source] json_codec::Error),
     #[error("invalid first-commit recovery record: {0}")]
@@ -114,8 +112,6 @@ pub enum ErrorSource {
     FileHistory(#[source] crate::files::FileHistoryError),
     #[error("{0}")]
     ContainerTags(#[source] crate::files::ContainerTagsError),
-    #[error("invalid directory repository status: {0}")]
-    DirectoryGit(#[source] json_codec::Error),
     #[error("invalid directory page: {0}")]
     DirectoryPage(#[source] crate::files::DirectoryPageError),
     #[error("invalid service API path: {0}")]
@@ -176,17 +172,7 @@ impl std::fmt::Display for Error {
             f,
             "{} · {}{}",
             self.code,
-            match self.code {
-                storage_contract::ErrorCode::DirectoryScopeRequired => t(
-                    "请选择具体文件夹；此硬盘根目录包含多个已有目录。",
-                    "Select a specific folder; this disk root contains multiple existing namespaces."
-                ),
-                storage_contract::ErrorCode::DirectoryBranchIncomplete => t(
-                    "所选目录分支的引用不完整，未发布此次切换。",
-                    "The selected folder branch has incomplete references. The switch was not published."
-                ),
-                _ => self.message.clone(),
-            },
+            self.message,
             if self.retryable {
                 t(
                     "（可重试；提交操作请先查询原操作状态）",

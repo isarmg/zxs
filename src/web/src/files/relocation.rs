@@ -191,7 +191,6 @@ pub(super) fn start(state: RwSignal<State>, entry: Option<Entry>) {
         state.files.clear_selection();
         state.files.checked_entries.clear();
         state.files.selected = Some(entry);
-        state.files.batch = None;
         state.change_page(crate::ui::Page::Files);
     });
     let captured = state
@@ -278,14 +277,14 @@ fn review_destination(state: RwSignal<State>, editor: Editor) {
         return;
     };
     spawn_local(async move {
-        let result = target::review(state, editor, &read, destination).await;
+        let result = target::review(&read, destination).await;
         if !accept_read_response(state, read.basis.epoch, &result) || !read.current(state, editor) {
             return;
         }
         editor.reading.set(false);
         editor.cancellation.set(None);
         match result {
-            Ok(review) => editor.review.set(review),
+            Ok(review) => editor.review.set(Some(review)),
             Err(error) => editor.error.set(Some(error)),
         }
     });
@@ -314,8 +313,8 @@ pub(super) fn controls(state: RwSignal<State>) -> impl IntoView {
                     "{} / {} · {}", draft.slot, draft.display_path, draft.entry,
                 )))}</p>
                 <p>{t(
-                    "将所选的一个文件或整个目录连同完整历史一起移动。选择目标磁盘，填写相对磁盘根的完整目标路径。除空盘根以外，目标父目录须已存在且可写；不覆盖已有条目，普通目录不会因此变成独立目录仓库。",
-                    "Move the selected file or whole folder together with its complete history. Choose a disk and enter the complete destination path relative to its root. Except for a new disk root, its parent must exist and be writable. Existing entries are not replaced, and ordinary folders do not become independent repositories.",
+                    "将所选的一个文件或整个目录连同完整历史一起移动。选择目标磁盘，填写相对磁盘根的完整目标路径。除空盘根以外，目标父目录须已存在且可写；不覆盖已有条目。",
+                    "Move the selected file or whole folder together with its complete history. Choose a disk and enter the complete destination path relative to its root. Except for a new disk root, its parent must exist and be writable. Existing entries are not replaced.",
                 )}</p>
                 <Select label=t("目标磁盘", "Destination disk") options=slots value=selected_slot disabled=disabled
                     placeholder=t("选择目标磁盘", "Choose destination disk")

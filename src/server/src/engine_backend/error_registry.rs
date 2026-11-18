@@ -229,7 +229,6 @@ policies! {
         PlanStale,
         PreparationStale,
         PurgeBlockedByReference,
-        RestoreBackupConflict,
         SplitPlanStale,
         TreeMoved,
         UploadGenerationConflict,

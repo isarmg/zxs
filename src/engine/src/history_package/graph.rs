@@ -41,12 +41,23 @@ pub(super) struct PreparedHistory {
     pub(super) objects: Vec<PreparedMetadataObject>,
 }
 
+fn require_registered(root: &PagedHistoryRoot) -> Result<()> {
+    if !root.repository.file_manager_root {
+        return Err(crate::Error::new(
+            crate::ErrorCode::HistoryPackageInvalid,
+            "a portable history requires its original registered FILE namespace",
+        ));
+    }
+    Ok(())
+}
+
 fn finish_encoded(
     mut encoder: Encoder,
     mut root: PagedHistoryRoot,
     maps: BTreeMap<Field, MapRoot>,
     maximum: usize,
 ) -> Result<PreparedHistory> {
+    require_registered(&root)?;
     root.maps = maps
         .iter()
         .map(|(field, map)| (field.name().to_owned(), map.reference().clone()))
@@ -187,6 +198,7 @@ pub(super) fn prepare_indexed_encoded(
     owners: &DerivedOwners,
     maximum: usize,
 ) -> Result<PreparedHistory> {
+    crate::ordinary_authority::tables(state)?;
     let history = state
         .histories
         .get(id)
@@ -295,6 +307,7 @@ pub(super) fn prepare_update_with_origin(
     state: &crate::State,
     maximum: usize,
 ) -> Result<PreparedUpdate> {
+    crate::ordinary_authority::tables(state)?;
     let root = objects
         .last()
         .expect("invariant: a resolved history graph ends with its root");
@@ -311,6 +324,7 @@ pub(super) fn prepare_update_with_origin(
         origin.maps.clone()
     });
     update_header(&mut decoded, &edits, state);
+    require_registered(&decoded)?;
     let available = objects
         .iter()
         .map(|object| ((object.kind(), object.hash().to_owned()), object))

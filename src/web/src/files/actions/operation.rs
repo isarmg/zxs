@@ -50,7 +50,6 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
         s.files.operations.retain(|operation| operation.id() != id);
         s.files.operations.insert(0, operation);
         s.files.operations.truncate(100);
-        crate::files::batch::settle_operation(&mut s.files, &id, status);
         crate::files::review::settle(&mut s.files, &id, status);
         crate::files::deletion::settle(&mut s.files, &id, status);
         crate::files::mkdir::settle(&mut s.files.mkdir, &id, status);
@@ -58,7 +57,6 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
         s.notices.record_operation(s.session_epoch, &id, status);
         if s.files.default_operation.as_deref() == Some(&id) {
             if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
-                s.files.directory_preview = None;
                 s.files.file_preview = None;
             }
             if status != SaveStatus::Unknown {

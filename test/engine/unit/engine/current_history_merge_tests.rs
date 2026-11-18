@@ -127,7 +127,8 @@ fn disk_exit_history_merge_uses_readable_old_nodes_of_hidden_source_head_and_res
     .unwrap();
     let result_branch = result.branch_id.clone().unwrap();
     assert_eq!(result.result["reused_node"], false);
-    assert_eq!(result.result["directory_branch_ids"], json_codec::json!([]));
+    assert_eq!(result.result["surviving_branch_id"].as_str(), Some(result_branch.as_str()));
+    assert_eq!(result.result["source_inputs"], json_codec::json!(&inputs));
     assert_ne!(result.result["node_id"], inputs[1].source_node_id);
     assert_eq!(result.result["version_id"], inputs[1].source_node_id);
     for (id, branch) in &previous.branches {
@@ -401,7 +402,7 @@ fn disk_exit_history_merge_recovery_rejects_request_actor_graph_and_occurrence_t
     let head = &published.commits[&branch.head_commit_id];
     let pending_id = &head.parent_commit_ids[0];
     let unchanged = canonical_json(fixture.engine.state()).unwrap();
-    for attack in 0..9 {
+    for attack in 0..10 {
         let mut forged = published.as_ref().clone();
         match attack {
             0 => {
@@ -462,6 +463,10 @@ fn disk_exit_history_merge_recovery_rejects_request_actor_graph_and_occurrence_t
                     .as_object_mut()
                     .unwrap()
                     .remove("location");
+            }
+            9 => {
+                forged.operations.get_mut(&operation).unwrap().result["extra_publication"] =
+                    json_codec::json!([]);
             }
             _ => unreachable!(),
         }

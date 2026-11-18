@@ -2,6 +2,7 @@
 //! admitted namespace HEAD determine what this reader may expose. Frozen
 //! history reads have their own source and must not fall through to this module.
 use crate::business::{namespace, repository};
+use std::collections::BTreeMap;
 use crate::{Engine, Entry, FileContext, NamespaceEntryKind, Repository, State};
 
 pub(crate) fn context_key_from_key(repository: &str, key: &str) -> String {
@@ -42,7 +43,7 @@ pub(in crate::business) fn context_for_entry(
             .and_then(|b| b.file_node_id.clone()),
         selection_generation: 0,
         branch_id: branch,
-        inherited_from: state.file_write_origins.get(&entry.file_id).cloned(),
+        inherited_from: None,
     }
 }
 pub(crate) fn branch_context_at_key(
@@ -61,6 +62,45 @@ pub(crate) fn branch_context_at_key(
             inherited_from: None,
         })
     }
+}
+
+/// Carry forward only the pending version of the independent FILE selected
+/// at this exact ordinary path. A matching path in another repository or a
+/// named inherited directory composition is not a source.
+pub(in crate::business) fn selected_pending(
+    state: &State,
+    repository: &Repository,
+    entries: &[Entry],
+) -> crate::Result<BTreeMap<String, String>> {
+    let mut pending = BTreeMap::new();
+    for entry in entries.iter().filter(|entry| entry.kind == NamespaceEntryKind::File) {
+        let context = context_at_key(state, &repository.repository_id, entry.lookup_key())
+            .ok_or_else(|| crate::Error::new(crate::ErrorCode::StateInvalid, "FILE selection missing"))?;
+        if context.inherited_from.is_some() {
+            return Err(crate::Error::new(crate::ErrorCode::FileBranchConflict,
+                "ordinary FILE selection cannot borrow another namespace"));
+        }
+        let branch = state.branches.get(&context.branch_id).ok_or_else(|| {
+            crate::Error::new(crate::ErrorCode::FileBranchNotFound, "selected FILE branch missing")
+        })?;
+        // An ordinary root with no per-file selection has no independent
+        // pending branch. It is not a donor for another FILE.
+        if branch.branch_id == repository.main_branch_id { continue; }
+        if branch.file_id.as_deref() != Some(entry.file_id.as_str())
+            || branch.history_tree_id != repository.history_tree_id
+        {
+            return Err(crate::Error::new(crate::ErrorCode::FileBranchConflict,
+                "selected branch is not this ordinary FILE"));
+        }
+        if let Some(version) = branch.pending_file_versions.get(&entry.file_id) {
+            if version != &entry.version_id {
+                return Err(crate::Error::new(crate::ErrorCode::FileBranchConflict,
+                    "pending FILE version differs from its selected occurrence"));
+            }
+            pending.insert(entry.file_id.clone(), version.clone());
+        }
+    }
+    Ok(pending)
 }
 
 impl Engine {

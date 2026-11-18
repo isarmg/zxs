@@ -142,11 +142,26 @@ fn graph_budget_counts_before_allocating_output() {
     );
 }
 
+fn registered_original() -> (tempfile::TempDir, Engine, storage_contract::Repository) {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(&temp.path().join("system"), Config::development(
+        crate::test_disks([temp.path().join("disk")]),
+    ).unwrap()).unwrap();
+    let repo = engine.create_disk_root("P01", "admin", OperationId::generate().unwrap()).unwrap();
+    let workspace = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "document.txt", b"original FILE").unwrap();
+    engine.commit_workspace(crate::CommitRequest {
+        workspace_id: workspace.workspace_id, operation_id: OperationId::generate().unwrap(),
+        principal: "admin".into(), expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token, message: "native fixture".into(), request_digest: None,
+    }).unwrap();
+    (temp, engine, repo)
+}
+
 #[test]
 fn real_path_audit_rejects_foreign_remap_without_rewriting_source_evidence() {
-    let mut fixture = crate::foreign_import::tests::fixture();
-    let repository = fixture.engine.state().repositories.values().next().unwrap().clone();
-    let receipt = fixture.engine.file_namespace(
+    let (_temp, mut engine, repository) = registered_original();
+    let receipt = engine.file_namespace(
         &repository.repository_id,
         NamespaceOperation::parse(
             NamespaceOperationKind::Rename, "document.txt", Some("renamed.txt"),
@@ -155,33 +170,32 @@ fn real_path_audit_rejects_foreign_remap_without_rewriting_source_evidence() {
         OperationId::generate().unwrap(),
     ).unwrap();
     let source = HistoryManifest::from_state(
-        fixture.engine.state(), &repository.history_tree_id,
+        engine.state(), &repository.history_tree_id,
     ).unwrap();
     source.validate().unwrap();
     assert!(!source.path_audit.is_empty());
     let before = canonical_json(&source).unwrap();
-    let state_before = canonical_json(fixture.engine.state()).unwrap();
-    let names = names(fixture.engine.state());
+    let state_before = canonical_json(engine.state()).unwrap();
+    let names = names(engine.state());
     let names_before = names.clone();
     let error = remap::Remap::new(&names).manifest(&source).unwrap_err();
     assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
     assert!(matches!(error, Error::PathChange(crate::PathChangeError::ForeignSource)));
     assert_eq!(canonical_json(&source).unwrap(), before);
-    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), state_before);
+    assert_eq!(canonical_json(engine.state()).unwrap(), state_before);
     assert_eq!(names, names_before);
-    assert_eq!(fixture.engine.state().operations[&receipt.operation_id], receipt);
+    assert_eq!(engine.state().operations[&receipt.operation_id], receipt);
 }
 
 #[test]
-fn restored_path_audit_is_not_treated_as_an_empty_foreign_graph() {
+fn recovered_registered_audit_is_not_treated_as_an_empty_foreign_graph() {
     use std::os::unix::fs::PermissionsExt;
 
-    let mut fixture = crate::foreign_import::tests::fixture();
+    let (temp, mut engine, repository) = registered_original();
     std::fs::set_permissions(
-        fixture._temp.path(), std::fs::Permissions::from_mode(0o700),
+        temp.path(), std::fs::Permissions::from_mode(0o700),
     ).unwrap();
-    let repository = fixture.engine.state().repositories.values().next().unwrap().clone();
-    let renamed = fixture.engine.file_namespace(
+    let renamed = engine.file_namespace(
         &repository.repository_id,
         NamespaceOperation::parse(
             NamespaceOperationKind::Rename, "document.txt", Some("renamed.txt"),
@@ -189,18 +203,12 @@ fn restored_path_audit_is_not_treated_as_an_empty_foreign_graph() {
         "admin",
         OperationId::generate().unwrap(),
     ).unwrap();
-    let package = fixture._temp.path().join("audit-package");
-    fixture.engine.export_history_package(&repository.history_tree_id, &package).unwrap();
-    let mut restored = Engine::initialize(
-        &fixture._temp.path().join("restored-system"),
-        Config::development(crate::test_disks(
-            [fixture._temp.path().join("restored-disk")],
-        )).unwrap(),
-    ).unwrap();
-    restored.restore_history_package(
-        &package, "P01", 1, "restorer", OperationId::generate().unwrap(),
-    ).unwrap();
-    assert!(!restored.state().operations.contains_key(&renamed.operation_id));
+    let package = temp.path().join("audit-package");
+    engine.export_history_package(&repository.history_tree_id, &package).unwrap();
+    crate::offline_check_history_package(&package).unwrap();
+    let recovered = temp.path().join("recovered-system");
+    let restored = crate::tests::restore_registered_fixture(engine, &recovered);
+    assert_eq!(restored.state().operations[&renamed.operation_id], renamed);
     let source = HistoryManifest::from_state(
         restored.state(), &repository.history_tree_id,
     ).unwrap();

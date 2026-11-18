@@ -82,12 +82,12 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             Err("file row retained a stale hover".into())
         }
     })?;
-    let initial = browser.script("const check=document.querySelector('.zxs-entry-checkbox');return {checked:check?.checked,disabled:check?.disabled,batchOpen:!!document.querySelector('.zxs-batch-editor')}")?;
+    let initial = browser.script("const check=document.querySelector('.zxs-entry-checkbox');return {checked:check?.checked,disabled:check?.disabled,moveOpen:!!document.querySelector('[data-zxs-object-move]')}")?;
     println!("INFO file_rows entry: {initial}");
-    if initial["checked"] != false || initial["disabled"] != false || initial["batchOpen"] != false
+    if initial["checked"] != false || initial["disabled"] != false || initial["moveOpen"] != false
     {
         return Err(format!(
-            "file_rows requires an unchecked, enabled row without a batch: {initial}"
+            "file_rows requires an unchecked, enabled row without a relocation editor: {initial}"
         )
         .into());
     }

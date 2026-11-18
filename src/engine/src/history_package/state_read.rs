@@ -113,6 +113,8 @@ macro_rules! history_coverage {
                     control_auth: _, events: _, operations: _, operation_principals: _, plans: _,
                     content_states: _,
                     histories: _, file_containers: _, namespace_directories: _,
+                    directory_branches: _, directory_git_repositories: _, directory_trees: _, file_write_origins: _,
+                    directory_tree_selections: _, directory_selections: _, directory_selection_generations: _,
                     container_tags, repositories, $($field,)*
                 } = state;
                 if self.container_tags.iter().ne(container_tags.keys()) {
@@ -133,10 +135,6 @@ macro_rules! history_coverage {
 history_coverage! {
     branches => branches,
     file_selections => file_selections,
-    directory_branches => directory_branches,
-    directory_git_repositories => directory_git_repositories,
-    directory_trees => directory_trees,
-    file_write_origins => file_write_origins,
     file_contexts => file_contexts,
     file_path_nodes => file_path_nodes,
     file_metadata_nodes => file_metadata_nodes,
@@ -145,12 +143,9 @@ history_coverage! {
     file_branch_aliases => file_branch_aliases,
     file_node_parents => file_node_parents,
     file_path_notes => file_path_notes,
-    directory_tree_selections => directory_tree_selections,
     file_locations => file_locations,
     file_backup_paths => file_backup_paths,
     file_backup_policies => file_backup_policies,
-    directory_selections => directory_selections,
-    directory_selection_generations => directory_selection_generations,
     file_selection_generations => file_selection_generations,
     file_notes => file_notes,
     version_notes => version_notes,
@@ -165,6 +160,9 @@ history_coverage! {
 }
 
 pub(crate) fn validate(state: &State) -> Result<()> {
+    crate::ordinary_authority::decoded_records(state)?;
+    crate::engine::fresh_layout::namespace::require_root_origins(state)
+        .map_err(|source| source.context(ErrorCode::StateInvalid, "invalid registered namespace origins"))?;
     if !state.file_path_nodes.is_empty() {
         return Err(crate::persist::path_changes::invalid());
     }

@@ -66,7 +66,7 @@ macro_rules! methods {
                 ) -> Result<storage_contract::WorkspaceCapacity, $crate::ApiError>;
 
                 /// Resolve the default share's displayed disk path with file-manager
-                /// ownership rules, preserving named repositories and existing roots.
+                /// ownership rules, preserving the registered root and ordinary relative path.
                 fn resolve_smb_path(
                     &self,
                     identity: &$crate::Identity,
@@ -210,11 +210,6 @@ macro_rules! methods {
                     request: Result<$crate::CommitPlan, $crate::ApiError>,
                 ) -> Result<storage_contract::OperationResult, $crate::ApiError>;
 
-                fn prepare_historical_save(
-                    &self,
-                    identity: &$crate::Identity,
-                    request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-                ) -> Result<storage_contract::Plan, $crate::ApiError>;
 
                 fn prepare_purge(
                     &self,
@@ -222,11 +217,6 @@ macro_rules! methods {
                     request: Result<crate::PreparePurge, crate::ApiError>,
                 ) -> Result<storage_contract::Plan, $crate::ApiError>;
 
-                fn prepare_split(
-                    &self,
-                    identity: &$crate::Identity,
-                    request: Result<crate::PrepareSplit, crate::ApiError>,
-                ) -> Result<storage_contract::Plan, $crate::ApiError>;
 
                 fn namespace_batch(
                     &self,
@@ -465,77 +455,6 @@ macro_rules! methods {
                 ) -> Result<storage_contract::StagedFile, $crate::ApiError>;
             }
             optional {
-                fn smb_worktree_mounts(
-                    &self, identity: &$crate::Identity, branch: &str,
-                ) -> Result<
-                    Vec<storage_contract::snapshot_worktree::WorktreeStatus>, $crate::ApiError,
-                > {
-                    let _ = (identity, branch);
-                    Ok(Vec::new())
-                }
-                fn smb_worktree_locate(
-                    &self, identity: &$crate::Identity, branch: &str,
-                    path: &name_policy::LookupPath,
-                ) -> Result<Option<$crate::SmbWorktreeLocation>, $crate::ApiError> {
-                    let _ = (identity, branch, path);
-                    Ok(None)
-                }
-                fn smb_worktree_entry(
-                    &self, identity: &$crate::Identity,
-                    target: storage_contract::snapshot_worktree::WorktreeHandle,
-                    path: &name_policy::LookupPath,
-                ) -> Result<$crate::SmbWorktreeEntry, $crate::ApiError> {
-                    let _ = (identity, target, path);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn smb_worktree_page(
-                    &self, identity: &$crate::Identity,
-                    target: storage_contract::snapshot_worktree::WorktreeHandle,
-                    parent: Option<&name_policy::LookupPath>,
-                    cursor: Option<&$crate::SmbWorktreeCursor>,
-                ) -> Result<$crate::SmbWorktreePage, $crate::ApiError> {
-                    let _ = (identity, target, parent, cursor);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn authorize_smb_worktree_page(
-                    &self, identity: &$crate::Identity,
-                    target: storage_contract::snapshot_worktree::WorktreeHandle,
-                    parent: Option<&name_policy::LookupPath>, page: &$crate::SmbWorktreePage,
-                ) -> Result<(), $crate::ApiError> {
-                    let _ = (identity, target, parent, page);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn authorize_smb_worktree(
-                    &self, identity: &$crate::Identity,
-                    target: storage_contract::snapshot_worktree::WorktreeHandle,
-                    access: $crate::SmbWorktreeAccess<'_>,
-                ) -> Result<(), $crate::ApiError> {
-                    let _ = (identity, target, access);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn smb_worktree_content(
-                    &self, identity: &$crate::Identity, file: &$crate::SmbWorktreeFile,
-                    deadline: ::std::time::Instant,
-                ) -> Result<$crate::Content, $crate::ApiError> {
-                    let _ = (identity, file, deadline);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn edit_smb_worktree(
-                    &self, identity: &$crate::Identity,
-                    request: storage_contract::snapshot_worktree::EditWorktree,
-                    source: &$crate::UploadSource,
-                ) -> Result<
-                    storage_contract::snapshot_worktree::WorktreeRevision, $crate::ApiError,
-                > {
-                    let _ = (identity, request, source);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn smb_worktree_working_open(
-                    &self, identity: &$crate::Identity, request: $crate::SmbWorktreeWorkingOpen,
-                ) -> Result<$crate::SmbNativeHandle, $crate::ApiError> {
-                    let _ = (identity, request);
-                    Err($crate::ApiError::unsupported())
-                }
                 fn smb_native_open(
                     &self, identity: &$crate::Identity, request: $crate::SmbNativeOpen<'_>,
                 ) -> Result<Option<$crate::SmbNativeHandle>, $crate::ApiError> {
@@ -686,168 +605,6 @@ macro_rules! methods {
                     let _ = (identity, request);
                     Err($crate::ApiError::unsupported())
                 }
-                fn register_snapshot_root(
-                    &self,
-                    identity: &$crate::Identity,
-                    slot: name_policy::SlotId,
-                    request: storage_contract::snapshot_worktree::root::RegisterSnapshotRoot,
-                ) -> Result<
-                    storage_contract::snapshot_worktree::root::RegisteredSnapshotRoot,
-                    $crate::ApiError,
-                > {
-                    let _ = (identity, slot, request);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn snapshot_root_context(
-                    &self,
-                    identity: &$crate::Identity,
-                    repository: storage_contract::RepositoryId,
-                ) -> Result<storage_contract::snapshot_worktree::SnapshotRootContext, $crate::ApiError> {
-                    let _ = (identity, repository);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn directory_snapshot_head(
-                    &self,
-                    identity: &$crate::Identity,
-                    repository: storage_contract::RepositoryId,
-                ) -> Result<
-                    storage_contract::snapshot_worktree::discovery::DirectorySnapshotHead,
-                    $crate::ApiError,
-                > {
-                    let _ = (identity, repository);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn directory_snapshot_history(
-                    &self,
-                    identity: &$crate::Identity,
-                    repository: storage_contract::RepositoryId,
-                    cursor: Option<
-                        storage_contract::snapshot_worktree::history::SnapshotHistoryCursor,
-                    >,
-                ) -> Result<
-                    storage_contract::snapshot_worktree::history::DirectorySnapshotHistory,
-                    $crate::ApiError,
-                > {
-                    let _ = (identity, repository, cursor);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn initialize_directory_snapshot(
-                    &self,
-                    identity: &$crate::Identity,
-                    request: storage_contract::snapshot_worktree::InitializeSnapshot,
-                ) -> Result<storage_contract::snapshot_worktree::SnapshotHandle, $crate::ApiError> {
-                    let _ = (identity, request);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn commit_directory_drafts(
-                    &self, identity: &$crate::Identity,
-                    request:
-                        storage_contract::snapshot_worktree::draft_commit::CommitDirectoryDrafts,
-                ) -> Result<
-                    storage_contract::snapshot_worktree::draft_commit::DirectoryDraftReceipt,
-                    $crate::ApiError,
-                > {
-                    let _ = (identity, request);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn directory_draft_receipt(
-                    &self, identity: &$crate::Identity,
-                    lookup: storage_contract::snapshot_worktree::draft_commit::DirectoryDraftLookup,
-                ) -> Result<
-                    storage_contract::snapshot_worktree::draft_commit::DirectoryDraftReceipt,
-                    $crate::ApiError,
-                > {
-                    let _ = (identity, lookup);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn directory_worktree_creation_receipt(
-                    &self,
-                    identity: &$crate::Identity,
-                    repository: storage_contract::RepositoryId,
-                    operation: storage_contract::OperationId,
-                ) -> Result<
-                    storage_contract::snapshot_worktree::outcome::WorktreeCreationReceipt,
-                    $crate::ApiError,
-                > {
-                    let _ = (identity, repository, operation);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn directory_worktree_commit_receipt(
-                    &self,
-                    identity: &$crate::Identity,
-                    repository: storage_contract::RepositoryId,
-                    operation: storage_contract::OperationId,
-                ) -> Result<
-                    storage_contract::snapshot_worktree::outcome::WorktreeCommitReceipt,
-                    $crate::ApiError,
-                > {
-                    let _ = (identity, repository, operation);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn create_directory_worktree(
-                    &self,
-                    identity: &$crate::Identity,
-                    request: storage_contract::snapshot_worktree::creation::AllocateWorktree,
-                ) -> Result<storage_contract::snapshot_worktree::WorktreeHandle, $crate::ApiError> {
-                    let _ = (identity, request);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn directory_worktree_instances(
-                    &self,
-                    identity: &$crate::Identity,
-                    repository: storage_contract::RepositoryId,
-                ) -> Result<
-                    storage_contract::snapshot_worktree::instances::DirectoryWorktrees,
-                    $crate::ApiError,
-                > {
-                    let _ = (identity, repository);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn directory_worktree_status(
-                    &self,
-                    identity: &$crate::Identity,
-                    target: storage_contract::snapshot_worktree::WorktreeHandle,
-                ) -> Result<storage_contract::snapshot_worktree::WorktreeStatus, $crate::ApiError> {
-                    let _ = (identity, target);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn authorize_directory_worktree_edit(
-                    &self,
-                    identity: &$crate::Identity,
-                    request: &storage_contract::snapshot_worktree::EditWorktree,
-                ) -> Result<(), $crate::ApiError> {
-                    let _ = (identity, request);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn edit_directory_worktree(
-                    &self,
-                    identity: &$crate::Identity,
-                    request: storage_contract::snapshot_worktree::EditWorktree,
-                    source: &$crate::UploadSource,
-                ) -> Result<
-                    storage_contract::snapshot_worktree::WorktreeRevision, $crate::ApiError,
-                > {
-                    let _ = (identity, request, source);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn commit_directory_worktree(
-                    &self,
-                    identity: &$crate::Identity,
-                    request: storage_contract::snapshot_worktree::CommitWorktree,
-                ) -> Result<storage_contract::snapshot_worktree::SnapshotHandle, $crate::ApiError> {
-                    let _ = (identity, request);
-                    Err($crate::ApiError::unsupported())
-                }
-                fn directory_worktree_content(
-                    &self,
-                    identity: &$crate::Identity,
-                    target: storage_contract::snapshot_worktree::WorktreeHandle,
-                    path: name_policy::LookupPath,
-                    deadline: std::time::Instant,
-                ) -> Result<$crate::Content, $crate::ApiError> {
-                    let _ = (identity, target, path, deadline);
-                    Err($crate::ApiError::unsupported())
-                }
                 fn file_container_tags(
                     &self,
                     identity: &$crate::Identity,
@@ -856,16 +613,6 @@ macro_rules! methods {
                     let _ = (identity, request);
                     Err($crate::ApiError::unsupported())
                 }
-                fn directory_snapshot_source(
-                    &self,
-                    _identity: &$crate::Identity,
-                    _request: $crate::ReadDirectorySnapshotSource,
-                    _cancellation: storage_contract::history_window::HistoryWindowCancellation,
-                ) -> Result<$crate::DirectorySnapshotSourcePreview, $crate::ApiError> {
-                    Err($crate::ApiError::unsupported())
-                }
-
-
 
                 /// Require the original native save's terminal workspace reconciliation.
                 /// A published receipt alone does not authorize SMB source cleanup.
@@ -1198,70 +945,12 @@ macro_rules! methods {
                     Err($crate::ApiError::unsupported())
                 }
 
-                fn directory_git_status(
-                    &self,
-                    _identity: &$crate::Identity,
-                    _repository: &str,
-                    _path: &str,
-                    _cancellation: storage_contract::history_window::HistoryWindowCancellation,
-                ) -> Result<storage_contract::directory_git::DirectoryGitStatus, $crate::ApiError> {
-                    Err($crate::ApiError::unsupported())
-                }
 
-                fn initialize_directory_git(
-                    &self,
-                    _identity: &$crate::Identity,
-                    _repository: &str,
-                    _request: storage_contract::directory_git::DirectoryGitInitializeBody,
-                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
-                    Err($crate::ApiError::unsupported())
-                }
 
-                fn stage_directory_git_child(
-                    &self,
-                    _identity: &$crate::Identity,
-                    _repository: &str,
-                    _request: storage_contract::directory_git::DirectoryGitStageChildBody,
-                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
-                    Err($crate::ApiError::unsupported())
-                }
 
-                fn stage_directory_git_owned(
-                    &self,
-                    _identity: &$crate::Identity,
-                    _repository: &str,
-                    _request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
-                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
-                    Err($crate::ApiError::unsupported())
-                }
 
-                fn directory_staging(
-                    &self,
-                    _identity: &$crate::Identity,
-                    _repository: &str,
-                    _branch: &str,
-                ) -> Result<storage_contract::directory_staging::DirectoryStagingStatus, $crate::ApiError> {
-                    Err($crate::ApiError::unsupported())
-                }
 
-                fn commit_directory_changes(
-                    &self,
-                    _identity: &$crate::Identity,
-                    _repository: &str,
-                    _branch: &str,
-                    _request: storage_contract::directory_staging::DirectoryCommitBody,
-                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
-                    Err($crate::ApiError::unsupported())
-                }
 
-                fn directory_history(
-                    &self,
-                    _identity: &$crate::Identity,
-                    _request: storage_contract::directory_history::DirectoryHistoryRequest,
-                    _cancellation: storage_contract::history_window::HistoryWindowCancellation,
-                ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, $crate::ApiError> {
-                    Err($crate::ApiError::unsupported())
-                }
 
                 fn workspace_content(
                     &self,

@@ -198,39 +198,30 @@ fn browser_guard_rejects_only_the_original_directory_reconciliation_post() {
 }
 
 #[test]
-fn directory_network_guard_rejects_retired_web_writes_and_entry_queries_only() {
+fn directory_network_guard_rejects_retired_reads_and_writes_without_rejecting_current_entries() {
     let origin = "http://127.0.0.1:2345";
     for path in [
-        "/api/repositories/repo_123/directory-scopes",
-        "/api/repositories/repo_123/directory-git/initialize",
-        "/api/repositories/repo_123/directory-git/stage",
-        "/api/repositories/repo_123/directory-git/children/stage",
-        "/api/repositories/repo_123/directory-branches/dbr_123/commits",
-        "/api/file-manager/disks/P01/directory-select",
-        "/api/file-manager/disks/P01/entries?entry=old",
+        "/api/directory-snapshots/commits/op", "/api/directory-worktrees/w/content",
+        "/api/file-manager/directory-snapshot-source", "/api/file-manager/disks/P01/snapshot-root",
+        "/api/repositories/r/directory-worktrees/creations/op", "/api/repositories/r/directories/d/history",
+        "/api/repositories/r/snapshot-head", "/api/repositories/r/snapshot-history",
+        "/api/repositories/r/snapshot-root-context",
+        "/api/repositories/r/directory-git?path=", "/api/repositories/r/directory-scopes",
+        "/api/repositories/r/directory-git/stage", "/api/repositories/r/directory-branches/b",
+        "/api/file-manager/disks/P01/namespace-batch", "/api/file-manager/disks/P01/directory-select",
+        "/api/file-manager/disks/P01/entries?path=&directory_branch_id=b&expected_tree_id=t",
         "/api/file-manager/disks/P01/entries?path=folder&entry=old",
     ] {
-        assert!(metadata::is_retired_directory_request(
-            &format!("{origin}{path}"),
-            origin,
-            "GET"
-        ));
+        for method in ["GET","HEAD","POST","PUT"] {
+            assert!(metadata::is_retired_directory_request(&format!("{origin}{path}"), origin, method));
+        }
     }
     for path in [
-        "/api/repositories/repo_123/directory-git?path=",
-        "/api/repositories/repo_123/default-branch",
-        "/api/repositories/repo_123/directory-layout/reconcile",
-        "/api/repositories/repo_123/directory-branches/dbr_123",
-        "/api/file-manager/files/file_123/branches/br_123/commits",
-        "/api/file-manager/disks/P01/directory-branches",
+        "/api/file-manager/files/f/default-branch", "/api/file-manager/files/f/branches/b/commits",
         "/api/file-manager/disks/P01/entries?path=entry",
         "/api/file-manager/disks/P01/entries?path=folder&selected_path=folder/file&selected_entry_id=entry_123",
     ] {
-        assert!(!metadata::is_retired_directory_request(
-            &format!("{origin}{path}"),
-            origin,
-            "GET"
-        ));
+        assert!(!metadata::is_retired_directory_request(&format!("{origin}{path}"), origin, "GET"));
     }
     assert!(!metadata::is_retired_directory_request(
         "http://other.test/api/repositories/r/directory-scopes",
@@ -309,38 +300,36 @@ fn webdriver_error_http_preserves_protocol_failure_even_for_success_looking_valu
 }
 
 #[test]
-fn directory_network_guard_rejects_branch_writes_but_keeps_reads_and_file_defaults() {
+fn directory_network_guard_blocks_detached_repository_writes_but_keeps_file_defaults_and_moves() {
     let origin = "http://127.0.0.1:2345";
-    for path in [
-        "/api/file-manager/disks/P01/directory-branches",
-        "/api/file-manager/disks/P01/directory-branches/from-history",
-        "/api/repositories/repo/directory-branches/dbr",
-        "/api/repositories/repo/default-branch",
-    ] {
-        for method in ["POST", "PUT", "PATCH"] {
-            assert!(metadata::is_retired_directory_request(
-                &format!("{origin}{path}"),
-                origin,
-                method,
-            ));
-        }
-        assert!(!metadata::is_retired_directory_request(
-            &format!("{origin}{path}"),
-            origin,
-            "GET",
-        ));
+    for path in ["/api/repositories", "/api/repositories/r/branches"] {
+        assert!(metadata::is_retired_directory_request(&format!("{origin}{path}"), origin, "POST"));
+        assert!(!metadata::is_retired_directory_request(&format!("{origin}{path}"), origin, "GET"));
     }
-    for path in [
-        "/api/file-manager/files/file/branches",
-        "/api/file-manager/files/file/branches/br",
-        "/api/file-manager/files/file/default-branch",
-        "/api/file-manager/disks/P01/namespace",
-        "/api/file-manager/disks/P01/object-move",
+    for path in ["/api/file-manager/files/f/branches","/api/file-manager/files/f/branches/b",
+        "/api/file-manager/files/f/default-branch","/api/file-manager/disks/P01/namespace",
+        "/api/file-manager/disks/P01/object-move","/api/file-deletion-batches/undo"] {
+        assert!(!metadata::is_retired_directory_request(&format!("{origin}{path}"), origin, "POST"));
+    }
+}
+
+
+#[test]
+fn retired_whole_history_plan_creators_do_not_hide_existing_file_version_purge_or_graph_reads() {
+    let origin = "http://127.0.0.1:2345";
+    for suffix in ["historical-save-plans", "split-plans"] {
+        let url = format!("{origin}/api/history-trees/history/{suffix}");
+        assert!(metadata::is_retired_directory_request(&url, origin, "POST"));
+        assert!(!metadata::is_retired_directory_request(&url, origin, "GET"));
+    }
+    for (method, path) in [
+        ("POST", "/api/history-trees/history/purge-plans"),
+        ("GET", "/api/history-trees/history/graph"),
+        ("GET", "/api/plans/plan"),
+        ("POST", "/api/plans/plan/cancel"),
+        ("POST", "/api/plans/plan/commit"),
+        ("POST", "/api/file-manager/files/file/branches"),
     ] {
-        assert!(!metadata::is_retired_directory_request(
-            &format!("{origin}{path}"),
-            origin,
-            "PUT",
-        ));
+        assert!(!metadata::is_retired_directory_request(&format!("{origin}{path}"), origin, method));
     }
 }

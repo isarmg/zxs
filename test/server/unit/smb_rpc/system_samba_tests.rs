@@ -4,10 +4,79 @@ use std::time::Duration;
 
 const PAYLOAD: &[u8] = b"ZXS Debian system Samba real engine payload\n";
 
-async fn marker(root: &Path, name: &str, server: &tokio::task::JoinHandle<io::Result<()>>) {
+/// A test-private owner: an early transport failure reports the actual cause,
+/// and the driver cannot publish a completion marker before all work drains.
+pub(super) struct FixtureService {
+    stop: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<io::Result<()>>,
+}
+
+impl FixtureService {
+    pub(super) async fn require_running(&mut self, phase: &str) {
+        if self.task.is_finished() {
+            match (&mut self.task).await {
+                Ok(Ok(())) => panic!("fixture service ended before {phase}"),
+                Ok(Err(error)) => panic!("fixture service failed before {phase}: {error}"),
+                Err(error) => panic!("fixture service task failed before {phase}: {error}"),
+            }
+        }
+    }
+
+    pub(super) async fn finish(self) {
+        let requested = self.stop.send(());
+        self.task.await.expect("fixture service panicked").expect("fixture service shutdown failed");
+        requested.expect("service exited before its owner requested shutdown");
+    }
+}
+
+/// Both harnesses require *both* services. Use the same stop boundary as the
+/// service, but make an unexpected bridge exit fail this fixture, not just log
+/// the optional-bridge error and keep HTTP running.
+pub(super) fn start_fixture_service(
+    listener: tokio::net::TcpListener,
+    http: (http_routing::Router, crate::HttpWork),
+    management: crate::service_lifecycle::ManagementShutdown,
+    rpc: impl std::future::Future<Output = io::Result<()>> + Send + 'static,
+) -> FixtureService {
+    fn completed(first: io::Result<()>, second: io::Result<()>) -> io::Result<()> {
+        match (first, second) {
+            (Ok(()), result) | (result, Ok(())) => result,
+            (Err(a), Err(b)) => Err(io::Error::other(format!("{a}; also: {b}"))),
+        }
+    }
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let (app, work) = http;
+        let http = |signal| async move {
+            let served = crate::http_shutdown::serve(listener, app, signal).await;
+            completed(served, work.drain().await)
+        };
+        let (report, failed) = tokio::sync::oneshot::channel();
+        let bridge = async move {
+            let error = match rpc.await {
+                Ok(()) => io::Error::new(io::ErrorKind::UnexpectedEof, "required SMB listener ended"),
+                Err(error) => error,
+            };
+            report.send(error).expect("required SMB result must reach its owner");
+        };
+        let mut early = None;
+        let shutdown = async {
+            tokio::select! {
+                biased;
+                failure = failed => early = Some(failure.expect("SMB failure reporter lost")),
+                request = stopped => request.expect("fixture owner dropped before orderly stop"),
+            }
+        };
+        let ended = crate::service_lifecycle::run_with_management(http, bridge, shutdown, management).await;
+        completed(ended, early.map_or(Ok(()), Err))
+    });
+    FixtureService { stop, task }
+}
+
+async fn marker(root: &Path, name: &str, server: &mut FixtureService) {
     tokio::time::timeout(Duration::from_secs(120), async {
         loop {
-            assert!(!server.is_finished(), "RPC listener ended before {name}");
+            server.require_running(name).await;
             match fs::read(root.join(name)) {
                 Ok(bytes) => {
                     assert_eq!(bytes, b"ok\n", "invalid client phase marker");
@@ -135,10 +204,10 @@ async fn system_samba_real_engine_fixture() {
         engine_uid, 0,
         "real engine must run as its private service user"
     );
-    let (temp, shared, fixture_backend, branch) = fixture();
+    let (temp, shared, _backend, branch) = fixture();
     let repository = repository(&shared);
-    // Default-share writes add a separate disk-root namespace. Keep all later
-    // revocation operations attached to this exact existing named repository.
+    // Both share forms expose the same ordinary root. Revocation remains
+    // bound to this exact registered root, not a share spelling.
     let rebind = |enabled| {
         let administrator = identity(&shared);
         let binding = shared
@@ -173,10 +242,8 @@ async fn system_samba_real_engine_fixture() {
         .find(|slot| slot.slot_id == named.primary_slot_id)
         .expect("invariant: named repository primary slot is configured");
     let default_disk_name = primary.directory_name().unwrap().as_str();
-    let (selection_repository, default_main, default_draft) =
-        directory_fixture(&shared, &fixture_backend);
-    assert_eq!(selection_repository, repository);
-    select_directory(&shared, &fixture_backend, &repository, &default_draft);
+    let (selected_file, default_main, default_draft) = file_selections(&shared, &branch);
+    select_file(&shared, &selected_file, &default_draft);
     {
         let mut selected = session(shared.clone(), &branch);
         let (opened, file) = open_file(&mut selected, true);
@@ -184,7 +251,7 @@ async fn system_samba_real_engine_fixture() {
         selected.dirty(opened.handle).unwrap();
         selected.close(opened.handle, false).unwrap();
     }
-    select_directory(&shared, &fixture_backend, &repository, &default_main);
+    select_file(&shared, &selected_file, &default_main);
     let socket = temp.path().join("rpc/smb.sock");
     let config = crate::SmbConfig {
         socket: socket.clone(),
@@ -217,6 +284,9 @@ async fn system_samba_real_engine_fixture() {
     let runtime =
         crate::ManagementRuntime::start(shared.backend.clone(), web_auth, &web_config).unwrap();
     let account = runtime.smb_account.clone().unwrap();
+    let mut management = crate::service_lifecycle::ManagementShutdown::new(runtime.backend.clone());
+    management.set_telemetry(runtime.telemetry.clone());
+    let workers = management.smb_connections();
     let web = crate::router_shared(
         runtime.backend,
         runtime.auth,
@@ -228,18 +298,14 @@ async fn system_samba_real_engine_fixture() {
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let web_port = listener.local_addr().unwrap().port();
-    let web_server = tokio::spawn(async move { http_routing::serve(listener, web).await });
     let auth = temp.auth.clone();
     let backend = shared.backend.clone();
-    let server = tokio::spawn(async move {
-        let mut shutdown = ConnectionShutdown::new();
-        let result = serve_owned(config, auth, backend, 4096, shutdown.registry(), account).await;
-        shutdown.finish().await?;
-        result
-    });
+    let mut server = start_fixture_service(
+        listener, web, management, serve_owned(config, auth, backend, 4096, workers, account),
+    );
     tokio::time::timeout(Duration::from_secs(10), async {
         while !socket.exists() {
-            assert!(!server.is_finished(), "RPC startup failed");
+            server.require_running("RPC socket readiness").await;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -253,7 +319,7 @@ async fn system_samba_real_engine_fixture() {
         "socket": socket,
         "repository_id": repository,
         "default_disk_name": default_disk_name,
-        "default_named_path": format!("{default_disk_name}/{}", named.name),
+        "default_report_path": format!("{default_disk_name}/report.txt"),
         "branch_id": branch,
         "payload": std::str::from_utf8(PAYLOAD).unwrap(),
     });
@@ -263,28 +329,19 @@ async fn system_samba_real_engine_fixture() {
         &json_codec::to_vec(&ready).unwrap(),
     )
     .unwrap();
-    marker(&root, "default-switch", &server).await;
-    select_directory(&shared, &fixture_backend, &repository, &default_draft);
+    marker(&root, "default-switch", &mut server).await;
+    select_file(&shared, &selected_file, &default_draft);
     publish_marker(&directory, "default-switched");
-    marker(&root, "default-restore", &server).await;
-    select_directory(&shared, &fixture_backend, &repository, &default_main);
+    marker(&root, "default-restore", &mut server).await;
+    select_file(&shared, &selected_file, &default_main);
     publish_marker(&directory, "default-restored");
-    marker(&root, "uploaded", &server).await;
+    marker(&root, "uploaded", &mut server).await;
     verify_body(&shared, &branch, "kept.txt", PAYLOAD);
     verify_body(&shared, &branch, "report.txt", b"old");
-    let default_root = shared
-        .backend
-        .repositories_snapshot(&identity(&shared))
-        .unwrap()
-        .into_iter()
-        .find(|repository| repository.file_manager_root && repository.primary_slot_id == "P01")
-        .expect("default SMB write did not create its internal root");
-    verify_body(
-        &shared,
-        &default_root.main_branch_id,
-        "default-kept.txt",
-        PAYLOAD,
-    );
+    let roots = shared.backend.repositories_snapshot(&identity(&shared)).unwrap();
+    assert_eq!(roots.len(), 1, "both shares must resolve the same registered namespace");
+    assert_eq!(roots[0].repository_id, repository);
+    verify_body(&shared, &branch, "default-kept.txt", PAYLOAD);
     rebind(false);
     // Replace only this fixture's sole authority: an already-authenticated Alice
     // session must now return Unauthorized/EACCES independently of stale binding.
@@ -297,11 +354,11 @@ async fn system_samba_real_engine_fixture() {
         .unwrap(),
     );
     publish_marker(&directory, "revoked");
-    marker(&root, "denied", &server).await;
+    marker(&root, "denied", &mut server).await;
     crate::lock(&temp.auth).replace_authority(AuthStore::open(&temp.path().join("auth")).unwrap());
     rebind(true);
     publish_marker(&directory, "enabled");
-    marker(&root, "done", &server).await;
+    marker(&root, "done", &mut server).await;
     let tree = shared
         .backend
         .tree_snapshot(
@@ -318,26 +375,10 @@ async fn system_samba_real_engine_fixture() {
         "client did not delete its published file"
     );
     verify_body(&shared, &branch, "report.txt", b"old");
-    assert!(
-        shared
-            .backend
-            .tree_snapshot(
-                &identity(&shared),
-                crate::ReadTree {
-                    branch: &default_root.main_branch_id,
-                    commit: None,
-                }
-            )
-            .unwrap()
-            .entries
-            .is_empty(),
-        "default share did not delete its published file"
-    );
-    web_server.abort();
-    assert!(web_server.await.unwrap_err().is_cancelled());
-    server.abort();
-    assert!(server.await.unwrap_err().is_cancelled());
-    let receipt = json!({"real_engine":true,"published_upload_and_rename_verified":true,"original_body_preserved":true,"old_tree_authority_revoked_then_restored":true,"new_tree_binding_disabled_then_restored":true,"published_delete_verified":true,"default_namespace_verified":true,"default_branch_switch_verified":true});
+    assert_eq!(tree.entries[0].path.as_str(), "report.txt",
+        "neither share's uploaded FILE may survive its confirmed deletion");
+    server.finish().await;
+    let receipt = json!({"real_engine":true,"published_upload_and_rename_verified":true,"original_body_preserved":true,"old_tree_authority_revoked_then_restored":true,"new_tree_binding_disabled_then_restored":true,"published_delete_verified":true,"default_namespace_verified":true,"file_branch_switch_verified":true});
     platform_io::fs_safety::AtomicFile::create(
         &directory,
         &platform_io::fs_safety::EntryName::new("verified.json").unwrap(),

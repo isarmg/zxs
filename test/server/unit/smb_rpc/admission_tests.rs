@@ -50,21 +50,12 @@ fn disconnect(connection: Connection, cancel: bool) {
 
 #[test]
 fn session_cap_is_shared_across_repositories_and_rejects_other_samba_names() {
-    let (_temp, shared, _backend, _branch) = fixture();
-    let repository = repository(&shared);
-    let other_repository = shared
-        .backend
-        .create_repository(
-            &identity(&shared),
-            crate::CreateRepository {
-                name: storage_contract::RepositoryName::parse("second-share").unwrap(),
-                primary_slot_id: "P01".into(),
-                target_copies: 3,
-                operation_id: storage_contract::OperationId::generate().unwrap(),
-            },
-        )
-        .unwrap()
-        .repository_id;
+    let (_temp, shared, backend) = default_share_tests::empty_fixture(true);
+    let (repository, other_repository) = backend.inner.test_with_engine_locked(|engine| {
+        let mut root = |slot| engine.create_disk_root(slot, "alice",
+            storage_contract::OperationId::generate().unwrap()).unwrap().repository_id;
+        (root("P01"), root("P02"))
+    });
     let mut idle = Vec::new();
     for index in 0..MAX_AUTHENTICATED_SESSIONS {
         let target = if index % 2 == 0 {

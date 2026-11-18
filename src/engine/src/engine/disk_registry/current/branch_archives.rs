@@ -44,7 +44,8 @@ impl CurrentNamespaces {
             .repositories
             .get(&history.repository_id)
             .ok_or_else(invalid)?;
-        if branch.branch_id != id
+        if crate::business::file_nodes::branch_owner(branch).is_err()
+            || branch.branch_id != id
             || scope.head != branch.head_commit_id
             || head.commit_id != branch.head_commit_id
             || head.history_tree_id != branch.history_tree_id
@@ -195,7 +196,8 @@ fn verify_archive_eligibility(state: &State, branch: &Branch) -> Result<()> {
         .repositories
         .get(&history.repository_id)
         .ok_or_else(invalid)?;
-    if repository.main_branch_id == branch.branch_id
+    if crate::business::file_nodes::branch_owner(branch).is_err()
+        || repository.main_branch_id == branch.branch_id
         || state
             .file_selections
             .values()

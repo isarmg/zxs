@@ -12,7 +12,7 @@ const QUERIES: [(&str, &str); 13] = [
     ("Integrity check", "完整性检查"),
     ("Repository", "仓库详情"),
     ("Operation", "操作"),
-    ("Plan", "计划"),
+    ("File-version purge plan", "文件版本清理计划"),
     ("Branch tree", "分支树"),
     ("Branch details", "分支详情"),
     ("File history", "文件历史"),

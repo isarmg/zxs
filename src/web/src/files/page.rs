@@ -17,15 +17,8 @@ impl DirectoryKey {
         Self(name_policy::path_key(path))
     }
 
-    pub(super) fn destination(prefix: &str, path: Option<&name_policy::PortablePath>) -> Self {
-        let mut directory = Self::navigation(prefix);
-        if let Some(path) = path {
-            if !directory.0.is_empty() {
-                directory.0.push('/');
-            }
-            directory.0.push_str(path.key());
-        }
-        directory
+    pub(super) fn destination(path: Option<&name_policy::PortablePath>) -> Self {
+        Self(path.map_or_else(String::new, |path| path.key().to_owned()))
     }
 }
 
@@ -83,13 +76,9 @@ pub(crate) struct PageParts {
     pub(crate) next: Option<String>,
     pub(crate) previous: Option<String>,
     pub(crate) total: u64,
-    pub(crate) branches: Vec<DirectoryBranch>,
     pub(crate) context: Option<Context>,
     pub(crate) writable: bool,
-    pub(crate) preview: bool,
     pub(crate) directory_file_count: u64,
-    pub(crate) branches_supported: bool,
-    pub(crate) default_branch_scope: bool,
 }
 impl Page {
     pub(super) fn parse(
@@ -100,9 +89,6 @@ impl Page {
         selected: Option<&Entry>,
     ) -> Result<Self, api::Error> {
         ingress::page(value, slot, directory, limit, selected).map_err(Into::into)
-    }
-    pub(super) fn preview(&self) -> bool {
-        self.parts.preview
     }
     pub(super) fn into_parts(self) -> PageParts {
         self.parts
@@ -126,39 +112,6 @@ impl Context {
         self.repository_path
             .as_ref()
             .map_or("", |path| path.as_str())
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DirectoryBranch {
-    id: String,
-    name: String,
-    head_tree_id: String,
-    path: Option<name_policy::PortablePath>,
-    repository_id: String,
-    current: bool,
-}
-impl DirectoryBranch {
-    pub(in crate::files) fn parse(value: Value) -> Result<Self, api::Error> {
-        ingress::branch(value).map_err(Into::into)
-    }
-    pub(crate) fn id(&self) -> &str {
-        &self.id
-    }
-    pub(crate) fn name(&self) -> &str {
-        &self.name
-    }
-    pub(crate) fn head_tree_id(&self) -> &str {
-        &self.head_tree_id
-    }
-    pub(crate) fn path(&self) -> &str {
-        self.path.as_ref().map_or("", |path| path.as_str())
-    }
-    pub(crate) fn repository_id(&self) -> &str {
-        &self.repository_id
-    }
-    pub(crate) fn current(&self) -> bool {
-        self.current
     }
 }
 
@@ -203,7 +156,6 @@ enum EntryIdentity {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Entry {
-    preview: bool,
     entry_id: EntryIdentity,
     path: DisplayPath,
     body: Body,
@@ -219,9 +171,6 @@ impl Entry {
             Body::Directory | Body::File { .. } => None,
         }
     }
-    pub(crate) fn preview(&self) -> bool {
-        self.preview
-    }
     pub(crate) fn entry_id(&self) -> &str {
         match &self.entry_id {
             EntryIdentity::Namespace(entry) => entry,
@@ -233,7 +182,6 @@ impl Entry {
     }
     pub(super) fn retained(file: &storage_contract::detached_history::File) -> Self {
         Self {
-            preview: false,
             entry_id: EntryIdentity::Retained(file.file_id.clone()),
             path: DisplayPath {
                 text: file.recorded_name.clone(),
@@ -315,7 +263,7 @@ impl Entry {
         self.backup
     }
     pub(crate) fn read_only(&self) -> bool {
-        self.read_only || self.preview
+        self.read_only
     }
     pub(crate) fn inherited(&self) -> bool {
         matches!(

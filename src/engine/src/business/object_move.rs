@@ -674,6 +674,20 @@ fn capture(
     })
 }
 
+fn basis_rows<'a>(
+    state: &'a State, view: Option<&'a crate::engine::CurrentNamespaces>, owner: &Repository,
+) -> Result<(&'a str, &'a [Entry])> {
+    if owner.file_manager_root {
+        return crate::engine::fresh_layout::namespace::ordinary_root_basis(
+            state, view, owner.repository_id.parse()?,
+        );
+    }
+    // Preserve the separate prior operation path. A missing original for a
+    // claimed ordinary root is an error above; never fall back here on failure.
+    let head = state.branches.get(&owner.main_branch_id).ok_or_else(changed)?;
+    Ok((&head.head_commit_id, directory_git::current_entries(state, view, &owner.repository_id)?))
+}
+
 fn basis(
     state: &State,
     view: Option<&crate::engine::CurrentNamespaces>,
@@ -688,11 +702,7 @@ fn basis(
                 "move source repository missing",
             )
         })?;
-    let source_head = state.branches[&source.main_branch_id]
-        .head_commit_id
-        .clone();
-    let source_entries =
-        directory_git::current_entries(state, view, &source.repository_id)?.to_vec();
+    let (source_head, source_entries) = basis_rows(state, view, source)?;
     let (target_head, target_entries) = match &request.target_repository_id {
         Some(id) => {
             let target = state.repositories.get(id.as_str()).ok_or_else(|| {
@@ -701,20 +711,14 @@ fn basis(
                     "move destination repository missing",
                 )
             })?;
-            (
-                Some(
-                    state.branches[&target.main_branch_id]
-                        .head_commit_id
-                        .clone(),
-                ),
-                directory_git::current_entries(state, view, id.as_str())?.to_vec(),
-            )
+            let (head, entries) = basis_rows(state, view, target)?;
+            (Some(head.to_owned()), entries.to_vec())
         }
         None => (None, Vec::new()),
     };
     Ok(NamespaceBasis {
-        source_head,
-        source_entries,
+        source_head: source_head.to_owned(),
+        source_entries: source_entries.to_vec(),
         target_head,
         target_entries,
     })

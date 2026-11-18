@@ -3,7 +3,7 @@ pub(crate) mod birth;
 pub(crate) mod unborn_save;
 pub(crate) mod unborn_first;
 
-use crate::business::file_draft::{Outcome, invalid, trace_limit};
+use crate::business::file_draft::{Outcome, PublicationGraph, invalid};
 use crate::{Engine, Error, OperationResult, Result, State};
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::file_draft::{DraftCommand, FileWorkingState};
@@ -186,7 +186,7 @@ pub(crate) fn decode(previous: &State, receipt: &OperationResult) -> Result<Deco
         }
         let allocations = content.get("allocations")
             .and_then(json_codec::Value::as_array).ok_or_else(invalid)?;
-        if allocations.len() > trace_limit(previous, request.target())? {
+        if allocations.len() > PublicationGraph::Revised.limit(previous, request.target())? {
             return Err(Error::FileDraft(crate::DraftError::Size));
         }
     }

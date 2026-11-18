@@ -1,11 +1,11 @@
-//! Existing identities survive replay and restoration; split copies are independent.
+//! Existing ordinary FILE storage identities survive replay and registered-root restoration.
 use super::*;
 
 #[test]
 fn version_builds_allocate_distinct_local_identities_without_changing_the_live_base() {
     let fixture = Fixture::new();
     let mut engine = fixture.initialize();
-    let repo = repository(&mut engine, 1);
+    let repo = engine.create_disk_root("P01", "admin", OperationId::generate().unwrap()).unwrap();
     let file = new_id("file").unwrap();
     let path = name_policy::PortablePath::parse("file.txt").unwrap();
     let source = fixture.temp.path().join("source");
@@ -56,7 +56,7 @@ fn version_builds_allocate_distinct_local_identities_without_changing_the_live_b
 fn purged_versions_retain_local_identity_after_reopen_and_replay() {
     let fixture = Fixture::new();
     let mut engine = fixture.initialize();
-    let repo = repository(&mut engine, 3);
+    let repo = engine.create_disk_root("P01", "admin", OperationId::generate().unwrap()).unwrap();
     save(&mut engine, &repo.main_branch_id, "file.txt", b"first");
     let first = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
     save(&mut engine, &repo.main_branch_id, "file.txt", b"second");
@@ -117,134 +117,21 @@ fn purged_versions_retain_local_identity_after_reopen_and_replay() {
 }
 
 #[test]
-fn mixed_split_and_package_restore_preserve_local_storage_identities() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let source = Fixture::new();
-    fs::set_permissions(source.temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let mut engine = source.initialize();
-    let repo = repository(&mut engine, 3);
-    let cut = save(&mut engine, &repo.main_branch_id, "file.txt", b"first")
-        .commit_id
-        .unwrap();
-    save(&mut engine, &repo.main_branch_id, "file.txt", b"second");
-    let second = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
-    save(&mut engine, &repo.main_branch_id, "file.txt", b"third");
-    let purge = engine
-        .create_purge_plan(
-            &repo.history_tree_id,
-            vec![second.version_id.clone()],
-            "admin",
-        )
-        .unwrap();
-    engine
-        .commit_plan(
-            &purge.plan_id,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let old_versions = engine.state.versions.clone();
-    let split = engine
-        .create_split_plan(&repo.history_tree_id, &cut, "admin")
-        .unwrap();
-    let result = engine
-        .commit_plan(
-            &split.plan_id,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let history = result.history_tree_id.unwrap();
-    let branch = engine.state.histories[&history]
-        .main_branch_id
-        .clone()
-        .unwrap();
-    let split_versions = engine
-        .state
-        .versions
-        .values()
-        .filter(|version| version.history_tree_id == history)
-        .cloned()
-        .collect::<Vec<_>>();
-    let split_ids = split_versions.iter().map(|version| version.storage_id)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(split_versions.len(), old_versions.len());
-    assert_eq!(split_ids.len(), split_versions.len());
-    // A split creates new FileId/VersionId records for retained bodies. Their
-    // local IDs are allocations, not the old sequential names copied verbatim.
-    // The purged record has no new body and retains its admitted identity below.
-    for version in &split_versions {
-        assert!(!old_versions.contains_key(&version.version_id));
-        assert!(old_versions.values().all(|old| old.file_id != version.file_id));
-    }
-    for (id, version) in old_versions.iter() {
-        assert_eq!(&engine.state.versions[id], version);
-    }
-    let tombstone = engine
-        .state
-        .versions
-        .values()
-        .find(|version| {
-            version.history_tree_id == history
-                && version.storage_id == old_versions[&second.version_id].storage_id
-        })
-        .unwrap()
-        .clone();
-    assert_eq!(
-        engine.state.content_states[&tombstone.version_id],
-        ContentState::Purged
-    );
-    assert_eq!(
-        tombstone.storage_id,
-        old_versions[&second.version_id].storage_id
-    );
-    assert_eq!(
-        tombstone.created_at,
-        old_versions[&second.version_id].created_at
-    );
-    drop(engine);
-    let mut engine = Engine::open(&source.root).unwrap();
-    for version in &split_versions {
-        assert_eq!(&engine.state.versions[&version.version_id], version);
-    }
-    save(&mut engine, &branch, "file.txt", b"fourth");
-    let latest = engine.list_tree(&branch).unwrap()[0].clone();
-    assert!(!split_ids.contains(&engine.state.versions[&latest.version_id].storage_id));
-
-    let package = source.temp.path().join("package");
-    engine.export_history_package(&history, &package).unwrap();
-    let imported = engine
-        .state
-        .versions
-        .iter()
-        .filter(|(_, version)| version.history_tree_id == history)
-        .map(|(id, version)| (id.clone(), version.clone()))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let target = Fixture::new();
-    let mut restored = target.initialize();
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            3,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    for (id, version) in &imported {
-        assert_eq!(&restored.state.versions[id], version);
-    }
-    save(&mut restored, &branch, "file.txt", b"fifth");
-    let fifth = restored.list_tree(&branch).unwrap()[0].clone();
-    let fifth_id = restored.state.versions[&fifth.version_id].storage_id;
-    assert!(imported.values().all(|version| version.storage_id != fifth_id));
-    drop(restored);
-    let mut reopened = Engine::open(&target.root).unwrap();
-    assert_eq!(reopened.state.versions[&tombstone.version_id], tombstone);
-    save(&mut reopened, &branch, "file.txt", b"sixth");
-    let sixth = reopened.list_tree(&branch).unwrap()[0].clone();
-    let sixth_id = reopened.state.versions[&sixth.version_id].storage_id;
-    assert_ne!(sixth_id, fifth_id);
-    assert!(imported.values().all(|version| version.storage_id != sixth_id));
+fn registered_disk_restore_preserves_ordinary_file_versions_and_local_storage_ids() {
+    let f = Fixture::new();
+    let mut original = f.initialize();
+    let repo = original.create_disk_root("P01", "admin", OperationId::generate().unwrap()).unwrap();
+    save(&mut original, &repo.main_branch_id, "body.txt", b"first");
+    let before = original.list_tree(&repo.main_branch_id).unwrap()[0].clone();
+    save(&mut original, &repo.main_branch_id, "body.txt", b"second");
+    let after = original.list_tree(&repo.main_branch_id).unwrap()[0].clone();
+    let versions = original.state().versions.clone();
+    assert_ne!(versions[&before.version_id].storage_id, versions[&after.version_id].storage_id);
+    let roots = original.config().disks.iter().map(|d| d.root.clone()).collect::<Vec<_>>();
+    drop(original);
+    fs::remove_dir_all(&f.root).unwrap();
+    let restored = Engine::restore_from_disks(&f.root, &roots).unwrap();
+    assert_eq!(restored.state().versions, versions);
+    assert_eq!(bytes(&restored, &before.version_id), b"first");
+    assert_eq!(bytes(&restored, &after.version_id), b"second");
 }

@@ -329,23 +329,15 @@ impl<'a> Application<'a> {
             .map_err(error)
     }
 
-    /// Destructive purge/clear and split plans retain owner, digest and domain
-    /// checks at execution time, even when prepared by a different adapter.
+    /// Purging an ordinary FILE version requires the exact owned review.
     pub fn commit_plan(
         &mut self,
         command: CommitPlan,
     ) -> Result<storage_engine::OperationResult, ApiError> {
-        let plan = self.engine.plan(&command.plan_id).map_err(error)?;
-        if plan.principal != self.identity.principal {
-            return Err(ApiError::forbidden());
-        }
+        let plan = super::owned_purge_plan(self.engine, &command.plan_id, &self.identity.principal)?;
         if command.plan_digest != plan.digest {
             return Err(ApiError::conflict(
-                if plan.kind == "split" {
-                    storage_contract::ErrorCode::SplitPlanStale
-                } else {
-                    storage_contract::ErrorCode::PlanStale
-                },
+                storage_contract::ErrorCode::PlanStale,
                 "plan digest does not match",
             ));
         }

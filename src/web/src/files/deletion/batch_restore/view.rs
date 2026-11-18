@@ -57,7 +57,7 @@ pub(in crate::files::deletion) fn view(state: RwSignal<State>) -> impl IntoView 
                 <section class="zxs-surface zxs-stack" data-zxs-batch-restore-review="">
                     <h3>{t("确认原子恢复完整删除批次", "Confirm atomic restoration of the complete deletion batch")}</h3>
                     {retained_view(&review.request)}
-                    <p>{t("一次操作撤销原批次列出的全部准确删除节点，恢复这些文件的 SMB 可见性并解除编辑冻结。任一节点已变更、已恢复、受目录删除约束或权限不符时整批拒绝，不跳过文件、不拆成逐文件请求。正文、目录工作树及历史保留。", "One operation removes every exact deletion node in the original batch, restoring SMB visibility and unfreezing these files. Any changed or already restored node, directory deletion constraint or permission failure rejects the whole batch. No files are skipped and no per-file requests are sent. Content, folder working trees and history remain retained.")}</p>
+                    <p>{t("一次操作撤销原批次列出的全部准确删除节点，恢复这些文件的 SMB 可见性并解除编辑冻结。任一节点已变更、已恢复或权限不符时整批拒绝，不跳过文件、不拆成逐文件请求。正文及文件历史保留。", "One operation removes every exact deletion node in the original batch, restoring SMB visibility and unfreezing these files. Any changed or already restored node or permission failure rejects the whole batch. No files are skipped and no per-file requests are sent. Content and file history are retained.")}</p>
                     <div class="zxs-row">
                         <button class="zxs-button" data-zxs-confirm-batch-restore=""
                             disabled=move ||state.with(|s| reviewed(s, epoch, generation).is_none())

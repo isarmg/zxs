@@ -5,7 +5,8 @@ use json_codec::Value;
 pub(super) fn parse(value: Value) -> Result<Entry, DecodeError> {
     let mut fields = Object::parse(value, "entry")?;
     let entry_id = fields.id("entry_id")?;
-    let path = display_path(fields.text("path")?)?;
+    let backup = fields.backup()?;
+    let path = display_path(fields.text("path")?, backup)?;
     let name = fields.text("name")?;
     if path.text.rsplit('/').next() != Some(name.as_str()) {
         return Err(DecodeError::Relation(
@@ -13,7 +14,6 @@ pub(super) fn parse(value: Value) -> Result<Entry, DecodeError> {
         ));
     }
     let kind = fields.text("kind")?;
-    let backup = fields.backup()?;
     let size = fields.integer("size")?;
     let file_id = fields.text("file_id")?;
     let (body, location, note, read_only) = match kind.as_str() {
@@ -23,7 +23,6 @@ pub(super) fn parse(value: Value) -> Result<Entry, DecodeError> {
     };
     fields.finish()?;
     Ok(Entry {
-        preview: false,
         entry_id: EntryIdentity::Namespace(entry_id),
         path,
         body,
@@ -46,10 +45,13 @@ fn directory(
             "directories have no file identity, size or version",
         ));
     }
-    let (location, note) = if fields.contains("repository_id") {
-        if backup {
+    let (location, note) = if backup {
+        if fields.contains("repository_id") {
             return Err(DecodeError::Relation("backup directories are virtual"));
         }
+        (None, None)
+    } else {
+        // A primary folder is an actual namespace occurrence, including at disk root.
         let location = location(fields, false, false)?;
         if location.selected_branch_id.is_some() {
             return Err(DecodeError::Relation(
@@ -57,8 +59,6 @@ fn directory(
             ));
         }
         (Some(location), Some(fields.text("note")?))
-    } else {
-        (None, None)
     };
     let read_only = if backup {
         if !fields.boolean("read_only")? {

@@ -24,7 +24,6 @@ pub enum WorkspaceWrite<'a> {
 #[derive(Clone, Debug)]
 pub struct CreateWorkspace {
     pub branch_id: String,
-    pub source_commit_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]

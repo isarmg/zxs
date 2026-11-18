@@ -43,10 +43,10 @@ strict_string_deserialize!(Mode { Production => "production", Development => "de
 /// Immutable semantic format authenticated by the Genesis configuration and disk seals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum PoolSemanticFormat {
-    #[serialization(rename = "manual-directory-v1")]
-    ManualDirectoryV1,
+    #[serialization(rename = "file-containers")]
+    FileContainers,
 }
-strict_string_deserialize!(PoolSemanticFormat { ManualDirectoryV1 => "manual-directory-v1" });
+strict_string_deserialize!(PoolSemanticFormat { FileContainers => "file-containers" });
 
 /// The validated display name consumed by the disk configuration contract.
 pub type DiskName = name_policy::Name;
@@ -194,7 +194,7 @@ impl Config {
         }
         Ok(Self {
             pool_id: crate::new_id("pool")?,
-            pool_semantic_format: PoolSemanticFormat::ManualDirectoryV1,
+            pool_semantic_format: PoolSemanticFormat::FileContainers,
             storage_roots: BTreeMap::new(),
             mode: Mode::Development,
             disks: disks
@@ -265,7 +265,7 @@ string_state!(BranchState {
 string_state!(WorkspaceState {
     Open => "open", Sealed => "sealed", Committed => "committed", Aborted => "aborted"
 });
-string_state!(WorkspacePurpose { Normal => "normal", HistoricalBranch => "historical_branch" });
+string_state!(WorkspacePurpose { Normal => "normal" });
 string_state!(PlanState {
     Ready => "ready", Cancelled => "cancelled", Committed => "committed", Completed => "completed"
 });
@@ -498,7 +498,7 @@ pub struct FileHistoryMergeInput {
 }
 
 /// A logical path's write target; several aliases of one identity may expose
-/// different immutable versions and independently inherited write intent.
+/// different immutable versions and select independent ordinary FILE branches.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
 pub struct FileContext {
@@ -507,6 +507,8 @@ pub struct FileContext {
     #[serialization(default, skip_serializing_if = "is_zero", with = "crate::u64_string")]
     pub selection_generation: u64,
     pub branch_id: String,
+    #[serialization(skip_deserializing, skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::reject_non_file_table")]
     pub inherited_from: Option<String>,
 }
 
@@ -876,15 +878,11 @@ pub struct Workspace {
     pub selected_file_branches: BTreeMap<String, String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub selected_file_contexts: BTreeMap<String, FileContext>,
-    /// Selected composition identities at open time; selection is a write even
-    /// when two directory snapshots happen to expose identical file bytes.
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "crate::reject_non_file_table")]
     pub selected_directory_branches: BTreeMap<String, String>,
-    #[serialization(
-        default,
-        skip_serializing_if = "BTreeMap::is_empty",
-        with = "crate::u64_string_map"
-    )]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "crate::reject_non_file_table")]
     pub directory_selection_generations: BTreeMap<String, u64>,
     #[serialization(
         default,
@@ -1087,15 +1085,17 @@ pub struct State {
     /// Selected independent content branch for each file in its disk namespace.
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_selections: crate::TrackedMap<String>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "crate::reject_non_file_table")]
     pub directory_branches: crate::TrackedMap<DirectoryBranch>,
-    /// Only an explicit initialization creates a directory repository. Legacy
-    /// composition rows alone do not enable Git-like staging or branch actions.
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "crate::reject_non_file_table")]
     pub directory_git_repositories: crate::TrackedMap<crate::directory_git::DirectoryGitRepository>,
-    #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "SharedRecords::is_empty",
+        serialize_with = "crate::reject_non_file_table")]
     pub directory_trees: crate::TrackedRecords<DirectoryTree>,
-    /// Current projection intent, separate from each public file branch HEAD.
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "crate::reject_non_file_table")]
     pub file_write_origins: crate::TrackedMap<String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_contexts: crate::TrackedMap<FileContext>,
@@ -1113,7 +1113,8 @@ pub struct State {
     pub file_node_parents: crate::TrackedMap<Vec<String>>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_path_notes: crate::TrackedMap<String>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "crate::reject_non_file_table")]
     pub directory_tree_selections: crate::TrackedMap<String>,
     /// Physical owner path; selecting an old logical alias never relocates it.
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1123,13 +1124,11 @@ pub struct State {
     pub file_backup_paths: crate::TrackedMap<BTreeMap<String, String>>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_backup_policies: crate::TrackedMap<String>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "crate::reject_non_file_table")]
     pub directory_selections: crate::TrackedMap<String>,
-    #[serialization(
-        default,
-        skip_serializing_if = "BTreeMap::is_empty",
-        with = "crate::tracked_u64_string_map"
-    )]
+    #[serialization(skip_deserializing, skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "crate::reject_non_file_table")]
     pub directory_selection_generations: crate::TrackedMap<u64>,
     #[serialization(
         default,

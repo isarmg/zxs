@@ -40,52 +40,58 @@ fn file_snapshot(entries: &[Entry], file: &Entry) -> Vec<Entry> {
         .collect()
 }
 
-pub(crate) fn synchronize_directory_edits(
+/// Advance only the FILE occurrences whose bodies this workspace actually
+/// published. A rename preserves EntryId; another path or equal hash cannot
+/// substitute for the entry, FILE and Version produced by the current write.
+pub(super) fn publish_workspace_file_heads(
     state: &mut State,
+    repo: &Repository,
     commit_id: &str,
-    written_paths: &[String],
+    written: &BTreeMap<String, (String, String)>,
     principal: &str,
     operation: OperationId,
 ) -> Result<()> {
-    let current = state.commits.get(commit_id).cloned().ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::StateInvalid,
-            "directory commit missing",
-        )
+    let current = state.commits.get_shared(commit_id).ok_or_else(|| {
+        Error::new(storage_contract::ErrorCode::StateInvalid, "owning namespace commit missing")
     })?;
+    if current.history_tree_id != repo.history_tree_id
+        || state.branches.get(&repo.main_branch_id).is_none_or(|b| b.head_commit_id != commit_id)
+    {
+        return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "FILE namespace HEAD differs"));
+    }
     for file in current.entries.iter().filter(|e| {
-        e.kind == NamespaceEntryKind::File && written_paths.iter().any(|path| path == e.path())
+        e.kind == NamespaceEntryKind::File && written.get(&e.entry_id)
+            .is_some_and(|(id, version)| id == &e.file_id && version == &e.version_id)
     }) {
-        let Some(repo) = state
-            .repositories
-            .values()
-            .find(|r| r.history_tree_id == current.history_tree_id)
-        else {
-            continue;
-        };
-        let Some(context) =
-            namespace::file_context::context_at_key(state, &repo.repository_id, file.lookup_key())
-        else {
-            continue;
-        };
+        let mut context = namespace::file_context::context_at_key(
+            state, &repo.repository_id, file.lookup_key(),
+        ).ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "FILE context missing"))?;
+        if context.inherited_from.is_some() {
+            return Err(Error::new(
+                storage_contract::ErrorCode::FileBranchConflict,
+                "an inherited directory selection cannot publish an ordinary FILE",
+            ));
+        }
+        if context.branch_id == repo.main_branch_id {
+            // A physical disk root owns an independent FILE root. Other logical
+            // namespaces retain their existing structural main as their default.
+            if !repo.file_manager_root { continue; }
+            let id = ensure_shared_file_branch(state, &current, file)?;
+            context.branch_id = id;
+            context.node_id = state.branches.get(&context.branch_id).and_then(|b| b.file_node_id.clone());
+            state.file_contexts.insert(
+                namespace::file_context::context_key_from_key(&repo.repository_id, file.lookup_key()),
+                context.clone(),
+            );
+        }
         let branch_id = context.branch_id;
-        if !state
-            .branches
-            .get(&branch_id)
-            .is_some_and(|b| b.file_id.as_deref() == Some(&file.file_id))
-        {
-            continue;
-        }
-
-        let branch = state.branches.get(&branch_id).cloned().ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "selected file branch missing",
-            )
-        })?;
-        if branch.history_tree_id != current.history_tree_id {
-            continue;
-        }
+        let branch = state.branches.get(&branch_id).filter(|branch| {
+            branch.file_id.as_deref() == Some(&file.file_id)
+                && branch.history_tree_id == current.history_tree_id
+        }).cloned().ok_or_else(|| Error::new(
+            storage_contract::ErrorCode::FileBranchConflict,
+            "selected branch does not own this FILE",
+        ))?;
         if branch.state != BranchState::Active || state.file_branch_aliases.contains_key(&branch_id)
         {
             return Err(Error::new(
@@ -371,7 +377,6 @@ fn publish_selected_file_source_with_ids(
         })?;
     target.version_id = source.version_id;
     target.size = source.size;
-    let changed_path = target.path().to_owned();
     let mut pending_file_versions = current.pending_file_versions.clone();
     if let Some(source) = branch.pending_file_versions.get(file_id) {
         pending_file_versions.insert(file_id.into(), source.clone());
@@ -442,14 +447,6 @@ fn publish_selected_file_source_with_ids(
             inherited_from: None,
         },
     );
-    super::directory::record_projected_directory_edits_with_ids(
-        state,
-        &repository.repository_id,
-        &[changed_path],
-        None,
-        view,
-        ids,
-    )?;
     Ok(id)
 }
 
@@ -786,22 +783,14 @@ impl Engine {
             let mut entries=previous.entries.clone();let deleted=super::apply_namespace(&mut entries,&change)?;
             validate_entries(&mut entries,engine.config.max_entries)?;
             if let Some(view) = &engine.current_namespaces { view.validate_draft(&repo.main_branch_id, &entries)?; }
-            let renamed_directories=directory::prepare_current_renamed_directories(state,repository,&previous.entries,&entries,std::slice::from_ref(&change))?;
-            let path_changes = super::directory::namespace_locations(state,repository,&previous.entries,&entries,std::slice::from_ref(&change),principal,operation)?;
+            let path_changes = namespace::locations::apply(state,repository,&previous.entries,&entries,std::slice::from_ref(&change),principal,operation)?;
             let pending_file_versions=previous.pending_file_versions.iter().filter(|(file,_)|entries.iter().any(|entry|entry.kind == NamespaceEntryKind::File&&entry.file_id==file.as_str())).map(|(file,source)|(file.clone(),source.clone())).collect();
             let id=new_id("commit")?;
             state.commits.insert(id.clone(),Commit{ namespace_deletions: namespace::deletion_record(deleted, now()?),commit_id:id.clone(),history_tree_id:branch.history_tree_id.clone(),kind:"namespace".into(),parent_commit_ids:vec![previous.commit_id],tree_id:new_id("tree")?,sequence:state.sequence,operation_id:operation,author:principal.into(),message:format!("{} {}",change.kind().as_str(),change.path()),entries,pending_file_versions,provenance:None});
             let live_files=state.commits[&id].entries.iter().filter(|entry|entry.kind == NamespaceEntryKind::File).map(|entry|entry.file_id.clone()).collect::<std::collections::BTreeSet<_>>();
             let branch=state.branches.get_mut(&repo.main_branch_id).expect("checked");branch.head_commit_id=id.clone();branch.generation = branch.generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
             branch.pending_file_versions.retain(|file,_|live_files.contains(file));
-            let mut changed_paths=vec![change.path().to_owned()];
-            changed_paths.extend(path_changes.iter().flat_map(|fact| {
-                [fact.before.path.as_str().to_owned(), fact.after.path.as_str().to_owned()]
-            }));
-            changed_paths.extend(renamed_directories);
-            if let Some(destination)=&change.destination() {changed_paths.push(destination.as_str().to_owned());}
-            let directories=super::directory::record_projected_directory_edits(state,repository,&changed_paths,None,engine.current_namespaces.as_deref())?;
-            let mut result = json!({"commit_id":id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"path":change.path(),"action":change.kind(),"directory_branch_ids":directories});
+            let mut result = json!({"commit_id":id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"path":change.path(),"action":change.kind()});
             if let Some(original) = original { result["original_file"] = json!(original); }
             if crate::engine::CurrentNamespaces::recursive_namespace_kind(kind) { result["namespace_request"] = request; }
             crate::persist::path_changes::attach(result, path_changes)

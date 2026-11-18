@@ -244,10 +244,8 @@ impl Fixture {
         original.disks[0].metadata_member = false;
         let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
         let repository = engine
-            .create_repository(
-                &RepositoryName::parse("preserved").unwrap(),
+            .create_disk_root(
                 "P01",
-                1,
                 "admin",
                 OperationId::generate().unwrap(),
             )
@@ -489,21 +487,13 @@ fn membership_activation_data_only_old_new_proofs_and_packages_are_independent()
         ("old-package", version, b"before membership".as_slice()),
         ("new-package", new_version, b"after membership".as_slice()),
     ] {
-        let destination = temp.path().join(format!("restore-{package}"));
-        let config = Config::development(crate::test_disks([destination.join("disk")])).unwrap();
-        let mut restored = Engine::initialize(&destination.join("system"), config).unwrap();
-        restored
-            .restore_history_package(
-                &temp.path().join(package),
-                "P01",
-                1,
-                "admin",
-                OperationId::generate().unwrap(),
-            )
-            .unwrap();
-        let output = temp.path().join(format!("restored-{id}"));
-        restored.export_version(&id, &output).unwrap();
-        assert_eq!(fs::read(output).unwrap(), expected);
+        let package = temp.path().join(package);
+        let report = crate::offline_check_history_package(&package).unwrap();
+        assert!(report.full_files > 0);
+        let version_root = package.join("versions").join(&id);
+        let frozen: storage_contract::FileVersion = read_json(&version_root.join("version.json")).unwrap();
+        assert_eq!(frozen.version_id, id);
+        assert_eq!(fs::read(version_root.join("content").join(&frozen.creation_name)).unwrap(), expected);
     }
     assert!(
         !primary
@@ -1377,7 +1367,7 @@ fn membership_activation_successive_additions_keep_each_epoch_and_standalone_pro
         .is_err()
     );
     fs::write(&marker, marker_bytes).unwrap();
-    let import_version = latest.clone();
+    let packaged_version = latest.clone();
     for (id, expected) in [
         (version, b"before membership".as_slice()),
         (middle, b"middle epoch".as_slice()),
@@ -1391,23 +1381,10 @@ fn membership_activation_successive_additions_keep_each_epoch_and_standalone_pro
         .unwrap();
     crate::history_package::offline_check_history_package(&temp.path().join("third-package"))
         .unwrap();
-    let mut imported = Engine::initialize(
-        &temp.path().join("imported-system"),
-        Config::development(crate::test_disks([temp.path().join("imported-disk")])).unwrap(),
-    )
-    .unwrap();
-    imported
-        .restore_history_package(
-            &temp.path().join("third-package"),
-            "P01",
-            1,
-            "admin",
-            OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let output = temp.path().join("imported-latest");
-    imported.export_version(&import_version, &output).unwrap();
-    assert_eq!(fs::read(output).unwrap(), b"latest epoch");
+    let version_root = temp.path().join("third-package/versions").join(&packaged_version);
+    let frozen: storage_contract::FileVersion = read_json(&version_root.join("version.json")).unwrap();
+    assert_eq!(frozen.version_id, packaged_version);
+    assert_eq!(fs::read(version_root.join("content").join(&frozen.creation_name)).unwrap(), b"latest epoch");
 }
 
 #[test]

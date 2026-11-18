@@ -126,70 +126,49 @@ fn shared_snapshot_rechecks_smb_binding_before_selecting_commit() {
 }
 
 #[test]
-fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
+fn shared_snapshot_keeps_the_archived_file_branch_at_its_original_version() {
     let (_root, mut engine, repo, identity) = fixture();
     save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"first");
-    let cut = engine.state().branches[&repo.main_branch_id]
-        .head_commit_id
-        .clone();
+    let entry = engine.namespace_tree(&repo.main_branch_id).unwrap()
+        .get("file.txt").unwrap().clone();
     let archived = engine
-        .create_branch(
-            &cut,
+        .create_file_branch(
+            &entry.file_id,
+            &entry.version_id,
             &storage_contract::BranchName::parse("Archive").unwrap(),
             "owner",
             storage_contract::OperationId::generate().unwrap(),
         )
-        .unwrap();
-    engine
-        .archive_branch(
-            &archived.branch_id,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let backend = EngineBackend::new(engine);
-    let frozen = backend
-        .snapshot_at(&identity, &archived.branch_id, &archived.head_commit_id)
-        .unwrap();
-    let tree = backend
-        .tree_snapshot(&identity, crate::tests::tree_request(&(json!({"branch_id":archived.branch_id,"query":{"commit_id":archived.head_commit_id}})))).map(|snapshot| json_codec::to_value(snapshot).unwrap())
-        .unwrap();
+        .unwrap().branch_id.unwrap();
+    let original = engine.state().branches[&archived].head_commit_id.clone();
+    engine.archive_branch(
+        &archived, "owner", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
     assert_eq!(
-        json_codec::to_value(&frozen.entries).unwrap(),
-        tree["entries"]
+        engine.state().branches[&archived].state, storage_contract::BranchState::Archived
     );
+    let backend = EngineBackend::new(engine);
+    let frozen = backend.snapshot_at(&identity, &archived, &original).unwrap();
+    let captured = frozen.entries.iter()
+        .find(|candidate| candidate.file_id == entry.file_id).unwrap();
+    assert_eq!(captured.version_id, entry.version_id);
     {
         let mut engine = backend.engine.lock().unwrap();
         save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"second");
-        let plan = engine
-            .create_split_plan(&repo.history_tree_id, &cut, "owner")
-            .unwrap();
-        engine
-            .commit_plan(
-                &plan.plan_id,
-                "owner",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
+        let current = engine.namespace_tree(&repo.main_branch_id).unwrap();
+        let current = current.get("file.txt").unwrap();
+        assert_eq!(current.file_id, entry.file_id);
+        assert_ne!(current.version_id, entry.version_id);
     }
-    let old = backend
-        .tree_snapshot(
-            &identity,
-            crate::tests::tree_request(
-                &(json!({"branch_id":repo.main_branch_id,"query":{"commit_id":cut}})),
-            ),
-        )
-        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
-        .unwrap_err();
-    let new = backend
-        .snapshot_at(&identity, &repo.main_branch_id, &cut)
-        .unwrap_err();
-    assert_eq!(new.code, storage_contract::ErrorCode::TreeMoved);
-    assert_eq!(
-        (new.status, new.code, new.message),
-        (old.status, old.code, old.message)
-    );
-    assert_eq!(frozen.commit_id, archived.head_commit_id);
+    let again = backend.snapshot_at(&identity, &archived, &original).unwrap();
+    let tree = backend.tree_snapshot(
+        &identity, crate::ReadTree { branch: &archived, commit: Some(&original) },
+    ).unwrap();
+    assert_eq!(again.commit_id, original);
+    assert_eq!(tree.branch_id, archived);
+    assert_eq!(tree.commit_id, original);
+    assert_eq!(tree.entries, frozen.entries);
+    assert_eq!(again.entries, frozen.entries);
 }
 
 fn publication_fact(entries: &[Entry], item: &str) -> (u64, usize) {

@@ -229,7 +229,6 @@ pub fn app() -> impl IntoView {
                     files::restore_deletion_recovery(state);
                     files::restore_folder_creation(state);
                     files::restore_first_commit(state);
-        files::restore_directory_snapshot(state);
                     management::load(state);
                 }
                 Err(error) => state.update(|s| s.login_failure = Some(feedback(&error))),
@@ -350,7 +349,6 @@ fn workspace(state: RwSignal<State>) -> impl IntoView {
         {files::deletion_recovery(state)}
         {files::folder_creation_recovery(state)}
         {files::first_commit_recovery(state)}
-        {files::directory_snapshot_recovery(state)}
         {move ||match page.get() { Page::Admin=>admin::view(state).into_any(),Page::Rules=>admin::console(state,admin::Section::Rules).into_any(),Page::Diagnostics=>admin::console(state,admin::Section::Diagnostics).into_any(),Page::Details=>files::details(state).into_any(),Page::Status=>monitor::view(state).into_any(),Page::History=>history::view(state).into_any(),Page::Account=>account(state).into_any(),Page::Files=>files::view(state).into_any() }}
     }
 }
@@ -455,7 +453,6 @@ fn restore_session(state: RwSignal<State>) {
         files::restore_deletion_recovery(state);
         files::restore_folder_creation(state);
         files::restore_first_commit(state);
-        files::restore_directory_snapshot(state);
         management::load(state);
     });
 }

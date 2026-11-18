@@ -239,7 +239,6 @@ struct Acceptance<'a> {
     physical: &'a PhysicalBinding,
     image_manifest_hash: String,
     whole_files: usize,
-    directory_repositories: usize,
     #[serialization(with = "storage_contract::u64_string")]
     bodies: u64,
     #[serialization(with = "storage_contract::u64_string")]
@@ -254,7 +253,6 @@ fn acceptance(task: &Task, task_hash: &str, index: usize, image: &Image<'_>) -> 
         physical: &task.selection().jobs()[index].target,
         image_manifest_hash: image.manifest_hash(),
         whole_files: image.file_units,
-        directory_repositories: image.directory_repositories,
         bodies: image.bodies,
         body_bytes: image.body_bytes,
     })
@@ -282,7 +280,6 @@ pub(super) fn with_image<T>(
         stop,
     )?;
     if image.file_units != task.evidence.report.whole_file_units_per_target
-        || image.directory_repositories != task.evidence.report.directory_repositories_per_target
         || image.bodies != job.total_files
         || image.body_bytes != job.total_bytes
     {

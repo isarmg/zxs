@@ -122,14 +122,16 @@ pub(super) fn portable_path(
         .map(Some)
         .map_err(|source| DecodeError::Path { field, source })
 }
-pub(super) fn display_path(text: String) -> Result<DisplayPath, DecodeError> {
-    // Primary listings may prepend a repository name to a bounded namespace
-    // path. Validate every component without imposing the namespace-only budget.
-    for component in text.split('/') {
-        name_policy::validate_name(component).map_err(|source| DecodeError::Path {
-            field: "path",
-            source,
-        })?;
+pub(super) fn display_path(text: String, backup: bool) -> Result<DisplayPath, DecodeError> {
+    let invalid = |source| DecodeError::Path { field: "path", source };
+    if backup {
+        // A backup projection includes retained upstream prefixes. It is not a
+        // writable primary namespace path; preserve its component-wise budget.
+        for component in text.split('/') {
+            name_policy::validate_name(component).map_err(invalid)?;
+        }
+    } else {
+        name_policy::PortablePath::parse(&text).map_err(invalid)?;
     }
     Ok(DisplayPath {
         key: name_policy::path_key(&text),

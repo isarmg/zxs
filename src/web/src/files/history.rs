@@ -250,7 +250,7 @@ impl FileHistory {
         let root = identity.history_root.to_string();
         let same_root = self.root.as_deref() == Some(root.as_str());
         let nodes = wire::nodes(nodes, edges);
-        if (entry.backup() || entry.preview())
+        if entry.backup()
             && nodes.iter().any(|node| {
                 Some(node.id()) == entry.node_id() && node.version_id() != entry.version_id()
             })
@@ -278,7 +278,7 @@ impl FileHistory {
             self.fragment = None;
             self.current_node = None;
         }
-        self.current_id = if entry.backup() || entry.preview() {
+        self.current_id = if entry.backup() {
             entry.node_id().map(str::to_owned)
         } else {
             identity
@@ -287,7 +287,7 @@ impl FileHistory {
                 .as_ref()
                 .map(ToString::to_string)
         };
-        self.current_version = if entry.backup() || entry.preview() {
+        self.current_version = if entry.backup() {
             entry.version_id().map(str::to_owned)
         } else {
             context
@@ -296,7 +296,7 @@ impl FileHistory {
                 .and_then(|c| c.version_id.as_ref())
                 .map(ToString::to_string)
         };
-        self.current_inherited = if entry.backup() || entry.preview() {
+        self.current_inherited = if entry.backup() {
             entry.inherited_content()
         } else {
             context
@@ -310,15 +310,7 @@ impl FileHistory {
         {
             self.current_node = Some(node.clone());
         }
-        self.selected = if entry.preview() {
-            entry.selected_branch_id().map(str::to_owned)
-        } else {
-            identity
-                .context
-                .selected_branch_id
-                .as_ref()
-                .map(ToString::to_string)
-        };
+        self.selected = identity.context.selected_branch_id.as_ref().map(ToString::to_string);
         if self
             .current_branch
             .as_ref()

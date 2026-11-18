@@ -107,11 +107,19 @@ impl<'a> PendingSources<'a> {
         }
     }
 
+    fn entry_at(&self, index: usize) -> Option<&'a storage_contract::Entry> {
+        match self.scope {
+            PendingScope::Current(namespace) => namespace.visible_entry(index),
+            PendingScope::Historical => self.entries.get(index),
+        }
+    }
+
     fn visible(&self, entry: &storage_contract::Entry) -> Option<&'a storage_contract::Entry> {
-        self.entries.iter().find(|visible| {
+        (0..self.entries.len()).find_map(|index| {
             #[cfg(test)]
             self.matching_visits.set(self.matching_visits.get() + 1);
-            visible.lookup_key() == entry.lookup_key() && visible.file_id == entry.file_id
+            self.entry_at(index).filter(|visible| visible.lookup_key() == entry.lookup_key()
+                && visible.file_id == entry.file_id)
         })
     }
 
@@ -119,41 +127,23 @@ impl<'a> PendingSources<'a> {
         if entry.kind != storage_contract::NamespaceEntryKind::File {
             return None;
         }
-        self.resolve(entry, self.visible(entry)?, CurrentContext::Lookup, None)
+        let visible = self.visible(entry)?;
+        if visible.entry_id != entry.entry_id || visible.version_id != entry.version_id {
+            return None;
+        }
+        self.resolve(visible, CurrentContext::Lookup)
     }
 
     pub(super) fn pending_versions(&self) -> std::collections::BTreeMap<String, String> {
-        let historical = matches!(self.scope, PendingScope::Historical).then(|| {
-            let mut contexts = std::collections::BTreeMap::new();
-            for tree in self
-                .engine
-                .state()
-                .directory_trees
-                .values()
-                .filter(|tree| tree.commit_id == self.commit.commit_id)
-            {
-                for (key, context) in &tree.file_contexts {
-                    // BTreeMap iteration preserves the original first tree.
-                    contexts.entry(key.as_str()).or_insert(context);
-                }
-            }
-            contexts
-        });
-        self.entries
-            .iter()
+        (0..self.entries.len())
+            .filter_map(|index| self.entry_at(index))
             .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
             .filter_map(|entry| {
-                let visible = entry;
                 let context = self.main_repository.and_then(|repository| {
                     self.engine
                         .file_context_for_current_entry(repository, entry)
                 });
-                self.resolve(
-                    entry,
-                    visible,
-                    CurrentContext::Resolved(context.as_deref()),
-                    historical.as_ref(),
-                )
+                self.resolve(entry, CurrentContext::Resolved(context.as_deref()))
                 .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect()
@@ -162,61 +152,40 @@ impl<'a> PendingSources<'a> {
     fn resolve(
         &self,
         entry: &storage_contract::Entry,
-        visible: &'a storage_contract::Entry,
         context: CurrentContext<'_>,
-        historical: Option<&std::collections::BTreeMap<&str, &'a storage_contract::FileContext>>,
     ) -> Option<&'a str> {
         let state = self.engine.state();
-        self.current?;
-        if matches!(self.scope, PendingScope::Current(_)) {
-            if let Some(repository) = self.main_repository {
-                let owned;
-                let context = match context {
-                    CurrentContext::Resolved(context) => context,
-                    CurrentContext::Lookup => {
-                        owned = self.engine.file_context(repository, entry.path.as_str());
-                        owned.as_ref()
-                    }
-                };
-                if let Some(context) = context {
-                    return if context.inherited_from.is_some() {
-                        Some(visible.version_id.as_str())
-                    } else {
-                        state
-                            .branches
-                            .get(&context.branch_id)?
-                            .pending_file_versions
-                            .get(&entry.file_id)
-                            .map(String::as_str)
-                    };
+        let branch = self.current?;
+        let frozen = || self.commit.pending_file_versions.get(&entry.file_id)
+            .filter(|version| **version == entry.version_id).map(String::as_str);
+        if matches!(self.scope, PendingScope::Historical) {
+            // The original commit is the sole issuer, even when it still
+            // happens to be the current HEAD. No current selection fallback.
+            return frozen();
+        }
+        if let Some(repository) = self.main_repository {
+            let owned;
+            let context = match context {
+                CurrentContext::Resolved(context) => context,
+                CurrentContext::Lookup => {
+                    owned = self.engine.file_context(repository, entry.path.as_str());
+                    owned.as_ref()
                 }
-            }
-        } else {
-            let context = match historical {
-                Some(contexts) => contexts.get(entry.lookup_key()).copied(),
-                None => state
-                    .directory_trees
-                    .values()
-                    .filter(|tree| tree.commit_id == self.commit.commit_id)
-                    .find_map(|tree| tree.file_contexts.get(entry.lookup_key())),
             };
             if let Some(context) = context {
-                return context
-                    .inherited_from
-                    .as_ref()
-                    .map(|_| visible.version_id.as_str());
+                let selected = state.branches.get(&context.branch_id)?;
+                if selected.history_tree_id != branch.history_tree_id
+                    || (selected.branch_id != branch.branch_id
+                        && selected.file_id.as_deref() != Some(entry.file_id.as_str())) {
+                    return None;
+                }
+                return selected.pending_file_versions.get(&entry.file_id)
+                    .filter(|version| **version == entry.version_id).map(String::as_str);
             }
         }
-        self.commit
-            .pending_file_versions
-            .get(&entry.file_id)
-            .filter(|version| **version == entry.version_id)
-            .map(String::as_str)
-            .or_else(|| {
-                matches!(self.scope, PendingScope::Current(_))
-                    .then(|| self.engine.pending_file_source(self.branch, &entry.file_id))
-                    .flatten()
-            })
+        // A direct current FILE branch can carry its own pending source.
+        frozen().or_else(|| self.engine.pending_file_source(self.branch, &entry.file_id)
+            .filter(|version| *version == entry.version_id))
     }
 
     #[cfg(test)]
@@ -247,15 +216,13 @@ pub(super) fn current_entry_source_at_index<'a>(
 ) -> Option<&'a str> {
     let current = engine.state().branches.get(branch)?;
     let commit = engine.state().commits.get(&current.head_commit_id)?;
-    let entry = namespace.entries().get(index)?;
+    let entry = namespace.visible_entry(index)?;
     if entry.kind != storage_contract::NamespaceEntryKind::File {
         return None;
     }
     PendingSources::new(engine, branch, commit, PendingScope::Current(namespace)).resolve(
         entry,
-        entry,
         CurrentContext::Resolved(context),
-        None,
     )
 }
 

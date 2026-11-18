@@ -4,10 +4,10 @@ use platform_io::fs_safety::linux::FileIdentity;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{DiskId, PoolId};
 use storage_contract::namespace_root::{
-    DirectoryId, LocalEntityIdentity, RootBinding, RootId, StorageLayout,
+    DirectoryId, LocalEntityIdentity, RootBinding, RootId,
 };
 
-const MAX_ROOTS: usize = 256;
+pub(crate) const MAX_ROOTS: usize = 256;
 pub(crate) const MAX_SOURCE_CHAIN: usize = 32;
 pub(crate) const MAX_DIRECTORY_DEPTH: usize = 64;
 
@@ -25,8 +25,6 @@ pub(crate) fn file_identity(identity: LocalEntityIdentity) -> FileIdentity {
 pub(crate) enum Error {
     #[error("too many registered roots or upstream registrations")]
     Budget,
-    #[error("registered root has the wrong storage layout")]
-    Format,
     #[error("registered roots do not belong to one pool")]
     Registration,
     #[error("invalid pool or disk registration identifier")]
@@ -55,7 +53,6 @@ pub(crate) struct Structure<'a> {
 /// with at most 32 ancestors each are under 6 MiB; no second serialized
 /// inventory is needed to bound these rows.
 pub(crate) fn inspect<'a>(
-    layout: StorageLayout,
     bindings: impl ExactSizeIterator<Item = &'a RootBinding>,
 ) -> Result<Structure<'a>, Error> {
     if bindings.len() > MAX_ROOTS {
@@ -68,9 +65,6 @@ pub(crate) fn inspect<'a>(
     let mut area_ids = BTreeSet::new();
     let mut pool = None;
     for root in bindings {
-        if root.layout != layout {
-            return Err(Error::Format);
-        }
         if root.source_chain.len() > MAX_SOURCE_CHAIN {
             return Err(Error::Budget);
         }

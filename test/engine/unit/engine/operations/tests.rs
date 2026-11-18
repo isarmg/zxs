@@ -635,3 +635,36 @@ fn assert_seal_json_cause(error: &Error) {
     }
     panic!("seal rejection lost its concrete JSON source");
 }
+
+#[test]
+fn partial_pending_receipt_checks_original_domain_before_reporting_any_outcome() {
+    use name_policy::Name;
+    let root = tempfile::tempdir().unwrap();
+    let config = Config::independent_roots(Mode::Development,
+        [(Name::parse("Primary").unwrap(), root.path().join("data"))]).unwrap();
+    let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
+    let op = OperationId::generate().unwrap();
+    engine.inject_fault_once("after_accept_1");
+    assert!(engine.create_disk_root("D01", "owner", op).is_err());
+    let (members, snapshot, candidate) = engine.pending_operation_snapshot(op).unwrap();
+    let original: OperationResult = snapshot_entry(&engine.disk_resources,
+        &members, &snapshot, "operations", op).unwrap().unwrap();
+    assert_eq!(engine.operation_record(op).unwrap().result().commit_state,
+        storage_contract::CommitState::InDoubt);
+    assert_eq!(engine.operation_owner(op).unwrap().as_deref(), Some("owner"));
+    // These have exactly the same accepted operation, sequence and digest.
+    // Neither the old kind nor a renamed envelope can become a recoverable
+    // ordinary receipt simply by changing its public outcome.
+    for (kind, body) in [
+        ("snapshot.working.commit", json_codec::json!({})),
+        ("file.namespace", json_codec::json!({"snapshot_worktree": {}})),
+        ("workspace.commit", json_codec::json!({"directory": {"format":"directory_draft_decision"}})),
+        ("workspace.commit", json_codec::json!({"directory": {"format":"directory_draft_unchanged"}})),
+    ] {
+        let mut row = original.clone();
+        row.kind = kind.into();
+        row.result = body;
+        assert_eq!(pending_observation(row, op, &candidate).unwrap_err().code(),
+            ErrorCode::StateInvalid);
+    }
+}

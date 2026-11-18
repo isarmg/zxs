@@ -10,7 +10,7 @@ pub(in crate::engine) use scoped::ServingSwitch;
 pub use scoped::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
-    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
     BackupNamespaceScope, BackupNativeMetadataReport, BackupOrdinaryServingReport,
@@ -107,7 +107,6 @@ pub struct BackupObjectDatabasePreparationReport {
     pub native: BackupNativePreparationReport,
     pub database_manifest_hash: String,
     pub files_per_target: usize,
-    pub directories_per_target: usize,
     #[serialization(with = "storage_contract::u64_string")]
     pub database_bytes_per_target: u64,
 }
@@ -124,7 +123,6 @@ fn report(
         native,
         database_manifest_hash: blake3::hash(&prepared.manifest()?).to_hex().to_string(),
         files_per_target: prepared.file_count(),
-        directories_per_target: prepared.directory_count(),
         database_bytes_per_target: prepared.total_bytes(),
     })
 }

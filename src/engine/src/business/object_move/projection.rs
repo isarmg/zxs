@@ -288,12 +288,12 @@ fn relocate_existing_locations(next: &mut State, unit: &MoveUnit) -> Result<()> 
             .get(&file.file_id)
             .cloned()
             .unwrap_or_else(|| file.path().to_owned());
-        let path = directory::namespace_location(
+        let path = namespace::locations::physical_path_after(
             old,
             file,
             unit.request.source_path.as_str(),
             unit.request.target_path.as_str(),
-            storage_contract::DirectoryBatchKind::Rename,
+            namespace::locations::Change::Rename,
             is_directory,
         );
         if let Some(other) = locations.insert(file.file_id.clone(), path.clone())
@@ -338,7 +338,7 @@ fn relocate_current_files(
     // Clear old keys first, before installing any destination occurrence.
     for member in &unit.entries {
         if member.source.kind == NamespaceEntryKind::File {
-            next.file_contexts.remove(&directory::context_key_from_key(
+            next.file_contexts.remove(&namespace::file_context::context_key_from_key(
                 &unit.source_repository.repository_id,
                 member.source.lookup_key(),
             ));
@@ -416,7 +416,7 @@ fn relocate_current_files(
             context = changed.context;
         }
         next.file_contexts.insert(
-            directory::context_key_from_key(&target.repository_id, entry.lookup_key()),
+            namespace::file_context::context_key_from_key(&target.repository_id, entry.lookup_key()),
             context,
         );
         if unit.copy_history {
@@ -428,71 +428,6 @@ fn relocate_current_files(
     }
     path_changes.sort_by_key(|fact| fact.event_id);
     Ok(path_changes)
-}
-
-fn refresh_working(
-    next: &mut State,
-    unit: &MoveUnit,
-    target: &Repository,
-    operation: OperationId,
-    path_changes: &[crate::persist::path_changes::PathChanged],
-) -> Result<()> {
-    let mut counter = 0u64;
-    let mut ids = |prefix: &str| {
-        counter += 1;
-        generated(operation, prefix, &format!("working-{counter}"))
-    };
-    // Refresh working compositions only. Their index, HEAD, and staged child
-    // references stay frozen until the user explicitly stages/commits them.
-    let mut target_paths = unit
-        .entries
-        .iter()
-        .map(|entry| {
-            if entry.source.kind == NamespaceEntryKind::Directory {
-                format!("{}/", entry.destination.as_str())
-            } else {
-                entry.destination.as_str().into()
-            }
-        })
-        .collect::<Vec<_>>();
-    if target.repository_id == unit.source_repository.repository_id {
-        target_paths.extend(
-            unit.entries
-                .iter()
-                .map(|entry| entry.source.path().to_owned()),
-        );
-        target_paths.sort();
-        target_paths.dedup();
-    }
-    let target_id = target.repository_id.parse::<storage_contract::RepositoryId>()?;
-    target_paths.extend(path_changes.iter()
-        .flat_map(|change| [&change.before, &change.after])
-        .filter(|location| location.repository_id == target_id)
-        .map(|location| location.path.as_str().to_owned()));
-    target_paths.sort();
-    target_paths.dedup();
-    directory::record_directory_edits_with_ids(
-        next,
-        &target.repository_id,
-        &target_paths,
-        None,
-        &mut ids,
-    )?;
-    if target.repository_id != unit.source_repository.repository_id {
-        let source_paths = unit
-            .entries
-            .iter()
-            .map(|entry| entry.source.path().to_owned())
-            .collect::<Vec<_>>();
-        directory::record_directory_edits_with_ids(
-            next,
-            &unit.source_repository.repository_id,
-            &source_paths,
-            None,
-            &mut ids,
-        )?;
-    }
-    Ok(())
 }
 
 fn compose(
@@ -647,7 +582,7 @@ fn compose(
                 .ok_or_else(crate::persist::path_changes::invalid)?;
             let new = namespace::find_unordered_key(&after_names, change.after.key())
                 .ok_or_else(crate::persist::path_changes::invalid)?;
-            let context = directory::context_at_key(&next, &target.repository_id, old.lookup_key());
+            let context = namespace::file_context::context_at_key(&next, &target.repository_id, old.lookup_key());
             let mut ordinal = 0u64;
             let changed = file_paths::record_change_with_ids(
                 &mut next,
@@ -666,12 +601,12 @@ fn compose(
             )?;
             path_changes.push(changed.fact);
             contexts.push((
-                directory::context_key_from_key(&target.repository_id, new.lookup_key()),
+                namespace::file_context::context_key_from_key(&target.repository_id, new.lookup_key()),
                 changed.context,
             ));
         }
         for change in &name_changes {
-            next.file_contexts.remove(&directory::context_key_from_key(
+            next.file_contexts.remove(&namespace::file_context::context_key_from_key(
                 &target.repository_id, change.before.key(),
             ));
         }
@@ -770,7 +705,6 @@ fn compose(
             displaced_deletions.push(node);
         }
     }
-    refresh_working(&mut next, &unit, &target, operation, &path_changes)?;
     crate::container_storage::capture_changed_names(previous, &mut next);
     let root = unit
         .entries
@@ -977,3 +911,7 @@ pub(crate) fn verify_transition(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/business/ordinary_move_projection.rs"]
+mod ordinary_move_projection;

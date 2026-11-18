@@ -13,7 +13,9 @@ pub use catalog::{SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue};
 pub(super) use prepared::verify_prepared;
 
 pub(super) const TABLE: &str = concat!(
-    "CREATE TABLE system_changes(kind INTEGER NOT NULL CHECK(kind BETWEEN 0 AND 41),",
+    "CREATE TABLE system_changes(kind INTEGER NOT NULL CHECK(",
+    "kind BETWEEN 0 AND 5 OR kind BETWEEN 9 AND 12 OR kind=15 OR ",
+    "kind BETWEEN 17 AND 24 OR kind BETWEEN 26 AND 41),",
     "id TEXT NOT NULL COLLATE BINARY,",
     "sequence_key BLOB NOT NULL CHECK(length(sequence_key)=8),",
     "payload TEXT NOT NULL,PRIMARY KEY(kind,id)) STRICT",
@@ -159,6 +161,8 @@ impl Delta {
         connection: &mut sqlite_access::SqliteConnection,
         after: &State,
     ) -> std::result::Result<(), ProjectionFailure> {
+        crate::ordinary_authority::tables(after)
+            .map_err(|source| ProjectionFailure { source, corrupt: false })?;
         for id in &self.operations {
             store_row(
                 connection,
@@ -233,6 +237,41 @@ fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
     crate::disk::encode_metadata(value, MAX_PAGE_BYTES)
 }
 
+// The primary key begins with kind: each invalid interval is an indexed
+// range, not a scan of every retained FILE operation. CHECK constraints alone
+// do not establish that an externally supplied SQLite image has no alien rows.
+async fn require_known_families(
+    connection: &mut sqlite_access::SqliteConnection,
+) -> std::result::Result<(), ProjectionFailure> {
+    let invalid: i64 = sqlite_access::query_scalar(concat!(
+        "SELECT EXISTS(SELECT 1 FROM system_changes WHERE kind<0 OR kind BETWEEN 6 AND 8 OR ",
+        "kind BETWEEN 13 AND 14 OR kind=16 OR kind=25 OR kind>41 LIMIT 1)",
+    )).fetch_one(&mut *connection).await?;
+    if invalid != 0 { return Err("unsupported SYSTEM catalog family".into()); }
+    Ok(())
+}
+
+/// A full rebuild can repair known projected payloads, but must not convert
+/// another database or discard an unrecognized native catalog.
+pub(super) async fn require_rebuild_source(
+    connection: &mut sqlite_access::SqliteConnection,
+) -> std::result::Result<(), ProjectionFailure> {
+    let recorded = sqlite_access::query("SELECT type,sql FROM sqlite_schema WHERE name='system_changes'")
+        .fetch_optional(&mut *connection).await?;
+    if let Some(row) = recorded {
+        if row.try_get::<String, _>(0)? != "table" || row.try_get::<String, _>(1)? != TABLE {
+            return Err("unsupported SYSTEM catalog; existing data is preserved".into());
+        }
+        return require_known_families(connection).await;
+    }
+    let occupied: i64 = sqlite_access::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_schema)")
+        .fetch_one(&mut *connection).await?;
+    if occupied != 0 {
+        return Err("nonempty SYSTEM database lacks its registered FILE catalog".into());
+    }
+    Ok(())
+}
+
 pub(super) async fn check_schema(
     connection: &mut sqlite_access::SqliteConnection,
 ) -> std::result::Result<(), ProjectionFailure> {
@@ -256,19 +295,12 @@ pub(super) async fn check_schema(
     if triggers != 0 {
         return Err("system change projection has an unexpected trigger".into());
     }
-    Ok(())
+    require_known_families(connection).await
 }
 
 pub(super) async fn recreate(
     connection: &mut sqlite_access::SqliteConnection,
 ) -> std::result::Result<(), ProjectionFailure> {
-    let kind: Option<String> =
-        sqlite_access::query_scalar("SELECT type FROM sqlite_schema WHERE name='system_changes'")
-            .fetch_optional(&mut *connection)
-            .await?;
-    if kind.as_deref() == Some("view") {
-        connection.execute("DROP VIEW system_changes").await?;
-    }
     connection
         .execute("DROP TABLE IF EXISTS system_changes")
         .await?;

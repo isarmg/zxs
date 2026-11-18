@@ -322,24 +322,10 @@ impl Backend for Probe {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
-    fn prepare_historical_save(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
     fn prepare_purge(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::PreparePurge, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
-    fn prepare_split(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareSplit, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

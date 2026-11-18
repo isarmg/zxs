@@ -85,7 +85,7 @@ pub(crate) fn select_root<'a>(
     current: &RootSelectionContext<'_>,
 ) -> Result<CurrentRootSelection<'a>, AdmissionError> {
     let binding = view.roots.get(&root_id).copied().ok_or(AdmissionError::Parent)?;
-    if binding.layout != current.storage_layout {
+    if view.catalog.storage_layout != current.storage_layout {
         return Err(AdmissionError::Format);
     }
     if binding.registration != *current.registration {
@@ -102,7 +102,6 @@ impl From<namespace_roots::Error> for AdmissionError {
         use namespace_roots::Error as Root;
         match source {
             Root::Budget => Self::Budget,
-            Root::Format => Self::Format,
             Root::Registration => Self::Registration,
             Root::Identifier(source) => Self::RegistrationIdentifier(source),
             Root::Slot(source) => Self::RegistrationSlot(source),
@@ -120,7 +119,7 @@ pub(crate) fn validate_catalog_structure(
 ) -> Result<StructurallyValidWorkingTreeCatalog<'_>, AdmissionError> {
     counts(catalog)?;
     let namespace_roots::Structure { by_id: roots, mut entities, area_ids } =
-        namespace_roots::inspect(catalog.storage_layout, catalog.roots.iter())?;
+        namespace_roots::inspect(catalog.roots.iter())?;
     // The bounded catalog stores an ordered array; Config stores a keyed map.
     if catalog.roots.windows(2).any(|pair| pair[0].root_id >= pair[1].root_id) {
         return Err(AdmissionError::Order);

@@ -409,12 +409,17 @@ fn owner_paths(previous: &State, moves: &[Move]) -> Result<BTreeMap<String, Stri
                 .get(&entry.file_id)
                 .cloned()
                 .unwrap_or_else(|| entry.path().to_owned());
-            let next = crate::business::namespace_location(
+            let operation = if change.kind == storage_contract::DirectoryBatchKind::Rename {
+                crate::business::NamespacePathChange::Rename
+            } else {
+                crate::business::NamespacePathChange::Move
+            };
+            let next = crate::business::physical_path_after(
                 before,
                 entry,
                 change.source.path(),
                 change.target.as_str(),
-                change.kind,
+                operation,
                 change.source.kind == NamespaceEntryKind::Directory,
             );
             if let Some(other) = paths.insert(entry.file_id.clone(), next.clone())

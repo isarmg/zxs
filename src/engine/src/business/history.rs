@@ -2,6 +2,30 @@
 use super::*;
 use crate::engine::MutationPlan;
 use json_codec::json;
+
+/// The branch/commit pair denotes one actual retained FILE occurrence. An
+/// ancestor namespace before this FILE existed is not a FILE endpoint. A
+/// still-unwritten separate FILE can name only its recorded pending body.
+pub(crate) fn holds_file_endpoint(state: &State, branch: &Branch, commit: &Commit) -> bool {
+    let Ok(file) = super::file_nodes::branch_owner(branch) else {
+        return false;
+    };
+    if commit.history_tree_id != branch.history_tree_id {
+        return false;
+    }
+    let mut matching = commit.entries.iter().filter(|entry| {
+        entry.kind == NamespaceEntryKind::File && entry.file_id == file
+    });
+    let Some(entry) = matching.next() else { return false };
+    matching.next().is_none() && state.versions.get(&entry.version_id).is_some_and(|body| {
+        body.version_id == entry.version_id
+            && body.history_tree_id == branch.history_tree_id
+            && body.logical_size == entry.size
+            && (body.file_id == file
+                || commit.pending_file_versions.get(file) == Some(&entry.version_id))
+    })
+}
+
 fn branch_contains_commit(state: &State, branch: &Branch, target: &str) -> Result<bool> {
     if branch.state == BranchState::Migrated {
         return Err(Error::new(
@@ -331,19 +355,17 @@ impl Engine {
                         "merge endpoints must belong to one history",
                     ));
                 }
-                if sb.file_id != tb.file_id && (sb.file_id.is_some() || tb.file_id.is_some()) {
+                if super::file_nodes::branch_owner(sb)? != super::file_nodes::branch_owner(tb)? {
                     return Err(Error::new(
                         storage_contract::ErrorCode::FileBranchScope,
                         "file branch relations must identify the same file",
                     ));
                 }
                 engine.repository_for_history(&sb.history_tree_id)?;
-                for id in [source_commit, target_commit] {
-                    if !state
-                        .commits
-                        .get(id)
-                        .is_some_and(|c| c.history_tree_id == sb.history_tree_id)
-                    {
+                for (branch, id) in [(sb, source_commit), (tb, target_commit)] {
+                    if !state.commits.get(id).is_some_and(|commit| {
+                        holds_file_endpoint(state, branch, commit)
+                    }) {
                         return Err(Error::new(
                             storage_contract::ErrorCode::CommitNotFound,
                             "selected endpoint is not in the history",
@@ -431,6 +453,10 @@ impl Engine {
                         "main branch cannot be archived while shared",
                     ));
                 }
+                let original = state.branches.get(id).ok_or_else(|| {
+                    Error::new(storage_contract::ErrorCode::BranchNotFound, "branch missing")
+                })?;
+                super::file_nodes::branch_owner(original)?;
                 if state
                     .file_selections
                     .values()

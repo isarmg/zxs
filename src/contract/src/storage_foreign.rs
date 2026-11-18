@@ -38,9 +38,8 @@ pub struct ForeignHistorySummary {
     pub repository_name: String,
     pub origin: ForeignDiskIdentity,
     pub manifest_hash: String,
+    /// Independent stable FILE branches; excludes the private ordinary namespace main.
     pub branches: usize,
-    pub directory_branches: usize,
-    pub directory_trees: usize,
     pub commit_records: usize,
     pub versions: usize,
     pub verified_local_versions: usize,

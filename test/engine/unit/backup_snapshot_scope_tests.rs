@@ -1,68 +1,11 @@
-//! Real SYSTEM registration, not a `.zxs` name or a fabricated completed row.
-use super::require_backup_snapshot_scope;
-use crate::persist::snapshot_worktree::{self as codec, NodeAllocation};
-use crate::snapshot_worktree::{
-    prepare_namespace_host, publication, SnapshotSourceError,
-};
-use crate::{
-    BackupPreparationRequest, BackupTopologyTarget, BackupTransactionRequest,
-    CommitRequest, Config, Engine, Error, ErrorCode, Repository,
-};
-use name_policy::Name;
-use std::{collections::BTreeMap, fs, io::Read, path::{Path, PathBuf}, sync::Arc};
+//! The live Backup boundary must reject mixed receipts before persisting its
+//! own intent. This injects an in-memory bad row, not a fabricated native seal.
+use super::*;
+use std::collections::BTreeMap;
+use std::fs;
+use std::io::Read;
+use std::path::Path;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
-use storage_contract::snapshot_worktree::{InitializeSnapshot, SnapshotHandle};
-use storage_contract::working_tree::{SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId};
-use storage_contract::{OperationId, Principal};
-
-const BODY: &[u8] = b"independent immutable snapshot body, not a FILE database";
-
-fn op() -> OperationId { OperationId::generate().unwrap() }
-
-fn admin() -> Principal { "admin".parse().unwrap() }
-
-fn setup() -> (tempfile::TempDir, Engine, Repository) {
-    let temp = tempfile::Builder::new().permissions(fs::Permissions::from_mode(0o700))
-        .tempdir().unwrap();
-    let config = Config::development(
-        ["Primary", "Near archive", "Old far archive"].into_iter()
-            .enumerate().map(|(index, name)| {
-                (Name::parse(name).unwrap(), temp.path().join(format!("disk-{index}")))
-            }),
-    ).unwrap();
-    let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
-    let repository = engine.create_disk_root("P01", "admin", op()).unwrap();
-    let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
-    engine.stage_bytes(&workspace.workspace_id, "original.txt", BODY).unwrap();
-    engine.commit_workspace(CommitRequest {
-        workspace_id: workspace.workspace_id,
-        operation_id: op(), principal: "admin".into(), expected_head: workspace.base_head,
-        fencing_token: workspace.fencing_token, message: "real snapshot source".into(),
-        request_digest: None,
-    }).unwrap();
-    // Genuine FILE history alone is supported. It must not be confused with an
-    // immutable directory snapshot or inferred from local path spellings.
-    require_backup_snapshot_scope(engine.state()).unwrap();
-    (temp, engine, repository)
-}
-
-fn snapshot_request(engine: &Engine, repository: &Repository) -> InitializeSnapshot {
-    let context = engine.snapshot_root_context(repository.repository_id.parse().unwrap()).unwrap();
-    InitializeSnapshot { host: context.host, source: context.source, operation_id: op() }
-}
-
-fn target(root: &Path, name: &str) -> PathBuf {
-    let path = root.join(name);
-    fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
-    path
-}
-
-fn request(engine: &Engine, paths: Vec<PathBuf>) -> BackupPreparationRequest {
-    BackupPreparationRequest {
-        operation_id: op(), principal: "admin".into(), source_slot_id: "B01".into(),
-        target_paths: paths, expected_sequence: engine.state().sequence,
-    }
-}
 
 type Media = BTreeMap<PathBuf, (u64, u64, u32, Option<Vec<u8>>)>;
 
@@ -84,138 +27,56 @@ fn media(root: &Path) -> Media {
     result
 }
 
-fn require_registered(error: Error, publication: OperationId) {
-    assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
-    assert!(matches!(error, Error::SnapshotSource(ref source)
-        if matches!(source.as_ref(), SnapshotSourceError::BackupRegisteredSnapshot(actual)
-            if *actual == publication)));
-}
-
-fn require_original_body(engine: &Engine, handle: SnapshotHandle) {
-    let index = engine.snapshot_receipts().unwrap();
-    let held = index.reopen_node(engine, handle).unwrap();
-    let entries = held.manifest().entries();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].path.as_str(), "original.txt");
-    let crate::working_tree::snapshot::SnapshotEntryContent::File { material, .. } =
-        entries[0].content else {
-            panic!("real immutable snapshot must contain the original FILE");
-        };
-    let mut bytes = Vec::new();
-    held.open_payload(material.version_id).unwrap().read_to_end(&mut bytes).unwrap();
-    assert_eq!(bytes, BODY);
-}
-
-fn reject_all_starts(engine: &mut Engine, root: &Path, paths: &[PathBuf], handle: SnapshotHandle) {
-    let before = Arc::clone(&engine.state);
-    let original = media(root);
-    let single = request(engine, vec![paths[0].clone()]);
-    let single_op = single.operation_id;
-    require_registered(engine.start_backup_preparation(
-        single, fs::File::open(&paths[0]).unwrap(),
-    ).unwrap_err(), handle.publication);
-    assert_eq!(
-        engine.operation(single_op).unwrap_err().code(), ErrorCode::OperationNotFound,
-    );
-    assert_eq!(media(root), original);
-
-    let batch = request(engine, paths.to_vec());
-    let batch_op = batch.operation_id;
-    require_registered(engine.start_backup_batch_preparation(
-        batch, paths.iter().map(|path| fs::File::open(path).unwrap()).collect(),
-    ).unwrap_err(), handle.publication);
-    assert_eq!(
-        engine.operation(batch_op).unwrap_err().code(), ErrorCode::OperationNotFound,
-    );
-    assert_eq!(media(root), original);
-
-    let preparation = request(engine, paths.to_vec());
-    let transaction_op = preparation.operation_id;
-    let transaction = BackupTransactionRequest {
-        preparation,
-        targets: paths.iter().enumerate().map(|(index, _)| BackupTopologyTarget {
-            name: Name::parse(&format!("New archive {index}")).unwrap(),
-            disk_id: crate::new_id("disk").unwrap(), slot_id: format!("C{:02}", index + 2),
-            upstream_slot_id: "B01".into(),
-        }).collect(),
-    };
-    require_registered(engine.start_backup_transaction(
-        transaction, paths.iter().map(|path| fs::File::open(path).unwrap()).collect(),
-    ).unwrap_err(), handle.publication);
-    assert_eq!(
-        engine.operation(transaction_op).unwrap_err().code(), ErrorCode::OperationNotFound,
-    );
-    assert!(engine.backup_preparation_status().is_none());
-    assert!(!root.join("system/backup-preparation").exists());
-    assert!(Arc::ptr_eq(&before, &engine.state));
-    // Complete media includes SYSTEM, all admitted disks and both empty
-    // targets. No task intent, root preparation, inode replacement or BODY
-    // write is hidden by an operation-result-only assertion.
-    assert_eq!(media(root), original);
-    require_original_body(engine, handle);
-}
 
 #[test]
-fn published_snapshot_blocks_whole_backup_before_intent_or_target_writes() {
-    let (temp, mut engine, repository) = setup();
-    let request = snapshot_request(&engine, &repository);
-    let handle = engine.initialize_directory_snapshot(
-        &request, &admin(),
-    ).unwrap();
-    assert_eq!(engine.operation(request.operation_id).unwrap().kind, codec::NODE_RESERVE);
-    assert_eq!(engine.operation(handle.publication).unwrap().kind, codec::NODE_COMPLETE);
-    require_original_body(&engine, handle);
-    let paths = [target(temp.path(), "new-first"), target(temp.path(), "new-second")];
-    reject_all_starts(&mut engine, temp.path(), &paths, handle);
-    drop(engine);
-
-    let mut engine = Engine::open(&temp.path().join("system")).unwrap();
-    assert!(!engine.is_read_only());
-    assert_eq!(engine.initialize_directory_snapshot(
-        &request, &admin(),
-    ).unwrap(), handle);
-    reject_all_starts(&mut engine, temp.path(), &paths, handle);
-}
-
-#[test]
-fn reserved_snapshot_is_pending_not_a_published_snapshot() {
-    let (temp, mut engine, repository) = setup();
-    let request = snapshot_request(&engine, &repository);
-    let allocated = NodeAllocation {
-        repository: SnapshotRepositoryId::generate().unwrap(),
-        branch: SnapshotBranchId::generate().unwrap(),
-        node: SnapshotNodeId::generate().unwrap(), completion: op(),
-    };
-    let host = prepare_namespace_host(
-        &mut engine, &request.source, request.host.root_id,
-        request.host.expected_root_generation, request.operation_id,
-    ).unwrap();
-    let (_reserved, _manifest) = publication::reserve(
-        &mut engine, &host, &request, allocated, &admin(),
-    ).unwrap();
-    // This is the actual durable reserve boundary. No node preparation or
-    // completion was attempted, and no completion row is fabricated.
-    assert_eq!(engine.operation(request.operation_id).unwrap().kind, codec::NODE_RESERVE);
-    assert_eq!(
-        engine.operation(allocated.completion).unwrap_err().code(), ErrorCode::OperationNotFound,
-    );
-    let index = engine.snapshot_receipts().unwrap();
-    assert!(index.completions.contains_key(&allocated.completion));
-    drop(index);
-    let path = target(temp.path(), "unwritten-target");
-    let before = Arc::clone(&engine.state);
+fn backup_rejects_retired_or_disguised_receipts_before_intent_and_preserves_opaque_file() {
+    let temp = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700)).tempdir().unwrap();
+    let system = temp.path().join("system");
+    let config = Config::development(crate::test_disks(
+        (0..3).map(|index| temp.path().join(format!("disk-{index}"))),
+    )).unwrap();
+    let mut engine = Engine::initialize(&system, config).unwrap();
+    let op = || OperationId::generate().unwrap();
+    let repo = engine.create_disk_root("P01", "admin", op()).unwrap();
+    let work = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&work.workspace_id, "project.zxs", b"opaque ZIP bytes").unwrap();
+    let save = op();
+    engine.commit_workspace(CommitRequest {
+        workspace_id: work.workspace_id, operation_id: save, principal: "admin".into(),
+        expected_head: work.base_head, fencing_token: work.fencing_token,
+        message: "ordinary FILE".into(), request_digest: None,
+    }).unwrap();
+    let target = temp.path().join("selected");
+    fs::DirBuilder::new().mode(0o700).create(&target).unwrap();
+    let request = BackupPreparationRequest { operation_id: op(), principal: "admin".into(),
+        source_slot_id: "B01".into(), target_paths: vec![target.clone()],
+        expected_sequence: engine.state().sequence };
+    engine.check_backup_preparation_scope(&request).unwrap();
+    let admitted = Arc::clone(&engine.state);
     let original = media(temp.path());
-    let backup = BackupPreparationRequest {
-        operation_id: op(), principal: "admin".into(), source_slot_id: "B01".into(),
-        target_paths: vec![path.clone()], expected_sequence: engine.state().sequence,
-    };
-    let error = engine.start_backup_preparation(backup, fs::File::open(&path).unwrap())
-        .unwrap_err();
-    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
-    assert!(matches!(error, Error::SnapshotSource(ref source)
-        if matches!(source.as_ref(), SnapshotSourceError::BackupRegistration(_))));
-    assert!(Arc::ptr_eq(&before, &engine.state));
-    assert_eq!(media(temp.path()), original);
-    assert!(!temp.path().join("system/backup-preparation").exists());
+    for kind in [Some("snapshot.repository.reserve"), None] {
+        let receipt = Arc::make_mut(&mut engine.state).operations.get_mut(&save).unwrap();
+        match kind {
+            Some(kind) => receipt.kind = kind.into(),
+            None => receipt.result["snapshot_worktree"] = json_codec::json!({}),
+        }
+        let error = engine.start_backup_preparation(request.clone(), File::open(&target).unwrap())
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::StateInvalid);
+        assert!(engine.backup_preparation_status().is_none());
+        assert!(!system.join(JOB).exists());
+        assert_eq!(media(temp.path()), original);
+        engine.state = Arc::clone(&admitted);
+    }
+    drop(engine);
+    let reopened = Engine::open(&system).unwrap();
+    assert_eq!(reopened.state().operations[&save], admitted.operations[&save]);
+    let view = reopened.namespace_tree(&repo.main_branch_id).unwrap();
+    let entry = view.get("project.zxs").unwrap();
+    assert_eq!(entry.kind, storage_contract::NamespaceEntryKind::File);
+    let mut bytes = Vec::new();
+    reopened.open_content(&entry.version_id).unwrap().file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"opaque ZIP bytes");
+    assert!(reopened.backup_preparation_status().is_none());
 }
-

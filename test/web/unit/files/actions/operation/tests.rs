@@ -424,12 +424,6 @@ fn default_publication_unknown_preserves_preview_until_its_own_terminal_receipt(
             });
             state.update(|s| {
                 s.files.default_operation = Some("original".into());
-                s.files.directory_preview = Some(crate::files::model::DirectoryPreview {
-                    source: crate::files::model::DirectoryPreviewSource::Branch(
-                        crate::files::test_entries::branch(json!({"directory_branch_id":"draft"})),
-                    ),
-                    path: String::new(),
-                });
                 s.files.file_preview = Some(crate::files::history::tests::branch(
                     json!({"branch_id":"file-draft"}),
                 ));
@@ -438,12 +432,12 @@ fn default_publication_unknown_preserves_preview_until_its_own_terminal_receipt(
             state.with_untracked(|s| {
                 assert!(super::super::pending(s));
                 assert_eq!(s.files.default_operation.as_deref(), Some("original"));
-                assert!(s.files.directory_preview.is_some() && s.files.file_preview.is_some());
+                assert!(s.files.file_preview.is_some());
             });
             let mut unrelated = published();
             unrelated["operation_id"] = "unrelated".into();
             record_receipt(state, "unrelated", unrelated);
-            assert!(state.with_untracked(|s| s.files.directory_preview.is_some()));
+            assert!(state.with_untracked(|s| s.files.file_preview.is_some()));
             if published_result {
                 record_receipt(state, "original", published());
             } else {
@@ -452,7 +446,6 @@ fn default_publication_unknown_preserves_preview_until_its_own_terminal_receipt(
             state.with_untracked(|s| {
                 assert!(!super::super::pending(s));
                 assert!(s.files.default_operation.is_none());
-                assert_eq!(s.files.directory_preview.is_none(), published_result);
                 assert_eq!(s.files.file_preview.is_none(), published_result);
             });
         });

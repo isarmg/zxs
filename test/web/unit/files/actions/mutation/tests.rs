@@ -43,9 +43,8 @@ fn business_mutations_require_an_active_session_before_browser_work() {
                 json!({}),
             );
             state.update(|s| s.files.repository_id = "repository".into());
-            crate::files::batch::start(state, crate::files::batch::Kind::Delete, None);
+            crate::files::deletion::start(state, None);
             assert!(!state.with_untracked(|s| s.files.mutation_pending));
-            assert!(state.with_untracked(|s| s.files.batch.is_none()));
             assert!(state.with_untracked(|s| s.files.publications.is_empty()));
         });
     }
@@ -258,14 +257,13 @@ fn blocked_actions_do_not_clone_unrelated_state_snapshots() {
         assert!(super::super::create_directory(state, "new").is_none());
         crate::files::merge::start(state);
         crate::files::tags::start(state);
-        crate::files::batch::start(state, crate::files::batch::Kind::Delete, None);
+        crate::files::deletion::start(state, None);
         crate::snapshot::CLONES.with(|count| assert_eq!(count.get(), 0));
     });
 }
 
 #[test]
 fn preview_is_not_general_mutation_authority() {
-    use crate::files::model::DirectoryPreview;
     let mut state = State {
         authenticated: true,
         ..Default::default()
@@ -273,16 +271,6 @@ fn preview_is_not_general_mutation_authority() {
     state.management.storage = crate::management::Storage::Ready;
     state.files.writable = true;
     state.files.loaded = true;
-    state.files.directory_preview = Some(DirectoryPreview {
-        source: crate::files::model::DirectoryPreviewSource::Branch(
-            crate::files::test_entries::branch(json!({"directory_branch_id":"draft"})),
-        ),
-        path: String::new(),
-    });
-    assert!(super::super::default_write_allowed(&state));
-    assert!(!super::super::write_allowed(&state));
-    assert!(!super::super::history_write_allowed(&state));
-    state.files.directory_preview = None;
     state.files.file_preview = Some(crate::files::history::tests::branch(
         json!({"branch_id":"draft"}),
     ));

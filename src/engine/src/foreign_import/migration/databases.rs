@@ -21,7 +21,6 @@ pub struct ForeignOriginalDatabasesReport {
     pub manifest_hash: String,
     pub original_disks: usize,
     pub file_databases: usize,
-    pub directory_databases: usize,
     pub databases: usize,
     #[serialization(with = "storage_contract::u64_string")]
     pub database_bytes: u64,
@@ -201,7 +200,6 @@ impl Prepared {
             manifest_hash: object_hash("foreign-original-database-inventory", &inventory)?,
             original_disks: images.original_disks,
             file_databases: images.object_files,
-            directory_databases: images.object_directories,
             databases: images.files.len(),
             database_bytes: images.bytes() as u64,
         };

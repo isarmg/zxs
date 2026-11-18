@@ -15,7 +15,7 @@ const state = window.__zxsPrimaryBrowse = {
         const row = this.entryReads.at(-1), body = row?.body;
         return !this.overflow && row?.status === 200 && !row.parseError && row.rootRequest
             && body?.slot_id === 'D01' && body.path === '' && body.writable === true
-            && !Object.hasOwn(body, 'backup') && !Object.hasOwn(body, 'preview')
+            && !Object.hasOwn(body, 'backup') && !['preview','directory_branches','directory_branches_supported','default_branch_scope'].some(key=>Object.hasOwn(body,key))
             && Array.isArray(body.entries) && body.entries.length === 0
             && body.total_entries === '0' && body.directory_file_count === '0'
             && typeof body.snapshot === 'string' && body.snapshot.length > 0

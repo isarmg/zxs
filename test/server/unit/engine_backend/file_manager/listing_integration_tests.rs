@@ -1,5 +1,4 @@
 use super::*;
-use crate::tests::directory_git_fixture::checkpoint;
 use storage_engine::{CommitRequest, Config, new_id};
 
 pub(super) fn listing_json(engine: &AdmissionEngine, input: &Value) -> Result<Value, ApiError> {
@@ -42,13 +41,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
     let mut engine =
         AdmissionEngine::new(Engine::initialize(&root.path().join("system"), config).unwrap());
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Files").unwrap(),
-            "P01",
-            3,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "owner", storage_contract::OperationId::generate().unwrap())
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -76,7 +69,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
             request_digest: None,
         })
         .unwrap();
-    for (slot, path) in [("P01", "Files"), ("B01", "P01/Files")] {
+    for (slot, path) in [("P01", ""), ("B01", "P01")] {
         let all = listing_json(&engine, &json!({"slot_id":slot,"query":{"path":path}})).unwrap();
         let selected = all["entries"]
             .as_array()
@@ -113,68 +106,10 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         assert_eq!(back["entries"], first["entries"]);
         assert_eq!(back["snapshot"], first["snapshot"]);
     }
-    checkpoint(&mut engine, &repo, "", "owner");
-    let initial =
-        listing_json(&engine, &json!({"slot_id":"P01","query":{"path":"Files"}})).unwrap();
-    let branch = initial["directory_branches"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|branch| branch["current"] == true)
-        .unwrap();
-    let chosen = initial["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["name"] == "zeta.txt")
-        .unwrap();
-    let selection = |head: String, path: &str| {
-        crate::ReadDirectorySelection::parse(
-            repo.repository_id.clone(),
-            "",
-            vec![crate::DirectorySelectionSourceInput {
-                directory_branch_id: branch["directory_branch_id"].as_str().unwrap().into(),
-                expected_tree_id: head,
-            }],
-            vec![crate::DirectorySelectionEntryInput {
-                entry_id: chosen["entry_id"].as_str().unwrap().into(),
-                path: path.into(),
-            }],
-        )
-    };
-    let before = (engine.state().sequence, engine.state().operations.len());
-    let request = selection(branch["head_tree_id"].as_str().unwrap().into(), "zeta.txt").unwrap();
-    let facts = crate::engine_backend::directory_selection::read(&engine, &request).unwrap();
-    let facts = &facts.branches[0].entries;
-    assert_eq!(facts.len(), 1);
-    assert_eq!(facts[0].entry_id, chosen["entry_id"]);
-    assert_eq!(facts[0].path, "zeta.txt");
-    assert_eq!(facts[0].selected_path, "zeta.txt");
-    assert_eq!(
-        (engine.state().sequence, engine.state().operations.len()),
-        before
-    );
-    let stale = selection(new_id("tree").unwrap(), "zeta.txt").unwrap();
-    assert_eq!(
-        crate::engine_backend::directory_selection::read(&engine, &stale)
-            .err()
-            .unwrap()
-            .code,
-        storage_contract::ErrorCode::ListingChanged
-    );
-    for path in ["../zeta.txt", "folder/child.txt"] {
-        assert_eq!(
-            selection(branch["head_tree_id"].as_str().unwrap().into(), path)
-                .err()
-                .unwrap()
-                .status,
-            http::StatusCode::BAD_REQUEST
-        );
-    }
 }
 
 #[test]
-fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limit() {
+fn long_registered_path_and_stable_selected_entry_are_not_rebased() {
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
@@ -183,18 +118,12 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
     .unwrap();
     let mut engine = AdmissionEngine::new(engine);
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Repository").unwrap(),
-            "P01",
-            1,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "owner", storage_contract::OperationId::generate().unwrap())
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
         .unwrap();
-    let name = "x".repeat(195);
+    let name = format!("Reports/{}", "x".repeat(105));
     engine
         .stage_bytes(&workspace.workspace_id, &name, b"body")
         .unwrap();
@@ -211,17 +140,18 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
         .unwrap();
     let first = listing_json(
         &engine,
-        &json!({"slot_id":"P01","query":{"path":"Repository"}}),
+        &json!({"slot_id":"P01","query":{"path":"Reports"}}),
     )
     .unwrap();
     let selected = &first["entries"][0];
-    assert!(selected["path"].as_str().unwrap().len() > 200);
-    let response=listing_json(&engine,&json!({"slot_id":"P01","query":{"path":"Repository","selected_path":selected["path"],"selected_entry_id":selected["entry_id"]}})).unwrap();
+    assert_eq!(selected["path"], name);
+    assert_eq!(selected["repository_path"], name);
+    let response=listing_json(&engine,&json!({"slot_id":"P01","query":{"path":"Reports","selected_path":selected["path"],"selected_entry_id":selected["entry_id"]}})).unwrap();
     assert_eq!(response["selected_entry"], *selected);
 }
 
 #[test]
-fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_without_creating_root()
+fn listing_never_registers_an_empty_root_and_fences_new_ordinary_entries()
 {
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
@@ -234,45 +164,24 @@ fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_with
     assert_eq!(empty["entries"], json!([]));
     assert!(empty["context"].is_null());
     assert!(engine.state().repositories.is_empty());
-    for name in ["Alpha", "Beta", "Gamma"] {
-        engine
-            .create_repository(
-                &storage_contract::RepositoryName::parse(name).unwrap(),
-                "P01",
-                1,
-                "owner",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
-    }
+    let repo = engine.create_disk_root("P01", "owner", storage_contract::OperationId::generate().unwrap()).unwrap();
+    let mkdir = |engine: &mut AdmissionEngine, name: &str| {
+        engine.file_namespace(&repo.repository_id, NamespaceOperation::parse(
+            storage_contract::NamespaceOperationKind::Mkdir, name, None,
+        ).unwrap(), "owner", storage_contract::OperationId::generate().unwrap()).unwrap();
+    };
+    for name in ["Alpha", "Beta", "Gamma"] { mkdir(&mut engine, name); }
     let first = listing_json(&engine, &json!({"slot_id":"P01","query":{"limit":"1"}})).unwrap();
     let expected_snapshot=blake3::hash(&json_codec::to_vec(&json!({"configuration":engine.config(),"generation":engine.state().business_generation.to_string()})).unwrap()).to_hex().to_string();
     assert_eq!(first["snapshot"], expected_snapshot);
     assert_eq!(first["entries"][0]["name"], "Alpha");
     assert_eq!(first["total_entries"], "3");
-    assert_eq!(first["directory_branches_supported"], false);
     let row = &first["entries"][0];
-    assert_eq!(row.as_object().unwrap().len(), 7);
-    assert!(row.get("note").is_none());
-    assert!(row.get("container").is_none());
-    assert!(first["context"].is_null());
-    assert!(
-        engine
-            .state()
-            .repositories
-            .values()
-            .all(|repo| !repo.file_manager_root)
-    );
+    assert_eq!(row["repository_id"], repo.repository_id);
+    assert_eq!(row["path"], row["repository_path"]);
+    assert_eq!(first["context"]["repository_id"], repo.repository_id);
     let cursor = first["next_cursor"].as_str().unwrap();
-    engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Delta").unwrap(),
-            "P01",
-            1,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    mkdir(&mut engine, "Delta");
     let stale = listing_json(
         &engine,
         &json!({"slot_id":"P01","query":{"limit":"1","cursor":cursor}}),
@@ -318,13 +227,7 @@ fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_c
     .unwrap();
     let mut engine = AdmissionEngine::new(engine);
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Files").unwrap(),
-            "P01",
-            3,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "owner", storage_contract::OperationId::generate().unwrap())
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -359,12 +262,12 @@ fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_c
         .unwrap();
     let listing = listing_json(
         &engine,
-        &json!({"slot_id":"B01","query":{"path":"P01/Files"}}),
+        &json!({"slot_id":"B01","query":{"path":"P01"}}),
     )
     .unwrap();
     assert_eq!(listing["backup"], true);
     assert_eq!(listing["writable"], false);
-    assert_eq!(listing["directory_branches"], json!([]));
+    assert!(listing.get("directory_branches").is_none());
     assert!(listing["context"].is_null());
     let row = &listing["entries"][0];
     assert_eq!(row["entry_id"], entry.file_id);

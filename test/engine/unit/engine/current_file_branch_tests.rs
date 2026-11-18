@@ -259,44 +259,16 @@ impl Fixture {
                 .get("dir/gone")
                 .is_none()
         );
-        for branch in self
-            .engine
-            .state
-            .directory_branches
-            .values()
-            .filter(|branch| branch.repository_id == self.repository.repository_id)
-        {
-            assert!(
-                self.engine
-                    .current_directory_entries(&branch.directory_branch_id)
-                    .unwrap()
-                    .iter()
-                    .all(|entry| entry.file_id != self.hidden.file_id)
-            );
-        }
+        assert!(self.engine.file_context_for_current_entry(
+            &self.repository.repository_id, &self.hidden,
+        ).is_none());
     }
 }
 
 #[test]
 fn disk_exit_current_file_create_select_default_merge_and_restart_preserve_history() {
     let mut fixture = Fixture::new(2);
-    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "dir");
-    let hidden_directory = fixture
-        .engine
-        .create_directory_branches(
-            &fixture.repository.repository_id,
-            Some(&name_policy::LookupPath::parse("dir").unwrap()),
-            &name("unselected current directory"),
-            "admin",
-            op(),
-        )
-        .unwrap();
-    let hidden_directory = hidden_directory.result["directory_branch_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
     let old_commits = fixture.engine.state.commits.clone();
-    let old_trees = fixture.engine.state.directory_trees.clone();
     let versions = canonical_json(&fixture.engine.state.versions).unwrap();
     let target = fixture.exit(0, MembershipExitAction::Deregister);
     fixture.assert_hidden();
@@ -360,14 +332,12 @@ fn disk_exit_current_file_create_select_default_merge_and_restart_preserve_histo
     let result = merge(&mut fixture.engine).unwrap();
     assert_eq!(result.result["version_id"], fixture.first.version_id);
     assert_eq!(result.result["reused_node"], false);
-    assert!(
-        result.result["directory_branch_ids"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|branch| branch.as_str() == Some(hidden_directory.as_str())),
-        "unselected current directories participate too"
-    );
+    let selected = fixture.engine.file_context(
+        &fixture.repository.repository_id, fixture.current.path(),
+    ).unwrap();
+    assert_eq!(selected.branch_id, fixture.file_main);
+    assert_eq!(selected.node_id.as_deref(), result.result["node_id"].as_str());
+    assert_eq!(result.result["merged_branch_ids"], json_codec::json!([&fixture.alternate]));
     assert_eq!(merge(&mut fixture.engine).unwrap(), result);
     assert_eq!(
         fixture
@@ -397,9 +367,6 @@ fn disk_exit_current_file_create_select_default_merge_and_restart_preserve_histo
     );
     for (id, commit) in old_commits.iter() {
         assert_eq!(fixture.engine.state.commits.get(id), Some(commit));
-    }
-    for (id, tree) in old_trees.iter() {
-        assert_eq!(fixture.engine.state.directory_trees.get(id), Some(tree));
     }
     let mut bytes = Vec::new();
     fixture
@@ -684,51 +651,5 @@ fn disk_exit_current_file_merge_rejects_unavailable_chosen_historical_body() {
     assert_eq!(files(&fixture.config.disks[0].root), target);
 }
 
-#[test]
-fn disk_exit_current_file_merge_rejects_unclosed_frozen_child_references() {
-    let mut fixture = Fixture::new(2);
-    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "");
-    fixture
-        .engine
-        .create_directory_branches(
-            &fixture.repository.repository_id,
-            None,
-            &name("frozen parent"),
-            "admin",
-            op(),
-        )
-        .unwrap();
-    save(
-        &mut fixture.engine,
-        &fixture.repository.main_branch_id,
-        "dir/live",
-        b"newer named child",
-    );
-    let target = fixture.exit(0, MembershipExitAction::Deregister);
-    let inputs = fixture.inputs();
-    let before = canonical_json(fixture.engine.state()).unwrap();
-    assert_eq!(
-        fixture
-            .engine
-            .merge_file_branches(FileBranchMergeRequest {
-                file_id: &fixture.current.file_id,
-                inputs: &inputs,
-                chosen_node_id: &fixture.first.version_id,
-                surviving_branch_id: &fixture.file_main,
-                location: None,
-                principal: "admin",
-                operation_id: op(),
-            })
-            .unwrap_err()
-            .code(),
-        ErrorCode::RecoveryRequired
-    );
-    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
-    assert_eq!(files(&fixture.config.disks[0].root), target);
-}
-
 #[path = "current_history_merge_tests.rs"]
 mod history_merge_tests;
-
-#[path = "current_selected_file_merge_tests.rs"]
-mod selected_merge_tests;

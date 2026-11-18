@@ -1307,7 +1307,9 @@ async fn historical_merge_preserves_source_default_and_replays_after_restart() {
     assert_eq!(merged["result"]["version_id"], middle);
     assert_eq!(merged["result"]["source_inputs"], inputs);
     assert_eq!(merged["result"]["name"], "Historical result");
-    assert_eq!(merged["result"]["directory_branch_ids"], json!([]));
+    assert_eq!(merged["result"]["file_id"], file);
+    assert_eq!(merged["result"]["chosen_node_id"], middle);
+    assert_eq!(merged["result"]["surviving_branch_id"], merged["result"]["branch_id"]);
     assert_eq!(merged["request_digest"], storage_contract::object_hash("request", &json!({
         "kind":"file.history.merge","principal":"admin","body":{
             "file_id":file,"inputs":inputs,"chosen_node_id":middle,"name":"Historical result",

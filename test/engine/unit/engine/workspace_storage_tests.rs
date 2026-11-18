@@ -4,76 +4,20 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
-fn historical_completion_rejects_invalid_persisted_fence_instead_of_leaving_workspace_open() {
-    let temp = tempfile::tempdir().unwrap();
-    let config = Config::development(crate::test_disks(
-        [
-            temp.path().join("primary"),
-            temp.path().join("backup"),
-            temp.path().join("tertiary"),
-        ],
-    ))
-    .unwrap();
-    let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
-    let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("history").unwrap(),
-            "P01",
-            1,
-            "admin",
-            OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let head = engine.state.branches[&repo.main_branch_id]
-        .head_commit_id
-        .clone();
-    let workspace = engine
-        .create_historical_workspace(&repo.main_branch_id, &head, "admin")
-        .unwrap();
-    engine
-        .stage_bytes(&workspace.workspace_id, "file", b"historical bytes")
-        .unwrap();
-    let plan = engine
-        .create_historical_save_plan(
-            &repo.history_tree_id,
-            crate::HistoricalSaveOptions {
-                source_commit_id: head,
-                name: "saved branch".into(),
-                workspace_id: Some(workspace.workspace_id.clone()),
-                primary_slot_id: None,
-                target_copies: None,
-            },
-            "admin",
-        )
-        .unwrap();
-    let sealed = engine.workspace(&workspace.workspace_id).unwrap();
-    engine
-        .commit_historical_save_plan(&plan.plan_id, "admin", OperationId::generate().unwrap())
-        .unwrap();
-    let mut recovered = sealed.clone();
-    assert!(engine.reconcile_workspace_receipt(&mut recovered).unwrap());
-    assert_eq!(recovered.state, WorkspaceState::Committed);
-    for invalid in [
-        json!(null),
-        json!("+1"),
-        json!("01"),
-        json!("garbage"),
-        json!("0"),
-        json!("18446744073709551615"),
-        json!("18446744073709551616"),
-    ] {
-        Arc::make_mut(&mut engine.state)
-            .plans
-            .get_mut(&plan.plan_id)
-            .unwrap()
-            .input["workspace_fencing_token"] = invalid.clone();
-        let mut recovered = sealed.clone();
-        let error = engine
-            .reconcile_workspace_receipt(&mut recovered)
-            .unwrap_err();
-        assert_eq!(error.code(), ErrorCode::RecoveryRequired, "{invalid}");
-        assert_eq!(recovered.state, sealed.state);
-        assert_eq!(recovered.fencing_token, sealed.fencing_token);
+fn historical_or_unknown_workspace_purpose_is_refused_without_rewriting_either_copy() {
+    for purpose in ["historical_branch","unrecognized"] {
+        let (temp, engine, workspace) = workspace_fixture(1);
+        let system = engine.root.clone();
+        let _keep_temp = temp;
+        let primary = engine.workspace_data_directory(&workspace).unwrap().join("workspace.json");
+        let local = engine.root.join("workspaces").join(&workspace.workspace_id).join("workspace.json");
+        let mut record = json_codec::to_value(&workspace).unwrap();
+        record["purpose"] = json_codec::Value::String(purpose.into());
+        let data = json_codec::to_vec(&record).unwrap();
+        drop(engine);
+        for path in [&local, &primary] { std::fs::write(path, &data).unwrap(); }
+        assert!(Engine::open(&system).is_err());
+        for path in [&local, &primary] { assert_eq!(std::fs::read(path).unwrap(), data); }
     }
 }
 
@@ -254,13 +198,7 @@ fn workspace_fixture(disks: usize) -> (tempfile::TempDir, Engine, Workspace) {
             .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("workspace mirrors").unwrap(),
-            "P01",
-            1,
-            "admin",
-            OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "admin", OperationId::generate().unwrap())
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")

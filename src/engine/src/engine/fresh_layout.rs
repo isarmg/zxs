@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{DiskId, Generation, OperationId};
 use storage_contract::namespace_root::{
     DirectoryId, DiskRegistrationIdentity, RootBinding, RootId,
-    StorageLayout,
 };
 
 pub(in crate::engine) mod root_areas;
@@ -180,7 +179,6 @@ impl CreatedRoots {
             let root_entity = local_entity(held.directory_identity(held.path())?);
             let areas = root_areas::HeldRootAreas::create(held, directory_ids)?;
             let binding = RootBinding {
-                layout: StorageLayout::UnifiedWorkingTreeV1,
                 root_id,
                 registration: registration(config, disk),
                 source_chain: source_chain(config, disk)?,
@@ -268,7 +266,7 @@ pub(super) fn validate_roots(config: &Config) -> Result<()> {
     if config.storage_roots.len() != config.disks.len() {
         return Err(FreshLayoutError::Registration.into());
     }
-    namespace_roots::inspect(StorageLayout::UnifiedWorkingTreeV1, config.storage_roots.values())
+    namespace_roots::inspect(config.storage_roots.values())
         .map_err(|source| FreshLayoutError::Structure(std::io::Error::other(source)))?;
     for disk in &config.disks {
         let binding = config.storage_roots.get(&disk.disk_id.parse::<DiskId>()?)

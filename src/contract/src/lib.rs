@@ -154,6 +154,16 @@ pub fn parse_u64_decimal(value: &str) -> Result<u64> {
     value.parse().map_err(Error::from)
 }
 
+/// Exists only while non-persistent producer fields are being removed. They
+/// are never a wire format: empty fields are omitted by the caller and any
+/// populated field is an explicit serialization error, not dropped data.
+#[doc(hidden)]
+pub fn reject_non_file_table<T, S: data_serialization::Serializer>(
+    _: &T, _: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    Err(data_serialization::ser::Error::custom("not a FILE namespace table"))
+}
+
 pub mod u64_string {
     use data_serialization::{Deserialize, Deserializer, Serializer};
     pub fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {

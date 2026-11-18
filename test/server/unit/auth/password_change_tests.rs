@@ -312,24 +312,10 @@ impl crate::Backend for UnusedBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
-    fn prepare_historical_save(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
     fn prepare_purge(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::PreparePurge, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
-    fn prepare_split(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareSplit, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -592,12 +578,12 @@ impl crate::Backend for UnusedBackend {
     }
 }
 
-fn application(root: &Path, store: AuthStore) -> (Router, Arc<Mutex<AuthStore>>) {
+fn application(root: &Path, store: AuthStore) -> (Router, Arc<Mutex<AuthStore>>, crate::HttpWork) {
     let config = crate::ServerConfig::new(root);
     let spool = crate::http_spool::HttpSpool::open_blocking(&config);
     let runtime = crate::ManagementRuntime::start(Arc::new(UnusedBackend), store, &config).unwrap();
     let auth = runtime.auth.clone();
-    let app = crate::router_shared(
+    let (app, http_work) = crate::router_shared(
         runtime.backend,
         runtime.auth,
         config.admit().unwrap(),
@@ -606,7 +592,7 @@ fn application(root: &Path, store: AuthStore) -> (Router, Arc<Mutex<AuthStore>>)
         runtime.smb_account,
     )
     .unwrap();
-    (app, auth)
+    (app, auth, http_work)
 }
 
 fn password_request(token: &str) -> Request<Body> {
@@ -629,7 +615,7 @@ async fn exhausted_generation_returns_nonretryable_http_conflict_without_mutatio
     let login = store.login("owner", OLD_PASSWORD).unwrap();
     let before = store.snapshot().unwrap();
     let disk = fs::read(root.path().join("auth.json")).unwrap();
-    let (app, auth) = application(root.path(), store);
+    let (app, auth, http_work) = application(root.path(), store);
     for _ in 0..2 {
         let response = app
             .clone()
@@ -671,7 +657,10 @@ async fn exhausted_generation_returns_nonretryable_http_conflict_without_mutatio
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
+    drop(response);
     drop(app);
+    tokio::time::timeout(Duration::from_secs(10), http_work.drain())
+        .await.unwrap().unwrap();
     drop(auth);
     let store = AuthStore::open(root.path()).unwrap();
     assert_eq!(store.snapshot().unwrap(), before);
@@ -683,7 +672,7 @@ async fn http_password_change_clears_cookie_and_revokes_the_request_session() {
     let root = crate::tests::private_tempdir();
     let mut store = AuthStore::initialize(root.path(), "owner", OLD_PASSWORD).unwrap();
     let login = store.login("owner", OLD_PASSWORD).unwrap();
-    let (app, auth) = application(root.path(), store);
+    let (app, auth, _http_work) = application(root.path(), store);
     let response = app.oneshot(password_request(&login.token)).await.unwrap();
     assert_eq!(response.status(), 200);
     assert!(
@@ -707,7 +696,7 @@ async fn password_preparation_is_detached_and_revokes_sessions_created_before_pu
     let root = crate::tests::private_tempdir();
     let mut store = AuthStore::initialize(root.path(), "owner", OLD_PASSWORD).unwrap();
     let login = store.login("owner", OLD_PASSWORD).unwrap();
-    let (app, auth) = application(root.path(), store);
+    let (app, auth, _http_work) = application(root.path(), store);
     let challenge = auth
         .lock()
         .unwrap()
@@ -988,7 +977,7 @@ async fn http_session_reads_continue_during_durable_logout_then_observe_revocati
             .unwrap();
         Ok(())
     }));
-    let (app, auth) = application(root.path(), store);
+    let (app, auth, _http_work) = application(root.path(), store);
     let token = login.token.clone();
     let writer = tokio::task::spawn_blocking(move || auth.lock().unwrap().logout(&token));
     tokio::time::timeout(Duration::from_secs(10), work.recv())

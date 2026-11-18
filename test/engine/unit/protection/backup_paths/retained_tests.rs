@@ -23,7 +23,10 @@ fn configure(
 }
 
 fn configured_source(root: &Path) -> (Engine, Repository, Entry, String) {
-    let (mut engine, repo) = initialize(root, 1, None);
+    let mut engine = Engine::initialize(&root.join("state"), Config::development(
+        crate::test_disks([root.join("p"), root.join("b"), root.join("c")]),
+    ).unwrap()).unwrap();
+    let repo = engine.create_disk_root("P01", "admin", storage_contract::OperationId::generate().unwrap()).unwrap();
     let inside = save(&mut engine, &repo, "source/inside.txt", b"inside");
     let configured = configure(&mut engine, &repo, "source", 2, &[("B01", "old")], 0);
     let policy = configured.result["policy"]["policy_id"]
@@ -183,28 +186,9 @@ fn retained_settings_replay_once_and_restore_without_becoming_inherited() {
     engine
         .export_history_package(&repo.history_tree_id, &package)
         .unwrap();
-    let destination = temp.path().join("restored");
-    let mut restored = Engine::initialize(
-        &destination.join("state"),
-        Config::development(crate::test_disks(
-            [
-                destination.join("p"),
-                destination.join("b"),
-                destination.join("c"),
-            ],
-        ))
-        .unwrap(),
-    )
-    .unwrap();
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            2,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    crate::offline_check_history_package(&package).unwrap();
+    let recovered_system = temp.path().join("recovered-system");
+    let mut restored = crate::tests::restore_registered_fixture(engine, &recovered_system);
     assert!(restored.state.protection_policies[&current].inheritable);
     assert!(!restored.state.protection_policies[&retained].inheritable);
     assert_eq!(restored.state.protection_policies[&current].generation, 1);
@@ -232,7 +216,7 @@ fn retained_settings_replay_once_and_restore_without_becoming_inherited() {
         "old/moved.txt"
     );
     drop(restored);
-    Engine::open(&temp.path().join("restored/state")).unwrap();
+    Engine::open(&recovered_system).unwrap();
 }
 
 #[test]

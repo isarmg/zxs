@@ -250,7 +250,9 @@ fn published_original_files_keep_no_clobber_readback_and_same_decision_retry() -
         let original = PreparedDatabases::capture(source.original(), &stop)?;
         let published = PreparedDatabases::capture(source.published(), &stop)?;
         assert_eq!((original.file_count(), published.file_count()), (2, 2));
-        assert_eq!((original.directory_count(), published.directory_count()), (0, 0));
+        for (admitted, image) in [(source.original(), &original), (source.published(), &published)] {
+            crate::container_storage::backup_databases::tests::require_transition_bytes(admitted, image)?;
+        }
         let mut databases = Vec::new();
         for (before, after) in original.databases().iter().zip(published.databases()) {
             assert_eq!(before.path(), after.path());

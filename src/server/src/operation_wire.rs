@@ -22,12 +22,6 @@ pub(crate) fn operation_wire(
     {
         op.result = container_tags_result(op.result)?;
     }
-    if op.kind == storage_contract::snapshot_worktree::draft_commit::KIND {
-        // Both generic operation endpoints keep their public receipt shell.
-        // The scoped directory endpoint alone projects the admitted relation;
-        // no host entity, FILE trace or native request escapes this adapter.
-        op.result = Value::Null;
-    }
     if op.kind == "workspace.commit"
         && let Some(fields) = op.result.as_object_mut()
     {

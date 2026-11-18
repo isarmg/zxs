@@ -1680,172 +1680,11 @@
         "sequence"
       ]
     },
-    "DirectoryNamespaceSource": {
-      "type": "object",
-      "properties": {
-        "directory_branch_id": {
-          "$ref": "#/$defs/DirectoryBranchId"
-        },
-        "expected_tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        },
-        "path": {
-          "type": "string",
-          "minLength": 1
-        },
-        "entry_id": {
-          "$ref": "#/$defs/EntryId"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "directory_branch_id",
-        "expected_tree_id",
-        "path",
-        "entry_id"
-      ]
-    },
-    "DirectoryNamespaceTarget": {
-      "type": "object",
-      "properties": {
-        "directory_branch_id": {
-          "$ref": "#/$defs/DirectoryBranchId"
-        },
-        "expected_tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        },
-        "path": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "directory_branch_id",
-        "expected_tree_id",
-        "path"
-      ]
-    },
-    "DirectoryNamespaceItem": {
-      "type": "object",
-      "properties": {
-        "source": {
-          "$ref": "#/$defs/DirectoryNamespaceSource"
-        },
-        "target": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DirectoryNamespaceTarget"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "source"
-      ]
-    },
-    "DirectoryNamespaceBatch": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "enum": [
-            "move",
-            "copy",
-            "delete",
-            "rename",
-            "separate"
-          ]
-        },
-        "items": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/DirectoryNamespaceItem"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "description": "一批显式分支映射；separate 只接受一对已存在的稳定 main 自有文件位置：source 保留原身份历史，target 以自身准确已保存正文建立新身份，不复制历史。实际发布统一校验树依据、身份、归属、碰撞及可写状态。",
-      "required": [
-        "kind",
-        "items"
-      ],
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "delete"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "items": {
-                "items": {
-                  "properties": {
-                    "target": {
-                      "type": "null"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "else": {
-            "properties": {
-              "items": {
-                "items": {
-                  "required": [
-                    "target"
-                  ],
-                  "properties": {
-                    "target": {
-                      "$ref": "#/$defs/DirectoryNamespaceTarget"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "separate"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "items": {
-                "maxItems": 1
-              }
-            }
-          }
-        }
-      ]
-    },
     "FileContext": {
       "type": "object",
       "properties": {
         "branch_id": {
           "$ref": "#/$defs/BranchId"
-        },
-        "inherited_from": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DirectoryBranchId"
-            },
-            {
-              "type": "null"
-            }
-          ]
         },
         "selection_generation": {
           "$ref": "#/$defs/UInt64"
@@ -1862,11 +1701,10 @@
         }
       },
       "required": [
-        "branch_id",
-        "inherited_from"
+        "branch_id"
       ],
       "additionalProperties": false,
-      "description": "精确逻辑路径的写入目标与继承意图；同文件多个别名可选择不同公开分支/节点，不能以全局file_id选择覆盖。selection_generation用于切换后写会话隔离。"
+      "description": "精确逻辑路径的普通 FILE 写入目标。别名可选择不同公开分支或节点；selection_generation 用于隔离切换前的写会话。"
     },
     "FilePathNodeId": {
       "type": "string",
@@ -5715,7 +5553,6 @@
             "RESOURCE_LIMIT",
             "RESOURCE_LIMIT_EXCEEDED",
             "RESPONSE_TOO_LARGE",
-            "RESTORE_BACKUP_CONFLICT",
             "ROUTE_INCOMPLETE",
             "ROUTE_TARGET_UNAVAILABLE",
             "SAVE_MODE_UNSUPPORTED",
@@ -6555,276 +6392,6 @@
         "branch_id",
         "expected_node_id",
         "source_node_id"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryHistoryIdentity": {
-      "type": "object",
-      "properties": {
-        "repository_id": {
-          "$ref": "#/$defs/RepositoryId"
-        },
-        "directory_id": {
-          "$ref": "#/$defs/DirectoryId"
-        },
-        "history_tree_id": {
-          "$ref": "#/$defs/HistoryId"
-        },
-        "history_root": {
-          "$ref": "#/$defs/HistoryRoot"
-        },
-        "collection": {
-          "type": "string",
-          "enum": [
-            "nodes",
-            "branches"
-          ]
-        },
-        "limit": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 128
-        }
-      },
-      "required": [
-        "repository_id",
-        "directory_id",
-        "history_tree_id",
-        "history_root",
-        "collection",
-        "limit"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryHistoryCurrent": {
-      "type": "object",
-      "properties": {
-        "directory_branch_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryBranchId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tree_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryTreeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "committed_tree_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryTreeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "staged": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "directory_branch_id",
-        "tree_id",
-        "committed_tree_id",
-        "staged"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryHistoryNode": {
-      "type": "object",
-      "properties": {
-        "tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        },
-        "directory_branch_id": {
-          "$ref": "#/$defs/DirectoryBranchId"
-        },
-        "parent_tree_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryTreeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "parent_endpoint": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "enum": [
-            "in_window",
-            "outside_window",
-            null
-          ]
-        },
-        "commit_id": {
-          "$ref": "#/$defs/CommitId"
-        },
-        "path": {
-          "type": "string",
-          "description": "Historical path, not scope identity. Empty for repository root."
-        },
-        "sequence": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "message": {
-          "type": "string",
-          "minLength": 1,
-          "x-maxUtf8Bytes": 128
-        }
-      },
-      "required": [
-        "tree_id",
-        "directory_branch_id",
-        "parent_tree_id",
-        "parent_endpoint",
-        "commit_id",
-        "path",
-        "sequence",
-        "message"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryHistoryBranch": {
-      "type": "object",
-      "properties": {
-        "directory_branch_id": {
-          "$ref": "#/$defs/DirectoryBranchId"
-        },
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "x-maxUtf8Bytes": 128
-        },
-        "parent_branch_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryBranchId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "head_tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        },
-        "materialized": {
-          "type": "boolean"
-        },
-        "current": {
-          "type": "boolean"
-        },
-        "sequence": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "committed_tree_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryTreeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "staged": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "directory_branch_id",
-        "name",
-        "parent_branch_id",
-        "head_tree_id",
-        "materialized",
-        "current",
-        "sequence",
-        "committed_tree_id",
-        "staged"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryHistoryPage": {
-      "type": "object",
-      "properties": {
-        "identity": {
-          "$ref": "#/$defs/DirectoryHistoryIdentity"
-        },
-        "current": {
-          "$ref": "#/$defs/DirectoryHistoryCurrent"
-        },
-        "nodes": {
-          "type": "array",
-          "maxItems": 128,
-          "items": {
-            "$ref": "#/$defs/DirectoryHistoryNode"
-          }
-        },
-        "branches": {
-          "type": "array",
-          "maxItems": 128,
-          "items": {
-            "$ref": "#/$defs/DirectoryHistoryBranch"
-          }
-        },
-        "page": {
-          "type": "object",
-          "properties": {
-            "previous_cursor": {
-              "oneOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[0-9a-f]+$"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "next_cursor": {
-              "oneOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[0-9a-f]+$"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "previous_cursor",
-            "next_cursor"
-          ],
-          "additionalProperties": false
-        }
-      },
-      "required": [
-        "identity",
-        "current",
-        "nodes",
-        "branches",
-        "page"
       ],
       "additionalProperties": false
     },
@@ -7757,79 +7324,6 @@
         "skipped_non_utf8"
       ]
     },
-    "DirectoryStagingStatus": {
-      "type": "object",
-      "properties": {
-        "repository_id": {
-          "$ref": "#/$defs/RepositoryId"
-        },
-        "directory_branch_id": {
-          "$ref": "#/$defs/DirectoryBranchId"
-        },
-        "head_tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        },
-        "committed_tree_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryTreeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "staged": {
-          "type": "boolean"
-        },
-        "added": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "modified": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "deleted": {
-          "$ref": "#/$defs/UInt64"
-        }
-      },
-      "required": [
-        "repository_id",
-        "directory_branch_id",
-        "head_tree_id",
-        "committed_tree_id",
-        "staged",
-        "added",
-        "modified",
-        "deleted"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryCommitBody": {
-      "type": "object",
-      "properties": {
-        "expected_tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        },
-        "message": {
-          "type": "string",
-          "minLength": 1,
-          "x-maxUtf8Bytes": 128
-        },
-        "operation_id": {
-          "$ref": "#/$defs/OperationId"
-        },
-        "expected_index_generation": {
-          "$ref": "#/$defs/UInt64"
-        }
-      },
-      "required": [
-        "expected_tree_id",
-        "message",
-        "operation_id",
-        "expected_index_generation"
-      ],
-      "additionalProperties": false
-    },
     "StorageDiscoveredDiskRole": {
       "type": "object",
       "additionalProperties": false,
@@ -8513,8 +8007,6 @@
         "origin",
         "manifest_hash",
         "branches",
-        "directory_branches",
-        "directory_trees",
         "commit_records",
         "versions",
         "verified_local_versions",
@@ -8539,14 +8031,6 @@
           "type": "string"
         },
         "branches": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "directory_branches": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "directory_trees": {
           "type": "integer",
           "minimum": 0
         },
@@ -8633,52 +8117,6 @@
           ]
         }
       }
-    },
-    "DirectoryBranchCreateSource": {
-      "type": "object",
-      "description": "创建目录分支时已复核的准确来源；根 directory_id 必须等于 repository_id，非根使用 EntryId。动态状态在首次发布时复核。",
-      "properties": {
-        "repository_id": {
-          "$ref": "#/$defs/RepositoryId"
-        },
-        "directory_id": {
-          "$ref": "#/$defs/DirectoryId"
-        },
-        "directory_branch_id": {
-          "$ref": "#/$defs/DirectoryBranchId"
-        },
-        "working_tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        },
-        "head_tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        },
-        "index_generation": {
-          "allOf": [
-            {
-              "$ref": "#/$defs/UInt64"
-            },
-            {
-              "not": {
-                "const": "0"
-              }
-            }
-          ]
-        },
-        "namespace_head": {
-          "$ref": "#/$defs/CommitId"
-        }
-      },
-      "required": [
-        "repository_id",
-        "directory_id",
-        "directory_branch_id",
-        "working_tree_id",
-        "head_tree_id",
-        "index_generation",
-        "namespace_head"
-      ],
-      "additionalProperties": false
     },
     "DirectoryGitChildReference": {
       "type": "object",
@@ -8800,283 +8238,6 @@
       ],
       "additionalProperties": false,
       "description": "显式初始化目录仓库的持久状态；HEAD、暂存树及独立子仓库精确引用分别保存。"
-    },
-    "DirectoryGitOwner": {
-      "type": "object",
-      "properties": {
-        "directory_id": {
-          "$ref": "#/$defs/DirectoryId"
-        },
-        "path": {
-          "type": "string",
-          "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
-        }
-      },
-      "required": [
-        "directory_id",
-        "path"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryGitChildStatus": {
-      "type": "object",
-      "properties": {
-        "directory_id": {
-          "$ref": "#/$defs/EntryId"
-        },
-        "path": {
-          "type": "string",
-          "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
-        },
-        "directory_branch_id": {
-          "$ref": "#/$defs/DirectoryBranchId"
-        },
-        "head_tree_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryTreeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "staged_tree_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryTreeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "committed_tree_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryTreeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "dirty": {
-          "type": "boolean"
-        },
-        "reference_changed": {
-          "type": "boolean"
-        },
-        "staged": {
-          "type": "boolean"
-        },
-        "needs_restage": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "directory_id",
-        "path",
-        "directory_branch_id",
-        "head_tree_id",
-        "staged_tree_id",
-        "committed_tree_id",
-        "dirty",
-        "reference_changed",
-        "staged",
-        "needs_restage"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryGitStatus": {
-      "type": "object",
-      "properties": {
-        "repository_id": {
-          "$ref": "#/$defs/RepositoryId"
-        },
-        "directory_id": {
-          "$ref": "#/$defs/DirectoryId"
-        },
-        "path": {
-          "type": "string",
-          "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
-        },
-        "initialized": {
-          "type": "boolean"
-        },
-        "owner": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryGitOwner"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "directory_branch_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryBranchId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "working_tree_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryTreeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "head_tree_id": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/DirectoryTreeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "index_generation": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "staged": {
-          "type": "boolean"
-        },
-        "needs_restage": {
-          "type": "boolean"
-        },
-        "added": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "modified": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "deleted": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "children": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/DirectoryGitChildStatus"
-          }
-        },
-        "legacy_history": {
-          "type": "boolean"
-        },
-        "unstaged": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "repository_id",
-        "directory_id",
-        "path",
-        "initialized",
-        "owner",
-        "directory_branch_id",
-        "working_tree_id",
-        "head_tree_id",
-        "index_generation",
-        "staged",
-        "needs_restage",
-        "added",
-        "modified",
-        "deleted",
-        "children",
-        "legacy_history",
-        "unstaged"
-      ],
-      "additionalProperties": false,
-      "description": "只读准确目录状态；未初始化目录可以显示最近所属祖先，但不因此成为独立仓库。所有nullable字段必须出现。完整响应限1MiB，超限拒绝而不截断孩子列表。 staged及增改删计数比较暂存区与HEAD，unstaged比较工作区与暂存区；二者可同时为真。"
-    },
-    "DirectoryGitInitializeBody": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string",
-          "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
-        },
-        "expected_namespace_head": {
-          "$ref": "#/$defs/CommitId"
-        },
-        "operation_id": {
-          "$ref": "#/$defs/OperationId"
-        }
-      },
-      "required": [
-        "path",
-        "expected_namespace_head",
-        "operation_id"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryGitStageChildBody": {
-      "type": "object",
-      "properties": {
-        "directory_id": {
-          "$ref": "#/$defs/DirectoryId"
-        },
-        "directory_branch_id": {
-          "$ref": "#/$defs/DirectoryBranchId"
-        },
-        "expected_index_generation": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "child_directory_id": {
-          "$ref": "#/$defs/EntryId"
-        },
-        "expected_child_head_tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        },
-        "operation_id": {
-          "$ref": "#/$defs/OperationId"
-        }
-      },
-      "required": [
-        "directory_id",
-        "directory_branch_id",
-        "expected_index_generation",
-        "child_directory_id",
-        "expected_child_head_tree_id",
-        "operation_id"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryGitStageOwnedBody": {
-      "type": "object",
-      "properties": {
-        "directory_id": {
-          "$ref": "#/$defs/DirectoryId"
-        },
-        "directory_branch_id": {
-          "$ref": "#/$defs/DirectoryBranchId"
-        },
-        "expected_tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        },
-        "expected_index_generation": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "operation_id": {
-          "$ref": "#/$defs/OperationId"
-        }
-      },
-      "required": [
-        "directory_id",
-        "directory_branch_id",
-        "expected_tree_id",
-        "expected_index_generation",
-        "operation_id"
-      ],
-      "additionalProperties": false
     },
     "ForeignPlanTarget": {
       "type": "object",
@@ -10938,105 +10099,6 @@
       ],
       "additionalProperties": false
     },
-    "UndoDirectoryDeletionBody": {
-      "type": "object",
-      "properties": {
-        "owner_directory_id": {
-          "$ref": "#/$defs/DirectoryId"
-        },
-        "directory_id": {
-          "$ref": "#/$defs/EntryId"
-        },
-        "deletion_node_id": {
-          "$ref": "#/$defs/DirectoryDeletionNodeId"
-        },
-        "operation_id": {
-          "$ref": "#/$defs/OperationId"
-        }
-      },
-      "required": [
-        "owner_directory_id",
-        "directory_id",
-        "deletion_node_id",
-        "operation_id"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryDeletionSummary": {
-      "type": "object",
-      "properties": {
-        "directory_id": {
-          "$ref": "#/$defs/EntryId"
-        },
-        "deletion_node_id": {
-          "$ref": "#/$defs/DirectoryDeletionNodeId"
-        },
-        "path": {
-          "type": "string",
-          "minLength": 1
-        },
-        "operation_id": {
-          "$ref": "#/$defs/OperationId"
-        }
-      },
-      "required": [
-        "directory_id",
-        "deletion_node_id",
-        "path",
-        "operation_id"
-      ],
-      "additionalProperties": false
-    },
-    "DirectoryDeletionsPage": {
-      "type": "object",
-      "properties": {
-        "snapshot": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "entries": {
-          "type": "array",
-          "maxItems": 100,
-          "items": {
-            "$ref": "#/$defs/DirectoryDeletionSummary"
-          }
-        },
-        "next_after": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EntryId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "snapshot",
-        "entries",
-        "next_after"
-      ],
-      "additionalProperties": false
-    },
-    "HistoricalDirectoryBranchSource": {
-      "type": "object",
-      "description": "当前七项审阅 CAS 与独立历史用户提交树；两者同时进入新操作的永久请求摘要。",
-      "properties": {
-        "current": {
-          "$ref": "#/$defs/DirectoryBranchCreateSource"
-        },
-        "tree_id": {
-          "$ref": "#/$defs/DirectoryTreeId"
-        }
-      },
-      "required": [
-        "current",
-        "tree_id"
-      ],
-      "additionalProperties": false
-    },
     "FileContainerTag": {
       "type": "string",
       "minLength": 1,
@@ -11982,7 +11044,7 @@
     },
     "PoolSemanticFormat": {
       "type": "string",
-      "const": "manual-directory-v1",
+      "const": "file-containers",
       "description": "唯一新池语义标识。Config 和持有盘 seal 均必需；缺失、未知值或对象别名不补值、不迁移。"
     },
     "PoolLocalEntityIdentity": {
@@ -12060,10 +11122,6 @@
     "PoolRootBinding": {
       "type": "object",
       "properties": {
-        "layout": {
-          "type": "string",
-          "const": "unified_working_tree_v1"
-        },
         "root_id": {
           "$ref": "#/$defs/WorkingTreeRootId"
         },
@@ -12079,7 +11137,7 @@
         "root_entity": {
           "$ref": "#/$defs/PoolLocalEntityIdentity"
         },
-        "roots": {
+        "areas": {
           "$ref": "#/$defs/PoolRootAreas"
         },
         "operation_id": {
@@ -12090,12 +11148,11 @@
         }
       },
       "required": [
-        "layout",
         "root_id",
         "registration",
         "source_chain",
         "root_entity",
-        "roots",
+        "areas",
         "operation_id",
         "generation"
       ],

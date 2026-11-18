@@ -187,14 +187,14 @@ const id = (prefix, number) => `${prefix}_${number.toString(16).padStart(32, '0'
 function page() {
     return {kind: 'nodes', identity: {file_id: id('file', 1), history_root: 'a'.repeat(64),
         context: {repository_id: id('repo', 1), history_tree_id: id('history', 1),
-            path: 'browser-smoke.txt', selected_branch_id: id('br', 1), current_node_id: id('ver', 1)}},
+            path: 'browser-fixtures/browser-smoke.txt', selected_branch_id: id('br', 1), current_node_id: id('ver', 1)}},
         page: {previous_cursor: null, next_cursor: null}, edges: [], nodes: [{node_id: id('ver', 1),
             version_id: id('ver', 1), current: true, kind: 'content', size: '7',
             content_hash: 'b'.repeat(64), branch_id: id('br', 1), note: 'retained', parents: {state: 'complete'}}]};
 }
 function labels() {
     return {file_id: id('file', 1),
-        context: {repository_id: id('repo', 1), path: 'browser-smoke.txt'}, tags: [], generation: '0'};
+        context: {repository_id: id('repo', 1), path: 'browser-fixtures/browser-smoke.txt'}, tags: [], generation: '0'};
 }
 function publication(p, index) {
     const before = p.snapshots[index], prior = p.tagSnapshots[index];
@@ -371,9 +371,11 @@ test('fresh container reads retain tags and generation across version selection'
 test('tag read observer binds the real GET path and query to the returned context', async () => {
     const f = fixture('tags', () => labels());
     const route = `${origin}/api/file-manager/files/${id('file', 1)}/tags`;
-    await f.window.fetch(`${route}?repository_id=${id('repo', 2)}&path=browser-smoke.txt`);
+    await f.window.fetch(`${route}?repository_id=${id('repo', 2)}&path=browser-fixtures%2Fbrowser-smoke.txt`);
     assert.equal(f.state.tagReads.length, 0);
-    const response = await f.window.fetch(`${route}?repository_id=${id('repo', 1)}&path=browser-smoke.txt`);
+    await f.window.fetch(`${route}?repository_id=${id('repo', 1)}&path=browser-smoke.txt`);
+    assert.equal(f.state.tagReads.length, 0, 'a matching basename is not the selected ordinary path');
+    const response = await f.window.fetch(`${route}?repository_id=${id('repo', 1)}&path=browser-fixtures%2Fbrowser-smoke.txt`);
     assert.equal(response, f.responses.at(-1));
     assert.deepEqual(copy(f.state.tagReads[0].body), labels());
     f.state.restore();

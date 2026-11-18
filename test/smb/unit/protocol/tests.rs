@@ -634,3 +634,44 @@ fn native_working_io_has_explicit_mode_and_never_requires_a_fake_version() {
         assert!(json_codec::from_value::<Request>(unknown).is_err());
     }
 }
+
+#[test]
+fn bridge_requires_the_exact_current_capabilities_and_only_ordinary_directory_entries() {
+    assert!(current_capabilities(REQUIRED_CAPABILITIES.iter().rev().copied().map(Some)));
+    let duplicate = [REQUIRED_CAPABILITIES[0]; REQUIRED_CAPABILITIES.len()];
+    assert!(!current_capabilities(duplicate.into_iter().map(Some)));
+    assert!(!current_capabilities(REQUIRED_CAPABILITIES.iter().copied().map(Some)
+        .chain([None])));
+    let entry = storage_contract::Entry {
+        entry_id: "original-entry".into(), path: PortablePath::parse("project.zxs").unwrap(),
+        kind: storage_contract::NamespaceEntryKind::File, file_id: "original-file".into(),
+        version_id: "original-version".into(), size: 22,
+    };
+    let wire = json_codec::to_value(DirectoryEntry::Published {
+        entry, mtime: FileMtime::Saved { unix_seconds: SavedMtime::from_unix_seconds(1).unwrap() },
+    }).unwrap();
+    assert_eq!(json_codec::from_value::<DirectoryEntry>(wire.clone()).unwrap().path().as_str(),
+        "project.zxs");
+    // Whole, formerly valid wire shapes must be rejected at the tag. A
+    // malformed Published row alone would not distinguish the two schemas.
+    let id = |prefix| storage_contract::new_id(prefix).unwrap();
+    let mount = json_codec::json!({"publication":id("op"),"worktree_id":id("worktree")});
+    let target = json_codec::json!({
+        "worktree":mount,"path":"project.zxs","entry":id("entry"),"file":id("file")
+    });
+    let saved = json_codec::to_value(FileMtime::Saved {
+        unix_seconds: SavedMtime::from_unix_seconds(1).unwrap(),
+    }).unwrap();
+    for former in [
+        json_codec::json!({"state":"worktree","target":mount,"path":"former",
+            "relative_path":null,"kind":"directory","size":"0"}),
+        json_codec::json!({"state":"worktree_working","target":target,
+            "path":"former/project.zxs","logical_size":"22"}),
+        json_codec::json!({"state":"worktree_retained","target":target,
+            "path":"former/project.zxs","version":id("ver"),"size":"22","mtime":saved}),
+        json_codec::json!({"state":"unknown"}),
+    ] {
+        assert!(json_codec::from_value::<DirectoryEntry>(former).is_err());
+    }
+
+}

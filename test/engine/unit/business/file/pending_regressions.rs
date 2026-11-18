@@ -16,13 +16,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     )
     .unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("branch regression").unwrap(),
-            "P01",
-            3,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "admin", OperationId::generate().unwrap())
         .unwrap();
     (root, engine, repo)
 }
@@ -279,30 +273,18 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
             storage_contract::ErrorCode::BranchNotActive
         );
         assert_eq!(canonical_json(engine.state()).unwrap(), source_before);
-        let current = engine.state.commits[&workspace.base_head].clone();
-        let mut changed = current.clone();
-        changed.commit_id = new_id("commit").unwrap();
-        changed
-            .entries
-            .iter_mut()
-            .find(|entry| entry.kind == NamespaceEntryKind::File)
-            .unwrap()
-            .version_id = new_id("ver").unwrap();
-        std::sync::Arc::make_mut(&mut engine.state)
-            .commits
-            .insert(changed.commit_id.clone(), changed.clone());
-        assert_eq!(
-            synchronize_directory_edits(
-                std::sync::Arc::make_mut(&mut engine.state),
-                &changed.commit_id,
-                &["report.txt".into()],
-                "admin",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap_err()
-            .code(),
-            storage_contract::ErrorCode::BranchNotActive
-        );
+        // Exercise the real second (publication) fence on the exact retained
+        // Entry/FILE/Version in this ordinary HEAD. Do not fabricate a body
+        // or a directory snapshot to select the owner of a FILE.
+        let held = engine.namespace_tree(&repo.main_branch_id).unwrap()
+            .get("report.txt").unwrap().clone();
+        let written = [(held.entry_id, (held.file_id, held.version_id))].into();
+        let mut candidate = engine.state().clone();
+        assert_eq!(publish_workspace_file_heads(
+            &mut candidate, &repo, &workspace.base_head, &written,
+            "admin", OperationId::generate().unwrap(),
+        ).unwrap_err().code(), storage_contract::ErrorCode::BranchNotActive);
+        assert_eq!(canonical_json(&candidate).unwrap(), source_before);
         assert_eq!(engine.state.branches[&branch].head_commit_id, before);
     }
 }
@@ -406,132 +388,58 @@ fn inherited_range_fences_selection_and_preserves_parent_bytes() {
 }
 
 #[test]
-fn selected_file_materialization_replaces_a_split_main_placeholder() {
+fn only_the_written_independent_file_branch_materializes_after_reopen() {
     let (root, mut engine, repo) = fixture();
-    let original = save(&mut engine, &repo.main_branch_id, b"original");
-    let pending = engine
-        .create_branch(
-            original.commit_id.as_ref().unwrap(),
-            &storage_contract::BranchName::parse("pending full").unwrap(),
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let plan = engine
-        .create_split_plan(&repo.history_tree_id, &pending.head_commit_id, "admin")
-        .unwrap();
-    let split = engine
-        .commit_plan(
-            &plan.plan_id,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let repository = engine
-        .state()
-        .repositories
-        .values()
-        .find(|repo| Some(&repo.history_tree_id) == split.history_tree_id.as_ref())
-        .unwrap()
-        .clone();
-    let placeholder = file(&engine, &repository.main_branch_id);
-    assert!(!placeholder.version_id.is_empty());
-    assert_eq!(placeholder.size, 8);
-    let source = engine
-        .pending_file_source(&repository.main_branch_id, &placeholder.file_id)
-        .unwrap()
-        .to_owned();
-    let created = engine
-        .create_file_branch(
-            &placeholder.file_id,
-            &source,
-            &storage_contract::BranchName::parse("actual").unwrap(),
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let branch = created.result["branch_id"].as_str().unwrap().to_owned();
-    engine
-        .select_file_branch(
-            &placeholder.file_id,
-            &branch,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    save(&mut engine, &branch, b"written branch bytes");
-    let written = file(&engine, &branch);
-    let selected = file(&engine, &repository.main_branch_id);
-    assert_eq!(selected.version_id, written.version_id);
-    assert_eq!(selected.size, 20);
-    assert!(
-        engine
-            .pending_file_source(&repository.main_branch_id, &placeholder.file_id)
-            .is_none()
-    );
-    assert!(
-        !engine.state().branches[&repository.main_branch_id]
-            .pending_file_versions
-            .contains_key(&placeholder.file_id)
-    );
-    drop(engine);
-    let engine = Engine::open(&root.path().join("system")).unwrap();
-    assert_eq!(
-        file(&engine, &repository.main_branch_id).version_id,
-        written.version_id
-    );
-    assert!(
-        engine
-            .pending_file_source(&repository.main_branch_id, &placeholder.file_id)
-            .is_none()
-    );
+    save(&mut engine, &repo.main_branch_id, b"original");
+    let first = file(&engine, &repo.main_branch_id);
+    let sibling_save = engine.create_workspace(&repo.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&sibling_save.workspace_id, "sibling.txt", b"original").unwrap();
+    commit(&mut engine, sibling_save);
+    let sibling = engine.namespace_tree(&repo.main_branch_id).unwrap().get("sibling.txt").unwrap().clone();
+    assert_ne!(first.file_id, sibling.file_id);
+    let selected = select_pending(&mut engine, &first);
+    let other = select_pending(&mut engine, &sibling);
+    let other_head = engine.state().branches[&other].head_commit_id.clone();
+    save(&mut engine, &repo.main_branch_id, b"written branch bytes");
+    let selected_version = engine.namespace_tree(&repo.main_branch_id).unwrap()
+        .get("report.txt").unwrap().version_id.clone();
+    assert_ne!(selected_version, first.version_id);
+    for reopen in [false, true] {
+        if reopen { drop(engine); engine = Engine::open(&root.path().join("system")).unwrap(); }
+        let changed = engine.namespace_tree(&selected).unwrap().get("report.txt").unwrap();
+        assert_eq!(changed.version_id, selected_version);
+        assert_eq!(changed.file_id, first.file_id);
+        assert_eq!(engine.state().versions[&selected_version].source_version_ids, [first.version_id.clone()]);
+        assert!(engine.pending_file_source(&selected, &first.file_id).is_none());
+        assert_eq!(engine.state().branches[&other].head_commit_id, other_head);
+        assert_eq!(engine.pending_file_source(&other, &sibling.file_id), Some(sibling.version_id.as_str()));
+        assert_eq!(engine.namespace_tree(&repo.main_branch_id).unwrap().get("sibling.txt").unwrap(), &sibling);
+    }
 }
 
 #[test]
-fn historical_range_edits_keep_the_explicit_old_snapshot_as_their_base() {
+fn historical_range_edits_use_the_selected_files_explicit_old_version_not_newer_main() {
     let (_root, mut engine, repo) = fixture();
-    let original = save(&mut engine, &repo.main_branch_id, b"old body");
-    let source = original.commit_id.unwrap();
+    save(&mut engine, &repo.main_branch_id, b"old body");
+    let original = file(&engine, &repo.main_branch_id);
     save(&mut engine, &repo.main_branch_id, b"current body");
-    let workspace = engine
-        .create_historical_workspace(&repo.main_branch_id, &source, "admin")
-        .unwrap();
-    engine
-        .stage_range(
-            &workspace.workspace_id,
-            &new_id("entry").unwrap(),
-            "report.txt",
-            0,
-            b"X",
-            None,
-        )
-        .unwrap();
-    let plan = engine
-        .create_historical_save_plan(
-            &repo.history_tree_id,
-            HistoricalSaveOptions {
-                source_commit_id: source,
-                name: "edited old snapshot".into(),
-                workspace_id: Some(workspace.workspace_id),
-                primary_slot_id: None,
-                target_copies: None,
-            },
-            "admin",
-        )
-        .unwrap();
-    let saved = engine
-        .commit_historical_save_plan(
-            &plan.plan_id,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let written = file(&engine, saved.branch_id.as_ref().unwrap());
-    let mut content = engine.open_content(&written.version_id).unwrap();
-    let mut bytes = Vec::new();
-    content.file.read_to_end(&mut bytes).unwrap();
-    assert_eq!(bytes, b"Xld body");
-    let unchanged = file(&engine, &repo.main_branch_id);
-    assert_ne!(written.version_id, unchanged.version_id);
-    assert_eq!(unchanged.size, 12);
+    let current = file(&engine, &repo.main_branch_id);
+    let main = engine.file_context(&repo.repository_id, "report.txt").unwrap().branch_id;
+    let fork = select_pending(&mut engine, &original);
+    let workspace = engine.create_workspace(&fork, "admin").unwrap();
+    engine.stage_range(&workspace.workspace_id, &new_id("entry").unwrap(), "report.txt", 0,
+        b"X", None).unwrap();
+    commit(&mut engine, workspace);
+    let written = file(&engine, &fork);
+    assert_eq!(engine.state().versions[&written.version_id].source_version_ids, [original.version_id.clone()]);
+    let read = |engine: &Engine, version: &str| {
+        let mut content = engine.open_content(version).unwrap();
+        let mut bytes = Vec::new();
+        content.file.read_to_end(&mut bytes).unwrap();
+        bytes
+    };
+    assert_eq!(read(&engine, &written.version_id), b"Xld body");
+    assert_eq!(read(&engine, &original.version_id), b"old body");
+    assert_eq!(file(&engine, &main).version_id, current.version_id);
+    assert_eq!(read(&engine, &current.version_id), b"current body");
 }

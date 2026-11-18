@@ -21,7 +21,6 @@ pub struct BackupWriterRoutesReport {
     pub retained_source_chain: Vec<DiskRegistrationIdentity>,
     pub retained_replaced_terminal: DiskRegistrationIdentity,
     pub whole_files_per_target: usize,
-    pub directory_repositories_per_target: usize,
     pub retained_versions_per_target: usize,
 }
 
@@ -42,20 +41,7 @@ pub struct BackupFileWriterRoute {
     pub decision_hash: BackupRegistryDecisionHash,
     pub history_tree_id: String,
     pub file_id: String,
-    pub directory_id: Option<String>,
     pub version_ids: BTreeSet<String>,
-    pub destinations: Vec<BackupWriterDestination>,
-}
-
-/// Parent and nested child repositories use the same complete destination set;
-/// the parent relation and relative entity home are preserved on every copy.
-#[derive(Clone, Debug)]
-pub struct BackupDirectoryWriterRoute {
-    pub decision_hash: BackupRegistryDecisionHash,
-    pub history_tree_id: String,
-    pub directory_id: String,
-    pub outer_repository_id: String,
-    pub parent_directory_id: Option<String>,
     pub destinations: Vec<BackupWriterDestination>,
 }
 
@@ -139,7 +125,6 @@ impl Routes {
             retained_source_chain: material.retained_source_chain.clone(),
             retained_replaced_terminal: material.retained_replaced_terminal.clone(),
             whole_files_per_target: material.units.files.len(),
-            directory_repositories_per_target: material.units.directories.len(),
             retained_versions_per_target: material
                 .units
                 .files
@@ -175,32 +160,7 @@ impl Routes {
             decision_hash: self.report.decision_hash.clone(),
             history_tree_id: home.history_tree_id.clone(),
             file_id: home.file_id.clone(),
-            directory_id: home.directory_id.clone(),
             version_ids: home.version_ids.clone(),
-            destinations: self.destinations(&home.path),
-        })
-    }
-
-    pub(super) fn directory(
-        &self,
-        history: &str,
-        directory: &str,
-    ) -> Result<BackupDirectoryWriterRoute> {
-        let home = self
-            .material
-            .units
-            .directories
-            .iter()
-            .find(|home| home.history_tree_id == history && home.directory_id == directory)
-            .ok_or_else(|| {
-                invalid("directory repository is not in the decided whole-unit writer material")
-            })?;
-        Ok(BackupDirectoryWriterRoute {
-            decision_hash: self.report.decision_hash.clone(),
-            history_tree_id: home.history_tree_id.clone(),
-            directory_id: home.directory_id.clone(),
-            outer_repository_id: home.outer_repository_id.clone(),
-            parent_directory_id: home.parent_directory_id.clone(),
             destinations: self.destinations(&home.path),
         })
     }

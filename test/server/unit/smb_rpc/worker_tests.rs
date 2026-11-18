@@ -320,7 +320,7 @@ async fn completed_connection_handles_are_reaped_before_the_next_admission() {
         // no arbitrary sleep or production polling hook is involved.
         tokio::time::timeout(DEADLINE, async {
             loop {
-                if registry.0.lock().unwrap().as_ref().unwrap().threads[0].is_finished() {
+                if registry.0.lock().unwrap().as_ref().unwrap().threads[0].thread.is_finished() {
                     break;
                 }
                 tokio::task::yield_now().await;

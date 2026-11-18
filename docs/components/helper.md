@@ -103,16 +103,14 @@ zxs-helper offline-export /srv/zxs/old-disk VERSION_ID /srv/helper/new-file
 
 在停止写入的可信原成员或一致的只读副本上操作。核验或导出只证明被检查的发布证据、单个版本与其数据完整性，不证明整个池可恢复、当前在线认证、最新历史或所有副本健康。导出目标不得已存在；`offline-export` 的输出路径须为有效 UTF-8，以便精确写入 JSON 收据，不可编码的路径在读取源盘或创建目标前拒绝。不要把隔离导出结果直接当作可重新加入池的磁盘。
 
-## 历史恢复包
+## FILE 历史包导出与核验
 
 ```sh
 zxs-helper --root /srv/zxs/system package export HISTORY_ID /srv/private-helper/new-package
 zxs-helper package check /srv/private-helper/new-package
-zxs-helper --root /srv/zxs/new-system package restore /srv/private-helper/new-package \
-  --primary-slot P01 --copies 3
 ```
 
-保留原有完整历史包导出、独立核验和新池恢复能力，不是 Web 文件传输。导出目标不得已存在，父目录必须为当前用户拥有的私有 0700 目录；包的路径、发布证明、摘要、对象与历史结构仍由原核心实现核验。没有外部可信成员配置时，独立包检查仅证明包内证据与内容自洽，不赋予来源池成员关系权威。恢复要求目标池已安全初始化，保留目标身份、副本和新池恢复约束，导入形成目标池的新本地发布，不沿用外来发布作为本池权威，不能覆盖现有目标或绕过损坏证明；可用 `--operation-id` 指定经审查的幂等操作标识。
+导出目标不得已存在，父目录必须为当前用户拥有的私有 0700 目录。独立核验检查原发布证明、历史根、可用版本的内容及墓碑；它不把包注册到另一个池，也不证明来源池当前的成员关系。SYSTEM 丢失时，使用上面的 `restore-system` 从原注册成员恢复，不要从历史包创建新库。
 
 <a id="uninitialized-configuration-drafts"></a>
 
@@ -135,7 +133,7 @@ zxs-helper configuration register-disk --config /srv/private-layout/custom.json 
 
 除系统盘外最低只需一块存储盘，后续备份层均可不配置；单盘没有冗余或故障盘容错。`configuration template --disks '{"name":"Primary","root":"/absolute/primary"}'` 可生成单盘草稿，增加路径时按顺序形成备份链；草稿本身不访问或初始化设备，实际使用仍须校验拓扑和设备。
 
-正常元数据发布要求全部已配置元数据成员持久化成功；严格多数仅用于相应恢复/准入流程，不能自动把失联成员移出配置。`package restore` 默认一个副本；需要更多副本时显式设置 `--copies N` 并预置足够的备份链。
+正常元数据发布要求全部已配置元数据成员持久化成功；严格多数仅用于相应恢复/准入流程，不能自动把失联成员移出配置。
 
 ## 检查
 

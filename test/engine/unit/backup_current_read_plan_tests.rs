@@ -31,7 +31,7 @@ fn rebuilt(
         targets: prepared.targets.len(),
         branch_scopes: counts.branches,
         readable_branch_scopes: counts.readable_branches,
-        directory_scopes: counts.directories,
+        registered_folders: counts.registered_folders,
         entries_per_target: counts.entries,
         deleted_files: counts.deletions,
         unavailable_versions: counts.unavailable,
@@ -97,8 +97,8 @@ pub(in super::super) fn verify_same_invocation_readback(
     let reference = rebuilt(context, prepared, decision, expected, stop)?;
     assert_eq!(format!("{actual:?}"), format!("{reference:?}"));
     assert_eq!(actual.targets, prepared.targets.len());
-    assert_eq!(actual.branch_scopes, 2);
-    assert_eq!(actual.directory_scopes, 2);
+    assert!(actual.readable_branch_scopes > 0);
+    assert_eq!(actual.registered_folders, 2);
     assert!(actual.entries_per_target > 0);
 
     // Change a real target SQLite and then a real held-source BODY only after

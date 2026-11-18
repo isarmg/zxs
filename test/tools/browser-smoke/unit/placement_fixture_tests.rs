@@ -1,55 +1,21 @@
 use super::*;
 
 #[test]
-fn placement_preview_has_an_explicit_clean_repository_and_preserves_files() {
+fn ordinary_placement_fixture_preserves_file_versions_and_opaque_zip_bytes() {
     let source = tempfile::tempdir().unwrap();
     crate::fixture::initialize_management(&source, "Placement fixture password 2026!").unwrap();
     let fixture = Fixture::new(source.path(), &source.path().join("pool")).unwrap();
-    let mut engine = Engine::open(&fixture.pool).unwrap();
-    let status = engine
-        .directory_git_status(&fixture.repository.repository_id, "future")
-        .unwrap();
-    assert!(status.initialized && status.head_tree_id.is_some());
-    assert!(!status.staged && !status.needs_restage);
-    assert!(
-        !engine
-            .directory_git_status(&fixture.repository.repository_id, "protected")
-            .unwrap()
-            .initialized,
-        "the independent backup policy must not implicitly initialize Git"
-    );
-    let path = engine
-        .list_tree(&fixture.repository.main_branch_id)
-        .unwrap()
-        .into_iter()
-        .find(|entry| entry.entry_id == fixture.future_directory)
-        .unwrap()
-        .path
-        .into();
-    engine
-        .create_directory_branches(
-            &fixture.repository.repository_id,
-            Some(&path),
-            &storage_engine::BranchName::parse("placement-preview").unwrap(),
-            PRINCIPAL,
-            OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let branch = engine
-        .state()
-        .directory_branches
-        .values()
-        .find(|branch| branch.name == "placement-preview")
-        .unwrap();
-    assert_eq!(branch.directory_id, fixture.future_directory);
-    let preview = engine
-        .preview_directory_branch(
-            &fixture.repository.repository_id,
-            &branch.directory_branch_id,
-            &branch.head_tree_id,
-        )
-        .unwrap();
-    assert_eq!(preview.path(), "future");
+    let engine = Engine::open(&fixture.pool).unwrap();
+    assert!(fixture.repository.file_manager_root);
+    let entries = engine.list_tree(&fixture.repository.main_branch_id).unwrap();
+    assert_eq!(entries.iter().find(|entry| entry.entry_id == fixture.future_directory).unwrap().path(), "future");
+    let zip = entries.iter().find(|entry| entry.path() == "future/project.zxs").unwrap();
+    let mut original = engine.open_content(&zip.version_id).unwrap();
+    let mut bytes = Vec::new();
+    original.file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes.len(), 22);
+    assert_eq!(&bytes[..4], b"PK\x05\x06");
+    assert!(bytes[4..].iter().all(|byte| *byte == 0));
     assert_eq!(fixture.originals().len(), 2);
     assert_eq!(engine.state().versions.len(), fixture.originals.len());
     fixture.preserved(&engine).unwrap();

@@ -667,7 +667,6 @@ fn flush_reports_external_workspace_ownership_without_losing_pending_bytes() {
             &session.identity,
             crate::CreateWorkspace {
                 branch_id: branch,
-                source_commit_id: None,
             },
         )
         .unwrap();

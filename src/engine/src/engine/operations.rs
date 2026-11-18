@@ -97,57 +97,39 @@ impl OperationReadPlan {
 
 impl Engine {
     pub fn operation_owner(&self, id: OperationId) -> Result<Option<String>> {
-        if let Some(owner) = self.state.operation_principals.get(&id) {
-            return Ok(Some(owner.clone()));
+        if let Some(result) = self.state.operations.get(&id) {
+            crate::ordinary_authority::operation(result)?;
+            return Ok(self.state.operation_principals.get(&id).cloned());
         }
-        let (members, snapshot, _) = match self.pending_operation_snapshot(id) {
-            Ok(pending) => pending,
-            Err(error) if error.code() == storage_contract::ErrorCode::OperationNotFound => {
-                return Ok(None);
-            }
-            Err(error) => return Err(error),
-        };
-        snapshot_entry(
-            &self.disk_resources,
-            &members,
-            &snapshot,
-            "operation_principals",
-            id,
-        )
+        match self.pending_operation_record(id) {
+            Ok(record) => Ok(record.owner),
+            Err(error) if error.code() == storage_contract::ErrorCode::OperationNotFound => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     /// Published records are metadata-only. An uncertain decision reads only
     /// the hash-bound owner/operation pages, not the candidate's entire State.
     pub fn operation_record(&self, id: OperationId) -> Result<OperationRecord> {
         if let Some(result) = self.state.operations.get(&id) {
+            crate::ordinary_authority::operation(result)?;
             return Ok(OperationRecord {
                 owner: self.state.operation_principals.get(&id).cloned(),
                 result: result.clone(),
             });
         }
+        self.pending_operation_record(id)
+    }
+
+    fn pending_operation_record(&self, id: OperationId) -> Result<OperationRecord> {
         let (members, snapshot, candidate) = self.pending_operation_snapshot(id)?;
+        let result = snapshot_entry(&self.disk_resources, &members, &snapshot, "operations", id)?
+            .ok_or_else(operation_not_found)?;
+        let result = pending_observation(result, id, &candidate)?;
+        // Don't even return a principal for a row outside the admitted domain.
         let owner = snapshot_entry(
-            &self.disk_resources,
-            &members,
-            &snapshot,
-            "operation_principals",
-            id,
+            &self.disk_resources, &members, &snapshot, "operation_principals", id,
         )?;
-        let mut result: OperationResult =
-            snapshot_entry(&self.disk_resources, &members, &snapshot, "operations", id)?
-                .ok_or_else(operation_not_found)?;
-        if result.operation_id != id
-            || result.request_digest != candidate.request_digest
-            || result.sequence != candidate.sequence
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ObjectCorrupt,
-                "operation differs from accepted candidate",
-            ));
-        }
-        result.commit_state = storage_contract::CommitState::InDoubt;
-        result.protection_at_publish = storage_contract::ProtectionAtPublish::Unconfirmed;
-        result.current_health = storage_contract::CurrentHealth::Recovering;
         Ok(OperationRecord { owner, result })
     }
 
@@ -275,6 +257,27 @@ impl Engine {
         }
         Err(first_error.unwrap_or_else(operation_not_found))
     }
+}
+
+// Only two authenticated radix rows are read for a blocked operation. That
+// path does not materialize AdmittedState. Require the same domain on the
+// actual original row before replacing any outcome fields or revealing owner.
+fn pending_observation(
+    mut result: OperationResult, id: OperationId, candidate: &Candidate,
+) -> Result<OperationResult> {
+    if result.operation_id != id || result.operation_id != candidate.operation_id
+        || result.request_digest != candidate.request_digest
+        || result.sequence != candidate.sequence
+    {
+        return Err(Error::new(
+            storage_contract::ErrorCode::ObjectCorrupt, "operation differs from accepted candidate",
+        ));
+    }
+    crate::ordinary_authority::operation(&result)?;
+    result.commit_state = storage_contract::CommitState::InDoubt;
+    result.protection_at_publish = storage_contract::ProtectionAtPublish::Unconfirmed;
+    result.current_health = storage_contract::CurrentHealth::Recovering;
+    Ok(result)
 }
 
 fn operation_not_found() -> Error {

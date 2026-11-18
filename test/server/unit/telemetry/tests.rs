@@ -351,24 +351,10 @@ impl Backend for MonitorBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
-    fn prepare_historical_save(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
     fn prepare_purge(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::PreparePurge, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
-    fn prepare_split(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareSplit, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -781,7 +767,7 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
         crate::auth::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
     let token = auth.login("admin", "a-long-test-password").unwrap().token;
     let spool_budget = crate::http_spool::HttpSpool::open_blocking(&config);
-    let app = crate::router_shared(
+    let (app, http_work) = crate::router_shared(
         backend,
         Arc::new(Mutex::new(auth)),
         config.admit().unwrap(),
@@ -843,6 +829,7 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
     for path in ["/api/system/status", "/api/system/history?range=1min"] {
         assert_eq!(request(&app, path, &token).await, StatusCode::OK);
     }
+    tokio::time::timeout(Duration::from_secs(3), http_work.drain()).await.unwrap().unwrap();
 }
 
 #[cfg(unix)]

@@ -155,8 +155,11 @@ fn semantics(name: &str, value: &Value) -> Result {
         "PoolConfiguration" => {
             let _: storage_contract::Config = json_codec::from_value(value.clone())?;
         }
+        "FileContext" => {
+            let _: storage_contract::FileContext = json_codec::from_value(value.clone())?;
+        }
         "PoolRootBinding" => {
-            let _: storage_contract::working_tree::RootBinding =
+            let _: storage_contract::namespace_root::RootBinding =
                 json_codec::from_value(value.clone())?;
         }
         "NamespaceDirectoryRecord" => {
@@ -317,11 +320,6 @@ fn semantics(name: &str, value: &Value) -> Result {
         "SmbAccountStatus" => {
             let _: storage_contract::smb_account::SmbAccountStatus =
                 json_codec::from_value(value.clone())?;
-        }
-        "DirectoryBranchCreateSource" => {
-            let source: storage_contract::directory_git::DirectoryBranchCreateSource =
-                json_codec::from_value(value.clone())?;
-            source.validate()?;
         }
         "DiskHealth" => {
             let _: storage_contract::disk_details::DiskHealth =

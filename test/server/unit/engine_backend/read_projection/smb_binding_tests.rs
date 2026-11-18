@@ -121,7 +121,6 @@ fn typed_smb_binding_preserves_repository_priority_and_workspace_rejection() {
             &identity,
             crate::CreateWorkspace {
                 branch_id: repo.main_branch_id.clone(),
-                source_commit_id: None,
             },
         )
         .unwrap();

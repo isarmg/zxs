@@ -166,13 +166,38 @@ impl NativeWorkingFile {
 }
 
 impl Engine {
+    /// A complete, admitted native state with no Unborn row for this root
+    /// can describe the registry's published listing exactly. A possible
+    /// row is a reason to refuse, never a grant to enumerate its name or size.
+    pub(crate) fn require_projected_unborn_absence(&self, repository: storage_contract::RepositoryId)
+        -> Result<()> {
+        if self.state.file_containers.values().any(|row| {
+            row.namespace.repository == repository && row.working.unborn().is_some()
+        }) {
+            return Err(Error::new(crate::ErrorCode::UnsupportedOperation,
+                "the current disk registry has no proved listing for this root's uncommitted FILEs"));
+        }
+        Ok(())
+    }
+
     pub fn native_current_entries(
         &self, repository: storage_contract::RepositoryId,
     ) -> Result<Vec<NativeCurrentEntry>> {
         use crate::business::namespace::working::{WorkingEntry, WorkingNamespace};
         let repo = self.state.repositories.get(&repository.to_string())
             .ok_or(Error::FileDraft(Failure::WorkingNamespace))?;
-        self.namespace_snapshot(&repo.main_branch_id)?;
+        let selected = self.ordinary_metadata_root_for_slot(&repo.primary_slot_id)?
+            .filter(|held| held.repository_id == repo.repository_id
+                && held.main_branch_id == repo.main_branch_id)
+            .ok_or(Error::FileDraft(Failure::WorkingNamespace))?;
+        let snapshot = self.namespace_snapshot(&selected.main_branch_id)?;
+        if self.admitted_current_namespaces()?.is_some() || self.config.generation().is_some() {
+            self.require_projected_unborn_absence(repository)?;
+            // The detached/disabled registry owns these scoped rows, not the
+            // raw historic HEAD. No payload or stopped root is opened here.
+            return Ok(snapshot.tree().visible_entries().cloned()
+                .map(NativeCurrentEntry::Published).collect());
+        }
         let namespace = WorkingNamespace::from_main_state(
             &self.state, repository, self.config.max_entries,
         )?;

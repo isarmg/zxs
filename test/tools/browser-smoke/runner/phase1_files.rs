@@ -168,7 +168,24 @@ pub(super) fn reload_container_tags(browser: &Browser) -> Result<()> {
 pub(super) fn edit_current_tags(browser: &Browser) -> Result<()> {
     browser.click(&browser.button("Edit container tags", "编辑容器标签")?)?;
     browser.css("[data-container-tag-editor] input:not([disabled])")?;
-    Ok(())
+    check(
+        browser,
+        "the native tag input has one visible label, separate from its action buttons",
+        r#"
+        const editor = document.querySelector('[data-container-tag-editor]');
+        const input = editor?.querySelector('input:not([disabled])');
+        if (!input || input.labels.length !== 1) return false;
+        const label = input.labels[0];
+        const text = n => n.textContent.trim();
+        if (label.control !== input || !label.getClientRects().length
+            || !['Add tag', '新增标签'].includes(text(label)) || label.querySelector('button'))
+            return false;
+        const buttons = [...editor.querySelectorAll('button')];
+        return [['Add tag', '添加标签'], ['Cancel', '取消'], ['Save tags', '保存标签']]
+            .every(names => buttons.filter(b => names.includes(text(b))).length === 1)
+            && buttons.every(b => !label.contains(b));
+        "#,
+    )
 }
 
 fn enter_tag(browser: &Browser) -> Result<()> {

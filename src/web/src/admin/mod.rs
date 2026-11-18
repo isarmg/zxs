@@ -3,6 +3,7 @@ mod backup_transaction;
 mod disks;
 mod messages;
 mod navigation;
+mod purge;
 pub(crate) use navigation::Section;
 mod request;
 mod response;
@@ -177,6 +178,14 @@ fn complete(
         return;
     }
     state.update(|s| s.admin_console.busy = false);
+    let result = result.and_then(|value| {
+        if let response::Action::Plan(review) = &value.action
+            && !state.with_untracked(|s| review.belongs_to(s.principal.as_ref()))
+        {
+            return Err(ResponseError::Contract("purge plan principal").into());
+        }
+        Ok(value)
+    });
     match result {
         Ok(value) => state.update(|s| accept(&mut s.admin_console, value)),
         Err(error) => {
@@ -270,9 +279,15 @@ fn submit(state: RwSignal<State>) {
             .update(|s| s.admin_console.error = Some(Failure::Input(std::sync::Arc::new(error)))),
     }
 }
+fn ready_purge(state: &State) -> bool {
+    permitted(state, true)
+        && state.admin_console.uncertain_operation.is_none()
+        && state.admin_console.plan.as_ref().is_some_and(|review|
+            review.belongs_to(state.principal.as_ref()) && review.ready())
+}
+
 fn plan_action(state: RwSignal<State>, commit: bool) {
-    if !allowed(state, true)
-        || state.with_untracked(|s| s.admin_console.uncertain_operation.is_some())
+    if !state.with_untracked(ready_purge)
     {
         return;
     }
@@ -378,10 +393,10 @@ pub(crate) fn console(state: RwSignal<State>, section: Section) -> impl IntoView
             <Show when=move ||state.with(|s|s.admin_console.plan.is_some())>
                 <h2 class="zxs-row">{Message::PlanReview.text()}</h2>
                 <pre class="zxs-admin-result">{move ||state.with(|s|s.admin_console.plan.as_ref().map(|plan|json_codec::to_string_pretty(plan.plan()).expect("invariant: plans serialize")))}</pre>
-                <label class="zxs-row"><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.acknowledged) disabled=move ||state.with(|s|s.admin_console.busy) on:change=move |ev|state.update(|s|s.admin_console.acknowledged=event_target_checked(&ev))/>{Message::AcknowledgePlan.text()}</label>
+                <label class="zxs-row"><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.acknowledged) disabled=move ||state.with(|s|!ready_purge(s)) on:change=move |ev|state.update(|s|s.admin_console.acknowledged=event_target_checked(&ev))/>{Message::AcknowledgePlan.text()}</label>
                 <div class="zxs-flow">
-                    <button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||!s.admin_console.acknowledged||s.admin_console.uncertain_operation.is_some()) on:click=move |_|plan_action(state,true)>{Message::CommitPlan.text()}</button>
-                    <button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||s.admin_console.uncertain_operation.is_some()) on:click=move |_|plan_action(state,false)>{Message::CancelPlan.text()}</button>
+                    <button class="zxs-button" disabled=move ||state.with(|s|!ready_purge(s)||!s.admin_console.acknowledged) on:click=move |_|plan_action(state,true)>{Message::CommitPlan.text()}</button>
+                    <button class="zxs-button" disabled=move ||state.with(|s|!ready_purge(s)) on:click=move |_|plan_action(state,false)>{Message::CancelPlan.text()}</button>
                 </div>
             </Show>
         })}

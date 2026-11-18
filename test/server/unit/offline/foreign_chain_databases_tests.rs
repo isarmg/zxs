@@ -5,7 +5,7 @@ fn report(level: u32) -> ForeignOriginalDatabasesReport {
         "registrations":[],"sequence":"2","snapshot_hash":"b".repeat(64),"state_hash":"c".repeat(64),
         "prefix_hash":"d".repeat(64),"publications":2,"operations":2,"principals":2,"events":2},
         "capsule_digest":"e".repeat(64),"chain_digest":"f".repeat(64),"target_level":level,
-        "manifest_hash":"a".repeat(64),"original_disks":3,"file_databases":1,"directory_databases":0,
+        "manifest_hash":"a".repeat(64),"original_disks":3,"file_databases":1,
         "databases":8,"database_bytes":"4096"})).unwrap()
 }
 fn input() -> Original {
@@ -86,4 +86,12 @@ fn original_database_completion_never_claims_new_identity_or_membership() {
     ] {
         assert_eq!(value[key], false);
     }
+}
+
+#[test]
+fn old_directory_count_is_not_a_file_only_database_receipt_even_when_zero() {
+    let mut value = json_codec::to_value(report(1)).unwrap();
+    value["directory_databases"] = 0.into();
+    let bytes = json_codec::to_vec(&value).unwrap();
+    assert!(storage_contract::decode_strict::<ForeignOriginalDatabasesReport>(&bytes).is_err());
 }

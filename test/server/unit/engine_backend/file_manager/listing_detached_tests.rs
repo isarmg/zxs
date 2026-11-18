@@ -1,6 +1,5 @@
 //! Primary listing interleavings at the real capture/scan boundary.
 use super::*;
-use crate::tests::directory_git_fixture::checkpoint;
 use crate::{
     Backend,
     auth::{AuthStore, Identity},
@@ -13,22 +12,22 @@ use std::{
 };
 use storage_contract::{CommitRequest, Config, OperationId};
 
-type ScanHook = Box<dyn FnOnce(&ListingMetadata)>;
+type ScanHook = Box<dyn FnOnce(u64)>;
 thread_local! {
     static BEFORE_SCAN: RefCell<Option<ScanHook>> = const { RefCell::new(None) };
 }
 
-pub(super) fn before_scan(view: &ListingMetadata) {
+pub(super) fn before_scan(sequence: u64) {
     let hook = BEFORE_SCAN.with(|hook| hook.borrow_mut().take());
     if let Some(hook) = hook {
-        hook(view);
+        hook(sequence);
     }
 }
 
 fn pause(started: mpsc::SyncSender<u64>, release: mpsc::Receiver<()>) {
     BEFORE_SCAN.with(|hook| {
-        *hook.borrow_mut() = Some(Box::new(move |view| {
-            started.send(view.sequence).unwrap();
+        *hook.borrow_mut() = Some(Box::new(move |sequence| {
+            started.send(sequence).unwrap();
             release.recv_timeout(Duration::from_secs(10)).unwrap();
         }));
     });
@@ -51,13 +50,7 @@ fn fixture() -> Fixture {
     )
     .unwrap();
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("Files").unwrap(),
-            "P01",
-            1,
-            "owner",
-            OperationId::generate().unwrap(),
-        )
+        .create_disk_root("P01", "owner", OperationId::generate().unwrap())
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -130,7 +123,7 @@ fn writers_finish_during_primary_scan_and_changed_pages_never_project_old_indice
                 let result = read(
                     backend.as_ref(),
                     &identity,
-                    request("Files", &[("limit", "1")]),
+                    request("", &[("limit", "1")]),
                 );
                 (result, LISTED_ENTRY_PROJECTIONS.get())
             });
@@ -196,7 +189,7 @@ fn revoked_identity_wins_over_a_changed_primary_listing() {
         let reader = scope.spawn(|| {
             pause(started, resume);
             LISTED_ENTRY_PROJECTIONS.set(0);
-            let result = read(backend.as_ref(), &identity, request("Files", &[]));
+            let result = read(backend.as_ref(), &identity, request("", &[]));
             (result, LISTED_ENTRY_PROJECTIONS.get())
         });
         observed.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -230,7 +223,7 @@ fn revoked_identity_wins_over_a_changed_primary_listing() {
 #[test]
 fn auth_only_publication_keeps_primary_snapshot_selection_and_bounded_projection() {
     let (_root, backend, mut auth, _token, identity, _repo) = fixture();
-    let all = read(backend.as_ref(), &identity, request("Files", &[])).unwrap();
+    let all = read(backend.as_ref(), &identity, request("", &[])).unwrap();
     let selected = all["entries"]
         .as_array()
         .unwrap()
@@ -243,14 +236,14 @@ fn auth_only_publication_keeps_primary_snapshot_selection_and_bounded_projection
         ("selected_path", selected["path"].as_str().unwrap()),
         ("selected_entry_id", selected["entry_id"].as_str().unwrap()),
     ];
-    let expected = read(backend.as_ref(), &identity, request("Files", &values)).unwrap();
+    let expected = read(backend.as_ref(), &identity, request("", &values)).unwrap();
     let (started, observed) = mpsc::sync_channel(1);
     let (release, resume) = mpsc::sync_channel(1);
     std::thread::scope(|scope| {
         let reader = scope.spawn(|| {
             pause(started, resume);
             LISTED_ENTRY_PROJECTIONS.set(0);
-            let result = read(backend.as_ref(), &identity, request("Files", &values));
+            let result = read(backend.as_ref(), &identity, request("", &values));
             (result, LISTED_ENTRY_PROJECTIONS.get())
         });
         let captured = observed.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -290,8 +283,8 @@ fn reopen(backend: &EngineBackend, root: &std::path::Path) {
 }
 
 #[test]
-fn same_snapshot_after_engine_reopen_rejects_namespace_and_virtual_repository_candidates() {
-    for path in ["Files", ""] {
+fn same_snapshot_after_engine_reopen_rejects_original_namespace_indices() {
+    for path in ["Café", ""] {
         let (root, backend, _auth, _token, identity, _repo) = fixture();
         let snapshot = backend.engine.lock().unwrap().listing_snapshot().to_owned();
         let (started, observed) = mpsc::sync_channel(1);
@@ -327,14 +320,14 @@ fn primary_capture_keeps_cursor_error_precedence_before_disk_and_directory_error
     let page = read(
         backend.as_ref(),
         &identity,
-        request("Files/Café", &[("limit", "1")]),
+        request("Café", &[("limit", "1")]),
     )
     .unwrap();
     let cursor = page["next_cursor"].as_str().unwrap();
     let mismatched = crate::ReadListing::parse(
         "missing".into(),
         [
-            ("path".into(), "Files/Café".into()),
+            ("path".into(), "Café".into()),
             ("limit".into(), "1".into()),
             ("cursor".into(), cursor.into()),
         ]
@@ -367,13 +360,13 @@ fn primary_capture_keeps_cursor_error_precedence_before_disk_and_directory_error
     let stale = read(
         backend.as_ref(),
         &identity,
-        request("Files/Café", &[("limit", "1"), ("cursor", cursor)]),
+        request("Café", &[("limit", "1"), ("cursor", cursor)]),
     )
     .unwrap_err();
     BEFORE_SCAN.with(|hook| hook.borrow_mut().take());
     assert_eq!(stale.code, storage_contract::ErrorCode::ListingChanged);
     assert_eq!(
-        read(backend.as_ref(), &identity, request("Files/Café", &[]))
+        read(backend.as_ref(), &identity, request("Café", &[]))
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::DirectoryNotFound
@@ -381,46 +374,24 @@ fn primary_capture_keeps_cursor_error_precedence_before_disk_and_directory_error
 }
 
 #[test]
-fn primary_scan_preserves_virtual_root_recursive_counts_unicode_and_directory_choices() {
+fn primary_scan_preserves_counts_unicode_and_the_exact_disk_relative_context() {
     let (_root, backend, _auth, _token, identity, repo) = fixture();
-    backend.test_with_engine_locked(|engine| {
-        checkpoint(engine, &repo, "", "owner");
-        checkpoint(engine, &repo, "Café", "owner");
-    });
-    let root = read(backend.as_ref(), &identity, request("", &[])).unwrap();
-    assert_eq!(root["entries"][0]["entry_id"], repo.repository_id);
-    assert_eq!(root["entries"][0]["name"], "Files");
-    assert!(root["context"].is_null());
-    assert_eq!(root["directory_branches_supported"], false);
-    let top = read(backend.as_ref(), &identity, request("FILES", &[])).unwrap();
+    let top = read(backend.as_ref(), &identity, request("", &[])).unwrap();
+    assert_eq!(top["context"]["repository_id"], repo.repository_id);
+    assert_eq!(top["context"]["repository_path"], "");
     assert_eq!(top["total_entries"], "4");
     assert_eq!(top["directory_file_count"], "5");
-    assert_eq!(top["default_branch_scope"], true);
-    assert_eq!(top["directory_branches_supported"], true);
-    assert!(!top["directory_branches"].as_array().unwrap().is_empty());
-    let directory = read(
-        backend.as_ref(),
-        &identity,
-        request("FILES/CAFE\u{301}", &[]),
-    )
-    .unwrap();
+    for old in ["directory_branches", "directory_branches_supported", "default_branch_scope", "preview"] {
+        assert!(top.get(old).is_none());
+    }
+    let directory = read(backend.as_ref(), &identity, request("CAFE\u{301}", &[])).unwrap();
+    assert_eq!(directory["context"]["repository_path"], "CAFE\u{301}");
     assert_eq!(directory["total_entries"], "2");
     assert_eq!(directory["directory_file_count"], "2");
-    assert_eq!(directory["default_branch_scope"], false);
-    assert!(
-        directory["entries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|entry| { entry["path"].as_str().unwrap().starts_with("Files/Café/") })
-    );
-    assert!(
-        directory["directory_branches"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|branch| branch["current"] == true)
-    );
+    assert!(directory["entries"].as_array().unwrap().iter().all(|entry| {
+        entry["path"] == entry["repository_path"]
+            && entry["path"].as_str().unwrap().starts_with("Café/")
+    }));
 }
 
 #[tokio::test]
@@ -429,16 +400,8 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
     // The scan owns its exact namespace, not an unrelated historical commit table
     // or version records. Cancellation still retains the worker and its permit.
     let (old_record, old_version, required_head) = backend.test_with_engine_locked(|engine| {
-        let other = engine
-            .create_repository(
-                &storage_contract::RepositoryName::parse("Other").unwrap(),
-                "P01",
-                1,
-                "owner",
-                OperationId::generate().unwrap(),
-            )
-            .unwrap();
-        let head = &engine.state().branches[&other.main_branch_id].head_commit_id;
+        let current = &engine.state().commits[&engine.state().branches[&repo.main_branch_id].head_commit_id];
+        let head = current.parent_commit_ids.first().expect("actual main predecessor");
         (
             Arc::downgrade(&engine.state().commits.get_shared(head).unwrap()),
             Arc::downgrade(engine.state().versions.shared_values().next().unwrap()),
@@ -468,7 +431,7 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
     )
     .run(move |backend| {
         pause(started, resume);
-        read(backend, &identity, request("Files", &[("limit", "1")]))
+        read(backend, &identity, request("", &[("limit", "1")]))
     });
     let waiter = tokio::spawn(wait);
     observed.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -495,265 +458,26 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
 }
 
 #[test]
-fn listing_projection_shares_only_required_tables_and_exact_namespace_owners() {
-    let (_root, backend, auth, _token, _identity, repo) = fixture();
-    let (mut state, view) = {
-        let engine = backend.engine.lock().unwrap();
-        (
-            engine.state().clone(),
-            ListingMetadata::capture(&engine, "P01", true).unwrap(),
-        )
-    };
-    drop(auth);
-    drop(backend);
-    let versions = std::ptr::from_ref(&*state.versions);
-    let placements = std::ptr::from_ref(&*state.placements);
-    let content_states = std::ptr::from_ref(&*state.content_states);
-    let branches = std::ptr::from_ref(&*state.branches);
-    let commits = std::ptr::from_ref(&*state.commits);
-    assert!(std::ptr::eq(&*view.repositories, &*state.repositories));
-    assert_eq!(view.namespaces.len(), 1);
-    assert_eq!(
-        view.namespaces[&repo.repository_id].branch_id(),
-        repo.main_branch_id
-    );
-    assert!(std::ptr::eq(
-        &*view.directory_branches,
-        &*state.directory_branches
-    ));
-    assert!(std::ptr::eq(
-        &*view.directory_selections,
-        &*state.directory_selections
-    ));
-    state.versions.extend_shared(&Default::default());
-    state.placements.clear();
-    state.content_states.clear();
-    state.branches.clear();
-    state.commits.extend_shared(&Default::default());
-    assert_eq!(versions, std::ptr::from_ref(&*state.versions));
-    assert_eq!(placements, std::ptr::from_ref(&*state.placements));
-    assert_eq!(content_states, std::ptr::from_ref(&*state.content_states));
-    assert_eq!(branches, std::ptr::from_ref(&*state.branches));
-    assert_eq!(commits, std::ptr::from_ref(&*state.commits));
-    state
-        .directory_selections
-        .insert("new-test-directory".into(), "new-selection".into());
-    assert!(!view.directory_selections.contains_key("new-test-directory"));
-    assert!(!std::ptr::eq(
-        &*view.directory_selections,
-        &*state.directory_selections
-    ));
-}
-
-fn preview_fixture() -> (Fixture, String, String, Value) {
-    let fixture = fixture();
-    let (_, backend, _, _, _, repo) = &fixture;
-    let mut engine = backend.engine.lock().unwrap();
-    checkpoint(&mut engine, repo, "Café", "owner");
-    let branch = engine
-        .create_directory_branches(
-            &repo.repository_id,
-            Some(&name_policy::LookupPath::parse("Café").unwrap()),
-            &storage_contract::BranchName::parse("frozen").unwrap(),
-            "owner",
-            OperationId::generate().unwrap(),
-        )
-        .unwrap()
-        .result["directory_branch_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let tree = engine.state().directory_branches[&branch]
-        .head_tree_id
-        .clone();
-    let frozen = json_codec::to_value(&engine.state().directory_branches[&branch]).unwrap();
-    // A same-owner rename separates the current path from the frozen snapshot
-    // while preserving the initialized directory's reversible deletion lifecycle.
-    engine
-        .file_namespace(
-            &repo.repository_id,
-            NamespaceOperation::parse(
-                storage_contract::NamespaceOperationKind::Rename,
-                "Café/child.txt",
-                Some("Café/renamed.txt"),
-            )
-            .unwrap(),
-            "owner",
-            OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    assert_eq!(
-        json_codec::to_value(&engine.state().directory_branches[&branch]).unwrap(),
-        frozen
-    );
-    drop(engine);
-    (fixture, branch, tree, frozen)
-}
-
-#[test]
-fn branch_preview_lists_frozen_files_without_changing_namespace_or_receipts() {
-    let ((_root, backend, _auth, _token, identity, repo), branch, tree, frozen) = preview_fixture();
-    let before = storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap();
-    let page = read(
-        backend.as_ref(),
-        &identity,
-        request(
-            "Files/CAFÉ",
-            &[
-                ("directory_branch_id", &branch),
-                ("expected_tree_id", &tree),
-                ("limit", "1"),
-            ],
-        ),
-    )
-    .unwrap();
-    assert_eq!(page["preview"], true);
-    assert_eq!(page["writable"], false);
-    assert_eq!(page["entries"][0]["name"], "child.txt");
-    assert_eq!(page["entries"][0]["read_only"], true);
-    assert_eq!(
-        page["entries"][0]["version_id"],
-        frozen["entries"][0]["version_id"]
-    );
-    assert_eq!(page["context"]["repository_id"], repo.repository_id);
-    let cursor = page["next_cursor"].as_str().unwrap();
-    let second = read(
-        backend.as_ref(),
-        &identity,
-        request(
-            "Files/CAFÉ",
-            &[
-                ("directory_branch_id", &branch),
-                ("expected_tree_id", &tree),
-                ("limit", "1"),
-                ("cursor", cursor),
-            ],
-        ),
-    )
-    .unwrap();
-    assert_eq!(second["entries"][0]["name"], "z.txt");
-    assert!(
-        read(
-            backend.as_ref(),
-            &identity,
-            request("Files/CAFÉ", &[("limit", "1"), ("cursor", cursor)])
-        )
-        .is_err()
-    );
-    assert!(
-        read(
-            backend.as_ref(),
-            &identity,
-            request(
-                "Files",
-                &[
-                    ("directory_branch_id", &branch),
-                    ("expected_tree_id", &tree)
-                ]
-            )
-        )
-        .is_err()
-    );
-    assert_eq!(
-        before,
-        storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap()
-    );
-    let default = read(backend.as_ref(), &identity, request("Files/Café", &[])).unwrap();
-    assert_eq!(default["entries"].as_array().unwrap().len(), 2);
-    assert_eq!(default["entries"][0]["name"], "renamed.txt");
-    assert_eq!(default["entries"][0]["repository_path"], "Café/renamed.txt");
-    for field in ["entry_id", "file_id", "version_id"] {
-        assert_eq!(default["entries"][0][field], page["entries"][0][field]);
-    }
-    assert_eq!(default["entries"][1]["name"], "z.txt");
-    assert_eq!(
-        before,
-        storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap()
-    );
-}
-
-#[test]
-fn initialized_preview_scope_rejects_structural_deletion_without_publication() {
-    let ((_root, backend, _auth, _token, _identity, repo), _branch, _tree, _frozen) = preview_fixture();
-    let mut engine = backend.engine.lock().unwrap();
-    let before = storage_contract::canonical_json(engine.state()).unwrap();
-    assert_eq!(
-        engine
-            .file_namespace(
-                &repo.repository_id,
-                NamespaceOperation::parse(
-                    storage_contract::NamespaceOperationKind::Delete,
-                    "Café/renamed.txt",
-                    None,
-                )
-                .unwrap(),
-                "owner",
-                OperationId::generate().unwrap(),
-            )
-            .unwrap_err()
-            .code(),
-        storage_contract::ErrorCode::UnsupportedOperation
-    );
-    assert_eq!(
-        before,
-        storage_contract::canonical_json(engine.state()).unwrap()
-    );
-}
-
-#[test]
-fn preview_rechecks_auth_and_exact_tree_after_detached_scan() {
-    let ((_root, backend, mut auth, token, identity, repo), branch, tree, _) = preview_fixture();
-    let parsed = request(
-        "Files/Café",
-        &[
-            ("directory_branch_id", &branch),
-            ("expected_tree_id", &tree),
-        ],
-    );
-    let captured = capture(&backend.engine.lock().unwrap(), parsed).unwrap();
-    let ListingRead::Primary(captured) = captured else {
-        panic!("expected primary preview")
-    };
-    let selected = captured.select().unwrap();
-    backend
-        .engine
-        .lock()
-        .unwrap()
-        .file_namespace(
-            &repo.repository_id,
-            NamespaceOperation::parse(
-                storage_contract::NamespaceOperationKind::Rename,
-                "Café/z.txt",
-                Some("Café/later.txt"),
-            )
-            .unwrap(),
-            "owner",
-            OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    assert_eq!(
-        selected
-            .project(&backend.engine.lock().unwrap())
-            .err()
-            .unwrap()
-            .code,
-        storage_contract::ErrorCode::ListingChanged
-    );
-    auth.logout(&token).unwrap();
-    assert_eq!(
-        read(
-            backend.as_ref(),
-            &identity,
-            request(
-                "Files/Café",
-                &[
-                    ("directory_branch_id", &branch),
-                    ("expected_tree_id", &tree)
-                ]
-            )
-        )
-        .unwrap_err()
-        .code,
-        storage_contract::ErrorCode::Unauthorized
-    );
+fn primary_capture_rejects_an_owner_replacement_after_the_unlocked_scan() {
+    let (root, backend, _auth, _token, identity, _repo) = fixture();
+    let (started, observed) = mpsc::sync_channel(1);
+    let (release, resume) = mpsc::sync_channel(1);
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            pause(started, resume);
+            LISTED_ENTRY_PROJECTIONS.set(0);
+            (read(backend.as_ref(), &identity, request("", &[("limit", "1")])),
+             LISTED_ENTRY_PROJECTIONS.get())
+        });
+        let sequence = observed.recv_timeout(Duration::from_secs(10)).unwrap();
+        let common = root.path().join("disk/common-data");
+        std::fs::rename(&common, root.path().join("original")).unwrap();
+        std::fs::create_dir(&common).unwrap();
+        assert_eq!(backend.engine.lock().unwrap().state().sequence, sequence);
+        release.send(()).unwrap();
+        let (result, projected) = reader.join().unwrap();
+        assert!(result.is_err());
+        assert_eq!(projected, 0);
+        assert!(std::fs::read_dir(&common).unwrap().next().is_none());
+    });
 }

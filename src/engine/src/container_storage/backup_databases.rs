@@ -1,7 +1,8 @@
 //! Object-scope SQLite material from one complete, already admitted State.
 //! These bytes stay in a preparation domain, not an active container or an
 //! independently elected authority. No database is copied from a live pathname.
-use super::{directory_database, file_database};
+use super::file_database;
+use crate::engine::fresh_layout::FreshLayoutError;
 use crate::{
     Error, ErrorCode, Result, canonical_json,
     history_package::{AdmittedState, preparation_checkpoint},
@@ -20,11 +21,6 @@ pub(super) enum Scope {
         history: String,
         file: String,
     },
-    Directory {
-        history: String,
-        repository: String,
-        directory: String,
-    },
 }
 impl Scope {
     fn path(&self) -> PathBuf {
@@ -34,23 +30,11 @@ impl Scope {
                 .join("files")
                 .join(file)
                 .join(file_database::NAME),
-            Self::Directory {
-                history, directory, ..
-            } => PathBuf::from("histories")
-                .join(history)
-                .join("directories")
-                .join(directory)
-                .join(directory_database::NAME),
         }
     }
     fn verify(&self, bytes: &[u8]) -> Result<()> {
         match self {
             Self::File { history, file } => file_database::verify_scope(bytes, file, history),
-            Self::Directory {
-                repository,
-                directory,
-                ..
-            } => directory_database::verify_scope(bytes, repository, directory),
         }
     }
 }
@@ -94,8 +78,6 @@ impl Database {
 pub(crate) struct PreparedDatabases {
     databases: Vec<Database>,
     bytes: usize,
-    files: usize,
-    directories: usize,
 }
 impl PreparedDatabases {
     pub(super) fn into_databases(self) -> Vec<Database> {
@@ -119,20 +101,22 @@ impl PreparedDatabases {
                 return Err(budget());
             }
         }
-        if files
-            .len()
-            .checked_add(state.directory_git_repositories.len())
-            .is_none_or(|count| count > MAX_DATABASES)
-        {
-            return Err(budget());
+        // A versionless registered FILE may own acknowledged private draft data.
+        // A whole-target image of closed versions must not silently omit that owner.
+        for (file, record) in state.file_containers.iter() {
+            preparation_checkpoint(stop)?;
+            let Some(history) = files.get(&file.to_string()) else {
+                return Err(FreshLayoutError::BackupLayoutUnsupported.into());
+            };
+            if history.as_str() != record.history_tree_id.to_string() {
+                return Err(FreshLayoutError::BackupLayoutEvidence.into());
+            }
         }
         let snapshot = ProjectionSnapshot::new(state);
         let view = snapshot.view();
         let mut prepared = Self {
             databases: Vec::new(),
             bytes: 0,
-            files: 0,
-            directories: 0,
         };
         for (file, history) in files {
             preparation_checkpoint(stop)?;
@@ -156,21 +140,6 @@ impl PreparedDatabases {
                 },
                 bytes,
             )?;
-            prepared.files += 1;
-        }
-        for (directory, git) in &state.directory_git_repositories {
-            preparation_checkpoint(stop)?;
-            let history = &state.repositories[&git.repository_id].history_tree_id;
-            let bytes = directory_database::prepare(state, directory)?.bytes;
-            prepared.add(
-                Scope::Directory {
-                    history: history.clone(),
-                    repository: git.repository_id.clone(),
-                    directory: directory.clone(),
-                },
-                bytes,
-            )?;
-            prepared.directories += 1;
         }
         Ok(prepared)
     }
@@ -192,10 +161,7 @@ impl PreparedDatabases {
         &self.databases
     }
     pub(crate) fn file_count(&self) -> usize {
-        self.files
-    }
-    pub(crate) fn directory_count(&self) -> usize {
-        self.directories
+        self.databases.len()
     }
     pub(crate) fn total_bytes(&self) -> u64 {
         self.bytes as u64
@@ -220,3 +186,7 @@ fn budget() -> Error {
         "all object databases must fit the 4096-database/64-MiB complete-set budget",
     )
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/backup_database_scope_tests.rs"]
+pub(crate) mod tests;

@@ -1,5 +1,5 @@
-use super::object::{Object, direct_child, field_error, lookup_path, portable_path};
-use super::{Context, DecodeError, DirectoryBranch, DirectoryKey, Entry, Page, PageParts};
+use super::object::{Object, direct_child, field_error, lookup_path};
+use super::{Context, DecodeError, DirectoryKey, Entry, Page, PageParts};
 use json_codec::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,33 +27,19 @@ pub(super) fn page(
     }
     let backup = fields.backup()?;
     let writable = fields.boolean("writable")?;
-    let preview = if fields.contains("preview") {
-        if !fields.boolean("preview")? {
-            return Err(field_error("preview", "true when present"));
-        }
-        true
-    } else {
-        false
-    };
-    if writable != (!backup && !preview) || backup && preview {
+    if writable && backup {
         return Err(DecodeError::Relation(
-            "page writeability disagrees with backup status",
+            "backup pages must be read-only",
         ));
     }
-    let mut entries = entries(fields.array("entries")?, directory_key, limit, backup)?;
-    let mut selected = selection(
+    let entries = entries(fields.array("entries")?, directory_key, limit, backup)?;
+    let selected = selection(
         fields.take("selected_entry")?,
         selected,
         directory_key,
         backup,
         &entries,
     )?;
-    for entry in &mut entries {
-        entry.preview = preview;
-    }
-    if let Some(entry) = &mut selected {
-        entry.preview = preview;
-    }
     let total = fields.integer("total_entries")?;
     let directory_file_count = fields.integer("directory_file_count")?;
     let listed_files = entries
@@ -86,25 +72,31 @@ pub(super) fn page(
         ));
     }
     let context = context(fields.take("context")?)?;
-    if !backup {
-        for entry in entries.iter().chain(selected.iter()) {
-            primary_location(entry, context.as_ref(), directory_key)?;
+    match (&context, backup) {
+        (Some(_), true) => return Err(DecodeError::Relation(
+            "backup listings cannot have an ordinary write context",
+        )),
+        (None, true) => {}
+        (None, false) if writable && directory_key.is_empty()
+            && total == 0 && directory_file_count == 0
+            && entries.is_empty() && selected.is_none() => {}
+        (None, false) => return Err(DecodeError::Relation(
+            "only an empty primary disk root may lack its registered namespace",
+        )),
+        (Some(context), false) => {
+            let actual = context.repository_path.as_ref().map_or("", |path| path.key());
+            if actual != directory_key {
+                return Err(DecodeError::Relation(
+                    "the registered namespace path differs from the requested folder",
+                ));
+            }
+            for entry in entries.iter().chain(selected.iter()) {
+                primary_location(entry, context)?;
+            }
         }
     }
-    let branches = branches(fields.array("directory_branches")?, context.as_ref())?;
-    let branches_supported = fields.boolean("directory_branches_supported")?;
-    let default_branch_scope = fields.boolean("default_branch_scope")?;
-    if backup && (context.is_some() || branches_supported || default_branch_scope)
-        || !branches_supported && !branches.is_empty()
-        || default_branch_scope
-            && context
-                .as_ref()
-                .is_none_or(|context| !context.repository_path().is_empty())
-    {
-        return Err(DecodeError::Relation(
-            "directory context and branch capabilities disagree",
-        ));
-    }
+    // Directory branch/preview fields are not a second wire format. Even
+    // empty/false extras are rejected by the ordinary page contract.
     fields.finish()?;
     Ok(Page {
         parts: PageParts {
@@ -113,13 +105,9 @@ pub(super) fn page(
             next,
             previous,
             total,
-            branches,
             context,
             writable,
-            preview,
             directory_file_count,
-            branches_supported,
-            default_branch_scope,
         },
     })
 }
@@ -249,99 +237,16 @@ fn context(value: Value) -> Result<Option<Context>, DecodeError> {
         base_head,
     }))
 }
-fn branches(
-    values: Vec<Value>,
-    context: Option<&Context>,
-) -> Result<Vec<DirectoryBranch>, DecodeError> {
-    let mut branches = Vec::with_capacity(values.len());
-    let mut ids = BTreeSet::new();
-    let mut current = false;
-    for value in values {
-        let branch = branch(value)?;
-        if context.is_none_or(|context| context.repository_id() != branch.repository_id()) {
-            return Err(DecodeError::Relation(
-                "directory branch differs from the repository context",
-            ));
-        }
-        // A stable directory may have moved since this historical branch was
-        // captured, so its recorded path need not equal today's context path.
-        if !ids.insert(branch.id().to_owned()) || current && branch.current() {
-            return Err(DecodeError::Relation(
-                "directory branches repeat an identity or current choice",
-            ));
-        }
-        current |= branch.current();
-        branches.push(branch);
-    }
-    Ok(branches)
-}
-pub(super) fn branch(value: Value) -> Result<DirectoryBranch, DecodeError> {
-    let mut fields = Object::parse(value, "directory branch")?;
-    let id = fields.id("directory_branch_id")?;
-    let repository_id = fields.id("repository_id")?;
-    fields.id("directory_id")?;
-    let name = fields.text("name")?;
-    if name.len() > 128 {
-        return Err(field_error(
-            "name",
-            "a branch label of at most 128 UTF-8 bytes",
-        ));
-    }
-    name_policy::validate_name(&name).map_err(|source| DecodeError::Path {
-        field: "name",
-        source,
-    })?;
-    fields.nullable_id("parent_branch_id")?;
-    let head_tree_id = fields.id("head_tree_id")?;
-    fields.id("commit_id")?;
-    let path = portable_path(&fields.text("path")?, "path")?;
-    fields.boolean("materialized")?;
-    let current = fields.boolean("current")?;
-    fields.integer("sequence")?;
-    fields.integer("file_count")?;
-    fields.finish()?;
-    Ok(DirectoryBranch {
-        id,
-        name,
-        head_tree_id,
-        path,
-        repository_id,
-        current,
-    })
-}
-
-fn primary_location(
-    entry: &Entry,
-    context: Option<&Context>,
-    directory_key: &str,
-) -> Result<(), DecodeError> {
+fn primary_location(entry: &Entry, context: &Context) -> Result<(), DecodeError> {
     let Some(location) = &entry.location else {
-        return if directory_key.is_empty() {
-            Ok(())
-        } else {
-            Err(DecodeError::Relation(
-                "primary virtual directories exist only at the disk root",
-            ))
-        };
+        return Err(DecodeError::Relation("primary entries require a registered location"));
     };
-    let Some(context) = context else {
-        return Err(DecodeError::Relation(
-            "current entries require a repository context",
-        ));
-    };
-    let path = location
-        .path
-        .as_ref()
-        .expect("invariant: current entries have repository paths");
-    let parent_key = path.key().rsplit_once('/').map_or("", |(parent, _)| parent);
-    let context_key = context
-        .repository_path
-        .as_ref()
-        .map_or("", |path| path.key());
-    if location.repository_id != context.repository_id
-        || parent_key != context_key
-        || path.file_name() != entry.name()
-    {
+    let path = location.path.as_ref().ok_or(DecodeError::Relation(
+        "primary entries require their complete ordinary path",
+    ))?;
+    // The page already proved that the displayed path is a direct child of the
+    // requested parent. Do not strip a first component or compare just its leaf.
+    if location.repository_id != context.repository_id || path.as_str() != entry.path.text {
         return Err(DecodeError::Relation(
             "current entry location differs from its directory context",
         ));

@@ -147,7 +147,7 @@ fn run(
         progress.update(|status| {
             status.phase = BackupPreparationPhase::Verifying;
             status.detail = format!(
-                "object SQLite target {}/{}; complete files and nested directory repositories, no authority switch",
+                "object SQLite target {}/{}; complete FILEs, no authority switch",
                 index + 1,
                 work.len()
             );
@@ -182,10 +182,9 @@ fn run(
     progress.update(|status| {
         status.phase = BackupPreparationPhase::ObjectDatabasesPrepared;
         status.detail = format!(
-            "all {} targets retain {} file and {} directory databases each; SYSTEM/disk historical databases, complete-chain admission and cutover remain unsupported",
+            "all {} targets retain {} FILE databases each; SYSTEM/disk historical databases, complete-chain admission and cutover remain unsupported",
             work.len(),
-            prepared.file_count(),
-            prepared.directory_count()
+            prepared.file_count()
         );
     })
 }

@@ -34,11 +34,7 @@ pub struct BackupServingContent {
 impl BackupServingRead {
     fn validate(&self) -> Result<()> {
         name_policy::validate_slot(&self.target_slot_id)?;
-        self.scope.validate()?;
-        match &self.scope {
-            BackupNamespaceScope::BranchHead(_) => validate_id(&self.head_id, "commit")?,
-            BackupNamespaceScope::DirectoryHead(_) => validate_id(&self.head_id, "dtree")?,
-        }
+        validate_id(&self.head_id, "commit")?;
         validate_id(&self.entry_id, "entry")?;
         validate_id(&self.version_id, "ver")?;
         if self.length > crate::container_storage::backup_entities::MAX_RECOVERY_RANGE {
@@ -133,7 +129,7 @@ pub(in super::super) fn read_entry(
                     &version.file_id,
                     &version.version_id,
                 )?;
-                // Image verification also binds the actual file/directory SQLite and
+                // Image verification also binds the actual FILE SQLite and
                 // all historical nodes. Range bytes are withheld until the same open
                 // inode has been read and hashed in full, including a zero-length read.
                 image.verify(&prepared.targets[index].root, &stop)?;
@@ -148,7 +144,7 @@ pub(in super::super) fn read_entry(
                     publication_hash: admitted.publication_hash().to_owned(),
                     registry: admitted.registry().clone(),
                     target_slot_id: request.target_slot_id.clone(),
-                    scope: request.scope.clone(),
+                    scope: request.scope,
                     head_id: request.head_id.clone(),
                     entry: entry.clone(),
                     version,

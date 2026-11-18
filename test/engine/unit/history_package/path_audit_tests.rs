@@ -54,7 +54,7 @@ fn path_audit_rejects_changed_principal_endpoint_source_fact_and_same_id_differe
 }
 
 #[test]
-fn restore_rejects_same_operation_id_with_different_native_proof_without_writes() {
+fn original_package_source_cannot_override_a_different_local_native_proof() {
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let (engine, repo, receipt) = source(&temporary.path().join("source"));
@@ -72,16 +72,16 @@ fn restore_rejects_same_operation_id_with_different_native_proof_without_writes(
     ).unwrap();
     let state = canonical_json(target.state()).unwrap();
     let files = super::export_audit_guard::disk_image(temporary.path());
-    let error = target.restore_history_package(
-        &package, "P01", 3, "bob", OperationId::generate().unwrap(),
-    ).unwrap_err();
+    let (manifest, proof, _) = load_package(&package).unwrap();
+    let sources = audit::portable(&manifest, proof.candidate.sequence).unwrap();
+    let error = audit::CollisionIndex::new(target.state()).admit(&sources).unwrap_err();
     assert!(matches!(error, Error::PathChange(crate::PathChangeError::Publication)));
     assert_eq!(canonical_json(target.state()).unwrap(), state);
     assert_eq!(super::export_audit_guard::disk_image(temporary.path()), files);
 }
 
 #[test]
-fn restore_rejects_conflicting_source_id_retained_only_in_a_prior_restore_without_writes() {
+fn conflicting_independent_packages_cannot_share_one_retained_source_identity() {
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let (first, first_repo, native) = source(&temporary.path().join("first"));
@@ -89,11 +89,9 @@ fn restore_rejects_conflicting_source_id_retained_only_in_a_prior_restore_withou
     first.export_history_package(&first_repo.history_tree_id, &first_package).unwrap();
 
     let mut second = initialize(&temporary.path().join("second"));
-    // Use a distinct repository name too: rejection must concern the retained
-    // source proof, not an incidental target repository-name collision.
-    let second_repo = second.create_repository(
-        &storage_contract::RepositoryName::parse("different audit source").unwrap(),
-        "P01", 3, "bob", OperationId::generate().unwrap(),
+    // Independently registered native root: only the deliberately reused operation ID agrees.
+    let second_repo = second.create_disk_root(
+        "P01", "bob", OperationId::generate().unwrap(),
     ).unwrap();
     save(&mut second, &second_repo.main_branch_id, b"different source body");
     let conflicting = second.file_namespace(
@@ -108,41 +106,24 @@ fn restore_rejects_conflicting_source_id_retained_only_in_a_prior_restore_withou
     let second_package = temporary.path().join("second-package");
     second.export_history_package(&second_repo.history_tree_id, &second_package).unwrap();
 
-    let root = temporary.path().join("target");
-    let mut target = initialize(&root);
-    let restored = target.restore_history_package(
-        &first_package, "P01", 3, "restore-manager", OperationId::generate().unwrap(),
-    ).unwrap();
-    let retained = audit::restored(&restored).unwrap();
-    assert_eq!(retained[&native.operation_id].operation, native);
-    assert_eq!(retained[&native.operation_id].principal.as_str(), "alice");
-    assert!(!target.state.operations.contains_key(&native.operation_id));
-    drop(target);
-    let mut target = Engine::open(&root.join("state")).unwrap();
-    assert!(!target.state.operations.contains_key(&native.operation_id));
-    assert_eq!(audit::restored(&target.state.operations[&restored.operation_id]).unwrap(), retained);
-    let state = canonical_json(target.state()).unwrap();
-    // Cover both packages, both source pools and every target file, including
-    // exact bytes, inode and mode; rejected restore must not stage anything.
-    let files = super::export_audit_guard::disk_image(temporary.path());
-    let operation = OperationId::generate().unwrap();
-    let error = target.restore_history_package(
-        &second_package, "P01", 3, "second-manager", operation,
-    ).unwrap_err();
+    let package_rows = |path: &Path| {
+        let (m, proof, _) = load_package(path).unwrap();
+        audit::portable(&m, proof.candidate.sequence).unwrap()
+    };
+    let empty = crate::State::default();
+    let mut checked = audit::CollisionIndex::new(&empty);
+    let image = super::export_audit_guard::disk_image(temporary.path());
+    checked.admit(&package_rows(&first_package)).unwrap();
+    let error = checked.admit(&package_rows(&second_package)).unwrap_err();
     assert!(matches!(error, Error::PathChange(crate::PathChangeError::Publication)));
-    assert!(!target.state.operations.contains_key(&operation));
-    assert_eq!(canonical_json(target.state()).unwrap(), state);
-    assert_eq!(super::export_audit_guard::disk_image(temporary.path()), files);
+    assert_eq!(super::export_audit_guard::disk_image(temporary.path()), image);
 }
 
 #[test]
-fn copied_restored_provenance_survives_cold_open_without_inventing_source_operations() {
+fn registered_file_copy_retains_original_provenance_across_cold_open() {
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let (source, repo, native) = source(&temporary.path().join("source"));
-    let package = temporary.path().join("package");
-    source.export_history_package(&repo.history_tree_id, &package).unwrap();
-    let root = temporary.path().join("target");
+    let root = temporary.path().join("original");
     let mut config = Config::development(crate::test_disks(
         (0..4).map(|index| root.join(format!("disk-{index}"))),
     )).unwrap();
@@ -150,20 +131,11 @@ fn copied_restored_provenance_survives_cold_open_without_inventing_source_operat
     config.disks[3].upstream_slot_id = None;
     config.disks[3].metadata_member = false;
     let mut target = Engine::initialize(&root.join("state"), config).unwrap();
-    let restored = target.restore_history_package(
-        &package, "P01", 3, "restore-manager", OperationId::generate().unwrap(),
-    ).unwrap();
-    assert!(restored.sequence > source.state.sequence);
-    assert!(!target.state.operations.contains_key(&native.operation_id));
-    let before_repeat = canonical_json(target.state()).unwrap();
-    let files_before_repeat = super::export_audit_guard::disk_image(temporary.path());
-    assert_eq!(target.restore_history_package(
-        &package, "P01", 3, "restore-manager", OperationId::generate().unwrap(),
-    ).unwrap_err().code(), ErrorCode::ObjectCollision);
-    assert_eq!(canonical_json(target.state()).unwrap(), before_repeat);
-    assert_eq!(
-        super::export_audit_guard::disk_image(temporary.path()), files_before_repeat
-    );
+    let repo = target.create_disk_root("P01", "alice", OperationId::generate().unwrap()).unwrap();
+    save(&mut target, &repo.main_branch_id, b"source proof");
+    let native = target.file_namespace(&repo.repository_id, NamespaceOperation::parse(
+        NamespaceOperationKind::Rename, "file.txt", Some("current.txt")).unwrap(),
+        "alice", OperationId::generate().unwrap()).unwrap();
     drop(target);
     let mut target = Engine::open(&root.join("state")).unwrap();
     let destination = target.create_disk_root(
@@ -207,7 +179,7 @@ fn copied_restored_provenance_survives_cold_open_without_inventing_source_operat
         projection.view(), &storage_contract::history_window::HistoryFileId::parse(&file).unwrap(),
     ).unwrap();
     assert_eq!(facts, prefix.path_changes);
-    assert!(!target.state.operations.contains_key(&native.operation_id));
+    assert_eq!(target.state.operations[&native.operation_id], native);
     target.export_history_package(
         &destination.history_tree_id, &temporary.path().join("recopied-package"),
     ).unwrap();

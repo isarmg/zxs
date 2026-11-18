@@ -1,7 +1,9 @@
 //! Validate the endpoint's actual success contract before releasing write fences.
 //! Domain-returning endpoints are not operation receipts.
 use json_codec::Value;
-use storage_contract::{OperationResult, Plan, client_protocol::OperationStatus};
+use storage_contract::{OperationResult, client_protocol::OperationStatus};
+use super::purge::PurgeCompletion;
+pub(super) use super::purge::ValidatedPlan;
 
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum ResponseError {
@@ -9,14 +11,6 @@ pub(crate) enum ResponseError {
     Decode(#[source] json_codec::Error),
     #[error("administration response does not match {0}")]
     Contract(&'static str),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct ValidatedPlan(Plan);
-impl ValidatedPlan {
-    pub(super) fn plan(&self) -> &Plan {
-        &self.0
-    }
 }
 
 #[derive(Debug)]
@@ -63,6 +57,7 @@ pub(super) enum Contract {
     },
     PlanReceipt {
         operation: String,
+        expected: PurgeCompletion,
     },
     MutationReceipt {
         operation: String,
@@ -87,7 +82,7 @@ impl Contract {
             | Self::Operation { .. }
             | Self::OperationOutcome { .. }
             | Self::Plan { .. } => None,
-            Self::PlanReceipt { operation }
+            Self::PlanReceipt { operation, .. }
             | Self::MutationReceipt { operation } => Some(operation),
         }
     }
@@ -119,17 +114,12 @@ impl Contract {
                 }
             }
             Self::Plan { id } => {
-                let plan: Plan = decode(value)?;
-                require(
-                    plan.input.is_object() && !plan.digest.is_empty() && plan.plan_id == *id,
-                    "plan identity, input and digest",
-                )?;
-                Action::Plan(ValidatedPlan(plan))
+                Action::Plan(ValidatedPlan::read(id, decode(value)?)?)
             }
-            Self::PlanReceipt { operation } => {
+            Self::PlanReceipt { operation, expected } => {
                 let receipt: OperationResult = decode(value)?;
                 require(
-                    !receipt.kind.is_empty()
+                    expected.matches(&receipt.kind, &receipt.result)
                         && !receipt.request_digest.is_empty()
                         && !operation.is_empty()
                         && receipt.operation_id.to_string() == *operation

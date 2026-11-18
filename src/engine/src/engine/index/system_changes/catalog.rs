@@ -72,6 +72,11 @@ macro_rules! catalog_families {
             // cannot silently disappear from the system-database decision.
             let State {
                 $( $field: _, )+
+                // These residual producer-only fields cannot reach SQL:
+                // admitted State and the projection writer both reject them.
+                directory_git_repositories: _, directory_branches: _, directory_trees: _,
+                directory_selections: _, directory_tree_selections: _,
+                directory_selection_generations: _, file_write_origins: _,
                 // Existing event families have their own sequence ordering.
                 operations: _,
                 file_path_nodes: _,
@@ -130,17 +135,11 @@ catalog_families! {
     History => (3, histories, HistoryTree),
     Branch => (4, branches, Branch),
     NamespaceCommit => (5, commits, Commit),
-    DirectoryRepository => (6, directory_git_repositories, storage_contract::directory_git::DirectoryGitRepository),
-    DirectoryBranch => (7, directory_branches, DirectoryBranch),
-    DirectoryTree => (8, directory_trees, DirectoryTree),
     FileLocation => (9, file_locations, String),
     FileBackupPaths => (10, file_backup_paths, BTreeMap<String, String>),
     VersionPlacement => (11, placements, Placement),
     FileSelection => (12, file_selections, String),
-    DirectorySelection => (13, directory_selections, String),
-    DirectoryTreeSelection => (14, directory_tree_selections, String),
     FileContext => (15, file_contexts, FileContext),
-    FileWriteOrigin => (16, file_write_origins, String),
     FileVersion => (17, versions, FileVersion),
     FileMetadataNode => (18, file_metadata_nodes, FileMetadataNode),
     FileDeletion => (19, file_deletions, FileDeletionNode),
@@ -149,7 +148,6 @@ catalog_families! {
     FileNodeParents => (22, file_node_parents, Vec<String>),
     FilePathNote => (23, file_path_notes, String),
     FileBackupPolicy => (24, file_backup_policies, String),
-    DirectorySelectionGeneration => (25, directory_selection_generations, #[serialization(with = "storage_contract::u64_string")] u64),
     FileSelectionGeneration => (26, file_selection_generations, #[serialization(with = "storage_contract::u64_string")] u64),
     FileNote => (27, file_notes, String),
     VersionNote => (28, version_notes, String),

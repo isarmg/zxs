@@ -257,12 +257,12 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     {t(
                     concat!(
                         "此动作不使用上方自定义前缀。实际目录按来源磁盘名和 UUID 逐级生成，",
-                        "不是更换备份盘，也不包含 .zxs 快照或 worktree。",
+                        "此动作不会更换备份盘。",
                     ),
                     concat!(
                         "This action does not use custom prefixes above. Native paths follow ",
                         "source disk names and UUIDs at each tier. It does not replace a backup ",
-                        "disk or protect .zxs snapshots or worktrees.",
+                        "disk.",
                     ),
                     )}
                 </p>

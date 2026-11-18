@@ -53,7 +53,6 @@ impl Fixture {
             },
         };
         let binding = RootBinding {
-            layout: StorageLayout::UnifiedWorkingTreeV1,
             root_id: RootId::from_random([1; 16]),
             registration: DiskRegistrationIdentity {
                 pool_id: disk.seal.pool_id.clone(),

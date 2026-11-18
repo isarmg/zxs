@@ -195,7 +195,7 @@ fn history_view(history: ForeignHistorySummary) -> impl IntoView {
     view! {<section class="zxs-stack" data-foreign-history=history.group_id>
         <h3 class="zxs-row">{history.repository_name}</h3>
         <p class="zxs-row">{history.history_tree_id}</p>
-        <p class="zxs-row">{format!("{}: {} · {}: {} · {}: {} · {}: {}",t("文件分支","File branches"),history.branches,t("目录分支","Directory branches"),history.directory_branches,t("目录树","Directory trees"),history.directory_trees,t("提交记录","Commit records"),history.commit_records)}</p>
+        <p class="zxs-row">{format!("{}: {} · {}: {}",t("文件分支","File branches"),history.branches,t("提交记录","Commit records"),history.commit_records)}</p>
         <p class="zxs-row">{format!("{}: {} · {}: {} · {}: {} · {}: {} · {}: {}",t("版本总数","Total versions"),history.versions,t("本地正文已核验","Verified local contents"),history.verified_local_versions,t("正文暂不可用","Contents temporarily unavailable"),history.temporarily_unavailable_versions.len(),t("已记录清除","Recorded purged"),history.recorded_purged_versions,t("已记录迁移","Recorded migrated"),history.recorded_migrated_versions)}</p>
         <Show when=move ||!history.temporarily_unavailable_versions.is_empty()><p class="zxs-row">{t("暂不可用的正文仍保留历史记录，不会被当作无效分支裁剪。","Unavailable contents retain their history and are never pruned as invalid branches.")}</p></Show>
     </section>}

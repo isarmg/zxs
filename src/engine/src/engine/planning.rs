@@ -547,6 +547,7 @@ impl<'a> PlanningContext<'a> {
     where
         F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
     {
+        crate::ordinary_authority::kind(kind)?;
         crate::directory_conversion::require_import_not_stopped(self.state, operation_id)?;
         // Published and planning views share only the immutable base. Every
         // mutation still owns an independent next State until publication.

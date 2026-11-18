@@ -364,18 +364,6 @@ pub(crate) fn path_changes(
     }
     for id in rows.path_operations.keys() {
         let receipt = state.operations.get(id).ok_or_else(crate::persist::path_changes::invalid)?;
-        if receipt.kind == crate::history_package::path_audit::RESTORE_KIND {
-            if receipt.operation_id != *id {
-                return Err(crate::persist::path_changes::invalid());
-            }
-            let sources = crate::history_package::path_audit::restored(receipt)?;
-            for fact in crate::history_package::path_audit::facts(&sources) {
-                if fact.file_id.to_string() == file.as_str() {
-                    insert(fact)?;
-                }
-            }
-            continue;
-        }
         let principal = state.operation_principals.get(id)
             .ok_or_else(crate::persist::path_changes::invalid)?;
         if receipt.operation_id != *id {

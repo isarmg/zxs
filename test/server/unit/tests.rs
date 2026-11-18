@@ -349,24 +349,10 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
-    fn prepare_historical_save(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
     fn prepare_purge(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::PreparePurge, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
-    fn prepare_split(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareSplit, crate::ApiError>,
     ) -> Result<storage_contract::Plan, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -400,14 +386,11 @@ impl Backend for TestBackend {
             slot_id: request.slot_id().into(),
             path: request.path().into(),
             backup: false,
-            preview: false,
+            writable: true,
             entries: vec![],
             selected_entry: None,
             context: None,
             directory_file_count: 0,
-            directory_branches: vec![],
-            directory_branches_supported: true,
-            default_branch_scope: false,
             total_entries: 0,
             snapshot: "fixture".into(),
             previous_cursor: None,
@@ -1605,26 +1588,12 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.commit_plan(identity, request)
         }
-        fn prepare_historical_save(
-            &self,
-            identity: &crate::auth::Identity,
-            request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-        ) -> Result<storage_contract::Plan, crate::ApiError> {
-            self.delegate.prepare_historical_save(identity, request)
-        }
         fn prepare_purge(
             &self,
             identity: &crate::auth::Identity,
             request: Result<crate::PreparePurge, crate::ApiError>,
         ) -> Result<storage_contract::Plan, crate::ApiError> {
             self.delegate.prepare_purge(identity, request)
-        }
-        fn prepare_split(
-            &self,
-            identity: &crate::auth::Identity,
-            request: Result<crate::PrepareSplit, crate::ApiError>,
-        ) -> Result<storage_contract::Plan, crate::ApiError> {
-            self.delegate.prepare_split(identity, request)
         }
         fn namespace_batch(
             &self,

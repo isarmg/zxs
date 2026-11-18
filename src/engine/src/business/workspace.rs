@@ -201,7 +201,7 @@ pub(crate) fn native_commit_digest(
     ).map_err(Into::into)
 }
 
-fn validate_directory_selection_key(
+fn validate_ordinary_parent_key(
     state: &State,
     workspace: &(impl WorkspaceInput + ?Sized),
     key: &str,
@@ -224,41 +224,24 @@ fn validate_directory_selection_key(
             "current namespace missing",
         )
     })?;
-    if state.directory_selection_generations.is_empty() {
+    if base.history_tree_id != branch.history_tree_id ||
+        current.history_tree_id != branch.history_tree_id
+    {
+        return Err(Error::PathChange(crate::PathChangeError::WorkspaceLocation));
+    }
+    if base.commit_id == current.commit_id {
         return Ok(());
     }
-    let changed = |id: &str| {
-        state
-            .directory_selection_generations
-            .get(id)
-            .is_some_and(|generation| {
-                workspace.directory_selection_generation(id)
-                    != *generation
-            })
-    };
-    // Visit this path's roots and ancestors once, not the whole namespace for
-    // every selection generation retained anywhere in the pool. Both views
-    // matter: an ancestor can disappear or first appear after workspace open.
-    let root_changed = state
-        .repositories
-        .values()
-        .any(|repo| repo.history_tree_id == branch.history_tree_id && changed(&repo.repository_id));
-    if root_changed
-        || base.entries.iter().chain(&current.entries).any(|entry| {
-            entry.kind == NamespaceEntryKind::Directory
-                && (key == entry.lookup_key() || namespace::is_descendant(key, entry.lookup_key()))
-                && changed(&entry.entry_id)
-        })
-    {
-        return Err(Error::new(
-            storage_contract::ErrorCode::DirectoryBranchConflict,
-            "directory branch changed after the workspace began; staged bytes are preserved",
-        ));
-    }
-    Ok(())
+    // Preserve the actual ordinary folder identities at this path, not the
+    // current names of unrelated folders or an independent product's epoch.
+    file_location::require_parents(
+        namespace::NamespaceTree::from_published_entries(&base.entries),
+        namespace::NamespaceTree::from_published_entries(&current.entries),
+        key,
+    )
 }
 
-// Callers validate directory selections first, including for new file paths.
+// Stable parent rows and the FILE's own selected source are separate fences.
 fn validate_file_context(
     state: &State,
     workspace: &(impl WorkspaceInput + ?Sized),
@@ -266,18 +249,21 @@ fn validate_file_context(
     key: &str,
 ) -> Result<()> {
     let selected =
-        directory::branch_context_at_key(state, workspace.branch_id(), key).ok_or_else(|| {
+        namespace::file_context::branch_context_at_key(state, workspace.branch_id(), key).ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::FileNotFound,
                 "file context no longer exists",
             )
         })?;
-    if selected.inherited_from.is_none()
-        && (state.file_branch_aliases.contains_key(&selected.branch_id)
-            || state
-                .branches
-                .get(&selected.branch_id)
-                .is_none_or(|branch| branch.state != BranchState::Active))
+    if selected.inherited_from.is_some() {
+        return Err(Error::new(
+            storage_contract::ErrorCode::FileBranchConflict,
+            "an inherited directory selection is not an ordinary FILE write source",
+        ));
+    }
+    if state.file_branch_aliases.contains_key(&selected.branch_id)
+        || state.branches.get(&selected.branch_id)
+            .is_none_or(|branch| branch.state != BranchState::Active)
     {
         return Err(Error::new(
             storage_contract::ErrorCode::BranchNotActive,
@@ -286,7 +272,7 @@ fn validate_file_context(
     }
     let repo = repository::main_for_branch(state, workspace.branch_id());
     let captured = repo.and_then(|r| {
-        workspace.selected_file_context(&directory::context_key_from_key(&r.repository_id, key))
+        workspace.selected_file_context(&namespace::file_context::context_key_from_key(&r.repository_id, key))
     });
     let changed = if let Some(captured) = captured {
         captured != &selected
@@ -354,7 +340,7 @@ impl Engine {
         path: &name_policy::PortablePath,
     ) -> Result<Option<storage_contract::FileId>> {
         let key = path.key();
-        validate_directory_selection_key(&self.state, workspace, key)?;
+        validate_ordinary_parent_key(&self.state, workspace, key)?;
         if self.state.branches.get(&workspace.branch_id)
             .is_some_and(|branch| branch.file_id.is_some())
         {
@@ -392,7 +378,7 @@ impl Engine {
             && repository::main_for_branch(&self.state, &workspace.branch_id).is_some_and(|repo| {
                 workspace
                     .selected_file_contexts
-                    .contains_key(&directory::context_key_from_key(&repo.repository_id, key))
+                    .contains_key(&namespace::file_context::context_key_from_key(&repo.repository_id, key))
             })
         {
             entry = Some(
@@ -475,7 +461,7 @@ impl Engine {
                 self.file_context_for_current_entry(&context_repository.repository_id, entry)
                     .filter(|context| branch.file_id.is_none() || context.branch_id == branch_id)
                     .map(|context| (
-                        directory::context_key_from_key(
+                        namespace::file_context::context_key_from_key(
                             &context_repository.repository_id, entry.lookup_key(),
                         ),
                         context.into_owned(),
@@ -490,8 +476,8 @@ impl Engine {
             fencing_token: self.next_slot,
             files: BTreeMap::new(),
             selected_file_contexts: selected_contexts,
-            selected_directory_branches: (*self.state.directory_selections).clone(),
-            directory_selection_generations: (*self.state.directory_selection_generations).clone(),
+            selected_directory_branches: BTreeMap::new(),
+            directory_selection_generations: BTreeMap::new(),
             file_selection_generations: (*self.state.file_selection_generations).clone(),
             selected_file_branches: head_entries
                 .iter()
@@ -605,7 +591,7 @@ impl Engine {
         validate_id(item, "entry")?;
         let w = self.writable_workspace(workspace)?;
         if w.purpose == WorkspacePurpose::Normal {
-            validate_directory_selection_key(&self.state, &w, path.key())?;
+            validate_ordinary_parent_key(&self.state, &w, path.key())?;
         }
         let key = path.key();
         // Reject invalid targets before publishing an immutable generation.
@@ -895,7 +881,7 @@ impl Engine {
         validate_id(item, "entry")?;
         let parsed = name_policy::PortablePath::parse(path)?;
         if w.purpose == WorkspacePurpose::Normal {
-            validate_directory_selection_key(&self.state, &w, parsed.key())?;
+            validate_ordinary_parent_key(&self.state, &w, parsed.key())?;
         }
         let end = offset.checked_add(bytes.len() as u64).ok_or_else(|| {
             Error::new(storage_contract::ErrorCode::FileTooLarge, "range overflow")
@@ -1141,7 +1127,7 @@ impl Engine {
         if let Some(repo) = repository {
             for file in completed.files.values() {
                 if let Some(context) =
-                    directory::context_at_key(state, &repo.repository_id, file.path.key())
+                    namespace::file_context::context_at_key(state, &repo.repository_id, file.path.key())
                 {
                     // Only this workspace's published occurrence may refresh an
                     // independent file branch, not another alias or selection.
@@ -1149,7 +1135,7 @@ impl Engine {
                         continue;
                     }
                     completed.selected_file_contexts.insert(
-                        directory::context_key_from_key(&repo.repository_id, file.path.key()),
+                        namespace::file_context::context_key_from_key(&repo.repository_id, file.path.key()),
                         context,
                     );
                 }
@@ -1405,12 +1391,6 @@ impl crate::engine::PlanningContext<'_> {
             });
         }
         let w = workspace;
-        if w.purpose == WorkspacePurpose::HistoricalBranch {
-            return Err(Error::new(
-                storage_contract::ErrorCode::HistoricalSaveRequiresBranch,
-                "commit a historical-save plan to create a full branch",
-            ));
-        }
         if let Some(view) = self.current_namespaces {
             view.validate_workspace(
                 self.state,
@@ -1523,7 +1503,7 @@ impl crate::engine::PlanningContext<'_> {
                     view.remove_hidden_contexts(state, &repo.repository_id, &w.branch_id);
                 }
                 for file in w.files.values() {
-                    validate_directory_selection_key(state, &w, file.path.key())?;
+                    validate_ordinary_parent_key(state, &w, file.path.key())?;
                     let existing = draft.get_key(file.path.key());
                     if existing.map(|entry| &entry.version_id) != file.base_version_id.as_ref() {
                         return Err(Error::new(storage_contract::ErrorCode::FileVersionConflict, "file changed after this workspace began"));
@@ -1534,8 +1514,8 @@ impl crate::engine::PlanningContext<'_> {
                 }
                 {
                     for operation in &w.namespace_operations {
-                        validate_directory_selection_key(state, &w, operation.key())?;
-                        if let Some(destination) = &operation.destination() { validate_directory_selection_key(state, &w, destination.key())?; }
+                        validate_ordinary_parent_key(state, &w, operation.key())?;
+                        if let Some(destination) = &operation.destination() { validate_ordinary_parent_key(state, &w, destination.key())?; }
                         let key = operation.key().to_owned();
                         let prefix = format!("{key}/");
                         // A same-name replacement is not the entry this workspace
@@ -1552,7 +1532,7 @@ impl crate::engine::PlanningContext<'_> {
                 let upload_locations = namespace::workspace_upload_locations(current_entries, &w)?;
                 let commit_id = new_id("commit")?;
                 let mut written_files = std::collections::BTreeSet::new();
-                let mut written_paths = Vec::new();
+                let mut written_entries = BTreeMap::new();
                 for file in w.files.values() {
                     let existing = draft.get_key(file.path.key()).cloned();
                     // An insensitive lookup is not a rename. Keep the existing
@@ -1560,7 +1540,6 @@ impl crate::engine::PlanningContext<'_> {
                     let location = existing.as_ref().map(|entry| entry.location()).unwrap_or(&file.path);
                     let path = location.as_str();
                     let final_location = upload_locations.get(&file.item_id).expect("invariant: workspace preview covers every upload");
-                    written_paths.push(final_location.as_str().to_owned());
                     // An unchanged save retains the selected content node and
                     // pending source. Fork only when the visible bytes change.
                     if existing.as_ref().is_some_and(|entry| {
@@ -1582,14 +1561,12 @@ impl crate::engine::PlanningContext<'_> {
                             file
                         }
                     };
-                    if existing.is_some() {
-                        super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,request.operation_id)?;
-                    }
                     // A removed path is a genuinely new file. Raw path contexts
                     // and pending reservations cannot select its old identity.
-                    let file_context = existing.as_ref().and_then(|_| directory::branch_context_at_key(state,&w.branch_id,location.key()));
-                    let pending_source = file_context.as_ref().and_then(|c|state.branches.get(&c.branch_id)).and_then(|b|b.pending_file_versions.get(&file_id)).cloned()
-                        .or_else(||existing.as_ref().and_then(|_| directory::unwritten_source_at(state,&w.branch_id,location.key()).map(str::to_owned)));
+                    let file_context = existing.as_ref().and_then(|_| namespace::file_context::branch_context_at_key(state,&w.branch_id,location.key()));
+                    let pending_source = file_context.as_ref()
+                        .and_then(|c| state.branches.get(&c.branch_id))
+                        .and_then(|branch| branch.pending_file_versions.get(&file_id)).cloned();
                     draft.ensure_parents_with_ids(
                         existing.as_ref().map(|entry| entry.location()).unwrap_or(&file.path),
                         &mut |prefix| directory_ids.next(prefix),
@@ -1620,12 +1597,13 @@ impl crate::engine::PlanningContext<'_> {
                     }
                     if repo.main_branch_id == w.branch_id
                         && final_location.as_str() == path
-                        && let Some(context) = state.file_contexts.get_mut(&directory::context_key_from_key(&repo.repository_id, location.key()))
+                        && let Some(context) = state.file_contexts.get_mut(&namespace::file_context::context_key_from_key(&repo.repository_id, location.key()))
                     {
                         context.node_id = None;
                     }
                     let location = location.clone();
                     let entry = Entry { entry_id: existing.as_ref().map(|entry| entry.entry_id.clone()).unwrap_or_else(|| file.item_id.clone()), path: location, kind: NamespaceEntryKind::File, file_id: file_id.clone(), version_id: version.version_id, size: version.logical_size };
+                    written_entries.insert(entry.entry_id.clone(), (file_id.clone(), entry.version_id.clone()));
                     draft.replace(entry);
                     state.file_locations.entry(file_id.clone()).or_insert_with(||final_location.as_str().to_owned());
                     state.file_names.entry(file_id.clone()).or_insert_with(||final_location.file_name().into());
@@ -1636,8 +1614,7 @@ impl crate::engine::PlanningContext<'_> {
                     &mut entries, current_entries, &w.namespace_operations,
                     &mut |prefix| directory_ids.next(prefix),
                 )?;
-                let renamed_directories=directory::prepare_current_renamed_directories(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations)?;
-                let path_changes = super::directory::namespace_locations(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
+                let path_changes = namespace::locations::apply(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
                 validate_entries(&mut entries, engine.config.max_entries)?;
                 if let Some(view) = engine.current_namespaces { view.validate_workspace_draft(engine.state, state, &w, &entries)?; }
                 if entries.as_slice() == current_entries && deleted.is_empty() {
@@ -1660,19 +1637,14 @@ impl crate::engine::PlanningContext<'_> {
                 target.pending_file_versions.retain(|file, _| live_files.contains(file) && !written_files.contains(file));
                 if !written_files.is_empty(){target.file_node_id=None;}
                 if branch.file_id.is_some() {
-                    if let Some(path)=w.files.values().find(|file|directory::context_at_key(state,&repo.repository_id, file.path.key()).is_some_and(|c|c.branch_id==w.branch_id&&c.inherited_from.is_none())).map(|f|f.path.clone()) {
+                    if let Some(path)=w.files.values().find(|file|namespace::file_context::context_at_key(state,&repo.repository_id, file.path.key()).is_some_and(|c|c.branch_id==w.branch_id&&c.inherited_from.is_none())).map(|f|f.path.clone()) {
                         super::file::publish_selected_file_at_projected(state,&w.branch_id,Some(&path),&request.principal,request.operation_id,engine.current_namespaces.map(std::sync::Arc::as_ref))?;
                     }
                 } else if repo.main_branch_id == w.branch_id {
-                    super::file::synchronize_directory_edits(state, &commit_id, &written_paths, &request.principal, request.operation_id)?;
-                    let changed_paths = written_paths.into_iter()
-                        .chain(w.namespace_operations.iter().flat_map(|n| std::iter::once(n.path().to_owned()).chain(n.destination().map(|path|path.as_str().to_owned()))))
-                        .chain(renamed_directories)
-                        .chain(path_changes.iter().flat_map(|fact| {
-                            [fact.before.path.as_str().to_owned(), fact.after.path.as_str().to_owned()]
-                        }))
-                        .collect::<Vec<_>>();
-                    super::directory::record_projected_directory_edits(state, &repo.repository_id, &changed_paths, None, engine.current_namespaces.map(std::sync::Arc::as_ref))?;
+                    super::file::publish_workspace_file_heads(
+                        state, repo, &commit_id, &written_entries,
+                        &request.principal, request.operation_id,
+                    )?;
                 }
                 let mut result = crate::persist::path_changes::attach(
                     json!({"commit_id":commit_id,"branch_id":w.branch_id,

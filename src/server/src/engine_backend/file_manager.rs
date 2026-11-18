@@ -44,117 +44,33 @@ enum DiskAccess {
     Create,
 }
 
-fn needs_disk_root(engine: &Engine, slot: &str, path: &str) -> bool {
-    let first = path.split('/').next().unwrap_or("");
-    !engine.state().repositories.values().any(|repo| {
-        repo.primary_slot_id == slot
-            && (repo.file_manager_root
-                || name_policy::lookup_key(&repo.name) == name_policy::lookup_key(first))
-    })
-}
-
-fn admit_root_operation(
+/// A user path component is never a repository selector. Only the original
+/// registered disk, root and present owner select an ordinary namespace.
+fn registered_root(
     engine: &Engine,
     slot: &str,
-    path: &str,
+    access: DiskAccess,
+) -> Result<Option<Repository>, ApiError> {
+    if access != DiskAccess::Read {
+        require_primary_disk(&disk(engine, slot)?)?;
+    }
+    engine.ordinary_root_for_slot(slot).map(|root| root.cloned()).map_err(error)
+}
+
+fn require_unused_root_operation(
+    engine: &Engine,
     operation: storage_contract::OperationId,
-) -> Result<bool, ApiError> {
-    let needs_root = needs_disk_root(engine, slot, path);
-    if needs_root && engine.state().operations.contains_key(&operation) {
+) -> Result<(), ApiError> {
+    if engine.state().operations.contains_key(&operation) {
         return Err(ApiError::conflict(
             storage_contract::ErrorCode::IdempotencyKeyReused,
             "operation is already bound to another request",
         ));
     }
-    Ok(needs_root)
-}
-
-/// Named repositories and a disk-root tree share one displayed namespace.
-/// A normalized first component must select exactly one owner, for both reads
-/// and writes. Explicit repository/entry identities remain independent of it.
-fn ensure_unambiguous_disk_path(
-    engine: &Engine,
-    root: &Repository,
-    path: &str,
-) -> Result<(), ApiError> {
-    let first = path.split('/').next().unwrap_or("");
-    let key = name_policy::lookup_key(first);
-    let names = engine
-        .state()
-        .repositories
-        .values()
-        .filter(|repo| repo.primary_slot_id == root.primary_slot_id && !repo.file_manager_root)
-        .map(|repo| name_policy::lookup_key(&repo.name))
-        .filter(|name| path.is_empty() || *name == key)
-        .collect::<BTreeSet<_>>();
-    if !names.is_empty()
-        && engine
-            .list_tree_ref(&root.main_branch_id)
-            .map_err(error)?
-            .iter()
-            .any(|entry| names.contains(entry.lookup_key()))
-    {
-        return Err(ApiError::conflict(
-            storage_contract::ErrorCode::NameCollision,
-            "a named repository conflicts with a disk-root entry; use an explicit repository identity to rename the entry",
-        ));
-    }
     Ok(())
 }
 
-fn resolve_existing<'a>(
-    engine: &Engine,
-    slot: &str,
-    value: &'a str,
-    access: DiskAccess,
-) -> Result<Option<(Repository, &'a str)>, ApiError> {
-    let write = access != DiskAccess::Read;
-    if write {
-        require_primary_disk(&disk(engine, slot)?)?;
-    }
-    let relative = value;
-    let existing = engine
-        .state()
-        .repositories
-        .values()
-        .find(|r| r.primary_slot_id == slot && r.file_manager_root)
-        .cloned();
-    if let Some(root) = &existing {
-        ensure_unambiguous_disk_path(engine, root, relative)?;
-        if let Some(first) = relative.split('/').next().filter(|name| !name.is_empty()) {
-            // A named repository and a registered worktree share this displayed
-            // disk namespace. The authority rejects collisions before routing
-            // can prefer either one; no-match leaves ordinary routes unchanged.
-            let owner = root.repository_id.parse().map_err(ApiError::contract_input)?;
-            let name = name_policy::LookupName::parse(first).map_err(ApiError::invalid_source)?;
-            engine.directory_worktree_mount(owner, &name)
-                .map_err(super::snapshot_worktree::error)?;
-        }
-    }
-    let first = relative.split('/').next().unwrap_or("");
-    if let Some(repo) = engine
-        .state()
-        .repositories
-        .values()
-        .find(|r| {
-            r.primary_slot_id == slot
-                && !r.file_manager_root
-                && name_policy::lookup_key(&r.name) == name_policy::lookup_key(first)
-        })
-        .cloned()
-    {
-        return Ok(Some((
-            repo,
-            relative.split_once('/').map(|(_, p)| p).unwrap_or(""),
-        )));
-    }
-    let Some(repo) = existing else {
-        return Ok(None);
-    };
-    Ok(Some((repo, relative)))
-}
-/// Use exactly the displayed primary-disk namespace, including its named
-/// repositories. Never merge histories or route a backup disk to its primary.
+/// Resolve the original primary disk, leaving the complete user path intact.
 pub(super) fn resolve_smb_path(
     engine: &mut Engine,
     identity: &Identity,
@@ -174,26 +90,17 @@ pub(super) fn resolve_smb_path(
     } else {
         DiskAccess::Read
     };
-    let value = request.path.as_str();
-    if let Some((repository, _)) = resolve_existing(engine, &request.slot_id, value, access)? {
-        let relative_path = if repository.file_manager_root {
-            crate::SmbRelativePath::Entry(request.path)
-        } else {
-            match request.path.strip_components(1) {
-                Some(path) => crate::SmbRelativePath::Entry(path),
-                None => crate::SmbRelativePath::Root,
-            }
-        };
+    if let Some(repository) = registered_root(engine, &request.slot_id, access)? {
         return Ok(crate::SmbPathLocation {
             repository,
-            relative_path,
+            relative_path: crate::SmbRelativePath::Entry(request.path),
         });
     }
     if !create {
         return Err(empty_directory());
     }
     if let crate::SmbPathIntent::CreateDirectory(operation) = request.intent {
-        admit_root_operation(engine, &request.slot_id, value, operation)?;
+        require_unused_root_operation(engine, operation)?;
     }
     // Only a missing creation path requires strict display spelling. Existing
     // NFC entries remain reachable by canonically equivalent lookup names.
@@ -213,31 +120,6 @@ fn empty_directory() -> ApiError {
     )
 }
 
-fn resolve_read<'a>(
-    engine: &Engine,
-    slot: &str,
-    value: &'a str,
-) -> Result<(Repository, &'a str), ApiError> {
-    resolve_existing(engine, slot, value, DiskAccess::Read)?.ok_or_else(empty_directory)
-}
-
-fn resolve<'a>(
-    engine: &mut Engine,
-    identity: &Identity,
-    slot: &str,
-    value: &'a str,
-    access: DiskAccess,
-) -> Result<(Repository, &'a str), ApiError> {
-    if let Some(resolved) = resolve_existing(engine, slot, value, access)? {
-        return Ok(resolved);
-    }
-    if access != DiskAccess::Create {
-        return Err(empty_directory());
-    }
-
-    Ok((create_disk_root(engine, identity, slot)?, value))
-}
-
 fn resolve_write_path(
     engine: &mut Engine,
     identity: &Identity,
@@ -245,8 +127,8 @@ fn resolve_write_path(
     path: &name_policy::PortablePath,
     access: DiskAccess,
 ) -> Result<Repository, ApiError> {
-    match resolve_existing(engine, slot, path.as_str(), access)? {
-        Some((repo, _)) => Ok(repo),
+    match registered_root(engine, slot, access)? {
+        Some(repo) => Ok(repo),
         None if access == DiskAccess::Create => {
             create_disk_root_for_path(engine, identity, slot, path)
         }
@@ -304,18 +186,13 @@ fn listed_current_entry(
     engine: &Engine,
     repo: &Repository,
     index: usize,
-    prefix: &str,
+    live_working: bool,
 ) -> Result<crate::ListingEntry, ApiError> {
     use crate::{ListingEntry, ListingLocation, ListingVersion};
     #[cfg(test)]
     LISTED_ENTRY_PROJECTIONS.set(LISTED_ENTRY_PROJECTIONS.get() + 1);
     let namespace = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
     let entry = &namespace.entries()[index];
-    let display = if prefix.is_empty() {
-        entry.path().to_owned()
-    } else {
-        format!("{prefix}/{}", entry.path)
-    };
     let context = engine.file_context_for_current_entry(&repo.repository_id, entry);
     let (version, node_id, read_only) = match entry.kind {
         storage_contract::NamespaceEntryKind::Directory => (
@@ -360,11 +237,11 @@ fn listed_current_entry(
     Ok(ListingEntry {
         entry_id: entry.entry_id.clone(),
         name: entry.name().into(),
-        path: display,
+        path: entry.path().into(),
         kind: entry.kind,
         // The selected current namespace and this published working row share
         // the same authorized projection. Do not re-query from the RPC cursor.
-        size: super::smb_draft::published_size(engine, repo, entry)?.unwrap_or(entry.size),
+        size: if live_working { super::smb_draft::published_size(engine, repo, entry)?.unwrap_or(entry.size) } else { entry.size },
         file_id: entry.file_id.clone(),
         version,
         location: Some(ListingLocation {
@@ -385,75 +262,11 @@ fn listed_current_entry(
                 .unwrap_or_default(),
         ),
         node_id,
-        read_only,
+        read_only: read_only.map(|read_only| read_only || !live_working),
         backup: false,
         historical_only: None,
     })
 }
-/// Frozen browsing never consults the mutable current-file selection for body
-/// ownership, and it never grants a write context for the previewed entry.
-fn listed_preview_entry(
-    engine: &Engine,
-    repo: &Repository,
-    preview: &storage_engine::DirectoryBranchPreview,
-    index: usize,
-    prefix: &str,
-) -> Result<crate::ListingEntry, ApiError> {
-    let entry = preview.entry(index).map_err(error)?;
-    let context = preview.file_context(index).map_err(error)?;
-    let version = match entry.kind {
-        storage_contract::NamespaceEntryKind::Directory => {
-            crate::ListingVersion::Directory(String::new())
-        }
-        storage_contract::NamespaceEntryKind::File => crate::ListingVersion::File {
-            content: super::branch::capture_content(
-                engine.state(),
-                Some(&entry.version_id),
-                context
-                    .filter(|context| context.inherited_from.is_some())
-                    .map(|_| entry.version_id.as_str()),
-            ),
-            backup_version: None,
-        },
-    };
-    Ok(crate::ListingEntry {
-        entry_id: entry.entry_id.clone(),
-        name: entry.name().into(),
-        path: if prefix.is_empty() {
-            entry.path().into()
-        } else {
-            format!("{prefix}/{}", entry.path())
-        },
-        kind: entry.kind,
-        size: entry.size,
-        file_id: entry.file_id.clone(),
-        version,
-        location: Some(crate::ListingLocation {
-            repository_id: repo.repository_id.clone(),
-            repository_path: Some(entry.path().into()),
-            container: entry.kind == storage_contract::NamespaceEntryKind::File,
-            selected_branch_id: context.map(|context| context.branch_id.clone()),
-        }),
-        note: Some(
-            engine
-                .state()
-                .file_notes
-                .get(&entry.file_id)
-                .cloned()
-                .unwrap_or_default(),
-        ),
-        node_id: context.map(|context| {
-            context
-                .node_id
-                .clone()
-                .unwrap_or_else(|| entry.version_id.clone())
-        }),
-        read_only: context.map(|_| true),
-        backup: false,
-        historical_only: None,
-    })
-}
-
 fn directory(name: &str, display: &str, id: &str) -> crate::ListingEntry {
     crate::ListingEntry {
         entry_id: id.into(),
@@ -470,14 +283,6 @@ fn directory(name: &str, display: &str, id: &str) -> crate::ListingEntry {
         backup: false,
         historical_only: None,
     }
-}
-
-fn root_has_virtual_directories(engine: &Engine, slot: &str) -> bool {
-    engine
-        .state()
-        .repositories
-        .values()
-        .any(|repo| repo.primary_slot_id == slot && !repo.file_manager_root)
 }
 
 /// One indexed selection and its current context from the same metadata view.
@@ -748,14 +553,6 @@ pub(super) fn mutate_directory(
         operation_id,
         action,
     } = request;
-    let display = path.as_ref().map_or("", name_policy::LookupPath::as_str);
-    if display.is_empty() && root_has_virtual_directories(engine, &slot_id) {
-        return Err(ApiError::new(
-            ::http::StatusCode::CONFLICT,
-            storage_contract::ErrorCode::DirectoryScopeRequired,
-            "select a specific folder before branching this disk root",
-        ));
-    }
     let access = match &action {
         crate::DiskDirectoryAction::Create if path.is_none() => DiskAccess::Create,
         crate::DiskDirectoryAction::Create
@@ -763,22 +560,21 @@ pub(super) fn mutate_directory(
         | crate::DiskDirectoryAction::HistoricalCreate(_)
         | crate::DiskDirectoryAction::Select => DiskAccess::Write,
     };
-    if access == DiskAccess::Create
-        && admit_root_operation(engine, &slot_id, display, operation_id)?
-        && name.key() == "main"
-    {
-        return Err(ApiError::conflict(
-            storage_contract::ErrorCode::NameCollision,
-            "directory baseline branch already uses this name",
-        ));
-    }
-    let (repo, _) = resolve(engine, identity, &slot_id, display, access)?;
-    let relative = if repo.file_manager_root {
-        path
-    } else {
-        path.expect("invariant: named repository resolution matched a path component")
-            .strip_components(1)
+    let repo = match registered_root(engine, &slot_id, access)? {
+        Some(repo) => repo,
+        None if access == DiskAccess::Create => {
+            require_unused_root_operation(engine, operation_id)?;
+            if name.key() == "main" {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::NameCollision,
+                    "directory baseline branch already uses this name",
+                ));
+            }
+            create_disk_root(engine, identity, &slot_id)?
+        }
+        None => return Err(empty_directory()),
     };
+    let relative = path;
     match action {
         crate::DiskDirectoryAction::HistoricalCreate(source) => {
             if source.current().repository_id != repo.repository_id {
@@ -840,30 +636,23 @@ pub(super) fn mkdir(
         path,
         operation_id,
     } = command;
-    let needs_root = admit_root_operation(engine, &slot_id, path.as_str(), operation_id)?;
-    if needs_root && path.as_str().split('/').count() > engine.config().max_entries {
-        return Err(ApiError::limit("directory entry limit exceeded"));
-    }
-    let repo = if let Some(shared) = &identity.smb_binding {
-        // The SMB path was already resolved and pinned before recording intent.
-        // Revalidate that same owner under the Engine lock and never allocate
-        // another root or redirect the operation on a stale binding.
-        match resolve_existing(engine, &slot_id, path.as_str(), DiskAccess::Create)? {
-            Some((repo, _)) if repo.file_manager_root && repo.repository_id == shared.repository_id
-                && repo.main_branch_id == shared.branch_id => repo,
-            _ => return Err(ApiError::conflict(
-                storage_contract::ErrorCode::SmbRebindRequired,
-                "SMB directory target changed; reconnect before starting another operation",
-            )),
+    let existing = registered_root(engine, &slot_id, DiskAccess::Create)?;
+    if existing.is_none() {
+        require_unused_root_operation(engine, operation_id)?;
+        if path.as_str().split('/').count() > engine.config().max_entries {
+            return Err(ApiError::limit("directory entry limit exceeded"));
         }
-    } else {
-        resolve_write_path(engine, identity, &slot_id, &path, DiskAccess::Create)?
-    };
-    let path = if repo.file_manager_root {
-        path
-    } else {
-        path.strip_components(1)
-            .ok_or_else(|| ApiError::invalid("disk namespace root cannot be changed"))?
+    }
+    let repo = match (existing, &identity.smb_binding) {
+        (Some(repo), Some(shared))
+            if repo.repository_id == shared.repository_id
+                && repo.main_branch_id == shared.branch_id => repo,
+        (_, Some(_)) => return Err(ApiError::conflict(
+            storage_contract::ErrorCode::SmbRebindRequired,
+            "SMB directory target changed; reconnect before starting another operation",
+        )),
+        (Some(repo), None) => repo,
+        (None, None) => create_disk_root_for_path(engine, identity, &slot_id, &path)?,
     };
     engine
         .file_namespace(
@@ -881,35 +670,10 @@ pub(super) fn move_file(
     command: crate::MoveDiskFile,
 ) -> Result<storage_contract::OperationResult, ApiError> {
     let request = &command.relocation;
-    let repo = engine
-        .state()
-        .repositories
-        .get(request.repository_id.as_str())
-        .ok_or_else(|| ApiError::invalid("the captured repository is no longer registered"))?;
-    if repo.primary_slot_id != command.slot_id.as_str() {
-        return Err(ApiError::invalid(
-            "the captured repository is not on this primary disk",
-        ));
-    }
-    let repository_id = repo.repository_id.clone();
-    for path in [&request.source, &request.destination] {
-        let displayed = if repo.file_manager_root {
-            path.as_str().to_owned()
-        } else {
-            format!("{}/{}", repo.name, path.as_str())
-        };
-        let (resolved, relative) = resolve_existing(
-            engine,
-            command.slot_id.as_str(),
-            &displayed,
-            DiskAccess::Write,
-        )?
+    let owner = registered_root(engine, command.slot_id.as_str(), DiskAccess::Write)?
         .ok_or_else(empty_directory)?;
-        if resolved.repository_id != repository_id || relative != path.as_str() {
-            return Err(ApiError::invalid(
-                "the destination leaves the captured disk namespace",
-            ));
-        }
+    if owner.repository_id != request.repository_id.as_str() {
+        return Err(ApiError::invalid("the captured repository is not on this primary disk"));
     }
     engine
         .relocate_ordinary_file(request, &identity.principal, command.operation_id)
@@ -959,7 +723,6 @@ pub(super) fn write_session(
     identity: &Identity,
     command: crate::CreateDiskWriteSession,
 ) -> Result<crate::DiskWriteSession, ApiError> {
-    use std::borrow::Cow;
     let crate::CreateDiskWriteSession {
         slot_id,
         path,
@@ -971,14 +734,7 @@ pub(super) fn write_session(
         DiskAccess::Create
     };
     let repo = resolve_write_path(engine, identity, &slot_id, &path, access)?;
-    let relative = if repo.file_manager_root {
-        Cow::Borrowed(&path)
-    } else {
-        Cow::Owned(
-            path.strip_components(1)
-                .ok_or_else(|| ApiError::invalid("cannot upload over a disk directory"))?,
-        )
-    };
+    let relative = &path;
     let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
     let existing = tree.get_key(relative.key());
     let context = existing
@@ -1016,9 +772,9 @@ pub(super) fn write_session(
             ));
         }
     }
-    if repo.file_manager_root && existing.is_none() {
+    if existing.is_none() {
         let repository = repo.repository_id.parse().map_err(ApiError::contract_input)?;
-        engine.validate_disk_root_upload_path(repository, &relative).map_err(error)?;
+        engine.validate_disk_root_upload_path(repository, relative).map_err(error)?;
     }
     let workspace = engine
         .create_workspace(&repo.main_branch_id, &identity.principal)

@@ -29,6 +29,16 @@ impl Fixture {
         Engine::initialize(&self.root, self.config.clone()).unwrap()
     }
 }
+/// Recover only from the original registered voters and originally held data roots.
+/// A detached package is never used to initialize or rebind another namespace.
+pub(crate) fn restore_registered_fixture(engine: Engine, fresh_system: &std::path::Path) -> Engine {
+    let voters = engine.config.disks.iter().filter(|disk| disk.metadata_member)
+        .map(|disk| disk.root.clone()).collect::<Vec<_>>();
+    let data = engine.recovery_data_roots().unwrap();
+    drop(engine);
+    Engine::restore_from_disks_and_data_roots(fresh_system, &voters, &data).unwrap()
+}
+
 fn repository(e: &mut Engine, copies: u32) -> Repository {
     e.create_repository(
         &storage_contract::RepositoryName::parse("项目").unwrap(),
@@ -430,7 +440,8 @@ fn file_container_rename_replays_only_after_decision_and_keeps_all_version_bytes
 fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen() {
     let fixture = Fixture::new();
     let mut engine = fixture.initialize();
-    let repo = repository(&mut engine, 3);
+    let repo = engine.create_disk_root("P01", "admin",
+        storage_contract::OperationId::generate().unwrap()).unwrap();
     save(
         &mut engine,
         &repo.main_branch_id,
@@ -675,17 +686,8 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
     engine
         .export_history_package(&repo.history_tree_id, &package)
         .unwrap();
-    let target = Fixture::new();
-    let mut recovered = target.initialize();
-    recovered
-        .restore_history_package(
-            &package,
-            "P01",
-            3,
-            "rescuer",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    crate::offline_check_history_package(&package).unwrap();
+    let recovered = restore_registered_fixture(engine, &fixture.temp.path().join("recovered-system"));
     assert_eq!(recovered.state().file_selections[&one.file_id], main);
     assert_eq!(
         recovered.state().file_notes[&one.file_id],
@@ -1292,23 +1294,13 @@ fn disjoint_workspaces_rebase_but_same_file_is_owned() {
 fn durable_workspace_and_plan_preparations_require_an_audit_actor() {
     let fixture = Fixture::new();
     let mut engine = fixture.initialize();
-    let repo = repository(&mut engine, 1);
-    let head = engine.state.branches[&repo.main_branch_id]
-        .head_commit_id
-        .clone();
+    let repo = engine.create_disk_root("P01", "admin", OperationId::generate().unwrap()).unwrap();
     let state = canonical_json(engine.state()).unwrap();
     let workspaces = engine.workspaces.len();
     let plans = engine.state.plans.len();
     assert_eq!(
         engine
             .create_workspace(&repo.main_branch_id, "")
-            .unwrap_err()
-            .code(),
-        storage_contract::ErrorCode::Unauthenticated
-    );
-    assert_eq!(
-        engine
-            .create_historical_workspace(&repo.main_branch_id, &head, "")
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::Unauthenticated
@@ -1417,11 +1409,11 @@ fn workspace_actor_binding_and_idempotency_conflicts() {
     );
 }
 #[test]
-fn active_reads_protect_history_and_split_remaps_full_payloads() {
+fn active_reads_protect_historical_file_bytes_until_explicit_purge() {
     let f = Fixture::new();
     let mut e = f.initialize();
-    let r = repository(&mut e, 3);
-    let first = save(&mut e, &r.main_branch_id, "a", b"v1");
+    let r = e.create_disk_root("P01", "admin", OperationId::generate().unwrap()).unwrap();
+    save(&mut e, &r.main_branch_id, "a", b"v1");
     let old = e.list_tree(&r.main_branch_id).unwrap()[0]
         .version_id
         .clone();
@@ -1434,43 +1426,13 @@ fn active_reads_protect_history_and_split_remaps_full_payloads() {
         storage_contract::ErrorCode::ContentPinned
     );
     drop(lease);
-    let plan = e
-        .create_split_plan(
-            &r.history_tree_id,
-            first.commit_id.as_deref().unwrap(),
-            "admin",
-        )
-        .unwrap();
-    let result = e
-        .commit_plan(
-            &plan.plan_id,
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let new_history = result.history_tree_id.unwrap();
-    assert_ne!(new_history, r.history_tree_id);
-    let graph = e.graph(&new_history).unwrap();
-    assert!(
-        graph
-            .commits
-            .iter()
-            .find(|c| c.kind == "split_root")
-            .unwrap()
-            .parent_commit_ids
-            .is_empty()
-    );
-    for c in &graph.commits {
-        for entry in &c.entries {
-            assert_eq!(
-                e.state().versions[&entry.version_id].history_tree_id,
-                new_history
-            );
-            assert!(bytes(&e, &entry.version_id).starts_with(b"v"));
-        }
-    }
+    let plan = e.create_purge_plan(&r.history_tree_id, vec![old.clone()], "admin").unwrap();
+    let operation = OperationId::generate().unwrap();
+    let result = e.commit_plan(&plan.plan_id, "admin", operation).unwrap();
+    assert_eq!(e.state().content_states[&old], ContentState::Purged);
     drop(e);
-    Engine::open(&f.root).unwrap();
+    let mut restored = Engine::open(&f.root).unwrap();
+    assert_eq!(restored.commit_plan(&plan.plan_id, "admin", operation).unwrap(), result);
 }
 #[test]
 fn fixed_route_capacity_does_not_fallback_and_second_writer_is_rejected() {
@@ -4559,8 +4521,6 @@ fn public_envelope(body: json_codec::Value) -> storage_contract::PublicCommitEnv
 #[path = "published_workspace_retirement.rs"]
 mod published_workspace_retirement;
 
-#[path = "historical_workspace_lifecycle.rs"]
-mod historical_workspace_lifecycle;
 
 #[path = "entropy_failure_tests.rs"]
 mod entropy_failure_tests;

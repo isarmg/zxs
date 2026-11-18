@@ -194,10 +194,8 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let mut engine = initialize(&temp.path().join("source"));
         let repo = engine
-            .create_repository(
-                &storage_contract::RepositoryName::parse("empty backup scope").unwrap(),
+            .create_disk_root(
                 "P01",
-                1,
                 "alice",
                 storage_contract::OperationId::generate().unwrap(),
             )
@@ -228,11 +226,11 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
         engine
             .export_history_package(&repo.history_tree_id, &package)
             .unwrap();
-        let mut restored = initialize(&temp.path().join("restored"));
-        let operation = storage_contract::OperationId::generate().unwrap();
-        let receipt = restored
-            .restore_history_package(&package, "P01", 2, "alice", operation)
-            .unwrap();
+        let (frozen, _, report) = load_package(&package).unwrap();
+        assert_eq!(report.versions, 0);
+        assert_eq!(engine.state.protection_policies, frozen.protection_policies);
+        let recovered_system = temp.path().join("recovered-system");
+        let mut restored = crate::tests::restore_registered_fixture(engine, &recovered_system);
         let configuration = restored
             .backup_configuration(&repo.repository_id, path)
             .unwrap();
@@ -259,15 +257,8 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
             restored.state.file_backup_paths[&file.file_id]["B01"],
             "chosen-backup/file.txt"
         );
-        let sequence = restored.state.sequence;
-        let replay = restored
-            .restore_history_package(&package, "P01", 2, "alice", operation)
-            .unwrap();
-        assert_eq!(replay.result, receipt.result);
-        assert_eq!(replay.sequence, receipt.sequence);
-        assert_eq!(restored.state.sequence, sequence);
         drop(restored);
-        let restored = Engine::open(&temp.path().join("restored/state")).unwrap();
+        let restored = Engine::open(&recovered_system).unwrap();
         assert_eq!(
             restored
                 .backup_configuration(&repo.repository_id, path)
@@ -275,64 +266,18 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
                 .backup_prefixes["B01"],
             "chosen-backup"
         );
-
-        let mut reduced = initialize(&temp.path().join("reduced"));
-        reduced
-            .restore_history_package(
-                &package,
-                "P01",
-                1,
-                "alice",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
-        let configuration = reduced
-            .backup_configuration(&repo.repository_id, path)
-            .unwrap();
-        assert_eq!(configuration.target_copies, 1);
-        assert_eq!(json_codec::json!(configuration.backup_prefixes), json!({}));
-
-        for (name, copies, renamed) in [("expanded", 3, false), ("renamed", 2, true)] {
-            let root = temp.path().join(name);
-            let mut config =
-                Config::development(crate::test_disks(
-                    [root.join("p"), root.join("b"), root.join("c")],
-                )).unwrap();
-            if renamed {
-                config.disks[1].slot_id = "OTHER".into();
-                config.disks[2].upstream_slot_id = Some("OTHER".into());
-            }
-            let mut destination = Engine::initialize(&root.join("state"), config).unwrap();
-            let before = canonical_json(destination.state()).unwrap();
-            assert_eq!(
-                destination
-                    .restore_history_package(
-                        &package,
-                        "P01",
-                        copies,
-                        "alice",
-                        storage_contract::OperationId::generate().unwrap()
-                    )
-                    .unwrap_err()
-                    .code(),
-                storage_contract::ErrorCode::BackupPrefixRequired
-            );
-            assert_eq!(canonical_json(destination.state()).unwrap(), before);
-        }
     }
 }
 
 #[test]
-fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_collisions() {
-    for (source_copies, target_copies) in [(2, 2), (3, 2), (3, 3)] {
+fn registered_backup_tiers_preserve_their_exact_slot_bindings_in_portable_evidence() {
+    for source_copies in [2, 3] {
         let temp = tempfile::tempdir().unwrap();
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let mut engine = initialize(&temp.path().join("source"));
         let repo = engine
-            .create_repository(
-                &storage_contract::RepositoryName::parse("prefix positions").unwrap(),
+            .create_disk_root(
                 "P01",
-                source_copies,
                 "alice",
                 storage_contract::OperationId::generate().unwrap(),
             )
@@ -364,41 +309,16 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
         engine
             .export_history_package(&repo.history_tree_id, &package)
             .unwrap();
-        let root = temp.path().join("restored");
-        let mut config =
-            Config::development(crate::test_disks(
-                [root.join("p"), root.join("b"), root.join("c")],
-            )).unwrap();
-        config.disks[1].slot_id = "C01".into();
-        config.disks[2].slot_id = "B01".into();
-        config.disks[2].upstream_slot_id = Some("C01".into());
-        let mut restored = Engine::initialize(&root.join("state"), config).unwrap();
-        let before = canonical_json(restored.state()).unwrap();
-        let result = restored.restore_history_package(
-            &package,
-            "P01",
-            target_copies,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        );
-        if source_copies == 2 {
-            assert_eq!(
-                result.unwrap_err().code(),
-                storage_contract::ErrorCode::RestoreBackupConflict
-            );
-            assert_eq!(canonical_json(restored.state()).unwrap(), before);
-        } else {
-            result.unwrap();
-            let configuration = restored
-                .backup_configuration(&repo.repository_id, "empty")
-                .unwrap();
-            let expected = if target_copies == 2 {
-                json!({"C01":"first-tier"})
-            } else {
-                json!({"C01":"first-tier", "B01":"second-tier"})
-            };
-            assert_eq!(json_codec::json!(configuration.backup_prefixes), expected);
-        }
+        let (manifest, _, report) = load_package(&package).unwrap();
+        assert_eq!(report.history_tree_id, repo.history_tree_id);
+        let original = engine.backup_configuration(&repo.repository_id, "empty").unwrap();
+        let policy = &manifest.protection_policies[original.policy_id.as_ref().unwrap()];
+        assert_eq!(policy.target_copies, source_copies);
+        assert_eq!(policy.backup_prefixes, original.backup_prefixes);
+        let recovered = crate::tests::restore_registered_fixture(engine, &temp.path().join("recovered-system"));
+        let current = recovered.backup_configuration(&repo.repository_id, "empty").unwrap();
+        assert_eq!(current.target_copies, source_copies);
+        assert_eq!(current.backup_prefixes, original.backup_prefixes);
     }
 }
 
@@ -624,10 +544,8 @@ fn offline_package_authenticates_raw_leaf_before_graph_admission() {
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("raw boundary").unwrap(),
-            "P01",
-            3,
+        .create_disk_root(
+                "P01",
             "alice",
             OperationId::generate().unwrap(),
         )
@@ -648,22 +566,9 @@ fn offline_package_authenticates_raw_leaf_before_graph_admission() {
         offline_check_history_package(&package).unwrap_err().code(),
         ErrorCode::ObjectCorrupt
     );
-    let mut destination = initialize(&temp.path().join("destination"));
-    let before = canonical_json(destination.state()).unwrap();
-    assert_eq!(
-        destination
-            .restore_history_package(
-                &package,
-                "P01",
-                3,
-                "alice",
-                OperationId::generate().unwrap()
-            )
-            .unwrap_err()
-            .code(),
-        ErrorCode::ObjectCorrupt
-    );
-    assert_eq!(canonical_json(destination.state()).unwrap(), before);
+    let corrupt = fs::read(&path).unwrap();
+    assert!(load_package(&package).is_err());
+    assert_eq!(fs::read(&path).unwrap(), corrupt);
     fs::write(&path, b"{\"duplicate\":{},\"duplicate\":{}}").unwrap();
     let error = offline_check_history_package(&package).unwrap_err();
     assert_eq!(error.code(), ErrorCode::InvalidJson);
@@ -749,451 +654,7 @@ fn legacy_placeholder(
         .join(format!("{branch}.pending"))
 }
 
-#[test]
-fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
-    let temp = tempfile::tempdir().unwrap();
-    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let mut engine = initialize(&temp.path().join("source"));
-    let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("嵌套恢复").unwrap(),
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let workspace = engine
-        .create_workspace(&repo.main_branch_id, "alice")
-        .unwrap();
-    for (path, bytes) in [
-        ("folder/a.txt", b"parent A".as_slice()),
-        ("folder/nested/b.txt", b"parent B".as_slice()),
-    ] {
-        engine
-            .stage_bytes(&workspace.workspace_id, path, bytes)
-            .unwrap();
-    }
-    engine
-        .commit_workspace(CommitRequest {
-            workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate().unwrap(),
-            principal: "alice".into(),
-            expected_head: workspace.base_head,
-            fencing_token: workspace.fencing_token,
-            message: "nested parent files".into(),
-            request_digest: None,
-        })
-        .unwrap();
-    engine
-        .initialize_directory_scope(
-            &repo.repository_id,
-            Some(&name_policy::LookupPath::parse("folder/nested").unwrap()),
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "folder", "alice");
-    let created = engine
-        .create_directory_branches(
-            &repo.repository_id,
-            Some(&name_policy::LookupPath::parse("folder").unwrap()),
-            &storage_contract::BranchName::parse("draft").unwrap(),
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let id = created.result["directory_branch_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let directory = engine.state.directory_branches[&id].directory_id.clone();
-    let inherited_tree = engine.state.directory_branches[&id].head_tree_id.clone();
-    let frozen = engine.state.directory_branches[&id]
-        .entries
-        .iter()
-        .find(|entry| entry.path.as_str() == "folder/nested/b.txt")
-        .unwrap()
-        .clone();
-    engine
-        .select_directory_branches(
-            &repo.repository_id,
-            Some(&name_policy::LookupPath::parse("folder").unwrap()),
-            &storage_contract::BranchName::parse("draft").unwrap(),
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let workspace = engine
-        .create_workspace(&repo.main_branch_id, "alice")
-        .unwrap();
-    engine
-        .stage_bytes(&workspace.workspace_id, "folder/a.txt", b"owned A")
-        .unwrap();
-    engine
-        .commit_workspace(CommitRequest {
-            workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate().unwrap(),
-            principal: "alice".into(),
-            expected_head: workspace.base_head,
-            fencing_token: workspace.fencing_token,
-            message: "complete one file".into(),
-            request_digest: None,
-        })
-        .unwrap();
-    assert!(engine.state.directory_branches[&id].materialized);
-    assert!(
-        engine.state.directory_branches[&id]
-            .entries
-            .iter()
-            .any(|entry| entry.file_id == frozen.file_id && entry.version_id == frozen.version_id)
-    );
-    let body_proofs = engine
-        .state
-        .versions
-        .iter()
-        .map(|(id, version)| (id.clone(), canonical_json(version).unwrap()))
-        .collect::<BTreeMap<_, _>>();
-    engine
-        .file_namespace(
-            &repo.repository_id,
-            NamespaceOperation::parse(NamespaceOperationKind::Rename, "folder", Some("renamed"))
-                .unwrap(),
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let path_facts = permanent_path_facts(&engine, &repo.history_tree_id);
-    assert_eq!(path_facts.len(), 2);
-    assert!(engine.state.file_path_nodes.is_empty());
-    for fact in &path_facts {
-        assert!(fact.source.before.path.as_str().starts_with("folder/"));
-        assert!(fact.source.after.path.as_str().starts_with("renamed/"));
-        let version = fact.after_version_id.to_string();
-        assert_eq!(canonical_json(&engine.state.versions[&version]).unwrap(), body_proofs[&version]);
-    }
-    let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
-    assert_eq!(manifest.directory_branches[&id].directory_id, directory);
-    assert!(!manifest.directory_branches[&id].directory_refs.is_empty());
-    assert_eq!(manifest.file_write_origins.get(&frozen.file_id), Some(&id));
-    assert_eq!(manifest.directory_trees[&inherited_tree].path, "folder");
-    assert_eq!(
-        manifest.directory_branches[&id].path,
-        manifest.directory_trees[&manifest.directory_branches[&id].head_tree_id].path
-    );
-    let visible = engine
-        .directory_branches(&repo.repository_id, "renamed")
-        .unwrap();
-    assert!(
-        visible
-            .iter()
-            .any(|branch| branch.directory_branch_id == id)
-    );
-    let package = temp.path().join("package");
-    engine
-        .export_history_package(&repo.history_tree_id, &package)
-        .unwrap();
-    let mut restored = initialize(&temp.path().join("restored"));
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    drop(restored);
-    let restored = Engine::open(&temp.path().join("restored/state")).unwrap();
-    assert_eq!(
-        canonical_json(&restored.state.directory_branches).unwrap(),
-        canonical_json(&manifest.directory_branches).unwrap()
-    );
-    assert_eq!(
-        canonical_json(&restored.state.directory_trees).unwrap(),
-        canonical_json(&manifest.directory_trees).unwrap()
-    );
-    assert_eq!(
-        restored.state.directory_selection_generations,
-        manifest.directory_selection_generations
-    );
-    assert_eq!(
-        restored.state.file_write_origins,
-        manifest.file_write_origins
-    );
-    assert_eq!(
-        restored.state.directory_tree_selections,
-        manifest.directory_tree_selections
-    );
-    assert_eq!(restored.state.file_contexts, manifest.file_contexts);
-    assert!(restored.state.file_path_nodes.is_empty());
-    assert_eq!(permanent_path_facts(&restored, &repo.history_tree_id), path_facts);
-    assert_eq!(restored.state.file_node_parents, manifest.file_node_parents);
-    assert_eq!(restored.state.file_path_notes, manifest.file_path_notes);
-    assert_eq!(restored.state.file_locations, manifest.file_locations);
-    assert_eq!(
-        restored.state.file_selection_generations,
-        manifest.file_selection_generations
-    );
-    assert!(
-        restored
-            .directory_branches(&repo.repository_id, "renamed")
-            .unwrap()
-            .iter()
-            .any(|branch| branch.directory_branch_id == id)
-    );
-    assert!(restored.open_content(&frozen.version_id).is_ok());
-}
 
-#[test]
-fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner() {
-    let temporary = tempfile::tempdir().unwrap();
-    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let mut engine = initialize(&temporary.path().join("source"));
-    let repo = engine
-        .create_disk_root(
-            "P01",
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let save_path = |engine: &mut Engine, path: &str, bytes: &[u8]| {
-        let workspace = engine
-            .create_workspace(&repo.main_branch_id, "alice")
-            .unwrap();
-        engine
-            .stage_bytes(&workspace.workspace_id, path, bytes)
-            .unwrap();
-        engine
-            .commit_workspace(CommitRequest {
-                workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate().unwrap(),
-                principal: "alice".into(),
-                expected_head: workspace.base_head,
-                fencing_token: workspace.fencing_token,
-                message: "alias write".into(),
-                request_digest: None,
-            })
-            .unwrap();
-    };
-    save_path(&mut engine, "a/f.txt", b"F1");
-    save_path(&mut engine, "b/keep.txt", b"keep");
-    let original = engine
-        .list_tree(&repo.main_branch_id)
-        .unwrap()
-        .into_iter()
-        .find(|entry| entry.path.as_str() == "a/f.txt")
-        .unwrap();
-    let create = |engine: &mut Engine, path: &str, name: &str| {
-        crate::directory_git_fixture::checkpoint_as(engine, &repo, path, "alice");
-        engine
-            .create_directory_branches(
-                &repo.repository_id,
-                (if (path).is_empty() {
-                    None
-                } else {
-                    Some(name_policy::LookupPath::parse(path).unwrap())
-                })
-                .as_ref(),
-                &storage_contract::BranchName::parse(name).unwrap(),
-                "alice",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap()
-            .result["directory_branch_id"]
-            .as_str()
-            .unwrap()
-            .to_owned()
-    };
-    let m = create(&mut engine, "", "source");
-    let frozen = create(&mut engine, "", "retained original");
-    let n = create(&mut engine, "", "selected aliases");
-    engine
-        .select_default_directory_branch(
-            &repo.repository_id,
-            &n,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let frozen_branch = engine.state.directory_branches[&frozen].clone();
-    assert_eq!(
-        frozen_branch.directory_id,
-        engine.state.directory_branches[&n].directory_id
-    );
-    let request = DirectoryNamespaceBatch {
-        kind: storage_contract::DirectoryBatchKind::Move,
-        items: vec![DirectoryNamespaceItem {
-            source: DirectoryNamespaceSource {
-                directory_branch_id: m.clone(),
-                expected_tree_id: engine.state.directory_branches[&m].head_tree_id.clone(),
-                path: "a/f.txt".into(),
-                entry_id: original.entry_id.clone(),
-            },
-            target: Some(DirectoryNamespaceTarget {
-                directory_branch_id: n.clone(),
-                expected_tree_id: engine.state.directory_branches[&n].head_tree_id.clone(),
-                path: "b/f.txt".into(),
-            }),
-        }],
-    };
-    engine
-        .directory_namespace_batch(
-            &repo.repository_id,
-            &request,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let draft = engine
-        .create_file_branch(
-            &original.file_id,
-            &original.version_id,
-            &storage_contract::BranchName::parse("independent alias").unwrap(),
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap()
-        .branch_id
-        .unwrap();
-    engine
-        .select_file_branch_at(
-            &repo.repository_id,
-            &name_policy::PortablePath::parse("b/f.txt").unwrap(),
-            &original.file_id,
-            &draft,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    save_path(&mut engine, "b/f.txt", b"F2");
-    let moved = engine
-        .list_tree(&repo.main_branch_id)
-        .unwrap()
-        .into_iter()
-        .find(|entry| entry.path.as_str() == "b/f.txt")
-        .unwrap();
-    crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "", "alice");
-    // The fixture helper checkpoints its source before creating the alternate.
-    let alternate = create(&mut engine, "", "whole-view-draft");
-    let saved_root = engine.state.directory_selections[&repo.repository_id].clone();
-    let saved_working_tree = engine.state.directory_branches[&saved_root]
-        .head_tree_id
-        .clone();
-    let saved_working_bytes = canonical_json(
-        &engine.state.directory_trees[&saved_working_tree],
-    )
-    .unwrap();
-    let saved_head = engine.state.directory_git_repositories[&repo.repository_id]
-        .branches[&saved_root]
-        .head_tree_id
-        .clone()
-        .unwrap();
-    let saved_entries = engine.list_tree(&repo.main_branch_id).unwrap();
-    let saved_contexts = engine.state.file_contexts.clone();
-    engine
-        .select_default_directory_branch(
-            &repo.repository_id,
-            &alternate,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    engine
-        .select_default_directory_branch(
-            &repo.repository_id,
-            &saved_root,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    // Checkout rebuilds ordinary child working scopes and their root references.
-    // The committed HEAD and every retained tree remain immutable, while the
-    // restored namespace and per-path file contexts must be exactly preserved.
-    assert_eq!(
-        engine.state.directory_git_repositories[&repo.repository_id]
-            .branches[&saved_root]
-            .head_tree_id
-            .as_ref(),
-        Some(&saved_head),
-    );
-    assert_eq!(
-        canonical_json(&engine.state.directory_trees[&saved_working_tree]).unwrap(),
-        saved_working_bytes,
-    );
-    assert_eq!(engine.list_tree(&repo.main_branch_id).unwrap(), saved_entries);
-    assert_eq!(engine.state.file_contexts, saved_contexts);
-    assert_eq!(engine.state.directory_branches[&frozen], frozen_branch);
-    let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
-    let a_key = format!("{}/a/f.txt", repo.repository_id);
-    let b_key = format!("{}/b/f.txt", repo.repository_id);
-    assert_eq!(
-        manifest.file_contexts[&a_key].inherited_from.as_deref(),
-        Some(n.as_str())
-    );
-    assert!(manifest.file_contexts[&b_key].inherited_from.is_none());
-    assert_ne!(
-        manifest.file_contexts[&a_key].branch_id,
-        manifest.file_contexts[&b_key].branch_id
-    );
-    assert_eq!(manifest.file_locations[&original.file_id], "b/f.txt");
-    let package = temporary.path().join("package");
-    engine
-        .export_history_package(&repo.history_tree_id, &package)
-        .unwrap();
-    let restored_root = temporary.path().join("restored");
-    let mut restored = initialize(&restored_root);
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    assert_eq!(restored.state.directory_branches[&frozen], frozen_branch);
-    assert_eq!(restored.state.file_contexts, manifest.file_contexts);
-    assert_eq!(restored.state.file_locations, manifest.file_locations);
-    assert_eq!(
-        fs::read(
-            restored
-                .valid_replica(&original.version_id)
-                .unwrap()
-                .0
-                .path()
-        )
-        .unwrap(),
-        b"F1"
-    );
-    assert_eq!(
-        fs::read(restored.valid_replica(&moved.version_id).unwrap().0.path()).unwrap(),
-        b"F2"
-    );
-    save_path(&mut restored, "a/f.txt", b"F3 from old alias");
-    let live = restored.list_tree(&repo.main_branch_id).unwrap();
-    let a = live.iter().find(|entry| entry.path.as_str() == "a/f.txt").unwrap();
-    let b = live.iter().find(|entry| entry.path.as_str() == "b/f.txt").unwrap();
-    assert_eq!(a.file_id, b.file_id);
-    assert_eq!(b.version_id, moved.version_id);
-    assert_ne!(a.version_id, original.version_id);
-    assert_eq!(restored.state.file_locations[&original.file_id], "b/f.txt");
-    assert_eq!(
-        restored.state.file_contexts[&b_key],
-        manifest.file_contexts[&b_key]
-    );
-    let latest = a.version_id.clone();
-    drop(restored);
-    let restored = Engine::open(&restored_root.join("state")).unwrap();
-    assert_eq!(
-        fs::read(restored.valid_replica(&latest).unwrap().0.path()).unwrap(),
-        b"F3 from old alias"
-    );
-    assert_eq!(
-        fs::read(restored.valid_replica(&moved.version_id).unwrap().0.path()).unwrap(),
-        b"F2"
-    );
-}
 
 #[test]
 fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_restore() {
@@ -1389,19 +850,10 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .unwrap();
     assert_eq!(report.full_files, 3);
     assert_eq!(report.tombstones, 1);
-    let mut restored = initialize(&temporary.path().join("restored"));
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    drop(restored);
-    let restored = Engine::open(&temporary.path().join("restored/state")).unwrap();
-    assert!(restored.state.file_path_nodes.is_empty());
+    let recovered_system = temporary.path().join("recovered-system");
+    let restored = crate::tests::restore_registered_fixture(engine, &recovered_system);
+    assert_eq!(canonical_json(&load_package(&package).unwrap().0).unwrap(),
+        canonical_json(&manifest).unwrap());
     assert_eq!(permanent_path_facts(&restored, &repo.history_tree_id), path_facts);
     assert_eq!(
         canonical_json(&restored.state.file_metadata_nodes).unwrap(),
@@ -1423,350 +875,6 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
     );
 }
 
-#[test]
-fn composed_directory_records_validate_and_restore_frozen_shared_file_references() {
-    let temp = tempfile::tempdir().unwrap();
-    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let mut engine = initialize(&temp.path().join("source"));
-    let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("组合恢复").unwrap(),
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let original_commit = save(&mut engine, &repo.main_branch_id, b"frozen parent");
-    let original = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
-    let shared = engine
-        .create_file_branch(
-            &original.file_id,
-            &original.version_id,
-            &storage_contract::BranchName::parse("shared").unwrap(),
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap()
-        .branch_id
-        .unwrap();
-    save(&mut engine, &shared, b"shared branch advanced");
-    let advanced = engine.list_tree(&shared).unwrap()[0].clone();
-    let first = new_id("dbr").unwrap();
-    let second = new_id("dbr").unwrap();
-    let first_tree = new_id("dtree").unwrap();
-    engine
-        .mutate(
-            "fixture.directory_compositions",
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-            json!({}),
-            |_, state, _| {
-                let parent = DirectoryBranch {
-                    directory_branch_id: first.clone(),
-                    repository_id: repo.repository_id.clone(),
-                    directory_id: repo.repository_id.clone(),
-                    path: String::new(),
-                    name: "frozen".into(),
-                    parent_branch_id: None,
-                    head_tree_id: first_tree.clone(),
-                    commit_id: original_commit.clone(),
-                    entries: vec![original.clone()],
-                    file_branches: BTreeMap::from([(original.file_id.clone(), shared.clone())]),
-                    file_contexts: BTreeMap::from([(
-                        original.lookup_key().to_owned(),
-                        FileContext {
-                            node_id: None,
-                            selection_generation: 0,
-                            branch_id: shared.clone(),
-                            inherited_from: None,
-                        },
-                    )]),
-                    inherited_files: BTreeMap::new(),
-                    directory_refs: BTreeMap::new(),
-                    materialized: true,
-                    sequence: state.sequence,
-                };
-                let mut child = parent.clone();
-                child.directory_branch_id = second.clone();
-                child.name = "composed".into();
-                child.parent_branch_id = Some(first.clone());
-                child.materialized = false;
-                state.directory_trees.insert(
-                    first_tree.clone(),
-                    DirectoryTree {
-                        tree_id: first_tree.clone(),
-                        directory_branch_id: first.clone(),
-                        parent_tree_id: None,
-                        commit_id: parent.commit_id.clone(),
-                        path: parent.path.clone(),
-                        entries: parent.entries.clone(),
-                        file_branches: parent.file_branches.clone(),
-                        file_contexts: parent.file_contexts.clone(),
-                        inherited_files: parent.inherited_files.clone(),
-                        directory_refs: parent.directory_refs.clone(),
-                        sequence: parent.sequence,
-                    },
-                );
-                state.directory_branches.insert(first.clone(), parent);
-                state.directory_branches.insert(second.clone(), child);
-                state
-                    .directory_selections
-                    .insert(repo.repository_id.clone(), second.clone());
-                state
-                    .directory_selection_generations
-                    .insert(repo.repository_id.clone(), 42);
-                Ok(json!({}))
-            },
-        )
-        .unwrap();
-    let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
-    // Shared branches can advance without rewriting an older composition.
-    directory_contents::assert_frozen_payload_validation(&manifest, &first_tree);
-    assert_ne!(
-        manifest.directory_branches[&first].entries[0].version_id,
-        advanced.version_id
-    );
-    assert_eq!(
-        manifest.directory_branches[&first].file_branches[&original.file_id],
-        shared
-    );
-    let bad = |manifest: &HistoryManifest| {
-        assert_eq!(
-            manifest.validate().unwrap_err().code(),
-            storage_contract::ErrorCode::HistoryPackageInvalid
-        )
-    };
-    for target in ["branch", "tree"] {
-        let mut invalid = manifest.clone();
-        if target == "branch" {
-            invalid
-                .directory_branches
-                .get_mut(&first)
-                .unwrap()
-                .file_contexts
-                .clear();
-        } else {
-            invalid
-                .directory_trees
-                .get_mut(&first_tree)
-                .unwrap()
-                .file_contexts
-                .clear();
-        }
-        bad(&invalid);
-    }
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_branches
-        .get_mut(&first)
-        .unwrap()
-        .repository_id = new_id("repo").unwrap();
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_branches
-        .get_mut(&first)
-        .unwrap()
-        .commit_id = new_id("commit").unwrap();
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid.directory_branches.get_mut(&first).unwrap().entries[0].version_id =
-        new_id("ver").unwrap();
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_branches
-        .get_mut(&first)
-        .unwrap()
-        .file_branches
-        .clear();
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_branches
-        .get_mut(&first)
-        .unwrap()
-        .file_branches
-        .insert(original.file_id.clone(), repo.main_branch_id.clone());
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_branches
-        .get_mut(&first)
-        .unwrap()
-        .parent_branch_id = Some(second.clone());
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_selections
-        .insert(new_id("entry").unwrap(), second.clone());
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_trees
-        .get_mut(&first_tree)
-        .unwrap()
-        .parent_tree_id = Some(first_tree.clone());
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_branches
-        .get_mut(&second)
-        .unwrap()
-        .head_tree_id = new_id("dtree").unwrap();
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_trees
-        .get_mut(&first_tree)
-        .unwrap()
-        .entries[0]
-        .size += 1;
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_selection_generations
-        .insert(new_id("entry").unwrap(), 1);
-    bad(&invalid);
-    let mut invalid_json = json_codec::to_value(&manifest).unwrap();
-    assert_eq!(
-        invalid_json["directory_selection_generations"][&repo.repository_id],
-        "42"
-    );
-    invalid_json["directory_selection_generations"][&repo.repository_id] = json!(42);
-    assert!(json_codec::from_value::<HistoryManifest>(invalid_json).is_err());
-    let mut invalid = manifest.clone();
-    invalid
-        .file_locations
-        .insert(new_id("file").unwrap(), "other.txt".into());
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .file_locations
-        .insert(original.file_id.clone(), "wrong-name.txt".into());
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .file_write_origins
-        .insert(original.file_id.clone(), new_id("dbr").unwrap());
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .file_selection_generations
-        .insert(new_id("file").unwrap(), 1);
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid.file_contexts.insert(
-        format!("{}/missing.txt", repo.repository_id),
-        FileContext {
-            node_id: None,
-            branch_id: shared.clone(),
-            inherited_from: None,
-            selection_generation: 0,
-        },
-    );
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_trees
-        .get_mut(&first_tree)
-        .unwrap()
-        .file_contexts
-        .insert(
-            "missing.txt".into(),
-            FileContext {
-                node_id: None,
-                branch_id: shared.clone(),
-                inherited_from: None,
-                selection_generation: 0,
-            },
-        );
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_tree_selections
-        .insert(repo.repository_id.clone(), new_id("dtree").unwrap());
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_trees
-        .get_mut(&first_tree)
-        .unwrap()
-        .inherited_files
-        .insert(new_id("file").unwrap(), first.clone());
-    bad(&invalid);
-    let mut invalid = manifest.clone();
-    invalid
-        .directory_trees
-        .get_mut(&first_tree)
-        .unwrap()
-        .directory_refs
-        .insert(
-            new_id("entry").unwrap(),
-            DirectoryReference {
-                directory_branch_id: first.clone(),
-                tree_id: first_tree.clone(),
-            },
-        );
-    bad(&invalid);
-
-    let package = temp.path().join("package");
-    let report = engine
-        .export_history_package(&repo.history_tree_id, &package)
-        .unwrap();
-    assert_eq!(report.versions, 2);
-    assert_eq!(report.full_files, 2);
-    let restored_root = temp.path().join("restored");
-    let mut restored = initialize(&restored_root);
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    assert_eq!(
-        canonical_json(&restored.state.directory_branches).unwrap(),
-        canonical_json(&manifest.directory_branches).unwrap()
-    );
-    assert_eq!(
-        canonical_json(&restored.state.directory_trees).unwrap(),
-        canonical_json(&manifest.directory_trees).unwrap()
-    );
-    assert_eq!(
-        restored.state.directory_selections,
-        manifest.directory_selections
-    );
-    assert_eq!(
-        restored.state.directory_selection_generations,
-        manifest.directory_selection_generations
-    );
-    drop(restored);
-    let restored = Engine::open(&restored_root.join("state")).unwrap();
-    assert_eq!(
-        restored.state.directory_branches[&first].entries[0].version_id,
-        original.version_id
-    );
-    assert_eq!(
-        restored.state.directory_selections[&repo.repository_id],
-        second
-    );
-    assert_eq!(
-        restored.state.directory_selection_generations[&repo.repository_id],
-        42
-    );
-    let mut content = Vec::new();
-    restored
-        .open_content(&original.version_id)
-        .unwrap()
-        .file
-        .read_to_end(&mut content)
-        .unwrap();
-    assert_eq!(content, b"frozen parent");
-}
 
 #[test]
 fn package_preserves_inherited_references_without_inventing_files_or_versions() {
@@ -1774,10 +882,8 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("引用恢复").unwrap(),
-            "P01",
-            3,
+        .create_disk_root(
+                "P01",
             "alice",
             storage_contract::OperationId::generate().unwrap(),
         )
@@ -1785,6 +891,11 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
     save(&mut engine, &repo.main_branch_id, b"source bytes");
     let file = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
     let before_versions = engine.state.versions.len();
+    let body = engine.valid_replica(&file.version_id).unwrap().0.path().to_owned();
+    let inode = fs::metadata(&body).unwrap().ino();
+    let names = |directory: &Path| fs::read_dir(directory).unwrap()
+        .map(|entry| entry.unwrap().file_name()).collect::<BTreeSet<_>>();
+    let original_names = names(body.parent().unwrap());
     let result = engine
         .create_file_branch(
             &file.file_id,
@@ -1841,73 +952,18 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
         exported.manifest_hash
     );
 
-    let restored_root = temp.path().join("restored");
-    let mut restored = initialize(&restored_root);
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    let recovered_system = temp.path().join("recovered-system");
+    let restored = crate::tests::restore_registered_fixture(engine, &recovered_system);
     assert_eq!(
         restored.state.branches[&branch].pending_file_versions[&file.file_id],
         file.version_id
     );
     assert_eq!(restored.state.versions.len(), 1);
-    for disk in &restored.config.disks {
-        let stub = legacy_placeholder(
-            disk,
-            &repo.history_tree_id,
-            &file.file_id,
-            file.name(),
-            &branch,
-        );
-        assert!(!stub.parent().unwrap().exists());
-        let cache = stub
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("container.json");
-        let metadata: json_codec::Value = read_json(&cache).unwrap();
-        assert_eq!(
-            metadata["inherited_branches"][0]["version_id"],
-            file.version_id
-        );
-        assert!(metadata["inherited_branches"][0]["own_version_id"].is_null());
-        // The optional cache can be rebuilt without manufacturing files.
-        fs::remove_file(cache).unwrap();
-    }
+    assert_eq!(restored.valid_replica(&file.version_id).unwrap().0.path(), body);
+    assert_eq!(fs::metadata(&body).unwrap().ino(), inode);
+    assert_eq!(names(body.parent().unwrap()), original_names);
     drop(restored);
-    let mut restored = Engine::open(&restored_root.join("state")).unwrap();
-    for disk in &restored.config.disks {
-        let stub = legacy_placeholder(
-            disk,
-            &repo.history_tree_id,
-            &file.file_id,
-            file.name(),
-            &branch,
-        );
-        assert!(!stub.parent().unwrap().exists());
-        let cache = stub
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("container.json");
-        let metadata: json_codec::Value = read_json(&cache).unwrap();
-        assert_eq!(
-            metadata["inherited_branches"][0]["source_version_id"],
-            file.version_id
-        );
-        assert_eq!(
-            metadata["inherited_branches"][0]["version_id"],
-            file.version_id
-        );
-    }
+    let mut restored = Engine::open(&recovered_system).unwrap();
     assert_eq!(
         restored.list_tree(&branch).unwrap()[0].version_id,
         file.version_id
@@ -1930,20 +986,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
     assert_eq!(old[0].version_id, file.version_id);
     assert_eq!(old[0].size, file.size);
     assert_ne!(old[0].version_id, new.version_id);
-    for disk in &restored.config.disks {
-        assert!(
-            !legacy_placeholder(
-                disk,
-                &repo.history_tree_id,
-                &file.file_id,
-                file.name(),
-                &branch
-            )
-            .parent()
-            .unwrap()
-            .exists()
-        );
-    }
+    assert_eq!(fs::metadata(body).unwrap().ino(), inode);
 }
 
 #[test]
@@ -2032,95 +1075,25 @@ fn inherited_metadata_replays_after_decision_without_preparing_payloads_or_stubs
     }
 }
 #[test]
-fn split_package_restores_full_history_after_all_original_paths_are_removed() {
+fn ordinary_file_package_keeps_independently_verifiable_bytes_after_source_loss() {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let source = temp.path().join("original");
+    let source = temp.path().join("source");
     let mut engine = initialize(&source);
-    let repository = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("来源").unwrap(),
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let cut = save(&mut engine, &repository.main_branch_id, b"first full bytes");
-    save(
-        &mut engine,
-        &repository.main_branch_id,
-        b"second full bytes",
-    );
-    let plan = engine
-        .create_split_plan(&repository.history_tree_id, &cut, "alice")
-        .unwrap();
-    let split = engine
-        .commit_plan(
-            &plan.plan_id,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    let history = split.history_tree_id.unwrap();
+    let repository = engine.create_disk_root("P01", "alice", storage_contract::OperationId::generate().unwrap()).unwrap();
+    save(&mut engine, &repository.main_branch_id, b"first full bytes");
+    save(&mut engine, &repository.main_branch_id, b"second full bytes");
     let package = temp.path().join("history-package");
-    let exported = engine.export_history_package(&history, &package).unwrap();
+    let exported = engine.export_history_package(&repository.history_tree_id, &package).unwrap();
     assert_eq!(exported.full_files, 2);
     let manifest = fs::read_to_string(package.join("manifest.json")).unwrap();
     assert!(!manifest.contains("control_auth"));
     assert!(!manifest.contains("operation_principals"));
     drop(engine);
     fs::remove_dir_all(source).unwrap();
-    assert_eq!(
-        offline_check_history_package(&package)
-            .unwrap()
-            .manifest_hash,
-        exported.manifest_hash
-    );
-    let restored_root = temp.path().join("restored");
-    let mut restored = initialize(&restored_root);
-    let operation = storage_contract::OperationId::generate().unwrap();
-    let result = restored
-        .restore_history_package(&package, "P01", 3, "rescuer", operation)
-        .unwrap();
-    assert_eq!(
-        restored
-            .restore_history_package(&package, "P01", 3, "rescuer", operation)
-            .unwrap()
-            .sequence,
-        result.sequence
-    );
-    assert_eq!(restored.state.histories.len(), 1);
-    let graph = restored.graph(&history).unwrap();
-    assert_eq!(graph.commits.len(), 2);
-    let mut contents = Vec::new();
-    for commit in &graph.commits {
-        for entry in commit
-            .entries
-            .iter()
-            .filter(|e| e.kind == NamespaceEntryKind::File)
-        {
-            let mut content = restored.open_content(&entry.version_id).unwrap();
-            let mut bytes = Vec::new();
-            content.file.read_to_end(&mut bytes).unwrap();
-            contents.push(bytes);
-        }
-    }
-    contents.sort();
-    assert_eq!(
-        contents,
-        vec![b"first full bytes".to_vec(), b"second full bytes".to_vec()]
-    );
-    let repo = &restored.state.repositories[&graph.history.repository_id];
-    assert!(!repo.smb_enabled);
-    assert_eq!(repo.smb_binding_generation, 1);
-    assert!(result.sequence > exported.publication_sequence);
-    let branch = graph.history.main_branch_id.unwrap();
-    let next = save(&mut restored, &branch, b"third");
-    assert!(restored.state.commits[&next].sequence > result.sequence);
-    drop(restored);
-    let reopened = Engine::open(&restored_root.join("state")).unwrap();
-    assert_eq!(reopened.graph(&history).unwrap().commits.len(), 3);
+    let checked = offline_check_history_package(&package).unwrap();
+    assert_eq!(checked.manifest_hash, exported.manifest_hash);
+    assert_eq!(checked.full_files, 2);
 }
 /// Rebind a complete test package to its altered logical graph using a fresh
 /// internally consistent receipt chain. This isolates semantic validation
@@ -2240,15 +1213,13 @@ fn rebind_test_package(
 }
 
 #[test]
-fn tombstoned_storage_identity_is_validated_before_restore_decision() {
+fn tombstoned_storage_identity_is_validated_without_installing_or_rewriting_the_checked_package() {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut source = initialize(&temp.path().join("source"));
     let repo = source
-        .create_repository(
-            &storage_contract::RepositoryName::parse("retained identity").unwrap(),
-            "P01",
-            3,
+        .create_disk_root(
+                "P01",
             "alice",
             storage_contract::OperationId::generate().unwrap(),
         )
@@ -2295,31 +1266,16 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
                 proof.clone(),
                 &source.members(),
             );
-            let mut restored = initialize(&temp.path().join(format!("restored-{label}")));
-            let before = canonical_json(restored.state()).unwrap();
-            let journals = restored
-                .members()
-                .iter()
-                .map(|member| fs::read(log_path(member)).ok())
-                .collect::<Vec<_>>();
-            let next_slot = restored.next_slot;
+            let unchanged = export_audit_guard::disk_image(&package);
             if malformed == "none" {
                 manifest.validate().unwrap();
                 assert_eq!(
                     offline_check_history_package(&package).unwrap().tombstones,
                     1
                 );
-                restored
-                    .restore_history_package(
-                        &package,
-                        "P01",
-                        3,
-                        "alice",
-                        storage_contract::OperationId::generate().unwrap(),
-                    )
-                    .unwrap();
-                assert_eq!(restored.state.versions[&old], baseline.versions[&old]);
-                assert_eq!(restored.state.content_states[&old], status);
+                let (checked, _, _) = load_package(&package).unwrap();
+                assert_eq!(checked.versions[&old], baseline.versions[&old]);
+                assert_eq!(checked.content_states[&old], status);
             } else {
                 assert_eq!(
                     manifest.validate().unwrap_err().code(),
@@ -2329,26 +1285,8 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
                     offline_check_history_package(&package).unwrap_err().code(),
                     storage_contract::ErrorCode::HistoryPackageInvalid
                 );
-                assert_eq!(
-                    restored
-                        .restore_history_package(
-                            &package,
-                            "P01",
-                            3,
-                            "alice",
-                            storage_contract::OperationId::generate().unwrap()
-                        )
-                        .unwrap_err()
-                        .code(),
-                    storage_contract::ErrorCode::HistoryPackageInvalid
-                );
-                assert_eq!(canonical_json(restored.state()).unwrap(), before);
-                assert_eq!(restored.next_slot, next_slot);
-                assert!(!restored.blocked);
-                for (member, journal) in restored.members().iter().zip(journals) {
-                    assert_eq!(fs::read(log_path(member)).ok(), journal);
-                }
             }
+            assert_eq!(export_audit_guard::disk_image(&package), unchanged);
         }
     }
 }
@@ -2359,10 +1297,8 @@ fn package_preserves_purge_and_rejects_missing_bytes_or_unpublished_manifest() {
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("历史").unwrap(),
-            "P01",
-            3,
+        .create_disk_root(
+                "P01",
             "alice",
             storage_contract::OperationId::generate().unwrap(),
         )
@@ -2388,16 +1324,8 @@ fn package_preserves_purge_and_rejects_missing_bytes_or_unpublished_manifest() {
         .unwrap();
     assert_eq!(report.tombstones, 1);
     assert_eq!(report.full_files, 1);
-    let mut restored = initialize(&temp.path().join("restored"));
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    let recovered_system = temp.path().join("recovered-system");
+    let restored = crate::tests::restore_registered_fixture(engine, &recovered_system);
     assert_eq!(
         restored.open_content(&old).err().unwrap().code(),
         storage_contract::ErrorCode::ContentPurged
@@ -2433,23 +1361,13 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("metadata recovery").unwrap(),
-            "P01",
-            1,
+        .create_disk_root(
+                "P01",
             "alice",
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"original body");
-    engine
-        .initialize_directory_scope(
-            &repo.repository_id,
-            None,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
     let entry = engine
         .list_tree(&repo.main_branch_id)
         .unwrap()
@@ -2641,16 +1559,8 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
     engine
         .export_history_package(&repo.history_tree_id, &package)
         .unwrap();
-    let mut restored = initialize(&temp.path().join("restored"));
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            3,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    let recovered_system = temp.path().join("recovered-system");
+    let restored = crate::tests::restore_registered_fixture(engine, &recovered_system);
     assert_eq!(
         canonical_json(&restored.state.file_metadata_nodes).unwrap(),
         canonical_json(&manifest.file_metadata_nodes).unwrap()
@@ -2666,10 +1576,9 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
     assert_eq!(restored.state.file_notes, manifest.file_notes);
     assert_eq!(restored.state.version_notes, manifest.version_notes);
     assert_eq!(restored.state.branches[&left].name, "restored label");
-    // Portable graph labels are restored, not the source pool's idempotency
-    // receipts. The enclosing history.restore is the only local publication.
+    // Registered disk recovery retains the original native operations, not invented replay envelopes.
     for original in [&file_note, &version_note, &branch_label] {
-        assert!(!restored.state.operations.contains_key(&original.operation_id));
+        assert_eq!(&restored.state.operations[&original.operation_id], original);
     }
     assert_eq!(restored.state.file_path_notes, manifest.file_path_notes);
     assert_eq!(restored.state.file_backup_paths, manifest.file_backup_paths);
@@ -2685,13 +1594,13 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         assert!(offline_check(&disk.root).unwrap().issues.is_empty());
     }
     drop(restored);
-    let restored = Engine::open(&temp.path().join("restored/state")).unwrap();
+    let restored = Engine::open(&recovered_system).unwrap();
     assert_eq!(restored.file_branch_head(&left).unwrap(), merged);
     assert_eq!(restored.state.file_notes, manifest.file_notes);
     assert_eq!(restored.state.version_notes, manifest.version_notes);
     assert_eq!(restored.state.branches[&left].name, "restored label");
     for original in [&file_note, &version_note, &branch_label] {
-        assert!(!restored.state.operations.contains_key(&original.operation_id));
+        assert_eq!(&restored.state.operations[&original.operation_id], original);
     }
 
 }
@@ -2975,15 +1884,13 @@ fn namespace_deletion_facts_validate_without_snapshot_or_content_dependencies() 
 }
 
 #[test]
-fn namespace_deletions_survive_export_restore_and_replay_without_operation_records() {
+fn namespace_deletions_survive_export_restore_and_original_native_replay() {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(temp.path());
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("deleted namespace").unwrap(),
-            "P01",
-            1,
+        .create_disk_root(
+                "P01",
             "alice",
             storage_contract::OperationId::generate().unwrap(),
         )
@@ -3040,29 +1947,12 @@ fn namespace_deletions_survive_export_restore_and_replay_without_operation_recor
         .export_history_package(&repo.history_tree_id, &package)
         .unwrap();
     offline_check_history_package(&package).unwrap();
-    let target = tempfile::tempdir().unwrap();
-    let mut restored = initialize(target.path());
-    restored
-        .restore_history_package(
-            &package,
-            "P01",
-            1,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
-    assert_eq!(
-        restored.state().commits[&commit_id]
-            .namespace_deletions
-            .as_ref(),
-        Some(&facts)
-    );
-    assert!(
-        !restored
-            .state()
-            .operations
-            .contains_key(&engine.state().commits[&commit_id].operation_id)
-    );
+    let (frozen, _, _) = load_package(&package).unwrap();
+    assert_eq!(frozen.commits[&commit_id].namespace_deletions.as_ref(), Some(&facts));
+    let original = engine.state().commits[&commit_id].operation_id;
+    let restored = crate::tests::restore_registered_fixture(engine, &temp.path().join("recovered-system"));
+    assert_eq!(restored.state().commits[&commit_id].namespace_deletions.as_ref(), Some(&facts));
+    assert_eq!(restored.state().operations[&original].operation_id, original);
     assert_eq!(restored.state().versions.len(), report.versions);
 }
 
@@ -3384,10 +2274,8 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("merge sources").unwrap(),
-            "P01",
-            1,
+        .create_disk_root(
+                "P01",
             "alice",
             storage_contract::OperationId::generate().unwrap(),
         )
@@ -3512,19 +2400,9 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
         let error = offline_check_history_package(&package).unwrap_err();
         assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
         assert_eq!(error.message(), expected);
-        let mut destination = initialize(&temp.path().join(format!("restore-{corruption}")));
-        let before = canonical_json(destination.state()).unwrap();
-        let error = destination
-            .restore_history_package(
-                &package,
-                "P01",
-                1,
-                "alice",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap_err();
-        assert_eq!(error.message(), expected);
-        assert_eq!(canonical_json(destination.state()).unwrap(), before);
+        let image = export_audit_guard::disk_image(&package);
+        assert!(load_package(&package).is_err());
+        assert_eq!(image, export_audit_guard::disk_image(&package));
     }
 }
 
@@ -3724,10 +2602,8 @@ fn file_branch_kind_requires_a_stable_file_binding_at_external_admission() {
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
-        .create_repository(
-            &storage_contract::RepositoryName::parse("branch binding").unwrap(),
-            "P01",
-            1,
+        .create_disk_root(
+                "P01",
             "alice",
             storage_contract::OperationId::generate().unwrap(),
         )
@@ -3797,20 +2673,9 @@ fn file_branch_kind_requires_a_stable_file_binding_at_external_admission() {
     let error = offline_check_history_package(&package).unwrap_err();
     assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
     assert_eq!(error.message(), expected);
-    let mut destination = initialize(&temp.path().join("destination"));
-    let before = canonical_json(destination.state()).unwrap();
-    let error = destination
-        .restore_history_package(
-            &package,
-            "P01",
-            1,
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap_err();
-    assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
-    assert_eq!(error.message(), expected);
-    assert_eq!(canonical_json(destination.state()).unwrap(), before);
+    let image = export_audit_guard::disk_image(&package);
+    assert!(load_package(&package).is_err());
+    assert_eq!(image, export_audit_guard::disk_image(&package));
 }
 
 #[test]

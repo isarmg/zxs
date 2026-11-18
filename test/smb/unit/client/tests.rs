@@ -8,8 +8,11 @@ mod write_sequence;
 
 #[test]
 fn module_client_requires_authenticated_account_and_durable_reservations() {
+    let mut extra = REQUIRED_CAPABILITIES.to_vec();
+    extra.push("unknown-entry-projection");
     for response in [
         json_codec::json!({"protocol":PROTOCOL,"capabilities":REQUIRED_CAPABILITIES}),
+        json_codec::json!({"protocol":PROTOCOL,"capabilities":extra}),
         json_codec::json!({"protocol":PROTOCOL,"capabilities":[crate::protocol::WRITE_RESERVATION_CAPABILITY]}),
         json_codec::json!({"protocol":PROTOCOL,"capabilities":[crate::protocol::AUTHENTICATED_ACCOUNT_CAPABILITY]}),
         // A peer that still announces every write with Dirty is a different contract.

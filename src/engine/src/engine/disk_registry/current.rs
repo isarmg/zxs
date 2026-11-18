@@ -1,4 +1,4 @@
-//! Owned current namespaces. Immutable Commit/DirectoryTree records remain history.
+//! Owned ordinary namespaces. Immutable FILE and registered-root commits remain history.
 //!
 //! Preparation is not activation. Installation consumes the lifecycle verifier's
 //! durable publication proof, after the exact D3 State/snapshot has been installed.
@@ -15,7 +15,6 @@ mod batch;
 pub(crate) use batch::CurrentBatchScope;
 mod branch_archives;
 mod directory_branches;
-mod directory_metadata;
 mod directory_staging;
 mod file_branches;
 mod file_metadata;
@@ -154,18 +153,13 @@ impl CurrentNamespaces {
 
     pub(in crate::engine) fn matches_source(&self, state: &State) -> bool {
         self.branches.len() == state.branches.len()
-            && self.directories.len() == state.directory_branches.len()
+            && self.directories.is_empty()
+            && state.directory_branches.is_empty()
             && self.branches.iter().all(|(id, scope)| {
                 state
                     .branches
                     .get(id)
                     .is_some_and(|branch| branch.head_commit_id == scope.head)
-            })
-            && self.directories.iter().all(|(id, scope)| {
-                state
-                    .directory_branches
-                    .get(id)
-                    .is_some_and(|branch| branch.head_tree_id == scope.head)
             })
     }
 
@@ -240,6 +234,7 @@ impl CurrentNamespaces {
     }
 
     pub(crate) fn require_operation(&self, kind: &str) -> Result<()> {
+        crate::ordinary_authority::kind(kind)?;
         // Imports without an exact current occurrence proof remain fenced.
         // Admitted planners must verify their own projected sources and
         // reference closure before a resulting state can be published.
@@ -251,7 +246,6 @@ impl CurrentNamespaces {
             || kind == "directory.import.stop"
             || kind == "file.delete"
             || crate::file_deletion::batch::is_kind(kind)
-            || crate::file_deletion::directory::is_kind(kind)
             || kind == "file.delete.undo"
             || kind == "file.namespace"
             || recursive_follow::is_kind(kind)
@@ -264,13 +258,6 @@ impl CurrentNamespaces {
             || kind == "file.default.set"
             || kind == "file.branches.merge"
             || kind == "file.history.merge"
-            || kind == "directory.scope.initialize"
-            || kind == "directory.namespace.batch"
-            || kind == "directory.branch.rename"
-            || kind == "directory.branches.create"
-            || kind == "directory.branches.select"
-            || kind == "directory.default.select"
-            || kind == "directory.default.set"
             || kind == "placement-rule.update"
             || kind == "placement.configure"
             || kind == "protection-policy.update"
@@ -571,32 +558,12 @@ impl CurrentNamespaces {
 
     /// Derived only before a real publication. Ordinary publication installs the
     /// result atomically with its State; failure leaves the previous view intact.
-    /// Projection only. The normal publication and a complete object-move
-    /// transition have different admission proofs, but preserve the same
-    /// directory registration, source baseline and hidden-path semantics.
-    fn project_directory_scope(
-        &self,
-        branch: &DirectoryBranch,
-        owner: &CurrentScope,
-    ) -> Arc<CurrentScope> {
-        let old = self.directories.get(&branch.directory_branch_id);
-        Arc::new(CurrentScope {
-            source_head: old
-                .map(|scope| scope.source_head.clone())
-                .unwrap_or_else(|| branch.head_tree_id.clone()),
-            source_entries: old
-                .map(|scope| Arc::clone(&scope.source_entries))
-                .unwrap_or_else(|| Arc::new(branch.entries.clone())),
-            head: branch.head_tree_id.clone(),
-            entries: Arc::new(branch.entries.clone()),
-            writable: old.map(|scope| scope.writable).unwrap_or(owner.writable),
-            hidden_paths: old
-                .map(|scope| scope.hidden_paths.clone())
-                .unwrap_or_default(),
-        })
-    }
-
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
+        crate::ordinary_authority::tables(previous)?;
+        crate::ordinary_authority::tables(next)?;
+        if !self.directories.is_empty() {
+            return Err(stale());
+        }
         workspace::verify_admissions(self, previous, next)?;
         let published = self.advance_namespaces(previous, next)?;
         path_changes::verify(previous, next, Some(self), Some(&published))?;
@@ -612,9 +579,6 @@ impl CurrentNamespaces {
         }
         if let Some(view) = self.advance_file_restore(previous, next)? {
             return Ok(view);
-        }
-        if crate::file_deletion::directory::verify_publication(previous, next, Some(self))? {
-            return Ok(self.clone());
         }
         if let Some(view) = self.advance_history_copy(previous, next)? {
             return Ok(view);
@@ -632,15 +596,11 @@ impl CurrentNamespaces {
         }
         self.verify_merge_links(previous, next)?;
         self.verify_merge_metadata(previous, next)?;
-        let historical_fork = self.verify_directory_commits(previous, next)?;
         let mut view = self.clone();
         view.recursive_policies =
             self.advance_recursive_index(previous, next, backup, follow.as_ref())?;
         let branch_changes = next.branches.changes_since(&previous.branches);
-        let directory_changes = next
-            .directory_branches
-            .changes_since(&previous.directory_branches);
-        if branch_changes.is_empty() && directory_changes.is_empty() {
+        if branch_changes.is_empty() {
             return Ok(view);
         }
         let mut changed_branches: Vec<_> = match &branch_changes {
@@ -653,7 +613,6 @@ impl CurrentNamespaces {
         // File-branch synchronization may only borrow an owning namespace that
         // this same publication has already passed through its identity fence.
         changed_branches.sort_by_key(|(_, branch)| branch.file_id.is_some());
-        let changed_directories = changed_directory_branches(previous, next);
         let history_sources = self.history_merge_sources(previous, next)?;
         for &(id, branch) in &changed_branches {
             if previous
@@ -680,12 +639,7 @@ impl CurrentNamespaces {
                     None => self.new_file_branch_source(previous, next, branch, commit)?,
                 },
             };
-            let selection_source =
-                self.directory_selection_source(previous, next, branch, commit)?;
-            let validation_scope = selection_source
-                .as_ref()
-                .or(old.map(Arc::as_ref))
-                .or(source);
+            let validation_scope = old.map(Arc::as_ref).or(source);
             let mut changes = VerifiedEntryChanges::between_states(
                 validation_scope
                     .map(|scope| scope.entries.as_slice())
@@ -739,44 +693,6 @@ impl CurrentNamespaces {
                 }),
             );
         }
-        for (id, branch) in changed_directories {
-            if let Some(before) = previous.directory_branches.get(id)
-                && (before == branch
-                    || self.directory_label_preserves_entries(previous, next, before, branch)?)
-            {
-                continue;
-            }
-            let old = self.directories.get(id);
-            let mut changes = VerifiedEntryChanges::between_states(
-                old.map(|scope| scope.entries.as_slice()).unwrap_or(&[]),
-                &branch.entries,
-                previous,
-                next,
-            );
-            let repository = next
-                .repositories
-                .get(&branch.repository_id)
-                .ok_or_else(stale)?;
-            let owner = view
-                .branches
-                .get(&repository.main_branch_id)
-                .ok_or_else(stale)?;
-            changes.synchronize_directory(next, branch, &owner.entries)?;
-            let fork_source = match historical_fork
-                .as_ref()
-                .and_then(|fork| fork.source(branch, owner))
-            {
-                Some(source) => Some(source),
-                None => self.directory_fork_source(previous, next, branch, owner)?,
-            };
-            self.validate_entry_changes(
-                fork_source.as_ref().or(old.map(Arc::as_ref)),
-                &branch.entries,
-                &changes,
-            )?;
-            Arc::make_mut(&mut view.directories)
-                .insert(id.clone(), self.project_directory_scope(branch, owner));
-        }
         for (id, branch) in changed_branches {
             if previous
                 .branches
@@ -797,22 +713,6 @@ impl CurrentNamespaces {
             }
         }
         Ok(view)
-    }
-}
-
-fn changed_directory_branches<'a>(
-    previous: &State,
-    next: &'a State,
-) -> Vec<(&'a String, &'a DirectoryBranch)> {
-    match next
-        .directory_branches
-        .changes_since(&previous.directory_branches)
-    {
-        storage_contract::MapChanges::Keys(keys) => keys
-            .iter()
-            .filter_map(|id| next.directory_branches.get_key_value(id))
-            .collect(),
-        storage_contract::MapChanges::All => next.directory_branches.iter().collect(),
     }
 }
 

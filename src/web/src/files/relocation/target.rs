@@ -14,18 +14,22 @@ pub(super) fn input_error(source: storage_contract::Error) -> api::Error {
 }
 
 pub(super) async fn review(
-    state: RwSignal<State>,
-    editor: Editor,
     read: &ReadTarget,
     destination: name_policy::PortablePath,
-) -> Result<Option<Review>, api::Error> {
-    let basis = read.basis.clone();
-    let slot = read.slot.clone();
-    let (parent, name) = destination
-        .as_str()
-        .rsplit_once('/')
-        .unwrap_or(("", destination.as_str()));
-    let page = folder_page(&slot, parent, 1, None, read.cancellation.clone()).await?;
+) -> Result<Review, api::Error> {
+    let parent = destination.as_str().rsplit_once('/').map_or("", |(p, _)| p);
+    let page = folder_page(&read.slot, parent, 1, None, read.cancellation.clone()).await?;
+    bind_destination(read.basis.clone(), read.slot.clone(), destination, page)
+}
+
+// This is an original move, not an existence probe or a second namespace lookup.
+// The caller rechecks the same session, source occurrence, slot and review generation.
+fn bind_destination(
+    basis: Basis,
+    slot: String,
+    destination: name_policy::PortablePath,
+    page: PageParts,
+) -> Result<Review, api::Error> {
     if !page.writable {
         return Err(api::error(
             storage_contract::ErrorCode::InvalidRequest,
@@ -36,24 +40,16 @@ pub(super) async fn review(
         ));
     }
     let context = page.context;
-    if parent.is_empty() {
-        if !read.current(state, editor) {
-            return Ok(None);
-        }
-        // A completed request drops and aborts its controller. Continue this
-        // same review generation with a new controller owned by the editor.
-        let cancellation = api::ReadCancellation::new()?;
-        editor.cancellation.set(Some(cancellation.clone()));
-        let target = folder_page(&slot, destination.as_str(), 1, None, cancellation).await;
-        check_root_target(context.as_ref(), target)?;
+    let (parent, name) = destination.as_str().rsplit_once('/').unwrap_or(("", destination.as_str()));
+    let admitted_parent = context.as_ref().map_or("", |context| context.repository_path());
+    if name_policy::path_key(parent) != name_policy::path_key(admitted_parent) {
+        return Err(api::error(
+            storage_contract::ErrorCode::InvalidDirectoryPage,
+            t("目标父目录与已读取的目录不一致。", "The destination parent differs from the admitted folder."),
+        ));
     }
-    let target_path = name_policy::PortablePath::parse(&super::super::model::join_path(
-        context
-            .as_ref()
-            .map_or("", |context| context.repository_path()),
-        name,
-    ))
-    .map_err(|source| input_error(source.into()))?;
+    let target_path = name_policy::PortablePath::parse(&super::super::model::join_path(admitted_parent, name))
+        .map_err(|source| input_error(source.into()))?;
     if basis.slot == slot
         && context
             .as_ref()
@@ -80,39 +76,11 @@ pub(super) async fn review(
         replace: false,
         target_entry_id: None,
     };
-    Ok(Some(Review {
+    Ok(Review {
         basis,
         destination: destination.as_str().to_owned(),
         request,
-    }))
-}
-
-fn check_root_target(
-    parent: Option<&crate::files::page::Context>,
-    target: Result<PageParts, api::Error>,
-) -> Result<(), api::Error> {
-    // Named repositories occupy root display names outside the root namespace.
-    match target {
-        Ok(target)
-            if target.context.as_ref().is_some_and(|target| {
-                target.repository_path().is_empty()
-                    && parent.is_none_or(|parent| parent.repository_id() != target.repository_id())
-            }) =>
-        {
-            Err(api::error(
-                storage_contract::ErrorCode::NameCollision,
-                t(
-                    "目标名称已被命名仓库占用，请选择仓库内的位置或其他名称。",
-                    "This name belongs to a named repository. Choose a location inside it or another name.",
-                ),
-            ))
-        }
-        Ok(_) => Ok(()),
-        // A file also produces DirectoryNotFound. Ordinary existence and
-        // replacement admission remain owned by the original move operation.
-        Err(error) if error.code == storage_contract::ErrorCode::DirectoryNotFound => Ok(()),
-        Err(error) => Err(error),
-    }
+    })
 }
 
 pub(super) async fn folder_page(
@@ -130,7 +98,7 @@ pub(super) async fn folder_page(
                 .map_err(|source| input_error(source.into()))?,
         )
     };
-    let key = DirectoryKey::destination("", parent_path.as_ref());
+    let key = DirectoryKey::destination(parent_path.as_ref());
     let mut endpoint = format!(
         "/api/file-manager/disks/{}/entries?path={}&limit={limit}",
         api::segment(slot),
@@ -147,7 +115,7 @@ pub(super) async fn folder_page(
         None,
     )?
     .into_parts();
-    if page.preview || (page.context.is_none() && !parent.is_empty()) {
+    if page.context.is_none() && !parent.is_empty() {
         return Err(api::error(
             storage_contract::ErrorCode::InvalidRequest,
             t(

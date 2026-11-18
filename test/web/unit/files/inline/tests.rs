@@ -41,8 +41,6 @@ fn first_creation_guidance_retires_only_after_the_refreshed_repository_context()
     model.repository_id = "repo_00000000000000000000000000000001".into();
     model.total_entries = 1;
     assert!(!needs_first_folder(&model));
-    assert!(!model.directory_branches_supported);
-    assert!(model.directory_branches.is_empty());
 
     // An existing but empty repository still offers explicit initialization,
     // rather than asking for a needless extra folder.
@@ -481,7 +479,6 @@ fn queued_edits_cannot_submit_after_session_navigation_alias_or_branch_changes()
             "slot",
             "directory",
             "repository",
-            "directory_branch",
             "path",
             "branch",
             "version",
@@ -501,7 +498,6 @@ fn queued_edits_cannot_submit_after_session_navigation_alias_or_branch_changes()
                 "slot" => s.files.slot = "other".into(),
                 "directory" => s.files.directory = "other".into(),
                 "repository" => s.files.repository_id = "other".into(),
-                "directory_branch" => s.files.directory_branches = vec![crate::files::test_entries::branch(json_codec::json!({"current":true,"directory_branch_id":"other"}))],
                 "path" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"path":"docs/b"})),
                 "branch" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"selected_branch_id":"other"})),
                 "version" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"version_id":"v2"})),

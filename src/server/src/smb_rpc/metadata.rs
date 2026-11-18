@@ -36,11 +36,6 @@ impl Session {
                 }
             }
             SmbRelativePath::Entry(path) => {
-                if let Some(location) = self.shared.backend.smb_worktree_locate(
-                    &self.identity, &self.branch, path,
-                )? {
-                    return self.stat_worktree(location);
-                }
                 if let Some(native) = self.shared.backend.smb_native_stat(
                     &self.identity, &self.branch, path,
                 )? {
@@ -85,9 +80,6 @@ impl Session {
     pub(super) fn handle_metadata(&self, opened: &Handle) -> Result<AuthorizedMetadata, ApiError> {
         let mtime = match opened {
             Handle::Native(opened) => opened.file.mtime(),
-            Handle::WorktreeWrite(_, _) => FileMtime::Unpublished {},
-            Handle::ReadWorktree(_, file) => file.mtime,
-            Handle::WorktreeDirectory(_) => FileMtime::NotFile {},
             Handle::Read(_, version) => self.version_mtime(version)?,
             Handle::ReadDraft(_, file) => {
                 self.version_mtime(&file.base.version_id().to_string())?

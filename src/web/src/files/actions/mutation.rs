@@ -193,7 +193,6 @@ pub(crate) fn set_default_file_branch(state: RwSignal<State>) {
     let request = state.with_untracked(|s| {
         if !s.files.file_history.ready()
             || s.files.history_loading
-            || s.files.directory_preview.is_some()
         {
             return None;
         }

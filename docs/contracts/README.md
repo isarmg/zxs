@@ -34,12 +34,12 @@
 
 ## 文件与覆盖范围
 
-`HistoricalDirectoryBranchSource` 将选定历史用户提交的 `tree_id` 与现有七项当前审阅 `current` 分开绑定。新增历史建分支入口沿独立操作 kind 记录完整来源，旧当前来源请求编码和失效冲突保持。固定向量验证严格字段与十进制代数；真实同目录归属、用户提交 marker、Current 来源、权限和永久重放由 Core/HTTP 行为测试覆盖。
+ZXS 的普通目录只组织 FILE。目录列表可分页并精确选择条目，不提供目录仓库、目录分支、工作区暂存或批量组合操作。FILE 仍可独立建分支、选择版本并查看历史。
 
 | 文件 | 当前覆盖 | 尚未证明 |
 | --- | --- | --- |
 | [core.schema.json](core.schema.json) | UINT64 精确上界、实体 ID、Branch / Commit 待写入映射、泛型 Entry 及文件分支投影、唯一管理员认证请求/响应、版本描述、内容提交请求、操作结果、完整上传状态、内容保存 PUBLICATION 字段、当前有界快照、分页历史根、共享索引/引用/叶页及路径证明形状 | 完整命名规则、父边和来源闭合、授权、实际 I/O、Tree/日志完整格式及所有管理操作 |
-| [openapi.json](openapi.json) | 登录/当前会话/注销/改密、保存、结果查询、版本/校验/内容/上传状态、文件管理（含零正文分支创建、冻结父版本与自有版本分开的继承投影、目录分页与精确选择、目录批量分支准备查询和128字节单行备注）及管理员系统状态、真实功耗和监测历史 | bootstrap 与凭据恢复、工作区创建/上传写接口、事件及其余尚未建模的管理接口 |
+| [openapi.json](openapi.json) | 登录/当前会话/注销/改密、保存、结果查询、版本/校验/内容/上传状态、文件管理（含零正文分支创建、冻结父版本与自有版本分开的继承投影、目录分页与精确选择、128字节单行备注）及管理员系统状态、真实功耗和监测历史 | bootstrap 与凭据恢复、工作区创建/上传写接口、事件及其余尚未建模的管理接口 |
 | [config-constraints.schema.json](config-constraints.schema.json) | 第 21 章关键常量、分支冻结引用/首写物化、当前 JSON/CLI 资源额度及明确标注的分页/告警设计目标投影 | 当前进程 JSON Config、完整部署配置、目录身份、拓扑和启动状态验证 |
 | [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、快照40映射与历史根33映射、必需标识、共享引用种类/深度/未知字段及旧格式拒绝、路径证明节点数边界、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
 | [contract-check](../tools/contract-check.md) | Rust 实现的 schema/OpenAPI 有效性、两者定义一致性、固定向量、配置投影、文档本地链接和 JSON/TOML 语法校验 | 模型检查、平台测试、网络端点行为和性能 |
@@ -96,11 +96,10 @@ Rust 依赖源码已包含在仓库中，首次构建也使用唯一根锁文件
 
 分支创建只登记元数据与冻结来源引用，`pending_file_versions` 的键/值分别为 FileId/VersionId；Commit 逐快照保留此状态，当前分支首写不会改变旧快照。泛型 Entry 及文件管理的 version_id 都指可见真实版本；继承时为冻结父 ID，own_version_id 为 null，首次写入后才为自有 ID。新增校验同时拒绝 pending 来源逃逸文件作用域、快照来源与条目不符，以及可见父内容被误标为已拥有内容；Branch / Commit 的空映射采用当前稀疏编码省略序列化，并核对规范字节与摘要；这不接受其他旧格式字段。
 
-目录分支以 `DirectoryBranch`、`DirectoryTree` 和 `DirectoryReference` 区分命名身份、不可变组成及子目录精确引用；`DirectoryNamespaceBatch` 每项要求源分支、依据子树与稳定条目 ID，非删除操作还要求明确目标分支及依据子树。登记目录分支不提前创建文件分支或占位文件。路径、跨分支冲突与实际归属由核心统一校验，schema 合法不等于业务可发布。
 
 `FilePathNode` 描述重命名的路径节点并引用现有正文，`HistoryNodeSummary` 把内容、路径与元数据节点投影到有界 `HistoryWindowPage`，父边预览与完整关系页分开。`FileNodeId` 允许 `ver_`、`fnode_` 与 `fmeta_`，正文读取仍只接受真实 `VersionId`。`FileContext.node_id` 和 `Branch.file_node_id` 冻结具体图节点，创建分支可以传 `source_node_id` 保留此来源。节点备注独立于正文版本备注保存，使用同一128 UTF-8字节、无控制字符规则。两个历史 GET 均默认首页；准确根、cursor、外置字段片段及各辅助集合不保留旧整包兼容出口。
 
-`FileMetadataNode` 保存不可变标签/合并子节点，`FileBranchMerge` 独立保存全部合并来源和安全图边。文件合并请求要求明确确认、结果归属及每个参与head，标签批量请求固定源节点与branch head，scope备份配置同时固定稳定身份和自身代数。标签的16项/128字节限制、无控制字符和全部预检由共享Rust验证及业务事务执行；schema检查不代替真实发布。目录分支合并待用户确认，暂不实现，能力为false。
+`FileMetadataNode` 保存不可变标签/合并子节点，`FileBranchMerge` 独立保存全部合并来源和安全图边。文件合并请求要求明确确认、结果归属及每个参与head，标签批量请求固定源节点与branch head，scope备份配置同时固定稳定身份和自身代数。标签的16项/128字节限制、无控制字符和全部预检由共享Rust验证及业务事务执行；schema检查不代替真实发布。
 
 `Snapshot`、`PagedHistoryRoot`、`MetadataIndex`、`MetadataReference` 和 `MetadataLeaf` 描述本次有界根实验源码的存储形状。两个根都必须携带 `format: "container-current-name-radix-map-roots"`，这是布局语义标识，不是项目发行版本号；分别要求准确40个 State 映射和33个历史映射，空映射也有引用。快照的三个代数使用 UInt64 十进制字符串，events 是独立映射根，control_auth 引用独立 `state-control-auth` 对象；该对象仍按原 `Option<Value>` 编码（包括 null）。历史根内仓库/历史身份使用 `HistoryRepository`、`HistoryIdentity`。`Candidate.history_roots` 绑定 history ID→manifest hash 的映射根，替代旧 `history_manifest_hashes`；当前 Candidate 自身没有 format 字段。原 `FileFeatureStateFields` 仍只是 State / 逻辑 HistoryManifest 的局部投影。这组存储组件在 OpenAPI 中保持镜像，HTTP 操作结果与诊断投影另按上文契约描述。
 
@@ -167,18 +166,6 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 [SMART 查询生命周期边界](../validation/smart-query-lifetime.md)。健康观察不改变原设备权限、
 存储准入或 systemd 沙箱；真实设备验收必须由操作者另行授权。
 
-## 显式目录仓库
-
-创建目录分支的磁盘 HTTP 请求必须携带 `DirectoryBranchCreateSource`，固定仓库、目录、当前分支、工作树、已提交 HEAD、index 代数与外层 namespace HEAD；仅省略 path 或空串表示磁盘根，不省略来源。代数使用非零规范 u64 十进制字符串，根目录 ID 必须等于仓库 ID。schema 描述字段，Rust 共享验证补充身份关系，首次规划复核当前状态。旧 path/name 请求拒绝且不会惰性建立磁盘根。
-
-同一 operation_id 的原请求先匹配永久摘要与收据，再决定是否需要规划；来源变化后仍可重放已经发布的原结果，不能为重试改用新来源。Web 在首次发送前保存完整创建或选择请求，恢复保留原 HTTP method、目标、来源、期望 HEAD 及操作 ID；本地恢复记录不证明发布成功。默认分支选择仍使用稳定分支 ID 与双 HEAD 的 PUT，不恢复按名 directory-select。新增固定向量和回归源码尚须由统一 GitHub CI 执行。
-
-`DirectoryGitRepository` 保存各目录仓库独立的 HEAD、index 与明确孩子引用。必需 `main_branch_id` 固定初始化时的目录分支身份，布局基准读取该分支最新已保存工作组合（包括未提交内容），不随 current 或显示名称改变；缺失字段拒绝，不隐式补齐。Snapshot 与 PagedHistoryRoot 的必需映射各增加 `directory_git_repositories`，结合文件删除生命周期表后，当前总数分别为40与33（另两个物理身份映射只属于 Snapshot）；缺失此映射的根拒绝，不补空表迁移旧格式。原证明仍绑定完整根，这些 schema 不能证明跨源完整历史或引用闭包。
-
-`DirectoryGitStatus` 和孩子状态的 nullable 字段必须显式出现，`unstaged` 为必填布尔值且不补旧响应默认值；目录初始化不创建提交，读取不初始化。暂存及提交请求必须携带规范十进制字符串 index 代数，未知字段、数值或遗漏代数拒绝。固定正反向量由 schema 及 Rust DTO 回归共同验证。HTTP 公开四个目录 Git 接口，旧 `/directory-scopes` 和按名 `/directory-select` 入口移除，目录选择改用稳定分支 ID 及双 HEAD CAS；父提交只采用固定暂存快照和明确暂存的孩子 HEAD，不递归提交，也不自动加入暂存后保存的工作内容。状态 GET 的完整编码上限为1MiB，超过失败而不截断。
-
-`DirectoryNamespaceBatch.kind = separate` 每次只接受一对位置，必须有 target。source 明确保留旧身份及历史，已存在的 target 从其自身准确保存版本建立新身份，首版本不复制历史。两个稳定 main 的同一身份、自有路径、基线及正文可用性由核心事务验证，schema 不猜测原件归属。操作沿用目录批发布及永久幂等入口；这是显式身份分离，不表示新的实体布局已经落盘。
-
 ## 文件软删除生命周期候选
 
 `FileDeletionNode` 是独立无正文记录，保存所有保留文件分支自身 HEAD 及去重父边；不能添加 `version_id` 伪装正文节点。State 和 HistoryManifest 必需 `file_deletions` 表，Snapshot/PagedHistoryRoot 当前分别为40/33个必需映射根。缺表拒绝，不兼容或迁移旧池。四条新 schema 向量覆盖合法无正文节点、空删除表、伪造正文字段和缺表拒绝；具体产品接线边界见[生命周期说明](../design/file-soft-deletion.md)。
@@ -243,7 +230,7 @@ FILE 父引用、Snapshot 及 SYSTEM family 41 必须出自同一 Candidate 决�
 `PoolConfiguration` 对应真正 Config JSON，`PoolRootBinding` 描述同锁反馈的五区实体，
 `PoolDiskSeal` 描述 Initial／已准入 generation 两种当前 seal 的规范输出形状。
 Config、固定 Genesis 中的 Config 和实际 held disk seal 都要求唯一字符串
-`pool_semantic_format = "manual-directory-v1"`。缺失、null、未知值和对象别名拒绝，
+`pool_semantic_format = "file-containers"`。缺失、null、未知值和对象别名拒绝，
 不补值、不迁移、不让当前名字或路径代替原登记。此标识不由 HTTP/CLI 客户端选择；
 真实初始化构造器固定它。已有明确模式也不因读取而改变。
 
