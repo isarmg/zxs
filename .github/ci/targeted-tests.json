@@ -5237,7 +5237,7 @@
       ]
     },
     "standalone-demo": {
-      "reason": "Exercise standalone browser simulation state transitions without building or importing ZXS product code.",
+      "reason": "Exercise the independent four-pane FILE model: ordinary folders, held drafts and names, independent SMB copies and an opaque .zxs FILE preserved through recursive backups. Node loads the actual embedded model. No product build, live browser, physical disk or Samba claim.",
       "python_tests": [
         "test_zxs_demo"
       ],
