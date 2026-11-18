@@ -5,6 +5,7 @@ mod context;
 pub(crate) mod install;
 mod model;
 mod render;
+pub(crate) mod replacement;
 pub(crate) mod samba_password;
 
 use crate::{
@@ -52,6 +53,9 @@ pub(crate) enum Command {
     },
     /// Preview an inactive systemd/Samba bundle; does not inspect or stop services.
     Preview(Options),
+    /// Read only existing fixed systemd/optional Samba files; excludes initial
+    /// installation, Web changes, activation, replacement and undo.
+    ReplacementPreview(Options),
     /// Preview fixed systemd/Samba file installation, not service activation.
     InstallPreview(Options),
     /// Recover the exact recorded configuration request without re-entering settings.
@@ -243,6 +247,7 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
 }
 pub(crate) fn run(command: Command) -> Result<Option<activation::Handoff>> {
     match command {
+        Command::ReplacementPreview(options) => replacement::preview(options.input()?),
         Command::ActivationPreview {
             options,
             enable_on_boot,

@@ -1,7 +1,7 @@
 //! Descriptor-anchored CLI files. Output parents may be public (for example
 //! /tmp); files are owner-only and single-linked. Existing outputs are never
 //! clobbered; draft replacements require a held transaction.
-mod configuration_files;
+pub(crate) mod configuration_files;
 mod host_root;
 mod program_repair;
 mod rescue_image;

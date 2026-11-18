@@ -31,7 +31,7 @@ Disk-databases reads selected local SQLite inventories without SYSTEM; local con
 Object-database exports object-local metadata and reconstructs standalone rescue SQLite from that archive; it never installs an active database or grants authority.
 With no command, start the root-only, unauthenticated maintenance Web console on 0.0.0.0:9040. Use a trusted isolated network and exit after use.
 The matching release helper can install its embedded ZXS executable at /usr/local/bin/zxs and explicitly install its sealed same-source VFS at the fixed Debian Samba path, without overwriting different bytes or starting services.
-Every helper operation holds the /zxs lifetime lease until exit. A root launch prepares the missing lease directory without initializing accounts or storage.
+Every helper operation holds the /zxs lifetime lease until exit. A root launch normally prepares the missing lease directory without initializing accounts or storage; read-only current-configuration replacement preview requires the original lease to exist.
 A missing nonlogin Unix service account and same-name primary group can be explicitly prepared through the fixed systemd-sysusers program. Existing accounts are never modified. A selected non-root local account can receive an empty private data layout; this creates no administrator, database or disk.
 Systemd/Samba configuration can be prepared as an inactive bundle or installed at fixed paths without overwriting different files, reloading, starting or enabling services.
 The independent Web console can create the first management-only administrator in the exact new empty private layout; no storage is initialized.
@@ -223,7 +223,15 @@ fn main() {
         .log_internal_errors(false)
         .init();
     let result: Result<()> = (|| {
-        let _lifetime = host::enter()?;
+        let _lifetime = match &args.command {
+            Some(Command::Deployment { command: deployment::Command::ReplacementPreview(_) }) => {
+                if args.root != std::path::Path::new("./zxs-data") {
+                    return Err("fixed configuration replacement does not accept --root overrides".into());
+                }
+                deployment::replacement::enter_existing()?
+            }
+            _ => host::enter()?,
+        };
         if let Some(handoff) = run(args)? {
             handoff.execute()?;
         }

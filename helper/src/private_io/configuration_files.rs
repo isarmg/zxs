@@ -1,5 +1,6 @@
 //! New fixed configuration files only. The parent descriptors and directory
 //! locks outlive every read, no-clobber rename and durability barrier.
+pub(crate) mod replacement;
 use super::write_atomic_at_mode;
 use crate::Result;
 use data_serialization::Serialize;
