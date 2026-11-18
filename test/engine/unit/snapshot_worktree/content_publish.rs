@@ -276,3 +276,7 @@ fn pending_originals_freeze_only_their_effective_future_file_routes_in_live_and_
     let handle = engine.commit_directory_worktree(&request, &principal).unwrap();
     assert_closed(&engine, &request, handle, fixture.source, other);
 }
+
+#[cfg(feature = "fault-injection")]
+#[path = "content_install_obstructions.rs"]
+mod install_obstructions;
