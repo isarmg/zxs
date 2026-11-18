@@ -175,3 +175,26 @@ fn two_dirty_instances_competing_for_the_same_heads_never_publish_a_replacement_
     assert_eq!(bytes(&engine, other, "first.txt"), b"second instance");
     assert_eq!(bytes(&engine, other, "Folder/Child/existing.txt"), b"other nested");
 }
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn abandoned_occupancy_prepare_is_not_a_permanent_reservation_or_permission_to_rebind_another_actor() {
+    let (fixture, mut engine, principal, request, other) = prepare();
+    let before = engine.state().events.len();
+    engine.inject_fault_once("after_prepare_1");
+    assert!(engine.commit_directory_worktree(&request, &principal).is_err());
+    assert!(!engine.state().operations.contains_key(&request.operation_id));
+    drop(engine);
+    let mut engine = Engine::open(&fixture.system).unwrap();
+    assert_eq!(engine.state().events.len(), before);
+    assert_eq!(bytes(&engine, other, "first.txt"), FIRST_ORIGINAL);
+    assert_eq!(bytes(&engine, request.target, "first.txt"), b"sealed current");
+    let snapshot = fixture.media();
+    let mut changed = request.clone(); changed.message.push('!');
+    assert!(engine.commit_directory_worktree(&changed, &principal).is_err());
+    assert!(engine.commit_directory_worktree(&request, &"other".parse().unwrap()).is_err());
+    assert_eq!(fixture.media(), snapshot, "unaccepted input cannot authorize an alternative actor/plan");
+    let handle = engine.commit_directory_worktree(&request, &principal).unwrap();
+    assert_eq!(engine.state().events.len(), before + 2);
+    assert_closed(&engine, &request, handle, fixture.source, other);
+}

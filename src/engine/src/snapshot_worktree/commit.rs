@@ -76,7 +76,7 @@ fn commit_inner(
     // a client count or the last save. A mixed/unsupported multi-file batch
     // must fail as a whole; it never falls through to the independent writer.
     if index.active_edits(request.target).len() > 1 {
-        engine.require_unstarted_content_slot(request.operation_id).map_err(RegistrationError::Publication)?;
+        engine.require_unstarted_content_slot(request, principal, None).map_err(RegistrationError::Publication)?;
         let originals = content::Originals::capture(engine, &index, request)?;
         content::reserve(engine, originals, principal)?;
         #[cfg(feature = "fault-injection")]

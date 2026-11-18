@@ -110,25 +110,80 @@ impl<'a> FinalizedOriginalContent<'a> {
 }
 
 impl Engine {
-    /// Under the one engine writer, all original fixed members need a ready,
-    /// still-named journal and no later slot than the admitted State. A crash
-    /// after PREPARE cannot start another provisional node for this request.
-    pub(crate) fn require_unstarted_content_slot(&self, reserve: OperationId) -> Result<()> {
+    /// A new request has no permanent Pending operation yet. A still-bound
+    /// original does. A registered other candidate or an unknown journal can
+    /// never be treated as proof that this proposed publication is unstarted.
+    pub(crate) fn require_unstarted_content_slot(&self, request: &storage_contract::snapshot_worktree::CommitWorktree,
+        principal: &storage_contract::Principal, publish: Option<OperationId>) -> Result<()> {
+        let held = || match publish {
+            Some(_) => failure(crate::snapshot_worktree::RegistrationError::Pending(request.operation_id)),
+            None => Error::new(ErrorCode::RecoveryRequired, "native decision history must be verified before reserving this worktree"),
+        };
         self.require_no_commit_preparation()?;
         let ctx = self.planning_context();
         if ctx.blocked || ctx.current_namespaces.is_some() || ctx.config.generation().is_some()
-            || ctx.next_slot <= ctx.state.sequence
-        { return Err(failure(crate::snapshot_worktree::RegistrationError::Pending(reserve))); }
+            || ctx.next_slot <= ctx.state.sequence { return Err(held()); }
         let members = ctx.members();
         if members.is_empty() { return Err(Failure::Registration.into()); }
-        for member in members {
-            ctx.disk_resources.get(&member)?.root.held_identity()
-                .map_err(|_| Failure::ContainerIdentity)?;
+        let mut future = false;
+        for member in &members {
+            ctx.disk_resources.get(member)?.root.held_identity().map_err(|_| Failure::ContainerIdentity)?;
             let journal = self.journals.get(&member.disk_id).ok_or(Failure::Registration)?;
             journal.verify_retained_name()?;
-            if journal.needs_recovery() || journal.records().last().is_some_and(|(r,_)| r.sequence > ctx.state.sequence) {
-                return Err(failure(crate::snapshot_worktree::RegistrationError::Pending(reserve)));
+            if journal.needs_recovery() { return Err(held()); }
+            future |= journal.records().last().is_some_and(|(r,_)| r.sequence > ctx.state.sequence);
+        }
+        if !future { return Ok(()); }
+        // Rare abandoned ordinary PREPARE. The cached journal tail alone is
+        // not enough: read every fixed member's original verified suffix, so
+        // another PREPARE cannot hide this reserved publish hash at an older
+        // slot. Protocol-native records already have per-journal read bounds.
+        let index = ctx.snapshot_receipts().map_err(failure)?;
+        let frozen = index.content_replay_fences();
+        let mut seen = std::collections::BTreeSet::new();
+        for member in &members {
+            let root = &ctx.disk_resources.get(member)?.root;
+            ctx.config.verify_root_membership(root, member)?;
+            let scan = crate::journal::OpenJournal::scan_configured_at(root, member, ctx.config)?.scan;
+            if scan.torn_tail { return Err(held()); }
+            for (record, frame_hash) in scan.records.into_iter().filter(|(r, _)| r.sequence > ctx.state.sequence) {
+                if record.record_type != RecordType::Prepare { return Err(held()); }
+                let candidate: Candidate = crate::publication_evidence::verified_object_at(ctx.disk_resources, &members,
+                    "candidate", &record.candidate_hash)?;
+                let receipt = Receipt { disk_id: member.disk_id.clone(), slot_id: member.slot_id.clone(),
+                    frame_hash, record };
+                if !crate::journal::receipt_binds(&receipt, RecordType::Prepare, candidate.sequence,
+                    &receipt.record.candidate_hash, &candidate.snapshot_hash)? || candidate.previous_snapshot != *ctx.snapshot
+                { return Err(held()); }
+                self.verify_candidate_membership(&candidate)?;
+                if frozen.selects(candidate.operation_id) || publish == Some(candidate.operation_id) { return Err(held()); }
+                if !seen.insert(receipt.record.candidate_hash) { continue; }
+                if seen.len() > ctx.config.max_entries { return Err(held()); }
+                if candidate.operation_id == request.operation_id {
+                    // The prior occupancy attempt has no native ACCEPT on any
+                    // fixed member. Do not silently rebind another principal,
+                    // purpose or request, or adopt its uncommitted allocations.
+                    let snapshot = crate::publication_evidence::verified_recovery_snapshot_at(ctx.disk_resources, &members,
+                        &candidate.snapshot_hash)?;
+                    let next = snapshot.for_candidate(&candidate)?.state();
+                    let result = next.operations.get(&candidate.operation_id).ok_or_else(&held)?;
+                    let decoded = crate::persist::snapshot_worktree::decode(result)
+                        .map_err(|e| failure(crate::snapshot_worktree::RegistrationError::Codec(e)))?
+                        .ok_or_else(&held)?;
+                    if publish.is_some() || candidate.generation().is_some() || !candidate.versions.is_empty()
+                        || next.operation_principals.get(&candidate.operation_id).map(String::as_str) != Some(principal.as_str())
+                        || !matches!(&decoded.record, crate::persist::snapshot_worktree::Record::ReserveContentBatch(plan)
+                            if plan.request == *request)
+                        || decoded.record.digest(principal).map_err(|e| failure(crate::snapshot_worktree::RegistrationError::Codec(e)))?
+                            != candidate.request_digest
+                    { return Err(failure(crate::snapshot_worktree::RegistrationError::Digest(request.operation_id))); }
+                }
             }
+        }
+        // Recheck the original live descriptor identity after the independent
+        // scan. Success creates no receipt, and never authorizes a MOVE.
+        for member in &members {
+            self.journals.get(&member.disk_id).ok_or(Failure::Registration)?.verify_retained_name()?;
         }
         Ok(())
     }
@@ -137,7 +192,7 @@ impl Engine {
     /// FILE row can be used as a standalone mutation or directory decision.
     pub(crate) fn publish_sparse_content(&mut self, input: OriginalContentInput) -> Result<OperationResult> {
         use crate::persist::snapshot_worktree::{PublicationEncoding, Record};
-        self.require_unstarted_content_slot(input.plan().request.operation_id)?;
+        self.require_unstarted_content_slot(&input.plan().request, input.principal(), Some(input.plan().publish_operation))?;
         let (held, projected, versions) = self.planning_context().prepare_sparse_content_node(input, MAX_METADATA)?;
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_worktree_content_stage")?;
@@ -153,6 +208,12 @@ impl Engine {
         let MutationPlan::Prepared { next, prepared, result } = plan else { return Err(Failure::ContainerScope.into()); };
         let publication = self.planning_context().prepare_publication_domains(*next, prepared, result,
             MAX_METADATA, MAX_METADATA, None, Some(Box::new(held)))?;
-        self.decide_publication(publication)
+        let original_slot = self.next_slot;
+        let outcome = self.decide_publication(publication);
+        // A PREPARE may have reached even one member before a later ordinary
+        // I/O error. Keep all further writers out until a cold scan sees this
+        // exact slot or proves that no business Candidate ever existed.
+        if outcome.is_err() && self.next_slot != original_slot { self.blocked = true; }
+        outcome
     }
 }

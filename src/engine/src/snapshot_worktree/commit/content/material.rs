@@ -51,6 +51,7 @@ impl OriginalContentInput {
         (&self.originals.source_node, &self.originals.repository, &self.originals.sparse)
     }
     pub(crate) fn preparation(&self) -> DirectoryId { self.preparation }
+    pub(crate) fn principal(&self) -> &Principal { &self.principal }
     pub(crate) fn rows(&self) -> &[Input] { &self.plan.rows }
     pub(crate) fn manifest(&self) -> &AdmittedSnapshotManifest { &self.projection.manifest }
     pub(crate) fn prepared(&self) -> &[Prepared] { &self.projection.versions }

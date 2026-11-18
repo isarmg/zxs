@@ -439,6 +439,12 @@ impl DirectoryPublicationGuard {
             Self::Content(value) => value.require_candidate(candidate).map_err(crate::business::file_draft::worktree::failure),
         }
     }
+    pub(super) fn before_accept(&self, ctx: &crate::engine::PlanningContext<'_>, candidate: &Candidate) -> Result<()> {
+        // Shared directory drafts have their own pre-PREPARE slot token; do
+        // not ask that independent producer to re-plan after next_slot moved.
+        match self { Self::Working(value) => value.require_candidate(candidate),
+            Self::Content(_) => self.require_context(ctx, candidate) }
+    }
     pub(super) fn after_decision(&self, candidate: &Candidate) -> Result<()> {
         self.require_candidate(candidate)?;
         if let Self::Content(value) = self { value.require_installed().map_err(crate::business::file_draft::worktree::failure)?; }

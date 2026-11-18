@@ -251,7 +251,7 @@ pub(super) fn finish(engine: &mut Engine, index: &ReceiptIndex<'_>,
     let handle = match retry {
         ContentRetry::Complete(handle) => handle,
         ContentRetry::Reserved(frozen) => {
-            engine.require_unstarted_content_slot(request.operation_id).map_err(RegistrationError::Publication)?;
+            engine.require_unstarted_content_slot(request, principal, Some(frozen.plan().publish_operation)).map_err(RegistrationError::Publication)?;
             let input = material::OriginalContentInput::capture(engine, index, &frozen, principal)?;
             engine.publish_sparse_content(input).map_err(RegistrationError::Publication)?;
             #[cfg(feature = "fault-injection")]
