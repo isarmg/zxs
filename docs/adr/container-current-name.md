@@ -1,56 +1,29 @@
-# 文件容器唯一当前名称
+# 普通 FILE 容器名、已提交正文名与 Worktree 展示名
 
-状态：按用户明确要求实施，当前尚待准确提交的 GitHub 定向验证。
-文件容器名就是 SMB 暴露的文件名；切换到改名前的正文节点不回滚名字。
-本文不表示完整时间线、真实 Chrome、Samba 或磁盘备份已经验收。
+状态：已确定的单一命名合同；实现与验收须分开记录。这里不提供兼容布局或迁移模式。
 
-## 名称与身份
+## 四个名字分别来自哪里
 
-`file_locations` 的最后组件是容器当前名称。`file_names` 仅保留为必须吻合的
-投影镜像，读取不允许回退到该镜像、冻结节点路径或 `creation_name`。
-同一 FileId 的当前 occurrence 使用同一叶名；父目录位置仍属于具体 occurrence。
-改名须检查全部最终路径的碰撞和路径预算，保留原授权、代数、CAS、路径事实及恢复证明。
-冻结提交／节点的原始 path 和 creation_name 是来源证据，不为显示最新名字而改写。
-历史选择恢复正文时使用当前容器名，下载名称和历史读取 DTO 同样取当前名。
+| 名称 | 唯一来源 | 例：主分支从 `a.txt` 改为 `b.txt` |
+| --- | --- | --- |
+| 普通 FILE 容器 / 普通 SMB 文件 | 适用主分支最新的文件名；`file_locations` 末段与当前 FILE 记录相符，`file_names` 仅为镜像 | 外层目录及普通 SMB 现在是 `b.txt` |
+| 版本 BODY 的 `storage_name` | 持有的 `FileVersion.storage_id`、连字符、该 Version 的 `creation_name` | 旧正文仍是 `<id1>-a.txt`；随后提交新正文才出现 `<id2>-b.txt` |
+| 受控历史下载的 `download_name` | 普通容器当前名。Web 文件管理不提供正文下载 | 下载旧正文仍建议叫 `b.txt`，无需与旧正文的存储后缀相等 |
+| Worktree SMB 映射名称 | 该 occurrence 所配置 FileNode 的实际逻辑文件名，绝不加存储前缀 | 映射原先以 `a.txt` 提交的节点时显示 `a.txt`；改选只改变此映射 |
 
-FileVersion 不再持久化独立的 `storage_name`，改为严格的 `VersionStorageId`。
-它有且只有 15 个小写 ASCII 字母或数字，在本容器内唯一；当前生成器对 VersionId 做
-域分隔摘要后取 15 位，分配及 FILE／history／State 准入显式拒绝碰撞。
-不能把截断摘要自身当成唯一性证明，也不在改名时重新生成身份。
+非主文件分支改名、选择旧节点、已有节点合并复用、元数据记录，都不改主分支容器名。
+只有实际创建的 Version 才对应 BODY。切换或复用节点不生成空正文或第二份相同正文。
+冻结路径、来源、真实 inode、VersionId、FileId 和已提交快照均不能为显示最新名称而改写。
 
-已安装版本叶名为 `storage_id-current_name`。改名更新全部仍有正文的版本叶名，
-版本 ID、15 位身份、正文及 inode 保持；原 creation_name 只用于来源／准备材料。
-历史读取 DTO 的 storage_name 是派生值，不是第二份可独立设置的名称。
-共享 contract 验证器同时验证严格身份、原名称政策及与 download_name 的逐字一致。
-前缀不消耗用户名称预算；真实文件系统组件上限仍由持有的目标目录负责检查。
+## 物理发布和恢复要求
 
-## 改名与恢复
+- `VersionStorageId` 恰为 15 个小写 ASCII 字母或数字，在本 FILE 内唯一。碰撞拒绝，不截断名字或改分配既有版本身份。每个实际目标检查 `15 + 1 + creation_name 的 UTF-8 字节数`；外层目录和客户端路径另算。
+- 普通同父改名只移动同一外层目录，不逐项改名、重建或复制内部正文。验证持有的原父目录、容器、`versions` 和准确已装叶的 inode、字节与预算；禁止覆盖目标、采用同名同字节替换物或把未知叶解释成另一种格式。
+- 原始决定及已准入实体是冷恢复的依据。按该决定验证外层来源或目的位置，仍只从 `<storage_id>-<creation_name>` 取已装正文。不扫描猜测、不寻找 `<storage_id>-<最新名>`、不补造收据。
+- 备份、恢复、历史包及读 API 以实际原版本描述为据；归档内自身的路径和导出显示名不成为已安装布局的第二种形式。
 
-准备阶段捕获原容器与各正文的真实身份，验证完整目标和无覆盖条件。
-决定后持久化有界的 inode 绑定意图，再逐项执行 no-clobber 叶名改动和外层布局改动。
-重试只接受同一容器、同一版本集合、同一 inode 的原名或目标名，拒绝陌生目标、
-同名替换物和丢失的两端；不扫描任意文件来猜历史身份，不用复制／删除覆盖恢复。
-叶已改而外层未改、外层已改而意图未清理时，读取只按该准确意图定位。
-FILE 与外层布局完成后才清理已验证的意图；未知结果继续原 operation，不制造新操作。
-本节的资源 reservation 与实际故障尾验仍需由准确 GitHub 测试证明，不能以静态审查代替。
+把外部 FILE 移入 Worktree 的产品语义仅是增加映射，原容器留在原处且不复制、不进已删除区。Worktree 真正提交时，才把所选完整内容复制到不可变的 `.zxs` 节点。此 occurrence 尚未纳入任何 Worktree 提交便移出时，对原容器做准确的直接移出；已纳入提交后再移出，则复制到新的独立 FILE，不转移原容器或其他映射。已提交快照不跟随后续源编辑。这些语义不等于已接通 SMB 或外层事务。
 
-## 新格式，不做旧格式兼容
+## 证据边界
 
-本批在 path-facts 格式之上统一使用 `container-current-name-*` 的 managed-directory、
-membership-generation、membership-pending、frozen-control-metadata、
-retained-exit-quorum-control-metadata、radix-map-roots 标记；preparation 使用
-`zxs-container-current-name-backup-native-control`，FILE 为 `file-local-container-current-name`。
-内层 FileVersion 必须有 storage_id 且拒绝旧 storage_name。外层标记同时换代，
-避免没有版本的旧空池绕过字段准入。旧池／旧备份拒绝后原字节保留，不自动迁移、
-删除、重置、重算摘要或覆盖。标记适配不是恢复备份开发或放宽原 900 秒验证。
-
-## 验证记录
-
-本地仅代码编辑、静态审阅与 git diffcheck，不运行编译、测试、formatter 或选择器。
-定向范围包含身份严格编码与碰撞、所有 alias 当前名称、切旧节点、HTTP／Web名称绑定、
-冷重开和原操作重试、叶／外层中断、inode 替换及目标碰撞，以及相关特性编译。
-需取得最终准确 head 的已执行、失败和未执行清单才形成运行结论。
-
-原 canonical_publication 和实际历史捕获保留原字节，用于原证据或明确旧格式拒绝。
-更新后的正向样例标明为合成数据，不冒充新 GitHub 捕获；原标签／图证据不证明新名称合同。
-备份业务与原超时优化继续放在其他工作之后。
+定向验收须覆盖真实 A→B 改名、B 下新 Version、非主分支操作、旧叶字节及 inode、目标碰撞、冷恢复、备份/导出和受控 HTTP 返回的两个不同名字；真实 SMB/浏览器验证另计。只读的 FILE 或已提交快照来源能够打开完整原字节，不单独证明任何外层复制、映射写入或命名验收。

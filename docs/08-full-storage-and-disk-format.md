@@ -58,7 +58,7 @@
 │       └── namespace/<实际归属目录>/报告.docx/
 │           ├── container.json
 │           └── versions/
-│               ├── 000000000000001-报告.docx
+│               ├── 000000000000001-初稿.docx
 │               └── 000000000000002-报告.docx
 ├── metadata/application-log/journal.bin
 ├── metadata/objects/<object-type>/<hash前两位>/<hash>.json
@@ -72,11 +72,11 @@
 
 不可变元数据对象按散列前两位分桶，每类最多 256 个桶，完整散列文件名、规范编码、摘要和日志引用保持不变。当前格式只接受 `metadata/objects/<object-type>/<hash前两位>/<hash>.json`；目标地址存在旧平铺对象时拒绝读取与写入，清点拒绝非分片项，不自动迁移、删除或复用平铺对象。按准确摘要修复当前格式的依赖仍然有效；离线导出只读且不修复。目录枚举和恢复检查点必须拒绝链接及错误分桶。
 
-`versions/<version-id>/` 保留不可变版本说明、校验及发布证明；正文是可以直接读取的普通文件。未激活目录共享布局时，命名空间位置为 `file-containers/<file-id>/namespace/<实际归属目录>/<当前文件名>/versions/<storage_id>-<当前文件名>`；共享布局的实际位置仍由其集中定位记录确定。外层 `file-id` 和 `storage_id` 是稳定身份，当前容器名就是 SMB 文件名。改名同步所有活动 occurrence 的叶名、实体容器目录及所有仍有正文的内部版本叶名，保留正文、inode、版本身份及证明。下载或选中改名前的正文节点仍使用最新名称，冻结路径证据不改写。`file_locations` 末段是唯一当前名称，`file_names` 只作一致镜像；删除保留最后位置，读取不从历史路径或 `creation_name` 回退。
+`versions/<version-id>/` 保留不可变版本说明、校验及发布证明；正文是可以直接读取的普通文件。未激活目录共享布局时，命名空间位置为 `file-containers/<file-id>/namespace/<实际归属目录>/<主分支当前文件名>/versions/<storage_id>-<该版本的创建名>`；共享布局的实际位置仍由其集中定位记录确定。外层 `file-id` 和 `storage_id` 是稳定身份，普通 SMB 文件使用主分支当前容器名。主分支从“初稿.docx”改为“报告.docx”，移动的是外层目录；已有正文仍是图中的 `000000000000001-初稿.docx`，inode、版本身份及证明均不变。此后再以“报告.docx”提交新正文，才产生第二个叶。非主文件分支改名、选择历史节点或复用合并节点不会替主分支改名，也不会产生复制正文。受控下载沿用最新容器名，冻结路径证据不改写。`file_locations` 末段是唯一当前名称，`file_names` 只作一致镜像；删除保留最后位置，读取不从历史路径或 `creation_name` 回退。
 
 位置投影的 namespace 根维护内部标记 `.zxs-namespace.json`。新候选在复制正文副本前预检实际主盘及备份投影的根部分量冲突，按[命名约束](05-naming-and-paths.md)在决定前返回 `NAME_COLLISION`，保留现有状态、正文和工作材料；不改标记或容器格式，不迁移或清除历史材料。已经发布的历史投影仍按固定身份和现有布局校验重放，不重新套用新请求的准入检查。
 
-版本持久化 `storage_id` 为严格 15 位小写 ASCII 字母或数字，在本容器内唯一；分配和准入明确拒绝碰撞，不把截断摘要当唯一性证明。已安装叶名逐字派生为 `storage_id-current_name`，不再编码顺序、UTC 时间、内容短散列或原扩展名。`version_sequence` 和 RFC3339 `created_at` 保留各自审计语义；`creation_name` 保留创建时来源及准备材料名称，不作为当前显示名。历史读取 DTO 的 `storage_name` 仅为派生的真实叶名，其名称后缀与 `download_name` 逐字一致。
+版本持久化 `storage_id` 为严格 15 位小写 ASCII 字母或数字，在本容器内唯一；分配和准入明确拒绝碰撞，不把截断摘要当唯一性证明。已安装叶名逐字派生为 `storage_id-creation_name`，后缀是此 Version 提交时记录的原始文件名（含扩展名），不是当前容器名、下载名或保留区目录名。实际每个目标的组件预算为 15 个 ASCII 标识字节、1 个连字符和该创建名的 UTF-8 字节数。`version_sequence` 和 RFC3339 `created_at` 保留审计语义。历史读取 DTO 的 `storage_name` 指认这一个真实叶，`download_name` 仍取当前普通容器名，两者分别验证。
 
 分支的 pending_file_versions 是已发布的继承归属记录，不对应空文件。新创建、恢复和导入均不生成 pending-branches/*.pending，也不为继承引用新建空容器。容器内出现 pending-branches 或 legacy 项时返回 FORMAT_UNSUPPORTED，保留包括零字节占位文件在内的原始材料，不自动清理或迁移。container.json 的 inherited_branches 是来源引用缓存，可见 version_id 等于父真实 ID，自有版本为空。
 

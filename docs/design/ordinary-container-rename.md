@@ -21,11 +21,8 @@ Candidate 仍分别消费同一完整容器转换核。Current、跨父目录、
 不交换、不删除、不按相同内容采用。实际旧父目录与容器 FD 持续保留；同父目录
 NOREPLACE 使用原同步原语，保留同 inode 父目录的去重，不重定义耐久性顺序。
 
-进入原 ACCEPT／全员 FINALIZE 后，先写入既有 inode-bound version-name intent，
-再把每个已验证历史 BODY 改为同一 `15位身份ID-新文件名`。完整正文哈希、大小、
-inode、stamp 和租约沿用原唯一捕获核。随后移动外层同一个容器 inode，安装原 FILE
-投影和 cache，核对并清除同决定的 intent，才进入原 Publication 尾部。
-原 BODY 身份前缀、内容和容器归属均不改变。
+普通改名的决定只移动外层同一容器 inode，随后安装原 FILE 投影及 cache，进入原 Publication 尾部。
+每个已安装 BODY 用自身 `VersionStorageId-creation_name` 校验：原父目录、原 inode、内容、大小及目标组件预算均保持；新建 BODY 才产生新叶。没有内部逐叶改名的步骤、恢复意图或兼容查找。只改非主文件分支名称、选中节点或复用节点均不能触发这个外层转换。
 
 ## 冷回放不是用当前字符串改写旧记录
 
@@ -36,10 +33,7 @@ owner、namespace 父项、容器 replica occurrence 及每个名字生效的 se
 后来新增的副本不能替较早的另一副本供应证明。同旧名新建一个不同 FileId 不会被采用。
 
 未有全员 FINALIZE 的 pending 候选只能观察旧名。接受过一个 ACCEPT、同 inode 被
-外界移到新名、磁盘上存在 intent 都不允许恢复器收养新路径。真实扫描的全员
-FINALIZE、各自前序 ACCEPT 与内容寻址对象完全绑定后，恢复器才可观察该决定的
-旧或新两个位置；两者皆在或皆不在均拒绝。叶子只能由同 file/history/sequence/
-source/target 的 intent 定位。该能力只进恢复消费者，不授普通公开读或新写权限。
+外界移到新名都不允许恢复器收养新路径。真实扫描的全员 FINALIZE、各自前序 ACCEPT 与内容寻址对象完全绑定后，恢复器才可观察该决定的旧或新两个外层位置；两者皆在或皆不在均拒绝。无论在哪一侧，每个应在的 BODY 始终只有原创建名的一个合法叶。该能力只进恢复消费者，不授普通公开读或新写权限。
 
 已有 Publication 对象但缺部分收据时，必须绑定原完整结果及实际全员 FINALIZE
 收据。该尾部只能接受目标容器名及应在该副本的全部 Available 历史 BODY，不能
@@ -57,19 +51,9 @@ ContainerPreparation／verify_transition 保留所有旧 replica occurrence，�
 历史槽完全缺 journal Publication、只能由旧 local-proof 路径发现的情况，仍先走
 原发现门；本片不绕过它，也不承诺能在终态名字尚未认证时修复该缺失证据。
 
-## 定向证据（待准确提交上的 GitHub 执行）
+## 定向验证目标（不代表已运行）
 
-- 两次不同 BODY 和非空标签：先 A 上公开改名，再由真实 automatic backfill 增加
-  B/C 并冷开，之后第二次改名覆盖全部三个副本。原 inode／字节、准确重试和旧
-  名字上独立新 FileId 均保留；另两用例从一开始就持有三个实际副本。
-- B 上目标名碰撞：预算及实际 root/实体门仍先行，未发表、未推进 sequence／日志，
-  不覆盖 sentinel，不改变旧正文或原容器。
-- 真实七个 fault 点：`after_accept_1`、`after_finalize`、`version-names-intent`、
-  `version-name-renamed`、`ordinary-container-renamed`、`after_container_names`、
-  `after_publication_1`。核外层 InDoubt 与精确注入 cause，然后冷恢复与准确重试。
-  ACCEPT-only 的外部同 inode 改名和 Publication 尾的旧名回退分别先拒绝；恢复原
-  现场后才继续正控，不把损坏拒绝当成功恢复。`after_container_names` 另验证
-  intent 已清但未 Published 时的坏 BODY 必须拒绝，恢复原 bytes 后再完成。
-
-没有改变旧 CI 分组、cap、timeout、原备份切换 900 秒或已有历史固定向量。
-尚未验收 Current／移动／删除、断盘改名、混合内容改名、真实 SMB 和浏览器交互。
+- A 名创建的旧 Version、主分支改为 B、B 名下新增 Version：三盘有效副本只移动各自的外层原目录；两个不同叶名持有原 ID、inode 与字节。独立文件分支改名或选择不更名该容器，不制造新 BODY。
+- 外层目标碰撞或已有未知、被替换的 BODY：拒绝覆盖、收养或继续错误尾写；保留原实体。Pending 不借未经全员 FINALIZE 的外部改名恢复。
+- 从原决定冷开、丢失回包重试，以及对应恢复、历史导出、受控 HTTP/管理读取均核相同的原版本。普通下载名和 Worktree 显示名按[命名合同](../adr/container-current-name.md)分别判断。
+- 此处不证明跨父目录移动／整容器删除、断盘改名、混合内容改名、真实 SMB、备份 900 秒或浏览器交互已经验收。
