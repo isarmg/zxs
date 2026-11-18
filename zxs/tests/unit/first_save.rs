@@ -236,3 +236,32 @@ fn a_slow_named_save_recovery_verifier_holds_the_same_work_lease_as_an_open_read
     assert_eq!(crate::commit_first(&t.sys,op,file,1).unwrap(),formal);assert!(!path.exists());
     let mut got=Vec::new();crate::read_node_to(&t.sys,file,formal.node,&mut got).unwrap();assert_eq!(got,input);
 }
+
+#[test]
+#[ignore="two private registered native filesystems"]
+fn late_first_save_admits_the_complete_original_directory_and_same_working_inode_before_confirmation(){
+    use std::os::unix::fs::MetadataExt;
+    for (foreign,when) in [(false,Cut::FrameSynced),(true,Cut::FrameSynced),(false,Cut::Decision)]{
+        let t=Fixture::new();let op=OperationId::new().unwrap();let bytes=b"one original working file";
+        let wanted=claim(bytes);let dir=t.data.join("first");let saved=t._one.0.join("original-working");
+        let named=if foreign{dir.join("never-issued")}else{dir.join(format!("working-{op}"))};
+        let mut interfered=None;
+        assert!(save_inner(&t.sys,op,t.file.file,wanted,Cursor::new(bytes),|at|{
+            if at==when{
+                if foreign{osfs::write(&named,b"independent")?;}else{osfs::rename(&named,&saved)?;osfs::copy(&saved,&named)?;}
+                interfered=Some((osfs::metadata(&named)?.ino(),osfs::read(&named)?));
+            }Ok(())
+        }).is_err());let(ino,foreign_bytes)=interfered.unwrap();
+        if !foreign{assert_ne!(osfs::metadata(&saved).unwrap().ino(),ino);}
+        let seen=first_save_receipt(&t.sys,op).unwrap().unwrap();let published=when==Cut::Decision;
+        assert_eq!(seen.status,if published{CreationStatus::PublishedInstallationUnconfirmed}else{CreationStatus::DecisionAwaitingConfirmation});
+        assert_eq!(seen.decision_sequence.is_some(),published);
+        assert!(save_first(&t.sys,op,t.file.file,wanted,NeverRead).is_err());
+        assert_eq!(first_save_receipt(&t.sys,op).unwrap().unwrap(),seen);
+        assert_eq!(osfs::metadata(&named).unwrap().ino(),ino);assert_eq!(osfs::read(&named).unwrap(),foreign_bytes);
+        let away=t._one.0.join("untouched-occupant");osfs::rename(&named,&away).unwrap();if !foreign{osfs::rename(&saved,&named).unwrap();}
+        let draft=save_first(&t.sys,op,t.file.file,wanted,NeverRead).unwrap();assert_eq!((draft.file,draft.revision,draft.decision_sequence),(t.file.file,1,2));
+        let mut out=Vec::new();assert_eq!(read_current_to(&t.sys,t.file.file,&mut out).unwrap().working,Some(draft));
+        assert_eq!(out,bytes);assert_eq!(osfs::read(away).unwrap(),foreign_bytes);
+    }
+}

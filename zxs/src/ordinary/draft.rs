@@ -5,7 +5,7 @@ pub(super) mod material;
 pub(super) mod types;
 
 use super::{allocation as creation_allocation,journal::{self,Decision,Journal},material as container,
-    wire::Frame,Cut,CreationStatus,FileInfo,publish_sealed};
+    wire::Frame,Cut,CreationStatus,FileInfo,publish_sealed_checked};
 use self::{allocation::SaveAllocation,material::{Input,InputHandle,PendingReader,Reader,Verified},types::{DraftClaim,DraftReceipt,Original,SaveFrame}};
 use crate::{FileId,OperationId,fs::{self,HeldDir,invalid},pool::lease::{Access,FileVolume,LocalPool}};
 use std::{io::{self,Read,Write},path::Path};
@@ -196,11 +196,21 @@ fn writer(system:&Path,op:OperationId,file:FileId,claim:DraftClaim,work:Work,cut
         held.room_for(f.bytes.len())?;cut(Cut::BeforeIntent)?;journal::Intent::seal(&p.system,&f.bytes)?;
     }
     drop(held);cut(Cut::Intent)?;
-    let sealed=publish_sealed(&p,op,request,|d|{
-        let f=d.save()?;volume.require_current()?;
-        if !a.matches(f)||verified.require(&dir,&a)?!=f.material{return Err(invalid("different material at first SAVE decision"));}
+    let check=|now:&HeldDir,f:&SaveFrame|->io::Result<()>{
+        volume.require_current()?;
+        if !a.matches(f)||verified.require(now,&a)?!=f.material{return Err(invalid("different material at first SAVE decision"));}
         Ok(())
-    },|phase|cut(phase))?;
+    };
+    let at_floor=|s:&Journal,d:&Decision|->io::Result<()>{
+        let active=s.saving.as_ref().ok_or_else(||invalid("lost original first SAVE reservation at confirmation"))?;
+        let f=d.save()?;let c=s.file(file).ok_or_else(||invalid("original FILE birth missing at first SAVE confirmation"))?;
+        if active.stamp!=a.stamp||active.bytes!=a.bytes||!active.matches(f)||!active.original.matches_create(c){
+            return Err(invalid("different original first SAVE reservation or FILE birth at confirmation"));}
+        // Cold admission includes the full set of names and the real local
+        // FILE header. The already verified reader then checks its same FD.
+        check(&source_dir(&volume,c,s,&active.original)?,f)
+    };
+    let sealed=publish_sealed_checked(&p,op,request,|d|check(&dir,d.save()?),Some(&at_floor),|phase|cut(phase))?;
     let f=sealed.frame.save()?;cut(Cut::Decision)?;
     volume.require_current()?;
     if verified.require(&dir,&a)?!=f.material{return Err(invalid("published draft cannot reopen its original bytes"));}

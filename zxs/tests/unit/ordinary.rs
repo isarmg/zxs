@@ -282,3 +282,38 @@ fn unbound_private_attempt_budget_is_finite_and_never_generates_another_ticket()
     assert_eq!(osfs::read_dir(&t.data).unwrap().count(),usize::from(allocation::SLOTS));
     assert_eq!(creation_receipt(&t.system,op).unwrap().unwrap().status,CreationStatus::Reserved);
 }
+
+#[test]
+#[ignore="two private registered native filesystems"]
+fn late_create_occupant_keeps_the_unconfirmed_original_and_never_replaces_an_installed_name(){
+    use std::os::unix::fs::MetadataExt;
+    // At Decision the same obstruction is an installation failure, NOT a
+    // reason to withdraw the already confirmed original CREATE.
+    for (replace_local,when) in [(false,Cut::FrameSynced),(true,Cut::FrameSynced),(false,Cut::Decision)]{
+        let t=Fixture::new();let op=OperationId::new().unwrap();
+        let saved=t._first.0.join("held-original");let displaced=t._first.0.join("independent-occupant");
+        let mut occupied=None;
+        assert!(create_inner(&t.system,op,t.v,"new-file",|at|{
+            if at!=when{return Ok(());}
+            let path=if replace_local{
+                let mut private=osfs::read_dir(&t.data)?;let dir=private.next().unwrap()?.path();assert!(private.next().is_none());
+                let local=dir.join("FILE");osfs::rename(&local,&saved)?;osfs::copy(&saved,&local)?;local
+            }else{
+                let path=t.data.join("NEW-FILE");osfs::write(&path,b"original occupant")?;path
+            };
+            occupied=Some((path.clone(),osfs::metadata(&path)?.ino(),osfs::read(&path)?));Ok(())
+        }).is_err());
+        let(path,ino,bytes)=occupied.unwrap();if replace_local{assert_ne!(ino,osfs::metadata(&saved).unwrap().ino());}
+        let original=creation_receipt(&t.system,op).unwrap().unwrap();let published=when==Cut::Decision;
+        assert_eq!(original.status,if published{CreationStatus::PublishedInstallationUnconfirmed}else{CreationStatus::DecisionAwaitingConfirmation});
+        assert_eq!(original.file.decision_sequence.is_some(),published);
+        assert!(create_empty(&t.system,op,t.v,"new-file").is_err());
+        assert_eq!(creation_receipt(&t.system,op).unwrap().unwrap(),original);
+        assert_eq!(osfs::metadata(&path).unwrap().ino(),ino);assert_eq!(osfs::read(&path).unwrap(),bytes);
+        osfs::rename(&path,&displaced).unwrap();if replace_local{osfs::rename(&saved,&path).unwrap();}
+        let completed=create_empty(&t.system,op,t.v,"new-file").unwrap();
+        assert_eq!((completed.file,completed.entry,completed.history),(original.file.file,original.file.entry,original.file.history));
+        assert_eq!(completed.decision_sequence,Some(1));
+        assert_eq!(read_initial_file(&t.system,completed.file).unwrap().0,completed);assert_eq!(osfs::read(displaced).unwrap(),bytes);
+    }
+}

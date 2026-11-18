@@ -171,3 +171,38 @@ fn a_zero_byte_formal_node_allows_only_the_empty_range_and_still_checks_its_real
     osfs::write(&index,&b).unwrap();osfs::set_permissions(&index,osfs::Permissions::from_mode(0o600)).unwrap();
     assert!(read_node_range_to(&t.system,f.file,f.node,0,0,&mut out).is_err());assert!(out.is_empty());
 }
+
+#[test]
+#[ignore="two private registered native filesystems"]
+fn first_full_rechecks_real_saved_source_raw_node_and_inventory_before_advancing_its_floor(){
+    for (role,when) in [("raw",Cut::FrameSynced),("node",Cut::FrameSynced),("work",Cut::FrameSynced),
+        ("unknown",Cut::FrameSynced),("raw",Cut::Decision)]{
+        let data=b"material from one confirmed first save";let t=Fixture::new(data);let op=OperationId::new().unwrap();
+        let id=t.file.file;
+        // Use the persisted original IDs, not the newest filename on disk.
+        assert!(commit_inner(&t.system,op,id,1,|step|if step==Cut::Reservation{Err(io::Error::other("before linking"))}else{Ok(())}).is_err());
+        let origin={let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();s.committing.unwrap().original};
+        let foreign=role=="unknown";let target=match role{
+            "raw"=>t.owner().join(format!("{}-{}",origin.storage,origin.creation_name)),
+            "node"=>t.owner().join(format!("node-{}",origin.node)),"work"=>t.work(),"unknown"=>t.owner().join("unissued"),_=>unreachable!(),
+        };
+        let saved=t.home.0.join("held-original");let away=t.home.0.join("independent-occupant");let mut changed=None;
+        assert!(commit_inner(&t.system,op,id,1,|step|{
+            if step==when{
+                if foreign{osfs::write(&target,b"independent occupant")?;}else{osfs::rename(&target,&saved)?;osfs::copy(&saved,&target)?;}
+                changed=Some((osfs::metadata(&target)?.ino(),osfs::read(&target)?));
+            }Ok(())
+        }).is_err());
+        let(ino,foreign_bytes)=changed.unwrap();if !foreign{assert_ne!(ino,osfs::metadata(&saved).unwrap().ino());}
+        let obs=first_commit_receipt(&t.system,op).unwrap().unwrap();let published=when==Cut::Decision;
+        assert_eq!(obs.published.is_some(),published);
+        assert_eq!(obs.status,if published{CreationStatus::PublishedInstallationUnconfirmed}else{CreationStatus::DecisionAwaitingConfirmation});
+        assert!(t.work().exists());assert!(commit_first(&t.system,op,id,1).is_err());
+        assert_eq!(first_commit_receipt(&t.system,op).unwrap().unwrap(),obs);assert!(t.work().exists());
+        assert_eq!(osfs::metadata(&target).unwrap().ino(),ino);assert_eq!(osfs::read(&target).unwrap(),foreign_bytes);
+        osfs::rename(&target,&away).unwrap();if !foreign{osfs::rename(&saved,&target).unwrap();}
+        let finished=commit_first(&t.system,op,id,1).unwrap();assert_eq!(finished.node,origin.node);assert_eq!(finished.decision_sequence,3);
+        assert!(!t.work().exists());let mut out=Vec::new();assert_eq!(read_node_to(&t.system,id,finished.node,&mut out).unwrap(),finished);
+        assert_eq!(out,data);assert_eq!(osfs::read(away).unwrap(),foreign_bytes);
+    }
+}

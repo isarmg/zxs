@@ -8,7 +8,7 @@ mod indexed;
 mod baseline;
 pub(in crate::ordinary) use baseline::{ParentCut,PinnedParent,PlacedSecond,for_retirement};
 use super::{allocation as ordinary_allocation,draft::{material::Reader,types::SaveFrame},journal::{self,Decision,Journal},
-    material as container,wire::Frame,Cut,CreationStatus,publish_sealed};
+    material as container,wire::Frame,Cut,CreationStatus,publish_sealed_checked};
 use crate::{FileId,NodeId,OperationId,fs::{self,HeldDir,invalid},pool::lease::{Access,FileVolume,LocalPool}};
 use self::{allocation::FormalAllocation,types::{Commit,FormalNode,Original},physical::{Input,Verified}};
 use std::{io::{self,Write},path::Path};
@@ -158,10 +158,21 @@ fn writer(system:&Path,op:OperationId,file:FileId,revision:u64,prepared:Verified
         held.room_for(f.bytes.len())?;cut(Cut::BeforeIntent)?;journal::Intent::seal(&p.system,&f.bytes)?;
     }
     drop(held);cut(Cut::Intent)?;
-    let sealed=publish_sealed(&p,op,request,|d|{
-        let f=d.formal()?;v.require_current()?;prepared.source_current(&dir,&f.original)?;
-        if !a.matches(f)||body.feedback(&dir)?!=f.materials{return Err(invalid("formal FILE changed before publication"));}Ok(())
-    },|s|cut(s))?;
+    let check=|now:&HeldDir,f:&types::Commit|->io::Result<()>{
+        v.require_current()?;prepared.source_current(now,&f.original)?;
+        if !a.matches(f)||body.feedback(now)?!=f.materials{return Err(invalid("formal FILE changed before publication"));}Ok(())
+    };
+    let at_floor=|s:&Journal,d:&Decision|->io::Result<()>{
+        let active=s.committing.as_ref().ok_or_else(||invalid("lost original first FULL reservation at confirmation"))?;
+        let f=d.formal()?;let c=s.file(file).ok_or_else(||invalid("original FILE missing at first FULL confirmation"))?;
+        let w=s.saved(file).ok_or_else(||invalid("original first working SAVE missing at FULL confirmation"))?;
+        if active.stamp!=a.stamp||active.bytes!=a.bytes||!active.matches(f)||!active.original.matches(c,w){
+            return Err(invalid("different original first FULL reservation, FILE or working source at confirmation"));}
+        // Resolve the entire exact local inventory, then compare its held
+        // working reader, independent RAW and node/index without recopying.
+        check(&directory(&v,s,c,w)?,f)
+    };
+    let sealed=publish_sealed_checked(&p,op,request,|d|check(&dir,d.formal()?),Some(&at_floor),|s|cut(s))?;
     let f=sealed.frame.formal()?;cut(Cut::Decision)?;
     v.require_current()?;if body.feedback(&dir)?!=f.materials{return Err(invalid("original published FULL cannot reopen"));}
     // Do not remove or clear the working source before its independent FULL

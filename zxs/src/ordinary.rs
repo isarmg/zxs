@@ -126,9 +126,17 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
     }
     drop(held);
     cut(Cut::Intent)?;
-    let p=publish_sealed(&pool,op,request,|decision|{
+    let at_floor=|s:&journal::Journal,d:&journal::Decision|->io::Result<()>{
+        let f=d.creation()?;let active=s.allocated.as_ref().ok_or_else(||invalid("lost original CREATE reservation at confirmation"))?;
+        if active.stamp!=a.stamp||active.bytes!=a.bytes||!a.matches(f)||!active.matches(f){
+            return Err(invalid("CREATE reservation, bound private slot or directory changed before confirmation"));}
+        // Check the original private directory, its only FILE record, and the
+        // actual, ASCII-equivalent human name before making CREATE visible.
+        material::require_staged(&volume,&f.create)
+    };
+    let p=publish_sealed_checked(&pool,op,request,|decision|{
         material::require_staged(&volume,&decision.creation()?.create)
-    },|step|cut(step))?;
+    },Some(&at_floor),|step|cut(step))?;
     let f=p.frame.creation()?;
     cut(Cut::Decision)?;
     material::install_decided(&volume,&f.create)?;
@@ -144,7 +152,16 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
 /// frontier here. The command owner must prove its exact durable physical
 /// operands again immediately before appending any previously undecided bytes.
 fn publish_sealed(pool:&LocalPool,op:OperationId,request:[u8;32],
-    material:impl FnOnce(&journal::Decision)->io::Result<()>,mut cut:impl FnMut(Cut)->io::Result<()>)->io::Result<journal::Intent>{
+    material:impl FnOnce(&journal::Decision)->io::Result<()>,cut:impl FnMut(Cut)->io::Result<()>)->io::Result<journal::Intent>{
+    publish_sealed_checked(pool,op,request,material,None,cut)
+}
+// First CREATE, SAVE and FULL recheck their respective held operands against
+// the already-read, still-unconfirmed snapshot. Other FILE operations retain
+// their existing per-command checks. Do not read a slow BODY a second time.
+fn publish_sealed_checked(pool:&LocalPool,op:OperationId,request:[u8;32],
+    material:impl FnOnce(&journal::Decision)->io::Result<()>,
+    at_floor:Option<&dyn Fn(&journal::Journal,&journal::Decision)->io::Result<()>>,
+    mut cut:impl FnMut(Cut)->io::Result<()>)->io::Result<journal::Intent>{
     let (stamp,mut state)=pool.snapshot()?;
     let p=state.pending.take().ok_or_else(||invalid("original prepared FILE intent missing"))?;
     if p.frame.op()!=op||p.frame.request()!=request{return Err(invalid("sealed FILE operation or request differs"));}
@@ -154,6 +171,12 @@ fn publish_sealed(pool:&LocalPool,op:OperationId,request:[u8;32],
         pool.system.append_exact(pool::READY,&stamp,stamp.stat.size(),&p.frame.bytes()[state.tail..],pool::MAX_SYSTEM)?;
         cut(Cut::FrameSynced)?;drop(state);
         let (st,synced)=pool.snapshot()?;let (before,after)=synced.acknowledgement(&p.frame)?;
+        if let Some(check)=at_floor{
+            let now=synced.pending.as_ref().ok_or_else(||invalid("original sealed FILE intent disappeared at confirmation"))?;
+            if now.stamp!=p.stamp||now.bytes!=p.bytes||synced.decided(op).is_some(){
+                return Err(invalid("original FILE intent or acknowledgement changed at confirmation"));}
+            check(&synced,&p.frame)?;
+        }
         pool.system.advance_frontier(pool::READY,&st,pool::MAX_SYSTEM,&before,&after,||cut(Cut::MarkedBeforeSync))?;
     }
     let (_,after)=pool.snapshot()?;
