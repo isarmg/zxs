@@ -20,12 +20,10 @@ fn observe_generation_encoding(
     let native = &prepared.task.installation.evidence.task.scoped.objects.native;
     let root = &prepared.targets[index].root;
     let job = &prepared.task.selection().jobs()[index];
-    let prefix = match prepared.scope_encoding.as_ref() {
-        Some(memo) => generation_objects::collect_with_committed_encodings(
-            root, job, native, stop, memo,
-        )?,
-        None => generation_objects::collect(root, job, &native.archive_hash, stop)?,
-    };
+    let prefix = generation_objects::collect_selected(
+        root, job, native, &prepared.projection().selected_nodes(), stop,
+        prepared.scope_encoding.as_ref(),
+    )?;
     let local = root.private_child(&root.path().join(DIRECTORY).join("archive"))?;
     let frozen = BackupFrozenControl::read_target(decision, &local, stop)?;
     let rebuilt = PreparedBackupControl::capture(

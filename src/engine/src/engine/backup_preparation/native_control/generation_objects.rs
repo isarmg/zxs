@@ -1,6 +1,8 @@
 //! Collect only the already authenticated original publication prefix. The
 //! caller must separately provide the actual post-prefix MembershipFence logs.
 use super::*;
+use crate::engine::backup_preparation::BackupPreparedTopologyNode;
+use crate::engine::disk_catalog::FreshBackupBindings;
 
 pub(in crate::engine) struct BackupNativeObjects {
     // In-memory join between the verified preparation manifest and every
@@ -42,35 +44,17 @@ impl Source for Collect<'_> {
     }
 }
 
-pub(in crate::engine::backup_preparation::native_control) fn collect(
-    root: &DiskRoot,
-    job: &Job,
-    expected: &str,
-    stop: &AtomicBool,
-) -> Result<BackupNativeObjects> {
-    collect_at(root, job, ExpectedArchiveDigest(expected), stop, None)
-}
-
-pub(in crate::engine::backup_preparation::native_control) fn collect_with_committed_encodings(
+pub(in crate::engine::backup_preparation::native_control) fn collect_selected(
     root: &DiskRoot,
     job: &Job,
     task: &NativeTask,
-    stop: &AtomicBool,
-    encodings: &ScopeEncodingMemo,
-) -> Result<BackupNativeObjects> {
-    collect_at(root, job, ExpectedArchiveDigest(&task.archive_hash), stop, Some(encodings))
-}
-
-fn collect_at(
-    root: &DiskRoot,
-    job: &Job,
-    expected: ExpectedArchiveDigest<'_>,
+    selection: &[BackupPreparedTopologyNode],
     stop: &AtomicBool,
     encodings: Option<&ScopeEncodingMemo>,
 ) -> Result<BackupNativeObjects> {
     let bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST)?;
     let manifest: Manifest = decode_proof(&bytes)?;
-    if object_hash(FORMAT, &manifest)? != expected.0 {
+    if object_hash(FORMAT, &manifest)? != task.archive_hash {
         return Err(invalid(
             "native generation objects belong to another original prefix",
         ));
@@ -84,7 +68,18 @@ fn collect_at(
         },
         objects: BTreeMap::new(),
     };
-    verify(&manifest, &bytes, job, &mut source)?;
+    // This is the existing authenticated target-local pass BEFORE first
+    // candidate preparation. Do not add a second archive traversal, or
+    // infer a target's entire prehistory from the last empty projection.
+    let mut fresh = None;
+    verify_observed(&manifest, &bytes, job, &mut source, &mut |original, _, _, step| {
+        if fresh.is_none() {
+            fresh = Some(FreshBackupBindings::selected(original, selection)?);
+        }
+        fresh.as_ref()
+            .expect("invariant: initialized original Backup bindings")
+            .require_absent(step, stop)
+    })?;
     let seals = manifest
         .publications
         .iter()

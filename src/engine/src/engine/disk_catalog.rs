@@ -22,7 +22,9 @@ pub(in crate::engine) use move_draft::{
 mod history;
 mod maintenance;
 pub(in crate::engine) mod root_install;
-pub(in crate::engine) use history::preparation::{FrozenDiskPair, OrdinaryDiskAliases, PreparedDiskScopes};
+pub(in crate::engine) use history::preparation::{
+    BackupDiskScopes, FreshBackupBindings, FrozenDiskPair, OrdinaryDiskAliases, PreparedDiskScopes,
+};
 pub use history::{
     DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRebuildSource,
     DiskDatabaseReconstruction, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,
@@ -133,14 +135,16 @@ fn budget() -> Error {
     )
 }
 
+fn placement_at(placement: &storage_contract::Placement, identity: &DiskRegistrationIdentity) -> bool {
+    placement.binding_generations.get(&identity.slot_id) == Some(&identity.binding_generation)
+        && placement.route_slot_ids.contains(&identity.slot_id)
+}
+
 fn snapshot(state: &State, identity: DiskRegistrationIdentity) -> Result<DiskCatalogSnapshot> {
     let mut versions = Vec::new();
     let mut bytes = 0usize;
     for (id, placement) in state.placements.iter() {
-        if !placement.route_slot_ids.contains(&identity.slot_id)
-            || placement.binding_generations.get(&identity.slot_id)
-                != Some(&identity.binding_generation)
-        {
+        if !placement_at(placement, &identity) {
             continue;
         }
         let version = state

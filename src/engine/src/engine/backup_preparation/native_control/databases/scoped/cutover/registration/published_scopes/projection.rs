@@ -1,6 +1,6 @@
 //! Real SQLite encoders fed by each target's own authenticated native history.
 use super::*;
-use crate::engine::disk_catalog::PreparedDiskScopes;
+use crate::engine::disk_catalog::{BackupDiskScopes, PreparedDiskScopes};
 use crate::engine::index::preparation::SystemEncodingInput;
 use super::encoding_memo;
 use crate::engine::backup_preparation::native_control::archive;
@@ -8,7 +8,7 @@ use crate::engine::backup_preparation::native_control::databases::scoped::encodi
     Transaction,
 };
 
-const MAX_DATABASES: usize = 81; // SYSTEM plus current/history for 32 + 8 bindings.
+const MAX_DATABASES: usize = 65; // SYSTEM plus current/history for the complete 32-binding ceiling.
 pub(super) const MAX_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Serialize)]
@@ -99,7 +99,9 @@ impl Scopes {
                 stop,
                 &mut |config, candidate, hash, state| {
                     if disks.is_none() {
-                        disks = Some(PreparedDiskScopes::new(config)?);
+                        disks = Some(BackupDiskScopes::new(
+                            config, registry.candidate(), registry.effective_config(),
+                        )?);
                     }
                     disks
                         .as_mut()
@@ -120,15 +122,8 @@ impl Scopes {
                 "published scopes do not extend this target's exact frozen State",
             ));
         }
-        let mut disks = disks
+        let disks = disks
             .ok_or_else(|| invalid("published scopes have no authenticated genesis prefix"))?;
-        disks.extend_backup(
-            registry.candidate(),
-            registry.effective_config(),
-            &source,
-            &published,
-            stop,
-        )?;
         let mut scopes = Self {
             files: BTreeMap::new(),
             descriptors: Vec::new(),
@@ -177,7 +172,7 @@ impl Scopes {
             },
             system,
         )?;
-        disks.finish_with_encoder(&published, stop, |current, history| {
+        disks.finish(&source, &published, stop, |current, history| {
             let input = if encodings.enabled() {
                 // These complete snapshots include identity, header and every
                 // historical change, not just the final publication State.
@@ -301,7 +296,7 @@ impl Scopes {
 pub(super) fn budget() -> Error {
     Error::new(
         ErrorCode::ResourceLimit,
-        "published scopes exceed 81 SQLite databases / 128 MiB or their manifest bound",
+        "published scopes exceed 65 SQLite databases / 128 MiB or their manifest bound",
     )
 }
 

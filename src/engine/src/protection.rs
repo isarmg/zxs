@@ -16,7 +16,7 @@ pub(crate) use backup_paths::automatic::{
 pub(crate) use backup_paths::directory_namespaces::{
     BATCH_FOLLOW_KIND, BATCH_ROUTE_KIND, DirectoryFollowChange, DirectoryFollowPlan,
     DirectoryNamespace, FILE_FOLLOW_KIND, FILE_ROUTE_KIND, captured_directory_namespace,
-    directory_catalog_changed, follows_directories, follows_routes,
+    directory_catalog_changed, follows_directories, follows_routes, has_published_directories_at_any,
     materialize as materialize_backup_directories, preflight as preflight_backup_directories,
     published_directories_at, repair_current as repair_current_backup_directories,
 };

@@ -1,92 +1,165 @@
-//! Append one authenticated Backup publication without relabelling old history.
+//! New Backup bindings begin at their one selected first publication. A
+//! transient earlier arrival followed by a departure is not an empty past.
 use super::*;
+use crate::ValidatedConfig;
+use crate::engine::backup_preparation::BackupPreparedTopologyNode;
 use crate::engine::membership_transition::PreparedBackupFirstCandidate;
 
-impl PreparedDiskScopes {
-    /// The source prefix has already been independently replayed on this target.
-    /// New bindings have no predecessor rows: their first arrivals belong only
-    /// to the actual Backup publication, never to the source disk's past.
-    pub(in crate::engine) fn extend_backup(
-        &mut self,
-        first: &PreparedBackupFirstCandidate,
-        config: &crate::ValidatedConfig,
-        source: &AdmittedState,
-        published: &AdmittedState,
+pub(in crate::engine) struct FreshBackupBindings(Vec<DiskRegistrationIdentity>);
+
+impl FreshBackupBindings {
+    pub(in crate::engine) fn selected(
+        original: &ValidatedConfig,
+        proposed: &[BackupPreparedTopologyNode],
+    ) -> Result<Self> {
+        if proposed.is_empty() || proposed.len() > 8 {
+            return Err(invalid("Backup needs its whole selected batch of fresh bindings"));
+        }
+        if original.disks.len().saturating_add(proposed.len()) > MAX_DISKS {
+            return Err(budget());
+        }
+        let mut fresh = Vec::<DiskRegistrationIdentity>::with_capacity(proposed.len());
+        for node in proposed {
+            let id = &node.identity;
+            if id.pool_id != original.pool_id
+                || id.binding_generation != 1
+                || original.disks.iter()
+                    .any(|old| old.disk_id == id.disk_id || old.slot_id == id.slot_id)
+                || fresh.iter()
+                    .any(|old| old.disk_id == id.disk_id || old.slot_id == id.slot_id)
+            {
+                return Err(invalid("selected Backup registrations repeat an original or one another"));
+            }
+            fresh.push(id.clone());
+        }
+        Ok(Self(fresh))
+    }
+
+    /// Only about the two DISK row families. This does not admit a FILE
+    /// replica, an actual empty disk, an independent directory or a voter.
+    pub(in crate::engine) fn require_absent(
+        &self,
+        step: &AdmittedState,
         stop: &AtomicBool,
     ) -> Result<()> {
-        let original = first.original_config();
-        let retained = original.disks.len();
-        if self.disks.len() != retained
-            || config.pool_id != original.pool_id
-            || config.disks.len() <= retained
-            || config.disks.len() > retained + 8
-            || storage_contract::canonical_json(&config.disks[..retained])?
-                != storage_contract::canonical_json(&original.disks)?
-        {
-            return Err(invalid(
-                "published disk scopes change the original fixed bindings",
-            ));
-        }
-        let candidate = first.candidate();
-        for (scope, disk) in self.disks.iter().zip(&original.disks) {
+        let state = step.state();
+        let conflict = || invalid("a selected fresh Backup binding already has original DISK history");
+        for placement in state.placements.values() {
             preparation_checkpoint(stop)?;
-            if scope.header.identity != identity(original, disk)
-                || scope.header.through_sequence != source.state().sequence
-                || scope.header.through_snapshot != candidate.previous_snapshot
+            if self.0.iter()
+                .any(|id| crate::engine::disk_catalog::placement_at(placement, id))
             {
-                return Err(invalid(
-                    "published disk scopes lost their exact original prefix",
-                ));
+                return Err(conflict());
             }
         }
-        let boundary = self
-            .disks
-            .first()
-            .ok_or_else(|| invalid("Backup disk scopes have no genesis binding"))?
-            .header
-            .clone();
-        for disk in &config.disks[retained..] {
-            preparation_checkpoint(stop)?;
-            let identity = identity(config, disk);
-            // The effective Config is append-only and validated. Still require
-            // the exact source State to have no data for any fresh binding.
-            if disk.binding_generation != 1
-                || original
-                    .disks
-                    .iter()
-                    .any(|old| old.slot_id == disk.slot_id || old.disk_id == disk.disk_id)
-                || !snapshot(source.state(), identity.clone())?.is_empty()
-            {
-                return Err(invalid(
-                    "new Backup binding already owns source data or history",
-                ));
-            }
-            self.disks.push(DiskScope {
-                header: DiskHistoryHeader {
-                    identity: identity.clone(),
-                    through_sequence: boundary.through_sequence,
-                    through_snapshot: boundary.through_snapshot.clone(),
-                    publications: boundary.publications,
-                },
-                previous: DiskCatalogSnapshot::empty(identity),
-                changes: Changes {
-                    rows: Vec::new(),
-                    bytes: 0,
-                },
-                record_bytes: 0,
-            });
+        if crate::protection::has_published_directories_at_any(
+            state, &self.0, &|| preparation_checkpoint(stop),
+        )? {
+            return Err(conflict());
         }
-        // One common actual Candidate extends every scope, including the old
-        // terminal's departures and each new target's first independent copy.
-        self.observe(candidate, first.hash(), published, stop)
+        Ok(())
     }
 }
 
-fn identity(config: &crate::ValidatedConfig, disk: &DiskConfig) -> DiskRegistrationIdentity {
-    DiskRegistrationIdentity {
-        pool_id: config.pool_id.clone(),
-        disk_id: disk.disk_id.clone(),
-        slot_id: disk.slot_id.clone(),
-        binding_generation: disk.binding_generation,
+/// Built by a target's *own* archive visitor. The original fixed registrations
+/// and every selected fresh target are checked on each authenticated step.
+pub(in crate::engine) struct BackupDiskScopes<'a> {
+    prefix: PreparedDiskScopes,
+    added: FreshBackupBindings,
+    first: &'a PreparedBackupFirstCandidate,
+}
+
+impl<'a> BackupDiskScopes<'a> {
+    pub(in crate::engine) fn new(
+        archived: &ValidatedConfig,
+        first: &'a PreparedBackupFirstCandidate,
+        selected: &ValidatedConfig,
+    ) -> Result<Self> {
+        let original = first.original_config();
+        let count = original.disks.len();
+        let added = FreshBackupBindings::selected(original, first.targets())?;
+        if storage_contract::canonical_json(&**archived)?
+                != storage_contract::canonical_json(&**original)?
+            || selected.pool_id != original.pool_id
+            || selected.disks.len() != count + added.0.len()
+            || storage_contract::canonical_json(&selected.disks[..count])?
+                != storage_contract::canonical_json(&original.disks)?
+            || selected.disks[count..].iter().zip(&added.0).any(|(disk, expected)| {
+                crate::engine::fresh_layout::registration(selected, disk) != *expected
+            })
+        {
+            return Err(invalid("published Backup disk scopes differ from the complete selected bindings"));
+        }
+        // Do not initialize from the portable Config on the decision: only
+        // the original target archive carries the fixed genesis predecessor.
+        archived.fixed_genesis()?;
+        Ok(Self {
+            prefix: PreparedDiskScopes::new(archived)?,
+            added,
+            first,
+        })
+    }
+
+    pub(in crate::engine) fn observe(
+        &mut self,
+        candidate: &Candidate,
+        hash: &str,
+        step: &AdmittedState,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        self.added.require_absent(step, stop)?;
+        self.prefix.observe(candidate, hash, step, stop)
+    }
+
+    /// Reconstruct the original recipe after D3, using the actual source
+    /// prefix, stable first request and predecessor only. The enclosing
+    /// first Candidate/Snapshot digest is never an input to these bytes.
+    pub(in crate::engine) fn finish(
+        self,
+        source: &AdmittedState,
+        published: &AdmittedState,
+        stop: &AtomicBool,
+        mut encode: impl FnMut(&DiskCatalogSnapshot, &StoredHistory) -> Result<(Vec<u8>, Vec<u8>)>,
+        mut store: impl FnMut(DiskRegistrationIdentity, Vec<u8>, Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        let Self { mut prefix, first, added } = self;
+        first.require_original_state(source)?;
+        let predecessor = first.candidate().previous_snapshot.as_deref();
+        let through = prefix.disks.first()
+            .ok_or_else(|| invalid("Backup disk scopes have no original registration"))?
+            .header
+            .clone();
+        if predecessor.is_none()
+            || through.through_sequence != source.state().sequence
+            || through.through_snapshot.as_deref() != predecessor
+            || through.publications == 0
+        {
+            return Err(invalid("Backup DISK history lost its complete authenticated original prefix"));
+        }
+        // No source row was seen on any step for these exact registrations.
+        // Carry only coverage, not some old disk's empty/retired inventory.
+        for registration in added.0 {
+            prefix.disks.push(DiskScope {
+                header: DiskHistoryHeader { identity: registration.clone(), ..through.clone() },
+                previous: DiskCatalogSnapshot::empty(registration),
+                changes: Changes { rows: Vec::new(), bytes: 0 },
+                record_bytes: 0,
+            });
+        }
+        let pairs = prospective::freeze_from_original_rows(
+            &prefix.config, prefix.disks, source.state(), published.state(), predecessor,
+            first.result(), stop, |current, history| {
+                let (a, b) = encode(current, history)?;
+                preparation_checkpoint(stop)?;
+                require_decoded_pair(current, history, &a, &b)?;
+                let bytes = a.len().checked_add(b.len()).ok_or_else(budget)?;
+                Ok(((current.identity.clone(), a, b), bytes))
+            },
+        )?;
+        for (id, a, b) in pairs {
+            preparation_checkpoint(stop)?;
+            store(id, a, b)?;
+        }
+        Ok(())
     }
 }

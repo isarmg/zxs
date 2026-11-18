@@ -80,12 +80,10 @@ impl Plan {
             .native;
         let root = &prepared.targets[index].root;
         let job = &prepared.task.selection().jobs()[index];
-        let prefix = match prepared.scope_encoding.as_ref() {
-            Some(memo) => generation_objects::collect_with_committed_encodings(
-                root, job, native, stop, memo,
-            )?,
-            None => generation_objects::collect(root, job, &native.archive_hash, stop)?,
-        };
+        let prefix = generation_objects::collect_selected(
+            root, job, native, &prepared.projection().selected_nodes(), stop,
+            prepared.scope_encoding.as_ref(),
+        )?;
         let archive = PreparedBackupControl::capture(frozen, prefix, stop)?;
         let decision_hash = decision.hash();
         let manifest = encode_metadata(

@@ -6,6 +6,7 @@ use crate::journal::Candidate;
 use std::sync::atomic::AtomicBool;
 
 mod backup;
+pub(in crate::engine) use backup::{BackupDiskScopes, FreshBackupBindings};
 mod prospective;
 pub(in crate::engine::disk_catalog::history) mod ordinary;
 pub(in crate::engine) use ordinary::OrdinaryDiskAliases;
@@ -216,13 +217,7 @@ impl PreparedDiskScopes {
             }, self.through)?;
             let (current_bytes, history_bytes) = encode(&current, &history)?;
             preparation_checkpoint(stop)?;
-            if super::super::database::read(&current_bytes, &current.identity)? != current
-                || database::read(&history_bytes, &current.identity)? != history
-            {
-                return Err(invalid(
-                    "prepared disk databases changed their exact source scopes",
-                ));
-            }
+            require_decoded_pair(&current, &history, &current_bytes, &history_bytes)?;
             store(current.identity, current_bytes, history_bytes)?;
         }
         Ok(())
@@ -237,6 +232,21 @@ impl PreparedDiskScopes {
         let history_bytes = database::encode(history)?;
         Ok((current_bytes, history_bytes))
     }
+}
+
+// Even a memo of pure encodings must return this complete canonical input.
+fn require_decoded_pair(
+    current: &DiskCatalogSnapshot,
+    history: &StoredHistory,
+    current_bytes: &[u8],
+    history_bytes: &[u8],
+) -> Result<()> {
+    if super::super::database::read(current_bytes, &current.identity)? != *current
+        || database::read(history_bytes, &current.identity)? != *history
+    {
+        return Err(invalid("prepared disk databases changed their exact source scopes"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

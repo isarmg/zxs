@@ -87,6 +87,32 @@ fn verify_published_encoding_reuse(
     let retained = prepared.scope_encoding.take();
     let before = published_fixture_tree(root);
     let registry = published_registry::Plan::capture(prepared, decision, expected, stop)?;
+    let first = registry.candidate();
+    let distinct = crate::engine::disk_catalog::FreshBackupBindings::selected(
+        first.original_config(), first.targets(),
+    )?;
+    let mut repeated = first.targets().to_vec();
+    assert!(repeated.len() > 1);
+    repeated[1].identity = repeated[0].identity.clone();
+    assert!(crate::engine::disk_catalog::FreshBackupBindings::selected(
+        first.original_config(), &repeated,
+    ).is_err());
+    for (target, job) in prepared.targets.iter().zip(prepared.task.selection().jobs()) {
+        let native = &prepared.task.installation.evidence.task.scoped.objects.native;
+        let mut steps = 0;
+        let (_, source) = archive::read_observed(
+            &target.root, job, &native.archive_hash, stop, &mut |_, _, _, admitted| {
+                steps += 1;
+                distinct.require_absent(admitted, stop)
+            },
+        )?;
+        assert!(steps > 0);
+        // Transplanting even one real occupied State into an alleged earlier
+        // prefix must fail, regardless of the following genuine empty tail.
+        let occupied = registry.state_at(target, stop)?;
+        assert!(distinct.require_absent(&occupied, stop).is_err());
+        distinct.require_absent(&source, stop)?;
+    }
     let baseline = observe_published_encodings(prepared, &registry, stop)?;
     assert_eq!(baseline.reports.len(), 2);
     assert_eq!(published_fixture_tree(root), before);

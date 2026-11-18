@@ -532,6 +532,46 @@ impl Engine {
     }
 }
 
+fn scoped_rows<'a, 'b>(
+    namespace: &'a DirectoryNamespace,
+    receipt: &'b OperationResult,
+    identity: &crate::DiskRegistrationIdentity,
+) -> Result<Option<(&'a Replica, &'b String)>> {
+    let Some(replica) = namespace
+        .replicas
+        .get(&identity.slot_id)
+        .filter(|replica| replica.identity == *identity)
+    else {
+        return Ok(None);
+    };
+    let history = receipt.history_tree_id.as_ref().ok_or_else(|| {
+        Error::new(ErrorCode::PublicationInvalid, "published directory history is missing")
+    })?;
+    Ok(Some((replica, history)))
+}
+
+/// Original Backup DISK prefix: one parse of each retained directory receipt
+/// for the whole selected set. A truly zero-version directory still counts.
+pub(crate) fn has_published_directories_at_any(
+    state: &State,
+    registrations: &[crate::DiskRegistrationIdentity],
+    checkpoint: &impl Fn() -> Result<()>,
+) -> Result<bool> {
+    for receipt in state.operations.values() {
+        checkpoint()?;
+        for (_, namespace) in current_namespaces(state, receipt)? {
+            for id in registrations {
+                if scoped_rows(&namespace, receipt, id)?
+                    .is_some_and(|(replica, _)| !replica.directories.is_empty())
+                {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Pure per-State projection shared with disk catalogs. The caller supplies an
 /// admitted historical State; today's policy, slot or Engine view is never used
 /// to assign an older publication to a disk. This grants no serving authority.
@@ -543,18 +583,9 @@ pub(crate) fn published_directories_at(
     let mut entries = BTreeMap::new();
     for receipt in state.operations.values() {
         for (policy, namespace) in current_namespaces(state, receipt)? {
-            let Some(replica) = namespace.replicas.get(&identity.slot_id) else {
+            let Some((replica, history_tree_id)) = scoped_rows(&namespace, receipt, identity)? else {
                 continue;
             };
-            if replica.identity != *identity {
-                continue;
-            }
-            let history_tree_id = receipt.history_tree_id.as_ref().ok_or_else(|| {
-                Error::new(
-                    ErrorCode::PublicationInvalid,
-                    "published directory history is missing",
-                )
-            })?;
             for row in &replica.directories {
                 let key = (
                     policy.repository_id.clone(),
