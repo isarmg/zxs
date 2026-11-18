@@ -44,7 +44,8 @@
   box-sizing: border-box;
 }
 .zxs-lifecycle-record { scroll-margin-block-start: 1rem; overflow-wrap: anywhere; }
-.zxs-lifecycle-record:is(:target, :focus-visible) {
+.zxs-lifecycle-record:is(:target, :focus-visible),
+.zxs-version-node:focus-visible {
   outline: 2px solid var(--zxs-action-primary, Highlight);
   outline-offset: 2px;
 }

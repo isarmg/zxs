@@ -585,6 +585,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
 
 fn window(state: RwSignal<State>) -> impl IntoView {
     let records = super::history_index::shared();
+    let focus = Memo::new(move |_| state.with(|s| s.files.history_focus.clone()));
     let versions = Memo::new(move |_| records.with(|index| metadata(index.snapshot.nodes())));
     let tree = Memo::new(move |_| layout(&versions.get()));
     let geometry = RwSignal::new(Geometry::default());
@@ -608,7 +609,7 @@ fn window(state: RwSignal<State>) -> impl IntoView {
                 </svg>
                 <For each=move ||tree.with(|tree|tree.levels.iter().enumerate().map(|(depth,ids)|(depth,ids.clone())).collect::<Vec<_>>()) key=|level|level.0 children=move |(depth,_)| {
                     view!{<div class="zxs-version-tree-level" data-version-depth=depth.to_string()>
-                        <For each=move ||tree.with(|tree|tree.levels.get(depth).cloned().unwrap_or_default()) key=|id|id.clone() children=move |id|node(state,records,id)/>
+                        <For each=move ||tree.with(|tree|tree.levels.get(depth).cloned().unwrap_or_default()) key=|id|id.clone() children=move |id|node(state,records,focus,id)/>
                     </div>}
                 }/>
             </div>
@@ -662,8 +663,12 @@ where
     }
 }
 
-fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String) -> impl IntoView {
+fn node(
+    state: RwSignal<State>, records: Memo<HistoryIndex>,
+    focus: Memo<Option<super::history::focus::Anchor>>, version_id: String,
+) -> impl IntoView {
     let id = StoredValue::new(version_id);
+    let card = super::history::focus::card(state, focus, id);
     let version = Memo::new(move |_| {
         records.with(|records| id.with_value(|id| records.node(id).map(|(_, node)| node.clone())))
     });
@@ -707,7 +712,7 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
         version.with(|node| node.as_ref().map(node_card::file_actions).unwrap_or(&[]))
     });
     view! {
-        <article class="zxs-version-node" data-version-id=id.get_value() data-node-id=id.get_value() data-body-version-id=move ||version.with(|node|node.as_ref().and_then(FileNode::version_id).map(str::to_owned).unwrap_or_default()) data-node-kind=move ||version.with(|node|node.as_ref().map(|node|kind_name(node.kind())).unwrap_or_default())
+        <article node_ref=card tabindex="-1" class="zxs-version-node" data-version-id=id.get_value() data-node-id=id.get_value() data-body-version-id=move ||version.with(|node|node.as_ref().and_then(FileNode::version_id).map(str::to_owned).unwrap_or_default()) data-node-kind=move ||version.with(|node|node.as_ref().map(|node|kind_name(node.kind())).unwrap_or_default())
             data-parent-set=move ||boundary.with(|boundary|if boundary.more.is_some(){"more"}else{"complete"})
             aria-label=move ||if current.get(){if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前版本","Current version")}}else{t("历史版本","Historical version")}>
             <details class="zxs-node-disclosure">

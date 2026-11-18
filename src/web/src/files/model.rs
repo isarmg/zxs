@@ -68,6 +68,7 @@ pub(crate) struct Model {
     pub file_history: crate::snapshot::Snapshot<FileHistory>,
     pub history_loading: bool,
     pub history_generation: u64,
+    pub history_focus: Option<super::history::focus::Anchor>,
     pub history_cancellation: Option<crate::api::ReadCancellation>,
     pub history_editors: usize,
     pub history_next_draft: u64,
@@ -223,6 +224,7 @@ impl Model {
 
     pub(crate) fn cancel_history(&mut self) {
         self.history_aux.cancel_all();
+        self.history_focus = None;
         if let Some(cancellation) = self.history_cancellation.take() {
             cancellation.abort();
         }

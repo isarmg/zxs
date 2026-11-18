@@ -782,3 +782,27 @@ fn stale_cyclic_response_does_not_invalidate_a_successor_window() {
     assert!(state.files.file_history.ready());
     assert!(state.files.history_loading);
 }
+
+#[test]
+fn only_the_original_admitted_anchor_can_focus_after_the_page_has_mounted() {
+    let mut state = loaded_state();
+    let node = HistoryNodeId::parse(NODE).unwrap();
+    let read = state.files.history_generation;
+    let anchor = history::focus::Anchor::from_page(&state, read, &node).unwrap();
+    assert!(anchor.current(&state));
+    let absent = HistoryNodeId::parse("ver_ffffffffffffffffffffffffffffffff").unwrap();
+    assert!(history::focus::Anchor::from_page(&state, read, &absent).is_none());
+    state.files.history_editors = 1;
+    assert!(!anchor.current(&state));
+    state.files.history_editors = 0;
+    state.files.generation += 1;
+    assert!(!anchor.current(&state));
+    state.files.generation -= 1;
+    state.session_epoch += 1;
+    assert!(!anchor.current(&state));
+    state.session_epoch -= 1;
+    state.files.history_focus = Some(anchor.clone());
+    state.files.cancel_history();
+    assert!(state.files.history_focus.is_none());
+    assert!(!anchor.current(&state));
+}

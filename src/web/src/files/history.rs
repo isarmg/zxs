@@ -8,6 +8,7 @@ use storage_contract::history_window::{
     HistoryWindowRequest,
 };
 
+pub(in crate::files) mod focus;
 mod ingress;
 mod node;
 pub(in crate::files) mod reads;

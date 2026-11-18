@@ -95,6 +95,7 @@ fn navigation_resets_only_location_owned_state() {
             ),
             history_loading: true,
             history_generation: 11,
+            history_focus: None,
             history_cancellation: None,
             history_editors: 0,
             history_next_draft: 0,

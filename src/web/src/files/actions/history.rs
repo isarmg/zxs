@@ -24,6 +24,7 @@ use web_interface::{i18n::t, prelude::*, tasks::spawn_local};
 #[derive(Clone)]
 struct Target {
     epoch: u64,
+    navigation: u64,
     slot: String,
     directory: String,
     entry: Entry,
@@ -49,6 +50,7 @@ impl Target {
         }
         Some(Self {
             epoch: state.session_epoch,
+            navigation: state.files.generation,
             slot: state.files.slot.clone(),
             directory: state.files.directory.clone(),
             entry: entry.clone(),
@@ -64,6 +66,7 @@ impl Target {
     fn current(&self, state: &State) -> bool {
         state.session_active()
             && state.session_epoch == self.epoch
+            && state.files.generation == self.navigation
             && state.files.slot == self.slot
             && state.files.directory == self.directory
             && state.files.file_history.root() == self.basis.as_deref()
@@ -365,8 +368,15 @@ fn begin_nodes(
         if !accept_read_response(state, target.epoch, &result) {
             return;
         }
-        let completion =
-            state.try_update(|s| complete_nodes(s, &target, generation, result, !fresh));
+        let completion = state.try_update(|s| {
+            let installed = complete_nodes(s, &target, generation, result, !fresh)?;
+            if installed && matches!(kind, NodeRead::Anchor)
+                && let Some(node) = request.anchor_node_id.as_ref()
+            {
+                s.files.history_focus = history::focus::Anchor::from_page(s, generation, node);
+            }
+            Ok::<_, api::Error>(installed)
+        });
         match completion {
             Some(Ok(true)) => {
                 let backup_anchor = if fresh {

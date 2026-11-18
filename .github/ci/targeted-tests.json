@@ -7443,6 +7443,29 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "file-original-timeline-navigation": {
+      "reason": "An explicit history locate focuses only its mounted original card, after the exact authorized page, without adopting a stale navigation, editor or session. No browser execution is implied by this inventory.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "files::actions::history::tests::only_the_original_admitted_anchor_can_focus_after_the_page_has_mounted"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 120
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        }
+      ]
     }
   },
   "rules": [
@@ -12959,7 +12982,8 @@
     {
       "path": "src/web/src/files/actions/history.rs",
       "groups": [
-        "container-tags-web"
+        "container-tags-web",
+        "file-original-timeline-navigation"
       ]
     },
     {
@@ -16596,7 +16620,8 @@
     {
       "path": "src/web/src/files/version_tree.rs",
       "groups": [
-        "web-directory-history-retirement"
+        "web-directory-history-retirement",
+        "file-original-timeline-navigation"
       ]
     },
     {
@@ -17097,7 +17122,8 @@
     {
       "path": "test/web/unit/files/actions/history_tests.rs",
       "groups": [
-        "container-history-dag-admission"
+        "container-history-dag-admission",
+        "file-original-timeline-navigation"
       ]
     },
     {
@@ -22153,6 +22179,12 @@
       "path": "test/engine/unit/engine/scope_node_bodies.rs",
       "groups": [
         "held-directory-node-occurrences"
+      ]
+    },
+    {
+      "path": "src/web/src/files/history/focus.rs",
+      "groups": [
+        "file-original-timeline-navigation"
       ]
     }
   ],
