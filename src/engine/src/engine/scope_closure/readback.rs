@@ -95,14 +95,10 @@ impl<'a> Original<'a> {
         {
             return Err(Failure::GenesisMismatch.into());
         }
-        let inventory = metadata_map::read_map(&manifest.inventory, |domain, hash| {
-            journal::load_scope_page_at(root, disk, domain, hash, PAGE_LIMIT)
-        })?;
-        if !inventory.is_empty() {
-            return Err(Failure::GenesisMismatch.into());
-        }
+        let empty = super::OrdinalBuilder::new(0).finish()?;
+        empty.verify(disk, root, &manifest.inventory)?;
         let counts = Counts {
-            inventory_entries: 0,
+            inventory_entries: empty.entries() as u64,
             materials: 2,
             body_entries: 0,
             canonical_metadata_bytes: (storage_contract::canonical_json(current)?.len()

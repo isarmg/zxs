@@ -8,6 +8,8 @@ pub(in crate::engine) use anchor::{Anchor, FixedGenesis};
 mod genesis;
 mod images;
 mod objects;
+mod ordinal;
+pub(in crate::engine) use ordinal::{OrdinalBuilder, OrdinalPages};
 mod publication;
 pub(in crate::engine) use publication::VerifiedScopeSnapshot;
 mod readback;
@@ -23,6 +25,8 @@ pub enum ScopeClosureError {
     ImageMismatch,
     #[error("the original native publication does not bind this exact local scope")]
     PublicationMismatch,
+    #[error("the local scope page differs from the complete original occurrence table")]
+    PageMismatch,
     #[error("the captured scope exceeds its resource budget")]
     Budget,
     #[error("the original genesis scope differs from the admitted empty pool")]
@@ -32,7 +36,7 @@ impl ScopeClosureError {
     pub(crate) fn code(&self) -> ErrorCode {
         match self {
             Self::GenesisIdentity => ErrorCode::DiskIdentityMismatch,
-            Self::ImageMismatch | Self::GenesisMismatch | Self::PublicationMismatch => ErrorCode::ObjectCorrupt,
+            Self::ImageMismatch | Self::PageMismatch | Self::GenesisMismatch | Self::PublicationMismatch => ErrorCode::ObjectCorrupt,
             Self::Budget => ErrorCode::ResourceLimit,
         }
     }

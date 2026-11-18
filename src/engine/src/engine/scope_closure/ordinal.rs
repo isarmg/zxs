@@ -1,0 +1,98 @@
+//! Bounded canonical order for local occurrence tables. The caller owns the
+//! row type, ordering, provenance, and domain-specific row limit. A set of
+//! pages alone cannot establish that any row exists or has been published.
+use super::{ScopeClosureError as Failure, genesis::PAGE_LIMIT};
+use crate::{
+    DiskConfig, Result, disk::DiskRoot, journal,
+    metadata_map::{Encoder, ProofMeasure, Reference},
+};
+use data_serialization::Serialize;
+
+const PACKAGE_LIMIT: usize = 64 * 1024 * 1024;
+
+pub(in crate::engine) struct OrdinalBuilder {
+    rows: json_codec::Map<String, json_codec::Value>,
+    limit: usize,
+    input_bytes: usize,
+}
+impl OrdinalBuilder {
+    pub(in crate::engine) fn new(limit: usize) -> Self {
+        Self { rows: json_codec::Map::new(), limit, input_bytes: 0 }
+    }
+
+    /// The ordinal is local to this exact material. Matching object hashes
+    /// across different occurrences must not remove/reorder rows.
+    pub(in crate::engine) fn push<T: Serialize>(&mut self, row: &T) -> Result<()> {
+        if self.rows.len() == self.limit {
+            return Err(Failure::Budget.into());
+        }
+        let key = format!("{:020}", self.rows.len());
+        let value = json_codec::to_value(row)?;
+        let bytes = storage_contract::canonical_json_value(&value)?.len();
+        // A singleton must fit even including its key, quotes, colon and braces.
+        let singleton = bytes.checked_add(key.len() + 5).ok_or(Failure::Budget)?;
+        if singleton > PAGE_LIMIT {
+            return Err(Failure::Budget.into());
+        }
+        self.input_bytes = self.input_bytes.checked_add(singleton - 1)
+            .filter(|total| *total <= PACKAGE_LIMIT).ok_or(Failure::Budget)?;
+        self.rows.insert(key, value);
+        Ok(())
+    }
+
+    pub(in crate::engine) fn finish(self) -> Result<OrdinalPages> {
+        let entries = self.rows.len();
+        let mut encoder = Encoder::new(PAGE_LIMIT);
+        let root = encoder.map_root(self.rows, ProofMeasure::Plain)?.reference().clone();
+        let pages = encoder.finish();
+        let mut bytes = 0usize;
+        for page in &pages {
+            bytes = bytes.checked_add(page.bytes().len())
+                .filter(|total| *total <= PACKAGE_LIMIT).ok_or(Failure::Budget)?;
+        }
+        Ok(OrdinalPages { root, pages, entries, bytes })
+    }
+}
+
+pub(in crate::engine) struct OrdinalPages {
+    root: Reference,
+    pages: Vec<journal::PreparedMetadataObject>,
+    entries: usize,
+    bytes: usize,
+}
+impl OrdinalPages {
+    pub(in crate::engine) fn root(&self) -> &Reference { &self.root }
+    pub(in crate::engine) fn entries(&self) -> usize { self.entries }
+    pub(in crate::engine) fn bytes(&self) -> usize { self.bytes }
+
+    pub(in crate::engine) fn install(&self, disk: &DiskConfig, held: &DiskRoot) -> Result<()> {
+        for page in &self.pages {
+            page.store_at_root(held, disk)?;
+        }
+        self.verify(disk, held, &self.root)
+    }
+
+    pub(in crate::engine) fn verify(
+        &self, disk: &DiskConfig, held: &DiskRoot, required: &Reference,
+    ) -> Result<()> {
+        if required != &self.root {
+            return Err(Failure::PageMismatch.into());
+        }
+        // Only independently derived, bounded addresses. A hostile local
+        // index cannot add reads, a suffix or substitute an equivalent map.
+        for page in &self.pages {
+            let actual = journal::load_scope_page_at(
+                held, disk, page.kind(), &page.hash, PAGE_LIMIT,
+            )?;
+            if actual.bytes() != page.bytes() {
+                return Err(Failure::PageMismatch.into());
+            }
+        }
+        Ok(())
+    }
+}
+
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/scope_ordinal_pages.rs"]
+mod tests;

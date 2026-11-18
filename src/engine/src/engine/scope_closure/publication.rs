@@ -144,12 +144,8 @@ impl VerifiedScopeSnapshot {
         if history.body_inventory.kind() != metadata_map::ReferenceKind::Page {
             return Err(Failure::PublicationMismatch.into());
         }
-        let bodies = metadata_map::read_map(&history.body_inventory, |kind, hash| {
-            journal::load_scope_page_at(root, disk, kind, hash, PAGE_LIMIT)
-        })?;
-        if !bodies.is_empty() {
-            return Err(Failure::PublicationMismatch.into());
-        }
+        let empty = super::OrdinalBuilder::new(0).finish()?;
+        empty.verify(disk, root, &history.body_inventory)?;
         Ok(HistoryReference {
             logical_root: history.logical_root,
             representation: history.representation,
