@@ -4505,7 +4505,7 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
     );
 }
 
-// A node-note target must be a real metadata merge, never a path-change fact.
+// Adopt the exact retained content. The existing Version-note route owns its note.
 async fn retained_note_merge(
     app: &Router,
     token: &str,
@@ -4553,7 +4553,7 @@ async fn retained_note_merge(
         })),
     )
     .await;
-    assert!(merged["result"]["node_id"].as_str().unwrap().starts_with("fmeta_"));
+    assert_eq!(merged["result"]["node_id"], chosen);
     success(
         app,
         token,
@@ -4737,12 +4737,9 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
         None,
     )
     .await;
-    assert_eq!(parents["parents"].as_array().unwrap().len(), 2);
-    for input in merged["result"]["source_inputs"].as_array().unwrap() {
-        assert!(parents["parents"].as_array().unwrap().iter().any(|parent| {
-            parent["parent_node_id"] == input["source_node_id"]
-        }));
-    }
+    assert_eq!(node, body);
+    assert!(parents["parents"].as_array().unwrap().is_empty());
+    assert_eq!(merged["result"]["source_inputs"].as_array().unwrap().len(),2);
     assert_eq!(version_bytes(&app, &admin, body).await, b"original one");
     let scopes = success(
         &app,
@@ -4753,14 +4750,8 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
     )
     .await;
     let note_route = format!("/api/file-manager/files/{file}/nodes/{node}");
-    success(
-        &app,
-        &admin,
-        "PATCH",
-        &note_route,
-        Some(json!({"note":"历史合并备注","operation_id":new_id("op").unwrap()})),
-    )
-    .await;
+    assert_eq!(send(&app,Some(&admin),"PATCH",&note_route,
+        Some(json!({"note":"不能另造合并备注","operation_id":new_id("op").unwrap()}))).await.0,StatusCode::NOT_FOUND);
     success(
         &app,
         &admin,
@@ -4777,7 +4768,7 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
             .iter()
             .find(|n| n["node_id"] == node)
             .unwrap()["note"],
-        "历史合并备注"
+        "正文备注"
     );
     assert_eq!(
         noted["nodes"]
@@ -4832,7 +4823,7 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
     let branch=success(&app,&admin,"POST",&branch_route,Some(json!({"source_version_id":body,"source_node_id":node,"name":"from-metadata","operation_id":new_id("op").unwrap()}))).await;
     let branch_id = branch["result"]["branch_id"].as_str().unwrap();
     let registered = success(&app, &admin, "GET", &history_route, None).await;
-    assert_eq!(registered["nodes"].as_array().unwrap().len(), 3);
+    assert_eq!(registered["nodes"].as_array().unwrap().len(), 2);
     assert_eq!(
         history_versions(&app, &admin, file, &registered, None).await["versions"]
             .as_array()
@@ -4863,7 +4854,7 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
             .len(),
         3
     );
-    assert_eq!(written["nodes"].as_array().unwrap().len(), 4);
+    assert_eq!(written["nodes"].as_array().unwrap().len(), 3);
     let current_body = written["context"]["content"]["version_id"]
         .as_str()
         .unwrap();
@@ -5612,7 +5603,9 @@ async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map(
     let history_route = format!("/api/file-manager/files/{file}/history");
     let merged = retained_note_merge(&app, &token, &file, &version, "renamed.txt").await;
     let node = merged["result"]["node_id"].as_str().unwrap().to_owned();
-    assert!(node.starts_with("fmeta_"));
+    assert_eq!(node, version);
+    assert_eq!(send(&app,Some(&token),"PATCH",&format!("/api/file-manager/files/{file}/nodes/{node}"),
+        Some(json!({"note":"not separate metadata","operation_id":new_id("op").unwrap()}))).await.0,StatusCode::NOT_FOUND);
     let mut receipts = Vec::new();
     for (method, route, kind, id_key, canonical) in [
         (
@@ -5628,13 +5621,6 @@ async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map(
             "version.metadata",
             "version_id",
             json!({"file_id":file,"version_id":version,"note":""}),
-        ),
-        (
-            "PATCH",
-            format!("/api/file-manager/files/{file}/nodes/{node}"),
-            "file.path.metadata",
-            "node_id",
-            json!({"file_id":file,"node_id":node,"note":""}),
         ),
     ] {
         let note = "  Cafe\u{301}  ";

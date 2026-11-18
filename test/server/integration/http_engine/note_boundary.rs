@@ -356,36 +356,6 @@ async fn file_note_wire_digest_and_permanent_receipts_survive_clear_replay_and_r
     assert_eq!(reopened.state().file_notes[&file], "later note");
 }
 
-async fn node_note_fixture() -> (tempfile::TempDir, Router, String, String, [String; 2]) {
-    let (root, app, token, file, version) = note_target_fixture().await;
-    manager_namespace(&app, &token, "rename", "version-note.txt", Some("node-note.txt")).await;
-    let first = retained_note_merge(&app, &token, &file, &version, "node-note.txt").await;
-    let anchor = first["result"]["node_id"].as_str().unwrap().to_owned();
-    let branch = first["result"]["branch_id"].as_str().unwrap();
-    // Distinct retained graph inputs create a second real metadata node, while
-    // choosing the first merge preserves the originally selected content bytes.
-    let merged = success(
-        &app,
-        &token,
-        "POST",
-        &format!("/api/file-manager/files/{file}/merge-history"),
-        Some(json!({
-            "inputs":[
-                {"branch_id":branch,"source_node_id":version,"expected_node_id":anchor},
-                {"branch_id":branch,"source_node_id":anchor,"expected_node_id":anchor}
-            ],
-            "chosen_node_id":anchor,"name":"Second node note metadata","confirmed":true,
-            "operation_id":new_id("op").unwrap()
-        })),
-    )
-    .await;
-    let metadata = merged["result"]["node_id"].as_str().unwrap().to_owned();
-    assert!(anchor.starts_with("fmeta_"));
-    assert!(metadata.starts_with("fmeta_"));
-    assert_ne!(anchor, metadata);
-    (root, app, token, file, [anchor, metadata])
-}
-
 #[tokio::test]
 async fn node_note_unknown_paths_preserve_body_file_and_idempotency_order() {
     let (_root, app, token, file, _) = note_target_fixture().await;
@@ -457,88 +427,28 @@ async fn assert_node_body_errors(
     }
 }
 
-fn node_note_clear_digest(file: &str, node: &str) -> String {
-    let body = json!({"file_id":file,"node_id":node,"note":""});
-    assert_eq!(
-        storage_contract::canonical_json(&body).unwrap(),
-        format!("{{\"file_id\":\"{file}\",\"node_id\":\"{node}\",\"note\":\"\"}}").as_bytes(),
-    );
-    storage_contract::object_hash(
-        "request",
-        &json!({"kind":"file.path.metadata","principal":"admin","body":body}),
-    )
-    .unwrap()
-}
-
-async fn node_note_clear_and_replay(
-    app: &Router,
-    token: &str,
-    file: &str,
-    node: &str,
-    operation: storage_contract::OperationId,
-) -> (Value, String) {
-    let route = format!("/api/file-manager/files/{file}/nodes/{node}");
-    let clear = json!({"note":"","operation_id":operation,"file_id":file,"node_id":node});
-    let original = success(app, token, "PATCH", &route, Some(clear.clone())).await;
-    assert_eq!(original["operation_kind"], "file.path.metadata");
-    assert_eq!(original["result"]["file_id"], file);
-    assert_eq!(original["result"]["node_id"], node);
-    assert_eq!(original["result"]["note"], "");
-    let digest = node_note_clear_digest(file, node);
-    assert_eq!(original["request_digest"], digest);
-    success(
-        app, token, "PATCH", &route,
-        Some(json!({"note":"later note","operation_id":new_id("op").unwrap()})),
-    )
-    .await;
-    let replay = success(app, token, "PATCH", &route, Some(clear)).await;
-    assert_eq!(
-        storage_contract::canonical_json(&replay).unwrap(),
-        storage_contract::canonical_json(&original).unwrap(),
-    );
-    (original, digest)
-}
-
 #[tokio::test]
-async fn node_note_both_prefixes_keep_wire_digest_receipts_and_cold_replay() {
-    let (root, app, token, file, nodes) = node_note_fixture().await;
-    let mut receipts = Vec::new();
-    for (node, operation) in nodes.iter().zip([
-        storage_contract::OperationId::from_random([14; 16]),
-        storage_contract::OperationId::from_random([15; 16]),
-    ]) {
-        let (wire, digest) = node_note_clear_and_replay(
-            &app, &token, &file, node, operation,
-        )
-        .await;
-        receipts.push((node.clone(), operation, wire, digest));
+async fn adopted_version_and_operation_are_not_synthetic_writable_node_notes() {
+    let (root,app,token,file,version)=note_target_fixture().await;
+    manager_namespace(&app,&token,"rename","version-note.txt",Some("adoption.txt")).await;
+    let first=retained_note_merge(&app,&token,&file,&version,"adoption.txt").await;
+    assert_eq!(first["result"]["node_id"],version);
+    let event=first["result"]["merge_id"].as_str().unwrap();
+    for target in [version.as_str(),event] {
+        let op=storage_contract::OperationId::generate().unwrap();
+        let (status,body)=send(&app,Some(&token),"PATCH",&format!("/api/file-manager/files/{file}/nodes/{target}"),
+            Some(json!({"note":"not a separate node","operation_id":op}))).await;
+        assert_eq!(status,StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"],"FILE_NODE_NOT_FOUND");
     }
+    let op=storage_contract::OperationId::generate().unwrap();
+    let route=format!("/api/file-manager/versions/{version}/metadata");
+    let input=json!({"note":"the original version","operation_id":op});
+    let original=success(&app,&token,"POST",&route,Some(input.clone())).await;
+    assert_eq!(success(&app,&token,"POST",&route,Some(input)).await,original);
     drop(app);
-    let mut engine = reopen_after_router_drop(&root.path().join("system")).await;
-    let mut stored = Vec::new();
-    for (node, operation, wire, digest) in receipts {
-        assert_eq!(engine.state().file_path_notes[&node], "later note");
-        let receipt = &engine.state().operations[&operation];
-        assert_eq!(receipt.request_digest, digest);
-        assert_eq!(receipt.result, wire["result"]);
-        let bytes = storage_contract::canonical_json(receipt).unwrap();
-        let decoded: storage_contract::OperationResult = json_codec::from_slice(&bytes).unwrap();
-        assert_eq!(storage_contract::canonical_json(&decoded).unwrap(), bytes);
-        let replay = engine.set_file_node_note(
-            &file, &node, &storage_contract::Note::parse("".into()).unwrap(), "admin", operation,
-        )
-        .unwrap();
-        assert_eq!(storage_contract::canonical_json(&replay).unwrap(), bytes);
-        assert_eq!(engine.state().file_path_notes[&node], "later note");
-        stored.push((node, operation, bytes));
-    }
-    drop(engine);
-    let reopened = Engine::open(&root.path().join("system")).unwrap();
-    for (node, operation, bytes) in stored {
-        assert_eq!(
-            storage_contract::canonical_json(&reopened.state().operations[&operation]).unwrap(),
-            bytes,
-        );
-        assert_eq!(reopened.state().file_path_notes[&node], "later note");
-    }
+    let engine=reopen_after_router_drop(&root.path().join("system")).await;
+    assert!(engine.state().file_metadata_nodes.is_empty());
+    assert_eq!(engine.state().version_notes[&version],"the original version");
+    assert_eq!(engine.state().operations[&op].result,original["result"]);
 }

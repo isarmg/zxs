@@ -138,6 +138,15 @@ async fn file_lifecycle_real_router_delete_undo_auth_current_root_and_read_only(
     let url = route(&request);
     let page: Page = json_codec::from_value(fixture.json("GET", &url, None).await).unwrap();
     page.validate(&request).unwrap();
+    // Same principal, different actual management session: a captured private
+    // continuation cannot reveal even the existence of the next event.
+    let other=super::request(&fixture.app,None,"POST","/api/auth/login",
+        Some(json!({"username":"admin","password":"phase-one-test-password"}))).await;
+    let request_from_other=Request::builder().uri(route(&request))
+        .header("authorization",format!("Bearer {}",other["token"].as_str().unwrap()))
+        .body(Body::empty()).unwrap();
+    let response=fixture.app.clone().oneshot(request_from_other).await.unwrap();
+    assert_eq!(response.status(),StatusCode::FORBIDDEN);
     assert_eq!(page.events[0].operation_id, undo);
     assert!(matches!(&page.events[0].detail, Detail::Undo { .. }));
     assert!(page.events[0].occurred_at.is_none());

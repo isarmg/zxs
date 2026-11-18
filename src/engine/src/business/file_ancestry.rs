@@ -161,23 +161,8 @@ impl<'a> FileAncestry<'a> {
                 builder.edge(id, parent)?;
             }
         }
-        for event in state.file_branch_merges.values() {
-            checkpoint()?;
-            builder.header()?;
-            if event.file_id != file || event.history_tree_id != history {
-                continue;
-            }
-            for parent in &event.parent_node_ids {
-                checkpoint()?;
-                if parent == &event.result_node_id {
-                    // Reused result self-members are not graph edges, but still
-                    // consume scan work even if a malformed fixture repeats one.
-                    builder.parent_record()?;
-                } else {
-                    builder.edge(&event.result_node_id, parent)?;
-                }
-            }
-        }
+        // Merge participants are original operation evidence, never content
+        // parent records. They neither create reachability nor spend edge budget.
         Ok(Self {
             parents: builder.parents,
         })

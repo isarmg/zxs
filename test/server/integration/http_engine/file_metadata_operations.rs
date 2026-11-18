@@ -561,11 +561,11 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         merged["result"]
     );
     let node = merged["result"]["node_id"].as_str().unwrap();
-    assert!(node.starts_with("fmeta_"));
+    assert_eq!(node, chosen_node);
     success(
-        &app, &token, "PATCH",
-        &format!("/api/file-manager/files/{file}/nodes/{node}"),
-        Some(json!({"note":"独立合并备注","operation_id":new_id("op").unwrap()})),
+        &app, &token, "POST",
+        &format!("/api/file-manager/versions/{node}/metadata"),
+        Some(json!({"note":"原版本备注","operation_id":new_id("op").unwrap()})),
     ).await;
     let after = history(&app, &token, file).await;
     assert_eq!(
@@ -583,8 +583,8 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         .iter()
         .find(|item| item["node_id"] == node)
         .unwrap();
-    assert_eq!(result["kind"], "merge");
-    assert_eq!(result["note"], "独立合并备注");
+    assert_eq!(result["kind"], "content");
+    assert_eq!(result["note"], "原版本备注");
     assert_eq!(
         result["path"], "report.txt",
         "merge metadata describes its chosen source, independent of parent UUID order"
@@ -647,17 +647,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     assert!(parents["page"]["next_cursor"].is_null());
     let parents = parents["parents"].as_array().unwrap();
     assert_eq!(merge["parent_count"], parents.len().to_string());
-    assert_eq!(parents.len(), 3);
-    for (ordinal, parent) in parents.iter().enumerate() {
-        assert_eq!(parent["ordinal"], ordinal.to_string());
-    }
-    for head in [left_node, right_node, chosen_node] {
-        assert!(
-            parents
-                .iter()
-                .any(|parent| parent["parent_node_id"] == head)
-        );
-    }
+    assert!(parents.is_empty(), "the two input facts are not graph edges");
     assert_eq!(version_bytes(&app, &token, base).await, b"base body");
     assert_eq!(
         send(
@@ -1300,10 +1290,9 @@ async fn historical_merge_preserves_source_default_and_replays_after_restart() {
     let merged = success(&app, &token, "POST", &route, Some(request.clone())).await;
     assert_eq!(merged["operation_kind"], "file.history.merge");
     let result_node = merged["result"]["node_id"].as_str().unwrap();
-    assert!(result_node.starts_with("fmeta_"));
-    assert_ne!(result_node, middle);
+    assert_eq!(result_node, middle);
     assert_ne!(result_node, base);
-    assert_eq!(merged["result"]["reused_node"], false);
+    assert_eq!(merged["result"]["reused_node"], true);
     assert_eq!(merged["result"]["version_id"], middle);
     assert_eq!(merged["result"]["source_inputs"], inputs);
     assert_eq!(merged["result"]["name"], "Historical result");
