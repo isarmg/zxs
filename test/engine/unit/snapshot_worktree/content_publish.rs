@@ -7,6 +7,13 @@ use storage_contract::snapshot_worktree::{CommitWorktree, SnapshotHandle};
 fn prepare() -> (Fixture, Engine, Principal, CommitWorktree, WorktreeHandle) {
     let (fixture, mut engine) = Fixture::with_nested_directory(true);
     let principal: Principal = "admin".parse().unwrap();
+    // One real ManualClean container and one Automatic nested container.
+    // Neither has a shared working draft for this private worktree to clear.
+    use storage_contract::file_draft::{CommitMode, DraftCommand};
+    let first_target = &fixture.targets[0];
+    let expected = engine.file_working_state(first_target).unwrap().revision();
+    engine.change_file_working(&DraftCommand::SetMode { target: first_target.clone(), expected, mode: CommitMode::Manual },
+        &principal, OperationId::generate().unwrap()).unwrap();
     let root = engine.snapshot_root_context(fixture.targets[0].repository).unwrap();
     let allocate = || AllocateWorktree { source: fixture.source, parent_directory_id: root.host.directory_id,
         expected_root_generation: root.host.expected_root_generation, operation_id: OperationId::generate().unwrap(),
@@ -42,6 +49,11 @@ fn assert_closed(engine: &Engine, request: &CommitWorktree, expected: SnapshotHa
         assert_eq!(row.content.version.version_sequence, published.sequence);
         assert_eq!(row.file.path, input.edit.path);
         assert_eq!(row.file.material, input.edit.material);
+        let working = &engine.state().file_containers[&input.original.file_id].working;
+        assert_eq!(working, &input.clean);
+        if input.edit.path.as_str() == "first.txt" {
+            assert!(matches!(working, storage_contract::file_draft::FileWorkingState::ManualClean { .. }));
+        } else { assert!(matches!(working, storage_contract::file_draft::FileWorkingState::Automatic { .. })); }
         assert_eq!(engine.file_branch_head(&input.base.branch_id().to_string()).unwrap(), row.file.material.version_id.to_string());
     }
     for (now, old) in node.manifest().entries().iter().zip(previous.manifest().entries()) {
