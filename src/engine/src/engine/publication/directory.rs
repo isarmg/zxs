@@ -2,7 +2,7 @@
 //! The old ordinary decision path remains closed to this private native mode.
 use super::*;
 mod content;
-pub(crate) use content::BudgetedOriginalContent;
+pub(crate) use content::{BudgetedOriginalContent, FinalizedOriginalContent};
 use crate::engine::file_draft::WorkingBatchHandoff;
 use crate::engine::fresh_layout::{FreshLayoutError as Failure, containers::ContainerPreparation};
 use crate::snapshot_worktree::drafts::{
@@ -169,13 +169,13 @@ impl crate::engine::PlanningContext<'_> {
 /// This product outlives all metadata writes and the actual native decision.
 /// It is created only by consuming both prepared physical domains and the
 /// complete reconstruction with the real directory feedback.
-pub(super) struct DirectoryPublicationGuard {
+pub(super) struct WorkingDirectoryGuard {
     proposal: PreparedDirectoryProposal,
     files: WorkingBatchHandoff,
     material: PreparedDirectoryMaterial,
 }
 
-impl DirectoryPublicationGuard {
+impl WorkingDirectoryGuard {
     pub(super) fn require_context(
         &self, context: &crate::engine::PlanningContext<'_>, candidate: &Candidate,
     ) -> Result<()> {
@@ -257,9 +257,9 @@ impl PreparedDirectoryFiles {
             )?;
         }
         self.require_context(context)?;
-        let guard = DirectoryPublicationGuard {
+        let guard = DirectoryPublicationGuard::Working(Box::new(WorkingDirectoryGuard {
             proposal, files: self.source, material: self.directory,
-        };
+        }));
         guard.require_context(context, &candidate)?;
         let history_owners = projection.into_owners();
         Ok(DetachedPublication {
@@ -414,5 +414,59 @@ impl Engine {
         observed.directory.require_candidate(candidate)
             .map_err(DirectoryPublicationError::into_engine)?;
         Ok(completed)
+    }
+}
+
+
+/// Different original producers, one native publication guard and linearization.
+pub(super) enum DirectoryPublicationGuard {
+    Working(Box<WorkingDirectoryGuard>),
+    Content(Box<crate::snapshot_worktree::PreparedOriginalContent>),
+}
+impl DirectoryPublicationGuard {
+    pub(super) fn require_context(&self, ctx: &crate::engine::PlanningContext<'_>, candidate: &Candidate) -> Result<()> {
+        match self {
+            Self::Working(value) => value.require_context(ctx, candidate),
+            Self::Content(value) => {
+                value.require_before(ctx).map_err(crate::business::file_draft::worktree::failure)?;
+                value.require_candidate(candidate).map_err(crate::business::file_draft::worktree::failure)
+            }
+        }
+    }
+    pub(super) fn require_candidate(&self, candidate: &Candidate) -> Result<()> {
+        match self {
+            Self::Working(value) => value.require_candidate(candidate),
+            Self::Content(value) => value.require_candidate(candidate).map_err(crate::business::file_draft::worktree::failure),
+        }
+    }
+    pub(super) fn after_decision(&self, candidate: &Candidate) -> Result<()> {
+        self.require_candidate(candidate)?;
+        if let Self::Content(value) = self { value.require_installed().map_err(crate::business::file_draft::worktree::failure)?; }
+        Ok(())
+    }
+    pub(super) fn installer(&self) -> Option<ContentInstaller<'_>> {
+        match self { Self::Working(_) => None, Self::Content(value) => Some(ContentInstaller::Live(value)) }
+    }
+}
+pub(super) enum ContentInstaller<'a> {
+    Live(&'a crate::snapshot_worktree::PreparedOriginalContent),
+    Recovery(&'a crate::snapshot_worktree::ObservedOriginalContent),
+}
+impl ContentInstaller<'_> {
+    pub(super) fn require_candidate(&self, ctx: &crate::engine::PlanningContext<'_>, candidate: &Candidate) -> Result<()> {
+        match self {
+            Self::Live(value) => { value.require_before(ctx).map_err(crate::business::file_draft::worktree::failure)?;
+                value.require_candidate(candidate) },
+            Self::Recovery(value) => value.require_context(ctx, candidate),
+        }.map_err(crate::business::file_draft::worktree::failure)
+    }
+    pub(super) fn install(&self, engine: &mut Engine, proof: &FinalizedOriginalContent<'_>) -> Result<()> {
+        #[cfg(feature = "fault-injection")]
+        let mut cut = |point: &str| engine.failpoint(point);
+        #[cfg(not(feature = "fault-injection"))]
+        let mut cut = |_: &str| { let _ = &engine; Ok(()) };
+        match self { Self::Live(value) => value.finish_moves(proof, &mut cut),
+            Self::Recovery(value) => value.finish_moves(proof, &mut cut) }
+            .map_err(crate::business::file_draft::worktree::failure)
     }
 }

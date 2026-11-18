@@ -1,6 +1,6 @@
-//! Explicit publication from one registered, durably sealed edit. Only an
-//! independently published FILE child and directory node may finish their exact
-//! ledger/SYSTEM tail on retry. Earlier uncertain preparations remain Pending.
+//! Explicit publication from a registered worktree. Existing multi-occurrence
+//! saves have one native business decision; single-occurrence forks and
+//! added entries keep their independent, explicitly selected domains.
 mod recovery;
 mod added;
 pub(crate) mod content;
@@ -32,6 +32,7 @@ pub(crate) fn commit_worktree(
         if engine.state().operations.get(&request.operation_id).is_some_and(|record| {
             record.kind == crate::persist::snapshot_worktree::HISTORICAL_RESERVE
                 || record.kind == crate::persist::snapshot_worktree::ADDED_RESERVE
+                || record.kind == crate::persist::snapshot_worktree::CONTENT_RESERVE
         }) && !matches!(source, RegistrationError::Pending(_) | RegistrationError::Digest(_)
             | RegistrationError::Operation(_))
         {
@@ -49,6 +50,9 @@ fn commit_inner(
 ) -> Result<SnapshotHandle> {
     let source = engine.snapshot_receipt_source()?;
     let index = source.index()?;
+    if let Some(retry) = index.retry_content(request, principal)? {
+        return content::finish(engine, &index, retry, request, principal);
+    }
     if let Some(retry) = index.retry_added_commit(request, principal)? {
         return added::retry(engine, &index, retry, request.target, principal);
     }
@@ -68,6 +72,20 @@ fn commit_inner(
         return Err(RegistrationError::InitialOnly);
     }
     let registered = index.worktree(request.target)?;
+    // Choose scope from the complete authenticated occurrence set, not from
+    // a client count or the last save. A mixed/unsupported multi-file batch
+    // must fail as a whole; it never falls through to the independent writer.
+    if index.active_edits(request.target).len() > 1 {
+        engine.require_unstarted_content_slot(request.operation_id).map_err(RegistrationError::Publication)?;
+        let originals = content::Originals::capture(engine, &index, request)?;
+        content::reserve(engine, originals, principal)?;
+        #[cfg(feature = "fault-injection")]
+        engine.failpoint("after_worktree_content_reserve").map_err(RegistrationError::Publication)?;
+        let actual = engine.snapshot_receipt_source()?;
+        let index = actual.index()?;
+        let retry = index.retry_content(request, principal)?.ok_or(RegistrationError::Source)?;
+        return content::finish(engine, &index, retry, request, principal);
+    }
     let original = index.reopen_node(engine, registered.source().handle())?;
     let session = registered.reopen(&original)?;
     if !session.added_files().is_empty() {

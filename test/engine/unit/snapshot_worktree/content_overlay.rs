@@ -85,3 +85,6 @@ fn siblings_survive_resave_and_cold_reopen_without_publishing_either_file() {
 
 #[path = "content_plan.rs"]
 mod plan;
+
+#[path = "content_publish.rs"]
+mod publish;

@@ -216,8 +216,20 @@ impl<'a> HeldWorktreeLedger<'a> {
         source: &'a HeldSnapshotNode,
         binding: Binding,
         expected: Checkpoint,
+        verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
+        verify_added: impl FnMut(&Publication, &AddedFileResult) -> Result<(), LedgerError>,
+    ) -> Result<RecoveredLedger<'a>, LedgerError> {
+        Self::recover_frames(source, binding, expected, verify, verify_added, None)
+    }
+
+    // Active ledger reads normally require all edits still at the source.
+    // A natively FINALIZED batch has proved the complete installed destination
+    // before appending its two frames; only that call may read this older prefix.
+    fn recover_frames(
+        source: &'a HeldSnapshotNode, binding: Binding, expected: Checkpoint,
         mut verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
         mut verify_added: impl FnMut(&Publication, &AddedFileResult) -> Result<(), LedgerError>,
+        installing: Option<&crate::engine::FinalizedOriginalContent<'_>>,
     ) -> Result<RecoveredLedger<'a>, LedgerError> {
         if source.manifest().reference() != binding.source
             || expected.sequence.get() >= MAX_FRAMES
@@ -282,7 +294,7 @@ impl<'a> HeldWorktreeLedger<'a> {
             publication.intent.revision == ledger.state.worktree.revision()
                 && matches!(publication.scope, PublicationScope::Directory { .. })
         });
-        if !moved {
+        if !moved && installing.is_none() {
             ledger.verify_edits(&ledger.state.edits, EditAccess::ReadOnly)?;
         }
         Ok(RecoveredLedger::Ready(ledger))

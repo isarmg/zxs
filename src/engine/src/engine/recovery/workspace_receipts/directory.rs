@@ -86,7 +86,7 @@ pub(super) struct DirectoryCandidateAdmission {
 }
 
 impl DirectoryCandidateAdmission {
-    fn capture(engine: &Engine, candidate: &Candidate, publication: &Publication) -> Result<Self> {
+    pub(super) fn capture(engine: &Engine, candidate: &Candidate, publication: &Publication) -> Result<Self> {
         Ok(Self {
             environment: super::installed::ReceiptEnvironment::capture(
                 &engine.config, &engine.disk_resources,

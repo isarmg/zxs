@@ -19,7 +19,7 @@ mod source;
 mod edit;
 pub(crate) mod additions;
 mod commit;
-pub(crate) use commit::content::{OriginalRow, OriginalBody, material::{OriginalContentInput, PreparedOriginalContent}};
+pub(crate) use commit::content::{OriginalRow, OriginalBody, recovery::ObservedOriginalContent, material::{OriginalContentInput, PreparedOriginalContent}};
 pub(crate) mod drafts;
 pub use source::SnapshotSourceError;
 pub(crate) use registry::{

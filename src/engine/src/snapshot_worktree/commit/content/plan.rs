@@ -96,8 +96,8 @@ impl Originals {
         destination: SnapshotNodeId, operation: OperationId, frozen: Option<&[Input]>,
     ) -> Result<Projection> {
         self.require_context(context)?;
-        let sequence = Sequence::new(context.state.sequence).next().map_err(|error|
-            RegistrationError::Ledger(crate::directory_worktree::ledger::LedgerError::Sequence(error)))?;
+        let sequence = Sequence::new(context.next_slot);
+        if sequence.get() <= context.state.sequence { return Err(RegistrationError::PublicationChanged); }
         let mut state = crate::business::file_draft::unborn::begin(context.state, sequence)
             .map_err(RegistrationError::Publication)?;
         let mut versions = Vec::with_capacity(self.rows.len());

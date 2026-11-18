@@ -108,15 +108,23 @@ pub(super) fn replay(
     read: Option<&crate::container_storage::ReadDraftDigest>,
 ) -> Result<()> {
     let hash = super::draft_content_hash(previous, target, read)?;
+    replay_full(previous, expected, target, selection, payload.logical_size(), hash, facts,
+        message, principal, operation)
+}
+
+/// One stable constructor for a confirmed FULL, whether its physical owner
+/// is the shared draft or a held original sparse inode. Physical admission
+/// remains the responsibility of the corresponding native decision adapter.
+pub(super) fn replay_full(previous: &State, expected: &mut State, target: &DraftLocation,
+    selection: &Selection, size: u64, hash: storage_contract::ContentHash, facts: &PublishedContent,
+    message: &str, principal: &str, operation: OperationId) -> Result<()>
+{
     if expected.versions.contains_key(&facts.version.version_id)
         || expected.placements.contains_key(&facts.version.version_id)
         || expected.content_states.contains_key(&facts.version.version_id)
-        || facts.version.logical_size != payload.logical_size()
-        || facts.version.content_hash != hash
+        || facts.version.logical_size != size || facts.version.content_hash != hash
         || facts.allocations.len() > trace_limit(previous, target)?
-    {
-        return Err(invalid());
-    }
+    { return Err(invalid()); }
     let primary = selection.placement.route_slot_ids.first().ok_or_else(invalid)?;
     let mut effects = ReplayEffects {
         previous, facts, source: &selection.placement, consumed: false,
@@ -129,8 +137,7 @@ pub(super) fn replay(
             sources: vec![selection.base.version_id().to_string()], checkpoint: false,
         },
         Content {
-            size: payload.logical_size(), hash,
-            chunk_bytes: facts.version.checksum_chunk_bytes,
+            size, hash, chunk_bytes: facts.version.checksum_chunk_bytes,
         },
         &mut effects,
     )?;

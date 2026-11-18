@@ -148,3 +148,57 @@ pub(crate) fn require_frozen(state: &State, plan: &crate::persist::snapshot_work
     drop(Replay::new(state, &ids)?);
     Ok(())
 }
+
+/// Full State reconstruction from the *original* reserve and prospective
+/// result. Candidate admission must separately verify physical source/destination
+/// bytes and the actual pre-existing published original/outcome prefix.
+pub(crate) fn replay(
+    config: &crate::ValidatedConfig, previous: &State, result: &crate::OperationResult,
+    principal: &Principal, plan: &crate::persist::snapshot_worktree::content_batch::Reservation,
+    value: &crate::persist::snapshot_worktree::content_batch::Publication,
+) -> Result<State> {
+    use crate::persist::snapshot_worktree::{self as codec, Record};
+    let decode_error = |source| super::worktree::failure(crate::snapshot_worktree::RegistrationError::Codec(source));
+    if result.kind != codec::CONTENT_PUBLISH || result.operation_id != plan.publish_operation
+        || result.sequence <= previous.sequence || previous.operations.contains_key(&result.operation_id)
+        || config.generation().is_some() || value.rows.len() != plan.rows.len() || value.rows.is_empty()
+        || value.reserve != plan.request.operation_id || value.reservation != Record::ReserveContentBatch(plan.clone())
+            .commitment().map_err(decode_error)?
+    { return Err(invalid()); }
+    require_frozen(previous, plan)?;
+    let decoded = codec::decode(result).map_err(decode_error)?.ok_or_else(invalid)?;
+    if decoded.record != Record::PublishContentBatch(value.clone()) || decoded.membership_epoch != config.membership_epoch()
+        || decoded.receipt(result.operation_id, storage_contract::Sequence::new(result.sequence), principal)
+            .map_err(decode_error)? != *result
+    { return Err(invalid()); }
+    let mut expected = super::unborn::begin(previous, storage_contract::Sequence::new(result.sequence))?;
+    let repository = previous.repositories.get(&plan.host.namespace.repository_id.to_string()).ok_or_else(invalid)?;
+    let mut entries = previous.commits.get(&plan.ordinary_head.to_string()).ok_or_else(invalid)?.entries.clone();
+    let names = crate::business::namespace::container_name::current_names(previous, &entries)?;
+    crate::business::namespace::container_name::apply_file_names(&mut entries, &names)?;
+    let tree = crate::NamespaceTree::from_current_state(previous, &repository.repository_id, &entries);
+    for (i, (row, out)) in plan.rows.iter().zip(&value.rows).enumerate() {
+        let target = storage_contract::file_draft::DraftLocation { repository: plan.host.namespace.repository_id,
+            entry: row.namespace.entry, file: row.original.file_id, path: row.edit.path.clone() };
+        let selection = super::from_worktree_namespace(previous, &target, tree)?;
+        if out.commit != row.commit || out.tree != row.tree || out.path != target.path || out.file.path != target.path
+            || out.file.material != row.edit.material || out.content.allocations != row.allocations
+            || out.file.source != (SnapshotFileSource::Container { branch: row.base.branch_id(),
+                node: FileNodeId::Version(row.edit.material.version_id) })
+            || out.content.version.version_id != row.edit.material.version_id.to_string()
+            || out.content.version.checksum_chunk_bytes != config.checksum_chunk_bytes
+            || decoded.protection.get(i) != Some(&crate::persist::file_draft::content_protection_for_owner(
+                row.owner, &out.content)?)
+        { return Err(invalid()); }
+        content::replay_full(previous, &mut expected, &target, &selection, row.edit.material.size,
+            row.edit.material.content_hash, &out.content, &plan.request.message, principal.as_str(), plan.publish_operation)?;
+        let branch = expected.branches.get(&row.base.branch_id().to_string()).ok_or_else(invalid)?;
+        let commit = expected.commits.get(&branch.head_commit_id).ok_or_else(invalid)?;
+        if commit.commit_id != row.commit.to_string() || commit.tree_id != row.tree.to_string()
+            || commit.parent_commit_ids != [row.branch_base.to_string()]
+            || expected.file_containers.get(&target.file).is_none_or(|r| r.working != row.clean)
+        { return Err(invalid()); }
+    }
+    crate::container_storage::capture_changed_names(previous, &mut expected);
+    super::unborn::finish_state(previous, expected, result, principal)
+}

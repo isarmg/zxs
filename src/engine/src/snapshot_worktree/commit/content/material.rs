@@ -136,6 +136,12 @@ impl PreparedOriginalContent {
     pub(crate) fn principal(&self) -> &Principal { &self.principal }
     pub(crate) fn require_before(&self, ctx: &PlanningContext<'_>) -> Result<()> {
         self.originals.require_context(ctx)?;
+        require_original_ledger(&self.originals.source_node, &self.plan, &self.result)?;
+        let host = ctx.namespace_host_root(self.plan.host.namespace.repository_id, self.plan.host.namespace.branch_id)
+            .map_err(RegistrationError::Publication)?;
+        let original = HeldSnapshotNode::reopen_at_host(host.common().map_err(RegistrationError::Publication)?,
+            self.plan.source_binding).map_err(RegistrationError::NodeReadback)?;
+        self.originals.repository.require_held_source(&original).map_err(RegistrationError::NodeReadback)?;
         let sparse = crate::directory_worktree::store::HeldSparseWorktree::reopen(
             &self.originals.source_node, self.plan.instance).map_err(RegistrationError::EditInstance)?;
         self.node.require_before(&self.originals.source_node, &self.originals.repository, &sparse,
@@ -148,4 +154,99 @@ impl PreparedOriginalContent {
         Ok(())
     }
     pub(crate) fn matches_source(&self, state: &Arc<State>) -> bool { Arc::ptr_eq(&self.originals.state, state) }
+}
+
+pub(crate) fn require_candidate(
+    plan: &Reservation, value: &Publication, principal: &Principal, candidate: &crate::journal::Candidate,
+) -> Result<()> {
+    let record = crate::persist::snapshot_worktree::Record::PublishContentBatch(value.clone());
+    if candidate.generation().is_some() || candidate.operation_id != plan.publish_operation
+        || candidate.request_digest != record.digest(principal).map_err(RegistrationError::Codec)?
+        || candidate.versions.len() != value.rows.len()
+        || candidate.versions.iter().zip(&value.rows).any(|(v,r)| v.version != r.content.version
+            || v.placement != r.content.placement || v.version.version_sequence != candidate.sequence)
+    { return Err(RegistrationError::PublicationChanged); }
+    Ok(())
+}
+
+pub(in crate::snapshot_worktree) fn require_installed(
+    source: &HeldSnapshotNode, repository: &PinnedSnapshotRepository,
+    node: &HeldContentNode, plan: &Reservation, value: &Publication,
+) -> Result<()> {
+    let sparse = crate::directory_worktree::store::HeldSparseWorktree::reopen(source, plan.instance)
+        .map_err(RegistrationError::EditInstance)?;
+    node.require_installed(source, repository, &sparse, plan).map_err(RegistrationError::NodeReadback)?;
+    let ledger = HeldWorktreeLedger::reopen(source, plan.ledger, value.completed, |p, files| {
+        if *p != plan.ledger_publication() || !value.rows.iter().map(|r| &r.file).eq(files.iter()) {
+            return Err(LedgerError::FileResults);
+        }
+        Ok(())
+    }).map_err(RegistrationError::Ledger)?;
+    if ledger.instance() != plan.instance || ledger.worktree().revision() != plan.request.expected
+        || ledger.file_results().iter().ne(value.rows.iter().map(|r| &r.file))
+    { return Err(RegistrationError::CommitScope); }
+    Ok(())
+}
+
+pub(in crate::snapshot_worktree) fn finish_moves(
+    decision: &crate::engine::FinalizedOriginalContent<'_>, source: &HeldSnapshotNode,
+    repository: &PinnedSnapshotRepository, node: &HeldContentNode, plan: &Reservation,
+    value: &Publication, cut: &mut impl FnMut(&str) -> crate::Result<()>,
+) -> Result<()> {
+    let sparse = crate::directory_worktree::store::HeldSparseWorktree::reopen(source, plan.instance)
+        .map_err(RegistrationError::EditInstance)?;
+    let installed = node.install(decision, source, repository, &sparse, plan, value, cut)
+        .map_err(RegistrationError::NodeReadback)?;
+    HeldWorktreeLedger::finish_finalized_content(source, &installed, plan, value, decision, cut)
+        .map_err(RegistrationError::Ledger)?;
+    require_installed(source, repository, node, plan, value)
+}
+
+impl PreparedOriginalContent {
+    pub(crate) fn require_candidate(&self, candidate: &crate::journal::Candidate) -> Result<()> {
+        require_candidate(&self.plan, &self.result, &self.principal, candidate)
+    }
+    pub(crate) fn require_installed(&self) -> Result<()> {
+        require_installed(&self.originals.source_node, &self.originals.repository, &self.node, &self.plan, &self.result)
+    }
+    pub(crate) fn finish_moves(&self, decision: &crate::engine::FinalizedOriginalContent<'_>,
+        cut: &mut impl FnMut(&str) -> crate::Result<()>) -> Result<()> {
+        finish_moves(decision, &self.originals.source_node, &self.originals.repository, &self.node, &self.plan, &self.result, cut)
+    }
+}
+
+impl PreparedOriginalContent {
+    pub(crate) fn require_plan(&self, ctx: &PlanningContext<'_>, next: &State, prepared: &[Prepared],
+        receipt: &crate::OperationResult) -> Result<()> {
+        self.require_before(ctx)?;
+        if prepared.len() != self.plan.rows.len() { return Err(RegistrationError::CommitScope); }
+        for ((row, output), payload) in self.plan.rows.iter().zip(&self.result.rows).zip(prepared) {
+            if payload.version != output.content.version || payload.placement != output.content.placement
+                || !payload.source.is_original_body(&self.originals.sparse, &row.edit)
+            { return Err(RegistrationError::CommitScope); }
+        }
+        let index = ctx.snapshot_receipts()?;
+        let (plan, principal) = index.frozen_for_result(&self.result, receipt.operation_id)?;
+        if plan != &self.plan || principal != &self.principal { return Err(RegistrationError::CommitScope); }
+        index.require_planned(next, receipt, principal,
+            &crate::persist::snapshot_worktree::Record::PublishContentBatch(self.result.clone()))?;
+        let replay = crate::business::file_draft::worktree_content::replay(ctx.config, ctx.state,
+            receipt, principal, plan, &self.result).map_err(RegistrationError::Publication)?;
+        if !crate::publication_shape::same_transition(ctx.state, &replay, next) { return Err(RegistrationError::PublicationChanged); }
+        // The original complete relation above checks all other still-pending
+        // reservations against next as well. Keep ordinary mount checks intact.
+        index.require_mount_namespace(next, ctx.config.max_entries)
+    }
+}
+
+pub(super) fn require_original_ledger(source: &HeldSnapshotNode, plan: &Reservation, value: &Publication) -> Result<()> {
+    let ledger = HeldWorktreeLedger::reopen(source, plan.ledger, plan.before,
+        |_, _| Err(LedgerError::PublicationPending)).map_err(RegistrationError::Ledger)?;
+    ledger.require_existing_content_scope().map_err(RegistrationError::Ledger)?;
+    if ledger.instance() != plan.instance || ledger.worktree().revision() != plan.request.expected
+        || !ledger.dirty_edits().into_iter().eq(plan.rows.iter().map(|r| &r.edit))
+        || ledger.preview_content(&plan.events(&value.rows)).map_err(RegistrationError::Ledger)?
+            != [value.committing, value.completed]
+    { return Err(RegistrationError::CommitScope); }
+    Ok(())
 }

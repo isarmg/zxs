@@ -255,3 +255,23 @@ impl<'a> ReceiptIndex<'a> {
         self.worktree_for_commit(plan.request.target, Some(op))
     }
 }
+
+impl ReceiptIndex<'_> {
+    pub(in crate::snapshot_worktree) fn frozen_for_result(&self, value: &ResultRecord, op: OperationId)
+        -> Result<(&Reservation, &Principal)> {
+        let entry = self.content_batches.get(&value.reserve).ok_or(RegistrationError::Source)?;
+        if entry.complete().is_some() || entry.plan.publish_operation != op || entry.commitment != value.reservation
+            || self.pending_edits.get(&entry.plan.request.target.worktree_id) != Some(&value.reserve)
+            || self.pending_branches.get(&(entry.plan.source.repository_id, entry.plan.source.branch_id)) != Some(&value.reserve)
+        { return Err(RegistrationError::CommitScope); }
+        Ok((&entry.plan, &entry.receipt.principal))
+    }
+}
+
+impl ReceiptIndex<'_> {
+    /// A PREPARE without an ACCEPT is not a generic recovery candidate. Only
+    /// the pre-existing, separately published reservation can name this job.
+    pub(crate) fn retained_content_publish(&self, operation: OperationId) -> bool {
+        self.content_batches.values().any(|entry| entry.complete().is_none() && entry.plan.publish_operation == operation)
+    }
+}

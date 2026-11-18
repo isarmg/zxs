@@ -28,6 +28,7 @@ pub(super) struct PreparedRecovery {
     container_locations: container_locations::ReplayContainerLocations,
     original_receipts: workspace_receipts::OriginalReceiptCursor,
     directory_checkpoints: BTreeMap<u64, workspace_receipts::CheckpointDirectoryObservation>,
+    original_content_prepare: Option<(u64, String)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -295,6 +296,7 @@ impl Engine {
             torn_tail,
             candidates: BTreeMap::new(),
             directory_checkpoints: BTreeMap::new(),
+            original_content_prepare: None,
             container_locations: container_locations::ReplayContainerLocations::default(),
             original_receipts: workspace_receipts::OriginalReceiptCursor::for_recovery(self)?,
         })
@@ -348,6 +350,7 @@ impl Engine {
             container_locations,
             original_receipts,
             mut directory_checkpoints,
+            original_content_prepare,
         } = prepared;
         let mut original_receipts = std::sync::Arc::new(original_receipts);
         // Preflight retained these originals under these exact held resources.
@@ -406,7 +409,8 @@ impl Engine {
                 .filter(|(hash, rs)| {
                     self.move_completion.as_ref().is_some_and(|selected| {
                         selected.sequence() == sequence && selected.candidate_hash() == hash
-                    }) || rs.iter().any(|receipt| {
+                    }) || original_content_prepare.as_ref().is_some_and(|(s,h)| *s == sequence && h == hash)
+                        || rs.iter().any(|receipt| {
                         matches!(
                             receipt.record.record_type,
                             RecordType::Accept | RecordType::Publication
@@ -523,7 +527,18 @@ impl Engine {
                     original,
                 )?;
                 if let Some(admitted) = admitted {
-                    let recovered_result = publication
+                    if original_content_prepare.as_ref().is_some_and(|(s,h)| *s == sequence && h == &hash) {
+                    let observed = content.as_ref().ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
+                    observed.require_context(&self.planning_context(), &candidate)
+                        .map_err(crate::business::file_draft::worktree::failure)?;
+                    // The ordinary decision still needs each original PREPARE.
+                    // Repair the same hash-bound Candidate, never a newly
+                    // planned slot or partially reconstructed latest State.
+                    for member in &members {
+                        self.append_recovered_journal(member, RecordType::Prepare, sequence, &hash, &candidate.snapshot_hash)?;
+                    }
+                }
+                let recovered_result = publication
                         .recovery
                         .as_ref()
                         .map(|_| publication.result.clone());
@@ -594,6 +609,14 @@ impl Engine {
                 .is_some_and(|result| {
                     result.kind == crate::persist::directory_draft_commit::native::KIND
                 });
+            let content = if next.operations.get(&candidate.operation_id)
+                .is_some_and(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH) {
+                let finalized = if publication.is_none() {
+                    self.content_fully_finalized(&candidate, &hash, next, &online, &rs)?
+                } else { false };
+                Some(crate::snapshot_worktree::ObservedOriginalContent::original(self, &candidate, &admitted,
+                    finalized, publication.is_some()).map_err(crate::business::file_draft::worktree::failure)?)
+            } else { None };
             if !directory_kind {
                 // Native directory originals were fully admitted by the scanner;
                 // apply re-observes their exact material below, before repairs.
@@ -813,8 +836,8 @@ impl Engine {
                     self.complete_observed_directory_candidate(&candidate, &hash, next, observed)?
                 } else {
                     match pending_containers {
-                        Some(observed) => self.complete_observed_ordinary_candidate(
-                            &candidate, &hash, next, observed,
+                        Some(observed) => self.complete_observed_with_original_content(
+                            &candidate, &hash, next, observed, content.as_ref(),
                         )?,
                         None => return Err(
                             super::fresh_layout::FreshLayoutError::ContainerScope.into(),
@@ -825,6 +848,10 @@ impl Engine {
                     observed.require_candidate(&candidate)?;
                 }
                 drop(directory_payloads);
+                if let Some(held) = &content {
+                    held.require_context(&self.planning_context(), &candidate)
+                        .and_then(|_| held.require_installed()).map_err(crate::business::file_draft::worktree::failure)?;
+                }
                 // Retain the exact original already admitted before repairs.
                 // The returned completion is the actual member/barrier tail,
                 // not a presumed success inferred from its visible State.
@@ -847,6 +874,10 @@ impl Engine {
                     observed.require_candidate(&candidate)?;
                 }
                 drop(directory_payloads);
+                if let Some(held) = &content {
+                    held.require_context(&self.planning_context(), &candidate)
+                        .and_then(|_| held.require_installed()).map_err(crate::business::file_draft::worktree::failure)?;
+                }
                 // This is the same no-repair branch whose complete actual
                 // barrier and exact Candidate were required above. A failed
                 // observation breaks the replay loop before visible installation.

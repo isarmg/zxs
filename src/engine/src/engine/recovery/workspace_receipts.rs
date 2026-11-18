@@ -3,6 +3,7 @@ use super::*;
 use crate::engine::disk_registry::current::CurrentNamespaces;
 use std::sync::Arc;
 
+mod content;
 mod directory;
 pub(crate) use directory::DirectoryReplayPrefix;
 pub(super) use directory::CheckpointDirectoryObservation;
@@ -276,10 +277,23 @@ impl Engine {
         // recreate them, even for an earlier operation kind.
         prepared.original_receipts.require_directory_index(&previous_state)?;
         for (sequence, candidates) in &prepared.records {
+            let prepared_content = if candidates.values().any(|records|
+                records.iter().all(|r| r.record.record_type == RecordType::Prepare)) {
+                self.original_content_prepare(&ReceiptPrefix { snapshot: &previous, state: &previous_state,
+                    namespaces: namespaces.as_ref(), originals: &prepared.original_receipts }, &prepared.online,
+                    *sequence, candidates)?
+            } else { None };
+            if let Some(hash) = &prepared_content {
+                if prepared.original_content_prepare.is_some() || prepared.records.range((
+                    std::ops::Bound::Excluded(*sequence), std::ops::Bound::Unbounded)).next().is_some() {
+                    return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix));
+                }
+                prepared.original_content_prepare = Some((*sequence, hash.clone()));
+            }
             let mut active = candidates.iter().filter(|(hash, receipts)| {
                 self.move_completion.as_ref().is_some_and(|selected| {
                     selected.sequence() == *sequence && selected.candidate_hash() == hash.as_str()
-                }) || receipts.iter().any(|receipt| {
+                }) || prepared_content.as_ref() == Some(*hash) || receipts.iter().any(|receipt| {
                     matches!(
                         receipt.record.record_type,
                         RecordType::Accept | RecordType::Publication
@@ -586,6 +600,11 @@ impl Engine {
             return self.read_directory_receipt_candidate(
                 candidate, admitted, journal_publication, hash, prefix,
             );
+        }
+        if admitted.for_candidate(&candidate)?.state().operations.get(&candidate.operation_id)
+            .is_some_and(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH)
+        {
+            return self.read_content_receipt_candidate(candidate, admitted, journal_publication, prefix, online, hash, receipts);
         }
         // Even ACCEPT-only discovery may open a data-only local proof. Prove
         // this slot against its exact admitted predecessor before that search;

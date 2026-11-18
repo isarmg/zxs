@@ -12,7 +12,7 @@ mod physical_budget;
 use physical_budget::PhysicalRequirements;
 mod directory;
 pub(crate) use directory::{
-    BudgetedDirectoryPreparation, BudgetedOriginalContent, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
+    BudgetedDirectoryPreparation, BudgetedOriginalContent, FinalizedOriginalContent, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
 };
 
 pub(crate) use verified_payloads::{PayloadProofReservation, payload_proof_budget};
@@ -472,10 +472,12 @@ enum Completion<'a> {
     Prepared {
         payloads: &'a VerifiedPayloadSet,
         names: crate::container_storage::PreparedNames,
+        content: Option<directory::ContentInstaller<'a>>,
     },
     RecoveredPrepared {
         payloads: &'a VerifiedPayloadSet,
         names: crate::container_storage::PreparedNames,
+        content: Option<directory::ContentInstaller<'a>>,
     },
     Recovery,
 }
@@ -835,11 +837,11 @@ impl Engine {
                 None,
                 Completion::Prepared {
                     payloads: &verified,
-                    names,
+                    names, content: directory.as_ref().and_then(|r| r.installer()),
                 },
             )?;
             if let Some(directory) = &directory {
-                directory.require_candidate(&candidate)?;
+                directory.after_decision(&candidate)?;
             }
             if originals.needs_projection(&result) {
                 let projection = completed.original_receipt(self, &candidate, &next)?;
@@ -987,6 +989,13 @@ impl Engine {
         next: &State,
         observed: RecoveredOrdinaryPayloads<'_>,
     ) -> Result<CompletedPublication> {
+        self.complete_observed_with_original_content(candidate, hash, next, observed, None)
+    }
+
+    pub(in crate::engine) fn complete_observed_with_original_content(
+        &mut self, candidate: &Candidate, hash: &str, next: &State, observed: RecoveredOrdinaryPayloads<'_>,
+        content: Option<&crate::snapshot_worktree::ObservedOriginalContent>,
+    ) -> Result<CompletedPublication> {
         let same_current = match (&observed.current, &self.current_namespaces) {
             (None, None) => true,
             (Some(before), Some(current)) => std::sync::Arc::ptr_eq(before, current),
@@ -1011,7 +1020,7 @@ impl Engine {
         observed.verified.validate_containers()?;
         self.complete_candidate_verified(
             candidate, hash, next, None,
-            Completion::RecoveredPrepared { payloads: &observed.verified, names },
+            Completion::RecoveredPrepared { payloads: &observed.verified, names, content: content.map(directory::ContentInstaller::Recovery) },
         )
     }
 
@@ -1191,7 +1200,15 @@ impl Engine {
         existing: Option<Publication>,
         completion: Completion<'_>,
     ) -> Result<CompletedPublication> {
-        let (verified, names, append) = match completion {
+        let content = match &completion {
+            Completion::Prepared { content, .. } | Completion::RecoveredPrepared { content, .. } => content.as_ref(),
+            Completion::Move { .. } | Completion::Recovery => None,
+        };
+        let needs_content = next.operations.get(&c.operation_id)
+            .is_some_and(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH);
+        if needs_content != content.is_some() { return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into()); }
+        if let Some(held) = content { held.require_candidate(&self.planning_context(), c)?; }
+        let (verified, names, append, content) = match completion {
             Completion::Move { names, recovered } => (
                 None,
                 Some(names),
@@ -1200,24 +1217,24 @@ impl Engine {
                 } else {
                     Engine::append_journal
                 }
-                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
+                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>, None,
             ),
-            Completion::Prepared { payloads, names } => (
+            Completion::Prepared { payloads, names, content } => (
                 Some(payloads),
                 Some(names),
                 Engine::append_journal
-                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
+                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>, content,
             ),
-            Completion::RecoveredPrepared { payloads, names } => (
+            Completion::RecoveredPrepared { payloads, names, content } => (
                 Some(payloads), Some(names),
                 Engine::append_recovered_journal
-                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
+                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>, content,
             ),
             Completion::Recovery => (
                 None,
                 None,
                 Engine::append_recovered_journal
-                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
+                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>, None,
             ),
         };
         if let Some(publication) = existing {
@@ -1287,6 +1304,8 @@ impl Engine {
                 hash,
                 &finalize_object.hash,
             )?);
+            #[cfg(feature = "fault-injection")]
+            self.failpoint(&format!("after_finalize_{}", final_receipts.len()))?;
         }
         drop(finalize_object);
         #[cfg(feature = "fault-injection")]
@@ -1381,6 +1400,10 @@ impl Engine {
             .sort_by(|a, b| (&a.version_id, &a.disk_id).cmp(&(&b.version_id, &b.disk_id)));
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_commit_proofs")?;
+        if let Some(held) = content {
+            let decided = FinalizedOriginalContent::from_members(c, hash, next, &finalize, &final_receipts, &members)?;
+            held.install(self, &decided)?;
+        }
         let publication = Publication {
             recovery: None,
             candidate_hash: hash.into(),
@@ -1674,6 +1697,16 @@ impl crate::engine::PlanningContext<'_> {
         cache_maximum: usize,
         working: Option<super::file_draft::WorkingPublicationInput>,
     ) -> Result<DetachedPublication> {
+        self.prepare_publication_domains(next, prepared, result, maximum, cache_maximum, working, None)
+    }
+
+    fn prepare_publication_domains(&self, next: State, prepared: Vec<Prepared>, result: OperationResult,
+        maximum: usize, cache_maximum: usize, working: Option<super::file_draft::WorkingPublicationInput>,
+        content: Option<Box<crate::snapshot_worktree::PreparedOriginalContent>>,
+    ) -> Result<DetachedPublication> {
+        if (result.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH) != content.is_some()
+            || (working.is_some() && content.is_some())
+        { return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into()); }
         super::file_draft::WorkingPublicationInput::require_input(
             working.as_ref(), self, &next, &result,
         )?;
@@ -1702,7 +1735,9 @@ impl crate::engine::PlanningContext<'_> {
             view.verify_backup_prepared(self.state, &next, &result, &prepared)?;
             view.verify_history_copy_prepared(self.state, &next, &result, &prepared)?;
         }
-        self.require_worktree_mount_reservations(&next)?;
+        if let Some(held) = &content {
+            held.require_plan(self, &next, &prepared, &result).map_err(crate::business::file_draft::worktree::failure)?;
+        } else { self.require_worktree_mount_reservations(&next)?; }
         let containers = super::fresh_layout::containers::ContainerPreparation::new(
             self, next, &prepared, &result,
             working.as_ref().and_then(|input| input.commit_read()),
@@ -1878,6 +1913,10 @@ impl crate::engine::PlanningContext<'_> {
         snapshot.metadata_integrity = Some(std::sync::Arc::clone(self.metadata_integrity));
         data.snapshot_hash = snapshot.hash.clone();
         let candidate = bind_candidate(self, data);
+        if let Some(held) = &content {
+            held.require_before(self).map_err(crate::business::file_draft::worktree::failure)?;
+            held.require_candidate(&candidate).map_err(crate::business::file_draft::worktree::failure)?;
+        }
         crate::metadata_budget::preflight_publication_prepared(
             self, &candidate, &result, &next, None, maximum, Some((&snapshot, &history_basis)),
         )?;
@@ -1921,7 +1960,7 @@ impl crate::engine::PlanningContext<'_> {
             result,
             verified,
             names,
-            directory: None,
+            directory: content.map(directory::DirectoryPublicationGuard::Content),
             metadata_epoch,
             prepared_epoch: self.metadata_integrity.capture(),
             reused_dependencies,

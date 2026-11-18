@@ -164,3 +164,93 @@ fn verify_optional(parent: &DiskRoot, name: &EntryName, edit: &EditRecord) -> St
     body.rewind().map_err(SnapshotStoreError::Io)?;
     Ok(Some(body))
 }
+
+impl HeldContentNode {
+    /// An original Candidate's prepared binding describes exactly two allowed
+    /// node positions. No scan, latest temporary or same-byte replacement.
+    pub(crate) fn observe(
+        original: &HeldSnapshotNode, pinned: &PinnedSnapshotRepository,
+        sparse: &HeldSparseWorktree, plan: &crate::persist::snapshot_worktree::content_batch::Reservation,
+        value: &crate::persist::snapshot_worktree::content_batch::Publication, finalized_or_published: bool,
+    ) -> Store<Self> {
+        let facts = &value.prepared_node;
+        if !facts.binding.independent_node(original.binding()) || original.binding() != plan.source_binding
+            || sparse.binding() != plan.instance || facts.binding.reference().node != plan.destination_node
+        { return Err(SnapshotStoreError::Repository); }
+        let repo = pinned.batch_repository(original)?;
+        let temp = layout::batch(facts.preparation);
+        let final_name = layout::node(plan.destination_node);
+        let at_temp = directory_at(repo, &temp, facts.binding.node_entity)?;
+        let at_final = directory_at(repo, &final_name, facts.binding.node_entity)?;
+        let name = match (at_temp, at_final) {
+            (true, false) => &temp, (false, true) if finalized_or_published => &final_name,
+            _ => return Err(SnapshotStoreError::Entries),
+        };
+        let node = HeldSnapshotNode::named_parts(repo, name, facts.binding)?;
+        if node.manifest.entries() != facts.entries || node.manifest.operation_id() != plan.publish_operation {
+            return Err(SnapshotStoreError::Entries);
+        }
+        let held = Self { preparation: facts.preparation, node };
+        held.inspect(repo, sparse, plan.rows.iter().map(|r| &r.edit),
+            if finalized_or_published { Requirement::Decided } else { Requirement::Before })?;
+        Ok(held)
+    }
+
+    pub(crate) fn require_installed(&self, original: &HeldSnapshotNode, pinned: &PinnedSnapshotRepository,
+        sparse: &HeldSparseWorktree, plan: &crate::persist::snapshot_worktree::content_batch::Reservation,
+    ) -> Store<()> {
+        self.inspect(pinned.batch_repository(original)?, sparse, plan.rows.iter().map(|r| &r.edit), Requirement::Installed)
+    }
+
+    /// Only the actual native decision may call this. Each move independently
+    /// checks both named parents and the original inode before and after
+    /// NOREPLACE, and repairs its file and both parent syncs on replay.
+    pub(crate) fn install(&self, decision: &crate::engine::FinalizedOriginalContent<'_>,
+        original: &HeldSnapshotNode, pinned: &PinnedSnapshotRepository,
+        sparse: &HeldSparseWorktree, plan: &crate::persist::snapshot_worktree::content_batch::Reservation,
+        value: &crate::persist::snapshot_worktree::content_batch::Publication,
+        cut: &mut impl FnMut(&str) -> crate::Result<()>,
+    ) -> Store<HeldSnapshotNode> {
+        decision.require(plan, value).map_err(SnapshotStoreError::Disk)?;
+        if self.facts() != value.prepared_node || original.binding() != plan.source_binding || sparse.binding() != plan.instance {
+            return Err(SnapshotStoreError::Entries);
+        }
+        let repo = pinned.batch_repository(original)?;
+        self.inspect(repo, sparse, plan.rows.iter().map(|r| &r.edit), Requirement::Decided)?;
+        for (i, row) in plan.rows.iter().enumerate() {
+            let observed = HeldSparseWorktree::reopen(original, plan.instance)
+                .map_err(SnapshotStoreError::Sparse)?;
+            let edit = &row.edit;
+            let target = layout::file(&self.node.manifest.payloads()[&edit.material.version_id]);
+            let at = self.position(repo)?;
+            let name = match at { Position::Staged => layout::batch(self.preparation),
+                Position::Installed => layout::node(plan.destination_node) };
+            let actual = repo.private_entry_matching(&name, file_identity(self.node.binding.node_entity))
+                .map_err(SnapshotStoreError::Directory)?;
+            let files = actual.private_entry_matching(&layout::FILES, file_identity(self.node.binding.files_entity))
+                .map_err(SnapshotStoreError::Directory)?;
+            observed.directory().resume_decided_file_move(edit.leaf.entry(), &files, &target,
+                crate::disk::FrozenFileMove { bytes: edit.material.size, content_hash: edit.material.content_hash, entity: edit.entity })
+                .map_err(SnapshotStoreError::Move)?;
+            cut(&format!("after_worktree_content_move_{}", i + 1)).map_err(SnapshotStoreError::Disk)?;
+        }
+        // All leaves and their independent immutable copies must be complete
+        // before exposing even the physical node's canonical name.
+        self.node.verify_inventory()?;
+        for version in self.node.manifest.files().keys() { self.node.open_payload(*version)?; }
+        let temp = layout::batch(self.preparation);
+        let name = layout::node(plan.destination_node);
+        if self.position(repo)? == Position::Staged {
+            repo.sync_private_entry_matching(&temp, file_identity(self.node.binding.node_entity))
+                .map_err(SnapshotStoreError::Directory)?;
+            repo.rename_noreplace_synced(&repo.path().join(temp.as_path()), &repo.path().join(name.as_path()))
+                .map_err(SnapshotStoreError::Disk)?;
+        }
+        repo.sync_private_entry_matching(&name, file_identity(self.node.binding.node_entity))
+            .map_err(SnapshotStoreError::Directory)?;
+        self.require_installed(original, pinned, sparse, plan)?;
+        let final_node = HeldSnapshotNode::reopen(repo, self.node.binding)?;
+        cut("after_worktree_content_node").map_err(SnapshotStoreError::Disk)?;
+        Ok(final_node)
+    }
+}

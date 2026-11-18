@@ -51,6 +51,11 @@ impl ReadSource {
         Self::OriginalBody { source, path }
     }
 
+    pub(crate) fn is_original_body(&self, sparse: &Arc<crate::directory_worktree::store::HeldSparseWorktree>,
+        edit: &crate::directory_worktree::ledger::EditRecord) -> bool {
+        matches!(self, Self::OriginalBody { source, path } if path == source.path() && source.is_exact(sparse, edit))
+    }
+
     pub(crate) fn external(path: impl Into<PathBuf>) -> Self {
         Self::External(path.into())
     }

@@ -23,6 +23,8 @@ pub(crate) enum SnapshotStoreError {
     Manifest(#[source] SnapshotManifestError),
     #[error("directory snapshot directory access failed")]
     Directory(#[source] DirectoryIoError),
+    #[error("checking the originally bound sparse worktree")]
+    Sparse(#[source] crate::directory_worktree::store::WorktreeStoreError),
     #[error("directory snapshot disk access failed")]
     Disk(#[source] crate::Error),
     #[error("directory snapshot payload access failed")]

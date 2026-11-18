@@ -114,3 +114,70 @@ fn sync_frame(directory: &DiskRoot, checkpoint: Checkpoint, bytes: &[u8])
     }).map_err(LedgerError::Payload)?;
     file.sync_all().map_err(LedgerError::Io)
 }
+
+impl<'a> HeldWorktreeLedger<'a> {
+    pub(crate) fn finish_finalized_content(
+        source: &'a HeldSnapshotNode, node: &HeldSnapshotNode,
+        plan: &crate::persist::snapshot_worktree::content_batch::Reservation,
+        value: &crate::persist::snapshot_worktree::content_batch::Publication,
+        decision: &crate::engine::FinalizedOriginalContent<'_>,
+        cut: &mut impl FnMut(&str) -> crate::Result<()>,
+    ) -> Result<Self, LedgerError> {
+        decision.require(plan, value).map_err(LedgerError::Disk)?;
+        if source.binding() != plan.source_binding || node.binding() != value.prepared_node.binding
+            || node.manifest().entries() != value.prepared_node.entries || node.manifest().operation_id() != plan.publish_operation
+        { return Err(LedgerError::FileResults); }
+        let [first, second] = plan.events(&value.rows);
+        let (first_bytes, committing) = event_frame(plan.before, &first)?;
+        let (second_bytes, completed) = event_frame(committing, &second)?;
+        if committing != value.committing || completed != value.completed { return Err(LedgerError::Chain); }
+        let dir = open_bound_directory(source.worktrees_directory(), plan.ledger)?;
+        let _activity = dir.retain_io_activity().map_err(LedgerError::Disk)?;
+        let checkpoint = content_tail(&dir, plan.before, committing, completed)?;
+        let mut verify = |publication: &Publication, files: &[FileResult]| {
+            if *publication != plan.ledger_publication() || !value.rows.iter().map(|r| &r.file).eq(files.iter()) {
+                return Err(LedgerError::FileResults);
+            }
+            Ok(())
+        };
+        let mut ledger = match Self::recover_frames(source, plan.ledger, checkpoint, &mut verify,
+            |_, _| Err(LedgerError::FileResults), Some(decision))? {
+            RecoveredLedger::Ready(ledger) => ledger, RecoveredLedger::Publishing(pending) => pending.ledger,
+        };
+        if ledger.instance() != plan.instance || !plan.rows.iter().map(|r| &r.edit).eq(ledger.edits().iter()) {
+            return Err(LedgerError::Binding);
+        }
+        if ledger.checkpoint() == plan.before && ledger.append(first, &mut verify)? != committing {
+            return Err(LedgerError::Chain);
+        }
+        sync_frame(&ledger.directory, committing, &first_bytes)?;
+        cut("after_worktree_content_committing").map_err(LedgerError::Disk)?;
+        if ledger.checkpoint() == committing && ledger.append(second, &mut verify)? != completed {
+            return Err(LedgerError::Chain);
+        }
+        if ledger.checkpoint() != completed { return Err(LedgerError::Chain); }
+        sync_frame(&ledger.directory, completed, &second_bytes)?;
+        source.worktrees_directory().sync_private_entry_matching(&layout::ledger(plan.ledger.worktree()),
+            file_identity(plan.ledger.ledger_entity)).map_err(|source| LedgerError::Persisted { intended: completed, source })?;
+        ledger.admit_read_view()?;
+        cut("after_worktree_content_completed").map_err(LedgerError::Disk)?;
+        Ok(ledger)
+    }
+}
+
+fn content_tail(directory: &DiskRoot, before: Checkpoint, first: Checkpoint, second: Checkpoint)
+    -> Result<Checkpoint, LedgerError>
+{
+    let mut required: BTreeSet<_> = (0..=before.sequence.get()).map(|i| layout::frame(Sequence::new(i))).collect();
+    let one = layout::frame(first.sequence);
+    let two = layout::frame(second.sequence);
+    let mut has_one = false; let mut has_two = false;
+    for name in directory.root_entries().map_err(LedgerError::Directory)? {
+        let name = name.map_err(LedgerError::Inventory)?;
+        if name == one && !has_one { has_one = true; }
+        else if name == two && !has_two { has_two = true; }
+        else if !required.remove(&name) { return Err(LedgerError::Chain); }
+    }
+    if !required.is_empty() || (has_two && !has_one) { return Err(LedgerError::Chain); }
+    Ok(if has_two { second } else if has_one { first } else { before })
+}

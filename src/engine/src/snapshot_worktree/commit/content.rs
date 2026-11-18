@@ -3,6 +3,7 @@
 //! node but neither allocates nor publishes a history node or container.
 pub(in crate::snapshot_worktree) mod plan;
 pub(crate) mod material;
+pub(crate) mod recovery;
 use crate::container_storage::ObservedContainerReplica;
 use crate::directory_worktree::ledger::{Binding, Checkpoint, EditRecord};
 use crate::directory_worktree::lifecycle::Phase;
@@ -69,6 +70,9 @@ pub(crate) struct OriginalBody {
 
 impl OriginalBody {
     pub(crate) fn path(&self) -> &Path { &self.path }
+    pub(crate) fn is_exact(&self, sparse: &Arc<HeldSparseWorktree>, edit: &EditRecord) -> bool {
+        Arc::ptr_eq(&self.sparse, sparse) && &self.edit == edit
+    }
 
     pub(crate) fn open(&self, path: &Path) -> crate::Result<crate::ReadFile> {
         if path != self.path {
@@ -237,4 +241,28 @@ pub(in crate::snapshot_worktree) fn reserve(
     crate::snapshot_worktree::publication::publish_new(engine, operation, principal, &record)?;
     drop(original);
     Ok(())
+}
+
+pub(super) fn finish(engine: &mut Engine, index: &ReceiptIndex<'_>,
+    retry: crate::snapshot_worktree::registry::ContentRetry<'_>, request: &CommitWorktree,
+    principal: &storage_contract::Principal) -> Result<SnapshotHandle> {
+    use crate::snapshot_worktree::registry::ContentRetry;
+    let handle = match retry {
+        ContentRetry::Complete(handle) => handle,
+        ContentRetry::Reserved(frozen) => {
+            engine.require_unstarted_content_slot(request.operation_id).map_err(RegistrationError::Publication)?;
+            let input = material::OriginalContentInput::capture(engine, index, &frozen, principal)?;
+            engine.publish_sparse_content(input).map_err(RegistrationError::Publication)?;
+            #[cfg(feature = "fault-injection")]
+            engine.failpoint("after_worktree_content_response").map_err(RegistrationError::Publication)?;
+            let receipts = engine.snapshot_receipts()?;
+            let Some(ContentRetry::Complete(handle)) = receipts.retry_content(request, principal)?
+                else { return Err(RegistrationError::Pending(request.operation_id)); };
+            handle
+        }
+    };
+    let completed = engine.snapshot_receipts()?;
+    completed.reopen_node(engine, handle)?;
+    crate::snapshot_worktree::with_worktree(engine, request.target, |_| Ok(()))?;
+    Ok(handle)
 }
