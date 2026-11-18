@@ -150,3 +150,5 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/snapshot_worktree/explicit_occurrence.rs"]
 mod explicit_occurrence_tests;
+
+pub(crate) use registry::ContentReplayFences;

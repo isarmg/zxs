@@ -276,12 +276,14 @@ impl Engine {
         // their real originals. Visible words or Config equality cannot
         // recreate them, even for an earlier operation kind.
         prepared.original_receipts.require_directory_index(&previous_state)?;
+        let mut content_fences = if previous_state.operations.values().any(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_RESERVE) {
+            crate::snapshot_worktree::ReceiptIndex::capture_with_originals(&previous_state, &prepared.original_receipts)
+                .map_err(crate::business::file_draft::worktree::failure)?.content_replay_fences()
+        } else { crate::snapshot_worktree::ContentReplayFences::default() };
         for (sequence, candidates) in &prepared.records {
             let prepared_content = if candidates.values().any(|records|
                 records.iter().all(|r| r.record.record_type == RecordType::Prepare)) {
-                self.original_content_prepare(&ReceiptPrefix { snapshot: &previous, state: &previous_state,
-                    namespaces: namespaces.as_ref(), originals: &prepared.original_receipts }, &prepared.online,
-                    *sequence, candidates)?
+                self.original_content_prepare(&previous, &prepared.online, *sequence, candidates, &content_fences)?
             } else { None };
             if let Some(hash) = &prepared_content {
                 if prepared.original_content_prepare.is_some() || prepared.records.range((
@@ -321,6 +323,12 @@ impl Engine {
                     originals: &prepared.original_receipts,
                 },
             )?;
+            if !content_fences.is_empty() {
+                let next = candidate.snapshot.as_ref().ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix))?.share_state();
+                let result = next.operations.get(&candidate.candidate.operation_id)
+                    .ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
+                content_fences.require_next(&next, result).map_err(crate::business::file_draft::worktree::failure)?;
+            }
             if self.move_completion.as_ref().is_some_and(|selected| {
                 selected.sequence() == *sequence && selected.candidate_hash() == hash
             }) {
@@ -445,6 +453,9 @@ impl Engine {
                 .get(&candidate.candidate.operation_id)
                 .is_some_and(|result| prepared.original_receipts.needs_projection(result))
                 || candidate.publication.as_ref().is_some_and(|p| p.recovery.is_some());
+            let result = original.state().operations.get(&candidate.candidate.operation_id)
+                .ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
+            content_fences.advance(result).map_err(crate::business::file_draft::worktree::failure)?;
             let shared = admitted.into_shared();
             previous_state = shared.share_state();
             // The original proof remains unmodified for this candidate.
@@ -601,6 +612,11 @@ impl Engine {
                 candidate, admitted, journal_publication, hash, prefix,
             );
         }
+        let content_reserve = admitted.for_candidate(&candidate)?.state().operations.get(&candidate.operation_id)
+            .is_some_and(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_RESERVE);
+        if content_reserve {
+            self.require_content_reservation(&candidate, &prefix, &admitted)?;
+        }
         if admitted.for_candidate(&candidate)?.state().operations.get(&candidate.operation_id)
             .is_some_and(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH)
         {
@@ -661,13 +677,19 @@ impl Engine {
             CurrentNamespaces::reject_degraded_history_copy(&candidate, &snapshot.share_state())?;
             CurrentNamespaces::reject_degraded_history_move(&candidate, &snapshot.share_state())?;
         }
+        // The reserve also reconstructed its *entire* original no-content
+        // transition above. A checkpoint may reborrow its authenticated barrier
+        // but must not try it again against a skipped predecessor State.
+        let directory_admission = if content_reserve {
+            publication.as_ref().map(|p| directory::DirectoryCandidateAdmission::capture(self, &candidate, p)).transpose()?
+        } else { None };
         Ok(PreparedCandidate {
             candidate,
             publication,
             barrier_failure: None,
             snapshot,
             next_namespaces,
-            directory_admission: None,
+            directory_admission,
         })
     }
 

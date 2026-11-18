@@ -73,6 +73,11 @@ fn one_business_candidate_closes_all_existing_occurrences_and_lost_response_repl
     assert_eq!(engine.state().events.len(), before + 2);
     assert_closed(&engine, &request, expected, original, other);
     assert_eq!(fixture.media(), media, "an acknowledged replay must not reopen publication or rewrite either FILE");
+    drop(engine);
+    // Startup just wrote its verified historical checkpoint. Both the reserve
+    // and outcome now need their original preflight, not a skipped predecessor.
+    let engine = Engine::open(&fixture.system).unwrap();
+    assert_closed(&engine, &request, expected, original, other);
 }
 
 #[cfg(feature = "fault-injection")]
@@ -103,4 +108,29 @@ fn original_reservation_and_only_its_native_slot_survive_every_physical_install_
         assert_eq!(engine.state().events.len(), before + 2, "{cut} installed another business slot");
         assert_closed(&engine, &request, expected, fixture.source, other);
     }
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn two_dirty_instances_competing_for_the_same_heads_never_publish_a_replacement_or_implicit_fork() {
+    let (fixture, mut engine, principal, first, other) = prepare();
+    let scratch = tempfile::tempdir().unwrap();
+    save(&mut engine, other, &principal, scratch.path(), "first.txt", b"second instance");
+    save(&mut engine, other, &principal, scratch.path(), "Folder/Child/existing.txt", b"other nested");
+    let contender = CommitWorktree { target: other, expected: engine.directory_worktree_status(other).unwrap().revision,
+        message: "do not silently fork this batch".into(), operation_id: OperationId::generate().unwrap() };
+    engine.inject_fault_once("after_worktree_content_reserve");
+    assert!(engine.commit_directory_worktree(&first, &principal).is_err());
+    let before = engine.state().events.len();
+    assert!(engine.commit_directory_worktree(&contender, &principal).is_err());
+    assert_eq!(engine.state().events.len(), before);
+    assert!(!engine.state().operations.contains_key(&contender.operation_id));
+    drop(engine);
+    let mut engine = Engine::open(&fixture.system).unwrap();
+    engine.commit_directory_worktree(&first, &principal).unwrap();
+    assert!(engine.commit_directory_worktree(&contender, &principal).is_err());
+    assert!(!engine.state().operations.contains_key(&contender.operation_id));
+    assert_eq!(engine.state().events.len(), before + 1);
+    assert_eq!(bytes(&engine, other, "first.txt"), b"second instance");
+    assert_eq!(bytes(&engine, other, "Folder/Child/existing.txt"), b"other nested");
 }

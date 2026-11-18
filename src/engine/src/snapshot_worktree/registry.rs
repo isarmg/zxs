@@ -30,6 +30,7 @@ mod commits;
 mod added_commits;
 mod content_batches;
 pub(super) use content_batches::{ContentRetry, FrozenContent};
+pub(crate) use content_batches::ContentReplayFences;
 pub(crate) use added_commits::PublishedAddedCommitTail;
 pub(super) use added_commits::AddedCommitRetry;
 mod historical;

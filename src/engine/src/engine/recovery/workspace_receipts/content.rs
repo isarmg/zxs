@@ -8,20 +8,17 @@ impl Engine {
     /// Most solitary PREPAREs keep their ordinary abandonable semantics.
     /// Consult only a published sparse reservation from this exact prefix;
     /// names on the disk, later States and user-supplied UUIDs cannot select it.
-    pub(super) fn original_content_prepare(&self, prefix: &ReceiptPrefix<'_>, online: &[DiskConfig],
-        sequence: u64, candidates: &BTreeMap<String, Vec<Receipt>>) -> Result<Option<String>> {
-        if !prefix.state.operations.values().any(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_RESERVE) {
-            return Ok(None);
-        }
-        let index = crate::snapshot_worktree::ReceiptIndex::capture_with_originals(prefix.state, prefix.originals)
-            .map_err(failure)?;
+    pub(super) fn original_content_prepare(&self, snapshot: &Option<String>, online: &[DiskConfig],
+        sequence: u64, candidates: &BTreeMap<String, Vec<Receipt>>,
+        fences: &crate::snapshot_worktree::ContentReplayFences) -> Result<Option<String>> {
+        if fences.is_empty() { return Ok(None); }
         let mut selected = None;
         for (hash, receipts) in candidates {
             if receipts.is_empty() || !receipts.iter().all(|r| r.record.record_type == RecordType::Prepare) { continue; }
             let candidate: Candidate = verified_object_at(&self.disk_resources, online, "candidate", hash)?;
-            if !index.retained_content_publish(candidate.operation_id) { continue; }
+            if !fences.selects(candidate.operation_id) { continue; }
             self.verify_candidate_membership(&candidate)?;
-            if selected.is_some() || candidate.sequence != sequence || &candidate.previous_snapshot != prefix.snapshot
+            if selected.is_some() || candidate.sequence != sequence || &candidate.previous_snapshot != snapshot
             { return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate)); }
             for r in receipts {
                 if !crate::journal::receipt_binds(r, RecordType::Prepare, sequence, hash, &candidate.snapshot_hash)? {
@@ -31,6 +28,38 @@ impl Engine {
             selected = Some(hash.clone());
         }
         Ok(selected)
+    }
+
+    /// Reserve freezes identities but cannot publish a FILE, directory, new
+    /// working state, permissions or any other business change. Reconstruct
+    /// that complete transition from the authenticated predecessor.
+    pub(super) fn require_content_reservation(&self, candidate: &Candidate, prefix: &ReceiptPrefix<'_>,
+        admitted: &crate::publication_evidence::AdmittedSnapshot) -> Result<()> {
+        use crate::persist::snapshot_worktree::{self as codec, Record};
+        let next = admitted.for_candidate(candidate)?.state();
+        let result = next.operations.get(&candidate.operation_id).ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
+        let actor = next.operation_principals.get(&candidate.operation_id).ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?
+            .parse::<storage_contract::Principal>().map_err(|_| Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
+        let decoded = codec::decode(result).map_err(|e| failure(crate::snapshot_worktree::RegistrationError::Codec(e)))?
+            .ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
+        let Record::ReserveContentBatch(plan) = &decoded.record else { return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate)); };
+        if result.operation_id != plan.request.operation_id || prefix.namespaces.is_some() || self.config.generation().is_some()
+            || candidate.generation().is_some() || !candidate.versions.is_empty() || result.sequence != candidate.sequence
+            || candidate.request_digest != result.request_digest || decoded.membership_epoch != self.config.membership_epoch()
+            || !decoded.protection.is_empty()
+            || decoded.receipt(result.operation_id, storage_contract::Sequence::new(result.sequence), &actor)
+                .map_err(|e| failure(crate::snapshot_worktree::RegistrationError::Codec(e)))? != *result
+        { return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate)); }
+        let source = crate::snapshot_worktree::ReceiptIndex::capture_with_originals(prefix.state, prefix.originals).map_err(failure)?;
+        source.require_planned(next, result, &actor, &decoded.record).map_err(failure)?;
+        crate::business::file_draft::worktree_content::require_frozen(prefix.state, plan)?;
+        let mut projected = crate::business::file_draft::unborn::begin(prefix.state, storage_contract::Sequence::new(result.sequence))?;
+        crate::container_storage::capture_changed_names(prefix.state, &mut projected);
+        let projected = crate::business::file_draft::unborn::finish_state(prefix.state, projected, result, &actor)?;
+        if !crate::publication_shape::same_transition(prefix.state, &projected, next) {
+            return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate));
+        }
+        Ok(())
     }
 
     /// Observation only. A mixed MOVE position is possible only after the

@@ -268,10 +268,50 @@ impl ReceiptIndex<'_> {
     }
 }
 
+/// Only currently occupied batches from the actual startup cursor; no cache
+/// crosses an Engine call. Completed historical plans are not kept here.
+#[derive(Default)]
+pub(crate) struct ContentReplayFences {
+    plans: std::collections::BTreeMap<OperationId, Reservation>,
+}
 impl ReceiptIndex<'_> {
-    /// A PREPARE without an ACCEPT is not a generic recovery candidate. Only
-    /// the pre-existing, separately published reservation can name this job.
-    pub(crate) fn retained_content_publish(&self, operation: OperationId) -> bool {
-        self.content_batches.values().any(|entry| entry.complete().is_none() && entry.plan.publish_operation == operation)
+    pub(crate) fn content_replay_fences(&self) -> ContentReplayFences {
+        ContentReplayFences { plans: self.content_batches.values().filter(|entry| entry.complete().is_none())
+            .map(|entry| (entry.plan.publish_operation, entry.plan.clone())).collect() }
+    }
+}
+impl ContentReplayFences {
+    pub(crate) fn selects(&self, operation: OperationId) -> bool { self.plans.contains_key(&operation) }
+    pub(crate) fn is_empty(&self) -> bool { self.plans.is_empty() }
+
+    /// A later candidate cannot temporarily publish a different FILE/root
+    /// head and then switch it back before the requested batch completes.
+    /// Only the caller's already separately admitted exact CONTENT_PUBLISH
+    /// may change its own original frozen rows.
+    pub(crate) fn require_next(&self, next: &crate::State, result: &crate::OperationResult) -> Result<()> {
+        for (publish, plan) in &self.plans {
+            if result.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH && result.operation_id == *publish {
+                continue;
+            }
+            if next.operations.contains_key(publish) { return Err(RegistrationError::Pending(plan.request.operation_id)); }
+            crate::business::file_draft::worktree_content::require_frozen(next, plan).map_err(RegistrationError::Publication)?;
+        }
+        Ok(())
+    }
+    /// Fences advance only on a full original native Publication and seal.
+    pub(crate) fn advance(&mut self, result: &crate::OperationResult) -> Result<()> {
+        use crate::persist::snapshot_worktree::{self as codec, Record};
+        match result.kind.as_str() {
+            codec::CONTENT_RESERVE => {
+                let decoded = codec::decode(result).map_err(RegistrationError::Codec)?.ok_or(RegistrationError::Source)?;
+                let Record::ReserveContentBatch(plan) = decoded.record else { return Err(RegistrationError::Source); };
+                if result.operation_id != plan.request.operation_id || self.plans.insert(plan.publish_operation, plan).is_some() {
+                    return Err(RegistrationError::Identity);
+                }
+            }
+            codec::CONTENT_PUBLISH if self.plans.remove(&result.operation_id).is_none() => return Err(RegistrationError::Source),
+            _ => {}
+        }
+        Ok(())
     }
 }
