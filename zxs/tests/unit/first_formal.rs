@@ -59,7 +59,7 @@ fn empty_and_nonempty_first_explicit_full_are_independent_raw_files_after_cold_r
 #[ignore="two explicitly owned native test filesystems"]
 fn source_intent_single_decision_and_raw_full_cleanup_resume_at_each_original_cut(){
     let bytes=b"original published once";
-    for stop in [Cut::Reservation,Cut::FormalIndex,Cut::BeforeIntent,Cut::Intent,Cut::FrameSynced,Cut::MarkedBeforeSync,
+    for stop in [Cut::Reservation,Cut::FormalIndex,Cut::FormalRaw,Cut::FormalReadback,Cut::BeforeIntent,Cut::Intent,Cut::FrameSynced,Cut::MarkedBeforeSync,
         Cut::Decision,Cut::WorkReleased,Cut::Installation,Cut::IntentReleased,Cut::Release]{
         let t=Fixture::new(bytes);let op=OperationId::new().unwrap();
         commit_inner(&t.system,op,t.file.file,1,|cut|if cut==stop{Err(io::Error::other("interrupted original formal commit"))}else{Ok(())}).unwrap_err();
@@ -205,4 +205,55 @@ fn first_full_rechecks_real_saved_source_raw_node_and_inventory_before_advancing
         assert!(!t.work().exists());let mut out=Vec::new();assert_eq!(read_node_to(&t.system,id,finished.node,&mut out).unwrap(),finished);
         assert_eq!(out,data);assert_eq!(osfs::read(away).unwrap(),foreign_bytes);
     }
+}
+
+#[test]
+#[ignore="two private registered native filesystems; named index and RAW gaps before their first new stamps"]
+fn equal_length_damage_between_first_full_links_and_named_pins_never_confirms_or_clears_the_real_draft(){
+    for index in [true,false]{
+        let expected=b"first FULL must preserve this entire actual source";let t=Fixture::new(expected);
+        let file=t.file.file;let op=OperationId::new().unwrap();
+        assert!(commit_inner(&t.system,op,file,1,|step|if step==Cut::Reservation{Err(io::Error::other("remember original allocation"))}else{Ok(())}).is_err());
+        let orig={let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();s.committing.unwrap().original};
+        let path=t.owner().join(if index{format!("node-{}",orig.node)}else{format!("{}-{}",orig.storage,orig.creation_name)});
+        let when=if index{Cut::FormalIndex}else{Cut::FormalRaw};let mut mutation=None;
+        assert!(commit_inner(&t.system,op,file,1,|step|{
+            if step==when{
+                let f=osfs::OpenOptions::new().read(true).write(true).open(&path)?;let meta=f.metadata()?;
+                // Last index link (not header) or a byte of actual RAW. No
+                // replacement, size change, permission change or new name.
+                let pos=meta.len()-1;let mut b=[0];f.read_exact_at(&mut b,pos)?;f.write_all_at(&[b[0]^1],pos)?;f.sync_all()?;
+                mutation=Some((f,meta.ino(),meta.len(),pos,b));
+            }Ok(())
+        }).is_err());
+        let(f,ino,len,pos,old)=mutation.unwrap();assert_eq!((osfs::metadata(&path).unwrap().ino(),osfs::metadata(&path).unwrap().len()),(ino,len));
+        let observation=first_commit_receipt(&t.system,op).unwrap().unwrap();assert_eq!(observation.status,CreationStatus::Reserved);
+        assert!(observation.published.is_none()&&t.work().exists());assert!(!t.system.join("FILE-INTENT").exists());
+        let mut out=Vec::new();let live=read_current_to(&t.system,file,&mut out).unwrap();
+        assert!(live.head.is_none());assert_eq!(out,expected);
+        assert!(commit_first(&t.system,op,file,1).is_err());assert_eq!(first_commit_receipt(&t.system,op).unwrap().unwrap(),observation);
+        assert!(t.work().exists()&&!t.system.join("FILE-INTENT").exists());
+        let mut still=[0];f.read_exact_at(&mut still,pos).unwrap();assert_eq!(still,[old[0]^1]);
+        f.write_all_at(&old,pos).unwrap();f.sync_all().unwrap();drop(f);
+        let n=commit_first(&t.system,op,file,1).unwrap();assert_eq!((n.node,n.version,n.created_by),(orig.node,orig.version,op));
+        assert_eq!(osfs::metadata(&path).unwrap().ino(),ino);assert!(!t.work().exists());
+        let mut after=Vec::new();read_node_to(&t.system,file,n.node,&mut after).unwrap();assert_eq!(after,out);
+    }
+}
+
+#[test]
+#[ignore="two private registered native filesystems; slow first FULL readback does not hold the pool or volume writer"]
+fn named_first_full_checks_under_its_file_lease_without_monopolizing_ordinary_reads(){
+    let t=Fixture::new(b"original");let other=create_empty(&t.system,OperationId::new().unwrap(),t.volume,"other").unwrap();
+    let op=OperationId::new().unwrap();let later=OperationId::new().unwrap();let mut seen=false;
+    let n=commit_inner(&t.system,op,t.file.file,1,|step|{
+        if step==Cut::FormalReadback{
+            seen=true;let(o,b)=crate::read_initial_file(&t.system,other.file)?;assert_eq!(o,other);assert!(b.is_empty());
+            // There is still a durable global ALLOC. Readers are admitted;
+            // this is not a promise of unrelated write concurrency.
+            assert!(create_empty(&t.system,later,t.volume,"later").is_err());
+            assert!(crate::creation_receipt(&t.system,later)?.is_none());
+        }Ok(())
+    }).unwrap();
+    assert!(seen);assert_eq!(n.created_by,op);assert!(create_empty(&t.system,later,t.volume,"later").is_ok());
 }

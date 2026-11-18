@@ -51,7 +51,7 @@ pub struct CreationReceipt{pub status:CreationStatus,pub file:FileInfo}
 pub struct RootFiles{pub files:Vec<FileInfo>,pub reserved_private_entries:usize,pub pending_moves:Vec<MoveReceipt>,pub pending_lifecycle:Vec<RecycleReceipt>}
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-enum Cut { Reservation,UnboundMkdir,MoveLeafLinked,MoveInstalled,MoveTargetFlagBeforeSync,MoveTargetChecked,MoveRetireFlagBeforeSync,MoveSourceAdmitted,MoveSourceIsolated,MoveEraseFlagBeforeSync,MoveLeafRetired,MoveEmptyFlagBeforeSync,MoveEmptyConfirmed,MoveDirectoryUnlinked,FormalIndex,IncrLinked,WorkUnlinked,WorkReleased,BeforeIntent,Intent,FrameSynced,MarkedBeforeSync,Decision,Installation,IntentReleased,Release }
+enum Cut { Reservation,UnboundMkdir,MoveLeafLinked,MoveInstalled,MoveTargetFlagBeforeSync,MoveTargetChecked,MoveRetireFlagBeforeSync,MoveSourceAdmitted,MoveSourceIsolated,MoveEraseFlagBeforeSync,MoveLeafRetired,MoveEmptyFlagBeforeSync,MoveEmptyConfirmed,MoveDirectoryUnlinked,FormalIndex,FormalRaw,FormalReadback,IncrLinked,WorkUnlinked,WorkReleased,BeforeIntent,Intent,FrameSynced,MarkedBeforeSync,Decision,Installation,IntentReleased,Release }
 
 fn expected(pool:&LocalPool,op:OperationId,v:VolumeId,name:&str)->io::Result<[u8;32]>{
     wire::request_digest(pool.id(),op,fs::local_uid(),v,name)

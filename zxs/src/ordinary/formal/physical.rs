@@ -173,15 +173,35 @@ impl Verified{
         if let Some(ref s)=self.input.work{s.require(dir)?;}
         Ok(())
     }
-    pub(super) fn install(&self,dir:&HeldDir,a:&FormalAllocation,after_node:impl FnOnce()->io::Result<()>)->io::Result<VerifiedBody>{
+    pub(super) fn install(&self,dir:&HeldDir,a:&FormalAllocation,mut cut:impl FnMut(crate::ordinary::Cut)->io::Result<()>)->io::Result<NamedFull>{
         self.source_current(dir,&a.original)?;
-        self.input.node.place(dir,Kind::Node,a,&self.node)?;after_node()?;self.input.raw.place(dir,Kind::Raw,a,&self.raw)?;
+        self.input.node.place(dir,Kind::Node,a,&self.node)?;cut(crate::ordinary::Cut::FormalIndex)?;
+        self.input.raw.place(dir,Kind::Raw,a,&self.raw)?;cut(crate::ordinary::Cut::FormalRaw)?;
         let actual=Before::read(dir,Some(a),&a.original)?;
         let body=HistoryBody{confirmed:None,node:actual.node.ok_or_else(||invalid("formal node missing after preparation"))?,
             raw:actual.raw.ok_or_else(||invalid("formal FULL missing after preparation"))?,original:a.original.clone(),index_digest:self.index_digest};
         let actual=body.facts();
         if actual.node!=NativeObject::stamp(&self.node)||actual.raw!=NativeObject::stamp(&self.raw){return Err(invalid("different formal operands installed"));}
-        body.require(dir)?;dir.file.sync_all()?;Ok(VerifiedBody(body))
+        body.require(dir)?;dir.file.sync_all()?;Ok(NamedFull(body))
+    }
+    /// A new named stamp verifies neither the old anonymous contents nor the
+    /// full index. Keep the FILE lease, but not SYSTEM or the ordinary volume,
+    /// while establishing proof on the actual named RAW and index together.
+    pub(super) fn verify_named(&self,named:NamedFull)->io::Result<VerifiedBody>{
+        let NamedFull(body)=named;let dir=&self.input.dir;
+        self.source_current(dir,&body.original)?;body.require(dir)?;
+        body.node.file.sync_all()?;body.raw.file.sync_all()?;
+        if !self.input.node.temp()&&!self.input.raw.temp(){
+            // On cold replay Input::verify already read BOTH named originals.
+            // No link or token write occurred; reuse that read only if the
+            // entire before/after stamps, not merely their birth IDs, agree.
+            if body.node.stamp!=self.node||body.raw.stamp!=self.raw{
+                return Err(invalid("named FULL or index changed since the original readback"));}
+        }else{
+            let digest=visit(&body.raw.file,&body.node.file,&body.original,||body.unchanged(),io::sink())?;
+            if digest!=self.index_digest{return Err(invalid("named FULL index differs from the verified original"));}
+        }
+        body.require(dir)?;self.source_current(dir,&body.original)?;Ok(VerifiedBody(body))
     }
     pub(super) fn retire(self,dir:&HeldDir,decision:&Commit,after_unlink:impl FnOnce()->io::Result<()>)->io::Result<()>{
         self.source_current(dir,&decision.original)?;
@@ -194,6 +214,8 @@ impl Verified{
         HistoryBody::current(dir,decision)?.require(dir)
     }
 }
+// Private inner field: link/identity alone cannot mint publication evidence.
+pub(super) struct NamedFull(HistoryBody);
 pub(super) struct VerifiedBody(HistoryBody);
 impl VerifiedBody{
     pub(super) fn feedback(&self,dir:&HeldDir)->io::Result<Materials>{self.0.require(dir)?;dir.file.sync_all()?;Ok(self.0.facts())}

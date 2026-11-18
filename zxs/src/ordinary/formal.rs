@@ -143,7 +143,23 @@ fn writer(system:&Path,op:OperationId,file:FileId,revision:u64,prepared:Verified
     let a=held.committing.take().ok_or_else(||invalid("original formal allocation disappeared"))?;
     if a.original!=*prepared.original()||a.request!=request{return Err(invalid("another formal reservation cannot accept this material"));}
     p.system.confirm_record_sync(ordinary_allocation::NAME,&a.stamp,a.bytes.len())?;p.system.file.sync_all()?;
-    let body=prepared.install(&dir,&a,||cut(Cut::FormalIndex))?;
+    let named=prepared.install(&dir,&a,|step|cut(step))?;
+    // The original FILE remains exclusively held in prepared.input. A full
+    // physical readback must not keep the SYSTEM or data-root writer locked.
+    drop(held);drop(dir);drop(v);drop(p);cut(Cut::FormalReadback)?;
+    let body=prepared.verify_named(named)?;
+    let (p,_,mut held)=LocalPool::with_snapshot(system,Access::Write)?;
+    let(c,w,live_request)=match choice(&p,&held,op,file,revision)?{
+        Choice::Done(f)=>return Ok(f),Choice::Active(c,w,r)=>(c,w,r),
+    };
+    if live_request!=request||!prepared.original().matches(c,w){
+        return Err(invalid("different original FILE, saved revision or request after named FULL readback"));}
+    let v=p.ordinary(c.create.volume)?;let dir=directory(&v,&held,c,w)?;
+    prepared.source_current(&dir,prepared.original())?;v.require_current()?;
+    let live=held.committing.take().ok_or_else(||invalid("lost original first FULL reservation during named readback"))?;
+    if live.stamp!=a.stamp||live.bytes!=a.bytes||live.original!=a.original{
+        return Err(invalid("different original first FULL reservation after named readback"));}
+    p.system.confirm_record_sync(ordinary_allocation::NAME,&live.stamp,live.bytes.len())?;
     let materials=body.feedback(&dir)?;
     if let Some(d)=held.decided(op){
         if held.pending.is_none(){
