@@ -14,6 +14,7 @@ mod publication;
 pub(in crate::engine) use publication::{HistoryReference, VerifiedScopeSnapshot};
 mod readback;
 mod schema;
+pub(in crate::engine) mod snapshot_bodies;
 pub(in crate::engine) use images::{PreparedImage, Representation, Schema};
 pub(super) use genesis::{GenesisPreparation, initial_state};
 
@@ -36,7 +37,8 @@ impl ScopeClosureError {
     pub(crate) fn code(&self) -> ErrorCode {
         match self {
             Self::GenesisIdentity => ErrorCode::DiskIdentityMismatch,
-            Self::ImageMismatch | Self::PageMismatch | Self::GenesisMismatch | Self::PublicationMismatch => ErrorCode::ObjectCorrupt,
+            Self::ImageMismatch | Self::PageMismatch | Self::GenesisMismatch
+            | Self::PublicationMismatch => ErrorCode::ObjectCorrupt,
             Self::Budget => ErrorCode::ResourceLimit,
         }
     }
