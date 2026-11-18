@@ -5397,27 +5397,6 @@
       }
     },
     {
-      "name": "directory-layout-request",
-      "schema": "DirectoryLayoutReconcileBody",
-      "value": {
-        "expected_namespace_head": "commit_00000000000000000000000000000001"
-      },
-      "layer": "schema"
-    },
-    {
-      "name": "directory-layout-partial-result",
-      "schema": "DirectoryLayoutResult",
-      "value": {
-        "repository_id": "repo_00000000000000000000000000000001",
-        "state_sequence": "18446744073709551615",
-        "directories": "0",
-        "containers": "2",
-        "unavailable_containers": "1",
-        "unavailable_histories": "0"
-      },
-      "layer": "schema"
-    },
-    {
       "name": "content-match-purged-metadata",
       "schema": "ContentMatchPage",
       "value": {
@@ -20233,40 +20212,6 @@
       "schema": "FileDeletionStateFields",
       "layer": "schema",
       "value": {}
-    },
-    {
-      "name": "directory-layout-request-extra-field",
-      "schema": "DirectoryLayoutReconcileBody",
-      "value": {
-        "expected_namespace_head": "commit_00000000000000000000000000000001",
-        "operation_id": "op_00000000000000000000000000000001"
-      },
-      "layer": "schema"
-    },
-    {
-      "name": "directory-layout-result-numeric-count",
-      "schema": "DirectoryLayoutResult",
-      "value": {
-        "repository_id": "repo_00000000000000000000000000000001",
-        "state_sequence": "18446744073709551615",
-        "directories": "0",
-        "containers": 2,
-        "unavailable_containers": "1",
-        "unavailable_histories": "0"
-      },
-      "layer": "schema"
-    },
-    {
-      "name": "directory-layout-result-missing-unavailable",
-      "schema": "DirectoryLayoutResult",
-      "value": {
-        "repository_id": "repo_00000000000000000000000000000001",
-        "state_sequence": "18446744073709551615",
-        "directories": "0",
-        "containers": "2",
-        "unavailable_containers": "1"
-      },
-      "layer": "schema"
     },
     {
       "name": "content-match-missing-nullable",
