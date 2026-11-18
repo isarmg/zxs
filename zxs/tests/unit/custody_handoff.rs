@@ -294,3 +294,42 @@ fn a_move_waiting_for_its_source_keeps_unrelated_reads_but_not_new_writes_until_
     let mut actual=Vec::new();z::read_current_to(&f.sys,x.file,&mut actual).unwrap();assert_eq!(actual,b"Xutside");
     f.all_history()
 }
+
+#[test]
+#[ignore="private registered roots on two or three filesystems; hot and cold late conflict for both custody methods"]
+fn a_complete_unconfirmed_move_does_not_override_a_late_competing_final_name_in_either_method(){
+    for cross in [false,true]{
+        let f=Fixture::build(cross,false);let r=f.cmd();let foreign=f.new.join(if cross{"name"}else{"NaMe"});
+        let original=inventory_ids(&f.old.join("name"));let mut hit=false;
+        let before=crate::pool::lease::LocalPool::with_snapshot(&f.sys,crate::pool::lease::Access::Read).unwrap().2.frontier();
+        assert!(perform(&f.sys,r,&mut |cut|{if cut==Cut::FrameSynced{
+            let mut claimant=fs::OpenOptions::new().write(true).create_new(true).open(&foreign)?;
+            claimant.write_all(b"independent late occupant")?;claimant.sync_all()?;hit=true;
+        }Ok(())}).is_err());assert!(hit);
+        let meta=fs::metadata(&foreign).unwrap();let identity=(meta.dev(),meta.ino());
+        assert_eq!(f.receipt(r).status,MoveStatus::AwaitingDecisionConfirmation);
+        assert_eq!(f.receipt(r).decision_sequence,None);assert!(f.call(r).is_err());
+        let(_,_,s)=crate::pool::lease::LocalPool::with_snapshot(&f.sys,crate::pool::lease::Access::Read).unwrap();
+        assert_eq!(s.frontier(),before);assert!(s.decided(r.op).is_none());assert_eq!(s.placement(r.id).unwrap().volume(),f.from);
+        assert_eq!(fs::read(&foreign).unwrap(),b"independent late occupant");assert_eq!(inventory_ids(&f.old.join("name")),original);f.all_history();
+        let away=f.new.with_file_name("own-fixture-occupant-relocated");fs::rename(&foreign,&away).unwrap();
+        assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);assert_eq!(f.receipt(r).decision_sequence,Some(before.0+1));
+        let moved=fs::metadata(&away).unwrap();assert_eq!((moved.dev(),moved.ino()),identity);
+        assert_eq!(fs::read(&away).unwrap(),b"independent late occupant");assert!(!f.old.join("name").exists());f.all_history();
+    }
+}
+
+#[test]
+#[ignore="private native roots; a conflict after confirmation cannot undo the sole original placement"]
+fn a_conflict_introduced_after_the_confirmed_move_keeps_the_original_target_pending_instead_of_reactivating_the_source(){
+    let f=Fixture::build(true,false);let r=f.cmd();let foreign=f.new.join("name");let mut hit=false;
+    assert!(perform(&f.sys,r,&mut |c|{if c==Cut::Decision{
+        let mut other=fs::OpenOptions::new().write(true).create_new(true).open(&foreign)?;
+        other.write_all(b"late after original decision")?;other.sync_all()?;hit=true;
+    }Ok(())}).is_err());assert!(hit);
+    assert_eq!(f.receipt(r).status,MoveStatus::DecidedTargetPending);assert!(f.old.join("name").is_dir());
+    let mut bytes=Vec::new();assert!(z::read_node_to(&f.sys,r.id,f.first.node,&mut bytes).is_err());assert!(bytes.is_empty());
+    assert_eq!(fs::read(&foreign).unwrap(),b"late after original decision");assert!(f.call(r).is_err());
+    fs::rename(&foreign,f.new.with_file_name("external-owner-kept")).unwrap();assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);
+    f.all_history();
+}

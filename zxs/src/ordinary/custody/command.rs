@@ -83,7 +83,20 @@ pub(super) fn perform(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Resu
                 s.room_for_effect(m.bytes.len(),m.original.effect())?;hook(Cut::BeforeIntent)?;Intent::seal(&p.system,&m.bytes)?;
             }
             hook(Cut::Intent)?;
-            ordinary::publish_sealed(p,r.op,req,|d|{if d.moved()?!=&m{return Err(invalid("different frozen custody decision"));}current()},|c|hook(c))?;
+            ordinary::publish_sealed(p,r.op,req,|d|{if d.moved()?!=&m{return Err(invalid("different frozen custody decision"));}current()},|c|{
+                hook(c)?;
+                if c==Cut::FrameSynced{
+                    // Complete bytes are not a confirmed placement. An exact
+                    // or equivalent competing final name must stop this hot
+                    // path at the same boundary as recovery of that frame.
+                    // Keep the same original SYSTEM/old/new writer leases.
+                    if src.same_mount(&new.root)?!=(m.original.mode==super::destination::Method::Rename){
+                        return Err(invalid("original MOVE method changed before confirmation"));
+                    }
+                    ordinary::material::vacant_for_move(new,&m.original.name)?;
+                    current()?;
+                }Ok(())
+            })?;
             Ok(())
         })?;
         drop(confirmed);drop(prep);drop(src);hook(Cut::Decision)?;
