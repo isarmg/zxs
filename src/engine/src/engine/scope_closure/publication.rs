@@ -147,6 +147,9 @@ impl VerifiedScopeSnapshot {
         let empty = super::OrdinalBuilder::new(0).finish()?;
         empty.verify(disk, root, &history.body_inventory)?;
         Ok(HistoryReference {
+            current_root: manifest.disk_current.logical_root,
+            current_representation: manifest.disk_current.representation,
+            both_have_no_bodies: manifest.disk_current.body_inventory == history.body_inventory,
             logical_root: history.logical_root,
             representation: history.representation,
             changes: manifest.local_changes,
@@ -155,6 +158,11 @@ impl VerifiedScopeSnapshot {
 }
 
 pub(in crate::engine) struct HistoryReference {
+    pub(in crate::engine) current_root: MaterialCommitment,
+    pub(in crate::engine) current_representation: super::Representation,
+    // The physical, canonical empty history-body page was already read on
+    // this holder. Current has no payload bodies of its own either.
+    pub(in crate::engine) both_have_no_bodies: bool,
     pub(in crate::engine) logical_root: MaterialCommitment,
     pub(in crate::engine) representation: super::Representation,
     pub(in crate::engine) changes: metadata_map::Reference,

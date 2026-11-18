@@ -241,6 +241,16 @@ pub(super) fn capture(
     identity: DiskRegistrationIdentity,
     through: u64,
 ) -> Result<CapturedHistory> {
+    capture_pair(engine, identity, through).map(|(history, _)| history)
+}
+
+/// The actual projection of the terminal replay step, not today's current
+/// catalog or a second fold of the history the caller intends to verify.
+pub(super) fn capture_pair(
+    engine: &Engine,
+    identity: DiskRegistrationIdentity,
+    through: u64,
+) -> Result<(CapturedHistory, DiskCatalogSnapshot)> {
     let mut binding = Binding::genesis();
     let mut header = DiskHistoryHeader {
         identity: identity.clone(),
@@ -286,7 +296,7 @@ pub(super) fn capture(
             "disk history prefix differs from the admitted current snapshot",
         ));
     }
-    Ok(CapturedHistory { view: DiskHistorySnapshot { header, changes: changes.rows }, binding })
+    Ok((CapturedHistory { view: DiskHistorySnapshot { header, changes: changes.rows }, binding }, previous))
 }
 
 #[cfg(test)]

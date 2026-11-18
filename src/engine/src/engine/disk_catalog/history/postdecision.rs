@@ -8,9 +8,9 @@ use crate::{
     DiskRegistrationIdentity, Engine, Error, ErrorCode, OperationId, Result, ValidatedConfig,
     disk::{DiskRoot, HeldRegular, MAX_METADATA, decode_seal, identity_at, validate_stored_seal},
     engine::{
-        disk_catalog::MAX_DATABASE_BYTES,
+        disk_catalog::{DiskCatalogSnapshot, MAX_DATABASE_BYTES},
         fresh_layout,
-        scope_closure::{Anchor, Representation, Schema, VerifiedScopeSnapshot},
+        scope_closure::{Anchor, HistoryReference, Representation, Schema, VerifiedScopeSnapshot},
     },
     persist::layout,
 };
@@ -20,6 +20,7 @@ pub(in crate::engine) struct Original {
     configuration: ValidatedConfig,
     snapshot: VerifiedScopeSnapshot,
     expected: StoredHistory,
+    current: DiskCatalogSnapshot,
     header: DiskHistoryHeader,
     binding: Binding,
     candidate_hash: MaterialCommitment,
@@ -47,7 +48,7 @@ impl Engine {
             .storage_roots
             .get(&id)
             .ok_or_else(|| invalid("DISK scope is outside the original registration set"))?;
-        let captured = replay::capture(self, selected.registration.clone(), sequence.get())?;
+        let (captured, current) = replay::capture_pair(self, selected.registration.clone(), sequence.get())?;
         if !matches!(
             captured.binding.through,
             Through::Publication { sequence: n, operation_id, .. }
@@ -80,6 +81,7 @@ impl Engine {
             configuration,
             snapshot,
             expected,
+            current,
             header: captured.view.header,
             binding: captured.binding,
             candidate_hash,
@@ -107,10 +109,47 @@ impl VerifiedHistory {
     }
 }
 
+/// Both scoped databases are linked through the same manifest, operation and
+/// registered physical owner. No FILE/inventory coverage is implied.
+pub(in crate::engine) struct VerifiedCatalogs {
+    pub(in crate::engine) history: VerifiedHistory,
+    pub(in crate::engine) current: VerifiedCurrent,
+}
+
+pub(in crate::engine) struct VerifiedCurrent {
+    pub(in crate::engine) logical_root: MaterialCommitment,
+    pub(in crate::engine) image_hash: ContentHash,
+    pub(in crate::engine) image_bytes: u64,
+    pub(in crate::engine) catalog: DiskCatalogSnapshot,
+}
+
 impl Original {
+    /// A deliberately selected history-only read need not open the current
+    /// image. It never claims that current is present or proven.
+    pub(in crate::engine) fn verify_local(self, root: &DiskRoot) -> Result<VerifiedHistory> {
+        self.with_holder(root, |_, _| Ok(())).map(|(history, ())| history)
+    }
+
+    pub(in crate::engine) fn verify_catalogs(self, root: &DiskRoot) -> Result<VerifiedCatalogs> {
+        let (history, current) = self.with_holder(root, |original, selected| {
+            if !selected.both_have_no_bodies
+                || super::offline::fold_stored(&original.expected, Some(&original.current))?
+                    != original.current
+            {
+                return Err(invalid("original DISK current and complete history do not agree"));
+            }
+            verify_current_image(root, &original.current, selected.current_root, selected.current_representation)
+        })?;
+        Ok(VerifiedCatalogs { history, current })
+    }
+
     /// Only this caller-selected, held target is addressed after capture. No
     /// peer reads, adopting a mutable catalog alias, or SQLite re-encoding.
-    pub(in crate::engine) fn verify_local(self, root: &DiskRoot) -> Result<VerifiedHistory> {
+    fn with_holder<T>(
+        self,
+        root: &DiskRoot,
+        extra: impl FnOnce(&Self, &HistoryReference) -> Result<T>,
+    ) -> Result<(VerifiedHistory, T)> {
         let Through::Publication {
             operation_id,
             request_digest,
@@ -157,7 +196,7 @@ impl Original {
         }
         let changes = change_pages::ChangePages::prepare(&self.expected)?;
         changes.verify(&disk, root, &material.changes)?;
-        let local = material.representation.verify(
+        let (local, additional) = material.representation.verify(
             root,
             Schema::DiskHistory,
             MAX_DATABASE_BYTES,
@@ -166,7 +205,10 @@ impl Original {
                 if actual != self.expected {
                     return Err(invalid("complete DISK SQLite differs from its native history"));
                 }
-                Ok(actual)
+                // In pair mode both image observations overlap: the original
+                // history FD stays open and its real name/stamp is rechecked
+                // after reading the complete current image.
+                Ok((actual, extra(&self, &material)?))
             },
         )?;
         fresh_layout::verify_root(&self.configuration, &disk, root)?;
@@ -182,7 +224,7 @@ impl Original {
             lease.check_running()?;
         }
         let Representation::Sqlite { image_hash, image_bytes, .. } = material.representation;
-        Ok(VerifiedHistory {
+        Ok((VerifiedHistory {
             registration: identity.clone(),
             sequence: Sequence::new(sequence),
             operation_id,
@@ -192,6 +234,29 @@ impl Original {
             image_hash,
             image_bytes,
             business: local.resolved(&self.header, &self.binding)?,
-        })
+        }, additional))
     }
+}
+
+pub(super) fn verify_current_image(
+    root: &DiskRoot,
+    expected: &DiskCatalogSnapshot,
+    logical_root: MaterialCommitment,
+    representation: Representation,
+) -> Result<VerifiedCurrent> {
+    let original = MaterialCommitment::from_digest(storage_contract::canonical_object_digest(
+        "disk-current-catalog", expected,
+    )?);
+    if logical_root != original {
+        return Err(invalid("DISK current logical root differs from the original terminal State"));
+    }
+    let catalog = representation.verify(root, Schema::DiskCurrent, MAX_DATABASE_BYTES, |bytes| {
+        let actual = super::super::database::read(bytes, &expected.identity)?;
+        if actual != *expected {
+            return Err(invalid("DISK current SQLite does not contain the exact selected State"));
+        }
+        Ok(actual)
+    })?;
+    let Representation::Sqlite { image_hash, image_bytes, .. } = representation;
+    Ok(VerifiedCurrent { logical_root, image_hash, image_bytes, catalog })
 }

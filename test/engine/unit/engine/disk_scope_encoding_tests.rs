@@ -279,3 +279,43 @@ fn identical_sql_rows_in_different_physical_pages_are_not_the_committed_image() 
         Ok(())
     }).unwrap();
 }
+
+
+#[test]
+fn selected_current_image_requires_original_full_rows_and_exact_page_bytes() {
+    use crate::engine::scope_closure::{PreparedImage, Representation, Schema};
+    use storage_contract::working_tree::MaterialCommitment;
+    let fixture = Fixture::new();
+    fixture.scopes().finish(&fixture.admitted, &AtomicBool::new(false), |id, bytes, _| {
+        let disk = fixture.engine.disk(&id.slot_id)?;
+        let held = &fixture.engine.disk_resources.get(disk)?.root;
+        let expected = snapshot(fixture.admitted.state(), id.clone())?;
+        let logical_root = MaterialCommitment::from_digest(
+            storage_contract::canonical_object_digest("disk-current-catalog", &expected)?,
+        );
+        let image = PreparedImage::new(Schema::DiskCurrent, bytes.clone());
+        image.install_verified(held, |_| Ok(()))?;
+        let reference = image.representation();
+        let check = |rows: &DiskCatalogSnapshot| {
+            super::super::postdecision::verify_current_image(held, rows, logical_root, reference)
+        };
+        let verified = check(&expected)?;
+        assert_eq!(verified.catalog, expected);
+        assert_eq!(verified.logical_root, logical_root);
+        assert_eq!(verified.image_bytes, bytes.len() as u64);
+        let mut wrong = expected.clone();
+        wrong.source_sequence += 1;
+        assert!(check(&wrong).is_err());
+
+        let Representation::Sqlite { image_hash, .. } = reference;
+        assert_eq!(verified.image_hash, image_hash);
+        let path = disk.root.join(crate::persist::layout::scope_image(image_hash).as_path());
+        let mut equivalent = bytes;
+        equivalent[68..72].copy_from_slice(&0x005a5853u32.to_be_bytes());
+        assert_eq!(super::super::super::database::read(&equivalent, &id)?, expected);
+        std::fs::write(&path, &equivalent)?;
+        assert!(check(&expected).is_err());
+        assert_eq!(std::fs::read(path)?, equivalent);
+        Ok(())
+    }).unwrap();
+}

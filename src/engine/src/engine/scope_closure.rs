@@ -11,7 +11,7 @@ mod objects;
 mod ordinal;
 pub(in crate::engine) use ordinal::{OrdinalBuilder, OrdinalPages};
 mod publication;
-pub(in crate::engine) use publication::VerifiedScopeSnapshot;
+pub(in crate::engine) use publication::{HistoryReference, VerifiedScopeSnapshot};
 mod readback;
 mod schema;
 pub(in crate::engine) use images::{PreparedImage, Representation, Schema};
