@@ -12,6 +12,7 @@ pub struct SmbWorktreeLocation {
 
 #[derive(Clone, Debug)]
 pub struct SmbWorktreeFile {
+    pub visible: storage_contract::OperationId,
     pub target: WorktreeHandle,
     pub path: PortablePath,
     pub revision: WorktreeRevision,
@@ -73,6 +74,7 @@ pub enum SmbWorktreeWorkingSource {
 }
 
 pub struct SmbWorktreeWorkingOpen {
+    pub visible: storage_contract::OperationId,
     pub source: SmbWorktreeWorkingSource,
     pub writable: bool,
     pub truncate: bool,
@@ -92,6 +94,6 @@ pub struct SmbWorktreePage {
 }
 
 pub enum SmbWorktreeAccess<'a> {
-    Read,
-    Write { path: &'a PortablePath, expected: WorktreeRevision },
+    Read { visible: storage_contract::OperationId },
+    Write { visible: storage_contract::OperationId, path: &'a PortablePath, expected: WorktreeRevision },
 }

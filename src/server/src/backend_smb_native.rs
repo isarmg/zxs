@@ -25,6 +25,7 @@ pub(crate) enum NativeSource {
         held: storage_engine::NativeWorkingFile,
     },
     Worktree {
+        visible: storage_contract::OperationId,
         target: WorktreeFileTarget,
         #[cfg(feature = "core")]
         held: storage_engine::NativeWorkingFile,

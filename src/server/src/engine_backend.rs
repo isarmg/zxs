@@ -693,22 +693,22 @@ impl Backend for EngineBackend {
         smb_worktree::locate(self, identity, branch, path)
     }
     fn smb_worktree_entry(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle, visible: storage_contract::OperationId,
         path: &name_policy::LookupPath,
     ) -> Result<crate::SmbWorktreeEntry, ApiError> {
-        smb_worktree::stat(self, identity, target, path)
+        smb_worktree::stat(self, identity, target, visible, path)
     }
     fn smb_worktree_page(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle, visible: storage_contract::OperationId,
         parent: Option<&name_policy::LookupPath>, cursor: Option<&crate::SmbWorktreeCursor>,
     ) -> Result<crate::SmbWorktreePage, ApiError> {
-        smb_worktree::page(self, identity, target, parent, cursor)
+        smb_worktree::page(self, identity, target, visible, parent, cursor)
     }
     fn authorize_smb_worktree_page(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle, visible: storage_contract::OperationId,
         parent: Option<&name_policy::LookupPath>, page: &crate::SmbWorktreePage,
     ) -> Result<(), ApiError> {
-        smb_worktree::check_page(self, identity, target, parent, page)
+        smb_worktree::check_page(self, identity, target, visible, parent, page)
     }
     fn authorize_smb_worktree(
         &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
@@ -722,10 +722,10 @@ impl Backend for EngineBackend {
         smb_worktree::content(self, identity, file, deadline)
     }
     fn edit_smb_worktree(
-        &self, identity: &Identity, request: storage_contract::snapshot_worktree::EditWorktree,
+        &self, identity: &Identity, request: storage_contract::snapshot_worktree::EditWorktree, visible: storage_contract::OperationId,
         source: &crate::UploadSource,
     ) -> Result<storage_contract::snapshot_worktree::WorktreeRevision, ApiError> {
-        smb_worktree::edit(self, identity, request, source)
+        smb_worktree::edit(self, identity, request, visible, source)
     }
     fn smb_worktree_working_open(
         &self, identity: &Identity, request: crate::SmbWorktreeWorkingOpen,

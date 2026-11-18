@@ -301,7 +301,7 @@ fn worktree_dispatch_exact_lost_reply_pending_guard_and_committed_handle_reject_
     let mut invalid: Identity = named.identity.clone();
     invalid.smb_binding.as_mut().unwrap().generation += 1;
     assert!(setup.backend.inner.authorize_smb_worktree(
-        &invalid, setup.target, crate::SmbWorktreeAccess::Read,
+        &invalid, setup.target, crate::SmbWorktreeAccess::Read { visible: status.visible },
     ).is_err());
     // SMB identities cannot call the management commit publisher.
     let commit = CommitWorktree {

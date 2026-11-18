@@ -22,6 +22,7 @@ pub(super) use writer::WorktreeWriter;
 
 pub(super) struct WorktreeDirectory {
     pub(super) target: WorktreeHandle,
+    pub(super) visible: OperationId,
     mount: LookupName,
     parent: Option<LookupPath>,
     pending: Option<crate::SmbWorktreePage>,
@@ -56,7 +57,7 @@ impl Session {
         let target = status.target;
         let entry = match location.path.as_ref() {
             Some(path) => match self.shared.backend.smb_worktree_entry(
-                &self.identity, target, path,
+                &self.identity, target, status.visible, path,
             ) {
                 Ok(entry) => Some(entry),
                 Err(error) if create && error.code == ErrorCode::NotFound => {
@@ -76,7 +77,7 @@ impl Session {
             && let SmbWorktreeEntryContent::Working { target, .. } = &entry.content
         {
             return self.open_worktree_working(
-                target.clone(), &path, writable, truncate, write_through,
+                target.clone(), status.visible, &path, writable, truncate, write_through,
             );
         }
         let (entry_id, version_id) = match entry.as_ref().map(|entry| &entry.content) {
@@ -101,20 +102,20 @@ impl Session {
                     "worktree directory data is not writable"));
             }
             let page = self.shared.backend.smb_worktree_page(
-                &self.identity, target, location.path.as_ref(), None,
+                &self.identity, target, status.visible, location.path.as_ref(), None,
             )?;
             let file = File::open(crate::smb_rpc::manual::layout::read_placeholder(
                 &self.shared.spool,
             )).map_err(ApiError::io)?;
             let descriptor = OwnedFd::from(file.try_clone().map_err(ApiError::io)?);
             (Handle::WorktreeDirectory(WorktreeDirectory {
-                target, mount: status.name, parent: location.path,
+                target, visible: status.visible, mount: status.name, parent: location.path,
                 pending: Some(page), cursor: None, exhausted: false, file,
             }), descriptor, 0, OpenIo::Directory)
         } else {
             let entry = entry.expect("invariant: a non-directory worktree entry is present");
             let selection = SmbWorktreeFile {
-                target, path: entry.path, revision: status.revision, mtime,
+                target, visible: status.visible, path: entry.path, revision: status.revision, mtime,
             };
             if writable {
                 self.open_worktree_writer(selection, &path, truncate, write_through)?
@@ -149,7 +150,7 @@ impl Session {
             &self.shared, [(self.branch.as_str(), path.key())],
         )?;
         self.shared.backend.authorize_smb_worktree(&self.identity, selection.target,
-            SmbWorktreeAccess::Write { path: &selection.path, expected: selection.revision })?;
+            SmbWorktreeAccess::Write { visible: selection.visible, path: &selection.path, expected: selection.revision })?;
         let operation = OperationId::generate().map_err(ApiError::contract_input)?;
         let directory = PrivateDirectory::open_trusted(&self.shared.spool)
             .map_err(crate::upload_fs_error)?;
@@ -184,7 +185,7 @@ impl Session {
         }
         file.sync_all().map_err(ApiError::io)?;
         self.shared.backend.authorize_smb_worktree(&self.identity, selection.target,
-            SmbWorktreeAccess::Write { path: &selection.path, expected: selection.revision })?;
+            SmbWorktreeAccess::Write { visible: selection.visible, path: &selection.path, expected: selection.revision })?;
         let descriptor = OwnedFd::from(file.try_clone().map_err(ApiError::io)?);
         let writer = WorktreeWriter::new(writer::Preparation {
             selection, operation, reservation, file, directory, name, hash, size,
@@ -196,8 +197,10 @@ impl Session {
     pub(super) fn stat_worktree(&self, location: SmbWorktreeLocation)
         -> Result<StatResult, ApiError>
     {
+        self.shared.backend.authorize_smb_worktree(&self.identity, location.status.target,
+            SmbWorktreeAccess::Read { visible: location.status.visible })?;
         let entry = location.path.as_ref().map(|path| {
-            self.shared.backend.smb_worktree_entry(&self.identity, location.status.target, path)
+            self.shared.backend.smb_worktree_entry(&self.identity, location.status.target, location.status.visible, path)
         }).transpose()?;
         let relative = entry.as_ref().map(|entry| &entry.path);
         let path = display_path(&location.status.name, relative)?;
@@ -224,14 +227,14 @@ impl Session {
             return Err(handles::missing_handle());
         };
         self.shared.backend.authorize_smb_worktree(
-            &self.identity, directory.target, SmbWorktreeAccess::Read,
+            &self.identity, directory.target, SmbWorktreeAccess::Read { visible: directory.visible },
         )?;
         if restart || directory.pending.is_none() {
             if !restart && directory.exhausted {
                 return Ok(DirectoryPage { entries: Vec::new(), more: false });
             }
             let page = self.shared.backend.smb_worktree_page(
-                &self.identity, directory.target, directory.parent.as_ref(),
+                &self.identity, directory.target, directory.visible, directory.parent.as_ref(),
                 if restart { None } else { directory.cursor.as_ref() },
             )?;
             directory.pending = Some(page);
@@ -241,7 +244,7 @@ impl Session {
         let page = directory.pending.as_ref()
             .expect("invariant: the pending page was captured above");
         self.shared.backend.authorize_smb_worktree_page(
-            &self.identity, directory.target, directory.parent.as_ref(), page,
+            &self.identity, directory.target, directory.visible, directory.parent.as_ref(), page,
         )?;
         let mut entries = Vec::new();
         let mut bytes = 128usize;

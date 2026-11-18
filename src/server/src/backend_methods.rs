@@ -482,27 +482,27 @@ macro_rules! methods {
                 }
                 fn smb_worktree_entry(
                     &self, identity: &$crate::Identity,
-                    target: storage_contract::snapshot_worktree::WorktreeHandle,
+                    target: storage_contract::snapshot_worktree::WorktreeHandle, visible: storage_contract::OperationId,
                     path: &name_policy::LookupPath,
                 ) -> Result<$crate::SmbWorktreeEntry, $crate::ApiError> {
-                    let _ = (identity, target, path);
+                    let _ = (identity, target, visible, path);
                     Err($crate::ApiError::unsupported())
                 }
                 fn smb_worktree_page(
                     &self, identity: &$crate::Identity,
-                    target: storage_contract::snapshot_worktree::WorktreeHandle,
+                    target: storage_contract::snapshot_worktree::WorktreeHandle, visible: storage_contract::OperationId,
                     parent: Option<&name_policy::LookupPath>,
                     cursor: Option<&$crate::SmbWorktreeCursor>,
                 ) -> Result<$crate::SmbWorktreePage, $crate::ApiError> {
-                    let _ = (identity, target, parent, cursor);
+                    let _ = (identity, target, visible, parent, cursor);
                     Err($crate::ApiError::unsupported())
                 }
                 fn authorize_smb_worktree_page(
                     &self, identity: &$crate::Identity,
-                    target: storage_contract::snapshot_worktree::WorktreeHandle,
+                    target: storage_contract::snapshot_worktree::WorktreeHandle, visible: storage_contract::OperationId,
                     parent: Option<&name_policy::LookupPath>, page: &$crate::SmbWorktreePage,
                 ) -> Result<(), $crate::ApiError> {
-                    let _ = (identity, target, parent, page);
+                    let _ = (identity, target, visible, parent, page);
                     Err($crate::ApiError::unsupported())
                 }
                 fn authorize_smb_worktree(
@@ -522,12 +522,12 @@ macro_rules! methods {
                 }
                 fn edit_smb_worktree(
                     &self, identity: &$crate::Identity,
-                    request: storage_contract::snapshot_worktree::EditWorktree,
+                    request: storage_contract::snapshot_worktree::EditWorktree, visible: storage_contract::OperationId,
                     source: &$crate::UploadSource,
                 ) -> Result<
                     storage_contract::snapshot_worktree::WorktreeRevision, $crate::ApiError,
                 > {
-                    let _ = (identity, request, source);
+                    let _ = (identity, request, visible, source);
                     Err($crate::ApiError::unsupported())
                 }
                 fn smb_worktree_working_open(

@@ -30,6 +30,19 @@ pub(super) fn authorize_target(
     authorize(engine, current, engine.directory_worktree_owner(target).map_err(error)?)
 }
 
+/// A live SMB handle belongs to a particular completed Create/Restore, not
+/// just to a WorktreeId or a name. Caller holds the same lock through data I/O.
+pub(super) fn authorize_visible(
+    engine: &Engine, current: &Identity, target: WorktreeHandle, visible: storage_contract::OperationId,
+) -> Result<(), ApiError> {
+    authorize_target(engine, current, target)?;
+    if engine.directory_worktree_status(target).map_err(error)?.visible != visible {
+        return Err(ApiError::conflict(storage_contract::ErrorCode::PreparationStale,
+            "worktree mount changed; reopen the handle"));
+    }
+    Ok(())
+}
+
 fn entry(engine: &Engine, value: WorktreeEntry) -> Result<SmbWorktreeEntry, ApiError> {
     let content = match value.content {
         WorktreeEntryContent::Directory => SmbWorktreeEntryContent::Directory,
@@ -57,7 +70,7 @@ pub(super) fn open_working(
         SmbWorktreeWorkingSource::Existing(target) => target.worktree,
         SmbWorktreeWorkingSource::Create(request) => request.target,
     };
-    authorize_target(&engine, &current, target)?;
+    authorize_visible(&engine, &current, target, request.visible)?;
     let principal = current.principal.parse().map_err(ApiError::invalid_authenticated_principal)?;
     let target = match request.source {
         SmbWorktreeWorkingSource::Existing(target) => target,
@@ -72,7 +85,7 @@ pub(super) fn open_working(
             .map_err(crate::engine_backend::error)?;
     }
     Ok(SmbNativeHandle {
-        source: crate::backend_smb_native::NativeSource::Worktree { target, held },
+        source: crate::backend_smb_native::NativeSource::Worktree { target, visible: request.visible, held },
     })
 }
 
@@ -105,19 +118,19 @@ pub(super) fn locate(
 }
 
 pub(super) fn stat(
-    backend: &EngineBackend, identity: &Identity, target: WorktreeHandle, path: &LookupPath,
+    backend: &EngineBackend, identity: &Identity, target: WorktreeHandle, visible: storage_contract::OperationId, path: &LookupPath,
 ) -> Result<SmbWorktreeEntry, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
-    authorize_target(&engine, &current, target)?;
+    authorize_visible(&engine, &current, target, visible)?;
     entry(&engine, engine.directory_worktree_entry(target, path).map_err(error)?)
 }
 
 pub(super) fn page(
-    backend: &EngineBackend, identity: &Identity, target: WorktreeHandle,
+    backend: &EngineBackend, identity: &Identity, target: WorktreeHandle, visible: storage_contract::OperationId,
     parent: Option<&LookupPath>, cursor: Option<&SmbWorktreeCursor>,
 ) -> Result<SmbWorktreePage, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
-    authorize_target(&engine, &current, target)?;
+    authorize_visible(&engine, &current, target, visible)?;
     let page = engine.directory_worktree_entries(target, parent, cursor.map(|value| &value.held))
         .map_err(error)?;
     Ok(SmbWorktreePage {
@@ -129,11 +142,11 @@ pub(super) fn page(
 }
 
 pub(super) fn check_page(
-    backend: &EngineBackend, identity: &Identity, target: WorktreeHandle,
+    backend: &EngineBackend, identity: &Identity, target: WorktreeHandle, visible: storage_contract::OperationId,
     parent: Option<&LookupPath>, page: &SmbWorktreePage,
 ) -> Result<(), ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
-    authorize_target(&engine, &current, target)?;
+    authorize_visible(&engine, &current, target, visible)?;
     engine.check_directory_worktree_page(target, parent, &page.stamp).map_err(error)
 }
 
@@ -142,12 +155,10 @@ pub(super) fn check(
     access: SmbWorktreeAccess<'_>,
 ) -> Result<(), ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
-    authorize_target(&engine, &current, target)?;
     match access {
-        SmbWorktreeAccess::Read => {
-            engine.directory_worktree_status(target).map_err(error)?;
-        }
-        SmbWorktreeAccess::Write { path, expected } => {
+        SmbWorktreeAccess::Read { visible } => authorize_visible(&engine, &current, target, visible)?,
+        SmbWorktreeAccess::Write { path, expected, visible } => {
+            authorize_visible(&engine, &current, target, visible)?;
             engine.check_directory_worktree_edit(target, path, expected).map_err(error)?;
         }
     }
@@ -159,7 +170,7 @@ pub(super) fn content(
     deadline: std::time::Instant,
 ) -> Result<Content, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
-    authorize_target(&engine, &current, file.target)?;
+    authorize_visible(&engine, &current, file.target, file.visible)?;
     let content = engine.open_directory_worktree_content(file.target, &(&file.path).into())
         .map_err(error)?;
     if content.revision != file.revision {
@@ -171,10 +182,10 @@ pub(super) fn content(
 }
 
 pub(super) fn edit(
-    backend: &EngineBackend, identity: &Identity, request: EditWorktree, source: &UploadSource,
+    backend: &EngineBackend, identity: &Identity, request: EditWorktree, visible: storage_contract::OperationId, source: &UploadSource,
 ) -> Result<WorktreeRevision, ApiError> {
     let (mut engine, current) = backend.lock_current(identity)?;
-    authorize_target(&engine, &current, request.target)?;
+    authorize_visible(&engine, &current, request.target, visible)?;
     if source.size != request.size || source.hash != request.content_hash {
         return Err(ApiError::conflict(storage_contract::ErrorCode::ChecksumMismatch,
             "retained SMB bytes differ from the original worktree save"));

@@ -44,7 +44,7 @@ impl Session {
         let path = if let Some((parent, leaf)) = path.as_str().rsplit_once('/') {
             let parent = LookupPath::parse(parent).map_err(ApiError::invalid_source)?;
             let parent = self.shared.backend.smb_worktree_entry(
-                &self.identity, status.target, &parent,
+                &self.identity, status.target, status.visible, &parent,
             )?;
             if parent.kind() != NamespaceEntryKind::Directory {
                 return Err(ApiError::conflict(
@@ -92,6 +92,7 @@ impl Session {
             let file = self.shared.backend.smb_worktree_working_open(
                 &self.identity,
                 SmbWorktreeWorkingOpen {
+                    visible: status.visible,
                     source: SmbWorktreeWorkingSource::Create(intent.request),
                     writable,
                     truncate,
@@ -123,6 +124,7 @@ impl Session {
     pub(super) fn open_worktree_working(
         &mut self,
         target: WorktreeFileTarget,
+        visible: OperationId,
         display: &PortablePath,
         writable: bool,
         truncate: bool,
@@ -139,6 +141,7 @@ impl Session {
         let file = self.shared.backend.smb_worktree_working_open(
             &self.identity,
             SmbWorktreeWorkingOpen {
+                visible,
                 source: SmbWorktreeWorkingSource::Existing(target),
                 writable,
                 truncate,

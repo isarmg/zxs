@@ -101,22 +101,22 @@ impl Backend for LostCommitReply {
         self.inner.smb_worktree_locate(identity, branch, path)
     }
     fn smb_worktree_entry(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle, visible: storage_contract::OperationId,
         path: &name_policy::LookupPath,
     ) -> Result<crate::SmbWorktreeEntry, ApiError> {
-        self.inner.smb_worktree_entry(identity, target, path)
+        self.inner.smb_worktree_entry(identity, target, visible, path)
     }
     fn smb_worktree_page(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle, visible: storage_contract::OperationId,
         parent: Option<&name_policy::LookupPath>, cursor: Option<&crate::SmbWorktreeCursor>,
     ) -> Result<crate::SmbWorktreePage, ApiError> {
-        self.inner.smb_worktree_page(identity, target, parent, cursor)
+        self.inner.smb_worktree_page(identity, target, visible, parent, cursor)
     }
     fn authorize_smb_worktree_page(
-        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
+        &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle, visible: storage_contract::OperationId,
         parent: Option<&name_policy::LookupPath>, page: &crate::SmbWorktreePage,
     ) -> Result<(), ApiError> {
-        self.inner.authorize_smb_worktree_page(identity, target, parent, page)
+        self.inner.authorize_smb_worktree_page(identity, target, visible, parent, page)
     }
     fn authorize_smb_worktree(
         &self, identity: &Identity, target: storage_contract::snapshot_worktree::WorktreeHandle,
@@ -130,10 +130,10 @@ impl Backend for LostCommitReply {
         self.inner.smb_worktree_content(identity, file, deadline)
     }
     fn edit_smb_worktree(
-        &self, identity: &Identity, request: storage_contract::snapshot_worktree::EditWorktree,
+        &self, identity: &Identity, request: storage_contract::snapshot_worktree::EditWorktree, visible: storage_contract::OperationId,
         source: &crate::UploadSource,
     ) -> Result<storage_contract::snapshot_worktree::WorktreeRevision, ApiError> {
-        let revision = self.inner.edit_smb_worktree(identity, request, source)?;
+        let revision = self.inner.edit_smb_worktree(identity, request, visible, source)?;
         if self.fail.swap(false, Ordering::SeqCst) {
             return Err(ApiError::io(io::Error::new(io::ErrorKind::BrokenPipe,
                 "lost reply after the real completed worktree save")));

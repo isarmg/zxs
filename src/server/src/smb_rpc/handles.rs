@@ -507,13 +507,13 @@ impl Handle {
     ) -> Result<(), ApiError> {
         match self {
             Self::WorktreeWrite(writer, _) => shared.backend.authorize_smb_worktree(
-                identity, writer.target(), crate::SmbWorktreeAccess::Read,
+                identity, writer.target(), crate::SmbWorktreeAccess::Read { visible: writer.visible() },
             ),
             Self::ReadWorktree(_, file) => shared.backend.authorize_smb_worktree(
-                identity, file.target, crate::SmbWorktreeAccess::Read,
+                identity, file.target, crate::SmbWorktreeAccess::Read { visible: file.visible },
             ),
             Self::WorktreeDirectory(directory) => shared.backend.authorize_smb_worktree(
-                identity, directory.target, crate::SmbWorktreeAccess::Read,
+                identity, directory.target, crate::SmbWorktreeAccess::Read { visible: directory.visible },
             ),
             Self::Native(file) => shared.backend.smb_native_size(identity, &file.file).map(|_| ()),
             Self::Read(_, version) => shared.backend.authorize_version(identity, version),

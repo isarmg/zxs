@@ -190,8 +190,8 @@ fn authorize_source(
 ) -> Result<Principal, ApiError> {
     match source {
         NativeSource::Current { target, .. } => authorize(engine, identity, target),
-        NativeSource::Worktree { target, .. } => {
-            smb_worktree::authorize_target(engine, identity, target.worktree)?;
+        NativeSource::Worktree { target, visible, .. } => {
+            smb_worktree::authorize_visible(engine, identity, target.worktree, *visible)?;
             identity.principal.parse().map_err(ApiError::invalid_authenticated_principal)
         }
     }

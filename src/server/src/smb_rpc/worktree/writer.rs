@@ -75,9 +75,12 @@ impl WorktreeWriter {
         self.selection.target
     }
 
+    pub(in crate::smb_rpc) fn visible(&self) -> OperationId { self.selection.visible }
+
     fn authorize_write(&self, shared: &Shared, identity: &Identity) -> Result<(), ApiError> {
         shared.backend.authorize_smb_worktree(identity, self.selection.target,
             SmbWorktreeAccess::Write {
+                visible: self.selection.visible,
                 path: &self.selection.path, expected: self.selection.revision,
             })
     }
@@ -147,7 +150,7 @@ impl WorktreeWriter {
         &mut self, shared: &Shared, identity: &Identity, maximum: u64,
     ) -> Result<Value, ApiError> {
         shared.backend.authorize_smb_worktree(
-            identity, self.selection.target, SmbWorktreeAccess::Read,
+            identity, self.selection.target, SmbWorktreeAccess::Read { visible: self.selection.visible },
         )?;
         self.directory.verify_payload(&self.name, &self.file).map_err(crate::upload_fs_error)?;
         self.file.sync_all().map_err(ApiError::io)?;
@@ -180,7 +183,7 @@ impl WorktreeWriter {
             return Err(pending());
         };
         let request = request.clone();
-        let revision = shared.backend.edit_smb_worktree(identity, request.clone(), &source)?;
+        let revision = shared.backend.edit_smb_worktree(identity, request.clone(), self.selection.visible, &source)?;
         // Descriptor mutation is outside the engine lock. Never acknowledge
         // later bytes as part of an older completed operation.
         let latest = UploadSource::from_file(
@@ -214,7 +217,7 @@ impl WorktreeWriter {
         let result = (|| {
             if abort {
                 shared.backend.authorize_smb_worktree(
-                    identity, self.selection.target, SmbWorktreeAccess::Read,
+                    identity, self.selection.target, SmbWorktreeAccess::Read { visible: self.selection.visible },
                 )?;
                 if matches!(self.publication, Publication::Pending { .. }) {
                     return Err(pending());
