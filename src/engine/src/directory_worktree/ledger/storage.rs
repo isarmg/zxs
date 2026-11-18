@@ -1,4 +1,6 @@
 mod published;
+mod content_material;
+pub(crate) use content_material::ScopedFrames;
 
 use crate::directory_worktree::projection::{FileResult, SparseProjection};
 use crate::directory_worktree::projection::namespace::NamespaceChange;
@@ -645,39 +647,4 @@ pub(crate) fn content_frame_bytes(before: Checkpoint, events: &[Event; 2]) -> Re
     let (first, next) = event_frame(before, &events[0])?;
     let (second, _) = event_frame(next, &events[1])?;
     Ok(bounded_total(first.len(), second.len())? as u64)
-}
-
-impl HeldWorktreeLedger<'_> {
-    pub(crate) fn admitted_bytes(&self) -> usize { self.bytes }
-
-    /// Recheck exact original bytes through the same named parent and actual
-    /// descriptor whose inode is returned. Reads at most one bounded frame.
-    pub(crate) fn observed_content_frame(&self, sequence: Sequence, previous: Option<MaterialCommitment>)
-        -> Result<(Checkpoint, LocalEntityIdentity, Vec<u8>), LedgerError> {
-        use std::io::Read;
-        if sequence > self.checkpoint.sequence { return Err(LedgerError::Chain); }
-        let name = layout::frame(sequence);
-        let mut file = self.directory.open_read_entry(&name).map_err(LedgerError::Disk)?;
-        let entity = local_entity(platform_io::fs_safety::linux::FileIdentity::from_metadata(
-            &file.metadata().map_err(LedgerError::Io)?));
-        let mut bytes = Vec::new();
-        (&mut file).take(MAX_FRAME_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(LedgerError::Io)?;
-        if bytes.len() > MAX_FRAME_BYTES { return Err(LedgerError::Budget); }
-        let frame: Frame = storage_contract::decode_strict(&bytes).map_err(LedgerError::Codec)?;
-        if frame.previous != previous || frame.sequence != sequence || frame.bytes()? != bytes {
-            return Err(LedgerError::Chain);
-        }
-        Ok((frame.checkpoint(&bytes), entity, bytes))
-    }
-
-    /// These two future encodings have no inode yet. Their exact order and
-    /// commitments are determined by the observed predecessor and both events.
-    pub(crate) fn prospective_content_frames(&self, events: &[Event; 2])
-        -> Result<[(Checkpoint, Vec<u8>); 2], LedgerError> {
-        let expected = self.preview_content(events)?;
-        let (first, committing) = event_frame(self.checkpoint, &events[0])?;
-        let (second, completed) = event_frame(committing, &events[1])?;
-        if [committing, completed] != expected { return Err(LedgerError::Chain); }
-        Ok([(committing, first), (completed, second)])
-    }
 }

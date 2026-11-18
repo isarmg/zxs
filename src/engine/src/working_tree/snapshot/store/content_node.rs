@@ -199,6 +199,25 @@ impl HeldContentNode {
         Ok(held)
     }
 
+    /// Physical readback only. Equal bytes at another inode, both names or
+    /// neither name are not an observed move. Opening these FDs cannot move it.
+    pub(crate) fn scope_dirty_at_destination(&self, sparse: &HeldSparseWorktree, edit: &EditRecord) -> Store<bool> {
+        let version = edit.material.version_id;
+        let payload = self.node.manifest.payloads().get(&version).ok_or(SnapshotStoreError::Version)?;
+        let target = layout::file(payload);
+        match (verify_sparse(sparse, edit)?, verify_optional(&self.node.files, &target, edit)?) {
+            (Some(_), None) => Ok(false), (None, Some(_)) => Ok(true), _ => Err(SnapshotStoreError::Entries),
+        }
+    }
+
+    pub(crate) fn require_observed(&self, original: &HeldSnapshotNode, pinned: &PinnedSnapshotRepository,
+        sparse: &HeldSparseWorktree, plan: &crate::persist::snapshot_worktree::content_batch::Reservation,
+        cut: &crate::engine::ContentReplayCut) -> Store<()> {
+        let need = if cut.must_be_installed() { Requirement::Installed } else if cut.can_have_moved() { Requirement::Decided }
+            else { Requirement::Before };
+        self.inspect(pinned.batch_repository(original)?, sparse, plan.rows.iter().map(|r| &r.edit), need)
+    }
+
     pub(crate) fn require_installed(&self, original: &HeldSnapshotNode, pinned: &PinnedSnapshotRepository,
         sparse: &HeldSparseWorktree, plan: &crate::persist::snapshot_worktree::content_batch::Reservation,
     ) -> Store<()> {

@@ -4,6 +4,7 @@ use crate::engine::disk_registry::current::CurrentNamespaces;
 use std::sync::Arc;
 
 mod content;
+pub(crate) use content::ContentReplayCut;
 mod directory;
 pub(crate) use directory::DirectoryReplayPrefix;
 pub(super) use directory::CheckpointDirectoryObservation;

@@ -98,8 +98,49 @@ fn original_reservation_and_only_its_native_slot_survive_every_physical_install_
         assert_eq!(bytes(&engine, other, "first.txt"), FIRST_ORIGINAL);
         drop(engine);
         let mut engine = Engine::open(&fixture.system).unwrap();
+        let (source_paths, destination_names) = {
+            use crate::snapshot_worktree::{commit::content::Originals, registry::ContentRetry};
+            let index = engine.snapshot_receipts().unwrap();
+            let Some(ContentRetry::Reserved(exact)) = index.retry_content(&request, &principal).unwrap() else { panic!("not frozen"); };
+            let source = Originals::retained(&engine, &index, &exact).unwrap();
+            let planned = source.project_reserved(&engine.planning_context(), &principal, exact.plan()).unwrap();
+            let sparse = source.sparse.directory().path();
+            let paths = plan.rows.iter().map(|r| sparse.join(r.edit.leaf.entry().as_path())).collect::<Vec<_>>();
+            let names = plan.rows.iter().map(|r| crate::persist::layout::snapshot::file(
+                &planned.manifest.payloads()[&r.edit.material.version_id])).collect::<Vec<_>>();
+            (paths, names)
+        };
         engine.inject_fault_once(cut);
         assert!(engine.commit_directory_worktree(&request, &principal).is_err(), "{cut} did not interrupt the original");
+        use std::os::unix::fs::MetadataExt;
+        let moved = match cut { "after_worktree_content_move_1" => 1,
+            "after_worktree_content_move_2" | "after_worktree_content_node" | "after_worktree_content_committing"
+                | "after_worktree_content_completed" | "after_worktree_content_response" => 2, _ => 0 };
+        let at_node = matches!(cut, "after_worktree_content_node" | "after_worktree_content_committing"
+            | "after_worktree_content_completed" | "after_worktree_content_response");
+        let snapshot_layout = fixture.snapshot_path();
+        let final_node = snapshot_layout.join(crate::persist::layout::snapshot::node(plan.destination_node).as_path());
+        assert_eq!(final_node.exists(), at_node, "{cut}");
+        for (i, row) in plan.rows.iter().enumerate() {
+            if i >= moved {
+                let meta = fs::symlink_metadata(&source_paths[i]).unwrap();
+                assert_eq!((meta.dev(), meta.ino()), (row.edit.entity.device(), row.edit.entity.inode()), "{cut}");
+            } else { assert!(!source_paths[i].exists(), "{cut}"); }
+            if at_node {
+                let path = final_node.join(crate::persist::layout::snapshot::FILES.as_path()).join(destination_names[i].as_path());
+                let meta = fs::symlink_metadata(path).unwrap();
+                assert_eq!((meta.dev(), meta.ino()), (row.edit.entity.device(), row.edit.entity.inode()), "{cut}");
+            }
+        }
+        let ledger = snapshot_layout.join(crate::persist::layout::snapshot::node(plan.source.node_id).as_path())
+            .join(crate::persist::layout::snapshot::WORKTREES.as_path()).join(
+                crate::persist::layout::worktree::ledger(plan.request.target.worktree_id).as_path());
+        let committing = plan.before.sequence.next().unwrap();
+        let completed = committing.next().unwrap();
+        let has_commit = matches!(cut, "after_worktree_content_committing" | "after_worktree_content_completed" | "after_worktree_content_response");
+        let has_completed = matches!(cut, "after_worktree_content_completed" | "after_worktree_content_response");
+        assert_eq!(ledger.join(crate::persist::layout::worktree::frame(committing).as_path()).exists(), has_commit, "{cut}");
+        assert_eq!(ledger.join(crate::persist::layout::worktree::frame(completed).as_path()).exists(), has_completed, "{cut}");
         drop(engine);
         let mut engine = Engine::open(&fixture.system).unwrap();
         let expected = engine.commit_directory_worktree(&request, &principal).unwrap();

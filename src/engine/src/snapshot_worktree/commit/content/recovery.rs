@@ -16,6 +16,8 @@ pub(crate) struct ObservedOriginalContent {
     config: crate::ValidatedConfig,
     resources: Arc<crate::disk::DiskResources>,
     candidate_hash: String,
+    cut: crate::engine::ContentReplayCut,
+    scope_entities: std::sync::OnceLock<Box<[storage_contract::working_tree::LocalEntityIdentity]>>,
     principal: Principal,
     plan: Reservation,
     value: Publication,
@@ -27,8 +29,9 @@ pub(crate) struct ObservedOriginalContent {
 
 impl ObservedOriginalContent {
     pub(crate) fn original(engine: &Engine, candidate: &Candidate,
-        admitted: &crate::publication_evidence::AdmittedSnapshot, finalized: bool, published: bool) -> Result<Self> {
+        admitted: &crate::publication_evidence::AdmittedSnapshot, cut: crate::engine::ContentReplayCut) -> Result<Self> {
         let context = engine.planning_context();
+        cut.require(context.config, context.disk_resources, candidate).map_err(RegistrationError::Publication)?;
         let index = engine.snapshot_receipts()?;
         let (plan, principal, value) = source_transition(&index, context.state, context.config, candidate, admitted)?;
         if candidate.previous_snapshot != *context.snapshot || context.current_namespaces.is_some() {
@@ -37,26 +40,40 @@ impl ObservedOriginalContent {
         let host = context.namespace_host_root(plan.host.namespace.repository_id, plan.host.namespace.branch_id)
             .map_err(RegistrationError::Publication)?;
         let (original, repository, node, descriptors) = observe(context.config, context.disk_resources,
-            context.state, &host, plan, &value, finalized, published)?;
+            context.state, &host, plan, &value, cut.can_have_moved(), cut.must_be_installed())?;
         let observed = Self { state: Arc::clone(context.state), config: context.config.clone(),
             resources: Arc::clone(context.disk_resources), candidate_hash: storage_contract::object_hash("candidate", candidate)
                 .map_err(RegistrationError::Allocation)?, principal: principal.clone(), plan: plan.clone(), value,
-            original, repository, node, _descriptors: descriptors };
+            original, repository, node, cut, scope_entities: std::sync::OnceLock::new(), _descriptors: descriptors };
         Ok(observed)
     }
 
     /// Startup can advance a separate authenticated cursor while the installed
     /// Engine intentionally remains at another State (checkpoint fast path).
     /// Never replay this transition against that later or earlier installation.
-    pub(crate) fn preflight(source: &crate::engine::DirectoryReplayPrefix<'_>,
+    pub(crate) fn with_replay_scope<T>(source: &crate::engine::DirectoryReplayPrefix<'_>,
         candidate: &Candidate, admitted: &crate::publication_evidence::AdmittedSnapshot,
-        finalized: bool, published: bool) -> Result<()> {
+        cut: &crate::engine::ContentReplayCut, read: impl FnOnce(&super::scope::OriginalContentScope<'_>) -> crate::Result<T>) -> Result<T> {
+        cut.require(source.config(), source.resources(), candidate).map_err(RegistrationError::Publication)?;
         if candidate.previous_snapshot != *source.snapshot() { return Err(RegistrationError::CommitScope); }
         let (plan, _, value) = source_transition(source.index(), source.previous(), source.config(), candidate, admitted)?;
         let host = source.namespace_host_root(plan.host.namespace.repository_id, plan.host.namespace.branch_id)
             .map_err(RegistrationError::Publication)?;
-        drop(observe(source.config(), source.resources(), source.previous(), &host, plan, &value, finalized, published)?);
-        Ok(())
+        let (original, _repository, node, _descriptors) = observe(source.config(), source.resources(), source.previous(),
+            &host, plan, &value, cut.can_have_moved(), cut.must_be_installed())?;
+        let entities = std::sync::OnceLock::new();
+        let scope = super::scope::OriginalContentScope::replay(plan, &value, &original, &node, cut, &entities)?;
+        read(&scope).map_err(RegistrationError::Publication)
+    }
+
+    pub(crate) fn material_scope(&self, ctx: &PlanningContext<'_>, candidate: &Candidate)
+        -> Result<super::scope::OriginalContentScope<'_>> {
+        self.require_context(ctx, candidate)?;
+        self.cut.require(ctx.config, ctx.disk_resources, candidate).map_err(RegistrationError::Publication)?;
+        let sparse = HeldSparseWorktree::reopen(&self.original, self.plan.instance).map_err(RegistrationError::EditInstance)?;
+        self.node.require_observed(&self.original, &self.repository, &sparse, &self.plan, &self.cut)
+            .map_err(RegistrationError::NodeReadback)?;
+        super::scope::OriginalContentScope::replay(&self.plan, &self.value, &self.original, &self.node, &self.cut, &self.scope_entities)
     }
     pub(crate) fn require_context(&self, context: &PlanningContext<'_>, candidate: &Candidate) -> Result<()> {
         if !Arc::ptr_eq(&self.state, context.state) || !self.config.same_admission(context.config)

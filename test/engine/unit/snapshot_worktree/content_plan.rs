@@ -188,11 +188,11 @@ fn durable_reservation_freezes_both_file_branches_without_publishing_and_reopens
                 assert_ne!(held.parent, destination_parent);
                 moves.push(held.entity);
             }
-            ContentMaterial::Frame { stage, checkpoint, bytes, hash, .. } => {
+            ContentMaterial::Frame { stage, checkpoint, bytes, hash, observed_entity, .. } => {
                 assert_eq!(hash, ContentHash::from_digest(blake3::hash(bytes)));
                 match stage {
-                    LedgerStage::Original { entity } => { assert_ne!(entity.inode(), 0); before += 1; }
-                    LedgerStage::ProspectiveCommit | LedgerStage::ProspectiveCompleted => future.push(checkpoint),
+                    LedgerStage::Original { entity } => { assert_eq!(observed_entity, Some(entity)); assert_ne!(entity.inode(), 0); before += 1; }
+                    LedgerStage::ProspectiveCommit | LedgerStage::ProspectiveCompleted => { assert_eq!(observed_entity, None); future.push(checkpoint); }
                 }
             }
             _ => {}

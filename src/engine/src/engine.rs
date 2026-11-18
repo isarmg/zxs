@@ -189,7 +189,7 @@ pub use membership_transition::{
 mod recovery;
 pub(crate) use recovery::{
     InstalledOriginalReceipts, OriginalReceiptCursor, OriginalReceiptPrefix,
-    ReadOnlyPublishedCandidate, DirectoryReplayPrefix,
+    ReadOnlyPublishedCandidate, DirectoryReplayPrefix, ContentReplayCut,
 };
 use recovery::RecoveryMode;
 mod recovery_checkpoint;

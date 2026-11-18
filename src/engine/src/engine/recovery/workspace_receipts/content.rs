@@ -4,6 +4,28 @@ use super::*;
 use crate::business::file_draft::worktree::failure;
 use crate::snapshot_worktree::ObservedOriginalContent;
 
+/// Read-only classification for one exact Candidate, not permission to
+/// install anything. Only the retained native journal/Publication readers
+/// below can mint it. Every use rechecks the Candidate bytes and identity.
+#[derive(Clone)]
+pub(crate) struct ContentReplayCut {
+    environment: ReceiptEnvironment, hash: String, operation: OperationId, sequence: u64, phase: CutPhase,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CutPhase { Before, Finalized, Published }
+impl ContentReplayCut {
+    pub(crate) fn can_have_moved(&self) -> bool { self.phase != CutPhase::Before }
+    pub(crate) fn must_be_installed(&self) -> bool { self.phase == CutPhase::Published }
+    pub(crate) fn require(&self, config: &ValidatedConfig, resources: &Arc<DiskResources>, candidate: &Candidate) -> Result<()> {
+        self.environment.require(config, resources)?;
+        if self.operation != candidate.operation_id || self.sequence != candidate.sequence
+            || self.hash != object_hash("candidate", candidate)? {
+            return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate));
+        }
+        Ok(())
+    }
+}
+
 impl Engine {
     /// Most solitary PREPAREs keep their ordinary abandonable semantics.
     /// Consult only a published sparse reservation from this exact prefix;
@@ -62,6 +84,25 @@ impl Engine {
         Ok(())
     }
 
+    pub(in crate::engine::recovery) fn original_content_cut(&self, candidate: &Candidate, hash: &str, next: &State,
+        publication: Option<&Publication>, online: &[DiskConfig], receipts: &[Receipt]) -> Result<ContentReplayCut> {
+        let phase = if let Some(p) = publication {
+            if p.recovery.is_some() || p.candidate_hash != hash || p.result.operation_id != candidate.operation_id {
+                return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Visible));
+            }
+            crate::journal::verify_finalized_publication(candidate, p)?;
+            // The outer caller must still authenticate the actual complete
+            // seal before admitting this as visible. No partial material is
+            // permitted when a native Publication is already present.
+            CutPhase::Published
+        } else if self.content_fully_finalized(candidate, hash, next, online, receipts)? {
+            CutPhase::Finalized
+        } else { CutPhase::Before };
+        let selected = ContentReplayCut { environment: ReceiptEnvironment::capture(&self.config, &self.disk_resources), hash: hash.to_owned(), operation: candidate.operation_id, sequence: candidate.sequence, phase };
+        selected.require(&self.config, &self.disk_resources, candidate)?;
+        Ok(selected)
+    }
+
     /// Observation only. A mixed MOVE position is possible only after the
     /// actual fixed-member FINALIZE on the exact original Candidate. The
     /// installer obtains a fresh native proof after reproducing normal stages.
@@ -95,11 +136,10 @@ impl Engine {
         prefix: ReceiptPrefix<'_>, online: &[DiskConfig], hash: &str, receipts: &[Receipt],
     ) -> Result<PreparedCandidate> {
         let source = DirectoryReplayPrefix::capture(self, &prefix)?;
-        let finalized = if publication.is_none() {
-            self.content_fully_finalized(&candidate, hash, admitted.for_candidate(&candidate)?.state(), online, receipts)?
-        } else { false };
-        ObservedOriginalContent::preflight(&source, &candidate, &admitted, finalized, publication.is_some())
-            .map_err(failure)?;
+        let cut = self.original_content_cut(&candidate, hash, admitted.for_candidate(&candidate)?.state(),
+            publication.as_ref(), online, receipts)?;
+        ObservedOriginalContent::with_replay_scope(&source, &candidate, &admitted, &cut,
+            |scope| scope.visit(|_| Ok(()))).map_err(failure)?;
         if let Some(p) = &publication {
             if p.recovery.is_some() || p.result != *admitted.for_candidate(&candidate)?.state().operations
                 .get(&candidate.operation_id).ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?

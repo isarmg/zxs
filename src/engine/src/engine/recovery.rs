@@ -12,7 +12,7 @@ mod payload_admission;
 mod workspace_receipts;
 pub(crate) use workspace_receipts::{
     InstalledOriginalReceipts, OriginalReceiptCursor, OriginalReceiptPrefix,
-    ReadOnlyPublishedCandidate, DirectoryReplayPrefix,
+    ReadOnlyPublishedCandidate, DirectoryReplayPrefix, ContentReplayCut,
 };
 pub(in crate::engine) mod container_locations;
 
@@ -611,11 +611,9 @@ impl Engine {
                 });
             let content = if next.operations.get(&candidate.operation_id)
                 .is_some_and(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH) {
-                let finalized = if publication.is_none() {
-                    self.content_fully_finalized(&candidate, &hash, next, &online, &rs)?
-                } else { false };
-                Some(crate::snapshot_worktree::ObservedOriginalContent::original(self, &candidate, &admitted,
-                    finalized, publication.is_some()).map_err(crate::business::file_draft::worktree::failure)?)
+                let cut = self.original_content_cut(&candidate, &hash, next, publication.as_ref(), &online, &rs)?;
+                Some(crate::snapshot_worktree::ObservedOriginalContent::original(self, &candidate, &admitted, cut)
+                    .map_err(crate::business::file_draft::worktree::failure)?)
             } else { None };
             if !directory_kind {
                 // Native directory originals were fully admitted by the scanner;

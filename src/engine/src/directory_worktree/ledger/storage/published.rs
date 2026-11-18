@@ -165,7 +165,7 @@ impl<'a> HeldWorktreeLedger<'a> {
     }
 }
 
-fn content_tail(directory: &DiskRoot, before: Checkpoint, first: Checkpoint, second: Checkpoint)
+pub(super) fn content_tail(directory: &DiskRoot, before: Checkpoint, first: Checkpoint, second: Checkpoint)
     -> Result<Checkpoint, LedgerError>
 {
     let mut required: BTreeSet<_> = (0..=before.sequence.get()).map(|i| layout::frame(Sequence::new(i))).collect();
