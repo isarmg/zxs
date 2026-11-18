@@ -30,7 +30,7 @@ mod commits;
 mod added_commits;
 mod content_batches;
 mod clean_mount;
-pub(super) use clean_mount::{MountState, Presence};
+pub(super) use clean_mount::{CleanBase, MountState, Presence};
 pub(super) use content_batches::{ContentRetry, FrozenContent};
 pub(crate) use content_batches::ContentReplayFences;
 pub(crate) use added_commits::PublishedAddedCommitTail;

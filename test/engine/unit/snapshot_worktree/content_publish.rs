@@ -280,3 +280,6 @@ fn pending_originals_freeze_only_their_effective_future_file_routes_in_live_and_
 #[cfg(feature = "fault-injection")]
 #[path = "content_install_obstructions.rs"]
 mod install_obstructions;
+
+#[path = "clean_mount.rs"]
+mod clean_mount;

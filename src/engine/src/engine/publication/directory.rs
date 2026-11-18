@@ -422,11 +422,16 @@ impl Engine {
 pub(super) enum DirectoryPublicationGuard {
     Working(Box<WorkingDirectoryGuard>),
     Content(Box<crate::snapshot_worktree::PreparedOriginalContent>),
+    Mount(Box<crate::snapshot_worktree::mount::PreparedMount>),
 }
 impl DirectoryPublicationGuard {
     pub(super) fn require_context(&self, ctx: &crate::engine::PlanningContext<'_>, candidate: &Candidate) -> Result<()> {
         match self {
             Self::Working(value) => value.require_context(ctx, candidate),
+            Self::Mount(value) => {
+                value.require_before(ctx).map_err(crate::business::file_draft::worktree::failure)?;
+                value.held.require_candidate(candidate).map_err(crate::business::file_draft::worktree::failure)
+            }
             Self::Content(value) => {
                 value.require_before(ctx).map_err(crate::business::file_draft::worktree::failure)?;
                 value.require_candidate(candidate).map_err(crate::business::file_draft::worktree::failure)
@@ -436,6 +441,7 @@ impl DirectoryPublicationGuard {
     pub(super) fn require_candidate(&self, candidate: &Candidate) -> Result<()> {
         match self {
             Self::Working(value) => value.require_candidate(candidate),
+            Self::Mount(value) => value.held.require_candidate(candidate).map_err(crate::business::file_draft::worktree::failure),
             Self::Content(value) => value.require_candidate(candidate).map_err(crate::business::file_draft::worktree::failure),
         }
     }
@@ -443,18 +449,21 @@ impl DirectoryPublicationGuard {
         // Shared directory drafts have their own pre-PREPARE slot token; do
         // not ask that independent producer to re-plan after next_slot moved.
         match self { Self::Working(value) => value.require_candidate(candidate),
-            Self::Content(_) => self.require_context(ctx, candidate) }
+            Self::Content(_) | Self::Mount(_) => self.require_context(ctx, candidate) }
     }
     pub(super) fn after_decision(&self, candidate: &Candidate) -> Result<()> {
         self.require_candidate(candidate)?;
+        if let Self::Mount(value) = self { value.held.require_installed().map_err(crate::business::file_draft::worktree::failure)?; }
         if let Self::Content(value) = self { value.require_installed().map_err(crate::business::file_draft::worktree::failure)?; }
         Ok(())
     }
     pub(super) fn installer(&self) -> Option<ContentInstaller<'_>> {
-        match self { Self::Working(_) => None, Self::Content(value) => Some(ContentInstaller::Live(value)) }
+        match self { Self::Working(_) => None, Self::Content(value) => Some(ContentInstaller::Live(value)),
+            Self::Mount(value) => Some(ContentInstaller::Mount(value)) }
     }
 }
 pub(super) enum ContentInstaller<'a> {
+    Mount(&'a crate::snapshot_worktree::mount::PreparedMount),
     Live(&'a crate::snapshot_worktree::PreparedOriginalContent),
     Recovery(&'a crate::snapshot_worktree::ObservedOriginalContent),
 }
@@ -464,6 +473,8 @@ impl ContentInstaller<'_> {
             Self::Live(value) => { value.require_before(ctx).map_err(crate::business::file_draft::worktree::failure)?;
                 value.require_candidate(candidate) },
             Self::Recovery(value) => value.require_context(ctx, candidate),
+            Self::Mount(value) => { value.require_before(ctx).map_err(crate::business::file_draft::worktree::failure)?;
+                value.held.require_candidate(candidate) },
         }.map_err(crate::business::file_draft::worktree::failure)
     }
     pub(super) fn install(&self, engine: &mut Engine, proof: &FinalizedOriginalContent<'_>) -> Result<()> {
@@ -472,7 +483,8 @@ impl ContentInstaller<'_> {
         #[cfg(not(feature = "fault-injection"))]
         let mut cut = |_: &str| { let _ = &engine; Ok(()) };
         match self { Self::Live(value) => value.finish_moves(proof, &mut cut),
-            Self::Recovery(value) => value.finish_moves(proof, &mut cut) }
+            Self::Recovery(value) => value.finish_moves(proof, &mut cut),
+            Self::Mount(value) => value.held.install(proof, &mut cut) }
             .map_err(crate::business::file_draft::worktree::failure)
     }
 }

@@ -191,3 +191,48 @@ impl<'a> ReceiptIndex<'a> {
         Ok(())
     }
 }
+
+/// Only a complete original multi-file decision has this baseline. Ownership
+/// lookup for authorization is separate and cannot acquire either node.
+pub(in crate::snapshot_worktree) struct CleanBase<'a> {
+    pub(in crate::snapshot_worktree) plan: &'a crate::persist::snapshot_worktree::content_batch::Reservation,
+    pub(in crate::snapshot_worktree) result: &'a crate::persist::snapshot_worktree::content_batch::Publication,
+    pub(in crate::snapshot_worktree) mount: MountState,
+    pub(in crate::snapshot_worktree) before: crate::directory_worktree::ledger::Checkpoint,
+}
+
+impl ReceiptIndex<'_> {
+    pub(in crate::snapshot_worktree) fn clean_base(
+        &self, request: &MountChange, reserved: Option<OperationId>,
+    ) -> Result<CleanBase<'_>> {
+        let tree = self.retained_tree(request.target)?;
+        let Publication::Complete(created) = &tree.publication else { return Err(RegistrationError::Source); };
+        let id = request.target.worktree_id;
+        let batch = self.content_instances.get(&id).and_then(|op| self.content_batches.get(op))
+            .ok_or(RegistrationError::CommitScope)?;
+        let done = batch.complete().ok_or(RegistrationError::CommitScope)?;
+        let head = self.heads.get(&id).ok_or(RegistrationError::Source)?;
+        if self.pending_edits.get(&id).copied() != reserved || !self.added(request.target).is_empty()
+            || created.binding != batch.plan.ledger || batch.plan.request.target != request.target
+            || request.expected != head.revision || request.expected != batch.plan.request.expected
+        {
+            return Err(RegistrationError::CommitScope);
+        }
+        Ok(CleanBase {
+            plan: &batch.plan, result: &done.value, mount: self.mount_state_for(tree),
+            before: head.checkpoint,
+        })
+    }
+
+    pub(in crate::snapshot_worktree) fn frozen_mount(
+        &self, operation: OperationId,
+    ) -> Result<(&Reservation, &Principal, MaterialCommitment)> {
+        let change = self.mount_changes.get(&operation).ok_or(RegistrationError::Source)?;
+        if change.outcome.is_some()
+            || self.pending_edits.get(&change.plan.request.target.worktree_id) != Some(&operation)
+        {
+            return Err(RegistrationError::Source);
+        }
+        Ok((&change.plan, &change.receipt.principal, change.commitment))
+    }
+}

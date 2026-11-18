@@ -6,6 +6,7 @@ mod history;
 mod transport;
 mod namespace;
 mod outcome;
+mod mount;
 pub use transport::WorktreeContent;
 pub use namespace::{
     WorktreeCursor, WorktreeEntry, WorktreeEntryContent, WorktreePage, WorktreePageStamp,

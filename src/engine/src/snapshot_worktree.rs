@@ -19,6 +19,7 @@ mod source;
 mod edit;
 pub(crate) mod additions;
 mod commit;
+pub(crate) mod mount;
 pub(crate) use commit::content::scope::{OriginalContentScope, ContentMaterial, BodyLocation, LedgerStage, NodeImage, PhysicalLeaf, ScopeSource};
 pub(crate) use commit::content::{OriginalRow, OriginalBody, recovery::ObservedOriginalContent, material::{OriginalContentInput, PreparedOriginalContent}};
 pub(crate) mod drafts;

@@ -104,7 +104,7 @@ fn selected_tail(directory: &DiskRoot, committing: Checkpoint, finished: Checkpo
     Ok(if complete { finished } else { committing })
 }
 
-fn sync_frame(directory: &DiskRoot, checkpoint: Checkpoint, bytes: &[u8])
+pub(super) fn sync_frame(directory: &DiskRoot, checkpoint: Checkpoint, bytes: &[u8])
     -> Result<(), LedgerError>
 {
     let mut file = directory.open_read_entry(&layout::frame(checkpoint.sequence))

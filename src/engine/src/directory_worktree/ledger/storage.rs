@@ -1,4 +1,6 @@
 mod published;
+mod clean_mount;
+pub(crate) use clean_mount::{MountFrame, install_mount_frame, observe_mount_frame};
 mod content_material;
 pub(crate) use content_material::ScopedFrames;
 

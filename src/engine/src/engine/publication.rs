@@ -1698,15 +1698,17 @@ impl crate::engine::PlanningContext<'_> {
         cache_maximum: usize,
         working: Option<super::file_draft::WorkingPublicationInput>,
     ) -> Result<DetachedPublication> {
-        self.prepare_publication_domains(next, prepared, result, maximum, cache_maximum, working, None)
+        self.prepare_publication_domains(next, prepared, result, maximum, cache_maximum, working, None, None)
     }
 
     fn prepare_publication_domains(&self, next: State, prepared: Vec<Prepared>, result: OperationResult,
         maximum: usize, cache_maximum: usize, working: Option<super::file_draft::WorkingPublicationInput>,
         content: Option<Box<crate::snapshot_worktree::PreparedOriginalContent>>,
+        mount: Option<Box<crate::snapshot_worktree::mount::PreparedMount>>,
     ) -> Result<DetachedPublication> {
         if (result.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH) != content.is_some()
-            || (working.is_some() && content.is_some())
+            || (result.kind == crate::persist::snapshot_worktree::MOUNT_PUBLISH) != mount.is_some()
+            || (working.is_some() && (content.is_some() || mount.is_some()))
         { return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into()); }
         super::file_draft::WorkingPublicationInput::require_input(
             working.as_ref(), self, &next, &result,
@@ -1738,6 +1740,8 @@ impl crate::engine::PlanningContext<'_> {
         }
         if let Some(held) = &content {
             held.require_plan(self, &next, &prepared, &result).map_err(crate::business::file_draft::worktree::failure)?;
+        } else if let Some(held) = &mount {
+            held.require_plan(self, &next, &prepared, &result).map_err(crate::business::file_draft::worktree::failure)?;
         } else { self.require_worktree_mount_reservations(&next)?; }
         let containers = super::fresh_layout::containers::ContainerPreparation::new(
             self, next, &prepared, &result,
@@ -1748,6 +1752,11 @@ impl crate::engine::PlanningContext<'_> {
         let metadata_epoch = self.metadata_integrity.capture();
         let members = self.members();
         let mut required = PhysicalRequirements::new(self);
+        if let Some(mount) = &mount {
+            let owner = self.disk(&mount.held.plan().host.registration.slot_id)?;
+            let frame = mount.held.frame(false).map_err(crate::business::file_draft::worktree::failure)?;
+            required.add(owner, frame.bytes.len() as u64)?;
+        }
         let existing = self.observe_existing_payloads(&prepared, &mut required)?;
         if let Some((file, payload)) = working.as_ref().and_then(|input| input.new_draft()) {
             let record = next.file_containers.get(&file)
@@ -1914,6 +1923,10 @@ impl crate::engine::PlanningContext<'_> {
         snapshot.metadata_integrity = Some(std::sync::Arc::clone(self.metadata_integrity));
         data.snapshot_hash = snapshot.hash.clone();
         let candidate = bind_candidate(self, data);
+        if let Some(value) = &mount {
+            value.require_before(self).map_err(crate::business::file_draft::worktree::failure)?;
+            value.held.require_candidate(&candidate).map_err(crate::business::file_draft::worktree::failure)?;
+        }
         if let Some(held) = &content {
             held.require_before(self).map_err(crate::business::file_draft::worktree::failure)?;
             held.require_candidate(&candidate).map_err(crate::business::file_draft::worktree::failure)?;
@@ -1961,7 +1974,8 @@ impl crate::engine::PlanningContext<'_> {
             result,
             verified,
             names,
-            directory: content.map(directory::DirectoryPublicationGuard::Content),
+            directory: content.map(directory::DirectoryPublicationGuard::Content)
+                .or_else(|| mount.map(directory::DirectoryPublicationGuard::Mount)),
             metadata_epoch,
             prepared_epoch: self.metadata_integrity.capture(),
             reused_dependencies,

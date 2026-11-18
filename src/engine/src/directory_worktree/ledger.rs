@@ -15,7 +15,8 @@ pub(crate) use leaf::EditLeaf;
 pub(crate) use record::{AddedFile, AddedFileResult, Checkpoint, EditRecord, Event};
 pub(crate) use state::{merge_original_edits, revision_commitment, revision_commitment_with_files};
 pub(crate) use storage::{
-    mount_checkpoint, content_checkpoints, content_frame_bytes, ScopedFrames, Binding, HeldWorktreeLedger, LedgerPreparationError, PendingPublication, RecoveredLedger,
+    MountFrame, install_mount_frame, observe_mount_frame, mount_checkpoint,
+    content_checkpoints, content_frame_bytes, ScopedFrames, Binding, HeldWorktreeLedger, LedgerPreparationError, PendingPublication, RecoveredLedger,
 };
 
 use super::lifecycle::LifecycleError;

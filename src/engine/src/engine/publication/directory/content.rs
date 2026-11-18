@@ -74,7 +74,8 @@ impl<'a> FinalizedOriginalContent<'a> {
         let result = next.operations.get(&candidate.operation_id).ok_or(Failure::ContainerScope)?;
         let expected_hash = object_hash("candidate", candidate)?;
         let finalized = object_hash("finalize", finalize)?;
-        if result.kind != crate::persist::snapshot_worktree::CONTENT_PUBLISH
+        if !matches!(result.kind.as_str(), crate::persist::snapshot_worktree::CONTENT_PUBLISH
+            | crate::persist::snapshot_worktree::MOUNT_PUBLISH)
             || result.sequence != candidate.sequence || result.request_digest != candidate.request_digest
             || hash != expected_hash || finalize.candidate_hash != hash || finalize.recovery_id.is_some()
             || members.is_empty() || members.len() != candidate.metadata_disk_ids.len()
@@ -90,6 +91,25 @@ impl<'a> FinalizedOriginalContent<'a> {
             { return Err(Failure::ContainerScope.into()); }
         }
         Ok(Self { candidate, receipt: result })
+    }
+
+    /// The same fixed member decision, restricted to this original mount plan.
+    /// A FILE batch proof, foreign reserve or generic metadata result cannot append.
+    pub(crate) fn require_mount(
+        &self, plan: &crate::persist::snapshot_worktree::mount_change::Reservation,
+        value: crate::persist::snapshot_worktree::mount_change::Publication,
+    ) -> Result<()> {
+        use crate::persist::snapshot_worktree::{self as codec, Record};
+        let decode = |source| failure(crate::snapshot_worktree::RegistrationError::Codec(source));
+        let decoded = codec::decode(self.receipt).map_err(decode)?.ok_or(Failure::ContainerScope)?;
+        if decoded.record != Record::PublishCleanMount(value) || !decoded.protection.is_empty()
+            || !self.candidate.versions.is_empty() || self.candidate.operation_id != plan.publish_operation
+            || value.reserve != plan.request.operation_id
+            || value.reservation != Record::ReserveCleanMount(plan.clone()).commitment().map_err(decode)?
+        {
+            return Err(Failure::ContainerScope.into());
+        }
+        Ok(())
     }
 
     pub(crate) fn require(&self, plan: &crate::persist::snapshot_worktree::content_batch::Reservation,
@@ -115,8 +135,28 @@ impl Engine {
     /// never be treated as proof that this proposed publication is unstarted.
     pub(crate) fn require_unstarted_content_slot(&self, request: &storage_contract::snapshot_worktree::CommitWorktree,
         principal: &storage_contract::Principal, publish: Option<OperationId>) -> Result<()> {
+        self.require_unstarted_directory_slot(request.operation_id, principal, publish, |record| {
+            matches!(record, crate::persist::snapshot_worktree::Record::ReserveContentBatch(plan)
+                if plan.request == *request)
+        })
+    }
+
+    pub(crate) fn require_unstarted_mount_slot(
+        &self, request: &storage_contract::snapshot_worktree::mount_change::MountChange,
+        principal: &storage_contract::Principal, publish: Option<OperationId>,
+    ) -> Result<()> {
+        self.require_unstarted_directory_slot(request.operation_id, principal, publish, |record| {
+            matches!(record, crate::persist::snapshot_worktree::Record::ReserveCleanMount(plan)
+                if plan.request == *request)
+        })
+    }
+
+    fn require_unstarted_directory_slot(
+        &self, operation: OperationId, principal: &storage_contract::Principal,
+        publish: Option<OperationId>, same_request: impl Fn(&crate::persist::snapshot_worktree::Record) -> bool,
+    ) -> Result<()> {
         let held = || match publish {
-            Some(_) => failure(crate::snapshot_worktree::RegistrationError::Pending(request.operation_id)),
+            Some(_) => failure(crate::snapshot_worktree::RegistrationError::Pending(operation)),
             None => Error::new(ErrorCode::RecoveryRequired, "native decision history must be verified before reserving this worktree"),
         };
         self.require_no_commit_preparation()?;
@@ -159,7 +199,7 @@ impl Engine {
                 if frozen.selects(candidate.operation_id) || publish == Some(candidate.operation_id) { return Err(held()); }
                 if !seen.insert(receipt.record.candidate_hash) { continue; }
                 if seen.len() > ctx.config.max_entries { return Err(held()); }
-                if candidate.operation_id == request.operation_id {
+                if candidate.operation_id == operation {
                     // The prior occupancy attempt has no native ACCEPT on any
                     // fixed member. Do not silently rebind another principal,
                     // purpose or request, or adopt its uncommitted allocations.
@@ -172,11 +212,10 @@ impl Engine {
                         .ok_or_else(&held)?;
                     if publish.is_some() || candidate.generation().is_some() || !candidate.versions.is_empty()
                         || next.operation_principals.get(&candidate.operation_id).map(String::as_str) != Some(principal.as_str())
-                        || !matches!(&decoded.record, crate::persist::snapshot_worktree::Record::ReserveContentBatch(plan)
-                            if plan.request == *request)
+                        || !same_request(&decoded.record)
                         || decoded.record.digest(principal).map_err(|e| failure(crate::snapshot_worktree::RegistrationError::Codec(e)))?
                             != candidate.request_digest
-                    { return Err(failure(crate::snapshot_worktree::RegistrationError::Digest(request.operation_id))); }
+                    { return Err(failure(crate::snapshot_worktree::RegistrationError::Digest(operation))); }
                 }
             }
         }
@@ -207,13 +246,40 @@ impl Engine {
             })?;
         let MutationPlan::Prepared { next, prepared, result } = plan else { return Err(Failure::ContainerScope.into()); };
         let publication = self.planning_context().prepare_publication_domains(*next, prepared, result,
-            MAX_METADATA, MAX_METADATA, None, Some(Box::new(held)))?;
+            MAX_METADATA, MAX_METADATA, None, Some(Box::new(held)), None)?;
         let original_slot = self.next_slot;
         let outcome = self.decide_publication(publication);
         // A PREPARE may have reached even one member before a later ordinary
         // I/O error. Keep all further writers out until a cold scan sees this
         // exact slot or proves that no business Candidate ever existed.
         if outcome.is_err() && self.next_slot != original_slot { self.blocked = true; }
+        outcome
+    }
+}
+
+impl Engine {
+    pub(crate) fn publish_clean_mount(
+        &mut self, prepared: crate::snapshot_worktree::mount::PreparedMount,
+    ) -> Result<OperationResult> {
+        use crate::persist::snapshot_worktree::{PublicationEncoding, Record};
+        let held = &prepared.held;
+        let op = held.plan().publish_operation;
+        self.require_unstarted_mount_slot(&held.plan().request, held.principal(), Some(op))?;
+        let record = Record::PublishCleanMount(held.result());
+        let encoded = PublicationEncoding::new(&record)
+            .map_err(|e| failure(crate::snapshot_worktree::RegistrationError::Codec(e)))?;
+        let mutation = self.plan_mutation_digest(
+            record.kind(), held.principal().as_str(), op, encoded.request(), None,
+            |_, _, _| Ok(encoded.result()),
+        )?;
+        let MutationPlan::Prepared { next, prepared: files, result } = mutation
+            else { return Err(Failure::ContainerScope.into()); };
+        let publication = self.planning_context().prepare_publication_domains(
+            *next, files, result, MAX_METADATA, MAX_METADATA, None, None, Some(Box::new(prepared)),
+        )?;
+        let slot = self.next_slot;
+        let outcome = self.decide_publication(publication);
+        if outcome.is_err() && self.next_slot != slot { self.blocked = true; }
         outcome
     }
 }
