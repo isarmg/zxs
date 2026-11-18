@@ -72,6 +72,7 @@ class CompareFolder(unittest.TestCase):
         for bad in (2, -1, True):
             with self.assertRaises(Rejected): report.page(bad)
 
+    @unittest.skipUnless(os.name == "posix", "checks POSIX fd/inode lifetime")
     def test_same_name_substitution_of_folder_or_archive_is_not_a_new_selection(self):
         chosen = snapshot(self.path, [])
         fd = self.chosen.check()
@@ -89,6 +90,7 @@ class CompareFolder(unittest.TestCase):
         with self.assertRaises(Rejected): comparison.compare(chosen, current)
         self.assertEqual(comparison.compare(Selection.open(self.path), comparison.Folder.choose(self.local)).page(0), ())
 
+    @unittest.skipUnless(os.name == "posix", "injects the POSIX directory scanner")
     def test_changes_during_inventory_link_and_late_root_replacement_return_no_report(self):
         chosen = snapshot(self.path, [("entry",b"first")])
         leaf = self.local/"entry"; leaf.write_bytes(b"first")
@@ -123,7 +125,7 @@ class CompareFolder(unittest.TestCase):
 @unittest.skipUnless(comparison.available() and find_spec("PySide6"), "requires desktop extra and folder reader")
 class CompareWidget(unittest.TestCase):
     def test_real_controls_keep_the_original_row_and_ignore_a_late_different_snapshot(self):
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QFileDialog
         from zipworkspace.desktop.window import Window
         app = QApplication.instance() or QApplication([])
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,8 +137,10 @@ class CompareWidget(unittest.TestCase):
                 archive = window.archive; pane = archive.comparison
                 self.assertFalse(pane.choose.isEnabled())
                 archive.show_selection(chosen)
-                with patch.object(window,"job") as runner:
-                    pane.compare_path(folder)
+                with patch.object(window,"job") as runner, \
+                     patch.object(QFileDialog,"getExistingDirectory",return_value=str(folder)) as picker:
+                    pane.pick()
+                    self.assertTrue(picker.call_args.args[3] & QFileDialog.Option.DontResolveSymlinks)
                     _, work, finish = runner.call_args.args
                     result = work(); finish(result)
                     self.assertEqual(pane.table.rows.rows[0][0], ("not-local","缺少","文件","无"))
@@ -160,7 +164,7 @@ class CompareWidget(unittest.TestCase):
             def capture(path):
                 chosen = choose(path)
                 self.addCleanup(chosen.close)
-                held.append(chosen.check())
+                held.append((chosen,chosen.check()))
                 return chosen
             try:
                 for result in (None, RuntimeError("submission failed"), Future()):
@@ -171,8 +175,10 @@ class CompareWidget(unittest.TestCase):
                         pane.compare_path(folder)
                     self.assertEqual(len(held),1)
                     if isinstance(result,Future):
-                        self.assertEqual(os.fstat(held[0]).st_ino, folder.stat().st_ino)
+                        self.assertEqual(held[0][0].check(), held[0][1])
                         self.assertTrue(result.cancel())
-                    with self.assertRaises(OSError) as closed: os.fstat(held[0])
-                    self.assertEqual(closed.exception.errno,errno.EBADF)
+                    with self.assertRaises(Rejected): held[0][0].check()
+                    if os.name == "posix":
+                        with self.assertRaises(OSError) as closed: os.fstat(held[0][1])
+                        self.assertEqual(closed.exception.errno,errno.EBADF)
             finally: window.close()

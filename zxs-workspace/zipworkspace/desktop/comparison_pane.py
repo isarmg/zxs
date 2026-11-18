@@ -43,7 +43,9 @@ class ComparisonPane(QWidget):
 
     def pick(self):
         if self.snapshot is None: return
-        name = QFileDialog.getExistingDirectory(self, "选择只读比较的本机文件夹")
+        # Pass the selected spelling to the provider rather than having Qt resolve a link for it.
+        options = QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        name = QFileDialog.getExistingDirectory(self, "选择只读比较的本机文件夹", "", options)
         if name: self.compare_path(name)
 
     def compare_path(self, name):

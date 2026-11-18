@@ -11,6 +11,9 @@ from .model import Rejected
 
 
 def available():
+    if os.name == "nt":
+        from .windows_nt import backend
+        return backend() is not None  # Per-volume/per-handle eligibility is checked on selection.
     return (os.name == "posix"
             and all(hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW", "O_CLOEXEC", "O_NONBLOCK"))
             and os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
@@ -31,6 +34,10 @@ class Folder:
 
     @classmethod
     def choose(cls, path):
+        if os.name == "nt":
+            from .windows_nt import backend
+            from .windows_folder import WindowsFolder
+            return WindowsFolder.choose(path, backend())
         if not available():
             raise Rejected("cannot securely read a selected folder on this platform")
         path = Path(path).absolute()
@@ -50,6 +57,9 @@ class Folder:
                 or native_identity(self.evidence.path.stat(follow_symlinks=False), stat.S_IFDIR) != self.evidence.identity):
             raise Rejected("chosen folder no longer names the held directory")
         return self._fd
+
+    def observe(self):
+        return observe_held(self.check(), self.evidence.identity, require_ids=True)
 
     def close(self):
         fd, self._fd = self._fd, None
@@ -93,10 +103,9 @@ def _compare(selected, folder):
     changes = []
     added = changed = missing = 0
     with named_document(selected.path) as doc:
-        fd = folder.check()
         if stamp(doc) != selected.observed:
             raise Rejected("displayed archive changed; reopen it before comparing")
-        tree = observe_held(fd, folder.evidence.identity, require_ids=True)
+        tree = folder.observe()
         # This Manifest belongs exclusively to this scan. Consuming its rows
         # avoids another full set of keys. At most the two admitted row budgets
         # can differ; no file payloads or live file handles enter the result.
