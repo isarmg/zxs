@@ -35,8 +35,20 @@ pub(in crate::engine_backend) fn change(
     let actor = authorize(&engine, &current, owner, &request.action)?;
     let reserved = engine.reserve_directory_worktree_mount(&request, &actor).map_err(error)?;
     if !matches!(reserved.outcome, MountOutcome::Pending {}) { return Ok(reserved); }
-    if authorize(&engine, &current, owner, &request.action)? != actor { return Err(ApiError::forbidden()); }
-    engine.change_directory_worktree_mount(&request, &actor).map_err(error)
+    let revalidated = authorize(&engine, &current, owner, &request.action).map_err(after_reservation)?;
+    if revalidated != actor { return Err(after_reservation(ApiError::forbidden())); }
+    engine.change_directory_worktree_mount(&request, &actor).map_err(error).map_err(after_reservation)
+}
+
+/// A generic response cannot prove that an already committed original claim
+/// failed. Never disclose the reserved name, contents or receipt to a session
+/// that may have lost access during preparation. Keep the private cause.
+fn after_reservation(mut source: ApiError) -> ApiError {
+    source.status = http::StatusCode::SERVICE_UNAVAILABLE;
+    source.code = storage_contract::ErrorCode::RecoveryRequired;
+    source.message = "outcome unavailable; keep the same original request and operation".into();
+    source.retryable = false;
+    source
 }
 
 pub(in crate::engine_backend) fn receipt(
