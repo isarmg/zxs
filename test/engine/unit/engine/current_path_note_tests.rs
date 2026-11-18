@@ -1,25 +1,19 @@
 //! Real Engine/D3 node-note consumers and exact ordinary-publication replay.
 //! These temporary roots are not physical-media or power-loss acceptance.
-use crate::engine::disk_registry::current::path_notes::KIND;
 use crate::{
     Branch, BranchName, BranchState, CommitRequest, Config, Engine, Entry, ErrorCode,
-    FileBranchMergeRequest, FileContext, FileHistoryMergeInput, FileHistoryMergeRequest,
-    FileMergeInput, FilePathNode, HistoryWindowCancellation, MembershipExitAction,
+    FileBranchMergeRequest, FileHistoryMergeInput, FileHistoryMergeRequest,
+    FileMergeInput, MembershipExitAction,
     NamespaceOperation, NamespaceOperationKind, OperationId, ProtectionPolicyUpdate,
-    Repository, State, canonical_json, new_id,
+    Repository, canonical_json, new_id,
 };
-use json_codec::json;
 use std::{
     collections::BTreeMap,
     fs,
-    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
-use storage_contract::history_window::{
-    HistoryCollection, HistoryFileId, HistoryPageLimit, HistoryWindowPage, HistoryWindowRequest,
-};
-use storage_contract::{MapChanges, Note};
+use storage_contract::Note;
 
 fn op() -> OperationId {
     OperationId::generate().unwrap()
@@ -100,10 +94,8 @@ fn merge_history(
         .unwrap();
     let node = receipt.result["node_id"].as_str().unwrap().to_owned();
     let branch = receipt.result["branch_id"].as_str().unwrap().to_owned();
-    assert_eq!(
-        engine.state.file_metadata_nodes[&node].version_id,
-        entry.version_id
-    );
+    assert_eq!(node,entry.version_id);
+    assert!(engine.state.file_metadata_nodes.is_empty());
     (node, branch)
 }
 
@@ -181,10 +173,10 @@ struct Fixture {
     repository: Repository,
     file: String,
     version: String,
-    merge_node: String,
+    merge_event: String,
     path_event: String,
-    metadata_node: String,
-    other_node: String,
+    branch: String,
+    merge_op: OperationId,
     alias: Branch,
 }
 
@@ -219,53 +211,13 @@ impl Fixture {
             .unwrap();
         // Real content ancestry supplies two distinct inputs. Renaming no
         // longer manufactures a node that can stand in for changed content.
-        let (metadata_node, metadata_branch) = merge_history(
-            &mut engine,
-            &entry,
-            &context.branch_id,
-            [&entry.version_id, &changed.version_id],
-            "note metadata merge",
-        );
-        let (merge_node, survivor) = merge_history(
-            &mut engine,
-            &entry,
-            &metadata_branch,
-            [&entry.version_id, &metadata_node],
-            "historical note target",
-        );
-        rename_path(&mut engine, &repository, "original.txt", "past.txt");
-        let alias = consume_alias(&mut engine, &entry, &merge_node, &survivor);
-        let path_event = rename_path(&mut engine, &repository, "past.txt", "current.txt");
-        let (other_node, _) = merge_history(
-            &mut engine,
-            &entry,
-            &survivor,
-            [&entry.version_id, &merge_node],
-            "unrelated note target",
-        );
-        assert!(engine.state.file_path_nodes.is_empty());
-        engine
-            .set_file_node_note(
-                &entry.file_id,
-                &other_node,
-                &note("leave this note"),
-                "admin",
-                op(),
-            )
-            .unwrap();
-        Self {
-            temp,
-            engine,
-            config,
-            repository,
-            file: entry.file_id,
-            version: entry.version_id,
-            merge_node,
-            path_event,
-            metadata_node,
-            other_node,
-            alias,
-        }
+        let (node,survivor)=merge_history(&mut engine,&entry,&context.branch_id,
+            [&entry.version_id,&changed.version_id],"only the adopted version");
+        let event=engine.state.file_branch_merges.values().find(|e|e.surviving_branch_id==survivor).unwrap().clone();
+        let alias=consume_alias(&mut engine,&entry,&node,&survivor);
+        let path_event=rename_path(&mut engine,&repository,"original.txt","current.txt");
+        Self {temp,engine,config,repository,file:entry.file_id,version:entry.version_id,
+            merge_event:event.merge_id,path_event,branch:survivor,merge_op:event.operation_id,alias}
     }
 
     fn exit(&mut self, action: MembershipExitAction) -> (PathBuf, BTreeMap<PathBuf, Vec<u8>>) {
@@ -297,712 +249,67 @@ impl Fixture {
     }
 }
 
-fn assert_only_note_publication(before: &State, after: &State) {
-    let mut normalized = after.clone();
-    normalized.sequence = before.sequence;
-    normalized.business_generation = before.business_generation;
-    normalized.file_path_notes = before.file_path_notes.clone();
-    normalized.operations = before.operations.clone();
-    normalized.operation_principals = before.operation_principals.clone();
-    normalized.events = before.events.clone();
-    assert_eq!(
-        canonical_json(&normalized).unwrap(),
-        canonical_json(before).unwrap()
-    );
-    for (id, receipt) in before.operations.iter() {
-        assert_eq!(after.operations.get(id), Some(receipt));
-        assert_eq!(
-            after.operation_principals.get(id),
-            before.operation_principals.get(id)
-        );
-    }
-}
-
-fn history_notes(engine: &Engine, file: &str) -> BTreeMap<String, String> {
-    let read = engine
-        .capture_history_window(
-            HistoryWindowRequest {
-                file_id: HistoryFileId::parse(file).unwrap(),
-                collection: HistoryCollection::Nodes,
-                location: None,
-                history_root: None,
-                cursor: None,
-                anchor_node_id: None,
-                limit: HistoryPageLimit::for_collection(32, &HistoryCollection::Nodes).unwrap(),
-            },
-            HistoryWindowCancellation::new(),
-        )
-        .unwrap();
-    let HistoryWindowPage::Nodes { nodes, .. } = read.page().unwrap() else {
-        panic!("node page required")
-    };
-    engine.recheck_history_window(&read).unwrap();
-    nodes
-        .into_iter()
-        .map(|node| (node.node_id.to_string(), node.note))
-        .collect()
-}
-
 #[test]
-fn membership_registry_current_path_note_real_d3_preserves_history_aliases_and_stopped_roots() {
-    for action in [
-        MembershipExitAction::PlannedOffline,
-        MembershipExitAction::Deregister,
-    ] {
-        for copies in [1, 2] {
-            let mut fixture = Fixture::new(copies);
-            let (parked, stopped) = fixture.exit(action);
-            let before = Arc::clone(&fixture.engine.state);
-            let current = fixture
-                .engine
-                .list_tree(&fixture.repository.main_branch_id)
-                .unwrap();
-            let alias = fixture.engine.list_tree(&fixture.alias.branch_id).unwrap();
-            let old_view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
-            let visible = action == MembershipExitAction::PlannedOffline || copies == 2;
-            assert_eq!(current.len(), usize::from(visible));
-            assert_eq!(alias.len(), usize::from(visible));
-            let mut receipts = Vec::new();
-            for node in [&fixture.merge_node, &fixture.metadata_node] {
-                let operation = op();
-                let receipt = fixture
-                    .engine
-                    .set_file_node_note(
-                        &fixture.file,
-                        node,
-                        &note("historical note"),
-                        "admin",
-                        operation,
-                    )
-                    .unwrap();
-                assert_eq!(
-                    receipt.request_digest,
-                    Engine::native_request_digest(
-                        KIND,
-                        "admin",
-                        &json!({"file_id":fixture.file,"node_id":node,"note":"historical note"})
-                    )
-                    .unwrap()
-                );
-                assert_eq!(
-                    fixture.engine.state.file_path_notes[node],
-                    "historical note"
-                );
-                assert_eq!(
-                    fixture
-                        .engine
-                        .set_file_node_note(
-                            &fixture.file,
-                            node,
-                            &note("historical note"),
-                            "admin",
-                            operation
-                        )
-                        .unwrap(),
-                    receipt
-                );
-                let same = fixture
-                    .engine
-                    .set_file_node_note(
-                        &fixture.file,
-                        node,
-                        &note("historical note"),
-                        "admin",
-                        op(),
-                    )
-                    .unwrap();
-                assert!(
-                    same.sequence > receipt.sequence,
-                    "a no-change request keeps its own permanent receipt"
-                );
-                receipts.push((node.clone(), operation, receipt));
+fn membership_registry_current_adopted_version_and_real_events_never_gain_metadata_note_authority() {
+    for action in [MembershipExitAction::PlannedOffline,MembershipExitAction::Deregister] {
+        for copies in [1,2] {
+            let mut f=Fixture::new(copies);
+            let (parked,stopped)=f.exit(action);
+            let before=canonical_json(f.engine.state()).unwrap();
+            for node in [&f.version,&f.path_event,&f.merge_event,&new_id("fmeta").unwrap()] {
+                let unused=op();
+                assert_eq!(f.engine.set_file_node_note(&f.file,node,&note("cannot invent an annotation"),
+                    "admin",unused).unwrap_err().code(), ErrorCode::FileNodeNotFound);
+                assert!(!f.engine.state().operations.contains_key(&unused));
             }
-            assert_eq!(
-                fixture.engine.state.file_path_notes[&fixture.other_node],
-                "leave this note"
-            );
-            let notes = history_notes(&fixture.engine, &fixture.file);
-            assert_eq!(notes[&fixture.merge_node], "historical note");
-            assert_eq!(notes[&fixture.metadata_node], "historical note");
-            assert_eq!(
-                fixture
-                    .engine
-                    .list_tree(&fixture.repository.main_branch_id)
-                    .unwrap(),
-                current
-            );
-            assert_eq!(
-                fixture.engine.list_tree(&fixture.alias.branch_id).unwrap(),
-                alias
-            );
-            assert!(Arc::ptr_eq(
-                &old_view.branches,
-                &fixture.engine.current_namespaces.as_ref().unwrap().branches
-            ));
-            assert!(Arc::ptr_eq(
-                &old_view.directories,
-                &fixture
-                    .engine
-                    .current_namespaces
-                    .as_ref()
-                    .unwrap()
-                    .directories
-            ));
-            assert_only_note_publication(&before, fixture.engine.state());
-            assert_eq!(files(&parked), stopped);
-            assert_eq!(
-                fs::read(&fixture.config.disks[0].root).unwrap(),
-                b"closed target must remain an ordinary file"
-            );
-            if copies == 2 {
-                let mut body = Vec::new();
-                fixture
-                    .engine
-                    .open_content(&fixture.version)
-                    .unwrap()
-                    .file
-                    .read_to_end(&mut body)
-                    .unwrap();
-                assert_eq!(body, b"immutable note body");
-            }
-            let system = fixture.temp.path().join("system");
-            drop(fixture.engine);
-            let mut reopened = Engine::open(&system).unwrap();
-            for (node, operation, receipt) in &receipts {
-                let state = canonical_json(reopened.state()).unwrap();
-                assert_eq!(
-                    reopened
-                        .set_file_node_note(
-                            &fixture.file,
-                            node,
-                            &note("historical note"),
-                            "admin",
-                            *operation
-                        )
-                        .unwrap(),
-                    *receipt
-                );
-                assert_eq!(canonical_json(reopened.state()).unwrap(), state);
-                // A new clear removes the annotation, not its immutable node.
-                reopened
-                    .set_file_node_note(&fixture.file, node, &note(""), "admin", op())
-                    .unwrap();
-                assert!(!reopened.state.file_path_notes.contains_key(node));
-                reopened
-                    .set_file_node_note(&fixture.file, node, &note(""), "admin", op())
-                    .unwrap();
-                assert_eq!(
-                    reopened
-                        .set_file_node_note(
-                            &fixture.file,
-                            node,
-                            &note("historical note"),
-                            "admin",
-                            *operation
-                        )
-                        .unwrap(),
-                    *receipt
-                );
-                assert!(
-                    !reopened.state.file_path_notes.contains_key(node),
-                    "replay cannot undo a later clear"
-                );
-            }
-            assert_only_note_publication(&before, reopened.state());
-            drop(reopened);
-            let reopened = Engine::open(&system).unwrap();
-            let notes = history_notes(&reopened, &fixture.file);
-            assert_eq!(notes[&fixture.merge_node], "");
-            assert_eq!(notes[&fixture.metadata_node], "");
-            assert_eq!(notes[&fixture.other_node], "leave this note");
-            assert_eq!(
-                reopened
-                    .list_tree(&fixture.repository.main_branch_id)
-                    .unwrap(),
-                current
-            );
-            assert_eq!(reopened.list_tree(&fixture.alias.branch_id).unwrap(), alias);
-            assert_only_note_publication(&before, reopened.state());
-            assert_eq!(files(&parked), stopped);
-            assert_eq!(
-                fs::read(&fixture.config.disks[0].root).unwrap(),
-                b"closed target must remain an ordinary file"
-            );
+            assert_eq!(f.engine.set_file_node_note(&f.file,&f.version,&note("another kind"),
+                "admin",f.merge_op).unwrap_err().code(),ErrorCode::IdempotencyKeyReused);
+            assert_eq!(canonical_json(f.engine.state()).unwrap(),before);
+            let operation=op();
+            let written=f.engine.set_file_note(&f.file,Some(&f.version),&note("the actual retained body"),
+                "admin",operation).unwrap();
+            assert_eq!(f.engine.state().version_notes[&f.version],"the actual retained body");
+            assert!(f.engine.state().file_metadata_nodes.is_empty());
+            assert!(f.engine.state().file_path_notes.is_empty());
+            assert_eq!(f.engine.state().file_branch_aliases[&f.alias.branch_id],f.branch);
+            assert_eq!(files(&parked),stopped);
+            let system=f.temp.path().join("system");
+            drop(f.engine);
+            let mut reopened=Engine::open(&system).unwrap();
+            assert_eq!(reopened.set_file_note(&f.file,Some(&f.version),&note("the actual retained body"),
+                "admin",operation).unwrap().result,written.result);
+            assert_eq!(reopened.state().file_branch_merges[&f.merge_event].operation_id,f.merge_op);
+            assert_eq!(files(&parked),stopped);
         }
     }
 }
 
 #[test]
-fn membership_registry_current_path_note_retains_target_actor_and_idempotency_boundaries() {
-    let mut fixture = Fixture::new(1);
-    fixture.exit(MembershipExitAction::Deregister);
-    let operation = op();
-    let receipt = fixture
-        .engine
-        .set_file_node_note(
-            &fixture.file,
-            &fixture.merge_node,
-            &note("accepted"),
-            "admin",
-            operation,
-        )
-        .unwrap();
-    let unchanged = canonical_json(fixture.engine.state()).unwrap();
-    for (file, node, actor, expected) in [
-        (
-            "file_00000000000000000000000000000000",
-            fixture.merge_node.as_str(),
-            "admin",
-            ErrorCode::FileNodeNotFound,
-        ),
-        (
-            fixture.file.as_str(),
-            fixture.version.as_str(),
-            "admin",
-            ErrorCode::FileNodeNotFound,
-        ),
-        (
-            fixture.file.as_str(),
-            fixture.path_event.as_str(),
-            "admin",
-            ErrorCode::FileNodeNotFound,
-        ),
-        (
-            fixture.file.as_str(),
-            "fnode_00000000000000000000000000000000",
-            "admin",
-            ErrorCode::FileNodeNotFound,
-        ),
-        (
-            fixture.file.as_str(),
-            fixture.merge_node.as_str(),
-            "",
-            ErrorCode::Unauthenticated,
-        ),
-    ] {
-        assert_eq!(
-            fixture
-                .engine
-                .set_file_node_note(file, node, &note("refused"), actor, op())
-                .unwrap_err()
-                .code(),
-            expected
-        );
-        assert_eq!(canonical_json(fixture.engine.state()).unwrap(), unchanged);
-    }
-    for (value, actor) in [("other note", "admin"), ("accepted", "other actor")] {
-        assert_eq!(
-            fixture
-                .engine
-                .set_file_node_note(
-                    &fixture.file,
-                    &fixture.merge_node,
-                    &note(value),
-                    actor,
-                    operation
-                )
-                .unwrap_err()
-                .code(),
-            ErrorCode::IdempotencyKeyReused
-        );
-    }
-    assert_eq!(
-        fixture
-            .engine
-            .set_file_node_note(
-                &fixture.file,
-                &fixture.merge_node,
-                &note("accepted"),
-                "admin",
-                operation
-            )
-            .unwrap(),
-        receipt
-    );
-    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), unchanged);
-}
-
-#[test]
-fn membership_registry_current_path_note_replay_checks_exact_writes_before_unchanged_heads() {
-    let mut fixture = Fixture::new(1);
-    fixture.exit(MembershipExitAction::Deregister);
-    let previous = Arc::clone(&fixture.engine.state);
-    let view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
-    let operation = op();
-    fixture
-        .engine
-        .set_file_node_note(
-            &fixture.file,
-            &fixture.merge_node,
-            &note("accepted"),
-            "admin",
-            operation,
-        )
-        .unwrap();
-    let next = fixture.engine.state().clone();
-    let decoded: State = json_codec::from_slice(&canonical_json(&next).unwrap()).unwrap();
-    assert!(matches!(
-        decoded.branches.changes_since(&previous.branches),
-        MapChanges::All
-    ));
-    for candidate in [&next, &decoded] {
-        let recovered = view.advance(&previous, candidate).unwrap();
-        assert!(Arc::ptr_eq(&view.branches, &recovered.branches));
-        assert!(Arc::ptr_eq(&view.directories, &recovered.directories));
-    }
-    let historical_operation = previous.operations.keys().next().copied().unwrap();
-    for corruption in 0..24 {
-        let mut changed = next.clone();
-        match corruption {
-            0 => {
-                changed
-                    .file_metadata_nodes
-                    .get_mut(&fixture.merge_node)
-                    .unwrap()
-                    .parent_node_ids
-                    .clear()
+fn fabricated_metadata_or_a_rewritten_native_input_fails_before_current_snapshot_installation() {
+    let mut f=Fixture::new(1);
+    let (parked,stopped)=f.exit(MembershipExitAction::PlannedOffline);
+    let original=f.engine.state().clone();
+    let view=f.engine.current_namespaces.as_ref().unwrap();
+    for corruption in ["record","edge","author","original_head","second_result"] {
+        let mut after=original.clone();
+        if corruption=="record" {
+            let id=new_id("fmeta").unwrap();
+            after.file_metadata_nodes.insert(id.clone(),crate::FileMetadataNode{node_id:id,
+                history_tree_id:f.repository.history_tree_id.clone(),file_id:f.file.clone(),version_id:f.version.clone(),
+                parent_node_ids:vec![f.version.clone()],branch_id:f.branch.clone(),kind:storage_contract::FileMetadataKind::Merge,
+                operation_id:f.merge_op,author:"admin".into(),sequence:original.sequence,created_at:1});
+        } else {
+            let e=after.file_branch_merges.get_mut(&f.merge_event).unwrap();
+            match corruption {
+                "edge"=>e.parent_node_ids.push(e.chosen_node_id.clone()),
+                "author"=>e.principal="not the original".parse().unwrap(),
+                "original_head"=>e.original_inputs[0].expected_node_id=new_id("ver").unwrap(),
+                _=>e.result_node_id=new_id("ver").unwrap(),
             }
-            1 => {
-                changed
-                    .file_metadata_nodes
-                    .get_mut(&fixture.merge_node)
-                    .unwrap()
-                    .file_id = "different-file".into()
-            }
-            2 => {
-                changed
-                    .file_metadata_nodes
-                    .get_mut(&fixture.metadata_node)
-                    .unwrap()
-                    .author = "injected".into();
-            }
-            3 => {
-                changed
-                    .commits
-                    .get_mut(&fixture.alias.head_commit_id)
-                    .unwrap()
-                    .entries
-                    .clear();
-            }
-            4 => {
-                changed
-                    .branches
-                    .get_mut(&fixture.alias.branch_id)
-                    .unwrap()
-                    .name = "extra branch edit".into()
-            }
-            5 => {
-                changed.file_contexts.insert(
-                    format!("{}/current.txt", fixture.repository.repository_id),
-                    FileContext {
-                        branch_id: fixture.alias.branch_id.clone(),
-                        node_id: Some(fixture.merge_node.clone()),
-                        selection_generation: u64::MAX,
-                        inherited_from: None,
-                    },
-                );
-            }
-            6 => {
-                changed
-                    .file_path_notes
-                    .insert(fixture.other_node.clone(), "extra note".into());
-            }
-            7 => {
-                changed
-                    .operations
-                    .get_mut(&operation)
-                    .unwrap()
-                    .request_digest = "0".repeat(64)
-            }
-            8 => {
-                changed
-                    .operation_principals
-                    .insert(operation, "other actor".into());
-            }
-            9 => {
-                changed.operations.get_mut(&operation).unwrap().result["note"] =
-                    json!("different request")
-            }
-            10 => {
-                changed.operations.remove(&operation);
-            }
-            11 => {
-                changed
-                    .operations
-                    .get_mut(&historical_operation)
-                    .unwrap()
-                    .result["injected"] = json!(true)
-            }
-            12 => changed.events[0].kind = "rewritten history".into(),
-            13 => {
-                changed
-                    .file_locations
-                    .insert(fixture.file.clone(), "injected.txt".into());
-            }
-            14 => {
-                changed
-                    .versions
-                    .get_mut(&fixture.version)
-                    .unwrap()
-                    .history_tree_id = "different-history".into()
-            }
-            15 => {
-                changed.file_metadata_nodes.remove(&fixture.metadata_node);
-            }
-            16 => {
-                let id = new_id("commit").unwrap();
-                let mut commit = changed.commits[&fixture.alias.head_commit_id].clone();
-                commit.commit_id = id.clone();
-                commit.sequence = changed.sequence;
-                commit.operation_id = operation;
-                changed.commits.insert(id.clone(), commit);
-                changed
-                    .branches
-                    .get_mut(&fixture.alias.branch_id)
-                    .unwrap()
-                    .head_commit_id = id;
-            }
-            17 => {
-                changed
-                    .operations
-                    .get_mut(&operation)
-                    .unwrap()
-                    .result
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("file_id");
-            }
-            18 => {
-                changed.operations.get_mut(&operation).unwrap().result["note"] =
-                    json!("invalid\nnote")
-            }
-            19 => {
-                changed
-                    .file_names
-                    .insert(fixture.file.clone(), "injected.txt".into());
-            }
-            20 => {
-                let id = new_id("fmeta").unwrap();
-                let mut forged = changed.file_metadata_nodes[&fixture.merge_node].clone();
-                forged.node_id = id.clone();
-                changed.file_metadata_nodes.insert(id.clone(), forged);
-                changed.file_path_notes.remove(&fixture.merge_node);
-                changed
-                    .file_path_notes
-                    .insert(id.clone(), "accepted".into());
-                let receipt = changed.operations.get_mut(&operation).unwrap();
-                receipt.result["node_id"] = json!(id);
-                receipt.request_digest = Engine::native_request_digest(
-                    KIND,
-                    "admin",
-                    &json!({"file_id":fixture.file,"node_id":id,"note":"accepted"}),
-                )
-                .unwrap();
-            }
-            21 => {
-                let file = new_id("file").unwrap();
-                let receipt = changed.operations.get_mut(&operation).unwrap();
-                receipt.result["file_id"] = json!(file);
-                receipt.request_digest = Engine::native_request_digest(
-                    KIND,
-                    "admin",
-                    &json!({"file_id":file,"node_id":fixture.merge_node,"note":"accepted"}),
-                )
-                .unwrap();
-            }
-            22 => {
-                changed
-                    .histories
-                    .get_mut(&fixture.repository.history_tree_id)
-                    .unwrap()
-                    .repository_id = "different-repository".into();
-            }
-            23 => {
-                let id = op();
-                let mut extra = changed.operations[&operation].clone();
-                extra.operation_id = id;
-                changed.operations.insert(id, extra);
-                changed.operation_principals.insert(id, "admin".into());
-            }
-            _ => unreachable!(),
         }
-        for cold in [false, true] {
-            let candidate = if cold {
-                json_codec::from_slice::<State>(&canonical_json(&changed).unwrap()).unwrap()
-            } else {
-                changed.clone()
-            };
-            assert_eq!(
-                view.advance(&previous, &candidate).err().unwrap().code(),
-                ErrorCode::PublicationInvalid,
-                "corruption {corruption}, cold {cold}"
-            );
-        }
-    }
-}
-
-#[test]
-fn membership_registry_current_path_note_target_requires_unique_node_and_exact_body_history() {
-    let fixture = Fixture::new(1);
-    let previous = fixture.engine.state();
-    for target in [&fixture.merge_node, &fixture.metadata_node] {
-        assert_eq!(
-            Engine::file_node_note_history(previous, &fixture.file, target).unwrap(),
-            fixture.repository.history_tree_id
-        );
-    }
-    for corruption in 0..8 {
-        let mut changed = previous.clone();
-        let target = match corruption {
-            0 => {
-                changed
-                    .file_metadata_nodes
-                    .get_mut(&fixture.merge_node)
-                    .unwrap()
-                    .node_id = new_id("fmeta").unwrap();
-                &fixture.merge_node
-            }
-            1 => {
-                changed
-                    .file_metadata_nodes
-                    .get_mut(&fixture.metadata_node)
-                    .unwrap()
-                    .node_id = new_id("fmeta").unwrap();
-                &fixture.metadata_node
-            }
-            2 => {
-                let source = &changed.file_metadata_nodes[&fixture.merge_node];
-                // A deliberately forged cross-table collision is rejected.
-                // It is not a supported source of a positive path-node fixture.
-                let duplicate = FilePathNode {
-                    node_id: source.node_id.clone(),
-                    history_tree_id: source.history_tree_id.clone(),
-                    file_id: source.file_id.clone(),
-                    version_id: source.version_id.clone(),
-                    parent_node_ids: source.parent_node_ids.clone(),
-                    branch_id: source.branch_id.clone(),
-                    path: "current.txt".into(),
-                    previous_path: "past.txt".into(),
-                    operation_id: source.operation_id,
-                    author: source.author.clone(),
-                    sequence: source.sequence,
-                    created_at: source.created_at,
-                };
-                changed
-                    .file_path_nodes
-                    .insert(fixture.merge_node.clone(), duplicate);
-                &fixture.merge_node
-            }
-            3 => {
-                changed
-                    .versions
-                    .get_mut(&fixture.version)
-                    .unwrap()
-                    .version_id = new_id("ver").unwrap();
-                &fixture.merge_node
-            }
-            4 => {
-                changed.versions.get_mut(&fixture.version).unwrap().file_id =
-                    new_id("file").unwrap();
-                &fixture.metadata_node
-            }
-            5 => {
-                changed
-                    .versions
-                    .get_mut(&fixture.version)
-                    .unwrap()
-                    .history_tree_id = new_id("history").unwrap();
-                &fixture.merge_node
-            }
-            6 => {
-                changed
-                    .file_metadata_nodes
-                    .get_mut(&fixture.metadata_node)
-                    .unwrap()
-                    .version_id = new_id("ver").unwrap();
-                &fixture.metadata_node
-            }
-            7 => {
-                changed
-                    .file_metadata_nodes
-                    .get_mut(&fixture.merge_node)
-                    .unwrap()
-                    .file_id = new_id("file").unwrap();
-                &fixture.merge_node
-            }
-            _ => unreachable!(),
-        };
-        assert_eq!(
-            Engine::file_node_note_history(&changed, &fixture.file, target)
-                .unwrap_err()
-                .code(),
-            ErrorCode::FileNodeNotFound,
-            "corruption {corruption}"
-        );
-    }
-}
-
-#[test]
-fn membership_registry_current_path_note_no_change_requires_its_receipt_and_preserves_old_events() {
-    let mut fixture = Fixture::new(1);
-    fixture.exit(MembershipExitAction::Deregister);
-    let previous = Arc::clone(&fixture.engine.state);
-    let view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
-    let operation = op();
-    fixture
-        .engine
-        .set_file_node_note(
-            &fixture.file,
-            &fixture.other_node,
-            &note("leave this note"),
-            "admin",
-            operation,
-        )
-        .unwrap();
-    let next = fixture.engine.state().clone();
-    assert_eq!(next.file_path_notes, previous.file_path_notes);
-    view.advance(&previous, &next).unwrap();
-    for corruption in 0..4 {
-        let mut changed = next.clone();
-        match corruption {
-            0 => {
-                changed.operations.remove(&operation);
-            }
-            1 => {
-                changed.operations.get_mut(&operation).unwrap().kind = "file.metadata".into();
-            }
-            2 => {
-                changed.operations.remove(&operation);
-                changed
-                    .branches
-                    .get_mut(&fixture.alias.branch_id)
-                    .unwrap()
-                    .name = "smuggled label".into();
-            }
-            3 => {
-                // Rewriting an older note event is forbidden even in a state
-                // without a new note receipt or changed annotation value.
-                changed = previous.as_ref().clone();
-                changed
-                    .events
-                    .iter_mut()
-                    .find(|event| event.kind == KIND)
-                    .unwrap()
-                    .kind = "rewritten note event".into();
-            }
-            _ => unreachable!(),
-        }
-        for cold in [false, true] {
-            let candidate = if cold {
-                json_codec::from_slice::<State>(&canonical_json(&changed).unwrap()).unwrap()
-            } else {
-                changed.clone()
-            };
-            assert_eq!(
-                view.advance(&previous, &candidate).err().unwrap().code(),
-                ErrorCode::PublicationInvalid,
-                "corruption {corruption}, cold {cold}"
-            );
-        }
+        assert!(crate::history_package::validate_prepared_state(&after).is_err());
+        assert!(view.advance(&original,&after).is_err());
+        assert_eq!(canonical_json(f.engine.state()).unwrap(),canonical_json(&original).unwrap());
+        assert_eq!(files(&parked),stopped);
     }
 }
