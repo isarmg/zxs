@@ -3,7 +3,7 @@
 use super::*;
 
 #[derive(Clone,Copy)]
-pub(crate) enum Access { Read, Write }
+pub(crate) enum Access { Read, Incoming, Write }
 
 pub(crate) struct LocalPool {
     pub(crate) system: HeldDir,
@@ -18,7 +18,7 @@ impl LocalPool {
     }
     pub(crate) fn with_snapshot(path: &Path, access: Access) -> io::Result<(Self,fs::OriginalStamp,crate::ordinary::journal::Journal)> {
         let system = HeldDir::open(path)?;
-        match access { Access::Read => system.share()?, Access::Write => system.exclusive()? }
+        match access { Access::Read | Access::Incoming => system.share()?, Access::Write => system.exclusive()? }
         system.require_named()?;
         system.reject_registered_ancestors(&BTreeSet::new())?;
         let Published{stamp,record:registration,journal}=published(&system)?
@@ -52,7 +52,7 @@ impl LocalPool {
             return Err(invalid("ordinary FILE operations require an ordinary FILE volume"));
         }
         let root = HeldDir::open(&volume.volume.path)?;
-        match self.access { Access::Read => root.share()?, Access::Write => root.exclusive()? }
+        match self.access { Access::Read | Access::Incoming => root.share()?, Access::Write => root.exclusive()? }
         let result = FileVolume { pool: self, index, root };
         result.require_current()?;
         Ok(result)

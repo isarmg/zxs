@@ -5,7 +5,7 @@ mod hash;
 mod identity;
 mod pool;
 mod ordinary;
-pub use ordinary::{FileInfo,RootFiles,CreationStatus,CreationReceipt,create_empty,creation_receipt,read_initial_file,list_initial_files};
+pub use ordinary::{CurrentFile,DraftClaim,DraftReceipt,FirstSaveObservation,DRAFT_CHUNK,save_first,first_save_receipt,read_current_to,current_info,FileInfo,RootFiles,CreationStatus,CreationReceipt,create_empty,creation_receipt,read_initial_file,list_initial_files};
 pub use identity::{EntryId, FileId, HistoryId, OperationId, PoolId, VolumeId};
 pub use pool::{initialize, inspect, PoolInfo, RegisteredVolume};
 pub use fs::Entity;

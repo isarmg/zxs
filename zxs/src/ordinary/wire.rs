@@ -97,6 +97,26 @@ pub(super) const MAX_FRAME:usize=4096;
 pub(super) struct Frame{
     pub seq:u64,pub previous:[u8;32],pub create:Creation,pub request:[u8;32],pub digest:[u8;32],pub bytes:Vec<u8>,
 }
+pub(super) struct Envelope<'a>{
+    pub seq:u64,pub previous:[u8;32],pub kind:u8,pub request:[u8;32],pub body:&'a[u8],pub digest:[u8;32],
+}
+pub(super) fn encode(pool:PoolId,seq:u64,prev:[u8;32],kind:u8,request:[u8;32],body:&[u8])->io::Result<(Vec<u8>,[u8;32])>{
+    let mut bytes=MAGIC.to_vec();bytes.extend_from_slice(&[0;4]);bytes.extend_from_slice(&pool.0);
+    bytes.extend_from_slice(&seq.to_be_bytes());bytes.extend_from_slice(&prev);bytes.push(kind);
+    bytes.extend_from_slice(&request);bytes.extend_from_slice(body);
+    let n=bytes.len()+32;if n>MAX_FRAME{return Err(invalid("FILE decision exceeds frame budget"));}
+    bytes[MAGIC.len()..MAGIC.len()+4].copy_from_slice(&(n as u32).to_be_bytes());
+    let digest=crate::hash::digest(&bytes)?;bytes.extend_from_slice(&digest);Ok((bytes,digest))
+}
+pub(super) fn envelope(pool:PoolId,bytes:&[u8])->io::Result<Envelope<'_>>{
+    if Frame::size(bytes)?!=Some(bytes.len()){return Err(invalid("incomplete SYSTEM decision"));}
+    let (body,hash)=bytes.split_at(bytes.len()-32);
+    let digest=crate::hash::digest(body)?;if digest.as_slice()!=hash{return Err(invalid("SYSTEM decision checksum mismatch"));}
+    let mut input=In(&body[MAGIC.len()+4..]);if PoolId(input.id()?)!=pool{return Err(invalid("foreign pool decision"));}
+    let seq=input.u64()?;let previous=input.fixed()?;let kind=input.byte()?;let request=input.fixed()?;
+    if seq==0{return Err(invalid("zero SYSTEM decision sequence"));}
+    Ok(Envelope{seq,previous,kind,request,body:input.0,digest})
+}
 impl Frame{
     pub(super) fn size(bytes:&[u8])->io::Result<Option<usize>>{
         if !MAGIC.starts_with(&bytes[..bytes.len().min(MAGIC.len())]){return Err(invalid("unknown SYSTEM frame prefix"));}
@@ -107,25 +127,17 @@ impl Frame{
     }
     pub(super) fn new(pool:PoolId,seq:u64,previous:[u8;32],c:Creation)->io::Result<Self>{
         let request=request_digest(pool,c.op,c.uid,c.volume,&c.name)?;
-        let mut bytes=MAGIC.to_vec();bytes.extend_from_slice(&[0;4]);bytes.extend_from_slice(&pool.0);
-        bytes.extend_from_slice(&seq.to_be_bytes());bytes.extend_from_slice(&previous);bytes.push(1); // CreateEmpty
-        bytes.extend_from_slice(&request);c.put(&mut bytes);
-        let n=bytes.len()+32;
-        if n>MAX_FRAME{return Err(invalid("FILE decision exceeds frame budget"));}
-        bytes[MAGIC.len()..MAGIC.len()+4].copy_from_slice(&(n as u32).to_be_bytes());
-        let digest=crate::hash::digest(&bytes)?;bytes.extend_from_slice(&digest);
+        let mut body=Vec::new();c.put(&mut body);
+        let (bytes,digest)=encode(pool,seq,previous,1,request,&body)?;
         Ok(Self{seq,previous,create:c,request,digest,bytes})
     }
     pub(super) fn read(pool:PoolId,bytes:&[u8])->io::Result<Self>{
-        if Self::size(bytes)?!=Some(bytes.len()){return Err(invalid("incomplete SYSTEM decision"));}
-        let (body,hash)=bytes.split_at(bytes.len()-32);
-        let digest=crate::hash::digest(body)?;
-        if digest.as_slice()!=hash{return Err(invalid("SYSTEM decision checksum mismatch"));}
-        let mut input=In(&body[MAGIC.len()+4..]);
-        if PoolId(input.id()?)!=pool{return Err(invalid("foreign pool decision"));}
-        let seq=input.u64()?;let previous=input.fixed()?;
-        if seq==0||input.byte()?!=1{return Err(invalid("unknown or invalid SYSTEM command"));}
-        let request=input.fixed()?;let create=Creation::get(&mut input)?;input.end()?;
+        Self::from_envelope(pool,bytes,envelope(pool,bytes)?)
+    }
+    pub(super) fn from_envelope(pool:PoolId,bytes:&[u8],e:Envelope<'_>)->io::Result<Self>{
+        if e.kind!=1{return Err(invalid("not an original empty FILE creation"));}
+        let (seq,previous,request,digest)=(e.seq,e.previous,e.request,e.digest);
+        let mut input=In(e.body);let create=Creation::get(&mut input)?;input.end()?;
         if request_digest(pool,create.op,create.uid,create.volume,&create.name)?!=request {
             return Err(invalid("FILE decision does not match original request"));
         }

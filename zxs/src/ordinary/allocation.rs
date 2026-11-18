@@ -6,7 +6,7 @@ use std::{ffi::CStr,io};
 pub(super) const NAME:&CStr=c"FILE-ALLOCATION";
 pub(super) const SLOTS:u8=8;
 const MAGIC:&[u8]=b"ZXS/ORIGINAL-ALLOCATE-EMPTY\0";
-const MAX:usize=1024;
+pub(super) const MAX:usize=1024;
 
 pub(super) struct Stage{pub slot:u8,pub object:NativeObject}
 pub(super) struct Allocation {
@@ -51,6 +51,9 @@ impl Allocation{
     }
     pub(super) fn read(system:&HeldDir,pool:PoolId)->io::Result<Option<Self>>{
         let Some((stamp,bytes))=system.record(NAME,MAX)? else{return Ok(None)};
+        Self::from_bytes(system,pool,stamp,bytes).map(Some)
+    }
+    pub(super) fn from_bytes(system:&HeldDir,pool:PoolId,stamp:fs::OriginalStamp,bytes:Vec<u8>)->io::Result<Self>{
         if bytes.len()<MAGIC.len()+32{return Err(invalid("short initial FILE reservation"));}
         let (body,tail)=bytes.split_at(bytes.len()-32);
         let digest=crate::hash::digest(body)?;
@@ -69,7 +72,7 @@ impl Allocation{
                 ||s.object.entity==root.entity||s.object.birth==root.birth){
             return Err(invalid("FILE reservation request, owner or frontier differs"));
         }
-        Ok(Some(Self{op,volume,entry,file,history,uid,seq,previous,name,request,attempt,root,stage,digest,stamp,bytes}))
+        Ok(Self{op,volume,entry,file,history,uid,seq,previous,name,request,attempt,root,stage,digest,stamp,bytes})
     }
     pub(super) fn bind(&self,system:&HeldDir,stage:&Stage)->io::Result<()>{
         if self.stage.is_some(){return Err(invalid("an original FILE directory is already bound"));}

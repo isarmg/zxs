@@ -218,3 +218,13 @@ ssize_t zxs_get_stage(int fd,unsigned char *out,size_t len) {
 int zxs_set_stage(int fd,const unsigned char *value,size_t len,int create) {
     return fsetxattr(fd,"user.zxs.create-stage",value,len,create?XATTR_CREATE:XATTR_REPLACE);
 }
+
+/* Reserve the one eventual physical extent file, not a second persistent
+ * copy. Unsupported allocation, quota, capacity and overflow are failures. */
+int zxs_allocate_stream(int fd,uint64_t total) {
+    struct stat st;
+    if (fstat(fd,&st)<0) return -1;
+    off_t size=(off_t)total;
+    if (!S_ISREG(st.st_mode)||st.st_nlink!=0||st.st_size!=0||size<=0||(uint64_t)size!=total) {errno=EINVAL;return -1;}
+    return fallocate(fd,0,0,size); /* no sparse/truncate fallback */
+}

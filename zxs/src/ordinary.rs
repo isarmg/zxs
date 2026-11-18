@@ -1,6 +1,9 @@
 //! First ordinary vertical path: a real, initially empty manual FILE in a
 //! selected registered ordinary root. Creation does not publish a version.
 mod wire;
+mod draft;
+pub use draft::{save_first,first_save_receipt,read_current_to,current_info,CurrentFile,FirstSaveObservation};
+pub use draft::types::{DraftClaim,DraftReceipt,DRAFT_CHUNK};
 mod material;
 mod allocation;
 pub(crate) mod journal;
@@ -51,12 +54,13 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
     let (pool,_,state)=LocalPool::with_snapshot(system,Access::Write)?;
     pool.require_business_op(op)?;
     let request=expected(&pool,op,id,name)?;
-    if let Some(done)=state.operation(op){
-        same_request(done,request)?;
+    if let Some(d)=state.decided(op){
+        let done=d.creation()?;same_request(done,request)?;
         if !state.allocated.as_ref().is_some_and(|a|a.op==op){
             return Ok(FileInfo::from_frame(done)); // Do not open a later same-named root.
         }
     }
+    if state.saving.is_some(){return Err(invalid("original first SAVE needs completion"));}
     if let Some(a)=&state.allocated{
         if a.op!=op || a.request!=request {return Err(invalid("another original FILE allocation needs completion"));}
     }else{
@@ -101,33 +105,14 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
         if Frame::read(pool.id(),&f.bytes)?!=f||!a.matches(&f){return Err(invalid("could not seal complete FILE decision"));}
         held.room_for(f.bytes.len())?;
         cut(Cut::BeforeIntent)?;
-        journal::Intent::seal(&pool.system,&f)?;
+        journal::Intent::seal(&pool.system,&f.bytes)?;
     }
     drop(held);
     cut(Cut::Intent)?;
-    let (stamp,mut now)=pool.snapshot()?;
-    let p=now.pending.take().ok_or_else(||invalid("original prepared FILE intent disappeared"))?;
-    same_request(&p.frame,request)?;
-    if p.frame.create.op!=op{return Err(invalid("FILE intent is not the original operation"));}
-    // The intent must survive a crash even if an earlier link or fsync reported
-    // an uncertain result. It supplies full bytes but is never itself a vote.
-    pool.system.confirm_record_sync(journal::INTENT,&p.stamp,p.bytes.len())?;
-    pool.system.file.sync_all()?;
-    if now.operation(op).is_none(){
-        material::require_staged(&volume,&p.frame.create)?;
-        pool.system.append_exact(pool::READY,&stamp,stamp.stat.size(),&p.frame.bytes[now.tail..],pool::MAX_SYSTEM)?;
-        cut(Cut::FrameSynced)?;
-        // No observer or caller may acknowledge this frontier on mere bytes.
-        // Reopen and verify both the original sealed material and entire hash
-        // chain through the synced frame before advancing its loss detector.
-        drop(now);
-        let (synced_stamp,synced)=pool.snapshot()?;
-        let (before,after)=synced.acknowledgement(&p.frame)?;
-        pool.system.advance_frontier(pool::READY,&synced_stamp,pool::MAX_SYSTEM,&before,&after,||cut(Cut::MarkedBeforeSync))?;
-    }
-    let (_,published)=pool.snapshot()?;
-    let f=published.operation(op).ok_or_else(||invalid("original FILE decision missing after durability check"))?;
-    if f.bytes!=p.frame.bytes{return Err(invalid("different SYSTEM decision at original FILE cut"));}
+    let p=publish_sealed(&pool,op,request,|decision|{
+        material::require_staged(&volume,&decision.creation()?.create)
+    },|step|cut(step))?;
+    let f=p.frame.creation()?;
     cut(Cut::Decision)?;
     material::install_decided(&volume,&f.create)?;
     cut(Cut::Installation)?;
@@ -138,18 +123,39 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
     Ok(FileInfo::from_frame(f))
 }
 
+/// All FILE commands cross the same original decision and acknowledged
+/// frontier here. The command owner must prove its exact durable physical
+/// operands again immediately before appending any previously undecided bytes.
+fn publish_sealed(pool:&LocalPool,op:OperationId,request:[u8;32],
+    material:impl FnOnce(&journal::Decision)->io::Result<()>,mut cut:impl FnMut(Cut)->io::Result<()>)->io::Result<journal::Intent>{
+    let (stamp,mut state)=pool.snapshot()?;
+    let p=state.pending.take().ok_or_else(||invalid("original prepared FILE intent missing"))?;
+    if p.frame.op()!=op||p.frame.request()!=request{return Err(invalid("sealed FILE operation or request differs"));}
+    pool.system.confirm_record_sync(journal::INTENT,&p.stamp,p.bytes.len())?;pool.system.file.sync_all()?;
+    if state.decided(op).is_none(){
+        material(&p.frame)?;
+        pool.system.append_exact(pool::READY,&stamp,stamp.stat.size(),&p.frame.bytes()[state.tail..],pool::MAX_SYSTEM)?;
+        cut(Cut::FrameSynced)?;drop(state);
+        let (st,synced)=pool.snapshot()?;let (before,after)=synced.acknowledgement(&p.frame)?;
+        pool.system.advance_frontier(pool::READY,&st,pool::MAX_SYSTEM,&before,&after,||cut(Cut::MarkedBeforeSync))?;
+    }
+    let (_,after)=pool.snapshot()?;
+    if !after.decided(op).is_some_and(|d|d.bytes()==p.frame.bytes()){return Err(invalid("different confirmed SYSTEM decision at original FILE cut"));}
+    Ok(p)
+}
+
 /// Original outcome only. It does not open a data volume or grant access to
 /// the FILE body. Published does not assert current installation/availability.
 pub fn creation_receipt(system:&Path,op:OperationId)->io::Result<Option<CreationReceipt>>{
     let (_pool,_,state)=LocalPool::with_snapshot(system,Access::Read)?;
     if let Some(f)=state.operation(op){
-        let waiting=state.pending.as_ref().is_some_and(|p|p.frame.bytes==f.bytes);
+        let waiting=state.pending.as_ref().is_some_and(|p|p.frame.bytes()==f.bytes.as_slice());
         return Ok(Some(CreationReceipt{status:if waiting{CreationStatus::PublishedInstallationUnconfirmed}else{CreationStatus::Published},
             file:FileInfo::from_frame(f)}));
     }
     Ok(state.allocated.as_ref().filter(|a|a.op==op).map(|a|{
         let status=match state.pending.as_ref(){
-            Some(p) if p.frame.bytes.len()==state.tail=>CreationStatus::DecisionAwaitingConfirmation,
+            Some(p) if p.frame.bytes().len()==state.tail=>CreationStatus::DecisionAwaitingConfirmation,
             Some(_)=>CreationStatus::Prepared,
             None=>CreationStatus::Reserved,
         };
@@ -161,11 +167,9 @@ pub fn creation_receipt(system:&Path,op:OperationId)->io::Result<Option<Creation
 /// Read the initial FILE by stable ID, not by a name or content hash. Only a
 /// physically checked local Unborn/Manual record can yield this zero-byte read.
 pub fn read_initial_file(system:&Path,id:FileId)->io::Result<(FileInfo,Vec<u8>)>{
-    let (pool,_,state)=LocalPool::with_snapshot(system,Access::Read)?;
-    let f=state.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published original FILE"))?;
-    let volume=pool.ordinary(f.create.volume)?;
-    material::installed(&volume,&f.create)?;volume.root.file.sync_all()?;
-    Ok((FileInfo::from_frame(f),Vec::new()))
+    let (info,reader)=draft::capture_current(system,id)?;
+    if reader.is_some(){return Err(invalid("FILE has a saved working revision; use current content read"));}
+    Ok((info.file,Vec::new()))
 }
 
 /// Every current business name must match its material; an unknown normal
@@ -192,7 +196,7 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
         }else{observed.insert(raw.clone());}
     }
     if observed!=names{return Err(invalid("missing or unrecognized business inventory; refusing a partial list"));}
-    for f in state.on(id){material::verify_named(&volume,&f.create)?;}
+    for f in state.on(id){let _=draft::admit_current_held(&state,&volume,f)?;}
     volume.root.file.sync_all()?;volume.require_current()?;
     if volume.root.names()?.into_iter().collect::<BTreeSet<_>>()!=actual{return Err(invalid("root changed during FILE enumeration"));}
     files.sort_by(|a,b|a.name.cmp(&b.name));Ok(RootFiles{files,reserved_private_entries})

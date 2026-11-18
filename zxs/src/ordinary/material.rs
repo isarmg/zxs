@@ -120,16 +120,43 @@ pub(super) fn prepare(volume:&FileVolume<'_>,a:&super::allocation::Allocation)->
         name:a.name.clone(),attempt:a.attempt,slot:s.slot,allocation:a.digest,directory,local,local_digest:crate::hash::digest(&bytes)?};
     require_staged(volume,&c)?;Ok(c)
 }
-fn verify_directory(dir:&HeldDir,c:&Creation)->io::Result<()>{
+fn verify_header(dir:&HeldDir,c:&Creation)->io::Result<()>{
     if dir.entity!=c.directory.entity{return Err(invalid("FILE container entity changed"));}
     c.directory.birth.require(&Birth::read(&dir.file)?)?;
-    dir.only(Some(LOCAL))?;
     let (origin,bytes)=dir.record(LOCAL,MAX_LOCAL)?.ok_or_else(||invalid("original FILE metadata missing"))?;
     if NativeObject::stamp(&origin)!=c.local || crate::hash::digest(&bytes)?!=c.local_digest ||
         bytes!=empty_material(c.file,c.history,c.op,&c.name) {
         return Err(invalid("FILE local birth, contents or manual-unborn state differs"));
     }
     dir.require_named()
+}
+fn verify_directory(dir:&HeldDir,c:&Creation)->io::Result<()>{
+    dir.only(Some(LOCAL))?;verify_header(dir,c)
+}
+/// The only optional extra occupant is a working object attributable to this
+/// exact FILE’s original SYSTEM command. Its shape is not permission to serve
+/// it: a current reader still requires the published native inode and head.
+pub(super) fn working_directory(volume:&FileVolume<'_>,c:&Creation,working:Option<(OperationId,bool)>)->io::Result<HeldDir>{
+    volume.require_current()?;let dir=working_directory_held(volume,c,working)?;volume.require_current()?;Ok(dir)
+}
+/// Caller compares the held selected volume before and after an inventory batch;
+/// the physical FILE, its individual local record and its actual names are
+/// still checked on every call. No repeated mount-table walk per entry.
+pub(super) fn working_directory_held(volume:&FileVolume<'_>,c:&Creation,working:Option<(OperationId,bool)>)->io::Result<HeldDir>{
+    if volume.id()!=c.volume{return Err(invalid("wrong current FILE role or volume"));}
+    let dir=volume.root.child_directory(&destination(&c.name)?)?.ok_or_else(||invalid("current FILE container not installed"))?;
+    let mut names=dir.names()?;
+    let i=names.iter().position(|n|n.as_slice()==LOCAL.to_bytes()).ok_or_else(||invalid("original FILE record missing"))?;
+    names.swap_remove(i);
+    match working{
+        None if names.is_empty()=>{},
+        Some((_,false)) if names.is_empty()=>{},
+        Some((op,_)) if names.len()==1 && names[0].as_slice()==super::draft::material::leaf(op).to_bytes()=>{},
+        _=>return Err(invalid("unrecognized or missing material in ordinary FILE")),
+    }
+    verify_header(&dir,c)?;
+    if volume.root.child_directory(&staging(c.attempt,c.slot))?.is_some(){return Err(invalid("both original FILE names present"));}
+    Ok(dir)
 }
 pub(super) fn require_staged(volume:&FileVolume<'_>,c:&Creation)->io::Result<()>{
     if volume.id()!=c.volume{return Err(invalid("wrong owner volume for staged FILE"));}

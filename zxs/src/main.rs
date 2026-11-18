@@ -1,5 +1,5 @@
 use std::{env, ffi::OsStr, io, path::PathBuf, process::ExitCode};
-const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-info SYSTEM FILE | file-read SYSTEM FILE";
+const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE";
 fn bad(message:&'static str)->io::Error {io::Error::new(io::ErrorKind::InvalidInput,message)}
 fn show(scope:&str,info:zxs::PoolInfo) {
     println!("{scope}");
@@ -47,13 +47,29 @@ fn run() -> io::Result<()> {
             }
             Ok(())
         }
+        Some("file-save")=>{
+            let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let file=word(&mut args)?.parse()?;
+            let len=word(&mut args)?.parse::<u64>().map_err(|_|bad("invalid first SAVE byte length"))?;
+            let claim=zxs::DraftClaim::from_hex(len,&word(&mut args)?)?;end(&mut args)?;
+            let r=zxs::save_first(&system,op,file,claim,io::stdin().lock())?;
+            println!("Original working SAVE: FILE {} revision {} length {} decision {} (no formal node)",r.file,r.revision,r.body.bytes,r.decision_sequence);Ok(())
+        }
+        Some("file-save-receipt")=>{
+            let system=path(&mut args)?;let op=word(&mut args)?.parse()?;end(&mut args)?;
+            let r=zxs::first_save_receipt(&system,op)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original first SAVE"))?;
+            println!("Original first SAVE {:?}: FILE {} length {} published-sequence {:?}",r.status,r.file,r.body.bytes,r.decision_sequence);Ok(())
+        }
         Some("file-info"|"file-read")=>{
             let system=path(&mut args)?;let id=word(&mut args)?.parse()?;end(&mut args)?;
-            let (file,bytes)=zxs::read_initial_file(&system,id)?;
-            if action==OsStr::new("file-read"){
-                use std::io::Write;
-                let mut out=io::stdout().lock();out.write_all(&bytes)?;out.flush()
-            }else{println!("Current initial FILE: manual, no formal node, 0 logical bytes");show_file(&file);Ok(())}
+            if action==OsStr::new("file-read"){zxs::read_current_to(&system,id,io::stdout().lock())?;}
+            else{
+                let current=zxs::current_info(&system,id)?;
+                match current.working{
+                    Some(r)=>println!("Current manual FILE: working revision {} length {} (header inspected, no formal node)",r.revision,r.body.bytes),
+                    None=>println!("Current manual FILE: no confirmed working revision, no formal node, 0 logical bytes"),
+                }
+                show_file(&current.file);
+            }Ok(())
         }
         Some("inspect")=>{
             let root=args.next().map(PathBuf::from).ok_or_else(||bad(USAGE))?;

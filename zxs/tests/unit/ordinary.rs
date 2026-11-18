@@ -72,7 +72,7 @@ fn a_torn_frame_can_only_be_completed_from_its_same_durable_sealed_bytes(){
         let (prefix,id)={
             let p=LocalPool::open(&t.system,Access::Write).unwrap();
             let (s,j)=p.snapshot().unwrap();
-            let f=&j.pending.as_ref().unwrap().frame;
+            let f=j.pending.as_ref().unwrap().frame.creation().unwrap();
             let mut bytes=f.bytes[..13].to_vec();
             if !matched{bytes[4]^=0x40;}
             let mut raw=osfs::OpenOptions::new().append(true).open(t.system.join("REGISTRATION")).unwrap();
@@ -125,7 +125,7 @@ fn full_original_frame_before_sync_is_not_a_confirmed_publication(){
     create_inner(&t.system,op,t.v,"first",|c|if c==Cut::Intent{Err(io::Error::other("before append"))}else{Ok(())}).unwrap_err();
     let file={
         let p=LocalPool::open(&t.system,Access::Write).unwrap();let (_,j)=p.snapshot().unwrap();
-        let original=&j.pending.as_ref().unwrap().frame;
+        let original=j.pending.as_ref().unwrap().frame.creation().unwrap();
         let mut raw=osfs::OpenOptions::new().append(true).open(t.system.join("REGISTRATION")).unwrap();
         raw.write_all(&original.bytes).unwrap(); // Complete bytes, deliberately no successful sync.
         original.create.file

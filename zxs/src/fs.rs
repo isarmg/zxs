@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf};
 mod mounts;
 mod relative;
 mod frontier;
+pub(crate) mod stream;
 pub(crate) use frontier::{frontier,initial_frontier,initial_attempt_binding,Frontier};
 mod birth;
 pub(crate) use birth::{Birth,MAX_BIRTH};
@@ -295,4 +296,13 @@ pub(crate) fn require_selected_lineages(roots:&[(crate::Role,HeldDir)])->io::Res
 pub(crate) fn set_preparation_token(f:&File,token:&[u8;32])->io::Result<()>{
     // SAFETY: called on our still-anonymous new material; key is create-only.
     os_result(unsafe{zxs_put_material_token(f.as_raw_fd(),token.as_ptr(),token.len())})
+}
+
+pub(crate) fn require_material_token(file:&File,token:&[u8;32])->io::Result<()>{
+    let mut bytes=[0;32];
+    // SAFETY: called on the admitted original private regular FD, fixed key.
+    let n=unsafe{zxs_get_material_token(file.as_raw_fd(),bytes.as_mut_ptr(),bytes.len())};
+    if n<0{return Err(io::Error::last_os_error());}
+    if n!=32||&bytes!=token{return Err(invalid("working file does not carry its original preparation token"));}
+    Ok(())
 }
