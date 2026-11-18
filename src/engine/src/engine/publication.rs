@@ -1205,7 +1205,8 @@ impl Engine {
             Completion::Move { .. } | Completion::Recovery => None,
         };
         let needs_content = next.operations.get(&c.operation_id)
-            .is_some_and(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_PUBLISH);
+            .is_some_and(|r| matches!(r.kind.as_str(), crate::persist::snapshot_worktree::CONTENT_PUBLISH
+                | crate::persist::snapshot_worktree::MOUNT_PUBLISH));
         if needs_content != content.is_some() { return Err(super::fresh_layout::FreshLayoutError::ContainerScope.into()); }
         if let Some(held) = content { held.require_candidate(&self.planning_context(), c)?; }
         let (verified, names, append, content) = match completion {

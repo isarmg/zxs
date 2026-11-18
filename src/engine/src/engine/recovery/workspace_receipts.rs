@@ -613,6 +613,13 @@ impl Engine {
                 candidate, admitted, journal_publication, hash, prefix,
             );
         }
+        if admitted.for_candidate(&candidate)?.state().operations.get(&candidate.operation_id)
+            .is_some_and(|r| matches!(r.kind.as_str(), crate::persist::snapshot_worktree::MOUNT_RESERVE
+                | crate::persist::snapshot_worktree::MOUNT_PUBLISH))
+        {
+            // A generic metadata snapshot cannot attest the local mount frame or its absence.
+            return Err(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate));
+        }
         let content_reserve = admitted.for_candidate(&candidate)?.state().operations.get(&candidate.operation_id)
             .is_some_and(|r| r.kind == crate::persist::snapshot_worktree::CONTENT_RESERVE);
         if content_reserve {

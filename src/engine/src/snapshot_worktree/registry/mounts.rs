@@ -1,7 +1,9 @@
 //! Mount names are resolved only from admitted original reservations. Pending
 //! reservations occupy their names; local filesystem names never create a route.
 use crate::business::namespace::working::WorkingNamespace;
-use crate::persist::snapshot_worktree::{Record, WorktreeReservation};
+use crate::persist::snapshot_worktree::{HostEvidence, Record};
+use crate::persist::snapshot_worktree::mount_change::Resolved;
+use crate::directory_worktree::lifecycle::Mount;
 use crate::snapshot_worktree::registry::{NameKey, Publication, ReceiptIndex};
 use crate::snapshot_worktree::{RegistrationError, Result};
 use name_policy::LookupName;
@@ -17,7 +19,9 @@ impl ReceiptIndex<'_> {
     pub(in crate::snapshot_worktree) fn require_mount_namespace(
         &self, next: &crate::State, maximum: usize,
     ) -> Result<()> {
-        let plans = self.worktrees.values().map(|record| &record.plan);
+        let plans = self.worktrees.values().filter_map(|record| {
+            self.mount_claim(record).map(|mount| (&record.plan.host, mount))
+        });
         self.require_unoccupied(next, maximum, plans)
     }
 
@@ -27,35 +31,51 @@ impl ReceiptIndex<'_> {
     pub(in crate::snapshot_worktree) fn require_new_mount_namespace(
         &self, next: &crate::State, maximum: usize, record: &Record,
     ) -> Result<()> {
-        let plan = match record {
-            Record::ReserveWorktree(plan) => plan,
-            Record::ReserveAllocatedWorktree(plan) => &plan.resolved,
+        let (host, mount) = match record {
+            Record::ReserveCleanMount(plan) => {
+                let mount = match &plan.resolved {
+                    Resolved::Hide {} => &plan.prior_mount,
+                    Resolved::Restore { mount } => mount,
+                };
+                (&plan.host, mount.clone())
+            }
+            Record::ReserveWorktree(plan) => (&plan.host, Mount {
+                parent: plan.request.parent_directory_id, name: LookupName::from(&plan.request.name),
+            }),
+            Record::ReserveAllocatedWorktree(value) => {
+                let plan = &value.resolved;
+                (&plan.host, Mount {
+                    parent: plan.request.parent_directory_id, name: LookupName::from(&plan.request.name),
+                })
+            }
             Record::ReserveNode(_) | Record::CompleteNode(_) | Record::CompleteWorktree(_)
             | Record::ReserveEdit(_) | Record::CompleteEdit(_) | Record::ReserveCommit(_)
             | Record::ReserveHistoricalCommit(_) | Record::PrepareHistoricalCommit(_)
             | Record::PublishCommitNode(_) | Record::CompleteCommit(_) | Record::BirthFile(_)
             | Record::SaveFile(_) | Record::CompleteFile(_) | Record::ReserveAddedCommit(_)
-            | Record::ReserveContentBatch(_) | Record::PublishContentBatch(_)
+            | Record::ReserveContentBatch(_) | Record::PublishContentBatch(_) | Record::PublishCleanMount(_)
             | Record::PublishAddedFile(_) | Record::PublishAddedNode(_)
             | Record::CompleteAddedCommit(_) => return Ok(()),
         };
-        self.require_unoccupied(next, maximum, std::iter::once(plan))
+        self.require_unoccupied(next, maximum, std::iter::once((host, mount)))
     }
 
     fn require_unoccupied<'p>(
         &self, next: &crate::State, maximum: usize,
-        plans: impl Iterator<Item = &'p WorktreeReservation>,
+        plans: impl Iterator<Item = (&'p HostEvidence, Mount)>,
     ) -> Result<()> {
         let mut claims: BTreeMap<RepositoryId, BTreeSet<NameKey>> = BTreeMap::new();
-        for plan in plans {
-            let repository = plan.host.namespace.repository_id;
-            if plan.host.namespace.directory != NamespaceDirectoryId::Repository(repository)
-                || !plan.host.directories.is_empty()
-                || plan.request.parent_directory_id != plan.host.common_data.directory_id
+        for (host, mount) in plans {
+            let repository = host.namespace.repository_id;
+            if host.namespace.directory != NamespaceDirectoryId::Repository(repository)
+                || !host.directories.is_empty()
+                || mount.parent != host.common_data.directory_id
             {
                 return Err(RegistrationError::Source);
             }
-            claims.entry(repository).or_default().insert(NameKey(plan.request.name.key()));
+            if !claims.entry(repository).or_default().insert(NameKey(mount.name.key())) {
+                return Err(RegistrationError::Mount);
+            }
         }
         for (repository, names) in claims {
             let key = repository.to_string();
@@ -93,7 +113,9 @@ impl ReceiptIndex<'_> {
     ) -> bool {
         self.worktrees.values().any(|record| {
             record.plan.host.namespace.repository_id == repository
-                && name.is_none_or(|name| name.key() == record.plan.request.name.key())
+                && self.mount_claim(record).is_some_and(|mount| {
+                    name.is_none_or(|name| name.key() == mount.name.key())
+                })
         })
     }
 
@@ -108,7 +130,12 @@ impl ReceiptIndex<'_> {
         for record in self.worktrees.values() {
             let plan = &record.plan;
             if plan.host.namespace.repository_id != namespace.repository_id
-                || name.is_some_and(|name| name.key() != plan.request.name.key())
+            {
+                continue;
+            }
+            let Some(mount) = self.mount_claim(record) else { continue; };
+            if name.is_some_and(|name| name.key() != mount.name.key())
+                || self.clean_change_pending(plan.allocated.worktree)
             {
                 continue;
             }

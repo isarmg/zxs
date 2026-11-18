@@ -52,7 +52,7 @@ impl ReceiptIndex<'_> {
                     && record.plan.host.root_entity == host.root_entity
                     && record.plan.request.parent_directory_id == parent
             })
-            .map(|record| LookupName::from(&record.plan.request.name))
+            .filter_map(|record| self.mount_claim(record).map(|mount| mount.name))
             .collect()
     }
 }

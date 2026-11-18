@@ -219,6 +219,8 @@ fn publish_planned(
 /// receipts on replay or bypass full byte, state and inode admission on append.
 fn require_new_ledger_capacity(record: &Record) -> Result<()> {
     match record {
+        Record::ReserveCleanMount(plan) => plan.before.next_frame_sequence().map(|_| ()),
+        Record::PublishCleanMount(_) => Ok(()),
         Record::ReserveContentBatch(plan) => plan.before.require_publication_frames(),
         Record::ReserveEdit(plan) => plan.before.next_frame_sequence().map(|_| ()),
         Record::ReserveCommit(plan) => plan.before.require_publication_frames(),

@@ -3,6 +3,7 @@ pub(crate) mod historical;
 pub(crate) mod files;
 pub(crate) mod added_commit;
 pub(crate) mod content_batch;
+pub(crate) mod mount_change;
 pub(crate) use historical::{CommitRouting, HistoricalCommit, HistoricalFile, HistoricalReady};
 use crate::directory_worktree::ledger::{Binding as LedgerBinding, Checkpoint, EditRecord};
 use crate::working_tree::snapshot::{
@@ -23,6 +24,9 @@ use storage_contract::working_tree::{
 use storage_contract::{
     BranchName, CommitState, EntryId, OperationId, Principal, ProtectionAtPublish, VersionId,
 };
+
+pub(crate) const MOUNT_RESERVE: &str = "snapshot.worktree.mount-reserve";
+pub(crate) const MOUNT_PUBLISH: &str = "snapshot.worktree.mount-publish";
 
 pub(crate) const CONTENT_RESERVE: &str = "snapshot.worktree.content-reserve";
 pub(crate) const CONTENT_PUBLISH: &str = "snapshot.worktree.content-publish";
@@ -224,6 +228,8 @@ pub(crate) struct EditCompletion {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", content = "record", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Record {
+    ReserveCleanMount(mount_change::Reservation),
+    PublishCleanMount(mount_change::Publication),
     ReserveContentBatch(content_batch::Reservation),
     PublishContentBatch(content_batch::Publication),
     ReserveAddedCommit(added_commit::AddedCommit),
@@ -288,6 +294,11 @@ pub enum CodecError {
 impl Record {
     fn request(&self) -> Result<json_codec::Value, CodecError> {
         match self {
+            Self::ReserveCleanMount(record) => json_codec::to_value(&record.request)
+                .map_err(CodecError::Value),
+            Self::PublishCleanMount(record) => content_batch::publish_request(
+                record.reserve, record.reservation,
+            ),
             Self::ReserveContentBatch(record) => json_codec::to_value(&record.request)
                 .map_err(CodecError::Value),
             Self::PublishContentBatch(record) => content_batch::publish_request(
@@ -336,6 +347,8 @@ impl Record {
 
     pub(crate) fn kind(&self) -> &'static str {
         match self {
+            Self::ReserveCleanMount(_) => MOUNT_RESERVE,
+            Self::PublishCleanMount(_) => MOUNT_PUBLISH,
             Self::ReserveContentBatch(_) => CONTENT_RESERVE,
             Self::PublishContentBatch(_) => CONTENT_PUBLISH,
             Self::ReserveAddedCommit(_) => ADDED_RESERVE,
@@ -413,7 +426,7 @@ impl PublicationEncoding {
 
 fn indexed_kind(kind: &str) -> bool {
     matches!(kind,
-        CONTENT_RESERVE | CONTENT_PUBLISH | ADDED_RESERVE | ADDED_FIRST | ADDED_NODE | ADDED_COMPLETE
+        MOUNT_RESERVE | MOUNT_PUBLISH | CONTENT_RESERVE | CONTENT_PUBLISH | ADDED_RESERVE | ADDED_FIRST | ADDED_NODE | ADDED_COMPLETE
             | FILE_BIRTH | FILE_SAVE | FILE_COMPLETE | NODE_RESERVE | NODE_COMPLETE
             | WORKTREE_RESERVE | WORKTREE_ALLOCATE | WORKTREE_COMPLETE
             | EDIT_RESERVE | EDIT_COMPLETE | COMMIT_RESERVE | HISTORICAL_RESERVE | HISTORICAL_READY

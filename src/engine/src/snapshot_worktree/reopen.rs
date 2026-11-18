@@ -70,8 +70,7 @@ impl PublishedWorktree<'_> {
         let worktree = session.worktree();
         if session.instance().operation() != reserved.request.operation_id
             || worktree.source().branch != reserved.request.source.branch_id
-            || worktree.mount().parent != reserved.request.parent_directory_id
-            || worktree.mount().name.as_str() != reserved.request.name.as_str()
+            || worktree.mount() != &self.mount.mount
             || worktree.revision() != self.revision()
             || session.added_files() != self.added_files()
         {

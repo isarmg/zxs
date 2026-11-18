@@ -29,6 +29,8 @@ mod files;
 mod commits;
 mod added_commits;
 mod content_batches;
+mod clean_mount;
+pub(super) use clean_mount::{MountState, Presence};
 pub(super) use content_batches::{ContentRetry, FrozenContent};
 pub(crate) use content_batches::ContentReplayFences;
 pub(crate) use added_commits::PublishedAddedCommitTail;
@@ -73,6 +75,8 @@ pub(crate) struct ReceiptIndex<'a> {
     added_commits: BTreeMap<OperationId, added_commits::AddedCommitRecord<'a>>,
     content_batches: BTreeMap<OperationId, content_batches::BatchRecord<'a>>,
     content_instances: BTreeMap<WorktreeId, OperationId>,
+    mount_states: BTreeMap<WorktreeId, MountState>,
+    mount_changes: BTreeMap<OperationId, clean_mount::Change<'a>>,
     frozen_content: BTreeMap<storage_contract::BranchId, OperationId>,
     historical: BTreeMap<OperationId, historical::HistoricalRecord<'a>>,
     working: BTreeMap<OperationId, WorkingRecord<'a>>,
@@ -175,6 +179,7 @@ enum CompletionOwner {
     Edit(OperationId),
     File(OperationId),
     ContentBatch(OperationId),
+    MountChange(OperationId),
     AddedFirst,
     AddedNode(OperationId),
     AddedCommit,
@@ -189,6 +194,7 @@ impl CompletionOwner {
             Self::Worktree(_) => snapshot_worktree::WORKTREE_COMPLETE,
             Self::Edit(_) => snapshot_worktree::EDIT_COMPLETE,
             Self::File(_) => snapshot_worktree::FILE_COMPLETE,
+            Self::MountChange(_) => snapshot_worktree::MOUNT_PUBLISH,
             Self::ContentBatch(_) => snapshot_worktree::CONTENT_PUBLISH,
             Self::AddedFirst => snapshot_worktree::ADDED_FIRST,
             Self::AddedNode(_) => snapshot_worktree::ADDED_NODE,
@@ -257,6 +263,7 @@ impl PublishedNode<'_> {
 }
 
 pub(super) struct PublishedWorktree<'a> {
+    pub(in crate::snapshot_worktree) mount: MountState,
     plan: &'a WorktreeReservation,
     source: PublishedNode<'a>,
     binding: Binding,
@@ -501,6 +508,7 @@ impl<'a> ReceiptIndex<'a> {
             pending_edits: BTreeMap::new(),
             commits: BTreeMap::new(), added_commits: BTreeMap::new(),
             content_batches: BTreeMap::new(), content_instances: BTreeMap::new(),
+            mount_states: BTreeMap::new(), mount_changes: BTreeMap::new(),
             frozen_content: BTreeMap::new(),
             historical: BTreeMap::new(),
             working: BTreeMap::new(),
@@ -551,6 +559,8 @@ impl<'a> ReceiptIndex<'a> {
             let commitment = decoded.record.commitment().map_err(RegistrationError::Codec)?;
             let receipt = Receipt { original, principal };
             match decoded.record {
+                Record::ReserveCleanMount(plan) => index.reserve_clean_mount(receipt, plan, commitment, &mut allocations)?,
+                Record::PublishCleanMount(outcome) => index.publish_clean_mount(receipt, outcome, &mut allocations)?,
                 Record::ReserveContentBatch(plan) => {
                     index.reserve_content(receipt, plan, commitment, &mut allocations)?;
                 }
@@ -654,9 +664,7 @@ impl<'a> ReceiptIndex<'a> {
         self.worktree_for_commit(handle, None)
     }
 
-    fn worktree_for_commit(&self, handle: WorktreeHandle, owner: Option<OperationId>)
-        -> Result<PublishedWorktree<'_>>
-    {
+    fn retained_tree(&self, handle: WorktreeHandle) -> Result<&WorktreeRecord<'_>> {
         let Some(CompletionOwner::Worktree(reserve)) = self.completions.get(&handle.publication)
         else {
             return Err(RegistrationError::Source);
@@ -665,14 +673,26 @@ impl<'a> ReceiptIndex<'a> {
         if handle.worktree_id != tree.plan.allocated.worktree {
             return Err(RegistrationError::Source);
         }
+        Ok(tree)
+    }
+
+    fn worktree_for_commit(&self, handle: WorktreeHandle, owner: Option<OperationId>)
+        -> Result<PublishedWorktree<'_>>
+    {
+        let tree = self.retained_tree(handle)?;
         let Publication::Complete(completion) = &tree.publication else {
-            return Err(RegistrationError::Pending(*reserve));
+            return Err(RegistrationError::Pending(tree.receipt.original.operation_id));
         };
+        let mount = self.mount_state_for(tree);
+        if !matches!(mount.presence, Presence::Visible(_)) || self.clean_change_pending(handle.worktree_id) {
+            return Err(RegistrationError::Source);
+        }
         if let Some(operation) = self.pending_edits.get(&handle.worktree_id) {
             if owner != Some(*operation) { return Err(RegistrationError::Pending(*operation)); }
         }
         let head = self.heads.get(&handle.worktree_id).ok_or(RegistrationError::Source)?;
         Ok(PublishedWorktree {
+            mount,
             plan: &tree.plan,
             source: self.node(tree.plan.request.source)?,
             binding: completion.binding,

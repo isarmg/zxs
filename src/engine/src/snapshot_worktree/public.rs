@@ -175,15 +175,20 @@ impl Engine {
 
 impl ReceiptIndex<'_> {
     fn status(&self, engine: &Engine, target: WorktreeHandle) -> Result<WorktreeStatus> {
-        self.with_worktree(engine, target, |original, session| {
-            let worktree = session.worktree();
-            Ok(WorktreeStatus {
-                visible: target.publication,
-                target, original,
-                parent_directory_id: worktree.mount().parent,
-                name: worktree.mount().name.clone(),
-                revision: worktree.revision(),
-            })
-        }).map_err(Into::into)
+        let registered = self.worktree(target)?;
+        let crate::snapshot_worktree::registry::Presence::Visible(visible) = registered.mount.presence
+        else { return Err(RegistrationError::Source.into()); };
+        let original = registered.source().handle();
+        let held = self.reopen_node(engine, original)?;
+        let session = registered.reopen(&held)?;
+        let worktree = session.worktree();
+        Ok(WorktreeStatus {
+            visible,
+            target,
+            original,
+            parent_directory_id: worktree.mount().parent,
+            name: worktree.mount().name.clone(),
+            revision: worktree.revision(),
+        })
     }
 }

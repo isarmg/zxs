@@ -611,6 +611,12 @@ fn verify_inventory(directory: &DiskRoot, checkpoint: Checkpoint) -> Result<(), 
 }
 
 /// Hash the actual two canonical frame encodings, not sequence arithmetic.
+pub(crate) fn mount_checkpoint(
+    plan: &crate::persist::snapshot_worktree::mount_change::Reservation,
+) -> Result<Checkpoint, LedgerError> {
+    event_frame(plan.before, &plan.event()).map(|(_, checkpoint)| checkpoint)
+}
+
 pub(crate) fn content_checkpoints(before: Checkpoint, events: &[Event; 2])
     -> Result<[Checkpoint; 2], LedgerError>
 {
