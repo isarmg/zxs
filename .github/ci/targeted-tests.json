@@ -4909,6 +4909,26 @@
         }
       ]
     },
+    "retired-layout-keeps-file-material": {
+      "reason": "A retired directory-layout POST cannot move or rewrite a registered FILE, including opaque project.zxs. Check current and stale requests, physical identities, preserved bytes and a cold reopen; not a claim of whole-directory repair coverage.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "http_engine",
+          "features": [
+            "core"
+          ],
+          "default_features": true,
+          "exact": [
+            "ordinary_layout_boundary::retired_layout_route_cannot_move_registered_file_material"
+          ],
+          "max_tests": 1
+        }
+      ]
+    },
     "current-name-layout-consumers": {
       "reason": "Check installed version identity and current-name layout consumers at copy, recovery, cache and held-inode boundaries; execute affected layout and retained-history integrations without claiming full workspace coverage.",
       "python_tests": [],
@@ -8667,15 +8687,53 @@
       ]
     },
     {
+      "path": "src/server/src/http_directory_layout.rs",
+      "groups": [
+        "retired-layout-keeps-file-material"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/ordinary_layout_boundary.rs",
+      "groups": [
+        "retired-layout-keeps-file-material"
+      ]
+    },
+    {
+      "path": "src/web/src/files/staging/layout.rs",
+      "groups": [
+        "retired-layout-keeps-file-material"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_layout_tests.rs",
+      "groups": [
+        "retired-layout-keeps-file-material"
+      ]
+    },
+    {
+      "path": "src/web/src/management.rs",
+      "groups": [
+        "web-session-principals"
+      ]
+    },
+    {
+      "path": "test/contract/unit/directory_git.rs",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
       "path": "test/server/integration/http_engine/directory_layout.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "retired-layout-keeps-file-material"
       ]
     },
     {
       "path": "test/server/integration/http_engine/directory_layout/lifecycle.rs",
       "groups": [
-        "fresh-managed-core"
+        "fresh-managed-core",
+        "retired-layout-keeps-file-material"
       ]
     },
     {
