@@ -8,6 +8,7 @@
 
 - [快速开始](getting-started.md)：构建和启动服务。
 - [操作手册](25-operation-manual.md)、[配置](21-configuration.md)、[systemd 部署](operations/deploy/systemd.md)。
+- [自动留版本选择指南](autosave-guide.md)：按软件实际保存方式选择自动或手动，并用 SMB 测试副本确认。
 - [管理面](management/control-plane.md)、[初始化与恢复](management/setup-recovery.md)、[SMB 集成](components/smb.md)。
 - [当前支持范围与限制](23-delivery-and-decisions.md)、[发行与安装](release.md)。
 
