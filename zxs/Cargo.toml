@@ -1,0 +1,14 @@
+[package]
+name = "zxs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "Apache-2.0"
+description = "Single-resident FILE container storage"
+build = "build.rs"
+
+# This project builds alone, including after removal of its enclosing checkout.
+[workspace]
+resolver = "3"
+
+[dependencies]
