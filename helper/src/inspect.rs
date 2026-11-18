@@ -128,6 +128,36 @@ mod tests {
         fs::write(&path, b"longer contents").unwrap();
         assert!(other.recheck(&reader).is_err());
     }
+    #[test]
+    fn equal_length_rewrite_or_new_hard_link_invalidates_the_original_descriptor() {
+        use std::{fs::{File, FileTimes}, os::unix::fs::MetadataExt, time::{Duration, UNIX_EPOCH}};
+        let temp = crate::test_area::data_directory();
+        let path = temp.path().join("same-inode");
+        let set_mtime = |seconds| {
+            File::open(&path).unwrap().set_times(
+                FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(seconds))
+            ).unwrap();
+        };
+        fs::write(&path, b"aaaa").unwrap();
+        set_mtime(1_000_000_000);
+        let before = super::Input::select(&path).unwrap();
+        let reader = before.reader().unwrap();
+        fs::write(&path, b"bbbb").unwrap();
+        set_mtime(1_100_000_000); // deterministic even on a coarse timestamp filesystem
+        let now = reader.metadata().unwrap();
+        assert_eq!(super::Entity::of(&now).unwrap(), before.stamp.entity);
+        assert_eq!(now.len(), before.stamp.size);
+        assert_ne!((now.mtime(), now.mtime_nsec()), before.stamp.modified);
+        assert!(before.recheck(&reader).is_err());
+
+        let fresh = super::Input::select(&path).unwrap();
+        let readable = fresh.reader().unwrap();
+        assert!(fresh.recheck(&readable).is_ok());
+        fs::hard_link(&path, temp.path().join("new-link")).unwrap();
+        assert_eq!(super::Entity::of(&readable.metadata().unwrap()).unwrap(), fresh.stamp.entity);
+        assert_eq!(readable.metadata().unwrap().nlink(), 2);
+        assert!(fresh.recheck(&readable).is_err());
+    }
     struct Short<'a>(&'a [u8], usize);
     impl Read for Short<'_> {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -145,5 +175,62 @@ mod tests {
         assert!(exact_bytes(&mut &b"short"[..], 7, &mut &b"longer!"[..], 7).is_err());
         assert!(exact_bytes(&mut &b"bad"[..], 0, &mut &b"ok"[..], 2).is_err());
         assert!(exact_bytes(&mut &b"ab"[..], 2, &mut &b"cx!"[..], 2).is_err());
+    }
+
+    #[test]
+    fn difference_in_first_block_does_not_hide_later_io_failure_at_either_end() {
+        struct LaterFailure { remaining: usize, failed: bool }
+        impl Read for LaterFailure {
+            fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+                if out.is_empty() { return Ok(0); }
+                if self.remaining == 0 {
+                    self.failed = true;
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, "fixture late read failure"));
+                }
+                let n = self.remaining.min(out.len());
+                out[..n].fill(0xff);
+                self.remaining -= n;
+                Ok(n)
+            }
+        }
+        let good = vec![0_u8; 64 * 1024 + 17];
+        let n = good.len() as u64;
+        for failing_left in [true, false] {
+            let mut bad = LaterFailure { remaining: 64 * 1024, failed: false };
+            let mut other = good.as_slice();
+            let result = if failing_left {
+                exact_bytes(&mut bad, n, &mut other, n)
+            } else {
+                exact_bytes(&mut other, n, &mut bad, n)
+            };
+            assert!(bad.failed);
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        }
+    }
+
+    #[test]
+    fn interrupted_eof_probe_is_retried_before_reporting_equality_or_growth() {
+        struct Probe { data: &'static [u8], attempts: u8, extra: bool }
+        impl Read for Probe {
+            fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+                if out.is_empty() { return Ok(0); }
+                if !self.data.is_empty() { return self.data.read(out); }
+                self.attempts += 1;
+                if self.attempts == 1 { return Err(io::ErrorKind::Interrupted.into()); }
+                if self.extra { self.extra = false; out[0] = 42; return Ok(1); }
+                Ok(0)
+            }
+        }
+        for grew in [false, true] {
+            let mut a = Probe { data: b"x", attempts: 0, extra: false };
+            let mut b = Probe { data: b"x", attempts: 0, extra: grew };
+            let result = exact_bytes(&mut a, 1, &mut b, 1);
+            assert_eq!((a.attempts, b.attempts), (2, 2));
+            if grew {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+            } else {
+                assert!(result.unwrap());
+            }
+        }
     }
 }

@@ -176,6 +176,26 @@ mod tests {
         assert_ne!(original.entity(), super::Pinned::open(&dir, super::Kind::Directory).unwrap().entity());
     }
     #[test]
+    fn replacing_only_a_parent_is_rejected_even_when_the_original_leaf_is_moved_back() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("original-parent");
+        let saved_parent = temp.path().join("saved-parent");
+        let leaf = parent.join("unchanged-leaf");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::create_dir(&leaf).unwrap();
+        let selected = super::Pinned::open(&leaf, super::Kind::Directory).unwrap();
+        let original_parent = super::Pinned::open(&parent, super::Kind::Directory).unwrap();
+        std::fs::rename(&parent, &saved_parent).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::rename(saved_parent.join("unchanged-leaf"), &leaf).unwrap();
+
+        let current = super::Pinned::open(&leaf, super::Kind::Directory).unwrap();
+        assert_eq!(selected.entity(), current.entity()); // comparing just the leaf would pass
+        assert_ne!(original_parent.entity(), super::Pinned::open(&parent, super::Kind::Directory).unwrap().entity());
+        assert!(selected.require_same_path().is_err());
+        assert!(current.require_same_path().is_ok());
+    }
+    #[test]
     fn only_known_disk_filesystems_can_issue_a_reader_even_for_a_zero_length_regular_operand() {
         for v in [fs::EXT2_SUPER_MAGIC, fs::EXT3_SUPER_MAGIC, fs::EXT4_SUPER_MAGIC,
                   fs::XFS_SUPER_MAGIC, fs::BTRFS_SUPER_MAGIC, fs::F2FS_SUPER_MAGIC] {
