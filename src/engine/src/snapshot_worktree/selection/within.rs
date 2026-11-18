@@ -61,7 +61,7 @@ impl HeldMountedFiles {
         if host != self.host || node.binding() != self.node.binding() { return Err(RegistrationError::PublicationChanged); }
         for (path,old) in &self.rows {
             let f = old.facts();
-            let pick = Pick { worktree:f.worktree,visible:f.visible,revision:f.revision,path:&f.selected.path };
+            let pick = Pick { worktree:f.worktree,visible:f.visible,revision:f.revision,path:&f.displayed };
             let fresh = HeldBranchFile::capture_at(engine,&index,&pick)?;
             if fresh.facts() != f || mounted_path(self.outer,&host,fresh.facts())? != *path {
                 return Err(RegistrationError::PublicationChanged);
@@ -96,7 +96,7 @@ fn mounted_path(outer:SnapshotHandle,host:&HostEvidence,inner:&InnerOccurrence) 
         || parent.namespace != host.namespace || parent.directory != inner.mount.parent
         || host.common_data != inner.host.common_data || host.registration != inner.host.registration
         || host.root_entity != inner.host.root_entity { return Err(RegistrationError::Host); }
-    let path = PortablePath::parse(inner.mount.name.as_str()).and_then(|mount| inner.selected.path.rebase(0,&mount))
+    let path = PortablePath::parse(inner.mount.name.as_str()).and_then(|mount| inner.displayed.rebase(0,&mount))
         .map_err(|e| RegistrationError::WorktreeName(crate::directory_worktree::names::NameError::MountedPath(e)))?;
     Ok(path)
 }

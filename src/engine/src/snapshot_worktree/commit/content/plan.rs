@@ -116,6 +116,11 @@ impl Originals {
         let manifest = replace_occurrences(self.source_node.manifest(), destination, operation, self.rows.iter().zip(&results)
             .map(|(row, output)| (&row.edit.path, row.original,
                 SnapshotFileSource::Container { branch: row.base.branch_id(), node: row.base.node_id() }, &output.file)))?;
+        // The authentic FILE results have supplied their actual node names.
+        // This shared projection runs both before the permanent reserve and on
+        // exact re-preparation. Never install a conflicted worktree namespace.
+        crate::directory_worktree::io::require_configured_manifest(&state,&manifest,Some(&self.mount_name))
+            .map_err(RegistrationError::ReadView)?;
         Ok(Projection { state, versions, rows: results, manifest })
     }
 }

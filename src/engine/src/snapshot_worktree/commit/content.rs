@@ -40,6 +40,7 @@ pub(crate) struct OriginalRow {
 }
 
 pub(crate) struct Originals {
+    mount_name: name_policy::Name,
     pub(crate) state: Arc<State>,
     pub(crate) config: ValidatedConfig,
     pub(crate) resources: Arc<crate::disk::DiskResources>,
@@ -222,7 +223,10 @@ impl Originals {
                 branch_base, clean: record.working.clone(), container,
             });
         }
+        let mount_name=name_policy::Name::parse(registered.mount.mount.name.as_str())
+            .map_err(|e| RegistrationError::WorktreeName(crate::directory_worktree::names::NameError::Invalid(e)))?;
         Ok(Self {
+            mount_name,
             state: Arc::clone(&engine.state), config: engine.config.clone(), resources: Arc::clone(&engine.disk_resources),
             request: request.clone(), source, host, root, ordinary_head, ordinary_generation, source_node, repository,
             sparse, ledger: ledger_binding, before, rows, _descriptors: descriptors,

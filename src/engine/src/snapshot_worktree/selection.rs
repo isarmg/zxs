@@ -37,7 +37,7 @@ pub(crate) struct InnerOccurrence {
     pub(crate) source: SnapshotHandle, pub(crate) source_node: SnapshotNodeBinding,
     pub(crate) published: Option<(SnapshotHandle, SnapshotNodeBinding)>,
     pub(crate) sparse: SparseWorktreeBinding, pub(crate) ledger: Binding, pub(crate) checkpoint: Checkpoint,
-    pub(crate) selected: FileBranchOccurrence, pub(crate) head: BranchHead,
+    pub(crate) displayed: PortablePath, pub(crate) selected: FileBranchOccurrence, pub(crate) head: BranchHead,
     pub(crate) container_namespace: ContainerNamespace, pub(crate) container_creation: OperationId,
     pub(crate) container: ContainerEntity, pub(crate) body_parent: LocalEntityIdentity,
     pub(crate) body_name: platform_io::fs_safety::EntryName, pub(crate) body: LocalEntityIdentity,
@@ -85,7 +85,12 @@ impl HeldBranchFile {
         use crate::directory_worktree::session::ReadMaterial;
         let material = published.as_ref().map_or(ReadMaterial::Original, |(_,node)| ReadMaterial::Published(node));
         let view = session.read(material).map_err(RegistrationError::ReadView)?;
-        let selected = view.select_file_branch(pick.path).map_err(RegistrationError::ReadView)?
+        // The caller selected a visible SMB occurrence, not the private ledger
+        // key. Its configured display node and selected branch HEAD can differ.
+        let (displayed,entry) = view.smb_entry(engine.state(),&name_policy::LookupPath::from(pick.path),engine.config().max_entries)
+            .map_err(RegistrationError::ReadView)?;
+        if displayed != *pick.path {return Err(RegistrationError::SelectedFileUnmapped);}
+        let selected = view.select_file_branch(&entry.path).map_err(RegistrationError::ReadView)?
             .ok_or(RegistrationError::SelectedFileUnmapped)?;
         let published = published.as_ref().map(|(id,node)| (*id,node.binding()));
         let state = engine.state();
@@ -133,7 +138,7 @@ impl HeldBranchFile {
         let (parent,name,body) = held.identity();
         let facts = InnerOccurrence { worktree:pick.worktree, visible:pick.visible,revision:pick.revision,host,mount,
             source,source_node,published,sparse:session.instance(),ledger:registered.binding(),checkpoint:registered.checkpoint(),
-            selected,head,container_namespace:container.namespace.clone(),container_creation:container.created_by,
+            displayed,selected,head,container_namespace:container.namespace.clone(),container_creation:container.created_by,
             container:replica.entity,body_parent:local_entity(parent),body_name:name.clone(),body:local_entity(body) };
         Ok(Self { facts,body:held })
     }
@@ -142,7 +147,7 @@ impl HeldBranchFile {
     /// physical parent or same-hash replacement inode without a fresh capture.
     pub(crate) fn require_current(&self,engine: &Engine) -> Result<()> {
         let f = &self.facts;
-        let again = Self::capture(engine,&Pick { worktree:f.worktree,visible:f.visible,revision:f.revision,path:&f.selected.path })?;
+        let again = Self::capture(engine,&Pick { worktree:f.worktree,visible:f.visible,revision:f.revision,path:&f.displayed })?;
         if again.facts != *f { return Err(RegistrationError::PublicationChanged); }
         Ok(())
     }

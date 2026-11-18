@@ -80,6 +80,8 @@ fn prepare(
     crate::directory_worktree::names::require_mounted_paths(
         &request.name, source.manifest().entries().iter().map(|entry| &entry.path),
     ).map_err(RegistrationError::WorktreeName)?;
+    crate::directory_worktree::io::require_configured_manifest(engine.state(),source.manifest(),Some(&request.name))
+        .map_err(RegistrationError::ReadView)?;
     let plan = WorktreeReservation {
         request: request.clone(), host: registered.host().clone(),
         allocated: WorktreeAllocation {

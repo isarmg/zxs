@@ -87,7 +87,7 @@ impl Session {
             Some(SmbWorktreeEntryContent::Working { .. }
                 | SmbWorktreeEntryContent::Directory | SmbWorktreeEntryContent::File { .. })
                 | None => {
-                    (worktree_entry_id(target, entry.as_ref().map(|entry| &entry.path)), None)
+                    (worktree_entry_id(target, entry.as_ref().map(|entry| &entry.source_path)), None)
                 }
         };
         let mtime = entry.as_ref().map_or(FileMtime::NotFile {}, |entry| entry.mtime());
@@ -115,7 +115,7 @@ impl Session {
         } else {
             let entry = entry.expect("invariant: a non-directory worktree entry is present");
             let selection = SmbWorktreeFile {
-                target, visible: status.visible, path: entry.path, revision: status.revision, mtime,
+                target, visible: status.visible, path: entry.source_path, revision: status.revision, mtime,
             };
             if writable {
                 self.open_worktree_writer(selection, &path, truncate, write_through)?
@@ -211,7 +211,7 @@ impl Session {
             Some(SmbWorktreeEntryContent::Working { target, .. }
                 | SmbWorktreeEntryContent::RetainedFile { target, .. }) => target.entry.to_string(),
             Some(SmbWorktreeEntryContent::Directory | SmbWorktreeEntryContent::File { .. })
-                | None => worktree_entry_id(location.status.target, relative),
+                | None => worktree_entry_id(location.status.target, entry.as_ref().map(|r| &r.source_path)),
         };
         Ok(StatResult {
             entry_id,
@@ -263,7 +263,7 @@ impl Session {
                 }
                 SmbWorktreeEntryContent::Directory | SmbWorktreeEntryContent::File { .. } => {
                     DirectoryEntry::Worktree {
-                        target: directory.target, path, relative_path: Some(entry.path.clone()),
+                        target: directory.target, path, relative_path: Some(entry.source_path.clone()),
                         kind: entry.kind(), size: entry.size(),
                     }
                 }

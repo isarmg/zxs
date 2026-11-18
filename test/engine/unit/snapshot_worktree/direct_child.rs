@@ -161,3 +161,78 @@ fn distinct_child_mount_uses_outer_parent_claim_and_yields_only_the_selected_cur
     assert_eq!(engine.directory_worktree_mount(repository,&LookupName::parse("worktree-main-002").unwrap()).unwrap().unwrap(),status);
     assert_eq!(fixture.media(),media);
 }
+
+#[test]
+fn smb_lists_and_opens_configured_node_filename_not_renamed_physical_container_or_internal_path() {
+    use name_policy::LookupName;
+    use storage_contract::snapshot_worktree::creation::{AllocateWorktree,WorktreeNaming};
+    use crate::snapshot_worktree::selection::{Pick,within::HeldMountedFiles};
+    let (fixture,mut engine)=Fixture::with_nested_directory(true);
+    let repo=fixture.targets[0].repository; let actor:storage_contract::Principal="admin".parse().unwrap();
+    let ordinary=LookupPath::parse("Folder/Child/existing.txt").unwrap();
+    let before=engine.locate_current_object(&repo.to_string(),&ordinary).unwrap();
+    let version=before.entry().version_id.clone(); let file=before.entry().file_id.clone();
+    let renamed=PortablePath::parse("Folder/Child/main-final.xlsx").unwrap();
+    engine.file_namespace(&repo.to_string(),crate::NamespaceOperation::Rename {
+        source:ordinary,destination:renamed.clone(),
+    },"admin",OperationId::generate().unwrap()).unwrap();
+    let now=engine.locate_current_object(&repo.to_string(),&LookupPath::from(&renamed)).unwrap();
+    assert_eq!(now.entry().file_id,file); assert_eq!(now.entry().version_id,version);
+    assert_eq!(engine.state().versions[&version].creation_name,"existing.txt");
+    let context=engine.snapshot_direct_child_context(repo,&LookupPath::parse("Folder").unwrap()).unwrap();
+    let inner=engine.initialize_directory_snapshot(&InitializeSnapshot {host:context.host,source:context.source,
+        operation_id:OperationId::generate().unwrap()},&actor).unwrap();
+    let parent=engine.snapshot_root_context(repo).unwrap();
+    let wt=engine.allocate_directory_worktree(&AllocateWorktree {source:inner, parent_directory_id:parent.host.directory_id,
+        expected_root_generation:parent.host.expected_root_generation,operation_id:OperationId::generate().unwrap(),naming:WorktreeNaming::Automatic},&actor).unwrap();
+    let state=engine.directory_worktree_status(wt).unwrap();
+    let visit=LookupPath::parse("Child").unwrap();
+    let physical=LookupPath::parse("Child/main-final.xlsx").unwrap(); let visible=LookupPath::parse("child/EXISTING.txt").unwrap();
+    let page=engine.directory_worktree_smb_entries(wt,Some(&visit),None).unwrap();
+    assert_eq!(page.entries.len(),1); assert_eq!(page.entries[0].smb_path.as_ref().unwrap().as_str(),"Child/existing.txt");
+    assert_eq!(page.entries[0].path.as_str(),"Child/main-final.xlsx");
+    let got=engine.directory_worktree_smb_entry(wt,&visible).unwrap();
+    assert_eq!(got,page.entries[0]);
+    assert!(engine.directory_worktree_smb_entry(wt,&physical).is_err());
+    assert_eq!(engine.directory_worktree_entry(wt,&physical).unwrap().path,got.path,"management keeps the original stable key");
+    assert!(engine.require_vacant_worktree_smb_name(wt,got.smb_path.as_ref().unwrap()).is_err());
+    let mut outer=HeldMountedFiles::capture(&engine,fixture.source,&[Pick {worktree:wt,visible:state.visible,
+        revision:state.revision,path:got.smb_path.as_ref().unwrap()}]).unwrap();
+    let (dest,source)=outer.occurrences().next().unwrap();
+    assert_eq!(dest.as_str(),format!("{}/Child/existing.txt",state.name.as_str()));
+    assert_eq!(source.selected.path.as_str(),"Child/main-final.xlsx"); assert_eq!(source.displayed.as_str(),"Child/existing.txt");
+    let mut bytes=Vec::new(); outer.bodies().next().unwrap().1.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes,b"unchanged nested original");
+    assert_eq!(engine.directory_worktree_mount(repo,&LookupName::parse(state.name.as_str()).unwrap()).unwrap().unwrap().target,wt);
+}
+
+#[test]
+fn same_configured_node_basenames_from_distinct_files_reject_mount_before_its_reservation() {
+    use storage_contract::snapshot_worktree::CreateWorktree;
+    let (fixture,mut engine)=Fixture::with_nested_directory(true);
+    let repo=fixture.targets[0].repository; let actor:storage_contract::Principal="admin".parse().unwrap();
+    let initial=engine.snapshot_root_context(repo).unwrap();
+    let path=LookupPath::parse("Folder/Child/existing.txt").unwrap();
+    let first=engine.locate_current_object(&repo.to_string(),&path).unwrap().entry().file_id.clone();
+    engine.file_namespace(&repo.to_string(),crate::NamespaceOperation::Rename {source:path.clone(),
+        destination:PortablePath::parse("Folder/Child/elsewhere.xlsx").unwrap()},"admin",OperationId::generate().unwrap()).unwrap();
+    let workspace=engine.create_workspace(&initial.source.branch_id.to_string(),"admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id,path.as_str(),b"new independent file, same first basename").unwrap();
+    engine.commit_workspace(crate::CommitRequest {workspace_id:workspace.workspace_id.clone(),operation_id:OperationId::generate().unwrap(),
+        principal:"admin".into(),expected_head:workspace.base_head.clone(),fencing_token:workspace.fencing_token,
+        message:"real new container".into(),request_digest:None}).unwrap();
+    assert_ne!(engine.locate_current_object(&repo.to_string(),&path).unwrap().entry().file_id,first);
+    let child=engine.snapshot_direct_child_context(repo,&LookupPath::parse("Folder").unwrap()).unwrap();
+    let source=engine.initialize_directory_snapshot(&InitializeSnapshot {host:child.host,source:child.source,
+        operation_id:OperationId::generate().unwrap()},&actor).unwrap();
+    let index=engine.snapshot_receipts().unwrap();
+    assert_eq!(index.reopen_node(&engine,source).unwrap().manifest().entries().len(),3);
+    drop(index);
+    let request=CreateWorktree {source,parent_directory_id:initial.host.directory_id,expected_root_generation:initial.host.expected_root_generation,
+        name:name_policy::Name::parse("NeverAmbiguous").unwrap(),operation_id:OperationId::generate().unwrap()};
+    let before=fixture.media(); let seq=engine.state().sequence;
+    let error=engine.create_directory_worktree(&request,&actor).unwrap_err();
+    assert_eq!(error.code(),storage_contract::ErrorCode::NameCollision);
+    assert!(!engine.state().operations.contains_key(&request.operation_id)); assert_eq!(engine.state().sequence,seq);
+    assert_eq!(fixture.media(),before);
+}

@@ -48,3 +48,38 @@ impl SparseProjection<'_> {
         Some(FileBranchOccurrence { path: row.path.clone(),occurrence,file,branch,routed_from:node })
     }
 }
+
+/// Native paths are sorted. Bound a single parent's descendant interval, then
+/// visit only its immediate entries. Never normalize or scan unrelated roots.
+pub(in crate::directory_worktree) fn children<'a,T>(rows:&'a [T], key:Option<String>,
+    path:impl Fn(&T)->&PortablePath + Copy + 'a) -> impl Iterator<Item=&'a T> + 'a where T:'a, {
+    let range=match &key {
+        None => rows,
+        Some(key) => {
+            let prefix=format!("{key}/");
+            let start=rows.partition_point(|r|path(r).key()<prefix.as_str());
+            let suffix=&rows[start..];
+            &suffix[..suffix.partition_point(|r|path(r).key().starts_with(&prefix))]
+        }
+    };
+    range.iter().filter(move |r|path(*r).key().rsplit_once('/').map(|(p,_)|p)==key.as_deref())
+}
+
+impl SparseProjection<'_> {
+    /// None is a directory, an admitted unborn addition or a genuinely
+    /// snapshot-only FILE. A configured FILE node is never replaced by HEAD.
+    pub(in crate::directory_worktree) fn configured_children<'a>(&'a self,key:Option<String>)
+        -> impl Iterator<Item=(&'a PortablePath,Option<(FileId,FileNodeId)>)>+'a {
+        children(&self.entries,key,|row|&row.path).map(|row| {
+            let selected=match row.content {
+                Content::Directory => None,
+                Content::Added {entry} => self.added_results.get(&entry).map(|result|(result.material.file_id,result.source)),
+                Content::File {original,material,source} => Some(self.results.get(&original)
+                    .map_or((material.file_id,source),|result|(result.material.file_id,result.source))),
+            };
+            (&row.path,selected.and_then(|(file,source)|match source {
+                SnapshotFileSource::Container {node,..}=>Some((file,node)), SnapshotFileSource::SnapshotOnly=>None,
+            }))
+        })
+    }
+}

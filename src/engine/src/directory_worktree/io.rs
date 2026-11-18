@@ -62,6 +62,7 @@ pub(crate) struct Entry {
 }
 #[derive(Clone)]
 pub(crate) struct Cursor {
+    smb: bool,
     stamp: ViewStamp,
     parent: Option<LookupPath>,
     after: LookupPath,
@@ -73,6 +74,12 @@ pub(crate) struct Page {
 
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum ViewError {
+    #[error("configured worktree FILE names collide in the same visible parent")]
+    DisplayCollision,
+    #[error("reading the configured FILE node's original logical name")]
+    DisplayNode(#[source] crate::Error),
+    #[error("the configured logical name exceeds its worktree path budget")]
+    DisplayPath(#[source] name_policy::Error),
     #[error("worktree view is not active or its saved material needs another read basis")]
     Phase,
     #[error("worktree view differs from the admitted instance or publication")]
@@ -309,7 +316,7 @@ impl<'a> HeldReadView<'a> {
             }
         }
         if let Some(cursor) = cursor {
-            if cursor.stamp != self.stamp || cursor.parent.as_ref() != parent {
+            if cursor.smb || cursor.stamp != self.stamp || cursor.parent.as_ref() != parent {
                 return Err(ViewError::Cursor);
             }
         }
@@ -349,7 +356,7 @@ impl<'a> HeldReadView<'a> {
                 let last: &Entry = selected.last().ok_or(ViewError::Budget)?;
                 return Ok(Page {
                     next: Some(Cursor {
-                        stamp: self.stamp,
+                        smb:false, stamp: self.stamp,
                         parent: parent.cloned(),
                         after: LookupPath::from(&last.path),
                     }),
@@ -372,3 +379,6 @@ fn stamp(ledger: &HeldWorktreeLedger<'_>, material: SnapshotReference) -> ViewSt
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/directory_worktree/io.rs"]
 mod tests;
+
+mod smb_names;
+pub(crate) use smb_names::require_configured_manifest;

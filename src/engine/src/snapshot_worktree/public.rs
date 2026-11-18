@@ -74,6 +74,9 @@ impl SnapshotWorktreeError {
             RegistrationError::EditBody
             | RegistrationError::EditVerification(platform_io::payload::Error::Length { .. }
                 | platform_io::payload::Error::Digest) => ErrorCode::ChecksumMismatch,
+            RegistrationError::ReadView(crate::directory_worktree::io::ViewError::DisplayCollision) => ErrorCode::NameCollision,
+            RegistrationError::ReadView(crate::directory_worktree::io::ViewError::DisplayNode(source)) => source.code(),
+            RegistrationError::ReadView(crate::directory_worktree::io::ViewError::DisplayPath(source)) => ErrorCode::from(source),
             RegistrationError::ReadView(crate::directory_worktree::io::ViewError::Missing) => {
                 ErrorCode::NotFound
             }

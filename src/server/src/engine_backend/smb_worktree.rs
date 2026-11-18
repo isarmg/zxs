@@ -59,7 +59,8 @@ fn entry(engine: &Engine, value: WorktreeEntry) -> Result<SmbWorktreeEntry, ApiE
             }
         }
     };
-    Ok(SmbWorktreeEntry { path: value.path, content })
+    Ok(SmbWorktreeEntry { path:value.smb_path.ok_or_else(||ApiError::invalid("missing configured worktree filename"))?,
+        source_path:value.path, content })
 }
 
 pub(super) fn open_working(
@@ -75,6 +76,9 @@ pub(super) fn open_working(
     let target = match request.source {
         SmbWorktreeWorkingSource::Existing(target) => target,
         SmbWorktreeWorkingSource::Create(request) => {
+            if !engine.state().operations.contains_key(&request.operation_id) {
+                engine.require_vacant_worktree_smb_name(request.target,&request.path).map_err(error)?;
+            }
             engine.create_directory_worktree_file(&request, &principal).map_err(error)?
         }
     };
@@ -122,7 +126,7 @@ pub(super) fn stat(
 ) -> Result<SmbWorktreeEntry, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
     authorize_visible(&engine, &current, target, visible)?;
-    entry(&engine, engine.directory_worktree_entry(target, path).map_err(error)?)
+    entry(&engine, engine.directory_worktree_smb_entry(target, path).map_err(error)?)
 }
 
 pub(super) fn page(
@@ -131,7 +135,7 @@ pub(super) fn page(
 ) -> Result<SmbWorktreePage, ApiError> {
     let (engine, current) = backend.lock_current(identity)?;
     authorize_visible(&engine, &current, target, visible)?;
-    let page = engine.directory_worktree_entries(target, parent, cursor.map(|value| &value.held))
+    let page = engine.directory_worktree_smb_entries(target, parent, cursor.map(|value| &value.held))
         .map_err(error)?;
     Ok(SmbWorktreePage {
         stamp: page.stamp,

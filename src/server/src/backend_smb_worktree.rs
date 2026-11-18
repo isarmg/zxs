@@ -20,7 +20,10 @@ pub struct SmbWorktreeFile {
 }
 
 pub struct SmbWorktreeEntry {
+    /// Public path is node-configured. Stable handles retain the original
+    /// occurrence separately; it is not an alternate user-accessible name.
     pub path: PortablePath,
+    pub source_path: PortablePath,
     pub content: SmbWorktreeEntryContent,
 }
 

@@ -63,6 +63,54 @@ pub(super) fn retained_node_version<'a>(state: &'a State, file: &str, node: &str
     Ok(version)
 }
 
+/// The SMB name of an explicitly selected immutable FILE node. A reused merge
+/// result is the selected node itself, not its independent merge fact. Neither
+/// today's container basename nor the physical storage-id leaf is a source.
+pub(crate) fn committed_name(
+    state: &State, file: storage_contract::FileId, node: storage_contract::FileNodeId,
+) -> Result<name_policy::Name> {
+    let key = node.to_string();
+    let file = file.to_string();
+    let version = node_version(state, &file, &key)?;
+    name_of_admitted_node(state, &file, node, &state.versions[&version])
+}
+
+/// Exact historical display name only. Self-contained snapshot bytes have
+/// their own issuer. This does not admit a live FILE/body, unretire a node,
+/// or authorize reading the metadata without the enclosing access check.
+pub(crate) fn recorded_name(
+    state: &State, file: storage_contract::FileId, node: storage_contract::FileNodeId,
+) -> Result<name_policy::Name> {
+    let file = file.to_string();
+    let version = retained_node_version(state, &file, &node.to_string())?;
+    name_of_admitted_node(state, &file, node, &state.versions[version])
+}
+
+fn name_of_admitted_node(
+    state: &State, file: &str, node: storage_contract::FileNodeId, body: &FileVersion,
+) -> Result<name_policy::Name> {
+    let key = node.to_string();
+    let missing = || Error::new(storage_contract::ErrorCode::FileNodeNotFound,
+        "selected FILE node has no proved committed logical name");
+    match node {
+        storage_contract::FileNodeId::Version(_) if key == body.version_id => {
+            Ok(name_policy::Name::parse(&body.creation_name)?)
+        }
+        storage_contract::FileNodeId::Anchor(_) => {
+            let path = state.file_path_nodes.get(&key).ok_or_else(missing)?;
+            if path.node_id != key || path.file_id != file || path.history_tree_id != body.history_tree_id
+                || path.version_id != body.version_id
+            {
+                return Err(missing());
+            }
+            Ok(name_policy::Name::parse(name_policy::PortablePath::parse(&path.path)?.file_name())?)
+        }
+        // The native adoption producer does not issue a metadata node. A
+        // foreign graph's body or audit label alone cannot attest its name.
+        _ => Err(missing()),
+    }
+}
+
 pub(crate) fn base_parents(state: &State, node: &str) -> Vec<String> {
     if let Some(n) = state.file_metadata_nodes.get(node) {
         n.parent_node_ids.clone()

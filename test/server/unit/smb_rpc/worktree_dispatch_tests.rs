@@ -180,6 +180,47 @@ fn share(setup: &Setup) -> DefaultShare {
 }
 
 #[test]
+fn worktree_dispatch_lists_and_opens_selected_node_basename_not_current_container_name() {
+    use name_policy::PortablePath;
+    use storage_engine::NamespaceOperation;
+    let setup = setup();
+    let target = setup.backend.inner.test_with_engine_locked(|engine| {
+        let repo = &setup.repository.repository_id;
+        let actor = "alice".parse().unwrap();
+        engine.file_namespace(repo, NamespaceOperation::Mkdir { path: PortablePath::parse("Folder").unwrap() },
+            "alice", OperationId::generate().unwrap()).unwrap();
+        let working = engine.create_workspace(&setup.repository.main_branch_id, "alice").unwrap();
+        engine.stage_bytes(&working.workspace_id, "Folder/baseline.xlsx", b"bytes of the selected node").unwrap();
+        engine.commit_workspace(CommitRequest { workspace_id:working.workspace_id, operation_id:OperationId::generate().unwrap(),
+            principal:"alice".into(), expected_head:working.base_head, fencing_token:working.fencing_token,
+            message:"first native FILE node".into(), request_digest:None }).unwrap();
+        engine.file_namespace(repo, NamespaceOperation::Rename { source:LookupPath::parse("Folder/baseline.xlsx").unwrap(),
+            destination:PortablePath::parse("Folder/main-final.xlsx").unwrap() }, "alice", OperationId::generate().unwrap()).unwrap();
+        let child = engine.snapshot_direct_child_context(repo.parse().unwrap(), &LookupPath::parse("Folder").unwrap()).unwrap();
+        let source = engine.initialize_directory_snapshot(&InitializeSnapshot { host:child.host, source:child.source,
+            operation_id:OperationId::generate().unwrap() }, &actor).unwrap();
+        let root = engine.snapshot_root_context(repo.parse().unwrap()).unwrap();
+        engine.create_directory_worktree(&CreateWorktree { source, parent_directory_id:root.host.directory_id,
+            expected_root_generation:root.host.expected_root_generation, name:Name::parse("Configured").unwrap(),
+            operation_id:OperationId::generate().unwrap() }, &actor).unwrap()
+    });
+    let mut share = share(&setup);
+    let (dir, _) = open(&mut share, "p/Configured", false, false);
+    let Reply::Directory(page) = call(&mut share, Request::ReadDirectory { handle:dir.handle, restart:false }) else {panic!("directory reply")};
+    assert!(!page.more);
+    assert!(matches!(page.entries.as_slice(),[DirectoryEntry::Worktree { target:t,path,.. }]
+        if *t==target && path.file_name()=="baseline.xlsx"));
+    call(&mut share, Request::Close { handle:dir.handle });
+    let Reply::Stat(stat) = call(&mut share, Request::Stat {path:"p/CONFIGURED/BASELINE.xlsx".into()}) else {panic!("stat reply")};
+    assert_eq!(stat.name,"baseline.xlsx");
+    assert_eq!(read(&mut share,"p/Configured/baseline.xlsx"),b"bytes of the selected node");
+    assert!(share.dispatch(Request::Open {path:"p/Configured/main-final.xlsx".into(), writable:false,
+        create:false, truncate:false, exclusive:false, write_through:false}).is_err());
+    let Reply::Stat(ordinary) = call(&mut share,Request::Stat {path:"p/Folder/main-final.xlsx".into()}) else {panic!("ordinary FILE")};
+    assert_eq!(ordinary.name,"main-final.xlsx");
+}
+
+#[test]
 fn worktree_dispatch_overwrite_resaves_close_then_explicit_commit_moves_only_final_body() {
     let setup = setup();
     let mut share = share(&setup);

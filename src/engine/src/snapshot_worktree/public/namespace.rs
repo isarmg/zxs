@@ -39,6 +39,9 @@ pub enum WorktreeEntryContent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorktreeEntry {
+    /// Issuing occurrence for I/O and idempotent writes. Only the SMB-specific
+    /// queries additionally carry the exact node's projected public pathname.
+    pub smb_path: Option<PortablePath>,
     pub path: PortablePath,
     pub content: WorktreeEntryContent,
 }
@@ -89,7 +92,7 @@ impl From<Entry> for WorktreeEntry {
             },
         };
         Self {
-            path: entry.path,
+            path: entry.path, smb_path:None,
             content,
         }
     }
@@ -228,6 +231,34 @@ impl Engine {
                 .map(Into::into)
                 .map_err(RegistrationError::ReadView)
                 .map_err(Into::into)
+        })
+    }
+
+    pub fn directory_worktree_smb_entry(&self,target:WorktreeHandle,path:&LookupPath) -> Result<WorktreeEntry> {
+        with_view(self,target,|view| {
+            let (display,entry)=view.smb_entry(self.state(),path,self.config().max_entries).map_err(RegistrationError::ReadView)?;
+            let mut entry=WorktreeEntry::from(entry); entry.smb_path=Some(display); Ok(entry)
+        })
+    }
+    pub fn directory_worktree_smb_entries(&self,target:WorktreeHandle,parent:Option<&LookupPath>,cursor:Option<&WorktreeCursor>)
+        -> Result<WorktreePage> {
+        with_view(self,target,|view| {
+            let (rows,next)=view.smb_directory(self.state(),parent,cursor.map(|c|&c.inner),self.config().max_entries)
+                .map_err(RegistrationError::ReadView)?;
+            let entries=rows.into_iter().map(|(display,row)| {
+                let mut entry=WorktreeEntry::from(row); entry.smb_path=Some(display); entry
+            }).collect();
+            Ok(WorktreePage {stamp:WorktreePageStamp {view:view.stamp(),parent:parent.cloned()},
+                revision:view.stamp().revision,entries,next:next.map(|inner|WorktreeCursor {inner})})
+        })
+    }
+    /// Under the SMB writer, a retry must reach its original result before
+    /// present-day name admission. Only a fresh creation asks this question.
+    pub fn require_vacant_worktree_smb_name(&self,target:WorktreeHandle,path:&PortablePath) -> Result<()> {
+        with_view(self,target,|view| match view.smb_entry(self.state(),&LookupPath::from(path),self.config().max_entries) {
+            Ok(_) => Err(RegistrationError::Mount.into()),
+            Err(crate::directory_worktree::io::ViewError::Missing) => Ok(()),
+            Err(error) => Err(RegistrationError::ReadView(error).into()),
         })
     }
 
