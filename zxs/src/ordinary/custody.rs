@@ -2,6 +2,7 @@
 //! container. A frozen source is local to one operation and one held FILE.
 //! One native SYSTEM decision hands the same container identity to its exact
 //! destination. Operands alone cannot authorize original source retirement.
+pub(super) mod purpose;
 mod source;
 mod command;
 mod finish;

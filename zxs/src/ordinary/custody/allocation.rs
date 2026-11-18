@@ -6,6 +6,7 @@ use crate::{OperationId,PoolId,fs::{self,HeldDir,invalid},ordinary::{allocation:
 use std::io;
 pub(in crate::ordinary) const MAGIC:&[u8]=b"ZXS/ORIGINAL-FILE-HANDOFF\0";
 pub(in crate::ordinary) const MAX:usize=2048;
+const _:()=assert!(MAGIC.len()+16+1+fs::MAX_BIRTH+16+transfer::MAX_ORIGIN+8+32+32+32<=MAX);
 
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct Stage{pub slot:u8,pub directory:NativeObject}
@@ -89,9 +90,9 @@ impl MoveAllocation{
     }
     fn write_original(sys:&HeldDir,pool:PoolId,o:&Origin,seq:u64,previous:[u8;32])->io::Result<()>{
         if seq==0{return Err(invalid("invalid initial MOVE sequence"));}
-        let req=transfer::request(pool,o.uid,o.op,o.file,o.from,o.to,o.epoch)?;
+        let req=o.request_digest(pool)?;
         let(f,entity)=sys.anonymous_record()?;let mut b=MAGIC.to_vec();NativeObject{entity,birth:fs::Birth::read(&f)?}.put(&mut b);
-        b.extend_from_slice(&pool.0);o.put(&mut b);b.extend_from_slice(&seq.to_be_bytes());b.extend_from_slice(&previous);b.extend_from_slice(&req);
+        b.extend_from_slice(&pool.0);o.put(&mut b)?;b.extend_from_slice(&seq.to_be_bytes());b.extend_from_slice(&previous);b.extend_from_slice(&req);
         let digest=crate::hash::digest(&b)?;b.extend_from_slice(&digest);
         if b.len()>MAX{return Err(invalid("original MOVE exceeds bounded SYSTEM reservation"));}
         fs::initial_attempt_binding(&f,&Phase::default().bytes(digest)?)?;sys.add_record(f,NAME,&b)
@@ -103,7 +104,7 @@ impl MoveAllocation{
         let mut r=In(body.strip_prefix(MAGIC).ok_or_else(||invalid("unknown native MOVE reservation"))?);
         if NativeObject::get(&mut r)?!=NativeObject::stamp(&stamp)||PoolId(r.id()?)!=pool{return Err(invalid("substituted MOVE reservation or foreign pool"));}
         let original=Origin::get(&mut r)?;let seq=r.u64()?;let previous=r.fixed()?;let request=r.fixed()?;r.end()?;
-        if seq==0||transfer::request(pool,original.uid,original.op,original.file,original.from,original.to,original.epoch)?!=request{
+        if seq==0||original.request_digest(pool)?!=request{
             return Err(invalid("MOVE allocation request is not the original FILE, caller and two roots"));
         }
         let phase=Phase::read(&original,digest,&sys.read_attempt_binding(NAME,&stamp,MAX)?)?;

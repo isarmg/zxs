@@ -131,6 +131,10 @@ impl OriginalIndex{
         Ok(place)
     }
     fn move_source<'a>(&self,o:&MoveOrigin,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<(&'a Frame,&'a Commit,Option<&'a Delta>)>{
+        // A well-formed lifecycle operand is *not* a positive business route.
+        // Keep both new directions closed until the native paired cold and
+        // physical owners are connected; generic MOVE may never admit them.
+        if o.purpose!=super::custody::purpose::Purpose::Ordinary{return Err(invalid("dedicated lifecycle operation is not yet admitted"));}
         // These maps contain only the verified prefix *before* this MOVE. A
         // later B-native child can never fill an absent role in the origin.
         let c=self.birth(o.file,ds)?;

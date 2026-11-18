@@ -42,8 +42,9 @@ pub(crate) struct Creation {
     pub op:OperationId,pub uid:u32,pub volume:VolumeId,pub entry:EntryId,pub file:FileId,pub history:HistoryId,
     pub name:String,pub attempt:OperationId,pub slot:u8,pub allocation:[u8;32],pub directory:NativeObject,pub local:NativeObject,pub local_digest:[u8;32],
 }
+pub(super) const MAX_HUMAN:usize=120;
 pub(super) fn human_name(bytes:&[u8])->io::Result<&str>{
-    if bytes.is_empty()||bytes.len()>120||!bytes[0].is_ascii_alphanumeric()||bytes.ends_with(b".")||
+    if bytes.is_empty()||bytes.len()>MAX_HUMAN||!bytes[0].is_ascii_alphanumeric()||bytes.ends_with(b".")||
         !bytes.iter().all(|&b|b.is_ascii_lowercase()||b.is_ascii_digit()||matches!(b,b'.'|b'-'|b'_')){
         return Err(invalid("this first ordinary path accepts one lowercase ASCII filename, 1 to 120 bytes"));
     }
@@ -92,6 +93,7 @@ impl Creation{
 }
 const MAGIC:&[u8]=b"ZXS/FILE-DECISION\0";
 pub(super) const MAX_FRAME:usize=4096;
+pub(super) const ENVELOPE_BYTES:usize=MAGIC.len()+4+16+8+32+1+32+32;
 
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(super) struct Frame{
@@ -104,7 +106,7 @@ pub(super) fn encode(pool:PoolId,seq:u64,prev:[u8;32],kind:u8,request:[u8;32],bo
     let mut bytes=MAGIC.to_vec();bytes.extend_from_slice(&[0;4]);bytes.extend_from_slice(&pool.0);
     bytes.extend_from_slice(&seq.to_be_bytes());bytes.extend_from_slice(&prev);bytes.push(kind);
     bytes.extend_from_slice(&request);bytes.extend_from_slice(body);
-    let n=bytes.len()+32;if n>MAX_FRAME{return Err(invalid("FILE decision exceeds frame budget"));}
+    let n=bytes.len()+32;if n>MAX_FRAME||body.len().checked_add(ENVELOPE_BYTES)!=Some(n){return Err(invalid("FILE decision exceeds or differs from its frame budget"));}
     bytes[MAGIC.len()..MAGIC.len()+4].copy_from_slice(&(n as u32).to_be_bytes());
     let digest=crate::hash::digest(&bytes)?;bytes.extend_from_slice(&digest);Ok((bytes,digest))
 }

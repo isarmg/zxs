@@ -3,20 +3,17 @@
 //! admission or an I/O capability; replay must prove the prior custody cut.
 use crate::{EntryId,FileId,HistoryId,OperationId,PoolId,VolumeId,fs::{self,invalid},ordinary::{
     delta::types::Delta,formal::types::Commit,wire::{self,Envelope,Frame,In,NativeObject}}};
-use super::{destination::{Method,Prepared},source::Verified};
+use super::{purpose::{Call,Purpose},destination::{Method,Prepared},source::Verified};
 use std::{collections::BTreeSet,io};
 
 pub(in crate::ordinary) const KIND:u8=6;
 pub(in crate::ordinary) fn request(pool:PoolId,uid:u32,op:OperationId,file:FileId,from:VolumeId,to:VolumeId,epoch:u64)->io::Result<[u8;32]>{
-    if from==to||epoch!=0{return Err(invalid("initial same-FileId MOVE requires distinct ordinary roots and original placement epoch zero"));}
-    let mut b=b"ZXS/FILE/MOVE/REQUEST\0".to_vec();
-    for id in [&pool.0,&op.0,&file.0,&from.0,&to.0]{b.extend_from_slice(id);}
-    b.extend_from_slice(&uid.to_be_bytes());b.extend_from_slice(&epoch.to_be_bytes());crate::hash::digest(&b)
+    Call::Move.request(pool,uid,op,file,from,to,epoch)
 }
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct Origin{
     pub op:OperationId,pub uid:u32,pub file:FileId,pub entry:EntryId,pub history:HistoryId,
-    pub from:VolumeId,pub to:VolumeId,pub epoch:u64,pub name:String,pub ticket:OperationId,pub mode:Method,
+    pub from:VolumeId,pub to:VolumeId,pub epoch:u64,pub name:String,pub ticket:OperationId,pub mode:Method,pub purpose:Purpose,
     pub src_root:NativeObject,pub dst_root:NativeObject,pub creation:[u8;32],pub parent:[u8;32],pub last:Option<[u8;32]>,
     pub source_bytes:u64,pub source_material:[u8;32],
 }
@@ -39,13 +36,14 @@ pub(super) fn check_private_paths(old:&fs::HeldDir,new:&fs::HeldDir,ticket:Opera
     }Ok(())
 }
 impl Origin{
-    // Initial ordinary-root MOVE is not a deletion or a restore. New
-    // lifecycle origins will require their own authenticated command domain.
-    pub(in crate::ordinary) fn effect(&self)->crate::ordinary::journal::credits::Effect{crate::ordinary::journal::credits::Effect::Ordinary}
+    pub(in crate::ordinary) fn effect(&self)->crate::ordinary::journal::credits::Effect{self.purpose.call().effect(self.file,self.op)}
+    pub(super) fn request_digest(&self,pool:PoolId)->io::Result<[u8;32]>{
+        self.purpose.call().request(pool,self.uid,self.op,self.file,self.from,self.to,self.epoch)
+    }
     pub(super) fn select(op:OperationId,p:&Prepared<'_>,ticket:OperationId)->io::Result<Self>{
         let src=p.source();let (c,f,d)=src.originals();
         let o=Self{op,uid:fs::local_uid(),file:src.file(),entry:c.create.entry,history:src.history(),from:src.volume(),to:p.volume(),epoch:0,
-            name:src.name().to_owned(),ticket,mode:p.method(),src_root:src.source_root().clone(),dst_root:p.root().clone(),
+            name:src.name().to_owned(),ticket,mode:p.method(),purpose:Purpose::Ordinary,src_root:src.source_root().clone(),dst_root:p.root().clone(),
             creation:c.digest,parent:f.digest,last:d.map(|d|d.digest),source_bytes:src.physical_bytes(),source_material:src.digest()?};
         o.require(src,p)?;Ok(o)
     }
@@ -79,25 +77,29 @@ impl Origin{
         }
         Ok(())
     }
-    pub(in crate::ordinary) fn put(&self,b:&mut Vec<u8>){
+    pub(in crate::ordinary) fn put(&self,b:&mut Vec<u8>)->io::Result<()>{
+        wire::human_name(self.name.as_bytes())?;
+        self.purpose.check_transfer(self.mode,&self.src_root,&self.dst_root)?;
+        let start=b.len();
         for id in [&self.op.0,&self.file.0,&self.entry.0,&self.history.0,&self.from.0,&self.to.0,&self.ticket.0]{b.extend_from_slice(id);}
         b.extend_from_slice(&self.uid.to_be_bytes());b.extend_from_slice(&self.epoch.to_be_bytes());
-        b.push(if self.mode==Method::Rename{0}else{1});b.push(self.name.len() as u8);b.extend_from_slice(self.name.as_bytes());
+        b.push(self.purpose.tag(self.mode)?);b.push(self.name.len() as u8);b.extend_from_slice(self.name.as_bytes());
         self.src_root.put(b);self.dst_root.put(b);b.extend_from_slice(&self.creation);b.extend_from_slice(&self.parent);put_hash(b,self.last);
-        b.extend_from_slice(&self.source_bytes.to_be_bytes());b.extend_from_slice(&self.source_material);
+        b.extend_from_slice(&self.source_bytes.to_be_bytes());b.extend_from_slice(&self.source_material);self.purpose.put(b);
+        if b.len()-start>MAX_ORIGIN{return Err(invalid("custody origin exceeds the certified restore bound"));}Ok(())
     }
     pub(in crate::ordinary) fn get(r:&mut In<'_>)->io::Result<Self>{
         let op=OperationId(r.id()?);let file=FileId(r.id()?);let entry=EntryId(r.id()?);let history=HistoryId(r.id()?);
         let from=VolumeId(r.id()?);let to=VolumeId(r.id()?);let ticket=OperationId(r.id()?);let uid=r.u32()?;
-        let epoch=r.u64()?;let mode=match r.byte()?{0=>Method::Rename,1=>Method::Transfer,_=>return Err(invalid("unknown native MOVE method"))};
+        let epoch=r.u64()?;let tag=r.byte()?;let mode=Purpose::method(tag)?;
         let name=wire::human_name(r.short_buf()?)?.to_owned();
         let src_root=NativeObject::get(r)?;let dst_root=NativeObject::get(r)?;let creation=r.fixed()?;let parent=r.fixed()?;
         let last=take_hash(r)?;let source_bytes=r.u64()?;let source_material=r.fixed()?;
-        if op==ticket||from==to||epoch!=0||source_bytes==0||src_root==dst_root||
-            (mode==Method::Rename&&(src_root.entity.device!=dst_root.entity.device||src_root.birth.filesystem()!=dst_root.birth.filesystem())){
+        let purpose=Purpose::get(tag,r)?;purpose.check_transfer(mode,&src_root,&dst_root)?;
+        if op==ticket||from==to||epoch==u64::MAX||purpose==Purpose::Ordinary&&epoch!=0||source_bytes==0||src_root==dst_root{
             return Err(invalid("inconsistent original roots, epoch or method"));
         }
-        Ok(Self{op,file,entry,history,from,to,ticket,uid,epoch,mode,name,src_root,dst_root,creation,parent,last,source_bytes,source_material})
+        Ok(Self{op,file,entry,history,from,to,ticket,uid,epoch,mode,purpose,name,src_root,dst_root,creation,parent,last,source_bytes,source_material})
     }
 }
 /// Physical custody alone, never replacement history. Stable version/node
@@ -139,6 +141,12 @@ impl Sites{
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct Moved{pub seq:u64,pub previous:[u8;32],pub request:[u8;32],pub digest:[u8;32],pub bytes:Vec<u8>,
     pub original:Origin,pub allocation:[u8;32],pub stage:Option<u8>,pub target:Sites}
+// Canonical maxima. The actual maximal encoder is also exercised in the
+// source fixture. Omitting an optional INCR or a shorter name only shrinks it.
+const NATIVE:usize=16+1+fs::MAX_BIRTH;
+pub(super) const MAX_ORIGIN:usize=7*16+4+8+1+1+wire::MAX_HUMAN+2*NATIVE+2*32+1+32+8+32+super::purpose::MAX_EXTRA;
+const MAX_CUSTODY_FRAME:usize=wire::ENVELOPE_BYTES+MAX_ORIGIN+32+1+(5*NATIVE+1);
+const _:()=assert!(MAX_CUSTODY_FRAME<=wire::MAX_FRAME);
 impl Moved{
     pub(in crate::ordinary) fn require_history(&self,c:&Frame,f:&Commit,d:Option<&Delta>)->io::Result<()>{
         let o=&self.original;o.require_history(c,f,d)?;
@@ -159,8 +167,8 @@ impl Moved{
     }
     pub(super) fn seal(pool:PoolId,seq:u64,previous:[u8;32],original:Origin,allocation:[u8;32],stage:Option<u8>,target:Sites)->io::Result<Self>{
         if seq==0{return Err(invalid("zero MOVE sequence"));}Self::target_shape(&original,stage,&target)?;
-        let req=request(pool,original.uid,original.op,original.file,original.from,original.to,original.epoch)?;
-        let mut b=Vec::new();original.put(&mut b);b.extend_from_slice(&allocation);
+        let req=original.request_digest(pool)?;
+        let mut b=Vec::new();original.put(&mut b)?;b.extend_from_slice(&allocation);
         b.push(stage.map_or(0,|s|s+1));target.put(&mut b);
         let(bytes,digest)=wire::encode(pool,seq,previous,KIND,req,&b)?;
         Ok(Self{seq,previous,request:req,digest,bytes,original,allocation,stage,target})
@@ -170,10 +178,14 @@ impl Moved{
         let mut r=In(e.body);let original=Origin::get(&mut r)?;let allocation=r.fixed()?;
         let window=r.byte()?;let stage=match window{0=>None,n if n<=crate::ordinary::allocation::SLOTS=>Some(n-1),_=>return Err(invalid("invalid original MOVE stage slot"))};
         let target=Sites::get(&mut r)?;r.end()?;
-        if request(pool,original.uid,original.op,original.file,original.from,original.to,original.epoch)?!=e.request{
+        if original.request_digest(pool)?!=e.request{
             return Err(invalid("wrong original MOVE principal, FILE, source, destination or generation"));
         }
         Self::target_shape(&original,stage,&target)?;
         Ok(Self{seq:e.seq,previous:e.previous,request:e.request,digest:e.digest,bytes:bytes.to_vec(),original,allocation,stage,target})
     }
 }
+
+#[cfg(test)]
+#[path="../../../tests/unit/recycle_codec.rs"]
+mod purpose_tests;
