@@ -159,7 +159,7 @@ impl OriginalReceiptCursor {
     }
 
     fn file_original(result: &OperationResult) -> bool {
-        crate::persist::file_draft::is_kind(&result.kind)
+        crate::engine::workspace_provenance::relevant(result) || crate::persist::file_draft::is_kind(&result.kind)
             || result.kind == crate::persist::file_draft::unborn_save::KIND
             || result.kind == crate::persist::file_draft::unborn_first::KIND
     }
@@ -596,6 +596,11 @@ impl Engine {
         let journal_publication = if registry { None } else { read_publication()? };
         let admitted = verified_recovery_snapshot_at(
             &self.disk_resources, online, &candidate.snapshot_hash,
+        )?;
+        // Verify both positive and negative Workspace obligations before opening
+        // candidate payload sources, planning repairs or inspecting later slots.
+        crate::engine::workspace_provenance::candidate(
+            prefix.state, admitted.for_candidate(&candidate)?.state(), &candidate,
         )?;
         if admitted.for_candidate(&candidate)?.state().operations
             .get(&candidate.operation_id).is_some_and(|result| {

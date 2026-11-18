@@ -137,6 +137,7 @@ pub(crate) use publication::{
     BudgetedDirectoryPreparation, PreparedDirectoryFiles, RecoveredDirectoryPayloads,
 };
 mod workspace_commit;
+pub(crate) mod workspace_provenance;
 #[cfg(test)]
 pub(crate) use workspace_commit::native_workspace_commit_completed;
 pub use workspace_commit::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};

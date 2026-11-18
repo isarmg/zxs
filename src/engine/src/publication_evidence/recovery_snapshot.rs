@@ -115,6 +115,7 @@ pub(crate) struct OriginalReceiptProjection {
     original: OperationResult,
     visible: OperationResult,
     principal: Principal,
+    manual_workspace: Option<crate::business::file_draft::origin::NodeOrigin>,
 }
 
 impl OriginalReceiptProjection {
@@ -135,6 +136,10 @@ impl OriginalReceiptProjection {
     /// from a visible recovery overlay or the current FILE controller.
     pub(crate) fn automatic_key(&self) -> Result<Option<storage_contract::automatic_observation::NodeKey>> {
         use crate::business::file_draft::origin::Reason;
+        // Explicit Workspace content is a manual publication even when that
+        // FILE later enters Automatic mode. Only the original born/first
+        // automatic-saver receipt can populate the automatic index.
+        if self.manual_workspace.is_some() || self.original.kind == "workspace.commit" {return Ok(None)}
         if !matches!(self.original.kind.as_str(), "file.draft.commit" | crate::persist::file_draft::unborn_first::KIND) {
             return Ok(None);
         }
@@ -186,8 +191,9 @@ fn project_original_receipt(
     if expected_state != *visible {
         return Err(Error::OriginalReceipt(OriginalReceiptError::Visible));
     }
+    let manual_workspace=crate::engine::workspace_provenance::original(original,receipt,&principal)?;
     Ok(OriginalReceiptProjection {
-        original: receipt.clone(), visible: expected_result, principal,
+        original: receipt.clone(), visible: expected_result, principal, manual_workspace,
     })
 }
 

@@ -132,6 +132,7 @@ impl ContainerPreparation {
         draft_read: Option<&std::sync::Arc<crate::container_storage::ReadDraftDigest>>,
     ) -> Result<Self> {
         validate_state(context.state)?;
+        crate::engine::workspace_provenance::prepared(context, &next, result, prepared)?;
         crate::persist::file_adoption::transition(context.state, &next, result, !prepared.is_empty())?;
         // Every old writer must still see Unborn names as occupied. This pure
         // union check precedes capacity admission and all physical preparation.
@@ -895,6 +896,7 @@ fn verify_transition_read<'a>(
 ) -> Result<VerifiedContainerTransition<'a>> {
     validate_state(previous)?;
     validate_state(next)?;
+    crate::engine::workspace_provenance::candidate(previous, next, candidate)?;
     if let Some(proof) = config.verify_backup_first_layout(previous, next, candidate)? {
         proof.require_pair(previous, next, candidate)?;
         return Ok(VerifiedContainerTransition {

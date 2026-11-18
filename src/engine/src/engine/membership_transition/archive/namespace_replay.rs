@@ -63,6 +63,9 @@ impl PendingControlArchive {
                 .into_value(),
         )?;
         let mut previous_sequence = None;
+        // A loan of the actual prior published outcome, never a replay against
+        // today's namespace or a newly synthesized original Workspace.
+        let mut previous_slot: Option<(String,Arc<State>)> = None;
         for (epoch, intent) in archive_epochs(&self.store, &self.root, &intent)? {
             let authority = intent
                 .origin
@@ -124,13 +127,20 @@ impl PendingControlArchive {
                     }
                     _ => None,
                 };
-                visit(&VerifiedArchivePublication {
-                    candidate,
-                    original: Arc::new(original),
-                    publication,
-                    seal,
-                    activation,
-                })?;
+                let slot=VerifiedArchivePublication {candidate,original:Arc::new(original),publication,seal,activation};
+                let result=slot.original.operations.get(&slot.candidate.operation_id)
+                    .ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Candidate))?;
+                if crate::engine::workspace_provenance::relevant(result) || crate::persist::file_adoption::is_kind(&result.kind) {
+                    let (previous_hash,previous)=previous_slot.as_ref()
+                        .filter(|(hash,state)|slot.candidate.previous_snapshot.as_ref()==Some(hash)
+                            && state.sequence.checked_add(1)==Some(sequence))
+                        .ok_or(Error::OriginalReceipt(crate::OriginalReceiptError::Prefix))?;
+                    debug_assert_eq!(slot.candidate.previous_snapshot.as_ref(),Some(previous_hash));
+                    crate::engine::workspace_provenance::candidate(previous,&slot.original,&slot.candidate)?;
+                    crate::persist::file_adoption::transition(previous,&slot.original,result,!slot.candidate.versions.is_empty())?;
+                }
+                visit(&slot)?;
+                previous_slot=Some((slot.candidate.snapshot_hash.clone(),slot.visible_state()));
                 previous_sequence = Some(sequence);
             }
         }
