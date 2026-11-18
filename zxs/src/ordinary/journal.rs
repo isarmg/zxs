@@ -11,6 +11,7 @@ use crate::{BranchId,NodeId,VersionId,VersionStorageId,fs::{self,HeldDir,invalid
 use std::{collections::{BTreeMap,BTreeSet},ffi::CStr,io};
 
 pub(in crate::ordinary) mod credits;
+pub(in crate::ordinary) mod cycle;
 use credits::{Credits,Effect};
 
 pub(crate) const MAX_JOURNAL:usize=8*1024*1024;
@@ -443,9 +444,9 @@ impl Journal{
             self.editing.is_some()||self.incrementing.is_some()||self.pending.is_some()||self.tail!=0||
             self.ticket_used(o.op)||self.ticket_used(o.ticket){return Err(invalid("not an unused dedicated proposal at its original SYSTEM prefix"));}
         self.room_for_effect(MAX_FRAME,o.effect())?;
-        let prev=self.placement(o.file)?;let f=self.head(o.file).ok_or_else(||invalid("lifecycle proposal needs original FULL"))?;
-        let d=self.delta(o.file);if d.is_none()&&self.interval(o.file).is_some(){return Err(invalid("uncommitted source revision"));}
-        registered_handoff(o,reg,prev,f,d,self.named(o.from,&o.name).is_some(),self.named(o.to,&o.name).is_some())
+        let current=self.confirmed_file_cycle(o.file)?;
+        let(f,d)=current.clean_transportable()?; // existing three/four physical roles only
+        registered_handoff(o,reg,current.placement(),f,d,self.named(o.from,&o.name).is_some(),self.named(o.to,&o.name).is_some())
     }
     /// Preflight is not an I/O permit. This is repeated from the very same
     /// writer snapshot immediately before naming the original reservation.
@@ -459,7 +460,7 @@ impl Journal{
         }Ok(())
     }
     pub(in crate::ordinary) fn clean_initial_handoff(&self,id:FileId)->bool{
-        self.placed(id).is_none()&&self.head(id).is_some()&&(self.delta(id).is_some()||self.interval(id).is_none())
+        self.placed(id).is_none()&&self.confirmed_file_cycle(id).is_ok_and(|edge|edge.clean_transportable().is_ok())
     }
     pub(super) fn ticket_used(&self,ticket:OperationId)->bool{
         self.on_all().any(|c|c.create.attempt==ticket)||self.moves().any(|m|m.original.ticket==ticket)||self.decided(ticket).is_some()

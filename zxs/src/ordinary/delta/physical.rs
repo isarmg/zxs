@@ -64,7 +64,7 @@ impl Body{
     }
     pub(in crate::ordinary) fn native_pack(&self)->&PinnedRegular{&self.target.pin}
     pub(in crate::ordinary) fn unchanged(&self)->io::Result<()>{self.parent.unchanged()?;self.target.pin.unchanged()}
-    fn require(&self,dir:&HeldDir)->io::Result<()>{self.parent.require(dir)?;self.target.pin.named(dir,&self.target.o.leaf())}
+    pub(in crate::ordinary) fn require(&self,dir:&HeldDir)->io::Result<()>{self.parent.require(dir)?;self.target.pin.named(dir,&self.target.o.leaf())}
     pub(in crate::ordinary) fn range(&self,at:u64,len:u64,out:impl Write)->io::Result<()>{
         self.unchanged()?;self.target.range(0,0,io::sink())?;self.parent.write_range(0,0,io::sink())?;
         let mut out=CheckedOutput{out,check:||self.unchanged()};let zeros=[0u8;64*1024];

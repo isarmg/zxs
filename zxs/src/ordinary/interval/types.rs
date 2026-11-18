@@ -49,12 +49,6 @@ pub(in crate::ordinary) fn request(pool:PoolId,uid:u32,op:OperationId,file:FileI
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct Predecessor{pub op:OperationId,pub decision:[u8;32],pub revision:u64,pub length:u64}
 impl Predecessor{
-    fn actual(f:&Base,previous:Option<&Saved>)->Self{
-        match previous{
-            Some(s)=>Self{op:s.original.op,decision:s.digest,revision:s.original.revision(),length:s.original.result},
-            None=>Self{op:f.original.op,decision:f.digest,revision:1,length:f.original.content.bytes},
-        }
-    }
     fn put(self,b:&mut Vec<u8>){
         b.extend_from_slice(&self.op.0);b.extend_from_slice(&self.decision);
         b.extend_from_slice(&self.revision.to_be_bytes());b.extend_from_slice(&self.length.to_be_bytes());
@@ -75,7 +69,7 @@ impl Original{
     pub fn select(op:OperationId,uid:u32,place:Placement<'_>,f:&Base,previous:Option<&Saved>,revision:u64,edit:SpanEdit)->io::Result<Self>{
         let c=place.birth();
         if previous.is_some_and(|e|e.original.volume!=place.volume())||f.original.file!=c.create.file||f.original.creation!=c.digest{return Err(invalid("different original FILE for interval"));}
-        let predecessor=Predecessor::actual(f,previous);
+        let predecessor=crate::ordinary::journal::cycle::Parent::full(f).predecessor(previous);
         if revision!=predecessor.revision||revision==u64::MAX{return Err(invalid("working revision changed; refusing stale write"));}
         Ok(Self{op,uid,file:c.create.file,history:c.create.history,volume:place.volume(),birth:c.digest,commit:f.digest,
             branch:f.original.branch,node:f.original.node,version:f.original.version,base_len:f.original.content.bytes,predecessor,edit,
@@ -87,7 +81,7 @@ impl Original{
         self.file==c.create.file&&self.history==c.create.history&&self.volume==place.volume()&&self.birth==c.digest&&
             self.commit==f.digest&&self.file==f.original.file&&self.branch==f.original.branch&&self.node==f.original.node&&
             self.version==f.original.version&&self.base_len==f.original.content.bytes&&
-            !previous.is_some_and(|e|e.original.volume!=place.volume())&&self.predecessor==Predecessor::actual(f,previous)&&self.edit.result(self.predecessor.length).ok()==Some(self.result)
+            !previous.is_some_and(|e|e.original.volume!=place.volume())&&self.predecessor==crate::ordinary::journal::cycle::Parent::full(f).predecessor(previous)&&self.edit.result(self.predecessor.length).ok()==Some(self.result)
     }
     pub fn put(&self,b:&mut Vec<u8>){
         for id in [&self.op.0,&self.file.0,&self.history.0,&self.volume.0]{b.extend_from_slice(id);}

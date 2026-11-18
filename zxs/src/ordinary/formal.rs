@@ -5,10 +5,12 @@ pub(super) mod types;
 pub(super) mod allocation;
 pub(super) mod physical;
 mod indexed;
+mod baseline;
+pub(in crate::ordinary) use baseline::{ParentCut,PinnedParent};
 use super::{allocation as ordinary_allocation,draft::{material::Reader,types::SaveFrame},journal::{self,Decision,Journal},
     material as container,wire::Frame,Cut,CreationStatus,publish_sealed};
 use crate::{FileId,NodeId,OperationId,fs::{self,HeldDir,invalid},pool::lease::{Access,FileVolume,LocalPool}};
-use self::{allocation::FormalAllocation,types::{Commit,FormalNode,Original},physical::{HistoryBody,Input,Verified}};
+use self::{allocation::FormalAllocation,types::{Commit,FormalNode,Original},physical::{Input,Verified}};
 use std::{io::{self,Write},path::Path};
 
 #[derive(Clone,Debug,Eq,PartialEq)]
@@ -78,35 +80,14 @@ pub(in crate::ordinary) fn directory(v:&FileVolume<'_>,s:&Journal,c:&Frame,w:&Sa
     }
     Ok(dir)
 }
-enum NodeBody{Full(HistoryBody),Incr(super::delta::physical::Body)}
-fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<(FormalNode,NodeBody)>{
-    let (p,_,s)=LocalPool::with_snapshot(system,Access::Read)?;
-    let selected_delta=s.delta_node(file,node);
-    let f=if selected_delta.is_some(){s.head(file)}else{s.node(file,node)}.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such published node in this FILE"))?;
-    let c=s.file(file).ok_or_else(||invalid("formal node lacks original FILE"))?;
-    let w=s.saved(file).ok_or_else(||invalid("formal node lacks its original save"))?;let v=p.ordinary(s.volume_of(c))?;
-    let site=s.placement(file)?;
-    let incr=s.delta(file).map(|d|(&d.original,selected_delta.is_some())).or_else(||s.incrementing.as_ref()
-        .filter(|a|a.original.file==file).map(|a|(&a.original,false)));
-    let dir=directory_at(&v,&s,c,working_names(&s,c,w,true),Some((&f.original,true)),incr)?;
-    let parent=site.full(&dir,f)?.user_read()?;
-    let result=match selected_delta{
-        None=>(f.receipt(),NodeBody::Full(parent)),
-        Some(d)=>{
-            (d.receipt(),NodeBody::Incr(site.incremental(&dir,parent,d)?))
-        }
-    };
-    v.root.file.sync_all()?;v.require_current()?;Ok(result)
+fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<PinnedParent>{
+    ParentCut::open(system,Access::Read)?.historical(file,node)
 }
 pub fn read_node_to(system:&Path,file:FileId,node:NodeId,mut out:impl Write)->io::Result<FormalNode>{
-    let (receipt,body)=open_node(system,file,node)?;
-    match &body{NodeBody::Full(b)=>b.write_to(&mut out)?,NodeBody::Incr(b)=>b.whole(&mut out)?,}
-    out.flush()?;if let NodeBody::Incr(b)=body{b.unchanged()?;}Ok(receipt)
+    let body=open_node(system,file,node)?;body.write_to(&mut out)?;body.finish_output(&mut out)
 }
 pub fn read_node_range_to(system:&Path,file:FileId,node:NodeId,offset:u64,length:u64,mut out:impl Write)->io::Result<FormalNode>{
-    let (receipt,body)=open_node(system,file,node)?;
-    match &body{NodeBody::Full(b)=>b.write_range(offset,length,&mut out)?,NodeBody::Incr(b)=>b.range(offset,length,&mut out)?,}
-    out.flush()?;if let NodeBody::Incr(b)=body{b.unchanged()?;}Ok(receipt)
+    let body=open_node(system,file,node)?;body.write_range(offset,length,&mut out)?;body.finish_output(&mut out)
 }
 enum Source{Done(FormalNode),Input(Input)}
 fn source(system:&Path,op:OperationId,file:FileId,revision:u64)->io::Result<Source>{

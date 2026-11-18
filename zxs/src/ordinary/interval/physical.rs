@@ -2,7 +2,7 @@
 //! exactly the supplied changed bytes, then one verification link per chunk.
 use super::{allocation::SpanAllocation,types::{Material,Original}};
 use crate::{fs::{self,HeldDir,invalid,stream::{self,PinnedRegular}},ordinary::{content::{self,BLOCK},
-    formal::physical::HistoryBody,indexed::Indexed,wire::NativeObject}};
+    formal::PinnedParent,indexed::Indexed,wire::NativeObject}};
 use std::{fs::File,io::{self,Read,Write}};
 
 fn shape(o:&Original)->io::Result<(u64,u64,u64)>{
@@ -100,11 +100,14 @@ pub(in crate::ordinary) fn inspect(dir:&HeldDir,a:&SpanAllocation,sealed:Option<
 mod cut;
 pub(in crate::ordinary) use cut::{Composed,Operands};
 enum Part{Anonymous(File),Named(Named)}
-pub(super) struct Capture{dir:HeldDir,base:HistoryBody,prior:Operands,o:Original,part:Part}
+pub(super) struct Capture{dir:HeldDir,base:PinnedParent,prior:Operands,o:Original,part:Part}
 pub(super) struct Verified{capture:Capture,stamp:fs::OriginalStamp,head:[u8;32],index:[u8;32]}
 impl Capture{
-    pub(super) fn open(dir:HeldDir,base:HistoryBody,prior:Operands,o:Original,a:Option<&SpanAllocation>,sealed:bool)->io::Result<Self>{
-        dir.exclusive()?;
+    pub(super) fn open(dir:HeldDir,base:PinnedParent,prior:Operands,o:Original,a:Option<&SpanAllocation>,sealed:bool)->io::Result<Self>{
+        let p=base.key();
+        if p.file!=o.file||p.history!=o.history||p.branch!=o.branch||p.node!=o.node||p.version!=o.version||
+            p.decision!=o.commit||p.length!=o.base_len{return Err(invalid("incoming extent belongs to a different original formal baseline"));}
+        dir.exclusive()?;base.require(&dir)?;
         let part=match Named::open(&dir,&o)?{
             Some(n)=>{n.prepared(a.ok_or_else(||invalid("unreserved existing material at the new working name"))?)?;Part::Named(n)}
             None if sealed=>return Err(invalid("decided or sealed extent cannot be rebuilt from new input")),

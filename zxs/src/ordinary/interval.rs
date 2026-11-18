@@ -5,7 +5,7 @@ pub(super) mod types;
 pub(super) mod allocation;
 pub(super) mod physical;
 pub(in crate::ordinary) mod layout;
-use super::{allocation as ordinary_allocation,draft::{self,Body},formal::{self,types::Commit},
+use super::{allocation as ordinary_allocation,draft::{self,Body},formal,
     journal::{self,Decision,Journal},wire::Frame,publish_sealed,Cut,CreationStatus,CurrentFile};
 use self::{allocation::SpanAllocation,types::{Original,Saved,SpanEdit,SpanReceipt},physical::{Capture,Verified}};
 use crate::{fs::{self,invalid},pool::lease::{Access,LocalPool},FileId,OperationId};
@@ -26,7 +26,7 @@ pub fn interval_receipt(system:&Path,op:OperationId)->io::Result<Option<SpanObse
         },
     }))
 }
-enum Choice<'a>{Done(SpanReceipt),Active(&'a Frame,&'a Commit,Original,[u8;32])}
+enum Choice<'a>{Done(SpanReceipt),Active(&'a Frame,Original,[u8;32])}
 fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,revision:u64,edit:SpanEdit)->io::Result<Choice<'a>>{
     p.require_business_op(op)?;let req=types::request(p.id(),fs::local_uid(),op,id,revision,edit)?;
     if let Some(d)=s.decided(op){
@@ -43,30 +43,31 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,revision:u64,e
     let o=Original::select(op,fs::local_uid(),s.placement(id)?,f,prior,revision,edit)?;
     if s.editing.as_ref().is_some_and(|a|a.original!=o){return Err(invalid("original interval base differs"));}
     if s.editing.is_none(){s.room_for(super::wire::MAX_FRAME)?;}
-    Ok(Choice::Active(c,f,o,req))
+    Ok(Choice::Active(c,o,req))
 }
 
-enum Source{Done(SpanReceipt),Input(Capture)}
+enum Source{Done(SpanReceipt),Input(Capture,journal::cycle::Edge)}
 fn source(system:&Path,op:OperationId,id:FileId,rev:u64,edit:SpanEdit)->io::Result<Source>{
-    let (p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;
-    let (c,f,o)=match choice(&p,&s,op,id,rev,edit)?{Choice::Done(r)=>return Ok(Source::Done(r)),Choice::Active(c,f,o,_)=>(c,f,o)};
-    let w=s.saved(id).ok_or_else(||invalid("formal original lacks its first confirmed save"))?;
-    let site=s.placement(c.create.file)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&s,c,w)?;
-    let base=site.full(&dir,f)?;
-    let prior=physical::Operands::capture(&dir,site,f.original.content.bytes,s.intervals(id).filter(|r|r.original.op!=op))?;
+    let cut=formal::ParentCut::open(system,Access::Incoming)?;let (p,s)=cut.originals();
+    let o=match choice(p,s,op,id,rev,edit)?{Choice::Done(r)=>return Ok(Source::Done(r)),Choice::Active(_,o,_)=>o};
+    let selected=cut.file(id)?;let cycle=selected.cycle();let edge=cycle.edge_before(op);
+    if edge.parent.decision!=o.commit||edge.predecessor!=o.predecessor{return Err(invalid("source differs from original working cycle"));}
+    let (v,dir,base)=selected.working(edge.parent)?;
+    let prior=physical::Operands::capture(&dir,cycle.placement(),edge.parent.length,cycle.work().iter().copied().filter(|r|r.original.op!=op))?;
     v.require_current()?;
-    Ok(Source::Input(Capture::open(dir,base,prior,o,s.editing.as_ref(),s.pending.is_some()||s.decided(op).is_some())?))
+    Ok(Source::Input(Capture::open(dir,base,prior,o,s.editing.as_ref(),s.pending.is_some()||s.decided(op).is_some())?,edge))
 }
 pub fn save_interval(system:&Path,op:OperationId,file:FileId,revision:u64,e:SpanEdit,body:impl Read)->io::Result<SpanReceipt>{
     save_inner(system,op,file,revision,e,body,|_|Ok(()))
 }
 fn save_inner(system:&Path,op:OperationId,file:FileId,revision:u64,e:SpanEdit,input:impl Read,mut cut:impl FnMut(Cut)->io::Result<()>)->io::Result<SpanReceipt>{
-    let checked=match source(system,op,file,revision,e)?{Source::Done(r)=>return Ok(r),Source::Input(capture)=>capture.verify(input)?};
-    writer(system,op,file,revision,e,checked,&mut cut)
+    let(checked,edge)=match source(system,op,file,revision,e)?{Source::Done(r)=>return Ok(r),Source::Input(capture,edge)=>(capture.verify(input)?,edge)};
+    writer(system,op,file,revision,e,checked,edge,&mut cut)
 }
-fn writer(system:&Path,op:OperationId,file:FileId,rev:u64,e:SpanEdit,checked:Verified,cut:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<SpanReceipt>{
+fn writer(system:&Path,op:OperationId,file:FileId,rev:u64,e:SpanEdit,checked:Verified,edge:journal::cycle::Edge,cut:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<SpanReceipt>{
     let (p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;
-    let (c,o,request)=match choice(&p,&s,op,file,rev,e)?{Choice::Done(r)=>return Ok(r),Choice::Active(c,_,o,r)=>(c,o,r)};
+    let (c,o,request)=match choice(&p,&s,op,file,rev,e)?{Choice::Done(r)=>return Ok(r),Choice::Active(c,o,r)=>(c,o,r)};
+    s.confirmed_file_cycle(file)?.require_captured(op,edge)?;
     let w=s.saved(file).ok_or_else(||invalid("formal base lacks its exact save original"))?;
     let site=s.placement(c.create.file)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&s,c,w)?;v.require_current()?;
     checked.source_current(&dir,&o)?;

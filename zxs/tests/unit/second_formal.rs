@@ -194,3 +194,80 @@ fn strict_inventory_after_partial_cleanup_refuses_equal_byte_work_name_substitut
     let mut out=Vec::new();read_node_to(&t.system,id,d.node,&mut out).unwrap();assert_eq!(out,b"axcyef");
     assert!(commit_working(&t.system,op,id,3).is_err());assert_eq!(osfs::read(t.work(last)).unwrap(),foreign);
 }
+
+#[test]
+#[ignore="actual private native prefixes before, above and at the original formal publication floor"]
+fn equal_working_revision_and_bytes_do_not_turn_an_old_working_edge_into_a_formal_baseline(){
+    let t=Fixture::new(b"abc");let id=t.base.file;let edit=t.edit(1,1,b"b",LengthPolicy::KeepOrGrow);
+    // Exact equal bytes are intentional. Only native operation and typed parent
+    // can distinguish the current draft from what will become the next node.
+    let upload=OperationId::new().unwrap();let promote=OperationId::new().unwrap();
+    let(cut,edge)={let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();let f=s.confirmed_file_cycle(id).unwrap();
+        let edge=f.edge_before(upload);assert_eq!(edge.parent.node,t.base.node);assert_eq!(edge.predecessor.op,edit);
+        assert_eq!(edge.predecessor.revision,2);assert_eq!(f.work().len(),1);assert!(f.clean_transportable().is_err());(s.frontier(),edge)};
+    assert!(commit_inner(&t.system,promote,id,2,|c|if c==Cut::FrameSynced{Err(io::Error::other("complete child frame, below its original acknowledgement"))}else{Ok(())}).is_err());
+    {let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();assert!(s.tail>0&&s.pending.is_some());
+        assert_eq!(s.frontier(),cut);let current=s.confirmed_file_cycle(id).unwrap();current.require_captured(upload,edge).unwrap();
+        assert_eq!(current.work()[0].original.op,edit);
+        assert!(s.file_cycle_at(id,cut.0+1,s.pending.as_ref().unwrap().frame.delta().unwrap().digest).is_err());}
+    let next=commit_working(&t.system,promote,id,2).unwrap();assert_eq!(next.body,t.base.body);
+    let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();let new=s.confirmed_file_cycle(id).unwrap();
+    let now=new.edge_before(upload);assert_eq!(now.parent.node,next.node);assert_eq!(now.predecessor.op,promote);
+    assert_eq!((now.predecessor.revision,now.predecessor.length),(edge.predecessor.revision,edge.predecessor.length));
+    assert_ne!(now.predecessor.decision,edge.predecessor.decision);assert_ne!(now.parent.decision,edge.parent.decision);
+    assert!(new.work().is_empty());assert_eq!(new.clean_transportable().unwrap().1.unwrap().original.node,next.node);
+    assert!(new.require_captured(upload,edge).is_err());new.require_captured(upload,now).unwrap();
+    let before=s.file_cycle_at(id,cut.0,cut.1).unwrap();assert_eq!(before.edge_before(upload),edge);
+    assert!(before.clean_transportable().is_err());assert!(s.file_cycle_at(id,cut.0,now.parent.decision).is_err());
+    let mut bytes=Vec::new();read_node_to(&t.system,id,t.base.node,&mut bytes).unwrap();assert_eq!(bytes,b"abc");bytes.clear();
+    read_node_to(&t.system,id,next.node,&mut bytes).unwrap();assert_eq!(bytes,b"abc");
+}
+
+
+#[test]
+#[ignore="two private registered native filesystems, real original FULL and submitted INCR"]
+fn fixed_node_and_working_parent_do_not_substitute_each_other_or_borrow_a_replacement(){
+    let t=Fixture::new(b"abcdefgh");let file=t.base.file;
+    let before={let cut=crate::ordinary::formal::ParentCut::open(&t.system,Access::Incoming).unwrap();
+        let selected=cut.file(file).unwrap();selected.cycle().parent()};
+    let edit=t.edit(1,2,b"XY",LengthPolicy::Set(5));let op=OperationId::new().unwrap();
+    let child=commit_working(&t.system,op,file,2).unwrap();assert!(!t.work(edit).exists());
+    let (dir,pinned)={
+        let cut=crate::ordinary::formal::ParentCut::open(&t.system,Access::Incoming).unwrap();let selected=cut.file(file).unwrap();
+        let expected=selected.cycle().parent();assert_eq!((expected.node,expected.version,expected.operation),(child.node,child.version,op));
+        assert!(selected.working(before).is_err());let mut wrong=expected;wrong.decision=before.decision;assert!(selected.working(wrong).is_err());
+        let (vol,dir,pinned)=selected.working(expected).unwrap();vol.require_current().unwrap();(dir,pinned)
+    };
+    let mut data=Vec::new();pinned.write_range(1,4,&mut data).unwrap();assert_eq!(data,b"bXYe");
+    pinned.write_range(5,0,io::sink()).unwrap();assert!(pinned.write_range(5,1,io::sink()).is_err());
+    let mut old=Vec::new();read_node_range_to(&t.system,file,t.base.node,1,6,&mut old).unwrap();assert_eq!(old,b"bcdefg");
+    // Keep the true inode elsewhere. Equal bytes at its issued name cannot
+    // authorize the held input against a new writer or the fixed child read.
+    let name=t.native(&child);let bytes=osfs::read(&name).unwrap();let held=t.top.0.join("true-child");
+    osfs::rename(&name,&held).unwrap();osfs::write(&name,&bytes).unwrap();
+    osfs::set_permissions(&name,osfs::Permissions::from_mode(0o600)).unwrap();
+    assert_ne!(osfs::metadata(&name).unwrap().ino(),osfs::metadata(&held).unwrap().ino());
+    assert!(pinned.require(&dir).is_err());let mut none=Vec::new();
+    assert!(read_node_range_to(&t.system,file,child.node,0,1,&mut none).is_err());assert!(none.is_empty());
+    let mut full=Vec::new();read_node_to(&t.system,file,t.base.node,&mut full).unwrap();assert_eq!(full,b"abcdefgh");
+    assert_eq!(osfs::read(&name).unwrap(),bytes);
+}
+
+#[test]
+#[ignore="two private registered native filesystems"]
+fn successful_sink_flush_cannot_hide_a_changed_pinned_full_or_increment(){
+    struct DuringFlush{path:PathBuf,got:Vec<u8>,flushes:u32}
+    impl io::Write for DuringFlush{
+        fn write(&mut self,b:&[u8])->io::Result<usize>{self.got.extend_from_slice(b);Ok(b.len())}
+        fn flush(&mut self)->io::Result<()>{self.flushes+=1;
+            let f=osfs::OpenOptions::new().write(true).open(&self.path)?;f.set_len(0)?;f.sync_all()}
+    }
+    for incremental in [false,true]{
+        let t=Fixture::new(b"abcd");
+        let n=if incremental{t.edit(1,1,b"X",LengthPolicy::KeepOrGrow);
+            commit_working(&t.system,OperationId::new().unwrap(),t.base.file,2).unwrap()}else{t.base.clone()};
+        let mut out=DuringFlush{path:t.native(&n),got:Vec::new(),flushes:0};
+        assert!(read_node_range_to(&t.system,n.file,n.node,0,4,&mut out).is_err());
+        assert_eq!(out.flushes,1);assert_eq!(out.got.as_slice(),if incremental{b"aXcd"}else{b"abcd"});
+    }
+}
