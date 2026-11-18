@@ -42,7 +42,7 @@ fn selected_worktree_occurrence_reads_latest_head_of_its_branch_not_its_saved_or
 }
 
 #[test]
-fn formal_merge_head_retains_its_node_while_selecting_its_older_body_not_the_newer_fork_or_private_edit() {
+fn formal_merge_head_reuses_its_chosen_original_node_not_the_newer_fork_or_private_edit() {
     let (fixture, mut engine) = Fixture::new();
     let principal: Principal = "admin".parse().unwrap();
     let root = engine.snapshot_root_context(fixture.targets[0].repository).unwrap();
@@ -73,8 +73,10 @@ fn formal_merge_head_retains_its_node_while_selecting_its_older_body_not_the_new
     assert_ne!(other.facts().selected.branch.to_string(), branch, "the original retained operation routed its occurrence to a historical fork");
     let left_head = selection(&engine, left, "first.txt");
     assert!(other.facts().head.body_sequence > left_head.facts().head.body_sequence);
-    let advanced = left_head.facts().head.node.to_string();
-    let temporary = engine.create_file_branch_from_node(&file, &left_head.facts().head.version.to_string(), &advanced,
+    // The native merge adopts a chosen existing node, even when a different
+    // branch has newer bytes. Do not fabricate distinct metadata nodes.
+    let chosen = original.facts().head.node.to_string();
+    let temporary = engine.create_file_branch_from_node(&file, &base.to_string(), &chosen,
         &storage_contract::BranchName::parse("second merge input").unwrap(), "admin", OperationId::generate().unwrap())
         .unwrap().result["branch_id"].as_str().unwrap().to_owned();
     let inputs = [branch.clone(), temporary].map(|id| crate::FileMergeInput {
@@ -82,16 +84,18 @@ fn formal_merge_head_retains_its_node_while_selecting_its_older_body_not_the_new
     });
     let merge = OperationId::generate().unwrap();
     let merged = engine.merge_file_branches(crate::FileBranchMergeRequest {
-        file_id:&file, inputs:&inputs, chosen_node_id:&base.to_string(), surviving_branch_id:&branch,
+        file_id:&file, inputs:&inputs, chosen_node_id:&chosen, surviving_branch_id:&branch,
         location:None, principal:"admin", operation_id:merge,
     }).unwrap();
     let node: storage_contract::FileNodeId = merged.result["node_id"].as_str().unwrap().parse().unwrap();
-    assert!(matches!(node, storage_contract::FileNodeId::Metadata(_)));
+    assert_eq!(node,original.facts().head.node);
+    assert_ne!(node,left_head.facts().head.node);
     save(&mut engine, picked, &principal, scratch.path(), "first.txt", b"latest dirty content must not win");
     let before = engine.state().events.len();
     let mut selected = selection(&engine, picked, "first.txt");
     assert_eq!(selected.facts().head.node, node);
-    assert_ne!(selected.facts().head.node, original.facts().head.node, "same bytes must not erase the new formal HEAD identity");
+    assert_eq!(selected.facts().head.node, original.facts().head.node);
+    assert_ne!(selected.facts().head.commit, original.facts().head.commit, "a fresh branch decision is not a new FILE node");
     assert_eq!(selected.facts().head.commit_operation, merge);
     assert_eq!(selected.facts().head.version, base);
     assert_eq!(selected.facts().body, original.facts().body);
