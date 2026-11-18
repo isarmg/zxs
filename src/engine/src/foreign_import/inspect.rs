@@ -5,6 +5,7 @@ use data_serialization::{Serialize, de::DeserializeOwned};
 use std::{collections::BTreeSet, os::unix::fs::MetadataExt, path::Path};
 
 mod native;
+mod current;
 
 struct Budget {
     remaining: usize,
@@ -65,6 +66,15 @@ impl Evidence<'_> {
         frame: &str,
         seal: &DiskSeal,
     ) -> Result<(Candidate, Publication)> {
+        let (candidate, publication, _) = self.publication_and_seal(record, frame, seal)?;
+        Ok((candidate, publication))
+    }
+    fn publication_and_seal(
+        &mut self,
+        record: &Record,
+        frame: &str,
+        seal: &DiskSeal,
+    ) -> Result<(Candidate, Publication, PublicationSeal)> {
         let candidate: Candidate = self.object("candidate", &record.candidate_hash)?;
         let publication: Publication = self.object("publication", &record.object_hash)?;
         let publication_seal: PublicationSeal =
@@ -91,7 +101,7 @@ impl Evidence<'_> {
                 "publication does not bind this source journal and identity",
             ));
         }
-        Ok((candidate, publication))
+        Ok((candidate, publication, publication_seal))
     }
     fn version_at(&mut self, snapshot: &str, version: &str) -> Result<Option<json_codec::Value>> {
         let snapshot: Snapshot = self.object("snapshot", snapshot)?;

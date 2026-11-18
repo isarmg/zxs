@@ -126,15 +126,39 @@ impl Engine {
         &self,
         request: ForeignIdentityTargetRequest,
     ) -> Result<ForeignIdentityTarget> {
+        self.require_foreign_naming_operation(request.operation_id)?;
+        let proposed = ValidatedConfig::try_from(request.proposed_configuration.clone())?;
+        self.capture_foreign_names(&request, &proposed)
+    }
+
+    /// A preserved chain has deliberately not installed fresh areas at any new
+    /// root. Its exact target is a registration proposal, never an I/O Config.
+    pub(crate) fn capture_preserved_foreign_identity_target(
+        &self,
+        request: &ForeignIdentityTargetRequest,
+    ) -> Result<ForeignIdentityTarget> {
+        self.require_foreign_naming_operation(request.operation_id)?;
+        self.require_uninstalled_foreign_proposal(&request.proposed_configuration)?;
+        self.capture_foreign_names(request, &request.proposed_configuration)
+    }
+
+    fn require_foreign_naming_operation(&self, operation: OperationId) -> Result<()> {
         self.require_write()?;
-        let operation = request.operation_id;
         if self.state.operations.contains_key(&operation) {
             return Err(Error::new(
                 ErrorCode::IdempotencyKeyReused,
                 "foreign identity operation already belongs to the current pool",
             ));
         }
-        let proposed = ValidatedConfig::try_from(request.proposed_configuration)?;
+        Ok(())
+    }
+
+    fn capture_foreign_names(
+        &self,
+        request: &ForeignIdentityTargetRequest,
+        proposed: &Config,
+    ) -> Result<ForeignIdentityTarget> {
+        let operation = request.operation_id;
         let current = self.config();
         let originals: BTreeSet<_> = current
             .disks
@@ -166,7 +190,7 @@ impl Engine {
                 ));
             }
         }
-        let mut preserved = Config::clone(&proposed);
+        let mut preserved = proposed.clone();
         preserved
             .disks
             .retain(|disk| originals.contains(disk.disk_id.as_str()));
@@ -193,7 +217,7 @@ impl Engine {
             configuration_hash: object_hash("foreign-identity-current-configuration", current)?,
             proposed_configuration_hash: object_hash(
                 "foreign-identity-proposed-configuration",
-                &*proposed,
+                proposed,
             )?,
             operation_id: operation,
             request_digest: request.request_digest.to_string(),

@@ -70,7 +70,7 @@ fn fixture() -> Fixture {
     let mut target = current.config().clone();
     target.disks.extend(added);
     let names = current
-        .capture_foreign_identity_target(ForeignIdentityTargetRequest {
+        .capture_preserved_foreign_identity_target(&ForeignIdentityTargetRequest {
             proposed_configuration: target.clone(),
             operation_id: OperationId::generate().unwrap(),
             request_digest: "a".repeat(64).parse().unwrap(),

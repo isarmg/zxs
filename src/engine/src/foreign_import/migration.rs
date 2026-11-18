@@ -14,7 +14,7 @@ pub use identity_closure::ForeignIdentityClosureStatus;
 mod inventory;
 mod planning;
 mod preserved;
-pub(crate) use preserved::PreservedSourceInventory;
+pub(crate) use preserved::{PreservedMaterial, PreservedSourceInventory};
 pub(crate) use transaction::LockedCapsuleParent;
 mod projection;
 mod transaction;

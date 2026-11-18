@@ -87,6 +87,18 @@ impl OriginalReceiptProjection {
         )
     }
 
+    /// The caller has resolved the actual original snapshot from this voter's
+    /// Candidate and checked its own journal frame in the matching seal.
+    pub(crate) fn from_held_publication(
+        original: &AdmittedState,
+        candidate: &Candidate,
+        publication: &Publication,
+        seal: &PublicationSeal,
+        visible: &State,
+    ) -> Result<Self> {
+        project_original_receipt(original.state(), candidate, publication, seal, visible)
+    }
+
     pub(crate) fn operation(&self) -> OperationId {
         self.original.operation_id
     }

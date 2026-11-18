@@ -226,9 +226,12 @@ fn inspect_unsealed(root: &DiskRoot, name: &str, empty_allowed: bool) -> Result<
 }
 
 impl Engine {
+    /// Bind exactly the requested new directory descriptors and no I/O
+    /// authority. Foreign observation uses an uninstalled logical proposal;
+    /// ordinary Add independently retains its fully admitted target Config.
     pub(in crate::engine::membership_transition) fn admit_added_directories(
         &self,
-        target: &ValidatedConfig,
+        target: &Config,
         directories: Vec<PendingMemberDirectory>,
     ) -> Result<BTreeMap<String, DiskRoot>> {
         let added = target

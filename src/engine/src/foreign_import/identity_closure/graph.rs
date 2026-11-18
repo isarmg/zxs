@@ -140,37 +140,8 @@ impl PreparedGraph {
         Ok(Self { report, bytes })
     }
 }
-/// Compact and canonical encodings have equal byte lengths. Count before any
-/// output allocation, without constructing a Value tree for the preflight.
 pub(super) fn encoded_length<T: Serialize + ?Sized>(value: &T, maximum: usize) -> Result<usize> {
-    struct Limit {
-        remaining: usize,
-        exceeded: bool,
-    }
-    impl std::io::Write for Limit {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if bytes.len() > self.remaining {
-                self.exceeded = true;
-                return Err(std::io::Error::other(
-                    "foreign mapped graph byte budget exceeded",
-                ));
-            }
-            self.remaining -= bytes.len();
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut limit = Limit {
-        remaining: maximum,
-        exceeded: false,
-    };
-    match json_codec::to_writer(&mut limit, value) {
-        Ok(()) => Ok(maximum - limit.remaining),
-        Err(_) if limit.exceeded => Err(budget()),
-        Err(error) => Err(error.into()),
-    }
+    crate::foreign_import::bounded::encoded_length(value, maximum, budget)
 }
 fn budget() -> Error {
     Error::new(

@@ -214,3 +214,15 @@ pub(crate) fn backup_package_version(
 pub(crate) static BACKUP_NATIVE_METADATA: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("metadata").expect("invariant: native Backup metadata is one entry")
 });
+
+
+/// Inert original Foreign intent. No discovery, startup or selection follows
+/// an entry merely because this name exists on SYSTEM.
+pub(crate) static FOREIGN_ENROLLMENT: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("foreign-enrollment").expect("invariant: Foreign provenance is one entry")
+});
+
+pub(crate) fn foreign_enrollment(operation: storage_contract::OperationId) -> EntryName {
+    EntryName::new(format!("{operation}.json"))
+        .expect("invariant: typed operation addresses exactly one Foreign original")
+}

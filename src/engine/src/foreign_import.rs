@@ -3,6 +3,7 @@
 use crate::{disk::*, journal::*, *};
 use std::{collections::BTreeMap, fs::File, path::PathBuf};
 
+pub(crate) mod bounded;
 mod identity_closure;
 mod inspect;
 pub(crate) use identity_closure::ForeignAdmissionRecipe;
@@ -17,7 +18,7 @@ pub use intent::{
 };
 mod mapping;
 mod migration;
-pub(crate) use migration::{LockedCapsuleParent, PreservedSourceInventory};
+pub(crate) use migration::{LockedCapsuleParent, PreservedMaterial, PreservedSourceInventory};
 mod model;
 pub use migration::{
     ForeignDatabaseStatus, ForeignHistoryGraphStatus, ForeignIdentityClosureStatus,
