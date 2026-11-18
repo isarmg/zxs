@@ -4,6 +4,8 @@ use crate::history_window::{
     HistoryRepositoryId, HistoryResolvedContext, HistoryRoot, HistoryWindowRequest,
 };
 use crate::{Error, ErrorCode, FileDeletionId, FilePathEventId, OperationId, RepositoryId, Result};
+mod navigation;
+pub use navigation::*;
 pub use crate::Timestamp;
 use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, fmt};
@@ -131,18 +133,20 @@ impl Request {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cursor {
     pub binding: HistoryQueryHash,
+    pub audience: HistoryQueryHash,
     pub after_operation_id: OperationId,
     pub after_sequence: u64,
     pub after_source_id: SourceId,
 }
 impl Cursor {
     pub fn parse(text: &str) -> Result<Self> {
-        if !(140..=160).contains(&text.len()) {
+        if !(204..=228).contains(&text.len()) {
             return Err(LifecycleError::Cursor.into_error());
         }
         let (binding, operation) = text
             .split_once(':')
             .ok_or_else(|| LifecycleError::Cursor.into_error())?;
+        let (audience, operation) = operation.split_once(':').ok_or_else(|| LifecycleError::Cursor.into_error())?;
         let (operation, sequence) = operation
             .split_once(':')
             .ok_or_else(|| LifecycleError::Cursor.into_error())?;
@@ -155,10 +159,26 @@ impl Cursor {
         }
         Ok(Self {
             binding: HistoryQueryHash::parse(binding)?,
+            audience: HistoryQueryHash::parse(audience)?,
             after_operation_id: operation.parse()?,
             after_sequence,
             after_source_id: SourceId::parse(source)?,
         })
+    }
+    /// Local read cursors are never accepted as authenticated HTTP cursors.
+    pub fn local(binding: HistoryQueryHash, event: &Event) -> Self {
+        Self { binding, audience: binding, after_operation_id: event.operation_id,
+            after_sequence: event.sequence, after_source_id: event.source_id() }
+    }
+    /// Domain-separated response scope. Only the already-authenticated server
+    /// holds the original session identity. No token/hash is copied into JSON.
+    pub fn for_audience(&self, session: &str, principal: &str) -> HistoryQueryHash {
+        let mut h=blake3::Hasher::new_derive_key("zxs native FILE lifecycle continuation audience");
+        for field in [session,principal,&self.binding.to_string(),&self.after_operation_id.to_string(),
+            &self.after_sequence.to_string(),&self.after_source_id.to_string()] {
+            h.update(&(field.len() as u64).to_le_bytes()); h.update(field.as_bytes());
+        }
+        HistoryQueryHash::from_digest(h.finalize())
     }
     pub fn after_key(&self) -> (u64, OperationId, SourceId) {
         (self.after_sequence, self.after_operation_id, self.after_source_id)
@@ -168,8 +188,9 @@ impl fmt::Display for Cursor {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}",
             self.binding,
+            self.audience,
             self.after_operation_id,
             self.after_sequence,
             self.after_source_id,
@@ -192,10 +213,13 @@ impl<'de> Deserialize<'de> for Cursor {
 pub enum SourceId {
     Deletion(FileDeletionId),
     PathChange(FilePathEventId),
+    Merge(crate::FileMergeId),
 }
 impl SourceId {
     pub fn parse(text: &str) -> Result<Self> {
-        if text.starts_with("fdel_") {
+        if text.starts_with("fmerge_") {
+            text.parse().map(Self::Merge)
+        } else if text.starts_with("fdel_") {
             text.parse().map(Self::Deletion)
         } else if text.starts_with("fpath_") {
             text.parse().map(Self::PathChange)
@@ -207,9 +231,19 @@ impl SourceId {
 impl fmt::Display for SourceId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Merge(id) => fmt::Display::fmt(id, formatter),
             Self::Deletion(id) => fmt::Display::fmt(id, formatter),
             Self::PathChange(id) => fmt::Display::fmt(id, formatter),
         }
+    }
+}
+
+impl Serialize for SourceId {
+    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> { s.collect_str(self) }
+}
+impl<'de> Deserialize<'de> for SourceId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self,D::Error> {
+        Self::parse(&String::deserialize(d)?).map_err(data_serialization::de::Error::custom)
     }
 }
 
@@ -223,6 +257,7 @@ pub struct PathLocation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Detail {
+    Merged { merge_id: crate::FileMergeId, survivor: crate::BranchId },
     Delete {
         deletion_id: FileDeletionId,
     },
@@ -242,6 +277,8 @@ pub enum Detail {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct Event {
+    pub principal: crate::Principal,
+    pub references: References,
     pub operation_id: OperationId,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
@@ -252,17 +289,23 @@ pub struct Event {
 impl Event {
     pub fn source_id(&self) -> SourceId {
         match &self.detail {
+            Detail::Merged { merge_id, .. } => SourceId::Merge(*merge_id),
             Detail::Delete { deletion_id }
             | Detail::Undo { deletion_id }
             | Detail::Import { deletion_id } => SourceId::Deletion(*deletion_id),
             Detail::PathChanged { event_id, .. } => SourceId::PathChange(*event_id),
         }
     }
+    pub fn event_key(&self) -> EventKey {
+        EventKey { sequence: self.sequence, operation: self.operation_id, source: self.source_id() }
+    }
     pub fn order_key(&self) -> (u64, OperationId, SourceId) {
         (self.sequence, self.operation_id, self.source_id())
     }
     fn has_valid_evidence_shape(&self) -> bool {
+        if !self.references.agrees(&self.detail) { return false }
         match &self.detail {
+            Detail::Merged { .. } => self.occurred_at.is_none(),
             Detail::Delete { .. } => self.occurred_at.is_some(),
             Detail::Undo { .. } | Detail::Import { .. } => self.occurred_at.is_none(),
             Detail::PathChanged { before, after, .. } => {
@@ -281,6 +324,7 @@ pub struct Page {
     #[serialization(with = "crate::u64_string")]
     pub observation_sequence: u64,
     pub events: Vec<Event>,
+    pub intervals: Vec<Interval>,
     #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub next_cursor: Option<Cursor>,
 }
@@ -325,6 +369,8 @@ impl Page {
         if self.file_id != request.file_id
             || self.history_root != request.history_root
             || self.events.len() > request.limit()
+            || self.intervals.len() != self.events.len().saturating_sub(1)
+            || self.intervals.iter().zip(self.events.windows(2)).any(|(i,p)| !i.agrees(p[0].event_key(), p[1].event_key()))
             || request.cursor.as_ref().is_some_and(|cursor| {
                 cursor.binding != binding
                     || cursor.after_sequence == 0

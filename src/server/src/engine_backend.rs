@@ -2017,16 +2017,26 @@ impl Backend for EngineBackend {
         request: storage_contract::file_lifecycle::Request,
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::file_lifecycle::Page, ApiError> {
+        let file = request.file_id.to_string();
         let read = {
-            let (engine, _) = self.lock_current(identity)?;
-            engine
-                .capture_file_lifecycle(request, cancellation)
-                .map_err(error)?
+            let (mut engine, current) = self.lock_current(identity)?;
+            let session = current.admission_session.as_deref().ok_or_else(ApiError::forbidden)?;
+            if current.smb_binding.is_some() || request.cursor.as_ref().is_some_and(|cursor|
+                cursor.audience != cursor.for_audience(session, &current.principal)) { return Err(ApiError::forbidden()) }
+            application::Application::new(&mut engine, &current).authorize_file(&file)?;
+            engine.capture_file_lifecycle(request, cancellation).map_err(error)?
         };
         let page = read.page().map_err(error);
-        let (engine, _) = self.lock_current(identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
+        if current.smb_binding.is_some() {return Err(ApiError::forbidden())}
+        application::Application::new(&mut engine, &current).authorize_file(&file)?;
         engine.recheck_file_lifecycle(&read).map_err(error)?;
-        page
+        let session = current.admission_session.as_deref().ok_or_else(ApiError::forbidden)?;
+        let mut page = page?;
+        if let Some(cursor) = &mut page.next_cursor {
+            cursor.audience = cursor.for_audience(session, &current.principal);
+        }
+        Ok(page)
     }
     fn content_matches(
         &self,

@@ -158,6 +158,13 @@ fn file_lifecycle_real_delete_undo_paginate_reopen_and_reject_changed_source() {
     let hidden_page = hidden.page().unwrap();
     assert!(hidden_page.context.path.is_none());
     assert_eq!(hidden_page.events[0].operation_id, delete);
+    assert_eq!(hidden_page.events[0].principal.as_str(), "admin");
+    let storage_contract::file_lifecycle::References::Complete {links} = &hidden_page.events[0].references else { panic!("original frozen heads") };
+    assert_eq!(links.len(),deletion.branch_heads.len());
+    for link in links {
+        let storage_contract::file_lifecycle::LinkRole::BranchHead{branch}=link.role else {panic!("original branch")};
+        assert_eq!(link.node.unwrap().to_string(),deletion.branch_heads[&branch.to_string()]);
+    }
     assert_eq!(
         hidden_page.events[0].occurred_at,
         Some(Timestamp::from_unix_seconds(deletion.created_at)),
@@ -313,6 +320,13 @@ fn file_lifecycle_rename_uses_permanent_fact_without_changing_content_graph() {
     assert_eq!(page.events.len(), 1);
     assert_eq!(page.events[0].operation_id, operation);
     assert_eq!(page.events[0].sequence, receipt.sequence);
+    assert_eq!(page.events[0].principal, facts[0].author);
+    let storage_contract::file_lifecycle::References::Complete{links}=&page.events[0].references else {panic!("original path links")};
+    assert_eq!(links.len(),2);
+    assert_eq!(links[0].role,storage_contract::file_lifecycle::LinkRole::Before);
+    assert_eq!(links[1].role,storage_contract::file_lifecycle::LinkRole::After);
+    assert_eq!(links[0].node.unwrap().to_string(),facts[0].before_version_id.to_string());
+    assert_eq!(links[1].node.unwrap().to_string(),facts[0].after_version_id.to_string());
     assert_eq!(page.events[0].occurred_at, Some(facts[0].occurred_at));
     assert_eq!(page.events[0].detail, Detail::PathChanged {
         event_id: facts[0].event_id,
@@ -608,6 +622,8 @@ fn lifecycle_summary_budget_counts_mixed_events_and_rejects_overflow_without_adm
     use storage_contract::file_lifecycle::{Event, MAX_AUDIT_BYTES, PathLocation};
 
     let deletion = Event {
+        principal:"a".parse().unwrap(),
+        references:storage_contract::file_lifecycle::References::Open{},
         operation_id: OperationId::generate().unwrap(),
         sequence: 1,
         occurred_at: None,
@@ -616,6 +632,8 @@ fn lifecycle_summary_budget_counts_mixed_events_and_rejects_overflow_without_adm
         },
     };
     let path = Event {
+        principal:"a".parse().unwrap(),
+        references:storage_contract::file_lifecycle::References::Open{},
         operation_id: OperationId::generate().unwrap(),
         sequence: 2,
         occurred_at: Some(Timestamp::from_unix_seconds(1)),
@@ -662,6 +680,8 @@ fn lifecycle_summary_count_boundary_preserves_admitted_budget_on_rejection() {
     use storage_contract::file_lifecycle::{Event, MAX_AUDIT_BYTES, MAX_AUDIT_EVENTS};
 
     let event = Event {
+        principal:"a".parse().unwrap(),
+        references:storage_contract::file_lifecycle::References::Open{},
         operation_id: OperationId::generate().unwrap(),
         sequence: 1,
         occurred_at: None,
@@ -670,19 +690,19 @@ fn lifecycle_summary_count_boundary_preserves_admitted_budget_on_rejection() {
         },
     };
     let size = json_codec::to_vec(&event).unwrap().len();
-    assert!(2 + (size + 1) * MAX_AUDIT_EVENTS < MAX_AUDIT_BYTES);
+    let cap=MAX_AUDIT_EVENTS.min((MAX_AUDIT_BYTES - 1)/(size+1));
     let mut budget = EventBudget::new();
-    for _ in 0..MAX_AUDIT_EVENTS {
+    for _ in 0..cap {
         budget.admit(&event).unwrap();
     }
-    assert_eq!(budget.count, MAX_AUDIT_EVENTS);
-    assert_eq!(budget.bytes, 2 + size * MAX_AUDIT_EVENTS + MAX_AUDIT_EVENTS - 1);
+    assert_eq!(budget.count, cap);
+    assert_eq!(budget.bytes, 2 + size * cap + cap - 1);
     let bytes = budget.bytes;
     assert_eq!(
         budget.admit(&event).unwrap_err().code(),
         storage_contract::ErrorCode::ResourceLimit,
     );
-    assert_eq!(budget.count, MAX_AUDIT_EVENTS);
+    assert_eq!(budget.count, cap);
     assert_eq!(budget.bytes, bytes);
 }
 
@@ -899,4 +919,43 @@ fn cold_lifecycle_uses_the_exact_disk_admission_before_first_page_but_not_an_alt
     raw.as_object_mut().unwrap().remove("path_changes");
     assert!(!changed.source_is_original());
     assert!(changed.page().is_err()); // no borrowed cold proof over this damaged ledger
+}
+
+#[test]
+fn closed_interval_uses_the_real_saved_body_and_the_deletions_frozen_branch_heads() {
+    use storage_contract::file_lifecycle::{IntervalBody,References};
+    let (_tmp,mut engine,file,version)=actual();
+    initialize_file_branch_owner(&mut engine,&version);
+    let history=engine.state.versions[version.as_str()].history_tree_id.clone();
+    let repository=engine.state.histories[&history].repository_id.clone();
+    engine.file_namespace(&repository,crate::NamespaceOperation::parse(
+        crate::NamespaceOperationKind::Rename,"file.txt",Some("renamed.txt")).unwrap(),
+        "first actor",OperationId::generate().unwrap()).unwrap();
+    let branch=engine.file_context(&repository,"renamed.txt").unwrap().branch_id;
+    let workspace=engine.create_workspace(&branch,"admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id,"renamed.txt",b"a genuinely changed interval body").unwrap();
+    engine.commit_workspace(crate::CommitRequest{workspace_id:workspace.workspace_id,operation_id:OperationId::generate().unwrap(),
+        principal:"admin".into(),expected_head:workspace.base_head,fencing_token:workspace.fencing_token,
+        message:"between two original decisions".into(),request_digest:None}).unwrap();
+    let head=engine.file_branch_head(&branch).unwrap();
+    let root=request_for(&engine,&file,64);
+    let captured=engine.capture_file_lifecycle(root,HistoryWindowCancellation::new()).unwrap();
+    let context=captured.read.context().clone();
+    engine.soft_delete_file(crate::DeleteFileRequest{target:crate::FileDeletionTarget{
+        repository_id:&context.repository_id,file_id:&file,path:&name_policy::LookupPath::parse("renamed.txt").unwrap()},
+        principal:"second actor",operation_id:OperationId::generate().unwrap()}).unwrap();
+    assert!(engine.recheck_file_lifecycle(&captured).is_err());
+    let request=request_for(&engine,&file,64);
+    let page=engine.capture_file_lifecycle(request.clone(),HistoryWindowCancellation::new()).unwrap().page().unwrap();
+    page.validate(&request).unwrap();
+    assert_eq!(page.events.len(),2);
+    assert_eq!(page.events[0].principal.as_str(),"first actor");
+    assert_eq!(page.events[1].principal.as_str(),"second actor");
+    assert!(matches!(page.events[1].references,References::Complete{..}));
+    let IntervalBody::Complete{nodes,branches}=&page.intervals[0].body else {panic!("complete original interval")};
+    assert_eq!(nodes.len(),1);
+    assert_eq!(nodes[0].node.to_string(),head);
+    assert_eq!(nodes[0].parents.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        engine.file_node_parents(file.as_str(),&head).unwrap());
+    assert!(branches.iter().any(|b|b.branch.to_string()==branch && b.node.to_string()==head));
 }

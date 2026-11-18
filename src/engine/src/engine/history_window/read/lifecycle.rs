@@ -8,11 +8,13 @@ use crate::state_projection::lifecycles::{
 };
 use std::sync::{Arc, Mutex, Weak};
 use storage_contract::file_lifecycle::{
-    Cursor, Detail, Event, LifecycleError, Page, Request, Timestamp,
+    Cursor, Detail, Event, IntervalBody, LifecycleError, LinkRole, NodeLink, Page, References, Request, Timestamp,
 };
 use storage_contract::history_window::{
     HistoryFileId, HistoryTreeId, HistoryWindowCancellation,
 };
+
+mod navigation;
 
 struct EventBudget {
     count: usize,
@@ -169,12 +171,7 @@ impl FileLifecycleRead {
         let selected = events[start..end].to_vec();
         let more = end < events.len();
         let next_cursor = if more {
-            selected.last().map(|event| Cursor {
-                binding,
-                after_operation_id: event.operation_id,
-                after_sequence: event.sequence,
-                after_source_id: event.source_id(),
-            })
+            selected.last().map(|event| Cursor::local(binding, event))
         } else {
             None
         };
@@ -183,6 +180,7 @@ impl FileLifecycleRead {
             history_root: self.request.history_root,
             context: self.read.context.clone(),
             observation_sequence: self.source.sequence,
+            intervals: self.intervals(&selected)?,
             events: selected,
             next_cursor,
         };
@@ -190,16 +188,16 @@ impl FileLifecycleRead {
             > storage_contract::file_lifecycle::MAX_RESPONSE_BYTES
         {
             self.read.cancellation.checkpoint()?;
+            if let Some(interval) = page.intervals.iter_mut().rev().find(|i| matches!(i.body, IntervalBody::Complete { ref nodes, .. } if !nodes.is_empty())) {
+                interval.body = IntervalBody::Open {};
+                continue;
+            }
             if page.events.len() <= 1 {
                 return Err(LifecycleError::Bytes.into_error().into());
             }
             page.events.pop();
-            page.next_cursor = page.events.last().map(|event| Cursor {
-                binding,
-                after_operation_id: event.operation_id,
-                after_sequence: event.sequence,
-                after_source_id: event.source_id(),
-            });
+            page.intervals.pop();
+            page.next_cursor = page.events.last().map(|event| Cursor::local(binding, event));
         }
         page.validate(&self.request)?;
         Ok(page)
@@ -248,6 +246,9 @@ impl FileLifecycleRead {
                 let event = Event {
                     operation_id: event.operation_id,
                     sequence: event.sequence,
+                    principal: event.author.parse().map_err(|_| LifecycleError::SourceIncomplete.into_error())?,
+                    references: self.frozen_heads(&event.node.branch_heads)?,
+
                     detail,
                     occurred_at,
                 };
@@ -265,6 +266,7 @@ impl FileLifecycleRead {
         }
         let checked = admission.as_deref().map(|verified| verified.paths(&self.request.file_id));
         self.append_path_events(source.path_ledger(), checked, &mut events, &mut budget)?;
+        self.merge_events(&mut events, &mut budget)?;
         events.sort_by_key(Event::order_key);
         self.read.cancellation.checkpoint()?;
         for pair in events.windows(2) {
@@ -292,7 +294,8 @@ impl FileLifecycleRead {
         }
         self.source.sequence == state.sequence && unchanged!(
             operations, operation_principals, histories, branches, commits,
-            versions, file_deletions, directory_git_repositories,
+            versions, file_deletions, directory_git_repositories, file_path_nodes, file_metadata_nodes,
+            file_branch_merges, file_node_parents, content_states,
         )
     }
 
@@ -314,6 +317,11 @@ impl FileLifecycleRead {
             let event = Event {
                 operation_id: fact.operation_id,
                 sequence: fact.sequence.get(),
+                principal: fact.author,
+                references: References::Complete { links: vec![
+                    NodeLink {role:LinkRole::Before, node:self.body_at(&fact.before_version_id.to_string())?},
+                    NodeLink {role:LinkRole::After, node:self.body_at(&fact.after_version_id.to_string())?},
+                ] },
                 occurred_at: Some(fact.occurred_at),
                 detail: Detail::PathChanged {
                     event_id: fact.event_id,

@@ -18,6 +18,8 @@ fn location(path: &str) -> PathLocation {
 
 fn deletion() -> Event {
     Event {
+        principal:"original actor".parse().unwrap(),
+        references:crate::file_lifecycle::References::Open{},
         operation_id: format!("op_{:032x}", 1).parse().unwrap(),
         sequence: 1,
         detail: Detail::Delete {
@@ -29,6 +31,8 @@ fn deletion() -> Event {
 
 fn path_change(id: u8) -> Event {
     Event {
+        principal:"original actor".parse().unwrap(),
+        references:crate::file_lifecycle::References::Open{},
         operation_id: format!("op_{:032x}", 2).parse().unwrap(),
         sequence: 2,
         detail: Detail::PathChanged {
@@ -53,18 +57,20 @@ fn page(request: &Request) -> Page {
         },
         observation_sequence: 3,
         events: vec![deletion()],
+        intervals: vec![],
         next_cursor: None,
     }
 }
 
 fn cursor(request: &Request, page: &Page) -> Cursor {
     let event = page.events.last().unwrap();
-    Cursor {
-        binding: request.binding(&page.context, page.observation_sequence),
-        after_operation_id: event.operation_id,
-        after_sequence: event.sequence,
-        after_source_id: event.source_id(),
-    }
+    Cursor::local(request.binding(&page.context, page.observation_sequence),event)
+}
+
+fn set_intervals(page:&mut Page) {
+    page.intervals=page.events.windows(2).map(|p|crate::file_lifecycle::Interval {
+        older:p[0].event_key(),newer:p[1].event_key(),body:crate::file_lifecycle::IntervalBody::Open{},
+    }).collect();
 }
 
 #[test]
@@ -120,6 +126,7 @@ fn one_operation_can_page_multiple_real_path_facts_without_skipping_aliases() {
     next_request.cursor = first.next_cursor.clone();
     let mut next = first.clone();
     next.events = vec![path_change(2), path_change(3)];
+    set_intervals(&mut next);
     next.next_cursor = None;
     next.validate(&next_request).unwrap();
     next.events.reverse();
@@ -142,7 +149,7 @@ fn cursor_requires_the_actual_record_domain_and_rejects_prior_encoding() {
     let request = request(1);
     let page = page(&request);
     let cursor = cursor(&request, &page);
-    let prefix = format!("{}:{}", cursor.binding, cursor.after_operation_id);
+    let prefix = format!("{}:{}:{}", cursor.binding, cursor.audience, cursor.after_operation_id);
     for invalid in [
         format!("{prefix}:1"),
         format!("{prefix}:0:{}", cursor.after_source_id),
@@ -242,12 +249,13 @@ fn lifecycle_page_enforces_exact_compact_json_budget_including_cursor_and_utf8()
 
     let request = request(64);
     let mut page = page(&request);
-    page.events = (1..=64).map(path_change).collect();
+    page.events = (1..=48).map(path_change).collect();
+    set_intervals(&mut page);
     for event in &mut page.events {
         let Detail::PathChanged { before, after, .. } = &mut event.detail else {
             panic!("fixture must contain path events");
         };
-        before.path = bounded_multibyte_path(542);
+        before.path = bounded_multibyte_path(1000);
         after.path = bounded_multibyte_path(541);
         after.repository_id = format!("repo_{:032x}", 2).parse().unwrap();
     }
@@ -283,4 +291,29 @@ fn lifecycle_page_enforces_exact_compact_json_budget_including_cursor_and_utf8()
         page.validate(&request).unwrap_err().code(),
         crate::ErrorCode::ResourceLimit,
     );
+}
+
+
+#[test]
+fn anchored_interval_and_audience_refuse_substitution_and_cycles() {
+    use crate::file_lifecycle::*;
+    let req=request(2);
+    let mut p=page(&req);
+    p.events.push(path_change(2));
+    set_intervals(&mut p);
+    let a=crate::FileNodeId::Version(crate::VersionId::from_random([1;16]));
+    let b=crate::FileNodeId::Version(crate::VersionId::from_random([2;16]));
+    p.intervals[0].body=IntervalBody::Complete { nodes:vec![
+        IntervalNode{node:a,parents:vec![]}, IntervalNode{node:b,parents:vec![a]}],
+        branches:vec![BranchTip{branch:crate::BranchId::from_random([4;16]),node:b}] };
+    p.validate(&req).unwrap();
+    let c=cursor(&req,&p);
+    assert_ne!(c.for_audience("one","same account"),c.for_audience("two","same account"));
+    assert_ne!(c.for_audience("one","same account"),c.for_audience("one","other account"));
+    let IntervalBody::Complete{nodes,..}=&mut p.intervals[0].body else {unreachable!()};
+    nodes[0].parents.push(b);
+    assert!(p.validate(&req).is_err());
+    p.intervals[0].body=IntervalBody::Open{};
+    p.intervals[0].newer=p.events[0].event_key();
+    assert!(p.validate(&req).is_err());
 }
