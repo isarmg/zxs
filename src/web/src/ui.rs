@@ -18,7 +18,6 @@ pub(crate) enum Page {
     Files,
     Details,
     Admin,
-    Repositories,
     Rules,
     Diagnostics,
     Status,
@@ -277,7 +276,7 @@ pub(crate) fn navigate(state: RwSignal<State>, page: Page) {
             management::load(state);
             admin::load_disks(state);
         }
-        Page::Repositories | Page::Rules | Page::Diagnostics => management::load(state),
+        Page::Rules | Page::Diagnostics => management::load(state),
         Page::Account => crate::smb_account::load(state),
         Page::Details | Page::Files => {}
     }
@@ -292,7 +291,7 @@ fn header_refreshing(state: &State) -> bool {
         Page::History => state.activity.loading,
         Page::Admin => admin::disks_refreshing(state),
         Page::Diagnostics => state.management.loading,
-        Page::Repositories | Page::Rules | Page::Account => false,
+        Page::Rules | Page::Account => false,
     }
 }
 
@@ -319,10 +318,9 @@ fn management_notice_visible(state: &State) -> bool {
     state.page != Page::Diagnostics && state.management.needs_attention()
 }
 
-fn administration_pages() -> [(Page, String); 4] {
+fn administration_pages() -> [(Page, String); 3] {
     [
         (Page::Admin, t("磁盘与接入", "Disks and admission")),
-        (Page::Repositories, t("仓库", "Repositories")),
         (Page::Rules, t("备份与放置", "Backup and placement")),
         (
             Page::Diagnostics,
@@ -353,7 +351,7 @@ fn workspace(state: RwSignal<State>) -> impl IntoView {
         {files::folder_creation_recovery(state)}
         {files::first_commit_recovery(state)}
         {files::directory_snapshot_recovery(state)}
-        {move ||match page.get() { Page::Admin=>admin::view(state).into_any(),Page::Repositories=>admin::console(state,admin::Section::Repositories).into_any(),Page::Rules=>admin::console(state,admin::Section::Rules).into_any(),Page::Diagnostics=>admin::console(state,admin::Section::Diagnostics).into_any(),Page::Details=>files::details(state).into_any(),Page::Status=>monitor::view(state).into_any(),Page::History=>history::view(state).into_any(),Page::Account=>account(state).into_any(),Page::Files=>files::view(state).into_any() }}
+        {move ||match page.get() { Page::Admin=>admin::view(state).into_any(),Page::Rules=>admin::console(state,admin::Section::Rules).into_any(),Page::Diagnostics=>admin::console(state,admin::Section::Diagnostics).into_any(),Page::Details=>files::details(state).into_any(),Page::Status=>monitor::view(state).into_any(),Page::History=>history::view(state).into_any(),Page::Account=>account(state).into_any(),Page::Files=>files::view(state).into_any() }}
     }
 }
 fn session_view(state: &State) -> SessionView {

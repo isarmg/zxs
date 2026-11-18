@@ -1,8 +1,7 @@
 //! Read-only administration labels and real language-toggle session restoration.
 use super::*;
 
-const ACTIONS: [(&str, &str); 4] = [
-    ("Repository", "仓库"),
+const ACTIONS: [(&str, &str); 3] = [
     ("Path copy rule", "路径副本规则"),
     ("Placement rule", "主盘规则"),
     ("Inspect / query", "检查 / 查询"),
@@ -65,9 +64,8 @@ fn expect_labels(
 fn actions(page: AdminPage) -> &'static [(&'static str, &'static str)] {
     match page {
         AdminPage::Storage => &[],
-        AdminPage::Repositories => &ACTIONS[..1],
-        AdminPage::Rules => &ACTIONS[1..3],
-        AdminPage::Diagnostics => &ACTIONS[3..],
+        AdminPage::Rules => &ACTIONS[..2],
+        AdminPage::Diagnostics => &ACTIONS[2..],
     }
 }
 fn select_action(browser: &Browser, page: AdminPage, en: &str, zh: &str) -> Result<()> {
@@ -205,33 +203,6 @@ fn inspect_queries(browser: &Browser, locale: &str) -> Result<()> {
         locale,
     )
 }
-fn inspect_repository(browser: &Browser, locale: &str) -> Result<()> {
-    let page = AdminPage::Repositories;
-    open_console(browser, page, locale)?;
-    select_action(browser, page, "Repository", "仓库")?;
-    expect_labels(
-        browser,
-        page,
-        ".zxs-form-grid label > span",
-        &[
-            ("Name", "名称"),
-            ("Primary slot", "主盘槽位"),
-            (
-                "Copies including primary; 1 has no redundancy",
-                "份数（含主盘；1 份无冗余）",
-            ),
-        ],
-        locale,
-    )?;
-    expect_labels(
-        browser,
-        page,
-        ":scope > button",
-        &[("Save configuration", "保存配置")],
-        locale,
-    )?;
-    accessibility::input_surface_viewports(browser)
-}
 fn inspect_rules(browser: &Browser, locale: &str) -> Result<()> {
     let page = AdminPage::Rules;
     open_console(browser, page, locale)?;
@@ -281,7 +252,6 @@ fn inspect(browser: &Browser, locale: &str) -> Result<()> {
     retired_controls_absent(browser, AdminPage::Storage)?;
     // Only select local forms. Never submit a mutation, query or checkbox.
     inspect_queries(browser, locale)?;
-    inspect_repository(browser, locale)?;
     inspect_rules(browser, locale)
 }
 fn switch(browser: &Browser, target: &str) -> Result<()> {
@@ -326,7 +296,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         },
     )?;
     println!(
-        "PASS four administration pages, four current actions, 13 queries and localized forms in both languages; real session reload restores original locale and Files"
+        "PASS three administration pages, three current actions, 13 queries and localized forms in both languages; real session reload restores original locale and Files"
     );
     Ok(())
 }

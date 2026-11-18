@@ -1,23 +1,6 @@
 use super::*;
 #[test]
-fn new_repository_defaults_to_one_actual_copy_and_preserves_explicit_choices() {
-    let mut fields = initial_fields(Kind::Repository);
-    fields.insert("name".into(), "one disk".into());
-    fields.insert("slot".into(), "P01".into());
-    let request = build(Kind::Repository, &fields, "operation").unwrap();
-    let body = request.body.unwrap();
-    assert_eq!(request.path, "/api/repositories");
-    assert_eq!(body["target_copies"], 1);
-    fields.insert("copies".into(), "3".into());
-    assert_eq!(
-        build(Kind::Repository, &fields, "operation")
-            .unwrap()
-            .body
-            .unwrap()["target_copies"],
-        3
-    );
-    fields.insert("copies".into(), "0".into());
-    assert!(build(Kind::Repository, &fields, "operation").is_err());
+fn ordinary_copy_policy_defaults_to_one_actual_copy() {
     assert_eq!(initial_fields(Kind::Policy)["copies"], "1");
     assert!(
         initial_fields(Kind::Rule).is_empty(),
@@ -34,14 +17,15 @@ fn inspection_cannot_build_a_mutation_request() {
 fn invalid_numeric_fields_retain_their_parser_source() {
     use std::error::Error as _;
     let fields = [
-        ("name".into(), "repo".into()),
-        ("slot".into(), "P01".into()),
+        ("repository".into(), "repo".into()),
+        ("id".into(), "rule".into()),
+        ("generation".into(),"0".into()),
         ("copies".into(), "NaN".into()),
     ]
     .into_iter()
     .collect();
     assert!(
-        build(Kind::Repository, &fields, "operation")
+        build(Kind::Policy, &fields, "operation")
             .unwrap_err()
             .source()
             .is_some()
@@ -92,18 +76,6 @@ fn each_form_constructs_the_exact_request_and_response_context_together() {
     let fields = all_fields();
     let operation = "original";
     for (kind, method, path, body, contract) in [
-        (
-            Kind::Repository,
-            "POST",
-            "/api/repositories",
-            json!({"name":"Name","primary_slot_id":"P01","target_copies":2,"operation_id":operation}),
-            Contract::Repository {
-                operation: operation.into(),
-                name: "Name".into(),
-                primary_slot_id: "P01".into(),
-                target_copies: 2,
-            },
-        ),
         (
             Kind::Policy,
             "PUT",

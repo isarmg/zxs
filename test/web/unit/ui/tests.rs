@@ -14,7 +14,6 @@ fn management_notices_survive_page_changes_only_when_attention_is_needed() {
         Page::History,
         Page::Account,
         Page::Admin,
-        Page::Repositories,
         Page::Rules,
     ] {
         state.page = page;
@@ -655,7 +654,6 @@ fn administration_navigation_has_distinct_responsibilities() {
         administration_pages().map(|(page, _)| page),
         [
             Page::Admin,
-            Page::Repositories,
             Page::Rules,
             Page::Diagnostics
         ]

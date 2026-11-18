@@ -162,6 +162,20 @@ fn metadata_only_network_guard_distinguishes_content_and_metadata() {
 }
 
 #[test]
+fn browser_guard_rejects_only_the_two_retired_creator_posts_not_registered_reads_or_file_creation() {
+    let origin = "http://127.0.0.1:2345";
+    for path in ["/api/repositories", "/api/repositories/original/branches?x=1"] {
+        let url = format!("{origin}{path}");
+        assert!(metadata::is_retired_directory_request(&url, origin, "POST"));
+        assert!(!metadata::is_retired_directory_request(&url, origin, "GET"));
+    }
+    for path in ["/api/file-manager/files/file_123/branches", "/api/file-manager/disks/P01/namespace",
+        "/api/repositories/repo/placement-configuration"] {
+        assert!(!metadata::is_retired_directory_request(&format!("{origin}{path}"), origin, "POST"));
+    }
+}
+
+#[test]
 fn directory_network_guard_rejects_retired_web_writes_and_entry_queries_only() {
     let origin = "http://127.0.0.1:2345";
     for path in [

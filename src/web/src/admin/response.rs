@@ -1,7 +1,7 @@
 //! Validate the endpoint's actual success contract before releasing write fences.
 //! Domain-returning endpoints are not operation receipts.
 use json_codec::Value;
-use storage_contract::{OperationResult, Plan, Repository, client_protocol::OperationStatus};
+use storage_contract::{OperationResult, Plan, client_protocol::OperationStatus};
 
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum ResponseError {
@@ -61,12 +61,6 @@ pub(super) enum Contract {
     Plan {
         id: String,
     },
-    Repository {
-        operation: String,
-        name: String,
-        primary_slot_id: String,
-        target_copies: u32,
-    },
     PlanReceipt {
         operation: String,
     },
@@ -81,7 +75,7 @@ impl Contract {
             | Self::Operation { .. }
             | Self::OperationOutcome { .. }
             | Self::Plan { .. } => false,
-            Self::Repository { .. } | Self::PlanReceipt { .. } | Self::MutationReceipt { .. } => {
+            Self::PlanReceipt { .. } | Self::MutationReceipt { .. } => {
                 true
             }
         }
@@ -93,8 +87,7 @@ impl Contract {
             | Self::Operation { .. }
             | Self::OperationOutcome { .. }
             | Self::Plan { .. } => None,
-            Self::Repository { operation, .. }
-            | Self::PlanReceipt { operation }
+            Self::PlanReceipt { operation }
             | Self::MutationReceipt { operation } => Some(operation),
         }
     }
@@ -132,26 +125,6 @@ impl Contract {
                     "plan identity, input and digest",
                 )?;
                 Action::Plan(ValidatedPlan(plan))
-            }
-            Self::Repository {
-                operation,
-                name,
-                primary_slot_id,
-                target_copies,
-            } => {
-                let repository: Repository = decode(value)?;
-                require(
-                    !repository.repository_id.is_empty()
-                        && !repository.history_tree_id.is_empty()
-                        && !repository.main_branch_id.is_empty()
-                        && repository.name == *name
-                        && repository.primary_slot_id == *primary_slot_id
-                        && repository.target_copies == *target_copies,
-                    "repository identity and requested configuration",
-                )?;
-                Action::Mutation {
-                    operation: operation.clone(),
-                }
             }
             Self::PlanReceipt { operation } => {
                 let receipt: OperationResult = decode(value)?;

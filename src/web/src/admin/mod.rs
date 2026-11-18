@@ -350,7 +350,7 @@ fn operation_status(state: RwSignal<State>) -> impl IntoView {
 }
 
 pub(crate) fn console(state: RwSignal<State>, section: Section) -> impl IntoView {
-    view! {<section class="zxs-content-stack zxs-stack" data-zxs-admin-section=match section {Section::Repositories=>"repositories",Section::Rules=>"rules",Section::Diagnostics=>"diagnostics"}>
+    view! {<section class="zxs-content-stack zxs-stack" data-zxs-admin-section=match section {Section::Rules=>"rules",Section::Diagnostics=>"diagnostics"}>
         <h1 class="zxs-row">{section.title()}</h1>
         <p class="zxs-row">{section.help()}</p>
         {(section==Section::Diagnostics).then(move ||crate::management::recovery(state))}
@@ -362,7 +362,6 @@ pub(crate) fn console(state: RwSignal<State>, section: Section) -> impl IntoView
             <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Policy)><p class="zxs-row">{Message::PathRuleHelp.text()}</p></Show>
             <div class="zxs-form-grid">{move ||{
                 let fields=match state.with(|s|s.admin_console.kind) {
-                    Kind::Repository=>vec![("name",Message::Name),("slot",Message::PrimarySlot),("copies",Message::Copies)],
                     Kind::Policy=>vec![("id",Message::PathRuleId),("repository",Message::RepositoryId),("prefix",Message::PathPrefix),("copies",Message::Copies),("generation",Message::Generation)],
                     Kind::Rule=>vec![("id",Message::RuleId),("repository",Message::RepositoryId),("prefix",Message::PathPrefix),("slot",Message::PrimarySlot),("generation",Message::Generation)],
                     Kind::Inspect=>vec![("repository",Message::RepositoryId),("id",Message::InspectionId)],

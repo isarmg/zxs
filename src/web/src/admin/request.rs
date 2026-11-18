@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
-    Repository,
     Policy,
     Rule,
     Inspect,
@@ -174,7 +173,7 @@ fn segment(value: &str) -> String {
 }
 pub(super) type Fields = BTreeMap<String, String>;
 pub(super) fn initial_fields(kind: Kind) -> Fields {
-    if matches!(kind, Kind::Repository | Kind::Policy) {
+    if kind == Kind::Policy {
         [("copies".to_owned(), "1".to_owned())]
             .into_iter()
             .collect()
@@ -215,24 +214,6 @@ pub(super) fn build(kind: Kind, fields: &Fields, operation: &str) -> Result<Requ
         )
     };
     Ok(match kind {
-        Kind::Repository => {
-            let name = required("name")?;
-            let primary_slot_id = required("slot")?;
-            let target_copies = copies()?;
-            Request {
-                method: "POST",
-                path: "/api/repositories".into(),
-                body: Some(
-                    json!({"name":name,"primary_slot_id":primary_slot_id,"target_copies":target_copies,"operation_id":operation}),
-                ),
-                contract: Contract::Repository {
-                    operation: operation.into(),
-                    name: name.into(),
-                    primary_slot_id: primary_slot_id.into(),
-                    target_copies,
-                },
-            }
-        }
         Kind::Policy => Request {
             method: "PUT",
             path: path("/api/policies", "id", "")?,

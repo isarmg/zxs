@@ -28,11 +28,9 @@ fn every_admin_message_has_exact_chinese_and_english_copy() {
             "我已审阅此计划及永久删除等后果，确认执行所示摘要对应的计划。",
             "I reviewed this plan and its consequences, including permanent deletion where applicable, and confirm this exact digest.",
         ),
-        (Message::RepositoryAction, "仓库", "Repository"),
         (Message::PolicyAction, "路径副本规则", "Path copy rule"),
         (Message::RuleAction, "主盘规则", "Placement rule"),
         (Message::InspectAction, "检查 / 查询", "Inspect / query"),
-        (Message::Name, "名称", "Name"),
         (Message::PrimarySlot, "主盘槽位", "Primary slot"),
         (
             Message::Copies,
@@ -153,7 +151,6 @@ fn actual_action_and_query_buttons_use_distinct_localized_keys() {
     use super::super::request::QUERIES;
     for keys in [
         vec![
-            Message::RepositoryAction,
             Message::PolicyAction,
             Message::RuleAction,
             Message::InspectAction,
@@ -185,7 +182,6 @@ fn shared_default_view_has_no_separate_web_binding_controls() {
         assert!(!source.contains("Kind::Smb"));
     }
     for key in [
-        Message::RepositoryAction,
         Message::PolicyAction,
         Message::RuleAction,
         Message::InspectAction,

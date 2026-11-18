@@ -4,14 +4,6 @@ use crate::ui::Page;
 #[test]
 fn administration_sections_only_offer_retained_actions() {
     assert_eq!(
-        Section::Repositories
-            .actions()
-            .iter()
-            .map(|(kind, _)| *kind)
-            .collect::<Vec<_>>(),
-        vec![Kind::Repository]
-    );
-    assert_eq!(
         Section::Rules
             .actions()
             .iter()
@@ -27,8 +19,7 @@ fn administration_sections_only_offer_retained_actions() {
             .collect::<Vec<_>>(),
         vec![Kind::Inspect]
     );
-    assert!(!Section::Rules.contains(Kind::Repository));
-    assert!(!Section::Repositories.contains(Kind::Inspect));
+    assert!(!Section::Rules.contains(Kind::Inspect));
 }
 
 #[test]
@@ -49,13 +40,12 @@ fn menu_changes_keep_drafts_and_original_unknown_operation() {
         let state = RwSignal::new(original);
         for page in [
             Page::Admin,
-            Page::Repositories,
             Page::Rules,
             Page::Diagnostics,
             Page::Files,
         ] {
             state.update(|s| s.change_page(page));
-            select(state, Kind::Repository);
+            select(state, Kind::Inspect);
             state.with_untracked(|s| {
                 assert_eq!(s.page, page);
                 assert_eq!(s.admin_console.kind, Kind::Rule);

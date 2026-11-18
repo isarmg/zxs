@@ -51,12 +51,12 @@ for (const message of ['Default branch saved', '已设为默认分支', 'Publica
 }
 expect('no notice is not success', {notice: false});
 expect('missing role is not success', {role: null});
-assert.ok(scene.includes('writes.length===11&&writes.every'));
+assert.ok(scene.includes('writes.length===10&&writes.every'));
 const navigation = readFileSync(new URL('../runner/admin_navigation.rs', import.meta.url), 'utf8');
-const pages = navigation.match(/const ALL: \[Self; 4\] = \[([\s\S]*?)\];/);
+const pages = navigation.match(/const ALL: \[Self; 3\] = \[([\s\S]*?)\];/);
 assert.ok(pages, 'missing current management navigation declaration');
 assert.deepEqual([...pages[1].matchAll(/Self::(\w+)/g)].map(match => match[1]),
-    ['Storage', 'Repositories', 'Rules', 'Diagnostics']);
+    ['Storage', 'Rules', 'Diagnostics']);
 assert.ok(scene.includes('.chain(AdminPage::ALL.map(AdminPage::labels))'));
 assert.ok(scene.includes('[("Status", "状态"), ("History", "历史记录")]'));
 assert.ok(scene.includes('.chain([("Account settings", "账号设置"), ("Details", "详情")])'));
@@ -72,11 +72,11 @@ const expectPublications = (label, actual, expected) => {
         expected, label);
     publicationCases++;
 };
-expectPublications('eight navigation targets plus dismiss, expiry and late delivery', writes(11), true);
-for (const count of [0, 8, 10, 12]) {
+expectPublications('seven navigation targets plus dismiss, expiry and late delivery', writes(10), true);
+for (const count of [0, 7, 9, 11]) {
     expectPublications(`wrong publication count ${count}`, writes(count), false);
 }
-for (let index = 0; index < 11; index++) {
+for (let index = 0; index < 10; index++) {
     for (const change of [
         {method: 'POST'}, {method: 'GET'}, {method: 'DELETE'},
         {path: '/api/repositories/repo/branches'},
@@ -84,12 +84,12 @@ for (let index = 0; index < 11; index++) {
         {path: '/api/file-manager/files/file/default-branch/outcome'},
         {path: '/api/repositories/repo/default-branch'},
     ]) {
-        const actual = writes(11);
+        const actual = writes(10);
         Object.assign(actual[index], change);
         expectPublications(`wrong publication at ${index}: ${JSON.stringify(change)}`, actual, false);
     }
 }
-assert.equal(publicationCases, 82);
+assert.equal(publicationCases, 75);
 assert.ok(scene.includes("if(!response.ok)throw new Error('real default branch publication failed')"));
 assert.ok(scene.includes("typeof window.__zxsNoticeDelivery.release==='function'"));
 console.log(`PASS ${cases} real-copy and settled-notice observer model cases; ${publicationCases} exact-publication predicate cases; no browser publication executed`);

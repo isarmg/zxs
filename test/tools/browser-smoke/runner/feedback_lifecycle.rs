@@ -184,9 +184,9 @@ fn exercise_notices(browser: &Browser) -> Result<()> {
         ),
     )?;
     if browser.script(
-        "const writes=window.__zxsNoticeDelivery.writes;return writes.length===11&&writes.every(write=>write.method==='PUT'&&/^\\/api\\/file-manager\\/files\\/[^/]+\\/default-branch$/.test(write.path))",
+        "const writes=window.__zxsNoticeDelivery.writes;return writes.length===10&&writes.every(write=>write.method==='PUT'&&/^\\/api\\/file-manager\\/files\\/[^/]+\\/default-branch$/.test(write.path))",
     )? != true {
-        return Err("notification lifecycle did not publish exactly eleven default-branch receipts".into());
+        return Err("notification lifecycle did not publish exactly ten default-branch receipts".into());
     }
     Ok(())
 }

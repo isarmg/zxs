@@ -49,7 +49,6 @@ fn edited_plan_inputs_require_a_new_review_before_commit_or_cancel() {
         (Kind::Inspect, "id", "plan-a", "plan-b"),
         (Kind::Policy, "copies", "1", "2"),
         (Kind::Rule, "slot", "P01", "P02"),
-        (Kind::Repository, "name", "saved-a", "saved-b"),
     ] {
         let mut model = Model {
             kind,
@@ -229,7 +228,7 @@ fn management_selection_does_not_bypass_session_busy_or_uncertainty_guards() {
                     _ => crate::ui::SessionTransition::Idle,
                 };
             });
-            select(state, Kind::Repository);
+            select(state, Kind::Policy);
             assert_eq!(
                 state.with_untracked(|s| s.admin_console.kind),
                 Kind::Inspect
@@ -241,10 +240,10 @@ fn management_selection_does_not_bypass_session_busy_or_uncertainty_guards() {
                 ..Default::default()
             };
         });
-        select(state, Kind::Repository);
+        select(state, Kind::Policy);
         assert_eq!(
             state.with_untracked(|s| s.admin_console.kind),
-            Kind::Repository
+            Kind::Policy
         );
     });
 }
@@ -546,7 +545,7 @@ fn every_mutation_failure_keeps_its_captured_operation_not_the_current_form() {
     .into_iter()
     .map(|(key, value)| (key.into(), value.into()))
     .collect();
-    let mut requests = [Kind::Repository, Kind::Policy, Kind::Rule]
+    let mut requests = [Kind::Policy, Kind::Rule]
         .into_iter()
         .map(|kind| request::build(kind, &fields, "original").unwrap())
         .collect::<Vec<_>>();
@@ -732,8 +731,9 @@ fn typed_execution_checks_session_busy_and_storage_before_starting_work() {
     Owner::new().with(|| {
         let state = RwSignal::new(State::default());
         let fields = [
-            ("name".into(), "Repository".into()),
-            ("slot".into(), "P01".into()),
+            ("repository".into(), "repo".into()),
+            ("id".into(), "policy".into()),
+            ("generation".into(), "0".into()),
             ("copies".into(), "1".into()),
         ]
         .into_iter()
@@ -788,7 +788,7 @@ fn typed_execution_checks_session_busy_and_storage_before_starting_work() {
             });
             execute(
                 state,
-                request::build(Kind::Repository, &fields, "original").unwrap(),
+                request::build(Kind::Policy, &fields, "original").unwrap(),
             );
             if storage == Storage::Ready {
                 execute(state, request::operation_outcome("original"));

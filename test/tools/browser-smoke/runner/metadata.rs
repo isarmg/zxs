@@ -543,7 +543,10 @@ pub(super) fn is_retired_directory_request(url: &str, origin: &str, method: &str
             || (path.starts_with("/api/repositories/")
                 && (path.ends_with("/default-branch")
                     || path.contains("/directory-branches/"))));
-    branch_write
+    let retired_creator = method == "POST" && (path == "/api/repositories"
+        || path.strip_prefix("/api/repositories/").and_then(|tail| tail.split_once('/'))
+            .is_some_and(|(repository, tail)| !repository.is_empty() && tail == "branches"));
+    retired_creator || branch_write
         || path.ends_with("/directory-scopes")
         || path.ends_with("/directory-select")
         || path.ends_with("/directory-git/initialize")

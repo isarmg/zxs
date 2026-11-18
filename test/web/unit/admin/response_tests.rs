@@ -165,39 +165,6 @@ fn diagnostic_and_outcome_contracts_cannot_be_interchanged() {
     assert!(inspect.validate(diagnostic).is_err());
 }
 #[test]
-fn repository_contract_accepts_domain_shape_not_generic_receipts() {
-    let repository = json!({"repository_id":"r", "name":"Repo", "history_tree_id":"h", "main_branch_id":"b", "primary_slot_id":"P01", "target_copies":1,"name_policy":"portable", "unicode_version":"17","smb_enabled":true,"smb_binding_generation":"1"});
-    let c = contract(
-        Kind::Repository,
-        &[("name", "Repo"), ("slot", "P01"), ("copies", "1")],
-    );
-    assert!(c.validate(repository.clone()).is_ok());
-    let mut missing_binding_state = repository.clone();
-    missing_binding_state
-        .as_object_mut()
-        .unwrap()
-        .remove("smb_enabled");
-    assert!(c.validate(missing_binding_state).is_err());
-    for (key, bad) in [
-        ("name", json!("Other")),
-        ("primary_slot_id", json!("P02")),
-        ("target_copies", json!(2)),
-        ("repository_id", json!("")),
-        ("history_tree_id", json!("")),
-        ("main_branch_id", json!("")),
-        ("smb_binding_generation", json!(1)),
-        ("unexpected", json!(true)),
-    ] {
-        let mut wrong = repository.clone();
-        wrong[key] = bad;
-        assert!(
-            c.validate(wrong).is_err(),
-            "repository accepted wrong {key}"
-        );
-    }
-}
-
-#[test]
 fn plan_query_checks_identity_and_shape_without_requiring_ready() {
     let request = request::query(
         QueryKind::Plan,

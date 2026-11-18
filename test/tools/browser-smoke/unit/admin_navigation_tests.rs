@@ -1,10 +1,9 @@
 use super::*;
 
 #[test]
-fn administration_navigation_has_four_distinct_current_destinations() {
+fn administration_navigation_has_three_distinct_current_destinations() {
     let expected = [
         (("Disks and admission", "磁盘与接入"), "storage"),
-        (("Repositories", "仓库"), "repositories"),
         (("Backup and placement", "备份与放置"), "rules"),
         (("Recovery and diagnostics", "恢复与检查"), "diagnostics"),
     ];
