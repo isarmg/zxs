@@ -55,23 +55,61 @@ fn operation_get_routes_separate_outcome_polling_from_explicit_observation() {
             format!("#/components/schemas/{name}")
         );
     }
-    let mut immediate = 0;
-    for path in object(&api["paths"]).unwrap().values() {
+    // A numeric minimum cannot distinguish a missing FILE writer from a
+    // retired directory route. Pin the actual method/path/status and whether
+    // the server uses a specialized inline, save or generic mutation envelope.
+    let expected = BTreeSet::from([
+        ("post", "/api/file-manager/disks/{slot}/namespace", "200", "inline"),
+        ("post", "/api/file-manager/files/{file}/branches", "200", "inline"),
+        ("post", "/api/file-manager/files/{file}/select", "200", "inline"),
+        ("post", "/api/file-manager/files/{file}/metadata", "200", "inline"),
+        ("post", "/api/file-manager/versions/{version}/metadata", "200", "inline"),
+        ("patch", "/api/file-manager/files/{file}/branches/{branch}", "200", "inline"),
+        ("patch", "/api/file-manager/files/{file}/nodes/{node}", "200", "inline"),
+        ("post", "/api/file-manager/files/{file}/merge", "200", "inline"),
+        ("post", "/api/file-manager/files/{file}/tags", "200", "inline"),
+        ("put", "/api/file-manager/files/{file}/default-branch", "200", "inline"),
+        ("post", "/api/file-manager/files/{file}/merge-history", "200", "inline"),
+        ("put", "/api/repositories/{repo}/backup-configuration", "200", "inline"),
+        ("put", "/api/repositories/{repo}/recursive-backup-configuration", "200", "inline"),
+        ("put", "/api/repositories/{repo}/recursive-backup-tree-configuration", "200", "inline"),
+        ("post", "/api/workspaces/{workspace}/commit", "200", "SaveOperation"),
+        ("post", "/api/workspaces/{workspace}/commit", "202", "SaveOperation"),
+        ("put", "/api/repositories/{repository}/placement-configuration", "200", "GenericOperation"),
+        ("post", "/api/files/{file}/deletion", "200", "GenericOperation"),
+        ("post", "/api/files/{file}/deletion/undo", "200", "GenericOperation"),
+    ]);
+    let mut actual = BTreeSet::new();
+    for (route, path) in object(&api["paths"]).unwrap() {
         for method in ["post", "put", "patch", "delete"] {
             let Some(responses) = path.get(method).and_then(|item| item.get("responses")) else {
                 continue;
             };
-            for response in object(responses).unwrap().values() {
-                let shape = &response["content"]["application/json"]["schema"];
-                if shape["properties"].get("operation_id").is_some() {
-                    immediate += 1;
-                    assert!(shape["properties"].get("current_health").is_none());
-                    assert!(shape["properties"].get("checked_at").is_none());
+            for (status, response) in object(responses).unwrap() {
+                let declaration = &response["content"]["application/json"]["schema"];
+                let (name, shape) = match declaration["$ref"].as_str() {
+                    Some("#/components/schemas/SaveOperation") => ("SaveOperation", &api["components"]["schemas"]["SaveOperation"]),
+                    Some("#/components/schemas/GenericOperation") => ("GenericOperation", &api["components"]["schemas"]["GenericOperation"]),
+                    Some("#/components/schemas/OperationObservation" | "#/components/schemas/SaveOperationObservation" | "#/components/schemas/GenericOperationObservation") => {
+                        panic!("mutation returns an explicit observation: {method} {route} {status}")
+                    }
+                    None if declaration["properties"].get("operation_id").is_some() => ("inline", declaration),
+                    _ => continue,
+                };
+                let key = (method, route.as_str(), status.as_str(), name);
+                let fields = object(&shape["properties"]).unwrap();
+                let required = array(&shape["required"]).unwrap();
+                for field in ["operation_id", "operation_kind", "request_digest", "state", "commit_state", "result", "error"] {
+                    assert!(fields.contains_key(field) && required.iter().any(|v| v.as_str() == Some(field)), "{key:?}: {field}");
                 }
+                assert_eq!(shape["additionalProperties"], false, "{key:?}");
+                assert_eq!(fields["operation_id"]["$ref"], "#/components/schemas/OperationId", "{key:?}");
+                assert!(!fields.contains_key("current_health") && !fields.contains_key("checked_at"), "{key:?}");
+                actual.insert(key);
             }
         }
     }
-    assert!(immediate >= 16, "missing direct mutation response shapes");
+    assert_eq!(actual, expected, "published direct mutation response shapes");
 }
 
 #[test]
