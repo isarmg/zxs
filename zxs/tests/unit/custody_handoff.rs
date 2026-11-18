@@ -91,6 +91,17 @@ fn original_move_is_not_old_source_fallback_after_decision_and_recovers_only_the
         let f=Fixture::build(true,false);let r=f.cmd();let mut hit=false;
         assert!(perform(&f.sys,r,&mut |s|{if s==step&&!hit{hit=true;return Err(io::Error::other("injected at exact native boundary"));}Ok(())}).is_err());assert!(hit);
         let state=f.receipt(r).status;
+        // This is the confirmed name projection, not a claim that either
+        // root currently has serviceable bytes. The sealed/synced frame alone
+        // never withdraws A. The confirmed decision reserves B before install.
+        {
+            use crate::pool::lease::{Access,LocalPool};
+            let(_,_,j)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+            let before=matches!(step,Cut::Reservation|Cut::Intent|Cut::FrameSynced);
+            assert_eq!(j.occupied_root(f.from,"name"),before);assert_eq!(j.occupied_root(f.to,"name"),!before);
+            let bound=if before{f.from}else{f.to};
+            assert_eq!(j.on(bound).map(|row|(row.create.entry,row.create.file)).collect::<Vec<_>>(),[(f.file.entry,r.id)]);
+        }
         if matches!(step,Cut::Reservation|Cut::Intent|Cut::FrameSynced){
             assert!(matches!(state,MoveStatus::Reserved|MoveStatus::Prepared|MoveStatus::AwaitingDecisionConfirmation));
             f.all_history();assert_eq!(z::current_info(&f.sys,r.id).unwrap().file.volume,f.from);

@@ -30,7 +30,7 @@ macro_rules! id {
     }
 }
 id!(OperationId); id!(PoolId); id!(VolumeId);
-id!(FileId); id!(EntryId); id!(HistoryId);
+id!(FileId); id!(EntryId); id!(HistoryId); id!(DirectoryId);
 id!(BranchId); id!(NodeId); id!(VersionId);
 
 /// Native FULL basename prefix. This is a distinct storage ID, not the

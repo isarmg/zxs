@@ -98,7 +98,7 @@ impl<'p> LifecycleGrant<'p>{
             // In particular, do not precharge an Ordinary frame to a matching
             // RESTORE that needs its own final reserved position or bytes.
             s.room_for_effect(MAX_FRAME,r.call.effect(r.id,r.op))?;
-            if matches!(r.call,Call::Restore{..})&&s.named(r.to,&c.create.name).is_some(){
+            if matches!(r.call,Call::Restore{..})&&s.occupied_root(r.to,&c.create.name){
                 return Err(invalid("a different active FILE owns the restore destination name"));}
             (prior,child,original)
         };

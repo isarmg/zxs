@@ -14,6 +14,8 @@ pub(in crate::ordinary) mod credits;
 pub(in crate::ordinary) mod cycle;
 mod windows;
 mod graph;
+mod names;
+use names::{Member,Names};
 pub(in crate::ordinary) use graph::Graph;
 pub(in crate::ordinary) use windows::WorkWindow;
 use credits::{Credits,Effect};
@@ -82,7 +84,7 @@ type Allowed<'a>=crate::pool::JournalRegistration<'a>;
 struct OriginalIndex{
     credits:Credits,
     ops:BTreeSet<OperationId>,files:BTreeMap<FileId,usize>,entries:BTreeSet<EntryId>,histories:BTreeSet<HistoryId>,
-    names:BTreeSet<(VolumeId,String)>,tickets:BTreeSet<OperationId>,native:BTreeSet<fs::Birth>,saved:BTreeMap<FileId,usize>,
+    names:Names,tickets:BTreeSet<OperationId>,native:BTreeSet<fs::Birth>,saved:BTreeMap<FileId,usize>,
     formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,branches:BTreeSet<BranchId>,
     versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,Vec<usize>>,moves:BTreeMap<FileId,usize>,
 }
@@ -143,7 +145,7 @@ impl OriginalIndex{
         if self.work(o.file,ds)?.last().is_some(){return Err(invalid("cannot hand off a dirty working chain"));}
         if self.tickets.contains(&o.ticket)||self.ops.contains(&o.ticket)||self.tickets.contains(&o.op)||self.ops.contains(&o.op){
             return Err(invalid("an original operation or custody ticket has already been used"));}
-        registered_handoff(o,allow,before,graph,self.names.contains(&(o.from,o.name.clone())),self.names.contains(&(o.to,o.name.clone())))?;
+        registered_handoff(o,allow,before,graph,&self.names)?;
         Ok(graph)
     }
     fn admit(&self,f:&Decision,frames:&[Decision],used:usize,prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
@@ -160,7 +162,7 @@ impl OriginalIndex{
             }
             Decision::Create(f)=>{let c=&f.create;
                 if !allow.file(c.volume,c.uid,c.directory.entity,&c.directory.birth,false)
-                    ||self.files.contains_key(&c.file)||self.names.contains(&(c.volume,c.name.clone()))||self.entries.contains(&c.entry)
+                    ||self.files.contains_key(&c.file)||self.names.occupied_root(c.volume,&c.name)||self.entries.contains(&c.entry)
                     ||self.histories.contains(&c.history)||self.tickets.contains(&c.attempt)||self.native.contains(&c.local.birth)
                     ||self.native.contains(&c.directory.birth){return Err(invalid("conflicting original FILE creation"));}
             }
@@ -196,11 +198,9 @@ impl OriginalIndex{
         self.ops.insert(d.op());
         match d{
             Decision::Move(m)=>{let o=&m.original;self.moves.insert(o.file,index);self.tickets.insert(o.ticket);
-                let(src_active,dst_active)=active_names(o);
-                if src_active{self.names.remove(&(o.from,o.name.clone()));}
-                if dst_active{self.names.insert((o.to,o.name.clone()));}
+                self.names.apply_handoff(o,false)?;
                 if o.mode==Method::Transfer{for obj in m.target.each(){self.native.insert(obj.birth.clone());}}}
-            Decision::Create(f)=>{let c=&f.create;self.files.insert(c.file,index);self.names.insert((c.volume,c.name.clone()));
+            Decision::Create(f)=>{let c=&f.create;self.files.insert(c.file,index);self.names.create_file(c.volume,&c.name,c.entry,c.file)?;
                 self.entries.insert(c.entry);self.histories.insert(c.history);self.tickets.insert(c.attempt);
                 self.native.insert(c.directory.birth.clone());self.native.insert(c.local.birth.clone());}
             Decision::Save(f)=>{self.saved.insert(f.original.file,index);self.native.insert(f.material.object.birth.clone());}
@@ -221,7 +221,7 @@ fn active_names(o:&MoveOrigin)->(bool,bool){
 }
 /// A logical precondition, not a warrant to install/delete material. The two
 /// endpoints are admitted as a pair by the *same* immutable original record.
-fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,graph:Graph<'a>,at_source:bool,at_target:bool)->io::Result<()>{
+fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,graph:Graph<'a>,names:&Names)->io::Result<()>{
     use crate::pool::lease::recycle::Direction;use super::custody::purpose::Purpose;
     let src=(o.from,o.src_root.entity,&o.src_root.birth);let dst=(o.to,o.dst_root.entity,&o.dst_root.birth);
     let eligible=match o.purpose{
@@ -229,14 +229,14 @@ fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,gr
         Purpose::Delete{..}=>reg.dedicated(o.uid,Direction::ToRecycle,src,dst),
         Purpose::Restore{..}=>reg.dedicated(o.uid,Direction::FromRecycle,src,dst),
     };
-    let(src_active,_)=active_names(o);
-    if !eligible||at_source!=src_active||at_target{return Err(invalid("wrong registered role, source name or occupied current destination"));}
+    if !eligible{return Err(invalid("wrong registered custody endpoints"));}
+    names.require_handoff(o)?;
     o.purpose.check_transfer(o.mode,&o.src_root,&o.dst_root)?;before.require_next(o)?;o.require_graph(before.birth(),graph)?;
     before.graph_sites(graph)?.check(&o.src_root)
 }
 
 pub(crate) struct Journal{
-    credits:Credits,
+    credits:Credits,names:Names,
     decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,Vec<usize>>,moves:BTreeMap<FileId,usize>,pub(super) moving:Option<MoveAllocation>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
     pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) incrementing:Option<DeltaAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
 }
@@ -305,7 +305,7 @@ impl Journal{
                 if !allowed.file(a.volume,a.uid,a.root.entity,&a.root.birth,true)||
                     (!last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.op)
                     ||idx.files.contains_key(&a.file)||idx.entries.contains(&a.entry)||idx.histories.contains(&a.history)
-                    ||idx.names.contains(&(a.volume,a.name.clone()))||idx.tickets.contains(&a.attempt)
+                    ||idx.names.occupied_root(a.volume,&a.name)||idx.tickets.contains(&a.attempt)
                     ||a.stage.as_ref().is_some_and(|s|idx.native.contains(&s.object.birth)))){
                     return Err(invalid("original FILE allocation no longer matches its registered root or frontier"));
                 }
@@ -357,6 +357,7 @@ impl Journal{
                     // earlier custody, restore the actual admitted predecessor,
                     // not the creation site or an untrusted location claim.
                     let id=m.original.file;
+                    idx.names.apply_handoff(&m.original,true)?;
                     match ds[..ds.len()-1].iter().rposition(|d|matches!(d,Decision::Move(old) if old.original.file==id)){
                         Some(i)=>{idx.moves.insert(id,i);},None=>{idx.moves.remove(&id);}
                     }
@@ -369,10 +370,10 @@ impl Journal{
                     let chain=idx.spans.get_mut(&s.original.file).ok_or_else(||invalid("missing original span chain"))?;
                     if chain.pop()!=Some(ds.len()-1){return Err(invalid("wrong unconfirmed working edge"));}
                 },Decision::Formal(f)=>{idx.formal.remove(&f.original.file);idx.nodes.remove(&f.original.node);},
-                Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{idx.files.remove(&f.create.file);}}
+                Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{let c=&f.create;idx.names.hide_created(c.volume,&c.name,c.entry,c.file)?;idx.files.remove(&c.file);}}
             ds.pop();
         }
-        Ok(Self{credits:idx.credits,decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
+        Ok(Self{credits:idx.credits,names:idx.names,decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
     }
     pub(super) fn frontier(&self)->(u64,[u8;32]){
         (self.decisions.len() as u64,self.decisions.last().map_or(self.genesis,Decision::digest))
@@ -412,7 +413,9 @@ impl Journal{
     pub(super) fn decided(&self,op:OperationId)->Option<&Decision>{self.decisions.iter().find(|d|d.op()==op)}
     pub(super) fn operation(&self,op:OperationId)->Option<&Frame>{self.decided(op)?.creation().ok()}
     pub(super) fn file(&self,id:FileId)->Option<&Frame>{self.decisions.get(*self.originals.get(&id)?)?.creation().ok()}
-    pub(super) fn named(&self,v:VolumeId,name:&str)->Option<&Frame>{self.on(v).find(|f|f.create.name==name)}
+    /// Confirmed ordinary name occupancy only. Still-unconfirmed reservations are
+    /// checked separately. Neither a name nor a nonempty result is a source permit.
+    pub(super) fn occupied_root(&self,v:VolumeId,name:&str)->bool{self.names.occupied_root(v,name)}
     pub(super) fn on_all(&self)->impl Iterator<Item=&Frame>{self.decisions.iter().filter_map(|d|d.creation().ok())}
     pub(in crate::ordinary) fn confirmed_handoff(&self,op:OperationId)->io::Result<(&Moved,&MoveAllocation)>{
         let m=self.decided(op).ok_or_else(||invalid("no confirmed handoff at the original SYSTEM lower bound"))?.moved()?;
@@ -439,8 +442,9 @@ impl Journal{
         Placement::from_prefix(c,old)
     }
     pub(super) fn volume_of(&self,f:&Frame)->VolumeId{self.placed(f.create.file).map_or(f.create.volume,|m|m.original.to)}
-    pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|self.volume_of(f)==v&&
-        !self.placed(f.create.file).is_some_and(|m|matches!(m.original.purpose,super::custody::purpose::Purpose::Delete{..})))}
+    pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|{
+        let c=&f.create;self.names.root(v,&c.name)==Some(Member::File{entry:c.entry,file:c.file})
+    })}
     pub(super) fn moves(&self)->impl Iterator<Item=&Moved>{self.decisions.iter().filter_map(|d|d.moved().ok())}
     /// Predecision check for an exact, unsigned-by-itself lifecycle proposal.
     /// Not the cold admission of a completed DELETE/RESTORE. Never accept a
@@ -455,7 +459,7 @@ impl Journal{
         self.room_for_effect(MAX_FRAME,o.effect())?;
         let current=self.confirmed_file_cycle(o.file)?;
         let graph=current.clean_transportable()?; // all actual formal children; never an active dirty window
-        registered_handoff(o,reg,current.placement(),graph,self.named(o.from,&o.name).is_some(),self.named(o.to,&o.name).is_some())
+        registered_handoff(o,reg,current.placement(),graph,&self.names)
     }
     /// Preflight is not an I/O permit. This is repeated from the very same
     /// writer snapshot immediately before naming the original reservation.
@@ -464,7 +468,8 @@ impl Journal{
         let c=self.file(id).ok_or_else(||invalid("no original FILE for handoff"))?;
         if self.pending.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||self.editing.is_some()||
             self.incrementing.is_some()||self.moving.is_some()||self.ticket_used(op)||from==to||c.create.volume!=from||
-            !self.clean_initial_handoff(id)||self.named(to,&c.create.name).is_some(){
+            !self.clean_initial_handoff(id)||self.names.root(from,&c.create.name)!=Some(Member::File{entry:c.create.entry,file:id})||
+            self.occupied_root(to,&c.create.name){
             return Err(invalid("handoff needs a free original slot and operation, the complete clean initial FILE history and unoccupied registered target"));
         }Ok(())
     }

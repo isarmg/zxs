@@ -317,3 +317,32 @@ fn late_create_occupant_keeps_the_unconfirmed_original_and_never_replaces_an_ins
         assert_eq!(read_initial_file(&t.system,completed.file).unwrap().0,completed);assert_eq!(osfs::read(displaced).unwrap(),bytes);
     }
 }
+
+
+#[test]
+#[ignore="two real private registered filesystems"]
+fn same_root_name_does_not_gain_a_file_identity_above_the_original_confirmation_frontier(){
+    let t=Fixture::new();let second=inspect(&t.system).unwrap().volumes.into_iter()
+        .find(|v|v.volume.path==t.other).unwrap().id;
+    let other=create_empty(&t.system,OperationId::new().unwrap(),second,"same").unwrap();
+    let op=OperationId::new().unwrap();
+    create_inner(&t.system,op,t.v,"same",|cut|if cut==Cut::FrameSynced{
+        Err(io::Error::other("full frame exists; native lower bound has not acknowledged it"))
+    }else{Ok(())}).unwrap_err();
+    let old=creation_receipt(&t.system,op).unwrap().unwrap();
+    assert_eq!(old.status,CreationStatus::DecisionAwaitingConfirmation);
+    {
+        let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();
+        assert!(!s.occupied_root(t.v,"same"));assert!(s.on(t.v).next().is_none());assert!(s.file(old.file.file).is_none());
+        assert_eq!(s.on(second).map(|f|(f.create.entry,f.create.file)).collect::<Vec<_>>(),[(other.entry,other.file)]);
+        assert!(s.occupied_root(second,"same"));
+    }
+    assert!(create_empty(&t.system,OperationId::new().unwrap(),t.v,"same").is_err());
+    let here=create_empty(&t.system,op,t.v,"same").unwrap();assert_eq!(here.file,old.file.file);assert_eq!(here.entry,old.file.entry);
+    assert_ne!(here.entry,other.entry);assert_ne!(here.file,other.file);
+    let(_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();
+    for(vol,want)in[(t.v,here),(second,other)]{
+        assert!(s.occupied_root(vol,"same"));
+        assert_eq!(s.on(vol).map(|f|(f.create.entry,f.create.file)).collect::<Vec<_>>(),[(want.entry,want.file)]);
+    }
+}

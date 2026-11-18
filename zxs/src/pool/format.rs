@@ -139,6 +139,12 @@ impl Record {
     pub(super) fn original_root(&self,i:usize)->(Entity,&fs::Birth){
         (self.info.volumes[i].volume.entity,&self.roots[i])
     }
+    // A business directory is never the SYSTEM register or any registered
+    // root, even when ordinary and SYSTEM roots share a filesystem.
+    pub(super) fn directory_child(&self,volume:VolumeId,uid:u32,entity:Entity,birth:&fs::Birth)->bool{
+        self.allows_file(volume,uid,entity,birth,false)&&self.origin!=entity && &self.origin_birth!=birth &&
+            self.info.volumes.iter().zip(&self.roots).all(|(r,b)|r.volume.entity!=entity&&b!=birth)
+    }
     pub(super) fn allows_file(&self,volume:VolumeId,uid:u32,entity:Entity,birth:&fs::Birth,root:bool)->bool{
         uid==self.actor_uid && self.info.volumes.iter().enumerate().any(|(i,r)|
             r.id==volume && r.volume.role==Role::File && r.volume.entity.device==entity.device

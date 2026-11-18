@@ -19,6 +19,7 @@ pub use formal::types::{FormalNode,FormalStorage};
 mod draft;
 pub use draft::{save_first,first_save_receipt,read_current_to,current_info,CurrentFile,FirstSaveObservation};
 pub use draft::types::{DraftClaim,DraftReceipt,DRAFT_CHUNK};
+mod directory;
 mod material;
 mod placement;
 mod allocation;
@@ -81,7 +82,7 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
     if let Some(a)=&state.allocated{
         if a.op!=op || a.request!=request {return Err(invalid("another original FILE allocation needs completion"));}
     }else{
-        if state.named(id,name).is_some(){return Err(io::Error::new(io::ErrorKind::AlreadyExists,"FILE name is already registered"));}
+        if state.occupied_root(id,name){return Err(io::Error::new(io::ErrorKind::AlreadyExists,"FILE name is already registered"));}
         state.room_for(wire::MAX_FRAME)?;
     }
     let volume=pool.ordinary(id)?;

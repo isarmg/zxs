@@ -44,6 +44,7 @@ pub(crate) struct JournalRegistration<'a>(&'a Record);
 impl JournalRegistration<'_>{
     pub(crate) fn basis(&self)->(PoolId,OperationId,[u8;32]){(self.0.info.id,self.0.info.initialized_by,self.0.digest())}
     pub(crate) fn file(&self,id:VolumeId,uid:u32,e:Entity,b:&fs::Birth,root:bool)->bool{self.0.allows_file(id,uid,e,b,root)}
+    pub(crate) fn directory_child(&self,id:VolumeId,uid:u32,e:Entity,b:&fs::Birth)->bool{self.0.directory_child(id,uid,e,b)}
     pub(crate) fn dedicated(&self,uid:u32,d:lease::recycle::Direction,f:(VolumeId,Entity,&fs::Birth),t:(VolumeId,Entity,&fs::Birth))->bool{
         self.0.dedicated_route(uid,d,f.0,t.0).is_ok_and(|route|route.matches(f,t))
     }

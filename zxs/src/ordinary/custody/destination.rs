@@ -12,7 +12,7 @@ pub(in crate::ordinary) enum Method{Rename,Transfer}
 /// This identity must still match a real authenticated registration before a
 /// name can be reserved. In particular the recycle role never passes ordinary().
 fn vacant(s:&Journal,v:&FileVolume<'_>,name:&str)->io::Result<()>{
-    if s.named(v.id(),name).is_some()||s.allocated.as_ref().is_some_and(|a|a.volume==v.id()&&a.name==name){
+    if s.occupied_root(v.id(),name)||s.allocated.as_ref().is_some_and(|a|a.volume==v.id()&&a.name==name){
         return Err(invalid("the selected target name is already decided or reserved by an original CREATE"));
     }
     material::vacant_for_move(v,name)

@@ -43,7 +43,7 @@ fn actual_cross_filesystem_target_is_complete_preallocated_unnamed_independent_a
         assert_eq!(hash_unnamed(&copy.file,&copy.stamp).unwrap(),original.digest);
     }
     prepared.at_vacant_cut(Access::Read,|_,s,old,new|{
-        assert_eq!(old.id(),t.src.volume());assert_eq!(new.id(),t.dest);assert!(s.named(t.dest,t.src.name()).is_none());Ok(())
+        assert_eq!(old.id(),t.src.volume());assert_eq!(new.id(),t.dest);assert!(!s.occupied_root(t.dest,t.src.name()));Ok(())
     }).unwrap();
     assert_eq!(fs::read_dir(&t.b).unwrap().count(),0);assert_eq!(fs::read(t.system.join("REGISTRATION")).unwrap(),before);
     drop(prepared);assert_eq!(fs::read_dir(&t.b).unwrap().count(),0);
@@ -118,7 +118,7 @@ fn original_move_reservation_cold_reopens_one_pending_slot_never_grants_serving_
     let (pool,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();
     let a=s.moving.as_ref().unwrap();assert_eq!(a.original,o);
     assert!(!a.opened());assert!(!a.retiring());assert!(a.stage().is_none());
-    assert!(s.decided(op).is_none());assert!(s.named(t.src.volume(),t.src.name()).is_some());assert!(s.named(t.dest,t.src.name()).is_none());
+    assert!(s.decided(op).is_none());assert!(s.occupied_root(t.src.volume(),t.src.name()));assert!(!s.occupied_root(t.dest,t.src.name()));
     let(c,f,d)=t.src.originals();let m=Moved::seal(pool.id(),a.seq,a.previous,o.clone(),a.digest,None,Sites::birthplace(c,f,d)).unwrap();
     assert!(a.matches(&m));assert!(s.confirmed_handoff(op).is_err());
     let pending_inode=fs::metadata(t.system.join("FILE-ALLOCATION")).unwrap();
