@@ -270,11 +270,38 @@ fn unborn_planner_uses_registered_root_without_making_a_historical_entry_or_node
     ).as_path());
     let identity = fs::metadata(&extent).unwrap();
     let extent_bytes = fs::read(&extent).unwrap();
+    // The native original-files capture must hash the entire real data file,
+    // not its visible two-byte prefix, a merged sparse body or its index.
+    let selected_scope = {
+        let context = engine.planning_context();
+        let owner = second_request.manifest.file();
+        let record = &context.state.file_containers[&owner];
+        let disk = context.config.disks.iter().find(|d| d.disk_id == record.owner_disk.to_string()).unwrap();
+        let original = crate::engine::fresh_layout::containers::published_source(
+            context.config, context.disk_resources, context.state, owner, disk,
+        ).unwrap();
+        crate::container_storage::ObservedContainerReplica::observe(original).unwrap()
+    };
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let capture = selected_scope.capture_packed_working_files(&stop).unwrap().unwrap();
+    assert_eq!(capture.manifest(), &second_request.manifest);
+    assert_eq!(capture.files().len(), 1);
+    let checked = &capture.files()[0];
+    assert_eq!(checked.pack(), pack);
+    assert_eq!(checked.physical_bytes(), extent_bytes.len() as u64);
+    assert_eq!(checked.raw_blake3(), blake3::hash(&extent_bytes));
+    assert_ne!(checked.raw_blake3().as_bytes(), &pack.index_digest());
+    capture.require_current().unwrap();
+    assert!(selected_scope.capture_packed_working_files(&std::sync::atomic::AtomicBool::new(true)).is_err());
     let live = engine.open_unborn_working(&target).unwrap();
     let parked = temporary.path().join("held-working-extent");
     fs::rename(&extent, &parked).unwrap();
     fs::copy(&parked, &extent).unwrap();
     assert_ne!(fs::metadata(&extent).unwrap().ino(), identity.ino());
+    assert!(capture.require_current().is_err());
+    assert!(selected_scope.capture_packed_working_files(&stop).is_err());
+    drop(capture);
+    drop(selected_scope);
     assert!(live.read_at(&mut [0; 2], 0).is_err());
     drop(live);
     drop(engine);

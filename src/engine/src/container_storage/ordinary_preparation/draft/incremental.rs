@@ -29,6 +29,10 @@ pub(in crate::container_storage::ordinary_preparation) struct HeldManualMaterial
 }
 
 impl HeldManualMaterial {
+    pub(in crate::container_storage::ordinary_preparation) fn packs(&self) -> &BTreeMap<PackId, HeldPack> {
+        &self.packs
+    }
+
     pub(super) fn capture(scope: &ObservedContainerReplica, state: &State) -> Result<Self> {
         let (base, _) = scope.record.working.draft().ok_or_else(changed)?;
         let manifest = scope.record.working.incremental().ok_or_else(changed)?;

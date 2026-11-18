@@ -140,17 +140,39 @@ impl HeldPack {
         result.validate(root)?;
         Ok(result)
     }
-    pub(super) fn verify_full(&self, root: &DiskRoot) -> Result<()> {
+    fn visit_verified_data(
+        &self, root: &DiskRoot, mut checkpoint: impl FnMut() -> Result<()>, mut visit: impl FnMut(&[u8]),
+    ) -> Result<()> {
+        checkpoint()?;
         self.validate(root)?;
         let mut buffer = vec![0; self.pack.data_bytes().min(VERIFY_CHUNK) as usize];
         let mut at = 0;
         while at < self.pack.data_bytes() {
+            checkpoint()?;
             let count = (self.pack.data_bytes() - at).min(VERIFY_CHUNK) as usize;
             self.file.read_exact_at(&mut buffer[..count], at)?;
             verify_chunk(&buffer[..count], self.index.expected_chunk(at / VERIFY_CHUNK))?;
+            visit(&buffer[..count]);
             at += count as u64;
         }
+        checkpoint()?;
         self.validate(root)
+    }
+    pub(super) fn verify_full(&self, root: &DiskRoot) -> Result<()> {
+        self.visit_verified_data(root, || Ok(()), |_| {})
+    }
+    /// Compute the raw hash over the whole actual file, not a conversion from
+    /// its authenticated index, one of its logical slices, or the merged FILE.
+    pub(super) fn raw_blake3(&self, root: &DiskRoot, mut checkpoint: impl FnMut() -> Result<()>) -> Result<blake3::Hash> {
+        let mut hash = blake3::Hasher::new();
+        self.visit_verified_data(root, &mut checkpoint, |part| { hash.update(part); })?;
+        let mut trailer = vec![0; self.pack.index_bytes()];
+        self.file.read_exact_at(&mut trailer, self.pack.data_bytes())?;
+        hash.update(&trailer);
+        CheckedIndex::from_trailer(self.pack, trailer).map_err(manifest_error)?;
+        self.validate(root)?;
+        checkpoint()?;
+        Ok(hash.finalize())
     }
     pub(in crate::container_storage::ordinary_preparation) fn evidence(&self) -> WorkingPack { self.pack }
     pub(in crate::container_storage::ordinary_preparation) fn validate(&self, root: &DiskRoot) -> Result<()> {

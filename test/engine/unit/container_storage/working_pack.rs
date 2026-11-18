@@ -53,6 +53,8 @@ fn frame_fragments_share_one_inode_and_a_cold_range_checks_only_its_selected_chu
     cold.read_at(&root, &mut across, where_).unwrap();
     assert_eq!(&across, b"11end");
     assert!(cold.read_at(&root, &mut across, 0).is_err());
+    assert!(cold.raw_blake3(&root, || Ok(())).is_err(),
+        "complete raw evidence cannot skip a corrupt unrequested chunk");
     drop(cold);
     let trailer = pack.data_bytes();
     let file = fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();

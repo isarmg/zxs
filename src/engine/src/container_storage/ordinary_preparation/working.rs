@@ -12,6 +12,8 @@ use storage_contract::file_draft::manifest::{
 use storage_contract::{ContentHash, FileId};
 
 mod pack;
+mod proof;
+pub(crate) use proof::{CapturedPackedWorkingFiles, VerifiedWorkingPackFile};
 pub(in crate::container_storage::ordinary_preparation) use pack::HeldPack;
 mod full;
 pub(crate) use full::PreparedUnbornFull;
