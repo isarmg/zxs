@@ -36,6 +36,7 @@ pub mod storage_independent_source;
 pub mod storage_independent_topology;
 pub mod storage_lifecycle;
 pub mod storage_readmission;
+pub mod namespace_root;
 pub mod working_tree;
 pub mod snapshot_worktree;
 pub mod file_draft;

@@ -12,11 +12,11 @@ use crate::engine::membership_transition::pending::reservation::fresh_addition::
     Preparation, PreparationFormat, RecordedAdditionArea, origin,
 };
 use crate::persist::layout;
-use crate::working_tree::records::{file_identity, local_entity};
+use crate::namespace_roots::{file_identity, local_entity};
 use platform_io::fs_safety::{EntryName, linux::FileIdentity};
 use std::{collections::BTreeMap, sync::Arc};
 use storage_contract::{DiskId, Generation, OperationId, Principal};
-use storage_contract::working_tree::{
+use storage_contract::namespace_root::{
     DirectoryId, LocalDirectoryBinding, RootBinding, RootId, StorageLayout,
 };
 

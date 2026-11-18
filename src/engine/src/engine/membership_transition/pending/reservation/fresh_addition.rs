@@ -17,9 +17,9 @@ use std::{
 };
 use crate::engine::fresh_layout::{self, FreshLayoutError as Failure};
 use crate::engine::fresh_layout::root_areas::HeldRootAreas;
-use crate::working_tree::records::file_identity;
+use crate::namespace_roots::file_identity;
 use storage_contract::{DiskId, Generation, OperationId, Principal, Sequence};
-use storage_contract::working_tree::{
+use storage_contract::namespace_root::{
     LocalDirectoryBinding, RootBinding,
 };
 

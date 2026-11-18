@@ -10,12 +10,12 @@ use crate::engine::membership_transition::backup::registry::{BackupChoiceContext
 use crate::engine::membership_transition::Origin;
 use crate::history_package::{install_preparation_bytes, preparation_checkpoint};
 use crate::persist::layout;
-use crate::working_tree::records::local_entity;
+use crate::namespace_roots::local_entity;
 use crate::{Result, canonical_json};
 use data_serialization::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::atomic::AtomicBool};
 use storage_contract::{DiskId, Generation, OperationId, decode_strict};
-use storage_contract::working_tree::{DirectoryId, RootBinding, RootId, StorageLayout};
+use storage_contract::namespace_root::{DirectoryId, RootBinding, RootId, StorageLayout};
 
 mod layout_source;
 mod layouts;

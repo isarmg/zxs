@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_CATALOG_ROWS: usize = 32_768;
-pub(crate) const MAX_DIRECTORY_DEPTH: usize = 64;
+pub(crate) use crate::namespace_roots::MAX_DIRECTORY_DEPTH;
 
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum AdmissionError {

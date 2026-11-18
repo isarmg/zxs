@@ -5,7 +5,7 @@ use crate::journal::Candidate;
 use crate::persist::file_draft::birth as codec;
 use crate::{Error, OperationResult, Result, State, ValidatedConfig};
 use storage_contract::file_container::{ContainerEntity, FileContainerRecord};
-use storage_contract::working_tree::RootId;
+use storage_contract::namespace_root::RootId;
 use storage_contract::{DiskId, FileId, Principal, Sequence};
 
 mod first;
@@ -217,7 +217,7 @@ pub(super) fn add_owner(
     record.replicas.insert(proof.owner(), storage_contract::file_container::ContainerReplica {
         root_id: proof.root,
         prefixes: Vec::new(),
-        preparation: storage_contract::working_tree::DirectoryId::generate()?,
+        preparation: storage_contract::namespace_root::DirectoryId::generate()?,
         // Only a budget row. ContainerPreparation::finish replaces this from
         // the actual EXCL descriptor before Candidate/snapshot construction.
         entity: ContainerEntity::new(0, 0),

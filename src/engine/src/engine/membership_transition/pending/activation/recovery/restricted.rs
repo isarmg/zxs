@@ -742,7 +742,7 @@ fn verify_held_genesis(
                 .ok_or(crate::engine::FreshLayoutError::Registration)?;
             let management = held.root.private_entry_matching(
                 &layout::ZXS_DATA_ROOT,
-                crate::working_tree::records::file_identity(binding.roots.zxs_data.entity),
+                crate::namespace_roots::file_identity(binding.roots.zxs_data.entity),
             ).map_err(crate::engine::fresh_layout::directory_error)?;
             let saved: ValidatedConfig = management.read_json_observed(
                 &held.disk.root.join(layout::GENESIS_CONFIGURATION.as_path()),

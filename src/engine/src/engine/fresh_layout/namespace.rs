@@ -5,7 +5,7 @@ use crate::disk::{DiskResources, DiskRoot, decode_seal, validate_stored_seal};
 use crate::engine::PlanningContext;
 use crate::{DiskConfig, Engine, OperationResult, Repository, Result, State, Config};
 use storage_contract::{BranchId, DiskId, OperationId, RepositoryId, Sequence};
-use storage_contract::working_tree::RootBinding;
+use storage_contract::namespace_root::RootBinding;
 use crate::persist::namespace_root::{self, RootOrigin};
 
 mod backup;

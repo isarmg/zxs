@@ -2,7 +2,7 @@
 use super::*;
 use crate::disk_names::configuration::ConfiguredDiskNames;
 use storage_contract::file_container::{ContainerAreas, ContainerNamespace, ContainerPrefix};
-use storage_contract::working_tree::DirectoryId;
+use storage_contract::namespace_root::DirectoryId;
 
 /// A fresh pool admits at most 32 disks. The owner itself is not a prefix.
 const MAX_ORDINARY_SOURCE_PREFIXES: usize = 31;
@@ -181,7 +181,7 @@ pub(super) fn require_geometry(
 
 pub(in crate::engine::fresh_layout) fn require_source_geometry(
     config: &Config, owner: DiskId, target: DiskId,
-    root: storage_contract::working_tree::RootId, prefixes: &[ContainerPrefix],
+    root: storage_contract::namespace_root::RootId, prefixes: &[ContainerPrefix],
 ) -> Result<()> {
     let names = ConfiguredDiskNames::new(config).map_err(crate::Error::ConfiguredDiskName)?;
     let path = names.source_path(target).map_err(crate::Error::ConfiguredDiskName)?;

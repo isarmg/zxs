@@ -1,5 +1,5 @@
 use super::{Error, MAX_ROOTS, MAX_SOURCE_CHAIN, inspect};
-use storage_contract::working_tree::{
+use storage_contract::namespace_root::{
     DirectoryId, DiskRegistrationIdentity, LocalDirectoryBinding, LocalEntityIdentity,
     RootBinding, RootId, StorageLayout, ThreeRootBinding, ZxsLifecycleBindings,
 };

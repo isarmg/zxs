@@ -2,7 +2,7 @@
 //! descriptors are deliberately absent. These records require native admission.
 use crate::{BranchId, DiskId, EntryId, HistoryTreeId, OperationId, RepositoryId};
 use crate::file_draft::FileWorkingState;
-use crate::working_tree::{DirectoryId, RootId};
+use crate::namespace_root::{DirectoryId, RootId};
 use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 
@@ -121,12 +121,12 @@ pub enum NamespaceDirectoryParent {
 #[serialization(deny_unknown_fields)]
 pub struct NamespaceDirectoryReplica {
     pub root_id: RootId,
-    pub source_chain: Vec<crate::working_tree::DiskRegistrationIdentity>,
+    pub source_chain: Vec<crate::namespace_root::DiskRegistrationIdentity>,
     pub source_prefixes: Vec<ContainerPrefix>,
     pub parent_entity: ContainerEntity,
     pub preparation: DirectoryId,
     pub entity: ContainerEntity,
-    pub lifecycle: crate::working_tree::BindingLifecycle,
+    pub lifecycle: crate::namespace_root::BindingLifecycle,
     pub created_by: OperationId,
 }
 

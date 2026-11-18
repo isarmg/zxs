@@ -6,7 +6,7 @@ use crate::{
     persist::{initial_storage, layout},
 };
 use std::collections::BTreeMap;
-use storage_contract::{DiskId, working_tree::LocalEntityIdentity};
+use storage_contract::{DiskId, namespace_root::LocalEntityIdentity};
 
 pub use crate::persist::initial_storage::InitialSealDigest;
 use super::disk_lifecycle::bootstrap::{BootstrapError, runtime::management_error};

@@ -3,7 +3,7 @@ use crate::engine::FreshLayoutError as Failure;
 use crate::{Engine, OperationResult, Repository, Result};
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::{BranchId, HistoryTreeId, OperationId, RepositoryId, Sequence};
-use storage_contract::working_tree::RootBinding;
+use storage_contract::namespace_root::RootBinding;
 
 const FIELD: &str = "file_manager_root_origin";
 

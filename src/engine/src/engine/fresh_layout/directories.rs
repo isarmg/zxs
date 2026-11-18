@@ -9,7 +9,7 @@ use storage_contract::file_container::{
     ContainerEntity, NamespaceDirectoryParent as Parent, NamespaceDirectoryRecord as Record,
     NamespaceDirectoryReplica as Replica,
 };
-use storage_contract::working_tree::{BindingLifecycle, DirectoryBinding, DirectoryId};
+use storage_contract::namespace_root::{BindingLifecycle, DirectoryBinding, DirectoryId};
 
 type Records = storage_contract::TrackedMap<Record>;
 
@@ -100,7 +100,7 @@ pub(crate) fn chain(state: &State, leaf: EntryId) -> Result<Vec<&Record>> {
     let mut cursor = Parent::Directory(leaf);
     while let Parent::Directory(entry) = cursor {
         if !seen.insert(entry)
-            || chain.len() == crate::working_tree::admission::MAX_DIRECTORY_DEPTH
+            || chain.len() == crate::namespace_roots::MAX_DIRECTORY_DEPTH
         {
             return Err(Failure::ContainerShape.into());
         }
@@ -500,7 +500,7 @@ pub(crate) fn owner_binding(state: &State, record: &Record) -> Result<DirectoryB
     };
     Ok(DirectoryBinding {
         directory_id: replica.preparation, root_id: replica.root_id, parent_directory_id,
-        name: record.name.clone(), entity: storage_contract::working_tree::LocalEntityIdentity::new(
+        name: record.name.clone(), entity: storage_contract::namespace_root::LocalEntityIdentity::new(
             replica.entity.device(), replica.entity.inode(),
         ), lifecycle: replica.lifecycle, operation_id: replica.created_by,
     })
@@ -561,7 +561,7 @@ pub(crate) fn read_backup<'a>(
 
 fn require_backup_geometry(
     config: &Config, record: &Record, target: DiskId,
-    binding: &storage_contract::working_tree::RootBinding,
+    binding: &storage_contract::namespace_root::RootBinding,
     path: &crate::disk_names::configuration::ConfiguredSourcePath<'_>,
 ) -> Result<()> {
     let replica = record.replicas.get(&target).ok_or(Failure::NamespaceUnmapped)?;

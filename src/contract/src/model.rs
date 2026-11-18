@@ -76,7 +76,7 @@ pub struct Config {
     pub pool_semantic_format: PoolSemanticFormat,
     /// Empty only in an initialization request. Persisted genesis requires the
     /// complete, same-lock observed physical roots; no old-format default.
-    pub storage_roots: BTreeMap<crate::DiskId, crate::working_tree::RootBinding>,
+    pub storage_roots: BTreeMap<crate::DiskId, crate::namespace_root::RootBinding>,
     pub mode: Mode,
     pub disks: Vec<DiskConfig>,
     pub checksum_chunk_bytes: u32,

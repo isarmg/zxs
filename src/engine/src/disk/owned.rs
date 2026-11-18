@@ -1277,7 +1277,7 @@ impl DiskHandle {
         ) {
             Some(binding) => {
                 let retain = |name, entity| root.private_entry_matching(
-                    name, crate::working_tree::records::file_identity(entity),
+                    name, crate::namespace_roots::file_identity(entity),
                 ).map_err(crate::engine::fresh_layout::directory_error);
                 let common = retain(&layout::COMMON_DATA_ROOT, binding.roots.common_data.entity)?;
                 let deleted = retain(
@@ -1287,11 +1287,11 @@ impl DiskHandle {
                 let partitions = &binding.roots.zxs_lifecycles;
                 let current_management = management.private_entry_matching(
                     &layout::COMMON_DATA_ROOT,
-                    crate::working_tree::records::file_identity(partitions.common_data.entity),
+                    crate::namespace_roots::file_identity(partitions.common_data.entity),
                 ).map_err(crate::engine::fresh_layout::directory_error)?;
                 let retained_management = management.private_entry_matching(
                     &layout::DELETED_DATA_ROOT,
-                    crate::working_tree::records::file_identity(partitions.deleted_data.entity),
+                    crate::namespace_roots::file_identity(partitions.deleted_data.entity),
                 ).map_err(crate::engine::fresh_layout::directory_error)?;
                 Some(RetainedLayoutRoots {
                     common, deleted, management, current_management, retained_management,

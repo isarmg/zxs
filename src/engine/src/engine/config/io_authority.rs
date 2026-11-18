@@ -27,7 +27,7 @@ pub(super) struct GenesisIoAuthority {
 struct GenesisControlContext {
     pool_id: String,
     pool_semantic_format: storage_contract::PoolSemanticFormat,
-    storage_roots: BTreeMap<storage_contract::DiskId, storage_contract::working_tree::RootBinding>,
+    storage_roots: BTreeMap<storage_contract::DiskId, storage_contract::namespace_root::RootBinding>,
     mode: Mode,
     disks: BTreeMap<String, RegisteredDisk>,
     checksum_chunk_bytes: u32,

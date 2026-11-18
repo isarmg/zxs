@@ -7,7 +7,7 @@ use crate::persist::layout;
 use crate::namespace_roots::{file_identity, local_entity};
 use crate::Result;
 use platform_io::fs_safety::EntryName;
-use storage_contract::working_tree::{
+use storage_contract::namespace_root::{
     DirectoryId, LocalDirectoryBinding, ThreeRootBinding, ZxsLifecycleBindings,
 };
 

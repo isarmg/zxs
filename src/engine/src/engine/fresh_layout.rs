@@ -7,7 +7,7 @@ use crate::persist::layout;
 use crate::namespace_roots::{self, file_identity, local_entity};
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{DiskId, Generation, OperationId};
-use storage_contract::working_tree::{
+use storage_contract::namespace_root::{
     DirectoryId, DiskRegistrationIdentity, RootBinding, RootId,
     StorageLayout,
 };

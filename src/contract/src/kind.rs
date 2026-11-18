@@ -25,6 +25,8 @@ kinds! {
     Entry => "entry",
     File => "file",
     Version => "ver",
+    Root => "root",
+    Directory => "directory",
     Pool => "pool",
     Disk => "disk",
     FileAnchor => "fnode",

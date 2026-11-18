@@ -10,7 +10,7 @@ use crate::engine::PlanningContext;
 use crate::{Config, DiskConfig, Error, Result, State};
 use std::sync::Arc;
 use storage_contract::{BranchId, DiskId, RepositoryId};
-use storage_contract::working_tree::{DiskRegistrationIdentity, RootBinding};
+use storage_contract::namespace_root::{DiskRegistrationIdentity, RootBinding};
 
 struct BackupPath<'a> {
     owner: DiskId,
@@ -270,7 +270,7 @@ fn verify_held(
     }
     let common = handle.content_root()?;
     if common.directory_identity(common.path())?
-        != crate::working_tree::records::file_identity(binding.roots.common_data.entity)
+        != crate::namespace_roots::file_identity(binding.roots.common_data.entity)
     {
         return Err(Failure::RootIdentity.into());
     }

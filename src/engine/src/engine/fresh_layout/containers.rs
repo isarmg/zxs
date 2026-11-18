@@ -283,7 +283,7 @@ impl ContainerPreparation {
                         record.replicas.insert(id, ContainerReplica {
                             root_id: root.root_id,
                             prefixes: planned_prefixes,
-                            preparation: storage_contract::working_tree::DirectoryId::generate()?,
+                            preparation: storage_contract::namespace_root::DirectoryId::generate()?,
                             entity: ContainerEntity::new(0, 0),
                         });
                         additions.insert((file, id), version.creation_name.clone());

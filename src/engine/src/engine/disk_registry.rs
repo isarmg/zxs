@@ -21,7 +21,7 @@ pub use published::{
 
 // The same registration tuple is shared by records and their consumers.
 // Moving its definition does not change identity or wire bytes.
-pub use storage_contract::working_tree::DiskRegistrationIdentity;
+pub use storage_contract::namespace_root::DiskRegistrationIdentity;
 
 /// Borrowed metadata only; neither the disk root nor any I/O capability escapes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

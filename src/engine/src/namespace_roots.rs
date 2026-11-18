@@ -3,12 +3,13 @@
 use platform_io::fs_safety::linux::FileIdentity;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{DiskId, PoolId};
-use storage_contract::working_tree::{
+use storage_contract::namespace_root::{
     DirectoryId, LocalEntityIdentity, RootBinding, RootId, StorageLayout,
 };
 
 const MAX_ROOTS: usize = 256;
 pub(crate) const MAX_SOURCE_CHAIN: usize = 32;
+pub(crate) const MAX_DIRECTORY_DEPTH: usize = 64;
 
 pub(crate) fn local_entity(identity: FileIdentity) -> LocalEntityIdentity {
     LocalEntityIdentity::new(identity.device, identity.inode)
