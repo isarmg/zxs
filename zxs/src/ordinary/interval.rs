@@ -49,10 +49,10 @@ enum Source{Done(SpanReceipt),Input(Capture,journal::cycle::Edge)}
 fn source(system:&Path,op:OperationId,id:FileId,rev:u64,edit:SpanEdit)->io::Result<Source>{
     let cut=formal::ParentCut::open(system,Access::Incoming)?;let (p,s)=cut.originals();
     let o=match choice(p,s,op,id,rev,edit)?{Choice::Done(r)=>return Ok(Source::Done(r)),Choice::Active(_,o,_)=>o};
-    let selected=cut.file(id)?;let cycle=selected.cycle();let edge=cycle.edge_before(op);
+    let selected=cut.file(id)?;let cycle=selected.cycle()?;let edge=cycle.edge_before(op);
     if edge.parent.decision!=o.commit||edge.predecessor!=o.predecessor{return Err(invalid("source differs from original working cycle"));}
     let (v,dir,base)=selected.working(edge.parent)?;
-    let prior=physical::Operands::capture(&dir,cycle.placement(),edge.parent.length,cycle.work().iter().copied().filter(|r|r.original.op!=op))?;
+    let prior=physical::Operands::capture(&dir,cycle.placement(),edge.parent,cycle.work().iter().copied().filter(|r|r.original.op!=op))?;
     v.require_current()?;
     Ok(Source::Input(Capture::open(dir,base,prior,o,s.editing.as_ref(),s.pending.is_some()||s.decided(op).is_some())?,edge))
 }
@@ -105,7 +105,6 @@ pub fn read_current_range_to(system:&Path,file:FileId,offset:u64,length:u64,mut 
     let (info,body)=draft::capture_current(system,file)?;
     match &body{
         Some(Body::Formal(b))=>b.write_range(offset,length,&mut out)?,
-        Some(Body::Incr(b))=>b.range(offset,length,&mut out)?,
         Some(Body::Composed(b))=>b.write_range(offset,length,&mut out)?,
         Some(Body::Working(_))=>return Err(io::Error::new(io::ErrorKind::Unsupported,"first uncommitted draft supports full sequential read only")),
         None if offset==0&&length==0=>{},

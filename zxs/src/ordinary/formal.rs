@@ -6,7 +6,7 @@ pub(super) mod allocation;
 pub(super) mod physical;
 mod indexed;
 mod baseline;
-pub(in crate::ordinary) use baseline::{ParentCut,PinnedParent};
+pub(in crate::ordinary) use baseline::{ParentCut,PinnedParent,PlacedSecond,for_retirement};
 use super::{allocation as ordinary_allocation,draft::{material::Reader,types::SaveFrame},journal::{self,Decision,Journal},
     material as container,wire::Frame,Cut,CreationStatus,publish_sealed};
 use crate::{FileId,NodeId,OperationId,fs::{self,HeldDir,invalid},pool::lease::{Access,FileVolume,LocalPool}};
@@ -63,8 +63,22 @@ pub(in crate::ordinary) fn working_names(s:&Journal,c:&Frame,w:&SaveFrame,histor
     }
     Ok(names)
 }
+/// Only exact original names. Current reads need every confirmed ancestor;
+/// a fixed node requires its particular lineage, not later locally born
+/// children. A sealed, undecided target is required by current-directory admission, not historical reads.
+fn child_names<'a>(s:&'a Journal,id:FileId,fixed:Option<NodeId>)->io::Result<Vec<(&'a super::delta::types::Original,bool)>>{
+    let mut out=Vec::new();if s.head(id).is_some(){
+        let graph=s.actual_graph(id)?;
+        let used=match fixed{Some(n)=>graph.through(n)?.children().len(),None=>graph.children().len()};
+        for (i,d) in graph.children().iter().copied().enumerate(){out.push((&d.original,i<used));}
+    }else if fixed.is_some(){return Err(invalid("cannot select an unpublished formal node"));}
+    if let Some(a)=s.incrementing.as_ref().filter(|i|i.original.file==id&&s.decided(i.original.op).is_none()){
+        if out.len()>=2||out.iter().any(|(d,_)|d.node==a.original.node||d.storage==a.original.storage){return Err(invalid("extra or overlapping original INCR reservation"));}
+        out.push((&a.original,fixed.is_none()&&s.pending.is_some()));
+    }Ok(out)
+}
 fn directory_at(v:&FileVolume<'_>,s:&Journal,c:&Frame,work:Vec<(OperationId,bool)>,
-    f:Option<(&Original,bool)>,d:Option<(&super::delta::types::Original,bool)>)->io::Result<HeldDir>{
+    f:Option<(&Original,bool)>,d:&[(&super::delta::types::Original,bool)])->io::Result<HeldDir>{
     if let Some(dir)=super::custody::placed::active_dir(s,v,c)?{
         container::require_entries(&dir,work,f,d)?;dir.require_named()?;return Ok(dir)
     }
@@ -74,9 +88,8 @@ pub(in crate::ordinary) fn directory(v:&FileVolume<'_>,s:&Journal,c:&Frame,w:&Sa
     let a=s.committing.as_ref().filter(|a|a.original.file==c.create.file);
     let f=s.head(c.create.file);
     let formal=f.map(|f|(&f.original,true)).or_else(||a.map(|a|(&a.original,false)));
-    let delta=s.delta(c.create.file).map(|d|(&d.original,true)).or_else(||s.incrementing.as_ref()
-        .filter(|i|i.original.file==c.create.file).map(|i|(&i.original,s.pending.is_some())));
-    let dir=directory_at(v,s,c,working_names(s,c,w,false)?,formal,delta)?;
+    let delta=child_names(s,c.create.file,None)?;
+    let dir=directory_at(v,s,c,working_names(s,c,w,false)?,formal,&delta)?;
     if let Some(a)=a{
         let sealed=s.pending.as_ref().map(|p|p.frame.formal()).transpose()?;
         physical::inspect_prepared(&dir,a,sealed.or(f))?;

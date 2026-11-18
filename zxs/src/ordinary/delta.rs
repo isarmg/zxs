@@ -4,7 +4,7 @@ pub(in crate::ordinary) mod types;
 pub(in crate::ordinary) mod allocation;
 pub(in crate::ordinary) mod map;
 pub(in crate::ordinary) mod physical;
-use super::{allocation as common,draft::types::SaveFrame,formal::{self,types::{Commit,FormalNode},FormalObservation},
+use super::{allocation as common,draft::types::SaveFrame,formal::{self,types::FormalNode,FormalObservation},
     interval::{types::Saved,physical::{Composed,Operands}},journal::{self,Decision,Journal,WorkWindow},wire::{self,Frame},Cut,CreationStatus,publish_sealed};
 use self::{allocation::DeltaAllocation,map::Map,physical::{Input,Verified},types::{Delta,Original}};
 use crate::{FileId,OperationId,fs::{self,invalid},pool::lease::{Access,LocalPool}};
@@ -31,7 +31,7 @@ pub fn formal_receipt(system:&Path,op:OperationId)->io::Result<Option<FormalObse
         Some(_)=>CreationStatus::Prepared,None=>CreationStatus::Reserved,
     },published:None}))
 }
-struct SourceCut<'a>{c:&'a Frame,initial:&'a SaveFrame,first:&'a Commit,work:WorkWindow<'a>,edge:&'a Saved,map:Map,req:[u8;32]}
+struct SourceCut<'a>{c:&'a Frame,initial:&'a SaveFrame,work:WorkWindow<'a>,edge:&'a Saved,map:Map,req:[u8;32]}
 enum Choice<'a>{Done(FormalNode),Active(SourceCut<'a>)}
 fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,rev:u64)->io::Result<Choice<'a>>{
     p.require_business_op(op)?;let req=types::request(p.id(),fs::local_uid(),op,id,rev)?;
@@ -53,25 +53,29 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,id:FileId,rev:u64)->io::
     if edge.original.revision()!=rev{return Err(invalid("requested working revision is not the exact current original"));}
     let map=Map::derive(parent.length,work.rows())?;
     if let Some(a)=&s.incrementing{a.original.require(s.placement(id)?,parent,edge,&map)?;}else{s.room_for(wire::MAX_FRAME)?;}
-    Ok(Choice::Active(SourceCut{c,initial,first,work,edge,map,req}))
+    Ok(Choice::Active(SourceCut{c,initial,work,edge,map,req}))
 }
 enum Source{Done(FormalNode),Input(Input)}
 fn source(system:&Path,op:OperationId,id:FileId,rev:u64)->io::Result<Source>{
-    let (p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;
-    let x=match choice(&p,&s,op,id,rev)?{Choice::Done(r)=>return Ok(Source::Done(r)),Choice::Active(x)=>x};
-    let site=s.placement(id)?;let v=p.ordinary(site.volume())?;let dir=formal::directory(&v,&s,x.c,x.initial)?;
+    let cut=formal::ParentCut::open(system,Access::Incoming)?;let(p,s)=cut.originals();
+    let x=match choice(p,s,op,id,rev)?{Choice::Done(r)=>return Ok(Source::Done(r)),Choice::Active(x)=>x};
+    let selected=cut.file(id)?;let site=selected.placement();let v=p.ordinary(site.volume())?;
+    let(dir,actual)=selected.on_volume(&v,x.work.parent())?;let parent=std::sync::Arc::new(actual);
     let a=s.incrementing.as_ref();let o=match a{
         Some(a)=>a.original.clone(),None=>Original::select(op,fs::local_uid(),site,x.work.parent(),x.edge,&x.map)?,
     };
     if a.is_none()&&!s.free_content_ids(o.node,o.version,o.storage){return Err(invalid("new formal identity already used"));}
-    let decided=s.delta(id);let sealed=s.pending.as_ref().map(|seal|seal.frame.delta()).transpose()?.or(decided);
-    let parent=site.full(&dir,x.first)?;
-    let actual=site.full(&dir,x.first)?;
+    // The previous INCR can be a parent. It is never the published result
+    // of a new operation merely because it is the latest confirmed child.
+    let decided=s.decided(op).map(|f|f.delta()).transpose()?;
+    let sealed=s.pending.as_ref().map(|seal|seal.frame.delta()).transpose()?.or(decided);
     let (working,published)=if let Some(d)=decided{
-        (None,Some(physical::Body::open(&dir,actual,d)?))
+        let(confirmed,pin)=selected.on_volume(&v,journal::cycle::Parent::incremental(d))?;
+        if confirmed.entity!=dir.entity||!confirmed.same_mount(&dir)?{return Err(invalid("published INCR changed FILE during recovery"));}
+        pin.require(&dir)?;(None,Some(pin))
     }else{
-        let set=Operands::capture(&dir,site,x.work.parent().length,x.work.rows())?;
-        (Some(Composed::new(dir.duplicate()?,actual,set)?),None)
+        let set=Operands::capture(&dir,site,x.work.parent(),x.work.rows())?;
+        (Some(Composed::new(dir.duplicate()?,parent.clone(),set)?),None)
     };
     let retained=x.work.rows().cloned().collect();v.require_current()?;
     Ok(Source::Input(Input::open(dir,o,x.map,working,published,parent,a,sealed,retained)?))
@@ -114,9 +118,7 @@ fn writer(system:&Path,op:OperationId,id:FileId,rev:u64,verified:Verified,cut:&m
     if let Some(d)=held.decided(op){
         if held.pending.is_none(){
             let f=d.delta()?;if !a.matches(f)||f.material!=material{return Err(invalid("wrong installed INCR after published completion"));}
-            let site=held.placement(id)?;
-            let parent=held.head(id).ok_or_else(||invalid("published INCR lacks its original parent"))?;
-            v.require_current()?;verified.retire(&dir,site,parent,&bound,f,|step|cut(step))?;
+            v.require_current()?;verified.retire(&dir,&v,&bound,f,|step|cut(step))?;
             p.system.remove_original_record(common::NAME,&a.stamp,&a.bytes)?;return Ok(f.receipt());
         }
     }
@@ -154,11 +156,9 @@ fn writer(system:&Path,op:OperationId,id:FileId,rev:u64,verified:Verified,cut:&m
         }
         Ok(())
     })?;
-    let f=seal.frame.delta()?;cut(Cut::Decision)?;let (_,s)=p.snapshot()?;
-    let site=s.placement(id)?;v.require_current()?;
+    let f=seal.frame.delta()?;cut(Cut::Decision)?;v.require_current()?;
     if bound.feedback(&dir)?!=f.material{return Err(invalid("confirmed native INCR cannot reopen"));}
-    let parent=s.head(id).ok_or_else(||invalid("confirmed INCR lacks its original parent"))?;
-    verified.retire(&dir,site,parent,&bound,f,|step|cut(step))?;cut(Cut::Installation)?;
+    verified.retire(&dir,&v,&bound,f,|step|cut(step))?;cut(Cut::Installation)?;
     p.system.remove_original_record(journal::INTENT,&seal.stamp,&seal.bytes)?;cut(Cut::IntentReleased)?;
     p.system.remove_original_record(common::NAME,&a.stamp,&a.bytes)?;cut(Cut::Release)?;Ok(f.receipt())
 }

@@ -3,7 +3,7 @@
 //! borrow even one byte from a working extent after publication.
 use super::{allocation::DeltaAllocation,map::{Map,Source as ByteSource},types::{Content,Delta,Material,Original}};
 use crate::{fs::{self,HeldDir,invalid,stream::{self,PinnedRegular}},ordinary::{content::{self,BLOCK},draft::types::DraftClaim,
-    formal::physical::HistoryBody,indexed::Indexed,interval::{physical::{Composed,cleanup_witness,retire_verified},types::Saved},output::CheckedOutput,wire::NativeObject}};
+    formal::{PinnedParent,physical::HistoryBody},indexed::Indexed,interval::{physical::{Composed,cleanup_witness,retire_verified},types::Saved},output::CheckedOutput,wire::NativeObject}};
 use std::{fs::File,io::{self,Write}};
 
 fn shape(o:&Original)->io::Result<(u64,u64,u64)>{
@@ -68,10 +68,10 @@ impl Body{
     /// Private successor: only a node from the same actual confirmed FILE
     /// cycle, not a hand-built Delta or an arbitrary latest node. No cold
     /// reader or producer admits a second decision until custody supports it.
-    pub(in crate::ordinary) fn extend_local(mut self,dir:&HeldDir,next:&crate::ordinary::journal::cycle::Next<'_>)->io::Result<Self>{
-        if self.second.is_some()||self.first.key!=next.parent(){return Err(invalid("wrong physical INCR parent; never skip a formal edge"));}
-        self.require(dir)?;let d=next.original();let object=next.local_object()?;
-        let child=Held::at_original(dir,d,object)?;self.second=Some(child);self.require(dir)?;Ok(self)
+    pub(in crate::ordinary) fn extend(mut self,at:&crate::ordinary::formal::PlacedSecond<'_>)->io::Result<Self>{
+        let(dir,parent,d,object)=at.parts();
+        if self.second.is_some()||self.first.key!=parent||!parent.precedes(d){return Err(invalid("wrong physical INCR parent; never skip a formal edge"));}
+        self.require(dir)?;let child=Held::at_original(dir,d,object)?;self.second=Some(child);self.require(dir)?;Ok(self)
     }
     fn top(&self)->&Held{self.second.as_ref().unwrap_or(&self.first)}
     pub(in crate::ordinary) fn single_pack(&self)->io::Result<&PinnedRegular>{
@@ -112,13 +112,19 @@ impl Target{
     fn file(&self)->&File{match self{Self::Private(f)=>f,Self::Named(p)=>&p.file}}
     fn stamp(&self)->io::Result<fs::OriginalStamp>{match self{Self::Private(f)=>stream::anonymous_stamp(f),Self::Named(p)=>{p.unchanged()?;Ok(p.stamp.clone())}}}
 }
-pub(super) struct Input{dir:HeldDir,pub o:Original,m:Map,source:Option<Composed>,published:Option<Body>,parent:HistoryBody,target:Target,already:Option<Material>,retained:Vec<Saved>}
+pub(super) struct Input{dir:HeldDir,pub o:Original,m:Map,source:Option<Composed>,published:Option<PinnedParent>,parent:std::sync::Arc<PinnedParent>,target:Target,already:Option<Material>,retained:Vec<Saved>}
 pub(super) struct Verified{input:Input,pre:fs::OriginalStamp,c:Content,index:[u8;32],cleanup:Vec<Option<fs::OriginalStamp>>}
 impl Input{
-    pub(super) fn open(dir:HeldDir,o:Original,m:Map,source:Option<Composed>,published:Option<Body>,parent:HistoryBody,
+    pub(super) fn open(dir:HeldDir,o:Original,m:Map,source:Option<Composed>,published:Option<PinnedParent>,parent:std::sync::Arc<PinnedParent>,
         a:Option<&DeltaAllocation>,d:Option<&Delta>,retained:Vec<Saved>)->io::Result<Self>{
         dir.exclusive()?;
-        if source.is_none()==published.is_none()||(published.is_some()&&d.is_none()){return Err(invalid("INCR must have exactly its genuine predecision or its published source"));}
+        let k=parent.key();
+        if o.file!=k.file||o.history!=k.history||o.branch!=k.branch||o.creation!=k.creation||o.parent!=k.node||
+            o.parent_version!=k.version||o.parent_decision!=k.decision||o.parent_length!=k.length||o.revision<=k.revision||
+            source.is_none()==published.is_none()||source.as_ref().is_some_and(|working|!working.uses(&parent))||
+            d.is_some_and(|v|v.original!=o)||published.as_ref().is_some_and(|body|!d.is_some_and(|v|body.key()==crate::ordinary::journal::cycle::Parent::incremental(v))){
+            return Err(invalid("INCR lacks its exact held parent and original predecision or published source"));
+        }
         let target=match dir.pin_stream(&o.leaf(),shape(&o)?.2)?{
             Some(p)=>{
                 let a=a.ok_or_else(||invalid("unreserved destination INCR already exists"))?;
@@ -162,7 +168,7 @@ impl Input{
         let (c,index)=scan(f,o,&self.m,||Ok(()))?;
         if self.target.stamp()?!=pre||wanted.is_some_and(|x|x!=(c.logical,c.packed)){return Err(invalid("actual prepared INCR does not equal checked original input"));}
         if let Some(d)=&self.already{if d.content!=c||d.index!=index{return Err(invalid("published INCR can never be rebuilt from dirty material"));}}
-        if let Some(p)=&self.published{p.whole(io::sink())?;p.require(&self.dir)?;}
+        if let Some(p)=&self.published{p.write_to(io::sink())?;p.require(&self.dir)?;}
         self.parent.require(&self.dir)?;
         let mut cleanup=Vec::with_capacity(self.retained.len());
         for s in &self.retained{cleanup.push(cleanup_witness(&self.dir,s,self.published.is_some())?);}
@@ -199,14 +205,14 @@ impl Verified{
         if content!=self.c||index!=self.index{return Err(invalid("newly named incremental bytes differ from verified inputs"));}
         p.named(dir,&o.leaf())?;Ok(Bound{pin:p,o:o.clone(),c:content,index})
     }
-    pub(super) fn retire(mut self,dir:&HeldDir,site:crate::ordinary::placement::Placement<'_>,parent:&crate::ordinary::formal::types::Commit,bound:&Bound,d:&Delta,mut after:impl FnMut(crate::ordinary::Cut)->io::Result<()>)->io::Result<()>{
+    pub(super) fn retire(mut self,dir:&HeldDir,v:&crate::pool::lease::FileVolume<'_>,bound:&Bound,d:&Delta,mut after:impl FnMut(crate::ordinary::Cut)->io::Result<()>)->io::Result<()>{
         self.require_source(dir,&d.original)?;drop(self.input.source.take());
         // Read the actual named destination, its local map and both original
         // authenticated indexes again, this time on the published side. Do not
         // infer install or cleanup authority from an in-memory prepared hash.
-        let reopened=site.incremental(dir,site.full(dir,parent)?,d)?;
-        reopened.range(0,0,io::sink())?;
-        let lease=site.file_lease(dir,true)?;
+        let reopened=crate::ordinary::formal::for_retirement(v,dir,d)?;
+        reopened.write_range(0,0,io::sink())?;
+        let(_,now)=v.pool.snapshot()?;let lease=now.placement(d.original.file)?.file_lease(dir,true)?;
         let checked=||->io::Result<()>{
             lease.named(dir,c"FILE")?;reopened.require(dir)?;
             if bound.feedback(dir)?!=d.material{return Err(invalid("published INCR no longer verifies; preserve old work"));}Ok(())

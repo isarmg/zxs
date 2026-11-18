@@ -156,10 +156,10 @@ pub(super) fn working_directory_held(volume:&FileVolume<'_>,c:&Creation,working:
 /// a missing required leaf or any extra entry is never an admitted state.
 pub(super) fn directory_with(volume:&FileVolume<'_>,c:&Creation,working:impl IntoIterator<Item=(OperationId,bool)>,
     formal:Option<(&super::formal::types::Original,bool)>)->io::Result<HeldDir>{
-    directory_all(volume,c,working,formal,None)
+    directory_all(volume,c,working,formal,&[])
 }
 pub(super) fn directory_all(volume:&FileVolume<'_>,c:&Creation,working:impl IntoIterator<Item=(OperationId,bool)>,
-    formal:Option<(&super::formal::types::Original,bool)>,incr:Option<(&super::delta::types::Original,bool)>)->io::Result<HeldDir>{
+    formal:Option<(&super::formal::types::Original,bool)>,incr:&[(&super::delta::types::Original,bool)])->io::Result<HeldDir>{
     if volume.id()!=c.volume{return Err(invalid("wrong current FILE role or volume"));}
     let dir=volume.root.child_directory(&destination(&c.name)?)?.ok_or_else(||invalid("current FILE container not installed"))?;
     require_entries(&dir,working,formal,incr)?;
@@ -170,7 +170,7 @@ pub(super) fn directory_all(volume:&FileVolume<'_>,c:&Creation,working:impl Into
 /// Exact FILE names from original decisions/issued operations; not a source of
 /// native identities. A future extent is never part of an earlier MOVE.
 pub(in crate::ordinary) fn require_entries(dir:&HeldDir,working:impl IntoIterator<Item=(OperationId,bool)>,
-    formal:Option<(&super::formal::types::Original,bool)>,incr:Option<(&super::delta::types::Original,bool)>)->io::Result<()>{
+    formal:Option<(&super::formal::types::Original,bool)>,incr:&[(&super::delta::types::Original,bool)])->io::Result<()>{
     let listed=dir.names()?;let count=listed.len();
     let mut names:std::collections::BTreeSet<_>=listed.into_iter().collect();
     if names.len()!=count{return Err(invalid("duplicate names during FILE enumeration"));}
@@ -183,7 +183,7 @@ pub(in crate::ordinary) fn require_entries(dir:&HeldDir,working:impl IntoIterato
         let node=take(&o.node_name());let raw=take(&o.body_name());
         if (raw&&!node)||(required&&(!node||!raw)){return Err(invalid("missing or unordered formal FILE material"));}
     }
-    if let Some((o,required))=incr{if !take(&o.leaf())&&required{return Err(invalid("required original incremental node is missing"));}}
+    for &(o,required) in incr{if !take(&o.leaf())&&required{return Err(invalid("required original incremental node is missing"));}}
     if !names.is_empty(){return Err(invalid("unknown material in the selected FILE"));}
     Ok(())
 }

@@ -13,6 +13,8 @@ use std::{collections::{BTreeMap,BTreeSet},ffi::CStr,io};
 pub(in crate::ordinary) mod credits;
 pub(in crate::ordinary) mod cycle;
 mod windows;
+mod graph;
+pub(in crate::ordinary) use graph::Graph;
 pub(in crate::ordinary) use windows::WorkWindow;
 use credits::{Credits,Effect};
 

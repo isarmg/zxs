@@ -164,6 +164,10 @@ fn a_later_handoff_source_uses_the_actual_b_roles_and_never_adds_a_new_b_child_t
     let m=s.placed(item.file).unwrap();let before=s.before_handoff(m).unwrap();assert_eq!((before.volume(),before.epoch()),(f.from,0));
     let frozen=m.require_at(before,full,None).unwrap();assert!(frozen.children.first().is_none());assert_eq!(frozen.directory,c.create.directory);
     let b=s.placement(item.file).unwrap();let sites=b.sites(full,Some(d)).unwrap();
+    let current=s.actual_graph(item.file).unwrap();let old=s.file_cycle_at(item.file,m.seq-1,m.previous).unwrap().graph().unwrap();
+    assert!(old.through(child.node).is_err());assert!(before.active_child(current,0).is_err());
+    assert_eq!(b.active_child(current.through(child.node).unwrap(),0).unwrap(),&d.material.object);
+    assert!(b.active_child(old,0).is_err()); // no after-the-fact child in the original A→B ticket
     assert_eq!((b.volume(),b.epoch(),b.key()),(f.to,1,m.digest));
     assert_eq!(sites.directory,m.target.directory);assert_ne!(sites.directory,c.create.directory);
     assert_eq!(sites.children.first(),Some(&d.material.object));assert!(m.target.children.first().is_none());

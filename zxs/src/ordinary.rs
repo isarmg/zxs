@@ -193,7 +193,7 @@ pub fn read_initial_file(system:&Path,id:FileId)->io::Result<(FileInfo,Vec<u8>)>
 /// name is never skipped. Only original issued private slots can be separated
 /// from that namespace, and observed residues are explicitly counted.
 pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
-    let (pool,_,state)=LocalPool::with_snapshot(system,Access::Read)?;
+    let cut=formal::ParentCut::open(system,Access::Read)?;let(pool,state)=cut.originals();
     let volume=pool.ordinary(id)?;
     let mut names=BTreeSet::new();let mut tickets=BTreeMap::new();let mut files=Vec::new();
     for f in state.on_all().filter(|f|f.create.volume==id){
@@ -220,7 +220,7 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
     }
     if observed!=names{return Err(invalid("missing or unrecognized business inventory; refusing a partial list"));}
     for f in state.on(id).filter(|f|handoff.deferred!=Some(f.create.file)){
-        let _=draft::admit_current_held(&state,&volume,f)?;
+        let _=draft::admit_current_held(&cut,&volume,f)?;
         if state.head(f.create.file).is_some()&&state.committing.as_ref().is_some_and(|a|a.original.file==f.create.file){
             let saved=state.saved(f.create.file).ok_or_else(||invalid("no original saved source for formal cleanup inventory"))?;
             let dir=formal::directory(&volume,&state,f,saved)?;

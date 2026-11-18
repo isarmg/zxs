@@ -12,10 +12,10 @@ use std::{io::{self,Read,Write},path::Path};
 
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub struct CurrentFile{pub file:FileInfo,pub working:Option<DraftReceipt>,pub head:Option<super::FormalNode>,pub edit:Option<super::SpanReceipt>}
-pub(super) enum Body{Working(Reader),Formal(super::formal::physical::HistoryBody),Composed(super::interval::physical::Composed),Incr(super::delta::physical::Body)}
+pub(super) enum Body{Working(Reader),Formal(super::formal::PinnedParent),Composed(super::interval::physical::Composed)}
 impl Body{
     fn write_to(&self,out:impl Write)->io::Result<()>{
-        match self{Self::Working(b)=>b.write_to(out),Self::Formal(b)=>b.write_to(out),Self::Composed(b)=>b.write_range(0,b.size(),out),Self::Incr(b)=>b.whole(out)}
+        match self{Self::Working(b)=>b.write_to(out),Self::Formal(b)=>b.write_to(out),Self::Composed(b)=>b.write_range(0,b.size(),out)}
     }
 }
 #[derive(Clone,Debug,Eq,PartialEq)]
@@ -23,21 +23,16 @@ pub struct FirstSaveObservation{
     pub status:CreationStatus,pub file:FileId,pub operation:OperationId,pub body:DraftClaim,pub decision_sequence:Option<u64>,
 }
 
-pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)->io::Result<Option<Body>>{
+pub(super) fn admit_current_held(cut:&super::formal::ParentCut,volume:&FileVolume<'_>,c:&Frame)->io::Result<Option<Body>>{
+    let(pool,state)=cut.originals();
+    if !std::ptr::eq(pool,volume.pool)||!state.file(c.create.file).is_some_and(|row|std::ptr::eq(row,c))||volume.id()!=state.volume_of(c){
+        return Err(invalid("not the current same-cut registered FILE volume and original creation"));}
     let saved=state.saved(c.create.file);
-    if let Some(f)=state.head(c.create.file){
-        let w=saved.ok_or_else(||invalid("formal node has no original confirmed revision"))?;
-        let dir=super::formal::directory(volume,state,c,w)?;
-        // The confirmed FULL is authoritative even if old-work cleanup is
-        // obstructed. Do not use the old draft as the body, or require it for
-        // the selected node. Complete-inventory and retirement verify it separately.
-        let site=state.placement(c.create.file)?;let base=site.full(&dir,f)?.user_read()?;
-        let work=state.active_work(c.create.file)?;
-        if let Some(d)=state.delta(c.create.file){
-            if work.last().is_some(){return Err(invalid("INCR-based working output is not admitted by this reader"));}
-            return Ok(Some(Body::Incr(site.incremental(&dir,base,d)?)));
-        }
-        if let Some(a)=state.incrementing.as_ref().filter(|a|a.original.file==c.create.file){
+    if state.head(c.create.file).is_some(){
+        let selected=cut.file(c.create.file)?;let work=state.active_work(c.create.file)?;
+        if selected.parent()!=work.parent(){return Err(invalid("current working window differs from this original formal tip"));}
+        let(dir,base)=selected.on_volume(volume,work.parent())?;
+        if let Some(a)=state.incrementing.as_ref().filter(|a|a.original.file==c.create.file&&state.decided(a.original.op).is_none()){
             let m=super::delta::map::Map::derive(work.parent().length,work.rows())?;
             super::delta::physical::inspect(&dir,a,&m,state.pending.as_ref().map(|p|p.frame.delta()).transpose()?)?;
         }
@@ -46,8 +41,8 @@ pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)
             super::interval::physical::inspect(&dir,a,sealed)?;
         }
         if work.last().is_some(){
-            let set=super::interval::physical::Operands::capture(&dir,site,work.parent().length,work.rows())?;
-            return Ok(Some(Body::Composed(super::interval::physical::Composed::new(dir,base,set)?)));
+            let set=super::interval::physical::Operands::capture(&dir,selected.placement(),work.parent(),work.rows())?;
+            return Ok(Some(Body::Composed(super::interval::physical::Composed::new(dir,std::sync::Arc::new(base),set)?)));
         }
         return Ok(Some(Body::Formal(base)));
     }
@@ -74,9 +69,9 @@ pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)
     Ok(None)
 }
 pub(super) fn capture_current(system:&Path,id:FileId)->io::Result<(CurrentFile,Option<Body>)>{
-    let (pool,_,state)=LocalPool::with_snapshot(system,Access::Read)?;
+    let cut=super::formal::ParentCut::open(system,Access::Read)?;let(pool,state)=cut.originals();
     let c=state.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published original FILE"))?;
-    let volume=pool.ordinary(state.volume_of(c))?;let body=admit_current_held(&state,&volume,c)?;
+    let volume=pool.ordinary(state.volume_of(c))?;let body=admit_current_held(&cut,&volume,c)?;
     volume.root.file.sync_all()?;volume.require_current()?;
     Ok((CurrentFile{file:FileInfo::at(c,state.volume_of(c)),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.delta(id).map(super::delta::types::Delta::receipt).or_else(||state.head(id).map(super::formal::types::Commit::receipt)),edit:if state.head(id).is_some(){state.active_work(id)?.last().map(super::interval::types::Saved::receipt)}else{None}},body))
 }
@@ -92,7 +87,7 @@ pub fn read_current_to(system:&Path,id:FileId,mut output:impl Write)->io::Result
     finish_output(&body,&mut output)?;Ok(info)
 }
 pub(super) fn finish_output(body:&Option<Body>,out:&mut impl Write)->io::Result<()>{
-    if let Some(Body::Composed(c))=body{c.unchanged()?;out.flush()?;c.finish()}else if let Some(Body::Incr(b))=body{b.unchanged()?;out.flush()?;b.unchanged()}else{out.flush()}
+    if let Some(Body::Composed(c))=body{c.unchanged()?;out.flush()?;c.finish()}else if let Some(Body::Formal(b))=body{b.unchanged()?;out.flush()?;b.unchanged()}else{out.flush()}
 }
 pub fn first_save_receipt(system:&Path,op:OperationId)->io::Result<Option<FirstSaveObservation>>{
     let (_pool,_,s)=LocalPool::with_snapshot(system,Access::Read)?;

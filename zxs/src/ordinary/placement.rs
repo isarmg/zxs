@@ -71,7 +71,7 @@ impl<'a> Placement<'a>{
         }sites.check(&m.original.dst_root)?;Ok(sites)
     }
     pub(super) fn directory(self)->&'a NativeObject{self.applied.map_or(&self.birth.create.directory,|m|&m.target.directory)}
-    fn local(self)->&'a NativeObject{self.applied.map_or(&self.birth.create.local,|m|&m.target.local)}
+    pub(in crate::ordinary) fn local(self)->&'a NativeObject{self.applied.map_or(&self.birth.create.local,|m|&m.target.local)}
     pub(super) fn file_lease(self,dir:&HeldDir,exclusive:bool)->io::Result<PinnedRegular>{
         if self.retained().is_some(){return Err(invalid("retained FILE is not an ordinary serving volume"));}
         material::verify_header_at(dir,&self.birth.create,self.directory(),self.local())?;
@@ -86,6 +86,28 @@ impl<'a> Placement<'a>{
             None=>HistoryBody::current(dir,f),
             Some(m)=>HistoryBody::at_originals(dir,f,&m.target.node,&m.target.raw)
         }
+    }
+    /// An original child decision at the *current* placement. A handoff
+    /// carries only its frozen prefix; later local children use their own
+    /// named birth. No lookup by current FILE name or content can add roles.
+    pub(in crate::ordinary) fn active_child(self,g:super::journal::Graph<'a>,i:usize)->io::Result<&'a NativeObject>{
+        if self.retained().is_some()||g.full().original.file!=self.birth.create.file||g.full().original.creation!=self.birth.digest{
+            return Err(invalid("not this active FILE's original graph"));}
+        let ds=g.children();let d=match i{0=>ds.first(),1=>ds.second(),_=>None}
+            .copied().ok_or_else(||invalid("missing exact ordinal of the selected original child"))?;
+        if let Some(m)=self.applied{
+            if m.original.parent!=g.full().digest||g.full().seq>=m.seq||m.original.children.len()!=m.target.children.len(){
+                return Err(invalid("different frozen original FULL or physical role set at this placement"));}
+            let roots=&m.original.children;let at=&m.target.children;
+            if d.seq<m.seq{
+                let(hash,n)=if i==0{(roots.first(),at.first())}else{(roots.second(),at.second())};
+                if hash!=Some(&d.digest){return Err(invalid("wrong original child at this handoff ordinal"));}
+                return n.ok_or_else(||invalid("lost frozen target object of a retained formal child"));
+            }
+            if d.seq==m.seq||i<roots.len(){return Err(invalid("later formal child conflicts with a frozen transfer role"));}
+        }
+        if d.original.volume!=self.volume(){return Err(invalid("later child was not authored on the actual active FILE owner"));}
+        Ok(&d.material.object)
     }
     pub(super) fn incremental(self,dir:&HeldDir,parent:HistoryBody,d:&Delta)->io::Result<Body>{
         if self.retained().is_some()||d.original.file!=self.birth.create.file||d.original.creation!=self.birth.digest{

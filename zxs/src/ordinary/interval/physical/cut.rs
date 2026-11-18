@@ -3,24 +3,26 @@
 use super::Stored;
 use crate::ordinary::output::CheckedOutput;
 use crate::{fs::{self,HeldDir,invalid,stream::PinnedRegular},ordinary::{placement::Placement,
-    interval::{types::{Material,Original,Saved},layout::{From,Layout}},formal::physical::HistoryBody}};
-use std::io::{self,Write};
+    interval::{types::{Material,Original,Saved},layout::{From,Layout}},formal::PinnedParent,journal::cycle::Parent}};
+use std::{io::{self,Write},sync::Arc};
 
 struct Seen{original:Original,material:Material,stamp:fs::OriginalStamp}
 pub(in crate::ordinary) struct Operands{
-    lease:PinnedRegular,rows:Vec<Seen>,edge:Option<Stored>,layout:Layout,
+    parent:Parent,lease:PinnedRegular,rows:Vec<Seen>,edge:Option<Stored>,layout:Layout,
 }
 impl Operands{
-    pub(in crate::ordinary) fn capture<'a>(dir:&HeldDir,site:Placement<'_>,base_len:u64,entries:impl Iterator<Item=&'a Saved>)->io::Result<Self>{
+    pub(in crate::ordinary) fn capture<'a>(dir:&HeldDir,site:Placement<'_>,parent:Parent,entries:impl Iterator<Item=&'a Saved>)->io::Result<Self>{
         let lease=site.file_lease(dir,false)?;
-        let mut layout=Layout::base(base_len);let mut rows=Vec::new();let mut edge=None;
+        let mut layout=Layout::base(parent.length);let mut rows=Vec::new();let mut edge=None;let mut previous=None;
         for s in entries{
-            let o=&s.original;let named=Stored::reopen(dir,o,&s.material)?;
+            let o=&s.original;
+            if !parent.owns(s)||o.predecessor!=parent.predecessor(previous)||o.volume!=site.volume(){return Err(invalid("working extent belongs to another original formal window or site"));}
+            let named=Stored::reopen(dir,o,&s.material)?;previous=Some(s);
             layout.apply(o.predecessor.length,o.edit,o.result,rows.len())?;
             rows.push(Seen{original:o.clone(),material:s.material.clone(),stamp:named.named.pin.stamp.clone()});
             edge=Some(named); // the preceding non-edge FD is dropped, not kept for every save
         }
-        let set=Self{lease,rows,edge,layout};set.quick()?;Ok(set)
+        let set=Self{parent,lease,rows,edge,layout};set.quick()?;Ok(set)
     }
     fn quick(&self)->io::Result<()>{
         self.lease.unchanged()?;if let Some(edge)=&self.edge{edge.named.pin.unchanged()?;}Ok(())
@@ -43,12 +45,13 @@ impl Operands{
         self.require(dir)
     }
 }
-pub(in crate::ordinary) struct Composed{dir:HeldDir,base:HistoryBody,set:Operands}
+pub(in crate::ordinary) struct Composed{dir:HeldDir,base:Arc<PinnedParent>,set:Operands}
 impl Composed{
-    pub(in crate::ordinary) fn new(dir:HeldDir,base:HistoryBody,set:Operands)->io::Result<Self>{
-        if set.edge.is_none(){return Err(invalid("a composed FILE must have an actual confirmed working edge"));}
+    pub(in crate::ordinary) fn new(dir:HeldDir,base:Arc<PinnedParent>,set:Operands)->io::Result<Self>{
+        if set.edge.is_none()||base.key()!=set.parent{return Err(invalid("a composed FILE must have an actual confirmed working edge"));}
         Ok(Self{dir,base,set})
     }
+    pub(in crate::ordinary) fn uses(&self,p:&Arc<PinnedParent>)->bool{Arc::ptr_eq(&self.base,p)}
     pub(in crate::ordinary) fn unchanged(&self)->io::Result<()>{self.base.unchanged()?;self.set.quick()}
     pub(in crate::ordinary) fn finish(&self)->io::Result<()>{self.base.require(&self.dir)?;self.set.require(&self.dir)}
     pub(in crate::ordinary) fn size(&self)->u64{self.set.layout.len()}

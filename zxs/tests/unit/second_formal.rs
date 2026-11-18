@@ -216,7 +216,16 @@ fn physical_increment_reader_denies_another_original_parent_even_at_equal_length
     assert!(physical::Body::open(&dir,base,&forged).is_err());
     let base=s.placement(first).unwrap().full(&dir,s.head(first).unwrap()).unwrap();
     let exact=physical::Body::open(&dir,base,genuine).unwrap();let mut got=Vec::new();exact.whole(&mut got).unwrap();assert_eq!(got,b"abxde");
-    assert!(s.confirmed_file_cycle(first).unwrap().next_generation(child.node).is_err());
+    let cycle=s.confirmed_file_cycle(first).unwrap();let graph=cycle.graph().unwrap();
+    assert!(graph.through(f.original.node).is_err()); // the sibling FULL has equal bytes, but a distinct original node
+    let past=graph.through(t.base.node).unwrap();
+    assert_eq!(past.children().len(),0);
+    let selected=graph.through(child.node).unwrap();assert_eq!(selected.children().len(),1);
+    assert_eq!(selected.tip().node,child.node);assert!(selected.children().second().is_none());
+    let c=s.file(first).unwrap();assert!(crate::ordinary::journal::Graph::at(c,s.head(first).unwrap(),&[&forged]).is_err());
+    assert_eq!(s.placement(first).unwrap().active_child(selected,0).unwrap(),&genuine.material.object);
+    assert!(s.placement(other).unwrap().active_child(selected,0).is_err());
+    assert!(s.placement(first).unwrap().active_child(selected,1).is_err());
 }
 
 #[test]
@@ -312,12 +321,12 @@ fn an_extra_file_at_the_acknowledgement_boundary_blocks_hot_and_cold_without_con
 fn fixed_node_and_working_parent_do_not_substitute_each_other_or_borrow_a_replacement(){
     let t=Fixture::new(b"abcdefgh");let file=t.base.file;
     let before={let cut=crate::ordinary::formal::ParentCut::open(&t.system,Access::Incoming).unwrap();
-        let selected=cut.file(file).unwrap();selected.cycle().parent()};
+        let selected=cut.file(file).unwrap();selected.parent()};
     let edit=t.edit(1,2,b"XY",LengthPolicy::Set(5));let op=OperationId::new().unwrap();
     let child=commit_working(&t.system,op,file,2).unwrap();assert!(!t.work(edit).exists());
     let (dir,pinned)={
         let cut=crate::ordinary::formal::ParentCut::open(&t.system,Access::Incoming).unwrap();let selected=cut.file(file).unwrap();
-        let expected=selected.cycle().parent();assert_eq!((expected.node,expected.version,expected.operation),(child.node,child.version,op));
+        let expected=selected.parent();assert_eq!((expected.node,expected.version,expected.operation),(child.node,child.version,op));
         assert!(selected.working(before).is_err());let mut wrong=expected;wrong.decision=before.decision;assert!(selected.working(wrong).is_err());
         let (vol,dir,pinned)=selected.working(expected).unwrap();vol.require_current().unwrap();(dir,pinned)
     };
@@ -382,4 +391,32 @@ fn formal_input_window_switches_only_on_confirmation_and_old_operations_never_ow
     assert_eq!(commit_working(&t.system,op,file,3).unwrap(),child);assert!(!t.work(first).exists()&&!t.work(last).exists());
     osfs::rename(&t.data,t.top.0.join("offline-original-volume")).unwrap();
     assert_eq!(commit_working(&t.system,op,file,3).unwrap(),child);
+}
+
+#[test]
+#[ignore="real original formal CLEANUP, two FileIds, one isolated ordinary test root"]
+fn cleanup_reads_only_its_decided_file_and_cannot_use_an_equal_sibling_directory_or_old_receipt(){
+    let t=Fixture::new(b"abc");let file=t.base.file;
+    let sibling=create_empty(&t.system,OperationId::new().unwrap(),t.vol,"other").unwrap();
+    save_first(&t.system,OperationId::new().unwrap(),sibling.file,claim(b"abc"),Cursor::new(b"abc")).unwrap();
+    commit_working(&t.system,OperationId::new().unwrap(),sibling.file,1).unwrap();
+    t.edit(1,1,b"z",LengthPolicy::KeepOrGrow);let op=OperationId::new().unwrap();
+    assert!(commit_inner(&t.system,op,file,2,|c|if c==Cut::Decision{Err(io::Error::other("confirmed; working remains"))}else{Ok(())}).is_err());
+    {
+        let(p,_,s)=LocalPool::with_snapshot(&t.system,Access::Write).unwrap();let v=p.ordinary(t.vol).unwrap();
+        let dir=|id|formal::directory(&v,&s,s.file(id).unwrap(),s.saved(id).unwrap()).unwrap();
+        let d=s.decided(op).unwrap().delta().unwrap();
+        let mut buf=Vec::new();formal::for_retirement(&v,&dir(file),d).unwrap().write_to(&mut buf).unwrap();assert_eq!(buf,b"azc");
+        assert!(formal::for_retirement(&v,&dir(sibling.file),d).is_err());
+        let mut altered=d.clone();altered.digest[0]^=1;assert!(formal::for_retirement(&v,&dir(file),&altered).is_err());
+    }
+    let original=commit_working(&t.system,op,file,2).unwrap();
+    {
+        let(p,_,s)=LocalPool::with_snapshot(&t.system,Access::Write).unwrap();let v=p.ordinary(t.vol).unwrap();
+        assert!(s.incrementing.is_none());let d=s.decided(op).unwrap().delta().unwrap();
+        let dir=formal::directory(&v,&s,s.file(file).unwrap(),s.saved(file).unwrap()).unwrap();
+        assert!(formal::for_retirement(&v,&dir,d).is_err()); // receipt stays real; the completed original slot does not.
+    }
+    assert_eq!(commit_working(&t.system,op,file,2).unwrap(),original);
+    let mut before=Vec::new();read_node_to(&t.system,file,t.base.node,&mut before).unwrap();assert_eq!(before,b"abc");
 }
