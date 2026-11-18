@@ -12,7 +12,7 @@ pub(in crate::ordinary) fn view(s:&Journal,v:&FileVolume<'_>,tickets:&mut BTreeM
     }
     let Some(a)=s.moving.as_ref().filter(|a|a.original.to==v.id()||a.original.from==v.id())else{return Ok(seen)};
     let o=&a.original;
-    let req=super::command::Request{op:o.op,id:o.file,from:o.from,to:o.to,epoch:o.epoch};
+    let req=super::command::Request{call:o.purpose.call(),op:o.op,id:o.file,from:o.from,to:o.to,epoch:o.epoch};
     seen.pending.push(req.observe(v.pool,s)?.ok_or_else(||invalid("pending original MOVE lacks its receipt"))?);
     let moved=s.placed(o.file).filter(|m|m.original.op==o.op);
     if v.id()==o.from{

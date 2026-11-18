@@ -2,8 +2,10 @@
 //! consulted offline. Only a subsequent physical observation opens roots, and
 //! neither object exposes the recycle directory as a general FILE volume.
 use super::{Access,FileVolume,LocalPool};
+use crate::ordinary::{LifecycleGrant,Side};
 use crate::{Entity,Role,VolumeId,fs::{self,Birth,HeldDir,invalid},pool::{format::Record,require_system}};
 use std::io;
+pub(crate) mod incoming;
 
 #[derive(Debug,Clone,Copy,Eq,PartialEq)]
 pub(crate) enum Direction{ToRecycle,FromRecycle}
@@ -52,6 +54,20 @@ impl Route<'_>{
 /// cleanup must use its own original decision, including offline-source cases.
 pub(crate) struct Observed<'p>{pool:&'p LocalPool,route:Route<'p>,ordinary:FileVolume<'p>,recycle:HeldDir}
 impl LocalPool{
+    pub(crate) fn registered_dedicated(&self,direction:Direction,from:VolumeId,to:VolumeId)->io::Result<Route<'_>>{
+        self.registration.dedicated_route(fs::local_uid(),direction,from,to)
+    }
+    /// Reopening ONE authorized end must not require its offline peer. A
+    /// submitted/granted role is checked against the same immutable record
+    /// on every call. Ordinary FILE APIs cannot borrow this return type.
+    pub(crate) fn custody_end<'g,'p>(&'g self,grant:&'g LifecycleGrant<'p>,side:Side)->io::Result<CustodyEnd<'g,'p>>{
+        let(direction,from,to)=grant.roles(self)?;
+        let route=self.registered_dedicated(direction,from,to)?;let(s,t)=route.ends();
+        let index=match side{Side::Source=>s,Side::Target=>t};
+        let role=if index==route.recycle{Role::Recycle}else{Role::File};
+        let root=self.open_root(index,role)?;
+        let end=CustodyEnd{pool:self,grant,side,index,role,root};end.require_current()?;Ok(end)
+    }
     pub(crate) fn observe_dedicated(&self,direction:Direction,from:VolumeId,to:VolumeId)->io::Result<Observed<'_>>{
         let route=self.registration.dedicated_route(fs::local_uid(),direction,from,to)?;
         let ordinary=self.ordinary(self.registration.info.volumes[route.ordinary].id)?;
@@ -59,6 +75,48 @@ impl LocalPool{
         let held=Observed{pool:self,route,ordinary,recycle};
         held.require_current()?;
         Ok(held)
+    }
+}
+/// No deref, root path, directory descriptor, arbitrary component, clone or
+/// unscoped callback. The lease validates the same grant on every operation.
+/// A long-running clean reader may outlive it, but contains only immutable
+/// FILE children and is not permission to locate or modify another item.
+pub(crate) struct CustodyEnd<'g,'p>{pool:&'g LocalPool,grant:&'g LifecycleGrant<'p>,side:Side,index:usize,role:Role,root:HeldDir}
+impl CustodyEnd<'_, '_>{
+    pub(crate) fn id(&self)->VolumeId{self.pool.registration.info.volumes[self.index].id}
+    pub(crate) fn role(&self)->Role{self.role}
+    pub(crate) fn belongs(&self,g:&LifecycleGrant<'_>,side:Side)->bool{self.side==side&&std::ptr::eq(self.grant,g)}
+    fn require_current(&self)->io::Result<()>{
+        self.grant.roles(self.pool)?;self.pool.check_root(self.index,self.role,&self.root)?;
+        if self.role==Role::Recycle&&self.pool.system.same_mount(&self.root)?{return Err(invalid("dedicated recycle shares SYSTEM's mount"));}
+        require_system(&self.pool.system,&self.pool.registration)
+    }
+    pub(crate) fn identity(&self)->io::Result<(Entity,Birth)>{
+        self.require_current()?;Ok((self.root.entity,Birth::read(&self.root.file)?))
+    }
+    pub(crate) fn target_present(&self)->io::Result<bool>{
+        if self.side!=Side::Target{return Err(invalid("not this operation's target"));}
+        self.require_current()?;let v=self.root.entry_present(self.grant.name(Side::Target))?;self.require_current()?;Ok(v)
+    }
+    fn source_child(&self)->io::Result<HeldDir>{
+        if self.side!=Side::Source||!matches!(self.pool.access,Access::Incoming|Access::Write){
+            return Err(invalid("requires the original incoming FILE source lease"));}
+        self.require_current()?;
+        if let Some(stage)=self.grant.prior_stage(){if self.root.entry_present(stage)?{return Err(invalid("previous FILE stage remains at the source"));}}
+        let d=self.root.child_directory(self.grant.name(Side::Source))?.ok_or_else(||invalid("selected FILE source is unavailable"))?;
+        let(e,b)=self.grant.source_directory();
+        if d.entity!=e||Birth::read(&d.file)?!=*b{return Err(invalid("not the original lifecycle FILE directory"));}
+        self.require_current()?;Ok(d)
+    }
+    pub(crate) fn check_source(&self,held:&HeldDir)->io::Result<()>{
+        let d=self.source_child()?;
+        if d.path!=held.path||d.entity!=held.entity||Birth::read(&d.file)?!=Birth::read(&held.file)?||
+            !d.same_mount(held)?{return Err(invalid("not the selected held source FILE"));}
+        held.require_named()?;self.require_current()
+    }
+    pub(crate) fn read_clean_source(&self)->io::Result<crate::ordinary::LifecycleSource>{
+        let dir=self.source_child()?;
+        let clean=self.grant.read_source(self.pool,self,dir)?;self.require_current()?;Ok(clean)
     }
 }
 impl Observed<'_>{

@@ -1,7 +1,7 @@
 //! First public custody transaction: one clean FILE with its actual original
 //! FULL and first INCR. Same logical name, two registered ordinary roots,
 //! no new FILE, node or version. Recycle is NOT an ordinary destination.
-use super::{allocation::MoveAllocation,destination::Destination,finish,placed::Reopened,source::Clean,transfer::{self,Origin}};
+use super::{purpose::Call,allocation::MoveAllocation,destination::Destination,finish,placed::Reopened,source::Clean,transfer::{self,Origin}};
 use crate::{EntryId,FileId,HistoryId,OperationId,VolumeId,fs::{self,invalid},ordinary::{self,Cut,journal::{Intent,Journal},wire},
     pool::lease::{Access,LocalPool}};
 use std::{io,path::Path};
@@ -13,10 +13,10 @@ pub struct MoveReceipt{pub operation:OperationId,pub file:FileId,pub entry:Entry
     pub source_epoch:u64,pub destination_epoch:u64,pub name:String,pub decision_sequence:Option<u64>,pub status:MoveStatus}
 fn result(o:&Origin,seq:Option<u64>,status:MoveStatus)->MoveReceipt{MoveReceipt{operation:o.op,file:o.file,entry:o.entry,history:o.history,
     from:o.from,to:o.to,source_epoch:o.epoch,destination_epoch:1,name:o.name.clone(),decision_sequence:seq,status}}
-#[derive(Clone,Copy)]pub(super) struct Request{pub op:OperationId,pub id:FileId,pub from:VolumeId,pub to:VolumeId,pub epoch:u64}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]pub(super) struct Request{pub call:Call,pub op:OperationId,pub id:FileId,pub from:VolumeId,pub to:VolumeId,pub epoch:u64}
 impl Request{
     pub(super) fn digest(self,p:&LocalPool)->io::Result<[u8;32]>{p.require_business_op(self.op)?;
-        transfer::request(p.id(),fs::local_uid(),self.op,self.id,self.from,self.to,self.epoch)}
+        self.call.request(p.id(),fs::local_uid(),self.op,self.id,self.from,self.to,self.epoch)}
     pub(super) fn observe(self,p:&LocalPool,s:&Journal)->io::Result<Option<MoveReceipt>>{
         let req=self.digest(p)?;
         if let Some(d)=s.decided(self.op){
@@ -35,12 +35,13 @@ impl Request{
     }
 }
 pub fn move_receipt(system:&Path,op:OperationId,id:FileId,from:VolumeId,to:VolumeId,epoch:u64)->io::Result<Option<MoveReceipt>>{
-    let(p,_,s)=LocalPool::with_snapshot(system,Access::Read)?;Request{op,id,from,to,epoch}.observe(&p,&s)
+    let(p,_,s)=LocalPool::with_snapshot(system,Access::Read)?;Request{call:Call::Move,op,id,from,to,epoch}.observe(&p,&s)
 }
 pub fn move_file(system:&Path,op:OperationId,id:FileId,from:VolumeId,to:VolumeId,epoch:u64)->io::Result<MoveReceipt>{
-    perform(system,Request{op,id,from,to,epoch},&mut |_|Ok(()))
+    perform(system,Request{call:Call::Move,op,id,from,to,epoch},&mut |_|Ok(()))
 }
 pub(super) fn perform(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<MoveReceipt>{
+    if r.call!=Call::Move{return Err(invalid("paired lifecycle publication is not yet available"));}
     let decided={
         let(p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;
         match r.observe(&p,&s)?{

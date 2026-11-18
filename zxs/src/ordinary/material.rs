@@ -24,7 +24,7 @@ pub(super) fn private_slot(raw:&[u8])->Option<(OperationId,u8)>{
     if slot>=SLOTS{return None;}
     Some((std::str::from_utf8(&tail[..32]).ok()?.parse().ok()?,slot))
 }
-fn check_siblings(names:&[Vec<u8>],name:&str,allow_target:bool)->io::Result<()>{
+pub(in crate::ordinary) fn check_siblings(names:&[Vec<u8>],name:&str,allow_target:bool)->io::Result<()>{
     human_name(name.as_bytes())?;
     for raw in names{
         if raw.eq_ignore_ascii_case(name.as_bytes()) && !(allow_target&&raw.as_slice()==name.as_bytes()){
@@ -44,7 +44,7 @@ fn check_name(volume:&FileVolume<'_>,name:&str,allow_target:bool)->io::Result<()
 pub(in crate::ordinary) fn vacant_for_move(v:&FileVolume<'_>,name:&str)->io::Result<()>{
     v.require_current()?;crate::fs::check_path(&v.root.path.join(name))?;check_name(v,name,false)
 }
-fn room_for_ticket(names:&[Vec<u8>],name:&str,stage:&CStr)->io::Result<()>{
+pub(in crate::ordinary) fn room_for_ticket(names:&[Vec<u8>],name:&str,stage:&CStr)->io::Result<()>{
     let bytes:usize=names.iter().map(|n|1+n.len()).sum();let n=usize::from(SLOTS);
     if names.len()+n>8192 || bytes+n*(1+name.len().max(stage.to_bytes().len()))>512*1024 {
         return Err(invalid("insufficient bounded inventory for the original temporary names"));

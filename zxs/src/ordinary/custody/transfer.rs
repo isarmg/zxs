@@ -23,7 +23,7 @@ fn take_hash(r:&mut In<'_>)->io::Result<Option<[u8;32]>>{
 fn put_hash(out:&mut Vec<u8>,d:Option<[u8;32]>){
     out.push(u8::from(d.is_some()));if let Some(d)=d{out.extend_from_slice(&d);}
 }
-fn isolation_name(ticket:OperationId)->std::ffi::CString{
+pub(super) fn isolation_name(ticket:OperationId)->std::ffi::CString{
     std::ffi::CString::new(format!(".zxs-move-out-{ticket}")).expect("fixed ASCII original MOVE ticket")
 }
 /// All actual (root,name) pairs that a transfer will later *have* to

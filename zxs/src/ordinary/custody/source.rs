@@ -1,9 +1,9 @@
-use super::transfer::Sites;
+use super::{admission::{LifecycleGrant,Side},command::Request,purpose::Call,transfer::Sites};
 use super::super::{delta::{physical::Body as IncrBody,types::Delta},
     formal::{self,physical::HistoryBody,types::Commit},journal::Journal,material,
     wire::{Frame,NativeObject,empty_material}};
 use crate::{FileId,HistoryId,NodeId,PoolId,VolumeId,fs::{self,HeldDir,invalid,stream::{self,PinnedRegular}},
-    pool::lease::{Access,FileVolume,LocalPool}};
+    pool::lease::{Access,FileVolume,LocalPool,recycle::CustodyEnd}};
 use std::{collections::BTreeSet,ffi::{CStr,CString},io,path::Path};
 
 /// The complete inventory of this narrow clean producer. There is exactly
@@ -37,8 +37,9 @@ fn selection(s:&Journal,id:FileId)->io::Result<(&Frame,&Commit,Option<&Delta>)>{
     }
     Ok((c,parent,d))
 }
-pub(in crate::ordinary::custody) struct Clean{
-    pool:PoolId,root:NativeObject,c:Frame,parent:Commit,delta:Option<Delta>,
+pub(crate) struct Clean{
+    pool:PoolId,volume:VolumeId,root:NativeObject,c:Frame,parent:Commit,delta:Option<Delta>,
+    lifecycle:Option<(Request,[u8;32],Sites)>,
     dir:HeldDir,local:PinnedRegular,first:HistoryBody,second:Option<IncrBody>,
 }
 impl Clean{
@@ -53,19 +54,59 @@ impl Clean{
         let result=Self::at_original_sites(&volume,dir,c,f,d,&Sites::birthplace(c,f,d))?;
         result.require(&pool,&s,&volume)?;Ok(result)
     }
+    /// Read the actual current source of a new/pending paired handoff. No
+    /// source fallback when R is unavailable, and no opening A just because
+    /// a later B-native FILE/INCR was first created there. A completed
+    /// decision must use target observation and exact retirement instead.
+    pub(super) fn capture_lifecycle(system:&Path,r:Request)->io::Result<Self>{
+        if r.call==Call::Move{return Err(invalid("ordinary MOVE uses its own source selection"));}
+        let(p,_,_)=LocalPool::with_snapshot(system,Access::Incoming)?;
+        let grant=LifecycleGrant::capture(&p,r)?;let end=p.custody_end(&grant,Side::Source)?;
+        end.read_clean_source()
+    }
+    /// Called only inside the original endpoint's fixed-name reader. The
+    /// child is the selected FILE, never the recycle root or a supplied path.
+    pub(super) fn from_lifecycle(p:&LocalPool,g:&LifecycleGrant<'_>,end:&CustodyEnd<'_, '_>,dir:HeldDir)->io::Result<Self>{
+        let s=g.predecision(p)?;let r=g.request();
+        if !end.belongs(g,Side::Source){return Err(invalid("not this predecision source reader"));}
+        end.check_source(&dir)?;dir.exclusive()?;end.check_source(&dir)?;
+        let c=s.file(r.id).ok_or_else(||invalid("original FILE unavailable"))?;
+        let f=s.head(r.id).ok_or_else(||invalid("source has no original main FULL"))?;let d=s.delta(r.id);
+        Self::previous_labels(&s,end,g,&dir,c)?;
+        let mut clean=Self::at_held_sites(p.id(),end.id(),g.root(Side::Source).clone(),dir,c,f,d,g.sites())?;
+        clean.lifecycle=Some((r,g.prior(),g.sites().clone()));
+        clean.require_lifecycle(p,g,end)?;Ok(clean)
+    }
+    fn previous_labels(s:&Journal,v:&CustodyEnd<'_, '_>,g:&LifecycleGrant<'_>,dir:&HeldDir,c:&Frame)->io::Result<()>{
+        if let Some(m)=s.placed(c.create.file){
+            let(_,f,d)=super::finish::frozen(s,m)?;
+            let(_,installed)=m.original.purpose.leaves(c.create.file,m.original.op,&c.create.name)?;
+            if m.original.to!=v.id()||installed.as_c_str()!=g.name(Side::Source)||m.original.dst_root!=*g.root(Side::Source)||
+                dir.entity!=m.target.directory.entity||fs::Birth::read(&dir.file)?!=m.target.directory.birth{
+                return Err(invalid("current custody source differs from its last exact installed original"));}
+            for role in super::placed::roles(c,f,d,&m.target)?{
+                let _=super::placed::held_role(dir,&role,(m.original.mode==super::Method::Transfer).then_some(m.allocation))?;
+            }
+        }else if c.create.volume!=v.id()||v.role()!=crate::Role::File{
+            return Err(invalid("FILE has no prior handoff to the offered lifecycle source"));}
+        Ok(())
+    }
     /// Shared reader, not another authority. The caller supplies the true
     /// selected location and native roles from the preceding original decision
     /// or the exact held source/target handoff prior to that decision.
     pub(super) fn at_original_sites(volume:&FileVolume<'_>,dir:HeldDir,c:&Frame,f:&Commit,d:Option<&Delta>,sites:&Sites)->io::Result<Self>{
+        volume.require_current()?;let root=NativeObject{entity:volume.root.entity,birth:fs::Birth::read(&volume.root.file)?};
+        let clean=Self::at_held_sites(volume.pool.id(),volume.id(),root,dir,c,f,d,sites)?;volume.require_current()?;Ok(clean)
+    }
+    fn at_held_sites(pool:PoolId,volume:VolumeId,root:NativeObject,dir:HeldDir,c:&Frame,f:&Commit,d:Option<&Delta>,sites:&Sites)->io::Result<Self>{
         if sites.incr.is_some()!=d.is_some(){return Err(invalid("incomplete original FILE placement"));}
-        volume.require_current()?;material::verify_header_at(&dir,&c.create,&sites.directory,&sites.local)?;
+        material::verify_header_at(&dir,&c.create,&sites.directory,&sites.local)?;
         let local=material::custody_lease_at(&dir,&c.create,&sites.local,false)?;
         let open=||HistoryBody::at_originals(&dir,f,&sites.node,&sites.raw);
         let first=open()?;let second=match(d,&sites.incr){(Some(d),Some(n))=>Some(IncrBody::at_original(&dir,open()?,d,n)?),
             (None,None)=>None,_=>return Err(invalid("unexpected retained role"))};
-        let root=NativeObject{entity:volume.root.entity,birth:fs::Birth::read(&volume.root.file)?};
         sites.check(&root)?;
-        let result=Self{pool:volume.pool.id(),root,c:c.clone(),parent:f.clone(),delta:d.cloned(),dir,local,first,second};
+        let result=Self{pool,volume,root,lifecycle:None,c:c.clone(),parent:f.clone(),delta:d.cloned(),dir,local,first,second};
         result.exact_names()?;Ok(result)
     }
     fn each(&self,mut apply:impl FnMut(Leaf,&CStr,&PinnedRegular)->io::Result<()>)->io::Result<()>{
@@ -92,6 +133,8 @@ impl Clean{
     /// Immediately before using a frozen source, compare to its *same* FILE
     /// original. Unrelated later FILE operations do not substitute a new cut.
     pub(super) fn require(&self,p:&LocalPool,s:&Journal,v:&FileVolume<'_>)->io::Result<()>{
+        if !std::ptr::eq(p,v.pool){return Err(invalid("not the selected original SYSTEM lease"));}
+        if self.lifecycle.is_some(){return Err(invalid("a lifecycle source requires its scoped original endpoint"));}
         let(c,f,d)=selection(s,self.c.create.file)?;
         if p.id()!=self.pool||v.id()!=self.c.create.volume||c.digest!=self.c.digest||f.digest!=self.parent.digest||
             d.map(|v|v.digest)!=self.delta.as_ref().map(|v|v.digest)||v.root.entity!=self.root.entity||
@@ -100,6 +143,17 @@ impl Clean{
             return Err(invalid("handoff source no longer belongs to its original FILE/root/frontier"));
         }
         v.require_current()?;self.exact_names()?;v.require_current()
+    }
+    fn require_lifecycle(&self,p:&LocalPool,g:&LifecycleGrant<'_>,v:&CustodyEnd<'_, '_>)->io::Result<()>{
+        let Some((r,prior,sites))=&self.lifecycle else{return Err(invalid("not a frozen lifecycle source"));};
+        let s=g.predecision(p)?;
+        if !v.belongs(g,Side::Source)||*r!=g.request()||p.id()!=self.pool||v.id()!=self.volume||
+            v.id()!=r.from||g.root(Side::Source)!=&self.root||g.prior()!=*prior||g.sites()!=sites||
+            s.file(r.id).map(|c|c.digest)!=Some(self.c.digest)||s.head(r.id).map(|f|f.digest)!=Some(self.parent.digest)||
+            s.delta(r.id).map(|d|d.digest)!=self.delta.as_ref().map(|d|d.digest){
+            return Err(invalid("different lifecycle operation, source or formal history"));}
+        v.check_source(&self.dir)?;Self::previous_labels(&s,v,g,&self.dir,&self.c)?;
+        self.exact_names()?;v.check_source(&self.dir)
     }
     pub(super) fn verify(self)->io::Result<Verified>{
         self.exact_names()?;
@@ -162,11 +216,14 @@ impl Verified{
     pub(super) fn same_mount(&self,root:&HeldDir)->io::Result<bool>{self.source.dir.same_mount(root)}
     pub(super) fn file(&self)->FileId{self.source.c.create.file}
     pub(super) fn history(&self)->HistoryId{self.source.c.create.history}
-    pub(super) fn volume(&self)->VolumeId{self.source.c.create.volume}
+    pub(super) fn volume(&self)->VolumeId{self.source.volume}
     pub(super) fn head(&self)->NodeId{self.source.delta.as_ref().map_or(self.source.parent.original.node,|d|d.original.node)}
     pub(super) fn objects(&self)->&[Bytes]{&self.bytes}
     pub(super) fn physical_bytes(&self)->u64{self.total}
     pub(super) fn require(&self,pool:&LocalPool,s:&Journal,volume:&FileVolume<'_>)->io::Result<()>{self.source.require(pool,s,volume)}
+    pub(super) fn require_lifecycle(&self,p:&LocalPool,g:&LifecycleGrant<'_>,v:&CustodyEnd<'_, '_>)->io::Result<()>{
+        self.source.require_lifecycle(p,g,v)
+    }
     /// Supplies only the named immutable original from the actual checked
     /// source, not a selector for a new name/path, and rechecks the raw hash.
     pub(super) fn stream(&self,required:Leaf,mut output:impl FnMut(u64,&[u8])->io::Result<()>)->io::Result<()>{

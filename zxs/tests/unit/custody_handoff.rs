@@ -25,7 +25,7 @@ impl Fixture{
         let last=z::commit_working(&sys,op(),file.file,2).unwrap();
         Self{_s:s,_d:d,_r:r,sys,old,new,from,to,file,first,last}
     }
-    fn cmd(&self)->Request{Request{op:op(),id:self.file.file,from:self.from,to:self.to,epoch:0}}
+    fn cmd(&self)->Request{Request{call:crate::ordinary::custody::purpose::Call::Move,op:op(),id:self.file.file,from:self.from,to:self.to,epoch:0}}
     fn call(&self,r:Request)->io::Result<z::MoveReceipt>{z::move_file(&self.sys,r.op,r.id,r.from,r.to,r.epoch)}
     fn receipt(&self,r:Request)->z::MoveReceipt{z::move_receipt(&self.sys,r.op,r.id,r.from,r.to,r.epoch).unwrap().unwrap()}
     fn all_history(&self){let id=self.file.file;

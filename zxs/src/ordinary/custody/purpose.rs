@@ -20,6 +20,12 @@ impl Call{
         if let Self::Restore{deleted_by,decision}=self{b.extend_from_slice(&deleted_by.0);b.extend_from_slice(&decision);}
         crate::hash::digest(&b)
     }
+    pub(super) fn leaves(self,file:FileId,op:OperationId,human:&str)->io::Result<(CString,CString)>{
+        wire::human_name(human.as_bytes())?;
+        let h=CString::new(human.as_bytes()).map_err(|_|invalid("invalid original FILE leaf"))?;
+        let kept=|by:OperationId|CString::new(format!(".zxs-retained-{file}-{by}")).expect("two fixed hex IDs, no NUL");
+        Ok(match self{Self::Move=>(h.clone(),h),Self::Delete=>(h,kept(op)),Self::Restore{deleted_by,..}=>(kept(deleted_by),h)})
+    }
     pub(in crate::ordinary) fn effect(self,file:FileId,op:OperationId)->Effect{
         match self{Self::Move=>Effect::Ordinary,Self::Delete=>Effect::Retain{file,operation:op},
             Self::Restore{deleted_by,decision}=>Effect::Restore(Deletion{file,operation:deleted_by,decision})}
@@ -74,12 +80,7 @@ impl Purpose{
             return Err(invalid("custody method does not match the two original filesystems"));
         }Ok(())
     }
-    pub(super) fn leaves(self,file:FileId,op:OperationId,human:&str)->io::Result<(CString,CString)>{
-        wire::human_name(human.as_bytes())?;
-        let h=CString::new(human.as_bytes()).map_err(|_|invalid("invalid original FILE leaf"))?;
-        let kept=|by:OperationId|CString::new(format!(".zxs-retained-{file}-{by}")).expect("two fixed hex IDs, no NUL");
-        Ok(match self{Self::Ordinary=>(h.clone(),h),Self::Delete{..}=>(h,kept(op)),Self::Restore{deleted_by,..}=>(kept(deleted_by),h)})
-    }
+    pub(super) fn leaves(self,file:FileId,op:OperationId,human:&str)->io::Result<(CString,CString)>{self.call().leaves(file,op,human)}
 }
 
 pub(super) const MAX_EXTRA:usize=16+32; // max(previous + u64 seconds + u32 nanos, op + previous)

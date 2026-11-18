@@ -1,6 +1,8 @@
 //! First ordinary vertical path: a real, initially empty manual FILE in a
 //! selected registered ordinary root. Creation does not publish a version.
 mod custody;
+pub(crate) use custody::{LifecycleSource,IncomingSelection};
+pub(crate) use custody::admission::{LifecycleGrant,Side};
 pub use custody::{move_file,move_receipt,MoveReceipt,MoveStatus};
 mod wire;
 mod content;

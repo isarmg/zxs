@@ -101,19 +101,12 @@ impl<'s> Destination<'s>{
         for (part,f) in allocated{
             src.stream(part.kind,|at,b|stream::write_at(&f,b,at))?;
             f.sync_all()?;let stamp=stream::anonymous_stamp(&f)?;
-            if hash_unnamed(&f,&stamp)?!=part.digest{return Err(invalid("target physical data differs from checked source"));}
+            if stream::hash_unnamed(&f,&stamp)?!=part.digest{return Err(invalid("target physical data differs from checked source"));}
             files.push(Anonymous{part,file:f,stamp});
         }
         self.held.require_named()?;
         Ok(Prepared{dest:self,files,existing})
     }
-}
-fn hash_unnamed(f:&File,original:&fs::OriginalStamp)->io::Result<[u8;32]>{
-    if stream::anonymous_stamp(f)?!=*original{return Err(invalid("unnamed target changed at transfer boundary"));}
-    let len=original.stat.size();let mut h=crate::hash::Sha256::new();let mut at=0;let mut buf=vec![0;len.min(1024*1024) as usize];
-    while at<len{let n=(len-at).min(buf.len() as u64)as usize;stream::read_at(f,&mut buf[..n],at)?;
-        h.update(&buf[..n])?;at+=n as u64;}
-    if stream::anonymous_stamp(f)?!=*original{return Err(invalid("unnamed target changed during complete readback"));}Ok(h.finish())
 }
 pub(super) struct Anonymous{pub part:Bytes,pub file:File,pub stamp:fs::OriginalStamp}
 pub(super) struct Prepared<'s>{dest:Destination<'s>,files:Vec<Anonymous>,existing:Option<Existing>}

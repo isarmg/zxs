@@ -7,7 +7,7 @@ fn seed(f:&Fixture)->(FileInfo,FormalNode,Request){
     let item=z::create_empty(&f.sys,op(),f.from,"one").unwrap();
     z::save_first(&f.sys,op(),item.file,claim(BEFORE),Cursor::new(BEFORE)).unwrap();
     let first=z::commit_working(&f.sys,op(),item.file,1).unwrap();
-    let r=Request{op:op(),id:item.file,from:f.from,to:f.to,epoch:0};
+    let r=Request{call:crate::ordinary::custody::purpose::Call::Move,op:op(),id:item.file,from:f.from,to:f.to,epoch:0};
     (item,first,r)
 }
 fn edit(at:u64,b:&[u8])->z::SpanEdit{z::SpanEdit::new(at,claim(b),z::LengthPolicy::KeepOrGrow).unwrap()}
@@ -210,4 +210,116 @@ fn before_handoff_does_not_promote_the_reservation_a_sealed_frame_or_an_unconfir
     assert_eq!(confirmed.before_handoff(&m).unwrap().volume(),f.from);
     assert!(confirmed.before_handoff(&swapped).is_err());assert!(confirmed.before_handoff(&wrong).is_err());
     assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);
+}
+
+#[test]
+#[ignore="dedicated recycle filesystem and two registered ordinary roots; lifecycle observation only"]
+fn only_the_original_local_subject_and_clean_file_can_borrow_the_two_physical_endpoints(){
+    use crate::ordinary::custody::{admission::{LifecycleGrant,Side},purpose::Call};
+    let f=Fixture::build(false,false);let rr=z::inspect(&f.sys).unwrap().volumes.into_iter().find(|x|x.volume.role==z::Role::Recycle).unwrap();
+    let request=Request{op:op(),id:f.file.file,from:f.from,to:rr.id,epoch:0,call:Call::Delete};
+    let(p,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+    let grant=LifecycleGrant::capture(&p,request).unwrap();
+    assert_eq!(grant.prior(),s.file(request.id).unwrap().digest);
+    assert_eq!(grant.name(Side::Source).to_bytes(),b"name");
+    assert!(grant.name(Side::Target).to_bytes().starts_with(b".zxs-retained-"));
+    let orig=p.custody_end(&grant,Side::Source).unwrap();let bin=p.custody_end(&grant,Side::Target).unwrap();
+    assert_eq!((orig.id(),orig.role(),bin.id(),bin.role()),(f.from,crate::Role::File,rr.id,crate::Role::Recycle));
+    assert_eq!(bin.identity().unwrap(),(grant.root(Side::Target).entity,grant.root(Side::Target).birth.clone()));
+    assert!(grant.sites().incr.is_some());assert!(orig.target_present().is_err());
+    assert!(bin.read_clean_source().is_err());assert!(orig.read_clean_source().is_err()); // read-only observation, not incoming.
+    for bad in [
+        Request{call:Call::Move,..request},Request{op:f.last.created_by,..request},
+        Request{to:f.to,..request},Request{from:f.to,..request},Request{epoch:1,..request},
+        Request{from:rr.id,to:f.to,epoch:1,call:Call::Restore{deleted_by:request.op,decision:[31;32]},..request},
+    ]{assert!(LifecycleGrant::capture(&p,bad).is_err());}
+    let other_cut=LocalPool::open(&f.sys,Access::Read).unwrap();
+    assert!(other_cut.custody_end(&grant,Side::Target).is_err());assert!(p.ordinary(rr.id).is_err());
+    assert!(!bin.target_present().unwrap());assert!(s.decided(request.op).is_none());assert!(s.moving.is_none());
+    drop(orig);drop(bin);drop(other_cut);drop(grant);drop(s);drop(p);
+    assert!(f.old.join("name").is_dir());assert!(fs::read_dir(&rr.volume.path).unwrap().next().is_none());
+    let new=z::create_empty(&f.sys,request.op,f.to,"same-old-op-still-unused").unwrap();assert_ne!(new.file,request.id);
+    let(p,_,_)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();assert!(LifecycleGrant::capture(&p,request).is_err());
+}
+
+#[test]
+#[ignore="three private registered test filesystems; verifies source streams only, not a delete"]
+fn soft_delete_preparation_reads_the_true_b_container_after_a_disconnect_and_refuses_changed_moved_history(){
+    use crate::ordinary::custody::{purpose::Call,source::{Clean,Leaf}};
+    let f=Fixture::build(true,false);let(item,first,r)=seed(&f);f.call(r).unwrap();
+    let bytes=b"new native child of B";z::save_interval(&f.sys,op(),item.file,1,edit(0,bytes),Cursor::new(bytes)).unwrap();
+    let second=z::commit_working(&f.sys,op(),item.file,2).unwrap();
+    let recycle=z::inspect(&f.sys).unwrap().volumes.into_iter().find(|v|v.volume.role==z::Role::Recycle).unwrap();
+    let req=Request{call:Call::Delete,op:op(),id:item.file,from:f.to,to:recycle.id,epoch:1};
+    let offline=f.old.with_file_name("offline-A");fs::rename(&f.old,&offline).unwrap();
+    {
+        let held=Clean::capture_lifecycle(&f.sys,req).unwrap().verify().unwrap();
+        assert_eq!((held.file(),held.volume(),held.head()),(item.file,f.to,second.node));
+        assert_eq!(held.objects().len(),4);
+        let mut raw=Vec::new();held.stream(Leaf::FullRaw,|_,v|{raw.extend_from_slice(v);Ok(())}).unwrap();assert_eq!(raw,BEFORE);
+        let pack=held.objects().iter().find(|part|part.kind==Leaf::Incr).unwrap();
+        let bmeta=fs::metadata(f.new.join("one").join(format!("{}-one",second.storage))).unwrap();
+        assert_eq!((pack.original.entity.device,pack.original.entity.inode),(bmeta.dev(),bmeta.ino()));
+    }
+    assert!(Clean::capture_lifecycle(&f.sys,Request{from:f.from,..req}).is_err());
+    let parent=f.new.join("one").join(format!("{}-one",first.storage));let mut corrupt=BEFORE.to_vec();corrupt[0]^=31;
+    fs::write(&parent,&corrupt).unwrap();assert!(Clean::capture_lifecycle(&f.sys,req).unwrap().verify().is_err());
+    assert_eq!(fs::read(&parent).unwrap(),corrupt);
+    assert!(fs::read_dir(&recycle.volume.path).unwrap().next().is_none());
+    let(_,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();assert!(s.decided(req.op).is_none()&&s.moving.is_none());
+}
+
+#[test]
+#[ignore="three private filesystems; actual original stage and INTENT at separate cut points"]
+fn a_custody_loan_compares_decoded_phase_and_the_seal_incarnation_not_only_a_frame_hash_or_stat(){
+    use crate::ordinary::custody::admission::Stage;
+    let f=Fixture::build(true,false);let r=f.cmd();
+    stop_at(&f,r,Cut::Reservation);let(p,_,mut early)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();drop(p);
+    stop_at(&f,r,Cut::MoveLeafLinked);let(p,_,mut bound)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();drop(p);
+    assert!(early.moving.as_ref().unwrap().stage().is_none()&&bound.moving.as_ref().unwrap().stage().is_some());
+    // Equalize the two observed stamps only in these borrowed test values:
+    // changes to the original phase still distinguish the two cuts.
+    early.moving.as_mut().unwrap().stamp=bound.moving.as_ref().unwrap().stamp.clone();
+    assert!(Stage::of(&early).unwrap()!=Stage::of(&bound).unwrap());
+    stop_at(&f,r,Cut::Intent);let(p,_,mut sealed)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();drop(p);
+    let real=Stage::of(&sealed).unwrap();
+    let i=sealed.pending.as_mut().unwrap();let digest=i.frame.moved().unwrap().digest;
+    i.stamp=bound.moving.take().unwrap().stamp;
+    assert_eq!(i.frame.moved().unwrap().digest,digest);assert!(Stage::of(&sealed).unwrap()!=real);
+    assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);
+}
+
+#[test]
+#[ignore="private original ordinary and dedicated recycle filesystems; unnamed material only"]
+fn fresh_dedicated_copy_reads_back_all_true_anonymous_originals_before_any_ticket_or_visible_deletion(){
+    use std::os::unix::ffi::OsStrExt;
+    use crate::ordinary::custody::{admission::{LifecycleGrant,Side},incoming::IncomingSelection,purpose::Call,source::Clean};
+    let f=Fixture::build(true,false);let rr=z::inspect(&f.sys).unwrap().volumes.into_iter().find(|v|v.volume.role==z::Role::Recycle).unwrap();
+    let r=Request{call:Call::Delete,op:op(),id:f.file.file,from:f.from,to:rr.id,epoch:0};
+    let held=Clean::capture_lifecycle(&f.sys,r).unwrap().verify().unwrap();
+    let copy=IncomingSelection::prepare(&f.sys,&held,r).unwrap();let target=copy.inspection().unwrap();
+    assert_eq!(target.len(),4);
+    for (a,b) in target.iter().zip(held.objects()){
+        assert_ne!(a.0,b.original.entity);assert_eq!(a.0.device,rr.volume.entity.device);
+        assert_ne!(a.1.filesystem(),b.original.birth.filesystem());assert_eq!((a.2,a.3),(b.len,b.digest));
+    }
+    let(_,private)=r.call.leaves(r.id,r.op,&f.file.name).unwrap();
+    assert!(fs::read_dir(&rr.volume.path).unwrap().next().is_none());
+    let(p,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+    let g=LifecycleGrant::capture(&p,r).unwrap();
+    assert!(!p.custody_end(&g,Side::Target).unwrap().target_present().unwrap());
+    assert!(s.moving.is_none()&&s.decided(r.op).is_none());drop(g);drop(s);drop(p);
+    assert!(IncomingSelection::prepare(&f.sys,&held,Request{op:op(),..r}).is_err());
+    // Occupancy or loss of the exact dedicated root leaves the original FILE
+    // active, never removes an unknown item and doesn't create a SYSTEM ticket.
+    let foreign=rr.volume.path.join("foreign");fs::write(&foreign,b"keep").unwrap();
+    assert!(copy.recheck(&f.sys).is_err());assert!(IncomingSelection::prepare(&f.sys,&held,r).is_err());
+    assert_eq!(fs::read(&foreign).unwrap(),b"keep");fs::remove_file(&foreign).unwrap();
+    let at=rr.volume.path.join(std::ffi::OsStr::from_bytes(private.to_bytes()));fs::create_dir(&at).unwrap();
+    assert!(copy.recheck(&f.sys).is_err());assert!(at.is_dir());fs::remove_dir(&at).unwrap();
+    let lost=rr.volume.path.with_file_name("missing-selected-R");fs::rename(&rr.volume.path,&lost).unwrap();
+    assert!(copy.recheck(&f.sys).is_err());fs::rename(lost,&rr.volume.path).unwrap();
+    copy.recheck(&f.sys).unwrap();drop(copy);drop(held);f.all_history();
+    let(_,_,now)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+    assert!(now.decided(r.op).is_none()&&now.moving.is_none());assert!(fs::read_dir(&rr.volume.path).unwrap().next().is_none());
 }

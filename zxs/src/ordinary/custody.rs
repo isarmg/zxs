@@ -2,9 +2,13 @@
 //! container. A frozen source is local to one operation and one held FILE.
 //! One native SYSTEM decision hands the same container identity to its exact
 //! destination. Operands alone cannot authorize original source retirement.
+pub(crate) mod admission;
 pub(super) mod purpose;
 mod source;
+pub(crate) use source::Clean as LifecycleSource;
 mod command;
+mod incoming;
+pub(crate) use incoming::IncomingSelection;
 mod finish;
 mod retire;
 pub(super) mod inventory;

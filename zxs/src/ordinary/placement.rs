@@ -20,6 +20,7 @@ impl<'a> Placement<'a>{
         Ok(Self{birth,applied})
     }
     pub(super) fn birth(self)->&'a Frame{self.birth}
+    pub(super) fn transfer(self)->Option<&'a Moved>{self.applied}
     pub(super) fn volume(self)->VolumeId{self.applied.map_or(self.birth.create.volume,|m|m.original.to)}
     pub(super) fn epoch(self)->u64{self.applied.map_or(0,|m|m.original.epoch+1)}
     pub(super) fn key(self)->[u8;32]{self.applied.map_or(self.birth.digest,|m|m.digest)}

@@ -18,6 +18,9 @@ impl PinnedRegular{
     }
 }
 impl HeldDir{
+    /// A held unnamed inode can only acquire its intended name through the
+    /// very same mount instance, not through some other mount of the same FS.
+    pub(crate) fn shares_file_mount(&self,file:&File)->io::Result<bool>{Ok(mounts::id(&self.file)?==mounts::id(file)?)}
     pub(crate) fn pin_stream(&self,name:&CStr,exact:u64)->io::Result<Option<PinnedRegular>>{
         let Some(pin)=self.pin_record(name)? else{return Ok(None)};
         let stat=record_stamp(&pin,exact)?;let m=mounts::id(&self.file)?;
@@ -82,4 +85,13 @@ impl HeldDir {
         if self.pin_record(name)?.is_some(){return Err(invalid("working name reused at release"));}
         self.require_named()
     }
+}
+
+/// Reads the entire original unnamed regular object, before and after checking its native stamp.
+pub(crate) fn hash_unnamed(f:&File,original:&OriginalStamp)->io::Result<[u8;32]>{
+    if anonymous_stamp(f)?!=*original{return Err(invalid("unnamed target changed at transfer boundary"));}
+    let len=original.stat.size();let mut h=crate::hash::Sha256::new();let mut at=0;let mut buf=vec![0;len.min(1024*1024) as usize];
+    while at<len{let n=(len-at).min(buf.len() as u64)as usize;read_at(f,&mut buf[..n],at)?;
+        h.update(&buf[..n])?;at+=n as u64;}
+    if anonymous_stamp(f)?!=*original{return Err(invalid("unnamed target changed during complete readback"));}Ok(h.finish())
 }
