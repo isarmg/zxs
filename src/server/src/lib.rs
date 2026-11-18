@@ -187,9 +187,7 @@ mod backend_create_repository;
 mod backend_merge_link;
 mod http_merge_link;
 pub use backend_merge_link::CreateMergeLink;
-mod http_create_repository;
 pub use backend_create_repository::CreateRepository;
-mod http_create_branch;
 pub use backend_archive::{ArchiveBranch, ArchiveBranchTarget};
 pub use backend_create_branch::CreateBranch;
 mod backend_smb_binding;
@@ -1123,7 +1121,7 @@ fn router_shared(
         .route("/api/smb/password", post(http_smb_account::change_password))
         .route(
             "/api/repositories",
-            get(repositories).post(http_create_repository::create),
+            get(repositories),
         )
         .route("/api/repositories/{repo}", get(repository))
         .route(
@@ -1176,7 +1174,7 @@ fn router_shared(
         )
         .route(
             "/api/repositories/{repo}/branches",
-            get(branches).post(http_create_branch::create),
+            get(branches),
         )
         .route("/api/branches/{branch}/tree", get(tree))
         .route("/api/branches/{branch}", get(branch_info))

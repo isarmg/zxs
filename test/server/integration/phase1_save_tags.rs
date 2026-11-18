@@ -18,6 +18,8 @@ mod content_matches;
 mod directory_git;
 #[path = "phase1_save_tags/discovery.rs"]
 mod discovery;
+#[path = "phase1_save_tags/ordinary_root_creators.rs"]
+mod ordinary_root_creators;
 #[path = "phase1_save_tags/file_lifecycle.rs"]
 mod file_lifecycle;
 #[path = "phase1_save_tags/rejection.rs"]
