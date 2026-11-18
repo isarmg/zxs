@@ -10,6 +10,7 @@ from . import lifecycle
 from .archive import read_archive
 from .freeze import frozen_tree, pack
 from .model import Commit, Rejected, check_id, new_id
+from .private_candidates import held_candidates
 from .private_freeze import anonymous_capture
 from .publish import confirm_final, digest_file, publish, rename_new, require_native_writer, sync_dir
 
@@ -165,10 +166,10 @@ def history(archive, store):
 
 def fork_pending(state, operation):
     """Explicitly rebranch the actual original frozen candidate, never today's worktree."""
-    import shutil
-    import zipfile
     check_id(operation)
-    with locked(state) as (con, row, state):
+    require_native_writer()  # Reject an unavailable native primitive before opening/recovering SQLite.
+    with held_candidates(state) as area, locked(state) as (con, row, state):
+        area.check_state()
         prior = con.execute("SELECT successor FROM forked_original WHERE operation=?", (operation,)).fetchone()
         if prior is not None:
             successor = prior[0]
@@ -178,24 +179,12 @@ def fork_pending(state, operation):
             old = Commit.decode(row["pending"])
             if old.operation != operation:
                 raise Rejected("refusing to replace a different pending operation")
-            oldfile = state / (operation + ".zxs")
-            if digest_file(oldfile) != row["pending_sha"] or read_archive(oldfile)[0] != old:
-                raise Rejected("original frozen candidate is unavailable")
             winner, _ = read_archive(Path(row["store"]) / old.filename)
             if (winner.repo, winner.branch, winner.generation) != (old.repo, old.branch, old.generation) or winner.operation == old.operation:
                 raise Rejected("not a verified conflicting commit in the original branch slot")
             marker = Commit(old.repo, new_id(), 1, new_id(), old.parent, old.tree)
             successor = marker.operation
-            output = state / (successor + ".zxs")
-            with oldfile.open("rb") as src, output.open("xb") as dst:
-                shutil.copyfileobj(src, dst, length=1 << 20)
-            # Only modify the new private copy. No archive member is changed.
-            with output.open("r+b") as io:
-                with zipfile.ZipFile(io, "a", allowZip64=True) as z: z.comment = marker.encode()
-                io.flush(); os.fsync(io.fileno())
-            if read_archive(output)[0] != marker: raise Rejected("rebranched candidate failed readback")
-            digest = digest_file(output)
-            sync_dir(state)
+            digest = area.fork(old, row["pending_sha"], marker)
             con.execute("INSERT INTO forked_original VALUES(?,?)", (operation, successor))
             con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1", (marker.encode(), digest))
     return finish(state, successor)

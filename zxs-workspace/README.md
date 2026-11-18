@@ -42,7 +42,7 @@ python3 -m zipworkspace commit demo/states/second --fork --writers-stopped
 - `branches ARCHIVE STORE` 仅列本目录仓库的分支，区分观察到的最高代与祖先完整的分支头。可用 `checkout-branch ARCHIVE STORE WORKTREE STATE BRANCH_ID` 或 `checkout-node ARCHIVE STORE WORKTREE STATE NODE_ID` 固定选择；不会根据文件日期或后来出现的包重选。在本机保存原包之前发现来源被替换时不发表目标目录。
 - `changes STATE` 对照原提交显示真实新增、修改和删除的普通路径。工作树只能由其登记的原目录继续提交；同名同内容的新目录不能冒充。
 - `hide STATE --writers-stopped` 只移动已提交且干净的原工作树，归档不变。恢复用 `restore STATE --writers-stopped`；原名已被占用时拒绝覆盖，也不删除任何一方。这里的“隐藏”不是权限隔离。断电中断后用 `status` 显示的原操作执行 `resume-visibility STATE OPERATION --writers-stopped`。
-- 同代竞争留下的未发布候选可用 `fork-pending STATE OPERATION` 明确另起分支。分叉采用已冻结的原候选，不包含冲突后写入工作树的新字节；原件继续保留。
+- 同代竞争留下的未发布候选可用 `fork-pending STATE OPERATION` 明确另起分支。按已登记的完整 SHA-256 和节点核验原候选；从同一打开的文件复制，在独占创建的新 ZIP 句柄中改写节点标记，不重新按路径打开文件修改。冲突后的工作树编辑不包含在内，原件保留。若原件或新名称变化，拒绝把新包登记为成功；保留可能未登记的候选，不自动删除。已有分叉的重试仍只核对原后继操作。此保护不代替稳定的原归档存储与私有状态目录。
 - 只读核验普通未加密 Store ZIP：`python3 -m zipworkspace import-zip archive.zip NEW_DIRECTORY --preview`。输出原包 SHA-256、整树摘要、条目数及拟用目标；不创建该目录。命令不带 `--preview` 会明确拒绝写入。拒绝压缩或加密成员、链接、设备、重复路径、路径穿越和跨平台别名。
 - 一份归档足以恢复其完整目录，**不等于**拥有所有历史。祖先档案不在当前存储位置时，`history` 明确返回缺失父操作。
 - 只看目录不必签出：`browse "$ARCHIVE" "选中的文件夹"` 返回直接子项、文件字节数和 SHA-256，空文件夹也会显示。用上一页的 `next_cursor` 继续同一快照和目录；新快照不会接用旧游标。[只读应用接口](docs/design.md#read-only-archive-browser)同样先核验整个归档，不创建工作树。
