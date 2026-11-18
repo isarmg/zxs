@@ -8,6 +8,8 @@ pub(in crate::engine) use anchor::Anchor;
 mod genesis;
 mod images;
 mod objects;
+mod publication;
+pub(in crate::engine) use publication::VerifiedScopeSnapshot;
 mod readback;
 mod schema;
 pub(in crate::engine) use images::{PreparedImage, Representation, Schema};
@@ -19,6 +21,8 @@ pub enum ScopeClosureError {
     GenesisIdentity,
     #[error("the database image does not match its exact bytes or logical scope")]
     ImageMismatch,
+    #[error("the original native publication does not bind this exact local scope")]
+    PublicationMismatch,
     #[error("the captured scope exceeds its resource budget")]
     Budget,
     #[error("the original genesis scope differs from the admitted empty pool")]
@@ -28,7 +32,7 @@ impl ScopeClosureError {
     pub(crate) fn code(&self) -> ErrorCode {
         match self {
             Self::GenesisIdentity => ErrorCode::DiskIdentityMismatch,
-            Self::ImageMismatch | Self::GenesisMismatch => ErrorCode::ObjectCorrupt,
+            Self::ImageMismatch | Self::GenesisMismatch | Self::PublicationMismatch => ErrorCode::ObjectCorrupt,
             Self::Budget => ErrorCode::ResourceLimit,
         }
     }

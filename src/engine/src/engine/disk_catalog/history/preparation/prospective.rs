@@ -16,6 +16,7 @@ pub(in crate::engine) struct FrozenDiskPair {
     history_root: MaterialCommitment,
     current: PreparedImage,
     history: PreparedImage,
+    changes: super::super::change_pages::ChangePages,
 }
 impl FrozenDiskPair {
     fn encode(current: &DiskCatalogSnapshot, history: &StoredHistory) -> Result<Self> {
@@ -28,6 +29,7 @@ impl FrozenDiskPair {
             through: history.header.through,
             current_root: MaterialCommitment::from_digest(storage_contract::canonical_object_digest("disk-current-catalog", current)?),
             history_root: history.logical_root()?,
+            changes: super::super::change_pages::ChangePages::prepare(history)?,
             current: PreparedImage::new(Schema::DiskCurrent, a),
             history: PreparedImage::new(Schema::DiskHistory, b),
         })
@@ -39,11 +41,18 @@ impl FrozenDiskPair {
     pub(in crate::engine) fn history(&self) -> (MaterialCommitment, Representation) {
         (self.history_root, self.history.representation())
     }
-    pub(in crate::engine) fn bytes(&self) -> usize { self.current.bytes() + self.history.bytes() }
+    pub(in crate::engine) fn local_changes(&self) -> &crate::metadata_map::Reference { self.changes.root() }
+    pub(in crate::engine) fn bytes(&self) -> usize {
+        self.current.bytes() + self.history.bytes() + self.changes.bytes()
+    }
 
     /// Preserve immutable raw bytes at their actual registration's root prior
     /// to PREPARE. Existing bytes must match; never replace a damaged holder.
-    pub(in crate::engine) fn install_at(&self, root: &DiskRoot) -> Result<()> {
+    pub(in crate::engine) fn install_at(&self, config: &ValidatedConfig, disk: &DiskConfig, root: &DiskRoot) -> Result<()> {
+        if crate::engine::fresh_layout::registration(config, disk) != self.registration {
+            return Err(ScopeClosureError::ImageMismatch.into());
+        }
+        crate::engine::fresh_layout::verify_root(config, disk, root)?;
         self.current.install_verified(root, |bytes| {
             let current = super::super::super::database::read(bytes, &self.registration)?;
             if current.source_sequence != self.through.sequence() ||
@@ -58,7 +67,9 @@ impl FrozenDiskPair {
                 return Err(ScopeClosureError::ImageMismatch.into());
             }
             Ok(())
-        })
+        })?;
+        self.changes.install(disk, root)?;
+        crate::engine::fresh_layout::verify_root(config, disk, root)
     }
     pub(in crate::engine) fn into_bytes(self) -> (DiskRegistrationIdentity, Vec<u8>, Vec<u8>) {
         (self.registration, self.current.into_bytes(), self.history.into_bytes())

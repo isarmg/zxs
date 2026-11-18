@@ -89,6 +89,18 @@ pub(crate) fn verified_graph_object_at(
     verified_graph_object_observed_at(resources, members, kind, hash, &mut |_| {})
 }
 
+/// Scope membership also requires the canonical bytes of the exact Snapshot,
+/// not just a JSON value which normalizes to them. The caller (not a member)
+/// supplied the already-sealed original digest.
+pub(crate) fn verified_canonical_snapshot_at(
+    resources: &DiskResources, members: &[DiskConfig], hash: &str,
+    fault: &mut impl FnMut(&Error),
+) -> Result<AuthenticatedMetadataObject> {
+    select_replica(members, |member| {
+        load_scope_page_at(&resources.get(member)?.root, member, "snapshot", hash, MAX_METADATA)
+    }, fault, "original publication has no canonical Snapshot replica")
+}
+
 pub(crate) fn verified_graph_object_observed_at(
     resources: &DiskResources,
     members: &[DiskConfig],

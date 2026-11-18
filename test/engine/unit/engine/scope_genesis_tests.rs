@@ -221,3 +221,23 @@ fn frozen_image_remains_named_while_its_logical_rows_are_admitted() {
     assert!(result.is_err());
     assert_eq!(fs::read(&parked).unwrap(), fs::read(&path).unwrap());
 }
+
+#[test]
+fn an_original_snapshot_digest_without_a_scope_root_is_not_local_publication_evidence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(&tmp.path().join("system"), Config::development(
+        crate::test_disks([tmp.path().join("disk")]),
+    ).unwrap()).unwrap();
+    let operation = storage_contract::OperationId::generate().unwrap();
+    engine.create_disk_root("P01", "admin", operation).unwrap();
+    let state = engine.state();
+    let source = crate::journal::prepare_snapshot(state, crate::disk::MAX_METADATA).unwrap();
+    let mut value = json_codec::to_value(&source.descriptor).unwrap();
+    value.as_object_mut().unwrap().remove("scope_closure");
+    let hash = storage_contract::object_hash("snapshot", &value).unwrap();
+    let original = crate::journal::AuthenticatedMetadataObject::authenticate("snapshot", &hash, value).unwrap();
+    let digest = MaterialCommitment::from_digest(hash.parse::<storage_contract::ContentHash>().unwrap().digest());
+    let error = VerifiedScopeSnapshot::read(original, digest, storage_contract::Sequence::new(state.sequence))
+        .err().unwrap();
+    assert_eq!(error.code(), crate::ErrorCode::RecoveryRequired);
+}

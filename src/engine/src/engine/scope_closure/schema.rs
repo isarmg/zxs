@@ -1,6 +1,6 @@
 //! Canonical fields of the scope graph. Binary SQLite data is referenced,
 //! never embedded in a registration page or sent to every holder.
-use crate::engine::scope_closure::Representation;
+use crate::engine::{disk_catalog::Predecessor, scope_closure::Representation};
 use crate::metadata_map::Reference;
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::working_tree::{DiskRegistrationIdentity, MaterialCommitment, RootBinding};
@@ -13,12 +13,22 @@ pub(super) enum Origin {
         initialization_operation_id: OperationId,
         config_hash: MaterialCommitment,
     },
+    Publication {
+        operation_id: OperationId,
+        request_digest: MaterialCommitment,
+        predecessor: Predecessor,
+    },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Membership {
     Genesis { config_hash: MaterialCommitment },
+    Membership { authority_hash: MaterialCommitment },
+    Registry {
+        authority_hash: MaterialCommitment,
+        registry_commitment: crate::DiskRegistryCommitment,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

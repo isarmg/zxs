@@ -192,7 +192,7 @@ fn original_prefix_freezes_identical_complete_history_before_current_hashes_are_
                 let disk = fixture.engine.disk(&pair.registration.slot_id)?;
                 let root = &fixture.engine.disk_resources.get(disk)?.root;
                 let before = pair.history();
-                pair.install_at(root)?;
+                pair.install_at(&fixture.engine.config, disk, root)?;
                 before.1.verify(root, crate::engine::scope_closure::Schema::DiskHistory, MAX_DATABASE_BYTES, |bytes| {
                     let actual = database::read(bytes, &pair.registration)?;
                     assert_eq!(actual.logical_root()?, before.0);
@@ -210,6 +210,66 @@ fn original_prefix_freezes_identical_complete_history_before_current_hashes_are_
     fixture.scopes().finish(&fixture.admitted, &stop, |_, current, history| {
         assert_eq!(current, expected_current);
         assert_eq!(history, expected_history);
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn first_nonlocal_publication_advances_the_real_header_without_manufacturing_a_change() {
+    let fixture = Fixture::new();
+    let stop = AtomicBool::new(false);
+    let mut checked = false;
+    crate::engine::disk_catalog::visit_published_prefix(
+        &fixture.engine, fixture.engine.state().sequence, &|| Ok(()), |source| {
+            if checked { return Ok(()); }
+            let candidate = source.candidate();
+            assert!(candidate.previous_snapshot.is_none());
+            let state = source.admitted().state();
+            let mut pairs = PreparedDiskScopes::new(&fixture.engine.config)?.freeze_next(
+                &crate::engine::scope_closure::initial_state(), state, None,
+                &state.operations[&candidate.operation_id], &stop,
+            )?;
+            let pair = pairs.pop().unwrap();
+            let (identity, _, bytes) = pair.into_bytes();
+            let history = database::read(&bytes, &identity)?;
+            assert!(history.changes.is_empty()); // original root creation, no file version or backup directory
+            assert_eq!(history.header.publications, 1);
+            assert_eq!(history.header.through, Through::from_candidate(&fixture.engine.config, candidate)?);
+            let mut transplant = history.clone();
+            if let Through::Publication { ref mut predecessor, .. } = transplant.header.through {
+                *predecessor = Predecessor::Snapshot { snapshot_hash: super::super::stored::commitment(&candidate.snapshot_hash)? };
+            }
+            assert!(database::read(&database::encode(&transplant)?, &identity).is_err());
+            checked = true;
+            Ok(())
+        },
+    ).unwrap();
+    assert!(checked);
+}
+
+#[test]
+fn identical_sql_rows_in_different_physical_pages_are_not_the_committed_image() {
+    use crate::engine::scope_closure::{PreparedImage, Schema};
+    let fixture = Fixture::new();
+    fixture.scopes().finish(&fixture.admitted, &AtomicBool::new(false), |id, _, bytes| {
+        let expected = database::read(&bytes, &id)?;
+        let disk = fixture.engine.disk(&id.slot_id)?;
+        let root = &fixture.engine.disk_resources.get(disk)?.root;
+        let image = PreparedImage::new(Schema::DiskHistory, bytes.clone());
+        image.install_verified(root, |_| Ok(()))?;
+        let mut equivalent = bytes;
+        // The database header's application_id is independent of these two
+        // tables, including their schema, digests, logical rows and integrity.
+        equivalent[68..72].copy_from_slice(&0x005a5853u32.to_be_bytes());
+        assert_eq!(database::read(&equivalent, &id)?, expected);
+        let reference = image.representation();
+        let crate::engine::scope_closure::Representation::Sqlite { image_hash, .. } = reference;
+        let selected = disk.root.join(crate::persist::layout::scope_image(image_hash).as_path());
+        std::fs::write(&selected, &equivalent)?;
+        assert!(reference.verify(root, Schema::DiskHistory, MAX_DATABASE_BYTES,
+            |_| -> Result<()> { panic!("different original bytes must fail before SQL admission") },
+        ).is_err());
+        assert_eq!(std::fs::read(selected)?, equivalent);
         Ok(())
     }).unwrap();
 }

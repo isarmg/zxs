@@ -335,13 +335,19 @@ fn disk_headers_reject_nul_format_and_digest_without_touching_other_selected_fam
                     .is_err()
                 );
             }
-            inspect_disk_database_material(
-                fs::File::open(&fixture.primary).unwrap(),
-                fixture.primary.clone(),
-                &identity,
-                other,
-            )
-            .unwrap();
+            let independent = inspect_disk_database_material(
+                fs::File::open(&fixture.primary).unwrap(), fixture.primary.clone(), &identity, other,
+            );
+            match other {
+                DiskDatabaseReadScope::Current => { independent.unwrap(); }
+                // SQL is intact, but a post-genesis history cannot resolve
+                // its current Candidate/Snapshot from this one alias alone.
+                DiskDatabaseReadScope::History => {
+                    assert_eq!(independent.err().unwrap().code(), storage_contract::ErrorCode::RecoveryRequired);
+                    fixture.engine.disk_history_observation("P01").unwrap();
+                }
+                DiskDatabaseReadScope::Both => unreachable!(),
+            }
             assert_eq!(fs::read(&path).unwrap(), unknown);
         }
         fs::write(path, original).unwrap();

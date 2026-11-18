@@ -2,7 +2,7 @@
 //! frontier. This module never chooses a frontier and never repairs material.
 use super::{
     ScopeClosureError as Failure,
-    genesis::{PAGE_LIMIT, registration_key},
+    genesis::PAGE_LIMIT,
     objects::{self, Domain},
     schema::{Closure, Counts, DiskManifest, Membership, Origin, Scope, SystemMaterial},
 };
@@ -73,29 +73,9 @@ impl<'a> Original<'a> {
             .get(&disk.disk_id.parse::<DiskId>()?)
             .ok_or(Failure::GenesisIdentity)?;
         let closure = self.closure(root)?;
-        // The original pool holds at most 32 bounded registrations. Its single
-        // canonical leaf exposes identities/hashes, not other members' bodies.
-        if closure.disks.kind() != metadata_map::ReferenceKind::Page {
-            return Err(Failure::GenesisMismatch.into());
-        }
-        let rows = metadata_map::read_map(&closure.disks, |domain, hash| {
-            journal::load_scope_page_at(root, disk, domain, hash, PAGE_LIMIT)
-        })?;
-        if rows.len() != self.config.storage_roots.len() {
-            return Err(Failure::GenesisMismatch.into());
-        }
-        for expected in self.config.storage_roots.values() {
-            let row = rows
-                .get(&registration_key(&expected.registration)?)
-                .ok_or(Failure::GenesisMismatch)?;
-            let _: MaterialCommitment =
-                storage_contract::decode_strict(&storage_contract::canonical_json_value(row)?)?;
-        }
-        let row = rows
-            .get(&registration_key(&binding.registration)?)
-            .ok_or(Failure::GenesisMismatch)?;
-        let commitment =
-            storage_contract::decode_strict(&storage_contract::canonical_json_value(row)?)?;
+        let commitment = super::publication::manifest_reference(
+            self.config, disk, root, &closure.disks, &binding.registration,
+        )?;
         let manifest: DiskManifest = objects::load(root, Domain::Disk, commitment)?;
         let current = &manifest.disk_current;
         let history = &manifest.disk_history;

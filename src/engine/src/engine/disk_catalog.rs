@@ -15,7 +15,7 @@ pub(in crate::engine) mod genesis;
 mod directories;
 pub use directories::DiskCatalogDirectory;
 mod move_draft;
-pub(in crate::engine) use history::visit_published_prefix;
+pub(in crate::engine) use history::{Predecessor, visit_published_prefix};
 pub(in crate::engine) use move_draft::{
     prepare_move_current, prepare_move_current_install, require_same_move_current,
 };

@@ -201,6 +201,13 @@ fn visit_sources(
             &members,
             &candidate.snapshot_hash,
         )?;
+        // A degraded publication may present a different visible result. A
+        // valid seal alone does not prove how that result follows from this
+        // exact original receipt and actor. Never mint its local history scope
+        // if the recovery plan cannot produce the recorded outcome.
+        if publication.recovery.is_some() {
+            snapshot.require_finalized_outcome(&candidate, &publication)?;
+        }
         let admitted = snapshot.for_candidate(&candidate)?;
         let state = admitted.state();
         let result = state

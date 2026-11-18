@@ -52,6 +52,7 @@ pub struct DiskHistoryStatus {
 /// proven not to change this disk's rows. It is never loaded from SQLite.
 #[derive(Clone)]
 struct Coverage {
+    physical: LocalImage,
     binding: Binding,
     persisted: DiskHistoryHeader,
     observed: DiskHistoryHeader,
@@ -136,6 +137,7 @@ impl Engine {
 
     pub(super) fn record_history_install(&mut self, receipt: &DiskHistoryReceipt) {
         self.record_history_coverage(Coverage {
+            physical: receipt.physical,
             binding: receipt.binding.clone(),
             persisted: receipt.header.clone(),
             observed: receipt.header.clone(),
@@ -328,11 +330,7 @@ impl Engine {
         let lease = handle.root.admit_io()?;
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
-        let bytes = handle.root.read_bytes(
-            &handle.root.path().join(DISK_HISTORY_DATABASE_NAME),
-            MAX_DATABASE_BYTES,
-        )?;
-        let stored = database::read(&bytes, identity)?;
+        let stored = coverage.physical.read(&handle.root, |bytes| database::read(bytes, identity))?;
         if stored.logical_root()?.hash().to_string() != coverage.records_hash {
             return Err(invalid(
                 "disk history bytes differ from the previously authenticated prefix",

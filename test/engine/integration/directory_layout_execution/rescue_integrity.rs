@@ -251,13 +251,12 @@ fn disk_rescue_rejects_index_hidden_inventory_but_allows_explicit_other_family()
             scope,
         ));
     }
-    inspect_disk_database_material(
-        fs::File::open(&root).unwrap(),
-        root,
-        &identity,
-        DiskDatabaseReadScope::History,
-    )
-    .unwrap();
+    let local_history = inspect_disk_database_material(
+        fs::File::open(&root).unwrap(), root, &identity, DiskDatabaseReadScope::History,
+    );
+    assert_eq!(local_history.err().unwrap().code(), storage_contract::ErrorCode::RecoveryRequired);
+    // An independent native prefix can resolve the untouched other family.
+    fixture.engine.disk_history_observation("P01").unwrap();
     assert_eq!(fs::read(path).unwrap(), damaged);
 }
 

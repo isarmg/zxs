@@ -4,9 +4,11 @@ use super::*;
 use crate::database_install::DISK_HISTORY_DATABASE_NAME;
 use std::collections::BTreeMap;
 
+mod change_pages;
 mod database;
 mod stored;
-pub(in crate::engine) use stored::{StoredHistory, Through};
+pub(in crate::engine) use stored::{Predecessor, StoredHistory, Through};
+mod postdecision;
 mod maintenance;
 mod offline;
 pub(super) use offline::fold_stored as fold_prepared;
@@ -139,6 +141,40 @@ pub struct DiskHistoryReceipt {
     pub records_hash: String,
     pub database_bytes: usize,
     binding: Binding,
+    // Ephemeral exact alias readback, not an independent publication seal.
+    physical: LocalImage,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LocalImage {
+    hash: storage_contract::ContentHash,
+    bytes: usize,
+}
+impl LocalImage {
+    fn new(bytes: &[u8]) -> Self {
+        Self { hash: storage_contract::ContentHash::from_digest(blake3::hash(bytes)), bytes: bytes.len() }
+    }
+
+    /// Pin both the previous inode and its name while strict SQL and native
+    /// checks run. An equal-row rewrite or a live SQLite sidecar is not the
+    /// preceding captured representation.
+    fn read<T>(self, root: &crate::disk::DiskRoot, inspect: impl FnOnce(&[u8]) -> Result<T>) -> Result<T> {
+        use crate::disk::HeldRegular;
+        offline::no_sidecars(root, DiskDatabaseReadScope::History)?;
+        let mut held = HeldRegular::capture(root, DISK_HISTORY_DATABASE_NAME, MAX_DATABASE_BYTES)?
+            .ok_or_else(|| invalid("captured DISK history image is missing"))?;
+        if held.bytes().len() != self.bytes || held.stamp().digest != self.hash.to_string() {
+            return Err(invalid("DISK history bytes differ from the previously captured physical image"));
+        }
+        let result = inspect(held.bytes())?;
+        held.release_bytes();
+        let leaf = platform_io::fs_safety::EntryName::new(DISK_HISTORY_DATABASE_NAME)
+            .expect("invariant: fixed DISK history entry name");
+        offline::recheck(root, &leaf, Some(&held), MAX_DATABASE_BYTES)?;
+        offline::no_sidecars(root, DiskDatabaseReadScope::History)?;
+        held.check_running()?;
+        Ok(result)
+    }
 }
 
 /// Boundaries supplied by the completed replay or the completed native write;
@@ -304,6 +340,7 @@ impl Engine {
         let records_hash = captured.logical_root()?.hash().to_string();
         let bytes = database::encode(&captured)?;
         let database_bytes = bytes.len();
+        let physical = LocalImage::new(&bytes);
         let root = &handle.root;
         let inode = root.directory_identity(root.path())?;
         let prepared = PreparedInstall::capture(
@@ -327,15 +364,12 @@ impl Engine {
             ));
         }
         prepared.apply(root, &mut |_| lease.check_running())?;
-        let bytes = root.read_bytes(
-            &root.path().join(DISK_HISTORY_DATABASE_NAME),
-            MAX_DATABASE_BYTES,
-        )?;
-        if database::read(&bytes, &identity)? != captured {
-            return Err(invalid(
-                "installed disk history differs from authenticated publications",
-            ));
-        }
+        physical.read(root, |bytes| {
+            if database::read(bytes, &identity)? != captured {
+                return Err(invalid("installed disk history differs from authenticated publications"));
+            }
+            Ok(())
+        })?;
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
         lease.check_running()?;
@@ -343,6 +377,7 @@ impl Engine {
             header: view.header,
             changes: view.changes.len(),
             binding,
+            physical,
             records_hash,
             database_bytes,
         })

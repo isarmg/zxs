@@ -195,7 +195,7 @@ pub(super) fn inspect_with_original(
     })
 }
 
-fn no_sidecars(root: &DiskRoot, scope: DiskDatabaseReadScope) -> Result<()> {
+pub(super) fn no_sidecars(root: &DiskRoot, scope: DiskDatabaseReadScope) -> Result<()> {
     for (selected, leaf) in [
         (scope.current(), DISK_DATABASE_NAME),
         (scope.history(), DISK_HISTORY_DATABASE_NAME),
@@ -217,7 +217,7 @@ fn no_sidecars(root: &DiskRoot, scope: DiskDatabaseReadScope) -> Result<()> {
     Ok(())
 }
 
-fn recheck(
+pub(super) fn recheck(
     root: &DiskRoot,
     leaf: &EntryName,
     original: Option<&HeldRegular>,
