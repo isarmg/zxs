@@ -125,12 +125,26 @@ enum Editing {
     Failed,
 }
 
+/// Only the already-published baseline on this exact State and configuration.
+/// No reservation: private staged bytes and the live filesystem still change.
+struct ConfiguredUsage {
+    used: u64,
+    limit: u64,
+}
+
+impl ConfiguredUsage {
+    fn exceeds(&self, staged: u64) -> bool {
+        self.used.checked_add(staged).is_none_or(|peak| peak > self.limit)
+    }
+}
+
 /// Connection-local edit state, not a durable accepted-write log. A failed frame
 /// poisons this batch and cannot later be flushed as if its partial copies had
 /// succeeded. Unrecorded packs are preserved, never adopted or auto-cleaned.
 pub(crate) struct WorkingWriteSession {
     source: Source,
     operation: OperationId,
+    configured_usage: Option<ConfiguredUsage>,
     editing: Editing,
     pending: BTreeMap<PackId, PendingPack>,
     current: Option<PackId>,
@@ -184,8 +198,15 @@ impl WorkingWriteSession {
                 .map_err(manifest_error)?,
         };
         let retained_base_bytes = source.reader.retained_base_bytes();
+        let disk = context.config.disks.iter()
+            .find(|disk| disk.disk_id == source.reader.scope().disk.seal.disk_id)
+            .ok_or(Error::FileDraft(Failure::SourceChanged))?;
+        let configured_usage = disk.capacity_bytes.map(|limit| ConfiguredUsage {
+            used: context.used_bytes(&disk.slot_id), limit,
+        });
         Ok(Self {
-            source, operation, editing: Editing::Active(batch), pending: BTreeMap::new(), current: None,
+            source, operation, configured_usage,
+            editing: Editing::Active(batch), pending: BTreeMap::new(), current: None,
             changed: false, retained_base_bytes,
         })
     }
@@ -234,8 +255,6 @@ impl WorkingWriteSession {
     fn require_capacity(&self, context: &PlanningContext<'_>, data: u64) -> Result<()> {
         let capacity = || Error::FileDraft(Failure::WorkingCapacity);
         let scope = self.source.reader.scope();
-        let disk = context.config.disks.iter().find(|disk| disk.disk_id == scope.disk.seal.disk_id)
-            .ok_or(Error::FileDraft(Failure::SourceChanged))?;
         let stat = scope.disk.root.filesystem_statistics()?;
         let unit = stat.f_bsize.max(stat.f_frsize);
         if unit == 0 || stat.f_frsize == 0 { return Err(capacity()); }
@@ -264,8 +283,7 @@ impl WorkingWriteSession {
         }
         let available = stat.f_bavail.checked_mul(stat.f_frsize).ok_or_else(capacity)?;
         if outstanding.checked_add(context.config.metadata_reserve_bytes).ok_or_else(capacity)? > available
-            || disk.capacity_bytes.is_some_and(|limit| context.used_bytes(&disk.slot_id)
-                .checked_add(all).is_none_or(|needed| needed > limit))
+            || self.configured_usage.as_ref().is_some_and(|usage| usage.exceeds(all))
         { return Err(capacity()); }
         Ok(())
     }
@@ -508,3 +526,7 @@ impl PreparedWorkingSave {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/container_storage/working_save_capacity.rs"]
+mod capacity_tests;

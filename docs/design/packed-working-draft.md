@@ -21,7 +21,7 @@
 ## 100 GiB 实机验收前提（尚未执行）
 
 - **服务端上限**：`--max-upload-bytes` 的 CLI 默认值是 `1,073,741,824` 字节（1 GiB），也限制原生 SMB 工作稿。握手取后端能力与服务端限制的较小值；每帧实际核对的是写入**末端偏移**，resize 则核对新逻辑长度，不是只检查本帧大小。默认配置无法完成十次 10 GiB 的场景。受控验收实例须明确给服务端至少 `107374182400` 字节（100 GiB）的额度。见 [CLI 默认值](../../src/server/src/main.rs)、[SMB 桥接](../../src/server/src/lib.rs)、[握手取小值](../../src/server/src/smb_rpc/transport.rs) 和 [写入／resize 准入](../../src/server/src/smb_rpc/native.rs)。
-- **池端与实盘**：独立确认该池的 `max_file_bytes` 允许 100 GiB、`max_workspace_bytes` 不小于它，且配置的校验块大小能容纳相应的清单；开发配置的 1 TiB 文件上限不会抬高服务端限制。原登记目标盘须有足够**真实可用**空间保留原始 FULL、仍占用的旧稿及 partial、本次新 pack 与校验尾表，并为生成正式节点时的独立 FULL、临时副本和元数据预留留出峰值。声明逻辑额度不能替代逐盘空间、inode 和 FD 准入。见 [池端配置校验](../../src/engine/src/engine/config.rs) 与 [逐盘实际成本](../19-capacity-and-performance.md#s19-01)。
+- **池端与实盘**：独立确认该池的 `max_file_bytes` 允许 100 GiB、`max_workspace_bytes` 不小于它，且配置的校验块大小能容纳相应的清单；开发配置的 1 TiB 文件上限不会抬高服务端限制。原登记目标盘须有足够**真实可用**空间保留原始 FULL、仍占用的旧稿及 partial、本次新 pack 与校验尾表，并为生成正式节点时的独立 FULL、临时副本和元数据预留留出峰值。声明逻辑额度不能替代逐盘空间、inode 和 FD 准入。配置容量的基线是本次原 State 引用的版本和工作材料，加本次全部私有追加；只在同一 Save 的已核对 State／配置内复用。每个非空写帧及有改动的 FLUSH 准备仍单独检查实盘，绝不把上次空闲空间当授予额度。该基线不是所有过往 partial 的根目录清单，不能据此回收。见 [池端配置校验](../../src/engine/src/engine/config.rs) 与 [逐盘实际成本](../19-capacity-and-performance.md#s19-01)。
 
 这些是以后测试环境的显式前提，不更改产品默认、不代表用测试跑过 100 GiB，也不把几何用例或小文件 dispatcher 用例当作真实 Samba 的测量。
 
