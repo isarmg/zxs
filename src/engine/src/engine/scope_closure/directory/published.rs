@@ -74,7 +74,7 @@ impl PublishedRepository {
             NodeBodies::append_rows(manifest, &leaves, &mut body)?;
             nodes.insert(id, pin);
         }
-        let instances = super::instances::Instances::prepare(&mut rows, &nodes, facts.instances)?;
+        let instances = super::instances::Instances::prepare(&mut rows, &mut body, &nodes, facts.instances)?;
         let frozen = FrozenDirectory::new(repo, &host, reserve, rows.finish()?, body.finish()?)?;
         frozen.bytes()?.checked_add(instances.bytes()).filter(|n| *n <= 64 * 1024 * 1024)
             .ok_or(Failure::Budget)?;

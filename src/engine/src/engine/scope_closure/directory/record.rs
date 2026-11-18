@@ -48,7 +48,7 @@ pub(super) enum Key {
 }
 #[derive(Clone, Copy, Serialize)]
 #[serialization(rename_all = "snake_case")]
-pub(super) enum ItemRole { NodeEntry }
+pub(super) enum ItemRole { NodeEntry, Edit, Checkpoint }
 #[derive(Serialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct Row<T> { pub source: Origin, pub value: T }
@@ -74,10 +74,18 @@ pub(super) struct Branch<'a> {
 }
 #[derive(Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
-pub(super) enum LocalBinding { NotBound {} }
+pub(super) enum LocalBinding { NotBound {}, Bound { binding: BoundInstance } }
+#[derive(Serialize)]
+#[serialization(deny_unknown_fields)]
+pub(super) struct BoundInstance {
+    pub instance: crate::directory_worktree::store::SparseWorktreeBinding,
+    pub ledger: crate::directory_worktree::ledger::Binding,
+}
 #[derive(Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
-pub(super) enum Target { InitialNode { allocated: NodeAllocation, material: SnapshotReference },
+pub(super) enum Target {
+    Edit { worktree: WorktreeHandle, source: SnapshotHandle, completion: OperationId, version: storage_contract::VersionId },
+    InitialNode { allocated: NodeAllocation, material: SnapshotReference },
     Worktree { allocated: WorktreeAllocation, source: SnapshotHandle, material: SnapshotReference,
         mount: crate::directory_worktree::lifecycle::Mount } }
 #[derive(Serialize)]
@@ -122,4 +130,37 @@ pub(super) enum Object<'a> {
 pub(super) struct InventoryRow<'a> {
     pub object: Object<'a>, pub ownership: Ownership<'a>, pub location: Location<'a>, pub lifecycle: Lifecycle,
     pub entity: LocalEntityIdentity, pub operation_id: OperationId,
+}
+
+
+#[derive(Serialize)]
+#[serialization(deny_unknown_fields)]
+pub(super) struct DeltaSource<'a> {
+    pub worktree: WorktreeHandle, pub snapshot: SnapshotHandle, pub path: &'a name_policy::PortablePath,
+    pub file_id: storage_contract::FileId, pub original_version: storage_contract::VersionId,
+    pub version: storage_contract::VersionId, pub selector: crate::working_tree::snapshot::SnapshotFileSource,
+    pub reservation: OperationId, pub publication: OperationId, pub entity: LocalEntityIdentity,
+}
+#[derive(Serialize)]
+#[serialization(tag = "kind", rename_all = "snake_case")]
+pub(super) enum Delta<'a> {
+    WorktreeDelta { source: DeltaSource<'a>, relative_name: &'a str,
+        #[serialization(with = "storage_contract::u64_string")]
+        bytes: u64, content_hash: storage_contract::ContentHash },
+}
+
+
+#[derive(Serialize)]
+#[serialization(deny_unknown_fields)]
+pub(super) struct ReservedEdit<'a> {
+    pub path: &'a name_policy::PortablePath, pub original: crate::working_tree::snapshot::SnapshotFile,
+    pub selector: crate::working_tree::snapshot::SnapshotFileSource, pub leaf: crate::directory_worktree::ledger::EditLeaf,
+    #[serialization(with = "storage_contract::u64_string")]
+    pub bytes: u64, pub content_hash: storage_contract::ContentHash,
+}
+#[derive(Serialize)]
+#[serialization(deny_unknown_fields)]
+pub(super) struct ReservedCheckpoint {
+    pub ledger: crate::directory_worktree::ledger::Binding, pub before: crate::directory_worktree::ledger::Checkpoint,
+    pub revision: storage_contract::snapshot_worktree::WorktreeRevision,
 }

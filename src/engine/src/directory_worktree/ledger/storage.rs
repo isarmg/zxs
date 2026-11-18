@@ -1,6 +1,6 @@
 mod published;
 mod scope;
-pub(crate) use scope::ScopedGenesis;
+pub(crate) use scope::{ScopedActiveLedger, ScopedEdit};
 
 use crate::directory_worktree::projection::{FileResult, SparseProjection};
 use crate::directory_worktree::projection::namespace::NamespaceChange;

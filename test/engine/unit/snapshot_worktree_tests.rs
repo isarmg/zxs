@@ -319,7 +319,25 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     let file_head = engine.file_branch_head(&selected.branch_id).unwrap();
     let original_versions = engine.state().versions.clone();
     let (_edit_source_directory, mut edit_source) = held_edit_body(edited_body);
+    let clean_scope = crate::engine::scope_closure::measure_published_directory_nodes(&engine, handle.repository_id).unwrap();
     let revision = edit_worktree(&mut engine, &edit, &mut edit_source, &principal()).unwrap();
+    let edited_scope = crate::engine::scope_closure::measure_published_directory_nodes(&engine, handle.repository_id).unwrap();
+    assert_ne!(edited_scope.0, clean_scope.0);
+    assert_eq!((edited_scope.1, edited_scope.2, edited_scope.3),
+        (clean_scope.1, clean_scope.2 + 1, clean_scope.3));
+    {
+        let ix = engine.snapshot_receipts().unwrap();
+        let source = ix.reopen_node(&engine, handle).unwrap();
+        let b = source.worktrees_directory().path().join(crate::persist::layout::worktree::instance(worktree.worktree_id).as_path());
+        let edit_path = fs::read_dir(&b).unwrap().next().unwrap().unwrap().path();
+        let parked = temporary.path().join("parked-original-scope-edit");
+        fs::rename(&edit_path, &parked).unwrap();
+        fs::write(&edit_path, edited_body).unwrap();
+        assert!(crate::engine::scope_closure::measure_published_directory_nodes(&engine, handle.repository_id).is_err(),
+            "equal bytes cannot supply a different sealed sparse inode");
+        fs::remove_file(&edit_path).unwrap();
+        fs::rename(parked, edit_path).unwrap();
+    }
     assert_eq!(revision.generation, edit.expected.generation.next().unwrap());
     assert_ne!(revision.manifest, edit.expected.manifest);
     assert_eq!(engine.file_branch_head(&selected.branch_id).unwrap(), file_head);
@@ -349,6 +367,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     let edited_receipts = engine.state().operations.clone();
     drop(engine);
     engine = Engine::open(&system).unwrap();
+    assert_eq!(crate::engine::scope_closure::measure_published_directory_nodes(&engine, handle.repository_id).unwrap(), edited_scope);
     let cold_edited_material = inventory(&disks[0].join("common-data"));
     assert_cold_material(&edited_material, &cold_edited_material, &database, &file_scope,
         engine.state().sequence);

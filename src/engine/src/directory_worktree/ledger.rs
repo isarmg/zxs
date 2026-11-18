@@ -15,14 +15,14 @@ pub(crate) use leaf::EditLeaf;
 pub(crate) use record::{AddedFile, AddedFileResult, Checkpoint, EditRecord, Event};
 pub(crate) use state::{revision_commitment, revision_commitment_with_files};
 pub(crate) use storage::{
-    ScopedGenesis,
+    ScopedActiveLedger, ScopedEdit,
     Binding, HeldWorktreeLedger, LedgerPreparationError, PendingPublication, RecoveredLedger,
 };
 
 use super::lifecycle::LifecycleError;
 use crate::disk::{DirectoryIoError, NewEntryCopyError};
 
-const MAX_FRAMES: u64 = 1024;
+pub(crate) const MAX_FRAMES: u64 = 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_LEDGER_BYTES: usize = 64 * 1024 * 1024;
 
