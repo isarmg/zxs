@@ -9,8 +9,14 @@ description = "Local working directories and explicit, portable whole-directory 
 requires-python = ">=3.12"
 dependencies = []
 
+[project.optional-dependencies]
+desktop = ["PySide6-Essentials>=6.8,<7"]
+
+[project.gui-scripts]
+zip-workspace-desktop = "zipworkspace.desktop:main"
+
 [project.scripts]
 zip-workspace = "zipworkspace.cli:main"
 
 [tool.setuptools]
-packages = ["zipworkspace"]
+packages = ["zipworkspace", "zipworkspace.desktop"]

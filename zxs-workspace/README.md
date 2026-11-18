@@ -52,8 +52,16 @@ python3 -m zipworkspace commit demo/states/second --fork --writers-stopped
 python3 -m unittest discover -s tests -v
 ```
 
+## 桌面窗口（源码，尚未打包或验证）
+
+当前可用和待验的操作见[本项目交付清单](TASKS.md)。
+
+在单独的 Python 3.12+ 环境中，从本项目目录安装可选依赖 `python -m pip install '.[desktop]'`，再以 `zip-workspace-desktop` 或 `python -m zipworkspace.desktop` 打开窗口。命令行不依赖 Qt。依赖来自 [Qt for Python 的 Essentials 组件](https://doc.qt.io/qtforpython-6/package_details.html)。
+
+选择 **打开 .zxs 快照** 可查看大小、SHA-256 和空目录，双击目录进入、按页前后浏览。选择 **归档存储目录 → 读取分支与历史** 才扫描对应仓库；历史节点和已核验的分支头可以单独打开。缺少祖先时显示缺失的原操作，不把该分支当作完整头。文件选择后被替换会拒绝，不用当前同名文件代替原节点。这个窗口不是虚拟磁盘。
+
 ## 平台与发行状态
 
 - **已验证：** Linux 上的 Python 3.12 源码命令行。`checkout` 写入普通本机目录，不会创建挂载点。ZIP64 已用包含 65,536 个条目的归档验证，单个 4 GiB 文件不在这项验证范围内。
-- **尚未发行：** Linux、macOS、Windows 均无桌面图形界面或虚拟磁盘挂载发行版；iOS、Android 均无移动客户端。当前源码不是这些平台可直接安装的签名 Release。
+- **尚未发行：** 已有可选的桌面图形界面源码，未在 Linux、macOS、Windows 实际启动验收、签名或打包；均无虚拟磁盘挂载发行版。iOS、Android 均无移动客户端。
 - **网络存储：** 真实 SMB 共享的不可覆盖发布和断线恢复尚待验证，不能将本机测试当作共享设备的保证。详见[归档校验和平台范围](docs/design.md)。

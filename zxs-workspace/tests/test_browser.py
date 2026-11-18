@@ -2,6 +2,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -107,9 +108,28 @@ class Browse(unittest.TestCase):
         replacement = self.root / "other.zxs"
         self.write(replacement, operation="4"*32)
         from zipworkspace.browser import read_managed_document
+        blocked = []
         def replace_after_read(document, *, display_name):
             verified = read_managed_document(document, display_name=display_name)
-            replacement.replace(self.path)
+            try:
+                replacement.replace(self.path)
+            except PermissionError:
+                if os.name != "nt": raise
+                blocked.append(True)  # The OS can itself forbid replacing the held file.
             return verified
         with mock.patch("zipworkspace.browser.read_managed_document", side_effect=replace_after_read):
-            with self.assertRaises(Rejected): ArchiveBrowser.open(self.path)
+            try:
+                selected = ArchiveBrowser.open(self.path)
+            except Rejected:
+                self.assertFalse(blocked)
+            else:
+                self.assertTrue(blocked)
+                self.assertEqual(selected.commit.operation, "3"*32)
+
+    def test_mismatched_final_named_identity_is_rejected_even_on_nonreplacing_platforms(self):
+        self.write(self.path)
+        replacement = self.root / "other.zxs"
+        self.write(replacement, operation="4"*32)
+        first, other = self.path.stat(), replacement.stat()
+        with mock.patch.object(Path, "stat", side_effect=[first, other]), self.assertRaises(Rejected):
+            ArchiveBrowser.open(self.path)

@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from operator import attrgetter
 import os
 from pathlib import Path
-import stat
 from typing import BinaryIO, Literal
 
 from .archive import read_managed_document
+from .document import named_document
 from .model import Commit, Rejected, hexdigest, member_name
 
 
@@ -17,13 +17,6 @@ MAX_PAGE = 256
 _NAME = attrgetter("name")
 
 
-def _named_identity(meta) -> tuple[int, int]:
-    # Some providers return the same unavailable identity for every file; two
-    # such observations cannot prove the selected pathname still denotes the FD.
-    if (not stat.S_ISREG(meta.st_mode) or not meta.st_ino
-            or getattr(meta, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
-        raise Rejected("cannot prove the selected ordinary file's identity; use a held document")
-    return meta.st_dev, meta.st_ino
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,16 +58,8 @@ class ArchiveBrowser:
     def open(cls, path: str | os.PathLike[str]) -> ArchiveBrowser:
         """CLI/path adapter. Refuse non-regular documents and a rebound selection."""
         path = Path(path)
-        named = _named_identity(path.stat(follow_symlinks=False))
-        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
-        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-        with os.fdopen(os.open(path, flags), "rb") as doc:
-            if named != _named_identity(os.fstat(doc.fileno())):
-                raise Rejected("selected archive changed before it was opened")
-            browser = cls(doc, display_name=path.name)
-            if named != _named_identity(path.stat(follow_symlinks=False)):
-                raise Rejected("selected archive changed during verification")
-            return browser
+        with named_document(path) as doc:
+            return cls(doc, display_name=path.name)
 
     @property
     def commit(self) -> Commit:

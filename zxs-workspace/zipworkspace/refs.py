@@ -4,9 +4,9 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import stat
-from .archive import read_archive
+from .archive import read_managed_document, stamp
+from .document import archive_sha, named_document, native_identity
 from .model import Commit, Rejected, check_id
-from .publish import digest_file
 
 
 @dataclass(frozen=True)
@@ -18,16 +18,19 @@ class Node:
 
 def _origin(path):
     m = path.stat(follow_symlinks=False)
-    if not stat.S_ISREG(m.st_mode): raise Rejected("managed slot must be a regular named file")
+    native_identity(m, stat.S_IFREG)
     return (m.st_dev, m.st_ino, m.st_size, m.st_mtime_ns, m.st_ctime_ns)
 
 
-def _load(path):
-    stamp = _origin(path)
-    marker, _ = read_archive(path)
-    sha = digest_file(path)
-    if _origin(path) != stamp: raise Rejected("archive changed while admitting its directory reference")
-    return Node(marker, path, sha)
+def _load(path, *, expected=None):
+    with named_document(path) as doc:
+        if expected is not None and stamp(doc) != expected:
+            raise Rejected("opened archive is not the inventoried slot")
+        marker, _ = read_managed_document(doc, display_name=path.name)
+        node = Node(marker, path, archive_sha(doc))
+        if expected is not None and stamp(doc) != expected:
+            raise Rejected("inventoried slot changed while reading")
+        return node
 
 
 def _members(store, repo):
@@ -41,17 +44,18 @@ def _members(store, repo):
 
 
 class Catalog:
-    def __init__(self, anchor: Path, store: Path):
+    def __init__(self, anchor: Path, store: Path, *, expected_store=None):
         self.anchor = _load(Path(anchor))
         self.store = Path(store).absolute()
-        if not self.store.is_dir() or self.store.is_symlink(): raise Rejected("select an ordinary archive store directory")
+        store_id = native_identity(self.store.stat(follow_symlinks=False), stat.S_IFDIR)
+        if expected_store is not None and store_id != expected_store:
+            raise Rejected("selected original archive store changed before inventory")
         self.repo = self.anchor.marker.repo
         self.nodes = {}
         self.slots = {}
         before = _members(self.store, self.repo)
-        store_id = self.store.stat(follow_symlinks=False)
         for name in sorted(before):
-            node = _load(self.store / name)
+            node = _load(self.store / name, expected=before[name])
             m = node.marker
             if m.repo != self.repo or m.filename != name:
                 raise Rejected("directory repository slot disagrees with its exact typed archive")
@@ -59,7 +63,7 @@ class Catalog:
                 raise Rejected("duplicate operation or branch generation; no branch head selected")
             self.nodes[m.operation] = node
             self.slots[m.branch, m.generation] = node
-        if before != _members(self.store, self.repo) or not os.path.samestat(store_id, self.store.stat(follow_symlinks=False)):
+        if before != _members(self.store, self.repo) or store_id != native_identity(self.store.stat(follow_symlinks=False), stat.S_IFDIR):
             raise Rejected("archive store changed during branch discovery; retry the read")
         a = self.anchor.marker
         occupied = self.slots.get((a.branch, a.generation))
