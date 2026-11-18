@@ -4,11 +4,12 @@ use crate::business::namespace::working::WorkingNamespace;
 use crate::persist::snapshot_worktree::{HostEvidence, Record};
 use crate::persist::snapshot_worktree::mount_change::Resolved;
 use crate::directory_worktree::lifecycle::Mount;
+use crate::snapshot_worktree::instance::MountParent;
 use crate::snapshot_worktree::registry::{NameKey, Publication, ReceiptIndex};
 use crate::snapshot_worktree::{RegistrationError, Result};
 use name_policy::LookupName;
 use std::collections::{BTreeMap, BTreeSet};
-use storage_contract::snapshot_worktree::{NamespaceDirectoryId, NamespaceHostAddress, WorktreeHandle};
+use storage_contract::snapshot_worktree::{NamespaceHostAddress, WorktreeHandle};
 use storage_contract::working_tree::RootBinding;
 use storage_contract::RepositoryId;
 
@@ -67,10 +68,9 @@ impl ReceiptIndex<'_> {
     ) -> Result<()> {
         let mut claims: BTreeMap<RepositoryId, BTreeSet<NameKey>> = BTreeMap::new();
         for (host, mount) in plans {
-            let repository = host.namespace.repository_id;
-            if host.namespace.directory != NamespaceDirectoryId::Repository(repository)
-                || !host.directories.is_empty()
-                || mount.parent != host.common_data.directory_id
+            let parent = MountParent::original(host)?;
+            let repository = parent.namespace.repository_id;
+            if mount.parent != parent.directory
             {
                 return Err(RegistrationError::Source);
             }
@@ -115,7 +115,7 @@ impl ReceiptIndex<'_> {
         &self, host: &HostEvidence, mount: &Mount, root: &RootBinding,
         target: WorktreeHandle, maximum: usize,
     ) -> Result<()> {
-        if self.mount_handles(host.namespace, root, Some(&mount.name), 1)?.as_slice() != [target] {
+        if self.mount_handles(MountParent::original(host)?.namespace, root, Some(&mount.name), 1)?.as_slice() != [target] {
             return Err(RegistrationError::Mount);
         }
         self.require_unoccupied(self.source, maximum, std::iter::once((host, mount.clone())))
@@ -141,12 +141,13 @@ impl ReceiptIndex<'_> {
             {
                 continue;
             }
-            if plan.host.namespace != namespace
+            let parent = MountParent::original(&plan.host)?;
+            if parent.namespace != namespace
                 || plan.host.registration != root.registration
                 || plan.host.root_entity != root.root_entity
                 || plan.host.common_data != root.roots.common_data
-                || !plan.host.directories.is_empty()
-                || plan.request.parent_directory_id != root.roots.common_data.directory_id
+                || plan.request.parent_directory_id != parent.directory
+                || mount.parent != parent.directory
                 || plan.request.expected_root_generation != root.generation
             {
                 return Err(RegistrationError::Source);

@@ -884,10 +884,11 @@ impl<'a> ReceiptIndex<'a> {
         if plan.material != source.manifest.reference() {
             return Err(RegistrationError::Material);
         }
-        // This first mode mounts only beside the original registered repository.
-        // A different parent or generation needs a separate future live issuer.
+        // The issuer owns only its actual parent. A direct child source keeps
+        // its own .zxs identity, but its mounted name belongs to the outer root.
+        let parent = super::instance::MountParent::original(source.host())?;
         if plan.host != source.plan.host
-            || plan.request.parent_directory_id != plan.host.host().directory_id
+            || plan.request.parent_directory_id != parent.directory
             || plan.request.expected_root_generation
                 != source.plan.request.host.expected_root_generation
         {

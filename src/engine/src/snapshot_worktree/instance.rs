@@ -1,6 +1,8 @@
 //! One independent instance publisher for explicit and automatically allocated
 //! mounts. Both retain the exact original before any physical preparation.
 mod allocation;
+mod mount_parent;
+pub(in crate::snapshot_worktree) use mount_parent::MountParent;
 pub(crate) use allocation::allocate_worktree;
 
 use crate::container_storage::namespace_host::NamespaceHost;
@@ -62,14 +64,15 @@ fn prepare(
     engine: &Engine, index: &ReceiptIndex<'_>, request: &CreateWorktree,
 ) -> Result<(HeldSnapshotNode, WorktreeReservation)> {
     let registered = index.node(request.source)?;
-    if request.parent_directory_id != registered.initialization().host.directory_id
+    let parent = MountParent::original(registered.host())?;
+    if request.parent_directory_id != parent.directory
         || request.expected_root_generation
             != registered.initialization().host.expected_root_generation
     {
         return Err(RegistrationError::RootOnly);
     }
     let source = index.reopen_node(engine, request.source)?;
-    NamespaceHost::registered(engine, registered.host().namespace)
+    NamespaceHost::registered(engine, parent.namespace)
         .map_err(RegistrationError::NamespaceHost)?
         .require_root_mount(
             request.parent_directory_id, request.expected_root_generation, &request.name,
@@ -116,7 +119,8 @@ impl ReservedWorktree {
         if fresh.binding() != self.source.binding() {
             return Err(RegistrationError::Source);
         }
-        NamespaceHost::registered(engine, self.plan.host.namespace)
+        let parent = MountParent::original(&self.plan.host)?;
+        NamespaceHost::registered(engine, parent.namespace)
             .map_err(RegistrationError::NamespaceHost)?
             .require_root_mount(
                 self.plan.request.parent_directory_id,

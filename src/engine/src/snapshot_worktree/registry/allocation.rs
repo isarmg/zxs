@@ -50,6 +50,9 @@ impl ReceiptIndex<'_> {
             .filter(|record| {
                 record.plan.host.registration == host.registration
                     && record.plan.host.root_entity == host.root_entity
+                    && record.plan.host.common_data == host.common_data
+                    && record.plan.host.namespace.repository_id == host.namespace.repository_id
+                    && record.plan.host.namespace.branch_id == host.namespace.branch_id
                     && record.plan.request.parent_directory_id == parent
             })
             .filter_map(|record| self.mount_claim(record).map(|mount| mount.name))

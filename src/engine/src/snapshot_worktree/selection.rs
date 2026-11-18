@@ -14,6 +14,8 @@ use storage_contract::file_container::{ContainerEntity, ContainerNamespace};
 use storage_contract::snapshot_worktree::{SnapshotHandle, WorktreeHandle, WorktreeRevision};
 use storage_contract::working_tree::LocalEntityIdentity;
 
+pub(crate) mod within;
+
 /// No caller supplies a node or version.
 pub(crate) struct Pick<'a> {
     pub(crate) worktree: WorktreeHandle, pub(crate) visible: OperationId,
@@ -52,6 +54,10 @@ impl HeldBranchFile {
 
     pub(crate) fn capture(engine: &Engine,pick: &Pick<'_>) -> Result<Self> {
         let index = engine.snapshot_receipts()?;
+        Self::capture_at(engine,&index,pick)
+    }
+
+    fn capture_at(engine: &Engine, index: &super::registry::ReceiptIndex<'_>, pick: &Pick<'_>) -> Result<Self> {
         index.require_source(engine.state())?;
         if engine.admitted_current_namespaces().map_err(RegistrationError::Publication)?.is_some()
             || engine.config.generation().is_some()

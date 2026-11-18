@@ -4,7 +4,7 @@ use crate::Engine;
 use crate::container_storage::namespace_host::NamespaceHost;
 use crate::directory_worktree::names;
 use crate::persist::snapshot_worktree::{AllocatedWorktreeReservation, Record};
-use crate::snapshot_worktree::instance::{prepare, publish, require_initial, with_worktree};
+use crate::snapshot_worktree::instance::{MountParent, prepare, publish, require_initial, with_worktree};
 use crate::snapshot_worktree::registry::ReceiptIndex;
 use crate::snapshot_worktree::{RegistrationError, Result};
 use crate::working_tree::snapshot::HeldSnapshotNode;
@@ -43,13 +43,14 @@ fn allocation_plan(
     request: &AllocateWorktree,
 ) -> Result<(HeldSnapshotNode, AllocatedWorktreeReservation)> {
     let registered = index.node(request.source)?;
-    if request.parent_directory_id != registered.initialization().host.directory_id
+    let parent = MountParent::original(registered.host())?;
+    if request.parent_directory_id != parent.directory
         || request.expected_root_generation
             != registered.initialization().host.expected_root_generation
     {
         return Err(RegistrationError::RootOnly);
     }
-    let host = NamespaceHost::registered(engine, registered.host().namespace)
+    let host = NamespaceHost::registered(engine, parent.namespace)
         .map_err(RegistrationError::NamespaceHost)?;
     let (budget, mut occupied) = host
         .root_mount_allocation(
