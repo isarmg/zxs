@@ -17,6 +17,7 @@ HTTP 只适配 `start_backup_transaction`、`continue_backup_transaction`、`res
 - 排除 SYSTEM、管理目录、所有现成员和本批已选目标；序列化新增及决定入口与现有 `storage_addition` 生命周期锁。首次创建要求普通管理业务准入；原任务读／续作仅取得原已持有 Engine，不由此开放其它业务。
 - 原请求已保留时，同 start 重试只核原操作／主体／输入并读取状态，不再把已写入材料的原目标当新空目录。续作从核心保留的原任务进入，不携带替代路径或重新采样来源。
 - `current_backup_transaction_request` 读取 SYSTEM 原输入。即使第一个后台 worker 尚未建立，仍返回原操作；不存在、损坏、其它主体及原任务运行态丢失不是同一状态。
+- 正常退出等待已有复制 worker，不替用户推进检查点。原 Start 已落盘、首个 worker 因目标目录锁冲突尚未建立时，退出返回原操作 ID 和恢复错误，不重开目标。只有在原 SYSTEM 目录与 writer 身份均未改变、实际未读到活动 Start 且无运行态时，此项检查才报告无任务；已接管的代际仍按实际服务状态判断。此边界已补回归源码，未运行。
 
 ## HTTP 契约
 

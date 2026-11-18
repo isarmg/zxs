@@ -1,7 +1,7 @@
 //! One held SYSTEM directory lock serializes every authority-format selection.
 //! It is retained with writer ownership, never reconstructed from a cache.
 use crate::{Error, ErrorCode, Result};
-use platform_io::fs_safety::linux::{AdvisoryLock, MountPolicy, OpenAt2Root};
+use platform_io::fs_safety::linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root};
 use platform_io::fs_safety::{EntryName, PrivateDirectory};
 use std::path::Path;
 
@@ -10,6 +10,7 @@ pub(crate) const ONLINE_STATE: &str = "authority-online-state.json";
 
 pub(crate) struct SelectionGuard {
     directory: PrivateDirectory,
+    identity: FileIdentity,
     _lock: AdvisoryLock,
 }
 impl SelectionGuard {
@@ -24,12 +25,18 @@ impl SelectionGuard {
                 "another runtime owns this SYSTEM authority selection",
             )
         })?;
+        let identity = root.identity();
         let directory = PrivateDirectory::from_directory(root.into_directory(), path.to_owned())?;
         directory.verify_identity()?;
         Ok(Self {
             directory,
+            identity,
             _lock: lock,
         })
+    }
+    /// The original directory remains open and locked for this guard's lifetime.
+    pub(crate) fn directory_identity(&self) -> FileIdentity {
+        self.identity
     }
     pub(crate) fn legacy(path: &Path) -> Result<Self> {
         let guard = Self::acquire(path)?;

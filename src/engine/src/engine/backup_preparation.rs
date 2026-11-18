@@ -23,6 +23,7 @@ pub(crate) use capacity::{
 };
 pub(in crate::engine) use capacity::require_new_feedback_capacity;
 mod completion;
+mod drain;
 mod execution;
 mod inspection;
 mod native_control;
@@ -534,16 +535,15 @@ impl Worker {
         if let Some(thread) = self.thread.take()
             && thread.join().is_err()
         {
-            let detail =
-                "backup preparation worker panicked; durable task and original data retained";
-            let failed = self.unavailable_status(detail);
+            let failure = drain::Failure::WorkerPanicked(self.job.request.operation_id);
+            let failed = self.unavailable_status(&failure.to_string());
             match self.state.lock() {
                 Ok(mut status) => *status = failed,
                 // Replace the untrusted diagnostic with a closed failure. Do
                 // not clear poisoning or recover any business data from it.
                 Err(poisoned) => *poisoned.into_inner() = failed,
             }
-            return Err(Error::new(ErrorCode::RecoveryRequired, detail));
+            return Err(failure.into());
         }
         Ok(())
     }
@@ -710,17 +710,6 @@ impl Engine {
             );
         }
         Some(status)
-    }
-
-    /// Host shutdown/test synchronization; ordinary setting calls do not wait.
-    pub fn wait_backup_preparation(&mut self) -> Result<BackupPreparationStatus> {
-        self.backup_preparation
-            .as_mut()
-            .ok_or_else(|| Error::new(ErrorCode::NotFound, "no backup preparation"))?
-            .join()?;
-        Ok(self
-            .backup_preparation_status()
-            .expect("invariant: retained worker"))
     }
 
     pub(super) fn resume_backup_preparation(&mut self) -> Result<()> {

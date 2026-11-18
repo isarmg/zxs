@@ -144,10 +144,9 @@ impl Fixture {
 fn panicking_worker_wait_retains_failure_and_releases_owned_resources() {
     let mut fixture = Fixture::new();
     fixture.install_panicking_owner(false);
-    assert_eq!(
-        fixture.engine.wait_backup_preparation().unwrap_err().code(),
-        ErrorCode::RecoveryRequired
-    );
+    let failure = fixture.engine.wait_backup_preparation().unwrap_err();
+    assert_eq!(failure.code(), ErrorCode::RecoveryRequired);
+    assert!(failure.to_string().contains(&fixture.request.operation_id.to_string()));
     fixture.assert_blocked_and_retained();
     assert_eq!(
         fixture.engine.wait_backup_preparation().unwrap().phase,
@@ -175,10 +174,9 @@ fn poisoned_progress_is_reported_as_unavailable_not_a_healthy_or_missing_task() 
     let mut fixture = Fixture::new();
     fixture.install_panicking_owner(true);
     fixture.assert_blocked_and_retained();
-    assert_eq!(
-        fixture.engine.wait_backup_preparation().unwrap_err().code(),
-        ErrorCode::RecoveryRequired
-    );
+    let failure = fixture.engine.wait_backup_preparation().unwrap_err();
+    assert_eq!(failure.code(), ErrorCode::RecoveryRequired);
+    assert!(failure.to_string().contains(&fixture.request.operation_id.to_string()));
     fixture.assert_blocked_and_retained();
     fixture.assert_target_lock_released();
     fixture.assert_same_task_completes();

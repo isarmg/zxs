@@ -163,6 +163,10 @@ impl WriterLocks {
         Ok(FileIdentity::from_fd(&*self.system)?)
     }
 
+    pub(crate) fn system_directory_identity(&self) -> FileIdentity {
+        self.selection.directory_identity()
+    }
+
     /// Management retains the pool writer, not any disk writer or I/O grant.
     pub(crate) fn system_only(&self) -> Self {
         Self {

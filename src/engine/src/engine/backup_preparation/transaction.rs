@@ -58,6 +58,13 @@ impl Retained {
         Ok(())
     }
 }
+
+/// A retained Start may predate creation of the history worker. Only report
+/// its saved operation; this read cannot acquire a target or resume the task.
+pub(super) fn retained_operation(system: &DiskRoot) -> Result<Option<OperationId>> {
+    Ok(Retained::read(system)?.map(|saved| saved.request.preparation.operation_id))
+}
+
 impl BackupTransactionRequest {
     fn validate(&self) -> Result<()> {
         Engine::require_actor(&self.preparation.principal)?;

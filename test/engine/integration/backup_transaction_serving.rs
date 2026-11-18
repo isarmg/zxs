@@ -987,3 +987,79 @@ fn successful_backup_inspection_does_not_cache_any_target_completion() {
     assert!(engine.is_read_only());
     assert!(!engine.state().operations.contains_key(&operation));
 }
+
+#[test]
+fn shutdown_reports_the_original_start_when_target_lock_failed_before_any_worker() {
+    use platform_io::fs_safety::linux::AdvisoryLock;
+    use std::os::unix::fs::MetadataExt;
+
+    let (temporary, mut engine, repository) = full_route();
+    save(&mut engine, &repository, "source", b"original remains readable");
+    assert_eq!(
+        engine.wait_backup_preparation().unwrap_err().code(),
+        ErrorCode::NotFound
+    );
+    let chosen = target(temporary.path(), "selected");
+    let request = transaction(&engine, vec![chosen.clone()]);
+    let operation = request.preparation.operation_id;
+    let owner = AdvisoryLock::directory(&fs::File::open(&chosen).unwrap()).unwrap();
+    // The wrapper has accepted the exact Start before the copier tries to
+    // acquire this directory. There is no worker or history job to join.
+    let failure = engine
+        .start_backup_transaction(request.clone(), vec![fs::File::open(&chosen).unwrap()])
+        .unwrap_err();
+    assert!(matches!(
+        failure,
+        storage_engine::Error::Filesystem(platform_io::fs_safety::Error::AlreadyLocked(_))
+    ));
+    assert!(engine.backup_preparation_status().is_none());
+    assert_eq!(
+        engine.backup_transaction_request(operation, "admin").unwrap(),
+        Some(request)
+    );
+    let system = temporary.path().join("system");
+    let directory = system.join("backup-preparation");
+    let receipt = directory.join("transaction.json");
+    let bytes = fs::read(&receipt).unwrap();
+    let identity = fs::metadata(&receipt).unwrap().ino();
+    let parked = temporary.path().join("held-original");
+    fs::rename(&chosen, &parked).unwrap();
+    fs::DirBuilder::new().mode(0o700).create(&chosen).unwrap();
+    fs::write(chosen.join("not-a-target"), b"leave untouched").unwrap();
+    for _ in 0..2 {
+        let error = engine.wait_backup_preparation().unwrap_err();
+        assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        assert!(error.to_string().contains(&operation.to_string()));
+        assert_eq!(fs::read(&receipt).unwrap(), bytes);
+        assert_eq!(fs::metadata(&receipt).unwrap().ino(), identity);
+        assert!(!directory.join("job.json").exists());
+        assert_eq!(fs::read_dir(&parked).unwrap().count(), 0);
+        assert_eq!(
+            fs::read(chosen.join("not-a-target")).unwrap(),
+            b"leave untouched"
+        );
+    }
+    // Carrying the real writer inode into another directory at the old name
+    // must not let that empty SYSTEM suppress the original request.
+    let displaced = temporary.path().join("held-system");
+    fs::rename(&system, &displaced).unwrap();
+    fs::DirBuilder::new().mode(0o700).create(&system).unwrap();
+    fs::rename(displaced.join("writer.lock"), system.join("writer.lock")).unwrap();
+    assert_eq!(
+        engine.wait_backup_preparation().unwrap_err().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert!(!directory.exists());
+    fs::rename(system.join("writer.lock"), displaced.join("writer.lock")).unwrap();
+    fs::rename(&system, temporary.path().join("unused-system")).unwrap();
+    fs::rename(&displaced, &system).unwrap();
+    fs::rename(&chosen, temporary.path().join("unused-replacement")).unwrap();
+    fs::rename(&parked, &chosen).unwrap();
+    drop(owner);
+    engine.resume_backup_transaction(operation, "admin").unwrap();
+    let prepared = engine.wait_backup_preparation().unwrap();
+    assert_eq!(prepared.operation_id, operation);
+    assert_eq!(prepared.phase, BackupPreparationPhase::HistoryPrepared);
+    assert_eq!(fs::read(&receipt).unwrap(), bytes);
+    assert!(engine.membership_fence_status().is_none());
+}
