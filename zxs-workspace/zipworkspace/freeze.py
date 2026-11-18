@@ -1,13 +1,14 @@
-"""POSIX source capture. Freeze a private copy first, and build ZIP only from it."""
+"""Read a selected tree; fresh commits package a complete anonymous frozen copy."""
 from __future__ import annotations
 import contextlib
 import hashlib
 import os
 from pathlib import Path
 import stat
-import tempfile
 import zipfile
+from .document import native_identity
 from .model import CHUNK, Commit, Manifest, Rejected
+from .private_freeze import local_mount, mount_id
 
 def _sig(m):
     return m.st_dev, m.st_ino, m.st_mode, m.st_size, m.st_mtime_ns, m.st_ctime_ns
@@ -22,7 +23,7 @@ def _dir_flags():
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
-def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False):
+def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_held=None):
     facts = {}
     manifest = Manifest()
     rootdev = os.fstat(rootfd).st_dev
@@ -50,20 +51,20 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False):
                 try:
                     if _sig(os.fstat(child)) != facts[path]:
                         raise Rejected("checkout changed during admission")
+                    if check_held is not None: check_held(child)
                     if is_dir:
-                        if frozen is not None: (frozen / path).mkdir(mode=0o700)
                         visit(child, path)
                     elif frozen is not None or hash_files:
                         h = hashlib.sha256()
                         count = 0
-                        output = (frozen / path).open("xb") if frozen is not None else contextlib.nullcontext(None)
-                        with output as out:
-                            while block := os.read(child, CHUNK):
-                                count += len(block)
-                                if count > before.st_size: raise Rejected("source grew while freezing")
-                                h.update(block)
-                                if out is not None: out.write(block)
+                        start = frozen.length if frozen is not None else 0
+                        while block := os.read(child, CHUNK):
+                            count += len(block)
+                            if count > before.st_size: raise Rejected("source grew while freezing")
+                            h.update(block)
+                            if frozen is not None: frozen.append(block)
                         if count != before.st_size: raise Rejected("source shrank while freezing")
+                        if frozen is not None: frozen.spans[path] = (start,count)
                         manifest.rows[path] = (False, count, h.hexdigest())
                     if _sig(os.fstat(child)) != facts[path] or _sig(os.stat(name, dir_fd=fd, follow_symlinks=False)) != facts[path]:
                         raise Rejected("source or its name changed while freezing")
@@ -101,45 +102,74 @@ def observe_tree(source: Path):
     finally: os.close(fd)
 
 
+def _distinct_roots(fds):
+    roots = [native_identity(os.fstat(fd),stat.S_IFDIR) for fd in fds]
+    if len(set(roots)) != len(roots): raise Rejected("working tree, private state and store must be different")
+    for start,root in zip(fds,roots):
+        current = os.dup(start)
+        try:
+            for _ in range(256):
+                parent = os.open("..",_dir_flags(),dir_fd=current)
+                try:
+                    here = native_identity(os.fstat(current),stat.S_IFDIR)
+                    above = native_identity(os.fstat(parent),stat.S_IFDIR)
+                    if above in roots and above != root:
+                        raise Rejected("one selected directory contains another")
+                    if above==here: break
+                    os.close(current); current = parent; parent = None
+                finally:
+                    if parent is not None: os.close(parent)
+            else: raise Rejected("cannot establish independent selected directory roots")
+        finally: os.close(current)
+
+
 @contextlib.contextmanager
-def frozen_tree(source: Path, private_parent: Path):
+def frozen_tree(source, capture, expected, store):
     _native()
-    if private_parent.resolve().is_relative_to(source.resolve()):
-        raise Rejected("put all application state and temporary files outside the worktree")
     fd = os.open(source, _dir_flags())
     try:
         root_sig = _sig(os.fstat(fd))
-        with tempfile.TemporaryDirectory(prefix="freeze-", dir=private_parent) as temp:
-            frozen = Path(temp)
-            facts, tree = _scan(fd, frozen)
-            now, _ = _scan(fd)
-            if facts != now or root_sig != _sig(os.stat(source, follow_symlinks=False)):
-                raise Rejected("checkout generation changed; no archive was packaged")
-            # An unmounted/quiescent checkout was copied; the archive consumer is
-            # handed only this private generation, never a path into the live tree.
-            yield frozen, tree
-    finally:
-        os.close(fd)
+        if native_identity(os.fstat(fd),stat.S_IFDIR)!=expected:
+            raise Rejected("registered worktree was replaced before capture")
+        source_mount = local_mount(fd)
+        store_fd = os.open(store,_dir_flags())
+        try:
+            _distinct_roots((fd,capture.parent,store_fd))
+            store_id = native_identity(os.fstat(store_fd),stat.S_IFDIR)
+            excluded = {capture.identity,store_id}
+            def check_held(child):
+                m = os.fstat(child)
+                if not m.st_ino or (m.st_dev,m.st_ino) in excluded or mount_id(child)!=source_mount:
+                    raise Rejected("cannot capture aliased state, archive store, or a nested mount")
+            capture.check_state()
+            facts,tree = _scan(fd,capture,check_held=check_held)
+            after,_ = _scan(fd,check_held=check_held)
+            if (facts!=after or root_sig!=_sig(os.stat(source,follow_symlinks=False)) or
+                    native_identity(os.stat(store,follow_symlinks=False),stat.S_IFDIR)!=store_id):
+                raise Rejected("a selected location changed while freezing; no snapshot packed")
+            capture.validate(tree)
+            capture.check_state()
+            yield capture,tree
+        finally: os.close(store_fd)
+    finally: os.close(fd)
 
 
-def pack(frozen: Path, tree: Manifest, marker: Commit, destination: Path):
+def pack(frozen, tree: Manifest, marker: Commit, destination):
     if marker.tree != tree.digest(): raise Rejected("wrong frozen generation")
-    with destination.open("xb") as raw:
-        with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
-            for name, (directory, size, digest) in sorted(tree.rows.items()):
-                info = zipfile.ZipInfo(name + ("/" if directory else ""), (1980, 1, 1, 0, 0, 0))
-                info.create_system = 3
-                info.external_attr = ((0o40755 if directory else 0o100644) << 16) | (16 if directory else 0)
-                info.compress_type = zipfile.ZIP_STORED
-                info.file_size = size
-                if directory:
-                    archive.writestr(info, b"")
-                else:
-                    h = hashlib.sha256()
-                    with (frozen / name).open("rb") as src, archive.open(info, "w") as out:
-                        while data := src.read(CHUNK):
-                            h.update(data); out.write(data)
-                    if h.hexdigest() != digest: raise Rejected("frozen member no longer matches")
-            archive.comment = marker.encode()
-        raw.flush()
-        os.fsync(raw.fileno())
+    frozen.validate(tree)
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+        for name, (directory,size,digest) in sorted(tree.rows.items()):
+            info = zipfile.ZipInfo(name + ("/" if directory else ""), (1980,1,1,0,0,0))
+            info.create_system = 3
+            info.external_attr = ((0o40755 if directory else 0o100644) << 16) | (16 if directory else 0)
+            info.compress_type = zipfile.ZIP_STORED
+            info.file_size = size
+            if directory:
+                archive.writestr(info,b"")
+            else:
+                h = hashlib.sha256()
+                with archive.open(info,"w") as out:
+                    for block in frozen.blocks(name,size): h.update(block); out.write(block)
+                if h.hexdigest()!=digest: raise Rejected("frozen bytes no longer match the captured file")
+        archive.comment = marker.encode()
+    destination.flush(); os.fsync(destination.fileno())

@@ -97,6 +97,8 @@ def main(args=None):
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (OSError, Rejected, sqlite3.Error, zipfile.BadZipFile, UnicodeError, ValueError) as err:
-        print(f"zip-workspace: {err}", file=sys.stderr); return 1
+        print(f"zip-workspace: {err}", file=sys.stderr)
+        for note in getattr(err, "__notes__", ()): print(note, file=sys.stderr)
+        return 1
 
 if __name__ == "__main__": raise SystemExit(main())

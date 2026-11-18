@@ -10,6 +10,7 @@ from . import lifecycle
 from .archive import read_archive
 from .freeze import frozen_tree, pack
 from .model import Commit, Rejected, check_id, new_id
+from .private_freeze import anonymous_capture
 from .publish import confirm_final, digest_file, publish, rename_new, require_native_writer, sync_dir
 
 
@@ -118,7 +119,9 @@ def finish(state, operation):
 
 def commit(state, *, fork=False):
     require_native_writer()
-    with locked(state) as (con, row, state):
+    # Unsupported STATE volumes refuse before SQLite can open/recover the catalog.
+    with anonymous_capture(state) as capture, locked(state) as (con, row, state):
+        capture.check_state()
         if row["pending"] is not None:
             raise Rejected("an original operation is pending; resume it rather than recapturing")
         lifecycle.require_visible(con, row)
@@ -130,14 +133,15 @@ def commit(state, *, fork=False):
             if (saved.repo, saved.branch, saved.generation, saved.operation) != (repo, branch, gen, row["parent"]) or digest_file(base_path) != row["base_sha"]:
                 raise Rejected("exact original branch base is not available in the selected store")
         operation = new_id()
-        with frozen_tree(work, state) as (frozen, manifest):
+        registered = lifecycle.instance(con)
+        expected = (int(registered["device"]),int(registered["inode"]))
+        with frozen_tree(work, capture, expected, store) as (frozen, manifest):
             marker = Commit(repo, new_id() if fork else branch, 1 if fork else gen + 1,
                             operation, row["parent"], manifest.digest())
-            local = state / (operation + ".zxs")
-            pack(frozen, manifest, marker, local)
-        if read_archive(local)[0] != marker: raise Rejected("local closed archive verification failed")
-        digest = digest_file(local)
-        sync_dir(state)
+            with capture.candidate(operation) as (name, original, stream):
+                pack(frozen, manifest, marker, stream)
+                stream.close()
+                digest = capture.verify_candidate(name, original, marker)
         con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1", (marker.encode(), digest))
     # Durable client intent precedes any remote bytes. A retry uses this exact
     # candidate, regardless of later writes to the local working directory.

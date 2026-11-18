@@ -35,7 +35,8 @@ python3 -m zipworkspace commit demo/states/second --fork --writers-stopped
 - `checkout` 只还原指定快照，不换成较新的包，也不会覆盖现有目录。不同工作树和私有状态相互独立。
 - 让工具选一个不冲突的目录名：`checkout-auto ARCHIVE PARENT STORE STATE Project`。它从 `Project`、`Project (2)` 起尝试，已存在的目录一律保留；256 个名字都被占用时停止。
 - 签出中断时，运行 `checkout-status STATE` 查看原操作，再运行 `resume-checkout STATE OPERATION`。恢复只接认本机已验证的原快照和原目录；不会重新选择更新的分支或仅因字节相同就采用别人的同名目录。无须联网重新下载已经保存的原包。
-- 提交前停止工作目录的所有写入者。本版命令行没有权限冻结其他进程。它会通过不跟随链接的目录描述符复制到私有临时快照，并复核整树身份/变更戳；观察到变化则拒绝，ZIP 打包器不会读正在编辑的目录。
+- **新的 `commit`（包括 `--fork`）**：停止工作目录的所有写入者。将 `STATE` 放在本人独占、稳定且持久的本机目录中；工作树父目录和 `STATE` 都不能被同步、搬移或重新挂载。其他合作客户端可以竞争归档槽位，但不能动别人的临时上传文件。模式 0700 和 `--writers-stopped` 不是对其他进程的锁。
+- 新提交的冻结阶段仅接纳能证明原挂载的 Linux ext4/XFS（当前未接纳子目录挂载），并要求所选 `STATE` 文件系统实际提供不可链接的匿名临时文件。工作内容只写入一个无名称文件，再从同一句柄核验并打包；正常退出、失败或进程结束都无需按名字递归清理。峰值仍需一份未压缩工作内容加一份本地归档的空间，关闭句柄不是安全擦除。单独创建的具名候选 `STATE/<原操作>.zxs` 如在登记前失败，可能只写了一部分；出错时会尽可能给出该名称，不会自动删除、认领或重试。已有 `freeze-*` 目录也不会被扫描或清理。无法证明这些条件时，在打开 SQLite 前拒绝不支持的 `STATE`；不退回具名暂存目录。不影响只读浏览或原提交的 `resume`。这项改动未运行，macOS / Windows 未提供等效的新提交冻结实现。
 - 先在本地生成、关闭并验证完整 ZIP，记录原操作，再上传临时同级文件，关闭、复读并验证。只有底层支持 **原生不可覆盖 rename** 和目录同步时才发表。分支同一代只能有一个提交；冲突保留原包和私有候选，不自动覆盖或分叉。失败后的 `.partial` 不当成提交，也不自动清理。
 - 断线后用 `status` 查看原 `pending_operation`，再执行 `python3 -m zipworkspace resume STATE OPERATION`。已提交的同一操作可以被核对；找不到原证据不凭当前工作树重新签发。
 - `branches ARCHIVE STORE` 仅列本目录仓库的分支，区分观察到的最高代与祖先完整的分支头。可用 `checkout-branch ARCHIVE STORE WORKTREE STATE BRANCH_ID` 或 `checkout-node ARCHIVE STORE WORKTREE STATE NODE_ID` 固定选择；不会根据文件日期或后来出现的包重选。在本机保存原包之前发现来源被替换时不发表目标目录。
