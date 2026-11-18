@@ -181,6 +181,15 @@ pub(super) fn registered_root<'a>(
     Ok(source)
 }
 
+/// A complete ordinary proposal must reopen the selected registered main
+/// root. Returning only its binding grants no authority to install bytes.
+pub(in crate::engine) fn original_scope_root(state: &State, config: &Config, resources: &DiskResources,
+    origin: &RootOrigin) -> Result<()> {
+    let root = registered_root(state,config,resources,origin.repository,origin.branch)?;
+    if root.binding() != &origin.genesis { return Err(Failure::RootIdentity.into()); }
+    Ok(())
+}
+
 /// Logical ownership from the admitted publication and its exact configured
 /// registration. It grants no root access: owner writers still require common(),
 /// while an existing backup read separately observes only its actual target.

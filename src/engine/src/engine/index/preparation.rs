@@ -64,6 +64,15 @@ impl<'a> SystemEncodingInput<'a> {
         Self::from_state(candidate.state(), checkpoint)
     }
 
+    /// Same exact ordinary detached proposal, not a caller-provided future
+    /// State or a current index duplicated as if it were authoritative.
+    pub(in crate::engine) fn first_root(
+        source: &'a crate::engine::publication::FirstRootScopeInput<'_>, checkpoint: &impl Fn() -> Result<()>,
+    ) -> Result<Self> {
+        source.require()?;
+        Self::from_state(source.next(),checkpoint)
+    }
+
     fn from_state(state: &'a State, checkpoint: &impl Fn() -> Result<()>) -> Result<Self> {
         checkpoint()?;
         // Preserve the original complete input bound before SQL projection.

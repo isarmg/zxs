@@ -163,6 +163,17 @@ impl WriterLocks {
         Ok(FileIdentity::from_fd(&*self.system)?)
     }
 
+    /// Borrow the actual SYSTEM selected by this writer. A path containing
+    /// an identically named database does not select the scope destination.
+    pub(crate) fn held_scope_system(&self) -> Result<super::DiskRoot> {
+        let root = self.selection.held_system_root()?;
+        let named = root.open_regular_entry(&crate::persist::layout::CONTROL_WRITER_LOCK)?;
+        if FileIdentity::from_fd(&named)? != self.system_identity()? || named.metadata()?.len() != 0 {
+            return Err(Error::new(ErrorCode::DiskIdentityMismatch, "selected SYSTEM writer changed"));
+        }
+        Ok(root)
+    }
+
     /// Management retains the pool writer, not any disk writer or I/O grant.
     pub(crate) fn system_only(&self) -> Self {
         Self {

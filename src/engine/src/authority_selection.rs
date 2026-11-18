@@ -43,6 +43,7 @@ impl SelectionGuard {
     /// Duplicate the actual selected SYSTEM directory rather than reopening a
     /// caller-supplied path as the destination for its private scope image.
     pub(crate) fn held_system_root(&self) -> Result<crate::disk::DiskRoot> {
+        self.directory.verify_identity()?;
         let root = OpenAt2Root::from_private_directory(
             self.directory.try_clone()?, MountPolicy::SameMount,
         )?;

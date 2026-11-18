@@ -266,16 +266,38 @@ impl Engine {
         operation: OperationId,
         file_manager_root: bool,
     ) -> Result<Repository> {
+        let result = match self.plan_repository_creation(name, primary, copies, principal, operation, file_manager_root)? {
+            crate::engine::MutationPlan::Existing(result) => result,
+            crate::engine::MutationPlan::Prepared { next, prepared, result } => {
+                self.persist(*next, prepared, result.clone())?;
+                result
+            }
+        };
+        // Later SMB binding changes do not change a creation response. Do not
+        // substitute the live repository when replaying its original receipt.
+        json_codec::from_value(result.result["created_repository"].clone()).map_err(|source| {
+            Error::from(source).context(
+                ErrorCode::StateInvalid,
+                "created repository receipt is invalid",
+            )
+        })
+    }
+
+    pub(crate) fn plan_repository_creation(
+        &self, name: &storage_contract::RepositoryName, primary: &str, copies: u32, principal: &str,
+        operation: OperationId, file_manager_root: bool,
+    ) -> Result<crate::engine::MutationPlan> {
         let mut input =
             json!({"name":name.as_str(),"primary_slot_id":primary,"target_copies":copies});
         if file_manager_root {
             input["file_manager_root"] = json!(true);
         }
-        let result = self.mutate(
+        self.plan_mutation_digest(
             "repository.create",
             principal,
             operation,
             input,
+            None,
             |engine, state, _| {
                 // Current routes authorize a new root, never overwrite the
                 // meaning of a permanent creation receipt after a later exit.
@@ -315,15 +337,7 @@ impl Engine {
                 }
                 Ok(result)
             },
-        )?;
-        // Later SMB binding changes do not change a creation response. Do not
-        // substitute the live repository when replaying its original receipt.
-        json_codec::from_value(result.result["created_repository"].clone()).map_err(|source| {
-            Error::from(source).context(
-                ErrorCode::StateInvalid,
-                "created repository receipt is invalid",
-            )
-        })
+        )
     }
 }
 
@@ -464,6 +478,45 @@ pub(super) fn project_creation(
         .repositories
         .insert(repo_id.clone(), repository.clone());
     Ok(repository)
+}
+
+/// Check the complete ordinary change from genuinely empty genesis with the
+/// original allocated IDs. This is not another creator and never allocates
+/// or publishes anything. Unrelated rows cannot hide outside a hand-picked
+/// list of FILE/retention maps: the entire resulting State must agree.
+pub(crate) fn require_first_scope_creation(before: &State, next: &State,
+    result: &crate::OperationResult, origin: &crate::persist::namespace_root::RootOrigin) -> Result<()> {
+    let invalid = || Error::new(ErrorCode::PublicationInvalid, "not the original empty root creation");
+    if before.sequence != 0 || next.sequence != 1 || result.sequence != 1
+        || result.kind != "repository.create" || origin.operation != result.operation_id || origin.sequence.get() != 1
+        || next.operations.get(&origin.operation) != Some(result) || next.events.len() != 1 { return Err(invalid()); }
+    const FIELDS: [&str; 10] = ["repository_id","history_tree_id","branch_id","commit_id","created_repository",
+        "file_manager_root_origin","branch_generation","timestamp","membership_epoch","version_protection"];
+    let body = result.result.as_object().ok_or_else(invalid)?;
+    if body.len() != FIELDS.len() || !FIELDS.iter().all(|k| body.contains_key(*k)) { return Err(invalid()); }
+    let time = body["timestamp"].as_str().ok_or_else(invalid)?;
+    if time.parse::<u64>().ok().is_none_or(|n| n.to_string() != time) { return Err(invalid()); }
+    let actor = next.operation_principals.get(&origin.operation).ok_or_else(invalid)?;
+    let created = crate::persist::namespace_root::created_repository(result)?;
+    crate::persist::namespace_root::require_creation_request(result,&created,actor)?;
+    let cid = result.commit_id.as_deref().ok_or_else(invalid)?;
+    let commit = next.commits.get(cid).ok_or_else(invalid)?;
+    let event = next.events.last().ok_or_else(invalid)?;
+    if !created.file_manager_root || created.target_copies != 1 || event.kind != result.kind
+        || event.operation_id != origin.operation || event.sequence != 1 || event.object_id != cid { return Err(invalid()); }
+    let mut expected = before.clone();
+    expected.sequence = 1;
+    expected.business_generation = 1;
+    let actual = project_creation(&mut expected, RepositoryCreation {
+        name: &storage_contract::RepositoryName::parse(&created.name)?, primary: &origin.genesis.registration.slot_id,
+        copies: 1, file_manager_root: true, principal: actor, operation: origin.operation,
+    }, RepositoryIds { repository: origin.repository.to_string(), history: origin.history.to_string(),
+        branch: origin.branch.to_string(), commit: cid.to_owned(), tree: commit.tree_id.clone() })?;
+    expected.operations.insert(origin.operation,result.clone());
+    expected.operation_principals.insert(origin.operation,actor.clone());
+    expected.events.push(event.clone());
+    if actual != created || expected != *next { return Err(invalid()); }
+    Ok(())
 }
 
 #[cfg(test)]

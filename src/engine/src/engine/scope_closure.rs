@@ -4,6 +4,7 @@ use crate::{Config, ErrorCode, Result, ValidatedConfig};
 use storage_contract::{Generation, OperationId};
 
 pub(in crate::engine) mod directory;
+pub(in crate::engine) mod first_root;
 mod anchor;
 pub(in crate::engine) use anchor::{Anchor, FixedGenesis};
 mod genesis;

@@ -42,6 +42,7 @@ pub(crate) mod file_tags;
 mod history;
 pub(crate) mod namespace;
 mod repository;
+pub(crate) use repository::require_first_scope_creation;
 mod workspace;
 pub(crate) use ancestry::descendant_commits;
 pub(crate) use batch::{relocate as relocate_namespace_entry, separated_file_source};

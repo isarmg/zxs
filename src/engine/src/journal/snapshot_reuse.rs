@@ -1,6 +1,14 @@
 //! Full exact dependency reads and immutable barriers remain until the scrub gate.
 use super::*;
 impl SnapshotReuse {
+    /// This is only the original in-memory state projection that the native
+    /// encoder used. It does not by itself bind or elect a scope or a disk.
+    pub(crate) fn state_descriptor_for(&self, hash: &str) -> Result<&Snapshot> {
+        if !self.matches_snapshot(hash) {
+            return Err(Error::new(ErrorCode::PublicationInvalid,"wrong original Snapshot basis"));
+        }
+        Ok(&self.descriptor)
+    }
     pub(crate) fn matches_snapshot(&self, hash: &str) -> bool {
         self.hash == hash
     }

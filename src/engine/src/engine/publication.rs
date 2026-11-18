@@ -253,6 +253,45 @@ pub(crate) struct DetachedPublication {
     history_owners: crate::state_projection::DerivedOwners,
 }
 
+/// Nonserializable prospective first-root handoff. Only an existing
+/// physically prepared detached publication can supply this original request.
+pub(in crate::engine) struct FirstRootScopeInput<'a> { engine: &'a Engine, proposal: &'a DetachedPublication }
+impl<'a> FirstRootScopeInput<'a> {
+    pub(in crate::engine) fn engine(&self) -> &Engine { self.engine }
+    pub(in crate::engine) fn next(&self) -> &State { &self.proposal.next }
+    pub(in crate::engine) fn receipt(&self) -> &OperationResult { &self.proposal.result }
+    pub(in crate::engine) fn state_descriptor(&self) -> Result<&crate::journal::Snapshot> {
+        self.proposal.snapshot_basis.state_descriptor_for(&self.proposal.candidate.snapshot_hash)
+    }
+    pub(in crate::engine) fn require(&self) -> Result<()> {
+        let engine = self.engine;
+        let p = self.proposal;
+        engine.require_detached_publication(p)?;
+        let c = &p.candidate;
+        if engine.config.generation().is_some() || engine.snapshot.is_some() || p.base_sequence != 0
+            || *engine.state != super::scope_closure::initial_state()
+            || p.directory.is_some() || !c.versions.is_empty() || c.previous_snapshot.is_some()
+            || c.sequence != 1 || c.operation_id != p.result.operation_id || c.request_digest != p.result.request_digest
+            || c.metadata_disk_ids != engine.members().into_iter().map(|d| d.disk_id).collect::<Vec<_>>()
+            || p.result.result.get("membership_epoch") != Some(&json_codec::json!(engine.config.membership_epoch().to_string()))
+            || !p.snapshot_basis.matches_snapshot(&c.snapshot_hash) {
+            return Err(super::scope_closure::ScopeClosureError::PublicationMismatch.into());
+        }
+        p.verified.validate(&engine.config,c)?;
+        let origin = crate::persist::namespace_root::origin(&p.result)?
+            .ok_or(super::scope_closure::ScopeClosureError::PublicationMismatch)?;
+        crate::business::require_first_scope_creation(&engine.state,&p.next,&p.result,&origin)?;
+        super::fresh_layout::namespace::original_scope_root(&p.next,&engine.config,&engine.disk_resources,&origin)
+    }
+}
+impl Engine {
+    pub(in crate::engine) fn first_root_scope_input<'a>(&'a self, p: &'a DetachedPublication) -> Result<FirstRootScopeInput<'a>> {
+        let input = FirstRootScopeInput { engine: self, proposal: p };
+        input.require()?;
+        Ok(input)
+    }
+}
+
 /// Owns the exact immutable outcome and its admitted Current projection.
 /// It cannot be serialized, detached from that outcome or reused after either
 /// original State/Current allocation changes.

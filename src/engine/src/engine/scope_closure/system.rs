@@ -37,6 +37,14 @@ impl FrozenSystem {
         let empty = OrdinalBuilder::new(0).finish()?;
         Self::measure(config.pool_id.parse()?, configuration, empty.root(), state, &input, checkpoint)
     }
+    pub(super) fn first_root(
+        source: &crate::engine::publication::FirstRootScopeInput<'_>, empty: &Reference,
+        configuration: MaterialCommitment, checkpoint: &impl Fn() -> Result<()>,
+    ) -> Result<Self> {
+        let input = SystemEncodingInput::first_root(source,checkpoint)?;
+        Self::measure(source.engine().config.pool_id.parse()?,configuration,empty,source.next(),&input,checkpoint)
+    }
+
     fn measure(
         pool_id: PoolId, configuration_hash: MaterialCommitment, empty: &Reference, state: &State,
         input: &SystemEncodingInput<'_>, checkpoint: &impl Fn() -> Result<()>,
