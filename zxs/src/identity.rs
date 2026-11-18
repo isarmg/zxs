@@ -31,3 +31,27 @@ macro_rules! id {
 }
 id!(OperationId); id!(PoolId); id!(VolumeId);
 id!(FileId); id!(EntryId); id!(HistoryId);
+id!(BranchId); id!(NodeId); id!(VersionId);
+
+/// Native FULL basename prefix. This is a distinct storage ID, not the
+/// business VersionId, NodeId, a path component chosen by a client, or a hash.
+#[derive(Clone,Copy,Debug,Eq,Ord,PartialEq,PartialOrd,Hash)]
+pub struct VersionStorageId(pub(crate) [u8;15]);
+impl VersionStorageId{
+    pub(crate) fn fresh()->io::Result<Self>{
+        let bits=random()?;let hex=b"0123456789abcdef";let mut key=[0;15];
+        for (i,c) in key.iter_mut().enumerate(){
+            let b=bits[i/2];*c=hex[usize::from(if i%2==0{b>>4}else{b&15})];
+        }
+        Self::checked(key)
+    }
+    pub(crate) fn checked(key:[u8;15])->io::Result<Self>{
+        if key.iter().all(|b|*b==b'0')||!key.iter().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(b)){
+            return Err(crate::fs::invalid("invalid 15-character FULL storage identifier"));
+        }
+        Ok(Self(key))
+    }
+}
+impl fmt::Display for VersionStorageId{
+    fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Result{f.write_str(std::str::from_utf8(&self.0).expect("checked ASCII storage ID"))}
+}

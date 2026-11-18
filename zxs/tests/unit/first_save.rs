@@ -209,3 +209,30 @@ fn an_unlinked_reserved_retry_keeps_sibling_reads_but_refuses_new_writes_until_o
     let sibling_result=save_first(&t.sys,sibling_save,other.file,sibling_wants,Cursor::new(b"sibling")).unwrap();
     assert_eq!(sibling_result.decision_sequence,5);assert_eq!(sibling_result.file,other.file);
 }
+
+#[test]
+#[ignore="two explicit registered native filesystems"]
+fn a_slow_named_save_recovery_verifier_holds_the_same_work_lease_as_an_open_reader(){
+    let t=Fixture::new();let file=t.file.file;let input=b"old named preparation still being authenticated";
+    let expected=claim(input);let save=OperationId::new().unwrap();
+    save_inner(&t.sys,save,file,expected,Cursor::new(input),|s|if s==Cut::BeforeIntent{
+        Err(io::Error::other("leave the exact named working preparation"))
+    }else{Ok(())}).unwrap_err();
+    let pending={
+        let (pool,_,state)=LocalPool::with_snapshot(&t.sys,Access::Read).unwrap();
+        let a=state.saving.as_ref().unwrap();let c=state.file(file).unwrap();let volume=pool.ordinary(t.volume).unwrap();
+        let original=source_dir(&volume,c,&state,&a.original).unwrap();PendingReader::open(&original,a).unwrap().unwrap()
+    };
+    let r=save_first(&t.sys,save,file,expected,NeverRead).unwrap();
+    assert_eq!(r.revision,1);
+    let op=OperationId::new().unwrap();let path=t.data.join("first").join(format!("working-{save}"));
+    assert!(crate::commit_first(&t.sys,op,file,1).is_err());
+    let receipt=crate::first_commit_receipt(&t.sys,op).unwrap().unwrap();
+    assert_eq!(receipt.status,CreationStatus::PublishedInstallationUnconfirmed);let formal=receipt.published.unwrap();
+    assert!(path.is_file());
+    let verified=pending.verify().unwrap(); // same named inode, still open throughout verification
+    assert!(crate::commit_first(&t.sys,op,file,1).is_err());assert!(path.is_file());
+    drop(verified);
+    assert_eq!(crate::commit_first(&t.sys,op,file,1).unwrap(),formal);assert!(!path.exists());
+    let mut got=Vec::new();crate::read_node_to(&t.sys,file,formal.node,&mut got).unwrap();assert_eq!(got,input);
+}

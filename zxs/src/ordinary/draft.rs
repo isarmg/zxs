@@ -11,19 +11,38 @@ use crate::{FileId,OperationId,fs::{self,HeldDir,invalid},pool::lease::{Access,F
 use std::{io::{self,Read,Write},path::Path};
 
 #[derive(Clone,Debug,Eq,PartialEq)]
-pub struct CurrentFile{pub file:FileInfo,pub working:Option<DraftReceipt>}
+pub struct CurrentFile{pub file:FileInfo,pub working:Option<DraftReceipt>,pub head:Option<super::FormalNode>}
+pub(super) enum Body{Working(Reader),Formal(super::formal::physical::HistoryBody)}
+impl Body{
+    fn write_to(&self,out:impl Write)->io::Result<()>{
+        match self{Self::Working(b)=>b.write_to(out),Self::Formal(b)=>b.write_to(out)}
+    }
+}
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub struct FirstSaveObservation{
     pub status:CreationStatus,pub file:FileId,pub operation:OperationId,pub body:DraftClaim,pub decision_sequence:Option<u64>,
 }
 
-pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)->io::Result<Option<Reader>>{
+pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)->io::Result<Option<Body>>{
     let saved=state.saved(c.create.file);
+    if let Some(f)=state.head(c.create.file){
+        let w=saved.ok_or_else(||invalid("formal node has no original confirmed revision"))?;
+        let dir=super::formal::directory(volume,state,c,w)?;
+        // The confirmed FULL is authoritative even if old-work cleanup is
+        // obstructed. Do not use the old draft as the body, or require it for
+        // the selected node. Complete-inventory and retirement verify it separately.
+        return super::formal::physical::HistoryBody::current(&dir,f).map(|b|Some(Body::Formal(b)));
+    }
+    if state.committing.as_ref().is_some_and(|a|a.original.file==c.create.file){
+        let w=saved.ok_or_else(||invalid("formal reservation without working source"))?;
+        let dir=super::formal::directory(volume,state,c,w)?;
+        return Reader::current(&dir,&w.original,&w.material).map(|b|Some(Body::Working(b)));
+    }
     let pending=state.saving.as_ref().filter(|a|a.original.file==c.create.file);
     let sealed=state.pending.as_ref().filter(|p|pending.is_some_and(|a|p.frame.op()==a.original.op));
     let work=saved.map(|f|(f.original.op,true)).or_else(||pending.map(|a|(a.original.op,sealed.is_some())));
     let dir=container::working_directory_held(volume,&c.create,work)?;
-    if let Some(f)=saved{return Reader::current(&dir,&f.original,&f.material).map(Some);}
+    if let Some(f)=saved{return Reader::current(&dir,&f.original,&f.material).map(|b|Some(Body::Working(b)));}
     // The logical old revision is still empty. A matching private spelling
     // that exists, however, is not harmless or attributable merely by name.
     if let Some(a)=pending{
@@ -36,12 +55,12 @@ pub(super) fn admit_current_held(state:&Journal,volume:&FileVolume<'_>,c:&Frame)
     }
     Ok(None)
 }
-pub(super) fn capture_current(system:&Path,id:FileId)->io::Result<(CurrentFile,Option<Reader>)>{
+pub(super) fn capture_current(system:&Path,id:FileId)->io::Result<(CurrentFile,Option<Body>)>{
     let (pool,_,state)=LocalPool::with_snapshot(system,Access::Read)?;
     let c=state.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published original FILE"))?;
     let volume=pool.ordinary(c.create.volume)?;let body=admit_current_held(&state,&volume,c)?;
     volume.root.file.sync_all()?;volume.require_current()?;
-    Ok((CurrentFile{file:FileInfo::from_frame(c),working:state.saved(id).map(SaveFrame::receipt)},body))
+    Ok((CurrentFile{file:FileInfo::from_frame(c),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.head(id).map(super::formal::types::Commit::receipt)},body))
 }
 /// Inspect actual original FILE and (if present) its named working record and
 /// authenticated chunk head. This is not a whole-content verification scan.
@@ -78,7 +97,7 @@ fn choice<'a>(pool:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,claim:Dra
         // A completed historical receipt neither opens today's data path nor consumes input.
         if !s.saving.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(f.receipt()));}
     }
-    if s.allocated.is_some()||s.saving.as_ref().is_some_and(|a|a.original.op!=op||a.request!=request){
+    if s.committing.is_some()||s.allocated.is_some()||s.saving.as_ref().is_some_and(|a|a.original.op!=op||a.request!=request){
         return Err(invalid("different original FILE operation needs completion"));
     }
     let c=s.file(file).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE at first SAVE cutoff"))?;

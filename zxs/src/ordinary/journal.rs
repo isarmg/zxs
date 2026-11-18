@@ -2,8 +2,9 @@
 //! share the same pending allocation, sealed-frame slot, bounds and lower
 //! frontier. The two private sidecars are operands, not votes.
 use super::{allocation::{self,Allocation},draft::{allocation::{self as save_allocation,SaveAllocation},types::{Original,SaveFrame}},
+    formal::{allocation::{self as formal_allocation,FormalAllocation},types::{self as formal_types,Commit}},
     wire::{self,Frame,In,NativeObject,MAX_FRAME}};
-use crate::{fs::{self,HeldDir,invalid},Entity,EntryId,HistoryId,PoolId,OperationId,FileId,VolumeId};
+use crate::{BranchId,NodeId,VersionId,VersionStorageId,fs::{self,HeldDir,invalid},Entity,EntryId,HistoryId,PoolId,OperationId,FileId,VolumeId};
 use std::{collections::{BTreeMap,BTreeSet},ffi::CStr,io};
 
 pub(crate) const MAX_JOURNAL:usize=8*1024*1024;
@@ -12,24 +13,26 @@ pub(super) const INTENT:&CStr=c"FILE-INTENT";
 const INTENT_MAGIC:&[u8]=b"ZXS/ORIGINAL-FILE-INTENT\0";
 const MAX_INTENT:usize=MAX_FRAME+256;
 
-pub(super) enum Decision{Create(Frame),Save(SaveFrame)}
+pub(super) enum Decision{Create(Frame),Save(SaveFrame),Formal(Commit)}
 impl Decision{
     pub(super) fn read(pool:PoolId,bytes:&[u8])->io::Result<Self>{
         let e=wire::envelope(pool,bytes)?;
         match e.kind{
             1=>Ok(Self::Create(Frame::from_envelope(pool,bytes,e)?)),
             2=>Ok(Self::Save(SaveFrame::from_envelope(pool,bytes,e)?)),
+            3=>Ok(Self::Formal(Commit::from_envelope(pool,bytes,e)?)),
             _=>Err(invalid("unknown original SYSTEM command")),
         }
     }
     pub(super) fn creation(&self)->io::Result<&Frame>{match self{Self::Create(f)=>Ok(f),_=>Err(invalid("original command is not FILE creation"))}}
     pub(super) fn save(&self)->io::Result<&SaveFrame>{match self{Self::Save(f)=>Ok(f),_=>Err(invalid("original command is not a first SAVE"))}}
-    pub(super) fn seq(&self)->u64{match self{Self::Create(f)=>f.seq,Self::Save(f)=>f.seq}}
-    fn previous(&self)->[u8;32]{match self{Self::Create(f)=>f.previous,Self::Save(f)=>f.previous}}
-    fn digest(&self)->[u8;32]{match self{Self::Create(f)=>f.digest,Self::Save(f)=>f.digest}}
-    pub(super) fn request(&self)->[u8;32]{match self{Self::Create(f)=>f.request,Self::Save(f)=>f.request}}
-    pub(super) fn bytes(&self)->&[u8]{match self{Self::Create(f)=>&f.bytes,Self::Save(f)=>&f.bytes}}
-    pub(super) fn op(&self)->OperationId{match self{Self::Create(f)=>f.create.op,Self::Save(f)=>f.original.op}}
+    pub(super) fn formal(&self)->io::Result<&Commit>{match self{Self::Formal(f)=>Ok(f),_=>Err(invalid("original command is not a formal FILE commit"))}}
+    pub(super) fn seq(&self)->u64{match self{Self::Create(f)=>f.seq,Self::Save(f)=>f.seq,Self::Formal(f)=>f.seq}}
+    fn previous(&self)->[u8;32]{match self{Self::Create(f)=>f.previous,Self::Save(f)=>f.previous,Self::Formal(f)=>f.previous}}
+    fn digest(&self)->[u8;32]{match self{Self::Create(f)=>f.digest,Self::Save(f)=>f.digest,Self::Formal(f)=>f.digest}}
+    pub(super) fn request(&self)->[u8;32]{match self{Self::Create(f)=>f.request,Self::Save(f)=>f.request,Self::Formal(f)=>f.request}}
+    pub(super) fn bytes(&self)->&[u8]{match self{Self::Create(f)=>&f.bytes,Self::Save(f)=>&f.bytes,Self::Formal(f)=>&f.bytes}}
+    pub(super) fn op(&self)->OperationId{match self{Self::Create(f)=>f.create.op,Self::Save(f)=>f.original.op,Self::Formal(f)=>f.original.op}}
 }
 
 pub(super) struct Intent{pub frame:Decision,pub stamp:fs::OriginalStamp,pub bytes:Vec<u8>}
@@ -58,6 +61,8 @@ type Allowed<'a>=dyn Fn(VolumeId,u32,Entity,&fs::Birth,bool)->bool+'a;
 struct OriginalIndex{
     ops:BTreeSet<OperationId>,files:BTreeMap<FileId,usize>,entries:BTreeSet<EntryId>,histories:BTreeSet<HistoryId>,
     names:BTreeSet<(VolumeId,String)>,tickets:BTreeSet<OperationId>,native:BTreeSet<fs::Birth>,saved:BTreeMap<FileId,usize>,
+    formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,branches:BTreeSet<BranchId>,
+    versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,
 }
 impl OriginalIndex{
     fn birth<'a>(&self,id:FileId,frames:&'a[Decision])->io::Result<&'a Frame>{
@@ -69,6 +74,18 @@ impl OriginalIndex{
             return Err(invalid("SAVE does not select this FILE, actual original birth or registered owner"));
         }
         Ok(c)
+    }
+    fn original_formal<'a>(&self,o:&formal_types::Original,ds:&'a[Decision],allow:&Allowed<'_>)->io::Result<(&'a Frame,&'a SaveFrame)>{
+        let c=self.birth(o.file,ds)?;
+        let w=self.saved.get(&o.file).and_then(|i|ds.get(*i)).ok_or_else(||invalid("formal commit has no actual confirmed working revision"))?.save()?;
+        if !o.matches(c,w)||!allow(o.volume,o.uid,c.create.directory.entity,&c.create.directory.birth,false){
+            return Err(invalid("explicit first commit does not bind this registered FILE and its exact saved revision"));
+        }
+        Ok((c,w))
+    }
+    fn new_ids(&self,o:&formal_types::Original)->bool{
+        !self.formal.contains_key(&o.file)&&!self.nodes.contains_key(&o.node)&&!self.branches.contains(&o.branch)
+            &&!self.versions.contains(&o.version)&&!self.storage.contains(&o.storage)
     }
     fn admit(&self,f:&Decision,frames:&[Decision],prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
         if frames.len()>=MAX_DECISIONS||f.seq()!=frames.len() as u64+1||f.previous()!=prev||self.ops.contains(&f.op()){
@@ -87,6 +104,15 @@ impl OriginalIndex{
                     return Err(invalid("first SAVE is not a new working revision on the original FILE owner"));
                 }
             }
+            Decision::Formal(f)=>{
+                let (c,_)=self.original_formal(&f.original,frames,allow)?;
+                let n=&f.materials.node;let r=&f.materials.raw;
+                if !self.new_ids(&f.original)||n.birth==r.birth||n.entity==r.entity||
+                    [n,r].iter().any(|v|self.native.contains(&v.birth)||v.entity.device!=c.create.directory.entity.device||
+                        v.birth.filesystem()!=c.create.directory.birth.filesystem()){
+                    return Err(invalid("formal FULL and node must be separate new originals on the one admitted FILE owner"));
+                }
+            }
         }
         Ok(())
     }
@@ -97,13 +123,16 @@ impl OriginalIndex{
                 self.entries.insert(c.entry);self.histories.insert(c.history);self.tickets.insert(c.attempt);
                 self.native.insert(c.directory.birth.clone());self.native.insert(c.local.birth.clone());}
             Decision::Save(f)=>{self.saved.insert(f.original.file,index);self.native.insert(f.material.object.birth.clone());}
+            Decision::Formal(f)=>{let o=&f.original;self.formal.insert(o.file,index);self.nodes.insert(o.node,index);
+                self.branches.insert(o.branch);self.versions.insert(o.version);self.storage.insert(o.storage);
+                self.native.insert(f.materials.node.birth.clone());self.native.insert(f.materials.raw.birth.clone());}
         }
     }
 }
 
 pub(crate) struct Journal{
-    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
-    pub(super) saving:Option<SaveAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
+    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
+    pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
 }
 impl Journal{
     pub(crate) fn read(system:&HeldDir,pool:PoolId,initial_op:OperationId,genesis:[u8;32],tail:&[u8],floor:fs::Frontier,
@@ -115,9 +144,16 @@ impl Journal{
             let f=Decision::read(pool,&input[..n])?;idx.admit(&f,&ds,prev,&allowed)?;
             prev=f.digest();idx.remember(&f,ds.len());ds.push(f);input=&input[n..];
         }
-        let (mut allocated,mut saving)=(None,None);
+        let (mut allocated,mut saving,mut committing)=(None,None,None);
         if let Some((stamp,bytes))=system.record(allocation::NAME,allocation::MAX)?{
-            if bytes.starts_with(save_allocation::MAGIC){
+            if bytes.starts_with(formal_allocation::MAGIC){
+                let a=FormalAllocation::from_bytes(pool,stamp,bytes)?;idx.original_formal(&a.original,&ds,&allowed)?;
+                let last=ds.last().is_some_and(|d|matches!(d,Decision::Formal(f) if a.matches(f)));
+                if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op)||!idx.new_ids(&a.original)){
+                    return Err(invalid("formal reservation is not at its original source and frontier"));
+                }
+                committing=Some(a);
+            }else if bytes.starts_with(save_allocation::MAGIC){
                 let a=SaveAllocation::from_bytes(pool,stamp,bytes)?;idx.original_save(&a.original,&ds,&allowed)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Save(f) if a.matches(f)));
                 if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op)||idx.saved.contains_key(&a.original.file)){
@@ -142,6 +178,7 @@ impl Journal{
             let matches=match &p.frame{
                 Decision::Create(f)=>allocated.as_ref().is_some_and(|a|a.matches(f)),
                 Decision::Save(f)=>saving.as_ref().is_some_and(|a|a.matches(f)),
+                Decision::Formal(f)=>committing.as_ref().is_some_and(|a|a.matches(f)),
             };
             if !matches{return Err(invalid("sealed FILE material has no matching original reservation"));}
             if ds.last().is_some_and(|d|d.bytes()==p.frame.bytes()){
@@ -164,10 +201,11 @@ impl Journal{
             frame_bytes=before;unconfirmed=last.bytes().len();
             // The replay indices must never expose an otherwise complete but
             // not yet confirmed last frame (including a first working revision).
-            match last {Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{idx.files.remove(&f.create.file);}}
+            match last {Decision::Formal(f)=>{idx.formal.remove(&f.original.file);idx.nodes.remove(&f.original.node);},
+                Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{idx.files.remove(&f.create.file);}}
             ds.pop();
         }
-        Ok(Self{decisions:ds,originals:idx.files,working:idx.saved,pending,allocated,saving,tail:unconfirmed,genesis,frame_bytes})
+        Ok(Self{decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,pending,allocated,saving,committing,tail:unconfirmed,genesis,frame_bytes})
     }
     pub(super) fn frontier(&self)->(u64,[u8;32]){
         (self.decisions.len() as u64,self.decisions.last().map_or(self.genesis,Decision::digest))
@@ -190,6 +228,15 @@ impl Journal{
     pub(super) fn named(&self,v:VolumeId,name:&str)->Option<&Frame>{self.on(v).find(|f|f.create.name==name)}
     pub(super) fn on_all(&self)->impl Iterator<Item=&Frame>{self.decisions.iter().filter_map(|d|d.creation().ok())}
     pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|f.create.volume==v)}
+    pub(super) fn head(&self,id:FileId)->Option<&Commit>{self.decisions.get(*self.formal.get(&id)?)?.formal().ok()}
+    pub(super) fn node(&self,file:FileId,node:NodeId)->Option<&Commit>{
+        self.decisions.get(*self.nodes.get(&node)?)?.formal().ok().filter(|f|f.original.file==file)
+    }
+    pub(super) fn require_free_formal_ids(&self,o:&formal_types::Original)->io::Result<()>{
+        if self.decisions.iter().filter_map(|d|d.formal().ok()).any(|d|{
+            let p=&d.original;p.file==o.file||p.node==o.node||p.version==o.version||p.branch==o.branch||p.storage==o.storage
+        }){return Err(invalid("first formal identity already used"));}Ok(())
+    }
     pub(super) fn saved(&self,id:FileId)->Option<&SaveFrame>{
         self.decisions.get(*self.working.get(&id)?)?.save().ok()
     }

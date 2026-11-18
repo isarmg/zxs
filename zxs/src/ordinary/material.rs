@@ -143,17 +143,28 @@ pub(super) fn working_directory(volume:&FileVolume<'_>,c:&Creation,working:Optio
 /// the physical FILE, its individual local record and its actual names are
 /// still checked on every call. No repeated mount-table walk per entry.
 pub(super) fn working_directory_held(volume:&FileVolume<'_>,c:&Creation,working:Option<(OperationId,bool)>)->io::Result<HeldDir>{
+    directory_with(volume,c,working,None)
+}
+/// Receipt-selected working, raw FULL and node are the only optional native
+/// names. Before a decision the index may have been linked alone; raw-first,
+/// a missing required leaf or any extra entry is never an admitted state.
+pub(super) fn directory_with(volume:&FileVolume<'_>,c:&Creation,working:Option<(OperationId,bool)>,
+    formal:Option<(&super::formal::types::Original,bool)>)->io::Result<HeldDir>{
     if volume.id()!=c.volume{return Err(invalid("wrong current FILE role or volume"));}
     let dir=volume.root.child_directory(&destination(&c.name)?)?.ok_or_else(||invalid("current FILE container not installed"))?;
     let mut names=dir.names()?;
-    let i=names.iter().position(|n|n.as_slice()==LOCAL.to_bytes()).ok_or_else(||invalid("original FILE record missing"))?;
-    names.swap_remove(i);
-    match working{
-        None if names.is_empty()=>{},
-        Some((_,false)) if names.is_empty()=>{},
-        Some((op,_)) if names.len()==1 && names[0].as_slice()==super::draft::material::leaf(op).to_bytes()=>{},
-        _=>return Err(invalid("unrecognized or missing material in ordinary FILE")),
+    let mut take=|name:&CStr|->bool{
+        if let Some(i)=names.iter().position(|n|n.as_slice()==name.to_bytes()){names.swap_remove(i);true}else{false}
+    };
+    if !take(LOCAL){return Err(invalid("original FILE record missing"));}
+    if let Some((op,required))=working{
+        if !take(&super::draft::material::leaf(op))&&required{return Err(invalid("required FILE working body is unnamed"));}
     }
+    if let Some((o,required))=formal{
+        let node=take(&o.node_name());let raw=take(&o.body_name());
+        if (raw&&!node)||(required&&(!node||!raw)){return Err(invalid("missing or unordered formal FILE material"));}
+    }
+    if !names.is_empty(){return Err(invalid("unknown material in the selected FILE"));}
     verify_header(&dir,c)?;
     if volume.root.child_directory(&staging(c.attempt,c.slot))?.is_some(){return Err(invalid("both original FILE names present"));}
     Ok(dir)

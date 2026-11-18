@@ -4,7 +4,7 @@
 //! verified forward reads without loading a file-size-dependent checksum table.
 use super::{allocation::SaveAllocation,types::{DRAFT_CHUNK,DraftClaim,Material,Original}};
 use crate::{OperationId,fs::{self,Birth,HeldDir,invalid,stream::{self,PinnedRegular}}};
-use crate::ordinary::wire::NativeObject;
+use crate::ordinary::{wire::NativeObject,content::{self,chunks,end,link}};
 use std::{ffi::CString,fs::File,io::{self,Read,Write}};
 
 const MAGIC:&[u8]=b"ZXS/FILE/WORKING/INITIAL-RANGE\0";
@@ -13,7 +13,6 @@ const HEADER:u64=FIXED as u64+32;
 const CHUNK:u64=DRAFT_CHUNK as u64;
 pub(in crate::ordinary) fn leaf(op:OperationId)->CString{CString::new(format!("working-{op}")).expect("fixed native working name")}
 fn claim_buffer(c:DraftClaim)->usize{c.bytes.clamp(1,CHUNK) as usize}
-fn chunks(bytes:u64)->u64{bytes/CHUNK+if bytes%CHUNK!=0{1}else{0}}
 pub(in crate::ordinary) fn physical_size(bytes:u64)->io::Result<u64>{
     if bytes>u64::MAX/8{return Err(invalid("content exceeds SHA-256 representable length"));}
     chunks(bytes).checked_mul(32).and_then(|n|n.checked_add(bytes)).and_then(|n|n.checked_add(HEADER))
@@ -25,28 +24,19 @@ fn header(o:&Original)->Vec<u8>{
     for n in [0u64,1,0,o.claim.bytes]{b.extend_from_slice(&n.to_be_bytes());} // from, to, logical offset, length
     b.extend_from_slice(&o.claim.sha256);b
 }
-fn end(claim:DraftClaim)->io::Result<[u8;32]>{
-    let mut h=crate::hash::Sha256::new();h.update(b"ZXS/WORKING/END\0")?;h.update(&claim.bytes.to_be_bytes())?;h.update(&claim.sha256)?;Ok(h.finish())
-}
-fn link(i:u64,n:usize,digest:[u8;32],next:[u8;32])->io::Result<[u8;32]>{
-    let mut h=crate::hash::Sha256::new();h.update(b"ZXS/WORKING/CHUNK\0")?;h.update(&i.to_be_bytes())?;
-    h.update(&(n as u64).to_be_bytes())?;h.update(&digest)?;h.update(&next)?;Ok(h.finish())
-}
 fn read_header(file:&File,o:&Original)->io::Result<[u8;32]>{
     let mut bytes=vec![0;HEADER as usize];stream::read_at(file,&mut bytes,0)?;
     if &bytes[..FIXED]!=header(o).as_slice(){return Err(invalid("working body is not the original FILE, operation and revision"));}
     Ok(bytes[FIXED..].try_into().expect("exact working chain head"))
 }
 fn stream_content(file:&File,o:&Original,head:[u8;32],mut out:impl Write,check:impl Fn()->io::Result<()>)->io::Result<()>{
-    let mut expected=head;let mut content=crate::hash::Sha256::new();let mut buf=vec![0;claim_buffer(o.claim)];
-    for i in 0..chunks(o.claim.bytes){
-        let (at,n)=location(o.claim,i);let part=&mut buf[..n];stream::read_at(file,part,at)?;
-        let mut next=[0;32];stream::read_at(file,&mut next,at+n as u64)?;
-        if link(i,n,crate::hash::digest(part)?,next)?!=expected{return Err(invalid("working material chunk differs from the bound original"));}
-        check()?;content.update(part)?;out.write_all(part)?;expected=next;
-    }
-    if expected!=end(o.claim)?||content.finish()!=o.claim.sha256{return Err(invalid("working length/content/terminal commitment differs"));}
-    check()?;Ok(())
+    visit_work(file,o,head,check,|_,part,_|out.write_all(part))
+}
+fn visit_work(file:&File,o:&Original,head:[u8;32],check:impl Fn()->io::Result<()>,
+    action:impl FnMut(u64,&[u8],[u8;32])->io::Result<()>)->io::Result<()>{
+    content::visit(o.claim,head,|i,part,next|{
+        let (at,n)=location(o.claim,i);stream::read_at(file,part,at)?;stream::read_at(file,next,at+n as u64)
+    },check,action)
 }
 
 pub(super) struct InputHandle{file:File,lease:HeldDir,directory:NativeObject,original:Original}
@@ -102,13 +92,30 @@ pub(in crate::ordinary) struct Reader{pin:PinnedRegular,original:Original,materi
 impl Reader{
     fn capture(dir:&HeldDir,o:&Original)->io::Result<Option<Self>>{
         let name=leaf(o.op);let Some(pin)=dir.pin_stream(&name,physical_size(o.claim.bytes)?)? else{return Ok(None)};
+        // Every original named-working reader, including a recovery verifier
+        // running outside SYSTEM, pins the same retirement lease until drop.
+        pin.file.try_lock_shared().map_err(io::Error::from)?;pin.unchanged()?;
         let material=Material{object:NativeObject::stamp(&pin.stamp),chain:read_header(&pin.file,o)?};
         pin.named(dir,&name)?;Ok(Some(Self{pin,original:o.clone(),material}))
     }
     pub(in crate::ordinary) fn current(dir:&HeldDir,o:&Original,m:&Material)->io::Result<Self>{
-        let r=Self::capture(dir,o)?.ok_or_else(||invalid("published working body is unavailable"))?;
+        Self::current_if_named(dir,o,m)?.ok_or_else(||invalid("published working body is unavailable"))
+    }
+    pub(in crate::ordinary) fn current_if_named(dir:&HeldDir,o:&Original,m:&Material)->io::Result<Option<Self>>{
+        let Some(r)=Self::capture(dir,o)? else{return Ok(None)};
         if &r.material!=m{return Err(invalid("published working body native identity or commitment differs"));}
-        Ok(r)
+        Ok(Some(r))
+    }
+    pub(in crate::ordinary) fn visit(&self,action:impl FnMut(u64,&[u8],[u8;32])->io::Result<()>)->io::Result<()>{
+        visit_work(&self.pin.file,&self.original,self.material.chain,||self.pin.unchanged(),action)
+    }
+    pub(in crate::ordinary) fn require(&self,dir:&HeldDir)->io::Result<()>{
+        self.pin.named(dir,&leaf(self.original.op))
+    }
+    pub(in crate::ordinary) fn into_retirement(self,dir:&HeldDir)->io::Result<(CString,PinnedRegular)>{
+        let name=leaf(self.original.op);self.pin.named(dir,&name)?;
+        self.pin.file.unlock()?;self.pin.file.try_lock().map_err(io::Error::from)?;
+        self.pin.named(dir,&name)?;Ok((name,self.pin))
     }
     pub(in crate::ordinary) fn write_to(&self,out:impl Write)->io::Result<()>{
         stream_content(&self.pin.file,&self.original,self.material.chain,out,||self.pin.unchanged())

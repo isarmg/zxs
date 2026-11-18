@@ -64,3 +64,22 @@ pub(crate) fn write_at(file:&File,mut src:&[u8],mut at:u64)->io::Result<()>{
             Ok(n)=>{src=&src[n..];at+=n as u64;},Err(e) if e.kind()==io::ErrorKind::Interrupted=>{},Err(e)=>return Err(e)}
     }Ok(())
 }
+impl HeldDir {
+    /// The caller holds the original exclusive directory capability and the
+    /// checked old work FD with an exclusive content lease. Never take an
+    /// equivalent name, length or byte hash as permission to remove an inode.
+    pub(crate) fn release_verified_work(&self,name:&CStr,original:&PinnedRegular,after_unlink:impl FnOnce()->io::Result<()>)->io::Result<()>{
+        original.named(self,name)?;
+        // SAFETY: name is the single component derived from the original save;
+        // its exact private regular inode is still held and was just compared.
+        os_result(unsafe{zxs_remove_name(self.file.as_raw_fd(),name.as_ptr())})?;after_unlink()?;
+        self.confirm_absence(name)
+    }
+    pub(crate) fn confirm_absence(&self,name:&CStr)->io::Result<()>{
+        self.require_named()?;
+        if self.pin_record(name)?.is_some(){return Err(invalid("working material unexpectedly remains named"));}
+        self.file.sync_all()?;
+        if self.pin_record(name)?.is_some(){return Err(invalid("working name reused at release"));}
+        self.require_named()
+    }
+}

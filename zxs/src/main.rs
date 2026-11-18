@@ -1,5 +1,5 @@
 use std::{env, ffi::OsStr, io, path::PathBuf, process::ExitCode};
-const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE";
+const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE";
 fn bad(message:&'static str)->io::Error {io::Error::new(io::ErrorKind::InvalidInput,message)}
 fn show(scope:&str,info:zxs::PoolInfo) {
     println!("{scope}");
@@ -59,14 +59,31 @@ fn run() -> io::Result<()> {
             let r=zxs::first_save_receipt(&system,op)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original first SAVE"))?;
             println!("Original first SAVE {:?}: FILE {} length {} published-sequence {:?}",r.status,r.file,r.body.bytes,r.decision_sequence);Ok(())
         }
+        Some("file-commit")=>{
+            let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let file=word(&mut args)?.parse()?;
+            let rev=word(&mut args)?.parse::<u64>().map_err(|_|bad("invalid expected working revision"))?;end(&mut args)?;
+            let f=zxs::commit_first(&system,op,file,rev)?;show_node(&f);Ok(())
+        }
+        Some("file-commit-receipt")=>{
+            let system=path(&mut args)?;let op=word(&mut args)?.parse()?;end(&mut args)?;
+            let r=zxs::first_commit_receipt(&system,op)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such original formal commit"))?;
+            println!("Original formal commit {:?}: operation {} FILE {}",r.status,r.operation,r.file);
+            if let Some(f)=r.published{show_node(&f);}Ok(())
+        }
+        Some("file-node-read")=>{
+            let system=path(&mut args)?;let file=word(&mut args)?.parse()?;let node=word(&mut args)?.parse()?;end(&mut args)?;
+            zxs::read_node_to(&system,file,node,io::stdout().lock())?;Ok(())
+        }
         Some("file-info"|"file-read")=>{
             let system=path(&mut args)?;let id=word(&mut args)?.parse()?;end(&mut args)?;
             if action==OsStr::new("file-read"){zxs::read_current_to(&system,id,io::stdout().lock())?;}
             else{
                 let current=zxs::current_info(&system,id)?;
-                match current.working{
-                    Some(r)=>println!("Current manual FILE: working revision {} length {} (header inspected, no formal node)",r.revision,r.body.bytes),
-                    None=>println!("Current manual FILE: no confirmed working revision, no formal node, 0 logical bytes"),
+                match (current.head,current.working){
+                    (Some(f),None)=>show_node(&f),
+                    (None,Some(r))=>println!("Current manual FILE: working revision {} length {} (header inspected, no formal node)",r.revision,r.body.bytes),
+                    (None,None)=>println!("Current manual FILE: no confirmed working revision, no formal node, 0 logical bytes"),
+                    _=>return Err(bad("inconsistent initial formal FILE state")),
                 }
                 show_file(&current.file);
             }Ok(())
@@ -93,6 +110,10 @@ fn run() -> io::Result<()> {
         }
         _=>Err(bad(USAGE))
     }
+}
+fn show_node(f:&zxs::FormalNode){
+    println!("Published manual FULL: FILE {} main {} node {} version {} storage {} created-name {} length {} from SAVE {} revision {} decision {}",
+        f.file,f.branch,f.node,f.version,f.storage,f.creation_name,f.body.bytes,f.created_from_save,f.working_revision,f.decision_sequence);
 }
 fn main() -> ExitCode {
     match run() {Ok(())=>ExitCode::SUCCESS,Err(error)=>{eprintln!("zxs: {error}");ExitCode::FAILURE}}
