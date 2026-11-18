@@ -5,6 +5,7 @@
 //! publication replay closes the complete State before any physical grant.
 use storage_contract::GenerationExhausted;
 mod allocations;
+pub(crate) mod independent_first;
 pub(crate) mod trace;
 pub(crate) mod ordinary;
 pub(crate) mod origin;

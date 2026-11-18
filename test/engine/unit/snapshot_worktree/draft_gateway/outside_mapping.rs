@@ -96,3 +96,59 @@ fn projection_in_the_published_snapshot_keeps_its_own_bytes_and_original_name() 
         &name_policy::PortablePath::parse("First.txt").unwrap()).is_err());
     assert_eq!(fixture.media(), media);
 }
+
+#[test]
+fn ordinary_copy_plans_a_new_parentless_file_and_never_moves_the_snapshot_or_source() {
+    use crate::business::file_draft::independent_first::IndependentFirst;
+    use crate::snapshot_worktree::copy_source::PublishedSnapshotFile;
+    use storage_contract::file_draft::BirthRequest;
+    let (fixture, mut engine) = Fixture::new();
+    let outside = &fixture.targets[0];
+    let original = Arc::new(PublishedSnapshotFile::capture(&engine, fixture.source, &outside.path).unwrap());
+    let body = original.material();
+    let repository = outside.repository;
+    let repo = &engine.state().repositories[&repository.to_string()];
+    let branch = repo.main_branch_id.clone();
+    let destination = BirthRequest { repository, path: name_policy::PortablePath::parse("independent.txt").unwrap(),
+        expected_namespace_head: engine.state().branches[&branch].head_commit_id.parse().unwrap() };
+    let user = "admin".parse().unwrap();
+    let operation = storage_contract::OperationId::generate().unwrap();
+    let media = fixture.media();
+    let before = Arc::clone(&engine.state);
+    let occupied = BirthRequest { path: outside.path.clone(), ..destination.clone() };
+    assert!(IndependentFirst::plan(&engine, Arc::clone(&original), &occupied, &user, operation).is_err());
+    assert!(IndependentFirst::plan(&engine, Arc::clone(&original), &destination, &user,
+        fixture.source.publication).is_err());
+    let plan = IndependentFirst::plan(&engine, Arc::clone(&original), &destination, &user, operation).unwrap();
+    let target = plan.target().clone();
+    assert_ne!(target.file, outside.file);
+    assert_ne!(target.entry, outside.entry);
+    assert_eq!(target.path, destination.path);
+    assert_eq!(plan.namespace().entry, target.entry);
+    let version = plan.content().version.clone();
+    assert_ne!(version.version_id, body.version_id.to_string());
+    assert_eq!(version.file_id, target.file.to_string());
+    assert_eq!(version.creation_name, destination.path.file_name());
+    assert!(version.source_version_ids.is_empty());
+    assert_eq!(version.logical_size, body.size);
+    assert_eq!(version.content_hash, body.content_hash);
+    let (next, physical) = plan.into_parts(&engine).unwrap();
+    assert_eq!(next.versions[&version.version_id], version);
+    assert!(!next.file_node_parents.contains_key(&version.version_id));
+    assert_eq!(next.file_containers.get(&outside.file), before.file_containers.get(&outside.file));
+    assert!(!next.file_containers.contains_key(&target.file));
+    assert_eq!(physical.version, version);
+    let mut bytes = Vec::new();
+    physical.source.open().unwrap().read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, fixture::FIRST_ORIGINAL);
+    assert!(Arc::ptr_eq(&engine.state, &before));
+    assert_eq!(fixture.media(), media);
+
+    // An unrelated genuine save moves the preparation's state cut. The
+    // previous source remains intact and the new FILE is not published.
+    let pending = IndependentFirst::plan(&engine, original, &destination, &user, operation).unwrap();
+    write_draft(&mut engine, &fixture.targets[1], fixture::SECOND_DRAFT);
+    assert!(pending.into_parts(&engine).is_err());
+    assert!(!engine.state().operations.contains_key(&operation));
+    assert!(!engine.state().file_containers.contains_key(&target.file));
+}

@@ -76,7 +76,7 @@ impl Effects for VersionFacts<'_> {
     }
 }
 
-fn publish_first_namespace(
+pub(in crate::business::file_draft) fn publish_first_namespace(
     namespace: &WorkingNamespace<'_>,
     next: &mut State,
     operation: OperationId,
