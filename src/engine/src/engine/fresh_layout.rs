@@ -81,6 +81,10 @@ pub enum FreshLayoutError {
     NamespaceUnmapped,
     #[error("whole-container lifecycle transactions are not supported by this physical layout")]
     WholeContainerLifecycleUnsupported,
+    #[error("allocating the exact retained FILE name: {0}")]
+    RetainedAllocation(#[source] crate::retained_names::RetainedNameError),
+    #[error("the exact retained FILE destination is occupied")]
+    RetainedDestinationOccupied,
     #[error("the selected namespace does not match its exact root creation source")]
     NamespaceSource,
     #[error("the permanent namespace root creation record is invalid: {0}")]
@@ -113,6 +117,8 @@ pub enum FreshLayoutError {
 impl FreshLayoutError {
     pub(crate) fn code(&self) -> ErrorCode {
         match self {
+            Self::RetainedAllocation(source) => source.code(),
+            Self::RetainedDestinationOccupied => ErrorCode::NameConflict,
             Self::AdditionRequest => ErrorCode::ConfigConflict,
             Self::AdditionCount => ErrorCode::UnsupportedOperation,
             Self::AdditionConflict => ErrorCode::IdempotencyKeyReused,

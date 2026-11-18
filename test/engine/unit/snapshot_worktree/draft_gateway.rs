@@ -444,3 +444,6 @@ fn real_selected_drafts_pin_original_directory_and_fail_without_preparation() {
     assert_eq!(read_draft(&engine, &fixture.targets[1]), fixture::SECOND_ORIGINAL);
     assert!(prepared_node.is_dir()); // Retained unpublished material, never adopted.
 }
+
+#[path = "draft_gateway/retained_physical_review.rs"]
+mod retained_physical_review;

@@ -58,7 +58,7 @@ impl<'a> ReceiptIndex<'a> {
         self.retained.as_ref()
     }
 
-    pub(in crate::snapshot_worktree) fn retained_names(
+    pub(crate) fn retained_names(
         &self,
         disk: DiskId,
     ) -> impl Iterator<Item = &RetainedName> {
