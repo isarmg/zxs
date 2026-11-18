@@ -106,9 +106,54 @@ impl FileLifecycleRead {
         }
     }
 
+    /// A native reuse decision has no all-branch frontier of its own. There
+    /// is precisely one additional source here: the complete installed state
+    /// at the *same* publication. Never borrow a later head for an old event.
+    fn current_merge_heads(&self, upper: &Event, original: bool, work: &mut usize)
+        -> Result<Option<Vec<BranchTip>>>
+    {
+        let Detail::Merged { merge_id, survivor } = &upper.detail else { return Ok(None) };
+        if !original || upper.sequence != self.source.sequence || !self.native_boundary(upper)
+            || !matches!(&upper.references, References::Complete { links } if links.iter().all(|l|l.node.is_some()))
+        { return Ok(None) }
+        let merge = self.source.file_branch_merges.get(&merge_id.to_string())
+            .ok_or_else(|| LifecycleError::SourceIncomplete.into_error())?;
+        if !merge.is_existing_adoption() || merge.operation_id != upper.operation_id
+            || merge.sequence != upper.sequence || merge.file_id != self.scope().file
+            || merge.history_tree_id != self.scope().history || merge.surviving_branch_id != survivor.to_string()
+        { return Ok(None) }
+        let mut heads=Vec::new();
+        let mut observed_survivor=false;
+        for branch in self.source.branches.values() {
+            self.read.cancellation.checkpoint()?;
+            if *work >= MAX_AUDIT_EVENTS { return Ok(None) }
+            *work += 1;
+            if branch.file_id.as_deref() != Some(self.scope().file) { continue }
+            if branch.branch_kind != crate::BranchKind::File || !self.allowed_branch(&branch.branch_id)
+                || heads.len() == MAX_LINKS { return Ok(None) }
+            // Some pending/content branches resolve their head through their
+            // actual immutable namespace commit. Bound all possible entries
+            // scanned by that ordinary FILE reader before calling it.
+            if branch.file_node_id.is_none() {
+                let Some(commit)=self.source.commits.get(&branch.head_commit_id) else {return Ok(None)};
+                if commit.history_tree_id!=self.scope().history || commit.sequence>upper.sequence
+                    || commit.entries.len()>MAX_AUDIT_EVENTS-*work {return Ok(None)}
+                *work+=commit.entries.len();
+            }
+            let head=crate::business::file_nodes::retained_branch_head(&self.source,&branch.branch_id)?;
+            let Some(node)=self.body_at(&head)? else {return Ok(None)};
+            if branch.branch_id==merge.surviving_branch_id {
+                if head!=merge.result_node_id {return Ok(None)}
+                observed_survivor=true;
+            }
+            heads.push(BranchTip{branch:branch.branch_id.parse()?,node});
+        }
+        Ok(observed_survivor.then_some(heads))
+    }
+
     /// A complete original enumeration is shared by all neighboring boundaries
     /// on this page. Without enough work budget, leave *all* sections open.
-    pub(super) fn intervals(&self, events:&[Event]) -> Result<Vec<Interval>> {
+    pub(super) fn intervals(&self, events:&[Event], original:bool) -> Result<Vec<Interval>> {
         let mut sections:Vec<_>=events.windows(2).map(|p| Interval {
             older:p[0].event_key(),newer:p[1].event_key(),body:IntervalBody::Open{},
         }).collect();
@@ -161,19 +206,23 @@ impl FileLifecycleRead {
             let upper=&events[k+1];
             if section.older.sequence>=section.newer.sequence
                 || [ &events[k], upper ].iter().any(|e| !self.native_boundary(e)) {continue}
-            // A native deletion freezes every FILE branch HEAD. Other events
-            // (including an undo that cites an earlier tombstone) do not.
+            // A native deletion freezes every FILE branch HEAD. A native
+            // merge can use the actual state at its own observation only.
+            // Neither inputs alone nor a later undo prove a frontier.
             let mut branches=Vec::new();
             if !nodes.is_empty() {
-                if !matches!(upper.detail,Detail::Delete{..}) {continue}
-                let References::Complete{links}=&upper.references else {continue};
                 let members:BTreeSet<_>=nodes.iter().map(|n|n.node).collect();
-                let mut proved=true;
-                for link in links {
-                    let (LinkRole::BranchHead{branch},Some(node))=(link.role,link.node) else {proved=false;break};
-                    if members.contains(&node) {branches.push(BranchTip{branch,node});}
-                }
-                if !proved {continue}
+                if matches!(upper.detail,Detail::Delete{..}) {
+                    let References::Complete{links}=&upper.references else {continue};
+                    let mut proved=true;
+                    for link in links {
+                        let (LinkRole::BranchHead{branch},Some(node))=(link.role,link.node) else {proved=false;break};
+                        if members.contains(&node) {branches.push(BranchTip{branch,node});}
+                    }
+                    if !proved {continue}
+                } else if let Some(heads)=self.current_merge_heads(upper,original,&mut work)? {
+                    branches.extend(heads.into_iter().filter(|tip|members.contains(&tip.node)));
+                } else {continue}
             }
             nodes.sort_by_key(|row|row.node);
             section.body=IntervalBody::Complete{nodes,branches};

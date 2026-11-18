@@ -181,7 +181,7 @@ impl FileLifecycleRead {
             history_root: self.request.history_root,
             context: self.read.context.clone(),
             observation_sequence: self.source.sequence,
-            intervals: self.intervals(&selected)?,
+            intervals: self.intervals(&selected,reusable)?,
             events: selected,
             next_cursor,
         };

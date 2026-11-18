@@ -1021,3 +1021,70 @@ fn copied_merge_uses_the_original_command_and_only_destination_node_identities()
     row.original_inputs[0].expected_node_id=version.as_str().into();
     assert!(substituted.page().is_err());
 }
+
+#[test]
+fn two_native_existing_selections_bound_real_content_only_at_the_exact_final_decision() {
+    use storage_contract::file_lifecycle::{IntervalBody,LinkRole,References};
+    let (_tmp,mut engine,file,initial)=actual();
+    initialize_file_branch_owner(&mut engine,&initial);
+    let fresh=||OperationId::generate().unwrap();
+    let fork=|engine:&mut Engine, v:&str, name:&str| engine.create_file_branch(file.as_str(),v,
+        &storage_contract::BranchName::parse(name).unwrap(),"admin",fresh()).unwrap().branch_id.unwrap();
+    let a=fork(&mut engine,initial.as_str(),"older input");
+    let main=engine.state.branches.values().find(|b|b.file_id.as_deref()==Some(file.as_str())
+        && b.branch_id!=a && b.state==crate::BranchState::Active).unwrap().branch_id.clone();
+    let merge=|engine:&mut Engine, other:&str, actor:&str|{
+        let inputs=[main.as_str(),other].map(|id|storage_contract::FileMergeInput{
+            branch_id:id.into(),expected_node_id:engine.file_branch_head(id).unwrap(),
+        });
+        let size=engine.state.versions.len();
+        let decision=engine.merge_file_branches(crate::FileBranchMergeRequest{
+            file_id:file.as_str(),inputs:&inputs,chosen_node_id:&inputs[0].expected_node_id,
+            surviving_branch_id:&main,location:None,principal:actor,operation_id:fresh(),
+        }).unwrap();
+        assert_eq!(size,engine.state.versions.len());
+        decision
+    };
+    let lower=merge(&mut engine,&a,"first actor");
+    let b=fork(&mut engine,initial.as_str(),"other exact input");
+    let mut created=vec![];
+    for bytes in [b"first actual interval body".as_slice(),b"second actual interval body".as_slice()] {
+        let workspace=engine.create_workspace(&main,"admin").unwrap();
+        engine.stage_bytes(&workspace.workspace_id,"file.txt",bytes).unwrap();
+        engine.commit_workspace(crate::CommitRequest{
+            workspace_id:workspace.workspace_id,operation_id:fresh(),principal:"admin".into(),
+            expected_head:workspace.base_head,fencing_token:workspace.fencing_token,
+            message:"publish actual FILE content".into(),request_digest:None,
+        }).unwrap();
+        created.push(engine.file_branch_head(&main).unwrap());
+    }
+    assert_ne!(created[0],created[1]);
+    let upper=merge(&mut engine,&b,"second actor");
+    let request=request_for(&engine,&file,64);
+    let capture=engine.capture_file_lifecycle(request.clone(),HistoryWindowCancellation::new()).unwrap();
+    let page=capture.page().unwrap(); page.validate(&request).unwrap();
+    assert_eq!(page.observation_sequence,upper.sequence);
+    assert_eq!(page.events.iter().map(|e| e.operation_id).collect::<Vec<_>>(),
+        [lower.operation_id,upper.operation_id]);
+    let References::Complete{links}=&page.events[1].references else{panic!("original merge links")};
+    assert!(links.iter().any(|l|l.role==LinkRole::Result && l.node.unwrap().to_string()==created[1]));
+    let IntervalBody::Complete{nodes,branches}=&page.intervals[0].body else{panic!("native frontier")};
+    assert_eq!(nodes.len(),2);
+    for id in &created {
+        let row=nodes.iter().find(|r|r.node.to_string()==*id).unwrap();
+        assert_eq!(row.parents.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            engine.file_node_parents(file.as_str(),id).unwrap());
+    }
+    assert_eq!(branches.len(),1);
+    assert_eq!(branches[0].branch.to_string(),main);
+    assert_eq!(branches[0].node.to_string(),created[1]);
+    // This actual new publication has no timeline event of its own. An old
+    // merge cannot borrow even identical-looking tips from the newer state.
+    fork(&mut engine,&created[1],"later branch");
+    assert!(engine.recheck_file_lifecycle(&capture).is_err());
+    let later=request_for(&engine,&file,64);
+    let page=engine.capture_file_lifecycle(later.clone(),HistoryWindowCancellation::new()).unwrap().page().unwrap();
+    page.validate(&later).unwrap();
+    assert_eq!(page.intervals.len(),1);
+    assert!(matches!(page.intervals[0].body,IntervalBody::Open{}));
+}
