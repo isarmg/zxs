@@ -4,14 +4,14 @@
 use crate::{
     metadata_map::Reference,
     persist::snapshot_worktree::{NodeAllocation, NamespaceDirectoryBinding},
-    working_tree::snapshot::{SnapshotEntry, SnapshotReference},
+    working_tree::snapshot::{SnapshotEntry, SnapshotNodeBinding, SnapshotReference},
 };
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::{
     BranchName, OperationId, Sequence,
-    snapshot_worktree::NamespaceHostAddress,
+    snapshot_worktree::{NamespaceHostAddress, SnapshotHandle},
     working_tree::{DirectoryId, DiskRegistrationIdentity, LocalEntityIdentity, MaterialCommitment,
-        RootId, SnapshotBranchId, SnapshotRepositoryId},
+        RootId, SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -41,6 +41,7 @@ pub(super) struct Origin {
 pub(super) enum Key {
     HostStep { ordinal: Sequence },
     Branch { branch_id: SnapshotBranchId },
+    Node { node_id: SnapshotNodeId },
     Pending { reserve_operation: OperationId },
     PendingItem { reserve_operation: OperationId, role: ItemRole, source_ordinal: Sequence, item_ordinal: Sequence },
 }
@@ -55,7 +56,15 @@ pub(super) struct Row<T> { pub source: Origin, pub value: T }
 pub(super) struct HostStep<'a> { pub original: &'a NamespaceDirectoryBinding }
 #[derive(Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
-pub(super) enum BranchState { Pending { reservation: OperationId } }
+pub(super) enum BranchState { Pending { reservation: OperationId }, Head { handle: SnapshotHandle } }
+#[derive(Serialize)]
+#[serialization(tag = "kind", rename_all = "snake_case")]
+pub(super) enum Parent { Initial {}, Node { handle: SnapshotHandle } }
+#[derive(Serialize)]
+#[serialization(deny_unknown_fields)]
+pub(super) struct Node {
+    pub handle: SnapshotHandle, pub parent: Parent, pub reservation: OperationId, pub binding: SnapshotNodeBinding,
+}
 #[derive(Serialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct Branch<'a> {
@@ -83,13 +92,16 @@ pub(super) struct PlannedEntry<'a> { pub entry: &'a SnapshotEntry }
 pub(super) enum Ownership<'a> { Original { registration: &'a DiskRegistrationIdentity } }
 #[derive(Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
-pub(super) enum Location { Anchor { root_id: RootId, directory_id: DirectoryId } }
+pub(super) enum Location { Anchor { root_id: RootId, directory_id: DirectoryId },
+    Entry { root_id: RootId, parent_directory_id: DirectoryId, name: &'static str } }
 #[derive(Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
-pub(super) enum Lifecycle { Pending { reservation: OperationId } }
+pub(super) enum Lifecycle { Pending { reservation: OperationId }, Current {} }
 #[derive(Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Object<'a> {
+    DirectoryRepository { repository_id: SnapshotRepositoryId, directory_id: DirectoryId,
+        material: &'a super::super::schema::Material<RepositoryIdentity> },
     DirectoryRepositoryReservation { repository_id: SnapshotRepositoryId, directory_id: DirectoryId,
         reserve_operation: OperationId, material: &'a super::super::schema::Material<RepositoryIdentity> },
 }

@@ -23,7 +23,7 @@ use storage_contract::working_tree::{
 use storage_contract::{BranchName, EntryId, OperationId, Principal, RepositoryId, Sequence};
 
 mod local_material;
-pub(crate) use local_material::InitialDirectoryMaterial;
+pub(crate) use local_material::{InitialDirectoryMaterial, NodeDirectoryMaterial};
 mod backup;
 pub(crate) use backup::require_backup_snapshot_scope;
 mod edits;
@@ -436,6 +436,14 @@ impl<'a> ReceiptIndex<'a> {
     pub(crate) fn require_planned(
         &self, next: &State, result: &OperationResult, principal: &Principal, record: &Record,
     ) -> Result<()> {
+        self.planned_index(next, result, principal, record).map(drop)
+    }
+
+    // This temporary index is not an admitted prefix. Only this owner may
+    // use it, for checking or for a typed pre-decision material projection.
+    fn planned_index<'b>(
+        &'b self, next: &'b State, result: &'b OperationResult, principal: &'b Principal, record: &Record,
+    ) -> Result<ReceiptIndex<'b>> {
         let operation = result.operation_id;
         if self.source.operations.contains_key(&operation)
             || next.operations.get(&operation) != Some(result)
@@ -464,8 +472,7 @@ impl<'a> ReceiptIndex<'a> {
         }
         ReceiptIndex::capture_inner(
             next, self.originals, Some(PlannedReceipt { result, principal }),
-        )?;
-        Ok(())
+        )
     }
 
     fn capture_inner(

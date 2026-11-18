@@ -111,3 +111,14 @@ pub(crate) fn measure_initial_directory_reservation(
     let pending = directory::PendingRepository::original(&engine.planning_context(), repository)?;
     Ok((pending.reservation(), pending.root(), pending.host_entity()))
 }
+
+/// Read-only diagnostics of the original complete node-only repository. A
+/// pending or genuinely sparse repository cannot use this subproducer.
+pub(crate) fn measure_published_directory_nodes(
+    engine: &crate::Engine, repository: storage_contract::working_tree::SnapshotRepositoryId,
+) -> Result<(storage_contract::working_tree::MaterialCommitment, usize, usize,
+            storage_contract::working_tree::LocalEntityIdentity)> {
+    let held = directory::PublishedRepository::original(&engine.planning_context(), repository)?;
+    let (nodes, bodies) = held.counts();
+    Ok((held.root(), nodes, bodies, held.entity()))
+}

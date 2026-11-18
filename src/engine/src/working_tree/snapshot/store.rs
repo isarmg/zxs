@@ -12,6 +12,8 @@ use std::{collections::BTreeSet, io::{Read, Seek}};
 use storage_contract::VersionId;
 use storage_contract::working_tree::LocalEntityIdentity;
 
+mod scope;
+pub(crate) use scope::ScopedNodeFiles;
 mod preparation_input;
 pub(crate) use preparation_input::PinnedSnapshotRepository;
 
@@ -223,6 +225,21 @@ impl HeldSnapshotNode {
         repository: &DiskRoot,
         expected: SnapshotNodeBinding,
     ) -> Result<Self, SnapshotStoreError> {
+        let held = Self::reopen_inventory(repository, expected)?;
+        for version in held.manifest.files().keys() {
+            // Each source is opened and closed sequentially, not retained as a
+            // full-snapshot FD set. Every later open crosses admission again.
+            held.open_payload(*version)?;
+        }
+        repository.private_entry_matching(
+            &layout::node(expected.reference.node), file_identity(expected.node_entity),
+        ).map_err(SnapshotStoreError::Directory)?;
+        Ok(held)
+    }
+
+    // Opening only the node's namespace is not a public admission result:
+    // callers must independently read every actual payload before returning.
+    fn reopen_inventory(repository: &DiskRoot, expected: SnapshotNodeBinding) -> Result<Self, SnapshotStoreError> {
         if repository.held_identity().map_err(SnapshotStoreError::Directory)?
             != file_identity(expected.repository_entity)
         {
@@ -244,14 +261,6 @@ impl HeldSnapshotNode {
         ).map_err(SnapshotStoreError::Directory)?;
         let held = Self { binding: expected, manifest, node, files, worktrees };
         held.verify_inventory()?;
-        for version in held.manifest.files().keys() {
-            // Each source is opened and closed sequentially, not retained as a
-            // full-snapshot FD set. Every later open crosses admission again.
-            held.open_payload(*version)?;
-        }
-        repository.private_entry_matching(
-            &layout::node(expected.reference.node), file_identity(expected.node_entity),
-        ).map_err(SnapshotStoreError::Directory)?;
         Ok(held)
     }
 

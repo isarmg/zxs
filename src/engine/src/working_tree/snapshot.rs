@@ -12,7 +12,7 @@ pub(crate) use manifest::{
     MAX_ENTRIES, MAX_LOGICAL_BYTES, MAX_VERSIONS, LogicalAdmission,
 };
 pub(crate) use store::{
-    HeldSnapshotNode, PinnedSnapshotRepository, SnapshotNodeBinding,
+    HeldSnapshotNode, PinnedSnapshotRepository, ScopedNodeFiles, SnapshotNodeBinding,
     SnapshotPreparationError, SnapshotStoreError,
 };
 

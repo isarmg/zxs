@@ -2,6 +2,8 @@
 //! A prepared subgroup cannot certify a different repository or a whole disk.
 mod record;
 mod pending;
+mod published;
+pub(in crate::engine) use published::PublishedRepository;
 pub(in crate::engine) use pending::PendingRepository;
 use super::{
     OrdinalPages, Representation, ScopeClosureError as Failure,

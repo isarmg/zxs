@@ -190,6 +190,15 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
         original.open_payload(material.version_id).unwrap().read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, BODY);
     }
+    let measured_nodes = crate::engine::scope_closure::measure_published_directory_nodes(&engine, handle.repository_id).unwrap();
+    assert_eq!((measured_nodes.1, measured_nodes.2), (1, 1));
+    assert!(crate::engine::scope_closure::measure_initial_directory_reservation(&engine, handle.repository_id).is_err());
+    let repo_dir = disks[0].join("common-data").join(crate::persist::layout::SNAPSHOT_REPOSITORY.as_path());
+    let unrelated = repo_dir.join("unregistered-node");
+    fs::create_dir(&unrelated).unwrap();
+    assert!(crate::engine::scope_closure::measure_published_directory_nodes(&engine, handle.repository_id).is_err());
+    assert!(unrelated.is_dir(), "read-only checking must not clean residual material");
+    fs::remove_dir(unrelated).unwrap();
     let first_material = inventory(&disks[0].join("common-data"));
     assert!(!first_material.is_empty());
     let container = engine.state().file_containers
@@ -204,6 +213,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
 
     engine = Engine::open(&system).unwrap();
     assert!(!engine.is_read_only());
+    assert_eq!(crate::engine::scope_closure::measure_published_directory_nodes(&engine, handle.repository_id).unwrap(), measured_nodes);
     let cold_material = inventory(&disks[0].join("common-data"));
     assert_cold_material(&first_material, &cold_material, &database, &file_scope,
         engine.state().sequence);
@@ -796,6 +806,7 @@ fn actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node() {
     let (reserved, manifest) = publication::reserve(
         &mut engine, &host, &pending, allocated, &principal(),
     ).unwrap();
+    assert!(crate::engine::scope_closure::measure_published_directory_nodes(&engine, allocated.repository).is_err());
     let measured = crate::engine::scope_closure::measure_initial_directory_reservation(&engine, allocated.repository).unwrap();
     assert_eq!(measured.0, pending.operation_id);
     assert!(crate::engine::scope_closure::measure_initial_directory_reservation(

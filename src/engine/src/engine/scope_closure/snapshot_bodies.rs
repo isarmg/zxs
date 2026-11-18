@@ -129,6 +129,15 @@ impl NodeBodies {
         }
         let reference = manifest.reference();
         let mut rows = OrdinalBuilder::new(MAX_ENTRIES);
+        Self::append_rows(manifest, &leaves, &mut rows)?;
+        Ok(Self { reference, operation: manifest.operation_id(), pages: rows.finish()?, leaves })
+    }
+
+    /// Append in the independently known node order to one entire repository's
+    /// table, not a root-of-partial-roots or a distinct-node set of hashes.
+    pub(in crate::engine) fn append_rows(manifest: &AdmittedSnapshotManifest,
+        leaves: &BTreeMap<VersionId, BodyLeaf>, rows: &mut OrdinalBuilder) -> Result<()> {
+        let reference = manifest.reference();
         for entry in manifest.entries() {
             let SnapshotEntryContent::File { material, .. } = entry.content else {
                 // Empty directories stay in the admitted original native
@@ -145,7 +154,7 @@ impl NodeBodies {
                 content_hash: material.content_hash,
             })?;
         }
-        Ok(Self { reference, operation: manifest.operation_id(), pages: rows.finish()?, leaves })
+        Ok(())
     }
 }
 
