@@ -252,3 +252,45 @@ mod single_full {
     use super::*;
     include!("custody_single_full.rs");
 }
+
+// The target can be readable while an unrelated FILE is still unable to
+// acquire the unique SYSTEM decision slot. No fallback or early release.
+#[test]
+#[ignore="three genuinely private filesystems; held reader, original offline then reattached"]
+fn a_move_waiting_for_its_source_keeps_unrelated_reads_but_not_new_writes_until_the_same_move_finishes(){
+    let f=Fixture::build(true,false);let r=f.cmd();
+    let x=z::create_empty(&f.sys,op(),f.to,"outside-move").unwrap();
+    z::save_first(&f.sys,op(),x.file,claim(b"outside"),Cursor::new(b"outside")).unwrap();
+    let head=z::commit_working(&f.sys,op(),x.file,1).unwrap();
+    let create=op();let save=op();let edit=z::SpanEdit::new(0,claim(b"X"),z::LengthPolicy::KeepOrGrow).unwrap();
+    let check=||->io::Result<()>{
+        let pending=f.receipt(r);assert_eq!(pending.status,MoveStatus::TargetReopenedSourcePending);
+        let list=z::list_initial_files(&f.sys,f.to)?;assert_eq!(list.pending_moves,[pending]);assert_eq!(list.files.len(),2);
+        assert!(list.files.iter().any(|a|a.file==r.id));assert!(list.files.contains(&x));
+        f.all_history();let mut actual=Vec::new();
+        assert_eq!(z::read_current_to(&f.sys,x.file,&mut actual)?.head,Some(head.clone()));assert_eq!(actual,b"outside");
+        assert!(z::create_empty(&f.sys,create,f.to,"wait-for-move").is_err());
+        assert!(z::save_interval(&f.sys,save,x.file,1,edit,Cursor::new(b"X")).is_err());
+        assert!(z::creation_receipt(&f.sys,create)?.is_none());assert!(z::interval_receipt(&f.sys,save)?.is_none());
+        assert!(!f.new.join("wait-for-move").exists());Ok(())
+    };
+    struct Inspect<F>{once:Option<F>,bytes:Vec<u8>}
+    impl<F:FnOnce()->io::Result<()>> Write for Inspect<F>{
+        fn write(&mut self,b:&[u8])->io::Result<usize>{if let Some(f)=self.once.take(){f()?;}self.bytes.extend_from_slice(b);Ok(b.len())}
+        fn flush(&mut self)->io::Result<()>{Ok(())}
+    }
+    let mut reader=Inspect{once:Some(||{assert!(f.call(r).is_err());check()}),bytes:Vec::new()};
+    z::read_node_to(&f.sys,r.id,f.first.node,&mut reader).unwrap();assert!(reader.once.is_none());assert_eq!(reader.bytes,BEFORE);
+    // Even after the old reader drops, offline A is not proof of retirement.
+    let offline=f.old.with_file_name("source-offline-during-cleanup");fs::rename(&f.old,&offline).unwrap();
+    assert!(f.call(r).is_err());check().unwrap();fs::rename(&offline,&f.old).unwrap();
+    let done=f.call(r).unwrap();assert_eq!(done.status,MoveStatus::CompleteCheckedNow);
+    assert_eq!(f.receipt(r).decision_sequence,done.decision_sequence);
+    assert!(z::list_initial_files(&f.sys,f.to).unwrap().pending_moves.is_empty());
+    let other=z::create_empty(&f.sys,create,f.to,"wait-for-move").unwrap();assert_ne!(other.file,x.file);
+    let saved=z::save_interval(&f.sys,save,x.file,1,edit,Cursor::new(b"X")).unwrap();assert_eq!(saved.base_node,head.node);
+    assert_eq!(z::creation_receipt(&f.sys,create).unwrap().unwrap().file,other);
+    assert_eq!(z::interval_receipt(&f.sys,save).unwrap().unwrap().published,Some(saved));
+    let mut actual=Vec::new();z::read_current_to(&f.sys,x.file,&mut actual).unwrap();assert_eq!(actual,b"Xutside");
+    f.all_history()
+}
