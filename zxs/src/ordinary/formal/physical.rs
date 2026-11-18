@@ -19,36 +19,43 @@ impl Kind{
         b.push(match self{Self::Node=>1,Self::Raw=>2});n.put(&mut b);crate::hash::digest(&b)
     }
 }
-fn check_header(file:&File,o:&Original)->io::Result<()>{
+fn check_header(file:&File,o:&Original)->io::Result<Vec<u8>>{
     let wanted=o.node_header();let mut actual=vec![0;wanted.len()];stream::read_at(file,&mut actual,0)?;
-    if wanted!=actual{return Err(invalid("local FILE node/branch/version/source or creation-time name differs"));}Ok(())
+    if wanted!=actual{return Err(invalid("local FILE node/branch/version/source or creation-time name differs"));}Ok(actual)
 }
-fn visit(raw:&File,index:&File,o:&Original,check:impl FnMut()->io::Result<()>,mut out:impl Write)->io::Result<()>{
-    check_header(index,o)?;let start=o.node_header().len() as u64;
+fn visit(raw:&File,index:&File,o:&Original,check:impl FnMut()->io::Result<()>,mut out:impl Write)->io::Result<[u8;32]>{
+    let actual_header=check_header(index,o)?;let start=actual_header.len() as u64;
+    let mut exact_index=crate::hash::Sha256::new();exact_index.update(&actual_header)?;
     content::visit(o.content,o.chain,|i,bytes,next|{
-        stream::read_at(raw,bytes,i*BLOCK)?;stream::read_at(index,next,start+32*i)
-    },check,|_,part,_|out.write_all(part))
+        stream::read_at(raw,bytes,i*BLOCK)?;stream::read_at(index,next,start+32*i)?;exact_index.update(next)
+    },check,|_,part,_|out.write_all(part))?;
+    Ok(exact_index.finish())
 }
 fn named(dir:&HeldDir,o:&Original,k:Kind)->io::Result<Option<PinnedRegular>>{
     let Some(pin)=dir.pin_stream(&k.name(o),k.size(o)?)? else{return Ok(None)};
     if matches!(k,Kind::Node){check_header(&pin.file,o)?;}Ok(Some(pin))
 }
-pub(in crate::ordinary) struct HistoryBody{node:PinnedRegular,raw:PinnedRegular,original:Original}
+pub(in crate::ordinary) struct HistoryBody{pub(super) node:PinnedRegular,pub(super) raw:PinnedRegular,pub(super) original:Original,pub(super) index_digest:[u8;32]}
 impl HistoryBody{
-    fn facts(&self)->Materials{Materials{node:NativeObject::stamp(&self.node.stamp),raw:NativeObject::stamp(&self.raw.stamp)}}
+    fn facts(&self)->Materials{Materials{node:NativeObject::stamp(&self.node.stamp),raw:NativeObject::stamp(&self.raw.stamp),index_digest:self.index_digest}}
     pub(in crate::ordinary) fn current(dir:&HeldDir,f:&Commit)->io::Result<Self>{
         let (node,raw)=(named(dir,&f.original,Kind::Node)?.ok_or_else(||invalid("original local node unavailable"))?,
             named(dir,&f.original,Kind::Raw)?.ok_or_else(||invalid("original independent FULL unavailable"))?);
-        let b=Self{node,raw,original:f.original.clone()};
-        if b.facts()!=f.materials{return Err(invalid("original formal material replaced"));}
-        b.require(dir)?;Ok(b)
+        if NativeObject::stamp(&node.stamp)!=f.materials.node||NativeObject::stamp(&raw.stamp)!=f.materials.raw{
+            return Err(invalid("original formal material replaced"));
+        }
+        // A read handle carries the expected digest; opening the header is
+        // not evidence that its index was read. Only a fresh Verified object
+        // below can issue preparation feedback to the original writer.
+        let b=Self{node,raw,original:f.original.clone(),index_digest:f.materials.index_digest};b.require(dir)?;Ok(b)
     }
-    fn unchanged(&self)->io::Result<()>{self.raw.unchanged()?;self.node.unchanged()}
+    pub(super) fn unchanged(&self)->io::Result<()>{self.raw.unchanged()?;self.node.unchanged()}
     fn require(&self,dir:&HeldDir)->io::Result<()>{
         self.raw.named(dir,&self.original.body_name())?;self.node.named(dir,&self.original.node_name())
     }
     pub(in crate::ordinary) fn write_to(&self,out:impl Write)->io::Result<()>{
-        visit(&self.raw.file,&self.node.file,&self.original,||self.unchanged(),out)
+        let exact=visit(&self.raw.file,&self.node.file,&self.original,||self.unchanged(),out)?;
+        if exact!=self.index_digest{return Err(invalid("complete formal node index differs from original publication"));}Ok(())
     }
 }
 struct Before{node:Option<PinnedRegular>,raw:Option<PinnedRegular>}
@@ -98,7 +105,7 @@ impl Part{
     }
 }
 pub(super) struct Input{dir:HeldDir,pub original:Original,work:Option<Working>,node:Part,raw:Part}
-pub(super) struct Verified{input:Input,node:fs::OriginalStamp,raw:fs::OriginalStamp}
+pub(super) struct Verified{input:Input,node:fs::OriginalStamp,raw:fs::OriginalStamp,index_digest:[u8;32]}
 impl Input{
     pub(super) fn open(dir:HeldDir,o:Original,work:Option<Working>,a:Option<&FormalAllocation>,decided:Option<&Commit>)->io::Result<Self>{
         dir.exclusive()?;
@@ -130,9 +137,9 @@ impl Input{
         self.raw.file().sync_all()?;self.node.file().sync_all()?;
         let raw=self.raw.stamp()?;let node=self.node.stamp()?;
         if raw.stat.size()!=Kind::Raw.size(o)?||node.stat.size()!=Kind::Node.size(o)?{return Err(invalid("prepared FULL or local index length differs"));}
-        visit(self.raw.file(),self.node.file(),o,||Ok(()),io::sink())?;
+        let index_digest=visit(self.raw.file(),self.node.file(),o,||Ok(()),io::sink())?;
         if self.raw.stamp()?!=raw||self.node.stamp()?!=node{return Err(invalid("prepared FULL or node changed during physical verification"));}
-        Ok(Verified{input:self,raw,node})
+        Ok(Verified{input:self,raw,node,index_digest})
     }
 }
 impl Verified{
@@ -144,15 +151,15 @@ impl Verified{
         if let Some(ref s)=self.input.work{s.require(dir)?;}
         Ok(())
     }
-    pub(super) fn install(&self,dir:&HeldDir,a:&FormalAllocation,after_node:impl FnOnce()->io::Result<()>)->io::Result<HistoryBody>{
+    pub(super) fn install(&self,dir:&HeldDir,a:&FormalAllocation,after_node:impl FnOnce()->io::Result<()>)->io::Result<VerifiedBody>{
         self.source_current(dir,&a.original)?;
         self.input.node.place(dir,Kind::Node,a,&self.node)?;after_node()?;self.input.raw.place(dir,Kind::Raw,a,&self.raw)?;
         let actual=Before::read(dir,Some(a),&a.original)?;
         let body=HistoryBody{node:actual.node.ok_or_else(||invalid("formal node missing after preparation"))?,
-            raw:actual.raw.ok_or_else(||invalid("formal FULL missing after preparation"))?,original:a.original.clone()};
+            raw:actual.raw.ok_or_else(||invalid("formal FULL missing after preparation"))?,original:a.original.clone(),index_digest:self.index_digest};
         let actual=body.facts();
         if actual.node!=NativeObject::stamp(&self.node)||actual.raw!=NativeObject::stamp(&self.raw){return Err(invalid("different formal operands installed"));}
-        body.require(dir)?;dir.file.sync_all()?;Ok(body)
+        body.require(dir)?;dir.file.sync_all()?;Ok(VerifiedBody(body))
     }
     pub(super) fn retire(self,dir:&HeldDir,decision:&Commit,after_unlink:impl FnOnce()->io::Result<()>)->io::Result<()>{
         self.source_current(dir,&decision.original)?;
@@ -165,6 +172,7 @@ impl Verified{
         HistoryBody::current(dir,decision)?.require(dir)
     }
 }
-impl HistoryBody{
-    pub(super) fn feedback(&self,dir:&HeldDir)->io::Result<Materials>{self.require(dir)?;dir.file.sync_all()?;Ok(self.facts())}
+pub(super) struct VerifiedBody(HistoryBody);
+impl VerifiedBody{
+    pub(super) fn feedback(&self,dir:&HeldDir)->io::Result<Materials>{self.0.require(dir)?;dir.file.sync_all()?;Ok(self.0.facts())}
 }

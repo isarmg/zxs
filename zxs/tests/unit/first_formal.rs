@@ -131,3 +131,43 @@ fn same_bytes_on_a_different_inode_cannot_replace_raw_node_or_authorize_old_work
         else{assert!(result.is_err());assert!(hist.is_empty());}
     }
 }
+
+#[test]
+#[ignore="two expressly supplied private native test filesystems"]
+fn small_history_range_authenticates_the_actual_index_and_reads_only_intersecting_raw_blocks(){
+    let n=DRAFT_CHUNK;let mut original=vec![0x31;2*n+37];original[n..2*n].fill(0x62);original[2*n..].fill(0xc3);
+    let t=Fixture::new(&original);let f=commit_first(&t.system,OperationId::new().unwrap(),t.file.file,1).unwrap();let id=t.file.file;
+    let index=t.graph(&f);let index_bytes=osfs::read(&index).unwrap();
+    let actual=crate::hash::digest(&index_bytes).unwrap();
+    {let (_,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();assert_eq!(s.node(id,f.node).unwrap().materials.index_digest,actual);}
+    let range=|off:u64,len:u64,out:&mut Vec<u8>|read_node_range_to(&t.system,id,f.node,off,len,out);
+    let mut out=Vec::new();assert_eq!(range((n-3) as u64,8,&mut out).unwrap(),f);assert_eq!(out,&original[n-3..n+5]);
+    out.clear();range(original.len() as u64,0,&mut out).unwrap();assert!(out.is_empty());
+    assert!(range(original.len() as u64,1,&mut out).is_err());assert!(range(u64::MAX,2,&mut out).is_err());assert!(out.is_empty());
+    let raw=t.body(&f);let uh=osfs::OpenOptions::new().write(true).open(&raw).unwrap();
+    uh.write_all_at(&[0xfe],1).unwrap();uh.sync_all().unwrap();drop(uh);
+    // A damaged unrelated leading body block cannot be the source of our
+    // late anchor. A whole-body sequential read correctly rejects that block.
+    assert!(read_node_to(&t.system,id,f.node,io::sink()).is_err());
+    range((2*n+6) as u64,4,&mut out).unwrap();assert_eq!(out,&original[2*n+6..2*n+10]);out.clear();
+    let ih=osfs::OpenOptions::new().write(true).open(&index).unwrap();
+    // Alter a link outside the request, keeping the original inode and length.
+    let earlier=index_bytes.len()-3*32+2;ih.write_all_at(&[index_bytes[earlier]^1],earlier as u64).unwrap();ih.sync_all().unwrap();
+    assert!(range((2*n+6) as u64,4,&mut out).is_err());assert!(out.is_empty());
+    ih.write_all_at(&[index_bytes[earlier]],earlier as u64).unwrap();ih.sync_all().unwrap();drop(ih);
+    let uh=osfs::OpenOptions::new().write(true).open(&raw).unwrap();uh.write_all_at(&[0],(2*n+29) as u64).unwrap();uh.sync_all().unwrap();
+    // Even corruption *outside* the four requested bytes but inside their
+    // selected physical block must be observed before any of it is released.
+    assert!(range((2*n+6) as u64,4,&mut out).is_err());assert!(out.is_empty());
+}
+
+#[test]
+#[ignore="two expressly supplied private native test filesystems"]
+fn a_zero_byte_formal_node_allows_only_the_empty_range_and_still_checks_its_real_index(){
+    let t=Fixture::new(b"");let f=commit_first(&t.system,OperationId::new().unwrap(),t.file.file,1).unwrap();let mut out=Vec::new();
+    assert_eq!(read_node_range_to(&t.system,f.file,f.node,0,0,&mut out).unwrap(),f);
+    assert!(read_node_range_to(&t.system,f.file,f.node,1,0,&mut out).is_err());assert!(out.is_empty());
+    let index=t.graph(&f);let b=osfs::read(&index).unwrap();osfs::rename(&index,t.home.0.join("different-born-node")).unwrap();
+    osfs::write(&index,&b).unwrap();osfs::set_permissions(&index,osfs::Permissions::from_mode(0o600)).unwrap();
+    assert!(read_node_range_to(&t.system,f.file,f.node,0,0,&mut out).is_err());assert!(out.is_empty());
+}

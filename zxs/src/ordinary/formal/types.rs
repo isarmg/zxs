@@ -61,7 +61,7 @@ impl Original{
     }
 }
 #[derive(Clone,Debug,Eq,PartialEq)]
-pub(in crate::ordinary) struct Materials{pub node:NativeObject,pub raw:NativeObject}
+pub(in crate::ordinary) struct Materials{pub node:NativeObject,pub raw:NativeObject,pub index_digest:[u8;32]}
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct Commit{
     pub seq:u64,pub previous:[u8;32],pub request:[u8;32],pub digest:[u8;32],pub bytes:Vec<u8>,
@@ -70,14 +70,14 @@ pub(in crate::ordinary) struct Commit{
 impl Commit{
     pub fn new(pool:PoolId,seq:u64,previous:[u8;32],original:Original,allocation:[u8;32],materials:Materials)->io::Result<Self>{
         let request=request(pool,original.uid,original.op,original.file,1)?;let mut body=Vec::new();
-        original.put(&mut body);body.extend_from_slice(&allocation);materials.node.put(&mut body);materials.raw.put(&mut body);
+        original.put(&mut body);body.extend_from_slice(&allocation);materials.node.put(&mut body);materials.raw.put(&mut body);body.extend_from_slice(&materials.index_digest);
         let (bytes,digest)=encode(pool,seq,previous,3,request,&body)?;
         Ok(Self{seq,previous,request,digest,bytes,original,allocation,materials})
     }
     pub fn from_envelope(pool:PoolId,bytes:&[u8],e:Envelope<'_>)->io::Result<Self>{
         if e.kind!=3{return Err(invalid("not an original explicit formal commit"));}
         let mut r=In(e.body);let original=Original::get(&mut r)?;let allocation=r.fixed()?;
-        let materials=Materials{node:NativeObject::get(&mut r)?,raw:NativeObject::get(&mut r)?};r.end()?;
+        let materials=Materials{node:NativeObject::get(&mut r)?,raw:NativeObject::get(&mut r)?,index_digest:r.fixed()?};r.end()?;
         if request(pool,original.uid,original.op,original.file,1)?!=e.request{return Err(invalid("different original explicit commit request"));}
         Ok(Self{seq:e.seq,previous:e.previous,request:e.request,digest:e.digest,bytes:bytes.to_vec(),original,allocation,materials})
     }

@@ -4,6 +4,7 @@
 pub(super) mod types;
 pub(super) mod allocation;
 pub(super) mod physical;
+mod indexed;
 use super::{allocation as ordinary_allocation,draft::{material::Reader,types::SaveFrame},journal::{self,Decision,Journal},
     material as container,wire::Frame,Cut,CreationStatus,publish_sealed};
 use crate::{FileId,NodeId,OperationId,fs::{self,HeldDir,invalid},pool::lease::{Access,FileVolume,LocalPool}};
@@ -59,17 +60,23 @@ pub(in crate::ordinary) fn directory(v:&FileVolume<'_>,s:&Journal,c:&Frame,w:&Sa
     }
     Ok(dir)
 }
-pub fn read_node_to(system:&Path,file:FileId,node:NodeId,mut out:impl Write)->io::Result<FormalNode>{
-    let (receipt,body)={
+fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<(FormalNode,HistoryBody)>{
         let (p,_,s)=LocalPool::with_snapshot(system,Access::Read)?;
         let f=s.node(file,node).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such published node in this FILE"))?;
         let c=s.file(file).ok_or_else(||invalid("formal node lacks original FILE"))?;
         let w=s.saved(file).ok_or_else(||invalid("formal node lacks its original saved-revision decision"))?;
         let v=p.ordinary(c.create.volume)?;let dir=directory(&v,&s,c,w)?;
         let body=HistoryBody::current(&dir,f)?;v.root.file.sync_all()?;v.require_current()?;
-        (f.receipt(),body)
-    };
+        Ok((f.receipt(),body))
+}
+pub fn read_node_to(system:&Path,file:FileId,node:NodeId,mut out:impl Write)->io::Result<FormalNode>{
+    let (receipt,body)=open_node(system,file,node)?;
     body.write_to(&mut out)?;out.flush()?;Ok(receipt)
+}
+/// Strict half-open [offset,offset+length) on an immutable original FULL.
+pub fn read_node_range_to(system:&Path,file:FileId,node:NodeId,offset:u64,length:u64,mut out:impl Write)->io::Result<FormalNode>{
+    let (receipt,body)=open_node(system,file,node)?;
+    body.write_range(offset,length,&mut out)?;out.flush()?;Ok(receipt)
 }
 enum Source{Done(FormalNode),Input(Input)}
 fn source(system:&Path,op:OperationId,file:FileId,revision:u64)->io::Result<Source>{

@@ -3,7 +3,7 @@
 mod wire;
 mod content;
 mod formal;
-pub use formal::{commit_first,first_commit_receipt,read_node_to,FormalObservation};
+pub use formal::{commit_first,first_commit_receipt,read_node_to,read_node_range_to,FormalObservation};
 pub use formal::types::FormalNode;
 mod draft;
 pub use draft::{save_first,first_save_receipt,read_current_to,current_info,CurrentFile,FirstSaveObservation};
