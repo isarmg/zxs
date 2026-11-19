@@ -8,6 +8,7 @@ import sys
 import zipfile
 from .archive import read_archive
 from .browser import ArchiveBrowser, MAX_PAGE
+from .capacity import describe
 from .model import Rejected
 from . import worktree as w
 from . import lifecycle, refs, opening
@@ -103,8 +104,7 @@ def main(args=None):
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (OSError, Rejected, sqlite3.Error, zipfile.BadZipFile, UnicodeError, ValueError) as err:
-        print(f"zip-workspace: {err}", file=sys.stderr)
-        for note in getattr(err, "__notes__", ()): print(note, file=sys.stderr)
+        print("zip-workspace: " + describe(err), file=sys.stderr)
         return 1
 
 if __name__ == "__main__": raise SystemExit(main())

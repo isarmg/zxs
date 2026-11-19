@@ -1,5 +1,6 @@
 """Native Linux fixtures for explicit commit from one live desktop checkout, not a registry."""
 from dataclasses import replace
+import errno
 import hashlib
 from importlib.util import find_spec
 import os
@@ -363,6 +364,35 @@ class ExplicitDesktopCommit(unittest.TestCase):
                 controls.inspect()
                 self.assertIn("历史回执",controls.output.text())
             self.assertEqual(len(tuple(self.store.iterdir())),2)
+        finally: win.close()
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_window_shows_the_actual_store_capacity_error_and_queries_instead_of_retrying(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import commit_controls
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        def immediate(_title, call, result, *, failed=None):
+            try: value = call()
+            except Exception as error:
+                if failed is None: raise
+                failed(error)
+            else: result(value)
+            return object()
+        try:
+            controls = win.archive.checkout.commits; controls.set_session(self.live)
+            with patch.object(win, "job", side_effect=immediate), patch.object(controls, "refresh_status"), \
+                 patch.object(commit_controls, "confirm", return_value=True), \
+                 patch.object(publish, "_new_upload", side_effect=OSError(errno.ENOSPC, "injected")) as upload:
+                controls.begin()
+                detail = controls.output.text()
+                self.assertIn("STORE " + str(self.store), detail)
+                self.assertIn("ENOSPC", detail); self.assertIn(controls.last.operation, detail)
+                self.assertEqual(detail.count("容量诊断："), 1)
+                self.assertTrue(controls.query.isEnabled()); controls.inspect()
+                self.assertEqual(upload.call_count, 1)
+                self.assertEqual(controls.last.result()[0], "pending")
         finally: win.close()
 
     @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")

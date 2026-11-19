@@ -5,6 +5,7 @@ from pathlib import Path
 import stat
 import sys
 
+from .capacity import close_output_fd, note, writing
 from .document import native_identity
 from .model import CHUNK, MAX_TOTAL, Rejected
 from .private_candidates import CandidateDirectory, held_candidates
@@ -39,7 +40,7 @@ def local_mount(fd):
 class Capture(CandidateDirectory):
     def __init__(self, area, body):
         super().__init__(area.path, area.parent, area.identity)
-        self.body = body
+        self.body, self.operation = body, None
         self.length, self.spans = 0, {}
 
     def append(self, block):
@@ -48,6 +49,9 @@ class Capture(CandidateDirectory):
         while view:
             try: count = os.write(self.body,view)
             except InterruptedError: continue
+            except OSError as error:
+                note(error,"STATE",self.path,"写入匿名冻结正文；匿名体在最后一个句柄关闭后释放",self.operation,self.parent)
+                raise
             if not 0<count<=len(view): raise OSError("incomplete private freeze write")
             self.length += count
             view = view[count:]
@@ -74,7 +78,7 @@ class Capture(CandidateDirectory):
 
 
 @contextmanager
-def anonymous_capture(state, *, held=None):
+def anonymous_capture(state, *, held=None, operation=None):
     if not sys.platform.startswith("linux") or not getattr(os,"O_TMPFILE",0) or not hasattr(os,"pread"):
         raise Rejected("fresh commit needs native anonymous file support; no named scratch fallback")
     with (held_candidates(state) if held is None else nullcontext(held)) as area:
@@ -82,7 +86,9 @@ def anonymous_capture(state, *, held=None):
         area.check_state()
         parent, ident = area.parent, area.identity
         selected_mount = local_mount(parent)
-        body = os.open(".", os.O_TMPFILE|os.O_EXCL|os.O_RDWR|os.O_CLOEXEC, 0o600, dir_fd=parent)
+        with writing("STATE",area.path,"取得匿名冻结文件，尚未建立本次待决",operation,parent):
+            body = os.open(".", os.O_TMPFILE|os.O_EXCL|os.O_RDWR|os.O_CLOEXEC, 0o600, dir_fd=parent)
+        capture = None
         try:
             b = os.fstat(body)
             if (native_identity(b,stat.S_IFREG)[0]!=ident[0] or b.st_nlink!=0 or b.st_size!=0 or
@@ -91,4 +97,5 @@ def anonymous_capture(state, *, held=None):
             capture = Capture(area,body)
             capture.check_state()
             yield capture
-        finally: os.close(body)
+        finally:
+            close_output_fd(body, "STATE", area.path, capture.operation if capture else operation, parent)

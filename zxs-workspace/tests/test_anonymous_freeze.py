@@ -1,5 +1,6 @@
 """Fresh Linux freeze capability, actual source/extent/candidate and failure boundaries."""
 from contextlib import ExitStack
+import errno
 from hashlib import sha256
 from pathlib import Path
 import os
@@ -10,6 +11,7 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace import freeze, private_freeze as private, worktree
+from zipworkspace.capacity import describe
 from zipworkspace.model import Commit, Manifest, Rejected
 
 
@@ -144,3 +146,29 @@ class AnonymousFreeze(unittest.TestCase):
             os.ftruncate(capture.body,3)
             with self.assertRaises(Rejected): capture.validate(tree)
             with self.assertRaises(Rejected): list(capture.blocks("right",3))
+
+    def test_anonymous_space_failure_identifies_state_and_does_not_invent_an_operation(self):
+        with ExitStack() as stack:
+            capture = self.admitted(stack)
+            failure = OSError(errno.ENOSPC, "injected on anonymous STATE")
+            with patch.object(os, "write", side_effect=failure), self.assertRaises(OSError) as actual:
+                capture.append(b"private bytes")
+            self.assertIs(actual.exception, failure)
+            self.assertIn("STATE " + str(self.state), describe(failure))
+            self.assertIn("匿名冻结正文", describe(failure))
+            self.assertNotIn("；原操作号 ", describe(failure))
+            self.assertEqual(capture.length, 0)
+        self.assertEqual(tuple(self.state.iterdir()), ())
+
+    def test_partial_named_candidate_capacity_does_not_delete_or_call_it_pending(self):
+        with ExitStack() as stack:
+            capture = self.admitted(stack); operation = "8"*32
+            with self.assertRaises(OSError) as err:
+                with capture.candidate(operation) as (_, fd, stream):
+                    stream.write(b"partial"); stream.flush()
+                    raise OSError(errno.ENOSPC, "injected during candidate creation")
+            candidate = self.state / (operation + ".zxs")
+            self.assertEqual(candidate.read_bytes(), b"partial")
+            detail = describe(err.exception)
+            self.assertIn("STATE " + str(candidate), detail); self.assertIn(operation, detail)
+            self.assertIn("尚未登记", detail)

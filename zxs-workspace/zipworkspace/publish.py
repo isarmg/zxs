@@ -9,6 +9,7 @@ from pathlib import Path
 import stat
 import sys
 from .archive import read_managed_document, stamp
+from .capacity import buffered_output, close_output_fd, note, writing
 from .document import archive_sha as hash_document, named_document, native_identity
 from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected, new_id
 
@@ -148,8 +149,9 @@ class StoreReadback:
             if original is None: return False
             fd, _ = original
             # Only the writer's acknowledgement supplies these real durability barriers.
-            os.fsync(fd)
-            os.fsync(self.fd)
+            with writing("STORE",self.path,"同步正式归档及其目录；文件可能已经可见",marker.operation,self.fd):
+                os.fsync(fd)
+                os.fsync(self.fd)
         return True
 
 
@@ -221,16 +223,24 @@ def _publish(local, scope, marker, archive_sha, *, source=None, confirm_only_fd=
                 if hash_document(src) != archive_sha or read_managed_document(src, display_name=marker.filename)[0] != marker:
                     raise Rejected("saved local candidate does not match the original operation")
                 size = stamp(src)[2]
-                fd, stage = _new_upload(scope)
-                writer.callback(os.close, fd)
-                out = writer.enter_context(os.fdopen(fd, "wb", closefd=False))
+                with writing("STORE",store,"独占建立上传暂存 .partial",marker.operation,scope.fd):
+                    fd, stage = _new_upload(scope)
+                writer.callback(close_output_fd, fd, "STORE", store/stage, marker.operation, scope.fd)
+                out = writer.enter_context(buffered_output(os.fdopen(fd, "wb", closefd=False),
+                                                          "STORE", store/stage, marker.operation, scope.fd))
                 src.seek(0)
                 while size:
                     block = src.read(min(size, CHUNK))
-                    if not block or out.write(block) != len(block): raise Rejected("incomplete upload")
+                    if not block: raise Rejected("incomplete upload")
+                    try: count = out.write(block)
+                    except OSError as err:
+                        note(err,"STORE",store/stage,"写入上传暂存内容",marker.operation,scope.fd)
+                        raise
+                    if count != len(block): raise Rejected("incomplete upload")
                     size -= len(block)
                 if src.read(1): raise Rejected("original candidate grew during upload")
-                out.flush(); os.fsync(fd)
+                with writing("STORE",store/stage,"刷新并同步上传暂存",marker.operation,scope.fd):
+                    out.flush(); os.fsync(fd)
                 heldfd = reader.enter_context(_pin_upload(scope, stage, out))
         with os.fdopen(heldfd, "rb", closefd=False) as uploaded:
             observed = stamp(uploaded)
@@ -239,7 +249,8 @@ def _publish(local, scope, marker, archive_sha, *, source=None, confirm_only_fd=
                     or stamp(uploaded) != observed):
                 raise Rejected("temporary upload does not reproduce the frozen snapshot")
         scope.check_store()
-        os.fsync(scope.fd)
+        with writing("STORE",store,"同步已写暂存的目录项",marker.operation,scope.fd):
+            os.fsync(scope.fd)
         scope.check_store()
         named = os.stat(stage, dir_fd=scope.fd, follow_symlinks=False)
         if (native_identity(named, stat.S_IFREG) + (named.st_size, named.st_mtime_ns, named.st_ctime_ns)
@@ -249,6 +260,7 @@ def _publish(local, scope, marker, archive_sha, *, source=None, confirm_only_fd=
             # The cooperating STORE must not move or modify another writer's temporary entry.
             rename_new_at(scope.fd, stage, target.name)
         except OSError as err:
+            note(err,"STORE",target,"不可覆盖发布；正式槽是否已出现须按原结果核对",marker.operation,scope.fd)
             # A lost reply is not evidence of failure. Durable logical identity
             # is the original operation/marker and the exact entire ZIP digest.
             if scope.confirm(marker, archive_sha): return target

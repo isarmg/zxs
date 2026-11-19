@@ -8,6 +8,7 @@ import sys
 from .. import opening, private_stage
 from ..archive import stamp
 from ..comparison import Folder
+from ..capacity import describe
 from ..document import named_document, native_identity
 from ..model import Rejected, member_name, new_id
 from ..private_candidates import generation, held_candidates
@@ -205,8 +206,7 @@ class CheckoutChoice:
                                    "如需继续，再使用 resume-checkout STATE OPERATION，限下列原 STATE 和操作号。")
             except (OSError, ValueError, sqlite3.Error):
                 pass  # Unknown is not absence. Never select another database or issue a retry.
-        note = "\n".join(getattr(error, "__notes__", ()))
-        return f"{error}\n{note}\n{outcome}\nSTATE：{self.state}\n操作号：{self.operation}"
+        return f"{describe(error)}\n{outcome}\nSTATE：{self.state}\n操作号：{self.operation}"
 
     def run(self):
         if self.closed or self.used or self.state is None: raise Rejected("本次签出决定不能重复提交")

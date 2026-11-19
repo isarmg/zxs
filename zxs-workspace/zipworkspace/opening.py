@@ -8,6 +8,7 @@ import sqlite3
 import stat
 import tempfile
 from .archive import read_archive, read_managed_document, stamp
+from .capacity import buffered_output, close_output_fd, note, writing
 from .document import archive_sha, named_document
 from .freeze import observe_held, observe_tree
 from . import private_stage as staging
@@ -36,40 +37,48 @@ def _parent(path):
 
 
 @contextmanager
-def _save_original(inp, size, area, expected):
+def _save_original(inp, size, area, expected, operation):
     """Copy to one exclusive leaf in the already selected private seed directory."""
     name = "original.zxs"
     area.check_state()
-    fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-                 0o600, dir_fd=area.parent)
+    with writing("STATE", area.path/name, "独占建立原始包副本", operation, area.parent):
+        fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600, dir_fd=area.parent)
     try:
-        with os.fdopen(fd, "w+b", closefd=False) as out:
+        with buffered_output(os.fdopen(fd, "w+b", closefd=False), "STATE", area.path/name,
+                             operation, area.parent) as out:
             if area.check_file(name, fd)[2] != 0: raise Rejected("checkout copy is not new")
             left, h = size, hashlib.sha256()
             while left:
                 data = inp.read(min(CHUNK, left))
-                if not data or out.write(data) != len(data):
-                    raise Rejected("incomplete copy of the selected checkout source")
+                if not data: raise Rejected("incomplete copy of the selected checkout source")
+                try: count = out.write(data)
+                except OSError as error:
+                    note(error, "STATE", area.path/name, "写入原始包副本", operation, area.parent)
+                    raise
+                if count != len(data): raise Rejected("incomplete copy of the selected checkout source")
                 h.update(data); left -= len(data)
             if inp.read(1): raise Rejected("selected source grew")
             digest = h.hexdigest()
             if expected is not None and digest != expected.sha256: raise Rejected("selected original was replaced")
-            out.flush(); os.fsync(fd)
+            with writing("STATE", area.path/name, "刷新并同步原始包副本", operation, area.parent):
+                out.flush(); os.fsync(fd)
             observed = area.check_file(name, fd)
             if observed[2] != size: raise Rejected("checkout copy length changed")
             marker = read_managed_document(out, display_name=name)[0]
             if archive_sha(out) != digest or expected is not None and marker != expected.marker:
                 raise Rejected("checkout copy does not represent the selected original")
             area.check_file(name, fd, observed)
-            os.fsync(area.parent)
+            with writing("STATE", area.path, "同步原始包副本的目录项", operation, area.parent):
+                os.fsync(area.parent)
             area.check_file(name, fd, observed)
         yield marker, digest, (fd, observed)
     finally:
-        os.close(fd)
+        close_output_fd(fd, "STATE", area.path/name, operation, area.parent)
 
 
 @contextmanager
-def _source(source, seed_parent, expected, *, exclusive=None, mount=None, selected=None):
+def _source(source, seed_parent, expected, *, exclusive=None, mount=None, selected=None, operation=None):
     source = Path(source).absolute()  # A different spelling isn't the selected catalog slot.
     if source.suffix.lower() != ".zxs": raise Rejected("repository checkout requires the .zxs extension")
     seed = None
@@ -85,12 +94,14 @@ def _source(source, seed_parent, expected, *, exclusive=None, mount=None, select
                 if observed[2] > MAX_TOTAL + 2 * MAX_CD + (1 << 20):
                     raise Rejected("checkout source is outside the archive size budget")
                 if exclusive is None:
-                    seed = Path(tempfile.mkdtemp(prefix=".zip-opening-", dir=seed_parent))
+                    with writing("STATE", seed_parent, "建立私有签出准备目录", operation):
+                        seed = Path(tempfile.mkdtemp(prefix=".zip-opening-", dir=seed_parent))
                     area = held.enter_context(held_candidates(seed))
                 else:
                     seed = exclusive.path / (".zip-opening-" + new_id())
-                    area = held.enter_context(staging.new_child(exclusive, seed.name, mount))
-                marker, digest, copy = held.enter_context(_save_original(inp, observed[2], area, expected))
+                    with writing("STATE", seed_parent, "建立私有签出准备目录", operation, exclusive.parent):
+                        area = held.enter_context(staging.new_child(exclusive, seed.name, mount))
+                marker, digest, copy = held.enter_context(_save_original(inp, observed[2], area, expected, operation))
                 if selected is not None:
                     selected.check_source()
                     if marker != selected.snapshot.browser.commit:
@@ -104,11 +115,18 @@ def _source(source, seed_parent, expected, *, exclusive=None, mount=None, select
 
 
 @contextmanager
-def _record(state, *, write, selected=None):
+def _record(state, *, write, selected=None, operation=None):
     state = Path(state).absolute()
     if selected is not None: selected.check_registered(state)
     if state.is_symlink() or state.stat().st_mode & 0o077: raise Rejected("checkout state is not private")
-    con = sqlite3.connect((state/"opening.sqlite").as_uri()+("?mode=rw" if write else "?mode=ro"), uri=True, isolation_level=None)
+    db = state / "opening.sqlite"
+    def database_error(error):
+        if write:
+            note(error, "STATE", db, "登记签出决策或回执；目录可能已安装", operation,
+                 selected.publication[0] if selected is not None else None, database=True)
+    try: con = sqlite3.connect(db.as_uri()+("?mode=rw" if write else "?mode=ro"), uri=True, isolation_level=None)
+    except sqlite3.Error as error:
+        database_error(error); raise
     con.row_factory = sqlite3.Row
     try:
         if selected is not None: selected.check_registered(state)
@@ -126,7 +144,8 @@ def _record(state, *, write, selected=None):
         yield con,row,state
         if selected is not None: selected.check_registered(state)
         if write: con.commit()
-    except BaseException:
+    except BaseException as error:
+        database_error(error)
         if write: con.rollback()
         raise
     finally: con.close()
@@ -287,17 +306,21 @@ def begin(source, parent, stem, store, state, *, automatic, expected=None, priva
             store_root = held.enter_context(held_store(store))
             staging.separate_roots(base.parent, target, store_root, mount)
             if _parent(parent) != owner: raise Rejected("chosen target parent changed")
-        area, marker, sha, copy = held.enter_context(_source(source, state.parent, expected, exclusive=base, mount=mount, selected=selected))
+        area, marker, sha, copy = held.enter_context(_source(source, state.parent, expected, exclusive=base, mount=mount, selected=selected, operation=operation))
         fields = (operation, worktree, marker.encode(), sha, str(parent), owner[0], owner[1],
                   str(store), stem, int(automatic))
         if base is None:
-            _install_initial(area, copy, _initial_image(fields), state)
+            image = _initial_image(fields)  # In-memory SQL is not evidence about the STATE volume.
+            with writing("STATE", state, "写入、安装并同步首笔签出登记", operation, area.parent):
+                _install_initial(area, copy, image, state)
         else:
-            stage = held.enter_context(staging.materialize(area, copy, marker, mount))
+            with writing("STATE", area.path/staging.LEAF, "在原私处解包并同步完整工作树", operation, area.parent):
+                stage = held.enter_context(staging.materialize(area, copy, marker, mount))
             image = _initial_image(fields, prepared=(*stage.identity, *area.identity, base.identity[1]))
             if _parent(parent) != owner: raise Rejected("chosen target parent changed")
             staging.separate_roots(base.parent, target, store_root, mount)
-            _install_initial(area, copy, image, state, base=base, stage=stage, selected=selected)
+            with writing("STATE", state, "写入、安装并同步首笔签出登记", operation, base.parent):
+                _install_initial(area, copy, image, state, base=base, stage=stage, selected=selected)
     if selected is not None: return finish(state, operation, selected=selected)
     return finish(state,operation)
 
@@ -341,7 +364,7 @@ def _held_directory(name, expected, *, parent_fd=None):
 def finish(state, operation, *, selected=None):
     from .worktree import create_catalog, paths
     require_native_writer()
-    with _record(state, write=True, selected=selected) as (con,row,state):
+    with _record(state, write=True, selected=selected, operation=operation) as (con,row,state):
         parent, marker = _verify_record(row,operation)
         _private_origin(row)  # A damaged private record cannot fall through to the legacy extractor.
         dest = _target(row)
@@ -351,21 +374,25 @@ def finish(state, operation, *, selected=None):
         if row["stage"] is None:
             local = state/"original.zxs"
             if digest_file(local) != row["sha"]: raise Rejected("original checkout archive is unavailable")
-            stage = Path(tempfile.mkdtemp(prefix=".zip-checkout-",dir=parent))
+            with writing("工作目录父", parent, "建立原签出暂存目录", operation):
+                stage = Path(tempfile.mkdtemp(prefix=".zip-checkout-",dir=parent))
             held = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 m = os.fstat(held); sid = str(m.st_dev), str(m.st_ino), stat.S_IFDIR
+                # Legacy extraction reads original.zxs on STATE as well as writing a different
+                # filesystem. Do not attribute arbitrary archive-reader errors to the target.
                 represented,_ = read_archive(local,sink=stage)
                 if (represented != marker or digest_file(local) != row["sha"]
                         or observe_tree(stage).digest() != marker.tree or _parent(stage) != sid):
                     raise Rejected("private checkout stage is not the original verified directory")
-                sync_dir(parent)
+                with writing("工作目录父", parent, "同步原签出暂存目录项", operation, held):
+                    sync_dir(parent)
             finally: os.close(held)
             con.execute("UPDATE opening SET stage=?,stage_dev=?,stage_ino=? WHERE singleton=1", (stage.name,sid[0],sid[1]))
     # The original stage decision is durable before any visible rename.
     while True:
         with ExitStack() as held:
-            with _record(state, write=True, selected=selected) as (con, row, state):
+            with _record(state, write=True, selected=selected, operation=operation) as (con, row, state):
                 parent, marker = _verify_record(row, operation)
                 dest = _target(row)
                 paths(dest, Path(row["store"]), state)
@@ -452,7 +479,10 @@ def finish(state, operation, *, selected=None):
                 if private_id is not None:
                     staging.separate_roots(base.parent, pfd, current_store, mount)
                     # A visible STATE is not durable if its original outer dirsync failed.
-                    check_parent(); os.fsync(base.parent); check_parent()
+                    check_parent()
+                    with writing("STATE", state.parent, "复核原签出登记的父目录屏障", operation, base.parent):
+                        os.fsync(base.parent)
+                    check_parent()
 
                 def checked_root():
                     if pair(receipt_name) != (None, sid):
@@ -481,23 +511,35 @@ def finish(state, operation, *, selected=None):
                         except FileExistsError:
                             next_name()
                             continue
+                        except OSError as error:
+                            note(error, "工作目录父", parent, "不可覆盖安装工作目录；须核原签出结果", operation, pfd)
+                            raise
                 checked_root()
                 if private_id is not None: staging.separate_roots(base.parent, pfd, current_store, mount)
-                os.fsync(pfd)
+                with writing("工作目录父", parent, "同步工作目录的正式名称；改名可能已生效", operation, pfd):
+                    os.fsync(pfd)
                 checked_root()
                 if private_id is not None and not attached:
-                    os.fsync(source_fd)  # Also required if a previous cross-parent rename lost its reply.
+                    with writing("STATE", state, "同步原暂存所在目录；工作目录可能已出现", operation, source_fd):
+                        os.fsync(source_fd)  # Also required if the rename lost its reply.
                     checked_root()
                 if attached:
                     # A prior attempt may have installed the catalog name, then lost its STATE dirsync.
                     if catalog_name() != catalog_id: raise Rejected("installed checkout catalog changed")
-                    os.fsync(private.parent)
+                    with writing("STATE", state, "同步已安装的工作树登记", operation, private.parent):
+                        os.fsync(private.parent)
                     if catalog_name() != catalog_id: raise Rejected("installed checkout catalog changed")
                 else:
                     live = selected.new_session(row, child, private.parent, current_store.fd) if selected is not None else None
                     options = {"live": live} if live is not None else {}
-                    create_catalog(dest, Path(row["store"]), state, (marker, row["sha"]), row["worktree"],
-                                   checked_root=checked_root, **options)
+                    with writing("STATE", state, "创建并同步工作树登记；工作目录可能已安装", operation,
+                                 private.parent if private is not None else None):
+                        try:
+                            create_catalog(dest, Path(row["store"]), state, (marker, row["sha"]), row["worktree"],
+                                           checked_root=checked_root, **options)
+                        except sqlite3.Error as error:
+                            note(error, "STATE", state/"worktree.sqlite", "建立工作树登记", operation, database=True)
+                            raise
                     if _catalog_matches(state, row, dest, parent_fd=pfd) != dest:
                         raise Rejected("original directory absent after new catalog publication")
                 checked_root()

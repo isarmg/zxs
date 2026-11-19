@@ -7,6 +7,7 @@ import stat
 import zipfile
 
 from .archive import read_managed_document, stamp
+from .capacity import close_output_fd, note, writing
 from .document import archive_sha, native_identity
 from .model import CHUNK, Rejected, check_id
 
@@ -40,17 +41,19 @@ class CandidateDirectory:
         self.check_state()
         name = check_id(operation) + ".zxs"
         access = os.O_RDWR if editable else os.O_WRONLY
-        fd = os.open(name, os.O_CREAT | os.O_EXCL | access | os.O_NOFOLLOW | os.O_CLOEXEC,
-                     0o600, dir_fd=self.parent)
+        with writing("STATE",self.path/name,"独占建立私有命名候选，未据此受理",operation,self.parent):
+            fd = os.open(name, os.O_CREAT | os.O_EXCL | access | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         0o600, dir_fd=self.parent)
         try:
             with os.fdopen(fd, "w+b" if editable else "wb", closefd=False) as stream:
                 self.check_file(name, fd)
                 yield name, fd, stream
         except Exception as error:
+            note(error,"STATE",self.path/name,"制作或同步原私有命名候选；它可能保留且尚未登记",operation,self.parent)
             error.add_note(f"原私有候选可能残留于 {self.path / name}，也可能尚未登记。保留现场，不自动删除或重试。")
             raise
         finally:
-            os.close(fd)
+            close_output_fd(fd, "STATE", self.path/name, operation, self.parent)
 
     def verify_candidate(self, name, original, marker):
         observed = self.check_file(name, original)

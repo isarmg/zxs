@@ -1,6 +1,7 @@
 """One explicit, non-forking save for a live CLI checkout. A query never uploads."""
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
+from ..capacity import describe
 from .commit_choice import CommitChoice
 from .retry_choice import PendingRetry
 from .widgets import button, confirm, label
@@ -36,7 +37,7 @@ class CommitControls(QWidget):
     def discard(self, job):
         if self.last is job: self.last = None
         try: job.release()
-        except (OSError, ValueError) as error: self.owner.inform(str(error))
+        except (OSError, ValueError) as error: self.owner.inform(describe(error))
         finally:
             if self.running is job: self.running = None
             self.buttons()
@@ -54,11 +55,11 @@ class CommitControls(QWidget):
         if original is None or self.running is not None or self.blocked or self.owner.pending is not None: return
         try: job = CommitChoice(original)
         except Exception as err:
-            self.output.setText(str(err)); return
+            self.output.setText(describe(err)); return
         self.running = job; self.buttons()
 
         def refused(err):
-            if self.session is original: self.output.setText(str(err))
+            if self.session is original: self.output.setText(describe(err))
             self.discard(job)
 
         def after_submit(message, *, uncertain):
@@ -86,14 +87,14 @@ class CommitControls(QWidget):
                 def failed(error):
                     if not job.used:
                         refused(error); return
-                    after_submit(f"{error}\n尚不能从此次返回确定结果；只读查询本次原回执。", uncertain=True)
+                    after_submit(f"{describe(error)}\n尚不能从此次返回确定结果；只读查询本次原回执。", uncertain=True)
                 def done(result):
                     path, marker = result
                     after_submit(f"新快照已存入：{path}\n分支：{marker.branch} · 第 {marker.generation} 代\n原节点：{marker.operation}",
                                  uncertain=False)
                 self.submit(job, "正在冻结、核对并发布本次工作树…", job.run, done, failed)
             except Exception as err:
-                if job.used: after_submit(f"{err}\n结果待核。", uncertain=True)
+                if job.used: after_submit(f"{describe(err)}\n结果待核。", uncertain=True)
                 else: refused(err)
         self.submit(job, "正在只读核对原登记及 STORE 基线…", job.prepare, reviewed, refused)
 
@@ -109,7 +110,7 @@ class CommitControls(QWidget):
             self.buttons()
             self.output.setText(f"{text}\nSTATE：{job.live.state}\n操作号：{job.operation}")
         self.submit(job, "正在只读查询本次原操作…", job.result,
-                    lambda result: end(*result), lambda error: end("unknown", f"原结果未知：{error}。未发布或重试。"))
+                    lambda result: end(*result), lambda error: end("unknown", f"原结果未知：{describe(error)}。未发布或重试。"))
 
     def resume(self):
         original, live = self.last, self.session
@@ -117,7 +118,7 @@ class CommitControls(QWidget):
                 or not original.pending_seen or original.conflict): return
         try: attempt = PendingRetry(original)
         except Exception as err:
-            self.output.setText(str(err)); self.buttons(); return
+            self.output.setText(describe(err)); self.buttons(); return
         self.running = attempt; self.buttons()
 
         def finish_view(message, *, completed=False):
@@ -144,8 +145,8 @@ class CommitControls(QWidget):
                     finish_view("工作树已切换，未提交续作。"); return
                 self.submit(attempt, "正在处理这笔原冻结操作…", attempt.run,
                             lambda outcome: finish_view(f"已确认原操作的正式槽：{outcome[0]}",completed=True),
-                            lambda err: finish_view(f"{err}\n未自动重试，请只读查询原回执。"))
+                            lambda err: finish_view(f"{describe(err)}\n未自动重试，请只读查询原回执。"))
             except Exception as exc:
-                finish_view(f"{exc}\n请只读查询原回执。")
+                finish_view(f"{describe(exc)}\n请只读查询原回执。")
         self.submit(attempt, "正在只读核对原候选、分支基线和正式槽…", attempt.prepare, reviewed,
-                    lambda err: finish_view(f"不能同意续作：{err}。未上传或自动分叉。"))
+                    lambda err: finish_view(f"不能同意续作：{describe(err)}。未上传或自动分叉。"))

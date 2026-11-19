@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 from . import lifecycle
 from .archive import read_archive
+from .capacity import note
 from .freeze import frozen_tree, pack
 from .model import Commit, Rejected, check_id, new_id
 from .private_candidates import held_candidates
@@ -84,7 +85,7 @@ def create_catalog(work, store, state, base, instance_id, *, checked_root=None, 
 
 
 @contextmanager
-def locked(state, *, read_only=False, live=None):
+def locked(state, *, read_only=False, live=None, operation=None, phase="更新原工作树登记"):
     """Open the existing catalog with either a read snapshot or a reserved writer."""
     state = Path(state).absolute()
     db = state / "worktree.sqlite"
@@ -92,8 +93,12 @@ def locked(state, *, read_only=False, live=None):
     if not state.is_dir() or state.is_symlink() or (state.stat().st_mode & 0o077):
         raise Rejected("use the existing private worktree state directory")
     mode = "ro" if read_only else "rw"  # Neither may create a missing catalog.
-    con = sqlite3.connect(db.as_uri() + "?mode=" + mode,
-                          uri=True, isolation_level=None)
+    def database_error(exc):
+        if not read_only:
+            note(exc,"STATE",db,phase,operation,None if live is None else live.state_fd,database=True)
+    try: con = sqlite3.connect(db.as_uri() + "?mode=" + mode, uri=True, isolation_level=None)
+    except sqlite3.Error as error:
+        database_error(error); raise
     con.row_factory = sqlite3.Row
     try:
         if live is not None: live.check_catalog(db)
@@ -107,7 +112,8 @@ def locked(state, *, read_only=False, live=None):
         yield con, row, state
         if live is not None: live.check_catalog(db)
         con.commit()
-    except BaseException:
+    except BaseException as error:
+        database_error(error)
         con.rollback()
         raise
     finally: con.close()
@@ -132,7 +138,8 @@ def finish(state, operation, *, selected=None):
     if selected is not None and (operation != selected.operation or selected.closed
                                  or not selected.used or not selected.ready):
         raise Rejected("not the reviewed original operation")
-    with locked(state, live=live) as (con, row, state):
+    with locked(state, live=live, operation=operation,
+                phase="记原提交回执；正式归档可能已出现，不能按返回失败判断是否发布") as (con, row, state):
         if live is not None: live.check_instance(row, lifecycle.instance(con))
         done = con.execute("SELECT marker,digest FROM completed WHERE operation=?", (operation,)).fetchone()
         if done is not None:
@@ -177,7 +184,10 @@ def commit(state, *, fork=False, selected=None):
             raise Rejected("not the reviewed ordinary fresh commit")
         selected.check_base()
     # Unsupported STATE volumes refuse before SQLite can open/recover the catalog.
-    with anonymous_capture(state, held=None if selected is None else selected.area) as capture, locked(state, live=live) as (con, row, state):
+    proposal = selected.operation if selected is not None else None
+    with anonymous_capture(state, held=None if selected is None else selected.area, operation=proposal) as capture, \
+         locked(state, live=live, operation=lambda: capture.operation or proposal,
+                phase="登记原 pending；冻结候选可能已存在，不能据此认定已受理") as (con, row, state):
         capture.check_state()
         if row["pending"] is not None:
             raise Rejected("an original operation is pending; resume it rather than recapturing")
@@ -192,6 +202,7 @@ def commit(state, *, fork=False, selected=None):
             if (saved.repo, saved.branch, saved.generation, saved.operation) != (repo, branch, gen, row["parent"]) or digest_file(base_path) != row["base_sha"]:
                 raise Rejected("exact original branch base is not available in the selected store")
         operation = new_id() if selected is None else selected.operation
+        capture.operation = operation
         registered = lifecycle.instance(con)
         expected = (int(registered["device"]),int(registered["inode"]))
         with frozen_tree(work, capture, expected, store, selected=live) as (frozen, manifest):

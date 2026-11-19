@@ -1,15 +1,18 @@
 """Final-slot acknowledgement on real temporary directories; no new working-tree freeze."""
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr
+import io
 import errno
 from hashlib import sha256
 import os
+import sqlite3
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 import zipfile
 
-from zipworkspace import publish as media, worktree
+from zipworkspace import cli, publish as media, worktree
+from zipworkspace.capacity import describe, note
 from zipworkspace.model import Commit, Manifest, Rejected, new_id
 
 
@@ -202,3 +205,101 @@ class StoreAcknowledgement(unittest.TestCase):
         with self.assertRaises(Rejected):
             media.confirm_final(self.target, self.marker, sha256(self.target.read_bytes()).hexdigest())
         self.assert_pending()
+
+    @unittest.skipUnless(hasattr(errno, "EDQUOT"), "requires a native quota errno")
+    def test_real_pending_denied_store_upload_reports_quota_in_cli_without_consuming_the_original(self):
+        log = io.StringIO()
+        failure = OSError(errno.EDQUOT, "injected at exclusive upload")
+        with patch.object(media, "_new_upload", side_effect=failure), redirect_stderr(log):
+            self.assertEqual(cli.main(["resume", str(self.state), self.marker.operation]), 1)
+        self.assertIn("EDQUOT", log.getvalue())
+        self.assertIn("STORE " + str(self.store), log.getvalue())
+        self.assertIn(self.marker.operation, log.getvalue())
+        self.assertEqual(log.getvalue().count("容量诊断："), 1)
+        self.assertFalse(self.target.exists()); self.assert_pending()
+        self.assertEqual((self.state/(self.marker.operation + ".zxs")).read_bytes(), self.raw)
+
+    def test_ambiguous_rename_capacity_error_uses_the_original_slot_before_reporting_a_failure(self):
+        rename = media.rename_new_at
+        def rename_then_full(fd, name, target):
+            rename(fd, name, target)
+            raise OSError(errno.ENOSPC, "injected lost rename response")
+        with patch.object(media, "rename_new_at", side_effect=OSError(errno.ENOSPC, "not installed")), \
+                self.assertRaises(media.Uncertain) as unknown:
+            self.resume()
+        self.assertEqual(unknown.exception.__cause__.errno, errno.ENOSPC)
+        detail = describe(unknown.exception)
+        self.assertIn("STORE " + str(self.target), detail); self.assertIn("ENOSPC", detail)
+        self.assertIn(self.marker.operation, detail); self.assertEqual(detail.count("容量诊断："), 1)
+        self.assertFalse(self.target.exists()); self.assert_pending()
+        [original_partial] = self.store.glob("*.partial")
+        self.assertEqual(original_partial.read_bytes(), self.raw)
+        with patch.object(media, "rename_new_at", side_effect=rename_then_full):
+            self.assertEqual(self.resume(), (self.target, self.marker))
+        self.assertEqual(self.target.read_bytes(), self.raw)
+        self.assertEqual(original_partial.read_bytes(), self.raw)
+
+    def test_final_sync_capacity_preserves_a_visible_slot_and_an_unfinished_original(self):
+        self.target.write_bytes(self.raw)
+        real, chosen = os.fsync, self.store.stat()
+        def fail(fd):
+            if os.path.samestat(chosen, os.fstat(fd)): raise OSError(errno.ENOSPC, "injected final dirsync")
+            real(fd)
+        with patch.object(os, "fsync", side_effect=fail), self.assertRaises(OSError) as caught:
+            self.resume()
+        detail = describe(caught.exception)
+        self.assertIn("STORE " + str(self.store), detail); self.assertIn("同步正式归档", detail)
+        self.assertIn(self.marker.operation, detail); self.assertEqual(caught.exception.errno, errno.ENOSPC)
+        self.assertEqual(self.target.read_bytes(), self.raw); self.assert_pending()
+
+    def test_native_full_on_receipt_after_the_store_slot_is_installed_leaves_original_pending(self):
+        with worktree.locked(self.state) as (con, _, __):
+            con.execute("""CREATE TRIGGER large_receipt BEFORE INSERT ON completed
+                           BEGIN UPDATE checkout SET pending=zeroblob(1048576) WHERE singleton=1; END""")
+        connect = sqlite3.connect
+        def limited(*args, **kwargs):
+            con = connect(*args, **kwargs)
+            pages = con.execute("PRAGMA page_count").fetchone()[0]
+            self.assertEqual(con.execute(f"PRAGMA max_page_count={pages}").fetchone()[0], pages)
+            return con
+        with patch.object(sqlite3, "connect", side_effect=limited), self.assertRaises(sqlite3.OperationalError) as err:
+            self.resume()
+        self.assertEqual(err.exception.sqlite_errorcode & 255, sqlite3.SQLITE_FULL)
+        message = describe(err.exception)
+        self.assertIn("SQLITE_FULL", message); self.assertIn("原因未定", message)
+        self.assertNotIn("ENOSPC", message); self.assertNotIn("EDQUOT", message)
+        self.assertIn(str(self.state/"worktree.sqlite"), message); self.assertIn(self.marker.operation, message)
+        self.assertEqual(self.target.read_bytes(), self.raw); self.assert_pending()
+        with worktree.locked(self.state) as (con, _, __): con.execute("DROP TRIGGER large_receipt")
+        with patch.object(media, "_new_upload", side_effect=AssertionError("must not upload again")):
+            self.assertEqual(self.resume(), (self.target, self.marker))
+
+    def test_message_text_is_not_a_native_space_or_quota_result(self):
+        for err in (OSError(errno.EIO, "no space left on device"), sqlite3.OperationalError("database is full")):
+            note(err, "STATE", self.state, "write", self.marker.operation, database=isinstance(err, sqlite3.Error))
+            self.assertNotIn("容量诊断：", describe(err))
+
+    @unittest.skipUnless(hasattr(errno, "EDQUOT"), "requires a native quota errno")
+    def test_late_quota_from_the_actual_upload_writer_close_keeps_pending_without_renaming_or_reclosing(self):
+        new, close = media._new_upload, os.close
+        owned, injected = [], []
+        def upload(scope):
+            fd, stage = new(scope)
+            owned.append((fd, self.store/stage))
+            return fd, stage
+        def release(fd):
+            close(fd)  # The kernel may already have released it when reporting the error.
+            if owned and fd == owned[0][0] and not injected:
+                injected.append(fd)
+                raise OSError(errno.EDQUOT, "injected late writer close")
+        log = io.StringIO()
+        with patch.object(media, "_new_upload", side_effect=upload), patch.object(os, "close", side_effect=release), \
+             patch.object(media, "rename_new_at", side_effect=AssertionError("must not promote")), redirect_stderr(log):
+            self.assertEqual(cli.main(["resume", str(self.state), self.marker.operation]), 1)
+        self.assertEqual(injected, [owned[0][0]])
+        self.assertIn("关闭原可写文件描述符", log.getvalue())
+        self.assertIn("STORE " + str(owned[0][1]), log.getvalue())
+        self.assertIn("EDQUOT", log.getvalue()); self.assertIn(self.marker.operation, log.getvalue())
+        self.assertEqual(log.getvalue().count("容量诊断："), 1)
+        self.assertEqual(owned[0][1].read_bytes(), self.raw)
+        self.assertFalse(self.target.exists()); self.assert_pending()

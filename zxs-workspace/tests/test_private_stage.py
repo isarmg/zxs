@@ -1,5 +1,6 @@
 """A fresh synthetic CLI STATE. No test switches an unqualified filesystem into a supported one."""
 from contextlib import closing, contextmanager, redirect_stdout
+import errno
 import hashlib
 import io
 import os
@@ -12,6 +13,7 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace import cli, opening, private_stage as staging, worktree
+from zipworkspace.capacity import describe
 from zipworkspace.model import Commit, Manifest, Rejected
 
 
@@ -93,10 +95,13 @@ class PrivateCheckoutStage(unittest.TestCase):
                     label = ("target" if os.path.samestat(os.fstat(fd), self.out.stat()) else
                              "private" if os.path.samestat(os.fstat(fd), self.state.stat()) else None)
                     if label: barriers.add(label)
-                    if moved and label == failed: raise OSError("original parent sync denied")
+                    if moved and label == failed: raise OSError(errno.ENOSPC, "original parent sync denied")
                     return sync(fd)
                 with patch.object(opening, "rename_new_at", side_effect=rename), patch.object(opening.os, "fsync", side_effect=barrier):
-                    with self.assertRaisesRegex(OSError, "parent sync denied"): opening.finish(self.state, op)
+                    with self.assertRaisesRegex(OSError, "parent sync denied") as err: opening.finish(self.state, op)
+                role = "STATE " + str(self.state) if failed == "private" else "工作目录父 " + str(self.out)
+                self.assertIn(role, describe(err.exception)); self.assertIn(op, describe(err.exception))
+                self.assertIn("ENOSPC", describe(err.exception))
                 self.assertEqual(moved, [True]); self.assertEqual(dest.stat().st_ino, inode)
                 self.assertFalse(source.exists()); self.assertFalse((self.state / "worktree.sqlite").exists())
                 self.assertEqual(opening.status(self.state)["recorded_stage"], "verified_stage")
