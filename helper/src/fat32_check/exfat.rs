@@ -1,10 +1,11 @@
 //! Only the image/volume correspondence and the bounded public result. Real
 //! allocation, directories, checksums and corruption checks belong to fsck.exfat.
+mod receipt;
 use crate::pinned::invalid;
 use std::{fmt,io};
 
 #[derive(Clone,Copy,Debug)]
-pub(super) struct Framing{length:u64,sector:u16,flags:u16}
+pub(super) struct Framing{pub(super) length:u64,pub(super) sector:u16,flags:u16}
 pub(super) fn framing(boot:&[u8;512],length:u64)->io::Result<Framing>{
     let bad=||io::Error::new(io::ErrorKind::Unsupported,"not a supported whole exFAT 1.00 single-FAT volume image");
     // An extracted volume can legitimately retain its original partition offset.
@@ -56,7 +57,10 @@ fn counts(line:&[u8],header:&[u8],frame:Framing)->Option<(u32,u32)>{
     let(d,f)=pair(line,header,b", files ")?;
     // Root is counted. These are only the tool's reported counts, not a
     // second directory walker. Even one directory entry takes at least 32 B.
-    (d>=1 && u64::from(d)+u64::from(f)<=1+frame.length/32).then_some((d,f))
+    valid_counts(d,f,frame).then_some((d,f))
+}
+fn valid_counts(d:u32,f:u32,frame:Framing)->bool{
+    d>=1 && u64::from(d)+u64::from(f)<=1+frame.length/32
 }
 pub(super) fn classify(code:i32,out:&[u8],err:&[u8],frame:Framing)->io::Result<Report>{
     const BANNER:&[u8]=b"exfatprogs version : 1.2.9";

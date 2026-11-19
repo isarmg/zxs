@@ -21,7 +21,7 @@ helper compare-files /home/alice/reference.bin /mnt/incoming/candidate.bin
 
 ## 本机磁盘面板
 
-`helper disk-web` 在明确启动后才监听本机临时端口。从终端取得一次性配对码，网页可分别查看设备与挂载、被动 I/O 速率、七类工具的固定安装位置。普通启动不会执行检查。若在终端明确使用 `helper disk-web --fat32-copy IMAGE --sha256 HEX`，启动时就读取并封存这一份镜像；配对后可核对摘要、确认一次只读检查并查回结果。网页不收路径/上传，没有修复。见[用法和访问边界](docs/disk-web.md)。
+`helper disk-web` 在明确启动后才监听本机临时端口。从终端取得一次性配对码，网页可分别查看设备与挂载、被动 I/O 速率、七类工具的固定安装位置。普通启动不会执行检查。若在终端明确使用 `helper disk-web --fat32-copy IMAGE --sha256 HEX` 或 `helper disk-web --exfat-copy IMAGE --sha256 HEX`，启动时就读取并封存这一份镜像；配对后可核对格式和摘要、确认一次对应的只读检查并查回结果。网页不收路径/上传，没有修复。见[用法和访问边界](docs/disk-web.md)。
 
 ## 查看选定的存储根
 
@@ -56,7 +56,7 @@ helper disks --device 259:1 --rates
 
 `helper check-fat32-copy /绝对路径/volume.img --sha256 完整镜像的可信SHA256`。只接受已保存、最多 128 MiB 的普通 FAT32 卷镜像，不接受设备、分区表或任意工具参数。检查器只看到已核摘要的独立副本，在独立的 Linux 命名空间中运行 `fsck.fat -n`；不会修复或改写原镜像。[Debian 13 amd64 的发行配方](packaging/debian13-amd64/README.md)将上游工具与其运行库放在 helper 私有目录；不借用宿主同名程序，不自动安装。缺件或隔离不成立就拒绝。详见[配置、结果和限制](docs/fat32-copy-check.md)。本批只写源码，尚无实跑证据。
 
-exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整镜像的可信SHA256`。它只对 1–128 MiB、符合单卷边界的封存副本运行包内 `fsck.exfat -n`。返回 0 只表示此次检查未报告问题；1 表示明确报告问题或卷状态位须注意；2 表示未能确认。不会修盘，也不检查普通文件正文。[范围、结果与上游依据](docs/exfat-copy-check.md)。目前 exFAT 仅有 CLI。
+exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整镜像的可信SHA256`。它只对 1–128 MiB、符合单卷边界的封存副本运行包内 `fsck.exfat -n`。返回 0 只表示此次检查未报告问题；1 表示明确报告问题或卷状态位须注意；2 表示未能确认。不会修盘，也不检查普通文件正文。[范围、结果与上游依据](docs/exfat-copy-check.md)。也可在终端按上述方式预选 exFAT，由配对页面确认同一项检查。
 
 ## 本机部署与离线维护（设计）
 

@@ -61,12 +61,16 @@ pub fn prepare_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
     pinned_exec(cmd,original,args,None)
 }
 
+/// No string from a request can become a subcommand or a program name.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum CopyFormat{Fat32,Exfat}
 /// Spawn only the copy checker present in the same protected installation as the
 /// calling panel. The only argument is the digest of the *already sealed* stdin.
-pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,digest:&[u8;32])->io::Result<()>{
+pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CopyFormat,digest:&[u8;32])->io::Result<()>{
     use std::fmt::Write;
     let mut hex=String::with_capacity(64);for byte in digest{write!(&mut hex,"{byte:02x}").expect("String formatting");}
-    let args=vec![CString::new("helper").expect("literal"),CString::new("__fat32-sealed-v1").expect("literal"),
+    let action=match format{CopyFormat::Fat32=>"__fat32-sealed-v1",CopyFormat::Exfat=>"__exfat-sealed-v1"};
+    let args=vec![CString::new("helper").expect("literal"),CString::new(action).expect("literal"),
         CString::new(hex).expect("hex digest")];
     pinned_exec(cmd,original,args,Some(std::process::id() as libc::pid_t))
 }

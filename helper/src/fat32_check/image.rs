@@ -39,17 +39,18 @@ impl Sealed {
     pub(super) fn file(&self)->&File { &self.fd }
     pub(super) fn capture(path:&Path,expected:&[u8;32])->io::Result<Self>{capture(path,expected,512,Self::from_sealed)}
     pub(super) fn from_sealed(copy:File,expected:&[u8;32])->io::Result<Self>{
-        let (fd,boot,len)=verify_copy(copy,expected)?;
+        let (fd,boot,len)=verify_copy(copy,expected,512)?;
         Ok(Self{fd,geometry:geometry(&boot,len)?})
     }
 }
 pub(super) struct ExfatSealed {fd:File,frame:super::exfat::Framing}
 impl ExfatSealed {
     pub(super) fn capture(path:&Path,expected:&[u8;32])->io::Result<Self>{
-        capture(path,expected,1<<20,|copy,expected|{
-            let (fd,boot,len)=verify_copy(copy,expected)?;
-            Ok(Self{fd,frame:super::exfat::framing(&boot,len)?})
-        })
+        capture(path,expected,1<<20,Self::from_sealed)
+    }
+    pub(super) fn from_sealed(copy:File,expected:&[u8;32])->io::Result<Self>{
+        let (fd,boot,len)=verify_copy(copy,expected,1<<20)?;
+        Ok(Self{fd,frame:super::exfat::framing(&boot,len)?})
     }
     pub(super) fn file(&self)->&File{&self.fd}
     pub(super) fn frame(&self)->super::exfat::Framing{self.frame}
@@ -76,13 +77,13 @@ fn capture<T>(path:&Path,expected:&[u8;32],minimum:u64,finish:fn(File,&[u8;32])-
     Ok(result)
 }
 
-// The FAT32 panel worker may also receive this anonymous tmpfs file on stdin.
+// A fixed panel worker may also receive this anonymous tmpfs file on stdin.
 // Reject regular named files, devices, pipes and incomplete seals before reading.
-fn verify_copy(mut copy:File,expected:&[u8;32])->io::Result<(File,[u8;512],u64)>{
+fn verify_copy(mut copy:File,expected:&[u8;32],min:u64)->io::Result<(File,[u8;512],u64)>{
     use std::os::unix::fs::MetadataExt;
     let meta=copy.metadata()?;
     let length=meta.len();
-    if !meta.is_file() || meta.nlink()!=0 || meta.mode()&0o111!=0 || !(512..=MAX).contains(&length)
+    if !meta.is_file() || meta.nlink()!=0 || meta.mode()&0o111!=0 || !(min..=MAX).contains(&length)
         || rustix::fs::fstatfs(&copy)?.f_type as u64!=0x0102_1994 // Linux TMPFS_MAGIC (memfd)
         || !fcntl_get_seals(&copy)?.contains(seals()|SealFlags::EXEC) {
         return Err(invalid("expected a complete, non-executable, write-sealed anonymous image"));

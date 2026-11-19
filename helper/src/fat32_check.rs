@@ -5,6 +5,7 @@ mod image;
 pub(crate) mod panel;
 mod runner;
 mod runtime;
+pub(crate) use helper_linux_evidence::diagnostic_process::CopyFormat as Format;
 use crate::fs_tools::hex;
 use std::{ffi::OsString,fmt,io,path::{Path,PathBuf}};
 

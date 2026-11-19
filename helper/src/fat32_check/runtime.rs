@@ -2,8 +2,7 @@
 use crate::{fs_tools::{RuntimeFile,hex},pinned::invalid};
 use std::{io::{self,Read},os::unix::fs::FileExt};
 
-#[derive(Clone,Copy,PartialEq,Eq)]
-pub(super) enum Format{Fat32,Exfat}
+use super::Format;
 pub(super) const PROFILE:&str="debian13-amd64/private-pack-1/bubblewrap-0.12/dosfstools-4.2";
 const KEYS:[&str;8]=["bwrap","fsck.fat","ld-linux-x86-64","libc","libcap","libselinux","libpcre2","libgcc"];
 macro_rules! pack {($($name:literal),+) => {&["usr","lib","local-ops-helper","disk-tools-v1",$($name),+]};}

@@ -26,8 +26,8 @@
     <p class="hint">只有点击才采样，不后台刷新。速率取两次内核计数，不运行读写基准。</p>
   </section>
   <section id="checks" class="card" hidden aria-labelledby="checktitle">
-    <p class="eyebrow">READ-ONLY CHECK</p><h2 id="checktitle">检查终端预选的 FAT32 副本</h2>
-    <p>本页不能选路径或上传文件。先核对摘要和大小，确认后才在隔离环境运行上游检查器；不检查原盘、不修复。</p>
+    <p class="eyebrow">READ-ONLY CHECK</p><h2 id="checktitle">检查终端预选的卷镜像</h2>
+    <p>本页不能选路径或上传文件。先核对格式、摘要和大小，确认后才在隔离环境运行相应的上游只读检查器；不检查原盘、不修复。</p>
     <button type="button" id="preview" class="quiet">预览终端已选镜像</button>
     <div id="selection" hidden>
       <dl><dt>封存副本的 SHA-256</dt><dd><code id="imgdigest"></code></dd><dt>卷镜像</dt><dd id="imggeometry"></dd></dl>

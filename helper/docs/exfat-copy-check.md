@@ -6,7 +6,7 @@
 
 格式门只核[微软规范中的卷起点和边界](https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification#31-main-and-backup-boot-sector-sub-regions)：引导标识、必须为零的区段、1.00 版、单 FAT 且以该 FAT 为当前表、扇区和簇大小范围、声明的卷长度恰与完整镜像相等。本命令接受 1–128 MiB；切出的卷可保留原分区偏移。其他格式、截短/尾随数据、双 FAT、标题已无法辨明、超出预算等均报未能检查，不判介质损坏。分配表、目录和校验和由上游检查器处理，不另写一套 fsck。
 
-[Debian 13 amd64 发行配方](../packaging/debian13-amd64/README.md)使用 `exfatprogs 1.2.9-1+deb13u1`，独立策略文件为私有工具根下的 `exfat-check-v1`。固定八槽，与 FAT32 的策略文件不能互换。逐个核对受保护的原 ELF、完整摘要与安装位置。只把选定检查器、加载器、libc、只读副本投射进和 FAT32 相同的受限命名空间；无宿主目录、终端、网络或块设备，且检查器不能派生子进程。共用 30 秒时限、输出预算、真实 handoff 与整进程组回收；失败不改用宿主工具。仅 CLI 可调用，磁盘网页不会凭一次普通配对开启 exFAT。
+[Debian 13 amd64 发行配方](../packaging/debian13-amd64/README.md)使用 `exfatprogs 1.2.9-1+deb13u1`，独立策略文件为私有工具根下的 `exfat-check-v1`。固定八槽，与 FAT32 的策略文件不能互换。逐个核对受保护的原 ELF、完整摘要与安装位置。只把选定检查器、加载器、libc、只读副本投射进和 FAT32 相同的受限命名空间；无宿主目录、终端、网络或块设备，且检查器不能派生子进程。共用 30 秒时限、输出预算、真实 handoff 与整进程组回收；失败不改用宿主工具。CLI 可直接调用；[本机磁盘面板](disk-web.md)也可在终端用 `--exfat-copy` 预选同一份镜像，配对后预览并确认一次。普通配对不能授予检查权。
 
 |helper 返回码|如何解读|
 |---|---|

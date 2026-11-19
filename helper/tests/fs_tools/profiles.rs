@@ -52,6 +52,6 @@ fn only_supported_bundled_slots_are_private_and_detection_is_not_execution(){
             assert!(!p.private());assert!(!path.contains("disk-tools-v1"));
         }
     }
-    assert_eq!(PROFILES[5].action(),"sealed-copy-readonly-cli");
+    assert_eq!(PROFILES[5].action(),"sealed-copy-readonly");
     assert_eq!(PROFILES[2].action(),"host-version-and-loaded-module-required-not-enabled");
 }

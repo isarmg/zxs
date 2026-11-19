@@ -1,6 +1,6 @@
 //! One isolated invocation. The checker never gets /dev, the caller's
 //! namespace/terminal, a host directory, the source file or a caller-selected option.
-use super::{group::Group,image::{ExfatSealed,Sealed},runtime::{Format,Runtime}};
+use super::{Format,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
 use crate::pinned::invalid;
 use rustix::{
     fd::{AsFd,AsRawFd,OwnedFd},

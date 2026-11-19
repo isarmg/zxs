@@ -45,23 +45,26 @@
     if(!response.ok){state(msg);return;}render(labels[id],msg);
   }
   async function preview() {
-    const response=await post("/api/fat32/preview",auth());const msg=await response.text();
+    ticket="";show("selection",false);
+    const response=await post("/api/copy/preview",auth());const msg=await response.text();
     if(!response.ok){ticket="";show("selection",false);state(msg);return;}
-    const [key,hash,bytes,sector,clusters,phase,...extra]=msg.split("\n");
+    const [key,hash,format,bytes,sector,detail,phase,...extra]=msg.split("\n");
     if(extra.length||![key,hash].every(x=>/^[0-9a-f]{64}$/.test(x))||
-       ![bytes,sector,clusters].every(x=>/^[0-9]{1,10}$/.test(x))||!["prepared","claimed"].includes(phase))throw Error("invalid preview");
+       ![bytes,sector].every(x=>/^[0-9]{1,10}$/.test(x))||!["prepared","claimed"].includes(phase)||
+       !(format==="FAT32"&&/^[0-9]{1,10}$/.test(detail)||format==="exFAT"&&detail==="-"))throw Error("invalid preview");
     ticket=key;el("imgdigest").textContent=hash;
-    el("imggeometry").textContent=bytes+" 字节；逻辑扇区 "+sector+" 字节；"+clusters+" 个数据簇";
+    const check=format==="FAT32"?detail+" 个数据簇；fsck.fat -n":"单 FAT；fsck.exfat -n";
+    el("imggeometry").textContent=format+" · "+bytes+" 字节；逻辑扇区 "+sector+" 字节；"+check;
     show("selection",true);show("confirm",phase==="prepared");
     state(phase==="prepared"?"请对照你的独立摘要。90 秒内确认才会开始；不确认不会执行。":"此目标已认领，只能查询原结果。");
   }
   async function check(submit) {
     if(!ticket)return;
     const headers=auth().headers;headers["Content-Type"]="application/octet-stream";
-    const response=await post(submit?"/api/fat32/check":"/api/fat32/result",{headers,body:ticket});
+    if(submit)show("confirm",false); // The server may claim it even if our response is lost.
+    const response=await post(submit?"/api/copy/check":"/api/copy/result",{headers,body:ticket});
     // If the outcome is unknown after disconnect, query the original receipt.
     // Never substitute a new target or silently issue another command.
-    if(submit)show("confirm",false);
     state(await response.text());
   }
   el("preview").addEventListener("click",()=>once(preview));

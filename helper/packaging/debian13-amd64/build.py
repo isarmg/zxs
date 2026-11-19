@@ -297,7 +297,7 @@ def build(args):
               "inactive_smb_installation_check":smb_host,
               "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
-              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly-cli"}}
+              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly"}}
         # Candidate NON-privileged material for the release signer. Do not
         # install it as its own authorization: the package owner is not the site's
         # authority. It and the exact .deb are covered by the external signed sums.

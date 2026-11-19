@@ -71,14 +71,29 @@ fn pairing_requires_a_supported_terminal_and_the_callers_actual_foreground_sessi
 }
 
 #[test]
-fn pairing_or_a_user_supplied_path_cannot_create_a_fat32_grant(){
+fn pairing_or_a_user_supplied_format_path_or_flags_cannot_create_any_copy_grant(){
     let now=Instant::now();let mut p=logged(now);
-    assert_eq!(p.handle(approved("/api/fat32/preview"),now).code,403);
-    let mut supplied=approved("/api/fat32/preview");supplied.body=b"/dev/sda".to_vec();
+    assert_eq!(p.handle(approved("/api/copy/preview"),now).code,403);
+    let mut supplied=approved("/api/copy/preview");supplied.body=b"/dev/sda".to_vec();
     assert_eq!(p.handle(supplied,now).code,400);
-    for endpoint in ["/api/fat32/check","/api/fat32/result"]{
+    for endpoint in ["/api/copy/check","/api/copy/result"]{
         let mut r=approved(endpoint);r.content_type=Some("application/octet-stream".into());r.body=vec![b'f';64];
         assert_eq!(p.handle(r,now).code,403);
         let mut r=approved(endpoint);r.body=b"--fix".to_vec();assert_eq!(p.handle(r,now).code,400);
     }
+}
+
+#[test]
+fn only_the_terminal_chooses_format_and_even_paired_clients_never_choose_a_tool(){
+    let now=Instant::now();let mut p=logged(now);
+    for path in ["/api/fat32/preview","/api/exfat/preview","/api/copy/preview?format=exfat","/api/exfat/repair"]{
+        assert_eq!(p.handle(approved(path),now).code,404);
+    }
+    let mut q=approved("/api/copy/preview");q.content_type=Some("application/octet-stream".into());q.body=b"exFAT".to_vec();
+    assert_eq!(p.handle(q,now).code,400);
+    let submit=||{let mut q=approved("/api/copy/check");q.content_type=Some("application/octet-stream".into());q.body=vec![b'f';64];q};
+    let mut q=submit();q.origin=Some("http://elsewhere.invalid".into());assert_eq!(p.handle(q,now).code,403);
+    let mut q=submit();q.auth=None;assert_eq!(p.handle(q,now).code,403);
+    let mut q=submit();q.csrf=None;assert_eq!(p.handle(q,now).code,403);
+    assert!(p.check.is_none());
 }

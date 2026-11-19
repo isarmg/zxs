@@ -29,7 +29,7 @@ impl Profile {
         else{vec!["usr",self.directory,self.tool]}
     }
     pub(crate) fn action(self)->&'static str {match self.format {
-        "fat32"=>"sealed-copy-readonly", "exfat"=>"sealed-copy-readonly-cli",
+        "fat32"=>"sealed-copy-readonly", "exfat"=>"sealed-copy-readonly",
         "zfs"=>"host-version-and-loaded-module-required-not-enabled", _=>"planned-not-enabled"
     }}
 }
