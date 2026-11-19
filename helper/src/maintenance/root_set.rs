@@ -13,10 +13,10 @@ struct Root { name: Pinned, dir: File, observed: ObservedOriginal, component_lim
 // Directory contents and claims may change even under an advisory flock.
 // Do not count reads through NOATIME as changes or treat a stamp as a lock.
 #[derive(PartialEq, Eq)]
-struct DirectoryStamp { links: u64, size: u64, mtime: (i64, i64), ctime: (i64, i64) }
+pub(super) struct DirectoryStamp { links: u64, size: u64, mtime: (i64, i64), ctime: (i64, i64) }
 struct RootSample { stamp: DirectoryStamp, mounts: Vec<u64> }
 impl DirectoryStamp {
-    fn on(dir: &File) -> io::Result<Self> {
+    pub(super) fn on(dir: &File) -> io::Result<Self> {
         let m = dir.metadata()?;
         if !m.is_dir() || m.nlink() == 0 { return Err(invalid("storage directory was unlinked")); }
         Ok(Self { links: m.nlink(), size: m.len(), mtime: (m.mtime(), m.mtime_nsec()),
@@ -125,19 +125,25 @@ impl FreshRootLocks {
 // A newly opened directory description starts at offset zero on each scan;
 // never advance the original locked description. RawDir preserves getdents
 // errors (including ENOENT on removal); only its real end counts as EOF.
-fn read_empty(dir: File) -> io::Result<()> {
+fn read_empty(dir: File) -> io::Result<()> { read_directory(dir, false) }
+pub(super) fn read_pending_only(dir: File) -> io::Result<()> { read_directory(dir, true) }
+
+fn read_directory(dir: File, pending_only: bool) -> io::Result<()> {
     let mut buffer = [MaybeUninit::<u8>::uninit(); 4096];
     let mut stream = RawDir::new(dir, &mut buffer);
     let mut dot = false;
     let mut parent = false;
+    let mut pending = false;
     while let Some(entry) = stream.next() {
         let entry = entry?;
         match entry.file_name().to_bytes() {
             b"." if !dot => dot = true,
             b".." if !parent => parent = true,
-            _ => return Err(invalid("storage root is not empty or its entry stream is inconsistent")),
+            b"INITIALIZING" if pending_only && !pending => pending = true,
+            _ => return Err(invalid("unexpected entry or inconsistent storage directory stream")),
         }
     }
+    if pending != pending_only { return Err(invalid("the original pending registration name is absent")); }
     Ok(())
 }
 

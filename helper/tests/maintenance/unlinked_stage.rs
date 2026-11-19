@@ -141,3 +141,7 @@ fn same_length_change_after_complete_content_sample_is_refused_at_finish() {
     assert!(synced.recheck().is_err()); // the next real byte read also finds the altered byte
     unclaimed_and_locked(&[system.as_path(), recycle.path(), primary.as_path()]);
 }
+
+// Exercise an actual staged original after the test-only first name and cold open.
+#[path = "pending.rs"]
+mod pending;

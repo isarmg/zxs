@@ -2,5 +2,6 @@
 mod ancestry;
 mod genesis;
 mod identity;
+mod pending;
 mod root_set;
 mod register_flock;

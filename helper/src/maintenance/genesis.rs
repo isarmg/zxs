@@ -8,7 +8,7 @@ pub(super) use encoding::{InitialBytes, RootInput};
 
 const GENESIS: &[u8] = b"ZXS/FILE-POOL/MAINT-1\0";
 const VOLUME: &[u8] = b"ZXS/VOLUME/MAINT-1\0";
-const MAX_IMAGE: usize = 64 * (MAX_PATH_BYTES + 64 + 148) + 256;
+pub(super) const MAX_IMAGE: usize = 64 * (MAX_PATH_BYTES + 64 + 148) + 256;
 type Id = [u8; 16];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -136,6 +136,8 @@ impl<'a> FreshGenesis<'a> {
         Ok(Self { pool, operation, storage_uid, registration, volumes, digest })
     }
 
+    pub(super) fn has_init_operation(&self, op: &[u8; 16]) -> bool { self.operation == *op }
+
     /// Compares only these two observed originals, never the other volumes, a
     /// pathname, label, lock or operator authority. Mount IDs are not stored.
     pub(super) fn matches_origin_pair(&self, uid: u32, registration: (u64, u64, &[u8]),
@@ -160,14 +162,17 @@ impl<'a> FreshGenesis<'a> {
     /// SYSTEM volume binds the genesis digest; data/recycle labels do not.
     pub(super) fn check_labels(&self, labels: &[&[u8]]) -> Result<(), Invalid> {
         if labels.len() != self.volumes.len() { return Err(Invalid::Label); }
-        for (v, &label) in self.volumes.iter().zip(labels) {
-            let tail = label.strip_prefix(VOLUME).and_then(|b| b.strip_prefix(&[v.tag]))
-                .and_then(|b| b.strip_prefix(&self.pool[..]))
-                .and_then(|b| b.strip_prefix(&v.id[..]))
-                .and_then(|b| b.strip_prefix(&self.operation[..]));
-            let expected: &[u8] = if v.tag == 0 { &self.digest } else { &[] };
-            if tail != Some(expected) { return Err(Invalid::Label); }
-        }
+        for (i, &label) in labels.iter().enumerate() { self.check_label(i, label)?; }
+        Ok(())
+    }
+
+    pub(super) fn check_label(&self, index: usize, label: &[u8]) -> Result<(), Invalid> {
+        let v = self.volumes.get(index).ok_or(Invalid::Label)?;
+        let tail = label.strip_prefix(VOLUME).and_then(|b| b.strip_prefix(&[v.tag]))
+            .and_then(|b| b.strip_prefix(&self.pool[..])).and_then(|b| b.strip_prefix(&v.id[..]))
+            .and_then(|b| b.strip_prefix(&self.operation[..]));
+        let expected: &[u8] = if v.tag == 0 { &self.digest } else { &[] };
+        if tail != Some(expected) { return Err(Invalid::Label); }
         Ok(())
     }
 

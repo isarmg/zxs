@@ -110,7 +110,7 @@ impl Pinned {
     }
 }
 
-/// Only this type can upgrade an O_PATH operand to a data reader.
+/// Keeps the original selected comparison operand and its admitted filesystem.
 pub(crate) struct LocalDataFile { pin: Pinned, magic: u32 }
 impl LocalDataFile {
     pub(crate) fn select(path: &Path) -> io::Result<Self> {
@@ -125,50 +125,70 @@ impl LocalDataFile {
     // Selection keeps the admitted regular-file handle alive. Reopening the operand's
     // pathname instead could read a different object or open a device or FIFO.
     pub(crate) fn reader(&self) -> io::Result<File> {
-        let proc = open("/proc", dir_flags(), Mode::empty())?;
-        if fstatfs(&proc)?.f_type != PROC_SUPER_MAGIC {
-            return Err(invalid("a genuine procfs for this process is required"));
-        }
-        let pid = std::process::id().to_string();
-        if readlinkat(&proc, "self", Vec::new())?.as_bytes() != pid.as_bytes() {
-            return Err(invalid("procfs refers to another process namespace"));
-        }
-        let proc_pid = openat(&proc, pid.as_str(), dir_flags(), Mode::empty())?;
-        let fds = File::from(openat(&proc_pid, "fd", dir_flags(), Mode::empty())?);
-        if fstatfs(&fds)?.f_type != PROC_SUPER_MAGIC { return Err(invalid("untrusted descriptor directory")); }
-        // Even a procfs directory must belong to our descriptor table. Follow the kernel
-        // link for the directory's own held fd and compare identities before using it.
-        let myself = fds.as_raw_fd().to_string();
-        let again = File::from(openat(&fds, myself.as_str(),
-            OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())?);
-        if Entity::of(&again.metadata()?)? != Entity::of(&fds.metadata()?)? {
-            return Err(invalid("procfs descriptor directory is not this process's"));
-        }
-        let number = self.pin.fd.as_raw_fd().to_string();
-        let proc_link = File::from(openat(&fds, number.as_str(),
-            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?);
-        if !proc_link.metadata()?.file_type().is_symlink() || fstatfs(&proc_link)?.f_type != PROC_SUPER_MAGIC {
-            return Err(invalid("descriptor is not a procfs kernel link"));
-        }
-        let check = File::from(openat(&fds, number.as_str(), OFlags::PATH | OFlags::CLOEXEC, Mode::empty())?);
-        let original = check.metadata()?;
-        if !original.is_file()
-            || Entity::of(&original)? != self.pin.entity()
-            || filesystem(&check)? != Some(self.magic)
-        {
-            return Err(invalid("descriptor no longer selects the original regular file"));
-        }
-        let result = File::from(openat(&fds, number.as_str(),
-            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::NOATIME | OFlags::CLOEXEC, Mode::empty())?);
-        let observed = result.metadata()?;
-        if !observed.is_file() || Entity::of(&observed)? != self.pin.entity() {
-            return Err(invalid("read descriptor did not resolve to the original regular file"));
-        }
-        if filesystem(&result)? != Some(self.magic) {
-            return Err(invalid("read descriptor no longer belongs to the selected data filesystem"));
-        }
-        Ok(result)
+        reopen_admitted_reader(&self.pin.fd, self.pin.entity(), self.magic)
     }
+}
+
+/// Upgrade an original O_PATH private regular inode only; never use its mutable pathname.
+/// The caller must independently recheck the original name, held birth, protocol and lock.
+pub(crate) fn private_inode_reader(pin: &File, uid: u32, expected_mount: u64) -> io::Result<File> {
+    let m = pin.metadata()?;
+    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH) || !m.is_file()
+        || m.uid() != uid || m.nlink() != 1 || m.mode() & 0o7777 != 0o600
+        || Mount::on(pin)?.is_none_or(|v| v.id != expected_mount) {
+        return Err(invalid("expected a singly linked private file pinned on its original mount"));
+    }
+    let file = reopen_admitted_reader(pin, Entity::of(&m)?, local_data_filesystem(pin)?)?;
+    if Mount::on(&file)?.is_none_or(|v| v.id != expected_mount) {
+        return Err(invalid("opened file no longer has the selected mount"));
+    }
+    Ok(file)
+}
+
+fn reopen_admitted_reader(pin: &File, entity: Entity, magic: u32) -> io::Result<File> {
+    let proc = open("/proc", dir_flags(), Mode::empty())?;
+    if fstatfs(&proc)?.f_type != PROC_SUPER_MAGIC {
+        return Err(invalid("a genuine procfs for this process is required"));
+    }
+    let pid = std::process::id().to_string();
+    if readlinkat(&proc, "self", Vec::new())?.as_bytes() != pid.as_bytes() {
+        return Err(invalid("procfs refers to another process namespace"));
+    }
+    let proc_pid = openat(&proc, pid.as_str(), dir_flags(), Mode::empty())?;
+    let fds = File::from(openat(&proc_pid, "fd", dir_flags(), Mode::empty())?);
+    if fstatfs(&fds)?.f_type != PROC_SUPER_MAGIC { return Err(invalid("untrusted descriptor directory")); }
+    // Even a procfs directory must belong to our descriptor table. Follow the kernel
+    // link for the directory's own held fd and compare identities before using it.
+    let myself = fds.as_raw_fd().to_string();
+    let again = File::from(openat(&fds, myself.as_str(),
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())?);
+    if Entity::of(&again.metadata()?)? != Entity::of(&fds.metadata()?)? {
+        return Err(invalid("procfs descriptor directory is not this process's"));
+    }
+    let number = pin.as_raw_fd().to_string();
+    let proc_link = File::from(openat(&fds, number.as_str(),
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?);
+    if !proc_link.metadata()?.file_type().is_symlink() || fstatfs(&proc_link)?.f_type != PROC_SUPER_MAGIC {
+        return Err(invalid("descriptor is not a procfs kernel link"));
+    }
+    let check = File::from(openat(&fds, number.as_str(), OFlags::PATH | OFlags::CLOEXEC, Mode::empty())?);
+    let original = check.metadata()?;
+    if !original.is_file()
+        || Entity::of(&original)? != entity
+        || filesystem(&check)? != Some(magic)
+    {
+        return Err(invalid("descriptor no longer selects the original regular file"));
+    }
+    let result = File::from(openat(&fds, number.as_str(),
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::NOATIME | OFlags::CLOEXEC, Mode::empty())?);
+    let observed = result.metadata()?;
+    if !observed.is_file() || Entity::of(&observed)? != entity {
+        return Err(invalid("read descriptor did not resolve to the original regular file"));
+    }
+    if filesystem(&result)? != Some(magic) {
+        return Err(invalid("read descriptor no longer belongs to the selected data filesystem"));
+    }
+    Ok(result)
 }
 
 pub(crate) fn local_data_filesystem(fd: &File) -> io::Result<u32> {
