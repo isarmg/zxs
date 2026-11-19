@@ -5,6 +5,7 @@
 compile_error!("helper currently supports Linux x86_64 (LP64) only");
 
 mod block_tools;
+mod fs_tools;
 mod inspect;
 mod maintenance;
 mod path_rules;
@@ -23,7 +24,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: read-only local diagnostics (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -34,6 +35,7 @@ enum Command {
     Compare(PathBuf, PathBuf),
     Storage(Selection),
     Disks(block_tools::Query),
+    FsTools(fs_tools::Query),
 }
 
 fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static str> {
@@ -48,6 +50,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if dirs.is_empty() || dirs.len() > inspect::MAX_DIRS { return Err("expected 1–16 directories"); }
         return Ok(Command::Directories(dirs));
     }
+    if op == "fs-tools" { return fs_tools::Query::parse(args).map(Command::FsTools); }
     if op == "disks" { return block_tools::Query::parse(args).map(Command::Disks); }
     if op == "storage-status" { return Selection::parse(args).map(Command::Storage); }
     if op == "compare-files" {
@@ -70,6 +73,11 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::Help => line(USAGE)?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
+        Command::FsTools(query) => {
+            let report = query.observe();
+            line(&report.to_string())?;
+            return Ok(ExitCode::from(report.exit()));
+        }
         Command::Disks(query) => {
             let report = query.observe()?;
             line(&report.to_string())?;
