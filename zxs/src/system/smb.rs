@@ -52,5 +52,8 @@ pub(crate) mod file_create;
 #[path="first_work.rs"]
 pub(crate) mod first_work;
 
+#[path="directory.rs"]
+pub(crate) mod directory;
+
 #[path="smb_runtime.rs"]
 pub(crate) mod runtime;

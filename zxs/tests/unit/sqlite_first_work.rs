@@ -70,12 +70,19 @@ fn synced_not_yet_confirmed_remains_logically_empty_and_same_original_can_recove
         let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let tree=smb.connect(rw).unwrap();
         let sb=SmbSession::fixture_authenticated(&peer,"files.smb").unwrap();let other=sb.connect(rw).unwrap();
         let id=tree.create_file(OperationId([0xb1;16]),NAME).unwrap().file;
+        let mut saw_uncommitted_page=false;
         assert!(tree.save_first_after(SAVE,NAME,id,&input,|cut|{
             if cut==Cut::Reserved{assert_eq!(pending(&peer,SAVE),Some(0));
                 other.create_file(OperationId([0xb3;16]),"sibling")?; // no volume flock or SQL writer held
                 let d=f.join(format!("方案-{id}.xlsx"));assert_eq!(std::fs::read_dir(d)?.count(),1);}
-            if cut==Cut::BytesSynced{return Err(io::Error::other("interrupt after named sync before SQL"));}Ok(())
-        }).is_err());assert_eq!(pending(&src,SAVE),Some(0));
+            if cut==Cut::BytesSynced{
+                let visible=other.root_files()?.next(16)?.into_iter().find(|x|x.file==id).unwrap();
+                assert_eq!((visible.revision,visible.size),(0,0)); // real synced bytes are still private
+                saw_uncommitted_page=true;
+                return Err(io::Error::other("interrupt after named sync before SQL"));
+            }Ok(())
+        }).is_err());assert!(saw_uncommitted_page,"must have observed the original FILE at BytesSynced");
+        assert_eq!(pending(&src,SAVE),Some(0));
         assert_eq!(other.open_current("sibling").unwrap().working_revision(),0);id
     };
     let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
@@ -214,3 +221,6 @@ fn compatible_read_snapshots_cross_a_real_first_writer_in_both_directions(){
     let prior=manager.share_setting(ro).unwrap();manager.set_share_mode(OperationId([0xd3;16]),ro,prior.op,Mode::Disabled).unwrap();
     assert!(old.range_to(0,0,Vec::new()).is_err());assert!(now.range_to(0,1,Vec::new()).is_err());
 }
+
+#[path="sqlite_directory.rs"]
+mod directory;

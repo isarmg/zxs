@@ -61,6 +61,12 @@ helper 供给的 `/instance/domain.bound` 正好 128 字节：`ZXS-SAM/BOUND-1\0
 
 SQLite 首份手动 SAVE 的真实库路径已分开准备写者与读者：容器 EX 只约束本次原生准备写者，Current 不参与该写锁，仍持出生头/真实已确认材料并重验当前读权。新开读在未确认时只选空的前修订，确认后新开读选修订 1；原已开空稿句柄不升级、不阻止确认。源码用例跨两个独立 SQLite 连接，在真实源文件已同步/未提交时检查此区别。只覆盖这个首稿，不是跨进程 SMB 逻辑写句柄、原生 ShareAccess/字节锁、后续修订或 Windows 实测。
 
+### 普通共享根 FILE 列表（存储业务层）
+
+从本次已授权的共享定位其唯一普通卷，不接客户目录路径；按显示名的 UTF-8 原字节分页（每页 1–16 项）。仅列已确认出生的 FILE，返回显示名、FILE/条目标识、已确认工作修订和逻辑长度。只读及读写共享可以指向同一个命名空间；未确认的创建、物理文件夹名、标记、改动材料及回收卷不会被列出。已确认首个 0 字节 SAVE 与尚未保存都显示 0 字节，但修订号不同。列出尺寸不证明正文完好，读数据仍另走原块校验。
+
+非空页的首尾各枚举一次该 F 的真实目录项，各 FILE 另验自己的成员；按页计成本，不是整个目录只扫两遍，也不是正文 I/O。空 SQL 页免扫 F 子项，仍复核同一根、授权及空结果。每一页在归还结果前复核同一 SQL 权限及该页成员、同一 F 和实物双名 FILE 头。选件变化/断点返回错误，失败不会推进游标或泄出半页。游标跨页不占 SQL 事务或卷写锁；并发新增而排在已交付显示名之前的项需重新枚举，遇到结束后也需重开。此处不是 SMB2 `QUERY_DIRECTORY` 的协议实现；未运行。
+
 ## 来源与验收
 
 - 正式输入是 [Debian trixie 的 samba 源包](https://packages.debian.org/source/trixie/samba) `2:4.22.11+dfsg-0+deb13u1`。按 [Debian .dsc](https://deb.debian.org/debian/pool/main/s/samba/samba_4.22.11+dfsg-0+deb13u1.dsc) 核对 orig 25,620,416 B 的 SHA-256 `4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a`，Debian 源补丁 189,836 B 的 SHA-256 `0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03`。[固定输入清单](debian-trixie/inputs.sha256)逐项绑定被改的原文件及未改的 passdb ABI 头；其中 `source3/param/loadparm.c` 的输入已含 Debian `usershare.patch`（默认 0→100）；ZXS 仍要求有效值为 0。其他列出的 Debian 原文件未被该补丁集更改。当前仅来源字节与补丁静审，**没有**替代 Debian 信任链验签；最终发行应验镜像/包签名及修补支持。源版本或补丁改变，必须重新独立适配，不换回任意同名 smbd。
