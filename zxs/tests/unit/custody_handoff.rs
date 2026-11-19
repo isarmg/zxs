@@ -230,16 +230,7 @@ fn original_cross_parent_rename_cannot_open_target_until_both_held_parents_are_r
     fs::rename(offline,&f.old).unwrap();assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);f.all_history();
 }
 
-fn native_root_length(parent:&Path,n:usize)->PathBuf{
-    use std::os::unix::{ffi::OsStrExt,fs::DirBuilderExt};
-    let mut p=parent.to_owned();
-    while p.as_os_str().as_bytes().len()<n{
-        let delta=n-p.as_os_str().as_bytes().len();assert!(delta>=2);
-        let mut k=(delta-1).min(160);if delta-k-1==1{k-=1;}
-        p.push("a".repeat(k));fs::DirBuilder::new().mode(0o700).create(&p).unwrap();
-    }
-    assert_eq!(p.as_os_str().as_bytes().len(),n);p
-}
+use crate::test_support::native_root_length;
 // Exercise CREATE against the same real long-root fixture as MOVE below.
 #[test]
 #[ignore="two private native filesystems; exact registered boundary paths"]

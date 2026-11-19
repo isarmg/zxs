@@ -113,6 +113,7 @@ fn choice<'a>(pool:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,claim:Dra
         // A completed historical receipt neither opens today's data path nor consumes input.
         if !s.saving.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(f.receipt()));}
     }
+    s.require_file_token(op)?;
     if s.moving.is_some()||s.incrementing.is_some()||s.editing.is_some()||s.committing.is_some()||s.allocated.is_some()||s.saving.as_ref().is_some_and(|a|a.original.op!=op||a.request!=request){
         return Err(invalid("different original FILE operation needs completion"));
     }

@@ -89,6 +89,7 @@ pub(in crate::ordinary) struct Created{
     pub origin:Origin,pub allocation:[u8;32],pub slot:u8,pub object:NativeObject,
 }
 impl Created{
+    pub(super) fn belongs_to(&self,pool:PoolId)->bool{self.pool==pool}
     pub(in crate::ordinary) fn new(pool:PoolId,seq:u64,previous:[u8;32],origin:Origin,allocation:[u8;32],slot:u8,object:NativeObject)->io::Result<Self>{
         if seq==0{return Err(invalid("zero ordinary directory decision sequence"));}
         let claim=request(pool,origin.op,origin.uid,origin.parent.address,&origin.name)?;

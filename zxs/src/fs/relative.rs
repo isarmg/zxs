@@ -11,6 +11,16 @@ fn leaf(name:&CStr)->io::Result<&OsStr>{
     Ok(OsStr::from_bytes(b))
 }
 
+impl PathBudget{
+    pub(crate) fn child(self,name:&CStr)->io::Result<Self>{
+        let width=leaf(name)?.as_bytes().len();
+        let bytes=self.bytes.checked_add(1).and_then(|n|n.checked_add(width)).filter(|n|*n<=MAX_PATH_BYTES)
+            .ok_or_else(||invalid("child exceeds original absolute path byte limit"))?;
+        let depth=self.depth.checked_add(1).filter(|n|*n<=MAX_PATH_DEPTH)
+            .ok_or_else(||invalid("child exceeds original absolute path depth limit"))?;
+        Ok(Self{bytes,depth})
+    }
+}
 impl HeldDir {
     /// Observe one bounded child name without opening its contents or
     /// returning a handle for an untrusted device, FIFO, or symlink.

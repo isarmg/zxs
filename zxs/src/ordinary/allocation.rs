@@ -15,7 +15,7 @@ pub(super) struct Allocation {
     pub attempt:OperationId,pub root:NativeObject,pub stage:Option<Stage>,pub digest:[u8;32],pub stamp:fs::OriginalStamp,pub bytes:Vec<u8>,
 }
 
-fn binding(digest:[u8;32],stage:Option<&Stage>)->io::Result<Vec<u8>>{
+pub(super) fn binding(digest:[u8;32],stage:Option<&Stage>)->io::Result<Vec<u8>>{
     let mut bytes=Vec::new();
     match stage{None=>bytes.push(0),Some(s)=>{
         if s.slot>=SLOTS{return Err(invalid("attempt ordinal out of range"));}
@@ -24,7 +24,7 @@ fn binding(digest:[u8;32],stage:Option<&Stage>)->io::Result<Vec<u8>>{
     let mut hash=crate::hash::Sha256::new();hash.update(b"ZXS/ORIGINAL-STAGE-BINDING\0")?;
     hash.update(&digest)?;hash.update(&bytes)?;bytes.extend_from_slice(&hash.finish());Ok(bytes)
 }
-fn stage_of(digest:[u8;32],bytes:&[u8])->io::Result<Option<Stage>>{
+pub(super) fn stage_of(digest:[u8;32],bytes:&[u8])->io::Result<Option<Stage>>{
     let mut r=In(bytes);let stage=match r.byte()?{
         0=>None,
         1=>Some(Stage{slot:r.byte()?,object:NativeObject::get(&mut r)?}),

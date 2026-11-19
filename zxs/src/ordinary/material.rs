@@ -55,10 +55,18 @@ pub(in crate::ordinary) fn room_for_ticket(names:&[Vec<u8>],name:&str,stage:&CSt
 /// Check every name this exact ticket might need, against the same held
 /// parent. Inventory capacity and vacancy are separate checks; this does not
 /// allocate a slot, authorize a parent, or open/claim any existing occupant.
+fn ticket_paths<T>(name:&str,ticket:OperationId,mut check:impl FnMut(&std::ffi::CStr)->io::Result<T>)->io::Result<T>{
+    let final_name=check(&destination(name)?)?;
+    for slot in 0..SLOTS{check(&staging(ticket,slot))?;}
+    Ok(final_name)
+}
 pub(in crate::ordinary) fn check_ticket_paths(parent:&HeldDir,name:&str,ticket:OperationId)->io::Result<()>{
-    parent.checked_child_path(&destination(name)?)?;
-    for slot in 0..SLOTS{parent.checked_child_path(&staging(ticket,slot))?;}
-    Ok(())
+    ticket_paths(name,ticket,|n|parent.checked_child_path(n)).map(|_|())
+}
+/// The same issued names, checked from the authenticated parent's cumulative
+/// extent rather than a filesystem listing. Cache only the business child.
+pub(in crate::ordinary) fn ticket_budget(parent:crate::fs::PathBudget,name:&str,ticket:OperationId)->io::Result<crate::fs::PathBudget>{
+    ticket_paths(name,ticket,|n|parent.child(n))
 }
 
 /// No named write here. The actual root, FileId and this one bounded ticket

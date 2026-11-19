@@ -78,6 +78,7 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
             return Ok(FileInfo::from_frame(done)); // Do not open a later same-named root.
         }
     }
+    state.require_file_token(op)?;
     if state.moving.is_some()||state.incrementing.is_some()||state.editing.is_some()||state.saving.is_some()||state.committing.is_some(){return Err(invalid("a different original FILE command needs completion"));}
     if let Some(a)=&state.allocated{
         if a.op!=op || a.request!=request {return Err(invalid("another original FILE allocation needs completion"));}
@@ -88,11 +89,12 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
     let volume=pool.ordinary(id)?;
     if state.allocated.is_none(){
         let file=FileId::new()?;let entry=EntryId::new()?;let history=HistoryId::new()?;
-        if state.file(file).is_some() || state.on_all().any(|f|f.create.entry==entry||f.create.history==history){
+        if state.file(file).is_some() || state.entry_used(entry) || state.on_all().any(|f|f.create.history==history){
             return Err(invalid("new FILE identity collides with an original decision"));
         }
         let (seq,previous)=state.frontier();
         let (attempt,root)=material::select_ticket(&volume,name)?;
+        pool.require_business_op(attempt)?;
         if state.ticket_used(attempt)||op==attempt{return Err(invalid("new private ticket collides with earlier operation"));}
         allocation::Allocation::reserve(&pool.system,pool.id(),op,id,name,seq+1,previous,entry,file,history,attempt,root)?;
     }

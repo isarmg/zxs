@@ -63,8 +63,16 @@ pub(crate) fn local_uid()->u32 {
     unsafe { zxs_effective_uid() }
 }
 
-pub(crate) fn check_path(path: &Path) -> io::Result<()> {
-    if !path.is_absolute() || path.as_os_str().as_bytes().len() > 4096 {
+const MAX_PATH_BYTES:usize=4096;
+pub(crate) const MAX_PATH_DEPTH:usize=256;
+/// Capacity of an already canonical absolute name. It contains no path,
+/// filesystem object, or permission to operate on one.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) struct PathBudget{bytes:usize,depth:usize}
+pub(crate) fn check_path(path:&Path)->io::Result<()>{path_budget(path).map(|_|())}
+pub(crate) fn path_budget(path:&Path)->io::Result<PathBudget>{
+    let bytes=path.as_os_str().as_bytes().len();
+    if !path.is_absolute() || bytes > MAX_PATH_BYTES {
         return Err(invalid("supply a bounded absolute directory path"));
     }
     let mut normal = PathBuf::from("/");
@@ -74,7 +82,7 @@ pub(crate) fn check_path(path: &Path) -> io::Result<()> {
             Component::RootDir => {}
             Component::Normal(name) => {
                 depth += 1;
-                if depth > 256 || name.as_bytes().contains(&0) { return Err(invalid("invalid directory component or depth")); }
+                if depth > MAX_PATH_DEPTH || name.as_bytes().contains(&0) { return Err(invalid("invalid directory component or depth")); }
                 normal.push(name);
             }
             _ => return Err(invalid("relative or parent components are not allowed")),
@@ -83,7 +91,7 @@ pub(crate) fn check_path(path: &Path) -> io::Result<()> {
     if depth == 0 || normal.as_os_str().as_bytes() != path.as_os_str().as_bytes() {
         return Err(invalid("use an exact absolute directory path, not / or an alias spelling"));
     }
-    Ok(())
+    Ok(PathBudget{bytes,depth})
 }
 
 fn open_absolute(path: &Path) -> io::Result<File> {

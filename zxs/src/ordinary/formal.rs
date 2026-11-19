@@ -36,6 +36,7 @@ fn choice<'a>(p:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,rev:u64)->io
         let f=d.formal()?;if f.request!=req{return Err(invalid("different initial formal commit request for original operation"));}
         if !s.committing.as_ref().is_some_and(|a|a.original.op==op){return Ok(Choice::Done(f.receipt()));}
     }
+    s.require_file_token(op)?;
     if s.moving.is_some()||s.incrementing.is_some()||s.editing.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.as_ref().is_some_and(|a|a.original.op!=op||a.request!=req){
         return Err(invalid("another original FILE operation needs completion"));
     }

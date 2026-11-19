@@ -5,6 +5,8 @@ use super::{allocation::{self,Allocation},draft::{allocation::{self as save_allo
     formal::{allocation::{self as formal_allocation,FormalAllocation},types::{self as formal_types,Commit}},
     interval::{allocation::{self as span_allocation,SpanAllocation},types::{self as span_types,Saved}},
     wire::{self,Frame,In,NativeObject,MAX_FRAME}};
+use super::directory::types::{Created as DirCreated,Origin as DirOrigin,Parent as DirParent};
+use crate::identity::DirectoryId;
 use super::custody::{Method,allocation::{self as move_allocation,MoveAllocation},transfer::{self as transfer,Origin as MoveOrigin,Moved}};
 use super::delta::{allocation::{self as delta_allocation,DeltaAllocation},map::Map as DeltaMap,types::{self as delta_types,Delta}};
 use crate::{BranchId,NodeId,VersionId,VersionStorageId,fs::{self,HeldDir,invalid},EntryId,HistoryId,PoolId,OperationId,FileId,VolumeId};
@@ -15,6 +17,7 @@ pub(in crate::ordinary) mod cycle;
 mod windows;
 mod graph;
 mod names;
+mod directories;
 use names::{Member,Names};
 pub(in crate::ordinary) use graph::Graph;
 pub(in crate::ordinary) use windows::WorkWindow;
@@ -26,7 +29,7 @@ pub(super) const INTENT:&CStr=c"FILE-INTENT";
 const INTENT_MAGIC:&[u8]=b"ZXS/ORIGINAL-FILE-INTENT\0";
 const MAX_INTENT:usize=MAX_FRAME+256;
 
-pub(super) enum Decision{Create(Frame),Save(SaveFrame),Formal(Commit),Span(Saved),Delta(Delta),Move(Moved)}
+pub(super) enum Decision{Create(Frame),Save(SaveFrame),Formal(Commit),Span(Saved),Delta(Delta),Move(Moved),Directory(DirCreated)}
 impl Decision{
     pub(super) fn read(pool:PoolId,bytes:&[u8])->io::Result<Self>{
         let e=wire::envelope(pool,bytes)?;
@@ -40,21 +43,22 @@ impl Decision{
             _=>Err(invalid("unknown original SYSTEM command")),
         }
     }
+    pub(super) fn directory(&self)->io::Result<&DirCreated>{match self{Self::Directory(d)=>Ok(d),_=>Err(invalid("not an original ordinary directory birth"))}}
     pub(super) fn moved(&self)->io::Result<&Moved>{match self{Self::Move(m)=>Ok(m),_=>Err(invalid("not an original FILE handoff"))}}
     pub(super) fn creation(&self)->io::Result<&Frame>{match self{Self::Create(f)=>Ok(f),_=>Err(invalid("original command is not FILE creation"))}}
     pub(super) fn save(&self)->io::Result<&SaveFrame>{match self{Self::Save(f)=>Ok(f),_=>Err(invalid("original command is not a first SAVE"))}}
     pub(super) fn formal(&self)->io::Result<&Commit>{match self{Self::Formal(f)=>Ok(f),_=>Err(invalid("original command is not a formal FILE commit"))}}
     pub(super) fn delta(&self)->io::Result<&Delta>{match self{Self::Delta(d)=>Ok(d),_=>Err(invalid("not a formal incremental decision"))}}
     pub(super) fn span(&self)->io::Result<&Saved>{match self{Self::Span(s)=>Ok(s),_=>Err(invalid("not an original working interval save"))}}
-    pub(super) fn seq(&self)->u64{match self{Self::Create(f)=>f.seq,Self::Save(f)=>f.seq,Self::Formal(f)=>f.seq,Self::Span(f)=>f.seq,Self::Delta(f)=>f.seq,Self::Move(m)=>m.seq}}
-    fn previous(&self)->[u8;32]{match self{Self::Create(f)=>f.previous,Self::Save(f)=>f.previous,Self::Formal(f)=>f.previous,Self::Span(f)=>f.previous,Self::Delta(f)=>f.previous,Self::Move(m)=>m.previous}}
-    fn digest(&self)->[u8;32]{match self{Self::Create(f)=>f.digest,Self::Save(f)=>f.digest,Self::Formal(f)=>f.digest,Self::Span(f)=>f.digest,Self::Delta(f)=>f.digest,Self::Move(m)=>m.digest}}
-    pub(super) fn request(&self)->[u8;32]{match self{Self::Create(f)=>f.request,Self::Save(f)=>f.request,Self::Formal(f)=>f.request,Self::Span(f)=>f.request,Self::Delta(f)=>f.request,Self::Move(m)=>m.request}}
-    pub(super) fn bytes(&self)->&[u8]{match self{Self::Create(f)=>&f.bytes,Self::Save(f)=>&f.bytes,Self::Formal(f)=>&f.bytes,Self::Span(f)=>&f.bytes,Self::Delta(f)=>&f.bytes,Self::Move(m)=>&m.bytes}}
+    pub(super) fn seq(&self)->u64{match self{Self::Create(f)=>f.seq,Self::Save(f)=>f.seq,Self::Formal(f)=>f.seq,Self::Span(f)=>f.seq,Self::Delta(f)=>f.seq,Self::Move(m)=>m.seq,Self::Directory(d)=>d.seq}}
+    fn previous(&self)->[u8;32]{match self{Self::Create(f)=>f.previous,Self::Save(f)=>f.previous,Self::Formal(f)=>f.previous,Self::Span(f)=>f.previous,Self::Delta(f)=>f.previous,Self::Move(m)=>m.previous,Self::Directory(d)=>d.previous}}
+    fn digest(&self)->[u8;32]{match self{Self::Create(f)=>f.digest,Self::Save(f)=>f.digest,Self::Formal(f)=>f.digest,Self::Span(f)=>f.digest,Self::Delta(f)=>f.digest,Self::Move(m)=>m.digest,Self::Directory(d)=>d.digest}}
+    pub(super) fn request(&self)->[u8;32]{match self{Self::Create(f)=>f.request,Self::Save(f)=>f.request,Self::Formal(f)=>f.request,Self::Span(f)=>f.request,Self::Delta(f)=>f.request,Self::Move(m)=>m.request,Self::Directory(d)=>d.request}}
+    pub(super) fn bytes(&self)->&[u8]{match self{Self::Create(f)=>&f.bytes,Self::Save(f)=>&f.bytes,Self::Formal(f)=>&f.bytes,Self::Span(f)=>&f.bytes,Self::Delta(f)=>&f.bytes,Self::Move(m)=>&m.bytes,Self::Directory(d)=>&d.bytes}}
     fn effect(&self)->Effect{
-        match self{Self::Move(m)=>m.original.effect(),Self::Create(_)|Self::Save(_)|Self::Formal(_)|Self::Span(_)|Self::Delta(_)=>Effect::Ordinary}
+        match self{Self::Move(m)=>m.original.effect(),Self::Create(_)|Self::Save(_)|Self::Formal(_)|Self::Span(_)|Self::Delta(_)|Self::Directory(_)=>Effect::Ordinary}
     }
-    pub(super) fn op(&self)->OperationId{match self{Self::Create(f)=>f.create.op,Self::Save(f)=>f.original.op,Self::Formal(f)=>f.original.op,Self::Span(f)=>f.original.op,Self::Delta(f)=>f.original.op,Self::Move(m)=>m.original.op}}
+    pub(super) fn op(&self)->OperationId{match self{Self::Create(f)=>f.create.op,Self::Save(f)=>f.original.op,Self::Formal(f)=>f.original.op,Self::Span(f)=>f.original.op,Self::Delta(f)=>f.original.op,Self::Move(m)=>m.original.op,Self::Directory(d)=>d.origin.op}}
 }
 
 pub(super) struct Intent{pub frame:Decision,pub stamp:fs::OriginalStamp,pub bytes:Vec<u8>}
@@ -84,11 +88,13 @@ type Allowed<'a>=crate::pool::JournalRegistration<'a>;
 struct OriginalIndex{
     credits:Credits,
     ops:BTreeSet<OperationId>,files:BTreeMap<FileId,usize>,entries:BTreeSet<EntryId>,histories:BTreeSet<HistoryId>,
+    directory_rows:directories::DirectoryRows,directory_tokens:BTreeSet<OperationId>,
     names:Names,tickets:BTreeSet<OperationId>,native:BTreeSet<fs::Birth>,saved:BTreeMap<FileId,usize>,
     formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,branches:BTreeSet<BranchId>,
     versions:BTreeSet<VersionId>,storage:BTreeSet<VersionStorageId>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,Vec<usize>>,moves:BTreeMap<FileId,usize>,
 }
 impl OriginalIndex{
+    fn file_op_used(&self,op:OperationId)->bool{self.ops.contains(&op)||self.directory_tokens.contains(&op)}
     fn birth<'a>(&self,id:FileId,frames:&'a[Decision])->io::Result<&'a Frame>{
         self.files.get(&id).and_then(|i|frames.get(*i)).ok_or_else(||invalid("no original FILE creation at this SAVE cutoff"))?.creation()
     }
@@ -150,10 +156,15 @@ impl OriginalIndex{
     }
     fn admit(&self,f:&Decision,frames:&[Decision],used:usize,prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
         self.credits.room(frames.len(),used,f.bytes().len(),f.effect())?;
-        if f.seq()!=frames.len() as u64+1||f.previous()!=prev||self.ops.contains(&f.op()){
+        if f.seq()!=frames.len() as u64+1||f.previous()!=prev||self.file_op_used(f.op()){
             return Err(invalid("repeated operation or nonconsecutive original FILE decision"));
         }
         match f{
+            Decision::Directory(d)=>{
+                self.new_directory(&d.origin,frames,allow)?;
+                d.relation(allow,self.directory_parent(frames,d.origin.parent.address)?)?;
+                if self.native.contains(&d.object.birth){return Err(invalid("ordinary directory birth reuses an admitted native object"));}
+            }
             Decision::Move(m)=>{let graph=self.registered_source(&m.original,frames,allow)?;
                 m.require_at_graph(self.placement(m.original.file,frames)?,graph)?;
                 if m.original.mode==Method::Transfer&&m.target.each().any(|x|self.native.contains(&x.birth)){
@@ -163,7 +174,7 @@ impl OriginalIndex{
             Decision::Create(f)=>{let c=&f.create;
                 if !allow.file(c.volume,c.uid,c.directory.entity,&c.directory.birth,false)
                     ||self.files.contains_key(&c.file)||self.names.occupied_root(c.volume,&c.name)||self.entries.contains(&c.entry)
-                    ||self.histories.contains(&c.history)||self.tickets.contains(&c.attempt)||self.native.contains(&c.local.birth)
+                    ||self.histories.contains(&c.history)||self.tickets.contains(&c.attempt)||self.directory_tokens.contains(&c.attempt)||self.native.contains(&c.local.birth)
                     ||self.native.contains(&c.directory.birth){return Err(invalid("conflicting original FILE creation"));}
             }
             Decision::Save(f)=>{let c=self.original_save(&f.original,frames,allow)?;let n=&f.material.object;
@@ -193,10 +204,13 @@ impl OriginalIndex{
         }
         Ok(())
     }
-    fn remember(&mut self,d:&Decision,index:usize)->io::Result<()>{
+    fn remember(&mut self,d:&Decision,index:usize,reg:&Allowed<'_>)->io::Result<()>{
         self.credits.apply(d.effect(),d.digest())?;
         self.ops.insert(d.op());
         match d{
+            Decision::Directory(d)=>{let o=&d.origin;let budget=directories::child_budget(&self.directory_rows,o,reg)?;
+                self.names.add_directory(d)?;self.directory_rows.insert(o.id,(index,budget));
+                self.entries.insert(o.entry);self.tickets.insert(o.ticket);self.directory_tokens.extend([o.op,o.ticket]);self.native.insert(d.object.birth.clone());}
             Decision::Move(m)=>{let o=&m.original;self.moves.insert(o.file,index);self.tickets.insert(o.ticket);
                 self.names.apply_handoff(o,false)?;
                 if o.mode==Method::Transfer{for obj in m.target.each(){self.native.insert(obj.birth.clone());}}}
@@ -236,7 +250,7 @@ fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,gr
 }
 
 pub(crate) struct Journal{
-    credits:Credits,names:Names,
+    credits:Credits,names:Names,entries:BTreeSet<EntryId>,directory_rows:directories::DirectoryRows,directory_tokens:BTreeSet<OperationId>,
     decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,Vec<usize>>,moves:BTreeMap<FileId,usize>,pub(super) moving:Option<MoveAllocation>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
     pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) incrementing:Option<DeltaAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
 }
@@ -248,7 +262,7 @@ impl Journal{
         while !input.is_empty(){
             let Some(n)=Frame::size(input)? else{break};if input.len()<n{break;}
             let f=Decision::read(pool,&input[..n])?;idx.admit(&f,&ds,tail.len()-input.len(),prev,&allowed)?;
-            prev=f.digest();idx.remember(&f,ds.len())?;ds.push(f);input=&input[n..];
+            prev=f.digest();idx.remember(&f,ds.len(),&allowed)?;ds.push(f);input=&input[n..];
         }
         let (mut allocated,mut saving,mut committing,mut editing,mut incrementing,mut moving)=(None,None,None,None,None,None);
         if let Some((stamp,bytes))=system.record(allocation::NAME,move_allocation::MAX)?{
@@ -256,7 +270,7 @@ impl Journal{
                 let a=MoveAllocation::from_bytes(system,pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Move(m) if a.matches(m)));
                 if !last{
-                    if ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op)||a.opened(){
+                    if ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.file_op_used(a.original.op)||a.opened(){
                         return Err(invalid("handoff reservation not at its original frontier"));
                     }
                     // Reservation alone is never a decided custody. Frame,
@@ -270,14 +284,14 @@ impl Journal{
                 let a=DeltaAllocation::from_bytes(pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Delta(f) if a.matches(f)));
                 if !last{
-                    if ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op){return Err(invalid("not the original INCR frontier"));}
+                    if ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.file_op_used(a.original.op){return Err(invalid("not the original INCR frontier"));}
                     idx.delta_source(&a.original,&ds,&allowed)?;
                 }
                 incrementing=Some(a);
             }else if bytes.starts_with(span_allocation::MAGIC){
                 let a=SpanAllocation::from_bytes(pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Span(f) if a.matches(f)));
-                if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op)){
+                if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.file_op_used(a.original.op)){
                     return Err(invalid("working interval reservation conflicts with original frontier"));
                 }
                 // When an already-appended frame exactly equals this still-open
@@ -288,14 +302,14 @@ impl Journal{
             }else if bytes.starts_with(formal_allocation::MAGIC){
                 let a=FormalAllocation::from_bytes(pool,stamp,bytes)?;idx.original_formal(&a.original,&ds,&allowed)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Formal(f) if a.matches(f)));
-                if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op)||!idx.new_ids(&a.original)){
+                if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.file_op_used(a.original.op)||!idx.new_ids(&a.original)){
                     return Err(invalid("formal reservation is not at its original source and frontier"));
                 }
                 committing=Some(a);
             }else if bytes.starts_with(save_allocation::MAGIC){
                 let a=SaveAllocation::from_bytes(pool,stamp,bytes)?;idx.original_save(&a.original,&ds,&allowed)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Save(f) if a.matches(f)));
-                if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.original.op)||idx.saved.contains_key(&a.original.file)){
+                if !last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.file_op_used(a.original.op)||idx.saved.contains_key(&a.original.file)){
                     return Err(invalid("first SAVE reservation is not at its original frontier"));
                 }
                 saving=Some(a);
@@ -303,9 +317,9 @@ impl Journal{
                 let a=Allocation::from_bytes(system,pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Create(f) if a.matches(f)));
                 if !allowed.file(a.volume,a.uid,a.root.entity,&a.root.birth,true)||
-                    (!last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.ops.contains(&a.op)
+                    (!last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.file_op_used(a.op)
                     ||idx.files.contains_key(&a.file)||idx.entries.contains(&a.entry)||idx.histories.contains(&a.history)
-                    ||idx.names.occupied_root(a.volume,&a.name)||idx.tickets.contains(&a.attempt)
+                    ||idx.names.occupied_root(a.volume,&a.name)||idx.tickets.contains(&a.attempt)||idx.directory_tokens.contains(&a.attempt)
                     ||a.stage.as_ref().is_some_and(|s|idx.native.contains(&s.object.birth)))){
                     return Err(invalid("original FILE allocation no longer matches its registered root or frontier"));
                 }
@@ -322,6 +336,7 @@ impl Journal{
         let pending=Intent::read(system,pool)?;
         if let Some(p)=&pending{
             let matches=match &p.frame{
+                Decision::Directory(_)=>false, // No directory operand/issuer can be admitted at this stage.
                 Decision::Move(m)=>moving.as_ref().is_some_and(|a|a.matches(m)),
                 Decision::Create(f)=>allocated.as_ref().is_some_and(|a|a.matches(f)),
                 Decision::Save(f)=>saving.as_ref().is_some_and(|a|a.matches(f)),
@@ -351,7 +366,9 @@ impl Journal{
             idx.credits.before_unconfirmed(last.effect(),last.digest())?;
             // The replay indices must never expose an otherwise complete but
             // not yet confirmed last frame (including a first working revision).
-            match last {Decision::Move(m)=>{
+            match last {Decision::Directory(d)=>{
+                    let o=&d.origin;idx.names.hide_directory(d)?;idx.directory_rows.remove(&o.id);idx.entries.remove(&o.entry);idx.directory_tokens.remove(&o.op);idx.directory_tokens.remove(&o.ticket);
+                },Decision::Move(m)=>{
                     if moving.as_ref().is_some_and(|a|a.opened()){return Err(invalid("target installation confirmation before original placement frontier"));}
                     // Only this unconfirmed frame is hidden. If there was
                     // earlier custody, restore the actual admitted predecessor,
@@ -370,10 +387,10 @@ impl Journal{
                     let chain=idx.spans.get_mut(&s.original.file).ok_or_else(||invalid("missing original span chain"))?;
                     if chain.pop()!=Some(ds.len()-1){return Err(invalid("wrong unconfirmed working edge"));}
                 },Decision::Formal(f)=>{idx.formal.remove(&f.original.file);idx.nodes.remove(&f.original.node);},
-                Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{let c=&f.create;idx.names.hide_created(c.volume,&c.name,c.entry,c.file)?;idx.files.remove(&c.file);}}
+                Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{let c=&f.create;idx.names.hide_created(c.volume,&c.name,c.entry,c.file)?;idx.files.remove(&c.file);idx.entries.remove(&c.entry);}}
             ds.pop();
         }
-        Ok(Self{credits:idx.credits,names:idx.names,decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
+        Ok(Self{credits:idx.credits,names:idx.names,entries:idx.entries,directory_rows:idx.directory_rows,directory_tokens:idx.directory_tokens,decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
     }
     pub(super) fn frontier(&self)->(u64,[u8;32]){
         (self.decisions.len() as u64,self.decisions.last().map_or(self.genesis,Decision::digest))
@@ -401,7 +418,7 @@ impl Journal{
             self.pending.as_ref().is_some_and(|i|i.frame.bytes()!=m.bytes){
             return Err(invalid("different sealed frame, original register or lifecycle operand"));}
         let mut i=OriginalIndex::default();i.ops.insert(init);
-        for(n,d)in self.decisions.iter().enumerate(){i.remember(d,n)?;}
+        for(n,d)in self.decisions.iter().enumerate(){i.remember(d,n,allowed)?;}
         i.admit(&Decision::Move(m.clone()),&self.decisions,self.frame_bytes,self.frontier().1,allowed)
     }
     pub(super) fn room_for(&self,n:usize)->io::Result<()>{
@@ -476,8 +493,14 @@ impl Journal{
     pub(in crate::ordinary) fn clean_initial_handoff(&self,id:FileId)->bool{
         self.placed(id).is_none()&&self.confirmed_file_cycle(id).is_ok_and(|edge|edge.clean_transportable().is_ok())
     }
+    /// Neither a completed mkdir's private name ticket nor its public Op
+    /// can be reissued as a FILE command. Historical readers do not use this.
+    pub(super) fn require_file_token(&self,op:OperationId)->io::Result<()>{
+        if self.directory_tokens.contains(&op){return Err(invalid("operation belongs to an original ordinary directory"));}Ok(())
+    }
+    pub(super) fn entry_used(&self,id:EntryId)->bool{self.entries.contains(&id)}
     pub(super) fn ticket_used(&self,ticket:OperationId)->bool{
-        self.on_all().any(|c|c.create.attempt==ticket)||self.moves().any(|m|m.original.ticket==ticket)||self.decided(ticket).is_some()
+        self.directory_tokens.contains(&ticket)||self.on_all().any(|c|c.create.attempt==ticket)||self.moves().any(|m|m.original.ticket==ticket)||self.decided(ticket).is_some()
     }
     #[cfg(test)]
     pub(super) fn intervals(&self,id:FileId)->impl DoubleEndedIterator<Item=&Saved>{

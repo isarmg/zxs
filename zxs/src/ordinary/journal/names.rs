@@ -12,7 +12,7 @@ pub(super) enum Member{File{entry:EntryId,file:FileId},Directory{entry:EntryId,d
 #[derive(Default)]
 pub(super) struct Names{parents:BTreeMap<Parent,BTreeMap<String,Member>>}
 impl Names{
-    fn get(&self,p:Parent,name:&str)->Option<Member>{self.parents.get(&p)?.get(name).copied()}
+    pub(super) fn get(&self,p:Parent,name:&str)->Option<Member>{self.parents.get(&p)?.get(name).copied()}
     pub(super) fn root(&self,volume:VolumeId,name:&str)->Option<Member>{self.get(Parent::Root(volume),name)}
     pub(super) fn occupied_root(&self,volume:VolumeId,name:&str)->bool{self.root(volume,name).is_some()}
     fn enter(&mut self,p:Parent,name:&str,e:Member)->io::Result<()>{
@@ -26,6 +26,12 @@ impl Names{
         let siblings=self.parents.get_mut(&p).ok_or_else(||invalid("missing original parent of the confirmed entry"))?;
         if siblings.get(name)!=Some(&expected){return Err(invalid("source is not the exact original entry of this parent"));}
         siblings.remove(name);if siblings.is_empty(){self.parents.remove(&p);}Ok(())
+    }
+    pub(super) fn add_directory(&mut self,d:&super::DirCreated)->io::Result<()>{
+        let o=&d.origin;self.enter(o.parent.address,&o.name,Member::Directory{entry:o.entry,directory:o.id})
+    }
+    pub(super) fn hide_directory(&mut self,d:&super::DirCreated)->io::Result<()>{
+        let o=&d.origin;self.withdraw(o.parent.address,&o.name,Member::Directory{entry:o.entry,directory:o.id})
     }
     pub(super) fn create_file(&mut self,volume:VolumeId,name:&str,entry:EntryId,file:FileId)->io::Result<()>{
         self.enter(Parent::Root(volume),name,Member::File{entry,file})

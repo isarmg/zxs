@@ -33,3 +33,14 @@ impl Drop for PrivateTemp {
         }
     }
 }
+
+pub(crate) fn native_root_length(parent:&Path,n:usize)->PathBuf{
+    use std::os::unix::{ffi::OsStrExt,fs::DirBuilderExt};
+    let mut p=parent.to_owned();
+    while p.as_os_str().as_bytes().len()<n{
+        let delta=n-p.as_os_str().as_bytes().len();assert!(delta>=2);
+        let mut k=(delta-1).min(160);if delta-k-1==1{k-=1;}
+        p.push("a".repeat(k));fs::DirBuilder::new().mode(0o700).create(&p).unwrap();
+    }
+    assert_eq!(p.as_os_str().as_bytes().len(),n);p
+}
