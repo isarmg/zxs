@@ -132,6 +132,10 @@ impl<'v> IncomingSelection<'v>{
         if !a.matches(&m)||s.pending.as_ref().is_some_and(|i|i.frame.bytes()!=m.bytes){return Err(invalid("new target bytes differ from the original sealed decision"));}
         Ok(super::target::Goal{frame:m,site:super::target::Site::Private})
     }
+    pub(crate) fn allocation_count(&self,g:&LifecycleGrant<'_>)->io::Result<usize>{
+        if self.request!=g.request()||self.prior!=g.prior(){return Err(invalid("not this original lifecycle selection"));}
+        self.source.allocation_count(g.sites())
+    }
     pub(crate) fn count(&self)->usize{self.source.objects().len()}
     pub(crate) fn claim(&self,i:usize)->io::Result<(u64,[u8;32])>{
         let x=self.source.objects().get(i).ok_or_else(||invalid("no such original source role"))?;Ok((x.len,x.digest))

@@ -112,3 +112,23 @@ fn verified_older_inventory_cannot_lend_an_extra_child_or_repeat_a_real_pack_at_
     assert_eq!(s.actual_graph(id).unwrap().hashes(),ds.map(|d|d.digest));
     assert!(live.stream(Leaf::IncrNext,|_,_|panic!("an unissued ordinal furnished bytes")).is_err());
 }
+
+#[test]
+#[ignore="actual original FILE history on registered filesystems; source-only role-admission regression"]
+fn recycle_allocation_requires_the_three_four_or_five_actual_ordered_roles_not_a_numeric_range(){
+    let t=Original::new(b"original");let id=t.first.file;
+    let check=|count:usize|{
+        let mut v=Clean::capture(&t.system,id).unwrap().verify().unwrap();
+        let sites={let(c,f,ds)=v.originals();Sites::birthplace(c,f,ds)};
+        assert_eq!(v.allocation_count(&sites).unwrap(),count);
+        let saved=v.bytes.clone();v.bytes.pop();assert!(v.allocation_count(&sites).is_err());
+        v.bytes=saved.clone();v.bytes.swap(0,1);assert!(v.allocation_count(&sites).is_err());
+        v.bytes=saved.clone();v.bytes[1].original=saved[0].original.clone();
+        assert!(v.allocation_count(&sites).is_err());
+        v.bytes=saved.clone();v.bytes.push(saved.last().unwrap().clone());
+        assert!(v.allocation_count(&sites).is_err()); // four for F0, five for I1, six for I2
+    };
+    check(3);t.write(0,b"X");t.second();check(4);
+    save_interval(&t.system,OperationId::new().unwrap(),id,2,SpanEdit::new(1,claim(b"Y"),LengthPolicy::KeepOrGrow).unwrap(),Cursor::new(b"Y")).unwrap();
+    commit_working(&t.system,OperationId::new().unwrap(),id,3).unwrap();check(5);
+}

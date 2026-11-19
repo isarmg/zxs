@@ -249,6 +249,16 @@ impl Verified{
     pub(super) fn volume(&self)->VolumeId{self.source.volume}
     pub(super) fn head(&self)->NodeId{self.source.children.iter().last().map_or(self.source.parent.original.node,|d|d.original.node)}
     pub(super) fn objects(&self)->&[Bytes]{&self.bytes}
+    /// Use the actual ordered formal graph and the source addresses from this
+    /// original custody decision, never a standalone length interval.
+    pub(super) fn allocation_count(&self,sites:&Sites)->io::Result<usize>{
+        let(c,f,ds)=self.originals();let roles=super::placed::roles(c,f,ds,sites)?;
+        if roles.len()!=self.bytes.len()||roles.iter().zip(&self.bytes).any(|(r,b)|
+            r.kind!=b.kind||r.name!=b.name||r.len!=b.len||r.original!=&b.original){
+            return Err(invalid("the complete original FILE roles, names, sizes and native objects are required before allocation"));
+        }
+        Ok(roles.len())
+    }
     pub(super) fn physical_bytes(&self)->u64{self.total}
     pub(super) fn require(&self,pool:&LocalPool,s:&Journal,volume:&FileVolume<'_>)->io::Result<()>{self.source.require(pool,s,volume)}
     pub(super) fn require_lifecycle(&self,p:&LocalPool,g:&LifecycleGrant<'_>,v:&CustodyEnd<'_, '_>)->io::Result<()>{

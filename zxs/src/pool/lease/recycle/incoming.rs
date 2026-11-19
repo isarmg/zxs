@@ -45,7 +45,9 @@ impl CustodyEnd<'_,'_>{
     }
     pub(crate) fn claim_anonymous<'v>(&self,from:&CustodyEnd<'_,'_>,o:IncomingSelection<'v>)->io::Result<Unlinked<'v>>{
         self.check_new_target(from,&o)?;
-        let n=o.count();if !(3..=4).contains(&n){return Err(invalid("cannot allocate a partial or unknown FILE role set"));}
+        // F0, F0+I1 and F0+I1+I2 each have exactly their own source
+        // inventory. No O_TMPFILE is opened until every required role matches.
+        let n=o.allocation_count(self.grant)?;
         let target=self.identity()?;let mut files=Vec::with_capacity(n);
         let(dir,free)=self.window(&o)?;if dir.is_none()&&free.is_none(){return Err(invalid("original private ticket exhausted"));}
         let known=o.capture_known(self.pool,self.grant,dir)?;
