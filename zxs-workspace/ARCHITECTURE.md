@@ -36,7 +36,7 @@
 - **逻辑提交。** 现有标记包含仓库、分支、代数、原操作、父操作与整树 SHA-256。整树摘要覆盖已排序规范路径、种类、大小和文件正文摘要；不是签名或授权。只有在认定“所选存储中的分支代际槽位”时才要求规范归档名与标记相符。用户手中改名为 `设计稿.zxs` 的完整包，核验后仍可单独浏览或签出该快照；它不补齐缺少的槽位或祖先，也不自动成为分支头。
 - **所选实物。** 只读浏览在所选文件上核验 ZIP 结构、每个成员的实际字节与逻辑提交；不要求为浏览另算一份包含 ZIP 头及注释的原包摘要。签出登记、原候选发布、冲突处理及断线恢复另需核对完整原始 ZIP 的字节摘要；原工作树、暂存及目的名称则核对操作系统能证明的实际实体。同名或逻辑树相同不能替换已开始操作的原件。历史或分支画面选择后直接传已核验的原节点，不在最后一步按名称重选“最新”。
 
-[model.py](zipworkspace/model.py)、[archive.py](zipworkspace/archive.py) 是格式与准入的依据。先给中央目录、条目数、路径深度和展开总量设上限，再核对本地头、中央目录、ZIP64、CRC、实际正文及整树标记；拒绝压缩、加密、穿越、不可移植别名、链接、特殊文件和冲突父子路径。预览第一屏也不得跳过页面之外的坏成员。大文件不整体放入内存。单个 4 GiB 文件及峰值内存/临时磁盘仍须单独验收。格式取自 [PKWARE APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT)，编解码复用 [Python zipfile](https://docs.python.org/3.12/library/zipfile.html)。
+[model.py](zipworkspace/model.py)、[archive.py](zipworkspace/archive.py) 是格式与准入的依据。先给中央目录、条目数、路径深度和展开总量设上限，再核对本地头、中央目录、ZIP64、CRC、实际正文及整树标记；拒绝压缩、加密、穿越、不可移植别名、链接、特殊文件和冲突父子路径。完整快照视图的第一屏也不得跳过页面之外的坏成员。大文件不整体放入内存。单个 4 GiB 文件及峰值内存/临时磁盘仍须单独验收。格式取自 [PKWARE APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT)，编解码复用 [Python zipfile](https://docs.python.org/3.12/library/zipfile.html)。
 
 ## 3. 模块和应用接口
 
@@ -51,7 +51,7 @@ CLI / 桌面窗口 / 移动文档选择器
 宿主能力：已选文件句柄、本机私有目录、受控文件系统操作 / 可选挂载驱动
 ```
 
-CLI 是现有入口，不用 CLI 文本、子进程或窗口控件作为业务协议。GUI 和将来移动端应调用相同的应用操作；界面不得自己解析 ZIP、拼槽位名或写 SQLite。归档只读、工作树写入和系统挂载是三个独立能力，不因安装了界面或识别了文件扩展名而自动具备。
+CLI 是现有入口，不用 CLI 文本、子进程或窗口控件作为业务协议。GUI 和将来移动端应调用相同的应用操作；界面不得自己解析 ZIP、拼槽位名或写 SQLite。[Android 的目录声明预览](android/README.md)是另一种只读结果：平台适配器交付已选文件的受限定位读，独立索引层只读 ZIP 目录声明。界面可显示名称和声明大小，不能把它交给快照、历史或写入接口；完整核验仍是另一项操作。归档只读、工作树写入和系统挂载是三个独立能力，不因安装了界面或识别了文件扩展名而自动具备。
 
 | 应用动作 | 必需输入和返回事实 |
 | --- | --- |
@@ -87,7 +87,7 @@ CLI 是现有入口，不用 CLI 文本、子进程或窗口控件作为业务�
 | Linux / macOS / Windows 桌面应用 | 同一套 Qt 工作流；分别适配已选文件身份、权限及变更观察。发布必须在实际目的卷证明“不可覆盖 + 同步 + 复读”；平台名和原生 API 的存在只是前置条件。当前源码有 Linux/macOS 原生改名路径，未提供 Windows 对等写入实现。 | 可验证的只读视图单独开放，不显示虚假的写成功。Windows 不能假定所有 POSIX 家族的查询可用；要逐项准入。缺少可证身份时，拒绝或让宿主交付已完成且有界的私有副本。 |
 | 系统挂载的 SMB 路径 | 视为用户选择的普通文件位置，无专用网络协议。逐后端验证不可覆盖竞争、关闭/冲刷及失联后的准确原操作读回。 | 仅有连接、能复制或能读目录，不等于可安全发布；没有证据时不宣告该后端支持写。 |
 | 三个桌面虚拟挂载（后续） | Linux 候选 [FUSE](https://docs.kernel.org/filesystems/fuse/fuse.html)，macOS 候选 [FSKit](https://developer.apple.com/documentation/fskit)，Windows 候选 [WinFsp](https://winfsp.dev/doc/WinFsp-Design/)。映射本机工作树而非在线重写 ZIP；继续普通读、编辑和显式整树提交。 | 每平台独立验证句柄关闭、并发、撤销/卸载、崩溃重开、权限和签名。驱动不可用仍可使用普通目录；当前无虚拟磁盘发行。 |
-| iOS / Android（后续） | 原生 UI 使用 [iOS 文档选择和目录授权](https://developer.apple.com/documentation/uikit/providing-access-to-directories)、[Android SAF](https://developer.android.com/training/data-storage/shared/documents-files)；从受授句柄或应用私有已完成副本浏览，隔离私有缓存，处理授权撤销。 | 不把 URI 当 POSIX 路径；不能证明原件/不可覆盖/耐久条件时，不提供该位置的写发布。“可以挑文件”不算移动客户端完成。 |
+| iOS / Android（完整工作流待实现） | 原生 UI 使用 [iOS 文档选择和目录授权](https://developer.apple.com/documentation/uikit/providing-access-to-directories)、[Android SAF](https://developer.android.com/training/data-storage/shared/documents-files)；从受授句柄或应用私有已完成副本浏览，隔离私有缓存，处理授权撤销。 | 不把 URI 当 POSIX 路径；不能证明原件/不可覆盖/耐久条件时，不提供该位置的写发布。“可以挑文件”不算移动客户端完成。 |
 
 ### 本项目任务与放行证据
 
