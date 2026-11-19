@@ -4,6 +4,8 @@
 //! directory authority is granted to the worker. Not an online smbd channel.
 mod issue;
 mod worker;
+mod installed;
+pub(in crate::sqlite_install::pair) use installed::SelectedSetup;
 mod start;
 pub(crate) use worker::exec_child;
 use super::{FRESH_SITE,PRIVATE_STORE,Unpublished,child,contents,live,mark};
@@ -48,7 +50,12 @@ impl Site{
     }
     fn base(&self)->&File{self.chain.last().expect("base retained")}
     fn check(&self)->io::Result<()>{
-        let host=approval::host_admin()?;safe_dir(&self.host)?;
+        self.require_from(approval::host_admin()?)
+    }
+    // Keep the original root selected before permanently lowering identity.
+    // Rewalk from the actual current "/" without administrative privileges.
+    fn require_from(&self,host:File)->io::Result<()>{
+        safe_dir(&self.host)?;safe_dir(&host)?;
         if mark(&self.host)?!=mark(&host)?{return Err(bad("different current host root"));}
         let mut p=host;
         for (original,n) in self.chain.iter().zip(PREFIX.iter().copied().chain(std::iter::once(self.leaf.as_c_str()))){

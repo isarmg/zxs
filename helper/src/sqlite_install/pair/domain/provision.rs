@@ -5,6 +5,7 @@ mod capsule;
 mod monitor;
 mod return_to_host;
 pub(crate) use return_to_host::exec_child;
+pub(in crate::sqlite_install::pair) use return_to_host::SelectedSetup;
 mod live;
 use super::handoff::{HeldOrigin,OriginChannel,SyncedStore};
 use crate::{fs_tools::RuntimeFile,isolated_group::Group,pinned::{Entity,Mount,Pinned},

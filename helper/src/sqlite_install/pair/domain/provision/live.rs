@@ -38,9 +38,14 @@ impl Live{
         // No "sign what is there": the proposal, compiled fixed bytes and
         // complete physical original must agree, before any Samba call.
         if approved_sha!=&<[u8;32]>::from(Sha256::digest(PROFILE)){return Err(bad("the original approval did not select the first-install live profile"));}
-        let dir=Stamp::on(parent)?;let os=source_at(parent)?;let stamp=Stamp::on(&os)?;
+        let os=source_at(parent)?;Self::from_original(parent,&os,approved_sha)
+    }
+    pub(super) fn from_original(parent:&File,os:&File,approved_sha:&[u8;32])->io::Result<Self>{
+        if approved_sha!=&<[u8;32]>::from(Sha256::digest(PROFILE)){return Err(bad("not the fixed first-install live profile"));}
+        let dir=Stamp::on(parent)?;let stamp=Stamp::on(os)?;
+        if Stamp::on(&source_at(parent)?)?!=stamp{return Err(bad("selected live profile was replaced before opening"));}
         if !stamp.acceptable(&dir){return Err(bad("not the installed root-owned 0444 live configuration"));}
-        let fd=crate::pinned::sam_public_reader(&os,stamp.mount,PROFILE.len() as u64)?;
+        let fd=crate::pinned::sam_public_reader(os,stamp.mount,PROFILE.len() as u64)?;
         let live=Self{fd,stamp};live.require(parent)?;Ok(live)
     }
     pub(super) fn origin(&self)->(Entity,u64){(self.stamp.entity,self.stamp.mount)}

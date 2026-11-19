@@ -55,3 +55,7 @@
 [Debian 的 Samba 源包](https://packages.debian.org/source/trixie/samba)为 `2:4.22.11+dfsg-0+deb13u1`。本片静读对应 [dsc](https://deb.debian.org/debian/pool/main/s/samba/samba_4.22.11+dfsg-0+deb13u1.dsc)、原归档和 Debian 补丁：orig 25,620,416 B、SHA-256 `4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a`；Debian 189,836 B、`0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03`。`source3/passdb/{py_passdb.c,secrets.c,machine_sid.c}` 对应三入口、按指定目录建立原 Samba 状态及本机 SID 事务；24 项补丁中，`usershare.patch` 改默认用户共享数量，所以原配置明确设为 0。上游或其他 Debian 版本不自动放行。
 
 已写客体、固定宿主启动、原组收尾及原库/父同步源码，**未调用、未生成域、未开放命令**。已有前台确认和不覆盖发布的内部步骤；已经写了仅为这一域供给准备私有运行材料的组包配方；独立登记后的现场软件原件核对已接入内部批准；固定一次性 worker 已有受限启动及收尾源码；实际发行签章、冷启动与可用性验收未交付；不能凭来宾自报的版本、退出码或 SID 冒称做到。未分发/执行 Samba，没有安装包、登录、拒绝访客的实机测试或可用首设声明。
+
+### 停机后按同一原单查首设
+
+内部 SETUP_PAIR 观察在真实宿主前台固定选定的 SYSTEM、池/INIT、实例及域供给原单。管理员阶段只固定实例槽的元数据；永久降到存储身份，实际独占原 SYSTEM 和实例目录后，才实读 root 持有的正式配置与准确 128 字节 domain.bound。原件、挂载、完整字节、严格 EOF、原 S 卷标和 SQLite 均相符，才用绑定里的本地域加固定 RID 1000 查两个历史 AccountId。此步不读取 private/secrets.tdb，不探测全机 Samba，不请求口令，不改数据库；没有回执不等于允许新设。它只能核宿主先前发行的预期域，不能证明活 smbd 正使用它或任一用户已登录。
