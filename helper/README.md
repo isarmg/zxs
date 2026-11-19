@@ -2,6 +2,8 @@
 
 目前的宿主只读诊断包括：目录关系、文件比较、选定存储根的容量/挂载、Linux 块设备清单与被动 I/O 速率，文件系统检查工具清单，以及在隔离副本上调用 FAT32 检查器。目标平台为 Linux x86_64。不接管设备或服务，没有后台服务；只有显式启动 `helper disk-web` 才开临时本机面板。无参数只显示用法。
 
+ZXS 的业务管理网页是另一个服务。可用[非 root 本机 HTTPS 部署模板](docs/management-https.md)准备专用 nginx、命名 Unix 套接字和 ZXS 后端；包本身不启用任何单元，不提供私钥、不改宿主 nginx 或网络。
+
 ```sh
 helper inspect-dirs /home/alice/downloads /home/alice/downloads/week-01 /mnt/incoming
 helper compare-files /home/alice/reference.bin /mnt/incoming/candidate.bin

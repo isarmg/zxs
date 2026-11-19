@@ -50,3 +50,5 @@ python3 packaging/debian13-amd64/build.py \
 宿主 apt 升级不会替换本私有目录中的加载器、libc 或其它库。复核 Debian 公告与新签名索引，更新准确包、对应原源码/版权、ELF 闭包和锁内的 `debian_version`，重新发行整个 helper 包，不得同版本替换内容。更新时必须传 `--previous-version`（取自上一份经独立验签的正式发行记录）；组包器按 Debian 的版本比较规则拒绝重复或倒退。只有核实从无发布才可用 `--first-release`。两项不可均给，也不可均省略；缺失、空值、错误文法及相同/倒退版本都不产生候选。这不替代对真实签名发行历史的审核。
 
 未来获准实测后：发行操作不支持边跑旧 worker 边原地换私有目录：先停止接收检查并等现有 worker 退出；前后摘要复核不是和 dpkg 整组换文件的原子锁。在隔离 Debian 13 amd64 上升级，核新签名及 BUNDLE 中每个实际文件摘要；启动新 helper 进程，证明固定启动器、加载器、私有库和检查器都符合新摘要，再对独立已知的只读副本验证。若槽在单次观察期间变化，结果不作已验证使用；不能把此事后检查当作并发升级的保证。没有签名、升级/重新核验及上游公告复核，不称已经修补。
+
+**业务管理 HTTPS 模板。** 配方只向 `/usr/share/local-ops-helper/web-management/` 复制五份固定、带 BUNDLE 摘要的 0444 输入，不装入 /etc 或 systemd 单元目录。nginx/Python/systemd、另行验签的 ZXS、专用站点身份和证书均不是本包替站点安装的依赖；见[生成与明确激活](../../docs/management-https.md)。

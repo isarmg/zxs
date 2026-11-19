@@ -187,6 +187,23 @@ def ship_live_template(root):
     f.chmod(0o444)
     return f
 
+# Inactive deployment inputs only: no /etc, installed units, keys or service
+# users. nginx/systemd/Python and the independent ZXS executable are from the
+# administrator's trusted host; not dependencies installed by the helper package.
+WEB_INPUTS = {
+    "nginx.conf": "aa5c8c5ab07f5b3bcf541502069bbce043c564d5eb706c276095f71b7f82fc6c",
+    "profile.py": "536b451ab626fbada58ca501eecaf2781349d5b315729d1c5dc726742fcd0ec6",
+    "zxs-management-https.service.in": "0e2d07f6b5f6859f3618703d2492cfc6ba392de5eb2643739fbbd2336cedee79",
+    "zxs-management.service.in": "9f14b91afe7c72332a90e3c1ccace64316ae63cb4610d84ce401b1ceaede529b",
+    "zxs-management.socket.in": "f8dab08483d34f64ab6fded9ea8e69f65e2f3464bff6cae878ef7b4c163bdf22",
+}
+def ship_web_templates(root):
+    rel="usr/share/local-ops-helper/web-management"
+    for name,d in WEB_INPUTS.items():
+        f=copy_checked(PROJECT/"resources/web-management"/name,root/rel/name,d,cap=32768)
+        f.chmod(0o444)
+    return {"base":rel,"sha256":WEB_INPUTS,"active_units":[]}
+
 def build(args):
     require(os.geteuid()!=0,"the offline package builder must run unprivileged")
     lock=json.loads((HERE/"lock.json").read_text())
@@ -209,6 +226,7 @@ def build(args):
         root=Path(scratch)/"data"; home=mkdir(root/PRIVATE_NAME)
         docs=mkdir(root/"usr/share/doc/local-ops-helper")
         template=ship_live_template(root)
+        management=ship_web_templates(root)
         shutil.copyfile(PROJECT/"LICENSE",docs/"copyright")
         rust_notices(out,docs)
         copy_checked(args.stdlib_notices,docs/"rust-stdlib-notices",args.stdlib_notices_sha256,cap=32<<20)
@@ -257,6 +275,7 @@ def build(args):
               "helper_distributed_sha256":digest(binary),"stdlib_notices_sha256":args.stdlib_notices_sha256,"packages":lock["packages"],"needed":requires,
               "files":{str(p.relative_to(home)):digest(p) for p in sorted(home.rglob("*")) if p.is_file()},
               "scope_sam":"explicit local setup-pair provision/enroll; no daemon or login validation",
+              "inactive_management_frontend":management,
               "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
               "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"packaged-not-yet-enabled"}}
