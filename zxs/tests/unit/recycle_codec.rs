@@ -44,9 +44,18 @@ fn distinct_requests_addresses_and_physical_methods_cannot_be_relabelled(){
     assert!(req(r.call(),0).is_err());assert!(req(r.call(),u64::MAX).is_err());
     assert!(req(Call::Restore{deleted_by:op,decision:prev},2).is_err());
     let d=Purpose::Delete{previous:prev,at:DeletedAt::new(0,0).unwrap()};
-    let(h,kept)=d.leaves(file,by,"same").unwrap();assert_eq!(r.leaves(file,op,"same").unwrap(),(kept.clone(),h));
-    assert_ne!(kept,d.leaves(FileId([3;16]),by,"same").unwrap().1);
-    assert_ne!(kept,d.leaves(file,op,"same").unwrap().1);assert!(wire::human_name(kept.to_bytes()).is_err());
+    let(h,kept)=d.leaves(file,by,"same").unwrap();assert_eq!(h,kept);
+    assert_eq!(kept.to_bytes(),format!("same-{file}").as_bytes());
+    assert_eq!(r.leaves(file,op,"same").unwrap(),(kept.clone(),h));
+    let other_file=FileId([3;16]);assert_ne!(kept,d.leaves(other_file,by,"same").unwrap().1);
+    // A different deletion of this FILE has a different request, not a
+    // different physical leaf. Only its own delete Op and decision can restore.
+    assert_eq!(kept,d.leaves(file,op,"same").unwrap().1);
+    assert_ne!(d.call().request(pool,9,by,file,a,b,0).unwrap(),d.call().request(pool,9,op,file,a,b,0).unwrap());
+    // A user may choose a display spelling that looks like someone else's
+    // container. It still derives a new leaf using this FILE's actual ID.
+    let looks_physical=wire::human_name(kept.to_bytes()).unwrap();
+    assert_eq!(d.leaves(other_file,op,looks_physical).unwrap().1.to_bytes(),format!("same-{file}-{other_file}").as_bytes());
     assert!(r.check_transfer(Method::Rename,&n(1,25),&n(2,26)).is_err());
     let x=n(1,25);let mut y=n(2,26);y.entity.device=1;assert!(r.check_transfer(Method::Transfer,&x,&y).is_err());
     let mut z=n(1,26);z.entity.device=2;assert!(r.check_transfer(Method::Transfer,&x,&z).is_err());
