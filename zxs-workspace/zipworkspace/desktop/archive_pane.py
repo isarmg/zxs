@@ -54,6 +54,11 @@ class ArchivePane(QWidget):
         self.views.addTab(self.comparison, "与本机文件夹比较")
         self.checkout = CheckoutPane(owner, lambda: self.store)
         self.views.addTab(self.checkout, "签出工作树")
+        self.mount = None
+        if sys.platform == "linux":
+            from .mount_pane import MountPane
+            self.mount = MountPane(owner)
+            self.views.addTab(self.mount, "只读虚拟盘")
         self.clear_document()
 
     def make_table(self, headers, title, action):
@@ -72,6 +77,8 @@ class ArchivePane(QWidget):
         self.branches.rows.replace(())
 
     def clear_document(self):
+        if self.mount is not None: self.mount.set_snapshot(None)
+        if self.selection is not None: self.selection.release_display()
         self.selection = self.next_cursor = None
         if self.save_copy is not None: self.save_copy.setEnabled(False)
         self.comparison.set_snapshot(None)
@@ -84,11 +91,13 @@ class ArchivePane(QWidget):
             widget.setEnabled(False)
 
     def choose(self):
+        if self.mount is not None: self.mount.changing()
         name, _ = QFileDialog.getOpenFileName(self, "选择要核验的目录快照", "", "目录快照 (*.zxs *.ZXS);;所有文件 (*)")
         if not name: return
         self.clear_document()
         self.views.setCurrentIndex(0)
-        self.owner.job("正在核验所选快照中的全部成员…", lambda: Selection.open(name), self.show_selection)
+        retain = self.mount is not None
+        self.owner.job("正在核验所选快照中的全部成员…", lambda: Selection.open(name, retain=retain), self.show_selection)
 
     def choose_copy(self):
         selected = self.selection
@@ -144,6 +153,8 @@ class ArchivePane(QWidget):
         self.owner.inform("已登记本次选择的存储目录。读取分支与历史时将复核原目录。")
 
     def show_selection(self, selected):
+        if self.mount is not None: self.mount.set_snapshot(selected)
+        if self.selection is not None and self.selection is not selected: self.selection.release_display()
         self.selection = selected
         if self.save_copy is not None: self.save_copy.setEnabled(True)
         self.comparison.set_snapshot(selected)
@@ -185,12 +196,17 @@ class ArchivePane(QWidget):
         if node is None:
             self.owner.inform("请选择有原始证明的节点；缺少祖先的分支头不可选。")
             return
-        store = self.store
+        if self.mount is not None: self.mount.changing()
+        store, retain = self.store, self.mount is not None
         def read_original():
             store.check()
-            original = Selection.open(node.path, expected=node)
-            store.check()
-            return original
+            original = Selection.open(node.path, expected=node, retain=retain)
+            try:
+                store.check()
+                return original
+            except BaseException:
+                original.release_display()
+                raise
         self.owner.job("正在复核所选原节点的归档字节…", read_original, self.show_selection)
 
     def show_folder(self, directory):

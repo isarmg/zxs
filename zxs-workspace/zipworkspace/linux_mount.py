@@ -47,21 +47,39 @@ def _chain(stack, path, uid):
     except Rejected as err: raise Rejected("the original mountpoint must be on an admitted ext4/XFS mount") from err
     with os.scandir(dirs[-1]) as items:
         if next(items, None) is not None: raise Rejected("mountpoint is not empty; nothing was hidden or removed")
-    return ids
+    return tuple(dirs), tuple(ids)
 
 
-@contextmanager
-def selected_point(spelling, uid):
+def point_path(spelling):
     path = Path(spelling)
     if (not path.is_absolute() or path.anchor != "/" or str(path) != spelling or ".." in path.parts
             or not 2 <= len(path.parts) <= 65 or path.parts[1] in ("dev", "proc", "sys")):
         raise Rejected("give the exact absolute path of an existing dedicated mountpoint (not a device or FD path)")
+    return path
+
+
+def point_id(fd):
+    return (*native_identity(os.fstat(fd), stat.S_IFDIR), mount_id(fd))
+
+
+@contextmanager
+def held_point(spelling, uid, *, leaf=None, chain=None):
+    path = point_path(spelling)
     with ExitStack() as original:
-        ids = _chain(original, path, uid)
+        fds, ids = _chain(original, path, uid)
+        if ((leaf is not None and point_id(leaf) != ids[-1]) or
+                (chain is not None and tuple(map(point_id, chain)) != ids)):
+            raise Rejected("the chosen mountpoint or its original directory chain changed")
         def recheck():
             with ExitStack() as now:
-                if _chain(now, path, uid) != ids:
+                if _chain(now, path, uid)[1] != ids:
                     raise Rejected("the selected mountpoint or an ancestor was replaced")
+        yield path, fds, recheck
+
+
+@contextmanager
+def selected_point(spelling, uid):
+    with held_point(spelling, uid) as (path, _, recheck):
         yield path, recheck
 
 

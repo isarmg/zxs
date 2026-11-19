@@ -86,7 +86,7 @@ CLI 是现有入口，不用 CLI 文本、子进程或窗口控件作为业务�
 | --- | --- | --- |
 | Linux / macOS / Windows 桌面应用 | 同一套 Qt 工作流；分别适配已选文件身份、权限及变更观察。发布必须在实际目的卷证明“不可覆盖 + 同步 + 复读”；平台名和原生 API 的存在只是前置条件。当前源码有 Linux/macOS 原生改名路径，未提供 Windows 对等写入实现。 | 可验证的只读视图单独开放，不显示虚假的写成功。Windows 不能假定所有 POSIX 家族的查询可用；要逐项准入。缺少可证身份时，拒绝或让宿主交付已完成且有界的私有副本。 |
 | 系统挂载的 SMB 路径 | 视为用户选择的普通文件位置，无专用网络协议。逐后端验证不可覆盖竞争、关闭/冲刷及失联后的准确原操作读回。 | 仅有连接、能复制或能读目录，不等于可安全发布；没有证据时不宣告该后端支持写。 |
-| Linux 固定快照只读挂载 | 可选 FUSE3 前台命令：显式选择一个归档及本人控制的原空目录；同一持有文件完整核验时记录 Store 数据偏移和块摘要，按位置重核后读出。仅提供归档当时的目录，不选 HEAD、签出、写入或提交。 | 未作内核/实机或打包验收。不自动挂载、提权、改变驱动/宿主设置；它不能代替可编辑工作树。 |
+| Linux 固定快照只读挂载 | 可选 FUSE3 前台命令或 Linux 窗口显式确认。窗口将已核验的原归档句柄、所选私有空目录和持有的父链交给独立助手，不解析 CLI 输出；索引核验可取消，原授权与内核挂载回执分开。两种入口都只使用明确选择的原件与位置；同一持有文件完整核验时记录 Store 数据偏移和块摘要，按位置重核后读出。仅提供归档当时的目录，不选 HEAD、签出、写入或提交。 | 未作内核/实机或打包验收。不自动挂载、提权、改变驱动/宿主设置；它不能代替可编辑工作树。 |
 | 三个桌面可编辑工作树挂载（后续） | Linux 候选 [FUSE](https://docs.kernel.org/filesystems/fuse/fuse.html)，macOS 候选 [FSKit](https://developer.apple.com/documentation/fskit)，Windows 候选 [WinFsp](https://winfsp.dev/doc/WinFsp-Design/)。映射本机工作树而非在线重写 ZIP；继续普通读、编辑和显式整树提交。 | 每平台独立验证句柄关闭、并发、撤销/卸载、崩溃重开、权限和签名。驱动不可用仍可使用普通目录；当前无虚拟磁盘发行。 |
 | iOS / Android（完整工作流待实现） | 原生 UI 使用 [iOS 文档选择和目录授权](https://developer.apple.com/documentation/uikit/providing-access-to-directories)、[Android SAF](https://developer.android.com/training/data-storage/shared/documents-files)；从受授句柄或应用私有已完成副本浏览，隔离私有缓存，处理授权撤销。 | 不把 URI 当 POSIX 路径；不能证明原件/不可覆盖/耐久条件时，不提供该位置的写发布。“可以挑文件”不算移动客户端完成。 |
 

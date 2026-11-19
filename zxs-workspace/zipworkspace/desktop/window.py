@@ -24,6 +24,7 @@ class Window(QMainWindow):
         self.plain_import = ImportPane(self)
         self.tabs.addTab(self.plain_import, "核验普通 ZIP")
         layout.addWidget(self.tabs)
+        if self.archive.mount is not None: layout.addWidget(self.archive.mount.banner)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.hide()
@@ -74,6 +75,9 @@ class Window(QMainWindow):
             event.ignore()
             self.inform("操作尚未返回，请等待。关闭窗口不等于撤销已登记的操作。")
         else:
+            if self.archive.mount is not None and not self.archive.mount.close_window():
+                event.ignore(); return
             self.archive.checkout.close_session()
+            if self.archive.selection is not None: self.archive.selection.release_display()
             self.pool.shutdown(wait=False)
             super().closeEvent(event)

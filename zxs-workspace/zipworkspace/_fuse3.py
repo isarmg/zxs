@@ -105,15 +105,22 @@ class Operations(pyfuse3.Operations):
     setxattr = removexattr = fallocate = _readonly
 
 
-def serve(view, point, last_check):
+def serve(view, point, last_check, *, token=None, accepted=None):
     if pyfuse3.ROOT_INODE != ROOT:
         raise RuntimeError("unsupported FUSE root inode")
     ops = Operations(view)
-    options = {"ro", "nodev", "nosuid", "noexec", "default_permissions", "fsname=zip-workspace-ro"}
+    fsname = "zip-workspace-ro"
+    if token is not None:
+        from .model import check_id
+        fsname += "-" + check_id(token)
+    options = {"ro", "nodev", "nosuid", "noexec", "default_permissions", "fsname=" + fsname}
     last_check()
     pyfuse3.init(ops, str(point), options)
     try:
-        print(f"Mounted read-only snapshot {view.commit.operation} at {str(point)!r}", flush=True)
+        if accepted is None:
+            print(f"Mounted read-only snapshot {view.commit.operation} at {str(point)!r}", flush=True)
+        else:
+            accepted()  # pyfuse3.init has actually returned; not an assertion about later unmount.
         trio.run(pyfuse3.main, 1, 4)
     finally:
         # Never unmount by a possibly reused pathname. A normal, external unmount ends main().
