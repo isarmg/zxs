@@ -2,7 +2,7 @@
 //! proves continuity, not authorization, child exit, durability or login.
 use super::LocalDomain;
 use crate::{pinned::{Entity,Mount},sqlite_install::bad};
-use rustix::{fd::OwnedFd,fs::{Mode,OFlags,fcntl_getfl,openat},net::{AddressFamily,RecvAncillaryBuffer,
+use rustix::{fd::{AsFd,BorrowedFd,OwnedFd},fs::{Mode,OFlags,fcntl_getfl,openat},net::{AddressFamily,RecvAncillaryBuffer,
     RecvAncillaryMessage,RecvFlags,ReturnFlags,SocketFlags,SocketType,UCred,recvmsg,socketpair,sockopt}};
 use sha2::{Digest,Sha256};
 use std::{fs::File,io::{self,IoSliceMut},mem::MaybeUninit,os::unix::fs::MetadataExt};
@@ -29,7 +29,7 @@ fn fixed_name(parent:&File)->io::Result<File>{
 // already-held lease OFDs and a host O_PATH to the original supervisor.
 #[derive(Default)]
 struct Ancillary {fds:Vec<OwnedFd>, credentials:Option<UCred>}
-fn packet<const N:usize>(socket:&OwnedFd)->io::Result<([u8;N],usize,Ancillary)>{
+fn packet<const N:usize>(socket:&impl AsFd)->io::Result<([u8;N],usize,Ancillary)>{
     let mut data=[0;N];
     let mut space=[MaybeUninit::uninit();rustix::cmsg_space!(ScmRights(4),ScmCredentials(1))];
     let mut control=RecvAncillaryBuffer::new(&mut space);
@@ -50,7 +50,16 @@ fn packet<const N:usize>(socket:&OwnedFd)->io::Result<([u8;N],usize,Ancillary)>{
     }}
     Ok((data,msg.bytes,c))
 }
+/// A live one-shot control leg on the host/worker socket only. No FDs,
+/// message-provided credentials, truncated shapes, or stream fallbacks.
+pub(super) fn start_control(socket:&impl AsFd,expected:UCred)->io::Result<[u8;65]>{
+    let (data,n,c)=packet::<65>(socket)?;
+    if n!=65||!c.fds.is_empty()||!c.credentials.is_some_and(|w|w.pid==expected.pid&&w.uid==expected.uid&&w.gid==expected.gid){
+        return Err(bad("wrong actual sender or malformed live host authorization"));
+    }Ok(data)
+}
 impl OriginChannel {
+    pub(super) fn start_endpoint(&self)->BorrowedFd<'_>{self.rx.as_fd()}
     pub(super) fn open()->io::Result<(Self,File)>{
         let (rx,tx)=socketpair(AddressFamily::UNIX,SocketType::SEQPACKET,SocketFlags::CLOEXEC,None)?;
         // A zero-length *record* also has SCM_CREDENTIALS; a true peer EOF

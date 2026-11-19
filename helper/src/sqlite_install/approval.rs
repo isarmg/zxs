@@ -43,13 +43,19 @@ impl Approved{
         // End the privileged phase BEFORE opening any storage directory for data or
         // reserving a file. This code runs only in a fresh, single-threaded CLI.
         // Any partial transition terminates the operation; no recovery as root.
-        set_no_new_privs(true)?;set_keep_capabilities(false)?;set_thread_groups(&[])?;
-        let g=Gid::from_raw(gid);let u=Uid::from_raw(uid);
-        set_thread_res_gid(g,g,g)?;set_thread_res_uid(u,u,u)?;
-        diagnostic_worker(uid,gid)?;  // all four UIDs/GIDs, no extra groups, caps, or threads
+        drop_to_storage(uid,gid)?;
         Ok(Self{request,originals,purpose})
     }
     pub(super) fn into_parts(self)->(Purpose,Request,Originals){(self.purpose,self.request,self.originals)}
+}
+
+// Fresh single-threaded host processes only. No escalation or recovery.
+pub(super) fn drop_to_storage(uid:u32,gid:u32)->io::Result<()>{
+    if !(1..u32::MAX).contains(&uid)||!(1..u32::MAX).contains(&gid){return Err(denied());}
+    set_no_new_privs(true)?;set_keep_capabilities(false)?;set_thread_groups(&[])?;
+    let g=Gid::from_raw(gid);let u=Uid::from_raw(uid);
+    set_thread_res_gid(g,g,g)?;set_thread_res_uid(u,u,u)?;
+    diagnostic_worker(uid,gid)
 }
 
 fn hex(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
@@ -73,7 +79,7 @@ pub(super) fn own_descriptor_table()->io::Result<(File,File)>{
     if Mount::on(&dir)?.is_none_or(|m|m.id!=mount.id)||fstatfs(&dir)?.f_type!=PROC_SUPER_MAGIC{return Err(denied());}
     Ok((proc,dir))
 }
-fn no_inherited_descriptors()->io::Result<()>{
+pub(super) fn no_inherited_descriptors()->io::Result<()>{
     let (proc,dir)=own_descriptor_table()?;
     let mut buf=[MaybeUninit::uninit();4096];let mut entries=RawDir::new(&dir,&mut buf);
     while let Some(e)=entries.next(){

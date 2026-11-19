@@ -42,6 +42,7 @@ enum Command {
     Disks(block_tools::Query),
     DiskWeb(Option<fat32_check::Request>),
     SealedWorker([u8;32]),
+    SamWorker,
     FsTools(fs_tools::Query),
     Fat32(fat32_check::Request),
 }
@@ -60,6 +61,10 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
             Some(arg) if arg=="--fat32-copy"=>fat32_check::Request::parse(args).map(|r|Command::DiskWeb(Some(r))),
             _=>Err("disk-web accepts only a terminal-selected --fat32-copy IMAGE --sha256 HEX"),
         };
+    }
+    if op=="__sam-fresh-v1"{
+        if args.next().is_some(){return Err("invalid internal worker");}
+        return Ok(Command::SamWorker);
     }
     if op=="__fat32-sealed-v1"{
         let expected=args.next().and_then(|s|fs_tools::hex(s.to_str()?)).ok_or("invalid internal worker")?;
@@ -93,6 +98,7 @@ fn line(s: &str) -> io::Result<()> {
 fn run(command: Command) -> io::Result<ExitCode> {
     match command {
         Command::DiskWeb(image) => disk_web::serve(image)?,
+        Command::SamWorker=>return Ok(ExitCode::from(if sqlite_install::sam_worker().is_ok(){0}else{2})),
         Command::SealedWorker(digest) => return Ok(ExitCode::from(fat32_check::panel::worker(digest).unwrap_or(2))),
         Command::Install(i)=>line(&i.run()?)?,
         Command::Help => line(USAGE)?,

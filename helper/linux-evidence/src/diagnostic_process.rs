@@ -71,6 +71,13 @@ pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,digest:&[u8;32]
     pinned_exec(cmd,original,args,Some(std::process::id() as libc::pid_t))
 }
 
+/// First-install child: no caller-selected operation or argument. The parent
+/// hands off a sealed scope and one local result endpoint, not root files.
+pub fn prepare_sam_worker_exec(cmd:&mut Command,original:&File)->io::Result<()>{
+    pinned_exec(cmd,original,vec![CString::new("helper").expect("literal"),
+        CString::new("__sam-fresh-v1").expect("literal")],Some(std::process::id() as libc::pid_t))
+}
+
 #[allow(unsafe_code)]
 fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<libc::pid_t>)->io::Result<()> {
     let executable=original.try_clone()?;

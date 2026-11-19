@@ -4,6 +4,7 @@
 mod capsule;
 mod monitor;
 mod return_to_host;
+pub(crate) use return_to_host::exec_child;
 mod live;
 use super::handoff::{HeldOrigin,OriginChannel,SyncedStore};
 use crate::{fs_tools::RuntimeFile,isolated_group::Group,pinned::{Entity,Mount,Pinned},
@@ -20,7 +21,16 @@ const BOOT:&[u8]=include_bytes!("../../../../resources/samba-domain/domain-boots
 const SCRIPT:&[u8]=include_bytes!("../../../../resources/samba-domain/fresh_guest.py");
 const ENTRY:&str="import runpy; runpy.run_path('/provision.py',run_name='_local_ops_sam')['_provision_original']()";
 
-// The sole future issuer must verify the original pool, explicit local approval,
+/// Internal setup step, not an independent public command. The application
+/// supplies its own stable nonsecret IDs. Do not use for recovery or existing
+/// instances; credentials and services are not touched by this step.
+pub(in crate::sqlite_install) fn provision_fresh_domain(system:&Path,pool:Id,init:Id,instance:Id,op:Id,approval:Id)->io::Result<[u8;128]>{
+    use sha2::{Digest,Sha256};
+    let source=return_to_host::HostOrigins::before_worker(system,pool,init,instance,op,Sha256::digest(live::PROFILE).into())?;
+    source.issue(approval)
+}
+
+// The sole fixed host issuer verifies the original pool, explicit local approval,
 // private immutable release closure/protected installation, exact live config
 // and fixed instance origins before constructing this. No public or fallback
 // constructor. Merely receiving arguments, a uid or a packaging profile is NOT
@@ -139,7 +149,7 @@ fn fixed_args(cmd:&mut Command,uid:u32,gid:u32,ns:&[String;7]){
 }
 impl<'a> FreshApproval<'a>{
     /// One-use in a dedicated just-dropped single-threaded CLI worker, NOT a web
-    /// process. Host account/instance release authority is deliberately not yet issued.
+    /// process. Account credentials are never read or issued at this stage.
     pub(super) fn provision(self)->io::Result<Unpublished<'a>>{
         use std::os::unix::fs::FileExt;
         rustix::thread::set_no_new_privs(true)?;

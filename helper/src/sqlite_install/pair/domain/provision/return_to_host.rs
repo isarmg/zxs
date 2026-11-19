@@ -3,6 +3,9 @@
 //! descriptions. No pathname, writable output FD, TDB contents or root
 //! directory authority is granted to the worker. Not an online smbd channel.
 mod issue;
+mod worker;
+mod start;
+pub(crate) use worker::exec_child;
 use super::{FRESH_SITE,PRIVATE_STORE,Unpublished,child,contents,live,mark};
 use super::super::{LocalDomain,handoff::{OriginChannel,SyncedStore}};
 use crate::{pinned::{Entity,Kind,Pinned},sqlite_install::{approval,bad,request::Id}};
@@ -63,6 +66,7 @@ pub(super) struct HostOrigins{
 }
 impl HostOrigins{
     pub(super) fn before_worker(path:&Path,pool:Id,init:Id,instance:Id,op:Id,config:[u8;32])->io::Result<Self>{
+        approval::no_inherited_descriptors()?;
         if [pool,init,instance,op].contains(&[0;16]){return Err(bad("missing original installation identities"));}
         let host=approval::host_admin()?;let (actor,uid,gid)=approval::profile()?;
         let system=Pinned::open(path,Kind::StorageRoot)?;let site=Site::select(host,&instance)?;
@@ -100,11 +104,14 @@ impl HostOrigins{
         }
         self.live.require(root)?;contents(&self.state,&[])?;Ok(())
     }
-    fn scope(&self,reference:&Id)->io::Result<[u8;32]>{
-        let sys=self.system.relative_directory()?;
-        order([&self.pool,&self.init,&self.instance,&self.op,&self.actor,reference],self.uid,self.gid,
-              self.system.path(),&self.config,&self.release.key(),[mark(&sys)?,mark(self.site.base())?,mark(&self.private)?,mark(&self.state)?,self.live.origin(),self.release.original()?])
+    fn marks(&self)->io::Result<[(Entity,u64);6]>{
+        Ok([(self.system.entity(),self.system.mount()?.id),mark(self.site.base())?,mark(&self.private)?,mark(&self.state)?,self.live.origin(),self.release.original()?])
     }
+    fn scope(&self,reference:&Id)->io::Result<[u8;32]>{
+        order([&self.pool,&self.init,&self.instance,&self.op,&self.actor,reference],self.uid,self.gid,
+              self.system.path(),&self.config,&self.release.key(),self.marks()?)
+    }
+    pub(super) fn issue(&self,reference:Id)->io::Result<[u8;128]>{issue::foreground(self,reference)}
     pub(super) fn fresh(&self)->io::Result<()>{
         self.common()?;contents(self.site.base(),FRESH_SITE)?;contents(&self.private,&[])?;self.site.check()
     }

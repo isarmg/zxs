@@ -91,6 +91,17 @@ fn expected(bytes:&[u8])->io::Result<Keys>{
     let ["HOST-SAM-RELEASE-1",m,w,p]=parts.as_slice() else{return Err(invalid());};
     Ok(Keys{manifest:hex(m)?,helper:hex(w)?,launcher_profile:hex(p)?})
 }
+// Before permanently dropping identity the exec'd worker may read only
+// these fixed root-owned public policy inputs. All data FDs die on return.
+pub(super) fn worker_keys(parent:rustix::process::Pid)->io::Result<Keys>{
+    let mut policy=RuntimeFile::open(POLICY,false,256)?;
+    let k=expected(&read(&mut policy,0o600,256)?)?;
+    let mut worker=RuntimeFile::open(HELPER,true,64<<20)?;
+    worker.require_running_helper()?;worker.require_parent_helper(parent)?;
+    let m=worker.file.metadata()?;
+    if m.mode()!=0o100755||m.gid()!=0||m.nlink()!=1||worker.digest()?!=k.helper{return Err(invalid());}
+    policy.recheck()?;worker.require_parent_helper(parent)?;Ok(k)
+}
 impl Originals{
     /// For the single approved host installer. The manifest is authenticated
     /// by the separately enrolled root policy BEFORE interpreting any pathname.
@@ -118,6 +129,10 @@ impl Originals{
     pub(super) fn key(&self)->[u8;32]{
         self.keys.bind(&self.launcher.sha())
     }
+    pub(super) fn bind_worker(&self,cmd:&mut std::process::Command)->io::Result<()>{
+        self.slots()?;helper_linux_evidence::diagnostic_process::prepare_sam_worker_exec(cmd,&self.worker.file)
+    }
+    pub(super) fn original_launcher(&self)->[u8;32]{self.launcher.sha()}
     pub(super) fn original(&self)->io::Result<(crate::pinned::Entity,u64)>{super::mark(&self.usr)}
     pub(super) fn slots(&self)->io::Result<()>{
         self.pin.require_same_path()?;self.manifest.require_samba_usr(&self.usr)?;

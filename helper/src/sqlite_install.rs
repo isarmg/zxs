@@ -9,6 +9,7 @@ mod catalog;
 mod markers;
 mod complete;
 mod pair;
+pub(crate) use pair::exec_child as sam_worker;
 
 const DATABASE:&str="SYSTEM.sqlite3";
 const MARKER:&[u8]=b".zxs-new-ffffffffffffffffffffffffffffffff-0";

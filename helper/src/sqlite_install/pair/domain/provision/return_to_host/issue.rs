@@ -5,34 +5,83 @@ use super::{HostOrigins,OriginChannel,Returned};
 use super::super::{FRESH_SITE,Times,live::Stamp};
 use crate::sqlite_install::{bad,request::Id};
 use rustix::fs::{Mode,OFlags,RenameFlags,fchmod,openat,renameat_with};
-use std::{ffi::CStr,fs::File,io::{self,Write},os::unix::{ffi::OsStrExt,fs::FileExt},process::Child};
+use std::{ffi::CStr,fs::File,io::{self,Write},thread,time::{Duration,Instant},os::unix::{ffi::OsStrExt,fs::FileExt},process::{Child,Command,Stdio}};
 
 const MIDDLE:&[&[u8]]=&[b"private",b"state",b"smb.conf",b".domain.bound.new"];
 const END:&[&[u8]]=&[b"private",b"state",b"smb.conf",b"domain.bound"];
 #[derive(Copy,Clone)] enum Name{Stage,Bound}
 impl Name{fn name(self)->&'static CStr{match self{Self::Stage=>c".domain.bound.new",Self::Bound=>c"domain.bound"}}}
-fn hex(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
+pub(super) fn hex_id(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
 fn escaped(v:&[u8])->String{v.iter().copied().flat_map(std::ascii::escape_default).map(char::from).collect()}
 
-// An actual worker, when the signed package and fixed authenticated launch
-// exist. Deliberately no constructor from an arbitrary Child or socket.
-struct SelectedWorker<'a>{child:Child,channel:Option<OriginChannel>,grant:Option<Grant<'a>>}
+// Only Grant::start can create this owner from its fixed child and socket.
+struct SelectedWorker<'a>{child:Child,channel:Option<OriginChannel>,grant:Option<Grant<'a>>,allowed:bool,reaped:bool}
 impl SelectedWorker<'_>{
     /// Unready leaves ownership with the supervisor; abnormal exit or a bad
     /// return is reaped, never published. No re-use of a PID after wait.
     fn finish_when_exited(&mut self)->io::Result<[u8;128]>{
         let Some((pid,normal))=super::waitable(&self.child)? else{
             return Err(io::Error::new(io::ErrorKind::WouldBlock,"dedicated worker is still running"));};
+        if !self.allowed{return Err(bad("dedicated worker exited before current foreground permission"));}
         let rx=self.channel.take().ok_or_else(||bad("worker result already consumed"))?;
         let grant=self.grant.take().ok_or_else(||bad("no original foreground grant"))?;
         let r=if normal{Returned::from_waitable(rx,pid,grant.originals)}else{Err(bad("dedicated worker did not finish normally"))};
         let status=loop{match self.child.wait(){
             Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,other=>break other?,
         }};
+        self.reaped=true;
         if status.code()!=Some(0){return Err(bad("no clean result from the original dedicated worker"));}
         grant.publish(r?)
     }
 }
+// Until wait, the actual child (even a zombie) reserves its PID. TERM lets
+// the restricted worker clean its own launcher group. KILL or an abnormal
+// status is never treated as proof that all guest processes drained.
+impl SelectedWorker<'_>{
+    fn stop(&mut self)->io::Result<()>{
+        if self.reaped{return Ok(());}
+        let id=rustix::process::Pid::from_raw(self.child.id() as i32).ok_or_else(||bad("invalid original worker PID"))?;
+        let signal=|s|match rustix::process::kill_process(id,s){
+            Ok(())|Err(rustix::io::Errno::SRCH)=>Ok(()),Err(e)=>Err(io::Error::from(e)),
+        };
+        if super::waitable(&self.child)?.is_none(){
+            signal(rustix::process::Signal::TERM)?;
+            let start=Instant::now();
+            while super::waitable(&self.child)?.is_none(){
+                if start.elapsed()>=Duration::from_secs(8){signal(rustix::process::Signal::KILL)?;break;}
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+        loop{match self.child.wait(){Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,r=>{r?;self.reaped=true;return Ok(());}}}
+    }
+    fn complete(mut self)->io::Result<[u8;128]>{
+        let begin=Instant::now();
+        loop{
+            if super::super::cancelled().is_err()||begin.elapsed()>=Duration::from_secs(90){
+                self.stop()?;
+                return Err(bad("dedicated host operation was interrupted or timed out; keep originals, do not reissue"));
+            }
+            if super::waitable(&self.child)?.is_some(){return self.finish_when_exited();}
+            if !self.allowed {
+                let channel=self.channel.as_ref().ok_or_else(||bad("missing original worker channel"))?;
+                let g=self.grant.as_ref().ok_or_else(||bad("missing live foreground grant"))?;
+                let cred=rustix::net::UCred{pid:rustix::process::Pid::from_raw(self.child.id() as i32)
+                    .ok_or_else(||bad("invalid original worker PID"))?,
+                    uid:rustix::process::Uid::from_raw(g.originals.uid),gid:rustix::process::Gid::from_raw(g.originals.gid)};
+                match super::start::respond(&channel.start_endpoint(),cred,&g.scope,||{
+                    g.terminal.check()?;g.originals.fresh()?;g.originals.release.require()?;
+                    if g.originals.scope(&g.reference)?!=g.scope||super::waitable(&self.child)?.is_some()
+                        ||begin.elapsed()>=Duration::from_secs(90){return Err(bad("original approval, child or time window changed"));}
+                    g.terminal.check()?;super::super::cancelled()
+                }){
+                    Ok(true)=>self.allowed=true,Ok(false)=>(),Err(e)=>return Err(e),
+                }
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+impl Drop for SelectedWorker<'_>{fn drop(&mut self){let _=self.stop();}}
 use crate::sqlite_install::pair::terminal::PublicConfirmation;
 struct Grant<'a>{originals:&'a HostOrigins,reference:Id,scope:[u8;32],terminal:PublicConfirmation}
 impl<'a> Grant<'a>{
@@ -44,21 +93,35 @@ impl<'a> Grant<'a>{
         let terminal=PublicConfirmation::select()?;let stderr=io::stderr();
         let mut out=stderr.lock();
         writeln!(out,"仅为此空专用实例创建 Samba 本机域与受保护的 domain.bound。不会使用全机 Samba，不建立账户，不开共享。若中断，保留现场，不重新发号。")?;
-        writeln!(out,"SYSTEM {}；池 {}；预期原 INIT {}（此时尚未查询；降权后仅当原 SYSTEM 确认同一 INIT 已提交才生成域）。",escaped(originals.system.path().as_os_str().as_bytes()),hex(&originals.pool),hex(&originals.init))?;
+        writeln!(out,"SYSTEM {}；池 {}；预期原 INIT {}（此时尚未查询；降权后仅当原 SYSTEM 确认同一 INIT 已提交才生成域）。",escaped(originals.system.path().as_os_str().as_bytes()),hex_id(&originals.pool),hex_id(&originals.init))?;
         writeln!(out,"专用实例 {}；原操作 {}；维护主体 {}；审批参考 {}；存储 UID/GID {}/{}。",
-            hex(&originals.instance),hex(&originals.op),hex(&originals.actor),hex(&reference),originals.uid,originals.gid)?;
-        writeln!(out,"正式配置 SHA-256 {}；核准的软件发行材料 {}；本次完整范围 {}。",hex(&originals.config),hex(&originals.release.key()),hex(&scope))?;out.flush()?;drop(out);
+            hex_id(&originals.instance),hex_id(&originals.op),hex_id(&originals.actor),hex_id(&reference),originals.uid,originals.gid)?;
+        writeln!(out,"正式配置 SHA-256 {}；核准的软件发行材料 {}；本次完整范围 {}。",hex_id(&originals.config),hex_id(&originals.release.key()),hex_id(&scope))?;out.flush()?;drop(out);
         terminal.confirm()?;
         terminal.check()?;originals.fresh()?;originals.release.require()?;
         if originals.scope(&reference)?!=scope{return Err(bad("approved originals changed; do not start provisioning"));}
         Ok(Self{originals,reference,scope,terminal})
+    }
+    fn start(self)->io::Result<SelectedWorker<'a>>{
+        self.terminal.check()?;self.originals.fresh()?;self.originals.release.require()?;
+        if self.originals.scope(&self.reference)?!=self.scope{return Err(bad("different confirmed host scope before spawn"));}
+        let input=super::worker::sealed_request(self.originals,self.reference,self.scope)?;
+        let (channel,tx)=OriginChannel::open()?;
+        let mut cmd=Command::new("/no-path-execution-for-dedicated-sam-worker");
+        cmd.env_clear().current_dir("/").stdin(Stdio::from(input)).stdout(Stdio::from(tx)).stderr(Stdio::null());
+        // execveat the exact held ELF, close all other FDs and pass no path in
+        // argv/environment. The two original root policy FDs stay with us.
+        self.originals.release.bind_worker(&mut cmd)?;
+        self.terminal.check()?;super::super::cancelled()?;
+        let child=cmd.spawn()?;drop(cmd);
+        Ok(SelectedWorker{child,channel:Some(channel),grant:Some(self),allowed:false,reaped:false})
     }
     fn accept(&self,r:&Returned<'_>)->io::Result<()>{
         if !std::ptr::eq(self.originals,r.originals)||self.scope!=r.scope||self.originals.scope(&self.reference)?!=self.scope{
             return Err(bad("not the foreground-approved original installation and worker"));}
         self.terminal.check()
     }
-    /// The future fixed protected supervisor may call this ONLY with its own
+    /// The selected protected supervisor may call this only with its own
     /// authenticated worker return. There is no public caller or alternate
     /// material source; cold receipts never re-enter the fresh writer.
     fn publish(self,r:Returned<'a>)->io::Result<[u8;128]>{
@@ -107,6 +170,13 @@ impl<'a> Grant<'a>{
         write().map_err(|_|unconfirmed())?;
         Ok(r.record)
     }
+}
+/// Internal precursor to the single setup interface. Nothing calls this from
+/// a Web handler or a historical receipt; one live confirmation, one new exec.
+pub(super) fn foreground(originals:&HostOrigins,reference:Id)->io::Result<[u8;128]>{
+    use helper_linux_evidence::diagnostic_process::{require_waitable_children,watch_cancellation};
+    require_waitable_children()?;watch_cancellation()?;
+    Grant::foreground(originals,reference)?.start()?.complete()
 }
 fn unconfirmed()->io::Error{bad("SAM binding publication unconfirmed; retain all originals and inspect this operation, never reinitialize")}
 fn fresh(dir:&File)->io::Result<File>{Ok(File::from(openat(dir,Name::Stage.name(),OFlags::CREATE|OFlags::EXCL|OFlags::RDWR

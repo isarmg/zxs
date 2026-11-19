@@ -60,6 +60,11 @@ impl SelectedSystem {
     }
     fn from_host(path:&std::path::Path,host:File,uid:u32,gid:u32)->io::Result<Self>{
         let pin=Pinned::open(path,Kind::StorageRoot)?;
+        Self::from_origin(pin,host,uid,gid)
+    }
+    // For the already authenticated, permanently lowered host worker. Its
+    // O_PATH was matched against the parent's still-held original before use.
+    pub(super) fn from_origin(pin:Pinned,host:File,uid:u32,gid:u32)->io::Result<Self>{
         super::request::database_path(pin.path(),super::engine::path_limit()?)?;
         let m=pin.metadata()?;
         if uid==0||gid==0||uid==u32::MAX||gid==u32::MAX||!m.is_dir()||m.uid()!=uid||m.mode()&0o7777!=0o700||m.nlink()==0{

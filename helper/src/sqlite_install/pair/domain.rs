@@ -2,6 +2,7 @@
 //! smbd, authorize provisioning or prove that a running smbd used this domain.
 mod handoff;
 mod provision;
+pub(crate) use provision::exec_child;
 use crate::sqlite_install::{bad,request::Id};
 use std::io;
 

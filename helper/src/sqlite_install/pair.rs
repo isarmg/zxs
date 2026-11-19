@@ -5,6 +5,7 @@ mod web_secret;
 mod terminal;
 mod observed;
 mod domain;
+pub(crate) use domain::exec_child;
 
 use super::{bad, catalog::Canonical, request::Id};
 use rusqlite::{params, Transaction};
