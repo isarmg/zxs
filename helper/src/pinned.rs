@@ -148,15 +148,26 @@ pub(crate) fn private_inode_reader(pin: &File, uid: u32, expected_mount: u64) ->
     Ok(file)
 }
 
+/// Public installed executables, libraries or root policy only. Caller walked the
+/// entire fixed, protected root-owned chain and must recheck it after use.
+pub(crate) fn installed_regular_reader(pin:&File)->io::Result<File>{
+    let m=pin.metadata()?;
+    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH) || !m.is_file()
+        || m.uid()!=0 || m.mode()&0o6022!=0 || m.nlink()==0 {
+        return Err(invalid("not an eligible root-controlled installation input"));
+    }
+    reopen_admitted_reader(pin,Entity::of(&m)?,ReaderBoundary::InstalledRegular(local_data_filesystem(pin)?))
+}
+
 // Unknown comparison inputs still have their prior filesystem allowlist. The other
 // caller only reads fixed private control names below a separately selected, held
 // storage directory. A current mount ID binds its descriptors, not its provenance.
 #[derive(Copy, Clone)]
-enum ReaderBoundary { DataFilesystem(u32), SelectedControlMount(u64) }
+enum ReaderBoundary { DataFilesystem(u32), SelectedControlMount(u64), InstalledRegular(u32) }
 impl ReaderBoundary {
     fn matches(self, fd: &File) -> io::Result<bool> {
         match self {
-            Self::DataFilesystem(magic) => Ok(filesystem(fd)? == Some(magic)),
+            Self::DataFilesystem(magic)|Self::InstalledRegular(magic) => Ok(filesystem(fd)? == Some(magic)),
             Self::SelectedControlMount(id) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
         }
     }
@@ -196,8 +207,9 @@ fn reopen_admitted_reader(pin: &File, entity: Entity, boundary: ReaderBoundary) 
     {
         return Err(invalid("descriptor no longer selects the original regular file"));
     }
-    let result = File::from(openat(&fds, number.as_str(),
-        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::NOATIME | OFlags::CLOEXEC, Mode::empty())?);
+    let flags=OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
+    let flags=if matches!(boundary,ReaderBoundary::InstalledRegular(_)){flags}else{flags|OFlags::NOATIME};
+    let result = File::from(openat(&fds, number.as_str(),flags,Mode::empty())?);
     let observed = result.metadata()?;
     if !observed.is_file() || Entity::of(&observed)? != entity {
         return Err(invalid("read descriptor did not resolve to the original regular file"));

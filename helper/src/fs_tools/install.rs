@@ -42,7 +42,10 @@ impl Mark {
     fn accepts(self,directory:bool)->bool{
         if self.owner!=0 || self.mode&0o022!=0 || self.links==0{return false;}
         if directory {self.mode&0o170000==0o040000}
-        else {self.mode&0o170000==0o100000 && self.mode&0o6000==0 && self.mode&0o111!=0 && self.size>0}
+        else {self.regular() && self.mode&0o111!=0}
+    }
+    fn regular(self)->bool {
+        self.owner==0 && self.mode&0o6022==0 && self.links>0 && self.mode&0o170000==0o100000 && self.size>0
     }
 }
 
@@ -54,19 +57,21 @@ impl Slot {
 }
 enum Lookup { Present(Slot), Absent{parent:Slot, component:usize} }
 fn path_flags()->OFlags { OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC }
-fn slot(p:&Profile)->Result<Lookup>{
+fn slot(p:&Profile)->Result<Lookup>{lookup(&["usr",p.directory,p.tool],true)}
+fn lookup(parts:&[&str],executable:bool)->Result<Lookup>{
     let mut held=Slot{fds:Vec::with_capacity(4),marks:Vec::with_capacity(4)};
     let root=File::from(open(c"/",path_flags()|OFlags::DIRECTORY,Mode::empty()).map_err(|e|Evidence::from_io(e.into()))?);
     let m=Mark::on(&root)?; if !m.accepts(true){return Err(Evidence::Refused);}
     held.fds.push(root); held.marks.push(m);
-    for (index,name) in ["usr",p.directory,p.tool].into_iter().enumerate(){
+    for (index,&name) in parts.iter().enumerate(){
         // Only an actual component lookup, never an fstat/statx error, can report absence.
         let f=match openat(held.fds.last().expect("root present"),name,path_flags(),Mode::empty()){
             Ok(fd)=>File::from(fd),
             Err(rustix::io::Errno::NOENT)=>return Ok(Lookup::Absent{parent:held,component:index}),
             Err(e)=>return Err(Evidence::from_io(e.into())),
         };
-        let m=Mark::on(&f)?; if !m.accepts(index<2){return Err(Evidence::Refused);}
+        let m=Mark::on(&f)?;
+        if if index+1<parts.len(){!m.accepts(true)} else { !m.regular() || executable && !m.accepts(false) }{return Err(Evidence::Refused);}
         held.fds.push(f); held.marks.push(m);
     }
     Ok(Lookup::Present(held))
@@ -129,6 +134,36 @@ pub(super) fn inspect(p:&Profile,expected:Option<&[u8;32]>)->Evidence{
     result
 }
 
+/// A fixed host installation input, not an executable selector from the request.
+/// These bytes are public runtime components: ordinary readonly access may
+/// update their atime. User images still require the original NOATIME boundary.
+pub(crate) struct RuntimeFile {chain:Slot, pub(crate) file:File, parts:&'static [&'static str],executable:bool}
+impl RuntimeFile {
+    pub(crate) fn open(parts:&'static [&'static str],executable:bool,max:u64)->io::Result<Self>{
+        let unavailable=||io::Error::other("fixed diagnostic installation missing, unprotected or changed");
+        let Lookup::Present(chain)=lookup(parts,executable).map_err(|_|unavailable())? else{return Err(unavailable());};
+        let last=chain.fds.last().ok_or_else(unavailable)?;
+        let mark=chain.marks.last().ok_or_else(unavailable)?;
+        if mark.size>max {return Err(unavailable());}
+        let file=crate::pinned::installed_regular_reader(last)?;
+        if Mark::on(&file).ok().as_ref()!=Some(mark){return Err(unavailable());}
+        let result=Self{file,chain,parts,executable};result.recheck()?;Ok(result)
+    }
+    pub(crate) fn recheck(&self)->io::Result<()> {
+        let ok=match lookup(self.parts,self.executable){
+            Ok(Lookup::Present(now))=>self.chain.marks==now.marks && self.chain.unchanged() && now.unchanged()
+                && Mark::on(&self.file).ok().as_ref()==self.chain.marks.last(),
+            _=>false,
+        };
+        if ok{Ok(())}else{Err(io::Error::other("protected diagnostic installation changed"))}
+    }
+    pub(crate) fn digest(&mut self)->io::Result<[u8;32]> {
+        use std::io::Seek;
+        self.file.rewind()?;
+        let expected_len=self.file.metadata()?.len();let hash=full_hash(&mut self.file,expected_len)?;
+        self.recheck()?; self.file.rewind()?;Ok(hash)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

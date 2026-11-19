@@ -1,7 +1,10 @@
-//! Narrow, read-only Linux ABI leaf. No path input, handle reopening, write or device API.
+//! Fixed Linux ABI boundaries: held-object evidence and one close-on-exec barrier.
+//! No path input, handle reopening, disk write or device control interface.
 #![deny(unsafe_code, unsafe_op_in_unsafe_fn)]
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_pointer_width = "64")))]
 compile_error!("helper-linux-evidence supports x86_64 Linux LP64 only");
+
+pub mod diagnostic_process;
 
 use linux_raw_sys::general as uapi;
 use rustix::fs::{OFlags, fcntl_getfl, fstatfs};
@@ -164,4 +167,18 @@ mod tests {
             assert!(collect(filesystem_uuid(uuid()).unwrap(), &h, 7, 7).is_err());
         }
     }
+}
+
+/// One-shot CLI launch boundary. Atomically privatize this thread's descriptor
+/// table and mark *all* non-standard descriptors close-on-exec, including
+/// unknown inherited ones. This does not close or retarget existing objects.
+/// Only explicitly chosen read-only runtime/image FDs and the monitor pipe
+/// may be reintroduced before spawn. No retries with a weaker descriptor set.
+#[allow(unsafe_code)]
+pub fn isolate_check_descriptors()->io::Result<()> {
+    // SAFETY: close_range accepts only unsigned scalars; no pointer, Rust
+    // object or descriptor is invalidated by the CLOEXEC operation.
+    let result=unsafe {libc::syscall(libc::SYS_close_range,3u32,u32::MAX,
+        libc::CLOSE_RANGE_CLOEXEC|libc::CLOSE_RANGE_UNSHARE)};
+    if result==0 {Ok(())}else{Err(io::Error::last_os_error())}
 }

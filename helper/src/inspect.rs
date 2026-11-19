@@ -45,19 +45,20 @@ impl Stamp {
     }
 }
 
-struct Input { pinned: LocalDataFile, stamp: Stamp }
+pub(crate) struct Input { pinned: LocalDataFile, stamp: Stamp }
 impl Input {
-    fn select(path: &Path) -> io::Result<Self> {
+    pub(crate) fn select(path: &Path) -> io::Result<Self> {
         let pinned = LocalDataFile::select(path)?;
         let stamp = Stamp::of(pinned.metadata()?)?;
         Ok(Self { pinned, stamp })
     }
-    fn reader(&self) -> io::Result<File> {
+    pub(crate) fn len(&self) -> u64 { self.stamp.size }
+    pub(crate) fn reader(&self) -> io::Result<File> {
         let file = self.pinned.reader()?;
         if Stamp::of(file.metadata()?)? != self.stamp { return Err(invalid("file changed before the comparison")); }
         Ok(file)
     }
-    fn recheck(&self, file: &File) -> io::Result<()> {
+    pub(crate) fn recheck(&self, file: &File) -> io::Result<()> {
         self.pinned.require_same_path()?;
         if Stamp::of(file.metadata()?)? != self.stamp {
             return Err(invalid("file changed during comparison"));

@@ -1,0 +1,124 @@
+//! Fixed child lifetime primitives for a one-shot CLI, never a generic shell.
+//! The high-level caller supplies only the approved bubblewrap File and closed argv.
+use linux_raw_sys::general as uapi;
+use std::{ffi::CString,fs::File,io,mem::MaybeUninit,os::{fd::AsRawFd,unix::{ffi::OsStrExt,process::CommandExt}},process::Command};
+
+use std::sync::atomic::{AtomicBool,Ordering};
+static CANCELLED:AtomicBool=AtomicBool::new(false);
+extern "C" fn cancel(_:libc::c_int){CANCELLED.store(true,Ordering::Relaxed);}
+pub fn cancelled()->bool{CANCELLED.load(Ordering::Relaxed)}
+
+/// Only for the dedicated CLI process. Cancellation is recorded without
+/// allocation or non-signal-safe I/O. exec resets caught signals in the child.
+#[allow(unsafe_code)]
+pub fn watch_cancellation()->io::Result<()>{
+    // SAFETY: fully initialized Linux sigaction with a C-ABI handler that
+    // only sets a lock-free x86-64 atomic bool. This does not send a signal.
+    unsafe{
+        let mut action:libc::sigaction=std::mem::zeroed();
+        action.sa_sigaction=cancel as *const () as usize;
+        let mut current=MaybeUninit::<libc::sigset_t>::uninit();
+        if libc::sigprocmask(libc::SIG_SETMASK,std::ptr::null(),current.as_mut_ptr())!=0{
+            return Err(io::Error::last_os_error());
+        }
+        let current=current.assume_init();
+        if libc::sigemptyset(&mut action.sa_mask)!=0{return Err(io::Error::last_os_error());}
+        for sig in [libc::SIGINT,libc::SIGTERM,libc::SIGHUP,libc::SIGQUIT]{
+            // A blocked inherited cancellation signal is not observable by our handler.
+            if libc::sigismember(&current,sig)!=0{return Err(io::Error::other("diagnostic cancellation signals must be unblocked"));}
+            if libc::sigaction(sig,&action,std::ptr::null_mut())!=0{return Err(io::Error::last_os_error());}
+        }
+    } Ok(())
+}
+
+/// The group leader must stay waitable (therefore its numeric PGID pinned)
+/// until the last signal to the dedicated session. Reject auto-reaping.
+#[allow(unsafe_code)]
+pub fn require_waitable_children()->io::Result<()> {
+    let mut a=MaybeUninit::<libc::sigaction>::uninit();
+    // SAFETY: no new handler is installed. The kernel initializes a on success.
+    if unsafe {libc::sigaction(libc::SIGCHLD,std::ptr::null(),a.as_mut_ptr())} !=0{
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: sigaction succeeded above.
+    let a=unsafe{a.assume_init()};
+    if a.sa_sigaction!=libc::SIG_DFL || a.sa_flags&libc::SA_NOCLDWAIT!=0{
+        return Err(io::Error::other("diagnostic monitor needs default, waitable child disposition"));
+    }
+    Ok(())
+}
+
+/// In the spawned child, establish a new session/group *before* any launcher
+/// setup, then exec the verified ELF by descriptor. No /proc path or PATH lookup.
+/// On any error pre_exec returns Err, never Ok: std cannot execute its nominal path.
+#[allow(unsafe_code)]
+pub fn prepare_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
+    let executable=original.try_clone()?;
+    let mut args=vec![CString::new("bwrap").expect("literal")];
+    for arg in cmd.get_args() {
+        if args.len()>=63{return Err(io::Error::other("fixed diagnostic launcher argument budget exceeded"));}
+        args.push(CString::new(arg.as_bytes()).map_err(|_|io::Error::other("invalid diagnostic launcher argument"))?);
+    }
+    // SAFETY: all memory and C strings are owned and allocated before fork.
+    // The closure only builds pointer arrays on the stack and uses async-safe
+    // Linux syscalls: setsid and execveat. No lock, allocation or unwinding.
+    unsafe {cmd.pre_exec(move||{
+        if libc::setsid()<0{return Err(io::Error::last_os_error());}
+        let mut argv=[std::ptr::null::<libc::c_char>();64];
+        for (dst,src) in argv.iter_mut().zip(args.iter()){*dst=src.as_ptr();}
+        let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
+        libc::syscall(uapi::__NR_execveat as libc::c_long,executable.as_raw_fd(),c"".as_ptr(),
+                      argv.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);
+        Err(io::Error::last_os_error())
+    });}
+    Ok(())
+}
+
+/// Native x86-64 classic BPF for --seccomp. Only group-lifetime constraints,
+/// not a general syscall security policy. The actual checker needs no child.
+/// Reject alternate audit architectures/x32 instead of interpreting their numbers as amd64.
+pub fn diagnostic_group_filter()->Vec<u8>{
+    const LD_W_ABS:u16=0x20;const JEQ:u16=0x15;const JGE:u16=0x35;const RET:u16=0x06;
+    const KILL:u32=0x8000_0000;const EPERM:u32=0x0005_0001;const ALLOW:u32=0x7fff_0000;
+    let mut out=Vec::with_capacity(192);
+    let mut op=|code:u16,jt:u8,jf:u8,k:u32|{
+        out.extend_from_slice(&code.to_ne_bytes());out.extend_from_slice(&[jt,jf]);out.extend_from_slice(&k.to_ne_bytes());
+    };
+    op(LD_W_ABS,0,0,4);op(JEQ,1,0,0xc000_003e);op(RET,0,0,KILL); // seccomp_data.arch
+    op(LD_W_ABS,0,0,0);op(JGE,0,1,0x4000_0000);op(RET,0,0,KILL); // seccomp_data.nr, reject x32
+    for number in [uapi::__NR_setsid,uapi::__NR_setpgid,uapi::__NR_fork,uapi::__NR_vfork,
+                   uapi::__NR_clone,uapi::__NR_clone3,uapi::__NR_unshare,uapi::__NR_setns] {
+        op(JEQ,0,1,number);op(RET,0,0,EPERM);
+    }
+    op(RET,0,0,ALLOW);out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Independent interpreter restricted to the four emitted classic-BPF operations.
+    fn decision(p:&[u8],arch:u32,nr:u32)->u32{
+        let (mut a,mut pc)=(0,0usize);
+        loop {
+            let f=&p[pc*8..(pc+1)*8];pc+=1;
+            let ins=u16::from_ne_bytes(f[..2].try_into().unwrap());
+            let k=u32::from_ne_bytes(f[4..].try_into().unwrap());
+            match ins{
+                0x20=>a=match k{0=>nr,4=>arch,_=>panic!("unexpected seccomp_data offset")},
+                0x15=>pc+=usize::from(if a==k{f[2]}else{f[3]}),
+                0x35=>pc+=usize::from(if a>=k{f[2]}else{f[3]}),
+                0x06=>return k,_=>panic!("unexpected fixed diagnostic instruction"),
+            }
+        }
+    }
+    #[test]
+    fn tool_cannot_fork_or_leave_the_launchers_process_group_in_another_abi(){
+        let p=diagnostic_group_filter();let arch=0xc000_003e;
+        for n in [uapi::__NR_fork,uapi::__NR_vfork,uapi::__NR_clone,uapi::__NR_clone3,uapi::__NR_setpgid,uapi::__NR_setsid,uapi::__NR_unshare,uapi::__NR_setns]{
+            assert_eq!(decision(&p,arch,n),0x0005_0001);
+        }
+        for n in [uapi::__NR_read,uapi::__NR_execve,uapi::__NR_exit_group]{assert_eq!(decision(&p,arch,n),0x7fff_0000);}
+        assert_eq!(decision(&p,0x4000_0003,uapi::__NR_fork),0x8000_0000);
+        assert_eq!(decision(&p,arch,0x4000_0000|uapi::__NR_clone),0x8000_0000);
+    }
+}

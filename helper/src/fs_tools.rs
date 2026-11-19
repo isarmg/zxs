@@ -3,7 +3,7 @@
 mod install;
 
 use std::{ffi::OsString, fmt};
-pub(crate) use install::{Evidence, Record};
+pub(crate) use install::{Evidence, Record, RuntimeFile};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(crate) enum Target { OfflineImage, IsolatedMembers, ImportedPool }
@@ -39,7 +39,7 @@ const PROFILES:[Profile;7]=[
         options:&["-n"],target:Target::OfflineImage,limit:"confirm FAT32 rather than FAT12/16 or exFAT; no prompt or automatic repair"},
 ];
 
-fn hex(s:&str)->Option<[u8;32]> {
+pub(crate) fn hex(s:&str)->Option<[u8;32]> {
     if s.len()!=64 || !s.as_bytes().iter().all(u8::is_ascii_hexdigit){return None;}
     let mut out=[0;32];
     for (i,v) in out.iter_mut().enumerate(){*v=u8::from_str_radix(&s[i*2..i*2+2],16).ok()?;}

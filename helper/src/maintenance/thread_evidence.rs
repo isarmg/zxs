@@ -53,6 +53,20 @@ fn require_storage_worker(uid: u32, service_gid: u32) -> io::Result<()> {
     check_status(&data, uid, service_gid)
 }
 
+/// Process-local sandbox eligibility only. Does not consult a pool or issue
+/// maintenance authority. A fresh CLI, never an in-process Web worker, sets NNP.
+pub(crate) fn diagnostic_worker(uid:u32,gid:u32)->io::Result<()> {
+    let mut data=Vec::new();
+    thread_file(c"thread-self/status")?.take(STATUS_MAX as u64+1).read_to_end(&mut data)?;
+    check_status(&data,uid,gid)?;
+    let mut fields=data.split(|&b|b==b'\n').filter_map(|line|line.strip_prefix(b"Threads:"))
+        .flat_map(|v|v.split(u8::is_ascii_whitespace).filter(|f|!f.is_empty()));
+    if fields.next()!=Some(&b"1"[..])||fields.next().is_some(){
+        return Err(unsupported("diagnostics require an independent single-threaded CLI process"));
+    }
+    Ok(())
+}
+
 fn check_status(data: &[u8], uid: u32, service_gid: u32) -> io::Result<()> {
     let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "need the unprivileged, no-new-privileges storage worker");
     if [uid, service_gid].iter().any(|v| *v == 0 || *v == u32::MAX)

@@ -2,12 +2,12 @@
 
 [Cargo.toml](Cargo.toml) 在主程序中声明两个非开发的直接注册表依赖，另有一个本项目内部小库：
 
-- `rustix = 1.1.5`（默认 `std`，显式 `fs`、`rand`）：安全的 Linux 文件描述符和文件系统观察；新池/卷 ID 只使用内核非阻塞 getrandom。本次仅启用同一锁定包的现有功能，没有增加依赖或改锁。
+- `rustix = 1.1.5`（默认 `std`，显式 `fs`、`rand`、`pipe`、`process`、`thread`）：安全的 Linux 文件描述符和文件系统观察；新池/卷 ID 只使用内核非阻塞 getrandom。本次仅启用同一锁定包的现有功能，没有增加依赖或改锁。
 - `sha2 = 0.10.9`（不启用默认功能）：在内存中以 RustCrypto SHA-256 核验候选新登记完整前缀；不用于认证操作者或保护口令。
 
 主程序的测试直接用 `linux-raw-sys 0.12.1` 核已知 Linux 文件系统类型。`tempfile = 3.27.0` 仅供测试，在专用临时父目录内独占创建私有子目录；它不是运行时组件。位置参数、字节流和输出使用标准库。支持的 Rust 工具链单独固定为 1.100.0。
 
-本项目内部的 [helper-linux-evidence](linux-evidence/Cargo.toml) 是单独静审的 Linux LP64 小库，不依赖其他项目。它直接使用锁内的 `libc 0.2.190`、`linux-raw-sys 0.12.1` 和 `rustix 1.1.5`。主程序仍禁止 unsafe；小库仅在三项固定 Linux/POSIX 只读接口处使用 unsafe：通过持有的原描述符读取 [FS_IOC_GETFSUUID](https://github.com/torvalds/linux/blob/master/include/uapi/linux/fs.h) 和 [name_to_handle_at](https://www.man7.org/linux/man-pages/man2/name_to_handle_at.2.html)；每个卷行的原生名称字节限额使用同目录 [fpathconf(_PC_NAME_MAX)](https://man7.org/linux/man-pages/man3/fpathconf.3.html)，不猜未知值。没有任意 ioctl、路径重开或按句柄开文件的接口。libc 现在是小库的直接普通依赖，不是新增或升级了注册表包。
+本项目内部的 [helper-linux-evidence](linux-evidence/Cargo.toml) 是单独静审的 Linux LP64 小库，不依赖其他项目。它直接使用锁内的 `libc 0.2.190`、`linux-raw-sys 0.12.1` 和 `rustix 1.1.5`。主程序仍禁止 unsafe；小库的固定 Linux/POSIX 只读接口使用少量 unsafe：通过持有的原描述符读取 [FS_IOC_GETFSUUID](https://github.com/torvalds/linux/blob/master/include/uapi/linux/fs.h) 和 [name_to_handle_at](https://www.man7.org/linux/man-pages/man2/name_to_handle_at.2.html)；每个卷行的原生名称字节限额使用同目录 [fpathconf(_PC_NAME_MAX)](https://man7.org/linux/man-pages/man3/fpathconf.3.html)，不猜未知值。另有一个仅供独立诊断 CLI 的 [close_range](https://man7.org/linux/man-pages/man2/close_range.2.html) 固定调用，私有化描述符表并给所有非标准描述符加 close-on-exec，不关闭外部文件。隔离运行的极小 Linux 层还核验可等待的子进程信号策略，在本次 CLI 处理取消消息；子进程在启动之前用 setsid 建独立组，并仅对已核的 ELF 文件描述符使用 execveat。主程序没有 unsafe。没有任意 ioctl、路径重开或按句柄开文件的接口。libc 现在是小库的直接普通依赖，不是新增或升级了注册表包。
 
 本工具的 13 项原有注册表记录取自 **cc 1.8.0** 官方发行包的 Cargo.lock，未改版本。新增 8 项按 **[sha2 0.10.9](https://crates.io/crates/sha2/0.10.9)** 官方发行包的 Cargo.lock 固定版本，逐个与 crates.io 原档案、登记校验值及其规范化 Cargo.toml 核对。锁内记录本工程选用的依赖，包括本工程的测试依赖及所需的构建依赖；不引 sha2 自身的测试、可选的汇编/OID，亦不引 digest 的测试数据。共用 cfg-if 和 libc 的原锁版本。这份锁不是在本工程新运行解析而得。跨平台传递记录不表示支持其他平台。
 
