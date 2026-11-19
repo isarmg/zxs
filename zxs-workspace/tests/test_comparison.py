@@ -1,4 +1,5 @@
 from concurrent.futures import Future
+from contextlib import contextmanager
 import errno
 import hashlib
 import os
@@ -94,13 +95,16 @@ class CompareFolder(unittest.TestCase):
     def test_changes_during_inventory_link_and_late_root_replacement_return_no_report(self):
         chosen = snapshot(self.path, [("entry",b"first")])
         leaf = self.local/"entry"; leaf.write_bytes(b"first")
-        original_scan = freeze._scan
-        def edit_after_hash(fd, *args, **kwargs):
-            result = original_scan(fd, *args, **kwargs)
-            if kwargs.get("hash_files"): leaf.write_bytes(b"a longer generation")
-            return result
-        with patch.object(freeze,"_scan",side_effect=edit_after_hash), self.assertRaises(Rejected):
+        scandir = os.scandir
+        passes = 0
+        def edit_before_second_walk(fd):
+            nonlocal passes
+            passes += 1  # This fixture has no nested directory.
+            if passes == 2: leaf.write_bytes(b"a longer generation")
+            return scandir(fd)
+        with patch.object(os, "scandir", side_effect=edit_before_second_walk), self.assertRaises(Rejected):
             comparison.compare(chosen,self.chosen)
+        self.assertEqual(passes, 2)
         alias = self.local/"alias"; alias.symlink_to(self.path)
         with self.assertRaises(Rejected): comparison.compare(chosen,comparison.Folder.choose(self.local))
         alias.unlink()
@@ -111,6 +115,39 @@ class CompareFolder(unittest.TestCase):
             return tree
         with patch.object(comparison,"observe_held",side_effect=replace_after_scan), self.assertRaises(Rejected):
             comparison.compare(chosen,comparison.Folder.choose(self.local))
+
+    @unittest.skipUnless(os.name == "posix", "exercises native descriptor-relative inventories")
+    def test_second_inventory_consumes_each_original_name_once_in_any_order(self):
+        chosen = snapshot(self.path, [("sub/a", b"a"), ("sub/b", b"b")])
+        sub = self.local / "sub"; sub.mkdir()
+        for name in ("a", "b"): (sub / name).write_bytes(name.encode())
+        original = sub.stat()
+        scandir = os.scandir
+        for first, second, accept in (("ab", "ba", True), ("ab", "a", False),
+                                      ("a", "ab", False), ("ab", "aab", False)):
+            with self.subTest(first=first, second=second):
+                folder = comparison.Folder.choose(self.local)
+                seen = []
+                @contextmanager
+                def inventory(fd):
+                    with scandir(fd) as entries:
+                        if not os.path.samestat(os.fstat(fd), original):
+                            yield entries
+                            return
+                        # Model an incomplete/repeated native enumeration without changing
+                        # the real names, their contents, or the parent timestamps.
+                        by_name = {e.name: e for e in entries}
+                        order = (first, second)[len(seen)]
+                        seen.append(order)
+                        yield (by_name[name] for name in order)
+                with patch.object(os, "scandir", side_effect=inventory), \
+                     patch.object(freeze, "Manifest", wraps=Manifest) as manifests:
+                    if accept:
+                        self.assertEqual(comparison.compare(chosen, folder).rows, ())
+                    else:
+                        with self.assertRaises(Rejected): comparison.compare(chosen, folder)
+                self.assertEqual(seen, [first, second])
+                self.assertEqual(manifests.call_count, 1)
 
     def test_distinct_spelling_is_not_an_inferred_rename_and_intra_tree_aliases_refuse(self):
         chosen = snapshot(self.path, [("Foo",b"same")])

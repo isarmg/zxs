@@ -27,7 +27,7 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
     facts = {}
     manifest = Manifest()
     rootdev = os.fstat(rootfd).st_dev
-    def visit(fd, prefix):
+    def visit(fd, prefix, *, recheck):
         root = os.fstat(fd)
         if root.st_dev != rootdev:
             raise Rejected("nested mount is not part of this portable worktree")
@@ -43,18 +43,25 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
                     raise Rejected("checkout contains a link or non-regular entry")
                 if before.st_dev != rootdev:
                     raise Rejected("checkout member is on another device")
-                manifest.add(path, is_dir, 0 if is_dir else before.st_size, None)
-                facts[path] = _sig(before)
+                sig = _sig(before)
+                if recheck:
+                    # Only an exact previously admitted name and generation can
+                    # pass. A duplicate also has no remaining first-pass entry.
+                    if facts.pop(path, None) != sig:
+                        raise Rejected("entry changed between directory inventories")
+                else:
+                    manifest.add(path, is_dir, 0 if is_dir else before.st_size, None)
+                    facts[path] = sig
                 name = entry.name
                 flags = _dir_flags() if is_dir else os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
                 child = os.open(name, flags, dir_fd=fd)
                 try:
-                    if _sig(os.fstat(child)) != facts[path]:
+                    if _sig(os.fstat(child)) != sig:
                         raise Rejected("checkout changed during admission")
                     if check_held is not None: check_held(child)
                     if is_dir:
-                        visit(child, path)
-                    elif frozen is not None or hash_files:
+                        visit(child, path, recheck=recheck)
+                    elif not recheck and (frozen is not None or hash_files):
                         h = hashlib.sha256()
                         count = 0
                         start = frozen.length if frozen is not None else 0
@@ -66,14 +73,16 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
                         if count != before.st_size: raise Rejected("source shrank while freezing")
                         if frozen is not None: frozen.spans[path] = (start,count)
                         manifest.rows[path] = (False, count, h.hexdigest())
-                    if _sig(os.fstat(child)) != facts[path] or _sig(os.stat(name, dir_fd=fd, follow_symlinks=False)) != facts[path]:
+                    if _sig(os.fstat(child)) != sig or _sig(os.stat(name, dir_fd=fd, follow_symlinks=False)) != sig:
                         raise Rejected("source or its name changed while freezing")
                 finally:
                     os.close(child)
         if _sig(os.fstat(fd)) != _sig(root):
             raise Rejected("directory changed while freezing")
-    visit(rootfd, "")
-    return facts, manifest
+    visit(rootfd, "", recheck=False)
+    visit(rootfd, "", recheck=True)
+    if facts: raise Rejected("entries missing from the second directory inventory")
+    return manifest
 
 
 def observe_held(fd, expected, *, require_ids=False):
@@ -81,9 +90,8 @@ def observe_held(fd, expected, *, require_ids=False):
     before = os.fstat(fd)
     if (before.st_dev,before.st_ino) != expected or not expected[1] or not stat.S_ISDIR(before.st_mode):
         raise Rejected("not the original held output directory")
-    facts, tree = _scan(fd, hash_files=True, require_ids=require_ids)
-    after, _ = _scan(fd, require_ids=require_ids)
-    if facts != after or _sig(before) != _sig(os.fstat(fd)):
+    tree = _scan(fd, hash_files=True, require_ids=require_ids)
+    if _sig(before) != _sig(os.fstat(fd)):
         raise Rejected("selected directory changed during readback")
     return tree
 
@@ -94,9 +102,8 @@ def observe_tree(source: Path):
     fd = os.open(source, _dir_flags())
     try:
         root_sig = _sig(os.fstat(fd))
-        facts, tree = _scan(fd, hash_files=True)
-        now, _ = _scan(fd)
-        if facts != now or root_sig != _sig(os.stat(source, follow_symlinks=False)):
+        tree = _scan(fd, hash_files=True)
+        if root_sig != _sig(os.stat(source, follow_symlinks=False)):
             raise Rejected("checkout changed during readback")
         return tree
     finally: os.close(fd)
@@ -142,9 +149,8 @@ def frozen_tree(source, capture, expected, store):
                 if not m.st_ino or (m.st_dev,m.st_ino) in excluded or mount_id(child)!=source_mount:
                     raise Rejected("cannot capture aliased state, archive store, or a nested mount")
             capture.check_state()
-            facts,tree = _scan(fd,capture,check_held=check_held)
-            after,_ = _scan(fd,check_held=check_held)
-            if (facts!=after or root_sig!=_sig(os.stat(source,follow_symlinks=False)) or
+            tree = _scan(fd,capture,check_held=check_held)
+            if (root_sig!=_sig(os.stat(source,follow_symlinks=False)) or
                     native_identity(os.stat(store,follow_symlinks=False),stat.S_IFDIR)!=store_id):
                 raise Rejected("a selected location changed while freezing; no snapshot packed")
             capture.validate(tree)
