@@ -89,3 +89,10 @@ fn same_socket_inode_as_a_path_cannot_exchange_control_packets(){
     assert!(communicating(&process,&dir,alias.as_c_str(),&socket).is_err());
     communicating(&process,&dir,real.as_c_str(),&socket).unwrap();
 }
+
+#[test]fn uid_zero_does_not_substitute_for_stop_or_exe_observation_capabilities(){
+    let make=|e:u64,b:u64|format!("CapEff:\t{e:016x}\nCapBnd:\t{b:016x}\n");
+    assert!(supervisor_caps(make(SUPERVISOR_CAPS,SERVICE_CAPS).as_bytes()).is_ok());
+    for bit in [5,19,21]{assert!(supervisor_caps(make(SUPERVISOR_CAPS & !(1<<bit),SERVICE_CAPS).as_bytes()).is_err());}
+    assert!(supervisor_caps(make(SUPERVISOR_CAPS,SERVICE_CAPS & !(1<<10)).as_bytes()).is_err());
+}

@@ -1,8 +1,9 @@
 //! Internal online-launch handoff, separate from offline SAM creation and from Web.
-//! No service entry point, spawn, signalling or wait/reap of another worker here.
-//! A later trusted single-purpose supervisor must create its own two roles and
-//! retain the ORIGINAL, unreaped process pidfd from smbd birth even on any error.
+//! Pair creation and teardown operate only on the two internally born roles.
+//! There is no public path from a preflight result to a start grant.
 mod process;
+mod origins;
+mod supervisor;
 use crate::fs_tools::{RuntimeFile,hash_upto};
 use crate::pinned::{Entity,Mount};
 use helper_linux_evidence::smb_process::initially_no_sender_pidfd;
@@ -12,6 +13,7 @@ use rustix::{fs::{OFlags,fcntl_getfl,fstatfs},net::{AddressFamily,SocketFlags,So
 use std::{fs::File,io::{self,Seek},os::{fd::{AsFd,BorrowedFd},unix::fs::{FileExt,MetadataExt}}};
 
 const MAX_IMAGE:u64=128<<20;
+const STORAGE:&[&str]=&["usr","lib","zxs-smb-runtime","debian13-amd64","bin","zxs-smb-storage"];
 const DAEMON:&[&str]=&["usr","lib","zxs-smb-runtime","debian13-amd64","sbin","smbd"];
 fn no()->io::Error {io::Error::other("original dedicated SMB launch could not be established")}
 
@@ -20,8 +22,12 @@ impl Image {
     /// Expected bytes are supplied from the separately approved online release,
     /// never by smbd, the Web request, a filename search or this file's own hash.
     pub(crate) fn selected(expected:[u8;32])->io::Result<Self>{
+        Self::at(DAEMON,expected)
+    }
+    fn at(parts:&'static [&'static str],expected:[u8;32])->io::Result<Self>{
         if expected==[0;32]{return Err(no());}
-        let mut f=RuntimeFile::open(DAEMON,true,MAX_IMAGE)?;
+        let mut f=RuntimeFile::open(parts,true,MAX_IMAGE)?;
+        if !matches!(rustix::fs::fgetxattr(&f.file,c"security.capability",&mut [0u8;0][..]),Err(rustix::io::Errno::NODATA)){return Err(no());}
         let m=f.file.metadata()?;
         let mut hdr=[0;64];f.file.read_exact_at(&mut hdr,0)?;
         if m.gid()!=0 || m.nlink()!=1 || !matches!(m.mode()&0o7777,0o555|0o755)

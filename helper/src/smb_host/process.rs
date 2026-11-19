@@ -111,13 +111,20 @@ fn endpoint_set(process:&File,daemon:&File,storage:&File)->io::Result<()>{
     if !found{return Err(no());}Ok(())
 }
 
-pub(super) fn qualify(birth:&File,image:&File,daemon:&File,storage:&File)->io::Result<()>{
-    waitable_live(birth)?;
-    // A numeric path is only a route into genuine procfs for THIS held pidfd.
-    // Pin its original process directory and check the same live pidfd before
-    // opening any of that child's links. Never search by process name or pidfile.
-    let name=CString::new(format!("thread-self/fdinfo/{}",birth.as_raw_fd())).expect("decimal descriptor");
-    let id=boot_pid(&data(crate::maintenance::thread_file(&name)?,4096)?)?;
+fn cap_mask(bytes:&[u8],key:&[u8])->io::Result<u64>{
+    let vals=field(bytes,key)?;let [v]=vals.as_slice()else{return Err(no());};
+    if v.len()!=16||!v.iter().all(u8::is_ascii_hexdigit){return Err(no());}
+    u64::from_str_radix(std::str::from_utf8(v).map_err(|_|no())?,16).map_err(|_|no())
+}
+const SERVICE_CAPS:u64=(1<<0)|(1<<1)|(1<<3)|(1<<6)|(1<<7)|(1<<10);
+const SUPERVISOR_CAPS:u64=SERVICE_CAPS|(1<<5)|(1<<8)|(1<<18)|(1<<19)|(1<<21);
+fn supervisor_caps(bytes:&[u8])->io::Result<()>{
+    // KILL is necessary once the storage child no longer has UID 0. PTRACE
+    // is necessary to inspect that child's exe/ns. No emergency elevation.
+    if cap_mask(bytes,b"CapEff:")?&SUPERVISOR_CAPS!=SUPERVISOR_CAPS||
+       cap_mask(bytes,b"CapBnd:")?&SERVICE_CAPS!=SERVICE_CAPS{return Err(no());}Ok(())
+}
+pub(super) fn host()->io::Result<File>{
     let p=File::from(open(c"/proc",DIR,Mode::empty())?);
     if fstatfs(&p)?.f_type!=PROC_SUPER_MAGIC || Mount::on(&p)?.is_none_or(|m|m.at_root!=Some(true))
         ||readlinkat(&p,c"self",Vec::new())?.as_bytes()!=std::process::id().to_string().as_bytes(){return Err(no());}
@@ -125,8 +132,41 @@ pub(super) fn qualify(birth:&File,image:&File,daemon:&File,storage:&File)->io::R
     let own_pid=target(&current,c"pid")?;let own_user=target(&current,c"user")?;
     if fstatfs(&own_pid)?.f_type as u64!=0x6e736673||own_pid.metadata()?.ino()!=0xefff_fffc
         ||fstatfs(&own_user)?.f_type as u64!=0x6e736673||own_user.metadata()?.ino()!=0xefff_fffd{return Err(no());}
-    let idname=id.to_string();
-    let original=File::from(openat2(&p,idname.as_str(),DIR,Mode::empty(),SAFE)?);waitable_live(birth)?;
+    // A service supervisor, not a thread inside a loaded Web/SQL process.
+    let t=File::from(openat2(&p,c"thread-self/status",OFlags::RDONLY|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),SAFE)?);
+    let fields=data(t,65536)?;supervisor_caps(&fields)?;
+    if field(&fields,b"Threads:")?.as_slice()!=[b"1".as_slice()]||
+        field(&fields,b"Uid:")?.as_slice()!=[b"0".as_slice();4]||field(&fields,b"Gid:")?.as_slice()!=[b"0".as_slice();4]{return Err(no());}
+    Ok(p)
+}
+fn active_dir(birth:&File)->io::Result<(u32,File)>{
+    waitable_live(birth)?;
+    // Route to genuine procfs only AFTER the original live pidfd was obtained.
+    let name=CString::new(format!("thread-self/fdinfo/{}",birth.as_raw_fd())).expect("decimal descriptor");
+    let id=boot_pid(&data(crate::maintenance::thread_file(&name)?,4096)?)?;
+    let p=host()?;let idname=id.to_string();
+    let original=File::from(openat2(&p,idname.as_str(),DIR,Mode::empty(),SAFE)?);
+    waitable_live(birth)?;Ok((id,original))
+}
+pub(super) fn storage_snapshot(birth:&File,image:&File,uid:u32,gid:u32)->io::Result<bool>{
+    let(id,original)=active_dir(birth)?;pid_namespaces(birth)?;
+    if !same(&target(&original,c"exe")?,image)?{return Err(no());}
+    let file=File::from(openat2(&original,c"status",OFlags::RDONLY|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),SAFE)?);
+    let b=data(file,65536)?;let id=id.to_string();let parent=std::process::id().to_string();
+    let(uid,gid)=(uid.to_string(),gid.to_string());
+    if field(&b,b"Tgid:")?.as_slice()!=[id.as_bytes()]||field(&b,b"Pid:")?.as_slice()!=[id.as_bytes()]||
+        field(&b,b"PPid:")?.as_slice()!=[parent.as_bytes()]||field(&b,b"NSpid:")?.as_slice()!=[id.as_bytes(),b"1"]||
+        field(&b,b"Uid:")?.as_slice()!=[uid.as_bytes();4]||field(&b,b"Gid:")?.as_slice()!=[gid.as_bytes();4]||
+        !field(&b,b"Groups:")?.is_empty()||field(&b,b"NoNewPrivs:")?.as_slice()!=[b"1".as_slice()]{return Err(no());}
+    for k in [b"CapInh:",b"CapPrm:",b"CapEff:",b"CapBnd:",b"CapAmb:"]{
+        if field(&b,k)?.as_slice()!=[b"0000000000000000".as_slice()]{return Err(no());}
+    }
+    let term=1u64<<(15-1);let handles_term=cap_mask(&b,b"SigCgt:")?&term!=0&&cap_mask(&b,b"SigBlk:")?&term==0;
+    if !same(&target(&original,c"exe")?,image)?{return Err(no());}waitable_live(birth)?;Ok(handles_term)
+}
+
+pub(super) fn qualify(birth:&File,image:&File,daemon:&File,storage:&File)->io::Result<()>{
+    let(id,original)=active_dir(birth)?;
     let snapshot=||->io::Result<()>{
         let s=File::from(openat2(&original,c"status",OFlags::RDONLY|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),SAFE)?);
         status(&data(s,65536)?,id,std::process::id())?;
