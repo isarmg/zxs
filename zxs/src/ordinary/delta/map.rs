@@ -12,7 +12,7 @@ struct Run{kind:Part,len:u64}
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct Map{parent_length:u64,runs:Vec<Run>,pub changed:u64,pub logical:u64}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(super) enum Source{Full,First,Second,Zero}
+pub(super) enum Source{Full,Pack(usize),Zero}
 impl Map{
     pub(in crate::ordinary) fn derive<'a>(base:u64,spans:impl Iterator<Item=&'a Saved>)->io::Result<Self>{
         let mut l=Layout::base(base);let mut count=0;
@@ -64,19 +64,59 @@ impl Map{
         let mut b=b"ZXS/FORMAL/INCR/MAP\0".to_vec();b.extend_from_slice(&self.logical.to_be_bytes());b.extend_from_slice(&self.changed.to_be_bytes());self.put(&mut b);
         crate::hash::digest(&b)
     }
-    /// Resolve one bounded graph, never rebase child Parent runs onto FULL.
-    /// Offsets for dense packs remain relative to their *own* packed stream.
-    pub(super) fn resolve(&self,older:Option<&Map>,full:u64,at:u64,len:u64,
+    /// Plan only this range in logical order. Each non-Parent interval claims
+    /// the holes not already supplied by a newer layer. No recursive calls,
+    /// per-byte bitmap, or scans of an older map for each newer Parent run.
+    /// The caller separately authenticates each original map and its indexes.
+    pub(super) fn resolve<'a>(full:u64,layers:impl IntoIterator<Item=&'a Map>,at:u64,len:u64,
         mut emit:impl FnMut(Source,u64,u64)->io::Result<()>)->io::Result<()>{
-        if self.parent_length!=older.map_or(full,|p|p.logical)||older.is_some_and(|p|p.parent_length!=full){
-            return Err(invalid("immutable map does not cover the actual immediate parent's logical length"));}
-        self.visit(at,len,|part,off,n|match(part,older){
-            (Part::Zero,_)=>emit(Source::Zero,0,n),(Part::Changed,None)=>emit(Source::First,off,n),
-            (Part::Changed,Some(_))=>emit(Source::Second,off,n),(Part::Parent,None)=>emit(Source::Full,off,n),
-            (Part::Parent,Some(p))=>p.visit(off,n,|source,p_at,p_len|emit(match source{
-                Part::Parent=>Source::Full,Part::Changed=>Source::First,Part::Zero=>Source::Zero
-            },p_at,p_len)),
-        })
+        use std::collections::BTreeMap;
+        let layers:Vec<_>=layers.into_iter().collect();
+        let mut length=full;
+        for m in &layers{
+            if m.parent_length!=length{return Err(invalid("immutable map does not bind its immediate parent length"));}
+            length=m.logical;
+        }
+        let end=at.checked_add(len).filter(|&n|n<=length).ok_or_else(||invalid("range outside the selected immutable version"))?;
+        if at==end{return Ok(());}
+        let mut holes=BTreeMap::from([(at,end)]); // disjoint logical [lo,hi)
+        let mut parts=BTreeMap::new();
+        for (ordinal,m) in layers.into_iter().enumerate().rev(){
+            let Some((&first,_))=holes.first_key_value()else{break};
+            let last=*holes.last_key_value().expect("nonempty above").1;
+            let mut pos=first;
+            m.visit(first,last-first,|part,off,n|{
+                let hi=pos.checked_add(n).ok_or_else(||invalid("logical part overflow"))?;
+                let from=match part{Part::Parent=>None,Part::Changed=>Some(Source::Pack(ordinal)),Part::Zero=>Some(Source::Zero)};
+                if let Some(from)=from{
+                    let mut next=pos;
+                    while next<hi{
+                        let hit=holes.range(..=next).next_back().filter(|(_,stop)|**stop>next)
+                            .or_else(||holes.range(next..hi).next()).map(|(&a,&b)|(a,b));
+                        let Some((a,b))=hit else{break};
+                        let lo=a.max(next);let stop=b.min(hi);holes.remove(&a);
+                        if a<lo{holes.insert(a,lo);}if stop<b{holes.insert(stop,b);}
+                        let source_at=if from==Source::Zero{0}else{off.checked_add(lo-pos).ok_or_else(||invalid("dense offset overflow"))?};
+                        parts.insert(lo,(from,source_at,stop-lo));next=stop;
+                    }
+                }
+                pos=hi;Ok(())
+            })?;
+        }
+        for (lo,hi) in holes{
+            if hi>full{return Err(invalid("immutable parent unexpectedly reaches outside FULL"));}
+            parts.insert(lo,(Source::Full,lo,hi-lo));
+        }
+        let mut merged:Option<(Source,u64,u64)>=None;
+        for (_,part) in parts{
+            if let Some((s,off,n))=merged.as_mut(){
+                if *s==part.0&&(*s==Source::Zero||off.checked_add(*n)==Some(part.1)){
+                    *n=n.checked_add(part.2).ok_or_else(||invalid("merged interval overflow"))?;continue;
+                }
+            }
+            if let Some((s,off,n))=merged.replace(part){emit(s,off,n)?;}
+        }
+        if let Some((s,off,n))=merged{emit(s,off,n)?;}Ok(())
     }
     pub(super) fn visit(&self,at:u64,len:u64,mut f:impl FnMut(Part,u64,u64)->io::Result<()>)->io::Result<()>{
         let end=at.checked_add(len).filter(|v|*v<=self.logical).ok_or_else(||invalid("range outside the exact incremental version"))?;
@@ -94,7 +134,7 @@ impl Map{
 }
 
 #[cfg(test)]
-mod two_layer_tests{
+mod range_plan_tests{
     use super::*;
     fn map(parent:u64,logical:u64,changed:u64,runs:&[(u8,u64)])->Map{
         let mut b=(runs.len()as u32).to_be_bytes().to_vec();
@@ -105,20 +145,43 @@ mod two_layer_tests{
     fn second_generation_inherits_changes_only_from_its_immediate_parent_and_never_untruncates_full(){
         let first=map(10,5,2,&[(1,2),(2,2),(1,1)]);
         let second=map(5,9,1,&[(1,3),(2,1),(1,1),(3,4)]);
-        let mut parts=Vec::new();second.resolve(Some(&first),10,2,7,|s,o,n|{parts.push((s,o,n));Ok(())}).unwrap();
-        assert_eq!(parts,[(Source::First,0,1),(Source::Second,0,1),(Source::Full,4,1),(Source::Zero,0,4)]);
-        let mut bytes=Vec::new();second.resolve(Some(&first),10,0,9,|s,o,n|{
+        let mut parts=Vec::new();Map::resolve(10,[&first,&second],2,7,|s,o,n|{parts.push((s,o,n));Ok(())}).unwrap();
+        assert_eq!(parts,[(Source::Pack(0),0,1),(Source::Pack(1),0,1),(Source::Full,4,1),(Source::Zero,0,4)]);
+        let mut bytes=Vec::new();Map::resolve(10,[&first,&second],0,9,|s,o,n|{
             if s==Source::Zero{bytes.resize(bytes.len()+n as usize,0);}else{
-                let src:&[u8]=match s{Source::First=>b"XY",Source::Second=>b"Z",Source::Full=>b"abcdefghij",Source::Zero=>unreachable!()};
+                let src:&[u8]=match s{Source::Pack(0)=>b"XY",Source::Pack(1)=>b"Z",Source::Full=>b"abcdefghij",_=>unreachable!()};
                 bytes.extend_from_slice(&src[o as usize..(o+n)as usize]);}Ok(())
         }).unwrap();assert_eq!(bytes,b"abXZe\0\0\0\0");
         // Short reads map dense offsets in each independent original pack,
         // not into the larger FULL or the other generation's dense bytes.
-        let mut middle=Vec::new();first.resolve(None,10,3,1,|s,o,n|{middle.push((s,o,n));Ok(())}).unwrap();
-        assert_eq!(middle,[(Source::First,1,1)]);
-        assert!(second.resolve(Some(&first),9,0,0,|_,_,_|panic!("bad bound emitted bytes")).is_err());
-        assert!(second.resolve(None,10,0,9,|_,_,_|panic!("skipped parent emitted bytes")).is_err());
-        assert!(second.resolve(Some(&first),10,9,1,|_,_,_|panic!("past end emitted bytes")).is_err());
-        let empty=map(9,0,0,&[]);assert!(empty.resolve(Some(&first),10,0,0,|_,_,_|unreachable!()).is_err());
+        let mut middle=Vec::new();Map::resolve(10,[&first],3,1,|s,o,n|{middle.push((s,o,n));Ok(())}).unwrap();
+        assert_eq!(middle,[(Source::Pack(0),1,1)]);
+        assert!(Map::resolve(9,[&first,&second],0,0,|_,_,_|panic!("bad bound emitted bytes")).is_err());
+        assert!(Map::resolve(10,[&second],0,9,|_,_,_|panic!("skipped parent emitted bytes")).is_err());
+        assert!(Map::resolve(10,[&first,&second],9,1,|_,_,_|panic!("past end emitted bytes")).is_err());
+        let empty=map(9,0,0,&[]);assert!(Map::resolve(10,[&first,&empty],0,0,|_,_,_|unreachable!()).is_err());
     }
+    #[test]
+    fn deep_overlap_uses_the_right_original_dense_offset_and_only_the_selected_ancestry(){
+        // F0=abcdefghij; I1=abXYe, I2=abXZe + four zeroes;
+        // I3 masks offsets 2..5; I4 masks 3..4; I5 truncates to 7 then I6 grows to 12.
+        let maps=[map(10,5,2,&[(1,2),(2,2),(1,1)]),map(5,9,1,&[(1,3),(2,1),(1,1),(3,4)]),
+            map(9,9,3,&[(1,2),(2,3),(1,4)]),map(9,9,1,&[(1,3),(2,1),(1,5)]),
+            map(9,7,0,&[(1,7)]),map(7,12,0,&[(1,7),(3,5)])];
+        let ranges=|n:usize,off,len|{let mut v=Vec::new();Map::resolve(10,&maps[..n],off,len,|s,o,l|{v.push((s,o,l));Ok(())}).unwrap();v};
+        assert_eq!(ranges(4,2,4),[(Source::Pack(2),0,1),(Source::Pack(3),0,1),(Source::Pack(2),2,1),(Source::Zero,0,1)]);
+        assert_eq!(ranges(6,0,12),[(Source::Full,0,2),(Source::Pack(2),0,1),(Source::Pack(3),0,1),(Source::Pack(2),2,1),(Source::Zero,0,7)]);
+        assert_eq!(ranges(2,2,3),[(Source::Pack(0),0,1),(Source::Pack(1),0,1),(Source::Full,4,1)]);
+        assert_eq!(ranges(0,8,2),[(Source::Full,8,2)]);
+        assert!(Map::resolve(10,&maps[..],u64::MAX,2,|_,_,_|panic!("bad range emitted bytes")).is_err());
+    }
+    #[test]
+    fn ordinals_are_not_byte_tags_and_a_fully_overwritten_layer_cannot_hide_a_broken_edge(){
+        let layers:Vec<_>=(0..300).map(|_|map(3,3,1,&[(1,1),(2,1),(1,1)])).collect();
+        let mut got=Vec::new();Map::resolve(3,&layers,0,3,|s,o,n|{got.push((s,o,n));Ok(())}).unwrap();
+        assert_eq!(got,[(Source::Full,0,1),(Source::Pack(299),0,1),(Source::Full,2,1)]);
+        let corrupt=map(4,3,3,&[(2,3)]);let cover=map(3,3,3,&[(2,3)]);
+        assert!(Map::resolve(3,layers.iter().chain([&corrupt,&cover]),0,3,|_,_,_|panic!("broken ancestor emitted bytes")).is_err());
+    }
+
 }

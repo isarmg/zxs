@@ -93,11 +93,10 @@ impl Body{
         self.unchanged()?;self.parent.write_range(0,0,io::sink())?;self.first.range(0,0,io::sink())?;
         if let Some(n)=&self.second{n.range(0,0,io::sink())?;}
         let mut out=CheckedOutput{out,check:||self.unchanged()};let zeros=[0u8;64*1024];
-        let older=self.second.as_ref().map(|_|&self.first.m);
-        self.top().m.resolve(older,self.parent.confirmed_parent()?.length,at,len,|from,offset,n|match from{
+        let held=[Some(&self.first),self.second.as_ref()];
+        Map::resolve(self.parent.confirmed_parent()?.length,held.iter().flatten().map(|x|&x.m),at,len,|from,offset,n|match from{
             ByteSource::Full=>self.parent.write_range(offset,n,&mut out),
-            ByteSource::First=>self.first.range(offset,n,&mut out),
-            ByteSource::Second=>self.second.as_ref().ok_or_else(||invalid("missing second immutable pack"))?.range(offset,n,&mut out),
+            ByteSource::Pack(i)=>held.get(i).and_then(|h|*h).ok_or_else(||invalid("missing selected original incremental pack"))?.range(offset,n,&mut out),
             ByteSource::Zero=>{let mut left=n;while left!=0{let size=left.min(zeros.len() as u64) as usize;out.write_all(&zeros[..size])?;left-=size as u64;}Ok(())}
         })?;self.unchanged()
     }
