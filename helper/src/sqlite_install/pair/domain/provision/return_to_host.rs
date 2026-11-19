@@ -2,6 +2,7 @@
 //! worker sends the public result and transfers its *existing* two EX open
 //! descriptions. No pathname, writable output FD, TDB contents or root
 //! directory authority is granted to the worker. Not an online smbd channel.
+mod issue;
 use super::{FRESH_SITE,PRIVATE_STORE,Unpublished,child,contents,live,mark};
 use super::super::{LocalDomain,handoff::{OriginChannel,SyncedStore}};
 use crate::{pinned::{Entity,Kind,Pinned},sqlite_install::{approval,bad,request::Id}};
@@ -10,8 +11,21 @@ use rustix::{fd::AsFd,fs::{FlockOperation,Mode,OFlags,fcntl_getfl,flock,openat},
     process::{Gid,Pid,Uid,WaitId,WaitIdOptions,getppid,waitid}};
 use std::{ffi::CString,fs::File,io::{self,IoSlice,Read},mem::MaybeUninit,os::{fd::AsRawFd,unix::fs::MetadataExt},path::Path,process::Child};
 
-const RESULT:usize=176; // 128 B BOUND + exact original INIT ID + ephemeral file/parent comparison
+const RESULT:usize=192; // 128 B BOUND + confirmed host scope (includes original INIT) + sync comparison
 const PREFIX:[&std::ffi::CStr;4]=[c"var",c"lib",c"local-ops-helper",c"samba-instances"];
+// A nonsecret local comparison, not a signature. Parent and worker both use
+// their independently selected, simultaneously live original objects; do not
+// persist dev/mount/inode as reboot-stable IDs. Only the parent's explicit
+// terminal confirmation authorizes this single future installation.
+pub(super) fn order(ids:[&Id;6],uid:u32,gid:u32,path:&Path,config:&[u8;32],objs:[(Entity,u64);5])->io::Result<[u8;32]>{
+    use sha2::{Digest,Sha256};use std::os::unix::ffi::OsStrExt;
+    let mut h=Sha256::new();h.update(b"helper: one original host SAM installation v1\0");
+    for id in ids{if *id==[0;16]{return Err(bad("missing host installation identity"));}h.update(id);}
+    h.update(uid.to_be_bytes());h.update(gid.to_be_bytes());let p=path.as_os_str().as_bytes();
+    h.update(u16::try_from(p.len()).map_err(|_|bad("out-of-range installation root"))?.to_be_bytes());h.update(p);
+    h.update(config);for (e,m) in objs{h.update(e.dev.to_be_bytes());h.update(e.ino.to_be_bytes());h.update(m.to_be_bytes());}
+    Ok(h.finalize().into())
+}
 fn safe_dir(f:&File)->io::Result<()>{
     let m=f.metadata()?;
     if !m.is_dir()||m.uid()!=0||m.nlink()==0||m.mode()&0o022!=0{return Err(bad("unprotected host instance ancestor"));}Ok(())
@@ -45,12 +59,12 @@ impl Site{
 // foreground issuer must separately confirm the action and identified pool.
 pub(super) struct HostOrigins{
     system:Pinned,site:Site,private:File,state:File,live:live::Live,
-    uid:u32,gid:u32,pool:Id,init:Id,instance:Id,op:Id,config:[u8;32],
+    uid:u32,gid:u32,pool:Id,init:Id,instance:Id,op:Id,actor:Id,config:[u8;32],
 }
 impl HostOrigins{
     pub(super) fn before_worker(path:&Path,pool:Id,init:Id,instance:Id,op:Id,config:[u8;32])->io::Result<Self>{
         if [pool,init,instance,op].contains(&[0;16]){return Err(bad("missing original installation identities"));}
-        let host=approval::host_admin()?;let (_,uid,gid)=approval::profile()?;
+        let host=approval::host_admin()?;let (actor,uid,gid)=approval::profile()?;
         let system=Pinned::open(path,Kind::StorageRoot)?;let site=Site::select(host,&instance)?;
         let selected=|n:&std::ffi::CStr|->io::Result<File>{
             let p=pin_dir(site.base(),n)?;let m=p.metadata()?;
@@ -62,14 +76,14 @@ impl HostOrigins{
         };
         let private=selected(c"private")?;let state=selected(c"state")?;
         let live=live::Live::select(site.base(),&config)?;
-        let this=Self{system,site,private,state,live,uid,gid,pool,init,instance,op,config};
+        let this=Self{system,site,private,state,live,uid,gid,pool,init,instance,op,actor,config};
         this.fresh()?;Ok(this)
     }
     fn common(&self)->io::Result<()>{
         self.site.check()?;self.system.require_same_path()?;
-        let (_,u,g)=approval::profile()?;
+        let (a,u,g)=approval::profile()?;
         let s=self.system.metadata()?;let root=self.site.base();
-        if (u,g)!=(self.uid,self.gid)||!s.is_dir()||s.uid()!=u||s.mode()&0o7777!=0o700||s.nlink()==0{
+        if (a,u,g)!=(self.actor,self.uid,self.gid)||!s.is_dir()||s.uid()!=u||s.mode()&0o7777!=0o700||s.nlink()==0{
             return Err(bad("inconsistent storage subject, SYSTEM or protected instance"));}
         for f in &self.site.chain {
             if mark(f)?.0==self.system.entity(){return Err(bad("SYSTEM is an ancestor of the dedicated installation"));}
@@ -85,6 +99,11 @@ impl HostOrigins{
         }
         self.live.require(root)?;contents(&self.state,&[])?;Ok(())
     }
+    fn scope(&self,reference:&Id)->io::Result<[u8;32]>{
+        let sys=self.system.relative_directory()?;
+        order([&self.pool,&self.init,&self.instance,&self.op,&self.actor,reference],self.uid,self.gid,
+              self.system.path(),&self.config,[mark(&sys)?,mark(self.site.base())?,mark(&self.private)?,mark(&self.state)?,self.live.origin()])
+    }
     pub(super) fn fresh(&self)->io::Result<()>{
         self.common()?;contents(self.site.base(),FRESH_SITE)?;contents(&self.private,&[])?;self.site.check()
     }
@@ -96,7 +115,7 @@ impl Unpublished<'_>{
             ||Some(who.pid)!=getppid()||!who.uid.is_root()||!who.gid.is_root(){
             return Err(bad("the return endpoint does not belong to the original host parent"));}
         let mut bytes=[0;RESULT];bytes[..128].copy_from_slice(&self.original_record()?);
-        let (store,witness)=self.original.feedback(&self.site.private)?;bytes[128..144].copy_from_slice(&self.approval.init);bytes[144..].copy_from_slice(&witness);
+        let (store,witness)=self.original.feedback(&self.site.private)?;bytes[128..160].copy_from_slice(&self.approval.host_order);bytes[160..].copy_from_slice(&witness);
         let fds=[self.approval.system.source().dir().as_fd(),self.site.base.as_fd(),store.as_fd()];
         let mut buf=[MaybeUninit::uninit();rustix::cmsg_space!(ScmRights(3))];
         let mut control=SendAncillaryBuffer::new(&mut buf);
@@ -154,27 +173,30 @@ fn lease(fd:&File,id:(Entity,u64))->io::Result<()>{
     }
 }
 pub(super) struct Returned<'a>{
-    originals:&'a HostOrigins,system:File,base:File,store:File,record:[u8;128],witness:[u8;32],
+    originals:&'a HostOrigins,system:File,base:File,store:File,record:[u8;128],scope:[u8;32],witness:[u8;32],
+}
+// WNOWAIT anchors this child through the kernel-credential check. No group or
+// unrelated descriptor can supply the actual wait result.
+fn waitable(child:&Child)->io::Result<Option<(Pid,bool)>>{
+    let pid=Pid::from_raw(i32::try_from(child.id()).map_err(|_|bad("invalid original child identity"))?)
+        .ok_or_else(||bad("invalid original child PID"))?;
+    loop{match waitid(WaitId::Pid(pid),WaitIdOptions::EXITED|WaitIdOptions::NOHANG|WaitIdOptions::NOWAIT){
+        Err(Errno::INTR)=>continue,r=>return Ok(r?.map(|s|(pid,s.exit_status()==Some(0)))),
+    }}
 }
 impl<'a> Returned<'a>{
     // The caller is the private one-shot supervisor, which must have spawned
     // the fixed protected executable itself. Child PID is observed while the
     // real child is still waitable, not supplied by argv, a parsed result or
     // a later lookup. This method does not reap or kill that child.
-    pub(super) fn from_exited(rx:OriginChannel,child:&Child,originals:&'a HostOrigins)->io::Result<Self>{
-        let pid=Pid::from_raw(i32::try_from(child.id()).map_err(|_|bad("invalid original child identity"))?)
-            .ok_or_else(||bad("invalid original child PID"))?;
-        let result=loop{match waitid(WaitId::Pid(pid),WaitIdOptions::EXITED|WaitIdOptions::NOHANG|WaitIdOptions::NOWAIT){
-            Err(Errno::INTR)=>continue,r=>break r?,
-        }};
-        if result.is_none_or(|st|st.exit_status()!=Some(0)){return Err(bad("original dedicated worker has not exited normally"));}
+    fn from_waitable(rx:OriginChannel,pid:Pid,originals:&'a HostOrigins)->io::Result<Self>{
         let (data,[system,base,store])=rx.exact::<RESULT,3>(UCred{pid,uid:Uid::from_raw(originals.uid),gid:Gid::from_raw(originals.gid)})?;
-        if data[128..144]!=originals.init{return Err(bad("different original pool initialization in the handoff"));}
-        let this=Self{originals,system,base,store,record:data[..128].try_into().expect("fixed BOUND"),witness:data[144..].try_into().expect("fixed witness")};
+        let this=Self{originals,system,base,store,record:data[..128].try_into().expect("fixed BOUND"),scope:data[128..160].try_into().expect("fixed approved host scope"),witness:data[160..].try_into().expect("fixed witness")};
         this.require()?;Ok(this)
     }
-    fn require(&self)->io::Result<()>{
-        let s=self.originals;s.common()?;contents(s.site.base(),FRESH_SITE)?;contents(&s.private,PRIVATE_STORE)?;
+    fn require(&self)->io::Result<()>{self.require_names(FRESH_SITE)}
+    fn require_names(&self,names:&[&[u8]])->io::Result<()>{
+        let s=self.originals;s.common()?;contents(s.site.base(),names)?;contents(&s.private,PRIVATE_STORE)?;
         let selected=s.system.relative_directory()?;
         lease(&self.system,mark(&selected)?)?;lease(&self.base,mark(s.site.base())?)?;
         LocalDomain::expected_binding(&self.record,&s.pool,&s.instance,&s.op,&s.config)?;
@@ -236,4 +258,16 @@ mod tests{
             s.to_owned()+"ino: 101\n",s.to_owned()+"lock: 2: FLOCK ADVISORY WRITE 61 00:6a:101 0 EOF\n"]{
             assert!(!owns_flock(bad.as_bytes(),101,99));}
     }
+    #[test]
+    fn the_foreground_scope_cannot_move_between_actors_roots_or_operations(){
+        let a=[[1;16],[2;16],[3;16],[4;16],[5;16],[6;16]];let roots=std::array::from_fn(|i|(Entity{dev:10,ino:20+i as u64},30));
+        let take=|a:&[Id;6],r:[(Entity,u64);5],p:&Path,g|order(a.each_ref(),1001,g,p,&[42;32],r).unwrap();
+        let p=Path::new("/selected");let same=take(&a,roots,p,99);
+        assert_eq!(same,take(&a,roots,p,99));
+        for i in 0..a.len(){let mut other=a;other[i][0]^=1;assert_ne!(same,take(&other,roots,p,99));}
+        for i in 0..roots.len(){let mut other=roots;other[i].0.ino+=1;assert_ne!(same,take(&a,other,p,99));
+            let mut other=roots;other[i].1+=1;assert_ne!(same,take(&a,other,p,99));}
+        assert_ne!(same,take(&a,roots,Path::new("/other"),99));assert_ne!(same,take(&a,roots,p,98));
+    }
+
 }

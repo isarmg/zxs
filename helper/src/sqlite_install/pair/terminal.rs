@@ -2,6 +2,7 @@
 //! this is not maintenance authorization, Samba-domain evidence or an issuer.
 mod audit;
 mod channel;
+pub(super) use channel::PublicConfirmation;
 use audit::UnauditedInput;
 use super::super::approval::{host_admin,same_terminal};
 use crate::maintenance::{diagnostic_worker, thread_file};

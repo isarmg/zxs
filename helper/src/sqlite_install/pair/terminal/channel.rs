@@ -6,6 +6,9 @@ use crate::{disk_web::require_terminal,sqlite_install::approval::own_descriptor_
 use rustix::{fs::{self,AtFlags,Mode,OFlags,StatxFlags},io::Errno,termios::{tcgetpgrp,tcgetsid}};
 use std::{fs::File,io,os::fd::{AsFd,BorrowedFd},time::{Duration,Instant}};
 
+mod confirmation;
+pub(in crate::sqlite_install::pair) use confirmation::PublicConfirmation;
+
 const PROMPTS:[&[u8];4]=[
     "请输入 Web 管理员口令（不回显），然后按回车。\n".as_bytes(), "请再次输入同一 Web 管理员口令。\n".as_bytes(),
     "请输入不同的 SMB 专用账户口令（不回显），然后按回车。\n".as_bytes(), "请再次输入同一 SMB 专用账户口令。\n".as_bytes(),
@@ -73,7 +76,7 @@ impl Channel {
 
 // This is not a poll-then-blocking-write trick: each actual write uses the
 // private NONBLOCK OFD. Retry only while time, operator, tty and signal agree.
-fn nonblocking_prompt(fd:BorrowedFd<'_>, mut msg:&'static [u8],end:Instant,check:impl Fn()->io::Result<()>)->io::Result<()> {
+fn nonblocking_prompt(fd:BorrowedFd<'_>, mut msg:&[u8],end:Instant,check:impl Fn()->io::Result<()>)->io::Result<()> {
     while !msg.is_empty() {
         check()?;
         if Instant::now()>=end{return Err(io::Error::new(io::ErrorKind::TimedOut,"credential prompt could not be delivered in time"));}

@@ -25,7 +25,7 @@ const ENTRY:&str="import runpy; runpy.run_path('/provision.py',run_name='_local_
 // constructor. Merely receiving arguments, a uid or a packaging profile is NOT
 // enough. The executable actually consumed is the specific digest-verified ELF.
 pub(super) struct FreshApproval<'a>{
-    system:&'a LockedSystem, pool:Id,init:Id,instance_id:Id,op:Id,live_config:[u8;32],
+    system:&'a LockedSystem, pool:Id,init:Id,instance_id:Id,op:Id,actor:Id,reference:Id,live_config:[u8;32],host_order:[u8;32],
     site:&'a Pinned, usr:&'a Pinned, expected_bwrap:[u8;32], uid:u32,gid:u32,
 }
 // Only the real monitor/reaper creates this proof for its original payload.
@@ -144,7 +144,7 @@ impl<'a> FreshApproval<'a>{
         rustix::thread::set_no_new_privs(true)?;
         crate::maintenance::diagnostic_worker(self.uid,self.gid)?;
         if self.system.source().uid()!=self.uid||self.uid==0||self.gid==0||
-            [self.pool,self.init,self.instance_id,self.op].contains(&[0;16])||self.usr.path()!=Path::new(CAPSULE_USR){
+            [self.pool,self.init,self.instance_id,self.op,self.actor,self.reference].contains(&[0;16])||self.usr.path()!=Path::new(CAPSULE_USR){
             return Err(bad("not the selected dedicated instance operation"));}
         let instance_name=format!("/var/lib/local-ops-helper/samba-instances/{}",self.instance_id.iter().map(|n|format!("{n:02x}")).collect::<String>());
         let s=self.system.source();let real_s=Pinned::open(s.path(),crate::pinned::Kind::StorageRoot)?;
@@ -163,9 +163,17 @@ impl<'a> FreshApproval<'a>{
         // Before exposing a writable empty private directory to Samba, query only the
         // explicitly selected original S under its EX; no SQL connection survives
         // the native process. A pool ID supplied by the caller alone is not enough.
-        super::super::observed::original_pool(&self.pool,&self.init,self.system)?;
         let site=Instance::lock(&self)?;
         let live=live::Live::select(&site.base,&self.live_config)?;
+        let check_order=||->io::Result<()>{
+            let dig=return_to_host::order([&self.pool,&self.init,&self.instance_id,&self.op,&self.actor,&self.reference],
+                self.uid,self.gid,s.path(),&self.live_config,[mark(s.dir())?,mark(&site.base)?,mark(&site.private)?,mark(&site.state)?,live.origin()])?;
+            if dig!=self.host_order{return Err(bad("foreground host approval referred to different original objects; not provisioning"));}
+            Ok(())
+        };
+        check_order()?;
+        // Only now open the SQL file: a wrong selected inode is not even read.
+        super::super::observed::original_pool(&self.pool,&self.init,self.system)?;
         let (origin,tx)=OriginChannel::open()?;let (rstatus,wstatus)=pipe_with(PipeFlags::CLOEXEC)?;
         let (stdin,fin)=pipe_with(PipeFlags::CLOEXEC)?;drop(fin);
         let (script,boot,bpf)=(sealed(SCRIPT)?,sealed(BOOT)?,sealed(&helper_linux_evidence::diagnostic_process::diagnostic_group_filter())?);
@@ -174,7 +182,7 @@ impl<'a> FreshApproval<'a>{
         let mut cmd=Command::new("/no-path-execution-for-helper-sam");
         cmd.env_clear().current_dir("/").stdin(Stdio::from(File::from(stdin))).stdout(Stdio::from(tx)).stderr(Stdio::piped());
         fixed_args(&mut cmd,self.uid,self.gid,&ns);
-        named(self.usr,&usr)?;bwrap.recheck()?;site.require(&self,None)?;live.require(&site.base)?;cancelled()?;
+        named(self.usr,&usr)?;bwrap.recheck()?;site.require(&self,None)?;live.require(&site.base)?;check_order()?;cancelled()?;
         helper_linux_evidence::diagnostic_process::prepare_diagnostic_exec(&mut cmd,&bwrap.file)?;
         let group=Group::new(cmd.spawn()?);
         drop(cmd);drop(fds);drop(wstatus);

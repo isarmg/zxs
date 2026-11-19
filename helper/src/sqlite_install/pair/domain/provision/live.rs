@@ -7,16 +7,18 @@ use std::{fs::File,io,os::unix::fs::{FileExt,MetadataExt}};
 
 pub(super) const PROFILE:&[u8]=include_bytes!("../../../../../resources/samba-domain/initial-live.conf");
 #[derive(Copy,Clone,PartialEq,Eq)]
-struct Stamp{entity:Entity,mount:u64,mode:u32,uid:u32,links:u64,len:u64,mtime:(i64,i64),ctime:(i64,i64)}
+pub(super) struct Stamp{pub(super) entity:Entity,pub(super) mount:u64,pub(super) mode:u32,pub(super) uid:u32,
+    pub(super) links:u64,pub(super) len:u64,pub(super) mtime:(i64,i64),pub(super) ctime:(i64,i64)}
 impl Stamp{
-    fn on(f:&File)->io::Result<Self>{let m=f.metadata()?;Ok(Self{entity:Entity::of(&m)?,
+    pub(super) fn on(f:&File)->io::Result<Self>{let m=f.metadata()?;Ok(Self{entity:Entity::of(&m)?,
         mount:Mount::on(f)?.ok_or_else(||bad("missing installed live configuration mount"))?.id,
         mode:m.mode(),uid:m.uid(),links:m.nlink(),len:m.len(),
         mtime:(m.mtime(),m.mtime_nsec()),ctime:(m.ctime(),m.ctime_nsec())})}
-    fn acceptable(&self,parent:&Stamp)->bool{
-        self.mode==0o100444&&self.uid==0&&self.links==1&&self.len==PROFILE.len() as u64
+    pub(super) fn at(&self,parent:&Stamp,length:u64,mode:u32,uid:u32)->bool{
+        self.mode==(0o100000|mode)&&self.uid==uid&&self.links==1&&self.len==length
             &&self.mount==parent.mount&&self.entity.dev==parent.entity.dev&&self.entity!=parent.entity
     }
+    fn acceptable(&self,parent:&Stamp)->bool{self.at(parent,PROFILE.len() as u64,0o444,0)}
 }
 fn source_at(parent:&File)->io::Result<File>{
     Ok(File::from(openat(parent,c"smb.conf",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?))
@@ -38,9 +40,10 @@ impl Live{
         if approved_sha!=&<[u8;32]>::from(Sha256::digest(PROFILE)){return Err(bad("the original approval did not select the first-install live profile"));}
         let dir=Stamp::on(parent)?;let os=source_at(parent)?;let stamp=Stamp::on(&os)?;
         if !stamp.acceptable(&dir){return Err(bad("not the installed root-owned 0444 live configuration"));}
-        let fd=crate::pinned::sam_live_reader(&os,stamp.mount,PROFILE.len() as u64)?;
+        let fd=crate::pinned::sam_public_reader(&os,stamp.mount,PROFILE.len() as u64)?;
         let live=Self{fd,stamp};live.require(parent)?;Ok(live)
     }
+    pub(super) fn origin(&self)->(Entity,u64){(self.stamp.entity,self.stamp.mount)}
     pub(super) fn require(&self,parent:&File)->io::Result<()>{
         let check=||->io::Result<()>{
             if !self.stamp.acceptable(&Stamp::on(parent)?)||Stamp::on(&self.fd)?!=self.stamp||Stamp::on(&source_at(parent)?)?!=self.stamp{

@@ -157,13 +157,13 @@ pub(crate) fn sqlite_claim_reader(pin:&File,entity:Entity,mount:u64)->io::Result
     reopen_admitted_reader(pin,entity,ReaderBoundary::SelectedControlMount(mount))
 }
 
-/// Only the root-owned nonsecret initial smb.conf below a separately
+/// Only the root-owned nonsecret live configuration or bound record below a separately
 /// admitted instance root. The worker may update atime; no arbitrary path.
-pub(crate) fn sam_live_reader(pin:&File,mount:u64,length:u64)->io::Result<File>{
+pub(crate) fn sam_public_reader(pin:&File,mount:u64,length:u64)->io::Result<File>{
     let m=pin.metadata()?;
     if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)||!m.is_file()||m.uid()!=0||m.mode()&0o7777!=0o444||m.nlink()!=1
         ||length==0||length>1<<20||m.len()!=length||Mount::on(pin)?.is_none_or(|v|v.id!=mount){
-        return Err(invalid("not the selected root-owned public live configuration"));
+        return Err(invalid("not the selected root-owned public SAM record"));
     }
     reopen_admitted_reader(pin,Entity::of(&m)?,ReaderBoundary::PublicSamMount(mount))
 }
