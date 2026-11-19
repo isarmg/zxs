@@ -204,6 +204,17 @@ def ship_web_templates(root):
         f.chmod(0o444)
     return {"base":rel,"sha256":WEB_INPUTS,"active_units":[]}
 
+SMB_HOST_INPUTS = {
+    "check.py": "98b88600ae8e8c704d329efba68d36bba0bbeafcebeaeca52f612dec9191c869",
+    "zxs-smb-preflight.service.in": "1c729d0f912d4e9040ac3a674329186e7899eadc673673d13d1b619673aef85e",
+}
+def ship_smb_host_preflight(root):
+    rel="usr/share/local-ops-helper/smb-host"
+    for name,d in SMB_HOST_INPUTS.items():
+        f=copy_checked(PROJECT/"resources/smb-host"/name,root/rel/name,d,cap=32768)
+        f.chmod(0o444)
+    return {"base":rel,"sha256":SMB_HOST_INPUTS,"active_units":[],"ships_online_executables":False}
+
 def build(args):
     require(os.geteuid()!=0,"the offline package builder must run unprivileged")
     lock=json.loads((HERE/"lock.json").read_text())
@@ -227,6 +238,7 @@ def build(args):
         docs=mkdir(root/"usr/share/doc/local-ops-helper")
         template=ship_live_template(root)
         management=ship_web_templates(root)
+        smb_host=ship_smb_host_preflight(root)
         shutil.copyfile(PROJECT/"LICENSE",docs/"copyright")
         rust_notices(out,docs)
         copy_checked(args.stdlib_notices,docs/"rust-stdlib-notices",args.stdlib_notices_sha256,cap=32<<20)
@@ -276,6 +288,7 @@ def build(args):
               "files":{str(p.relative_to(home)):digest(p) for p in sorted(home.rglob("*")) if p.is_file()},
               "scope_sam":"explicit local setup-pair provision/enroll; no daemon or login validation",
               "inactive_management_frontend":management,
+              "inactive_smb_installation_check":smb_host,
               "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
               "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"packaged-not-yet-enabled"}}

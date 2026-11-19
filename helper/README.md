@@ -4,6 +4,8 @@
 
 ZXS 的业务管理网页是另一个服务。可用[非 root 本机 HTTPS 部署模板](docs/management-https.md)准备专用 nginx、命名 Unix 套接字和 ZXS 后端；包本身不启用任何单元，不提供私钥、不改宿主 nginx 或网络。
 
+[专用 SMB 安装预检](docs/smb-host.md)可独立核对本机已有实例和两个在线程序的原件；不启动 Samba，不等于已能从客户端登录。
+
 ```sh
 helper inspect-dirs /home/alice/downloads /home/alice/downloads/week-01 /mnt/incoming
 helper compare-files /home/alice/reference.bin /mnt/incoming/candidate.bin
