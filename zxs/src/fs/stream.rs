@@ -22,13 +22,22 @@ impl HeldDir{
     /// very same mount instance, not through some other mount of the same FS.
     pub(crate) fn shares_file_mount(&self,file:&File)->io::Result<bool>{Ok(mounts::id(&self.file)?==mounts::id(file)?)}
     pub(crate) fn pin_stream(&self,name:&CStr,exact:u64)->io::Result<Option<PinnedRegular>>{
+        self.pin_private(name,exact,Some(exact))
+    }
+    /// Same O_PATH/type/mount gate as exact FILE streams, for a size-bounded
+    /// regular registration. An unknown name cannot activate a device or FIFO.
+    pub(crate) fn pin_bounded(&self,name:&CStr,max:u64)->io::Result<Option<PinnedRegular>>{
+        self.pin_private(name,max,None)
+    }
+    fn pin_private(&self,name:&CStr,max:u64,exact:Option<u64>)->io::Result<Option<PinnedRegular>>{
         let Some(pin)=self.pin_record(name)? else{return Ok(None)};
-        let stat=record_stamp(&pin,exact)?;let m=mounts::id(&self.file)?;
-        if stat.size()!=exact||stat.dev!=self.entity.device||mounts::id(&pin)?!=m{return Err(invalid("working body length, mount or role differs"));}
-        // SAFETY: verified private, regular, same-mount O_PATH original, no device or symlink opens.
+        let stat=record_stamp(&pin,max)?;let m=mounts::id(&self.file)?;
+        if exact.is_some_and(|n|n!=stat.size())||stat.dev!=self.entity.device||mounts::id(&pin)?!=m{
+            return Err(invalid("private regular length, mount or role differs"));}
+        // Reopen the already validated private regular FD, not the previous name.
         let fd=unsafe{zxs_open_pinned_record(pin.as_raw_fd(),0)};if fd<0{return Err(io::Error::last_os_error());}
         let file=unsafe{File::from_raw_fd(fd)};
-        if record_stamp(&file,exact)?!=stat||mounts::id(&file)?!=m{return Err(invalid("working body pin was replaced"));}
+        if record_stamp(&file,max)?!=stat||mounts::id(&file)?!=m{return Err(invalid("private regular pin was replaced"));}
         let birth=Birth::read(&file)?;let result=PinnedRegular{file,stamp:OriginalStamp{stat,birth},mount:m};
         result.named(self,name)?;Ok(Some(result))
     }

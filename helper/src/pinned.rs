@@ -1,7 +1,7 @@
 //! Path resolution is through held directories. No operation here writes or adopts a path.
 pub(crate) mod storage_status;
 
-use rustix::fs::{Mode, OFlags, PROC_SUPER_MAGIC, fstatfs, open, openat, readlinkat};
+use rustix::fs::{AtFlags, Mode, OFlags, PROC_SUPER_MAGIC, StatxAttributes, StatxFlags, fstatfs, open, openat, readlinkat, statx};
 use std::ffi::OsStr;
 use std::fs::{File, Metadata};
 use std::io;
@@ -20,6 +20,19 @@ impl Entity {
     pub(crate) fn of(m: &Metadata) -> io::Result<Self> {
         if m.ino() == 0 { return Err(invalid("filesystem did not supply an inode identity")); }
         Ok(Self { dev: m.dev(), ino: m.ino() })
+    }
+}
+
+/// Kernel observation for this held mount now (not a persistent filesystem UUID).
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) struct Mount { pub(crate) id: u64, pub(crate) at_root: Option<bool> }
+impl Mount {
+    pub(crate) fn on(fd: &File) -> io::Result<Option<Self>> {
+        let s = statx(fd, c"", AtFlags::EMPTY_PATH | AtFlags::NO_AUTOMOUNT | AtFlags::STATX_DONT_SYNC,
+                      StatxFlags::MNT_ID)?;
+        if s.stx_mask & StatxFlags::MNT_ID.bits() == 0 || s.stx_mnt_id == 0 { return Ok(None); }
+        Ok(Some(Self { id: s.stx_mnt_id, at_root: s.stx_attributes_mask.contains(StatxAttributes::MOUNT_ROOT)
+            .then(|| s.stx_attributes.contains(StatxAttributes::MOUNT_ROOT)) }))
     }
 }
 
@@ -96,7 +109,7 @@ pub(crate) struct LocalDataFile { pin: Pinned, magic: u32 }
 impl LocalDataFile {
     pub(crate) fn select(path: &Path) -> io::Result<Self> {
         let pin = Pinned::open(path, Kind::Regular)?;
-        let magic = require_local_data_fs(filesystem(&pin.fd)?)?;
+        let magic = local_data_filesystem(&pin.fd)?;
         Ok(Self { pin, magic })
     }
 
@@ -152,13 +165,16 @@ impl LocalDataFile {
     }
 }
 
+pub(crate) fn local_data_filesystem(fd: &File) -> io::Result<u32> {
+    require_local_data_fs(filesystem(fd)?)
+}
+
 // S_IFREG on its own does not make a kernel/remote control endpoint a data file.
 // These are Linux UAPI values, not distro/mount-point names. Unknown means no reader.
 fn require_local_data_fs(magic: Option<u32>) -> io::Result<u32> {
-    use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
     match magic {
-        Some(kind @ (EXT4_SUPER_MAGIC | XFS_SUPER_MAGIC | BTRFS_SUPER_MAGIC | F2FS_SUPER_MAGIC)) => Ok(kind),
-        _ => Err(invalid("comparison requires ext2/3/4, XFS, Btrfs or F2FS; unsupported filesystem")),
+        Some(kind) if helper_linux_evidence::supported_local_magic(kind) => Ok(kind),
+        _ => Err(io::Error::new(io::ErrorKind::Unsupported, "requires a supported local data filesystem (ext2/3/4, XFS, Btrfs or F2FS)")),
     }
 }
 

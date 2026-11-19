@@ -57,3 +57,53 @@ fn one_checksum_does_not_explain_another_role_frontier_or_trailing_frame(){
     let mut t=Sample::load();t.image[54]^=1;assert!(t.read(1001).is_err());
     let mut t=Sample::load();t.image.push(0);assert!(t.read(1001).is_err());
 }
+
+/// Emit a fresh synthetic *native* fixture at the selected original FD. It is
+/// not a product writer, never relabels ID-LEAF-1 media, and does not prove
+/// another implementation has written a usable pool. The public hex vector
+/// above is the independent byte-level reference.
+#[test]
+#[ignore="two private Linux filesystems with export handles and native UUID"]
+fn online_empty_keeps_the_original_regular_flock_not_the_directory_short_lock(){
+    use crate::test_support::PrivateTemp;
+    use crate::pool::{PENDING,READY};
+    use std::{fs as osfs,fs::File};
+    let a=PrivateTemp::under(&std::env::temp_dir());
+    let b=PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
+    let sys=a.child("system");let data=a.child("data");let bin=b.child("recycle");
+    let s=Selection::open(&sys,&bin,std::slice::from_ref(&data)).unwrap();
+    let root=&s.roots[0].1;let(file,who)=root.anonymous_record().unwrap();file.try_lock().unwrap();
+    // All native fields below are from the fresh held files, not the public
+    // synthetic Linux numbers. Assemble the MAINT bytes before publishing either name.
+    let layout=Record::new(&s,OperationId::new().unwrap(),who,fs::Birth::read(&file).unwrap()).unwrap();
+    let mut bytes=GENESIS.to_vec();bytes.extend_from_slice(&layout.bytes[MAGIC.len()..layout.bytes.len()-32]);
+    let sum=crate::hash::digest(&bytes).unwrap();bytes.extend_from_slice(&sum);
+    let rec=decode_empty(&bytes,fs::local_uid(),&fs::frontier(0,0,sum)).unwrap();
+    fs::initial_frontier(&file,sum).unwrap();root.add_record(file.try_clone().unwrap(),PENDING,&bytes).unwrap();
+    let other=File::open(sys.join("INITIALIZING")).unwrap();
+    assert_eq!(io::Error::from(other.try_lock_shared().unwrap_err()).kind(),io::ErrorKind::WouldBlock);
+    for(i,(_,d))in s.roots.iter().enumerate(){d.claim(&rec.label_in_domain(i,LABEL)).unwrap();}
+    root.rename_registration(PENDING,READY).unwrap();root.file.sync_all().unwrap();
+    assert_eq!(io::Error::from(other.try_lock_shared().unwrap_err()).kind(),io::ErrorKind::WouldBlock);
+    assert!(native::OnlineEmpty::open(&sys).is_err());drop(file);
+    let first=native::OnlineEmpty::open(&sys).unwrap();
+    let second=native::OnlineEmpty::open(&sys).unwrap();
+    assert_eq!(io::Error::from(other.try_lock().unwrap_err()).kind(),io::ErrorKind::WouldBlock);
+    // An idle online reader does NOT monopolize SYSTEM's short transaction lock.
+    let short=HeldDir::open(&sys).unwrap();short.exclusive().unwrap();drop(short);
+    let offline=bin.with_file_name("fixture-recycle-offline");osfs::rename(&bin,&offline).unwrap();
+    assert_eq!(first.observe(rec.info.volumes[2].id).unwrap(),rec.info.volumes[2]);
+    assert!(first.observe(rec.info.volumes[1].id).is_err());
+    assert!(crate::inspect(&sys).is_err(),"old format is never selected for new media");
+    // Substitute equal bytes and even the same frontier on another inode, with
+    // the original lock still alive elsewhere. Neither cold nor held view accepts it.
+    let original=sys.with_file_name("retained-original-registration");osfs::rename(sys.join("REGISTRATION"),&original).unwrap();
+    let(impostor,_)=root.anonymous_record().unwrap();fs::initial_frontier(&impostor,sum).unwrap();
+    root.add_record(impostor,READY,&bytes).unwrap();
+    assert!(first.observe(rec.info.volumes[2].id).is_err());assert!(native::OnlineEmpty::open(&sys).is_err());
+    osfs::rename(sys.join("REGISTRATION"),sys.with_file_name("kept-impostor")).unwrap();
+    osfs::rename(original,sys.join("REGISTRATION")).unwrap();
+    drop(second);assert_eq!(io::Error::from(other.try_lock().unwrap_err()).kind(),io::ErrorKind::WouldBlock);
+    drop(first);other.try_lock().unwrap();assert!(native::OnlineEmpty::open(&sys).is_err());
+    drop(other);assert!(native::OnlineEmpty::open(&sys).is_ok());osfs::rename(offline,bin).unwrap();
+}

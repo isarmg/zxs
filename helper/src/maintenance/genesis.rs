@@ -137,6 +137,16 @@ impl<'a> FreshGenesis<'a> {
         Ok(Self { pool, operation, storage_uid, registration, volumes, digest })
     }
 
+    /// Compares only these two observed originals, never the other volumes, a
+    /// pathname, label, lock or operator authority. Mount IDs are not stored.
+    pub(super) fn matches_origin_pair(&self, uid: u32, registration: (u64, u64, &[u8]),
+                                      system: (u64, u64, &[u8])) -> bool {
+        let r = &self.registration;
+        let s = &self.volumes[0].object;
+        self.storage_uid == uid && registration == (r.device, r.inode, r.birth)
+            && system == (s.device, s.inode, s.birth)
+    }
+
     /// All labels must appear once, in original registration order. Only the
     /// SYSTEM volume binds the genesis digest; data/recycle labels do not.
     pub(super) fn check_labels(&self, labels: &[&[u8]]) -> Result<(), Invalid> {

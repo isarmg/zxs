@@ -26,6 +26,13 @@ fn read(file:&File)->io::Result<Frontier>{
     if n!=FRONTIER_LEN as isize{return Err(invalid("invalid acknowledged SYSTEM frontier length"));}
     Ok(bytes)
 }
+impl stream::PinnedRegular{
+    /// Read the attribute of the actual held file description rather than
+    /// opening a second regular FD to stand in for its lifetime flock.
+    pub(crate) fn opening_frontier(&self)->io::Result<Frontier>{
+        self.unchanged()?;let value=read(&self.file)?;self.unchanged()?;Ok(value)
+    }
+}
 pub(crate) fn initial_frontier(file:&File,genesis:[u8;32])->io::Result<()>{
     if file.metadata()?.nlink()!=0{return Err(invalid("cannot initialize a frontier on a named SYSTEM file"));}
     let first=frontier(0,0,genesis);

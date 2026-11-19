@@ -1,6 +1,6 @@
 //! Kernel observations of explicitly selected directories. Not a pool or role admission.
-use super::{Entity, Kind, Pinned, validate_path};
-use rustix::fs::{AtFlags, StatVfsMountFlags, StatxAttributes, StatxFlags, fstatvfs, statx};
+use super::{Entity, Kind, Mount, Pinned, validate_path};
+use rustix::fs::{StatVfsMountFlags, fstatvfs};
 use std::{ffi::OsString, fmt::{self, Display}, fs::File, io, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
 
 const MAX_DATA: usize = 62;
@@ -69,16 +69,8 @@ impl Display for Reason {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub(crate) struct Mount { pub(crate) id: u64, pub(crate) at_root: Option<bool> }
-impl Mount {
-    fn read(fd: &File) -> Result<Self, Reason> {
-        let s = statx(fd, c"", AtFlags::EMPTY_PATH | AtFlags::NO_AUTOMOUNT | AtFlags::STATX_DONT_SYNC, StatxFlags::MNT_ID)
-            .map_err(|e| Reason::from(io::Error::from(e)))?;
-        if s.stx_mask & StatxFlags::MNT_ID.bits() == 0 || s.stx_mnt_id == 0 { return Err(Reason::NotReported); }
-        Ok(Self { id: s.stx_mnt_id, at_root: s.stx_attributes_mask.contains(StatxAttributes::MOUNT_ROOT)
-            .then(|| s.stx_attributes.contains(StatxAttributes::MOUNT_ROOT)) })
-    }
+fn observed_mount(fd: &File) -> Result<Mount, Reason> {
+    Mount::on(fd).map_err(Reason::from)?.ok_or(Reason::NotReported)
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -110,14 +102,14 @@ impl HeldSample {
     fn take(path: &Path) -> Result<Self, Reason> {
         let root = Pinned::open(path, Kind::Directory).map_err(Reason::opening_directory)?;
         // Per-directory filesystem accounting can differ between subvolumes.
-        let mount = Mount::read(&root.fd).map(|mount| Mounted { mount, space: Space::read(&root.fd) });
+        let mount = observed_mount(&root.fd).map(|mount| Mounted { mount, space: Space::read(&root.fd) });
         Ok(Self { root, mount })
     }
     fn finish(self) -> Result<Observed, Reason> {
         let now = Pinned::open(&self.root.path, Kind::Directory).map_err(Reason::opening_directory)?;
         if self.root.chain != now.chain { return Err(Reason::Changed); }
         let mount = match self.mount {
-            Ok(held) => match Mount::read(&now.fd) {
+            Ok(held) => match observed_mount(&now.fd) {
                 Ok(m) if held.mount.id == m.id => Ok(held),
                 // Bind mounts of the same inode can still have different per-mount flags.
                 Ok(_) => return Err(Reason::Changed),

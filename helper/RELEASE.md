@@ -12,10 +12,10 @@
 
    ```sh
    cargo +1.100.0 build --locked --offline --release --target x86_64-unknown-linux-gnu --bin helper
-   cargo +1.100.0 test --locked --offline --target x86_64-unknown-linux-gnu
+   cargo +1.100.0 test --workspace --locked --offline --target x86_64-unknown-linux-gnu
    ```
 
-   测试与发行构建是两项证据。正向文件用例需要允许的文件系统、私有专用测试目录和相应只读权限；`HELPER_TEST_DATA_PARENT` 只供测试，不能指向真实业务数据。记录实际用例数、失败、跳过及原因。缺少前提不是通过；没有用同一配置复建比对，不声称可复现。[Cargo 参数说明](https://doc.rust-lang.org/cargo/commands/cargo-build.html#manifest-options)
+   测试与发行构建是两项证据。正向文件用例需要允许的文件系统、私有专用测试目录和相应只读权限；`HELPER_TEST_DATA_PARENT` 只供测试，不能指向真实业务数据。记录实际用例数、失败、跳过及原因。原生身份与互斥用例还需该测试文件系统支持 O_TMPFILE、真实 FS UUID / 文件句柄及指定的首次具名权限。缺少前提不是通过；没有用同一配置复建比对，不声称可复现。[Cargo 参数说明](https://doc.rust-lang.org/cargo/commands/cargo-build.html#manifest-options)
 
 ## H08：在交付文件之前，需要什么证据
 

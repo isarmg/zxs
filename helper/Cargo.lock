@@ -177,9 +177,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
+name = "helper-linux-evidence"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "linux-raw-sys",
+ "rustix",
+]
+
+[[package]]
 name = "local-ops-helper"
 version = "1.0.0"
 dependencies = [
+ "helper-linux-evidence",
  "linux-raw-sys",
  "rustix",
  "sha2",
