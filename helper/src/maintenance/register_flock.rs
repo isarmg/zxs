@@ -1,5 +1,5 @@
 //! First-inode portion of an offline initialization, not a pool-level writer permit.
-//! No constructor adopts an externally opened file. Nothing here links a name or claims a volume.
+//! No constructor adopts an externally opened file. The bare allocation does not link a name or claim a volume.
 pub(super) mod staging;
 
 use super::genesis::FreshGenesis;

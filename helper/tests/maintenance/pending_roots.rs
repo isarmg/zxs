@@ -8,7 +8,7 @@ fn selected(system: &Path, recycle: &Path, data: &Path) -> Selection {
              recycle.as_os_str().into(), "--data".into(), data.as_os_str().into()];
     Selection::parse(a.into_iter()).unwrap()
 }
-fn observe(system: &Path, uid: u32, selection: &Selection) -> io::Result<PendingRootSet> {
+fn observe(system: &Path, uid: u32, selection: &Selection) -> io::Result<PendingRootSet<'static>> {
     PendingRootSet::inspect(ColdPending::inspect(system, uid, OP)?, selection)
 }
 fn no_tag(dir: &File) {

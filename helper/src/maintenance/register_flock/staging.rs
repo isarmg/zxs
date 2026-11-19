@@ -1,5 +1,7 @@
 //! Single transition: empty anonymous original -> synchronized anonymous original.
-//! No producer here touches a root attribute, a directory name or a previously named file.
+//! The prepare step changes no root attribute or name. Its separate first-name transition
+//! is not callable by any public operation.
+pub(in crate::maintenance) mod first_name;
 use super::UnpublishedRegisterFlock;
 use crate::maintenance::{genesis::{FreshGenesis, InitialBytes}, root_set::{FreshRootLocks, UnpublishedProposal}};
 use crate::pinned::invalid;
@@ -110,3 +112,6 @@ fn write_initial(register: &UnpublishedRegisterFlock<'_>, bytes: &InitialBytes) 
 #[cfg(test)]
 #[path = "../../../tests/maintenance/unlinked_stage.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(in crate::maintenance) use tests::roots as fixture_roots;

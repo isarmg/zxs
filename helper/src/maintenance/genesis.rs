@@ -170,6 +170,19 @@ impl<'a> FreshGenesis<'a> {
         Ok(())
     }
 
+    /// Reconstruct only this admitted row's original label, never invent an ID.
+    /// check_label remains an independent exact decoder/length check.
+    pub(super) fn expected_label(&self, index: usize) -> Result<Vec<u8>, Invalid> {
+        let row = self.volumes.get(index).ok_or(Invalid::Label)?;
+        let mut label = VOLUME.to_vec();
+        label.push(row.tag);
+        label.extend_from_slice(&self.pool);
+        label.extend_from_slice(&row.id);
+        label.extend_from_slice(&self.operation);
+        if index == 0 { label.extend_from_slice(&self.digest); }
+        Ok(label)
+    }
+
     pub(super) fn check_label(&self, index: usize, label: &[u8]) -> Result<(), Invalid> {
         let v = self.volumes.get(index).ok_or(Invalid::Label)?;
         let tail = label.strip_prefix(VOLUME).and_then(|b| b.strip_prefix(&[v.tag]))

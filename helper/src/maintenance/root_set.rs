@@ -3,7 +3,7 @@
 //! attributes, publishes no name and issues no operation receipt.
 mod proposal;
 mod pending;
-pub(super) use pending::PendingRootSet;
+pub(super) use pending::{PendingRootSet, SystemLabelCreated};
 pub(super) use proposal::UnpublishedProposal;
 use super::{ancestry::Mounts, genesis::FreshGenesis, identity::ObservedOriginal};
 use crate::pinned::{Kind, Pinned, invalid, storage_status::Selection};
@@ -118,6 +118,12 @@ impl FreshRootLocks {
     /// a directory FD to a writer or adopt a hidden ancestor.
     pub(super) fn check_image_roots(&self, image: &FreshGenesis<'_>) -> io::Result<()> {
         self.check_empty_selection()?;
+        self.check_row_origins(image)
+    }
+
+    pub(super) fn selected_system(&self) -> &std::path::Path { self.roots[0].name.path() }
+
+    fn check_row_origins(&self, image: &FreshGenesis<'_>) -> io::Result<()> {
         if !image.has_root_count(self.uid, self.roots.len()) || self.roots.iter().enumerate().any(|(i,r)|
             !image.matches_root_origin(i, r.name.path().as_os_str().as_bytes(), r.component_limit, r.observed.fields())) {
             return Err(invalid("new image differs from the held original root selection"));
@@ -136,25 +142,32 @@ fn leaf_observation(mounts: &Mounts, r: &Root, named: &File, image: Option<&Fres
 
 fn sample_roots(roots: &[Root], uid: u32, image: Option<&FreshGenesis<'_>>) -> io::Result<Vec<RootSample>> {
     let mounts = Mounts::current()?;
-    roots.iter().enumerate().map(|(i,r)| {
-        let named = r.checked_name(uid)?;
-        let stamp = DirectoryStamp::on(&named)?;
-        let (chain, labelled) = leaf_observation(&mounts, r, &named, image, i)?;
-        if image.is_some() && i == 0 { read_pending_only(named)?; } else { read_empty(named)?; }
-        Ok(RootSample { stamp, mounts: chain, labelled })
-    }).collect()
+    roots.iter().enumerate().map(|(i, r)| sample_one(&mounts, r, uid, image, i)).collect()
+}
+
+fn sample_one(mounts: &Mounts, r: &Root, uid: u32, image: Option<&FreshGenesis<'_>>, i: usize) -> io::Result<RootSample> {
+    let named = r.checked_name(uid)?;
+    let stamp = DirectoryStamp::on(&named)?;
+    let (chain, labelled) = leaf_observation(mounts, r, &named, image, i)?;
+    if image.is_some() && i == 0 { read_pending_only(named)?; } else { read_empty(named)?; }
+    Ok(RootSample { stamp, mounts: chain, labelled })
 }
 
 fn finish_roots(roots: &[Root], uid: u32, image: Option<&FreshGenesis<'_>>, samples: &[RootSample]) -> io::Result<()> {
     if samples.len() != roots.len() { return Err(invalid("incomplete storage root observation")); }
     let mounts = Mounts::current()?;
     for (i, (r, before)) in roots.iter().zip(samples).enumerate() {
-        let named = r.checked_name(uid)?;
-        let (chain, labelled) = leaf_observation(&mounts, r, &named, image, i)?;
-        if chain != before.mounts || labelled != before.labelled
-            || DirectoryStamp::on(&named)? != before.stamp || DirectoryStamp::on(&r.dir)? != before.stamp {
-            return Err(invalid("storage directory changed during observation"));
-        }
+        finish_one(&mounts, r, uid, image, i, before)?;
+    }
+    Ok(())
+}
+
+fn finish_one(mounts: &Mounts, r: &Root, uid: u32, image: Option<&FreshGenesis<'_>>, i: usize, before: &RootSample) -> io::Result<()> {
+    let named = r.checked_name(uid)?;
+    let (chain, labelled) = leaf_observation(mounts, r, &named, image, i)?;
+    if chain != before.mounts || labelled != before.labelled
+        || DirectoryStamp::on(&named)? != before.stamp || DirectoryStamp::on(&r.dir)? != before.stamp {
+        return Err(invalid("storage directory changed during observation"));
     }
     Ok(())
 }

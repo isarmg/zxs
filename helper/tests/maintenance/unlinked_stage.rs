@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn roots(parent: &Path, recycle: &Path) -> (FreshRootLocks, PathBuf, PathBuf) {
+pub(in crate::maintenance) fn roots(parent: &Path, recycle: &Path) -> (FreshRootLocks, PathBuf, PathBuf) {
     let system = parent.join("system");
     let data = parent.join("data");
     for path in [&system, &data] {

@@ -1,6 +1,6 @@
 //! Pure, bounded encoder for a new uncommitted registration. Only the native
 //! preparation supplies its real operands; this module neither issues IDs nor opens a file.
-use super::{FreshGenesis, GENESIS, Id, Invalid, MAX_IMAGE, VOLUME};
+use super::{FreshGenesis, GENESIS, Id, Invalid, MAX_IMAGE};
 use crate::path_rules::MAX_PATH_BYTES;
 use sha2::{Digest, Sha256};
 
@@ -52,14 +52,7 @@ impl InitialBytes {
             || roots.iter().enumerate().any(|(i,r)| g.volumes[i].id != r.id ||
                 !g.matches_root_origin(i, r.path, r.limit, r.origin)) { return Err(Invalid::Identity); }
 
-        let mut labels = Vec::with_capacity(roots.len());
-        for row in &g.volumes {
-            let mut label = VOLUME.to_vec();
-            label.push(row.tag); label.extend_from_slice(&pool); label.extend_from_slice(&row.id);
-            label.extend_from_slice(&op);
-            if row.tag == 0 { label.extend_from_slice(&digest); }
-            labels.push(label);
-        }
+        let labels = (0..roots.len()).map(|i| g.expected_label(i)).collect::<Result<Vec<_>, _>>()?;
         let mut frontier = [0; 48];
         frontier[16..].copy_from_slice(&digest);
         let bytes = Self { image, labels, frontier };

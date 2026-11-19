@@ -1,7 +1,7 @@
 //! Fresh-root ancestry in the current maintenance thread's mount namespace.
 //! We never search other paths, open files on a volume, or recover a hidden parent.
 use crate::pinned::{Entity, Mount, Pinned, invalid, local_data_filesystem};
-use rustix::fs::{Mode, OFlags, PROC_SUPER_MAGIC, ResolveFlags, fgetxattr, fstatfs, makedev, open, openat, openat2};
+use rustix::fs::{Mode, OFlags, fgetxattr, makedev, openat};
 use rustix::io::Errno;
 use std::{collections::BTreeMap, fs::File, io::{self, Read}, os::unix::fs::MetadataExt};
 
@@ -24,21 +24,7 @@ struct Row { parent: u64, device: u64, whole: bool }
 pub(super) struct Mounts(BTreeMap<u64, Row>);
 impl Mounts {
     pub(super) fn current() -> io::Result<Self> {
-        let proc = File::from(open("/proc", OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?);
-        let proc_mount = Mount::on(&proc)?.ok_or_else(|| unknown("proc mount identity unavailable"))?;
-        if fstatfs(&proc)?.f_type != PROC_SUPER_MAGIC || proc_mount.at_root != Some(true) {
-            return Err(unknown("need the root of a genuine procfs"));
-        }
-        // Kernel thread-self is a *relative* link to this very caller's task.
-        // Allow that ordinary link; reject magic links, mount crossings (including
-        // a file bind at mountinfo), escapes, and a symlink as the final file.
-        let f = File::from(openat2(&proc, c"thread-self/mountinfo",
-            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty(),
-            ResolveFlags::BENEATH | ResolveFlags::NO_XDEV | ResolveFlags::NO_MAGICLINKS)?);
-        if !f.metadata()?.is_file() || fstatfs(&f)?.f_type != PROC_SUPER_MAGIC
-            || Mount::on(&f)?.is_none_or(|m| m.id != proc_mount.id) {
-            return Err(unknown("cannot attribute mountinfo to the current thread's procfs"));
-        }
+        let f = super::thread_evidence::mountinfo()?;
         let mut bytes = Vec::new();
         f.take(TABLE_BYTES as u64 + 1).read_to_end(&mut bytes)?;
         Self::parse(&bytes)
