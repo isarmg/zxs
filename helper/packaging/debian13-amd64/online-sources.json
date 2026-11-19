@@ -1,19 +1,76 @@
 {
   "debian_source": "samba",
   "debian_version": "2:4.22.11+dfsg-0+deb13u1",
-  "inrelease": ["0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675", 140421],
-  "source_index": ["6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9", 10540436],
+  "inrelease": [
+    "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+    140421
+  ],
+  "source_index": [
+    "6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9",
+    10540436
+  ],
   "directory": "pool/main/s/samba",
   "archives": {
-    "samba_4.22.11+dfsg-0+deb13u1.dsc": ["39774db3a5d14787f15ae1345764fbb3f37ea86f7c0cb9791808883a288e65fc", 5665],
-    "samba_4.22.11+dfsg.orig.tar.xz": ["4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a", 25620416],
-    "samba_4.22.11+dfsg-0+deb13u1.debian.tar.xz": ["0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03", 189836]
+    "samba_4.22.11+dfsg-0+deb13u1.dsc": [
+      "39774db3a5d14787f15ae1345764fbb3f37ea86f7c0cb9791808883a288e65fc",
+      5665
+    ],
+    "samba_4.22.11+dfsg.orig.tar.xz": [
+      "4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a",
+      25620416
+    ],
+    "samba_4.22.11+dfsg-0+deb13u1.debian.tar.xz": [
+      "0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03",
+      189836
+    ]
   },
-  "project_commit": "dec7aa55fa9fa5789d75a89feccb3024d41880bb",
-  "project_tree": "0da4ba101975a108b07e26d0d2e5e862e993bedc",
-  "project_files": [254, 12512142, "41b45fbf9ffeda1a30dc84129f78441d144bbe94faa9d07b531118ec3190ba85"],
-  "preimages_sha256": "964e2a38d06a6b312d4d0e75e5219631681c06b36e48f4deacd757e572a72e36",
-  "patch_sha256": "61131436e9a1928f5acca29bc55922a58c471416450332416479cc497742cef3",
+  "project_commit": "e0ef41866004f07c41e6472909c49f7601f1536a",
+  "project_tree": "de1966fdc37fd8312c48ca782122d0aea10ab8e3",
+  "project_files": [
+    255,
+    12521578,
+    "8be977320711af0d9dadcf64983b7ea683fc1c1e3707a125f43e04db309e7114"
+  ],
+  "preimages_sha256": "db3fa362ed1ece2826b897075ce01c40c5f9a64c606c9231ae99f5dfd8d6a537",
+  "patch_sha256": "c2cd2847359e8ec4a215c2f87470d8a8bfad6ba7e462e543f5c3ee2bf1c6fdc7",
   "rust": "1.100.0",
-  "source_date_epoch": 1795122755
+  "source_date_epoch": 1795123725,
+  "runtime_debian": {
+    "trixie": {
+      "inrelease": [
+        "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+        140421
+      ],
+      "indexes": {
+        "main/binary-amd64/Packages.xz": [
+          "7778d3e3f303b7ddb8ce0fe7c8d57473a076c6bf2e8f241f75421d2396352498",
+          9678380
+        ],
+        "main/source/Sources.xz": [
+          "6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9",
+          10540436
+        ],
+        "main/Contents-amd64.gz": [
+          "3d3e6930908db0b53f780dd7397b9589e27db88b59205c331a76d76d6726e419",
+          12698511
+        ]
+      }
+    },
+    "trixie-security": {
+      "inrelease": [
+        "4bcc789fc8cf9d937b6d721b04f3687984e282ea848c8ecbdb234ebe851e748c",
+        43409
+      ],
+      "indexes": {
+        "main/binary-amd64/Packages.xz": [
+          "f5fbebc08a304d02e91be446511fc06cbe5f4b92d3cb023c5e82e3616aa1d1c4",
+          325216
+        ],
+        "main/source/Sources.xz": [
+          "e568113392db9b57002badd34281cf343e3e961894dea9562f8edd405cdae5a7",
+          269556
+        ]
+      }
+    }
+  }
 }

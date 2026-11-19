@@ -14,12 +14,14 @@ sys.path.insert(0,str(HERE))  # fixed trusted recipe directory; supports python3
 from archive_inputs import copy_checked, digest, require
 from online_sources import command, debian, git_export, member, patch_source
 from online_objects import collect
+from online_roles import assemble
+from online_catalog import Catalog
 
 BUILD=Path("/build/zxs-smb-v1")
 RUST=Path("/opt/zxs-rust-1.100.0/bin")
 LOCK="online-sources.json"
 RECIPE=("online_smb_build.py","online_sources.py","online_objects.py","samba_capsule.py",
-        "archive_inputs.py",LOCK,"online-smb.md")
+        "archive_inputs.py","online_catalog.py","online_roles.py",LOCK,"online-smb.md")
 FORMAT=r"[a-f0-9]{64}"
 TARGET="x86_64-unknown-linux-gnu"
 
@@ -43,9 +45,9 @@ def tools_record(env,work,pin):
     require(0<len(rows)<=16384 and all(len(s.split("\t"))==4 for s in rows),"invalid installed-package inventory")
     tools=[str(RUST/"cargo"),str(RUST/"rustc"),"/usr/bin/x86_64-linux-gnu-gcc","/usr/bin/x86_64-linux-gnu-ar",
            "/usr/bin/x86_64-linux-gnu-objcopy","/usr/bin/readelf","/usr/bin/git","/usr/bin/dpkg-source",
-           "/usr/bin/make","/usr/bin/patch","/usr/bin/gpgv"]
+           "/usr/bin/make","/usr/bin/patch","/usr/bin/gpgv","/usr/bin/dpkg-deb","/usr/bin/dpkg-query"]
     t="".join(digest(Path(p))+"  "+p+"\n" for p in tools)
-    return ("ZXS-SMB/BUILD-ENV-1\n"+rv+cv+t+"\n".join(rows)+"\n").encode("utf-8")
+    return ("ZXS-SMB/BUILD-ENV-2\n"+rv+cv+t+"\n".join(rows)+"\n").encode("utf-8")
 
 def main():
     if sys.argv[1:]==["--describe-environment"]:
@@ -56,14 +58,15 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--project-git",type=Path,required=True,help="complete, protected, offline original Git object store")
     p.add_argument("--debian-mirror",type=Path,required=True,help="offline Debian archive root containing dists/ and pool/")
-    p.add_argument("--environment-sha256",required=True,help="independent approval of exact BUILD-ENV-1")
+    p.add_argument("--debian-security-mirror",type=Path,required=True,help="separate offline official trixie-security archive")
+    p.add_argument("--environment-sha256",required=True,help="independent approval of exact BUILD-ENV-2")
     p.add_argument("--toolchain-materials",type=Path,required=True,help="issuer's corresponding source/notice evidence archive")
     p.add_argument("--materials-sha256",required=True)
     a=p.parse_args()
     require(os.getuid()!=0 and os.geteuid()==os.getuid(),"never run as root")
     require(all(re.fullmatch(FORMAT,x) for x in (a.environment_sha256,a.materials_sha256)),"invalid approved digest")
     require(all(v.is_absolute() and not v.is_relative_to(BUILD) for v in
-                (a.project_git,a.debian_mirror,a.toolchain_materials)),"supply separate absolute readonly inputs")
+                (a.project_git,a.debian_mirror,a.debian_security_mirror,a.toolchain_materials)),"supply separate absolute readonly inputs")
     pin=json.loads((HERE/LOCK).read_text("ascii"))
     # Fixed build path, fresh private tree, no resume/overwrite. Build code,
     # .pc, intermediate machine tools and Debian's d/tmp are never publications.
@@ -81,7 +84,11 @@ def main():
          "CC":"/usr/bin/x86_64-linux-gnu-gcc","AR":"/usr/bin/x86_64-linux-gnu-ar"}
     inventory=tools_record(env,work,pin)
     require(hashlib.sha256(inventory).hexdigest()==a.environment_sha256,"unapproved or changed build environment")
-    (srcs/"BUILD-ENV-1").write_bytes(inventory)
+    (srcs/"BUILD-ENV-2").write_bytes(inventory)
+    # Reject missing, untrusted or expired indices before compiling either program.
+    materials=srcs/"external";materials.mkdir(); members=work/"package-members";members.mkdir()
+    catalog=Catalog({"trixie":a.debian_mirror,"trixie-security":a.debian_security_mirror},
+                    materials,members,pin["runtime_debian"],inventory,env)
     copy_checked(a.toolchain_materials,srcs/"toolchain-source-and-notices.archive",a.materials_sha256,cap=1<<30)
     recipes=srcs/"recipe";recipes.mkdir()
     for name in RECIPE:shutil.copyfile(HERE/name,recipes/name)
@@ -104,13 +111,20 @@ def main():
              "--bin","zxs-smb-storage"],env,zxs)
     obj=BUILD/"objects";obj.mkdir()
     evidence=collect(native/"debian/tmp",work/"target"/TARGET/"release/zxs-smb-storage",obj,env)
-    require(tools_record(env,work,pin)==inventory,"builder changed during compilation")
     evidence.update(project_commit=pin["project_commit"],project_tree=pin["project_tree"],
                     debian_version=pin["debian_version"],environment_sha256=a.environment_sha256,
                     toolchain_materials_sha256=a.materials_sha256)
     as_json(BUILD/"UNSIGNED-OBJECTS.json",evidence)
+    linked=assemble(BUILD/"elf-roles",obj,materials,catalog,evidence)
+    require(tools_record(env,work,pin)==inventory,"builder changed during compilation or assembly")
+    linked.update(project_commit=pin["project_commit"],project_tree=pin["project_tree"],
+                  environment_sha256=a.environment_sha256,source_lock_sha256=digest(recipes/LOCK),
+                  intermediate_manifest_sha256=digest(BUILD/"UNSIGNED-OBJECTS.json"),
+                  toolchain_materials_sha256=a.materials_sha256)
+    catalog.current()  # A long build can cross the signed Valid-Until.
+    as_json(BUILD/"UNSIGNED-ELF-ROLES.json",linked)
     flag.unlink()
-    print("Created unsigned build intermediates only; no deployable bundle, service or trust record.")
+    print("Created separate unsigned ELF role materials; not deployable, no service or trust record.")
 
 if __name__=="__main__":
     main()
