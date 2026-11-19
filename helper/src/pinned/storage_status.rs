@@ -1,0 +1,236 @@
+//! Kernel observations of explicitly selected directories. Not a pool or role admission.
+use super::{Entity, Kind, Pinned, validate_path};
+use rustix::fs::{AtFlags, StatVfsMountFlags, StatxAttributes, StatxFlags, fstatvfs, statx};
+use std::{ffi::OsString, fmt::{self, Display}, fs::File, io, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
+
+const MAX_DATA: usize = 62;
+
+#[derive(Debug)]
+pub(crate) struct Selection { system: PathBuf, recycle: PathBuf, data: Vec<PathBuf> }
+impl Selection {
+    pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
+        let (mut system, mut recycle, mut data) = (None, None, Vec::new());
+        while let Some(flag) = args.next() {
+            let path = PathBuf::from(args.next().ok_or("expected a directory after each role")?);
+            if validate_path(&path).is_err() || path.as_os_str() == "/" {
+                return Err("expected a bounded, canonical absolute storage directory other than /");
+            }
+            if flag == "--system" && system.is_none() { system = Some(path); }
+            else if flag == "--recycle" && recycle.is_none() { recycle = Some(path); }
+            else if flag == "--data" && data.len() < MAX_DATA { data.push(path); }
+            else { return Err("unknown or duplicate role option, or more than 62 data directories"); }
+        }
+        if data.is_empty() { return Err("supply at least one --data directory"); }
+        Ok(Self { system: system.ok_or("missing --system directory")?,
+                  recycle: recycle.ok_or("missing --recycle directory")?, data })
+    }
+
+    pub(crate) fn observe(&self) -> Report {
+        let started = timestamp();
+        let mut rows = Vec::with_capacity(2 + self.data.len());
+        rows.push((Role::System, observe(&self.system)));
+        rows.push((Role::Recycle, observe(&self.recycle)));
+        for (i, p) in self.data.iter().enumerate() { rows.push((Role::Data(i + 1), observe(p))); }
+        Report { started, ended: timestamp(), rows }
+    }
+}
+
+fn timestamp() -> Option<u128> {
+    SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Reason { Unavailable, Denied, Unsupported, Invalid, Changed, NotReported, Io(Option<i32>) }
+impl From<io::Error> for Reason {
+    fn from(value: io::Error) -> Self {
+        use io::ErrorKind::*;
+        if value.raw_os_error() == Some(rustix::io::Errno::NOSYS.raw_os_error()) { return Self::Unsupported; }
+        match value.kind() {
+            NotFound => Self::Unavailable, PermissionDenied => Self::Denied, Unsupported => Self::Unsupported,
+            _ => Self::Io(value.raw_os_error()),
+        }
+    }
+}
+impl Reason {
+    fn opening_directory(e: io::Error) -> Self {
+        if matches!(e.kind(), io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData | io::ErrorKind::NotADirectory) {
+            Self::Invalid
+        } else { e.into() }
+    }
+}
+impl Display for Reason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unavailable => f.write_str("not-found"), Self::Denied => f.write_str("permission-denied"),
+            Self::Unsupported => f.write_str("unsupported"), Self::Invalid => f.write_str("not-an-admitted-directory"),
+            Self::Changed => f.write_str("changed"), Self::NotReported => f.write_str("not-reported"),
+            Self::Io(Some(n)) => write!(f,"io-error({n})"), Self::Io(None) => f.write_str("io-error"),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) struct Mount { pub(crate) id: u64, pub(crate) at_root: Option<bool> }
+impl Mount {
+    fn read(fd: &File) -> Result<Self, Reason> {
+        let s = statx(fd, c"", AtFlags::EMPTY_PATH | AtFlags::NO_AUTOMOUNT | AtFlags::STATX_DONT_SYNC, StatxFlags::MNT_ID)
+            .map_err(|e| Reason::from(io::Error::from(e)))?;
+        if s.stx_mask & StatxFlags::MNT_ID.bits() == 0 || s.stx_mnt_id == 0 { return Err(Reason::NotReported); }
+        Ok(Self { id: s.stx_mnt_id, at_root: s.stx_attributes_mask.contains(StatxAttributes::MOUNT_ROOT)
+            .then(|| s.stx_attributes.contains(StatxAttributes::MOUNT_ROOT)) })
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) struct Capacity { pub(crate) total: u128, pub(crate) free: u128, pub(crate) available: u128 }
+impl Capacity {
+    fn counts(unit: u64, total: u64, free: u64, available: u64) -> Option<Self> {
+        if unit == 0 || total == 0 || free > total || available > free { return None; }
+        let bytes = |n: u64| u128::from(n) * u128::from(unit);
+        Some(Self { total: bytes(total), free: bytes(free), available: bytes(available) })
+    }
+}
+#[derive(Debug)]
+pub(crate) struct Space { pub(crate) readonly_flag: bool, pub(crate) capacity: Option<Capacity> }
+impl Space {
+    fn read(fd: &File) -> Result<Self, Reason> {
+        let v = fstatvfs(fd).map_err(|e| Reason::from(io::Error::from(e)))?;
+        Ok(Self { readonly_flag: v.f_flag.contains(StatVfsMountFlags::RDONLY),
+                  capacity: Capacity::counts(v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail) })
+    }
+}
+#[derive(Debug)]
+pub(crate) struct Mounted { pub(crate) mount: Mount, pub(crate) space: Result<Space, Reason> }
+#[derive(Debug)]
+pub(crate) struct Observed { pub(crate) entity: Entity, pub(crate) mount: Result<Mounted, Reason> }
+
+// Keep the original directory descriptor alive until attribution has been rechecked.
+struct HeldSample { root: Pinned, mount: Result<Mounted, Reason> }
+impl HeldSample {
+    fn take(path: &Path) -> Result<Self, Reason> {
+        let root = Pinned::open(path, Kind::Directory).map_err(Reason::opening_directory)?;
+        // Per-directory filesystem accounting can differ between subvolumes.
+        let mount = Mount::read(&root.fd).map(|mount| Mounted { mount, space: Space::read(&root.fd) });
+        Ok(Self { root, mount })
+    }
+    fn finish(self) -> Result<Observed, Reason> {
+        let now = Pinned::open(&self.root.path, Kind::Directory).map_err(Reason::opening_directory)?;
+        if self.root.chain != now.chain { return Err(Reason::Changed); }
+        let mount = match self.mount {
+            Ok(held) => match Mount::read(&now.fd) {
+                Ok(m) if held.mount.id == m.id => Ok(held),
+                // Bind mounts of the same inode can still have different per-mount flags.
+                Ok(_) => return Err(Reason::Changed),
+                Err(why) => Err(why),
+            },
+            Err(why) => Err(why),
+        };
+        Ok(Observed { entity: self.root.entity(), mount })
+    }
+}
+
+fn observe(path: &Path) -> Result<Observed, Reason> { HeldSample::take(path)?.finish() }
+
+#[derive(Debug)]
+pub(crate) enum Role { System, Recycle, Data(usize) }
+impl Display for Role {
+    fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
+        match self { Self::System => f.write_str("system"), Self::Recycle => f.write_str("recycle"),
+                     Self::Data(i) => write!(f,"data[{i}]") }
+    }
+}
+#[derive(Debug)]
+pub(crate) struct Report {
+    pub(crate) started: Option<u128>,
+    pub(crate) ended: Option<u128>,
+    pub(crate) rows: Vec<(Role, Result<Observed, Reason>)>,
+}
+impl Report {
+    pub(crate) fn all_sampled(&self) -> bool {
+        self.rows.iter().all(|(_,r)| matches!(r,Ok(Observed { mount: Ok(Mounted { space: Ok(Space { capacity: Some(_), .. }), .. }), .. })))
+    }
+}
+impl Display for Report {
+    fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "source=linux-statx+fstatvfs roles=operator-selected registration=not-checked filesystem_uuid=not-observed business_health=not-observed")?;
+        match (self.started, self.ended) {
+            (Some(a), Some(b)) if b >= a => write!(f, " sample_unix_ms={a}..{b}")?,
+            _ => f.write_str(" sample_unix_ms=unavailable")?,
+        }
+        for (role, row) in &self.rows {
+            write!(f,"\nrole={role} ")?;
+            let o = match row { Ok(o) => o, Err(why) => { write!(f,"path=unverified reason={why}")?; continue; } };
+            write!(f, "path=observed dev={} ino={} ", o.entity.dev, o.entity.ino)?;
+            let Mounted { mount: m, space: s } = match &o.mount { Ok(mounted) => mounted, Err(why) => {
+                write!(f,"mount_id=unknown reason={why} mount_ro_flag=unattributed capacity=unattributed")?; continue;
+            }};
+            write!(f,"mount_id={} mount_root={} ",m.id, match m.at_root { Some(true)=>"yes", Some(false)=>"no", None=>"not-reported" })?;
+            match s {
+                Err(why) => write!(f, "mount_ro_flag=unknown capacity=unknown reason={why}")?,
+                Ok(s) => {
+                    write!(f,"mount_ro_flag={} ",if s.readonly_flag { "set" } else { "clear" })?;
+                    match s.capacity {
+                        Some(c) => write!(f,"total_bytes={} free_bytes={} available_bytes={}",c.total,c.free,c.available)?,
+                        None => f.write_str("capacity=unknown reason=unusable-kernel-counts")?,
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn role_selection_is_bounded_and_preserves_non_utf8_unix_names() {
+        let bytes = OsString::from_vec(vec![b'/',0xfe]);
+        let base = [OsString::from("--recycle"),"/r".into(),"--system".into(),"/s".into()];
+        let a = |n| base.clone().into_iter().chain((0..n).flat_map(|_| [OsString::from("--data"),bytes.clone()]));
+        let selected = Selection::parse(a(62)).unwrap();
+        assert_eq!(selected.data[61].as_os_str(), bytes.as_os_str());
+        assert!(Selection::parse(a(63)).is_err());
+        assert!(Selection::parse(a(0)).is_err());
+        for wrong in ["/", "relative", "/x/..", "/a//b", "/x/."] {
+            assert!(Selection::parse(base.clone().into_iter().chain(["--data".into(),wrong.into()])).is_err());
+        }
+        assert!(Selection::parse(a(1).chain(["--system".into(),"/other".into()])).is_err());
+        assert!(Selection::parse(a(1).chain(["--arbitrary".into(),"/other".into()])).is_err());
+        assert!(Selection::parse(["--data".into(),"/d".into()].into_iter()).is_err());
+    }
+
+    #[test]
+    fn rejected_kernel_sample_does_not_reclassify_an_observed_directory() {
+        let errno = rustix::io::Errno::INVAL.raw_os_error();
+        assert_eq!(Reason::from(io::Error::from_raw_os_error(errno)),Reason::Io(Some(errno)));
+        assert_eq!(Reason::opening_directory(io::Error::from_raw_os_error(errno)),Reason::Invalid);
+    }
+
+    #[test]
+    fn replacing_only_a_visible_parent_invalidates_the_mount_sample() {
+        let area = tempfile::tempdir().unwrap();
+        let parent = area.path().join("parent");
+        let old = area.path().join("saved-parent");
+        let selected = parent.join("root");
+        std::fs::create_dir(&parent).unwrap(); std::fs::create_dir(&selected).unwrap();
+        let held = HeldSample::take(&selected).unwrap();
+        std::fs::rename(&parent, &old).unwrap(); std::fs::create_dir(&parent).unwrap();
+        std::fs::rename(old.join("root"), &selected).unwrap();
+        assert_eq!(Pinned::open(&selected, Kind::Directory).unwrap().entity(),held.root.entity());
+        assert!(matches!(held.finish(),Err(Reason::Changed)));
+    }
+
+    #[test]
+    fn real_zero_availability_is_distinct_from_invalid_counters_and_product_does_not_wrap() {
+        assert_eq!(Capacity::counts(4096,8,2,0),Some(Capacity { total:32768, free:8192, available:0 }));
+        assert_eq!(Capacity::counts(0,1,1,1),None);
+        assert_eq!(Capacity::counts(4096,0,0,0),None);
+        assert_eq!(Capacity::counts(2,1,2,1),None);
+        assert_eq!(Capacity::counts(2,3,1,2),None);
+        let cap = Capacity::counts(u64::MAX,u64::MAX,2,1).unwrap();
+        assert_eq!(cap.total, u128::from(u64::MAX).pow(2));
+    }
+}

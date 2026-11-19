@@ -1,4 +1,6 @@
 //! Path resolution is through held directories. No operation here writes or adopts a path.
+pub(crate) mod storage_status;
+
 use rustix::fs::{Mode, OFlags, PROC_SUPER_MAGIC, fstatfs, open, openat, readlinkat};
 use std::ffi::OsStr;
 use std::fs::{File, Metadata};
@@ -34,12 +36,23 @@ fn dir_flags() -> OFlags {
     OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
 }
 
+pub(crate) fn validate_path(path: &Path) -> io::Result<()> {
+    let raw = path.as_os_str().as_bytes();
+    if raw.len() > 4096 || !raw.starts_with(b"/") {
+        return Err(invalid("expected an absolute path of at most 4096 bytes"));
+    }
+    if raw != b"/" && raw[1..].split(|b| *b == b'/').enumerate().any(|(i,n)|
+        i >= 128 || n.is_empty() || n == b"." || n == b".." || n.contains(&0))
+    {
+        return Err(invalid("empty, dot, parent, NUL or over-depth path component"));
+    }
+    Ok(())
+}
+
 impl Pinned {
     pub(crate) fn open(path: &Path, kind: Kind) -> io::Result<Self> {
+        validate_path(path)?;
         let raw = path.as_os_str().as_bytes();
-        if raw.len() > 4096 || !raw.starts_with(b"/") {
-            return Err(invalid("expected an absolute path of at most 4096 bytes"));
-        }
         let mut names = raw[1..].split(|b| *b == b'/').peekable();
         let mut fd = File::from(open("/", dir_flags(), Mode::empty())?);
         let mut chain = vec![Entity::of(&fd.metadata()?)?];
@@ -48,9 +61,6 @@ impl Pinned {
             return Ok(Self { path: path.to_owned(), kind, fd, chain });
         }
         while let Some(name) = names.next() {
-            if name.is_empty() || name == b"." || name == b".." || chain.len() > 128 {
-                return Err(invalid("empty, dot, parent or over-depth path component"));
-            }
             let last_file = names.peek().is_none() && matches!(kind, Kind::Regular);
             let flags = if last_file {
                 OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC

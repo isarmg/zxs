@@ -10,6 +10,7 @@ mod pinned;
 #[path = "../tests/common/mod.rs"]
 mod test_area;
 
+use pinned::storage_status::Selection;
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -17,8 +18,8 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: read-only local diagnostics (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper --help | --version\n\n\
-Select 1–16 directories, or two distinct regular files. Supply absolute paths.";
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper --help | --version\n\n\
+Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
 enum Command {
@@ -26,6 +27,7 @@ enum Command {
     Version,
     Directories(Vec<PathBuf>),
     Compare(PathBuf, PathBuf),
+    Storage(Selection),
 }
 
 fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static str> {
@@ -40,6 +42,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if dirs.is_empty() || dirs.len() > inspect::MAX_DIRS { return Err("expected 1–16 directories"); }
         return Ok(Command::Directories(dirs));
     }
+    if op == "storage-status" { return Selection::parse(args).map(Command::Storage); }
     if op == "compare-files" {
         let a = args.next().ok_or("expected a reference and candidate")?;
         let b = args.next().ok_or("expected a reference and candidate")?;
@@ -60,6 +63,11 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::Help => line(USAGE)?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
+        Command::Storage(selection) => {
+            let report = selection.observe();
+            line(&report.to_string())?;
+            return Ok(if report.all_sampled() { ExitCode::SUCCESS } else { ExitCode::from(2) });
+        }
         Command::Compare(a, b) => {
             let observed = inspect::compare(&a, &b)?;
             if observed.equal {
