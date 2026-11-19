@@ -1,6 +1,6 @@
 import Foundation
 
-// A list of declarations, not a snapshot validator or content-reading API.
+// Displaying the declarations never reads member bodies or grants snapshot identity.
 enum PreviewError: Error { case format, unavailable, cancelled }
 
 func requirePreview(_ ok: Bool) throws {
@@ -12,6 +12,7 @@ final class Member {
     let size: Int
     var children: [String: Member]?
     var explicit = false
+    fileprivate var slot: PhysicalSlot?
 
     init(_ name: String, size: Int = 0, folder: Bool = true) {
         self.name = name; self.size = size
@@ -19,17 +20,37 @@ final class Member {
     }
 }
 
+fileprivate final class PhysicalSlot {
+    let central: Int, offset: Int, minimum: Int, wide: Bool
+    var limit = 0
+    init(_ central: Int, _ offset: Int, _ minimum: Int, _ wide: Bool) {
+        self.central = central; self.offset = offset; self.minimum = minimum; self.wide = wide
+    }
+}
+
 struct DirectoryIndex {
     static let maxSize = (256 << 30) + (32 << 20)
     static let maxDirectory = 2 << 20
-    private static let u32max = 0xffff_ffff
+    static let u32max = 0xffff_ffff
     let root = Member("")
     private var nameBytes = 0, nodes = 0, total = 0
+    private var centralAt = 0, central: [UInt8] = [], ending: [UInt8] = []
+    // Actual explicit file objects from this observation only; no pathname lookup on a later selection.
+    private var files = Set<ObjectIdentifier>()
+
+    func checkMember(_ file: Member, check: () throws -> Void,
+                     fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> MemberCRC {
+        try requirePreview(file.children == nil && files.contains(ObjectIdentifier(file)))
+        guard let slot = file.slot else { throw PreviewError.format }
+        return try StoredBody.check(central: central, centralAt: centralAt, ending: ending,
+            record: slot.central, offset: slot.offset, limit: slot.limit, centralWide: slot.wide,
+            size: file.size, check: check, fill: fill)
+    }
 
     // Callers establish enclosing structure bounds before accessing fixed-width fields.
-    private static func u16(_ b: [UInt8], _ i: Int) -> Int { Int(b[i]) | Int(b[i + 1]) << 8 }
-    private static func u32(_ b: [UInt8], _ i: Int) -> Int { u16(b, i) | u16(b, i + 2) << 16 }
-    private static func u64(_ b: [UInt8], _ i: Int) throws -> Int {
+    static func u16(_ b: [UInt8], _ i: Int) -> Int { Int(b[i]) | Int(b[i + 1]) << 8 }
+    static func u32(_ b: [UInt8], _ i: Int) -> Int { u16(b, i) | u16(b, i + 2) << 16 }
+    static func u64(_ b: [UInt8], _ i: Int) throws -> Int {
         let high = u32(b, i + 4)
         try requirePreview(high < 0x8000_0000)
         return high << 32 | u32(b, i)
@@ -59,18 +80,19 @@ struct DirectoryIndex {
         let sentinels = [65535, 65535, u32max, u32max]
         var end = size - window + e
         let loc = end >= 20 ? try get(end - 20, 20) : []
+        var ending = Array(tail[e...])
         if !loc.isEmpty && u32(loc, 0) == 0x07064b50 {
             let z = try u64(loc, 8)
             try requirePreview(u32(loc, 4) == 0 && u32(loc, 16) == 1 && end >= 76 && z == end - 76)
             let rec = try get(z, 56), declaredSize = try u64(rec, 4)
-            try requirePreview(u32(rec, 0) == 0x06064b50 && declaredSize == 44 && u16(rec, 14) <= 45
+            try requirePreview(u32(rec, 0) == 0x06064b50 && declaredSize == 44 && u16(rec, 14) == 45
                                && u32(rec, 16) == 0 && u32(rec, 20) == 0)
             for i in counts.indices {
                 let wide = try u64(rec, 24 + 8 * i)
                 try requirePreview(counts[i] == sentinels[i] || counts[i] == wide)
                 counts[i] = wide
             }
-            end = z
+            ending = rec + loc + ending; end = z
         } else {
             for i in counts.indices { try requirePreview(counts[i] != sentinels[i]) }
         }
@@ -79,7 +101,8 @@ struct DirectoryIndex {
                            && at <= end && length == end - at && count <= length / 46)
         let cd = try get(at, length)
         var out = DirectoryIndex(), p = 0
-        var spans: [(start: Int, end: Int)] = []
+        out.centralAt = at; out.central = cd; out.ending = ending
+        var spans: [PhysicalSlot] = []
         for _ in 0..<count {
             try check()
             try requirePreview(cd.count - p >= 46 && u32(cd, p) == 0x02014b50)
@@ -95,7 +118,7 @@ struct DirectoryIndex {
                 let kind = u16(cd, x), n = u16(cd, x + 2); x += 4
                 try requirePreview(n <= stop - x)
                 if kind == 1 {
-                    try requirePreview(!hasWide); hasWide = true
+                    try requirePreview(!hasWide && n >= 8 && u16(cd, p + 6) == 45); hasWide = true
                     var q = x
                     for i in values.indices where values[i] == u32max {
                         try requirePreview(x + n - q >= 8); values[i] = try u64(cd, q); q += 8
@@ -108,7 +131,7 @@ struct DirectoryIndex {
             let body = values[0], off = values[2], header = 30 + nl + (flags & 8 == 0 ? 0 : 12)
             try requirePreview(body == values[1] && body <= (128 << 30)
                                && off <= at - header && body <= at - header - off)
-            spans.append((off, off + header + body))
+            let slot = PhysicalSlot(p, off, off + header + body, hasWide); spans.append(slot)
             let raw = cd[name..<extra]
             try requirePreview(flags & 0x800 != 0 || raw.allSatisfy { $0 < 128 })
             let folder = raw.last == 47
@@ -118,13 +141,15 @@ struct DirectoryIndex {
             try requirePreview(attr & 0x448 == 0 && (attr & 16 == 0 || folder)
                                && (host == 3 ? type == 0 || type == (folder ? 4 : 8) : type == 0)
                                && (!folder || body == 0))
-            try out.add(path: path, folder: folder, size: body, nameBytes: nl)
+            let row = try out.add(path: path, folder: folder, size: body, nameBytes: nl)
+            if !folder { row.slot = slot; out.files.insert(ObjectIdentifier(row)) }
             p = next
         }
         try requirePreview(p == cd.count)
-        var previous = 0
-        for span in spans.sorted(by: { $0.start < $1.start }) {
-            try check(); try requirePreview(previous <= span.start); previous = span.end
+        var limit = at
+        for slot in spans.sorted(by: { $0.offset > $1.offset }) {
+            try check(); try requirePreview(slot.minimum <= limit)
+            slot.limit = limit; limit = slot.offset
         }
         try check()
         return out
@@ -149,7 +174,7 @@ struct DirectoryIndex {
         return true
     }
 
-    private mutating func add(path: String, folder: Bool, size: Int, nameBytes: Int) throws {
+    private mutating func add(path: String, folder: Bool, size: Int, nameBytes: Int) throws -> Member {
         self.nameBytes += nameBytes; total += size
         try requirePreview(self.nameBytes <= 512 * 1024 && total <= (256 << 30))
         // Split at the actual ASCII slash; grapheme-cluster segmentation is not a ZIP delimiter.
@@ -172,5 +197,6 @@ struct DirectoryIndex {
             if leaf { try requirePreview(!item.explicit); item.explicit = true }
             parent = item
         }
+        return parent
     }
 }

@@ -6,7 +6,7 @@
 	objects = {
 		000000000000000000000001 = { isa = PBXProject; buildConfigurationList = 00000000000000000000005A; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base, "zh-Hans"); mainGroup = 000000000000000000000002; productRefGroup = 000000000000000000000005; projectDirPath = ""; projectRoot = ""; targets = (00000000000000000000000A, 00000000000000000000000B); };
 		000000000000000000000002 = { isa = PBXGroup; children = (000000000000000000000003, 000000000000000000000004, 000000000000000000000005); sourceTree = "<group>"; };
-		000000000000000000000003 = { isa = PBXGroup; children = (000000000000000000000014, 000000000000000000000015, 000000000000000000000016, 000000000000000000000017); path = Preview; sourceTree = "<group>"; };
+		000000000000000000000003 = { isa = PBXGroup; children = (000000000000000000000014, 000000000000000000000015, 000000000000000000000016, 000000000000000000000017, 00000000000000000000001B, 00000000000000000000001C); path = Preview; sourceTree = "<group>"; };
 		000000000000000000000004 = { isa = PBXGroup; children = (000000000000000000000018); path = Tests; sourceTree = "<group>"; };
 		000000000000000000000005 = { isa = PBXGroup; children = (000000000000000000000019, 00000000000000000000001A); name = Products; sourceTree = "<group>"; };
 		000000000000000000000014 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewApp.swift; sourceTree = "<group>"; };
@@ -16,11 +16,14 @@
 		000000000000000000000018 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryIndexTests.swift; sourceTree = "<group>"; };
 		000000000000000000000019 = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ZipPreview.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		00000000000000000000001A = { isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZipPreviewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		00000000000000000000001B = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoredBody.swift; sourceTree = "<group>"; };
+		00000000000000000000001C = { isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "ZipPreview-Bridging.h"; sourceTree = "<group>"; };
+		000000000000000000000022 = { isa = PBXBuildFile; fileRef = 00000000000000000000001B; };
 		00000000000000000000001E = { isa = PBXBuildFile; fileRef = 000000000000000000000014; };
 		00000000000000000000001F = { isa = PBXBuildFile; fileRef = 000000000000000000000015; };
 		000000000000000000000020 = { isa = PBXBuildFile; fileRef = 000000000000000000000016; };
 		000000000000000000000021 = { isa = PBXBuildFile; fileRef = 000000000000000000000018; };
-		000000000000000000000028 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (00000000000000000000001E, 00000000000000000000001F, 000000000000000000000020); runOnlyForDeploymentPostprocessing = 0; };
+		000000000000000000000028 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (00000000000000000000001E, 00000000000000000000001F, 000000000000000000000020, 000000000000000000000022); runOnlyForDeploymentPostprocessing = 0; };
 		000000000000000000000029 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		00000000000000000000002A = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		00000000000000000000002B = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000000021); runOnlyForDeploymentPostprocessing = 0; };
@@ -32,8 +35,8 @@
 		000000000000000000000033 = { isa = PBXTargetDependency; target = 00000000000000000000000A; targetProxy = 000000000000000000000032; };
 		00000000000000000000003C = { isa = XCBuildConfiguration; name = Debug; buildSettings = { CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; ENABLE_TESTABILITY = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; };
 		00000000000000000000003D = { isa = XCBuildConfiguration; name = Release; buildSettings = { CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_OPTIMIZATION_LEVEL = "-O"; }; };
-		00000000000000000000003E = { isa = XCBuildConfiguration; name = Debug; buildSettings = { CODE_SIGN_STYLE = Automatic; INFOPLIST_FILE = Preview/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = org.zipworkspace.preview; PRODUCT_NAME = "$(TARGET_NAME)"; }; };
-		00000000000000000000003F = { isa = XCBuildConfiguration; name = Release; buildSettings = { CODE_SIGN_STYLE = Automatic; INFOPLIST_FILE = Preview/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = org.zipworkspace.preview; PRODUCT_NAME = "$(TARGET_NAME)"; }; };
+		00000000000000000000003E = { isa = XCBuildConfiguration; name = Debug; buildSettings = { CODE_SIGN_STYLE = Automatic; INFOPLIST_FILE = Preview/Info.plist; SWIFT_OBJC_BRIDGING_HEADER = "Preview/ZipPreview-Bridging.h"; OTHER_LDFLAGS = ("$(inherited)", "-lz"); PRODUCT_BUNDLE_IDENTIFIER = org.zipworkspace.preview; PRODUCT_NAME = "$(TARGET_NAME)"; }; };
+		00000000000000000000003F = { isa = XCBuildConfiguration; name = Release; buildSettings = { CODE_SIGN_STYLE = Automatic; INFOPLIST_FILE = Preview/Info.plist; SWIFT_OBJC_BRIDGING_HEADER = "Preview/ZipPreview-Bridging.h"; OTHER_LDFLAGS = ("$(inherited)", "-lz"); PRODUCT_BUNDLE_IDENTIFIER = org.zipworkspace.preview; PRODUCT_NAME = "$(TARGET_NAME)"; }; };
 		000000000000000000000040 = { isa = XCBuildConfiguration; name = Debug; buildSettings = { CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = org.zipworkspace.preview.tests; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ZipPreview.app/ZipPreview"; BUNDLE_LOADER = "$(TEST_HOST)"; }; };
 		000000000000000000000041 = { isa = XCBuildConfiguration; name = Release; buildSettings = { CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = org.zipworkspace.preview.tests; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ZipPreview.app/ZipPreview"; BUNDLE_LOADER = "$(TEST_HOST)"; }; };
 		00000000000000000000005A = { isa = XCConfigurationList; buildConfigurations = (00000000000000000000003C, 00000000000000000000003D); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
