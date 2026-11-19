@@ -1,6 +1,8 @@
-//! The fixed SETUP_PAIR request, receipt lookup and internal one-time setup. A
+//! The fixed SETUP_PAIR request, receipt lookup and one-time offline setup. A
 //! structurally valid SID or an SQL match is not a Samba domain proof, a
 //! maintenance approval, a password check, or a privilege to create credentials.
+mod command;
+pub(crate) use command::Setup;
 mod web_secret;
 mod smb_policy;
 mod terminal;
@@ -38,14 +40,17 @@ fn login(s: &[u8]) -> bool {
         && s.iter().all(|&b| basic(b) || matches!(b, b'.' | b'_' | b'-'))
 }
 
+fn distinct_roles(web:&[u8],smb:&[u8])->bool{
+    web!=smb&&![b"guest".as_slice(),b"anonymous",b"nobody",b"root"].contains(&smb)
+}
+
 impl PairRequest {
     pub(super) fn new(pool: Id, init: Id, op: Id, actor: Id, approval: Id,
                       web: &[u8], smb: &[u8], sid: [u8; 28]) -> io::Result<Self> {
         if [pool, init, op, actor, approval].contains(&[0; 16]) || init == op {
             return Err(bad("missing or conflicting pool/setup identifiers"));
         }
-        if !login(web) || !login(smb) || web == smb
-            || [b"guest".as_slice(), b"anonymous", b"nobody", b"root"].contains(&smb) {
+        if !login(web) || !login(smb) || !distinct_roles(web,smb) {
             return Err(bad("expected two distinct, valid protocol-specific login names"));
         }
         if sid[..12] != [1, 5, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0]

@@ -30,7 +30,7 @@ python3 packaging/debian13-amd64/build.py \
 
 ## 专用 Samba 供给运行时
 
-这不是面向全机的 Samba 或 Python 安装器。[组装器](samba_capsule.py)只从经发行签名认证的 `2:4.22.11+dfsg-0+deb13u1` 和所锁的 Debian 13 amd64 原包，写入 helper 私有的 `/usr/lib/local-ops-helper/samba-4.22.11-deb13u1-v1/usr`。正式安装后不需临时联网 apt install。只为[受控专实例首装](../../docs/samba-domain.md)预备材料，私有解释器不会作为宿主级命令安装。本配方不提供 smbd、另一个用户密码库、主机注册表/配置、插件搜索回退或开机服务。
+这不是面向全机的 Samba 或 Python 安装器。[组装器](samba_capsule.py)只从经发行签名认证的 `2:4.22.11+dfsg-0+deb13u1` 和所锁的 Debian 13 amd64 原包，写入 helper 私有的 `/usr/lib/local-ops-helper/samba-4.22.11-deb13u1-v1/usr`。正式安装后不需临时联网 apt install。只为[受控专实例首装](../../docs/samba-domain.md)预备材料，私有解释器不会作为宿主级命令安装。随包分发的只读模板 `/usr/share/local-ops-helper/initial-live.conf` 只作实例准备来源，不安装于 `/etc` 或 `/var`、不覆盖配置、不启动服务；BUNDLE.json 记录其路径和完整摘要。本配方不提供 smbd、另一个用户密码库、主机注册表/配置、插件搜索回退或开机服务。
 
 - `samba-packages.json` 是候选原包，不是把这些包的全部程序搬进客体。先正向选择准确 CPython 3.13、标准库源码、Samba Python 入口、LDB/TDB/TALLOC 及由 passdb 初始化动态导入的 dcerpc.security、misc、base；字符转换只取固定 libc 模块/声明。标准库是两个已锁定的 Debian 标准库包中受筛选的顶层 Python 文件，以及 encodings、importlib、collections、re、logging 五个具名源码子树，**不是**本次真实导入过的精确集合。排除测试、site 自定义、.pth、subprocess/pty/webbrowser 等不需要的单独入口；这不是语言沙箱。宿主只许内嵌的固定脚本，不能从清单任选脚本/参数。打包时不运行私有解释器“发现”依赖。对实际 ELF 的 NEEDED 逐件跟到原字节，只有**该请求者**声明了受支持的 Samba private 搜索目录才能在那里选其直接依赖；否则只用 Debian 默认 multiarch 目录。保留经验证的原件字节、正常 SONAME（包括 Debian 私库 `.so.0`）；没有宿主 ld cache、LD_LIBRARY_PATH、其他 Python 环境或同名扫描兜底。
 - 受限 ASCII 清单 `CAPSULE` 放在 guest 的 `usr` 之外，记录每个落地普通文件的路径、字节数、权限、SHA-256、ELF 依赖与准确供给原包成员。文件行按原路径排序、逐字段用制表符分隔；目录仅允许作为相应文件路径的前缀，不允许空目录或链接。`BUNDLE.json` 绑定该清单摘要。发行目录保留全部锁定输入的准确 Debian 原包、对应源包及补丁。安装包随附实际供给者的原版权/例外；常见的包内版权别名只从已认证的同套文档解析，不能指向宿主。

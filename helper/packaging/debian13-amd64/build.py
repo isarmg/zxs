@@ -177,6 +177,16 @@ def release_history(version,first,previous):
     require((first and previous is None) or (not first and valid(previous)),
             "explicitly select first release or a valid version from the preceding signed release")
 
+# This passive release template is NOT an installed smb.conf, instance, NTLM
+# policy, or service. The site must supply the actual approved instance target.
+LIVE_TEMPLATE = "usr/share/local-ops-helper/initial-live.conf"
+LIVE_TEMPLATE_SHA = "0154cff9b9d2f9be1f5ab7b374f36ee10530d7d1fe08f72ac2eaf19f32116406"
+def ship_live_template(root):
+    f=copy_checked(PROJECT/"resources/samba-domain/initial-live.conf",root/LIVE_TEMPLATE,
+                   LIVE_TEMPLATE_SHA,1277,cap=1277)
+    f.chmod(0o444)
+    return f
+
 def build(args):
     require(os.geteuid()!=0,"the offline package builder must run unprivileged")
     lock=json.loads((HERE/"lock.json").read_text())
@@ -198,6 +208,7 @@ def build(args):
     with tempfile.TemporaryDirectory(prefix="helper-package-") as scratch:
         root=Path(scratch)/"data"; home=mkdir(root/PRIVATE_NAME)
         docs=mkdir(root/"usr/share/doc/local-ops-helper")
+        template=ship_live_template(root)
         shutil.copyfile(PROJECT/"LICENSE",docs/"copyright")
         rust_notices(out,docs)
         copy_checked(args.stdlib_notices,docs/"rust-stdlib-notices",args.stdlib_notices_sha256,cap=32<<20)
@@ -245,7 +256,8 @@ def build(args):
         info={"debian_version":version,"abi":"debian13-amd64-gnu","source_commit":rev,"helper_input_sha256":args.helper_sha256,
               "helper_distributed_sha256":digest(binary),"stdlib_notices_sha256":args.stdlib_notices_sha256,"packages":lock["packages"],"needed":requires,
               "files":{str(p.relative_to(home)):digest(p) for p in sorted(home.rglob("*")) if p.is_file()},
-              "scope_sam":"offline dedicated fresh instance only; no public command or daemon",
+              "scope_sam":"explicit local setup-pair provision/enroll; no daemon or login validation",
+              "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
               "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"packaged-not-yet-enabled"}}
         # Candidate NON-privileged material for the release signer. Do not

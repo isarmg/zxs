@@ -1,4 +1,4 @@
-//! One fresh, fixed Samba bootstrap. No CLI and no public grant constructor:
+//! One fresh, fixed Samba bootstrap. No public grant constructor:
 //! neither a path, an approval string, nor classifying an empty directory
 //! supplies the host authorization and authenticated capsule required below.
 mod capsule;
@@ -22,7 +22,7 @@ const BOOT:&[u8]=include_bytes!("../../../../resources/samba-domain/domain-boots
 const SCRIPT:&[u8]=include_bytes!("../../../../resources/samba-domain/fresh_guest.py");
 const ENTRY:&str="import runpy; runpy.run_path('/provision.py',run_name='_local_ops_sam')['_provision_original']()";
 
-/// Internal setup step, not an independent public command. The application
+/// This explicit first stage creates only the dedicated domain. The operator
 /// supplies its own stable nonsecret IDs. Do not use for recovery or existing
 /// instances; credentials and services are not touched by this step.
 pub(in crate::sqlite_install) fn provision_fresh_domain(system:&Path,pool:Id,init:Id,instance:Id,op:Id,approval:Id)->io::Result<[u8;128]>{

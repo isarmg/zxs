@@ -1,4 +1,4 @@
-//! No public command. Discover the original receipt first; for a fresh pair,
+//! Offline setup only. Discover the original receipt first; for a fresh pair,
 //! require a separate local confirmation, two protocol-specific results and a
 //! short SQL transaction. No generic credential setter or update/reset path.
 use super::{domain::{InstalledSetup,SelectedSetup},observed,terminal::{InputBudget,PublicConfirmation,SelectedInput},smb_policy::Permit,

@@ -1,4 +1,4 @@
-//! Explicit, local diagnostics. The loopback-only disk panel starts only by explicit command.
+//! Explicit local diagnostics and offline installation. The loopback-only disk panel starts only by explicit command.
 #![forbid(unsafe_code)]
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_pointer_width = "64")))]
@@ -28,7 +28,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper install-pool new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper install-pool new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --approval ID\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only]\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -39,6 +39,7 @@ enum Command {
     Compare(PathBuf, PathBuf),
     Storage(Selection),
     Install(sqlite_install::Installation),
+    Setup(sqlite_install::Setup),
     Disks(block_tools::Query),
     DiskWeb(Option<fat32_check::Request>),
     SealedWorker([u8;32]),
@@ -54,6 +55,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if args.next().is_some() { return Err("unexpected argument"); }
         return Ok(if op == "--help" { Command::Help } else { Command::Version });
     }
+    if op == "setup-pair"{return sqlite_install::Setup::parse(args).map(Command::Setup);}
     if op == "install-pool"{return sqlite_install::Installation::parse(args).map(Command::Install);}
     if op == "disk-web" {
         return match args.next(){
@@ -101,6 +103,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::SamWorker=>return Ok(ExitCode::from(if sqlite_install::sam_worker().is_ok(){0}else{2})),
         Command::SealedWorker(digest) => return Ok(ExitCode::from(fat32_check::panel::worker(digest).unwrap_or(2))),
         Command::Install(i)=>line(&i.run()?)?,
+        Command::Setup(s)=>{let(code,public)=s.run()?;line(&public)?;return Ok(ExitCode::from(code));}
         Command::Help => line(USAGE)?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
@@ -140,7 +143,7 @@ fn main() -> ExitCode {
         Err(why) => { eprintln!("helper: {why}\n{USAGE}"); ExitCode::from(2) }
         Ok(cmd) => match run(cmd) {
             Ok(code) => code,
-            Err(e) => { eprintln!("helper: observation not completed: {e}"); ExitCode::from(2) }
+            Err(e) => { eprintln!("helper: action not confirmed: {e}"); ExitCode::from(2) }
         },
     }
 }

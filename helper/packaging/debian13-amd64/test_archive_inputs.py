@@ -19,6 +19,21 @@ class Inputs(unittest.TestCase):
         for first,previous in [(False,None),(False,""),(False,"nightly"),(True,prev),(True,"")]:
             with self.assertRaises(ValueError): release_history(cur,first,previous)
 
+    def test_live_profile_is_only_a_passive_distribution_template(self):
+        from build import PROJECT,LIVE_TEMPLATE,LIVE_TEMPLATE_SHA,ship_live_template
+        from unittest.mock import patch
+        profile=(PROJECT/"resources/samba-domain/initial-live.conf").read_bytes()
+        self.assertEqual((len(profile),hashlib.sha256(profile).hexdigest()),(1277,LIVE_TEMPLATE_SHA))
+        with tempfile.TemporaryDirectory() as d:
+            directory=Path(d); pkg=directory/"package"; f=ship_live_template(pkg)
+            self.assertEqual(f,pkg/LIVE_TEMPLATE)
+            self.assertEqual(f.read_bytes(),profile);self.assertEqual(f.stat().st_mode & 0o7777,0o444)
+            self.assertFalse((pkg/"etc").exists());self.assertFalse((pkg/"var").exists())
+            alt=directory/"untrusted/resources/samba-domain";alt.mkdir(parents=True)
+            (alt/"initial-live.conf").write_bytes(profile[:-1]+b"x")
+            with patch("build.PROJECT",directory/"untrusted"), self.assertRaises(ValueError):
+                ship_live_template(directory/"rejected")
+
     def test_single_bsd_notice_requires_the_named_file_not_a_dual_license_substitute(self):
         from build import rust_notices
         from unittest.mock import patch

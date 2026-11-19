@@ -1,4 +1,4 @@
-//! Explicit terminal-only pool installation and original-operation resumption. No account, password, remote request or legacy-format fallback.
+//! Explicit terminal-only pool installation and original-operation resumption. Separate local pair enrollment; no remote requests or legacy-format fallback.
 mod request;
 mod engine;
 mod originals;
@@ -9,7 +9,7 @@ mod catalog;
 mod markers;
 mod complete;
 mod pair;
-pub(crate) use pair::exec_child as sam_worker;
+pub(crate) use pair::{Setup,exec_child as sam_worker};
 
 const DATABASE:&str="SYSTEM.sqlite3";
 const MARKER:&[u8]=b".zxs-new-ffffffffffffffffffffffffffffffff-0";
