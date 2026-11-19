@@ -1,10 +1,11 @@
 //! A fresh SYSTEM image has one genesis, not a journal or an account database.
 //! Native paths, kernel handles and IDs are bytes, not display strings.
+use crate::path_rules::{Kind, MAX_PATH_BYTES};
 use sha2::{Digest, Sha256};
 
 const GENESIS: &[u8] = b"ZXS/FILE-POOL/MAINT-1\0";
 const VOLUME: &[u8] = b"ZXS/VOLUME/MAINT-1\0";
-const MAX_IMAGE: usize = 64 * (4096 + 64 + 148) + 256;
+const MAX_IMAGE: usize = 64 * (MAX_PATH_BYTES + 64 + 148) + 256;
 type Id = [u8; 16];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -79,14 +80,9 @@ impl<'a> Cursor<'a> {
     }
     fn path(&mut self) -> Result<&'a [u8], Invalid> {
         let n = usize::from(u16::from_be_bytes(self.array()?));
-        if !(2..=4096).contains(&n) { return Err(Invalid::Path); }
+        if !(2..=MAX_PATH_BYTES).contains(&n) { return Err(Invalid::Path); }
         let path = self.take(n)?;
-        let relative = path.strip_prefix(b"/").ok_or(Invalid::Path)?;
-        for (i, part) in relative.split(|&b| b == b'/').enumerate() {
-            if i >= 256 || part.is_empty() || part == b"." || part == b".." || part.contains(&0) {
-                return Err(Invalid::Path);
-            }
-        }
+        Kind::StorageRoot.check_path(path).map_err(|_| Invalid::Path)?;
         Ok(path)
     }
 }

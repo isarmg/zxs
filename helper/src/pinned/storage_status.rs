@@ -1,7 +1,7 @@
 //! Kernel observations of explicitly selected directories. Not a pool or role admission.
-use super::{Entity, Kind, Mount, Pinned, validate_path};
+use super::{Entity, Kind, Mount, Pinned};
 use rustix::fs::{StatVfsMountFlags, fstatvfs};
-use std::{ffi::OsString, fmt::{self, Display}, fs::File, io, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
+use std::{ffi::OsString, fmt::{self, Display}, fs::File, io, os::unix::ffi::OsStrExt, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
 
 const MAX_DATA: usize = 62;
 
@@ -12,7 +12,7 @@ impl Selection {
         let (mut system, mut recycle, mut data) = (None, None, Vec::new());
         while let Some(flag) = args.next() {
             let path = PathBuf::from(args.next().ok_or("expected a directory after each role")?);
-            if validate_path(&path).is_err() || path.as_os_str() == "/" {
+            if Kind::StorageRoot.check_path(path.as_os_str().as_bytes()).is_err() {
                 return Err("expected a bounded, canonical absolute storage directory other than /");
             }
             if flag == "--system" && system.is_none() { system = Some(path); }
@@ -100,13 +100,13 @@ pub(crate) struct Observed { pub(crate) entity: Entity, pub(crate) mount: Result
 struct HeldSample { root: Pinned, mount: Result<Mounted, Reason> }
 impl HeldSample {
     fn take(path: &Path) -> Result<Self, Reason> {
-        let root = Pinned::open(path, Kind::Directory).map_err(Reason::opening_directory)?;
+        let root = Pinned::open(path, Kind::StorageRoot).map_err(Reason::opening_directory)?;
         // Per-directory filesystem accounting can differ between subvolumes.
         let mount = observed_mount(&root.fd).map(|mount| Mounted { mount, space: Space::read(&root.fd) });
         Ok(Self { root, mount })
     }
     fn finish(self) -> Result<Observed, Reason> {
-        let now = Pinned::open(&self.root.path, Kind::Directory).map_err(Reason::opening_directory)?;
+        let now = Pinned::open(&self.root.path, Kind::StorageRoot).map_err(Reason::opening_directory)?;
         if self.root.chain != now.chain { return Err(Reason::Changed); }
         let mount = match self.mount {
             Ok(held) => match observed_mount(&now.fd) {
@@ -213,6 +213,24 @@ mod tests {
         std::fs::rename(old.join("root"), &selected).unwrap();
         assert_eq!(Pinned::open(&selected, Kind::Directory).unwrap().entity(),held.root.entity());
         assert!(matches!(held.finish(),Err(Reason::Changed)));
+    }
+
+    #[test]
+    fn a_storage_sample_and_its_final_reopen_keep_the_maintenance_depth_limit() {
+        let area = tempfile::tempdir().unwrap();
+        let mut dir = area.path().to_owned();
+        let base = dir.components().count() - 1; // the leading slash is not a component
+        assert!(base < 128, "fixture needs a private absolute path below 128 components");
+        for depth in base + 1..=256 {
+            dir.push("n"); std::fs::create_dir(&dir).unwrap();
+            if [128, 129, 256].contains(&depth) {
+                let sample = HeldSample::take(&dir).unwrap();
+                assert_eq!(sample.finish().unwrap().entity, Entity::of(&std::fs::metadata(&dir).unwrap()).unwrap());
+                assert_eq!(Pinned::open(&dir, Kind::Directory).is_ok(), depth <= 128);
+            }
+        }
+        dir.push("not-opened");
+        assert!(matches!(HeldSample::take(&dir), Err(Reason::Invalid)));
     }
 
     #[test]

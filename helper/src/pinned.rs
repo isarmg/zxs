@@ -1,5 +1,6 @@
 //! Path resolution is through held directories. No operation here writes or adopts a path.
 pub(crate) mod storage_status;
+pub(crate) use crate::path_rules::Kind;
 
 use rustix::fs::{AtFlags, Mode, OFlags, PROC_SUPER_MAGIC, StatxAttributes, StatxFlags, fstatfs, open, openat, readlinkat, statx};
 use std::ffi::OsStr;
@@ -36,8 +37,6 @@ impl Mount {
     }
 }
 
-#[derive(Copy, Clone)]
-pub(crate) enum Kind { Directory, Regular }
 pub(crate) struct Pinned {
     path: PathBuf,
     kind: Kind,
@@ -49,28 +48,14 @@ fn dir_flags() -> OFlags {
     OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
 }
 
-pub(crate) fn validate_path(path: &Path) -> io::Result<()> {
-    let raw = path.as_os_str().as_bytes();
-    if raw.len() > 4096 || !raw.starts_with(b"/") {
-        return Err(invalid("expected an absolute path of at most 4096 bytes"));
-    }
-    if raw != b"/" && raw[1..].split(|b| *b == b'/').enumerate().any(|(i,n)|
-        i >= 128 || n.is_empty() || n == b"." || n == b".." || n.contains(&0))
-    {
-        return Err(invalid("empty, dot, parent, NUL or over-depth path component"));
-    }
-    Ok(())
-}
-
 impl Pinned {
     pub(crate) fn open(path: &Path, kind: Kind) -> io::Result<Self> {
-        validate_path(path)?;
         let raw = path.as_os_str().as_bytes();
+        kind.check_path(raw).map_err(invalid)?;
         let mut names = raw[1..].split(|b| *b == b'/').peekable();
         let mut fd = File::from(open("/", dir_flags(), Mode::empty())?);
         let mut chain = vec![Entity::of(&fd.metadata()?)?];
         if raw == b"/" {
-            if !matches!(kind, Kind::Directory) { return Err(invalid("root is not a regular file")); }
             return Ok(Self { path: path.to_owned(), kind, fd, chain });
         }
         while let Some(name) = names.next() {

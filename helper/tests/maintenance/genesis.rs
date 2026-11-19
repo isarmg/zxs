@@ -158,3 +158,33 @@ fn enforces_raw_file_order_canonical_paths_and_component_ancestry() {
     let mut permitted = b.to_vec(); replace_path(&mut permitted, rows[2], b"/m/sys2");
     assert!(FreshGenesis::decode(&sign(&permitted)).is_ok());
 }
+
+#[test]
+fn decoded_and_operator_selected_storage_paths_share_exact_raw_bounds() {
+    use crate::pinned::storage_status::Selection;
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    let image = wire("genesis");
+    let (body, _) = image.split_last_chunk::<32>().unwrap();
+    let row = fields(body).2[0]; // no effect on the lexical ordering of the two FILE rows
+    let check = |path: Vec<u8>, accepted: bool| {
+        let mut b = body.to_vec(); replace_path(&mut b, row, &path);
+        assert_eq!(FreshGenesis::decode(&sign(&b)).is_ok(), accepted);
+        let selection = ["--system".into(), OsString::from_vec(path), "--recycle".into(),
+                         "/bin".into(), "--data".into(), "/data".into()];
+        assert_eq!(Selection::parse(selection.into_iter()).is_ok(), accepted);
+    };
+    for count in [128, 129, 256, 257] {
+        let mut raw = b"/x".repeat(count);
+        *raw.last_mut().unwrap() = 0xFF; // no UTF-8 normalization or loss
+        assert_eq!(Kind::Directory.check_path(&raw).is_ok(), count <= 128);
+        assert_eq!(Kind::Regular.check_path(&raw).is_ok(), count <= 128);
+        check(raw, count <= 256);
+    }
+    let bound = b"/123456789abcdef".repeat(256);
+    assert_eq!(bound.len(), 4096);
+    check(bound.clone(), true);
+    let mut too_long = bound; too_long.push(b'x'); check(too_long, false);
+    for bad in [&b"/"[..], b"relative", b"/x//y", b"/x/./y", b"/x/../y", b"/x/", b"/x\0y"] {
+        check(bad.to_vec(), false);
+    }
+}
