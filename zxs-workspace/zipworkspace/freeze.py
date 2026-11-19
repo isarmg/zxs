@@ -58,7 +58,7 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
                 try:
                     if _sig(os.fstat(child)) != sig:
                         raise Rejected("checkout changed during admission")
-                    if check_held is not None: check_held(child)
+                    if check_held is not None: check_held(path, child)
                     if is_dir:
                         visit(child, path, recheck=recheck)
                     elif not recheck and (frozen is not None or hash_files):
@@ -85,12 +85,12 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
     return manifest
 
 
-def observe_held(fd, expected, *, require_ids=False):
+def observe_held(fd, expected, *, require_ids=False, check_held=None):
     """Hash all real descendants of this particular open directory, then recheck the generation."""
     before = os.fstat(fd)
     if (before.st_dev,before.st_ino) != expected or not expected[1] or not stat.S_ISDIR(before.st_mode):
         raise Rejected("not the original held output directory")
-    tree = _scan(fd, hash_files=True, require_ids=require_ids)
+    tree = _scan(fd, hash_files=True, require_ids=require_ids, check_held=check_held)
     if _sig(before) != _sig(os.fstat(fd)):
         raise Rejected("selected directory changed during readback")
     return tree
@@ -144,7 +144,7 @@ def frozen_tree(source, capture, expected, store):
             _distinct_roots((fd,capture.parent,store_fd))
             store_id = native_identity(os.fstat(store_fd),stat.S_IFDIR)
             excluded = {capture.identity,store_id}
-            def check_held(child):
+            def check_held(_, child):
                 m = os.fstat(child)
                 if not m.st_ino or (m.st_dev,m.st_ino) in excluded or mount_id(child)!=source_mount:
                     raise Rejected("cannot capture aliased state, archive store, or a nested mount")

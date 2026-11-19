@@ -19,6 +19,9 @@ def main(args=None):
     def add(command, fields, help):
         s = commands.add_parser(command, help=help)
         for f in fields.split(): s.add_argument(f, type=Path)
+        if command in ("checkout", "checkout-auto", "checkout-branch", "checkout-node"):
+            s.add_argument("--private-stage", action="store_true",
+                           help="Linux: stage only below your exclusive local STATE parent, on the target mount; never fall back")
         return s
     add("init", "worktree store state", "register an existing directory; do not commit it")
     add("inspect", "archive", "fully validate a typed .zxs repository archive")
@@ -60,7 +63,7 @@ def main(args=None):
             browser = ArchiveBrowser.open(ns.archive)
             result = asdict(browser.list_directory(ns.directory, cursor=ns.cursor, limit=ns.limit))
         elif ns.action == "checkout":
-            marker = w.checkout(ns.archive, ns.worktree, ns.store, ns.state); result = {"checked_out": marker.operation}
+            marker = w.checkout(ns.archive, ns.worktree, ns.store, ns.state, private_stage=ns.private_stage); result = {"checked_out": marker.operation}
         elif ns.action == "import-zip":
             from . import plain_import
             if not ns.preview:
@@ -72,7 +75,8 @@ def main(args=None):
             if ns.target is not None:
                 result["target_observation"] = plain_import.observe_target(ns.target)
         elif ns.action == "checkout-auto":
-            path, marker = opening.begin(ns.archive,ns.parent,ns.name,ns.store,ns.state,automatic=True)
+            path, marker = opening.begin(ns.archive,ns.parent,ns.name,ns.store,ns.state,automatic=True,
+                                        private_stage=ns.private_stage)
             result = {"checked_out":marker.operation,"worktree":str(path),"original":opening.status(ns.state)}
         elif ns.action == "checkout-status": result = opening.status(ns.state)
         elif ns.action == "resume-checkout":
@@ -84,7 +88,7 @@ def main(args=None):
         elif ns.action in ("checkout-branch", "checkout-node"):
             catalog = refs.Catalog(ns.archive, ns.store)
             node = catalog.select_branch(ns.branch) if ns.action == "checkout-branch" else catalog.select_node(ns.operation)
-            result = {"checked_out":refs.checkout(node, ns.worktree, ns.store, ns.state).operation}
+            result = {"checked_out":refs.checkout(node, ns.worktree, ns.store, ns.state, private_stage=ns.private_stage).operation}
         elif ns.action == "changes": result = lifecycle.changes(ns.state)
         elif ns.action in ("hide", "restore"): result = lifecycle.start(ns.state, ns.action)
         elif ns.action == "resume-visibility": result = lifecycle.finish(ns.state, ns.operation)

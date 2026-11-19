@@ -10,10 +10,11 @@ import tempfile
 from .archive import read_archive, read_managed_document, stamp
 from .document import archive_sha, named_document
 from .freeze import observe_held, observe_tree
+from . import private_stage as staging
 from .lifecycle import instance, locations, who
 from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected, check_id, member_name, new_id
 from .private_candidates import CandidateDirectory, generation, held_candidates
-from .publish import digest_file, rename_new, rename_new_at, require_native_writer, sync_dir
+from .publish import digest_file, held_store, rename_new, rename_new_at, require_native_writer, sync_dir
 
 MAX_AUTO = 256
 MAX_INITIAL_DB = 64 << 10  # One fresh PREPARED row; never serialize a live catalog.
@@ -68,7 +69,7 @@ def _save_original(inp, size, area, expected):
 
 
 @contextmanager
-def _source(source, seed_parent, expected):
+def _source(source, seed_parent, expected, *, exclusive=None, mount=None):
     source = Path(source).absolute()  # A different spelling isn't the selected catalog slot.
     if source.suffix.lower() != ".zxs": raise Rejected("repository checkout requires the .zxs extension")
     seed = None
@@ -80,8 +81,12 @@ def _source(source, seed_parent, expected):
                     raise Rejected("checkout source is not the selected catalog entry")
                 if observed[2] > MAX_TOTAL + 2 * MAX_CD + (1 << 20):
                     raise Rejected("checkout source is outside the archive size budget")
-                seed = Path(tempfile.mkdtemp(prefix=".zip-opening-", dir=seed_parent))
-                area = held.enter_context(held_candidates(seed))
+                if exclusive is None:
+                    seed = Path(tempfile.mkdtemp(prefix=".zip-opening-", dir=seed_parent))
+                    area = held.enter_context(held_candidates(seed))
+                else:
+                    seed = exclusive.path / (".zip-opening-" + new_id())
+                    area = held.enter_context(staging.new_child(exclusive, seed.name, mount))
                 marker, digest, copy = held.enter_context(_save_original(inp, observed[2], area, expected))
             yield area, marker, digest, copy
     except Exception as error:
@@ -112,12 +117,24 @@ def _record(state, *, write):
 def status(state):
     with _record(state,write=False) as (_,row,_):
         marker = Commit.decode(row["marker"])
+        _private_origin(row)
         return {"operation":row["operation"], "worktree":row["worktree"], "source_node":marker.operation,
                 "chosen_destination":str(_target(row)),
                 "recorded_stage":"attached" if row["done"] else "verified_stage" if row["stage"] else "original_recorded"}
 
 
-def _initial_image(fields):
+def _private_origin(row):
+    keys = {"private_device", "private_inode", "private_base_inode"}
+    present = keys.intersection(row.keys())
+    if not present and row["stage"] != staging.LEAF: return None  # Original target-parent protocol.
+    if (present != keys or row["stage"] != staging.LEAF or
+            not all(isinstance(row[k], str) and row[k].isdigit() and int(row[k]) > 0
+                    for k in (*keys, "stage_dev", "stage_ino"))):
+        raise Rejected("incomplete original private checkout decision; no alternate staging")
+    return row["private_device"], row["private_inode"]
+
+
+def _initial_image(fields, *, prepared=None):
     # No SQLite pathname, journal or second receipt: this database has never been opened on disk.
     budget = MAX_INITIAL_DB // 2
     if any(len(x) > budget for x in fields if isinstance(x, (str, bytes))):
@@ -135,6 +152,14 @@ def _initial_image(fields):
         inode TEXT NOT NULL, store TEXT NOT NULL, stem TEXT NOT NULL, allocate INTEGER NOT NULL,ordinal INTEGER NOT NULL,
         stage TEXT, stage_dev TEXT, stage_ino TEXT, done INTEGER NOT NULL)""")
         con.execute("INSERT INTO opening VALUES(1,?,?,?,?,?,?,?,?,?,?,1,NULL,NULL,NULL,0)", fields)
+        if prepared is not None:
+            # One initial row, already fully verified before it is exposed. Older
+            # clients reject this non-legacy stage name instead of unpacking it.
+            con.execute("ALTER TABLE opening ADD COLUMN private_device TEXT")
+            con.execute("ALTER TABLE opening ADD COLUMN private_inode TEXT")
+            con.execute("ALTER TABLE opening ADD COLUMN private_base_inode TEXT")
+            con.execute("UPDATE opening SET stage=?, stage_dev=?, stage_ino=?, private_device=?, private_inode=?, private_base_inode=?",
+                        (staging.LEAF, *map(str, prepared)))
         con.commit()
         size = page * con.execute("PRAGMA page_count").fetchone()[0]
         if not 0 < size <= MAX_INITIAL_DB: raise Rejected("initial checkout database exceeds the size budget")
@@ -152,9 +177,13 @@ def _seed_names(area, *names):
     if missing: raise Rejected("incomplete private checkout seed")
 
 
-def _install_initial(area, copy, image, state):
+def _install_initial(area, copy, image, state, *, base=None, stage=None):
+    if base is not None:
+        staging.check_private(base)
+        staging.check_private(area)
     area.check_file("original.zxs", *copy)
-    _seed_names(area, "original.zxs")
+    extra = (staging.LEAF,) if stage is not None else ()
+    _seed_names(area, "original.zxs", *extra)
     name = "opening.sqlite"
     fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
                  0o600, dir_fd=area.parent)
@@ -169,7 +198,11 @@ def _install_initial(area, copy, image, state):
                 raise Rejected("initial checkout database readback differs")
 
         def check_pair(held, *, db=None):
-            _seed_names(held, "original.zxs", name)
+            _seed_names(held, "original.zxs", name, *extra)
+            if stage is not None:
+                staging.check_private(base)
+                staging.check_private(held)
+                staging.check_named(held.parent, staging.LEAF, stage.parent)
             held.check_file("original.zxs", *copy)
             if db is not None:
                 held.check_file(name, db, observed)
@@ -186,30 +219,53 @@ def _install_initial(area, copy, image, state):
         # process can drop its POSIX locks. Close before exposing the STATE name.
         os.close(fd)
 
-    rename_new(area.path, state)  # Existing CLI requires a stable private STATE parent.
+    if base is None:
+        rename_new(area.path, state)  # Legacy CLI requires a stable private STATE parent.
+    else:
+        staging.check_private(base)
+        rename_new_at(base.parent, area.path.name, state.name, expected_source=os.fstat(area.parent))
     installed = CandidateDirectory(state, area.parent, area.identity)
     check_pair(installed)
-    sync_dir(state.parent)
+    if base is None: sync_dir(state.parent)
+    else:
+        os.fsync(base.parent)
+        staging.check_private(base)
     check_pair(installed)
 
 
-def begin(source, parent, stem, store, state, *, automatic, expected=None):
+def begin(source, parent, stem, store, state, *, automatic, expected=None, private_stage=False):
     from .worktree import paths
     require_native_writer()
     if not callable(getattr(sqlite3.Connection, "serialize", None)) or os.scandir not in os.supports_fd:
         raise Rejected("fresh checkout needs SQLite serialization and held-directory inventory")
     if len(member_name(stem)) != 1 or automatic and len(stem.encode()) > 230:
         raise Rejected("choose one portable checkout name with room for a collision suffix")
-    parent = Path(parent).resolve(strict=True)
+    parent = Path(parent).absolute() if private_stage else Path(parent).resolve(strict=True)
     dest, store, state = paths(parent/stem,store,state)
     if os.path.lexists(state) or not automatic and os.path.lexists(dest):
         raise Rejected("checkout state or requested destination is occupied")
     owner = _parent(parent)
     operation, worktree = new_id(), new_id()
-    with _source(source, state.parent, expected) as (area, marker, sha, copy):
+    with ExitStack() as held:
+        base = mount = None
+        if private_stage:
+            base = held.enter_context(held_candidates(state.parent))
+            target, _ = held.enter_context(_held_directory(parent, owner))
+            mount = staging.same_mount(base.parent, target)
+            store_root = held.enter_context(held_store(store))
+            staging.separate_roots(base.parent, target, store_root, mount)
+            if _parent(parent) != owner: raise Rejected("chosen target parent changed")
+        area, marker, sha, copy = held.enter_context(_source(source, state.parent, expected, exclusive=base, mount=mount))
         fields = (operation, worktree, marker.encode(), sha, str(parent), owner[0], owner[1],
                   str(store), stem, int(automatic))
-        _install_initial(area, copy, _initial_image(fields), state)
+        if base is None:
+            _install_initial(area, copy, _initial_image(fields), state)
+        else:
+            stage = held.enter_context(staging.materialize(area, copy, marker, mount))
+            image = _initial_image(fields, prepared=(*stage.identity, *area.identity, base.identity[1]))
+            if _parent(parent) != owner: raise Rejected("chosen target parent changed")
+            staging.separate_roots(base.parent, target, store_root, mount)
+            _install_initial(area, copy, image, state, base=base, stage=stage)
     return finish(state,operation)
 
 
@@ -254,6 +310,7 @@ def finish(state, operation):
     require_native_writer()
     with _record(state,write=True) as (con,row,state):
         parent, marker = _verify_record(row,operation)
+        _private_origin(row)  # A damaged private record cannot fall through to the legacy extractor.
         dest = _target(row)
         if row["done"]:
             _catalog_matches(state,row,dest)
@@ -280,7 +337,9 @@ def finish(state, operation):
                 dest = _target(row)
                 paths(dest, Path(row["store"]), state)
                 stage = row["stage"]
-                if not isinstance(stage, str) or Path(stage).name != stage or not stage.startswith(".zip-checkout-"):
+                private_id = _private_origin(row)
+                if private_id is None and (not isinstance(stage, str) or Path(stage).name != stage
+                                           or not stage.startswith(".zip-checkout-")):
                     raise Rejected("invalid registered checkout stage")
                 if row["done"]:
                     _catalog_matches(state, row, dest)
@@ -288,13 +347,32 @@ def finish(state, operation):
                 sid = row["stage_dev"], row["stage_ino"], stat.S_IFDIR
                 pid = row["device"], row["inode"], stat.S_IFDIR
                 pfd, _ = held.enter_context(_held_directory(parent, pid))
+                private = None
+                source_fd = pfd
+                if private_id is not None:
+                    private = held.enter_context(held_candidates(state))
+                    if tuple(map(str, private.identity)) != private_id:
+                        raise Rejected("the original private checkout parent changed")
+                    base = held.enter_context(held_candidates(state.parent))
+                    if tuple(map(str, base.identity)) != (row["private_device"], row["private_base_inode"]):
+                        raise Rejected("the private STATE parent was replaced")
+                    mount = staging.same_mount(base.parent, pfd)
+                    if staging.same_mount(private.parent, pfd) != mount:
+                        raise Rejected("installed private STATE is on a different mount")
+                    source_fd = private.parent
+                    current_store = held.enter_context(held_store(Path(row["store"])))
 
                 def check_parent():
+                    if private_id is not None:
+                        staging.check_private(base)
+                        staging.check_named(base.parent, state.name, private.parent)
+                        staging.check_private(private)
+                        current_store.check_store()
                     if who(parent) != pid: raise Rejected("checkout parent no longer names its original directory")
 
                 def pair(name):
                     check_parent()
-                    names = who(stage, dir_fd=pfd), who(name, dir_fd=pfd)
+                    names = who(stage, dir_fd=source_fd), who(name, dir_fd=pfd)
                     check_parent()
                     return names
 
@@ -310,7 +388,7 @@ def finish(state, operation):
                 if attached:
                     # Another attempt already created this original instance. It may since have
                     # been edited or hidden, so don't hash it against the old checkout tree.
-                    private = held.enter_context(held_candidates(state))
+                    if private is None: private = held.enter_context(held_candidates(state))
                     def catalog_name():
                         private.check_state()
                         m = os.stat("worktree.sqlite", dir_fd=private.parent, follow_symlinks=False)
@@ -323,6 +401,7 @@ def finish(state, operation):
                     if location is None or catalog_name() != catalog_id:
                         raise Rejected("existing registration has no matching original directory")
                     receipt_name = current = location.name
+                    from_stage = False
                 else:
                     source, target = pair(dest.name)
                     if source == sid and target is not None:
@@ -330,9 +409,15 @@ def finish(state, operation):
                         continue
                     if (source, target) not in ((sid, None), (None, sid)):
                         raise Rejected("neither complete original stage/destination pair is present")
-                    current = stage if source == sid else dest.name
+                    from_stage = source == sid
+                    current = stage if from_stage else dest.name
                     receipt_name = dest.name
-                child, m = held.enter_context(_held_directory(current, sid, parent_fd=pfd))
+                child, m = held.enter_context(_held_directory(current, sid, parent_fd=source_fd if from_stage else pfd))
+
+                if private_id is not None:
+                    staging.separate_roots(base.parent, pfd, current_store, mount)
+                    # A visible STATE is not durable if its original outer dirsync failed.
+                    check_parent(); os.fsync(base.parent); check_parent()
 
                 def checked_root():
                     if pair(receipt_name) != (None, sid):
@@ -340,22 +425,34 @@ def finish(state, operation):
                     return os.fstat(child)  # This is the identity to insert, not a fresh pathname lookup.
 
                 if not attached:
-                    if observe_held(child, (m.st_dev, m.st_ino), require_ids=True).digest() != marker.tree:
+                    check = None
+                    if private_id is not None:
+                        staging.member_identity(child, mount)
+                        check = lambda _, fd: staging.member_identity(fd, mount)
+                    if observe_held(child, (m.st_dev, m.st_ino), require_ids=True, check_held=check).digest() != marker.tree:
                         raise Rejected("original prepared checkout contents changed; nothing adopted")
-                    if current == stage:
+                    if from_stage:
                         source, target = pair(dest.name)
                         if source != sid: raise Rejected("original stage disappeared before publication")
                         if target is not None:
                             next_name()
                             continue
                         try:
-                            rename_new_at(pfd, stage, dest.name, expected_source=m)
+                            if private_id is None:
+                                rename_new_at(pfd, stage, dest.name, expected_source=m)
+                            else:
+                                staging.separate_roots(base.parent, pfd, current_store, mount)
+                                rename_new_at(source_fd, stage, dest.name, expected_source=m, target_fd=pfd)
                         except FileExistsError:
                             next_name()
                             continue
                 checked_root()
+                if private_id is not None: staging.separate_roots(base.parent, pfd, current_store, mount)
                 os.fsync(pfd)
                 checked_root()
+                if private_id is not None and not attached:
+                    os.fsync(source_fd)  # Also required if a previous cross-parent rename lost its reply.
+                    checked_root()
                 if attached:
                     # A prior attempt may have installed the catalog name, then lost its STATE dirsync.
                     if catalog_name() != catalog_id: raise Rejected("installed checkout catalog changed")

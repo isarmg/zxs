@@ -169,8 +169,8 @@ class Catalog:
         return self.history_nodes[operation]
 
 
-def checkout(node: Node, destination, store, state):
+def checkout(node: Node, destination, store, state, *, private_stage=False):
     # Do not let a re-read inside checkout substitute another commit after
     # branch selection. The exact marker+whole-file digest accompany the path.
     from .worktree import checkout as open_worktree
-    return open_worktree(node.path, destination, store, state, expected=node)
+    return open_worktree(node.path, destination, store, state, expected=node, private_stage=private_stage)

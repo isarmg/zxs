@@ -170,6 +170,8 @@ def read_plain_document(document):
 
 
 def _read_checked(source, *, managed, sink):
+    if not managed and sink is not None:
+        raise Rejected("ordinary ZIP extraction is not admitted")
     with source as f:
         before = stamp(f)
         expected_count, central_at = bounded_directory(f)
@@ -209,7 +211,8 @@ def _read_checked(source, *, managed, sink):
                             if written > info.file_size:
                                 raise Rejected("data exceeds declared size")
                             h.update(block)
-                            if target: target.write(block)
+                            if target is not None and target.write(block) != len(block):
+                                raise Rejected("short private checkout member write")
                         if target:
                             target.flush()
                             os.fsync(target.fileno())

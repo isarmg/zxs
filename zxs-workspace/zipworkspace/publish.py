@@ -34,10 +34,10 @@ def require_native_writer():
     raise Rejected("native no-replace rename unavailable; no files or settings were changed")
 
 
-def rename_new_at(fd, source, target, *, expected_source=None):
+def rename_new_at(fd, source, target, *, expected_source=None, target_fd=None):
     require_native_writer()
     if any(not n or n in (".","..") or Path(n).name != n for n in (source,target)):
-        raise Rejected("expected sibling directory entry names")
+        raise Rejected("expected single directory entry names")
     if expected_source is not None:
         actual = os.stat(source,dir_fd=fd,follow_symlinks=False)
         if not stat.S_ISDIR(actual.st_mode) or not os.path.samestat(actual,expected_source):
@@ -50,7 +50,7 @@ def rename_new_at(fd, source, target, *, expected_source=None):
     else: raise Rejected("native no-replace rename not available; the old version is untouched")
     fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     fn.restype = ctypes.c_int
-    if fn(fd, os.fsencode(source), fd, os.fsencode(target), flags) != 0:
+    if fn(fd, os.fsencode(source), fd if target_fd is None else target_fd, os.fsencode(target), flags) != 0:
         code = ctypes.get_errno()
         raise OSError(code, os.strerror(code))
 

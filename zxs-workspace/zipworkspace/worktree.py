@@ -92,10 +92,11 @@ def import_zip(archive, dest):
     require_writer()  # No destination is admitted. A preview is never a write request.
 
 
-def checkout(archive, dest, store, state, *, expected=None):
+def checkout(archive, dest, store, state, *, expected=None, private_stage=False):
     from . import opening
     dest, store, state = paths(dest, store, state)
-    _, marker = opening.begin(archive, dest.parent, dest.name, store, state, automatic=False, expected=expected)
+    _, marker = opening.begin(archive, dest.parent, dest.name, store, state, automatic=False,
+                              expected=expected, private_stage=private_stage)
     return marker
 
 
