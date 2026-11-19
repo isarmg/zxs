@@ -14,7 +14,7 @@ pub(crate) enum Record { MetadataOnly, Equal, Different }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(crate) enum Evidence { Observed(Record), Missing, Refused, Changed, Denied, Unavailable, DigestUnavailable }
 impl Evidence {
-    pub(super) fn slot(self)->&'static str { match self {
+    pub(crate) fn slot(self)->&'static str { match self {
         Self::Observed(_)|Self::DigestUnavailable=>"protected-metadata",Self::Missing=>"absent-at-fixed-slot",
         Self::Refused=>"ineligible",Self::Changed=>"changed",Self::Denied=>"permission-denied",Self::Unavailable=>"unknown",
     }}

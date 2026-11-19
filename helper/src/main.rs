@@ -1,10 +1,11 @@
-//! Explicit, local diagnostics. There is no listener, startup service or automatic discovery.
+//! Explicit, local diagnostics. The loopback-only disk panel starts only by explicit command.
 #![forbid(unsafe_code)]
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_pointer_width = "64")))]
 compile_error!("helper currently supports Linux x86_64 (LP64) only");
 
 mod block_tools;
+mod disk_web;
 mod fs_tools;
 mod fat32_check;
 mod inspect;
@@ -25,7 +26,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: read-only local diagnostics (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -36,6 +37,7 @@ enum Command {
     Compare(PathBuf, PathBuf),
     Storage(Selection),
     Disks(block_tools::Query),
+    DiskWeb,
     FsTools(fs_tools::Query),
     Fat32(fat32_check::Request),
 }
@@ -46,6 +48,9 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op == "--help" || op == "--version" {
         if args.next().is_some() { return Err("unexpected argument"); }
         return Ok(if op == "--help" { Command::Help } else { Command::Version });
+    }
+    if op == "disk-web" {
+        return if args.next().is_none() { Ok(Command::DiskWeb) } else { Err("disk-web takes no address, paths, or other arguments") };
     }
     if op == "inspect-dirs" {
         let dirs: Vec<_> = args.take(inspect::MAX_DIRS + 1).map(PathBuf::from).collect();
@@ -73,6 +78,7 @@ fn line(s: &str) -> io::Result<()> {
 
 fn run(command: Command) -> io::Result<ExitCode> {
     match command {
+        Command::DiskWeb => disk_web::serve()?,
         Command::Help => line(USAGE)?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,

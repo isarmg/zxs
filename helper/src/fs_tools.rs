@@ -23,12 +23,12 @@ pub(crate) struct Profile {
     pub(crate) options:&'static [&'static str], pub(crate) target:Target, pub(crate) limit:&'static str,
 }
 impl Profile {
-    fn private(self)->bool {matches!(self.format,"fat32"|"exfat")}
+    pub(crate) fn private(self)->bool {matches!(self.format,"fat32"|"exfat")}
     fn slots(self)->Vec<&'static str>{
         if self.private(){vec!["usr","lib","local-ops-helper","disk-tools-v1","bin",self.tool]}
         else{vec!["usr",self.directory,self.tool]}
     }
-    fn action(self)->&'static str {match self.format {
+    pub(crate) fn action(self)->&'static str {match self.format {
         "fat32"=>"sealed-copy-readonly", "exfat"=>"planned-check-not-enabled",
         "zfs"=>"host-version-and-loaded-module-required-not-enabled", _=>"planned-not-enabled"
     }}
@@ -60,6 +60,7 @@ pub(crate) fn hex(s:&str)->Option<[u8;32]> {
 #[derive(Debug)]
 pub(crate) struct Query { selected:Option<usize>, expected:Option<[u8;32]> }
 impl Query {
+    pub(crate) fn catalog()->Self{Self{selected:None,expected:None}}
     pub(crate) fn parse(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
         let Some(raw)=args.next() else {return Ok(Self{selected:None,expected:None});};
         let i=raw.to_str().and_then(|s|PROFILES.iter().position(|p|p.format==s))

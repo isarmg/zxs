@@ -1,8 +1,9 @@
 # 依赖与固定版本
 
-[Cargo.toml](Cargo.toml) 在主程序中声明两个非开发的直接注册表依赖，另有一个本项目内部小库：
+[Cargo.toml](Cargo.toml) 在主程序中声明三个非开发的直接注册表依赖，另有一个本项目内部小库：
 
-- `rustix = 1.1.5`（默认 `std`，显式 `fs`、`rand`、`pipe`、`process`、`thread`）：安全的 Linux 文件描述符和文件系统观察；新池/卷 ID 只使用内核非阻塞 getrandom。本次仅启用同一锁定包的现有功能，没有增加依赖或改锁。
+- `httparse = 1.10.1`：只用成熟的 HTTP/1.1 请求头解析器；Web 自己限制方法、来源、请求长度、时限、操作和会话。没有新增传递普通依赖。
+- `rustix = 1.1.5`（默认 `std`，显式 `fs`、`rand`、`pipe`、`process`、`termios`、`thread`）：安全的 Linux 文件描述符和文件系统观察；新池/卷 ID 只使用内核非阻塞 getrandom。本次仅启用同一锁定包的现有功能，没有增加依赖或改锁。
 - `sha2 = 0.10.9`（不启用默认功能）：在内存中以 RustCrypto SHA-256 核验候选新登记完整前缀；不用于认证操作者或保护口令。
 
 主程序的测试直接用 `linux-raw-sys 0.12.1` 核已知 Linux 文件系统类型。`tempfile = 3.27.0` 仅供测试，在专用临时父目录内独占创建私有子目录；它不是运行时组件。位置参数、字节流和输出使用标准库。支持的 Rust 工具链单独固定为 1.100.0。
@@ -13,12 +14,15 @@
 
 在独立目录使用标准 crates.io 源，或使用已备齐精确版本的本机可信缓存；不从父目录导入清单、源码、锁文件或构建产物。缓存不全时显式报告缺件，不替换包名或校验值。本次未捆绑或安装第三方二进制。已有[离线工具包配方](packaging/debian13-amd64/README.md)分别核上游工具、库、准确原包和对应源码；这些不是 Cargo 依赖。
 
-## 已核对的 21 份发行源码包
+## 已核对的 22 份发行源码包
 
-本表对应本项目 [Cargo.lock](Cargo.lock)（文件 SHA-256：`e8dee9ae171904383c74ee74595cd4fd4770c4795a213c36a3c6e8ad100d1045`）。逐个从 crates.io 取了锁定版本的 `.crate`，先核整个归档 SHA-256 与锁里该包的 `checksum` 相同，再静态读取归档中的 `Cargo.toml`、许可及署名材料。没有安装、执行或重新解析这些包。表内链接指向各版本的注册表页面；[Cargo 注册表规范](https://doc.rust-lang.org/cargo/reference/registry-index.html#download-endpoint)给出原始包的下载方式。
+`httparse` 的完整锁记录由 [crates.io 登记](https://github.com/rust-lang/crates.io-index/blob/master/ht/tp/httparse)及上游 axum 的 Cargo.lock 对读；原始发行包 SHA-256 为 `6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87`，静态核对了包内许可；未执行其 build.rs、解析器或 Cargo。
+
+本表对应本项目 [Cargo.lock](Cargo.lock)（文件 SHA-256：`c2c3ccaf02388158106ba932fa56dea7c405824bca0b5b4a4cf39ee3050ddb79`）。逐个从 crates.io 取了锁定版本的 `.crate`，先核整个归档 SHA-256 与锁里该包的 `checksum` 相同，再静态读取归档中的 `Cargo.toml`、许可及署名材料。没有安装、执行或重新解析这些包。表内链接指向各版本的注册表页面；[Cargo 注册表规范](https://doc.rust-lang.org/cargo/reference/registry-index.html#download-endpoint)给出原始包的下载方式。
 
 | 精确发行包 | 谁在锁里引用它 | 包声明的许可表达式 | 包内已核材料 |
 | --- | --- | --- | --- |
+| [httparse 1.10.1](https://crates.io/crates/httparse/1.10.1) | 主程序直接依赖；上游测试依赖不引入 | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |
 | [bitflags 2.13.2](https://crates.io/crates/bitflags/2.13.2) | rustix | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |
 | [cfg-if 1.0.5](https://crates.io/crates/cfg-if/1.0.5) | getrandom、sha2 | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |
 | [errno 0.3.14](https://crates.io/crates/errno/0.3.14) | rustix | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>本机磁盘工具 · helper</title>
+<link rel="stylesheet" href="/panel.css">
+<script src="/panel.js" defer></script>
+<header><div class="wrap"><span class="mark" aria-hidden="true">▤</span><strong>helper</strong><span class="label">本机只读</span></div></header>
+<main class="wrap">
+  <p class="eyebrow">LOCAL DISK TOOLS</p>
+  <h1>磁盘工具</h1>
+  <p class="lead">查看当前主机的设备、挂载与工具。不会启动磁盘自检、挂载文件系统或更改数据。</p>
+  <section class="card" id="pairing" aria-labelledby="pairtitle">
+    <h2 id="pairtitle">连接本机终端</h2>
+    <p>将这次启动 helper 时终端显示的一次性配对码粘贴到下方。配对码两分钟后失效，不要发给他人。</p>
+    <label for="code">一次性配对码</label>
+    <div class="entry"><input id="code" type="password" autocomplete="off" spellcheck="false" maxlength="64"><button id="pair" type="button">进入磁盘面板</button></div>
+  </section>
+  <section class="card" id="actions" hidden aria-labelledby="actiontitle">
+    <div class="top"><div><p class="eyebrow">OBSERVATIONS</p><h2 id="actiontitle">选择观察内容</h2></div><button id="close" class="quiet" type="button">结束会话</button></div>
+    <div class="buttons">
+      <button type="button" id="disks">查看设备与挂载</button>
+      <button type="button" id="rates">读取本次 I/O 速率</button>
+      <button type="button" id="tools">核对工具安装位置</button>
+    </div>
+    <p class="hint">只有点击才采样，不后台刷新。速率取两次内核计数，不运行读写基准。</p>
+  </section>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <section class="card" id="result" hidden aria-labelledby="resulttitle"><p class="eyebrow">RESULT</p><h2 id="resulttitle">观察结果</h2><p id="evidence"></p><div class="scroll" tabindex="0" aria-label="可横向滚动的结果表格"><table><thead id="cols"></thead><tbody id="rows"></tbody></table></div></section>
+  <footer>这里不读取文件正文，不接受设备路径或命令参数。检查和修复不是“查看状态”的副作用。</footer>
+</main>
+</html>

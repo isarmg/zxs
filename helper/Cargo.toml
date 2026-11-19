@@ -16,8 +16,9 @@ name = "helper"
 path = "src/main.rs"
 
 [dependencies]
+httparse = "=1.10.1"
 helper-linux-evidence = { path = "linux-evidence" }
-rustix = { version = "=1.1.5", features = ["fs", "pipe", "process", "rand", "thread"] }
+rustix = { version = "=1.1.5", features = ["fs", "pipe", "process", "rand", "termios", "thread"] }
 sha2 = { version = "=0.10.9", default-features = false }
 
 [dev-dependencies]

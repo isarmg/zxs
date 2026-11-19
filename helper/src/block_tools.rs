@@ -10,7 +10,7 @@ use std::{ffi::OsString, fmt, io, time::{Duration,Instant,SystemTime,UNIX_EPOCH}
 
 const MAX_DEVICES:usize=256;
 const MAX_MOUNTS:usize=32;
-const SECTOR_BYTES:u128=512; // Linux block statistics and sysfs size, even on 4Kn
+pub(crate) const SECTOR_BYTES:u128=512; // Linux block statistics and sysfs size, even on 4Kn
 type Field<T>=Result<T,Reason>;
 
 #[derive(Debug,Clone,Copy,Eq,PartialEq)]
@@ -25,7 +25,7 @@ impl Reason {
             _=>Self::Io,
         }
     }
-    fn label(self)->&'static str { match self {
+    pub(crate) fn label(self)->&'static str { match self {
         Self::NotReported=>"not-reported",Self::Denied=>"permission-denied",Self::Unsupported=>"unsupported",
         Self::Invalid=>"invalid-source",Self::Changed=>"changed",Self::Limit=>"limit",
         Self::NoSample=>"not-requested",Self::Reset=>"counter-reset",Self::Io=>"io",
@@ -56,6 +56,7 @@ impl fmt::Display for Dev {
 #[derive(Debug)]
 pub(crate) struct Query { device:Option<Dev>, rates:bool }
 impl Query {
+    pub(crate) fn inventory(rates:bool)->Self{Self{device:None,rates}}
     pub(crate) fn parse(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str> {
         use std::os::unix::ffi::OsStrExt;
         let (mut device,mut rates)=(None,false);
@@ -93,7 +94,7 @@ pub(crate) struct Rate {pub(crate) read_bytes:u128,pub(crate) write_bytes:u128,p
 impl Rate {
     // Keep the actual byte deltas. A busy device that transferred less than
     // one byte per second on average is distinguishable from one that was idle.
-    fn bps(self,bytes:u128)->String {
+    pub(crate) fn bps(self,bytes:u128)->String {
         let average=bytes*1_000_000_000/self.interval_ns; // bytes <= u64::MAX * 512
         if bytes!=0 && average==0 { "<1".into() } else { average.to_string() }
     }
