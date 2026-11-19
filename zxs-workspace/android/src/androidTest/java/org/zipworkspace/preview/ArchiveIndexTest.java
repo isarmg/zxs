@@ -15,7 +15,7 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public final class ArchiveIndexTest {
-    private static byte[] zip(String... names) throws IOException {
+    static byte[] zip(String... names) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (ZipOutputStream z = new ZipOutputStream(out)) {
             for (String name : names) {
@@ -78,7 +78,10 @@ public final class ArchiveIndexTest {
         byte[] saved = Arrays.copyOfRange(b, cd, cd + first);
         System.arraycopy(b, cd + first, b, cd, second);
         System.arraycopy(saved, 0, b, cd + second, first);
-        assertEquals(2, read(b).root.children.size());
+        ArchiveIndex index = read(b);
+        assertEquals(2, index.root.children.size());
+        for (ArchiveIndex.Item row : index.root.children.values())
+            assertTrue(index.checkMember(new StoredMemberTest.Bytes(b), row).matches());
     }
     @Test public void impossibleRequiredPhysicalSpansRejectWithoutOpeningMembers() throws IOException {
         byte[] b = zip("a", "bb");

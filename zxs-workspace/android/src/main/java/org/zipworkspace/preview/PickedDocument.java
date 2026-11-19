@@ -23,13 +23,37 @@ import java.io.IOException;
 import java.util.Locale;
 
 /** One user-selected document from a platform-signed AOSP-compatible primary storage provider. */
-final class PickedDocument {
+final class PickedDocument implements AutoCloseable {
     static final String AUTH = "com.android.externalstorage.documents";
     private static final String PACKAGE = "com.android.externalstorage";
     private static final String MANAGE = "android.permission.MANAGE_DOCUMENTS";
     final String title;
     final ArchiveIndex index;
-    private PickedDocument(String title, ArchiveIndex index) { this.title = title; this.index = index; }
+    private final Uri uri;
+    private final StructStat observed;
+    private ParcelFileDescriptor held;
+    private PickedDocument(String title, ArchiveIndex index, Uri uri, StructStat observed, ParcelFileDescriptor held) {
+        this.title = title; this.index = index; this.uri = uri; this.observed = observed; this.held = held;
+    }
+    private synchronized ParcelFileDescriptor borrow() throws IOException {
+        ArchiveIndex.require(held != null);
+        return ParcelFileDescriptor.dup(held.getFileDescriptor()); // same open file description, not a URI reopen
+    }
+    @Override public synchronized void close() {
+        if (held == null) return;
+        ParcelFileDescriptor old = held; held = null;
+        try { old.close(); } catch (IOException ignored) { /* no retry of a closed descriptor number */ }
+    }
+    StoredMember.Result checkMember(Context ctx, ArchiveIndex.Item item, CancellationSignal cancel) throws IOException {
+        cancel.throwIfCanceled();
+        try (ParcelFileDescriptor lease = borrow()) {
+            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel);
+            reader.validate();
+            StoredMember.Result result = index.checkMember(reader, item);
+            reader.validate();
+            return result;
+        }
+    }
 
     static Intent picker() {
         return new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
@@ -89,36 +113,63 @@ final class PickedDocument {
                     && size >= 22 && size <= ArchiveIndex.MAX_ARCHIVE && !c.moveToNext());
         }
         cancel.throwIfCanceled();
-        try (ParcelFileDescriptor pfd = resolver.openFileDescriptor(uri, "r", cancel)) {
-            ArchiveIndex.require(pfd != null);
+        ParcelFileDescriptor pfd = resolver.openFileDescriptor(uri, "r", cancel);
+        ArchiveIndex.require(pfd != null);
+        boolean transferred = false;
+        try {
             FileDescriptor fd = pfd.getFileDescriptor();
             StructStat original = Os.fstat(fd);
             ArchiveIndex.require(OsConstants.S_ISREG(original.st_mode) && original.st_ino != 0
                     && original.st_dev != 0 && original.st_nlink > 0 && original.st_size == size);
             Os.lseek(fd, 0, OsConstants.SEEK_CUR);
-            ArchiveIndex index = ArchiveIndex.read(new ArchiveIndex.Source() {
-                public void check() { cancel.throwIfCanceled(); }
-                public byte[] read(long off, int len) throws IOException {
-                    check();
-                    ArchiveIndex.require(off >= 0 && len >= 0 && len <= ArchiveIndex.MAX_CD && off <= size - len);
-                    byte[] b = new byte[len];
-                    for (int n = 0; n < len;) {
-                        check();
-                        try {
-                            int k = Os.pread(fd, b, n, Math.min(65536, len - n), off + n);
-                            ArchiveIndex.require(k > 0); n += k;
-                        } catch (ErrnoException ex) {
-                            if (ex.errno != OsConstants.EINTR) throw new IOException("Read unavailable", ex);
-                        }
-                    }
-                    return b;
-                }
-            }, size);
-            cancel.throwIfCanceled();
-            ArchiveIndex.require(same(original, Os.fstat(fd))
-                    && ctx.checkUriPermission(uri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        == PackageManager.PERMISSION_GRANTED);
-            return new PickedDocument(title, index);
+            Reader reader = new Reader(ctx, uri, fd, original, cancel);
+            reader.validate();
+            ArchiveIndex index = ArchiveIndex.read(reader, size);
+            reader.validate();
+            PickedDocument result = new PickedDocument(title, index, uri, original, pfd);
+            transferred = true;
+            return result;
         } catch (ErrnoException ex) { throw new IOException("Cannot inspect this selected file", ex); }
+        finally { if (!transferred) pfd.close(); }
+    }
+
+    private static final class Reader implements ArchiveIndex.MemberSource {
+        private final Context ctx;
+        private final Uri uri;
+        private final FileDescriptor fd;
+        private final StructStat original;
+        private final CancellationSignal cancel;
+        private long untilCheck;
+        Reader(Context ctx, Uri uri, FileDescriptor fd, StructStat original, CancellationSignal cancel) {
+            this.ctx = ctx; this.uri = uri; this.fd = fd; this.original = original; this.cancel = cancel;
+        }
+        public void check() { cancel.throwIfCanceled(); }
+        void validate() throws IOException {
+            check();
+            ArchiveIndex.require(ctx.checkUriPermission(uri, Process.myPid(), Process.myUid(),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION) == PackageManager.PERMISSION_GRANTED);
+            try { ArchiveIndex.require(same(original, Os.fstat(fd))); }
+            catch (ErrnoException ex) { throw new IOException("Selected file no longer available", ex); }
+            untilCheck = 8L << 20;
+        }
+        public byte[] read(long off, int len) throws IOException {
+            ArchiveIndex.require(len >= 0 && len <= ArchiveIndex.MAX_CD);
+            byte[] b = new byte[len]; fill(off, b, len); return b;
+        }
+        public void fill(long off, byte[] b, int len) throws IOException {
+            check();
+            ArchiveIndex.require(off >= 0 && len >= 0 && len <= b.length && off <= original.st_size - len);
+            for (int n = 0; n < len;) {
+                check();
+                if (untilCheck <= 0) validate();
+                try {
+                    int k = Os.pread(fd, b, n, Math.min(65536, len - n), off + n);
+                    ArchiveIndex.require(k > 0 && k <= len - n);
+                    n += k; untilCheck -= k;
+                } catch (ErrnoException ex) {
+                    if (ex.errno != OsConstants.EINTR) throw new IOException("Read unavailable", ex);
+                }
+            }
+        }
     }
 }
