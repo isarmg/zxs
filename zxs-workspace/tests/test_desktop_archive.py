@@ -257,9 +257,9 @@ class OriginalDesktopCheckout(unittest.TestCase):
         self.marker = write_snapshot(self.loose)
         self.target, self.state = self.parent / "Design", self.private / "Design"
 
-    def choice(self, snapshot=None, *, review=True):
+    def choice(self, snapshot=None, *, review=True, keep_session=False):
         from zipworkspace.desktop.checkout_action import CheckoutChoice
-        plan = CheckoutChoice(snapshot or Selection.open(self.loose))
+        plan = CheckoutChoice(snapshot or Selection.open(self.loose), keep_session=keep_session)
         self.addCleanup(plan.close)
         plan.pick_store(self.store); plan.pick_target(self.parent); plan.pick_private(self.private)
         if review:
@@ -373,6 +373,129 @@ class OriginalDesktopCheckout(unittest.TestCase):
         self.assertTrue((saved / "prepared-worktree/design/notes").is_file())
         self.assertFalse(self.target.exists())
 
+    def test_session_pins_the_exclusive_new_catalog_before_exposure_and_reports_real_status(self):
+        import fcntl
+        from zipworkspace import worktree
+        from zipworkspace.desktop.live_checkout import LiveCheckout
+        plan = self.choice(keep_session=True)
+        installed = []; creator = LiveCheckout.new_catalog
+        def witness(live, path, original_fd):
+            self.assertFalse((self.state/"worktree.sqlite").exists())
+            creator(live, path, original_fd)
+            self.assertTrue(os.path.samestat(os.fstat(original_fd), os.fstat(live.db)))
+            self.assertEqual(fcntl.fcntl(live.db, fcntl.F_GETFL) & os.O_PATH, os.O_PATH)
+            installed.append(os.fstat(live.db))
+        with patch.object(LiveCheckout, "new_catalog", new=witness): plan.run()
+        live = plan.take_session(); self.assertIsNotNone(live); self.addCleanup(live.close)
+        self.assertIsNone(plan.take_session())
+        self.assertTrue(os.path.samestat(installed[0], (self.state/"worktree.sqlite").stat()))
+        (self.target / "design/notes").write_bytes(b"editing does not imply another version")
+        active = live.status()
+        self.assertEqual(active, worktree.status(self.state))
+        self.assertEqual(active["worktree"], live.instance)
+        self.assertEqual(active["base_operation"], self.marker.operation)
+        self.assertIsNone(active["pending_operation"])
+        live.close()
+        with self.assertRaises(Rejected): live.status()
+
+    def test_explicitly_discarding_a_returned_plan_closes_its_untaken_session(self):
+        plan = self.choice(keep_session=True); plan.run()
+        still_owned = plan.session
+        self.assertIsNotNone(still_owned); self.assertFalse(still_owned.closed)
+        plan.close()
+        self.assertTrue(still_owned.closed); self.assertIsNone(plan.take_session())
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra not installed")
+    def test_late_or_failed_checkout_display_closes_the_undelivered_original_session(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window(); self.addCleanup(win.close)
+        pane = win.archive.checkout
+        for mode in ("changed", "failed"):
+            plan = self.choice(review=False, keep_session=True)
+            plan.review(mode)
+            pane.set_snapshot(plan.snapshot)
+            pane.active = True
+            result = plan.run(); original = plan.session
+            if mode == "changed":
+                pane.set_snapshot(Selection.open(self.loose))  # Selected anew after the real write returned.
+                pane._complete(plan, result)
+            else:
+                with patch.object(pane.result, "setText", side_effect=RuntimeError("view lost")):
+                    with self.assertRaisesRegex(RuntimeError, "view lost"): pane._complete(plan, result)
+            self.assertTrue(original.closed); self.assertIsNone(pane.live); self.assertFalse(pane.active)
+            self.assertEqual((self.parent/mode/"design/notes").read_bytes(), b"desktop selection")
+
+    def test_live_status_refuses_an_equal_copy_of_database_before_opening_sqlite(self):
+        from zipworkspace import worktree
+        plan = self.choice(keep_session=True); plan.run()
+        live = plan.take_session(); self.addCleanup(live.close)
+        db, original = self.state/"worktree.sqlite", self.state/"original-catalog"
+        db.rename(original); db.write_bytes(original.read_bytes()); db.chmod(0o600)
+        with patch.object(worktree, "locked", side_effect=AssertionError("no SQLite on the new inode")):
+            with self.assertRaises(Rejected): live.status()
+        self.assertEqual(db.read_bytes(), original.read_bytes())
+        db.unlink(); original.rename(db)
+        self.assertEqual(live.status()["worktree"], live.instance)
+        for directory in (self.target, self.store, self.state):
+            with self.subTest(directory=directory):
+                original = directory.with_name("saved-" + directory.name)
+                directory.rename(original); directory.mkdir(mode=0o700)
+                try:
+                    with self.assertRaises((OSError, Rejected)): live.status()
+                    self.assertFalse(any(directory.iterdir()))
+                finally:
+                    directory.rmdir(); original.rename(directory)
+
+    def test_original_visible_and_hidden_status_come_from_the_same_cli_instance(self):
+        from zipworkspace import lifecycle
+        (self.store / self.marker.filename).write_bytes(self.loose.read_bytes())
+        plan = self.choice(keep_session=True); plan.run()
+        live = plan.take_session(); self.addCleanup(live.close)
+        receipt = lifecycle.start(self.state, "hide")
+        self.assertEqual(live.status()["visibility"], "hidden")
+        self.assertFalse(self.target.exists())
+        self.assertEqual(receipt["original_outcome"], "hidden")
+        lifecycle.start(self.state, "restore")
+        self.assertEqual(live.status()["visibility"], "visible")
+        self.assertTrue(os.path.samestat(self.target.stat(), os.fstat(live.work_fd)))
+
+    def test_completed_elsewhere_is_a_valid_checkout_receipt_but_never_a_window_session(self):
+        from zipworkspace import opening
+        native = opening.finish
+        def other_first(state, op, *, selected):
+            # Selected caller admits its true prepared DB; another legitimate CLI
+            # actor finishes that same operation before this caller's next transaction.
+            with opening._record(state, write=False, selected=selected): pass
+            self.assertEqual(native(state, op), (self.target, self.marker))
+            return native(state, op, selected=selected)
+        plan = self.choice(keep_session=True)
+        with patch.object(opening, "finish", side_effect=other_first):
+            self.assertEqual(plan.run(), (self.target, self.marker))
+        self.assertIsNone(plan.take_session())
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "attached")
+
+    def test_failed_catalog_directory_barrier_keeps_original_receipt_but_closes_provisional_session(self):
+        from zipworkspace import opening
+        from zipworkspace.desktop.live_checkout import LiveCheckout
+        plan = self.choice(keep_session=True)
+        native, sync = LiveCheckout.new_catalog, os.fsync
+        scopes = []
+        def remember(live, path, fd):
+            native(live, path, fd); scopes.append(live)
+        def stop(fd):
+            if (scopes and (self.state/"worktree.sqlite").is_file()
+                    and os.path.samestat(os.fstat(fd), os.fstat(scopes[0].state_fd))):
+                raise OSError("lost original STATE sync")
+            return sync(fd)
+        with patch.object(LiveCheckout, "new_catalog", new=remember), patch.object(os, "fsync", side_effect=stop):
+            with self.assertRaisesRegex(Rejected, "lost original STATE sync"): plan.run()
+        self.assertTrue(scopes[0].closed)
+        self.assertIsNone(plan.take_session())
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "verified_stage")
+        self.assertEqual(opening.finish(self.state, plan.operation), (self.target, self.marker))
+
     @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra not installed")
     def test_widget_cancellation_stale_confirmation_and_reentry_do_not_create_a_second_operation(self):
         from concurrent.futures import Future
@@ -411,3 +534,9 @@ class OriginalDesktopCheckout(unittest.TestCase):
                 self.assertEqual(self.state.is_dir(), mode == "accept")
         self.assertIn(self.marker.operation, pane.result.text())
         self.assertEqual((self.target/"design/notes").read_bytes(), b"desktop selection")
+        self.assertIn(pane.live.instance, pane.details.text())
+        self.assertIn("未检查工作文件", pane.details.text())
+        active = pane.live
+        win.archive.clear_document()
+        self.assertTrue(active.closed); self.assertIsNone(pane.live)
+        self.assertFalse(pane.refresh.isEnabled())

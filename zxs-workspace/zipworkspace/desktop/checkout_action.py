@@ -37,13 +37,15 @@ def _named_mount(path, original):
 
 class CheckoutChoice:
     """Handles live from the individual picks through confirmation, job and original result."""
-    def __init__(self, snapshot):
+    def __init__(self, snapshot, *, keep_session=False):
         if not available(): raise Rejected("此平台不能从桌面创建 Linux CLI 工作树")
         require_native_writer()
         self.stack = ExitStack()
         self.snapshot = snapshot
         self.operation = new_id()
         self.store = self.target = self.base = self.state = None
+        self.keep_session = keep_session and hasattr(os, "O_PATH")
+        self.provisional = self.session = self.verified_sha = None
         self.publication = None  # Only the actual private STATE installation boundary sets this.
         self.used = self.closed = self.initial_opened = False
         try:
@@ -57,10 +59,17 @@ class CheckoutChoice:
             self.close()
             raise
 
-    def close(self):
+    def _close_picks(self):
         if not self.closed:
             self.closed = True
             self.stack.close()
+
+    def close(self):
+        # Explicit discard: any successfully created but not handed-off session is still ours.
+        if self.session is not None:
+            self.session.close()
+            self.session = None
+        self._close_picks()
 
     def check_source(self):
         s = self.snapshot
@@ -149,6 +158,16 @@ class CheckoutChoice:
                 not self.initial_opened and generation(m) != db_generation):
             raise Rejected("本次签出的原登记数据库已变化")
 
+    def new_session(self, row, work_fd, state_fd, store_fd):
+        if not self.keep_session: return None
+        from .live_checkout import LiveCheckout
+        self.provisional = LiveCheckout(self, row, work_fd, state_fd, store_fd)
+        return self.provisional
+
+    def take_session(self):
+        session, self.session = self.session, None
+        return session
+
     def _failure(self, error):
         if self.publication is None:
             outcome = "本次尚未安装原登记，没有可续作的回执。请保留可能留下的私有准备材料，不扫描、认领或清除。"
@@ -176,10 +195,13 @@ class CheckoutChoice:
         self.used = True
         try:
             self.check_new()
-            return opening.begin(self.snapshot.path, self.target.evidence.path, self.destination.name,
-                                 self.store.path, self.state, automatic=False, expected=self.snapshot.exact,
-                                 private_stage=True, selected=self)
+            result = opening.begin(self.snapshot.path, self.target.evidence.path, self.destination.name,
+                                   self.store.path, self.state, automatic=False, expected=self.snapshot.exact,
+                                   private_stage=True, selected=self)
+            self.session, self.provisional = self.provisional, None  # Original transaction has returned.
+            return result
         except Exception as error:
             raise Rejected(self._failure(error)) from error
         finally:
-            self.close()
+            if self.provisional is not None: self.provisional.close()
+            self._close_picks()  # The successful session, if any, awaits take_session() or close().

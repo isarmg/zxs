@@ -12,7 +12,7 @@ from .freeze import frozen_tree, pack
 from .model import Commit, Rejected, check_id, new_id
 from .private_candidates import held_candidates
 from .private_freeze import anonymous_capture
-from .publish import confirm_final, digest_file, publish, rename_new, require_native_writer, sync_dir
+from .publish import confirm_final, digest_file, publish, rename_new, rename_new_at, require_native_writer, sync_dir
 
 
 def paths(work, store, state):
@@ -34,11 +34,21 @@ def enroll(work, store, state, base=None):
     sync_dir(state.parent)
 
 
-def create_catalog(work, store, state, base, instance_id, *, checked_root=None):
-    fd, tmp = tempfile.mkstemp(prefix=".catalog-", dir=state)
-    os.close(fd)
-    temp = Path(tmp)
-    con = sqlite3.connect(temp)
+def create_catalog(work, store, state, base, instance_id, *, checked_root=None, live=None):
+    if live is not None and checked_root is None: raise Rejected("live catalog requires the actual checked checkout root")
+    if live is None:
+        fd, tmp = tempfile.mkstemp(prefix=".catalog-", dir=state)
+        temp = Path(tmp)
+    else:
+        live.check_dirs()
+        temp = state / (".catalog-" + new_id())
+        fd = os.open(temp.name, os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600, dir_fd=live.state_fd)
+    try:
+        if live is not None: live.new_catalog(temp, fd)  # Simultaneous with the exclusive creator's fd.
+    finally: os.close(fd)
+    if live is not None: live.check_catalog(temp)
+    con = sqlite3.connect(temp) if live is None else sqlite3.connect(temp.as_uri()+"?mode=rw", uri=True)
     try:
         con.execute("PRAGMA synchronous=FULL")
         con.execute("""CREATE TABLE checkout(singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -55,10 +65,22 @@ def create_catalog(work, store, state, base, instance_id, *, checked_root=None):
             root.operation if root else None, source_sha))
         con.commit()
     finally: con.close()
-    with temp.open("rb") as f: os.fsync(f.fileno())
-    if checked_root is not None: checked_root()
-    rename_new(temp, state / "worktree.sqlite")
-    sync_dir(state)
+    name = state / "worktree.sqlite"
+    if live is None:
+        with temp.open("rb") as f: os.fsync(f.fileno())
+        if checked_root is not None: checked_root()
+        rename_new(temp, name)
+        sync_dir(state)
+    else:
+        # The ordinary fd is only for the closed, still-private DB. Close it BEFORE
+        # naming worktree.sqlite, so it cannot cancel another live SQLite connection's locks.
+        live.sync_new_catalog(temp)
+        checked_root()
+        live.check_catalog(temp)
+        rename_new_at(live.state_fd, temp.name, name.name)
+        live.check_catalog(name)
+        os.fsync(live.state_fd)
+        live.check_catalog(name)
 
 
 @contextmanager
@@ -155,9 +177,14 @@ def commit(state, *, fork=False):
     return finish(state, marker.operation)
 
 
-def status(state):
+def status(state, *, live=None):
+    name = Path(state).absolute() / "worktree.sqlite"
+    if live is not None: live.check_catalog(name)
     with locked(state, read_only=True) as (con, row, _):
         rec = lifecycle.instance(con)
+        if live is not None:
+            live.check_instance(row, rec)
+            live.check_catalog(name)
         return {"visibility":rec["phase"], "pending_visibility_operation":rec["active"], "worktree": row["worktree"], "repo": row["repo"], "branch": row["branch"],
                 "base_generation": row["generation"], "base_operation": row["parent"],
                 "pending_operation": Commit.decode(row["pending"]).operation if row["pending"] is not None else None}

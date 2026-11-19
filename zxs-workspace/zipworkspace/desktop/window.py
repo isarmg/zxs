@@ -70,9 +70,10 @@ class Window(QMainWindow):
                 self.inform(f"操作已返回，但显示结果失败。请先查看原状态，不要重复发起。{err}")
 
     def closeEvent(self, event):
-        if self.pending is not None:
+        if self.pending is not None or self.archive.checkout.active:
             event.ignore()
             self.inform("操作尚未返回，请等待。关闭窗口不等于撤销已登记的操作。")
         else:
+            self.archive.checkout.close_session()
             self.pool.shutdown(wait=False)
             super().closeEvent(event)

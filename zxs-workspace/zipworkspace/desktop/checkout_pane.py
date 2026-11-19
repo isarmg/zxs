@@ -10,6 +10,7 @@ class CheckoutPane(QWidget):
         super().__init__()
         self.owner, self.current_store = owner, current_store
         self.snapshot, self.active, self.unresolved = None, False, False
+        self.live = None
         layout = QVBoxLayout(self)
         self.selected = label()
         layout.addWidget(self.selected)
@@ -19,10 +20,16 @@ class CheckoutPane(QWidget):
         layout.addWidget(self.start)
         self.result = label()
         layout.addWidget(self.result)
+        self.refresh = button("刷新本窗口工作树的状态", self.refresh_live)
+        layout.addWidget(self.refresh)
+        self.details = label()
+        layout.addWidget(self.details)
+        self.close_session()
         layout.addStretch()
         self.set_snapshot(None)
 
     def set_snapshot(self, selected):
+        if self.snapshot is not selected and self.live is not None: self.close_session()
         self.snapshot = selected
         if not available(): message = "当前平台未开放此写入口。可继续浏览或核验快照。"
         elif selected is None: message = "先打开一个 .zxs，或从历史 / 分支页面打开要签出的确切节点。"
@@ -45,7 +52,7 @@ class CheckoutPane(QWidget):
             opts = QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
             return QFileDialog.getExistingDirectory(self, prompt, initial, opts)
         try:
-            plan = CheckoutChoice(snapshot)
+            plan = CheckoutChoice(snapshot, keep_session=True)
             previous = self.current_store()
             name = directory("为这份新工作树选择归档存储目录", str(previous.path) if previous else "")
             if not name: return
@@ -103,8 +110,50 @@ class CheckoutPane(QWidget):
         future.add_done_callback(lambda f: plan.close() if f.cancelled() else None)
 
     def _complete(self, plan, result):
-        destination, marker = result
-        self.result.setText(f"已按原操作签出：{destination}\n原节点：{marker.operation}\n"
-                            f"命令行 STATE：{plan.state}\n签出操作：{plan.operation}")
-        self.owner.inform("新的 CLI 工作树已创建；不会因为切换页面或关闭窗口而再次签出。")
-        self._release()
+        # The checkout is already durable. A late or failed view may display the receipt,
+        # but must never leak its handles or adopt it as the currently selected worktree.
+        incoming = plan.take_session()
+        self.active = False
+        try:
+            self.set_snapshot(self.snapshot)
+            destination, marker = result
+            self.result.setText(f"原操作已签出：{destination}\n原节点：{marker.operation}\n"
+                                f"命令行 STATE：{plan.state}\n签出操作：{plan.operation}")
+            if self.snapshot is not plan.snapshot:
+                self.owner.inform("原签出已完成；当前快照已变，未交接工作树会话。")
+                return
+            self.close_session()
+            self.owner.inform("新的 CLI 工作树已创建；不会因为切换页面或关闭窗口而再次签出。")
+            self.refresh.setEnabled(incoming is not None)
+            self.live, incoming = incoming, None
+        finally:
+            if incoming is not None: incoming.close()
+            plan.close()
+        if self.live is not None: self.refresh_live()
+
+    def close_session(self):
+        if self.live is not None: self.live.close()
+        self.live = None
+        self.refresh.setEnabled(False)
+        self.details.setText("本窗口未持有当前工作树；不会按路径搜索或接管已有 STATE。")
+
+    def refresh_live(self):
+        live = self.live
+        if live is None or self.owner.pending is not None or self.active: return
+        def shown(record):
+            if self.live is not live: return
+            phase = {"visible":"可见", "hidden":"已隐藏", "hide-pending":"隐藏待决（位置未确认）",
+                     "restore-pending":"恢复待决（位置未确认）"}[record["visibility"]]
+            self.details.setText(
+                f"本次签出的原工作树：{live.work}\n命令行 STATE：{live.state}\n归档存储：{live.store}\n"
+                f"实例：{record['worktree']}\n可见状态：{phase}\n分支：{record['branch']} · 基线第 {record['base_generation']} 代\n"
+                f"基线节点：{record['base_operation']}\n待决提交：{record['pending_operation'] or '无'}\n"
+                f"待决隐藏/恢复：{record['pending_visibility_operation'] or '无'}\n"
+                "这是原登记的一次只读快照，未检查工作文件是否已修改。")
+            self.owner.inform("已读取本窗口原工作树状态。")
+        def failed(error):
+            if self.live is live: self.details.setText(f"无法核证原工作树状态：{error}。不会认领替件。")
+        try:
+            self.owner.job("正在读取本次工作树状态…", live.status, shown, failed=failed)
+        except Exception as error:
+            failed(error)

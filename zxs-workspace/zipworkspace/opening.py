@@ -95,6 +95,7 @@ def _source(source, seed_parent, expected, *, exclusive=None, mount=None, select
                     selected.check_source()
                     if marker != selected.snapshot.browser.commit:
                         raise Rejected("copied archive is not the reviewed snapshot node")
+                    selected.verified_sha = digest
             yield area, marker, digest, copy
     except Exception as error:
         if seed is not None:
@@ -116,7 +117,9 @@ def _record(state, *, write, selected=None):
         row = con.execute("SELECT * FROM opening WHERE singleton=1").fetchone()
         if row is None: raise Rejected("original checkout operation not available")
         if selected is not None:
-            if (row["operation"] != selected.operation or
+            if (row["operation"] != selected.operation or row["sha"] != selected.verified_sha or
+                    row["allocate"] != 0 or row["ordinal"] != 1 or _target(row) != selected.destination or
+                    row["store"] != str(selected.store.path) or
                     Commit.decode(row["marker"]) != selected.snapshot.browser.commit):
                 raise Rejected("CLI STATE does not contain the reviewed operation and node")
             selected.initial_opened = True
@@ -491,11 +494,15 @@ def finish(state, operation, *, selected=None):
                     os.fsync(private.parent)
                     if catalog_name() != catalog_id: raise Rejected("installed checkout catalog changed")
                 else:
+                    live = selected.new_session(row, child, private.parent, current_store.fd) if selected is not None else None
+                    options = {"live": live} if live is not None else {}
                     create_catalog(dest, Path(row["store"]), state, (marker, row["sha"]), row["worktree"],
-                                   checked_root=checked_root)
+                                   checked_root=checked_root, **options)
                     if _catalog_matches(state, row, dest, parent_fd=pfd) != dest:
                         raise Rejected("original directory absent after new catalog publication")
                 checked_root()
                 con.execute("UPDATE opening SET done=1 WHERE singleton=1")
             checked_root()  # Original parent and child are still held through the SQLite commit.
+            if selected is not None and selected.provisional is not None:
+                selected.provisional.check_catalog(state / "worktree.sqlite")
             return dest, marker
