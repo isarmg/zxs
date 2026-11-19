@@ -2,6 +2,8 @@
 
 这是**发行端的组包配置**，不是已经构建、签名、审计通过或发布的安装包。首批打包 bubblewrap 0.12、dosfstools 4.2 的 `fsck.fat`、exfatprogs 1.2.9 的 `fsck.exfat` 以及实际所需的运行库。能调用的是受限 FAT32 副本只读检查；包含 exFAT 程序不代表已经实现或获准调用。没有硬盘/分区修复入口。本配方也为专用 Samba 实例的**离线初次域供给**收集私有运行材料，绝不安装或启动宿主 smbd。
 
+用于**在线**专用 smbd 和非 root 存储进程的是[另一份离线原生构建配方](online-smb.md)。它不属于下述磁盘工具包或离线建域 Python 胶囊；不会把系统 smbd、普通 Debian 包中的原服务或用户库当作专版。
+
 ## 受信输入
 
 1. 使用独立、受保护、未挂载业务介质的 Debian 13 amd64 发行机与普通构建账户；具备受信的 Python 3.11+、Git、Debian archive keyring、gpgv、dpkg-deb、binutils/readelf、patchelf。只从干净的 helper 源码生成；先按[构建核对表](../../RELEASE.md)从指定源和 Cargo.lock 独立构建、取得受信 SHA-256 与构建记录。本脚本不替这一记录背书，不执行构建出的 helper。

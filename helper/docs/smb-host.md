@@ -5,7 +5,7 @@
 ## 哪些材料必须另有来源
 
 - 完成[同一池的专用首设](samba-domain.md)，保留 PoolId、InstanceId、DOMAIN_OP、已核 128 字节 `domain.bound` 的独立 SHA-256 和登记的非 root 存储 UID/GID。域正本、账号回执与批准各有用途，不能取当前查到的字节为自己背书。存储根仅支持以 `/srv/` 或 `/mnt/` 开头的受保护规范 ASCII 原路径；不要复制池以通过检查。
-- 由独立签名发行和部署记录取得两个**不同的** Debian 13 amd64 专用 ELF 的确切 SHA-256。该宿主约定把修补过的前台 smbd 安装在 `/usr/lib/zxs-smb-runtime/debian13-amd64/sbin/smbd`，配套 ZXS 存储端在 `/usr/lib/zxs-smb-runtime/debian13-amd64/bin/zxs-smb-storage`。不找 PATH、不用系统 `/usr/sbin/smbd` 或离线创建域的 Python 胶囊替代。单个 ELF 文件摘要**不检查整个动态装载链、NSS、模块或发行签名**；这些必须另在受控独立构建/安装中核准。没有可验证的配套制品不应启用。
+- 由独立签名发行和部署记录取得两个**不同的** Debian 13 amd64 专用 ELF 的确切 SHA-256。该宿主约定把修补过的前台 smbd 安装在 `/usr/lib/zxs-smb-runtime/debian13-amd64/sbin/smbd`，配套 ZXS 存储端在 `/usr/lib/zxs-smb-runtime/debian13-amd64/bin/zxs-smb-storage`。不找 PATH、不用系统 `/usr/sbin/smbd` 或离线创建域的 Python 胶囊替代。[离线构建配方](../packaging/debian13-amd64/online-smb.md)能从一份固定的已发产品源码、Debian 原包和原补丁准备这两个程序与重建的库；只产未签构建中间件，不能直接用来启动。单个 ELF 文件摘要**不检查整个动态装载链、NSS、模块或发行签名**；这些必须另在受控独立构建/安装中核准。没有可验证的配套制品不应启用。
 - 本片只接受此前的 root:存储组 0750 实例根、存储 UID/GID 的 0700 `private` 和 `state`、root:root 0444 的正式配置及非秘密 BOUND。受保护的原父和进程凭据是站点前提；不要从共享主机的陌生同名文件中生成配置。初装正式配置为已经审定的 1277 字节、仅回环端口、无数据共享版本，不是域初始化配置。既有 ACL、非本地权限、特权方并发换挂载/文件或未核的软件更新不在此片可证明范围。
 
 ## 准备一个可检查的本机单元
