@@ -40,7 +40,7 @@ impl Request{
 }
 pub(super) fn role(i:usize)->u8{match i {0=>0,1=>1,_=>2}}
 
-fn database_path(system:&Path,limit:usize)->io::Result<PathBuf>{
+pub(super) fn database_path(system:&Path,limit:usize)->io::Result<PathBuf>{
     let p=system.join(DATABASE);
     if p.to_str().is_none() || p.as_os_str().len().checked_add(b"-journal\0".len()).is_none_or(|n|n>limit){
         return Err(unsupported("SYSTEM database and rollback-journal name do not both fit the qualified Unix VFS"));

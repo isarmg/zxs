@@ -38,12 +38,21 @@ fn bytes(f:&File,expected:&[u8;101])->io::Result<()>{
 struct Mark{fd:File,s:Stamp}
 impl Mark{
     fn inspect(g:&Group,i:usize,wanted:&[u8;101])->io::Result<Self>{
-        let dir=&g.dirs()[i];let pin=File::from(openat(dir,slot(),OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?);
-        let s=held(&pin)?;feedback_shape(&s,&held(dir)?,g.uid(),101)?;
+        Self::read_original(&g.dirs()[i],g.uid(),wanted)
+    }
+    fn read_original(dir:&File,uid:u32,wanted:&[u8;101])->io::Result<Self>{
+        let m=Self::pin_original(dir,uid)?;m.verify(dir,wanted)?;Ok(m)
+    }
+    fn pin_original(dir:&File,uid:u32)->io::Result<Self>{
+        let before=stamp(dir,slot())?;feedback_shape(&before,&held(dir)?,uid,101)?;
+        let pin=File::from(openat(dir,slot(),OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?);
+        let s=held(&pin)?;if s!=before{return Err(bad("original enrollment slot changed before it was held"));}
+        feedback_shape(&s,&held(dir)?,uid,101)?;
         // Only this original pre-admitted private regular control file is opened.
         // No raw DB descriptor is open here, and no mutable path follows the pin.
         let fd=crate::pinned::sqlite_claim_reader(&pin,Entity{dev:s.dev,ino:s.ino},s.mount)?;
-        let m=Self{fd,s};m.verify(dir,wanted)?;Ok(m)
+        if held(&fd)?!=s||stamp(dir,slot())?!=s{return Err(bad("original enrollment slot changed during opening"));}
+        Ok(Self{fd,s})
     }
     fn verify(&self,dir:&File,wanted:&[u8;101])->io::Result<()>{
         if held(&self.fd)?!=self.s||stamp(dir,slot())?!=self.s{return Err(bad("original enrollment marker or name changed"));}
@@ -66,6 +75,16 @@ impl Mark{
         let again=Self::inspect(g,i,wanted)?;
         if again.s!=self.s||held(dir)?!=parent_before{return Err(bad("marker or original parent changed across sync/readback"));}
         self.verify(dir,wanted)?;Ok(again)
+    }
+}
+/// Retains the original private marker across this one short account observation.
+pub(super) struct SystemMark(Mark);
+impl SystemMark {
+    pub(super) fn before_sql(root:super::originals::HeldRoot<'_>)->io::Result<Self>{
+        Ok(Self(Mark::pin_original(root.dir(),root.uid())?))
+    }
+    pub(super) fn verify(&self,root:super::originals::HeldRoot<'_>,wanted:&[u8;101])->io::Result<()> {
+        self.0.verify(root.dir(),wanted)
     }
 }
 /// Only after every originally selected file+parent has been synchronized and

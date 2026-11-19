@@ -141,7 +141,7 @@ pub(super) fn host_admin()->io::Result<File>{
     if Entity::of(&host.metadata()?)?!=Entity::of(&here.metadata()?)?||Mount::on(&host)?!=Mount::on(&here)?{return Err(denied());}
     Ok(host)
 }
-fn profile()->io::Result<(Id,u32,u32)>{
+pub(super) fn profile()->io::Result<(Id,u32,u32)>{
     let f=RuntimeFile::open(PROFILE,false,128)?;
     let m=f.file.metadata()?;if m.mode()&0o7777!=0o600||m.nlink()!=1||m.uid()!=0{return Err(denied());}
     let mut bytes=Vec::new();(&f.file).take(129).read_to_end(&mut bytes)?;f.recheck()?;

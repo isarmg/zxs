@@ -12,6 +12,87 @@ fn location(f:&File)->io::Result<(Entity,Mount)>{
     Ok((Entity::of(&f.metadata()?)?,Mount::on(f)?.ok_or_else(||unsupported("live mount identity unavailable"))?))
 }
 
+/// These borrows never create, duplicate or convert a lock. A Group builds the
+/// view from one of its exclusively held roots; an independent S-only cut owns
+/// its own exclusive, separately opened original SYSTEM OFD for its whole life.
+#[derive(Clone,Copy)]
+pub(super) struct HeldRoot<'g> {pin:&'g Pinned,dir:&'g File,uid:u32,limit:u8,needs_write:bool}
+impl<'g> HeldRoot<'g> {
+    pub(super) fn dir(self)->&'g File{self.dir}
+    pub(super) fn uid(self)->u32{self.uid}
+    pub(super) fn path(self)->&'g std::path::Path{self.pin.path()}
+    pub(super) fn byte_limit(self)->u8{self.limit}
+    pub(super) fn require(self)->io::Result<()> {
+        let m=self.dir.metadata()?;
+        if location(self.dir)?!=(self.pin.entity(),self.pin.mount()?)
+            ||location(&self.pin.storage_directory()?)?!=location(self.dir)?
+            ||m.uid()!=self.uid||m.mode()&0o7777!=0o700||m.nlink()==0||!m.is_dir()
+            ||helper_linux_evidence::portable_component_limit(self.dir)?!=self.limit||usize::from(self.limit)<MARKER.len()
+            ||self.needs_write&&fstatvfs(self.dir)?.f_flag.contains(StatVfsMountFlags::RDONLY){
+            return Err(bad("changed, read-only, short-name or unprotected original root"));
+        }Ok(())
+    }
+    pub(super) fn controls(self,allowed:&[&[u8]])->io::Result<Vec<bool>> {
+        let mut seen=vec![false;allowed.len()];
+        let again=self.pin.storage_directory()?;
+        if location(&again)?!=location(self.dir)?{return Err(bad("directory changed before inventory"));}
+        let mut buf=[MaybeUninit::uninit();4096];let mut dir=RawDir::new(&again,&mut buf);
+        while let Some(e)=dir.next(){let e=e?;let name=e.file_name().to_bytes();
+            if name==b"."||name==b".." {continue;}
+            let j=allowed.iter().position(|s|*s==name).ok_or_else(||bad("original root holds an unknown entry; no takeover"))?;
+            if std::mem::replace(&mut seen[j],true){return Err(bad("duplicated root control name"));}
+        }
+        self.require()?;Ok(seen)
+    }
+}
+
+/// Separate capability for *observing* one established SYSTEM. It cannot be
+/// substituted for an initial whole-group grant or constructed from SQL paths.
+pub(super) struct SelectedSystem {pin:Pinned,host:File,uid:u32,gid:u32}
+pub(super) struct LockedSystem {selected:SelectedSystem,dir:File,limit:u8}
+impl SelectedSystem {
+    /// Only O_PATH ancestor/leaf observation here, before final lowering to the
+    /// configured storage worker. This is not setup/recovery authorization.
+    pub(super) fn foreground_origin(path:&std::path::Path)->io::Result<Self>{
+        let host=super::approval::host_admin()?;let (_,uid,gid)=super::approval::profile()?;
+        super::approval::same_terminal(&io::stdin(),&io::stderr())?;
+        Self::from_host(path,host,uid,gid)
+    }
+    fn from_host(path:&std::path::Path,host:File,uid:u32,gid:u32)->io::Result<Self>{
+        let pin=Pinned::open(path,Kind::StorageRoot)?;
+        super::request::database_path(pin.path(),super::engine::path_limit()?)?;
+        let m=pin.metadata()?;
+        if uid==0||gid==0||uid==u32::MAX||gid==u32::MAX||!m.is_dir()||m.uid()!=uid||m.mode()&0o7777!=0o700||m.nlink()==0{
+            return Err(bad("expected the configured storage worker's private original SYSTEM"));
+        }
+        Ok(Self{pin,host,uid,gid})
+    }
+    pub(super) fn lock(self)->io::Result<LockedSystem>{
+        crate::maintenance::diagnostic_worker(self.uid,self.gid)?;
+        self.take_original()
+    }
+    fn take_original(self)->io::Result<LockedSystem>{
+        let dir=self.pin.storage_directory()?;
+        flock(&dir,FlockOperation::NonBlockingLockExclusive)?;
+        let limit=helper_linux_evidence::portable_component_limit(&dir)?;
+        let locked=LockedSystem{selected:self,dir,limit};locked.require()?;Ok(locked)
+    }
+}
+impl LockedSystem {
+    pub(super) fn source(&self)->HeldRoot<'_>{
+        HeldRoot{pin:&self.selected.pin,dir:&self.dir,uid:self.selected.uid,limit:self.limit,needs_write:false}
+    }
+    pub(super) fn require(&self)->io::Result<()> {
+        self.source().require()?;
+        ancestry(&self.selected.pin,&self.dir,&HostMounts::current()?,&self.selected.host,self.selected.uid)?;
+        Ok(())
+    }
+    #[cfg(test)]
+    pub(super) fn from_fixture(path:&std::path::Path)->io::Result<Self>{
+        SelectedSystem::from_host(path,File::open("/")?,rustix::process::getuid().as_raw(),rustix::process::getgid().as_raw())?.take_original()
+    }
+}
+
 impl Originals{
     pub(super) fn require_host(&self,fd:&File)->io::Result<()>{
         if location(&self.host)?!=location(fd)?{return Err(bad("host root changed during operator approval"));}Ok(())
@@ -45,7 +126,8 @@ impl Originals{
 
 impl Group{
     pub(super) fn matches(&self,request:&Request)->bool {self.originals.selected.iter().map(|r|r.path()).eq(request.paths().iter().map(|p|p.as_path()))}
-    pub(super) fn require_system(&self)->io::Result<()>{self.check_root(0)}
+    fn root(&self,i:usize)->HeldRoot<'_>{HeldRoot{pin:&self.originals.selected[i],dir:&self.dirs[i],uid:self.uid,limit:self.limits[i],needs_write:true}}
+    pub(super) fn system_source(&self)->HeldRoot<'_>{self.root(0)}
     pub(super) fn system(&self)->&File{&self.dirs[0]}
     pub(super) fn dirs(&self)->&[File]{&self.dirs}
     pub(super) fn limits(&self)->&[u8]{&self.limits}
@@ -56,30 +138,9 @@ impl Group{
     // Presence and raw spelling come from a complete independent directory
     // stream, not case-insensitive name lookup or an ENOENT from an old parent.
     pub(super) fn controls(&self,i:usize,allowed:&[&[u8]])->io::Result<Vec<bool>>{
-        let mut seen=vec![false;allowed.len()];
-        // Independent directory offset; NEVER iterate with a dup of the EX OFD.
-        let again=self.originals.selected[i].storage_directory()?;
-        if location(&again)?!=location(&self.dirs[i])?{return Err(bad("directory changed before inventory"));}
-        let mut buf=[MaybeUninit::uninit();4096];
-        let mut dir=RawDir::new(&again,&mut buf);
-        while let Some(e)=dir.next(){let e=e?;let name=e.file_name().to_bytes();
-            if name==b"."||name==b".." {continue;}
-            let j=allowed.iter().position(|s|*s==name).ok_or_else(||bad("original root holds an unknown entry; no takeover"))?;
-            if std::mem::replace(&mut seen[j],true){return Err(bad("duplicated root control name"));}
-        }
-        self.check_root(i)?;
-        Ok(seen)
+        self.root(i).controls(allowed)
     }
-    fn check_root(&self,i:usize)->io::Result<()>{
-        let r=&self.originals.selected[i];let f=&self.dirs[i];let m=f.metadata()?;
-        if location(f)?!=(r.entity(),r.mount()?)||location(&r.storage_directory()?)?!=location(f)?
-            || m.uid()!=self.uid || m.mode()&0o7777!=0o700 || m.nlink()==0 || !m.is_dir()
-            || helper_linux_evidence::portable_component_limit(f)?!=self.limits[i]||usize::from(self.limits[i])<MARKER.len()
-            || fstatvfs(f)?.f_flag.contains(StatVfsMountFlags::RDONLY){
-            return Err(bad("changed, read-only, short-name or unprotected original root"));
-        }
-        Ok(())
-    }
+    fn check_root(&self,i:usize)->io::Result<()>{self.root(i).require()}
     pub(super) fn recheck(&self)->io::Result<()>{
         let table=HostMounts::current()?;let mut sb=Vec::with_capacity(self.dirs.len());
         for (i,f) in self.dirs.iter().enumerate(){

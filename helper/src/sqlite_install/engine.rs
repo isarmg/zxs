@@ -44,8 +44,9 @@ pub(super) fn open_reserved(reserved:&super::reservation::Reserved<'_>)->io::Res
 }
 pub(super) enum Access { Read, Write }
 pub(super) fn existing(origin:&Existing<'_>,mode:Access)->io::Result<Connection>{
-    path_limit()?;origin.sidecars_absent()?;
     let ro=matches!(mode,Access::Read);
+    if !ro&&!origin.allows_install_write(){return Err(bad("an account observation cannot open the database for writing"));}
+    path_limit()?;origin.sidecars_absent()?;
     let flags=OpenFlags::SQLITE_OPEN_NO_MUTEX|OpenFlags::SQLITE_OPEN_NOFOLLOW|
         if ro { OpenFlags::SQLITE_OPEN_READ_ONLY } else { OpenFlags::SQLITE_OPEN_READ_WRITE };
     let db=Connection::open_with_flags_and_vfs(origin.path(),flags,c"unix")

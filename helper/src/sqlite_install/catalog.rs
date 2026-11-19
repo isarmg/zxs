@@ -45,6 +45,12 @@ impl Canonical{
         Ok(())
     }
 }
+/// Fixed external ordinary marker for an already-validated SQL claim row.
+pub(super) fn claimed_marker(role:u8,pool:&Id,volume:&Id,op:&Id,token:&[u8;32])->[u8;101] {
+    let mut b=[0;101];b[..20].copy_from_slice(b"ZXS-SQLITE-1/VOLUME\0");b[20]=role;
+    b[21..37].copy_from_slice(pool);b[37..53].copy_from_slice(volume);
+    b[53..69].copy_from_slice(op);b[69..].copy_from_slice(token);b
+}
 pub(super) fn read(tx:&rusqlite::Transaction<'_>,template:&Canonical,group:&Group,r:&Request)->io::Result<Catalog>{
     if group.uid()!=r.uid()||!group.matches(r){return Err(bad("different approved group"));}
     template.require(tx)?;
@@ -67,9 +73,7 @@ pub(super) fn read(tx:&rusqlite::Transaction<'_>,template:&Canonical,group:&Grou
         if volume==[0;16]||volume==pool||token==[0;32]||markers.iter().any(|m:&[u8;101]|&m[37..53]==volume.as_slice()||&m[69..]==token.as_slice()){
             return Err(bad("missing or ambiguous issued identity"));
         }
-        let mut m=[0;101];m[..20].copy_from_slice(b"ZXS-SQLITE-1/VOLUME\0");m[20]=role(i);
-        m[21..37].copy_from_slice(&pool);m[37..53].copy_from_slice(&volume);m[53..69].copy_from_slice(&r.op());m[69..].copy_from_slice(&token);
-        markers.push(m);
+        markers.push(claimed_marker(role(i),&pool,&volume,&r.op(),&token));
     }
     if rows.next().map_err(sql)?.is_some(){return Err(bad("extra original claim rows"));}
     Ok(Catalog{pool,committed:state==1,markers})

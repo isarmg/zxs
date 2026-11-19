@@ -3,6 +3,7 @@
 //! maintenance approval, a password check, or a privilege to create credentials.
 mod web_secret;
 mod terminal;
+mod observed;
 
 use super::{bad, catalog::Canonical, request::Id};
 use rusqlite::{params, Transaction};
@@ -10,6 +11,15 @@ use sha2::{Digest, Sha256};
 use std::io;
 
 const PREFIX: &[u8] = b"ZXS-SQLITE-1/SETUP-PAIR\0";
+
+// The operation log grows with normal FILE traffic. Never scan that log
+// under the original SYSTEM EX to learn whether the single setup slot exists.
+const CONFLICT: &str = "SELECT
+    EXISTS(SELECT 1 FROM main.operation WHERE op_id=?1)
+    OR EXISTS(SELECT 1 FROM main.operation INDEXED BY singleton_bootstraps WHERE kind IN (1,2) AND kind=2)
+    OR EXISTS(SELECT 1 FROM main.account_pair)
+    OR EXISTS(SELECT 1 FROM main.web_password)
+    OR EXISTS(SELECT 1 FROM main.smb_password)";
 
 /// All caller-provided identifiers describe a lookup. They confer no authority.
 pub(super) struct PairRequest {
@@ -58,13 +68,17 @@ impl PairRequest {
     /// connection and current authorization before exposing a result. Absent is
     /// never permission to create, resume or reset either protocol account.
     pub(super) fn original(&self, tx: &Transaction<'_>, template: &Canonical) -> io::Result<History> {
-        let sql = |_| bad("original fixed-pair history is unavailable");
         template.require(tx)?;
+        let sql = |_| bad("original fixed-pair history is unavailable");
         let init: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM main.pool_birth b JOIN main.operation i ON i.op_id=b.init_op
                 WHERE b.singleton=1 AND b.pool_id=?1 AND b.init_op=?2 AND i.kind=1 AND i.state=1)",
             params![&self.pool[..], &self.init[..]], |r| r.get(0)).map_err(sql)?;
         if !init { return Err(bad("this exact original pool initialization is not committed")); }
+        self.original_after_init(tx)
+    }
+    fn original_after_init(&self,tx:&Transaction<'_>)->io::Result<History>{
+        let sql = |_| bad("original fixed-pair history is unavailable");
         let sha = self.sha();
         let mut st = tx.prepare(include_str!("original-first.sql")).map_err(sql)?;
         let mut rows = st.query(params![&self.pool[..], &self.op[..], &self.actor[..], &sha[..],
@@ -82,11 +96,7 @@ impl PairRequest {
         }
         // Do not confuse a competing setup, a reused operation ID, or partial
         // credential history with a pristine result. No secret columns selected.
-        let occupied: bool = tx.query_row("SELECT
-            EXISTS(SELECT 1 FROM main.operation WHERE op_id=?1 OR kind=2)
-            OR EXISTS(SELECT 1 FROM main.account_pair)
-            OR EXISTS(SELECT 1 FROM main.web_password)
-            OR EXISTS(SELECT 1 FROM main.smb_password)", [&self.op[..]], |r| r.get(0)).map_err(sql)?;
+        let occupied: bool = tx.query_row(CONFLICT, [&self.op[..]], |r| r.get(0)).map_err(sql)?;
         if occupied { return Err(bad("there is different or incomplete setup history; no action taken")); }
         Ok(History::Absent)
     }

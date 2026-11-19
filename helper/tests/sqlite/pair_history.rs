@@ -106,3 +106,28 @@ fn real_sqlite_history_never_completes_half_a_pair_or_reissues_a_previous_result
     }
     assert_eq!(tx.total_changes(),changes);
 }
+
+#[test]
+fn committed_pool_with_normal_file_volume_publications_checks_negative_history_without_scanning_log() {
+    let mut db=database();let request=fixed();
+    let t=db.transaction().unwrap();
+    t.execute("UPDATE operation SET state=1 WHERE op_id=?1",[&request.init[..]]).unwrap();
+    pair_rows(&t,&request,true);assert_eq!(commit_origin(&t,&request).unwrap(),1);
+    t.commit().unwrap();
+    let web_id=hex("result_web_id");
+    for i in 0..32u8 {
+        let t=db.transaction().unwrap();let op=[0x80+i;16];let share=[0x20+i;16];
+        t.execute("INSERT INTO root_share VALUES(?1,?2,?3,?4,?5)", params![&share[..],&op[..],&request.op[..],&[12u8;16][..],format!("share-{i}").as_bytes()]).unwrap();
+        t.execute("INSERT INTO operation VALUES(?1,3,?2,?3,1)",params![&op[..],&web_id[..],&[0x62u8;32][..]]).unwrap();
+        t.commit().unwrap();
+    }
+    let tx=db.transaction().unwrap();let mut lookup=tx.prepare(CONFLICT).unwrap();
+    for id in [[0xfeu8;16],[0x80u8;16]] {
+        // An unused Op on an already-occupied pair and a used, wrong-kind Op
+        // are both refusals. Neither negative case may walk ordinary operations.
+        assert!(lookup.query_row([&id[..]],|r|r.get::<_,bool>(0)).unwrap());
+        assert_eq!(lookup.get_status(rusqlite::StatementStatus::FullscanStep),0);
+        let mut wrong=fixed();wrong.op=id;
+        assert!(wrong.original(&tx,&Canonical::new().unwrap()).is_err());
+    }
+}
