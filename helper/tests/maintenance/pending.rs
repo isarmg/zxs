@@ -4,13 +4,13 @@ use crate::maintenance::pending::ColdPending;
 use rustix::fs::{AtFlags, linkat};
 use std::os::unix::fs::OpenOptionsExt;
 
-struct Fixture { bytes: Vec<u8>, frontier: [u8; 48], system_label: Vec<u8>, uid: u32 }
+struct Fixture { bytes: Vec<u8>, frontier: [u8; 48], labels: Vec<Vec<u8>>, uid: u32 }
 const OP: [u8; 16] = [0x8A; 16];
 
 fn name_original(group: &mut FreshRootLocks, system: &Path) -> Fixture {
     let staged = SyncedUnlinked::prepare(group.prepare_unpublished(OP).unwrap()).unwrap();
     let fixture = Fixture { bytes: staged.bytes.image.clone(), frontier: staged.bytes.frontier,
-        system_label: staged.bytes.labels[0].clone(), uid: staged.register.held.metadata().unwrap().uid() };
+        labels: staged.bytes.labels.clone(), uid: staged.register.held.metadata().unwrap().uid() };
     linkat(&staged.register.held, c"", staged.register.system, c"INITIALIZING", AtFlags::EMPTY_PATH)
         .expect("requires permission to name our very own private anonymous test inode");
     staged.register.system.sync_all().unwrap();
@@ -33,12 +33,12 @@ fn cold_pending_observes_only_its_original_system_and_never_claims_or_opens_unse
     assert_eq!(fgetxattr(&sys, c"user.zxs.volume", &mut marker[..]), Err(Errno::NODATA));
     // A non-cooperating test writer changes state under our EX. An old observation
     // does not absorb it, even when its exact label could be valid on a fresh cold read.
-    fsetxattr(&sys, c"user.zxs.volume", &original.system_label, XattrFlags::CREATE).unwrap();
+    fsetxattr(&sys, c"user.zxs.volume", &original.labels[0], XattrFlags::CREATE).unwrap();
     assert!(cold.recheck().is_err());
     drop(cold);
     ColdPending::inspect(&s, original.uid, OP).unwrap().recheck().unwrap();
     let n = fgetxattr(&sys, c"user.zxs.volume", &mut marker[..]).unwrap();
-    assert_eq!(&marker[..n], original.system_label.as_slice());
+    assert_eq!(&marker[..n], original.labels[0].as_slice());
     assert_eq!(fs::read(s.join("INITIALIZING")).unwrap(), original.bytes);
     assert!(!s.join("REGISTRATION").exists());
     assert!(!d.exists());
@@ -104,3 +104,6 @@ fn byte_identical_name_replacement_never_rebinds_the_original_pending_or_its_lea
     assert_eq!(fs::read(&p).unwrap(), original.bytes);
     assert_eq!(fs::read(&parked).unwrap(), original.bytes);
 }
+
+#[path = "pending_roots.rs"]
+mod pending_roots;

@@ -152,6 +152,10 @@ impl<'a> FreshGenesis<'a> {
         self.storage_uid == uid && self.volumes.len() == count
     }
 
+    pub(super) fn matches_request_path(&self, index: usize, path: &[u8]) -> bool {
+        self.volumes.get(index).is_some_and(|v| v.path == path)
+    }
+
     /// Both the wire decoder and caller use S, R, then sorted data rows.
     pub(super) fn matches_root_origin(&self, index: usize, path: &[u8], name_max: u8, observed: (u64, u64, &[u8])) -> bool {
         self.volumes.get(index).is_some_and(|row| row.path == path && row.name_max == name_max

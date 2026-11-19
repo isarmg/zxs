@@ -31,3 +31,17 @@ impl ObservedOriginal {
         (self.at.entity.dev, self.at.entity.ino, self.birth.payload())
     }
 }
+
+
+// A PENDING can have some absent labels. Empty, foreign, truncated or oversized is not absent.
+pub(super) fn original_pending_label(dir: &File, image: &super::genesis::FreshGenesis<'_>, row: usize) -> io::Result<bool> {
+    let mut bytes = [0; 160]; // greater than the largest v1 label; ERANGE is an error
+    match rustix::fs::fgetxattr(dir, c"user.zxs.volume", &mut bytes[..]) {
+        Err(rustix::io::Errno::NODATA) => Ok(false),
+        Ok(n) => {
+            image.check_label(row, &bytes[..n]).map_err(|_| invalid("unexpected label on original pending volume"))?;
+            Ok(true)
+        }
+        Err(e) => Err(e.into()),
+    }
+}

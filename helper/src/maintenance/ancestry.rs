@@ -94,7 +94,18 @@ impl Mounts {
     /// only over the exact forward-resolved entities. Unreadable, hidden or
     /// reparented ancestry is not treated as an unclaimed original.
     pub(super) fn unclaimed_chain(&self, name: &Pinned, leaf: &File) -> io::Result<Vec<u64>> {
+        self.chain(name, leaf, None).map(|(mounts, _)| mounts)
+    }
+
+    pub(super) fn pending_chain(&self, name: &Pinned, leaf: &File,
+        image: &super::genesis::FreshGenesis<'_>, row: usize) -> io::Result<(Vec<u64>, bool)> {
+        self.chain(name, leaf, Some((image, row)))
+    }
+
+    fn chain(&self, name: &Pinned, leaf: &File, original: Option<(&super::genesis::FreshGenesis<'_>, usize)>)
+        -> io::Result<(Vec<u64>, bool)> {
         let mut mounts = Vec::with_capacity(name.visible_chain().len());
+        let mut labelled = false;
         let mut parent_fd: Option<File> = None;
         let mut child: Option<(Mount, Row)> = None;
         let mut expected = name.visible_chain().iter().rev().peekable();
@@ -114,7 +125,10 @@ impl Mounts {
             // Unknown/union filesystems, denied xattrs and empty markers do not
             // count as unclaimed. No enumeration of ancestor contents is needed.
             local_data_filesystem(dir)?;
-            no_claim(dir)?;
+            if let Some((image, row)) = original.filter(|_| mounts.is_empty()) {
+                // Only the selected leaf may already bear its own original label.
+                labelled = super::identity::original_pending_label(dir, image, row)?;
+            } else { no_claim(dir)?; }
             mounts.push(mount.id);
             if expected.peek().is_none() {
                 self.require_root_boundary(mount, m.dev())?;
@@ -123,7 +137,7 @@ impl Mounts {
             child = Some((mount, row));
             parent_fd = Some(File::from(openat(dir, c"..", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?));
         }
-        Ok(mounts)
+        Ok((mounts, labelled))
     }
 }
 

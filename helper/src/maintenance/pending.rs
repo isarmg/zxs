@@ -9,7 +9,6 @@ use crate::pinned::{Entity, Kind, Pinned, invalid, private_inode_reader};
 use helper_linux_evidence::{component_limit, read_birth};
 use rustix::{
     fs::{FlockOperation::NonBlockingLockExclusive, Mode, OFlags, fgetxattr, flock, openat},
-    io::Errno,
 };
 use std::{fs::File, io, os::unix::{ffi::OsStrExt, fs::{FileExt, MetadataExt}}, path::Path};
 
@@ -68,6 +67,22 @@ impl ColdPending {
         Ok(Self { source, observed })
     }
 
+    pub(super) fn storage_uid(&self) -> u32 { self.source.uid }
+
+    /// Couple the complete group's row 0 to THIS retained SYSTEM, including its
+    /// in-process mount ID and label state (neither is implied by the stored row).
+    pub(super) fn check_system_observation(&self, root: &ObservedOriginal, labelled: bool) -> io::Result<()> {
+        if root != &self.source.s || labelled != self.observed.system_labeled {
+            return Err(invalid("pending registration and selected volumes did not observe the same SYSTEM"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn verified_genesis(&self) -> io::Result<FreshGenesis<'_>> {
+        self.recheck()?;
+        FreshGenesis::decode(&self.observed.bytes).map_err(|_| invalid("invalid observed pending image"))
+    }
+
     pub(super) fn recheck(&self) -> io::Result<()> {
         if self.source.read_original()? != self.observed {
             return Err(invalid("stored pending image changed since the original observation"));
@@ -124,15 +139,7 @@ impl Source {
         let mut frontier = [0; 48];
         let n = fgetxattr(&self.register, c"user.zxs.confirmed-frontier", &mut frontier[..])?;
         g.check_initial_frontier(Some(&frontier[..n])).map_err(|_| invalid("pending original lacks its exact zero frontier"))?;
-        let mut label = [0; 160]; // larger than any v1 SYSTEM label; ERANGE refuses
-        let system_labeled = match fgetxattr(&self.system, c"user.zxs.volume", &mut label[..]) {
-            Err(Errno::NODATA) => false, // missing is a possible PENDING, not proof of completion
-            Ok(n) => {
-                g.check_label(0, &label[..n]).map_err(|_| invalid("unexpected pending SYSTEM label"))?;
-                true
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let system_labeled = super::identity::original_pending_label(&self.system, &g, 0)?;
 
         // The directory can change even with an advisory flock on the regular file.
         // Only an unchanged named original and unchanged sampled intervals qualify.
