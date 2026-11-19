@@ -82,9 +82,8 @@ def locked(state):
 
 
 def import_zip(archive, dest):
-    from .plain_import import execute, inspect, require_writer
-    require_writer()  # Refuse before reading a large file; preview is a separate action.
-    return execute(inspect(archive, dest))
+    from .plain_import import require_writer
+    require_writer()  # No destination is admitted. A preview is never a write request.
 
 
 def checkout(archive, dest, store, state, *, expected=None):

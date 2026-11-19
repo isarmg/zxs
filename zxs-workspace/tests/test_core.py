@@ -95,7 +95,7 @@ class Repo(unittest.TestCase):
         with self.assertRaises(Rejected): read_archive(copy)
         with self.assertRaises(Rejected): read_archive(plain)
         dest = self.root / "import"
-        self.assertEqual(plain_import.inspect(plain, dest).count, 1)
+        self.assertEqual(plain_import.inspect(plain).count, 1)
         with self.assertRaises(plain_import.DestinationUnavailable): w.import_zip(plain, dest)
         self.assertFalse(dest.exists())
 
@@ -105,7 +105,7 @@ class Repo(unittest.TestCase):
             with zipfile.ZipFile(path, "w") as z:
                 for name in names: z.writestr(name, b"123")
             dest = self.root / "out"
-            with self.assertRaises(Rejected) as invalid: plain_import.inspect(path, dest)
+            with self.assertRaises(Rejected) as invalid: plain_import.inspect(path)
             self.assertNotIsInstance(invalid.exception, plain_import.DestinationUnavailable)
             with self.assertRaises(plain_import.DestinationUnavailable): w.import_zip(path, dest)
             self.assertFalse(dest.exists())

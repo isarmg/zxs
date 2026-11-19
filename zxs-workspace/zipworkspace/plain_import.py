@@ -1,8 +1,8 @@
 """Preview an ordinary Store ZIP. No destination is currently admitted for publication."""
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import stat
+from typing import Never
 
 from .archive import read_plain_document
 from .document import archive_sha, named_document, native_identity
@@ -10,30 +10,37 @@ from .model import Rejected, member_name
 
 
 @dataclass(frozen=True, slots=True)
-class Proposal:
+class Preview:
     source: Path
-    source_id: tuple[int, int]
     sha256: str
     tree: str
     count: int
     size: int
-    target: Path
-    parent_id: tuple[int, int]
 
 
-def inspect(source, target):
-    source, target = Path(source).absolute(), Path(target).absolute()
-    if source.suffix.lower() != ".zip": raise Rejected("普通导入只接受 .zip 文件。")
-    if len(member_name(target.name)) != 1: raise Rejected("请指定一个新的普通目录名。")
-    parent = native_identity(target.parent.stat(follow_symlinks=False), stat.S_IFDIR)
-    if os.path.lexists(target): raise Rejected("目标名称已存在；请选择另一个新目录。")
+def inspect(source):
+    source = Path(source).absolute()
+    if source.suffix.lower() != ".zip": raise Rejected("普通 ZIP 核验只接受 .zip 文件。")
     with named_document(source) as doc:
-        original = native_identity(os.fstat(doc.fileno()),stat.S_IFREG)
         tree = read_plain_document(doc)
         sha = archive_sha(doc)
-    if native_identity(target.parent.stat(follow_symlinks=False),stat.S_IFDIR) != parent or os.path.lexists(target):
-        raise Rejected("目标父目录或名称已改变，请重新选择。")
-    return Proposal(source,original,sha,tree.digest(),len(tree.rows),tree.total,target,parent)
+    return Preview(source, sha, tree.digest(), len(tree.rows), tree.total)
+
+
+def observe_target(target):
+    """An optional CLI name check, not an output reservation or capability."""
+    target = Path(target).absolute()
+    if len(member_name(target.name)) != 1: raise Rejected("请指定一个普通目录名。")
+    parent = native_identity(target.parent.lstat(), stat.S_IFDIR)
+    try:
+        target.lstat()  # A dangling symlink is occupied too. Other I/O failures are not absence.
+    except FileNotFoundError:
+        occupied = False
+    else:
+        occupied = True
+    if native_identity(target.parent.lstat(), stat.S_IFDIR) != parent:
+        raise Rejected("查看名称时父目录发生变化。")
+    return {"path": str(target), "occupied": occupied, "reserved": False}
 
 
 class DestinationUnavailable(Rejected):
@@ -44,7 +51,7 @@ OUTPUT_UNAVAILABLE = ("当前仅支持只读预览。尚不能证明暂存目录
                       "不会提取、发布或清理任何目录。")
 
 
-def require_writer():
+def require_writer() -> Never:
     # A mode-0700 directory or a native no-replace syscall is not authority over
     # the *source* entry between mkdir, the first open and rename.
     raise DestinationUnavailable(OUTPUT_UNAVAILABLE)
