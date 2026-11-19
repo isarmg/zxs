@@ -7,15 +7,16 @@
 
 ## 源码已接到哪里
 
-该私有源码覆盖由[Debian 原文件补丁](debian-trixie/0001-managed-standalone.patch)和[专用运行及控制通道的源文件](debian-trixie/new/source3/param/)组成。组装时将 `new/` 下这些文件按相对路径放入同一已验证的专用 Debian 源树，再应用原文件补丁；Waf 已列出实际源及 tini/GnuTLS 依赖。缺件不构建，没有回落系统 smbd 的第二条路。没有新增网络服务或自写 NTLM：
+该私有源码覆盖由[Debian 原文件补丁](debian-trixie/0001-managed-standalone.patch)和[专用运行、控制与 passdb 源文件](debian-trixie/new/source3/)组成。组装时将 `new/` 下这些文件按相对路径放入同一已验证的专用 Debian 源树，再应用原文件补丁；Waf 已列出实际源及 tini/GnuTLS 依赖。缺件不构建，没有回落系统 smbd 的第二条路。没有新增网络服务或自写 NTLM：
 
 | 实际切点 | 这段代码能判的事 |
 | --- | --- |
 | smbd 首次加载、配置热重载及认证路径的直接重载 | 用 Samba **实际装入的有效配置**核 `ZXSLOCAL`、指定 private/state、standalone/user、NTLMv2-only、拒外部 Kerberos keytab（standalone 的原 GENSEC 因此禁用 Kerberos）、强制签名、禁 guest 回退、`restrict anonymous=2`、禁别名/用户共享/打印/多通道等。逐活动 share 核无 guest、用户替代、wide links 或用户/root 连接/关闭脚本；生成的 IPC$ 只读且不加 VFS 模块，拒只有默认 VFS 或另带模块的业务共享。Samba 固有磁盘 VFS 仍位于模块栈底；真正的 `zxs_file` 必须明确接管各业务操作，不支持的不得透传到底层（尚未接线）。唯一守卫在私有 `lp_load_with_shares` 本身；`reload_services` 及认证的 `auth_generic.c` / `auth_ntlmssp.c` 直接调用同样必经。失败终止当前进程，不依赖调用者检查布尔返回。 |
 | 原生 SAM 域 | 只读、无创建地打开该实例的专用 Samba 状态；只取 Samba 原生接口给出的现有本地域 SID。没有域/类型不符则启动失败，不查旧 `MACHINE.SID`、不生成域、不修复。启动、fork 后业务子进程正式接手前、实际重载及真实登录的终态门从同一专用 TDB 重新取原域，与受管绑定的 24 字节逐字段比较；同形另一域或同名替换的 TDB 都不通过。这仍不是对 SQLite、该次用户认证或 SID 唯一硬件身份的证明。 |
 | SMB2 初次登录 | NTLM 只选现有的 `sam` 路径，不选匿名、Unix 或忽略域的后备。原 GENSEC 成功后再拒绝非普通用户或不属当前本地域 RID 1000 的主 SID；拒绝旧会话替换、多通道绑定及给已认证会话重认证，未完成的同一次多轮 NTLM 握手不当成重认证。仅为拒绝门，不能生成业务 `SmbSession`。 |
+| 监听前的 `initialize_password_db`、fork 后的重新初始化 | 专用 Debian 版实际注册、只选择内建的 `zxs_sqlite`。先核仍存活的原存储通道与同一实际 SAM，再装入原生 ABI v25 方法表；子进程重新核失败就不接手。拒绝其他名称、位置后缀或动态加载。 |
 
-这不是可用的 Windows 登录程序。尚未提交这套专用实例的 `zxs_sqlite` passdb、`zxs_file` VFS、准确认证尝试到成功 SMB2 session 的凭据代次传递、逐次 SQL 共享授权和现场验收。不会把操作系统用户名、裸 SID、Samba 日志或来源不明的 socket 当作成功认证。当前库级 FILE 夹具代入已认证事件，不替代上述任一项。
+这不是可用的 Windows 登录程序。该 passdb 只承接这份经核对的本地域，不从通用账户查询返回任何账户或密码材料，也不继承 Samba 默认的系统用户/组创建、策略或者秘密读写方法。Samba 内部仍可能构造用于自身运行的 guest 对象；它不是一次成功的客户端认证。将来的固定 `zxs-smb-client` 只作受限本地 Unix 身份映射，与存储 UID、Web 管理员和 guest 分离，不是第三个产品账号或口令来源；本批不创建它。尚缺实际 SMB 口令验证、`zxs_file` VFS、准确认证尝试到成功 SMB2 session 的凭据代次传递、逐次 SQL 共享授权和现场验收。不会把操作系统用户名、裸 SID、Samba 日志或来源不明的 socket 当作成功认证。当前库级 FILE 夹具代入已认证事件，不替代上述任一项。
 
 ### 受管原件怎样交接
 
@@ -56,6 +57,6 @@ SQLite 首份手动 SAVE 的真实库路径已分开准备写者与读者：容�
 
 ## 来源与验收
 
-- 正式输入是 [Debian trixie 的 samba 源包](https://packages.debian.org/source/trixie/samba) `2:4.22.11+dfsg-0+deb13u1`。按 [Debian .dsc](https://deb.debian.org/debian/pool/main/s/samba/samba_4.22.11+dfsg-0+deb13u1.dsc) 核对 orig 25,620,416 B 的 SHA-256 `4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a`，Debian 源补丁 189,836 B 的 SHA-256 `0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03`。[十四个原文件摘要](debian-trixie/inputs.sha256)绑定本补丁输入；其中 `source3/param/loadparm.c` 的输入已含 Debian `usershare.patch`（默认 0→100）；ZXS 仍要求有效值为 0。其他列出的 Debian 原文件未被该补丁集更改。当前仅来源字节与补丁静审，**没有**替代 Debian 信任链验签；最终发行应验镜像/包签名及修补支持。源版本或补丁改变，必须重新独立适配，不换回任意同名 smbd。
+- 正式输入是 [Debian trixie 的 samba 源包](https://packages.debian.org/source/trixie/samba) `2:4.22.11+dfsg-0+deb13u1`。按 [Debian .dsc](https://deb.debian.org/debian/pool/main/s/samba/samba_4.22.11+dfsg-0+deb13u1.dsc) 核对 orig 25,620,416 B 的 SHA-256 `4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a`，Debian 源补丁 189,836 B 的 SHA-256 `0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03`。[固定输入清单](debian-trixie/inputs.sha256)绑定 16 份被改的原文件及 1 份未改的 passdb ABI 头；其中 `source3/param/loadparm.c` 的输入已含 Debian `usershare.patch`（默认 0→100）；ZXS 仍要求有效值为 0。其他列出的 Debian 原文件未被该补丁集更改。当前仅来源字节与补丁静审，**没有**替代 Debian 信任链验签；最终发行应验镜像/包签名及修补支持。源版本或补丁改变，必须重新独立适配，不换回任意同名 smbd。
 - 此补丁只针对隔离的专用构建及其私有 Samba 库，**不得替换**宿主发行版的 smbd 或共享库；helper 首次供给使用它自己核定的正常 Samba 供给接口。补丁按原文件的 GPL-3.0-or-later 条款，见 [COPYING](debian-trixie/COPYING)。无包安装/编译/运行。
 - 待验：截短/多字节/错误域/用户 SID 的 BOUND、错/可写配置，带 include 或重定向的配置，以及相同文本换新 inode、父进程/子进程重新检查时换 secrets.tdb（保留原文件），均拒。没有真实预配时须先拒，未读任何真实密钥；坏配置首次启动及热重载；空私目录不得产域、正确原域启动、同名其他实例不可替代；错误密码与**完全无凭据**的 IPC$/枚举分别拒，Web 用户跨入拒，唯一 SMB 用户从冷 Windows 连接在 RO/RW 上读/写符合 SQL；两独立打开与断线见上。每一项都要在完整受管发行及真实 handler 上取得证据，不能以配置文本、STATUS_OK 或源码审阅冒充通过。

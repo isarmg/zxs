@@ -829,7 +829,15 @@
  	if (!test) {
 --- a/source3/wscript_build
 +++ b/source3/wscript_build
-@@ -490,6 +490,7 @@
+@@ -177,6 +177,7 @@
+                           passdb/pdb_secrets.c''',
+                    deps='''
+                         secrets3
++                        smbconf
+                         GROUPDB
+                         SERVER_MUTEX
+                         wbclient
+@@ -490,6 +491,7 @@
                     deps='''
                          ndr-samba4
                          smbconf
@@ -837,7 +845,7 @@
                          samba3util
                          dbwrap
                          krb5samba
-@@ -558,12 +559,16 @@
+@@ -558,12 +560,16 @@
  bld.SAMBA3_SUBSYSTEM('SMBCONF_PARAM',
                     source='''
                            param/loadparm.c
@@ -854,10 +862,15 @@
                          PARAM_UTIL
                          ldap
                          lber
-@@ -594,6 +599,11 @@
+@@ -594,6 +600,16 @@
                     public_headers='../lib/smbconf/smbconf.h',
                     pc_files=[],
                     vnum='0.0.1')
++
++bld.SAMBA3_BINARY('test_zxs_pdb',
++                   source='torture/test_zxs_pdb.c',
++                   deps='samba-passdb smbconf',
++                   for_selftest=True)
 +
 +bld.SAMBA3_BINARY('test_zxs_challenge_events',
 +                   source='torture/test_zxs_challenge_events.c',
@@ -1051,3 +1064,222 @@
                     private_library=True)
  
  bld.SAMBA3_MODULE('auth_sam',
+--- a/source3/passdb/pdb_interface.c
++++ b/source3/passdb/pdb_interface.c
+@@ -23,6 +23,9 @@
+ #include "includes.h"
+ #include "system/passwd.h"
+ #include "passdb.h"
++#include "passdb/machine_sid.h"
++#include "param/zxs_runtime.h"
++#include "passdb/pdb_zxs_sqlite_table.h"
+ #include "secrets.h"
+ #include "messages.h"
+ #include "serverid.h"
+@@ -43,18 +46,47 @@
+ #undef DBGC_CLASS
+ #define DBGC_CLASS DBGC_PASSDB
+ 
+-static_decl_pdb;
+-
+ static struct pdb_init_function_entry *backends = NULL;
+ 
+-static void lazy_initialize_passdb(void)
+-{
+-	static bool initialized = False;
+-	if(initialized) {
+-		return;
+-	}
+-	static_init_pdb(NULL);
+-	initialized = True;
++/* This private smbd never selects a host account database or holds the SQL
++ * password equivalent. Do not treat successful local routing as a login. */
++static bool zxs_pdb_origin(void)
++{
++	if (!zxs_runtime_storage_live()) {
++		return false;
++	}
++	zxs_sam_require_current();
++	return zxs_runtime_storage_live();
++}
++
++static NTSTATUS zxs_sqlite_init(struct pdb_methods **methods, const char *location)
++{
++	struct pdb_methods *m;
++
++	if (methods == NULL) {
++		return NT_STATUS_INVALID_PARAMETER;
++	}
++	*methods = NULL;
++	if (location != NULL || !zxs_pdb_origin()) {
++		return NT_STATUS_ACCESS_DENIED;
++	}
++	m = talloc(NULL, struct pdb_methods);
++	if (m == NULL) {
++		return NT_STATUS_NO_MEMORY;
++	}
++	*m = zxs_sqlite_methods;
++	*methods = m;
++	return NT_STATUS_OK;
++}
++
++static bool lazy_initialize_passdb(void)
++{
++	static bool initialized;
++	if (!initialized) {
++		initialized = NT_STATUS_IS_OK(smb_register_passdb(
++			PASSDB_INTERFACE_VERSION, "zxs_sqlite", zxs_sqlite_init));
++	}
++	return initialized;
+ }
+ 
+ static bool lookup_global_sam_rid(TALLOC_CTX *mem_ctx, uint32_t rid,
+@@ -74,7 +106,8 @@
+ 		return NT_STATUS_OBJECT_TYPE_MISMATCH;
+ 	}
+ 
+-	if (!name || !init) {
++	if (name == NULL || strcmp(name, "zxs_sqlite") != 0 ||
++	    init != zxs_sqlite_init) {
+ 		return NT_STATUS_INVALID_PARAMETER;
+ 	}
+ 
+@@ -136,60 +169,21 @@
+ 
+ NTSTATUS make_pdb_method_name(struct pdb_methods **methods, const char *selected)
+ {
+-	char *module_name = smb_xstrdup(selected);
+-	char *module_location = NULL, *p;
+ 	struct pdb_init_function_entry *entry;
+-	NTSTATUS nt_status;
+-
+-	lazy_initialize_passdb();
+-
+-	p = strchr(module_name, ':');
+-
+-	if (p) {
+-		*p = 0;
+-		module_location = p+1;
+-		trim_char(module_location, ' ', ' ');
+-	}
+-
+-	trim_char(module_name, ' ', ' ');
+-
+-
+-	DEBUG(5,("Attempting to find a passdb backend to match %s (%s)\n", selected, module_name));
+-
+-	entry = pdb_find_backend_entry(module_name);
+-
+-	/* Try to find a module that contains this module */
+-	if (!entry) {
+-		DEBUG(2,("No builtin backend found, trying to load plugin\n"));
+-		if(NT_STATUS_IS_OK(smb_probe_module("pdb", module_name)) && !(entry = pdb_find_backend_entry(module_name))) {
+-			DEBUG(0,("Plugin is available, but doesn't register passdb backend %s\n", module_name));
+-			SAFE_FREE(module_name);
+-			return NT_STATUS_UNSUCCESSFUL;
+-		}
+-	}
+-
+-	/* No such backend found */
+-	if(!entry) {
+-		DEBUG(0,("No builtin nor plugin backend for %s found\n", module_name));
+-		SAFE_FREE(module_name);
++	if (methods == NULL) {
+ 		return NT_STATUS_INVALID_PARAMETER;
+ 	}
+-
+-	DEBUG(5,("Found pdb backend %s\n", module_name));
+-
+-	nt_status = entry->init(methods, module_location);
+-	if (!NT_STATUS_IS_OK(nt_status)) {
+-		DEBUG(0,("pdb backend %s did not correctly init (error was %s)\n",
+-			selected, nt_errstr(nt_status)));
+-		SAFE_FREE(module_name);
+-		return nt_status;
+-	}
+-
+-	SAFE_FREE(module_name);
+-
+-	DEBUG(5,("pdb backend %s has a valid init\n", selected));
+-
+-	return nt_status;
++	*methods = NULL;
++	if (selected == NULL || strcmp(selected, "zxs_sqlite") != 0 ||
++	    !lazy_initialize_passdb()) {
++		return NT_STATUS_INVALID_PARAMETER;
++	}
++	entry = pdb_find_backend_entry(selected);
++	if (entry == NULL || entry->init != zxs_sqlite_init) {
++		return NT_STATUS_INVALID_PARAMETER;
++	}
++	/* Do not trim a location suffix or call smb_probe_module(). */
++	return entry->init(methods, NULL);
+ }
+ 
+ /******************************************************************
+@@ -200,23 +194,16 @@
+ {
+ 	static struct pdb_methods *pdb = NULL;
+ 	const char *backend = lp_passdb_backend();
+-	NTSTATUS status = NT_STATUS_OK;
+-
+-	if ( pdb && reload ) {
+-		if (pdb->free_private_data != NULL) {
+-			pdb->free_private_data( &(pdb->private_data) );
+-		}
+-		status = make_pdb_method_name(&pdb, backend);
+-	}
+-
+-	if ( !pdb ) {
+-		status = make_pdb_method_name(&pdb, backend);
+-	}
+-
+-	if (!NT_STATUS_IS_OK(status)) {
++	if (pdb == NULL) {
++		NTSTATUS status = make_pdb_method_name(&pdb, backend);
++		return NT_STATUS_IS_OK(status) ? pdb : NULL;
++	}
++	if (backend == NULL || strcmp(backend, "zxs_sqlite") != 0 ||
++	    !zxs_runtime_storage_live() || (reload && !zxs_pdb_origin())) {
+ 		return NULL;
+ 	}
+-
++	/* A fork/explicit reload revalidates the same origin. The callback
++	 * table has no per-user state; no stale allocation or new lookup. */
+ 	return pdb;
+ }
+ 
+@@ -226,14 +213,8 @@
+ 
+ 	pdb = pdb_get_methods_reload(false);
+ 	if (!pdb) {
+-		char *msg = NULL;
+-		if (asprintf(&msg, "pdb_get_methods: "
+-			     "failed to get pdb methods for backend %s\n",
+-			     lp_passdb_backend()) > 0) {
+-			smb_panic(msg);
+-		} else {
+-			smb_panic("pdb_get_methods");
+-		}
++		DBG_ERR("Dedicated passdb is unavailable; stopping process\n");
++		_exit(1); /* upstream callers require a non-NULL table; no core. */
+ 	}
+ 
+ 	return pdb;
+--- a/source3/smbd/server_exit.c
++++ b/source3/smbd/server_exit.c
+@@ -258,6 +258,11 @@
+ 	NTSTATUS ret;
+ 	am_parent = NULL;
+ 	ret = reinit_after_fork(msg_ctx, ev_ctx, parent_longlived);
+-	initialize_password_db(true, ev_ctx);
+-	return ret;
+-}
++	if (!NT_STATUS_IS_OK(ret)) {
++		return ret;
++	}
++	if (!initialize_password_db(true, ev_ctx)) {
++		return NT_STATUS_ACCESS_DENIED;
++	}
++	return NT_STATUS_OK;
++}
