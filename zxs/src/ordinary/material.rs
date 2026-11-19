@@ -18,11 +18,9 @@ fn destination(name:&str)->io::Result<CString>{
 /// Recognizing a distinct reserved *spelling* is not permission to look
 /// inside, adopt or clean up any such physical entry.
 pub(super) fn private_slot(raw:&[u8])->Option<(OperationId,u8)>{
-    let tail=raw.strip_prefix(b".zxs-new-")?;
-    if tail.len()!=34 || tail[32]!=b'-'{return None;}
-    let slot=tail[33].checked_sub(b'0')?;
-    if slot>=SLOTS{return None;}
-    Some((std::str::from_utf8(&tail[..32]).ok()?.parse().ok()?,slot))
+    // The old and new storage layouts share exactly the eight stage
+    // spellings. Parsing never recognizes an isolation name as a stage.
+    super::storage_name::TicketLeaf::parse(raw)?.as_stage()
 }
 pub(in crate::ordinary) fn check_siblings(names:&[Vec<u8>],name:&str,allow_target:bool)->io::Result<()>{
     human_name(name.as_bytes())?;

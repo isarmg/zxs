@@ -86,4 +86,23 @@ mod tests{
         n.endpoints(a,b,"report",Some(file)).unwrap();n.enter(Parent::Root(b),"report",dir).unwrap();
         assert!(n.endpoints(a,b,"report",Some(file)).is_err());assert_eq!(n.root(b,"report"),Some(dir));
     }
+    #[test]
+    fn exact_display_names_share_one_typed_namespace_without_case_or_unicode_aliases(){
+        use crate::ordinary::storage_name::{DirectoryName,FileName};
+        let v=VolumeId([1;16]);let p=Parent::Root(v);let e=EntryId([2;16]);let f=FileId([3;16]);
+        let e2=EntryId([4;16]);let f2=FileId([5;16]);let dir=Member::Directory{entry:EntryId([6;16]),directory:DirectoryId([7;16])};
+        let upper=FileName::parse(b"Report.xlsx").unwrap();let lower=FileName::parse(b"report.xlsx").unwrap();
+        let mut n=Names::default();n.create_file(p,upper.display(),e,f).unwrap();n.create_file(p,lower.display(),e2,f2).unwrap();
+        assert_eq!(n.get(p,"Report.xlsx"),Some(Member::File{entry:e,file:f}));assert_eq!(n.get(p,"report.xlsx"),Some(Member::File{entry:e2,file:f2}));
+        assert_eq!(n.get(p,"REPORT.xlsx"),None);
+        let same=DirectoryName::parse(b"Report.xlsx").unwrap();assert!(n.enter(p,same.display(),dir).is_err());
+        let third=DirectoryName::parse(b"REPORT.xlsx").unwrap();n.enter(p,third.display(),dir).unwrap();assert_eq!(n.get(p,third.display()),Some(dir));
+        n.hide_created(p,upper.display(),e,f).unwrap();assert_eq!(n.get(p,lower.display()),Some(Member::File{entry:e2,file:f2}));
+        n.enter(p,same.display(),dir).unwrap();assert!(n.create_file(p,upper.display(),e,f).is_err());
+        n.withdraw(p,same.display(),dir).unwrap();n.create_file(p,upper.display(),e,f).unwrap();
+        assert_eq!(n.get(p,upper.display()),Some(Member::File{entry:e,file:f}));
+        let composed="Café";let decomposed="Cafe\u{301}";
+        n.create_file(p,FileName::parse(composed.as_bytes()).unwrap().display(),EntryId([9;16]),FileId([10;16])).unwrap();
+        assert_eq!(n.get(p,decomposed),None);n.enter(p,DirectoryName::parse(decomposed.as_bytes()).unwrap().display(),dir).unwrap();
+    }
 }
