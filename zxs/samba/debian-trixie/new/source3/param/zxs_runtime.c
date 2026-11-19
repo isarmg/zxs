@@ -38,6 +38,7 @@ static bool active;
 static int control_fd = -1;
 static int lifetime_writer = -1; /* deliberately retained across participating forks */
 static bool qualified;
+static struct zxs_client_role client_role;
 
 static bool observed(int fd, const char *name, unsigned flags, struct statx *o)
 {
@@ -257,15 +258,33 @@ bool zxs_runtime_connect_storage(void)
 	    !record_intact() || zxs_smb_ctl_live(control_fd)!=0) {
 		return false;
 	}
+	client_role.parent=getpid();
 	qualified=true;
 	return true;
+}
+
+bool zxs_runtime_offer_child(int fd,struct zxs_client_offer *o)
+{
+	return zxs_runtime_storage_live() && zxs_offer_accepted(&client_role,fd,o);
+}
+bool zxs_runtime_claim_child(const struct zxs_client_offer *o,int fd)
+{
+	return zxs_runtime_storage_live() && zxs_claim_accepted(&client_role,o,fd);
+}
+bool zxs_runtime_child_on(int fd)
+{
+	return zxs_client_on(&client_role,fd) && zxs_runtime_storage_live();
+}
+bool zxs_runtime_client_process(void)
+{
+	return zxs_client_here(&client_role) && zxs_runtime_storage_live();
 }
 
 /* This does not let a caller submit its own challenge or read a stored
  * verifier. Only the exact, newly armed native SMB2 GENSEC context keeps
  * the returned private descriptor. */
-int zxs_runtime_attempt(int64_t *started_msec)
+int zxs_runtime_attempt(int transport,int64_t *started_msec)
 {
-	if (!zxs_runtime_storage_live()) { return -1; }
+	if (!zxs_runtime_child_on(transport)) { return -1; }
 	return zxs_smb_try_open(control_fd,started_msec);
 }

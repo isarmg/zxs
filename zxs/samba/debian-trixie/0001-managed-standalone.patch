@@ -492,7 +492,15 @@
  #include "../lib/util/memcache.h"
  #include "ctdbd_conn.h"
  #include "lib/util/util_process.h"
-@@ -983,6 +985,7 @@
+@@ -961,6 +963,7 @@
+ 	struct messaging_context *msg_ctx = s->parent->msg_ctx;
+ 	struct sockaddr_storage addr;
+ 	socklen_t in_addrlen = sizeof(addr);
++	struct zxs_client_offer zxs_accepted = {0};
+ 	int fd;
+ 	pid_t pid = 0;
+ 
+@@ -983,6 +986,7 @@
  			exit_server("reinit_after_fork() failed");
  			return;
  		}
@@ -500,15 +508,29 @@
  		smbd_process(ev, msg_ctx, fd, true);
  		exit_server_cleanly("end of interactive mode");
  		return;
-@@ -1036,6 +1039,7 @@
+@@ -990,7 +994,12 @@
+ 
+ 	if (!allowable_number_of_smbd_processes(s->parent)) {
+ 		close(fd);
+ 		return;
+ 	}
++	/* This offer lives on this accept's stack, not on the listener, in a
++	 * credential store, or in the global fork reinitialization hook. */
++	if (!zxs_runtime_offer_child(fd,&zxs_accepted)) {
++		close(fd); return;
++	}
+ 
+ 	pid = fork();
+@@ -1036,6 +1045,8 @@
  		print_sockaddr(addrstr, sizeof(addrstr), &addr);
  		process_set_title("smbd[%s]", "client [%s]", addrstr);
  
 +		zxs_sam_require_current();
++		if (!zxs_runtime_claim_child(&zxs_accepted,fd)) { goto exit; }
  		smbd_process(ev, msg_ctx, fd, false);
  	 exit:
  		exit_server_cleanly("end of child");
-@@ -1412,6 +1416,18 @@
+@@ -1412,6 +1423,18 @@
  		return False;
  
  	return True;
@@ -527,7 +549,7 @@
  }
  
  static void smbd_parent_sig_term_handler(struct tevent_context *ev,
-@@ -1843,6 +1859,13 @@
+@@ -1843,6 +1866,13 @@
  	};
  	bool ok;
  
@@ -541,7 +563,7 @@
  	setproctitle_init(argc, discard_const(argv), environ);
  
  	/*
-@@ -2038,7 +2061,14 @@
+@@ -2038,7 +2068,14 @@
  
  	DEBUG(3,("loaded services\n"));
  
@@ -557,7 +579,7 @@
  
  	if (!profile_setup(msg_ctx, False)) {
  		DEBUG(0,("ERROR: failed to setup profiling\n"));
-@@ -2122,6 +2152,11 @@
+@@ -2122,6 +2159,11 @@
  	parent->ev_ctx = ev_ctx;
  	parent->msg_ctx = msg_ctx;
  	am_parent = parent;
@@ -569,7 +591,7 @@
  
  	se = tevent_add_signal(parent->ev_ctx,
  			       parent,
-@@ -2166,9 +2201,7 @@
+@@ -2166,9 +2208,7 @@
  		TALLOC_FREE(lp_ctx);
  	}
  
@@ -654,19 +676,20 @@
  }
  
  static void smbd_smb2_session_setup_gensec_done(struct tevent_req *subreq)
-@@ -944,6 +973,11 @@
+@@ -944,6 +973,12 @@
  				     state,
  				     &state->session_info);
  	if (tevent_req_nterror(req, status)) {
 +		return;
 +	}
 +
-+	if (!zxs_normal_token(state->session_info)) {
++	if (!zxs_runtime_child_on(state->smb2req->xconn->transport.sock) ||
++	    !zxs_normal_token(state->session_info)) {
 +		tevent_req_nterror(req, NT_STATUS_ACCESS_DENIED);
  		return;
  	}
  
-@@ -1065,6 +1099,7 @@
+@@ -1065,6 +1100,7 @@
  
  struct smbd_smb2_session_setup_wrap_state {
  	struct tevent_context *ev;
@@ -674,7 +697,7 @@
  	struct smbd_smb2_request *smb2req;
  	uint64_t in_session_id;
  	uint8_t in_flags;
-@@ -1080,6 +1115,61 @@
+@@ -1080,6 +1116,62 @@
  static void smbd_smb2_session_setup_wrap_setup_done(struct tevent_req *subreq);
  static void smbd_smb2_session_setup_wrap_shutdown_done(struct tevent_req *subreq);
  
@@ -718,7 +741,8 @@
 +	bool ok=wait_for_read_recv(subreq,&err);
 +	a->wait=NULL;
 +	TALLOC_FREE(subreq);
-+	if (!ok || s->smb2req->session!=NULL || !zxs_runtime_storage_live() ||
++	if (!ok || s->smb2req->session!=NULL ||
++	    !zxs_runtime_child_on(s->smb2req->xconn->transport.sock) ||
 +	    zxs_smb_try_read(a->fd,a->started_msec,a->challenge)!=0 ||
 +	    zxs_smb_try_current(a->fd,a->started_msec)!=0) {
 +		TALLOC_FREE(s->attempt);
@@ -736,7 +760,7 @@
  static struct tevent_req *smbd_smb2_session_setup_wrap_send(TALLOC_CTX *mem_ctx,
  					struct tevent_context *ev,
  					struct smbd_smb2_request *smb2req,
-@@ -1091,7 +1181,7 @@
+@@ -1091,7 +1183,7 @@
  {
  	struct tevent_req *req;
  	struct smbd_smb2_session_setup_wrap_state *state;
@@ -745,7 +769,7 @@
  
  	req = tevent_req_create(mem_ctx, &state,
  				struct smbd_smb2_session_setup_wrap_state);
-@@ -1106,18 +1196,37 @@
+@@ -1106,18 +1198,41 @@
  	state->in_previous_session_id = in_previous_session_id;
  	state->in_security_buffer = in_security_buffer;
  
@@ -761,6 +785,10 @@
 -	}
 -	tevent_req_set_callback(subreq,
 -				smbd_smb2_session_setup_wrap_setup_done, req);
++	if (!zxs_runtime_child_on(smb2req->xconn->transport.sock)) {
++		tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);
++		return tevent_req_post(req,ev);
++	}
 +	if (in_session_id!=0 || (in_flags & SMB2_SESSION_FLAG_BINDING)!=0 ||
 +	    in_previous_session_id!=0 || smb2req->session!=NULL) {
 +		/* Continuation uses its original GENSEC. An unsupported bind/
@@ -774,7 +802,7 @@
 +	a->fd=-1;
 +	talloc_set_destructor(a,zxs_attempt_destroy);
 +	/* Try one atomic registration now; never wait in smbd for queue space. */
-+	a->fd=zxs_runtime_attempt(&a->started_msec);
++	a->fd=zxs_runtime_attempt(smb2req->xconn->transport.sock,&a->started_msec);
 +	if (a->fd<0) {
 +		TALLOC_FREE(state->attempt);
 +		tevent_req_nterror(req,NT_STATUS_LOGON_FAILURE);
@@ -862,7 +890,7 @@
                          PARAM_UTIL
                          ldap
                          lber
-@@ -594,6 +600,26 @@
+@@ -594,6 +600,31 @@
                     public_headers='../lib/smbconf/smbconf.h',
                     pc_files=[],
                     vnum='0.0.1')
@@ -882,6 +910,11 @@
 +                   deps='samba-passdb smbconf',
 +                   for_selftest=True)
 +
++bld.SAMBA3_BINARY('test_zxs_client_role',
++                   source='torture/test_zxs_client_role.c',
++                   deps='samba-util',
++                   for_selftest=True)
++
 +bld.SAMBA3_BINARY('test_zxs_challenge_events',
 +                   source='torture/test_zxs_challenge_events.c',
 +                   deps='LIBASYNC_REQ smbconf',
@@ -889,7 +922,7 @@
  
  bld.SAMBA3_SUBSYSTEM('sysquotas',
                       source='''
-@@ -740,6 +766,7 @@
+@@ -740,6 +771,7 @@
                          msrpc3
                          vfs
                          vfs_default
@@ -1013,7 +1046,7 @@
 +	struct zxs_smb2_attempt *a=auth_context->zxs_attempt;
 +	/* No wait or fresh challenge here: the outer SESSION_SETUP has
 +	 * already polled the original private endpoint through tevent. */
-+	if (a==NULL || !a->ready || !zxs_runtime_storage_live() ||
++	if (a==NULL || !a->ready || !zxs_runtime_client_process() ||
 +	    zxs_smb_try_current(a->fd,a->started_msec)!=0) {
 +		return NT_STATUS_LOGON_FAILURE;
 +	}
