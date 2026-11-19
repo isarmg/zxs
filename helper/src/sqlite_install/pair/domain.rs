@@ -1,5 +1,6 @@
 //! Public, nonsecret SAM material only. A parse cannot issue accounts, start
 //! smbd, authorize provisioning or prove that a running smbd used this domain.
+mod handoff;
 use crate::sqlite_install::{bad,request::Id};
 use std::io;
 

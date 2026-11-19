@@ -66,6 +66,28 @@ def _store_at(private, uid, dev, expected=None):
     return identity
 
 
+def _handoff(result_socket, private, uid, dev, store, raw):
+    # Only on the private host channel. A descriptor in flight keeps the
+    # original inode alive across guest exit; no TDB payload is ever read.
+    import array
+    import socket
+    _require(result_socket.family == socket.AF_UNIX
+             and result_socket.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) == socket.SOCK_SEQPACKET)
+    _store_at(private, uid, dev, store)
+    fd = os.open("secrets.tdb", os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=private)
+    try:
+        m = os.fstat(fd)
+        _require((m.st_dev, m.st_ino) == store and stat.S_ISREG(m.st_mode)
+                 and m.st_uid == uid and stat.S_IMODE(m.st_mode) == 0o600 and m.st_nlink == 1 and m.st_size > 0)
+        _store_at(private, uid, dev, store)
+        public = b"ZXS-SAM/NEW-1\0" + NAME + raw
+        n = result_socket.sendmsg([public], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))],
+                                  socket.MSG_NOSIGNAL)
+        _require(n == len(public))
+    finally:
+        os.close(fd)  # O_PATH only, not a second open of the TDB data stream
+
+
 def _domain(s):
     # 's' in the native path is the rendering of upstream's actual dom_sid.
     prefix = "S-1-5-21-"
@@ -157,10 +179,12 @@ def _provision_original():
         originals()
         _require(_is_just(private, ("secrets.tdb",)) and _is_just(state, ()))
         _store_at(private, uid, pm.st_dev, store)
-        # Do not open the secret store or cancel Samba's own file locks. Only
-        # AFTER normal guest exit may the host synchronize the held original
-        # store and its parent and publish an independent protected binding.
-        return b"ZXS-SAM/NEW-1\0" + NAME + raw
+        # stdout is the one-shot supervisor socket, never a terminal or a log.
+        # A receiver obtaining its EOF still needs a real, separate successful
+        # child/monitor/reap result; EOF alone never authorizes synchronization.
+        import socket
+        with socket.socket(fileno=os.dup(1)) as output:
+            _handoff(output, private, uid, pm.st_dev, store, raw)
 
 
 if __name__ == "__main__":
