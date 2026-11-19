@@ -226,9 +226,10 @@ pub fn creation_receipt(system:&Path,op:OperationId)->io::Result<Option<Creation
 /// Read the initial FILE by stable ID, not by a name or content hash. Only a
 /// physically checked local Unborn/Manual record can yield this zero-byte read.
 pub fn read_initial_file(system:&Path,id:FileId)->io::Result<(FileInfo,Vec<u8>)>{
-    let (info,reader)=draft::capture_current(system,id)?;
-    if reader.is_some(){return Err(invalid("FILE has a saved working revision; use current content read"));}
-    Ok((info.file,Vec::new()))
+    draft::capture_current(system,id)?.deliver(|(info,reader)|{
+        if reader.is_some(){return Err(invalid("FILE has a saved working revision; use current content read"));}
+        Ok((info.file,Vec::new()))
+    })
 }
 
 /// Look up this exact display spelling under a registered ordinary root.

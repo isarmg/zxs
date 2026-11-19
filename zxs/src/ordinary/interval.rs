@@ -122,15 +122,16 @@ fn writer(system:&Path,op:OperationId,file:FileId,rev:u64,e:SpanEdit,checked:Ver
 /// The initial uncommitted single-stream representation offers current full
 /// reads only; do not hide a whole-prefix scan behind a random-read contract.
 pub fn read_current_range_to(system:&Path,file:FileId,offset:u64,length:u64,mut out:impl Write)->io::Result<CurrentFile>{
-    let (info,body)=draft::capture_current(system,file)?;
-    match &body{
-        Some(Body::Formal(b))=>b.write_range(offset,length,&mut out)?,
-        Some(Body::Composed(b))=>b.write_range(offset,length,&mut out)?,
-        Some(Body::Working(_))=>return Err(io::Error::new(io::ErrorKind::Unsupported,"first uncommitted draft supports full sequential read only")),
-        None if offset==0&&length==0=>{},
-        None=>return Err(invalid("range outside an empty original FILE")),
-    }
-    draft::finish_output(&body,&mut out)?;Ok(info)
+    draft::capture_current(system,file)?.deliver(|(info,body)|{
+        match &body{
+            Some(Body::Formal(b))=>b.write_range(offset,length,&mut out)?,
+            Some(Body::Composed(b))=>b.write_range(offset,length,&mut out)?,
+            Some(Body::Working(_))=>return Err(io::Error::new(io::ErrorKind::Unsupported,"first uncommitted draft supports full sequential read only")),
+            None if offset==0&&length==0=>{},
+            None=>return Err(invalid("range outside an empty original FILE")),
+        }
+        draft::finish_output(&body,&mut out)?;Ok(info)
+    })
 }
 #[cfg(test)]
 #[path="../../tests/unit/working_interval.rs"]

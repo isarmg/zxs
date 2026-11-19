@@ -1,7 +1,7 @@
 //! Read-only, source-gated first cold admission. This original register SH
 //! survives the short SYSTEM transaction and every slower per-root query.
 use super::*;
-use crate::fs::stream::{self,PinnedRegular};
+use crate::fs::stream::PinnedRegular;
 use crate::pool::READY;
 
 /// No writable FD, registration installer or derived business capability
@@ -16,12 +16,8 @@ impl OnlineEmpty{
     /// regular file flock; never open a root named by an untrusted registration.
     pub(in crate::pool) fn open(path:&Path)->io::Result<Self>{
         let system=HeldDir::open(path)?;
-        let register=system.pin_bounded(READY,MAX_RECORD as u64)?
-            .ok_or_else(||invalid("no published empty maintenance-format pool"))?;
-        register.file.try_lock_shared().map_err(io::Error::from)?;
-        system.share()?;register.named(&system,READY)?;
-        let mut bytes=vec![0;register.stamp.stat.size() as usize];
-        stream::read_at(&register.file,&mut bytes,0)?;
+        let register=system.shared_original(READY,MAX_RECORD as u64)?;
+        system.share()?;let bytes=register.original_bytes(&system,READY)?;
         let record=decode_empty(&bytes,fs::local_uid(),&register.opening_frontier()?)?;
         if register.stamp.stat.entity()!=record.origin||register.stamp.birth!=record.origin_birth{
             return Err(invalid("registration is not its committed original regular inode"));}

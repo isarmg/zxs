@@ -258,3 +258,61 @@ fn named_first_full_checks_under_its_file_lease_without_monopolizing_ordinary_re
     }).unwrap();
     assert!(seen);assert_eq!(n.created_by,op);assert!(create_empty(&t.system,later,t.volume,"later").is_ok());
 }
+
+
+// No daemon or systemd unit is necessary. A separately opened original
+// REGISTRATION OFD observes an actual conflict with the real FILE reader.
+// This fixture does not execute a helper, change a volume, or measure speed.
+struct SlowOfflineProbe<'a>{
+    register:&'a osfs::File,system:&'a Path,volume:VolumeId,
+    start_sibling:bool,fail_flush:bool,bytes:Vec<u8>,flushes:usize,
+}
+impl SlowOfflineProbe<'_>{
+    fn check(&mut self)->io::Result<()>{
+        assert_eq!(io::Error::from(self.register.try_lock().unwrap_err()).kind(),io::ErrorKind::WouldBlock);
+        // No short SYSTEM directory lock hides a missing lifetime lock.
+        let short=crate::fs::HeldDir::open(self.system)?;short.exclusive()?;drop(short);
+        if self.start_sibling{self.start_sibling=false;create_empty(self.system,OperationId::new()?,self.volume,"independent")?;}
+        Ok(())
+    }
+}
+impl Write for SlowOfflineProbe<'_>{
+    fn write(&mut self,bytes:&[u8])->io::Result<usize>{self.check()?;self.bytes.extend_from_slice(bytes);Ok(bytes.len())}
+    fn flush(&mut self)->io::Result<()>{self.check()?;self.flushes+=1;
+        if self.fail_flush{Err(io::Error::other("downstream final flush failed"))}else{Ok(())}}
+}
+#[test]
+#[ignore="two native private filesystems; separate real OFDs; no service or helper process started"]
+fn a_standalone_file_read_keeps_the_original_register_shared_until_its_last_sink_and_body(){
+    let t=Fixture::new(b"slow original");let sys=&t.system;let id=t.file.file;
+    let original=osfs::File::open(sys.join("REGISTRATION")).unwrap();
+    let make=|write_other,fail|SlowOfflineProbe{register:&original,system:sys,volume:t.volume,
+        start_sibling:write_other,fail_flush:fail,bytes:Vec::new(),flushes:0};
+    // Actual revision-1 working material: an unrelated new FILE can publish
+    // during output; its change to this SAME register does not drop our SH.
+    let mut sink=make(true,false);read_current_to(sys,id,&mut sink).unwrap();
+    assert_eq!(sink.bytes,b"slow original");assert!(sink.flushes>0);assert!(!sink.start_sibling);
+    assert!(crate::lookup_file(sys,t.volume,"independent").unwrap().is_some());
+    original.try_lock().unwrap();let mut blocked=Vec::new();
+    assert!(read_current_to(sys,id,&mut blocked).is_err());assert!(blocked.is_empty());original.unlock().unwrap();
+    let formal=commit_first(sys,OperationId::new().unwrap(),id,1).unwrap();
+    for (which,want) in [(0,&b"slow original"[..]),(1,&b"original"[..]),(2,&b"slow original"[..]),(3,&b"original"[..])]{
+        let mut sink=make(false,false);
+        match which{
+            0=>{read_current_to(sys,id,&mut sink).unwrap();}
+            1=>{crate::read_current_range_to(sys,id,5,8,&mut sink).unwrap();}
+            2=>{read_node_to(sys,id,formal.node,&mut sink).unwrap();}
+            _=>{read_node_range_to(sys,id,formal.node,5,8,&mut sink).unwrap();}
+        }
+        assert_eq!(sink.bytes,want);assert!(sink.flushes>0);
+        // Only now can the new offline OFD acquire EX; it blocks a fresh
+        // historical read before output, not merely before the next write.
+        original.try_lock().unwrap();let mut untouched=Vec::new();
+        assert!(read_node_to(sys,id,formal.node,&mut untouched).is_err());assert!(untouched.is_empty());
+        original.unlock().unwrap();
+    }
+    // A zero-length range still guards the sink's final flush, including a
+    // sink error. Once the failed reader unwinds, maintenance can enter.
+    let mut fail=make(false,true);assert!(read_node_range_to(sys,id,formal.node,0,0,&mut fail).is_err());
+    assert!(fail.bytes.is_empty());assert_eq!(fail.flushes,1);original.try_lock().unwrap();original.unlock().unwrap();
+}

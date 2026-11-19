@@ -6,6 +6,15 @@ pub(crate) mod recycle;
 #[derive(Clone,Copy)]
 pub(crate) enum Access { Read, Incoming, Write }
 
+/// The selected BODY and its native FDs drop before the original-register SH.
+pub(crate) struct RegisteredRead<T>{value:T,register:std::fs::File}
+impl<T> RegisteredRead<T>{
+    #[cfg(test)]
+    pub(crate) fn get(&self)->&T{&self.value}
+    pub(crate) fn deliver<R>(self,use_value:impl FnOnce(T)->io::Result<R>)->io::Result<R>{
+        let result=use_value(self.value);drop(self.register);result
+    }
+}
 pub(crate) struct LocalPool {
     pub(crate) system: HeldDir,
     registration: Record,
@@ -18,11 +27,24 @@ impl LocalPool {
         Self::with_snapshot(path,access).map(|(pool,_,_)|pool)
     }
     pub(crate) fn with_snapshot(path: &Path, access: Access) -> io::Result<(Self,fs::OriginalStamp,crate::ordinary::journal::Journal)> {
-        let system = HeldDir::open(path)?;
+        Self::admit_system(HeldDir::open(path)?,access,published)
+    }
+    /// The slow sink only keeps its exact materials and this one regular OFD.
+    /// All initial register bytes are from that FD after SH, not another open.
+    pub(crate) fn capture_read<T>(path:&Path,select:impl FnOnce(Self,crate::ordinary::journal::Journal)->io::Result<T>)->io::Result<RegisteredRead<T>>{
+        let system=HeldDir::open(path)?;let pin=system.shared_original(READY,MAX_SYSTEM as u64)?;
+        let(pool,_,journal)=Self::admit_system(system,Access::Read,|dir|{
+            let bytes=pin.original_bytes(dir,READY)?;
+            read_published(dir,pin.stamp.clone(),&bytes,|_,_|pin.file.sync_all()).map(Some)
+        })?;
+        let value=select(pool,journal)?;Ok(RegisteredRead{value,register:pin.file})
+    }
+    fn admit_system(system:HeldDir,access:Access,read:impl FnOnce(&HeldDir)->io::Result<Option<Published>>)
+        ->io::Result<(Self,fs::OriginalStamp,crate::ordinary::journal::Journal)>{
         match access { Access::Read | Access::Incoming => system.share()?, Access::Write => system.exclusive()? }
         system.require_named()?;
         system.reject_registered_ancestors(&BTreeSet::new())?;
-        let Published{stamp,record:registration,journal}=published(&system)?
+        let Published{stamp,record:registration,journal}=read(&system)?
             .ok_or_else(|| invalid("no original published pool registration"))?;
         if system.record(PENDING, MAX_RECORD)?.is_some() {
             return Err(invalid("pool registration is not unambiguous"));

@@ -5,6 +5,13 @@ use std::os::unix::fs::FileExt;
 
 pub(crate) struct PinnedRegular{pub file:File,pub stamp:OriginalStamp,mount:u64}
 impl PinnedRegular{
+    /// This reads exactly the bounded inode pinned at admission, never reparses the pathname to get bytes.
+    pub(crate) fn original_bytes(&self,dir:&HeldDir,name:&CStr)->io::Result<Vec<u8>>{
+        self.named(dir,name)?;
+        let n=usize::try_from(self.stamp.stat.size()).map_err(|_|invalid("original record cannot fit its bounded read"))?;
+        let mut bytes=vec![0;n];read_at(&self.file,&mut bytes,0)?;
+        self.named(dir,name)?;Ok(bytes)
+    }
     pub(crate) fn unchanged(&self)->io::Result<()>{
         if record_stamp(&self.file,self.stamp.stat.size())?!=self.stamp.stat{return Err(invalid("immutable working material changed"));}
         Ok(())
@@ -28,6 +35,12 @@ impl HeldDir{
     /// regular registration. An unknown name cannot activate a device or FIFO.
     pub(crate) fn pin_bounded(&self,name:&CStr,max:u64)->io::Result<Option<PinnedRegular>>{
         self.pin_private(name,max,None)
+    }
+    /// Nonblocking lifetime lock on a held private regular file, not the short SYSTEM directory lock.
+    pub(crate) fn shared_original(&self,name:&CStr,max:u64)->io::Result<PinnedRegular>{
+        let pin=self.pin_bounded(name,max)?.ok_or_else(||invalid("no published original registration"))?;
+        pin.file.try_lock_shared().map_err(io::Error::from)?;
+        pin.named(self,name)?;Ok(pin)
     }
     fn pin_private(&self,name:&CStr,max:u64,exact:Option<u64>)->io::Result<Option<PinnedRegular>>{
         let Some(pin)=self.pin_record(name)? else{return Ok(None)};

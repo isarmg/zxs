@@ -13,6 +13,10 @@ impl ParentCut{
     pub(in crate::ordinary) fn open(system:&Path,access:Access)->io::Result<Self>{
         let(pool,_,journal)=LocalPool::with_snapshot(system,access)?;Ok(Self{pool,journal})
     }
+    pub(in crate::ordinary) fn capture<T>(system:&Path,choose:impl FnOnce(&Self)->io::Result<T>)
+        ->io::Result<crate::pool::lease::RegisteredRead<T>>{
+        LocalPool::capture_read(system,|pool,journal|choose(&Self{pool,journal}))
+    }
     pub(in crate::ordinary) fn originals(&self)->(&LocalPool,&Journal){(&self.pool,&self.journal)}
     pub(in crate::ordinary) fn file(&self,id:FileId)->io::Result<Selected<'_>>{
         Selected::from_cut(&self.pool,&self.journal,id)

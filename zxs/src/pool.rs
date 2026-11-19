@@ -67,7 +67,13 @@ fn published(dir:&HeldDir)->io::Result<Option<Published>>{
 }
 fn published_with_sync(dir:&HeldDir,confirm:impl FnOnce(&HeldDir,&fs::OriginalStamp)->io::Result<()>)->io::Result<Option<Published>>{
     let Some((stamp,bytes))=dir.record(READY,MAX_SYSTEM)? else{return Ok(None)};
-    let (record,tail)=Record::prefix(&bytes)?;
+    read_published(dir,stamp,&bytes,confirm).map(Some)
+}
+/// One admission for known held original bytes. Only the ID-LEAF-1 business
+/// decoder can accept them here; parsing a MAINT-1 empty image is not a data grant.
+fn read_published(dir:&HeldDir,stamp:fs::OriginalStamp,bytes:&[u8],
+    confirm:impl FnOnce(&HeldDir,&fs::OriginalStamp)->io::Result<()>)->io::Result<Published>{
+    let (record,tail)=Record::prefix(bytes)?;
     if record.origin!=stamp.stat.entity()||record.origin_birth!=stamp.birth||record.actor_uid!=fs::local_uid(){
         return Err(invalid("SYSTEM journal is not its original registered inode"));
     }
@@ -75,7 +81,7 @@ fn published_with_sync(dir:&HeldDir,confirm:impl FnOnce(&HeldDir,&fs::OriginalSt
     let frontier=dir.read_frontier(READY,&stamp,MAX_SYSTEM)?;
     let journal=crate::ordinary::journal::Journal::read(dir,JournalRegistration(&record),tail,frontier,&stamp)?;
     confirm(dir,&stamp)?;
-    Ok(Some(Published{stamp,record,journal}))
+    Ok(Published{stamp,record,journal})
 }
 
 #[cfg(test)]

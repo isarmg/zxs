@@ -81,8 +81,8 @@ fn every_incr_cut_has_only_the_old_dirty_edge_or_the_new_node_and_retries_the_or
 fn old_frozen_reader_blocks_retirement_not_the_published_incr_and_exact_retry_does_not_publish_twice(){
     let t=Fixture::new(b"123456");let id=t.base.file;let a=t.edit(1,2,b"X",LengthPolicy::KeepOrGrow);
     let b=t.edit(2,3,b"Y",LengthPolicy::KeepOrGrow);let op=OperationId::new().unwrap();
-    let (_,old)=crate::ordinary::draft::capture_current(&t.system,id).unwrap();
-    assert!(matches!(&old,Some(crate::ordinary::draft::Body::Composed(_))));
+    let old=crate::ordinary::draft::capture_current(&t.system,id).unwrap();
+    assert!(matches!(&old.get().1,Some(crate::ordinary::draft::Body::Composed(_))));
     assert!(commit_working(&t.system,op,id,3).is_err());
     let receipt=formal_receipt(&t.system,op).unwrap().unwrap();assert_eq!(receipt.status,CreationStatus::PublishedInstallationUnconfirmed);
     let done=receipt.published.unwrap();assert!(t.work(a).exists()&&t.work(b).exists());

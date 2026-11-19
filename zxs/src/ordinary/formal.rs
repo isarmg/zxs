@@ -97,14 +97,14 @@ pub(in crate::ordinary) fn directory(v:&FileVolume<'_>,s:&Journal,c:&Frame,w:&Sa
     }
     Ok(dir)
 }
-fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<PinnedParent>{
-    ParentCut::open(system,Access::Read)?.historical(file,node)
+fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<crate::pool::lease::RegisteredRead<PinnedParent>>{
+    ParentCut::capture(system,|cut|cut.historical(file,node))
 }
 pub fn read_node_to(system:&Path,file:FileId,node:NodeId,mut out:impl Write)->io::Result<FormalNode>{
-    let body=open_node(system,file,node)?;body.write_to(&mut out)?;body.finish_output(&mut out)
+    open_node(system,file,node)?.deliver(|body|{body.write_to(&mut out)?;body.finish_output(&mut out)})
 }
 pub fn read_node_range_to(system:&Path,file:FileId,node:NodeId,offset:u64,length:u64,mut out:impl Write)->io::Result<FormalNode>{
-    let body=open_node(system,file,node)?;body.write_range(offset,length,&mut out)?;body.finish_output(&mut out)
+    open_node(system,file,node)?.deliver(|body|{body.write_range(offset,length,&mut out)?;body.finish_output(&mut out)})
 }
 enum Source{Done(FormalNode),Input(Input)}
 fn source(system:&Path,op:OperationId,file:FileId,revision:u64)->io::Result<Source>{

@@ -68,23 +68,27 @@ pub(super) fn admit_current_held(cut:&super::formal::ParentCut,volume:&FileVolum
     }
     Ok(None)
 }
-pub(super) fn capture_current(system:&Path,id:FileId)->io::Result<(CurrentFile,Option<Body>)>{
-    let cut=super::formal::ParentCut::open(system,Access::Read)?;let(pool,state)=cut.originals();
+pub(super) fn capture_current(system:&Path,id:FileId)->io::Result<crate::pool::lease::RegisteredRead<(CurrentFile,Option<Body>)>>{
+    super::formal::ParentCut::capture(system,|cut|current_from(cut,id))
+}
+fn current_from(cut:&super::formal::ParentCut,id:FileId)->io::Result<(CurrentFile,Option<Body>)>{
+    let(pool,state)=cut.originals();
     let c=state.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published original FILE"))?;
-    let volume=pool.ordinary(state.volume_of(c))?;let body=admit_current_held(&cut,&volume,c)?;
+    let volume=pool.ordinary(state.volume_of(c))?;let body=admit_current_held(cut,&volume,c)?;
     volume.root.file.sync_all()?;volume.require_current()?;
     Ok((CurrentFile{file:FileInfo::at(c,state.placement(id)?.ordinary_parent()?.ok_or_else(||invalid("retained FILE has no current ordinary parent"))?),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.delta(id).map(super::delta::types::Delta::receipt).or_else(||state.head(id).map(super::formal::types::Commit::receipt)),edit:if state.head(id).is_some(){state.active_work(id)?.last().map(super::interval::types::Saved::receipt)}else{None}},body))
 }
 /// Inspect actual original FILE and (if present) its named working record and
 /// authenticated chunk head. This is not a whole-content verification scan.
-pub fn current_info(system:&Path,id:FileId)->io::Result<CurrentFile>{capture_current(system,id).map(|(i,_)|i)}
-/// Output is pinned to one admitted original revision. No general lock stays
-/// held across the output sink. A later corrupt chunk yields error, not success;
+pub fn current_info(system:&Path,id:FileId)->io::Result<CurrentFile>{capture_current(system,id)?.deliver(|(i,_)|Ok(i))}
+/// Output pins one admitted original revision and the registration SH for its
+/// lifetime, not a short SYSTEM/volume transaction lock across the sink. A later corrupt chunk yields error, not success;
 /// every preceding byte delivered already matched its authenticated chunk.
 pub fn read_current_to(system:&Path,id:FileId,mut output:impl Write)->io::Result<CurrentFile>{
-    let (info,body)=capture_current(system,id)?;
-    if let Some(r)=&body{r.write_to(&mut output)?;}
-    finish_output(&body,&mut output)?;Ok(info)
+    capture_current(system,id)?.deliver(|(info,body)|{
+        if let Some(r)=&body{r.write_to(&mut output)?;}
+        finish_output(&body,&mut output)?;Ok(info)
+    })
 }
 pub(super) fn finish_output(body:&Option<Body>,out:&mut impl Write)->io::Result<()>{
     if let Some(Body::Composed(c))=body{c.unchanged()?;out.flush()?;c.finish()}else if let Some(Body::Formal(b))=body{b.unchanged()?;out.flush()?;b.unchanged()}else{out.flush()}
