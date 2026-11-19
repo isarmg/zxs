@@ -8,7 +8,7 @@ use std::{ffi::CStr, fs::{File, Metadata}, io, mem::MaybeUninit, os::unix::fs::M
 
 const DIRECTORY: &CStr = c"accountdb";
 const DATABASE: &CStr = c"passdb.tdb";
-const LIMIT: u64 = 16 << 20; // resource limit, not a recognition of any TDB version
+const LIMIT: u64 = 64 << 20; // resource limit, not a recognition of any TDB version
 
 type Location = (Entity, u64);
 type Subject = (Id, u32, u32);
