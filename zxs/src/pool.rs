@@ -5,9 +5,12 @@ use super::*;
 use std::ffi::CStr;
 use std::os::unix::ffi::OsStrExt;
 mod format;
+// Retired private decision-stream experiment. Its regression fixtures remain,
+// but a production SQLite pool can never fall through to this authority.
+#[cfg(test)]
 mod portable_claim;
+#[cfg(test)]
 mod portable;
-pub(crate) use format::maintenance::native::accounts;
 pub(crate) mod lease;
 use format::{MAX_RECORD, Record};
 

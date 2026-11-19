@@ -34,13 +34,13 @@
 - **迟到取消/孤儿。** 仅在判断原操作尚未发布、目标确系该原单所发且无在途或已提交引用时，才在明确权限下清其私物；遇 COMMIT 未知、原 DB 不可用等保留现场。恢复用 SQL 原单及真实文件，不另写手工 redo 决定，不从名字、内容时间或 SQL 自增号猜最后一次成功。
 
 
-## 首个实际 DDL 与互操作样本（仅首登记子集）
+## 唯一 DDL 与互操作样本
 
-[唯一 DDL](../src/system/schema.sql) 定义 `application_id=0x5A585331`、`user_version=1`，三张普通关系表：`operation` 保存原操作/主体、规范请求摘要和阶段；`pool_birth` 保存一次初建的 PoolId、稳定服务 UID、原批准关联和组大小；`volume_claim` 保存这次领出的有序各卷、真实组件上限与一次性非秘密 32 字节认领标识。不是账户/FILE 全表，不宣布格式已经开放；实际只读开户以同一读事务核确切 schema，而不只看版本号。同一行状态 `0=pending I/O` 与 `1=committed` 区分未决观察/已完成回执，磁盘是否目前可用不写入这个历史结果。创建初始组用同一事务执行 DDL 和所有 INSERT；若在既存库读出不全的 pending 或公有字段不合原请求，拒绝做任何介质动作，不补生成 ID、不补齐表。不要执行 `IF NOT EXISTS`、`OR REPLACE`、自动建库或另存原单。后续能力另审，不将新的种类当成 INIT。
+[唯一 DDL](../src/system/schema.sql) 定义 `application_id=0x5A585331`、`user_version=2`。初始卷组三表：`operation` 保存原操作/主体、规范请求摘要和阶段；`pool_birth` 保存一次初建的 PoolId、稳定服务 UID、原批准关联和组大小；`volume_claim` 保存这次领出的有序各卷、真实组件上限与一次性非秘密 32 字节认领标识。同一 DDL 另有账户出生和口令验证两表，目前仍无共享/FILE 关系；实际只读开户以同一读事务核确切 schema，而不只看版本号。同一行状态 `0=pending I/O` 与 `1=committed` 区分未决观察/已完成回执，磁盘是否目前可用不写入这个历史结果。创建初始组用同一事务执行 DDL 和所有 INSERT；若在既存库读出不全的 pending 或公有字段不合原请求，拒绝做任何介质动作，不补生成 ID、不补齐表。不要执行 `IF NOT EXISTS`、`OR REPLACE`、自动建库或另存原单。FIRST_ADMIN 不是 INIT。新池只接受此确切 schema，不迁移或回退研发用三表草案。
 
 **请求与结果分开。** INIT=1，独立离线主体与这次授权范围经另一路真实验证后，原输入为 `"ZXS-SQLITE-1/INIT\0"|OpId[16]|actor[16]|approval_ref[16]|storage_uid:u32be|root_count:u16be|(role:u8,path_len:u16be,canonical_raw_path)*`。标识均为原二进制，字符串末尾是一个实际 NUL。角色依次 S=0、R=1、其余每项 F=2；3…64 个互异非嵌套根，普通根按原始路径字节严格递增，不比较区域设置。稳定存储属主 1…4294967294；绝不拿这个 UID 或原请求摘要代替维护认证。路径、组件、深度须在实际能力内。**只有 S 的管理路径**还须可无损作为 UTF‑8 交标准 VFS；选定 VFS 的 `mxPathname` 必须容纳实际 DB 和 `-journal` 名（保守计终止 NUL）并与根的真实几何相容，首建预留之前验证，不给 Linux 4096 字节一刀切或改名绕过。R/F 用原 BLOB，允许非 UTF‑8。完全相同的原请求即使丢过首次回答也不需要重给随机结果；已获准的观察者可用[原单查询](../src/system/original-init.sql)找回原 PoolId/状态，再在同一短读事务取得[原始各行](../src/system/initial-catalog.sql)。异主体/输入或同号冲突拒，未获准不披露；查询无行不能发行新号。初生 PoolId、VolumeId、每行认领标识和当时实测组件上限仅一次写入，不能重抽，均不计入原请求 SHA-256。
 
-**现场标签不是数据库。** 仍只用每个 S/R/F 根原已保留的 `.zxs-new-ffffffffffffffffffffffffffffffff-0`，但 SQLite 新族仅承认 101 字节 `"ZXS-SQLITE-1/VOLUME\0"|role:u8|PoolId[16]|VolumeId[16]|claim_op[16]|claim_token[32]`，无旧 103B 变体、GENESIS 摘要或平行前沿。先在已知 S 核数据库内原池/原认领行和指定 S 真标签，再按需核指定 R/F；单读标签绝不发现池或授权写。领用时每个根真实无未知物、受保护、下级无替身、独立 R、无覆盖、原件曾落盘且可靠，须由持全组 EX 的离线实现正面验证；DB 不能验证这些。两阶段之间 SQL 重读完全相同的行，最终执行[条件完成语句](../src/system/complete-initial.sql)；只有返回确切一个原 OpId **并且** COMMIT 成功或恢复查询证明成功，才能发已完成回执。保留错误/不明原件。更多见[固定四根请求与标签](../tests/sqlite/init-v1.txt)。本片没有执行 SQL 或实际建池。内部 `InitialReader` 通过固定的 SQLite 只读接口核已提交的初始卷表；不代办账户、授权写入或证明在线/离线互通。
+**现场标签不是数据库。** 仍只用每个 S/R/F 根原已保留的 `.zxs-new-ffffffffffffffffffffffffffffffff-0`，但 SQLite 新族仅承认 101 字节 `"ZXS-SQLITE-1/VOLUME\0"|role:u8|PoolId[16]|VolumeId[16]|claim_op[16]|claim_token[32]`，无旧 103B 变体、GENESIS 摘要或平行前沿。先在已知 S 核数据库内原池/原认领行和指定 S 真标签，再按需核指定 R/F；单读标签绝不发现池或授权写。领用时每个根真实无未知物、受保护、下级无替身、独立 R、无覆盖、原件曾落盘且可靠，须由持全组 EX 的离线实现正面验证；DB 不能验证这些。两阶段之间 SQL 重读完全相同的行，最终执行[条件完成语句](../src/system/complete-initial.sql)；只有返回确切一个原 OpId **并且** COMMIT 成功或恢复查询证明成功，才能发已完成回执。保留错误/不明原件。更多见[固定四根请求与标签](../tests/sqlite/init-v1.txt)。本片没有执行 SQL 或实际建池。内部 `InitialReader` 通过固定的 SQLite 只读接口核已提交的初始卷表；不代办首设、授予 FILE 权或证明在线/离线互通。账号/凭据及同一原单的准确参数、规范样本与认证核验见[SQLite 首管](first-account-v1.md)。
 
 ### 当前已接入的只读源码
 

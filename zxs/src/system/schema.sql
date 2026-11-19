@@ -1,20 +1,20 @@
--- ZXS-SQLITE-1 / initial pool. This is the sole DDL, not a migration.
+-- ZXS-SQLITE-1 / initial pool and first account. Sole fresh DDL; no migration.
 -- Execute once in the first BEGIN IMMEDIATE on the OS-exclusively reserved
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 
--- Only INIT (kind 1, trusted offline maintenance principal) is implemented
--- in this schema slice. No generic "approved" bit or serialized event log.
+-- Both INIT (1) and FIRST_ADMIN (2) name a separately authenticated offline
+-- maintenance principal. An operation row alone is not authorization.
 CREATE TABLE operation (
   op_id       BLOB NOT NULL PRIMARY KEY CHECK(length(op_id)=16 AND op_id<>zeroblob(16)),
-  kind        INTEGER NOT NULL CHECK(kind=1),
+  kind        INTEGER NOT NULL CHECK(kind IN (1,2)),
   actor_id    BLOB NOT NULL CHECK(length(actor_id)=16 AND actor_id<>zeroblob(16)),
   request_sha BLOB NOT NULL CHECK(length(request_sha)=32),
   state       INTEGER NOT NULL CHECK(state IN (0,1)) -- 0: pending I/O; 1: committed
 ) STRICT, WITHOUT ROWID;
-CREATE UNIQUE INDEX one_initialization ON operation(kind) WHERE kind=1;
+CREATE UNIQUE INDEX singleton_bootstraps ON operation(kind) WHERE kind IN (1,2);
 
 CREATE TABLE pool_birth (
   singleton    INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1),
@@ -43,9 +43,52 @@ CREATE TABLE volume_claim (
   UNIQUE(claim_op,root_path)
 ) STRICT, WITHOUT ROWID;
 
-CREATE TRIGGER start_init BEFORE INSERT ON operation
-WHEN NEW.state<>0 OR EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR kind=NEW.kind)
-BEGIN SELECT RAISE(ABORT,'new INIT must be the only pending origin'); END;
+-- Identity and original management choice do not change when a future
+-- credential changes. Login names use exact ASCII BLOB bytes, never SQLite
+-- collations or the OS account name. Original account IDs are results.
+CREATE TABLE account (
+  account_id   BLOB NOT NULL PRIMARY KEY CHECK(length(account_id)=16 AND account_id<>zeroblob(16)),
+  birth_op     BLOB NOT NULL UNIQUE REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  login        BLOB NOT NULL UNIQUE CHECK(length(login) BETWEEN 1 AND 64 AND instr(login,X'00')=0
+                   AND CAST(substr(login,1,1) AS TEXT) GLOB '[a-z0-9]'
+                   AND CAST(login AS TEXT) NOT GLOB '*[^a-z0-9._-]*'),
+  approval_ref BLOB NOT NULL CHECK(length(approval_ref)=16 AND approval_ref<>zeroblob(16)),
+  boot_profile INTEGER NOT NULL CHECK(boot_profile IN (1,2))
+) STRICT, WITHOUT ROWID;
+CREATE TABLE account_password (
+  account_id    BLOB NOT NULL PRIMARY KEY REFERENCES account(account_id),
+  credential_op BLOB NOT NULL UNIQUE REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  generation    INTEGER NOT NULL CHECK(generation=1),
+  salt          BLOB NOT NULL CHECK(length(salt)=16),
+  verifier      BLOB NOT NULL CHECK(length(verifier)=32)
+) STRICT, WITHOUT ROWID;
+
+-- In one BEGIN IMMEDIATE the authorized helper inserts account then its
+-- verifier, then a COMMITTED kind-2 receipt. The deferred FKs disallow
+-- COMMIT of the incomplete pair; there is no physical "pending" first
+-- account and no implicit power to read or write files.
+CREATE TRIGGER new_origin BEFORE INSERT ON operation
+WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR kind=NEW.kind)
+  OR (NEW.kind=1 AND NEW.state<>0)
+  OR (NEW.kind=2 AND (NEW.state<>1 OR NOT EXISTS(
+    SELECT 1 FROM account a JOIN account_password p USING(account_id)
+    WHERE a.birth_op=NEW.op_id AND p.credential_op=NEW.op_id AND p.generation=1)))
+BEGIN SELECT RAISE(ABORT,'duplicate, incomplete or wrongly staged origin'); END;
+CREATE TRIGGER start_first_account BEFORE INSERT ON account
+WHEN EXISTS(SELECT 1 FROM account)
+  OR EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.birth_op OR kind=2)
+  OR NOT EXISTS(SELECT 1 FROM pool_birth b JOIN operation o ON o.op_id=b.init_op
+                WHERE b.singleton=1 AND o.kind=1 AND o.state=1)
+BEGIN SELECT RAISE(ABORT,'first account requires committed INIT and unused original'); END;
+CREATE TRIGGER retain_account BEFORE DELETE ON account BEGIN SELECT RAISE(ABORT,'retain account origin'); END;
+CREATE TRIGGER keep_account BEFORE UPDATE ON account BEGIN SELECT RAISE(ABORT,'immutable account origin'); END;
+CREATE TRIGGER start_first_credential BEFORE INSERT ON account_password
+WHEN EXISTS(SELECT 1 FROM account_password WHERE account_id=NEW.account_id OR credential_op=NEW.credential_op)
+  OR NOT EXISTS(SELECT 1 FROM account a WHERE a.account_id=NEW.account_id AND a.birth_op=NEW.credential_op)
+  OR EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.credential_op)
+BEGIN SELECT RAISE(ABORT,'credential must belong to the same new account and original action'); END;
+CREATE TRIGGER retain_password BEFORE DELETE ON account_password BEGIN SELECT RAISE(ABORT,'retain credential'); END;
+CREATE TRIGGER change_password BEFORE UPDATE ON account_password BEGIN SELECT RAISE(ABORT,'no reset operation in this schema'); END;
 CREATE TRIGGER keep_op_identity BEFORE UPDATE OF op_id,kind,actor_id,request_sha ON operation
 BEGIN SELECT RAISE(ABORT,'operation identity is immutable'); END;
 CREATE TRIGGER keep_operation BEFORE DELETE ON operation

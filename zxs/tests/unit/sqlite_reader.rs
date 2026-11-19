@@ -20,8 +20,9 @@ impl Builder{
         // Test fixture only. OS reservation already exists; no SQLite CREATE.
         check(unsafe{sqlite3_open_v2(p.as_ptr(),&mut db,2|0x01000000,c"unix".as_ptr())}).unwrap();Self(Connection(db))
     }
-    fn exec(&self,sql:&str){let q=CString::new(sql).unwrap();
-        check(unsafe{sqlite3_exec(self.0.0,q.as_ptr(),None,ptr::null_mut(),ptr::null_mut())}).unwrap();}
+    fn try_exec(&self,sql:&str)->io::Result<()>{let q=CString::new(sql).unwrap();
+        check(unsafe{sqlite3_exec(self.0.0,q.as_ptr(),None,ptr::null_mut(),ptr::null_mut())})}
+    fn exec(&self,sql:&str){self.try_exec(sql).unwrap();}
 }
 fn hex(b:&[u8])->String{b.iter().map(|v|format!("{v:02x}")).collect()}
 fn record(parent:&PrivateTemp,state:InitState,extra:&str)->(PathBuf,PoolId){
@@ -145,3 +146,6 @@ fn just_the_declared_ordinary_root_is_observed_with_opaque_linux_path_and_withou
     assert_eq!(std::fs::read(&name).unwrap(),rows.expected_marker(2).unwrap());
     assert_eq!(online.ordinary_space(f.volume).unwrap().volume,f.volume); // fresh claim/host path, not durable physical identity
 }
+
+#[path="sqlite_first_account.rs"]
+mod first_account;

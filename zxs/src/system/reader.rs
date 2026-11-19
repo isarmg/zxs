@@ -148,7 +148,10 @@ impl InitialReader{
         let s=Self{conn,marker,dir,pool:expected,expected_schema};
         s.snapshot()?;Ok(s)
     }
-    pub(crate) fn snapshot(&self)->io::Result<Catalog>{
+    pub(crate) fn snapshot(&self)->io::Result<Catalog>{self.at(|_,catalog|Ok(catalog))}
+    /// Only bounded metadata may be selected here. KDF, disk transfer and
+    /// slow streams are outside the SQL transaction. A later action rechecks.
+    fn at<T>(&self,read:impl FnOnce(&Connection,Catalog)->io::Result<T>)->io::Result<T>{
         self.dir.require()?;check(unsafe{zxs_sql_named(self.conn.0)})?;
         if unsafe{sqlite3_get_autocommit(self.conn.0)}==0{return Err(invalid("previous SQLite transaction did not close"));}
         self.conn.fixed(c"BEGIN")?;
@@ -177,8 +180,9 @@ impl InitialReader{
                 !catalog.marker_matches(0,&self.marker.bytes(&self.dir.root)?) {
                 return Err(invalid("actual SYSTEM does not match its committed SQLite enrollment"));
             }
+            let value=read(&self.conn,catalog)?;
             self.dir.require()?;check(unsafe{zxs_sql_named(self.conn.0)})?;
-            Ok(catalog)
+            Ok(value)
         })();
         match result{
             Ok(c)=>{if let Err(e)=self.conn.fixed(c"COMMIT"){let _=self.conn.fixed(c"ROLLBACK");return Err(e);}Ok(c)}
@@ -193,3 +197,6 @@ mod tests;
 
 #[path="volume.rs"]
 pub(crate) mod volume;
+
+#[path="account.rs"]
+pub(crate) mod account;

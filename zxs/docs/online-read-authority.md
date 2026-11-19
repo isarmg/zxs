@@ -1,6 +1,6 @@
 # 在线主体与授权：Web 管理和 SMB 文件访问
 
-**职责。** 新服务只从[同池 SQLite 权威](sqlite-system.md)读账户、凭据代次、共享/ACL 和真实成员；不设第二账户库、不接受旧首管原帧登录。现有 [Argon2id 口令核验](first-account-v1.md) 与[旧帧夹具](portable-decisions-v1.md)不是新服务上线证据。首管/重置是独立 helper 停机动作，Web 管理，SMB 承担普通文件 I/O。
+**职责。** 新服务只从[同池 SQLite 权威](sqlite-system.md)读账户、凭据代次、共享/ACL 和真实成员；不设第二账户库、不接受旧首管原帧登录。已有 [SQLite 首管及 Argon2id 核验](first-account-v1.md)只返回内部管理身份，旧决定帧仅用于历史测试；均不代表可网络登录。首管/重置是独立 helper 停机动作，Web 管理，SMB 承担普通文件 I/O。
 
 ## 同一个池的原事实
 

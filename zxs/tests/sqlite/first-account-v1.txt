@@ -1,0 +1,15 @@
+# Synthetic interoperation data only. profile 1 and 2 are ALTERNATIVE pools,
+# never two first accounts in one pool. No passwords/secrets enter either SHA.
+pool=04040404040404040404040404040404
+init_op=01010101010101010101010101010101
+first_op=44444444444444444444444444444444
+offline_actor=66666666666666666666666666666666
+approval_ref=77777777777777777777777777777777
+login_hex=66697273742e61646d696e
+profile1_sha=f1ab3125584e5fc68c81a078b055e98f4a68e6daaedfe4f23fc1fd3484cbcfc0
+profile2_sha=26458e204160217ab8dbfc347787302b9d7ce59b3e94619ddb370a095be47347
+result_account=55555555555555555555555555555555
+# Public argon2-cffi 25.1.0 howto example, not a product credential or default.
+# https://argon2-cffi.readthedocs.io/en/stable/howto.html ; pwd: correct horse battery staple
+salt=308211aa0be041b823db6d237e9d0c3c
+verifier=61fc094958ed8d2534cf357f3f74bd9e743f512adedb0bc93237c2223ad341b8
