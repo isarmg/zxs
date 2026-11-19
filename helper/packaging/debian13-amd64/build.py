@@ -21,7 +21,6 @@ PREFIX = Path("/usr/lib/local-ops-helper/disk-tools-v1")
 PRIVATE_NAME = str(PREFIX).lstrip("/")
 SYSTEM_LOADER = "/lib64/ld-linux-x86-64.so.2"
 LOADER = "ld-linux-x86-64.so.2"
-PKGVER = "1.0.0+diskpack20261119.1"
 COMMON = ("GPL-1","GPL-2","GPL-3","LGPL-2","LGPL-2.1","LGPL-3","Apache-2.0","BSD",
           "GFDL-1.1","GFDL-1.2","GFDL-1.3","Artistic","MPL-2.0","CC0-1.0")
 PROFILE = ("bwrap","fsck.fat","ld-linux-x86-64","libc","libcap","libselinux","libpcre2","libgcc")
@@ -170,14 +169,23 @@ def rust_notices(out, docs):
                 done.add(name)
         require(done == expected, f"missing notices for {crate}")
 
+def release_history(version,first,previous):
+    valid=lambda value: isinstance(value,str) and re.fullmatch(r"[0-9]+(?:\.[0-9]+)*\+diskpack[0-9]{8}\.[1-9][0-9]*",value)
+    require(valid(version),"invalid curated Debian package version")
+    require((first and previous is None) or (not first and valid(previous)),
+            "explicitly select first release or a valid version from the preceding signed release")
+
 def build(args):
     require(os.geteuid()!=0,"the offline package builder must run unprivileged")
+    lock=json.loads((HERE/"lock.json").read_text())
+    version=lock["debian_version"]
+    release_history(version,args.first_release,args.previous_version)
+    if args.previous_version is not None:
+        run(["/usr/bin/dpkg","--compare-versions",version,"gt",args.previous_version],stdin=subprocess.DEVNULL)
     os.umask(0o022)
     out=args.output.resolve()
-    # No overwriting or resuming an ambiguous previous distribution. A failed
-    # builder leaves only its new, explicitly incomplete output.
+    # Invalid release history cannot create even an incomplete candidate.
     out.mkdir(mode=0o700); (out/"INCOMPLETE").write_text("not an installable or signed release\n")
-    lock=json.loads((HERE/"lock.json").read_text())
     rev=project_sources(args,out)
     debs=collect(args.inputs,out/"origin",lock)
     with tempfile.TemporaryDirectory(prefix="helper-package-") as scratch:
@@ -211,14 +219,14 @@ def build(args):
             bind_private_loader(path)
         lines=[f"{key} {digest(home/leaf)}" for key,leaf in zip(PROFILE,FILES,strict=True)]
         (home/"fat32-check-v1").write_text("debian13-amd64/private-pack-1/bubblewrap-0.12/dosfstools-4.2\n"+"\n".join(lines)+"\n")
-        info={"abi":"debian13-amd64-gnu","source_commit":rev,"helper_input_sha256":args.helper_sha256,
+        info={"debian_version":version,"abi":"debian13-amd64-gnu","source_commit":rev,"helper_input_sha256":args.helper_sha256,
               "helper_distributed_sha256":digest(binary),"stdlib_notices_sha256":args.stdlib_notices_sha256,"packages":lock["packages"],"needed":requires,
               "files":{str(p.relative_to(home)):digest(p) for p in sorted(home.rglob("*")) if p.is_file()},
               "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"packaged-not-yet-enabled"}}
         (docs/"BUNDLE.json").write_text(json.dumps(info,sort_keys=True,indent=2)+"\n")
         control=mkdir(root/"DEBIAN")/"control"
-        control.write_text("Package: local-ops-helper\nVersion: "+PKGVER+"\nArchitecture: amd64\nSection: admin\nPriority: optional\nMaintainer: local-ops-helper release team <noreply@users.noreply.github.com>\nDescription: Local diagnostics with private read-only disk checkers\n")
-        artifact=out/f"local-ops-helper_{PKGVER}_amd64.deb"
+        control.write_text("Package: local-ops-helper\nVersion: "+version+"\nArchitecture: amd64\nSection: admin\nPriority: optional\nMaintainer: local-ops-helper release team <noreply@users.noreply.github.com>\nDescription: Local diagnostics with private read-only disk checkers\n")
+        artifact=out/f"local-ops-helper_{version}_amd64.deb"
         run(["/usr/bin/dpkg-deb","--root-owner-group","--build",str(root),str(artifact)],stdin=subprocess.DEVNULL)
     with (out/"SHA256SUMS").open("x",encoding="ascii") as sums:
         for p in sorted(out.rglob("*")):
@@ -233,6 +241,9 @@ if __name__=="__main__":
     p.add_argument("--helper-sha256",required=True,help="digest from independent exact-revision build evidence")
     p.add_argument("--stdlib-notices",type=Path,required=True,help="reviewed complete license/notice material for the actual Rust sysroot and linked non-registry inputs")
     p.add_argument("--stdlib-notices-sha256",required=True,help="independently recorded digest of the toolchain notice material")
+    history=p.add_mutually_exclusive_group(required=True)
+    history.add_argument("--first-release",action="store_true",help="release owner has verified no earlier distribution exists")
+    history.add_argument("--previous-version",help="refresh from the preceding signed distribution's exact Debian version")
     p.add_argument("--source-commit",required=True)
     p.add_argument("--output",type=Path,required=True,help="new directory on trusted local build storage")
     build(p.parse_args())

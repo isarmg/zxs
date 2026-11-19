@@ -12,6 +12,13 @@ from archive_inputs import copy_checked, hashes, paragraphs, relative, release_t
 
 
 class Inputs(unittest.TestCase):
+    def test_release_history_needs_an_explicit_first_or_a_real_previous_version(self):
+        from build import release_history
+        cur="1.0.0+diskpack20261119.2";prev="1.0.0+diskpack20261119.1"
+        release_history(cur,True,None);release_history(cur,False,prev)
+        for first,previous in [(False,None),(False,""),(False,"nightly"),(True,prev),(True,"")]:
+            with self.assertRaises(ValueError): release_history(cur,first,previous)
+
     def test_source_archive_exact_for_repo_root_or_nested_helper(self):
         from build import archive_project
         for nested in (False,True):

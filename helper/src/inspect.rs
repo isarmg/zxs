@@ -48,8 +48,16 @@ impl Stamp {
 pub(crate) struct Input { pinned: LocalDataFile, stamp: Stamp }
 impl Input {
     pub(crate) fn select(path: &Path) -> io::Result<Self> {
-        let pinned = LocalDataFile::select(path)?;
-        let stamp = Stamp::of(pinned.metadata()?)?;
+        Self::select_in(path,0..=MAX_COMPARE)
+    }
+    // Check the operation's budget on its original metadata before data access.
+    pub(crate) fn select_in(path:&Path,sizes:std::ops::RangeInclusive<u64>)->io::Result<Self>{
+        let pinned=LocalDataFile::select(path)?;
+        let meta=pinned.metadata()?;
+        if meta.is_file() && meta.nlink()==1 && !sizes.contains(&meta.len()){
+            return Err(io::Error::new(io::ErrorKind::Unsupported,"regular input size is outside this operation's supported range"));
+        }
+        let stamp=Stamp::of(meta)?;
         Ok(Self { pinned, stamp })
     }
     pub(crate) fn len(&self) -> u64 { self.stamp.size }

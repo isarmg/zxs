@@ -38,8 +38,7 @@ impl Sealed {
     pub(super) fn geometry(&self)->Geometry { self.geometry }
     pub(super) fn file(&self)->&File { &self.fd }
     pub(super) fn capture(path:&Path,expected:&[u8;32])->io::Result<Self>{
-        let source=Input::select(path)?;let length=source.len();
-        if !(512..=MAX).contains(&length){return Err(unsupported("independent diagnostic image must be 512 B to 128 MiB"));}
+        let source=Input::select_in(path,512..=MAX)?;let length=source.len();
         let mut original=source.reader()?;
         let mut copy=File::from(memfd_create(c"helper-fat32-image",
             MemfdFlags::CLOEXEC|MemfdFlags::ALLOW_SEALING|MemfdFlags::NOEXEC_SEAL)?);

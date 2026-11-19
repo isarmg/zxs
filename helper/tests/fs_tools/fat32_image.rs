@@ -37,3 +37,17 @@ fn sealed_copy_is_not_the_input_and_wrong_expected_bytes_never_become_a_checked_
     let src=File::open(&source).unwrap();let mut actual=[0;512];src.read_exact_at(&mut actual,0).unwrap();assert_eq!(actual,boot);
     let mut wrong=hash;wrong[0]^=1;assert!(Sealed::capture(&source,&wrong).is_err());
 }
+#[test]
+fn supported_512_byte_source_and_credible_4k_layout_outside_the_budget(){
+    let(head,len)=boot();assert_eq!(geometry(&head,len).unwrap().sector_bytes,512);
+    let mut head=head;head[11..13].copy_from_slice(&4096u16.to_le_bytes());
+    let fat_sectors=65u32;let sectors=32+2*fat_sectors+65526u32;
+    head[32..36].copy_from_slice(&sectors.to_le_bytes());head[36..40].copy_from_slice(&fat_sectors.to_le_bytes());
+    let len=u64::from(sectors)*4096;let sample=geometry(&head,len).unwrap();
+    assert_eq!((sample.sector_bytes,sample.data_clusters),(4096,65526));assert!(len>MAX);
+    // A sparse private file carries plausible geometry, not evidence of filesystem health.
+    let area=crate::test_area::data_directory();let src=area.path().join("large-4k.img");
+    let mut f=File::create_new(&src).unwrap();f.write_all(&head).unwrap();f.set_len(len).unwrap();
+    let err=Sealed::capture(&src,&[0;32]).err().expect("over the selected copy budget");
+    assert_eq!(err.kind(),io::ErrorKind::Unsupported);assert_eq!(f.metadata().unwrap().len(),len);
+}

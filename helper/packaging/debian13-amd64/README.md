@@ -11,6 +11,7 @@
 在上述输入已核、获准实际打包时才执行：
 ```sh
 python3 packaging/debian13-amd64/build.py \
+  --first-release \
   --inputs /release/mirror --helper /release/build/helper \
   --helper-sha256 <已核原二进制的64位十六进制> --source-commit <准确完整提交> \
   --stdlib-notices /release/build/rust-stdlib-and-linked-notices \
@@ -26,3 +27,9 @@ python3 packaging/debian13-amd64/build.py \
 - 输出只在一个全新目录产生。有 `INCOMPLETE` 即禁止使用；完成也仅是未签候选。正式发行前须独立核构建过程、ABI、源码/许可证和归档、安装/冲突处理、已签清单及带外可信签名公钥，在干净受控 Debian 13 环境实测再发布；本次均未执行。不给 Web 安装任意系统软件或 root 身份。
 
 其它格式分开接：e2fsprogs/ext4、xfsprogs/XFS、ntfs-3g/NTFS、btrfs-progs/Btrfs 及 smartmontools 尚未随本版配方提供。OpenZFS 不随应用安装模块或启动池；只有宿主已经加载并验证匹配内核/用户态、可严格限定只读状态查询且不会触发 modprobe 时才可另行开放。`zpool status` 不是通用镜像检查，当前不调用。产品无须用这些文件系统保存自己的数据。
+
+## 私有运行库的安全更新
+
+宿主 apt 升级不会替换本私有目录中的加载器、libc 或其它库。复核 Debian 公告与新签名索引，更新准确包、对应原源码/版权、ELF 闭包和锁内的 `debian_version`，重新发行整个 helper 包，不得同版本替换内容。更新时必须传 `--previous-version`（取自上一份经独立验签的正式发行记录）；组包器按 Debian 的版本比较规则拒绝重复或倒退。只有核实从无发布才可用 `--first-release`。两项不可均给，也不可均省略；缺失、空值、错误文法及相同/倒退版本都不产生候选。这不替代对真实签名发行历史的审核。
+
+未来获准实测后：发行操作不支持边跑旧 worker 边原地换私有目录：先停止接收检查并等现有 worker 退出；前后摘要复核不是和 dpkg 整组换文件的原子锁。在隔离 Debian 13 amd64 上升级，核新签名及 BUNDLE 中每个实际文件摘要；启动新 helper 进程，证明固定启动器、加载器、私有库和检查器都符合新摘要，再对独立已知的只读副本验证。若槽在单次观察期间变化，结果不作已验证使用；不能把此事后检查当作并发升级的保证。没有签名、升级/重新核验及上游公告复核，不称已经修补。
