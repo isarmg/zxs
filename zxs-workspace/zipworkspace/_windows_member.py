@@ -8,6 +8,7 @@ from .archive import read_managed_document, stamp
 from .document import archive_sha
 from .model import CHUNK, Rejected, check_id, member_name
 from ._windows_access import OutputProtection
+from ._windows_attachment import attachment_services
 from ._windows_output import PinnedParent, leaf, _NTError
 from ._windows_origin import check_mark, read_mark
 
@@ -87,9 +88,12 @@ class _Member:
         if zone is None: api.only_default_stream(h, held.size)
         else: check_mark(api, h, zone, self.origin)
 
-    def publish(self):
+    def _take(self):
         if not self.live or self.used: raise Rejected("this exact member export was closed or already attempted")
         self.used = True
+
+    @contextmanager
+    def _written_stage(self):
         dst, staging, api = self.dst, self.staging, self.dst.api
         self.check_source()
         staging.check()
@@ -103,27 +107,39 @@ class _Member:
         dst.check()
         self.protection.check()
         self.started = True
+        with ExitStack() as new:
+            h = new.enter_context(api.new_file(staging.handle, self.stage))
+            stage_id = api.ordinary(h, staging.volume, staging.name(self.stage)).file_id
+            self._name_matches(h, staging, self.stage, stage_id, 0)
+            self.protection.check(h)  # Check the actual new file before writing even its zone.
+            api.absent(dst.handle, self.output)
+            zone = new.enter_context(api.new_zone(h))
+            api.write(zone, self.origin)
+            api.flush(zone)
+            self._name_matches(h, staging, self.stage, stage_id, 0, zone)
+            self.check_source()  # No member payload is written before both original marks pass.
+            self.protection.check(h)
+            self._copy(h)
+            api.flush(h)
+            yield h, zone, stage_id
+
+    def _verify_stage(self, held, zone, original):
+        # Verify at the last exclusive data-handle boundary before the next action.
+        # Offline publish retains the writer; system assessment uses the post-close reader.
+        self.dst.api.verify_bytes(held, self.size, self.sha)
+        self._name_matches(held, self.staging, self.stage, original, self.size, zone)
+        self.check_source()
+        self.staging.check()
+        self.dst.check()
+        self.protection.check(held)
+
+    def publish(self):
+        """Offline synthetic native publication primitive; never opts in to attachment services."""
+        self._take()
+        dst, staging, api = self.dst, self.staging, self.dst.api
         try:
-            with ExitStack() as new:
-                h = new.enter_context(api.new_file(staging.handle, self.stage))
-                stage_id = api.ordinary(h, staging.volume, staging.name(self.stage)).file_id
-                self._name_matches(h, staging, self.stage, stage_id, 0)
-                self.protection.check(h)  # Check the actual new file before writing even its zone.
-                api.absent(dst.handle, self.output)
-                zone = new.enter_context(api.new_zone(h))
-                api.write(zone, self.origin)
-                api.flush(zone)
-                self._name_matches(h, staging, self.stage, stage_id, 0, zone)
-                self.check_source()  # No member payload is written before both original marks pass.
-                self.protection.check(h)
-                self._copy(h)
-                api.flush(h)
-                api.verify_bytes(h, self.size, self.sha)  # Read back the held physical file, not the ZIP.
-                self._name_matches(h, staging, self.stage, stage_id, self.size, zone)
-                self.check_source()
-                staging.check()
-                dst.check()
-                self.protection.check(h)
+            with self._written_stage() as (h, zone, stage_id):
+                self._verify_stage(h, zone, stage_id)
                 self.renaming = True
                 try:
                     api.rename_new(h, dst.handle, self.output)
@@ -147,12 +163,84 @@ class _Member:
             self.note(err)
             raise
 
+    def assess_private_attachment(self, *, allow_configured_windows_services=False):
+        """Assess ONLY an explicitly authorized synthetic private file; no rename or publishing grant.
+
+        The operator grants configured Windows security services access to the member, its true
+        filename, the private/proposed local paths and referring archive (possible remote processing).
+        Requires stable drive mappings and quiescent, private synthetic directories that will not
+        auto-open or launch the staged file. Never use startup/sync folders or user data here.
+        """
+        self._take()
+        if allow_configured_windows_services is not True:
+            raise Rejected("explicit consent to configured Windows services is required, including possible remote processing")
+        if self.name.rsplit("/", 1)[-1] != self.output:
+            raise Rejected("attachment assessment requires the exact selected member's original filename")
+        staging, dst, api = self.staging, self.dst, self.dst.api
+        self.stage = self.output  # Distinct actual parents. Do not assess a random name/extension.
+        # Obtain original, DOS-normalized shell spellings before any COM activation or new file.
+        def paths(existing=None):
+            self.check_source()
+            self.protection.check()
+            api.absent(dst.handle, self.output)
+            return (self.src.shell_name(self.snapshot.path.name, existing=self.h),
+                    staging.shell_name(self.stage, existing=existing), dst.shell_name(self.output))
+        referring, private, proposed = evidence = paths()
+        try:
+            with ExitStack() as pins:
+                with attachment_services(allow_configured_windows_services=True) as service:
+                    service.check_proposed(self.output, proposed, referring)  # Fresh object; no Save at final.
+                    if paths() != evidence: raise Rejected("the selected attachment paths changed")
+                    with self._written_stage() as (writer, _zone, original):
+                        witness = pins.enter_context(api.witness(staging.handle, self.stage))
+                        # Overlap original writer and witness so an ID cannot be recycled in between.
+                        if (api.ordinary(witness, staging.volume, staging.name(self.stage)) !=
+                                api.ordinary(writer, staging.volume, staging.name(self.stage))):
+                            raise Rejected("cannot retain the original private attachment during service handoff")
+                        api.flush(staging.handle)
+                    # Both data AND origin writers are now closed. The metadata witness shares
+                    # READ|WRITE|DELETE so the service can legitimately modify, quarantine or remove.
+                    # Neither open used to validate the handoff survives into Save. A metadata-only
+                    # witness remains continuously open, but does not deny the scanner normal access.
+                    with api.inspected_file(staging.handle, self.stage) as handoff, api.zone_witness(handoff) as mark:
+                        before = api.ordinary(handoff, staging.volume, staging.name(self.stage))
+                        if before.file_id != original or before != api.ordinary(witness, staging.volume, staging.name(self.stage)):
+                            raise Rejected("not the staged original at the post-close handoff")
+                        self.protection.check(handoff)
+                        self._verify_stage(handoff, mark, original)
+                        if (api.ordinary(handoff, staging.volume, staging.name(self.stage)) != before or
+                                api.ordinary(witness, staging.volume, staging.name(self.stage)) != before or
+                                paths(handoff) != evidence):
+                            raise Rejected("the original private attachment changed before passing it to the service")
+                    service.save_private(self.output, private, referring)
+                # A scanner result isn't an identity. Re-open existing only, never restore by name.
+                with api.inspected_file(staging.handle, self.stage) as held, api.zone_witness(held) as zone:
+                    before = api.ordinary(held, staging.volume, staging.name(self.stage))
+                    if before.file_id != original or before != api.ordinary(witness, staging.volume, staging.name(self.stage)):
+                        raise Rejected("the original private attachment was removed or replaced")
+                    self._name_matches(held, staging, self.stage, original, self.size, zone)
+                    self.protection.check(held)
+                    api.verify_bytes(held, self.size, self.sha)
+                    api.flush(staging.handle)
+                    if (api.ordinary(held, staging.volume, staging.name(self.stage)) != before or
+                            api.ordinary(witness, staging.volume, staging.name(self.stage)) != before or
+                            paths(held) != evidence):
+                        raise Rejected("the original private attachment changed during final verification")
+                    self._name_matches(held, staging, self.stage, original, self.size, zone)
+                    self.protection.check(held)
+            return {"member": self.name, "sha256": self.sha, "private_save": "S_OK; original reverified",
+                    "proposed_policy": "S_OK for the proposed path only", "published": False}
+        except BaseException as err:
+            self.note(err)
+            raise
+
     def note(self, err):
         if not self.started: return
         if self.renaming:
             msg = f"Final name {self.output!r} may already exist; the exact result is unconfirmed."
         else:
-            msg = f"No completed publication; a partial or complete file {self.stage!r} may remain in the selected staging directory."
+            msg = (f"No completed publication. The staging name {self.stage!r} may be absent, occupied, "
+                   "incomplete or altered by a security service.")
         msg += " Do not automatically retry, remove or adopt an object by name."
         if msg not in getattr(err, "__notes__", ()): err.add_note(msg)
 

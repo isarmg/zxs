@@ -7,6 +7,7 @@ Do not change privilege, sharing policy or OS settings to pass. No UI, external 
 """
 from dataclasses import replace
 import hashlib
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import unittest
@@ -24,6 +25,9 @@ from zipworkspace.refs import Node
 
 SCRATCH = os.environ.get("ZIPWORKSPACE_NTFS_EXPORT_SCRATCH")
 PAYLOAD = b"the selected subdirectory's ordinary member\0\r\n\x1a\xff\xfe" * 137
+RECEIPT = b"Harmless synthetic Windows attachment qualification document.\r\n"
+# Separate opt-in from SCRATCH. Never call real Attachment Services for an ordinary native fixture.
+ALLOW_SERVICES = "ALLOW_SYNTHETIC_CONTENT_PATHS_AND_ARCHIVE_TO_CONFIGURED_SERVICES"
 MARK = b"[ZoneTransfer]\r\nZoneId=3\r\n"
 RESTRICTED = b"[ZoneTransfer]\nZoneId=4"
 
@@ -58,7 +62,8 @@ class OriginalMemberExport(unittest.TestCase):
         with PinnedParent(self.dst, output=True) as dst, PinnedParent(self.staging, output=True) as stage:
             OutputProtection(stage.handle, dst.handle)
         self.archive = self.root / "loose.zxs"
-        files = {"first/same.bin":b"not the chosen file", "second/same.bin":PAYLOAD, "zero":b""}
+        files = {"first/same.bin":b"not the chosen file", "second/same.bin":PAYLOAD, "zero":b"",
+                 "reports/receipt.txt":RECEIPT, "reports/receipt .txt":RECEIPT}
         manifest = Manifest()
         for name, body in files.items():
             manifest.add(name, False, len(body), hashlib.sha256(body).hexdigest())
@@ -318,3 +323,118 @@ class OriginalMemberExport(unittest.TestCase):
                 if occurrence == 1: self.assertFalse((self.dst / final).exists())
                 else: self.assertEqual((self.dst / final).read_bytes(), PAYLOAD)
                 self.op = new_id()
+
+    def test_private_assessment_refuses_missing_consent_or_changed_filename_before_new_file_or_com(self):
+        for name, permission in (("receipt.txt", False), ("changed.txt", True), ("receipt.TXT", True)):
+            with self.choice("reports/receipt.txt", output=name) as plan, \
+                    patch("zipworkspace._windows_member.attachment_services") as activate, \
+                    patch.object(plan.dst.api, "new_file") as create:
+                with self.assertRaises(Rejected):
+                    plan.assess_private_attachment(allow_configured_windows_services=permission)
+                activate.assert_not_called()
+                create.assert_not_called()
+                with self.assertRaises(Rejected): plan.publish()  # No fallback to offline publication.
+        self.assertEqual(list(self.dst.iterdir()), [])
+        self.assertEqual(list(self.staging.iterdir()), [])
+
+    def test_real_original_reopens_only_after_services_release_and_never_moves_to_final(self):
+        with self.choice("reports/receipt.txt", output="receipt.txt") as plan:
+            private, proposed, referring = map(str, (self.staging / "receipt.txt",
+                                                      self.dst / "receipt.txt", self.archive))
+            calls = []
+            @contextmanager
+            def synthetic_services(**_):
+                class Services:
+                    def check_proposed(inner, name, path, source):
+                        calls.append(("proposed", name, path, source))
+                        self.assertFalse(Path(private).exists())
+                    def save_private(inner, name, path, source):
+                        calls.append(("private", name, path, source))
+                        # A normally writable data handle proves the old exclusive writer is gone.
+                        with Path(path).open("r+b") as f: self.assertEqual(f.read(), RECEIPT)
+                        with open(path+":Zone.Identifier", "r+b") as f: self.assertEqual(f.read(), MARK)
+                yield Services()
+            with patch("zipworkspace._windows_member.attachment_services", synthetic_services), \
+                    patch.object(plan.dst.api, "rename_new") as rename:
+                result = plan.assess_private_attachment(allow_configured_windows_services=True)
+                self.assertFalse(result["published"])
+                self.assertEqual(calls, [("proposed","receipt.txt",proposed,referring),
+                                         ("private","receipt.txt",private,referring)])
+                rename.assert_not_called()
+                with self.assertRaises(Rejected): plan.publish()
+        self.assertEqual(list(self.dst.iterdir()), [])
+
+    def test_service_quarantine_changed_bytes_or_original_replacement_cannot_publish_or_recreate(self):
+        # Separate newly made cases: every input below is synthetic; never clean an unknown object.
+        for mode in ("quarantine", "rewrite", "same-bytes-replacement", "block", "changed-origin"):
+            parent = self.staging / mode
+            parent.mkdir()
+            with self.choice("reports/receipt.txt", output="receipt.txt", staging=parent) as plan:
+                @contextmanager
+                def synthetic_services(**_):
+                    class Services:
+                        def check_proposed(inner, *args): pass
+                        def save_private(inner, name, path, source):
+                            p = Path(path)
+                            if mode == "block": raise Rejected("policy refused synthetic attachment")
+                            if mode == "rewrite":
+                                with p.open("r+b") as f: f.write(b"X")
+                            elif mode == "changed-origin":
+                                with open(path+":Zone.Identifier", "wb") as f: f.write(RESTRICTED)
+                            else:
+                                p.rename(parent / "held-aside.txt")
+                                if mode == "same-bytes-replacement":
+                                    with p.open("xb") as f:
+                                        with open(path+":Zone.Identifier", "xb") as mark: mark.write(MARK)
+                                        f.write(RECEIPT)
+                    yield Services()
+                with patch("zipworkspace._windows_member.attachment_services", synthetic_services), \
+                        patch.object(plan.dst.api, "rename_new") as rename:
+                    with self.assertRaises((Rejected, OSError)):
+                        plan.assess_private_attachment(allow_configured_windows_services=True)
+                    with self.assertRaises(Rejected): plan.publish()
+                    rename.assert_not_called()
+                self.assertEqual(list(self.dst.iterdir()), [])
+                if mode == "quarantine": self.assertFalse((parent/"receipt.txt").exists())
+
+    @unittest.skipUnless(os.environ.get("ZIPWORKSPACE_WINDOWS_ATTACHMENT_CONSENT") == ALLOW_SERVICES,
+                         "requires separate agreement to OS security services handling synthetic contents and local paths")
+    def test_explicit_real_windows_attachment_services_on_synthetic_private_document_only(self):
+        # These services may legitimately reject/quarantine this sample or contact remote security
+        # providers. No execution, no settings changes, no publication and no retry on their decision.
+        with self.choice("reports/receipt.txt", output="receipt.txt") as plan:
+            try:
+                result = plan.assess_private_attachment(allow_configured_windows_services=True)
+            finally:
+                self.assertFalse((self.dst/"receipt.txt").exists())
+            self.assertFalse(result["published"])
+            self.assertEqual((self.staging/"receipt.txt").read_bytes(), RECEIPT)
+
+    def test_ambiguous_component_never_activates_attachment_services_or_creates_stage(self):
+        with self.choice("reports/receipt .txt", output="receipt .txt") as plan, \
+                patch("zipworkspace._windows_member.attachment_services") as activate, \
+                patch.object(plan.dst.api, "new_file") as create:
+            with self.assertRaisesRegex(Rejected, "ambiguous"):
+                plan.assess_private_attachment(allow_configured_windows_services=True)
+            activate.assert_not_called()
+            create.assert_not_called()
+
+    def test_equal_length_change_on_writer_close_is_not_submitted_to_save(self):
+        with self.choice("reports/receipt.txt", output="receipt.txt") as plan:
+            path, open_original = self.staging / "receipt.txt", plan.dst.api.inspected_file
+            def substitute_content(parent, name):
+                self.assertEqual(name, "receipt.txt")
+                # The real primary writer has closed. Simulate a local filter that changes
+                # one byte without changing the actual inode, length, origin or permissions.
+                with path.open("r+b") as f: f.write(b"X")
+                return open_original(parent, name)
+            with patch("zipworkspace._windows_member.attachment_services") as service, \
+                    patch.object(plan.dst.api, "inspected_file", side_effect=substitute_content), \
+                    patch.object(plan.dst.api, "rename_new") as rename:
+                with self.assertRaisesRegex(Rejected, "member bytes"):
+                    plan.assess_private_attachment(allow_configured_windows_services=True)
+                system = service.return_value.__enter__.return_value
+                system.check_proposed.assert_called_once()
+                system.save_private.assert_not_called()
+                rename.assert_not_called()
+            self.assertEqual(list(self.dst.iterdir()), [])

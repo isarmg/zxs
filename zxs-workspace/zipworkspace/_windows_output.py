@@ -87,6 +87,10 @@ class OutputNative(Native):
         # FILE_CREATE never opens an occupied leaf. Deny others data read/write/delete access.
         return self._request(parent, leaf(name), SYNC | ATTR | READ | WRITE | DELETE | READ_CONTROL, 0, CREATE, FILE_ONLY)
 
+    def inspected_file(self, parent, name):
+        # Existing-only after the security service releases the object. No create/write/delete.
+        return self._request(parent, leaf(name), SYNC | ATTR | READ | READ_CONTROL, 0, OPEN, FILE_ONLY)
+
     def witness(self, parent, name):
         # Metadata only, sharing all access used by the original still-open data handle.
         return self._request(parent, leaf(name), SYNC | ATTR, 7, OPEN, 0)
@@ -209,6 +213,31 @@ class PinnedParent:
     def handle(self): return self.chain[-1][0]
 
     def name(self, child): return self.chain[-1][2].rstrip("\\") + "\\" + leaf(child)
+
+    def shell_name(self, child, *, existing=None):
+        """One conventional MAX_PATH spelling, matched to live normalized DOS handles. No alias fallback."""
+        # Ordinary Win32/Shell paths can identify a legacy DOS device even when its
+        # base ends in an ASCII space before the first dot. NT-relative/extended names
+        # are not enough. Decline every such component; never ask Shell to resolve it.
+        for part in (*self.parts, leaf(child)):
+            stem, dot, _ = part.partition(".")
+            if dot and stem.endswith(" "):
+                raise Rejected("ambiguous component for an ordinary Windows Shell path")
+        self.check()
+        root = self.drive + ":\\" + "\\".join(self.parts)
+        path = root.rstrip("\\") + "\\" + leaf(child)
+        if len(path.encode("utf-16-le")) // 2 >= 260:
+            raise Rejected("selected attachment path is outside the admitted Windows Shell path length")
+        # Native I/O remains handle-relative/volume-GUID bound. The Shell receives ONLY the
+        # corresponding ordinary local spelling, not an NT/extended path, URL or 8.3 alias.
+        def require(actual, spelling):
+            b = c.create_unicode_buffer(265)
+            n = self.api.final_name(actual, b, len(b), 0)  # VOLUME_NAME_DOS | FILE_NAME_NORMALIZED
+            if not 0 < n < len(b) or b.value != "\\\\?\\" + spelling:
+                raise Rejected("the selected Windows Shell spelling does not identify the held original")
+        require(self.handle, root)
+        if existing is not None: require(existing, path)
+        return path
 
     def check(self):
         if not self.chain: raise Rejected("the original selected directory has been released")
