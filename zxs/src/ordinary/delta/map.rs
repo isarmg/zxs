@@ -2,6 +2,7 @@
 //! authenticated immutable parent, dense bytes in this version, and declared
 //! zero. Working names, routes and current path/HEAD cannot appear here.
 use crate::{fs::invalid,ordinary::interval::{layout::{From,Layout},types::Saved}};
+use crate::ordinary::flat::{Build, Index, Leaf, Material};
 use std::io;
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -11,6 +12,7 @@ impl Part{fn byte(self)->u8{match self{Self::Parent=>1,Self::Changed=>2,Self::Ze
 struct Run{kind:Part,len:u64}
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct Map{parent_length:u64,runs:Vec<Run>,pub changed:u64,pub logical:u64}
+#[cfg(test)]
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(super) enum Source{Full,Pack(usize),Zero}
 impl Map{
@@ -64,59 +66,37 @@ impl Map{
         let mut b=b"ZXS/FORMAL/INCR/MAP\0".to_vec();b.extend_from_slice(&self.logical.to_be_bytes());b.extend_from_slice(&self.changed.to_be_bytes());self.put(&mut b);
         crate::hash::digest(&b)
     }
-    /// Plan only this range in logical order. Each non-Parent interval claims
-    /// the holes not already supplied by a newer layer. No recursive calls,
-    /// per-byte bitmap, or scans of an older map for each newer Parent run.
-    /// The caller separately authenticates each original map and its indexes.
-    pub(super) fn resolve<'a>(full:u64,layers:impl IntoIterator<Item=&'a Map>,at:u64,len:u64,
-        mut emit:impl FnMut(Source,u64,u64)->io::Result<()>)->io::Result<()>{
-        use std::collections::BTreeMap;
-        let layers:Vec<_>=layers.into_iter().collect();
-        let mut length=full;
-        for m in &layers{
-            if m.parent_length!=length{return Err(invalid("immutable map does not bind its immediate parent length"));}
-            length=m.logical;
+    /// Interpret this old-format local map exactly once, when its real FILE
+    /// operands have been admitted. The resulting index names terminal
+    /// materials only. No Parent run survives to be resolved on each read.
+    pub(super) fn flatten(&self, parent: &Index, changes: Material) -> io::Result<Index> {
+        if parent.len() != self.parent_length || changes.file() != parent.file() || changes.size() != self.changed {
+            return Err(invalid("wrong material or immediate parent for a direct FILE index"));
         }
-        let end=at.checked_add(len).filter(|&n|n<=length).ok_or_else(||invalid("range outside the selected immutable version"))?;
-        if at==end{return Ok(());}
-        let mut holes=BTreeMap::from([(at,end)]); // disjoint logical [lo,hi)
-        let mut parts=BTreeMap::new();
-        for (ordinal,m) in layers.into_iter().enumerate().rev(){
-            let Some((&first,_))=holes.first_key_value()else{break};
-            let last=*holes.last_key_value().expect("nonempty above").1;
-            let mut pos=first;
-            m.visit(first,last-first,|part,off,n|{
-                let hi=pos.checked_add(n).ok_or_else(||invalid("logical part overflow"))?;
-                let from=match part{Part::Parent=>None,Part::Changed=>Some(Source::Pack(ordinal)),Part::Zero=>Some(Source::Zero)};
-                if let Some(from)=from{
-                    let mut next=pos;
-                    while next<hi{
-                        let hit=holes.range(..=next).next_back().filter(|(_,stop)|**stop>next)
-                            .or_else(||holes.range(next..hi).next()).map(|(&a,&b)|(a,b));
-                        let Some((a,b))=hit else{break};
-                        let lo=a.max(next);let stop=b.min(hi);holes.remove(&a);
-                        if a<lo{holes.insert(a,lo);}if stop<b{holes.insert(stop,b);}
-                        let source_at=if from==Source::Zero{0}else{off.checked_add(lo-pos).ok_or_else(||invalid("dense offset overflow"))?};
-                        parts.insert(lo,(from,source_at,stop-lo));next=stop;
-                    }
-                }
-                pos=hi;Ok(())
-            })?;
+        let mut out = Build::new(parent.file())?;
+        self.visit(0, self.logical, |part, off, n| match part {
+            Part::Parent => out.inherit(parent, off, n),
+            Part::Changed => out.add(Leaf::Data(changes), off, n),
+            Part::Zero => out.add(Leaf::Zero, 0, n),
+        })?;
+        out.finish(self.logical)
+    }
+
+    // Translate synthetic, ordered fixture slots back to its expected old
+    // range labels. Production maps only ever receive original FILE/Op keys.
+    #[cfg(test)]
+    fn resolve<'a>(full: u64, layers: impl IntoIterator<Item=&'a Map>, at: u64, len: u64,
+        mut emit: impl FnMut(Source, u64, u64)->io::Result<()>) -> io::Result<()> {
+        let file=crate::FileId([1;16]); let op=crate::OperationId([2;16]);
+        let mut view=Index::full(Material::declared(file,op,0,full)?)?;
+        for (i,m) in layers.into_iter().enumerate() {
+            let slot=u32::try_from(i+1).map_err(|_|invalid("fixture ordinal overflow"))?;
+            view=m.flatten(&view,Material::declared(file,op,slot,m.changed)?)?;
         }
-        for (lo,hi) in holes{
-            if hi>full{return Err(invalid("immutable parent unexpectedly reaches outside FULL"));}
-            parts.insert(lo,(Source::Full,lo,hi-lo));
-        }
-        let mut merged:Option<(Source,u64,u64)>=None;
-        for (_,part) in parts{
-            if let Some((s,off,n))=merged.as_mut(){
-                if *s==part.0&&(*s==Source::Zero||off.checked_add(*n)==Some(part.1)){
-                    *n=n.checked_add(part.2).ok_or_else(||invalid("merged interval overflow"))?;continue;
-                }
-            }
-            if let Some((s,off,n))=merged.replace(part){emit(s,off,n)?;}
-        }
-        if let Some((s,off,n))=merged{emit(s,off,n)?;}Ok(())
+        view.visit(at,len,|leaf,off,n|emit(match leaf {
+            Leaf::Zero=>Source::Zero, Leaf::Data(x) if x.slot()==0=>Source::Full,
+            Leaf::Data(x)=>Source::Pack((x.slot()-1) as usize),
+        },off,n))
     }
     pub(super) fn visit(&self,at:u64,len:u64,mut f:impl FnMut(Part,u64,u64)->io::Result<()>)->io::Result<()>{
         let end=at.checked_add(len).filter(|v|*v<=self.logical).ok_or_else(||invalid("range outside the exact incremental version"))?;

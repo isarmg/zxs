@@ -1,9 +1,9 @@
 //! One immutable object, named from the original VersionStorageId + creation
 //! name. Its own local header/node/map and checked dense change stream do not
 //! borrow even one byte from a working extent after publication.
-use super::{allocation::DeltaAllocation,map::{Map,Source as ByteSource},types::{Content,Delta,Material,Original}};
+use super::{allocation::DeltaAllocation,map::Map,types::{Content,Delta,Material,Original}};
 use crate::{fs::{self,HeldDir,invalid,stream::{self,PinnedRegular}},ordinary::{content::{self,BLOCK},draft::types::DraftClaim,
-    formal::{PinnedParent,physical::HistoryBody},indexed::Indexed,interval::{physical::{Composed,cleanup_witness,retire_verified},types::Saved},output::CheckedOutput,wire::NativeObject}};
+    flat::{Index as DirectIndex,Leaf,Material as DirectMaterial},formal::{PinnedParent,physical::HistoryBody},indexed::Indexed,interval::{physical::{Composed,cleanup_witness,retire_verified},types::Saved},output::CheckedOutput,wire::NativeObject}};
 use std::{fs::File,io::{self,Write}};
 
 fn shape(o:&Original)->io::Result<(u64,u64,u64)>{
@@ -35,7 +35,7 @@ fn seal_links(f:&File,raw:u64,table:u64,claim:DraftClaim)->io::Result<[u8;32]>{
         stream::write_at(f,&head,table+i*32)?;head=content::link(i,n,crate::hash::digest(&buf[..n])?,head)?;
     }Ok(head)
 }
-struct Held{key:crate::ordinary::journal::cycle::Parent,pin:PinnedRegular,o:Original,m:Map,c:Content,index:[u8;32]}
+struct Held{key:crate::ordinary::journal::cycle::Parent,data:DirectMaterial,pin:PinnedRegular,o:Original,m:Map,c:Content,index:[u8;32]}
 impl Held{
     fn at_original(dir:&HeldDir,d:&Delta,object:&NativeObject)->io::Result<Self>{
         let o=&d.original;let pin=dir.pin_stream(&o.leaf(),shape(o)?.2)?.ok_or_else(||invalid("actual published INCR missing"))?;
@@ -46,7 +46,8 @@ impl Held{
         if map.digest()?!=o.map{return Err(invalid("actual local INCR map differs from its original decision"));}
         let (c,_)=header(&pin.file,o,&map)?;
         if c!=d.material.content{return Err(invalid("different original INCR commitments"));}
-        pin.named(dir,&o.leaf())?;Ok(Self{key:crate::ordinary::journal::cycle::Parent::incremental(d),pin,o:o.clone(),m:map,c,index:d.material.index})
+        pin.named(dir,&o.leaf())?;let key=crate::ordinary::journal::cycle::Parent::incremental(d);
+        Ok(Self{key,data:payload(key,o.changed)?,pin,o:o.clone(),m:map,c,index:d.material.index})
     }
     fn range(&self,at:u64,n:u64,out:impl Write)->io::Result<()>{
         let (raw,links,_)=shape(&self.o)?;
@@ -55,15 +56,22 @@ impl Held{
             .write_range(at,n,out,||self.pin.unchanged())
     }
 }
-pub(in crate::ordinary) struct Body{parent:HistoryBody,first:Held,second:Option<Held>}
+fn payload(key:crate::ordinary::journal::cycle::Parent, size:u64)->io::Result<DirectMaterial>{
+    // Each legacy formal decision issued exactly one data stream: the Full
+    // RAW or this INCR's checked dense field. Slot 0 belongs only to that Op.
+    DirectMaterial::declared(key.file,key.operation,0,size)
+}
+pub(in crate::ordinary) struct Body{parent:HistoryBody,full:DirectMaterial,first:Held,second:Option<Held>,direct:DirectIndex}
 impl Body{
     pub(in crate::ordinary) fn open(dir:&HeldDir,parent:HistoryBody,d:&Delta)->io::Result<Self>{
         Self::at_original(dir,parent,d,&d.material.object)
     }
     pub(in crate::ordinary) fn at_original(dir:&HeldDir,parent:HistoryBody,d:&Delta,object:&NativeObject)->io::Result<Self>{
-        if !parent.confirmed_parent()?.precedes(d){return Err(invalid("wrong actual FULL parent for incremental node"));}
+        let k=parent.confirmed_parent()?;if !k.precedes(d){return Err(invalid("wrong actual FULL parent for incremental node"));}
         parent.require(dir)?;let first=Held::at_original(dir,d,object)?;
-        let ret=Self{parent,first,second:None};ret.require(dir)?;Ok(ret)
+        let full=payload(k,k.length)?;
+        let direct=first.m.flatten(&DirectIndex::full(full)?,first.data)?;
+        let ret=Self{parent,full,first,second:None,direct};ret.require(dir)?;Ok(ret)
     }
     /// Private successor: only a node from the same actual confirmed FILE
     /// cycle, not a hand-built Delta or an arbitrary latest node. At most
@@ -76,7 +84,9 @@ impl Body{
     }
     fn follow(mut self,dir:&HeldDir,parent:crate::ordinary::journal::cycle::Parent,d:&Delta,object:&NativeObject)->io::Result<Self>{
         if self.second.is_some()||self.first.key!=parent||!parent.precedes(d){return Err(invalid("wrong physical INCR parent; never skip a formal edge"));}
-        self.require(dir)?;let child=Held::at_original(dir,d,object)?;self.second=Some(child);self.require(dir)?;Ok(self)
+        self.require(dir)?;let child=Held::at_original(dir,d,object)?;
+        self.direct=child.m.flatten(&self.direct,child.data)?;
+        self.second=Some(child);self.require(dir)?;Ok(self)
     }
     fn top(&self)->&Held{self.second.as_ref().unwrap_or(&self.first)}
     pub(in crate::ordinary) fn pack_of(&self,wanted:crate::ordinary::journal::cycle::Parent)->io::Result<&PinnedRegular>{
@@ -93,11 +103,15 @@ impl Body{
         self.unchanged()?;self.parent.write_range(0,0,io::sink())?;self.first.range(0,0,io::sink())?;
         if let Some(n)=&self.second{n.range(0,0,io::sink())?;}
         let mut out=CheckedOutput{out,check:||self.unchanged()};let zeros=[0u8;64*1024];
-        let held=[Some(&self.first),self.second.as_ref()];
-        Map::resolve(self.parent.confirmed_parent()?.length,held.iter().flatten().map(|x|&x.m),at,len,|from,offset,n|match from{
-            ByteSource::Full=>self.parent.write_range(offset,n,&mut out),
-            ByteSource::Pack(i)=>held.get(i).and_then(|h|*h).ok_or_else(||invalid("missing selected original incremental pack"))?.range(offset,n,&mut out),
-            ByteSource::Zero=>{let mut left=n;while left!=0{let size=left.min(zeros.len() as u64) as usize;out.write_all(&zeros[..size])?;left-=size as u64;}Ok(())}
+        self.direct.visit(at,len,|from,offset,n|match from{
+            Leaf::Data(m) if m==self.full=>self.parent.write_range(offset,n,&mut out),
+            Leaf::Data(m)=>{
+                let held=if self.first.data==m { &self.first } else {
+                    self.second.as_ref().filter(|second|second.data==m).ok_or_else(||invalid("unknown selected direct material"))?
+                };
+                held.range(offset,n,&mut out)
+            }
+            Leaf::Zero=>{let mut left=n;while left!=0{let size=left.min(zeros.len() as u64) as usize;out.write_all(&zeros[..size])?;left-=size as u64;}Ok(())}
         })?;self.unchanged()
     }
     pub(in crate::ordinary) fn whole(&self,out:impl Write)->io::Result<()>{

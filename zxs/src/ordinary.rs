@@ -10,6 +10,7 @@ mod storage_name;
 mod file_parent;
 mod content;
 mod indexed;
+mod flat;
 mod output;
 mod interval;
 pub use interval::{save_interval,interval_receipt,read_current_range_to,SpanObservation};
