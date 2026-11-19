@@ -44,12 +44,12 @@ final class PickedDocument implements AutoCloseable {
         ParcelFileDescriptor old = held; held = null;
         try { old.close(); } catch (IOException ignored) { /* no retry of a closed descriptor number */ }
     }
-    StoredMember.Result checkMember(Context ctx, ArchiveIndex.Item item, CancellationSignal cancel) throws IOException {
+    StoredMember.Result checkMember(Context ctx, ArchiveIndex.Item item, CancellationSignal cancel, boolean previewText) throws IOException {
         cancel.throwIfCanceled();
         try (ParcelFileDescriptor lease = borrow()) {
             Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel);
             reader.validate();
-            StoredMember.Result result = index.checkMember(reader, item);
+            StoredMember.Result result = index.checkMember(reader, item, previewText);
             reader.validate();
             return result;
         }

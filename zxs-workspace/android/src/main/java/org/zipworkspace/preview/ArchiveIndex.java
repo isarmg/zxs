@@ -55,15 +55,23 @@ final class ArchiveIndex {
     }
 
     StoredMember.Result checkMember(MemberSource src, Item file) throws IOException {
+        return checkMember(src, file, false);
+    }
+    StoredMember.Result checkMember(MemberSource src, Item file, boolean previewText) throws IOException {
         require(file != null && file.children == null && file.slot != null);
+        require(!previewText || (file.bytes >= 0 && file.bytes <= PlainText.LIMIT));
         Item ancestor = file;
         while (ancestor.parent != null) ancestor = ancestor.parent;
         require(ancestor == root); // a row from a former selection is not a capability on this index
         byte[] block = new byte[64 * 1024];
         checkDirectory(src, block);
-        StoredMember.Result result = StoredMember.check(src, central, file.slot, file.bytes, block);
+        byte[] capture = previewText ? new byte[(int)file.bytes] : null;
+        StoredMember.Result result = StoredMember.check(src, central, file.slot, file.bytes, block, capture);
         checkDirectory(src, block); src.check();
-        return result;
+        if (capture == null || !result.matches()) return result;
+        String text = PlainText.decode(capture);
+        src.check();
+        return new StoredMember.Result(result.expected, result.actual, text);
     }
     private void checkDirectory(MemberSource src, byte[] block) throws IOException {
         StoredMember.match(src, centralAt, central, block);

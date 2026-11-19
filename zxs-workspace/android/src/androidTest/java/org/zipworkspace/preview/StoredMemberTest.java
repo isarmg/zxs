@@ -157,6 +157,73 @@ public final class StoredMemberTest {
             }
         }
     }
+    private static StoredMember.Result preview(byte[] zip) throws IOException {
+        Bytes src = new Bytes(zip);
+        ArchiveIndex index = ArchiveIndex.read(src, zip.length);
+        return index.checkMember(src, row(index), true);
+    }
+    @Test public void previewUsesOneCrcStreamAndRendersLiteralUnicodeWithoutActivatingMarkup() throws IOException {
+        String sample = "读我\t𠮷 / é / e\u0301\r\n<b>https://example.invalid</b>\n";
+        byte[] body = sample.getBytes(StandardCharsets.UTF_8), zip = archive(body, true, true, true);
+        final int[] payloadReads = {0};
+        Bytes src = new Bytes(zip) {
+            @Override public void fill(long off, byte[] buf, int n) throws IOException {
+                if (off == 30 + NAME.length + 20) { payloadReads[0]++; assertEquals(body.length, n); }
+                super.fill(off, buf, n);
+            }
+        };
+        ArchiveIndex index = ArchiveIndex.read(src, zip.length);
+        StoredMember.Result r = index.checkMember(src, row(index), true);
+        assertTrue(r.matches()); assertEquals(sample.replace("\r\n", "\n"), r.text);
+        assertEquals(1, payloadReads[0]);
+        assertNull(index.checkMember(src, row(index)).text); // CRC-only does not return a preview
+    }
+    @Test public void previewByteBudgetIncludesZeroAndExactly32KiBRejectsOneMoreBeforeIO() throws IOException {
+        assertEquals("", preview(archive(new byte[0], false, false, false)).text);
+        byte[] body = new byte[PlainText.LIMIT]; Arrays.fill(body, (byte)'a');
+        assertEquals(PlainText.LIMIT, preview(archive(body, false, false, false)).text.length());
+        byte[] large = archive(Arrays.copyOf(body, PlainText.LIMIT + 1), false, false, false);
+        ArchiveIndex index = ArchiveIndex.read(new Bytes(large), large.length);
+        Bytes noRead = new Bytes(large) {
+            @Override public byte[] read(long at, int n) { throw new AssertionError("oversize preview opened input"); }
+            @Override public void fill(long at, byte[] buf, int n) { throw new AssertionError("oversize preview read bytes"); }
+        };
+        assertThrows(IOException.class, () -> index.checkMember(noRead, row(index), true));
+        assertTrue(check(large).matches()); // original streaming CRC keeps its independent limit
+    }
+    @Test public void crcAndTextEligibilityHaveDistinctOutcomes() throws IOException {
+        for (String suffix : new String[]{"\0", "\r", "\u001b", "\u0085", "\u202e", "\u2066", "\u034f",
+                "\ufe0f", "\ufeff", "\u2028", "\ue000"}) {
+            byte[] zip = archive(("start" + suffix + "!").getBytes(StandardCharsets.UTF_8), false, true, false);
+            StoredMember.Result r = preview(zip); assertTrue(r.matches()); assertNull(r.text);
+        }
+        for (byte[] bad : new byte[][]{{(byte)0xc0, (byte)0xaf}, {(byte)0xe2, (byte)0x82},
+                {(byte)0xed, (byte)0xa0, (byte)0x80}}) {
+            StoredMember.Result r = preview(archive(bad, false, false, false));
+            assertTrue(r.matches()); assertNull(r.text);
+        }
+        byte[] damaged = archive(new byte[]{'a', 'b'}, false, true, true);
+        damaged[30 + NAME.length] = 'c';
+        StoredMember.Result mismatch = preview(damaged);
+        assertFalse(mismatch.matches()); assertNull(mismatch.text);
+    }
+    @Test public void cancelledReplacedOrChangedObservationNeverReturnsDisplayText() throws IOException {
+        byte[] zip = archive(new byte[]{'o', 'k'}, false, true, false);
+        ArchiveIndex a = ArchiveIndex.read(new Bytes(zip), zip.length), b = ArchiveIndex.read(new Bytes(zip), zip.length);
+        assertThrows(IOException.class, () -> b.checkMember(new Bytes(zip), row(a), true));
+        for (boolean cancel : new boolean[]{false, true}) {
+            Bytes src = new Bytes(zip.clone()) {
+                @Override public void fill(long at, byte[] buf, int n) throws IOException {
+                    super.fill(at, buf, n);
+                    if (at == 30 + NAME.length) {
+                        if (cancel) stop.cancel(); else bytes[bytes.length - 22 + 12] ^= 1;
+                    }
+                }
+            };
+            if (cancel) assertThrows(OperationCanceledException.class, () -> a.checkMember(src, row(a), true));
+            else assertThrows(IOException.class, () -> a.checkMember(src, row(a), true));
+        }
+    }
     @Test public void optionalSignatureIsNotChosenFromFirstWordAlone() throws IOException {
         long sig = 0x08074b50;
         ByteBuffer z = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);

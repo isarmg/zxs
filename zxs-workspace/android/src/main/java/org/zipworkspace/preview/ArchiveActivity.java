@@ -17,6 +17,9 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
+import android.widget.ScrollView;
+import android.view.WindowManager;
+import android.view.textclassifier.TextClassifier;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Locale;
@@ -52,7 +55,7 @@ public final class ArchiveActivity extends Activity {
             v.setPadding(i.left + gap, i.top + gap, i.right + gap, i.bottom + gap); return win;
         });
         TextView notice = new TextView(this);
-        notice.setText("ZIP 目录预览\n目录只显示声明。点普通文件可核验该项 CRC-32；不会解包，也不认证快照。");
+        notice.setText("ZIP 目录预览\n目录只显示声明。点普通文件可核验 CRC-32；不超过 32 KiB 的成员还可校验并查看 UTF-8 纯文本。不会解包或认证快照。");
         body.addView(notice);
         pick = button(body, "选择本机 .zxs 或 Store ZIP", v -> choose());
         cancel = button(body, "取消读取", v -> {
@@ -156,26 +159,50 @@ public final class ArchiveActivity extends Activity {
     }
     private void ask(PickedDocument picked, ArchiveIndex.Item row) {
         if (decision != null) return;
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("核验这一项的 CRC-32？")
+        boolean small = row.bytes <= PlainText.LIMIT;
+        AlertDialog.Builder actions = new AlertDialog.Builder(this)
+                .setTitle("查看这个归档成员")
                 .setMessage(picked.title + "\n" + pathOf(row) + "\n将读取全部 " + row.bytes
-                        + " 字节，只与 ZIP 声明比较，不保存或上传。")
+                        + " 字节，不保存或上传。" + (small ? "文本仅在 CRC 相符且符合 UTF-8 显示规则后打开。"
+                        : "超过 32 KiB，仅可核验 CRC。"))
                 .setNegativeButton("取消", null)
-                .setPositiveButton("开始核验", (d, which) -> {
-                    if (document == picked && active == null && folder == row.parent) verify(picked, row);
-                }).create();
+                .setPositiveButton("只核验 CRC", (d, which) -> startIfCurrent(picked, row, false));
+        if (small) actions.setNeutralButton("校验并看文本", (d, which) -> startIfCurrent(picked, row, true));
+        showDecision(actions.create(), null);
+    }
+    private void showDecision(AlertDialog dialog, TextView body) {
         decision = dialog;
-        dialog.setOnDismissListener(d -> { if (decision == dialog) decision = null; });
+        dialog.setOnDismissListener(d -> {
+            if (body != null) body.setText("");
+            if (decision == dialog) decision = null;
+        });
         dialog.show();
     }
-    private void verify(PickedDocument picked, ArchiveIndex.Item row) {
+    private void showText(String path, String text) {
+        TextView body = new TextView(this);
+        body.setAutoLinkMask(0); body.setLinksClickable(false); body.setTextIsSelectable(false);
+        body.setTextClassifier(TextClassifier.NO_OP); body.setSaveEnabled(false);
+        body.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        body.setImportantForContentCapture(View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS);
+        int pad = (int)(16 * getResources().getDisplayMetrics().density);
+        body.setPadding(pad, pad, pad, pad);
+        body.setText(text, TextView.BufferType.NORMAL); // ordinary string, never HTML, spans or a link handler
+        ScrollView area = new ScrollView(this); area.addView(body);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle((text.isEmpty() ? "空文本 · " : "文本预览 · ") + path)
+                .setView(area).setPositiveButton("关闭", null).create();
+        dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        showDecision(dialog, body);
+    }
+    private void startIfCurrent(PickedDocument picked, ArchiveIndex.Item row, boolean previewText) {
+        if (document != picked || active != null || folder != row.parent || (previewText && row.bytes > PlainText.LIMIT)) return;
         CancellationSignal signal = new CancellationSignal();
         int ticket = ++generation; active = signal;
         String path = pathOf(row);
         state.setText("正在读取 " + path + "（" + row.bytes + " B）…"); render();
         submit(() -> {
             StoredMember.Result read = null;
-            try { read = picked.checkMember(getApplicationContext(), row, signal); }
+            try { read = picked.checkMember(getApplicationContext(), row, signal, previewText); }
             catch (IOException | RuntimeException ignored) { /* don't disclose URIs or return a partial CRC */ }
             final StoredMember.Result result = read;
             main.post(() -> {
@@ -189,6 +216,10 @@ public final class ArchiveActivity extends Activity {
                             + String.format(Locale.ROOT, "\n声明 %08X，实读 %08X。", result.expected, result.actual)
                             + " 不是签名，也不证明整包或其他项。");
                     render();
+                    if (previewText && result.matches() && folder == row.parent) {
+                        if (result.text != null) showText(path, result.text);
+                        else state.append("\n不是此预览支持的 UTF-8 纯文本，不显示正文。");
+                    }
                 }
             });
         });

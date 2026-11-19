@@ -9,7 +9,9 @@ import static org.zipworkspace.preview.ArchiveIndex.*;
 final class StoredMember {
     static final class Result {
         final long expected, actual;
-        Result(long expected, long actual) { this.expected = expected; this.actual = actual; }
+        final String text; // null for CRC-only, nonmatching CRC, or text outside the supported profile
+        Result(long expected, long actual) { this(expected, actual, null); }
+        Result(long expected, long actual, String text) { this.expected = expected; this.actual = actual; this.text = text; }
         boolean matches() { return expected == actual; }
     }
 
@@ -23,7 +25,7 @@ final class StoredMember {
         }
     }
 
-    static Result check(MemberSource src, byte[] cd, Slot slot, long bytes, byte[] block) throws IOException {
+    static Result check(MemberSource src, byte[] cd, Slot slot, long bytes, byte[] block, byte[] capture) throws IOException {
         final int p = slot.record, flags = u16(cd, p + 8), nameLength = u16(cd, p + 28);
         final long crc = u32(cd, p + 16);
         final boolean streaming = (flags & 8) != 0;
@@ -75,6 +77,7 @@ final class StoredMember {
             int n = (int)Math.min(block.length, end - pos);
             src.fill(pos, block, n);
             computed.update(block, 0, n);
+            if (capture != null) System.arraycopy(block, 0, capture, (int)(pos - body), n);
             pos += n;
         }
         src.check();
