@@ -167,3 +167,4 @@ impl Index {
 #[cfg(test)]
 #[path="../../tests/unit/flat_index.rs"]
 mod tests;
+pub(in crate::ordinary) mod stored;
