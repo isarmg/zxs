@@ -4,6 +4,7 @@
 mod web_secret;
 mod terminal;
 mod observed;
+mod domain;
 
 use super::{bad, catalog::Canonical, request::Id};
 use rusqlite::{params, Transaction};
