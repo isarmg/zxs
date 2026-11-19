@@ -3,7 +3,7 @@
 mod install;
 
 use std::{ffi::OsString, fmt};
-pub(crate) use install::{Evidence, Record, RuntimeFile};
+pub(crate) use install::{Evidence, Record, RuntimeFile,hash_upto};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(crate) enum Target { OfflineImage, IsolatedMembers, ImportedPool }

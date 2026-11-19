@@ -10,6 +10,7 @@ mod fs_tools;
 mod fat32_check;
 mod inspect;
 mod isolated_group;
+mod smb_host;
 mod maintenance;
 mod path_rules;
 mod portable_claim;

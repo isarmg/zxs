@@ -26,7 +26,7 @@ rustix = { version = "=1.1.5", features = ["fs", "mm", "net", "pipe", "process",
 sha2 = { version = "=0.10.9", default-features = false }
 
 [dev-dependencies]
-rustix = { version = "=1.1.5", features = ["pty"] }
+rustix = { version = "=1.1.5", features = ["pty", "stdio"] }
 linux-raw-sys = { version = "=0.12.1", default-features = false, features = ["general", "std"] }
 tempfile = "=3.27.0"
 

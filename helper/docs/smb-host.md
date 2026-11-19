@@ -34,3 +34,9 @@
 |正常停止或失败|专用服务域只收本次进程；请求非 root 存储端正常停止，关闭新请求、半关控制通道，受管 smbd 主/子退出，存储端待生命周期管道全部写端关闭并关库后才释放原 S。宿主需回收真正的两个原主进程并核整域无余留。半关/读 EOF、两个 pidfile、一个退出 0 或 systemd 的 inactive 均不能单独证明所有业务写入已落稳。正常停不清现场，不自动重启、切换另一服务或补办账户。超时、强杀、主机掉电只能报‘未确认正常排空’，独立查原单；后续离线维护仍须在同一 S 原目录独立取 EX。|
 
 许可后待在隔离的 Debian 13 实机分别验：两个实际批准 ELF 与单个换件、错误的 fd 权限与 PID 命名空间、给错 smbd 的 pidfd、前后两种关停以及子进程仍持写端时的排空。此批未构建、安装、自建发行凭据、运行服务或进行 SMB 登录。技术依据：[pidfd_open(2)](https://man7.org/linux/man-pages/man2/pidfd_open.2.html)、[systemd 257 的只读投射](https://www.freedesktop.org/software/systemd/man/257/systemd.exec.html#BindReadOnlyPaths=)、[按受管进程域停止](https://www.freedesktop.org/software/systemd/man/257/systemd.kill.html#KillMode=)。
+
+### 主管内部的原端点交接
+
+代码已能创建一个真实 root 产生的匿名 SEQPACKET 对；在另一端交给存储进程之前，未来的可信主管必须提供它在创建本次 smbd 时取得、仍持有的原 process pidfd，此处不从进程号重开。当前内部检查只能证明进程在世且现在由本主管抚养并可等待（也可能是收养的进程），不能追溯描述符何时取得或据此签发启动许可。它核对该子已经执行专用发行的原 ELF、实际持有此端点且没有误继承存储那端。Samba 会把收到的 3 号描述符复制到 ≥5 并关闭原号，因此核验比较活内核 socket，而不把固定数字当永久身份；只看这个原子进程至多 256 个描述符链接，仅对命中端点读取内核 fdinfo；目标须是同一挂载和 inode 上可读写、阻塞的真实 socket 描述符，只持同一 inode 的 O_PATH 引用不算。其他目标不被数据打开或记录。首版保守要求它是宿主初始 user namespace 拥有的一层专用 PID namespace 的 1 号进程，未来子进程 PID namespace 与之相同、当前五套能力均无 CAP_SYS_ADMIN。通过仅是当时的逐项核验，不抵抗不遵约的特权宿主换件，也不证明所有将来子孙都受限。没有外部调用入口，不启动任一程序、不解释 BOUND 或发 READY。正常启动仍须由完整主管独立交付正确的只读 BOUND、存储身份、专用发行闭包以及进程约束，并在失败时收回自己产生的所有进程。
+
+上线也须把 Samba 的会话状态与持久的专用 SAM 域库/池 SQLite 分开：global sessions TDB 可能含签名、加密或应用会话材料。名称叫 run/lock、权限 0600 或 dbwrap 标 VOLATILE 都不是“不会落盘”的凭据。专实例 cache/lock/run 需要独立易失、经核不可交换的内存挂载（如支持且实核的 [tmpfs noswap](https://www.kernel.org/doc/html/v6.12/filesystems/tmpfs.html)），并另外排除进程换页、休眠镜像、核心转储及跨启动复用；未核不开放实际认证。本片不更改任何宿主设置。

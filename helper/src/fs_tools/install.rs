@@ -88,7 +88,12 @@ fn confirm_absence(original:&Slot,component:usize,again:Result<Lookup>,name:&str
     Evidence::Missing
 }
 fn full_hash(file:&mut impl Read,size:u64)->io::Result<[u8;32]>{
-    if size==0||size>MAX_HASH{return Err(io::Error::new(io::ErrorKind::InvalidInput,"tool outside hash budget"));}
+    hash_upto(file,size,MAX_HASH)
+}
+/// Pure bounded hashing. The diagnostic command keeps its fixed 64 MiB limit;
+/// separately curated roles can choose a different fixed limit on a held image.
+pub(crate) fn hash_upto(file:&mut impl Read,size:u64,max:u64)->io::Result<[u8;32]>{
+    if size==0||size>max{return Err(io::Error::new(io::ErrorKind::InvalidInput,"file outside hash budget"));}
     let mut hash=Sha256::new();let mut left=size;let mut buf=[0;32*1024];
     while left!=0 {
         let n=left.min(buf.len() as u64) as usize;file.read_exact(&mut buf[..n])?;
