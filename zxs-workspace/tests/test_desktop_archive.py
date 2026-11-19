@@ -1,6 +1,7 @@
 from dataclasses import replace
 import hashlib
 from importlib.util import find_spec
+import os
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
@@ -77,6 +78,55 @@ class SelectedOriginal(unittest.TestCase):
             with self.assertRaises(Rejected):
                 Selection.open(path, expected=replace(node, sha256="0" * 64))
 
+    def test_canonical_anchor_is_verified_once_and_held_through_both_inventories(self):
+        from zipworkspace import refs
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            source = store / "setup.zxs"; marker = write_snapshot(source)
+            slot = store / marker.filename; source.rename(slot)
+            later = replace(marker, generation=2, operation="4"*32, parent=marker.operation)
+            peer = store / later.filename; write_snapshot(peer, marker=later)
+            selected = Selection.open(slot)
+            chosen = StoreSelection.open(store)
+            read, digest, members = refs.read_managed_document, refs.archive_sha, refs._members
+            for _ in range(2):  # A new catalog always re-verifies both original files.
+                documents, hashes, inventories = {}, [], []
+                def check(doc, *, display_name):
+                    self.assertNotIn(display_name, documents)
+                    documents[display_name] = doc
+                    return read(doc, display_name=display_name)
+                def raw(doc):
+                    hashes.append(doc)
+                    return digest(doc)
+                def inventory(*args):
+                    inventories.append(not documents[marker.filename].closed)
+                    return members(*args)
+                with patch.object(refs, "read_managed_document", side_effect=check), \
+                     patch.object(refs, "archive_sha", side_effect=raw), \
+                     patch.object(refs, "_members", side_effect=inventory):
+                    cat = selected.catalog(chosen)
+                self.assertEqual(set(documents), {marker.filename, later.filename})
+                self.assertCountEqual(hashes, documents.values())
+                self.assertEqual(inventories, [True, True])
+                self.assertTrue(all(doc.closed for doc in documents.values()))
+                self.assertEqual(cat.select_node(marker.operation), cat.anchor)
+                self.assertEqual(cat.select_branch(marker.branch).marker, later)
+
+    def test_same_inode_at_a_different_name_is_not_reused_as_the_store_slot(self):
+        from zipworkspace import refs
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); store = root / "store"; store.mkdir()
+            loose = root / "loose.zxs"; marker = write_snapshot(loose)
+            slot = store / marker.filename
+            try: os.link(loose, slot)
+            except (OSError, NotImplementedError) as e: self.skipTest(f"hard links unavailable: {e}")
+            with patch.object(refs, "archive_sha", wraps=refs.archive_sha) as raw:
+                cat = refs.Catalog(loose, store)
+            self.assertEqual(raw.call_count, 2)
+            self.assertEqual(cat.anchor.path, loose)
+            self.assertEqual(cat.select_node(marker.operation).path, slot)
+            self.assertEqual(cat.select_branch(marker.branch).marker, marker)
+
     def test_corrupt_member_outside_root_view_is_rejected_without_a_raw_zip_pass(self):
         from zipworkspace.desktop import selection as view
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,11 +150,18 @@ class SelectedOriginal(unittest.TestCase):
             member.write_bytes(loose.read_bytes())
             selection = Selection.open(loose)
             self.assertEqual(selection.catalog(chosen).select_branch(marker.branch).marker, marker)
-            expected = refs._members(store, marker.repo)[member.name]
+            # Replace only the store slot after the real first inventory; the
+            # loose anchor stays valid but cannot authorize the equal-byte replacement.
+            members = refs._members
             original = root / "old-slot"
-            member.rename(original)
-            member.write_bytes(original.read_bytes())
-            with self.assertRaises(Rejected): refs._load(member, expected=expected)
+            def replace_after_inventory(*args):
+                before = members(*args)
+                if not original.exists():
+                    member.rename(original)
+                    member.write_bytes(original.read_bytes())
+                return before
+            with patch.object(refs, "_members", side_effect=replace_after_inventory):
+                with self.assertRaises(Rejected): selection.catalog(chosen)
             store.rename(root / "old-store")
             store.mkdir()
             (store / marker.filename).write_bytes(loose.read_bytes())

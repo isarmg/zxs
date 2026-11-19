@@ -49,15 +49,11 @@ class Selection:
         return cls(path, original, browser, expected)
 
     def catalog(self, store: StoreSelection):
-        store.check()
-        with named_document(self.path) as doc:
-            if stamp(doc) != self.observed:
-                raise Rejected("the displayed archive changed before catalog inspection")
-            # Catalog admits byte-exact anchors and store rows: this is the
-            # first place a loose display can obtain an exact original Node.
-            result = Catalog(self.path, store.path, expected_store=store.identity,
-                             expected_anchor=self.observed)
-            if (result.anchor.marker != self.browser.commit or
-                    (self.exact is not None and result.anchor != self.exact)):
-                raise Rejected("selected original changed before catalog inspection")
+        # Catalog holds and rechecks the selected anchor through both inventories;
+        # a loose display requires its exact original generation, never a bare path.
+        result = Catalog(self.path, store.path, expected_store=store.identity,
+                         expected_anchor=self.observed)
+        if (result.anchor.marker != self.browser.commit or
+                (self.exact is not None and result.anchor != self.exact)):
+            raise Rejected("selected original changed before catalog inspection")
         return result

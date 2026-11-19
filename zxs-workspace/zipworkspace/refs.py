@@ -23,16 +23,15 @@ def _origin(path):
     return (m.st_dev, m.st_ino, m.st_size, m.st_mtime_ns, m.st_ctime_ns)
 
 
-def _load(path, *, expected=None):
-    with named_document(path) as doc:
-        observed = stamp(doc)
-        if expected is not None and observed != expected:
-            raise Rejected("opened archive is not the inventoried slot")
-        marker, _ = read_managed_document(doc, display_name=path.name)
-        node = Node(marker, path, archive_sha(doc), observed)
-        if expected is not None and stamp(doc) != expected:
-            raise Rejected("inventoried slot changed while reading")
-        return node
+def _read_node(doc, path, expected):
+    observed = stamp(doc)
+    if expected is not None and observed != expected:
+        raise Rejected("opened archive is not the selected or inventoried slot")
+    marker, _ = read_managed_document(doc, display_name=path.name)
+    node = Node(marker, path, archive_sha(doc), observed)
+    if stamp(doc) != observed:
+        raise Rejected("selected or inventoried archive changed while reading")
+    return node
 
 
 def _members(store, repo):
@@ -47,17 +46,33 @@ def _members(store, repo):
 
 class Catalog:
     def __init__(self, anchor: Path, store: Path, *, expected_store=None, expected_anchor=None):
-        self.anchor = _load(Path(anchor), expected=expected_anchor)
+        anchor = Path(anchor).absolute()  # Do not resolve aliases into canonical store slots.
         self.store = Path(store).absolute()
         store_id = native_identity(self.store.stat(follow_symlinks=False), stat.S_IFDIR)
         if expected_store is not None and store_id != expected_store:
             raise Rejected("selected original archive store changed before inventory")
+        # Keep the original file open through both inventories. named_document
+        # also rechecks this name and its held generation before returning the catalog.
+        with named_document(anchor) as doc:
+            self.anchor = _read_node(doc, anchor, expected_anchor)
+            self._discover(store_id)
+
+    def _discover(self, store_id):
         self.repo = self.anchor.marker.repo
         self.nodes = {}
         self.slots = {}
         before = _members(self.store, self.repo)
         for name in sorted(before):
-            node = _load(self.store / name, expected=before[name])
+            path = self.store / name
+            if name == self.anchor.marker.filename and str(path) == str(self.anchor.path):
+                # Path equality alone may case-fold on Windows. An inode match
+                # at a differently spelled path is not the selected storage name.
+                if before[name] != self.anchor.observed:
+                    raise Rejected("selected archive no longer occupies its inventoried slot")
+                node = self.anchor
+            else:
+                with named_document(path) as doc:
+                    node = _read_node(doc, path, before[name])
             m = node.marker
             if m.repo != self.repo or m.filename != name:
                 raise Rejected("directory repository slot disagrees with its exact typed archive")
