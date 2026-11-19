@@ -1,5 +1,7 @@
 //! Full, explicitly supplied cold selection. No saved path supplies an origin.
 //! A storage worker's OS identity is not approval of a particular operation.
+mod feedback_file;
+mod markers;
 mod zero_floor;
 
 use super::*;

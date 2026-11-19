@@ -1,13 +1,16 @@
 //! Only the original empty CONFIRMED. No initial IDs, volume markers or READY publication.
-use super::*;
+use super::{feedback_file::Output, *};
 
 /// Only this successful create-or-resync and named readback produces this
 /// state. Merely observing a zero floor cannot construct it. REG and all root
 /// locks remain held; no writer/FD or operator receipt is returned.
 #[must_use]
 pub(super) struct SyncedFloor<'a>(LockedGroup<'a>);
-impl SyncedFloor<'_> {
+impl<'a> SyncedFloor<'a> {
     pub(super) fn recheck(&self) -> io::Result<()> { self.0.verify() }
+    // No constructor outside this module. Moving this value is the only way
+    // the marker operation receives a group with a genuinely synced floor.
+    pub(super) fn into_group(self) -> LockedGroup<'a> { self.0 }
 }
 
 impl<'a> LockedGroup<'a> {
@@ -31,30 +34,16 @@ impl<'a> LockedGroup<'a> {
         let created;
         let original=if let Some(existing)=&self.source.floor {
             existing.require_name(s)?;
-            existing.fd.sync_all()?;
             &existing.fd
         } else {
-            created=File::from(openat(s,OsStr::from_bytes(FLOOR),
-                OFlags::CREATE|OFlags::EXCL|OFlags::RDWR|OFlags::NOFOLLOW|OFlags::CLOEXEC,
-                Mode::RUSR|Mode::WUSR)?);
-            let fresh=Stamp::on(&created)?;
-            if !fresh.kind.is_file() || fresh.uid!=self.source.uid || fresh.mode&0o7777!=0o600
-                || fresh.links!=1 || fresh.len!=0 || fresh.mount!=parent.mount
-                || fresh.entity.dev!=parent.entity.dev || Stamp::on(&pin(s,FLOOR)?)?!=fresh {
-                return Err(bad("new confirmation is not the expected empty private original; preserved"));
-            }
+            created=Output::Floor.create(s)?;
             let names=Names::read(self.roots[0].name.storage_directory()?)?;
             if !names.floor || names.marker { return Err(bad("unexpected original names after exclusive create")); }
+            Output::Floor.require_new(s,&parent,&created)?;
             created.write_all_at(&exact,0)?;
-            created.sync_all()?;
             &created
         };
-        s.sync_all()?;
-        let observed=Record::open(s,&Stamp::root(s,self.source.uid)?,FLOOR)?;
-        if Stamp::on(original)?!=observed.original || observed.bytes()?.as_slice()!=exact.as_slice() {
-            return Err(bad("confirmation did not read back from its exact original and parent"));
-        }
-        observed.require_name(s)?;
+        let observed=Output::Floor.sync_and_readback(s,self.source.uid,original,&exact)?;
         self.source.floor=Some(observed); // sole admitted transition: our confirmed None→Some, or same existing original
         self.verify()?;
         Ok(SyncedFloor(self))

@@ -10,7 +10,7 @@ use tempfile::{Builder,TempDir};
 struct Fixture {
     _data:TempDir, _recycle:TempDir,
     names:Vec<PathBuf>, origins:Vec<File>, host_root:File, uid:u32,
-    request:Vec<u8>, image:Vec<u8>, zero:Vec<u8>, last_marker:Vec<u8>,
+    request:Vec<u8>, image:Vec<u8>, zero:Vec<u8>,
 }
 impl Fixture {
     fn new(same_fs:bool) -> Self {
@@ -39,14 +39,19 @@ impl Fixture {
         let mut image=request.clone(); image.extend_from_slice(&digest);
         let mut zero=b"ZXS-PORTABLE-1/CONFIRMED\0".to_vec();
         zero.extend_from_slice(&digest); zero.extend_from_slice(&[0;16]); zero.extend_from_slice(&digest);
-        let mut last_marker=b"ZXS-PORTABLE-1/VOLUME\0".to_vec(); last_marker.push(2);
-        for id in [1,13,2] { last_marker.extend_from_slice(&[id;16]); }
-        last_marker.extend_from_slice(&digest);
-        let v=Self {_data:data,_recycle:recycle,names,origins,host_root:File::open("/").unwrap(),uid,request,image,zero,last_marker};
+        let v=Self {_data:data,_recycle:recycle,names,origins,host_root:File::open("/").unwrap(),uid,request,image,zero};
         put(&v.at(0,PENDING),&v.image);
         v
     }
     fn at(&self,i:usize,n:&[u8])->PathBuf { self.names[i].join(OsStr::from_bytes(n)) }
+    // Construct the expectation separately from the implementation under test.
+    fn claim(&self, row:usize)->Vec<u8> {
+        let mut out=b"ZXS-PORTABLE-1/VOLUME\0".to_vec();
+        out.push(row.min(2) as u8);
+        for id in [1,10+u8::try_from(row).unwrap(),2] { out.extend_from_slice(&[id;16]); }
+        out.extend_from_slice(&Sha256::digest(&self.request));
+        out
+    }
     fn choices(&self)->Vec<(&Path,&File)> {
         self.names.iter().map(PathBuf::as_path).zip(&self.origins).collect()
     }
@@ -101,9 +106,9 @@ fn unresolved_last_root_or_unclaimed_ancestor_prevents_the_first_floor_write() {
     let other=File::open(&a.names[3]).unwrap(); flock(&other,FlockOperation::NonBlockingLockShared).unwrap();
     assert_eq!(LockedGroup::acquire(a.open(),a.order(&choices,&worker)).err().unwrap().kind(),io::ErrorKind::WouldBlock);
     drop(other);
-    put(&a.at(3,ROOT_SLOT),&a.last_marker); // individually correct, but no FLOOR and an impossible hole
+    put(&a.at(3,ROOT_SLOT),&a.claim(3)); // individually correct, but no FLOOR and an impossible hole
     assert!(LockedGroup::acquire(a.open(),a.order(&choices,&worker)).is_err());
-    assert_eq!(fs::read(a.at(3,ROOT_SLOT)).unwrap(),a.last_marker);
+    assert_eq!(fs::read(a.at(3,ROOT_SLOT)).unwrap(),a.claim(3));
     fs::remove_file(a.at(3,ROOT_SLOT)).unwrap();
     let parent_slot=a._data.path().join(OsStr::from_bytes(ROOT_SLOT)); put(&parent_slot,b"unknown");
     assert!(LockedGroup::acquire(a.open(),a.order(&choices,&worker)).is_err());
@@ -132,4 +137,94 @@ fn new_partial_confirmation_after_selection_cannot_be_overwritten_on_resume() {
     assert!(Stamp::on(&victim).unwrap()==before);
     assert_eq!(fs::read(a.at(0,FLOOR)).unwrap(),b"unknown existing bytes");
     assert!(a.names.iter().all(|d|!d.join(OsStr::from_bytes(ROOT_SLOT)).exists()));
+}
+
+#[test]
+fn cold_marker_steps_start_at_system_and_preserve_each_existing_claim_and_lock() {
+    let a=Fixture::new(false);
+    let choices=a.choices();
+    let worker=WorkerPolicy::fixture();
+    let reg=File::open(a.at(0,PENDING)).unwrap();
+    let get_floor=||LockedGroup::acquire(a.open(),a.order(&choices,&worker)).unwrap().persist_zero().unwrap();
+    let run=get_floor().markers();
+    assert_eq!(run.synced_rows(),0);
+    let first=run.sync_next().unwrap();
+    assert_eq!(first.synced_rows(),1);
+    let original_s=File::open(a.at(0,ROOT_SLOT)).unwrap();
+    let stamp_s=Stamp::on(&original_s).unwrap();
+    assert_eq!(fs::read(a.at(0,ROOT_SLOT)).unwrap(),a.claim(0));
+    assert!((1..4).all(|i| !a.at(i,ROOT_SLOT).exists()));
+    busy(&reg); for root in &a.origins { busy(root); }
+    drop(first); // original PENDING, FLOOR and precisely the first real marker survive
+
+    let mut cold=get_floor().markers();
+    assert_eq!(cold.synced_rows(),0); // the visible S marker was not credited as synced
+    for row in 0..4 {
+        cold=cold.sync_next().unwrap();
+        assert_eq!(cold.synced_rows(),row+1);
+        for i in 0..=row { assert_eq!(fs::read(a.at(i,ROOT_SLOT)).unwrap(),a.claim(i)); }
+        for i in row+1..4 { assert!(!a.at(i,ROOT_SLOT).exists()); }
+        assert!(Stamp::on(&File::open(a.at(0,ROOT_SLOT)).unwrap()).unwrap()==stamp_s);
+        busy(&reg); for fd in &a.origins { busy(fd); }
+    }
+    assert_eq!(fs::read(a.at(0,PENDING)).unwrap(),a.image);
+    assert_eq!(fs::read(a.at(0,FLOOR)).unwrap(),a.zero);
+    assert!(!a.at(0,b"REGISTRATION").exists());
+    assert!(cold.sync_next().is_err()); // no fifth row; never performs READY publication
+}
+
+#[test]
+fn out_of_order_or_foreign_feedback_blocks_the_first_marker_without_touching_it() {
+    let a=Fixture::new(false);
+    let choices=a.choices();
+    let worker=WorkerPolicy::fixture();
+    let run=LockedGroup::acquire(a.open(),a.order(&choices,&worker)).unwrap().persist_zero().unwrap().markers();
+    let wrong=a.at(3,ROOT_SLOT);
+    put(&wrong,&a.claim(1)); // correct length and pool, but a later F carries R's claim
+    let original=File::open(&wrong).unwrap();
+    let before=Stamp::on(&original).unwrap();
+    assert!(run.sync_next().is_err());
+    assert_eq!(fs::read(&wrong).unwrap(),a.claim(1));
+    assert!(Stamp::on(&File::open(&wrong).unwrap()).unwrap()==before);
+    assert!((0..3).all(|i| !a.at(i,ROOT_SLOT).exists()));
+    assert_eq!(fs::read(a.at(0,FLOOR)).unwrap(),a.zero);
+}
+
+#[test]
+fn a_byte_identical_replacement_of_synced_system_claim_does_not_allow_the_recycler_step() {
+    let a=Fixture::new(false);
+    let choices=a.choices();
+    let worker=WorkerPolicy::fixture();
+    let run=LockedGroup::acquire(a.open(),a.order(&choices,&worker)).unwrap()
+        .persist_zero().unwrap().markers().sync_next().unwrap();
+    let slot=a.at(0,ROOT_SLOT);
+    let kept=File::open(&slot).unwrap();
+    let moved=a._data.path().join("original-marker");
+    fs::rename(&slot,&moved).unwrap();
+    put(&slot,&a.claim(0));
+    assert_ne!(Entity::of(&kept.metadata().unwrap()).unwrap(),
+               Entity::of(&File::open(&slot).unwrap().metadata().unwrap()).unwrap());
+    assert!(run.sync_next().is_err());
+    assert_eq!(fs::read(&slot).unwrap(),a.claim(0));
+    assert_eq!(fs::read(moved).unwrap(),a.claim(0));
+    assert!((1..4).all(|i| !a.at(i,ROOT_SLOT).exists()));
+}
+
+#[test]
+fn full_visible_prefix_with_one_foreign_operation_cannot_be_resumed_or_repaired() {
+    let a=Fixture::new(false);
+    let choices=a.choices(); let worker=WorkerPolicy::fixture();
+    let mut run=LockedGroup::acquire(a.open(),a.order(&choices,&worker)).unwrap().persist_zero().unwrap().markers();
+    for _ in 0..3 { run=run.sync_next().unwrap(); }
+    drop(run);
+    let mut foreign=a.claim(3);
+    foreign[55]^=1; // same role, volume, pool, G and width, not the original acquisition Op
+    let slot=a.at(3,ROOT_SLOT);
+    put(&slot,&foreign);
+    let fd=File::open(&slot).unwrap(); let stamp=Stamp::on(&fd).unwrap();
+    assert!(LockedGroup::acquire(a.open(),a.order(&choices,&worker)).is_err());
+    assert!(Stamp::on(&File::open(&slot).unwrap()).unwrap()==stamp);
+    assert_eq!(fs::read(&slot).unwrap(),foreign);
+    for i in 0..3 { assert_eq!(fs::read(a.at(i,ROOT_SLOT)).unwrap(),a.claim(i)); }
+    assert!(!a.at(0,b"REGISTRATION").exists());
 }
