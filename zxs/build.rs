@@ -5,6 +5,7 @@ use std::{env, path::{Path,PathBuf}, process::Command};
 fn main() {
     const CONTROL:&str="samba/debian-trixie/new/source3/param/zxs_smb_control.c";
     println!("cargo:rerun-if-changed=samba/debian-trixie/new/source3/param/zxs_smb_control.h");
+    println!("cargo:rerun-if-changed=samba/debian-trixie/new/source3/param/zxs_smb_workers.inc");
     assert_eq!(env::var("CARGO_CFG_TARGET_OS").unwrap(), "linux", "ZXS requires Linux");
     for p in [CONTROL,"src/linux.c","src/sqlite_read.c","vendor/sqlite/sqlite3.c","vendor/sqlite/sqlite3.h"]{
         println!("cargo:rerun-if-changed={p}");

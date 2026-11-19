@@ -16,6 +16,13 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Exact UAPI of our pinned Debian amd64 / Linux 6.12. */
+#ifndef SO_PASSPIDFD
+#define SO_PASSPIDFD 76
+#endif
+#ifndef SCM_PIDFD
+#define SCM_PIDFD 4
+#endif
 static int bad(void) { errno=EPROTO; return -1; }
 static bool unnamed(int fd, bool peer)
 {
@@ -35,7 +42,7 @@ int zxs_smb_ctl_claim(int fd)
      * peer. Identity and sole delivery of opposite endpoints are the trusted
      * launcher's job; there is no connectable name or UID-only guest path. */
     int open_flags=fcntl(fd,F_GETFL);
-    if(flags<0 || open_flags<0 || (open_flags&O_NONBLOCK)!=0 || !opt(fd,SO_TYPE,SOCK_SEQPACKET) || !opt(fd,SO_ACCEPTCONN,0) ||
+    if(flags<0 || open_flags<0 || (open_flags&O_NONBLOCK)!=0 || !opt(fd,SO_TYPE,SOCK_SEQPACKET) || !opt(fd,SO_ACCEPTCONN,0) || !opt(fd,SO_PASSCRED,0) || !opt(fd,SO_PASSPIDFD,0) ||
        !unnamed(fd,false) || !unnamed(fd,true) ||
        getsockopt(fd,SOL_SOCKET,SO_PEERCRED,&creator,&n)<0 || n!=sizeof(creator) ||
        creator.uid!=0) {return bad();}
@@ -57,11 +64,11 @@ static bool life_reader(int fd)
            fstat(fd,&st)==0 && S_ISFIFO(st.st_mode) && fstatfs(fd,&fs)==0 &&
            (unsigned long)fs.f_type==PIPEFS_MAGIC;
 }
-enum inbound { ZXS_NO_FD, ZXS_LIFE_FD, ZXS_ATTEMPT_FD };
+enum inbound { ZXS_NO_FD, ZXS_LIFE_FD };
 static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take,enum inbound kind,bool nowait)
 {
     int64_t now,stop;bool sending=sendbuf!=NULL;
-    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=16 && len!=24)return bad();
+    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=16 && len!=24 && len!=32)return bad();
     if(millis(&now)<0)return -1;
     stop=now+10000;
     for(;;) {
@@ -92,6 +99,9 @@ static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,in
             if(got>=0){
                 struct cmsghdr *c;bool extra=(msg.msg_flags&(MSG_CTRUNC|MSG_TRUNC))!=0;
                 for(c=CMSG_FIRSTHDR(&msg);c!=NULL;c=CMSG_NXTHDR(&msg,c)){
+                    if(c->cmsg_level==SOL_SOCKET && c->cmsg_type==SCM_PIDFD && c->cmsg_len==CMSG_LEN(sizeof(int))){
+                        int v;memcpy(&v,CMSG_DATA(c),sizeof(v));if(v>=0)close(v);extra=true;continue;
+                    }
                     if(c->cmsg_level!=SOL_SOCKET || c->cmsg_type!=SCM_RIGHTS ||
                        c->cmsg_len<CMSG_LEN(0)){extra=true;continue;}
                     size_t n=c->cmsg_len-CMSG_LEN(0);
@@ -102,15 +112,9 @@ static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,in
                     }
                 }
                 if(extra || (take!=NULL && (received<0 ||
-                   (kind==ZXS_LIFE_FD ? !life_reader(received) : zxs_smb_ctl_claim(received)!=0))) ||
+                   (kind!=ZXS_LIFE_FD || !life_reader(received)))) ||
                    (size_t)got!=len){
                     if(received>=0)close(received);
-                    /* The complete registration was consumed, but the one
-                     * local attempt fd could not be accepted (including
-                     * kernel MSG_CTRUNC at the worker's fd limit). The
-                     * caller still checks the tag; no fd is adopted. */
-                    if(kind==ZXS_ATTEMPT_FD && got==(ssize_t)len &&
-                       !(msg.msg_flags&MSG_TRUNC)){errno=EBADMSG;return -2;}
                     return bad();
                 }
             }
@@ -138,16 +142,16 @@ int zxs_smb_ctl_bound(int fd,uint8_t *bound)
     int rd=-1;if(transfer(fd,NULL,bound,ZXS_SMB_BIND_LEN,-1,&rd,ZXS_LIFE_FD,false)!=0)return -1;
     return rd;
 }
-static const uint8_t begin_tag[16]="ZXS-SAM/BEGIN-1";
+#include "zxs_smb_workers.inc"
 static const uint8_t challenge_tag[16]="ZXS-SAM/CHLNG-1";
 /* Only the native new SMB2 GENSEC instance calls this. The shared master
  * control send is a single atomic seqpacket + one endpoint; *no* reply or
  * challenge is ever read from that shared socket by competing children. */
-int zxs_smb_try_open(int control,int64_t *started)
+int zxs_smb_try_open(int control,uint64_t net,uint64_t sk,int64_t *started)
 {
     int p[2];if(millis(started)<0)return -1;
     if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,p)<0)return -1;
-    int rc=transfer(control,begin_tag,NULL,sizeof(begin_tag),p[1],NULL,ZXS_NO_FD,true),err=errno;
+    int rc=role_send(control,begin_tag,net,sk,p[1]),err=errno;
     close(p[1]);
     if(rc!=0){close(p[0]);errno=err;return -1;}
     return p[0];
@@ -170,14 +174,6 @@ int zxs_smb_try_current(int fd,int64_t start)
 {
     if(!within(start,30000))return bad();
     return zxs_smb_ctl_live(fd);
-}
-int zxs_smb_try_accept(int control)
-{
-    int newfd=-1;uint8_t tag[16]={0};
-    int rc=transfer(control,NULL,tag,sizeof(tag),-1,&newfd,ZXS_ATTEMPT_FD,true);
-    if(rc==-1)return -1;
-    if(memcmp(tag,begin_tag,sizeof(tag))!=0){if(newfd>=0)close(newfd);return bad();}
-    return rc==-2?-2:newfd;
 }
 int zxs_smb_try_issue(int fd,const uint8_t challenge[8])
 {

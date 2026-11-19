@@ -28,7 +28,7 @@ helper 供给的 `/instance/domain.bound` 正好 128 字节：`ZXS-SAM/BOUND-1\0
 
 ### 仅两端的启动控制通道
 
-宿主监管者新建阻塞的匿名 Linux AF_UNIX/SOCK_SEQPACKET socketpair，严格只将一端作为 fd 3 给受保护的专用 smbd，另一端作为 fd 3 给本项目独立的非 root `zxs-smb-storage` 进程；不给 Web、系统级 Samba、其他实例或客户端。后者的 fd 4 另由宿主打开为已批准实例的**原 BOUND 只读投射**（root 属主、原单链接普通文件）。宿主分别提供 `ZXS_SYSTEM_ROOT`、`ZXS_POOL_ID`、`ZXS_SAMBA_INSTANCE_ID`、`ZXS_SAMBA_PROVISION_OP`、`ZXS_SAMBA_LIVE_CONFIG_SHA256`；必须来自原安装的独立选择，不从 socket 对端或所读记录反填。两个端点无文件名、无监听、不可连接；SO_PEERCRED 在 socketpair 上属于创建者，不能证明后来执行哪套二进制。宿主须验证实际启动的两份发行件，且在各自 exec 后关闭自己及其他进程不需要的副本；不得跨 UID 映射辨不出该 root 创建者却放宽准入。此通道与离线域供给不相通。
+宿主监管者新建阻塞的匿名 Linux AF_UNIX/SOCK_SEQPACKET socketpair，严格只将一端作为 fd 3 给受保护的专用 smbd，另一端作为 fd 3 给本项目独立的非 root `zxs-smb-storage` 进程；不给 Web、系统级 Samba、其他实例或客户端。后者的 fd 4 另由宿主打开为已批准实例的**原 BOUND 只读投射**（root 属主、原单链接普通文件）；fd 5 是宿主从创建时钉住、对应这一个前台专用 smbd **实际原进程**的 Linux process pidfd，不能由 fd 3 对端补给、启动器自己的 PID 或事后进程名替代。宿主分别提供 `ZXS_SYSTEM_ROOT`、`ZXS_POOL_ID`、`ZXS_SAMBA_INSTANCE_ID`、`ZXS_SAMBA_PROVISION_OP`、`ZXS_SAMBA_LIVE_CONFIG_SHA256`；必须来自原安装的独立选择，不从 socket 对端或所读记录反填。两个端点无文件名、无监听、不可连接；SO_PEERCRED 在 socketpair 上属于创建者，不能证明后来执行哪套二进制。宿主须验证实际启动的两份发行件，且在各自 exec 后关闭自己及其他进程不需要的副本；不得跨 UID 映射辨不出该 root 创建者却放宽准入。此通道与离线域供给不相通。
 
 只有在 smbd 已用同一配置字节并从真实专用 SAM 复验时，才向原通道发其 128B BOUND，并用同一消息只交接一件内核原物：专 smbd 刚建的匿名 Linux pipe 的只读端。写端不携数据，留在 smbd 及其 fork 的参与进程，禁止转交给第三方。存储进程独立持原 SYSTEM 目录 SH，用同一 SQLite 短读切面核 INIT/原卷标、唯一配对及其当前 SMB AccountId/凭据单和代次，域须为原本地域＋RID1000。受管 BOUND 在整个核对中保持原 FD、戳与相同字节。答复固定 212B：16B `ZXS-SAM/READY-1\0`、所核同一 BOUND、16B SMB AccountId、16B 凭据原单、8B 大端代次、28B 账户 SID。先完成字节数和原件核对才回复；不会选取或发送口令、NT 验证材料或 Web 凭据。成功仅描述启动瞬间证实的这份账户；不是 NTLM 验证、正面登录票、共享授权或目录就绪。
 
@@ -38,7 +38,7 @@ helper 供给的 `/instance/domain.bound` 正好 128 字节：`ZXS-SAM/BOUND-1\0
 
 ### 每次新 SMB2 握手的服务端挑战（仍无成功登录）
 
-真实的全新 SMB2 SESSION_SETUP 尚未建立会话时，只能为本次请求预取一次挑战。主通道拥塞立即拒本次登记；等待私端答复使用 Samba 原 tevent，十秒超时或取消即关本次等待和端点，不占用事件循环、未创建可访问的会话。其他连接/请求可先得到自己的答复。通用认证/RPC 调用、重认证、通道绑定、客户端改挑战或超时后在原上下文换挑战均被拒。专用 smbd 在这个上下文新建匿名 socketpair，向原已配对的 fd 3 发送 16B `ZXS-SAM/BEGIN-1\0` 和单独的对端 FD；多个 smbd 子进程在共用 fd 3 上**只发注册、不收挑战**。存储进程从系统随机源取 8B 非零值，仅向此次单独端点回复 16B `ZXS-SAM/CHLNG-1\0` 加原 8B。原 GENSEC 接手已就绪的这一个端点和挑战，正常对象销毁即关闭；以后查询不等待，按本机单调时钟和原私端复核，30 秒外即使远端还未关闭也拒。资格失败不改用 Samba 的其他随机源。
+真实的全新 SMB2 SESSION_SETUP 尚未建立会话时，只能为本次请求预取一次挑战。主通道拥塞立即拒本次登记；等待私端答复使用 Samba 原 tevent，十秒超时或取消即关本次等待和端点，不占用事件循环、未创建可访问的会话。其他连接/请求可先得到自己的答复。通用认证/RPC 调用、重认证、通道绑定、客户端改挑战或超时后在原上下文换挑战均被拒。专用 smbd 在这个上下文新建匿名 socketpair，向已配对的 fd 3 发送 `ZXS-SAM/BEGIN-2\0`（16B）和原 TCP 的两个大端 64 位 cookie，随包给单独的对端 FD；多个 smbd 子进程在共用 fd 3 上**只发注册、不收挑战**。存储进程从系统随机源取 8B 非零值，仅向此次单独端点回复 16B `ZXS-SAM/CHLNG-1\0` 加原 8B。原 GENSEC 接手已就绪的这一个端点和挑战，正常对象销毁即关闭；以后查询不等待，按本机单调时钟和原私端复核，30 秒外即使远端还未关闭也拒。资格失败不改用 Samba 的其他随机源。
 
 每次受管进程配对最多同时保留 32 个待处理挑战，按各自的 30 秒期限清退；满时只拒新的一次；原 BEGIN 完整但内核未能交出一件正确的 FD 时也只拒本次。坏控制帧/关闭仍撤销整次运行配对。超时、对端结束或私端额外输入即放弃原尝试。内核 poll 最长每 500ms 清理，不能据仍有一个 FD 声称已经验证。停止时全撤，仍等原生命周期 pipe 的最后写端真正关闭。此处不查密码、不接收客户端证明、不计算会话密钥或写 SQL；挑战是非秘密数值。本阶段原生密码回调对这种上下文明确失败，不能回落到 SAM/guest 或拿挑战换会话。未运行的源码用例覆盖独立的本机端点、队列、缺 FD 和过期；专用源码构建的 tevent 小夹具让第二个真实可读回调先于仍无答复的第一个执行。未实测系统 FD 枯竭，也不是 Windows 登录验收。
 
@@ -47,6 +47,14 @@ helper 供给的 `/instance/domain.bound` 正好 128 字节：`ZXS-SAM/BOUND-1\0
 只有专用前台 smbd 已配对的监听父进程在真正的 TCP `accept` 成功后、为它 `fork` 之前，才在本次调用栈记录原网络命名空间与原 socket 的内核 cookie。子分支完成 Samba 自身重初始化和专用 SAM 复核后，在同一已接受的 socket 上一次性认领。新 SMB2 SESSION_SETUP、其异步挑战回调、后续消息和最终令牌门都要求本次进程/连接仍相符；原 GENSEC 取挑战还核原工作进程。用另一个连接占用相同 FD 号不能接续，原连接的 `dup` 不改身份。父进程、通知/清理辅助进程、再派生的子进程、inetd 与交互分支不获此角色。这里没有给进程持有额外 TCP FD，不改已发布盘格式。
 
 此处证明的是**这份受控代码本次处理了哪条连接**，不是存储进程已经从操作系统独立验明应该向谁供给凭据，也不是客户通过认证。原密码判断继续关闭；PID、cookie、原挑战通道或 READY 均不能单独作为对外授权。测试源码用两条不同的回环 TCP、原 FD 替换、辅助 fork 和二次 fork 区分这些条件；未执行。
+
+### 存储端如何认出发起这一次认证的进程
+
+1. 宿主只运行固定发行，在**原 PID 命名空间的属主 user namespace**及其祖先里，专用 smbd 和所有能发送 fd 3 的参与者均无、也不能重新取得 `CAP_SYS_ADMIN`；不把 fd 转交给其他主体。发行入口能实查的是当前 user namespace 中有效、许可、继承、ambient 和 bounding 五组位，不是对其他命名空间权限的证明。受信宿主还必须保证原监听与传递端处于同一固定 PID namespace、它的属主正是这些进程的 user namespace，并排除向更高权限主体交付原端；无法确证此部署即不启动。服务不自行修改能力或切命名空间。原服务与运行实例的鉴别仍来自可信宿主。这不是通用的“不信任主机 root”的沙箱。
+2. 服务实际 accept/fork 后，在同一父级事件回调里，直接取这个尚未被回收的**亲生**子进程的 pidfd（拒自动回收配置；对 pidfd 作不消费的非阻塞子状态检查），用 `ZXS-SAM/CHILD-1\0 | net-cookie | socket-cookie` 向 fd 3 交这一个原 pidfd，只含非秘密调度信息。父不等存储或业务；成功将消息排入队列后才放本子继续，提前调度的子只等自己的一次启动闸；拒绝/超时发生在 Samba 子进程重初始化前，此时只以 `_exit` 结束该子，不运行继承的监听父清理、更不删除父 pidfile。待实机验拒绝一笔后原父 pidfile 不变、其他已接入连接仍可服务。别的 fork 不会被计入。
+3. 存储只在最后一次发 READY 后开启 Linux `SO_PASSPIDFD`，此后该主端只收不发，避免 Unix socket 自动绑定名字。两种角色消息均由发送进程附**自己**的内核校验身份，即使刚好已在 READY 后的队列也能取到该条消息的 `SCM_PIDFD`。父登记的发送者必须与独立 fd 5 是同一个仍存活的 pidfs 进程；子送 BEGIN 则核其真实发送者、所报原 TCP 和本次独立私端的 `SO_PEERPIDFD` 都对上这份登记。进程号、UID、socketpair 创建者、同名程序、上一条 READY 或仅持有 fd 3 都不够。重复/晚到/错件不替换原登记；最多 256 个登记、32 个进行中的挑战，进程消亡、超时及停机撤销。没有新监听或用户可查询的本机接口。参见 [Linux 6.12 的发送者记录](https://github.com/torvalds/linux/blob/v6.12/net/unix/af_unix.c#L1799-L1821)、[凭据的命名空间限制](https://github.com/torvalds/linux/blob/v6.12/net/core/scm.c#L43-L59) 和 [pidfd 的现场原物](https://github.com/torvalds/linux/blob/v6.12/fs/pidfs.c#L374-L387)。
+
+该登记只确定“哪一个真实接入进程为哪条 TCP 进行这一次挑战”。它不提供口令、密码等价物、正向会话或 FILE 权。后续专用认证处理仅可在这个受管 smbd 客户进程的原 GENSEC 中使用唯一 SMB 账号当前那一代验证资料，禁止独立查询接口/公开 fd 3/日志/另一个账户库输出；原登录失败、过期、凭据变化均不能靠调度证明放行。需保留原生签名与完整性后验，待准确 SMB2 session 发表成功后才可绑定当前共享和 FILE。宿主 fd 5 的实际交付、真实 Windows 登录和数据访问仍未验收。
 
 ### 原生 NTLMv2 输入与诊断边界
 

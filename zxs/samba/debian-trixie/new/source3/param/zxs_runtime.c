@@ -9,6 +9,8 @@
 #include "libcli/security/security.h"
 #include <gnutls/crypto.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <time.h>
 #include <linux/magic.h>
 #include <linux/stat.h>
 #include <sys/statfs.h>
@@ -228,6 +230,7 @@ bool zxs_runtime_domain(const struct dom_sid *s)
  * No smbd opens SYSTEM.sqlite3 or interprets host client passwords here. */
 bool zxs_runtime_control_take(void)
 {
+	if (zxs_smb_sender_isolated()!=0) { return false; }
 	if (control_fd!=-1 || zxs_smb_ctl_claim(3)!=0) { return false; }
 	control_fd=fcntl(3,F_DUPFD_CLOEXEC,5);
 	if (control_fd<0) { return false; }
@@ -263,9 +266,44 @@ bool zxs_runtime_connect_storage(void)
 	return true;
 }
 
-bool zxs_runtime_offer_child(int fd,struct zxs_client_offer *o)
+/* The accepted child cannot submit BEGIN before the original parent's
+ * dispatch packet is in the same socket queue. Only the new child waits,
+ * before it takes any client requests. The parent never waits or retries. */
+bool zxs_runtime_prepare_gate(int fd,struct zxs_client_offer *o,int gate[2])
 {
-	return zxs_runtime_storage_live() && zxs_offer_accepted(&client_role,fd,o);
+	return zxs_runtime_storage_live() && zxs_offer_accepted(&client_role,fd,o) &&
+	       socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC|SOCK_NONBLOCK,0,gate)==0;
+}
+void zxs_runtime_dispatch_child(const struct zxs_client_offer *o,pid_t child,int gate[2])
+{
+	const uint8_t ready=1;
+	close(gate[0]);
+	if (child>0 && o->parent==getpid() && client_role.parent==getpid() &&
+	    zxs_smb_dispatch(control_fd,child,o->tcp.net,o->tcp.sock)==0) {
+		(void)send(gate[1],&ready,1,MSG_NOSIGNAL|MSG_DONTWAIT);
+	}
+	close(gate[1]); /* on any failure child observes EOF */
+}
+void zxs_runtime_wait_gate_or_exit(int fd)
+{
+	struct pollfd p={.fd=fd,.events=POLLIN};struct timespec t;
+	int64_t end,now;uint8_t v=0;
+	if (clock_gettime(CLOCK_MONOTONIC,&t)!=0) { _exit(EXIT_FAILURE); }
+	end=(int64_t)t.tv_sec*1000+t.tv_nsec/1000000+10000;
+	for (;;) {
+		int n;ssize_t got;
+		if (clock_gettime(CLOCK_MONOTONIC,&t)!=0) { break; }
+		now=(int64_t)t.tv_sec*1000+t.tv_nsec/1000000;
+		if (now>=end || end-now>10000) { break; }
+		n=poll(&p,1,(int)(end-now));
+		if (n<0 && errno==EINTR) { continue; }
+		if (n!=1 || (p.revents&POLLIN)==0) { break; }
+		got=recv(fd,&v,1,MSG_DONTWAIT|MSG_TRUNC);
+		if (got<0 && (errno==EINTR || errno==EAGAIN)) { continue; }
+		if (got==1 && v==1) { close(fd);return; }
+		break;
+	}
+	_exit(EXIT_FAILURE); /* No inherited Samba or libc finalizers. */
 }
 bool zxs_runtime_claim_child(const struct zxs_client_offer *o,int fd)
 {
@@ -286,5 +324,5 @@ bool zxs_runtime_client_process(void)
 int zxs_runtime_attempt(int transport,int64_t *started_msec)
 {
 	if (!zxs_runtime_child_on(transport)) { return -1; }
-	return zxs_smb_try_open(control_fd,started_msec);
+	return zxs_smb_try_open(control_fd,client_role.tcp.net,client_role.tcp.sock,started_msec);
 }

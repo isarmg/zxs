@@ -3,7 +3,7 @@
  * an auxiliary fork, the selected fork and an inherited grandchild. No
  * Samba service, setup credential, SQL access or positive authentication. */
 #include "includes.h"
-#include "param/zxs_client_role.h"
+#include "param/zxs_runtime.h"
 #include <arpa/inet.h>
 #include <sys/wait.h>
 
@@ -14,6 +14,35 @@ static bool complete(pid_t pid)
 	while (waitpid(pid,&status,0)<0) { if (errno!=EINTR) { return false; } }
 	return WIFEXITED(status) && WEXITSTATUS(status)==0;
 }
+/* A rejected child still runs with its listener's inherited process state.
+ * Ordinary exit would run this inherited-cleanup sentinel. This fixture
+ * does not start a live listener or claim to exercise Samba's pidfile. */
+static int inherited_cleanup_fd=-1;
+static void inherited_cleanup(void)
+{
+	const char mark='x';
+	if (inherited_cleanup_fd>=0) { (void)write(inherited_cleanup_fd,&mark,1); }
+}
+static bool rejected_before_reinit(void)
+{
+	int gate[2],witness[2],status;char mark;pid_t child,got;ssize_t seen;
+	if (socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,gate)!=0 || pipe(witness)!=0) {
+		return false;
+	}
+	child=fork();
+	if (child==0) {
+		close(gate[1]);close(witness[0]);inherited_cleanup_fd=witness[1];
+		if (atexit(inherited_cleanup)!=0) { _exit(2); }
+		zxs_runtime_wait_gate_or_exit(gate[0]);
+		_exit(3); /* The closed gate must not hand a worker to smbd_process. */
+	}
+	close(gate[0]);close(gate[1]);close(witness[1]);
+	if (child<=0) { close(witness[0]);return false; }
+	do { got=waitpid(child,&status,0); } while (got<0 && errno==EINTR);
+	do { seen=read(witness[0],&mark,1); } while (seen<0 && errno==EINTR);
+	close(witness[0]);
+	return got==child && WIFEXITED(status) && WEXITSTATUS(status)==EXIT_FAILURE && seen==0;
+}
 int main(void)
 {
 	int l=-1,c1=-1,c2=-1,a1=-1,a2=-1;
@@ -21,6 +50,7 @@ int main(void)
 	struct zxs_client_role r={.parent=getpid()};
 	struct zxs_client_offer o={0},unused={0};
 	pid_t p;
+	if (!rejected_before_reinit()) { return 1; }
 	a.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
 	l=socket(AF_INET,SOCK_STREAM|SOCK_CLOEXEC,IPPROTO_TCP);
 	c1=socket(AF_INET,SOCK_STREAM|SOCK_CLOEXEC,IPPROTO_TCP);

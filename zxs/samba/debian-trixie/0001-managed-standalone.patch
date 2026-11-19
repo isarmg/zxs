@@ -492,15 +492,16 @@
  #include "../lib/util/memcache.h"
  #include "ctdbd_conn.h"
  #include "lib/util/util_process.h"
-@@ -961,6 +963,7 @@
+@@ -961,6 +963,8 @@
  	struct messaging_context *msg_ctx = s->parent->msg_ctx;
  	struct sockaddr_storage addr;
  	socklen_t in_addrlen = sizeof(addr);
 +	struct zxs_client_offer zxs_accepted = {0};
++	int zxs_gate[2];
  	int fd;
  	pid_t pid = 0;
  
-@@ -983,6 +986,7 @@
+@@ -983,6 +987,7 @@
  			exit_server("reinit_after_fork() failed");
  			return;
  		}
@@ -508,20 +509,31 @@
  		smbd_process(ev, msg_ctx, fd, true);
  		exit_server_cleanly("end of interactive mode");
  		return;
-@@ -990,7 +994,12 @@
- 
+@@ -991,6 +996,11 @@
  	if (!allowable_number_of_smbd_processes(s->parent)) {
  		close(fd);
  		return;
- 	}
++	}
 +	/* This offer lives on this accept's stack, not on the listener, in a
 +	 * credential store, or in the global fork reinitialization hook. */
-+	if (!zxs_runtime_offer_child(fd,&zxs_accepted)) {
++	if (!zxs_runtime_prepare_gate(fd,&zxs_accepted,zxs_gate)) {
 +		close(fd); return;
-+	}
+ 	}
  
  	pid = fork();
-@@ -1036,6 +1045,8 @@
+@@ -1004,6 +1014,11 @@
+ 		 */
+ 		talloc_free(s->parent);
+ 		s = NULL;
++
++		close(zxs_gate[1]);
++		/* Before Samba's child reinit: never run cleanup inherited
++		 * from the real listener (including its pidfile). */
++		zxs_runtime_wait_gate_or_exit(zxs_gate[0]);
+ 
+ 		/* Stop zombies, the parent explicitly handles
+ 		 * them, counting worker smbds. */
+@@ -1036,12 +1051,15 @@
  		print_sockaddr(addrstr, sizeof(addrstr), &addr);
  		process_set_title("smbd[%s]", "client [%s]", addrstr);
  
@@ -530,7 +542,14 @@
  		smbd_process(ev, msg_ctx, fd, false);
  	 exit:
  		exit_server_cleanly("end of child");
-@@ -1412,6 +1423,18 @@
+ 		return;
+ 	}
+ 
++	zxs_runtime_dispatch_child(&zxs_accepted,pid,zxs_gate);
+ 	if (pid < 0) {
+ 		DEBUG(0,("smbd_accept_connection: fork() failed: %s\n",
+ 			 strerror(errno)));
+@@ -1412,6 +1430,18 @@
  		return False;
  
  	return True;
@@ -549,7 +568,7 @@
  }
  
  static void smbd_parent_sig_term_handler(struct tevent_context *ev,
-@@ -1843,6 +1866,13 @@
+@@ -1843,6 +1873,13 @@
  	};
  	bool ok;
  
@@ -563,7 +582,7 @@
  	setproctitle_init(argc, discard_const(argv), environ);
  
  	/*
-@@ -2038,7 +2068,14 @@
+@@ -2038,7 +2075,14 @@
  
  	DEBUG(3,("loaded services\n"));
  
@@ -579,7 +598,7 @@
  
  	if (!profile_setup(msg_ctx, False)) {
  		DEBUG(0,("ERROR: failed to setup profiling\n"));
-@@ -2122,6 +2159,11 @@
+@@ -2122,6 +2166,11 @@
  	parent->ev_ctx = ev_ctx;
  	parent->msg_ctx = msg_ctx;
  	am_parent = parent;
@@ -591,7 +610,7 @@
  
  	se = tevent_add_signal(parent->ev_ctx,
  			       parent,
-@@ -2166,9 +2208,7 @@
+@@ -2166,9 +2215,7 @@
  		TALLOC_FREE(lp_ctx);
  	}
  
@@ -912,7 +931,7 @@
 +
 +bld.SAMBA3_BINARY('test_zxs_client_role',
 +                   source='torture/test_zxs_client_role.c',
-+                   deps='samba-util',
++                   deps='samba-util smbconf',
 +                   for_selftest=True)
 +
 +bld.SAMBA3_BINARY('test_zxs_challenge_events',

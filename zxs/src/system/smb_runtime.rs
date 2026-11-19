@@ -15,6 +15,8 @@ const DOMAIN:[u8;12]=[1,4,0,0,0,0,0,5,21,0,0,0];
 unsafe extern "C"{
     fn zxs_smb_ctl_claim(fd:i32)->i32;
     fn zxs_smb_bound_fd(fd:i32)->i32;
+    fn zxs_smb_origin_enable(fd:i32)->i32;
+    fn zxs_smb_process_claim(fd:i32)->i32;
     #[cfg(test)] fn zxs_smb_ctl_read(fd:i32,p:*mut u8,n:usize)->i32;
     #[cfg(test)] fn zxs_smb_ctl_hello(fd:i32,p:*const u8)->i32;
     fn zxs_smb_ctl_bound(fd:i32,p:*mut u8)->i32;
@@ -80,21 +82,30 @@ fn exchange(fd:i32,src:&InitialReader,e:&Expected,host:&[u8;128],before_send:imp
     if unsafe{zxs_smb_ctl_life(life.as_raw_fd(),0)}!=0{return Err(denied());}
     os(unsafe{zxs_smb_ctl_write(fd,reply.as_ptr(),reply.len())})?;Ok(life)
 }
-/// Both descriptors come from the trusted launcher. The original BOUND fd is
-/// independent of smbd's check of the live config and the native SAM. This is
-/// a service-start operation: no arbitrary client connector or auth result.
+/// These descriptors come independently from the trusted launcher. The
+/// process pidfd is the actual foreground smbd, not its supervisor's PID,
+/// a peer-provided number, or identity inferred from the control socket.
 pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config:&str,
-    endpoint:OwnedFd,binding:File,stopping:impl Fn()->bool)->io::Result<()>{
+    endpoint:OwnedFd,binding:File,master:OwnedFd,stopping:impl Fn()->bool)->io::Result<()>{
     let fd=endpoint.as_raw_fd();
-    os(unsafe{zxs_smb_ctl_claim(fd)})?;
+    os(unsafe{zxs_smb_ctl_claim(fd)})?;os(unsafe{zxs_smb_process_claim(master.as_raw_fd())})?;
     let e=Expected{pool,instance:hex(instance)?,provision,config:hex(config)?};
     let (host,stamp)=original(&binding)?;e.checked(&host)?;
     let src=InitialReader::open(system,pool)?; // original S SH through close
     let result=(||{
         let life=exchange(fd,&src,&e,&host,||{
-            if original(&binding)?!=(host,stamp)||stopping(){return Err(denied());}Ok(())
+            if original(&binding)?!=(host,stamp)||stopping(){return Err(denied());}
+            os(unsafe{zxs_smb_process_claim(master.as_raw_fd())})
         })?; // never an NT secret or password response
-        attempts::serve(fd,&life,stopping)
+        // No further sends on this anonymous endpoint (shutdown is not a
+        // send). Authentic role frames always supplied their own kernel-
+        // checked credentials, including ones already queued on this edge.
+        if let Err(e)=os(unsafe{zxs_smb_origin_enable(fd)}){
+            let _=unsafe{zxs_smb_ctl_drain(fd)};
+            while unsafe{zxs_smb_ctl_life(life.as_raw_fd(),500)}==0 {}
+            return Err(e);
+        }
+        attempts::serve(fd,&life,&master,stopping)
     })();
     drop(endpoint); // revoke the smbd end before releasing the original S, on errors too
     drop(src);result

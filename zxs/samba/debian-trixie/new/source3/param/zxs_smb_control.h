@@ -5,6 +5,7 @@
 #define ZXS_SMB_CONTROL_H
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 #define ZXS_SMB_BIND_LEN 128
 #define ZXS_SMB_READY_LEN 212
 int zxs_smb_ctl_claim(int fd);
@@ -17,11 +18,18 @@ int zxs_smb_ctl_life(int pipe_reader,int timeout);
 #define ZXS_SMB_MAX_ATTEMPTS 32
 /* No network event-loop call waits for storage. Submission and receive
  * both use MSG_DONTWAIT. Only the original readiness callback receives. */
-int zxs_smb_try_open(int original_control,int64_t *started_msec);
+int zxs_smb_try_open(int original_control,uint64_t net,uint64_t sk,int64_t *started_msec);
 int zxs_smb_try_read(int attempt,int64_t started_msec,uint8_t challenge[8]);
 int zxs_smb_try_current(int attempt,int64_t started_msec);
-/* -2: exact BEGIN consumed; its offered descriptor is unavailable or invalid. */
-int zxs_smb_try_accept(int original_control);
+/* Exact dedicated Debian kernel origins, never a principal or reusable token. */
+int zxs_smb_sender_isolated(void);
+int zxs_smb_process_live(int pidfd);
+int zxs_smb_process_claim(int pidfd);
+int zxs_smb_same_process(int left,int right);
+int zxs_smb_attempt_peer(int endpoint,int sender_pidfd);
+int zxs_smb_origin_enable(int control);
+int zxs_smb_dispatch(int control,pid_t direct_child,uint64_t net,uint64_t sk);
+int zxs_smb_origin_recv(int control,uint64_t tcp[2],int *sender,int *right);
 int zxs_smb_try_issue(int attempt,const uint8_t challenge[8]);
 /* events: bit 1 readable, bit 2 terminal. Index 0 control, 1 lifetime,
  * then the same bounded list of independent attempt sockets. */
