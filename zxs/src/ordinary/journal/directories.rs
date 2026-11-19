@@ -48,11 +48,14 @@ impl Journal{
         self.directory_rows.values().filter_map(move |&(i,_)|self.decisions.get(i).and_then(|d|d.directory().ok())
             .filter(|d|d.origin.parent.address==parent))
     }
-    pub(in crate::ordinary) fn new_directory_slot(&self,o:&DirOrigin,reg:&Allowed<'_>)->io::Result<()>{
+    fn unoccupied_ordinary_slot(&self)->io::Result<()>{
         if self.making.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||
             self.editing.is_some()||self.incrementing.is_some()||self.moving.is_some()||self.pending.is_some()||self.tail!=0{
             return Err(invalid("a different original command occupies this SYSTEM slot"));}
-        self.new_directory_origin(o,reg)?;self.room_for(MAX_FRAME)
+        Ok(())
+    }
+    pub(in crate::ordinary) fn new_directory_slot(&self,o:&DirOrigin,reg:&Allowed<'_>)->io::Result<()>{
+        self.unoccupied_ordinary_slot()?;self.new_directory_origin(o,reg)?;self.room_for(MAX_FRAME)
     }
     /// Project the original ordinary parent from THIS registration and
     /// confirmed prefix, never from a physical path or a supplied mkdir
@@ -77,11 +80,26 @@ impl Journal{
         if Frame::read(r.basis().0,&f.bytes)?!=*f||prev.checked_add(1)!=Some(f.seq)||head!=f.previous||
             c.parent!=self.file_parent_at(address,c.uid,r)?{
             return Err(invalid("prospective FILE does not bind this confirmed parent and original prefix"));}
-        let budget=match address{
-            DirParent::Root(v)=>r.ordinary_path_budget(v,c.uid)?,
-            DirParent::Child(_,id)=>self.directory_rows.get(&id).ok_or_else(||invalid("lost confirmed FILE parent path"))?.1,
-        };
-        super::super::material::ticket_budget(budget,&c.name,c.attempt)?;Ok(())
+        match address{
+            DirParent::Root(v)=>{super::super::material::ticket_budget(r.ordinary_path_budget(v,c.uid)?,&c.name,c.attempt)?;},
+            DirParent::Child(_,id)=>{self.child_file_geometry(id,&c.name,c.attempt)?;},
+        }Ok(())
+    }
+    fn child_file_geometry(&self,id:DirectoryId,name:&str,ticket:OperationId)->io::Result<()>{
+        let b=self.directory_rows.get(&id).ok_or_else(||invalid("lost confirmed FILE parent path"))?.1;
+        super::super::material::child_residence_budget(b,name,ticket)?;Ok(())
+    }
+    /// This is an original prefix check for a NEW prospective child birth.
+    /// Not for resuming an existing operation or issuing physical material.
+    pub(in crate::ordinary) fn prospective_child_file(&self,t:&allocation::Terms<'_>,r:&Allowed<'_>)->io::Result<()>{
+        let address=t.parent.address(t.volume);let DirParent::Child(_,id)=address else{return Err(invalid("not a child FILE request"));};
+        let(n,prev)=self.frontier();let(pool,init,_)=r.basis();self.unoccupied_ordinary_slot()?;
+        if t.pool!=pool||n.checked_add(1)!=Some(t.seq)||t.previous!=prev||*t.parent!=self.file_parent_at(address,t.uid,r)?||
+            !r.file(t.volume,t.uid,t.root.entity,&t.root.birth,true)||self.names.get(address,t.name).is_some()||
+            self.entry_used(t.entry)||self.file(t.file).is_some()||self.on_all().any(|f|f.create.history==t.history)||
+            t.op==t.attempt||[t.op,t.attempt].into_iter().any(|v|v==init||self.ticket_used(v)){
+            return Err(invalid("different original parent, occupied entry, identity, operation or private ticket"));}
+        self.child_file_geometry(id,t.name,t.attempt)?;self.room_for(MAX_FRAME)
     }
     /// Root to selected child, bounded before touching any physical child.
     /// An arbitrary decoded Created is not an argument. A still-unconfirmed

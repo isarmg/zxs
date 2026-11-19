@@ -54,7 +54,7 @@ pub(super) fn admit_current_held(cut:&super::formal::ParentCut,volume:&FileVolum
     let pending=state.saving.as_ref().filter(|a|a.original.file==c.create.file);
     let sealed=state.pending.as_ref().filter(|p|pending.is_some_and(|a|p.frame.op()==a.original.op));
     let work=saved.map(|f|(f.original.op,true)).or_else(||pending.map(|a|(a.original.op,sealed.is_some())));
-    let dir=container::working_directory_held(volume,&c.create,work)?;
+    let dir=container::working_directory_held(volume,state,c,work)?;
     if let Some(f)=saved{return Reader::current(&dir,&f.original,&f.material).map(|b|Some(Body::Working(b)));}
     // The logical old revision is still empty. A matching private spelling
     // that exists, however, is not harmless or attributable merely by name.
@@ -126,7 +126,7 @@ fn choice<'a>(pool:&LocalPool,s:&'a Journal,op:OperationId,file:FileId,claim:Dra
 }
 fn source_dir(v:&FileVolume<'_>,c:&Frame,state:&Journal,o:&Original)->io::Result<HeldDir>{
     let work=state.saving.as_ref().map(|_|(o.op,state.pending.is_some()||state.decided(o.op).is_some()));
-    container::working_directory(v,&c.create,work)
+    container::working_directory(v,state,c,work)
 }
 enum Source{Done(DraftReceipt),Consume(InputHandle),Verify(PendingReader)}
 fn source(system:&Path,op:OperationId,file:FileId,claim:DraftClaim)->io::Result<Source>{

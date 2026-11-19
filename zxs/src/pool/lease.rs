@@ -34,6 +34,19 @@ impl LocalPool {
 
     pub(crate) fn journal_registration(&self)->super::JournalRegistration<'_>{super::JournalRegistration(&self.registration)}
     pub(crate) fn id(&self)->PoolId{self.registration.info.id}
+    /// A low-water mark is not evidence of missing or altered frames. The
+    /// fast path uses the exact named inode stamp from a complete, checked
+    /// read of its bytes. A legitimately appended, unconfirmed suffix can
+    /// change this stamp; then only another full, original admission suffices.
+    pub(crate) fn require_namespace_floor(&self,admitted:&fs::OriginalStamp,frames:usize,value:fs::Frontier)->io::Result<()>{
+        let min=self.registration.bytes.len().checked_add(frames).ok_or_else(||invalid("namespace prefix size overflow"))?;
+        if admitted.stat.entity()!=self.registration.origin||admitted.birth!=self.registration.origin_birth||
+            admitted.stat.size()<(min as u64){return Err(invalid("namespace cut was not read from the complete original register"));}
+        if matches!(self.system.read_frontier(READY,admitted,MAX_SYSTEM),Ok(now) if now==value){return Ok(());}
+        let(_,now)=self.snapshot()?;
+        if now.confirmed_floor()!=value{return Err(invalid("FILE read belongs to another confirmed namespace cut"));}
+        Ok(())
+    }
     pub(crate) fn require_business_op(&self,op:OperationId)->io::Result<()>{
         if op==self.registration.info.initialized_by{return Err(invalid("operation ID already belongs to pool initialization"));}
         Ok(())

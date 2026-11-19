@@ -96,7 +96,13 @@ fn original_move_is_not_old_source_fallback_after_decision_and_recovers_only_the
         // never withdraws A. The confirmed decision reserves B before install.
         {
             use crate::pool::lease::{Access,LocalPool};
-            let(_,_,j)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+            let(pool,_,j)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+            if step==Cut::MoveTargetChecked{
+                // The old name and original inode still exist on A, but custody belongs to B.
+                let birth=j.file(r.id).unwrap();let old=pool.ordinary(f.from).unwrap();
+                assert_eq!(fs::metadata(f.old.join("name")).unwrap().ino(),birth.create.directory.entity.inode);
+                assert!(crate::ordinary::directory::file_home::open(&old,&j,birth).is_err());
+            }
             let before=matches!(step,Cut::Reservation|Cut::Intent|Cut::FrameSynced);
             assert_eq!(j.occupied_root(f.from,"name"),before);assert_eq!(j.occupied_root(f.to,"name"),!before);
             let bound=if before{f.from}else{f.to};

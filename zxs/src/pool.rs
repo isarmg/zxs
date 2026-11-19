@@ -68,7 +68,7 @@ fn published_with_sync(dir:&HeldDir,confirm:impl FnOnce(&HeldDir,&fs::OriginalSt
     }
     require_system(dir,&record)?;
     let frontier=dir.read_frontier(READY,&stamp,MAX_SYSTEM)?;
-    let journal=crate::ordinary::journal::Journal::read(dir,JournalRegistration(&record),tail,frontier)?;
+    let journal=crate::ordinary::journal::Journal::read(dir,JournalRegistration(&record),tail,frontier,&stamp)?;
     confirm(dir,&stamp)?;
     Ok(Some(Published{stamp,record,journal}))
 }

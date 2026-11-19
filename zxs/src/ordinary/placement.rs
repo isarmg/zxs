@@ -22,6 +22,14 @@ impl<'a> Placement<'a>{
     pub(super) fn birth(self)->&'a Frame{self.birth}
     pub(super) fn transfer(self)->Option<&'a Moved>{self.applied}
     pub(super) fn volume(self)->VolumeId{self.applied.map_or(self.birth.create.volume,|m|m.original.to)}
+    /// Only ordinary endpoints participate in a parent namespace. Today's
+    /// admitted custody frames name registered roots; a DELETE ends at R,
+    /// not at a synthetic ordinary root on the recycle filesystem.
+    pub(in crate::ordinary) fn ordinary_parent(self)->Option<super::DirectoryParent>{
+        if self.retained().is_some(){return None;}
+        Some(self.applied.map_or_else(||self.birth.create.parent.address(self.birth.create.volume),
+            |m|super::DirectoryParent::Root(m.original.to)))
+    }
     pub(super) fn epoch(self)->u64{self.applied.map_or(0,|m|m.original.epoch+1)}
     pub(super) fn key(self)->[u8;32]{self.applied.map_or(self.birth.digest,|m|m.digest)}
     pub(super) fn retained(self)->Option<super::journal::credits::Deletion>{

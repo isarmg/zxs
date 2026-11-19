@@ -10,7 +10,7 @@ impl<'v,'p> HeldParent<'v,'p>{
         if v.id()!=address.volume(){return Err(invalid("directory address is not on this registered ordinary volume"));}
         let(_,s)=v.pool.snapshot()?;let result=Self::at_cut(v,address,&s)?;result.require_at(&s)?;Ok(result)
     }
-    fn at_cut(v:&'v FileVolume<'p>,address:Parent,s:&Journal)->io::Result<Self>{
+    pub(super) fn at_cut(v:&'v FileVolume<'p>,address:Parent,s:&Journal)->io::Result<Self>{
         let mut basis=Basis::registered(v)?;let mut chain:Vec<(Created,HeldDir)>=Vec::new();
         for row in s.directory_lineage(address)?{
             let previous=chain.last().map(|(d,_)|d);
@@ -33,7 +33,7 @@ impl<'v,'p> HeldParent<'v,'p>{
     pub(super) fn require(&self)->io::Result<()>{
         let(_,s)=self.v.pool.snapshot()?;self.require_at(&s)
     }
-    fn require_at(&self,s:&Journal)->io::Result<()>{
+    pub(super) fn require_at(&self,s:&Journal)->io::Result<()>{
         self.v.require_current()?;
         let rows=s.directory_lineage(self.address)?;if rows.len()!=self.chain.len(){return Err(invalid("different confirmed directory depth"));}
         let mut parent=&self.v.root;

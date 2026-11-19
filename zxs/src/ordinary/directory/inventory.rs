@@ -77,25 +77,27 @@ pub(super) fn census(parent:&HeldParent<'_,'_>,s:&Journal)->io::Result<BTreeSet<
         return Err(invalid("a different original writer owns this namespace cut"));}
     let dir=parent.directory();let address=parent.basis().address;let raw=dir.names()?.into_iter().collect::<BTreeSet<_>>();
     let mut known=observe(s,address,dir,&raw)?.consumed;
-    if let Parent::Root(id)=address{
-        let mut file_tickets=BTreeMap::new();
-        for f in s.on_all().filter(|f|f.create.volume==id){file_tickets.insert(f.create.attempt,f.create.slot);}
-        for m in s.moves().filter(|m|m.original.to==id){if let Some(i)=m.stage{file_tickets.insert(m.original.ticket,i);}}
-        for f in s.on(id){
-            let c=&f.create;let place=s.placement(c.file)?;let n=human(&c.name)?;
-            if place.volume()!=id||place.retained().is_some(){return Err(invalid("different ordinary owner in parent inventory"));}
-            let h=dir.child_directory(&n)?.ok_or_else(||invalid("missing current FILE sibling of ordinary directory"))?;
-            material::verify_header_at(&h,c,place.directory(),place.local())?;
-            if !known.insert(n.into_bytes()){return Err(invalid("one physical name used by both FILE and directory"));}
-        }
-        for n in &raw{
-            if let Some((t,i))=material::private_slot(n){
-                if file_tickets.get(&t).is_some_and(|limit|i<*limit){
-                    // A read-only FILE list can count a spelling without
-                    // inspecting it. A NEW mkdir may not issue or confirm a
-                    // write across an unknown object under that spelling.
-                    empty_at(dir,&material::staging(t,i),None)?;known.insert(n.clone());
-                }
+    let mut file_tickets=BTreeMap::new();
+    for f in s.on_all().filter(|f|f.create.parent.address(f.create.volume)==address){file_tickets.insert(f.create.attempt,f.create.slot);}
+    // Current handoffs issue ordinary destination private names only at a
+    // registered root. R and a same-volume child do not inherit the ticket.
+    for m in s.moves().filter(|m|Parent::Root(m.original.to)==address&&
+        !matches!(m.original.purpose,crate::ordinary::custody::purpose::Purpose::Delete{..})){
+        if let Some(i)=m.stage{file_tickets.insert(m.original.ticket,i);}
+    }
+    for f in s.at_parent(address){
+        let c=&f.create;let place=s.placement(c.file)?;let n=human(&c.name)?;
+        if place.ordinary_parent()!=Some(address){return Err(invalid("different ordinary FILE owner or parent in inventory"));}
+        let h=dir.child_directory(&n)?.ok_or_else(||invalid("missing current FILE sibling of ordinary directory"))?;
+        material::verify_header_at(&h,c,place.directory(),place.local())?;
+        if !known.insert(n.into_bytes()){return Err(invalid("one physical name used by both FILE and directory"));}
+    }
+    for n in &raw{
+        if let Some((t,i))=material::private_slot(n){
+            if file_tickets.get(&t).is_some_and(|limit|i<*limit){
+                // A new write may not cross an unknown object beneath a
+                // private spelling. Check it without adopting or deleting it.
+                empty_at(dir,&material::staging(t,i),None)?;known.insert(n.clone());
             }
         }
     }

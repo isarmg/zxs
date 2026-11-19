@@ -69,6 +69,20 @@ pub(in crate::ordinary) fn ticket_budget(parent:crate::fs::PathBudget,name:&str,
     ticket_paths(name,ticket,|n|parent.child(n))
 }
 
+/// New residence in a Child must remain addressable for a future source
+/// isolation. Only the canonical name width is used: this neither reserves a
+/// future MOVE nor opens R. Ordinary root birth keeps its original rules.
+fn child_residence<T>(name:&str,ticket:OperationId,mut check:impl FnMut(&CStr)->io::Result<T>)->io::Result<T>{
+    let human=ticket_paths(name,ticket,&mut check)?;
+    check(&super::custody::transfer::isolation_name(ticket))?;Ok(human)
+}
+pub(in crate::ordinary) fn check_child_residence(parent:&HeldDir,name:&str,ticket:OperationId)->io::Result<()>{
+    child_residence(name,ticket,|n|parent.checked_child_path(n)).map(|_|())
+}
+pub(in crate::ordinary) fn child_residence_budget(parent:crate::fs::PathBudget,name:&str,ticket:OperationId)->io::Result<crate::fs::PathBudget>{
+    child_residence(name,ticket,|n|parent.child(n))
+}
+
 /// No named write here. The actual root, FileId and this one bounded ticket
 /// must be durably reserved in SYSTEM first.
 pub(super) fn select_ticket(volume:&FileVolume<'_>,name:&str)->io::Result<(OperationId,NativeObject)>{
@@ -158,30 +172,18 @@ fn verify_directory(dir:&HeldDir,c:&Creation)->io::Result<()>{
 /// The only optional extra occupant is a working object attributable to this
 /// exact FILE’s original SYSTEM command. Its shape is not permission to serve
 /// it: a current reader still requires the published native inode and head.
-pub(super) fn working_directory(volume:&FileVolume<'_>,c:&Creation,working:Option<(OperationId,bool)>)->io::Result<HeldDir>{
-    volume.require_current()?;let dir=working_directory_held(volume,c,working)?;volume.require_current()?;Ok(dir)
+pub(super) fn working_directory(volume:&FileVolume<'_>,s:&super::journal::Journal,f:&super::wire::Frame,working:Option<(OperationId,bool)>)->io::Result<HeldDir>{
+    volume.require_current()?;let dir=working_directory_held(volume,s,f,working)?;volume.require_current()?;Ok(dir)
 }
-/// Caller compares the held selected volume before and after an inventory batch;
-/// the physical FILE, its individual local record and its actual names are
-/// still checked on every call. No repeated mount-table walk per entry.
-pub(super) fn working_directory_held(volume:&FileVolume<'_>,c:&Creation,working:Option<(OperationId,bool)>)->io::Result<HeldDir>{
-    directory_with(volume,c,working,None)
+/// Caller compares the selected volume before and after a batch. Retain
+/// the original accepted birth, rather than treating volume+name as a FILE.
+pub(super) fn working_directory_held(volume:&FileVolume<'_>,s:&super::journal::Journal,f:&super::wire::Frame,working:Option<(OperationId,bool)>)->io::Result<HeldDir>{
+    directory_all(volume,s,f,working,None,&[])
 }
-/// Receipt-selected working, raw FULL and node are the only optional native
-/// names. Before a decision the index may have been linked alone; raw-first,
-/// a missing required leaf or any extra entry is never an admitted state.
-pub(super) fn directory_with(volume:&FileVolume<'_>,c:&Creation,working:impl IntoIterator<Item=(OperationId,bool)>,
-    formal:Option<(&super::formal::types::Original,bool)>)->io::Result<HeldDir>{
-    directory_all(volume,c,working,formal,&[])
-}
-pub(super) fn directory_all(volume:&FileVolume<'_>,c:&Creation,working:impl IntoIterator<Item=(OperationId,bool)>,
+pub(super) fn directory_all(volume:&FileVolume<'_>,s:&super::journal::Journal,f:&super::wire::Frame,working:impl IntoIterator<Item=(OperationId,bool)>,
     formal:Option<(&super::formal::types::Original,bool)>,incr:&[(&super::delta::types::Original,bool)])->io::Result<HeldDir>{
-    if volume.id()!=c.volume{return Err(invalid("wrong current FILE role or volume"));}
-    let dir=volume.root.child_directory(&destination(&c.name)?)?.ok_or_else(||invalid("current FILE container not installed"))?;
-    require_entries(&dir,working,formal,incr)?;
-    verify_header(&dir,c)?;
-    if volume.root.child_directory(&staging(c.attempt,c.slot))?.is_some(){return Err(invalid("both original FILE names present"));}
-    Ok(dir)
+    let dir=super::directory::file_home::open(volume,s,f)?;
+    require_entries(&dir,working,formal,incr)?;dir.require_named()?;Ok(dir)
 }
 /// Exact FILE names from original decisions/issued operations; not a source of
 /// native identities. A future extent is never part of an earlier MOVE.

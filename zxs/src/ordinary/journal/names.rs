@@ -33,11 +33,11 @@ impl Names{
     pub(super) fn hide_directory(&mut self,d:&super::DirCreated)->io::Result<()>{
         let o=&d.origin;self.withdraw(o.parent.address,&o.name,Member::Directory{entry:o.entry,directory:o.id})
     }
-    pub(super) fn create_file(&mut self,volume:VolumeId,name:&str,entry:EntryId,file:FileId)->io::Result<()>{
-        self.enter(Parent::Root(volume),name,Member::File{entry,file})
+    pub(super) fn create_file(&mut self,parent:Parent,name:&str,entry:EntryId,file:FileId)->io::Result<()>{
+        self.enter(parent,name,Member::File{entry,file})
     }
-    pub(super) fn hide_created(&mut self,volume:VolumeId,name:&str,entry:EntryId,file:FileId)->io::Result<()>{
-        self.withdraw(Parent::Root(volume),name,Member::File{entry,file})
+    pub(super) fn hide_created(&mut self,parent:Parent,name:&str,entry:EntryId,file:FileId)->io::Result<()>{
+        self.withdraw(parent,name,Member::File{entry,file})
     }
     fn endpoints(&self,from:VolumeId,to:VolumeId,name:&str,expected:Option<Member>)->io::Result<()>{
         if from==to||self.root(from,name)!=expected||self.occupied_root(to,name){
@@ -72,11 +72,15 @@ mod tests{
         let file=Member::File{entry:e,file:f};let dir=Member::Directory{entry:other,directory:g};
         let mut n=Names::default();n.enter(Parent::Root(a),"report",dir).unwrap();
         assert!(n.occupied_root(a,"report"));assert!(n.endpoints(a,b,"report",Some(file)).is_err());
-        assert!(n.create_file(a,"report",e,f).is_err());assert!(n.hide_created(a,"report",e,f).is_err());
-        n.enter(Parent::Child(a,g),"report",file).unwrap();n.enter(Parent::Child(a,h),"report",dir).unwrap();
+        assert!(n.create_file(Parent::Root(a),"report",e,f).is_err());assert!(n.hide_created(Parent::Root(a),"report",e,f).is_err());
+        n.create_file(Parent::Child(a,g),"report",e,f).unwrap();n.enter(Parent::Child(a,h),"report",dir).unwrap();
         assert_eq!(n.get(Parent::Child(a,g),"report"),Some(file));assert_eq!(n.get(Parent::Child(a,h),"report"),Some(dir));
         assert_eq!(n.get(Parent::Child(b,g),"report"),None);assert_eq!(n.root(a,"report"),Some(dir));
-        n.withdraw(Parent::Root(a),"report",dir).unwrap();n.create_file(a,"report",e,f).unwrap();
+        assert!(n.hide_created(Parent::Child(a,h),"report",e,f).is_err());
+        n.hide_created(Parent::Child(a,g),"report",e,f).unwrap();
+        assert_eq!(n.get(Parent::Child(a,g),"report"),None);
+        assert_eq!(n.get(Parent::Child(a,h),"report"),Some(dir));assert_eq!(n.root(a,"report"),Some(dir));
+        n.withdraw(Parent::Root(a),"report",dir).unwrap();n.create_file(Parent::Root(a),"report",e,f).unwrap();
         assert!(n.endpoints(a,b,"report",Some(Member::File{entry:other,file:f})).is_err());
         assert!(n.endpoints(a,b,"report",Some(Member::File{entry:e,file:FileId([8;16])})).is_err());
         n.endpoints(a,b,"report",Some(file)).unwrap();n.enter(Parent::Root(b),"report",dir).unwrap();

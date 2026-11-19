@@ -21,7 +21,7 @@ pub(in crate::ordinary) struct Origin{
     pub src_root:NativeObject,pub dst_root:NativeObject,pub creation:[u8;32],pub parent:[u8;32],pub children:ChildRoles<[u8;32]>,
     pub source_bytes:u64,pub source_material:[u8;32],
 }
-pub(super) fn isolation_name(ticket:OperationId)->std::ffi::CString{
+pub(in crate::ordinary) fn isolation_name(ticket:OperationId)->std::ffi::CString{
     std::ffi::CString::new(format!(".zxs-move-out-{ticket}")).expect("fixed ASCII original MOVE ticket")
 }
 /// All actual (root,name) pairs that a transfer will later *have* to

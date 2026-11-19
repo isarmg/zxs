@@ -83,7 +83,7 @@ fn directory_at(v:&FileVolume<'_>,s:&Journal,c:&Frame,work:Vec<(OperationId,bool
     if let Some(dir)=super::custody::placed::active_dir(s,v,c)?{
         container::require_entries(&dir,work,f,d)?;dir.require_named()?;return Ok(dir)
     }
-    container::directory_all(v,&c.create,work,f,d)
+    container::directory_all(v,s,c,work,f,d)
 }
 pub(in crate::ordinary) fn directory(v:&FileVolume<'_>,s:&Journal,c:&Frame,w:&SaveFrame)->io::Result<HeldDir>{
     let a=s.committing.as_ref().filter(|a|a.original.file==c.create.file);

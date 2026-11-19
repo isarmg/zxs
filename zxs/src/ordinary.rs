@@ -226,14 +226,14 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
 fn root_listing(cut:&formal::ParentCut,id:VolumeId)->io::Result<(RootFiles,Vec<DirectoryInfo>)>{
     let(pool,state)=cut.originals();let volume=pool.ordinary(id)?;
     let mut names=BTreeSet::new();let mut tickets=BTreeMap::new();let mut files=Vec::new();
-    for f in state.on_all().filter(|f|f.create.volume==id){
+    for f in state.on_all().filter(|f|f.create.parent.address(f.create.volume)==DirectoryParent::Root(id)){
         // A CREATE-private ticket was issued forever on that original root,
         // never on the relocated FILE's current volume.
         // Only lower, previously empty private occupants were passed over. The
         // successful original slot must be absent once its name is installed.
         tickets.insert(f.create.attempt,f.create.slot);
     }
-    if let Some(a)=state.allocated.as_ref().filter(|a|a.volume==id&&state.operation(a.op).is_none()){
+    if let Some(a)=state.allocated.as_ref().filter(|a|a.parent.address(a.volume)==DirectoryParent::Root(id)&&state.operation(a.op).is_none()){
         tickets.insert(a.attempt,a.stage.as_ref().map_or(allocation::SLOTS,|s|s.slot+1));
     }
     let handoff=custody::inventory::view(&state,&volume,&mut tickets)?;

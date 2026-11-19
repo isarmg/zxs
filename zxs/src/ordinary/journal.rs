@@ -220,7 +220,7 @@ impl OriginalIndex{
             Decision::Move(m)=>{let o=&m.original;self.moves.insert(o.file,index);self.tickets.insert(o.ticket);
                 self.names.apply_handoff(o,false)?;
                 if o.mode==Method::Transfer{for obj in m.target.each(){self.native.insert(obj.birth.clone());}}}
-            Decision::Create(f)=>{let c=&f.create;self.files.insert(c.file,index);self.names.create_file(c.volume,&c.name,c.entry,c.file)?;
+            Decision::Create(f)=>{let c=&f.create;self.files.insert(c.file,index);self.names.create_file(c.parent.address(c.volume),&c.name,c.entry,c.file)?;
                 self.entries.insert(c.entry);self.histories.insert(c.history);self.tickets.insert(c.attempt);
                 self.native.insert(c.directory.birth.clone());self.native.insert(c.local.birth.clone());}
             Decision::Save(f)=>{self.saved.insert(f.original.file,index);self.native.insert(f.material.object.birth.clone());}
@@ -258,10 +258,10 @@ fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,gr
 pub(crate) struct Journal{
     credits:Credits,names:Names,entries:BTreeSet<EntryId>,directory_rows:directories::DirectoryRows,directory_tokens:BTreeSet<OperationId>,
     decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,Vec<usize>>,moves:BTreeMap<FileId,usize>,pub(super) moving:Option<MoveAllocation>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,pub(in crate::ordinary) making:Option<DirOperand>,
-    pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) incrementing:Option<DeltaAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
+    pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) incrementing:Option<DeltaAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,admitted_register:fs::OriginalStamp,
 }
 impl Journal{
-    pub(crate) fn read(system:&HeldDir,allowed:crate::pool::JournalRegistration<'_>,tail:&[u8],floor:fs::Frontier)->io::Result<Self>{
+    pub(crate) fn read(system:&HeldDir,allowed:crate::pool::JournalRegistration<'_>,tail:&[u8],floor:fs::Frontier,register:&fs::OriginalStamp)->io::Result<Self>{
         let(pool,initial_op,genesis)=allowed.basis();
         if tail.len()>MAX_JOURNAL{return Err(invalid("SYSTEM FILE journal exceeds budget"));}
         let mut input=tail;let mut ds=Vec::new();let mut prev=genesis;let mut idx=OriginalIndex::default();idx.ops.insert(initial_op);
@@ -407,13 +407,16 @@ impl Journal{
                     let chain=idx.spans.get_mut(&s.original.file).ok_or_else(||invalid("missing original span chain"))?;
                     if chain.pop()!=Some(ds.len()-1){return Err(invalid("wrong unconfirmed working edge"));}
                 },Decision::Formal(f)=>{idx.formal.remove(&f.original.file);idx.nodes.remove(&f.original.node);},
-                Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{let c=&f.create;idx.names.hide_created(c.volume,&c.name,c.entry,c.file)?;idx.files.remove(&c.file);idx.entries.remove(&c.entry);}}
+                Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{let c=&f.create;idx.names.hide_created(c.parent.address(c.volume),&c.name,c.entry,c.file)?;idx.files.remove(&c.file);idx.entries.remove(&c.entry);}}
             ds.pop();
         }
-        Ok(Self{credits:idx.credits,names:idx.names,entries:idx.entries,directory_rows:idx.directory_rows,directory_tokens:idx.directory_tokens,decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,making,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
+        Ok(Self{credits:idx.credits,names:idx.names,entries:idx.entries,directory_rows:idx.directory_rows,directory_tokens:idx.directory_tokens,decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,making,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes,admitted_register:register.clone()})
     }
     pub(super) fn frontier(&self)->(u64,[u8;32]){
         (self.decisions.len() as u64,self.decisions.last().map_or(self.genesis,Decision::digest))
+    }
+    pub(crate) fn confirmed_floor(&self)->fs::Frontier{
+        let(n,head)=self.frontier();fs::frontier(n,self.frame_bytes,head)
     }
     pub(super) fn prefix_digest(&self,seq:u64)->io::Result<[u8;32]>{
         if seq==0{return Ok(self.genesis);}
@@ -479,9 +482,21 @@ impl Journal{
         Placement::from_prefix(c,old)
     }
     pub(super) fn volume_of(&self,f:&Frame)->VolumeId{self.placed(f.create.file).map_or(f.create.volume,|m|m.original.to)}
-    pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|{
-        let c=&f.create;self.names.root(v,&c.name)==Some(Member::File{entry:c.entry,file:c.file})
+    pub(in crate::ordinary) fn at_parent(&self,p:DirParent)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|{
+        let c=&f.create;self.names.get(p,&c.name)==Some(Member::File{entry:c.entry,file:c.file})
     })}
+    pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.at_parent(DirParent::Root(v))}
+    /// The physical birthplace is a current location only if no confirmed
+    /// handoff supersedes it. Compare the complete original entry, including
+    /// its typed parent and exact FILE membership (not just a human name).
+    pub(in crate::ordinary) fn unchanged_birth<'a>(&'a self,p:&crate::pool::lease::LocalPool,v:VolumeId,expected:&Frame)->io::Result<&'a Frame>{
+        let r=p.journal_registration();p.require_namespace_floor(&self.admitted_register,self.frame_bytes,self.confirmed_floor())?;
+        let f=self.file(expected.create.file).ok_or_else(||invalid("no admitted original FILE birth"))?;let c=&f.create;
+        if self.genesis!=r.basis().2||!f.belongs_to(r.basis().0)||f!=expected||c.volume!=v||self.placed(c.file).is_some()||
+            self.names.get(c.parent.address(v),&c.name)!=Some(Member::File{entry:c.entry,file:c.file}){
+            return Err(invalid("not the current owner at this original FILE birth address"));}
+        Ok(f)
+    }
     pub(super) fn moves(&self)->impl Iterator<Item=&Moved>{self.decisions.iter().filter_map(|d|d.moved().ok())}
     /// Predecision check for an exact, unsigned-by-itself lifecycle proposal.
     /// Not the cold admission of a completed DELETE/RESTORE. Never accept a
