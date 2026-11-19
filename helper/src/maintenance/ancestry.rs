@@ -19,7 +19,7 @@ fn no_claim(dir: &File) -> io::Result<()> {
 }
 
 #[derive(Clone, Copy)]
-struct Row { parent: u64, device: u64, whole: bool }
+struct Row { parent: u64, device: u64, whole: bool, devtmpfs: bool }
 
 pub(crate) struct Mounts(BTreeMap<u64, Row>);
 impl Mounts {
@@ -52,12 +52,24 @@ impl Mounts {
             let device = makedev(device_number(&raw[..colon])?, device_number(&raw[colon+1..])?);
             let root = words.next().filter(|w| w.starts_with(b"/")).ok_or_else(bad)?;
             if !words.next().is_some_and(|w| w.starts_with(b"/")) || !words.next().is_some_and(|w| !w.is_empty())
-                || !words.any(|w| w == b"-") || !(0..3).all(|_| words.next().is_some_and(|w| !w.is_empty()))
-                || words.next().is_some() || rows.insert(id, Row { parent, device, whole: root == b"/" }).is_some() {
+                || !words.any(|w| w == b"-") { return Err(bad()); }
+            let fs_type=words.next().filter(|v|!v.is_empty()).ok_or_else(bad)?;
+            if !(0..2).all(|_| words.next().is_some_and(|w| !w.is_empty())) || words.next().is_some()
+                || rows.insert(id, Row { parent, device, whole:root==b"/", devtmpfs:fs_type==b"devtmpfs" }).is_some() {
                 return Err(bad());
             }
         }
         Ok(Self(rows))
+    }
+
+    /// Numeric superblock matches in this thread's mount namespace. They do
+    /// not resolve a stack of devices or prove an unlisted device is unused.
+    pub(crate) fn ids_for_device(&self, device:u64) -> impl Iterator<Item=u64> + '_ {
+        self.0.iter().filter_map(move |(&id,r)| (r.device==device).then_some(id))
+    }
+
+    pub(crate) fn is_full_devtmpfs(&self, mount:u64, device:u64) -> bool {
+        self.0.get(&mount).is_some_and(|r| r.whole && r.devtmpfs && r.device==device)
     }
 
     /// Generic live kernel mount evidence: parent mount ID and this complete

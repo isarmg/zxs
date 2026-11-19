@@ -66,3 +66,15 @@ fn independently_provisioned_subtree_bind_is_unsupported_not_an_empty_or_damaged
     assert_eq!(table.unclaimed_chain(&name, &held).unwrap_err().kind(), io::ErrorKind::Unsupported);
     assert_eq!(fs::read_dir(private.path()).unwrap().count(), 0);
 }
+
+
+#[test]
+fn directly_matching_mount_ids_include_bind_rows_without_inventing_lower_devices() {
+    let raw=b"12 1 8:1 / /a rw - ext4 /dev/sda1 rw\n79 12 8:1 /b /other rw - ext4 /dev/sda1 rw\n101 1 0:4 / /dev rw - devtmpfs devtmpfs rw\n103 101 0:4 /disk /hide rw - devtmpfs devtmpfs rw\n";
+    let m=Mounts::parse(raw).unwrap();
+    assert_eq!(m.ids_for_device(makedev(8,1)).collect::<Vec<_>>(),[12,79]);
+    assert_eq!(m.ids_for_device(makedev(8,0)).count(),0); // no direct match is not evidence the underlying disk is unused
+    assert!(m.is_full_devtmpfs(101,makedev(0,4)));
+    assert!(!m.is_full_devtmpfs(101,makedev(0,7))); // same mount ID alone cannot authenticate the alias source
+    assert!(!m.is_full_devtmpfs(103,makedev(0,4))&&!m.is_full_devtmpfs(12,makedev(8,1)));
+}
