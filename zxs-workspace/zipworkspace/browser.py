@@ -40,6 +40,7 @@ class ArchiveBrowser:
 
     def __init__(self, document: BinaryIO, *, display_name: str):
         self._commit, tree = read_managed_document(document, display_name=display_name)
+        self._data_bytes = tree.total  # Already summed under the member limits and verified tree digest.
         self._key = hexdigest(self._commit.encode())
         children: dict[str, list[Entry]] = {"": []}
         for path, (directory, size, digest) in tree.rows.items():
@@ -64,6 +65,10 @@ class ArchiveBrowser:
     @property
     def commit(self) -> Commit:
         return self._commit
+
+    @property
+    def data_bytes(self) -> int:
+        return self._data_bytes
 
     def verified_entries(self):
         """Iterate the admitted rows, including empty and implicit directories; no archive I/O."""

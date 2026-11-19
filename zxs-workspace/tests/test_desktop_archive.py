@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 import zipfile
@@ -267,6 +268,59 @@ class OriginalDesktopCheckout(unittest.TestCase):
             for item in (self.target, self.state, self.store, self.marker.operation, plan.operation):
                 self.assertIn(str(item), msg)
         return plan
+
+    def test_capacity_observation_counts_only_this_original_copy_and_tree_on_one_held_mount(self):
+        # A second physical baseline and an older retained candidate already occupy disk.
+        (self.store/self.marker.filename).write_bytes(self.loose.read_bytes())
+        (self.private/"previous.zxs").write_bytes(b"prior retained bytes")
+        original = self.choice(review=False)
+        raw = self.loose.stat().st_size; body = len(b"desktop selection")
+        self.assertEqual(original.snapshot.browser.data_bytes, body)
+        def low(fd):
+            self.assertEqual(fd, original.base.parent)
+            self.assertTrue(os.path.samestat(os.fstat(fd), self.private.stat()))
+            return SimpleNamespace(f_frsize=1024, f_blocks=100, f_bfree=91, f_bavail=0)
+        with patch.object(os, "fstatvfs", side_effect=low) as only, \
+             patch("zipworkspace.browser.read_managed_document", side_effect=AssertionError("no ZIP rescan")), \
+             patch("zipworkspace.desktop.selection.archive_sha", side_effect=AssertionError("no extra raw read")), \
+             patch("zipworkspace.opening.begin", side_effect=AssertionError("review may not write")):
+            detail = original.review("Design")
+        only.assert_called_once_with(original.base.parent)
+        self.assertIn(f"新增逻辑字节：{raw+body:,} B", detail)
+        self.assertIn(f"原包副本 {raw:,} B，解包正文 {body:,} B", detail)
+        self.assertIn("普通用户可用 0 B", detail); self.assertIn("按当前报告可能不足", detail)
+        self.assertFalse(self.target.exists()); self.assertFalse(self.state.exists())
+        self.assertEqual((self.private/"previous.zxs").read_bytes(), b"prior retained bytes")
+
+    def test_unknown_or_inconsistent_space_does_not_become_zero_or_a_capacity_guarantee(self):
+        valid = SimpleNamespace(f_frsize=4096, f_blocks=2000, f_bfree=1024, f_bavail=512)
+        broken = SimpleNamespace(f_frsize=0, f_blocks=2000, f_bfree=1024, f_bavail=512)
+        invalid = SimpleNamespace(f_frsize=4096, f_blocks=2000, f_bfree=1024, f_bavail=None)
+        for reading in (valid, broken, invalid, OSError("statistics unavailable")):
+            with self.subTest(reading=reading):
+                plan = self.choice(review=False)
+                with patch.object(os, "fstatvfs", side_effect=[reading]) as one:
+                    detail = plan.review("Design")
+                one.assert_called_once_with(plan.base.parent)
+                self.assertIn("不保证配额或写入成功", detail)
+                self.assertNotIn("按当前报告可能不足", detail)
+                if reading is valid:
+                    self.assertIn("普通用户可用 2,097,152 B", detail)
+                else:
+                    self.assertIn("无法估算", detail); self.assertNotIn("普通用户可用 0 B", detail)
+                self.assertFalse(self.target.exists()); self.assertFalse(self.state.exists())
+
+    def test_replaced_private_parent_during_volume_observation_never_yields_a_confirmable_plan(self):
+        plan = self.choice(review=False)
+        real = os.fstatvfs
+        def switch(fd):
+            result = real(fd)
+            self.private.rename(self.root/"original-private"); self.private.mkdir(mode=0o700)
+            return result
+        with patch.object(os, "fstatvfs", side_effect=switch), self.assertRaises(Rejected):
+            plan.review("Design")
+        self.assertFalse(self.target.exists()); self.assertFalse(any(self.private.iterdir()))
+        self.assertFalse(any((self.root/"original-private").iterdir()))
 
     def test_loose_selected_original_creates_an_actual_cli_checkout_without_reopening_source(self):
         from zipworkspace import opening, worktree

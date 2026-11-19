@@ -113,6 +113,31 @@ class CheckoutChoice:
         _named_mount(self.store.path, self.store.fd)
         return f"所选 STORE 的基线槽：{marker.filename}\n{result}"
 
+    def _space_hint(self):
+        # Both copies originate below the same admitted private parent. Publication
+        # renames the tree on that mount; neither the STORE nor the output parent gets a second copy.
+        raw, body = self.snapshot.observed[2], self.snapshot.browser.data_bytes
+        needed = raw + body
+        def size(n):
+            return f"{n:,} B" if n < (1 << 30) else f"{n:,} B（约 {n / (1 << 30):.2f} GiB）"
+        detail = (f"本次签出新增逻辑字节：{size(needed)}（STATE 原包副本 {size(raw)}，解包正文 {size(body)}）。"
+                  "工作目录同挂载改名，不再复制；已有归档和候选不重复计入。")
+        available = None
+        try:
+            v = os.fstatvfs(self.base.parent)
+            unit, blocks, free, usable = v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail
+            if (all(type(x) is int for x in (unit, blocks, free, usable))
+                    and unit > 0 and blocks > 0 and 0 <= usable <= free <= blocks):
+                available = unit * usable
+        except (OSError, AttributeError):
+            pass  # Unavailable is neither zero nor permission to proceed on another volume.
+        if available is None:
+            observed = "当前无法估算该挂载普通用户的可用字节。"
+        else:
+            observed = f"该挂载当前报告普通用户可用 {size(available)}。"
+            if available < needed: observed += "按当前报告可能不足，建议释放空间或另选合格位置。"
+        return detail + "\n" + observed + "未计目录、inode 和额外元数据；未预留空间，不保证配额或写入成功。"
+
     def review(self, leaf):
         self._select(self.state)
         if self.store is None or self.target is None or self.base is None:
@@ -125,9 +150,11 @@ class CheckoutChoice:
         exact = (f"原 ZIP SHA-256：{self.snapshot.exact.sha256}" if self.snapshot.exact is not None
                  else "原 ZIP 字节将在确认后从这同一个已选文件核对。")
         hint = self._base_hint(m)
+        space = self._space_hint()
+        self.check_new()  # Observations must still belong to the selected source, directories and new names.
         return (f"归档：{self.snapshot.path}\n仓库：{m.repo}\n分支：{m.branch} · 第 {m.generation} 代\n"
                 f"原节点：{m.operation}\n整树 SHA-256：{m.tree}\n{exact}\n\n新工作目录：{self.destination}\n"
-                f"归档存储：{self.store.path}\n{hint}\n新 CLI 状态目录（STATE）：{self.state}\n本次操作号：{self.operation}\n\n"
+                f"归档存储：{self.store.path}\n{hint}\n新 CLI 状态目录（STATE）：{self.state}\n{space}\n本次操作号：{self.operation}\n\n"
                 "此操作将写入完整快照，并在所选专用位置创建可由命令行管理的状态；两个新名称都不能已存在。"
                 "请保留 STATE 与操作号。不会覆盖、自动换名或将现有工作树登记为桌面托管实例。")
 
