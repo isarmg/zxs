@@ -21,9 +21,9 @@ fn no_claim(dir: &File) -> io::Result<()> {
 #[derive(Clone, Copy)]
 struct Row { parent: u64, device: u64, whole: bool }
 
-pub(super) struct Mounts(BTreeMap<u64, Row>);
+pub(crate) struct Mounts(BTreeMap<u64, Row>);
 impl Mounts {
-    pub(super) fn current() -> io::Result<Self> {
+    pub(crate) fn current() -> io::Result<Self> {
         let f = super::thread_evidence::mountinfo()?;
         let mut bytes = Vec::new();
         f.take(TABLE_BYTES as u64 + 1).read_to_end(&mut bytes)?;
@@ -58,6 +58,14 @@ impl Mounts {
             }
         }
         Ok(Self(rows))
+    }
+
+    /// Generic live kernel mount evidence: parent mount ID and this complete
+    /// mount's superblock device (field 3, not the name or an inode's st_dev).
+    /// Neither field is a persistent medium ID or physical-drive certificate.
+    pub(crate) fn full_mount(&self, id: u64) -> io::Result<(u64, u64)> {
+        self.0.get(&id).filter(|r| r.whole && r.device != 0).map(|r| (r.parent, r.device))
+            .ok_or_else(|| unknown("cannot establish a complete selected mount"))
     }
 
     fn whole(&self, id: u64, device: u64) -> io::Result<Row> {

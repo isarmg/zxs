@@ -28,9 +28,9 @@ const STATUS_MAX: usize = 64 * 1024;
 
 // Trusted host subject, not operator authorization. There is no production
 // issuer/constructor: these values cannot presently come from a request, disk or UI.
-pub(super) struct WorkerPolicy { uid: u32, gid: u32 }
+pub(crate) struct WorkerPolicy { uid: u32, gid: u32 }
 impl WorkerPolicy {
-    pub(super) fn require(&self, registered_uid: u32) -> io::Result<()> {
+    pub(crate) fn require(&self, registered_uid: u32) -> io::Result<()> {
         if registered_uid != self.uid {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "storage UID is not the configured worker"));
         }
@@ -38,7 +38,7 @@ impl WorkerPolicy {
     }
 
     #[cfg(test)]
-    pub(super) fn fixture() -> Self {
+    pub(crate) fn fixture() -> Self {
         let id = |key| std::env::var(key).expect("dedicated worker test requires explicit UID/GID policy")
             .parse::<u32>().expect("expected decimal fixture UID/GID");
         Self { uid: id("HELPER_TEST_WORKER_UID"), gid: id("HELPER_TEST_WORKER_GID") }

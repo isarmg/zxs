@@ -103,6 +103,18 @@ impl<'a> Initial<'a> {
         if self.body == expected_body { Ok(()) } else { Err(Invalid::Request) }
     }
 
+    pub(crate) fn row_count(&self) -> usize { self.rows.len() }
+
+    /// Exactly the empty lower bound of this intact original image. Not proof
+    /// that this record exists, was synchronized or may now be created.
+    pub(crate) fn zero_floor(&self) -> [u8; FLOOR_LEN] {
+        let mut bytes = [0; FLOOR_LEN];
+        bytes[..25].copy_from_slice(CONFIRMED);
+        bytes[25..57].copy_from_slice(&self.digest);
+        bytes[73..].copy_from_slice(&self.digest);
+        bytes
+    }
+
     pub(crate) fn row(&self, index: usize) -> Result<(&[u8], u8, Claim), Invalid> {
         let row = self.rows.get(index).ok_or(Invalid::Feedback)?;
         let claim = Claim::from_fields(row.role, self.pool, row.id, self.op, self.digest)

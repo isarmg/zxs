@@ -1,5 +1,6 @@
-//! Inspect only the operator's original INITIALIZING under one explicit SYSTEM.
-//! Nothing here obtains a root from registration bytes, issues an ID, writes or syncs.
+//! HeldPending observes only an explicitly selected SYSTEM; it never writes or syncs.
+//! The separate private group step requires all original roots and a specific approved order.
+mod group;
 use super::{Entity, Kind, Mount, Pinned, ReaderBoundary, reopen_admitted_reader};
 use crate::portable_claim::{LEN as CLAIM_LEN, ROOT_SLOT};
 use crate::portable_genesis::{FLOOR_LEN, Initial, Invalid, MAX_GENESIS};
