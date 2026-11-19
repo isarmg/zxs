@@ -194,6 +194,40 @@ fn old_role_changed_after_the_whole_retirement_admission_stops_before_any_unlink
 }
 
 #[test]
+#[ignore="three private registered filesystems; change the already-held original during its private rename"]
+fn same_process_isolation_keeps_the_verified_sources_while_cold_retirement_rechecks_the_bytes(){
+    use std::{ffi::OsStr,os::unix::{ffi::OsStrExt,fs::FileExt},time::{Duration,UNIX_EPOCH}};
+    use crate::pool::lease::{Access,LocalPool};
+    use super::allocation::Progress;
+    let f=Fixture::build(true,false);let r=f.cmd();
+    let business=f.old.join(native_leaf("name",r.id));let ids=inventory_ids(&business);
+    let raw=fs::OpenOptions::new().read(true).write(true).open(actual_raw(&business)).unwrap();
+    let changed=UNIX_EPOCH+Duration::from_secs(60);assert_ne!(raw.metadata().unwrap().modified().unwrap(),changed);
+    let mut renamed=false;let mut erase=false;
+    assert!(perform(&f.sys,r,&mut|step|{
+        if step==Cut::MoveSourceIsolated{
+            // Same object and same bytes: a recapture here would silently
+            // accept its new stamp. The original checked FD is still locked.
+            assert!(matches!(raw.try_lock(),Err(fs::TryLockError::WouldBlock)));
+            raw.set_modified(changed)?;raw.sync_all()?;renamed=true;
+        }
+        if step==Cut::MoveEraseFlagBeforeSync{erase=true;}Ok(())
+    }).is_err());assert!(renamed&&!erase);
+    let q={let(_,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+        let(m,a)=s.confirmed_handoff(r.op).unwrap();assert_eq!(a.progress(),Progress::ARMED);
+        f.old.join(OsStr::from_bytes(m.original.quarantine_name().to_bytes()))};
+    assert!(!business.exists());assert_eq!(inventory_ids(&q),ids);
+    assert_eq!(f.receipt(r).status,MoveStatus::TargetReopenedSourcePending);f.all_history();
+    // A fresh retry no longer has the prior verified FDs. The native object
+    // and its byte length still match; actual changed contents must stop it.
+    raw.write_all_at(b"X",0).unwrap();raw.sync_all().unwrap();
+    assert!(f.call(r).is_err());assert_eq!(inventory_ids(&q),ids);f.all_history();
+    raw.write_all_at(&BEFORE[..1],0).unwrap();raw.sync_all().unwrap();drop(raw);
+    assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);assert!(!q.exists());
+    assert_eq!(f.call(r).unwrap().status,MoveStatus::OriginalPublished);f.all_history();
+}
+
+#[test]
 #[ignore="three private registered filesystems"]
 fn a_missing_whole_original_is_never_discharged_as_an_empty_directory(){
     for cut in [Cut::MoveSourceAdmitted,Cut::MoveSourceIsolated,Cut::MoveEraseFlagBeforeSync]{

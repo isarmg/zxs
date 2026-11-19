@@ -139,46 +139,48 @@ fn empty_source(p:&LocalPool,old:&FileVolume<'_>,new:&FileVolume<'_>,m:&Moved,g:
     old.root.confirm_absence(&gr.quarantine)?;old.root.confirm_absence(&gr.business)?;old.require_current()?;dst.verify_installed(new,m)
 }
 pub(super) fn complete(system:&Path,r:Request,m:&Moved,dst:&Reopened,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{
-    // The only optional second pass is after the business -> quarantine
-    // rename: reopen all roles frozen in this original MOVE by the private, now exact name.
-    for _ in 0..2{
-        let mut cut=if m.original.mode==Method::Transfer{
-            let g={let(p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;let(now,a)=s.confirmed_handoff(r.op)?;
-                if now!=m||a.request!=r.digest(&p)?||!a.opened(){return Err(invalid("no genuine applied target for original source retirement"));}
-                a.confirm_phase(&p)?;let new=p.ordinary(m.original.to)?;dst.verify_installed(&new,now)?;let old=p.ordinary(m.original.from)?;
-                let(c,f,d)=history(&s,now)?;SourceRetirement::capture(&old,now,a.progress(),&c,&f,d.as_refs(),true)?};
-            Some(g.verify(dst)?)
-        }else{None};
-        let(p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;let(now,a)=s.confirmed_handoff(r.op)?;
-        if now!=m||a.request!=r.digest(&p)?||!a.opened(){return Err(invalid("missing original reopened target at exact cleanup cut"));}
-        let old=p.ordinary(m.original.from)?;let new=p.ordinary(m.original.to)?;
-        placed::root(&old,&m.original.src_root)?;dst.verify_installed(&new,now)?;
-        if let Some(ref mut g)=cut{
-            g.require(&old,now)?;if g.group.initial!=a.progress(){return Err(invalid("source cleanup advanced during independent verification"));}
-            if g.group.addr==Address::Business{
-                if !a.retiring(){a.begin_verified_retirement(&p,&old,&new,g,dst,||hook(Cut::MoveRetireFlagBeforeSync))?;}
-                if exact_progress(&p,now)?!=Progress::ARMED{return Err(invalid("wrong original isolation phase"));}
-                hook(Cut::MoveSourceAdmitted)?;
-                g.require(&old,now)?;dst.verify_installed(&new,now)?;
-                let gr=&g.group;old.root.handoff_directory(&gr.business,&old.root,&gr.quarantine,
-                    gr.original.entity,&gr.original.birth,||hook(Cut::MoveSourceIsolated))?;continue;
-            }
-            empty_source(&p,&old,&new,now,g,dst,hook)?;
-        }else{
-            if !old.root.same_mount(&new.root)?{return Err(invalid("original rename mount changed; no transfer fallback"));}
-            old.root.confirm_absence(&business(now)?)?;new.root.file.sync_all()?;
+    let mut cut=if m.original.mode==Method::Transfer{
+        let g={let(p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;let(now,a)=s.confirmed_handoff(r.op)?;
+            if now!=m||a.request!=r.digest(&p)?||!a.opened(){return Err(invalid("no genuine applied target for original source retirement"));}
+            a.confirm_phase(&p)?;let new=p.ordinary(m.original.to)?;dst.verify_installed(&new,now)?;let old=p.ordinary(m.original.from)?;
+            let(c,f,d)=history(&s,now)?;SourceRetirement::capture(&old,now,a.progress(),&c,&f,d.as_refs(),true)?};
+        Some(g.verify(dst)?)
+    }else{None};
+    let(p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;let(now,a)=s.confirmed_handoff(r.op)?;
+    if now!=m||a.request!=r.digest(&p)?||!a.opened(){return Err(invalid("missing original reopened target at exact cleanup cut"));}
+    let old=p.ordinary(m.original.from)?;let new=p.ordinary(m.original.to)?;
+    placed::root(&old,&m.original.src_root)?;dst.verify_installed(&new,now)?;
+    if let Some(ref mut g)=cut{
+        g.require(&old,now)?;if g.group.initial!=a.progress(){return Err(invalid("source cleanup advanced during independent verification"));}
+        if g.group.addr==Address::Business{
+            if !a.retiring(){a.begin_verified_retirement(&p,&old,&new,g,dst,||hook(Cut::MoveRetireFlagBeforeSync))?;}
+            let armed=exact_progress(&p,now)?;if armed!=Progress::ARMED{return Err(invalid("wrong original isolation phase"));}
+            hook(Cut::MoveSourceAdmitted)?;
+            g.require(&old,now)?;dst.verify_installed(&new,now)?;
+            let gr=&mut g.group;old.root.handoff_directory(&gr.business,&old.root,&gr.quarantine,
+                gr.original.entity,&gr.original.birth,||hook(Cut::MoveSourceIsolated))?;
+            // The private name now addresses the same locked directory. Do not
+            // drop its FD or the verified leaf FDs and read the payloads again.
+            // require() resolves the new exact name and checks native birth,
+            // mount, membership and every unchanged leaf pin before any unlink.
+            let dir=gr.dir.as_mut().ok_or_else(||invalid("no held business source after isolation"))?;
+            dir.path=old.root.checked_child_path(&gr.quarantine)?;
+            gr.addr=Address::Isolated;gr.initial=armed;g.require(&old,now)?;
         }
-        old.require_current()?;dst.verify_installed(&new,now)?;
-        let(_,latest)=p.snapshot()?;let(cur,active)=latest.confirmed_handoff(r.op)?;
-        if cur!=m||!active.opened()||(m.original.mode==Method::Transfer&&active.progress()!=Progress::EMPTY){
-            return Err(invalid("different source retirement at completion"));}
-        if let Some(i)=&latest.pending{
-            if i.frame.moved()?!=cur{return Err(invalid("different original sealed MOVE"));}
-            p.system.remove_original_record(ordinary::journal::INTENT,&i.stamp,&i.bytes)?;hook(Cut::IntentReleased)?;
-        }
-        p.system.remove_original_record(ordinary::allocation::NAME,&active.stamp,&active.bytes)?;return hook(Cut::Release)
+        empty_source(&p,&old,&new,now,g,dst,hook)?;
+    }else{
+        if !old.root.same_mount(&new.root)?{return Err(invalid("original rename mount changed; no transfer fallback"));}
+        old.root.confirm_absence(&business(now)?)?;new.root.file.sync_all()?;
     }
-    Err(invalid("exact original source remains pending"))
+    old.require_current()?;dst.verify_installed(&new,now)?;
+    let(_,latest)=p.snapshot()?;let(cur,active)=latest.confirmed_handoff(r.op)?;
+    if cur!=m||!active.opened()||(m.original.mode==Method::Transfer&&active.progress()!=Progress::EMPTY){
+        return Err(invalid("different source retirement at completion"));}
+    if let Some(i)=&latest.pending{
+        if i.frame.moved()?!=cur{return Err(invalid("different original sealed MOVE"));}
+        p.system.remove_original_record(ordinary::journal::INTENT,&i.stamp,&i.bytes)?;hook(Cut::IntentReleased)?;
+    }
+    p.system.remove_original_record(ordinary::allocation::NAME,&active.stamp,&active.bytes)?;hook(Cut::Release)
 }
 /// An unresolved original source address is not a business FILE. The
 /// returned spelling identifies only the physically verified occurrence on
