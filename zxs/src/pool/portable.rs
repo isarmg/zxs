@@ -104,7 +104,10 @@ impl Genesis {
     }
 }
 
+mod accounts;
+mod credential;
 mod decision;
+mod shares;
 pub(in crate::pool) mod opened;
 #[cfg(test)]
 #[path="../../tests/unit/portable_genesis.rs"]

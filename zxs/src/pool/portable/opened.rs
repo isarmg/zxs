@@ -15,7 +15,11 @@ struct Source {
     genesis: Genesis,
 }
 pub(in crate::pool) struct Empty {source:Source}
-pub(in crate::pool) struct Recorded {source:Source,decisions:super::decision::Decisions}
+pub(in crate::pool) struct Recorded {source:Source,snapshot:std::sync::Mutex<Snapshot>}
+struct Snapshot {decisions:decision::Decisions, newer:Option<(ControlRead,ControlRead)>}
+pub(in crate::pool) struct Session<'r>{source:&'r Recorded,account:crate::identity::AccountId,credential:[u8;32]}
+pub(in crate::pool) struct Selected<'a,'r>{session:&'a Session<'r>,original:shares::Selection}
+fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"not authorized")}
 pub(in crate::pool) struct LocalRow {
     pub(in crate::pool) id: VolumeId,
     pub(in crate::pool) role: Role,
@@ -66,13 +70,17 @@ impl Source {
         Ok((ready,state))
     }
 
-    fn require(&self, cut: &HeldDir) -> io::Result<()> {
+    fn require_root(&self, cut: &HeldDir) -> io::Result<()> {
         cut.require_named()?;
         if cut.entity != self.system.entity || !cut.same_mount(&self.system)? {
             return Err(invalid("portable cut selected a different SYSTEM"));
         }
         only(cut, &[READY, CONFIRMED, ROOT_NAME])?;
-        self.reg.require(cut)?; self.floor.require(cut)?; self.marker.require(cut)?;
+        self.marker.require(cut)?;
+        cut.require_named()
+    }
+    fn require(&self,cut:&HeldDir)->io::Result<()>{
+        self.require_root(cut)?;self.reg.require(cut)?;self.floor.require(cut)?;
         cut.require_named()
     }
 
@@ -86,12 +94,73 @@ impl Recorded {
             if g.pool!=pool{return Err(invalid("different registered portable pool"));}
             super::decision::Decisions::read(g,tail,floor)
         })?;
-        Ok(Self{source,decisions})
+        Ok(Self{source,snapshot:std::sync::Mutex::new(Snapshot{decisions,newer:None})})
+    }
+    /// Original regular SH stays on the FIRST OFD even as ordinary decisions
+    /// append. This cache is bounded to one current cut (not one per read).
+    /// Only trusted, short selection code runs in f; never KDF, slow output
+    /// or an external callback. All grants/subjects are selected together.
+    fn at<T>(&self,f:impl FnOnce(&decision::Decisions)->io::Result<T>)->io::Result<T>{
+        let cut=HeldDir::open(&self.source.system.path)?;cut.share()?;
+        self.source.require_root(&cut)?;
+        let mut snap=self.snapshot.lock().map_err(|_|invalid("portable decision observer unavailable"))?;
+        let(reg,floor)=snap.newer.as_ref().map(|(r,f)|(r,f)).unwrap_or((&self.source.reg,&self.source.floor));
+        if reg.require(&cut).is_err()||floor.require(&cut).is_err(){
+            // The real lock is on source.reg, NOT on the floor, directory or
+            // this temporary new OFD. Can't follow a copied/replaced register.
+            let new_reg=ControlRead::open(&cut,READY,MAX_GENESIS+decision::MAX_JOURNAL)?;
+            if !self.source.reg.same_registration(&new_reg){return Err(invalid("portable original registration replaced"));}
+            let bytes=new_reg.bytes(&cut)?;
+            let(g,tail)=Genesis::prefix(&bytes)?;
+            if g.digest!=self.source.genesis.digest{return Err(invalid("portable original genesis changed"));}
+            let new_floor=ControlRead::open(&cut,CONFIRMED,FLOOR_SIZE)?;
+            if !new_floor.replaces_confirmed(floor)||!new_floor.replaces_confirmed(&self.source.floor){return Err(invalid("higher portable floor was not atomically replaced"));}
+            let old=snap.decisions.head;
+            let current=decision::Decisions::extending(&g,tail,&new_floor.bytes(&cut)?,Some(old))?;
+            if current.head.sequence()<=old.sequence(){return Err(invalid("changed control file without a true extending decision"));}
+            self.source.require_root(&cut)?;new_reg.require(&cut)?;new_floor.require(&cut)?;
+            snap.newer=Some((new_reg,new_floor));snap.decisions=current;
+        }
+        f(&snap.decisions)
     }
     pub(in crate::pool) fn first_result(&self,op:OperationId)->io::Result<Option<(crate::identity::AccountId,[u8;32])>>{
-        let cut=HeldDir::open(&self.source.system.path)?;cut.share()?;
-        self.source.require(&cut)?;
-        Ok(self.decisions.first.as_ref().filter(|f|f.operation==op).map(|f|(f.account,f.decision)))
+        self.at(|s|Ok(s.accounts.first().filter(|f|f.operation==op).map(|f|(f.account,f.decision))))
+    }
+    pub(in crate::pool) fn authenticate(&self,login:&str,password:&str)->io::Result<Session<'_>>{
+        self.authenticate_at(login,password,||Ok(()))
+    }
+    // After positive KDF verification but before a session can be admitted.
+    pub(super) fn authenticate_at(&self,login:&str,password:&str,after:impl FnOnce()->io::Result<()>)->io::Result<Session<'_>>{
+        // An unknown valid-length login still takes the bounded verifier path.
+        // An exact login match on the same credential is required after it.
+        let candidate=self.at(|s|s.accounts.login(login).or_else(||s.accounts.first()).cloned().ok_or_else(denied))?;
+        if !candidate.password_matches(login,password)?{return Err(denied());}
+        after()?;
+        self.at(|s|{
+            let now=s.accounts.login(login).filter(|a|a.account==candidate.account&&a.decision==candidate.decision).ok_or_else(denied)?;
+            Ok(Session{source:self,account:now.account,credential:now.decision})
+        })
+    }
+}
+impl<'r> Session<'r>{
+    fn at<T>(&self,share:shares::ShareId,action:shares::ShareUse,f:impl FnOnce(shares::Selection)->io::Result<T>)->io::Result<T>{
+        self.source.at(|state|{
+            let a=state.accounts.get(self.account).filter(|a|a.decision==self.credential).ok_or_else(denied)?;
+            f(state.shares.selected(self.source.source.genesis.pool,a,share,action)?)
+        })
+    }
+    pub(in crate::pool) fn select(&self,share:shares::ShareId,action:shares::ShareUse)->io::Result<Selected<'_,'r>>{
+        self.at(share,action,|original|Ok(Selected{session:self,original}))
+    }
+}
+impl Selected<'_,'_>{
+    /// Non-secret, scoped management observation only. It is not a pathname
+    /// or a grant usable by another component to open a FILE later.
+    pub(in crate::pool) fn root(&self)->io::Result<VolumeId>{
+        self.session.at(self.original.id(),self.original.action(),|now|{
+            if now!=self.original{return Err(denied());}
+            Ok(now.volume())
+        })
     }
 }
 impl Empty {

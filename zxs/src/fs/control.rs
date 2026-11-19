@@ -38,6 +38,21 @@ impl ControlRead {
         r.require(dir)?;
         Ok(r)
     }
+    /// Both descriptors are still open, so comparing their current parent,
+    /// mount and inode cannot be fooled by inode-number recycling after
+    /// close. This is not a cold persistent identity or a lock transfer.
+    pub(crate) fn same_registration(&self,other:&Self)->bool{
+        self.name==crate::pool::READY&&other.name==self.name&&self.parent==other.parent&&
+            self.mount==other.mount&&self.opening.entity()==other.opening.entity()
+    }
+    /// A higher portable floor must have used a *new* ordinary file
+    /// in the very same parent. The old descriptor is still open here,
+    /// so this observer can reject a same-inode rewrite without claiming
+    /// that a cold opener can reconstruct how a completed rename happened.
+    pub(crate) fn replaces_confirmed(&self,prior:&Self)->bool{
+        self.name==c"CONFIRMED"&&prior.name==self.name&&self.parent==prior.parent&&
+            self.mount==prior.mount&&self.opening.entity()!=prior.opening.entity()
+    }
     pub(crate) fn require(&self, dir: &HeldDir) -> io::Result<()> {
         if dir.entity != self.parent || mounts::id(&dir.file)? != self.mount {
             return Err(invalid("different original parent of the portable control file"));

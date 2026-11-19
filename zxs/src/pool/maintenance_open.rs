@@ -1,5 +1,5 @@
 //! Pin one original MAINT register for the whole admitted read. Neither a
-//! decoded account nor a valid label on a different inode can mint this holder.
+//! valid label on a different inode nor an account suffix can mint this empty-pool holder.
 use super::*;
 use crate::fs::stream::PinnedRegular;
 use crate::pool::READY;
@@ -8,21 +8,21 @@ struct Ready{
     system:HeldDir,register:PinnedRegular,record:Record,frontier:fs::Frontier,
 }
 impl Ready{
-    fn open<T>(path:&Path,max:usize,admit:impl FnOnce(&Record,&[u8],fs::Frontier)->io::Result<T>)->io::Result<(Self,T)>{
+    fn open(path:&Path)->io::Result<Self>{
         // Acquire regular SH first, then the short SYSTEM cut; no data roots
         // are opened from parsed paths until every original SYSTEM fact holds.
         let system=HeldDir::open(path)?;
-        let register=system.shared_original(READY,max as u64)?;system.share()?;
+        let register=system.shared_original(READY,MAX_RECORD as u64)?;system.share()?;
         let bytes=register.original_bytes(&system,READY)?;let frontier=register.opening_frontier()?;
         let(record,tail)=decode_genesis(&bytes,fs::local_uid())?;
         if register.stamp.stat.entity()!=record.origin||register.stamp.birth!=record.origin_birth{
             return Err(invalid("registration is not its committed original regular inode"));}
         let held=Self{system,register,record,frontier};held.require_system(&held.system)?;
-        let value=admit(&held.record,tail,frontier)?;
+        require_empty_tail(&held.record,tail,&frontier)?;
         held.register.file.sync_all()?;held.system.file.sync_all()?;
         held.register.named(&held.system,READY)?;
         held.system.file.unlock()?; // retain regular SH; no long SYSTEM lock
-        Ok((held,value))
+        Ok(held)
     }
     fn original_root(&self,i:usize,root:&HeldDir)->io::Result<()>{
         let r=&self.record;let row=&r.info.volumes[i];
@@ -51,7 +51,7 @@ impl Ready{
 pub(in crate::pool) struct OnlineEmpty(Ready);
 impl OnlineEmpty{
     pub(in crate::pool) fn open(path:&Path)->io::Result<Self>{
-        Ready::open(path,MAX_RECORD,|r,tail,f|require_empty_tail(r,tail,&f)).map(|(held,())|Self(held))
+        Ready::open(path).map(Self)
     }
     /// Only a checked row from the original SYSTEM can select a data root.
     pub(in crate::pool) fn observe(&self,id:VolumeId)->io::Result<RegisteredVolume>{
@@ -66,6 +66,3 @@ impl OnlineEmpty{
         })
     }
 }
-
-#[path="maintenance_account.rs"]
-pub(crate) mod accounts;

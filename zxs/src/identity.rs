@@ -29,7 +29,7 @@ macro_rules! id {
         impl FromStr for $kind { type Err=io::Error;fn from_str(s:&str)->io::Result<Self>{parse(s).map(Self)}}
     }
 }
-id!(OperationId); id!(PoolId); id!(VolumeId); id!(AccountId);
+id!(OperationId); id!(PoolId); id!(VolumeId); id!(AccountId); id!(ShareId);
 id!(FileId); id!(EntryId); id!(HistoryId); id!(DirectoryId);
 id!(BranchId); id!(NodeId); id!(VersionId);
 
