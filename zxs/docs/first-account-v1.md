@@ -1,6 +1,6 @@
 # SQLite 首管、原操作与口令验证
 
-新池只认[同一份 SQLite SYSTEM](sqlite-system.md) 与[唯一 DDL](../src/system/schema.sql)。ZXS 在原 SYSTEM 目录长 SH 内只读已确认的首管；旧首设帧不再是生产账户源。不提供网络登录、账户写端、共享或 FILE 权限。
+新池只认[同一份 SQLite SYSTEM](sqlite-system.md) 与[唯一 DDL](../src/system/schema.sql)。ZXS 在原 SYSTEM 目录长 SH 内只读已确认的首管；旧首设帧不再是生产账户源。没有账户写端、网络登录或 FILE 权限；[显式发布普通根共享](sqlite-system.md#普通根共享的首笔在线管理写)是另一笔在线管理操作。
 
 **原动作。** 已完成 INIT 的池最多一次 `FIRST_ADMIN=2`。独立 helper 必须取得原 S 的离线 EX，另行验证维护主体与本次一次性的首设授权，先查完整的原池、历史与原单。不能凭「没有活跃管理员」、UID、账号名字、审批关联号或进程已停机授权。管理档必须明确选 1（管理读 ACL）或 2（管理读及写 ACL）；两者都不自动创建共享或任何 FILE 读写权，包括管理者自己。
 
@@ -13,6 +13,6 @@
 
 这不是外部 I/O 的 pending 操作。两个[延迟外键](https://sqlite.org/foreignkeys.html#fk_deferred)使缺原单的账号/凭据不能提交；原单亦须在同一账号、凭据齐全后插入。禁止 OR REPLACE 与静默重设。COMMIT 结果未知必须从同一可信库查原单；已提交只返原结果，不重生 ID、盐或凭据。确切未提交时不存在已发行 ID/盐；若原候选或授权已丢，先停止，不把一次查询或不明密码当成再次设密的许可。数据库不证明离线审批或当时口令输入的真实性。重置/禁用/其它账户还须各自明确的操作、授权和凭据代次，不是修改这段行的便捷接口。
 
-**在线核验。** `InitialReader::authenticate_first` 在同一真实 SQLite 短事务内核当前 schema、已完成原 INIT、原 S 标、首管、管理档和原凭据；事务释放后核口令，再在一个新短事务比较同一组原件。确认的内部主体只可重新获取自己的管理档，不是授权布尔值或对外令牌；不提供 SMB/FILE 权、共享、监听或 Web 文件接口。旧便携账户/成员解析仅留历史测试。此版本没有构建、运行 SQL/KDF/测试或实现双方实盘互通。
+**在线核验。** `InitialReader::authenticate_first` 在同一真实 SQLite 短事务内核当前 schema、已完成原 INIT、原 S 标、首管、管理档和原凭据；事务释放后核口令，再在一个新短事务比较同一组原件。确认的内部主体可重新获取自己的管理档，也可在独立管理操作内按当次主体及原池发布普通根共享。此前的管理档不是可转交的授权布尔值；发布不授予 SMB/FILE 权，也不提供监听或 Web 文件接口。旧便携账户/成员解析仅留历史测试。此版本没有构建、运行 SQL/KDF/测试或实现双方实盘互通。
 
 **依赖。** 使用目标 Linux 的成熟 [libargon2](https://github.com/P-H-C/phc-winner-argon2/blob/20190702/include/argon2.h) 的 `argon2id_verify` ABI，固定 v19、64 MiB、3 次、并行度 4，交由库比较验证标签；不从请求接受 PHC 或算法参数。进程内并发上限 1，不能代替网络端未来的限流。构建 sysroot 需有目标架构的 [libargon2.so](https://packages.debian.org/trixie/amd64/libargon2-dev/filelist)，离线发行须随附已核准的 ABI 库和适用许可，或要求预装等价 [libargon2.so.1](https://packages.debian.org/trixie/amd64/libargon2-1/filelist)。不承诺单文件，不自动安装，无自写/降级算法。上游[许可](https://github.com/P-H-C/phc-winner-argon2/blob/20190702/LICENSE)为 CC0-1.0 或 Apache-2.0。向量中唯一的示例盐、验证值与输入来自 [argon2-cffi 25.1.0 公开示例](https://argon2-cffi.readthedocs.io/en/stable/howto.html)，不代表任何用户或默认账号。

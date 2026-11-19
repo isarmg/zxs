@@ -4,7 +4,8 @@
 use crate::{FileId,OperationId,fs::invalid};
 use std::{ffi::{CStr,CString},io};
 
-pub(super) const COMPONENT_MAX:usize=255;
+use crate::display::component;
+pub(super) const COMPONENT_MAX:usize=crate::display::MAX;
 const ID_HEX:usize=32;
 pub(super) const FILE_NAME_MAX:usize=COMPONENT_MAX-1-ID_HEX;
 const STAGE_PREFIX:&str=".zxs-new-";
@@ -15,14 +16,6 @@ pub(super) const ISOLATE_LEN:usize=ISOLATE_PREFIX.len()+ID_HEX+1;
 const _:()=assert!(FILE_NAME_MAX==222&&STAGE_LEN==43&&ISOLATE_LEN==46);
 const _:()=assert!(TICKETS==super::allocation::SLOTS);
 
-fn component(raw:&[u8],max:usize)->io::Result<&str>{
-    if raw.is_empty()||raw.len()>max{return Err(invalid("display name exceeds its component byte budget or is empty"));}
-    let s=std::str::from_utf8(raw).map_err(|_|invalid("display name is not strict UTF-8"))?;
-    if s=="."||s==".."||s.ends_with('.')||s.ends_with(' ')||s.encode_utf16().count()>COMPONENT_MAX||
-        s.chars().any(|c|c.is_control()||matches!(c,'<'|'>'|':'|'"'|'/'|'\\'|'|'|'?'|'*')){
-        return Err(invalid("not a single supported business display name"));}
-    Ok(s)
-}
 /// From a persistent FILE field or an explicitly typed client operation.
 /// Eq/Ord compare the original UTF-8 bytes; there is no folded/normalized key.
 #[derive(Clone,Copy,Debug,Eq,PartialEq,Ord,PartialOrd)]

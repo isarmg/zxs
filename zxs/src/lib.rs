@@ -3,6 +3,7 @@
 mod fs;
 mod hash;
 mod password;
+mod display;
 mod system;
 mod identity;
 mod pool;

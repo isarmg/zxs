@@ -1,15 +1,16 @@
--- ZXS-SQLITE-1 / initial pool and first account. Sole fresh DDL; no migration.
+-- ZXS-SQLITE-1 / initial pool, first account and ordinary-root share publication. Sole fresh DDL; no migration.
 -- Execute once in the first BEGIN IMMEDIATE on the OS-exclusively reserved
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 
 -- Both INIT (1) and FIRST_ADMIN (2) name a separately authenticated offline
--- maintenance principal. An operation row alone is not authorization.
+-- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
+-- An operation row alone is not authorization.
 CREATE TABLE operation (
   op_id       BLOB NOT NULL PRIMARY KEY CHECK(length(op_id)=16 AND op_id<>zeroblob(16)),
-  kind        INTEGER NOT NULL CHECK(kind IN (1,2)),
+  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3)),
   actor_id    BLOB NOT NULL CHECK(length(actor_id)=16 AND actor_id<>zeroblob(16)),
   request_sha BLOB NOT NULL CHECK(length(request_sha)=32),
   state       INTEGER NOT NULL CHECK(state IN (0,1)) -- 0: pending I/O; 1: committed
@@ -63,16 +64,40 @@ CREATE TABLE account_password (
   verifier      BLOB NOT NULL CHECK(length(verifier)=32)
 ) STRICT, WITHOUT ROWID;
 
+-- A published metadata object, not a filesystem-health observation or
+-- an ACL. The management label is exact UTF-8 bytes, not a host pathname.
+CREATE TABLE root_share (
+  share_id        BLOB NOT NULL PRIMARY KEY CHECK(length(share_id)=16 AND share_id<>zeroblob(16)),
+  publish_op      BLOB NOT NULL UNIQUE REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  author_auth_op  BLOB NOT NULL REFERENCES operation(op_id),
+  volume_id       BLOB NOT NULL REFERENCES volume_claim(volume_id),
+  display_label   BLOB NOT NULL UNIQUE CHECK(length(display_label) BETWEEN 1 AND 255 AND instr(display_label,X'00')=0)
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER new_root_share BEFORE INSERT ON root_share
+WHEN EXISTS(SELECT 1 FROM root_share WHERE share_id=NEW.share_id OR publish_op=NEW.publish_op OR display_label=NEW.display_label)
+  OR EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.publish_op)
+  OR NOT EXISTS(SELECT 1 FROM volume_claim v JOIN operation o ON o.op_id=v.claim_op
+                WHERE v.volume_id=NEW.volume_id AND v.role=2 AND o.kind=1 AND o.state=1)
+BEGIN SELECT RAISE(ABORT,'new share requires a fresh operation, label and ordinary registered root'); END;
+CREATE TRIGGER keep_share_origin BEFORE UPDATE ON root_share BEGIN SELECT RAISE(ABORT,'immutable share publication'); END;
+CREATE TRIGGER retain_share_origin BEFORE DELETE ON root_share BEGIN SELECT RAISE(ABORT,'retain original share publication'); END;
+
 -- In one BEGIN IMMEDIATE the authorized helper inserts account then its
 -- verifier, then a COMMITTED kind-2 receipt. The deferred FKs disallow
 -- COMMIT of the incomplete pair; there is no physical "pending" first
 -- account and no implicit power to read or write files.
 CREATE TRIGGER new_origin BEFORE INSERT ON operation
-WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR kind=NEW.kind)
+WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR (NEW.kind IN (1,2) AND kind=NEW.kind))
+  OR (NEW.kind<>3 AND EXISTS(SELECT 1 FROM root_share WHERE publish_op=NEW.op_id))
   OR (NEW.kind=1 AND NEW.state<>0)
   OR (NEW.kind=2 AND (NEW.state<>1 OR NOT EXISTS(
     SELECT 1 FROM account a JOIN account_password p USING(account_id)
     WHERE a.birth_op=NEW.op_id AND p.credential_op=NEW.op_id AND p.generation=1)))
+  OR (NEW.kind=3 AND (NEW.state<>1 OR NOT EXISTS(
+    SELECT 1 FROM root_share s JOIN account_password p ON p.credential_op=s.author_auth_op
+    JOIN account a ON a.account_id=p.account_id JOIN operation orig ON orig.op_id=a.birth_op
+    WHERE s.publish_op=NEW.op_id AND a.account_id=NEW.actor_id AND orig.kind=2 AND orig.state=1
+      AND p.generation=1 AND a.boot_profile IN (1,2))))
 BEGIN SELECT RAISE(ABORT,'duplicate, incomplete or wrongly staged origin'); END;
 CREATE TRIGGER start_first_account BEFORE INSERT ON account
 WHEN EXISTS(SELECT 1 FROM account)

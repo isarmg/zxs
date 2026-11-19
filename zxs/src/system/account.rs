@@ -65,14 +65,14 @@ impl InitialReader{
     }
 }
 impl Manager<'_>{
-    /// Fresh metadata only; future actual management operations also need
-    /// their own same-transaction checks. This result cannot grant a FILE.
+    /// Use the supplied transaction, never a detached copy of the profile.
+    fn current(&self,db:&Connection,c:&Catalog)->io::Result<Management>{
+        let m=First::select(db,c)?.ok_or_else(denied)?;
+        if m.account!=self.account||m.op!=self.origin{return Err(denied());}
+        Ok(m.scope)
+    }
     pub(crate) fn profile(&self)->io::Result<(AccountId,Management)>{
-        self.source.at(|db,c|{
-            let m=First::select(db,&c)?.ok_or_else(denied)?;
-            if m.account!=self.account||m.op!=self.origin{return Err(denied());}
-            Ok((m.account,m.scope))
-        })
+        self.source.at(|db,c|Ok((self.account,self.current(db,&c)?)))
     }
 }
 
@@ -100,3 +100,6 @@ pub(super) fn first_receipt(src:&InitialReader,op:OperationId,actor:[u8;16],appr
         },rc=>{check(rc)?;Err(invalid("unexpected first receipt result"))}}
     })
 }
+
+#[path="publication.rs"]
+pub(crate) mod publication;

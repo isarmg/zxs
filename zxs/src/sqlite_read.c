@@ -1,4 +1,4 @@
-/* ZXS's fixed read-only adapter, not a SQLite VFS. Only the upstream
+/* ZXS's fixed local connection policy, not a SQLite VFS. Only the upstream
  * amalgamation is authorized to open the actual database file. */
 #include "sqlite3.h"
 #include <stddef.h>
@@ -28,13 +28,13 @@ static int one(sqlite3 *db,const char *sql,int type,int number,const char *text)
     }
     int done=sqlite3_finalize(s); return rc==SQLITE_OK ? done : rc;
 }
-int zxs_sql_open_read(const char *path,sqlite3 **result) {
+static int open_existing(const char *path,int writer,sqlite3 **result) {
     sqlite3 *db=NULL;
     *result=NULL;
     if(path==NULL || path[0]!='/' || zxs_sql_path_limit()<=0) return SQLITE_CANTOPEN;
-    int rc=sqlite3_open_v2(path,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_NOFOLLOW|
+    int rc=sqlite3_open_v2(path,&db,(writer ? SQLITE_OPEN_READWRITE : SQLITE_OPEN_READONLY)|SQLITE_OPEN_NOFOLLOW|
                   SQLITE_OPEN_PRIVATECACHE|SQLITE_OPEN_EXRESCODE,"unix");
-    if(rc==SQLITE_OK && sqlite3_db_readonly(db,"main")!=1) rc=SQLITE_READONLY;
+    if(rc==SQLITE_OK && sqlite3_db_readonly(db,"main")!=(writer ? 0 : 1)) rc=SQLITE_READONLY;
     if(rc==SQLITE_OK) {
         int n=0;
         rc=sqlite3_db_config(db,SQLITE_DBCONFIG_DEFENSIVE,1,&n);
@@ -51,6 +51,14 @@ int zxs_sql_open_read(const char *path,sqlite3 **result) {
     if(rc==SQLITE_OK) rc=one(db,"PRAGMA main.journal_mode",SQLITE_TEXT,0,"delete"); /* NEVER set mode here. */
     if(rc!=SQLITE_OK){if(db) sqlite3_close(db);return rc;}
     *result=db;return SQLITE_OK;
+}
+int zxs_sql_open_read(const char *path,sqlite3 **result) { return open_existing(path,0,result); }
+/* No CREATE, no mode conversion and no arbitrary SQL interface. A genuine
+ * online operation must recheck its actor and immutable pool in its own
+ * BEGIN IMMEDIATE. Pure observations never request this connection. */
+int zxs_sql_open_writer(const char *path,sqlite3 **result) { return open_existing(path,1,result); }
+int zxs_sql_bind_copy(sqlite3_stmt *stmt,int index,const void *bytes,int count) {
+    return sqlite3_bind_blob(stmt,index,bytes,count,SQLITE_TRANSIENT);
 }
 int zxs_sql_named(sqlite3 *db) {
     int moved=1;
@@ -71,5 +79,5 @@ int zxs_sql_template(const char *ddl,sqlite3 **result) {
 int zxs_sql_family(sqlite3 *actual) {
     if(sqlite3_get_autocommit(actual))return SQLITE_MISUSE;
     int rc=one(actual,"PRAGMA main.application_id",SQLITE_INTEGER,0x5a585331,NULL);
-    return rc==SQLITE_OK ? one(actual,"PRAGMA main.user_version",SQLITE_INTEGER,2,NULL) : rc;
+    return rc==SQLITE_OK ? one(actual,"PRAGMA main.user_version",SQLITE_INTEGER,3,NULL) : rc;
 }

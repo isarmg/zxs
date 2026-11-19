@@ -149,3 +149,6 @@ fn just_the_declared_ordinary_root_is_observed_with_opaque_linux_path_and_withou
 
 #[path="sqlite_first_account.rs"]
 mod first_account;
+
+#[path="sqlite_publication.rs"]
+mod publication;

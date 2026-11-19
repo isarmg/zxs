@@ -10,7 +10,7 @@ fn field(k:&str)->&'static str{
 fn inputs(profile:u8)->(&'static str,Management){
     match profile{1=>(field("profile1_sha"),Management::ReadAcl),2=>(field("profile2_sha"),Management::ReadAndWriteAcl),_=>unreachable!()}
 }
-fn rows(profile:u8)->(String,String,String){
+pub(super) fn rows(profile:u8)->(String,String,String){
     let op=field("first_op");let account=field("result_account");let approval=field("approval_ref");
     let actor=field("offline_actor");let login=field("login_hex");let salt=field("salt");let tag=field("verifier");
     let (sha,_)=inputs(profile);

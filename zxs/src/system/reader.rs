@@ -10,6 +10,8 @@ use std::{ffi::{CStr,CString,OsStr,c_char,c_int,c_void},io,os::unix::ffi::OsStrE
 unsafe extern "C"{
     fn zxs_sql_path_limit()->c_int;
     fn zxs_sql_open_read(path:*const c_char,db:*mut *mut Db)->c_int;
+    fn zxs_sql_open_writer(path:*const c_char,db:*mut *mut Db)->c_int;
+    fn zxs_sql_bind_copy(s:*mut Stmt,index:c_int,bytes:*const c_void,count:c_int)->c_int;
     fn zxs_sql_named(db:*mut Db)->c_int;
     fn zxs_sql_template(ddl:*const c_char,db:*mut *mut Db)->c_int;
     fn zxs_sql_family(db:*mut Db)->c_int;
@@ -36,9 +38,11 @@ fn check(rc:c_int)->io::Result<()>{
 }
 struct Connection(*mut Db);
 impl Connection{
-    fn read(path:&CStr)->io::Result<Self>{
-        let mut p=ptr::null_mut();check(unsafe{zxs_sql_open_read(path.as_ptr(),&mut p)})?;
-        if p.is_null(){return Err(invalid("SQLite returned no live read-only connection"));}Ok(Self(p))
+    fn open(dir:&SystemDir,writer:bool)->io::Result<Self>{
+        let mut p=ptr::null_mut();
+        check(unsafe{if writer{zxs_sql_open_writer(dir.path().as_ptr(),&mut p)}
+                     else{zxs_sql_open_read(dir.path().as_ptr(),&mut p)}})?;
+        if p.is_null(){return Err(invalid("SQLite returned no live connection"));}Ok(Self(p))
     }
     fn prepare(&self,sql:&CStr)->io::Result<Statement<'_>>{
         let mut p=ptr::null_mut();
@@ -96,6 +100,15 @@ impl Drop for Connection{
 struct Statement<'a>(*mut Stmt,#[allow(dead_code)] &'a Connection);
 impl Drop for Statement<'_>{fn drop(&mut self){let _=unsafe{sqlite3_finalize(self.0)};}}
 impl Statement<'_>{
+    fn bind_bytes(&self,k:i32,b:&[u8])->io::Result<()>{
+        let n=i32::try_from(b.len()).map_err(|_|invalid("oversize SQLite parameter"))?;
+        // SQLITE_TRANSIENT: SQLite takes its own bytes before this function returns.
+        check(unsafe{zxs_sql_bind_copy(self.0,k,b.as_ptr().cast(),n)})
+    }
+    fn done(&self)->io::Result<()>{
+        let rc=unsafe{sqlite3_step(self.0)};
+        if rc==101{return Ok(());}check(rc)?;Err(invalid("statement did not finish exactly once"))
+    }
     fn integer(&self,k:i32)->io::Result<i64>{
         if unsafe{sqlite3_column_type(self.0,k)}!=1{return Err(invalid("unexpected SQLite integer storage class"));}
         Ok(unsafe{sqlite3_column_int64(self.0,k)})
@@ -143,7 +156,7 @@ impl InitialReader{
         // and shown distinct, single-link and protected before borrowing this
         // non-DB control file. Only SQLite ever opens the DB or its journal.
         let marker=dir.hold_marker(&dir.root)?;dir.require()?;
-        let conn=Connection::read(dir.path())?;
+        let conn=Connection::open(&dir,false)?;
         let expected_schema=Connection::expected_schema()?;
         let s=Self{conn,marker,dir,pool:expected,expected_schema};
         s.snapshot()?;Ok(s)
@@ -152,14 +165,17 @@ impl InitialReader{
     /// Only bounded metadata may be selected here. KDF, disk transfer and
     /// slow streams are outside the SQL transaction. A later action rechecks.
     fn at<T>(&self,read:impl FnOnce(&Connection,Catalog)->io::Result<T>)->io::Result<T>{
-        self.dir.require()?;check(unsafe{zxs_sql_named(self.conn.0)})?;
-        if unsafe{sqlite3_get_autocommit(self.conn.0)}==0{return Err(invalid("previous SQLite transaction did not close"));}
-        self.conn.fixed(c"BEGIN")?;
+        self.transaction(&self.conn,c"BEGIN",read)
+    }
+    fn transaction<T>(&self,conn:&Connection,begin:&CStr,read:impl FnOnce(&Connection,Catalog)->io::Result<T>)->io::Result<T>{
+        self.dir.require()?;check(unsafe{zxs_sql_named(conn.0)})?;
+        if unsafe{sqlite3_get_autocommit(conn.0)}==0{return Err(invalid("previous SQLite transaction did not close"));}
+        conn.fixed(begin)?;
         let result=(||{
-            check(unsafe{zxs_sql_family(self.conn.0)})?;
-            if self.conn.shape()?!=self.expected_schema{return Err(invalid("SQLite schema differs from the exact qualified DDL"));}
+            check(unsafe{zxs_sql_family(conn.0)})?;
+            if conn.shape()?!=self.expected_schema{return Err(invalid("SQLite schema differs from the exact qualified DDL"));}
             let select=CString::new(CATALOG).expect("compiled static SELECT is NUL-free");
-            let s=self.conn.prepare(&select)?;
+            let s=conn.prepare(&select)?;
             // NULL destructor = SQLITE_STATIC; these 16 bytes belong to self
             // and remain live beyond statement finalization.
             check(unsafe{sqlite3_bind_blob(s.0,1,self.pool.0.as_ptr().cast(),16,None)})?;
@@ -180,13 +196,15 @@ impl InitialReader{
                 !catalog.marker_matches(0,&self.marker.bytes(&self.dir.root)?) {
                 return Err(invalid("actual SYSTEM does not match its committed SQLite enrollment"));
             }
-            let value=read(&self.conn,catalog)?;
-            self.dir.require()?;check(unsafe{zxs_sql_named(self.conn.0)})?;
+            let value=read(conn,catalog)?;
+            self.dir.require()?;
+            self.marker.require(&self.dir.root)?; // same held S control bytes/stamp at the final boundary
+            check(unsafe{zxs_sql_named(conn.0)})?;
             Ok(value)
         })();
         match result{
-            Ok(c)=>{if let Err(e)=self.conn.fixed(c"COMMIT"){let _=self.conn.fixed(c"ROLLBACK");return Err(e);}Ok(c)}
-            Err(e)=>{if unsafe{sqlite3_get_autocommit(self.conn.0)}==0{self.conn.fixed(c"ROLLBACK")?;}Err(e)}
+            Ok(c)=>{if let Err(e)=conn.fixed(c"COMMIT"){let _=conn.fixed(c"ROLLBACK");return Err(e);}Ok(c)}
+            Err(e)=>{if unsafe{sqlite3_get_autocommit(conn.0)}==0{conn.fixed(c"ROLLBACK")?;}Err(e)}
         }
     }
 }
