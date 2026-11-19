@@ -4,6 +4,7 @@
  * Samba service, setup credential, SQL access or positive authentication. */
 #include "includes.h"
 #include "param/zxs_runtime.h"
+#include "param/zxs_receiver.h"
 #include <arpa/inet.h>
 #include <sys/wait.h>
 
@@ -43,6 +44,34 @@ static bool rejected_before_reinit(void)
 	close(witness[0]);
 	return got==child && WIFEXITED(status) && WEXITSTATUS(status)==EXIT_FAILURE && seen==0;
 }
+/* The irreversibly restricted branch owns no serving socket, password or
+ * user data. Its unfiltered parent can still create another worker. */
+static bool no_inherited_receiver(void)
+{
+	pid_t child=fork();
+	if (child==0) {
+		int pair[2],copy;
+		if (!zxs_seal_receiver() || socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,pair)!=0) {
+			_exit(2);
+		}
+		/* Same-process duplicates remain valid. A new process must never
+		 * get a chance to receive from even this nonsecret fixture pair. */
+		copy=dup(pair[0]);
+		if (copy<0) { _exit(3); }
+		if (fork()!=-1 || errno!=EPERM) { _exit(4); }
+		errno=0;
+		if (syscall(SYS_clone3,NULL,0)!=-1 || errno!=ENOSYS) { _exit(5); }
+		errno=0;
+		if (syscall(SYS_execve,"/cannot-be-an-installed-program",NULL,NULL)!=-1 ||
+		    errno!=EPERM) { _exit(6); }
+		const unsigned char b=19;unsigned char got=0;
+		if (write(pair[1],&b,1)!=1 || read(copy,&got,1)!=1 || got!=b) { _exit(7); }
+		_exit(0);
+	}
+	if (!complete(child)) { return false; }
+	child=fork();if (child==0) { _exit(0); }
+	return complete(child);
+}
 int main(void)
 {
 	int l=-1,c1=-1,c2=-1,a1=-1,a2=-1;
@@ -50,7 +79,7 @@ int main(void)
 	struct zxs_client_role r={.parent=getpid()};
 	struct zxs_client_offer o={0},unused={0};
 	pid_t p;
-	if (!rejected_before_reinit()) { return 1; }
+	if (!rejected_before_reinit() || !no_inherited_receiver()) { return 1; }
 	a.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
 	l=socket(AF_INET,SOCK_STREAM|SOCK_CLOEXEC,IPPROTO_TCP);
 	c1=socket(AF_INET,SOCK_STREAM|SOCK_CLOEXEC,IPPROTO_TCP);

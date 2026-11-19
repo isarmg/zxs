@@ -18,6 +18,8 @@
 
 这不是可用的 Windows 登录程序。该 passdb 只承接这份经核对的本地域，不从通用账户查询返回任何账户或密码材料，也不继承 Samba 默认的系统用户/组创建、策略或者秘密读写方法。Samba 内部仍可能构造用于自身运行的 guest 对象；它不是一次成功的客户端认证。将来的固定 `zxs-smb-client` 只作受限本地 Unix 身份映射，与存储 UID、Web 管理员和 guest 分离，不是第三个产品账号或口令来源；本批不创建它。尚缺实际 SMB 口令验证、`zxs_file` 的正向业务回调、准确认证尝试到成功 SMB2 session 的凭据代次传递、逐次 SQL 共享授权和现场验收。不会把操作系统用户名、裸 SID、Samba 日志或来源不明的 socket 当作成功认证。当前库级 FILE 夹具代入已认证事件，不替代上述任一项。
 
+首个新会话的[限定认证路径](../docs/smb-native-session.md)单列了接收者、SQLite 当前账号和 Samba 自身临时会话库的区别。存储端已在发挑战前选定该账号，但还没有可用的网络密码校验。
+
 ### 受管原件怎样交接
 
 helper 供给的 `/instance/domain.bound` 正好 128 字节：`ZXS-SAM/BOUND-1\0`、三个 16B 标识（Pool/Instance/供给原单）、32B **上线**原配置的 SHA-256、8B `ZXSLOCAL`、24B 本地域。这不是秘密。两个普通原文件 `/instance/domain.bound`、`/instance/smb.conf` 必须真正只读投射；`/instance/private` 与 `/instance/state` 是宿主选定的两个不同原目录。本机宿主先确保来自该次已批准的安装正本并在隔离配置中核池/实例/原单；只读标志、文件属主、这些字节本身都不构成宿主授权。ZXS 不自行挂载或供给。

@@ -80,7 +80,7 @@
 +	    !lp_config_backend_is_file() || lp_registry_shares() ||
 +	    lp_kerberos_method() != KERBEROS_VERIFY_SECRETS ||
 +	    !lp_encrypt_passwords() || lp_ntlm_auth() != NTLM_AUTH_NTLMV2_ONLY ||
-+	    lp_null_passwords() || lp_allow_trusted_domains() ||
++	    lp_null_passwords() || lp_allow_trusted_domains() || lp_obey_pam_restrictions() ||
 +	    lp_map_to_guest() != NEVER_MAP_TO_GUEST || lp_restrict_anonymous() != 2 ||
 +	    strcmp(lp_passdb_backend(), "zxs_sqlite") != 0 ||
 +	    lp_server_min_protocol() < PROTOCOL_SMB2_02 ||
@@ -91,7 +91,7 @@
 +	    !zxs_empty(lp_defaultservice(mem_ctx, sub)) ||
 +	    !zxs_empty(lp_auto_services(mem_ctx, sub)) ||
 +	    !zxs_empty(lp_username_map(mem_ctx, sub)) ||
-+	    !zxs_empty(lp_username_map_script(mem_ctx, sub)) ||
++	    !zxs_empty(lp_username_map_script(mem_ctx, sub)) || !zxs_empty(lp_log_nt_token_command(mem_ctx, sub)) ||
 +	    lp_servicenumber(HOMES_NAME) >= 0 ||
 +	    lp_servicenumber(PRINTERS_NAME) >= 0) {
 +		return false;

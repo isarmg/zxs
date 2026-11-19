@@ -1,7 +1,7 @@
 //! One bounded, nonsecret server challenge for one original SMB2 auth context.
 //! No input from the client, password, response, user name or FILE claim is
 //! accepted here. All outcomes leave authentication and SQL permissions unchanged.
-use super::os;
+use super::{Slot,os};
 use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd,RawFd},time::{Duration,Instant}};
 
 const LIMIT:usize=32;
@@ -19,23 +19,32 @@ unsafe extern "C"{
     #[cfg(test)] fn zxs_smb_try_current(fd:i32,born:i64)->i32;
 }
 struct Registered{peer:OwnedFd,worker:OwnedFd,tcp:[u64;2]}
-struct Attempt{origin:Registered,issued:Instant,challenge:[u8;8]}
+struct Attempt{origin:Registered,slot:Slot,issued:Instant,challenge:[u8;8]}
 struct Active(Vec<Attempt>);
 impl Active{
     fn new()->Self{Self(Vec::with_capacity(LIMIT))}
-    fn admit(&mut self,origin:Registered)->io::Result<()>{
+    fn admit(&mut self,origin:Registered,select:impl FnOnce()->io::Result<Slot>)->io::Result<()>{
         if origin.tcp.contains(&0)||unsafe{zxs_smb_process_live(origin.worker.as_raw_fd())}!=0{
             return Err(io::ErrorKind::PermissionDenied.into());
         }
         if self.0.len()>=LIMIT{return Err(io::ErrorKind::WouldBlock.into());}
+        // Do not let an unregistered sender or a full queue trigger a DB read.
+        // The original S read transaction is already closed before sending.
+        let slot=select()?;
+        self.0.retain(|a|a.slot==slot);
         for _ in 0..4{
             let mut challenge=[0;8];
             os(unsafe{zxs_random(challenge.as_mut_ptr(),challenge.len())})?;
             if challenge==[0;8]||self.0.iter().any(|a|a.challenge==challenge){continue;}
             os(unsafe{zxs_smb_try_issue(origin.peer.as_raw_fd(),challenge.as_ptr())})?;
-            self.0.push(Attempt{origin,issued:Instant::now(),challenge});return Ok(());
+            self.0.push(Attempt{origin,slot,issued:Instant::now(),challenge});return Ok(());
         }
         Err(io::Error::other("no fresh server challenge"))
+    }
+    fn recheck(&mut self,select:impl FnOnce()->io::Result<Slot>){
+        if self.0.is_empty(){return;}
+        // One fresh short cut for all attempts. No periodic query when idle.
+        match select(){Ok(slot)=>self.0.retain(|a|a.slot==slot),Err(_)=>self.0.clear()}
     }
     fn expire(&mut self,now:Instant,events:&[u8]){
         // events refer to the original poll order, not to vector positions
@@ -87,13 +96,13 @@ impl<'a> Workers<'a>{
         }
     }
 }
-pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,stopping:impl Fn()->bool)->io::Result<()>{
+pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,stopping:impl Fn()->bool,select:impl Fn()->io::Result<Slot>)->io::Result<()>{
     let mut active=Active::new();let mut workers=Workers::new(master);let mut swept=Instant::now();let mut draining=false;
     let revoke=|a:&mut Active|{
         let _=unsafe{super::zxs_smb_ctl_drain(ctl)};a.0.clear();
     };
     loop{
-        if !draining && swept.elapsed()>=Duration::from_secs(1){workers.sweep();swept=Instant::now();}
+        if !draining && swept.elapsed()>=Duration::from_secs(1){workers.sweep();active.recheck(&select);swept=Instant::now();}
         if !draining && (stopping()||unsafe{zxs_smb_process_live(master.as_raw_fd())}!=0){revoke(&mut active);workers.live.clear();draining=true;}
         let mut fds=[-1;LIMIT];
         for (slot,a) in fds.iter_mut().zip(&active.0){*slot=a.origin.peer.as_raw_fd();}
@@ -108,7 +117,7 @@ pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,stopping:impl Fn()->
                 Ok(Some(d))=>{
                     // Queue full, peer closed or randomness unavailable: just
                     // close that new endpoint. Never issue on the master.
-                    if let Some(peer)=workers.receive(d){let _=active.admit(peer);}
+                    if let Some(peer)=workers.receive(d){let _=active.admit(peer,&select);}
                 }
                 Ok(None)=>(),
                 Err(e) if matches!(e.kind(),io::ErrorKind::WouldBlock|io::ErrorKind::Interrupted)=>(),
@@ -125,6 +134,11 @@ mod tests{
         fn pipe2(out:*mut i32,flags:i32)->i32;
         fn geteuid()->u32;
         fn send(fd:i32,bytes:*const u8,n:usize,flags:i32)->isize;
+    }
+    fn synthetic()->io::Result<Slot>{
+        Ok(Slot{pool:crate::PoolId([4;16]),original:super::super::Credential{
+            account:crate::identity::AccountId([9;16]),op:crate::OperationId([8;16]),generation:1,
+            login:b"only.smb".to_vec(),sid:[7;28]}})
     }
     fn scope(peer:OwnedFd)->Registered{
         unsafe extern "C"{fn getsockopt(fd:i32,level:i32,op:i32,data:*mut i32,len:*mut u32)->i32;}
@@ -149,11 +163,11 @@ mod tests{
     fn bounded_distinct_originals_and_no_authentication_messages(){
         let (ctl,_master)=pair();let(life,_keep)=pipe();let mut active=Active::new();let mut clients=Vec::new();
         for _ in 0..LIMIT{
-            let(c,s)=pair();active.admit(scope(s)).unwrap();clients.push(c);
+            let(c,s)=pair();active.admit(scope(s),synthetic).unwrap();clients.push(c);
         }
         let values:Vec<_>=clients.iter().map(read).collect();assert!(values.iter().all(|a|*a!=[0;8]));
         for(i,a)in values.iter().enumerate(){assert!(!values[..i].contains(a));assert_eq!(*a,active.0[i].challenge);}
-        let (extra,s)=pair();assert_eq!(active.admit(scope(s)).unwrap_err().kind(),io::ErrorKind::WouldBlock);
+        let (extra,s)=pair();assert_eq!(active.admit(scope(s),synthetic).unwrap_err().kind(),io::ErrorKind::WouldBlock);
         assert!(unsafe{super::super::zxs_smb_ctl_live(extra.as_raw_fd())}<0);
         let rejected=1;assert_eq!(unsafe{send(clients[rejected].as_raw_fd(),b"x".as_ptr(),1,0)},1);
         let fds:Vec<_>=active.0.iter().map(|a|a.origin.peer.as_raw_fd()).collect();let mut events=[0u8;LIMIT+2];
@@ -162,14 +176,39 @@ mod tests{
         assert_eq!(active.0.len(),LIMIT-1);assert!(!active.0.iter().any(|a|a.challenge==values[rejected]));
         assert!(unsafe{super::super::zxs_smb_ctl_live(clients[rejected].as_raw_fd())}<0);
         assert_eq!(unsafe{super::super::zxs_smb_ctl_live(clients[0].as_raw_fd())},0);
-        let(c,s)=pair();active.admit(scope(s)).unwrap();assert_ne!(read(&c),[0;8]);
+        let(c,s)=pair();active.admit(scope(s),synthetic).unwrap();assert_ne!(read(&c),[0;8]);
         let end=active.0.last().unwrap().issued+TTL;active.expire(end,&[0;LIMIT]);
         assert!(active.0.is_empty());
     }
     #[test]
+    #[ignore="source-only; original non-root synthetic SQLite pool, not a Samba logon"]
+    fn only_the_original_current_smb_slot_can_receive_and_keep_its_challenge(){
+        use crate::{system::reader::{InitialReader,web_pool},test_support::PrivateTemp};
+        let tmp=PrivateTemp::under(&std::env::temp_dir());let (s,p)=web_pool(&tmp);
+        let src=InitialReader::open(&s,p).unwrap();let mut domain=[0;24];
+        domain[..12].copy_from_slice(&super::super::DOMAIN);
+        for(i,v)in [1u32,2,3].into_iter().enumerate(){domain[12+4*i..16+4*i].copy_from_slice(&v.to_le_bytes());}
+        let sid=super::super::expected_user(domain);
+        let select=||super::super::current_slot(&src,p,&sid);
+        let mut active=Active::new();let (first,peer)=pair();
+        active.admit(scope(peer),select).unwrap();
+        assert_ne!(read(&first),[0;8]);assert_eq!(active.0[0].slot.original.account.0,[0x56;16]);
+        let mut wrong=sid;wrong[12]^=1;let (never,peer)=pair();
+        assert!(active.admit(scope(peer),||super::super::current_slot(&src,p,&wrong)).is_err());
+        assert!(unsafe{super::super::zxs_smb_ctl_live(never.as_raw_fd())}<0);
+        let away=tmp.0.join("held-system-away");std::fs::rename(&s,&away).unwrap();
+        active.recheck(select);assert!(active.0.is_empty());
+        assert!(unsafe{super::super::zxs_smb_ctl_live(first.as_raw_fd())}<0);
+        std::fs::rename(&away,&s).unwrap();let (fresh,peer)=pair();
+        active.admit(scope(peer),select).unwrap();assert_ne!(read(&fresh),[0;8]);
+        let different=||{let mut x=select()?;x.original.generation+=1;Ok(x)};
+        active.recheck(different);assert!(active.0.is_empty()); // simulated NEW generation, not an implemented reset
+        assert!(unsafe{super::super::zxs_smb_ctl_live(fresh.as_raw_fd())}<0);
+    }
+    #[test]
     fn complete_begin_with_no_received_rights_rejects_only_that_attempt(){
         let(master,server)=pair();let (old,peer)=pair();let mut active=Active::new();
-        active.admit(scope(peer)).unwrap();let original=read(&old);
+        active.admit(scope(peer),synthetic).unwrap();let original=read(&old);
         // Same observable packet as a kernel-discarded local right. This is
         // not described as an injected system-wide RLIMIT/ENOMEM failure.
         let mut tag=[0u8;32];tag[..16].copy_from_slice(b"ZXS-SAM/BEGIN-2\0");

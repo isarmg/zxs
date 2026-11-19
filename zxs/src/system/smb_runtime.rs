@@ -58,15 +58,23 @@ fn original(file:&File)->io::Result<([u8;128],Stamp)>{
     let old=Stamp::read(file)?;let mut b=[0u8;128];file.read_exact_at(&mut b,0)?;
     if old!=Stamp::read(file)?{return Err(denied());}Ok((b,old))
 }
+#[derive(Clone,Eq,PartialEq)]
+struct Slot{pool:PoolId,original:Credential}
+fn expected_user(domain:[u8;24])->[u8;28]{
+    let mut sid=[0;28];sid[..24].copy_from_slice(&domain);sid[1]=5;
+    sid[24..].copy_from_slice(&1000u32.to_le_bytes());sid
+}
+/// Only the nonsecret provenance of this one live pool's SMB slot.
+fn current_slot(src:&InitialReader,pool:PoolId,sid:&[u8;28])->io::Result<Slot>{
+    src.at(|db,c|{
+        if c.birth.pool!=pool{return Err(denied());}
+        let original=Credential::current(db,&c)?;
+        if &original.sid!=sid{return Err(denied());}Ok(Slot{pool,original})
+    })
+}
 fn answer(src:&InitialReader,e:&Expected,host:&[u8;128],observed:&[u8;128])->io::Result<[u8;212]>{
     if host!=observed{return Err(denied());}
-    let domain=e.checked(host)?;
-    let cred=src.at(|db,c|{
-        if c.birth.pool!=e.pool{return Err(denied());}Credential::current(db,&c)
-    })?;
-    let mut user=[0;28];user[..24].copy_from_slice(&domain);user[1]=5;
-    user[24..].copy_from_slice(&1000u32.to_le_bytes());
-    if cred.sid!=user{return Err(denied());}
+    let cred=current_slot(src,e.pool,&expected_user(e.checked(host)?))?.original;
     let mut out=[0;212];out[..16].copy_from_slice(READY);out[16..144].copy_from_slice(host);
     out[144..160].copy_from_slice(&cred.account.0);out[160..176].copy_from_slice(&cred.op.0);
     out[176..184].copy_from_slice(&cred.generation.to_be_bytes());out[184..].copy_from_slice(&cred.sid);
@@ -90,11 +98,12 @@ pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config
     let fd=endpoint.as_raw_fd();
     os(unsafe{zxs_smb_ctl_claim(fd)})?;os(unsafe{zxs_smb_process_claim(master.as_raw_fd())})?;
     let e=Expected{pool,instance:hex(instance)?,provision,config:hex(config)?};
-    let (host,stamp)=original(&binding)?;e.checked(&host)?;
+    let (host,stamp)=original(&binding)?;let sid=expected_user(e.checked(&host)?);
     let src=InitialReader::open(system,pool)?; // original S SH through close
     let result=(||{
         let life=exchange(fd,&src,&e,&host,||{
-            if original(&binding)?!=(host,stamp)||stopping(){return Err(denied());}
+            let(seen,when)=original(&binding)?;
+            if seen!=host||when!=stamp||stopping(){return Err(denied());}
             os(unsafe{zxs_smb_process_claim(master.as_raw_fd())})
         })?; // never an NT secret or password response
         // No further sends on this anonymous endpoint (shutdown is not a
@@ -105,7 +114,11 @@ pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config
             while unsafe{zxs_smb_ctl_life(life.as_raw_fd(),500)}==0 {}
             return Err(e);
         }
-        attempts::serve(fd,&life,&master,stopping)
+        attempts::serve(fd,&life,&master,stopping,||{
+            if Stamp::read(&binding)?!=stamp{return Err(denied());}
+            let selected=current_slot(&src,pool,&sid)?;
+            if Stamp::read(&binding)?!=stamp{return Err(denied());}Ok(selected)
+        })
     })();
     drop(endpoint); // revoke the smbd end before releasing the original S, on errors too
     drop(src);result

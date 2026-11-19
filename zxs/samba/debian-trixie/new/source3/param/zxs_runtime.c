@@ -4,6 +4,7 @@
  * Debian 13 Linux/amd64; not a probe of the system Samba installation. */
 #include "includes.h"
 #include "param/zxs_runtime.h"
+#include "param/zxs_receiver.h"
 #include "param/zxs_smb_control.h"
 #include "lib/util/tini.h"
 #include "libcli/security/security.h"
@@ -40,6 +41,7 @@ static bool active;
 static int control_fd = -1;
 static int lifetime_writer = -1; /* deliberately retained across participating forks */
 static bool qualified;
+static bool receiver_sealed;
 static struct zxs_client_role client_role;
 
 static bool observed(int fd, const char *name, unsigned flags, struct statx *o)
@@ -307,15 +309,19 @@ void zxs_runtime_wait_gate_or_exit(int fd)
 }
 bool zxs_runtime_claim_child(const struct zxs_client_offer *o,int fd)
 {
-	return zxs_runtime_storage_live() && zxs_claim_accepted(&client_role,o,fd);
+	if (receiver_sealed || !zxs_runtime_storage_live() || !zxs_claim_accepted(&client_role,o,fd)) {
+		return false;
+	}
+	receiver_sealed = zxs_seal_receiver();
+	return receiver_sealed;
 }
 bool zxs_runtime_child_on(int fd)
 {
-	return zxs_client_on(&client_role,fd) && zxs_runtime_storage_live();
+	return receiver_sealed && zxs_client_on(&client_role,fd) && zxs_runtime_storage_live();
 }
 bool zxs_runtime_client_process(void)
 {
-	return zxs_client_here(&client_role) && zxs_runtime_storage_live();
+	return receiver_sealed && zxs_client_here(&client_role) && zxs_runtime_storage_live();
 }
 
 /* This does not let a caller submit its own challenge or read a stored
