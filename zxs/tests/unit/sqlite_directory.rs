@@ -108,3 +108,34 @@ fn original_number_survives_alias_share_revision_and_reopen(){
     let was=web.share_setting(ro).unwrap();web.set_share_mode(OperationId([0xee;16]),ro,was.op,Mode::Disabled).unwrap();
     assert!(got.native_key().is_err());
 }
+
+#[test]
+#[ignore="source-only; actual SQLite and FILE, test-only authenticated principal, no Windows session"]
+fn canonical_service_routes_to_one_current_share_and_does_not_publish_labels_or_grants(){
+    use std::io::ErrorKind;
+    let t=PrivateTemp::under(&std::env::temp_dir());let (s,p,_,rw,ro)=enrollment(&t);
+    let src=InitialReader::open(&s,p).unwrap();let sess=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let write_name=rw.smb_service();let read_name=ro.smb_service();
+    let w=sess.connect_service(write_name.to_ascii_uppercase().as_bytes()).unwrap();
+    let r=sess.connect_service(read_name.as_bytes()).unwrap();
+    let made=w.create_file(OperationId([0xbd;16]),"reports").unwrap();
+    assert_eq!(r.open_current("reports").unwrap().file(),made.file);
+    assert!(r.create_file(OperationId([0xbe;16]),"another").is_err());
+    let mut unknown=rw;for k in 1..=2{unknown.0[0]=rw.0[0]^k;if unknown!=ro{break;}}
+    let unknown=unknown.smb_service();let split=format!(r"\\ZXSLOCAL\{write_name}");
+    let nul=format!("{read_name}\0");let trailing=format!("{read_name}$");
+    for x in ["IPC$","writable","view","", "zxs-00000000000000000000000000000000",
+              unknown.as_str(),split.as_str(),nul.as_str(),trailing.as_str()] {
+        let e=sess.connect_service(x.as_bytes()).err().expect("must not select a tree");
+        assert_eq!(e.kind(),ErrorKind::PermissionDenied);
+    }
+    let web=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    let was=web.share_setting(ro).unwrap();
+    let off=web.set_share_mode(OperationId([0xbc;16]),ro,was.op,Mode::Disabled).unwrap();
+    let clean=sess.connect_service(read_name.as_bytes()).err().expect("disabled share has no route");
+    assert_eq!(clean.kind(),ErrorKind::PermissionDenied);assert!(r.open_current("reports").is_err());
+    assert_eq!(w.open_current("reports").unwrap().file(),made.file);
+    web.set_share_mode(OperationId([0xbb;16]),ro,off.op,Mode::ReadOnly).unwrap();
+    assert!(r.open_current("reports").is_err()); // same alias, not the old Tree grant
+    assert_eq!(sess.connect_service(read_name.as_bytes()).unwrap().open_current("reports").unwrap().file(),made.file);
+}

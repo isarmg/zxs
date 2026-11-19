@@ -3,6 +3,7 @@
 #ifndef ZXS_SAMBA_RUNTIME_H
 #define ZXS_SAMBA_RUNTIME_H
 #include "param/zxs_client_role.h"
+#include "param/zxs_smb_control.h"
 struct dom_sid;
 bool zxs_runtime_control_take(void);
 bool zxs_runtime_connect_storage(void);

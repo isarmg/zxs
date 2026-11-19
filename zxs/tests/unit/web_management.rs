@@ -56,6 +56,9 @@ fn login_publish_mode_and_cold_management_page_use_one_real_database_without_ope
     for _ in 0..2{assert!(hit(&mut app,"POST","/shares/publish",&cookie,SITE,&publish).starts_with("Status: 303"));}
     let page=hit(&mut app,"GET","/",&cookie,"","");
     assert_eq!(page.matches("<bdi>R&amp;D</bdi>").count(),1);assert!(page.contains("<td>停用</td>"));
+    let service=format!("zxs-{}",hidden(&page,"/shares/mode","share"));
+    assert!(page.contains(format!("<code>{service}</code>").as_str()));assert!(!page.contains("smb://"));
+    assert!(!hit(&mut app,"GET","/login","","","").contains(service.as_str()));
     let mode=format!("csrf={}&op={}&share={}&previous={}&mode=rw",hidden(&page,"/shares/mode","csrf"),
         hidden(&page,"/shares/mode","op"),hidden(&page,"/shares/mode","share"),hidden(&page,"/shares/mode","previous"));
     assert!(hit(&mut app,"POST","/shares/mode",&cookie,SITE,&mode).starts_with("Status: 303"));
@@ -65,6 +68,7 @@ fn login_publish_mode_and_cold_management_page_use_one_real_database_without_ope
     assert!(hit(&mut cold,"GET","/",&cookie,"","").contains("Location: /login"));
     let cookie=logged(&mut cold);let page=hit(&mut cold,"GET","/",&cookie,"","");
     assert!(page.contains("<bdi>R&amp;D</bdi>")&&page.contains("<td>读写</td>"));
+    assert!(page.contains(format!("<code>{service}</code>").as_str()));
     let exit=format!("csrf={}",hidden(&page,"/logout","csrf"));
     assert!(hit(&mut cold,"POST","/logout",&cookie,"https://other.example",&exit).starts_with("Status: 403"));
     assert!(hit(&mut cold,"POST","/logout",&cookie,SITE,&exit).contains("Max-Age=0"));

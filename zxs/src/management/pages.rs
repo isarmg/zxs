@@ -28,24 +28,24 @@ pub(super) fn overview(data:&Overview,csrf:&str)->io::Result<String>{
         write!(out,"<tr><td>{label}</td><td><code>{id}</code></td><td>{state}</td></tr>").unwrap();
     }
     out.push_str(r#"</tbody></table></div><p class="zxs-status">本页未采集文件系统 UUID、健康及读写速率，不能据此判定健康或空闲。</p></section><section id="zxs-shares" class="zxs-panel"><h2>共享配置</h2>"#);
-    out.push_str(r#"<form class="zxs-fields" method="post" action="/shares/publish"><h3>登记新共享</h3><p>只可选择已登记的普通卷。新共享默认停用。</p><label for="publish-volume">普通卷</label><select id="publish-volume" required name="volume">"#);
+    out.push_str(r#"<form class="zxs-fields" method="post" action="/shares/publish"><h3>登记新共享</h3><p>只可选择已登记的普通卷。新共享默认停用。显示名称与 SMB 服务名分开。</p><label for="publish-volume">普通卷</label><select id="publish-volume" required name="volume">"#);
     for &(r,id) in &data.volumes{if r==Role::File{write!(out,r#"<option value="{id}">{id}</option>"#).unwrap();}}
-    out.push_str(r#"</select><label for="publish-label">共享名称</label><input class="zxs-input" id="publish-label" name="label" required maxlength="255">"#);
+    out.push_str(r#"</select><label for="publish-label">共享显示名称</label><input class="zxs-input" id="publish-label" name="label" required maxlength="255">"#);
     hidden(&mut out,csrf)?;out.push_str(r#"<button class="zxs-button" type="submit">登记为停用共享</button></form>"#);
     if data.shares.is_empty(){out.push_str("<p>本页没有已登记的共享。</p>");}
     else{
-        out.push_str(r#"<div class="zxs-table-scroll"><table class="zxs-table"><thead><tr><th scope="col">共享名称</th><th scope="col">普通卷</th><th scope="col">SMB 设置</th><th scope="col">修改设置</th></tr></thead><tbody>"#);
+        out.push_str(r#"<div class="zxs-table-scroll"><table class="zxs-table"><thead><tr><th scope="col">共享显示名称</th><th scope="col">SMB 服务名</th><th scope="col">普通卷</th><th scope="col">SMB 设置</th><th scope="col">修改设置</th></tr></thead><tbody>"#);
         for share in &data.shares{
             let mode=match share.mode{Mode::Disabled=>"停用",Mode::ReadOnly=>"只读",Mode::ReadWrite=>"读写"};
             out.push_str("<tr><td><bdi>");text(&mut out,&share.label);
-            write!(out,r#"</bdi></td><td><code>{}</code></td><td>{mode}</td><td><form method="post" action="/shares/mode"><input type="hidden" name="share" value="{}"><input type="hidden" name="previous" value="{}">"#,share.volume,share.share,share.previous).unwrap();
+            write!(out,r#"</bdi></td><td><code>{}</code></td><td><code>{}</code></td><td>{mode}</td><td><form method="post" action="/shares/mode"><input type="hidden" name="share" value="{}"><input type="hidden" name="previous" value="{}">"#,share.share.smb_service(),share.volume,share.share,share.previous).unwrap();
             hidden(&mut out,csrf)?;out.push_str(r#"<label>新模式 <select name="mode">"#);
             for (value,label,active) in [("off","停用",Mode::Disabled),("ro","只读",Mode::ReadOnly),("rw","读写",Mode::ReadWrite)]{
                 let selected=if active==share.mode{" selected"}else{""};write!(out,r#"<option value="{value}"{selected}>{label}</option>"#).unwrap();
             }
             out.push_str(r#"</select></label><button type="submit" class="zxs-button">保存</button></form></td></tr>"#);
         }
-        out.push_str("</tbody></table></div>");
+        out.push_str("</tbody></table></div><p>用站点提供的服务器名与 SMB 服务名组成网络路径。这里显示的是本池登记，不代表 SMB 已上线。</p>");
     }
     if let Some(k)=data.next{write!(out,r##"<p><a href="/?after={k}#zxs-shares">下一页共享</a></p>"##).unwrap();}
     out.push_str(r#"</section><section id="zxs-versions" class="zxs-panel"><h2>版本元信息</h2><p>此版本管理页尚未接入正式节点查询。工作稿不计为正式版本。</p></section><section id="zxs-credentials" class="zxs-panel"><h2>固定账号</h2><div class="zxs-account-grid"><article class="zxs-account-card"><h3>Web 管理员</h3><bdi>"#);

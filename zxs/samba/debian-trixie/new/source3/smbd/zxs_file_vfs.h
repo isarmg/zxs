@@ -2,6 +2,7 @@
  * Internal to the fixed private smbd. This is stack routing, not a grant. */
 #ifndef ZXS_FILE_VFS_H
 #define ZXS_FILE_VFS_H
+#include "param/zxs_smb_control.h"
 #if SMB_VFS_INTERFACE_VERSION != 50
 #error Re-audit the complete terminal table for this Samba ABI
 #endif

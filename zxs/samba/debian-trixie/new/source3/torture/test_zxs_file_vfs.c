@@ -11,7 +11,20 @@ int main(void)
 	const char *path[] = {"/tmp/zxs_file.so", NULL};
 	connection_struct *conn = talloc_zero(NULL, connection_struct);
 	SMB_STRUCT_STAT untouched = {.st_ex_size = 42};
-	uint8_t marker = 0x35;
+	uint8_t marker = 0x35, id[16];
+	const char lower[] = "zxs-0102030405060708090a0b0c0d0e0fff";
+	const char upper[] = "ZxS-0102030405060708090A0B0C0D0E0Fff";
+	if (!zxs_smb_service_id((const uint8_t *)upper, sizeof(upper)-1, id) ||
+	    id[0] != 1 || id[14] != 15 || id[15] != 255 ||
+	    !zxs_smb_direct_service(lower, 0, 0, 0) ||
+	    zxs_smb_direct_service(upper, 0, 0, 0) ||
+	    zxs_smb_direct_service(lower, 1, 0, 0) ||
+	    zxs_smb_direct_service(lower, 0, 1, 0) ||
+	    zxs_smb_direct_service(lower, 0, 0, 1) ||
+	    zxs_smb_direct_service("zxs-00000000000000000000000000000000", 0, 0, 0) ||
+	    zxs_smb_direct_service("IPC$", 0, 0, 0)) {
+		return 1;
+	}
 	if (conn == NULL ||
 	    zxs_file_vfs_route(3,1,false,false,false,file) != ZXS_VFS_FILE ||
 	    zxs_file_vfs_route(1,1,true,false,false,NULL) != ZXS_VFS_IPC ||

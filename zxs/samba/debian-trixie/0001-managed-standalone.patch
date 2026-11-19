@@ -123,7 +123,7 @@
 +			continue;
 +		}
 +		vfs = lp_vfs_objects(i);
-+		if (lp_administrative_share(i) || strequal(lp_fstype(i), "IPC") ||
++		if (!zxs_smb_direct_service(lp_const_servicename(i), lp_browseable(i), lp_nt_pipe_support(), lp_host_msdfs()) || lp_administrative_share(i) || strequal(lp_fstype(i), "IPC") ||
 +		    lp_case_sensitive(i) != true || vfs == NULL || vfs[0] == NULL ||
 +		    strcmp(vfs[0], "zxs_file") != 0 || vfs[1] != NULL) {
 +			return false;
@@ -916,7 +916,7 @@
 +
 +bld.SAMBA3_BINARY('test_zxs_file_vfs',
 +                   source='torture/test_zxs_file_vfs.c',
-+                   deps='smbd_base vfs_not_implemented',
++                   deps='smbd_base vfs_not_implemented smbconf',
 +                   for_selftest=True)
 +
 +bld.SAMBA3_BINARY('test_zxs_native_auth_policy',
@@ -1659,7 +1659,7 @@
  }
  
  /*****************************************************************
-@@ -356,51 +278,27 @@
+@@ -356,51 +278,28 @@
  
  bool smbd_vfs_init(connection_struct *conn)
  {
@@ -1724,6 +1724,7 @@
 +	case ZXS_VFS_IPC:
 +		return vfs_init_custom(conn, DEFAULT_VFS_MODULE_NAME);
 +	case ZXS_VFS_FILE:
++		if (!zxs_smb_direct_service(lp_const_servicename(snum), lp_browseable(snum), lp_nt_pipe_support(), lp_host_msdfs())) { errno=EACCES; return false; }
 +		return zxs_file_vfs_install(conn);
 +	default:
 +		errno = EACCES;

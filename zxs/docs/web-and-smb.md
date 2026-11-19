@@ -13,6 +13,8 @@ ZXS 只有两个在线产品入口，职责不对称。Web 是管理界面；SMB
 
 只接受真正 Samba 验证的唯一 SMB 用户，准确匹配原受信域、SID、AccountId 和当时凭据代次；guest、匿名、错误凭据、Web 身份一律拒，不能据此列出任何共享。再核已启用 ShareId、只读或读写模式、确切普通卷根或已安装 DirectoryId 及可见成员。在同一原 SYSTEM 切面验证授权、父名录、EntryId/FileId 和所选材料，不能先拿许可布尔值再按另一个前沿重开。不同协议身份、同名兄弟、错池/错代次、SYSTEM 与回收原件都不得借读。不把宿主目录直接共享，未知或未实现的操作不能绕为 POSIX 直通。
 
+**从管理表到共享。** 管理员看到的“共享显示名称”可用中文；相应 SMB 服务名为 `zxs-<32 位小写十六进制 ShareId>`。例如 `\\服务器名\zxs-0102030405060708090a0b0c0d0e0fff`，主机名或地址由站点提供。管理页只提供可复制的服务名，不拼未经确认的 UNC、不生成下载链接。已验证的 SMB 会话按其中的 ShareId 和当前模式选树；服务名可作 ASCII 大小写变换，显示名、卷号、主机路径和 IPC$ 不是其他写法。两条共享就算指向同一普通卷也分别检查；重复开启原服务名不会恢复旧树的权限。可见服务名不等于已部署或准入。当前出厂专用配置只有 IPC$；普通共享还没有可用的网络登录/连接。
+
 **禁匿名验收不是一项。** 固定实例须读取运行中的有效配置：全局 `map to guest = Never`、`restrict anonymous = 2`、仅允许合格的强认证；所有 ZXS 共享 `guest ok = no`、`guest only = no`，没有另一个 guest 可用的共享或账号后备。用互不共享凭据缓存的全新 Windows/SMB 会话分别验证：① 已知 SMB 用户输错密码、未知用户和 Web 管理员尝试登录均不映射来宾；② 完全不带凭据的新会话不能访问 IPC$ 或列举共享，直接猜共享名也无权；③ 唯一有效 SMB 用户能在启用的共享按 RO/RW 做相应操作。核实际拒绝而非只看配置文件。参见 [Samba restrict anonymous](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html#RESTRICTANONYMOUS) 和 [map to guest](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html#MAPTOGUEST)。以上仅待运行的资格条件。
 
 客户端看到业务名和当前内容，不见物理 FileId 后缀。大小写敏感，要求已采用的 Samba 实例实际配置为 case sensitive = yes（非默认 auto），由真实客户端分别列/读 Report.xlsx 和 report.xlsx；全大写错名不得命中。[Samba 配置文档](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html)。跨进程 VFS 只在受控的本机对端与已验证会话之间移交不透明业务句柄，不传 argv、任意环境变量或原路径作权限。

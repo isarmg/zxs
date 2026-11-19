@@ -36,6 +36,18 @@ id!(OperationId); id!(PoolId); id!(VolumeId); id!(AccountId); id!(ShareId);
 id!(FileId); id!(EntryId); id!(HistoryId); id!(DirectoryId);
 id!(BranchId); id!(NodeId); id!(VersionId);
 
+impl ShareId {
+    /// The sole ordinary native share component in this dedicated pool.
+    /// A management label and a full UNC path are deliberately not inputs.
+    pub(crate) fn smb_service(self)->String{format!("zxs-{self}")}
+    pub(crate) fn from_smb_service(name:&[u8])->Option<Self>{
+        unsafe extern "C"{fn zxs_smb_service_id(s:*const u8,n:usize,id:*mut u8)->i32;}
+        let mut id=[0;16];
+        // Same bounded, side-effect-free parser used by the native module.
+        (unsafe{zxs_smb_service_id(name.as_ptr(),name.len(),id.as_mut_ptr())}==1).then_some(Self(id))
+    }
+}
+
 impl FileId{
     /// One bounded entropy draw before the SQLite writer transaction. Only
     /// the selected original is persisted, and only after its number is free.

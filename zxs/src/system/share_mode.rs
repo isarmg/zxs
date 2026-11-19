@@ -44,8 +44,10 @@ fn selected(db:&Connection,c:&Catalog,lo:ShareId,hi:ShareId,skip_lo:bool,limit:u
 }
 pub(in crate::system::reader) fn current(db:&Connection,c:&Catalog,share:ShareId)->io::Result<Setting>{
     if share.0==[0;16]{return Err(invalid("missing share identity"));}
-    let mut found=None;selected(db,c,share,share,false,1,|s,_|found=Some(s))?;
-    found.ok_or_else(||invalid("share has not been published"))
+    find(db,c,share)?.ok_or_else(||invalid("share has not been published"))
+}
+pub(in crate::system::reader) fn find(db:&Connection,c:&Catalog,share:ShareId)->io::Result<Option<Setting>>{
+    let mut found=None;selected(db,c,share,share,false,1,|s,_|found=Some(s))?;Ok(found)
 }
 pub(super) fn page(db:&Connection,c:&Catalog,after:Option<ShareId>)->io::Result<(Vec<(Setting,String)>,Option<ShareId>)>{
     const LIMIT:usize=32;let mut rows=Vec::new();

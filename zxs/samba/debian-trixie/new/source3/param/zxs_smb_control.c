@@ -16,6 +16,41 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Samba share names are case-insensitive. Use only ASCII for the network
+ * component: do not fold a human display label, interpolate a path, or
+ * permit special native services. No output is written on mismatch. */
+static int service_hex(uint8_t c)
+{
+    if (c>='0' && c<='9') return c-'0';
+    if (c>='A' && c<='F') c=(uint8_t)(c+('a'-'A'));
+    if (c>='a' && c<='f') return c-'a'+10;
+    return -1;
+}
+int zxs_smb_service_id(const uint8_t *s,size_t n,uint8_t id[16])
+{
+    uint8_t out[16];unsigned nonzero=0;
+    if (s==NULL || n!=36 ||
+        !(s[0]=='z' || s[0]=='Z') || !(s[1]=='x' || s[1]=='X') ||
+        !(s[2]=='s' || s[2]=='S') || s[3]!='-') return 0;
+    for (size_t i=0;i<16;i++) {
+        int a=service_hex(s[4+2*i]), b=service_hex(s[5+2*i]);
+        if (a<0 || b<0) return 0;
+        out[i]=(uint8_t)((a<<4)|b);nonzero|=out[i];
+    }
+    if (nonzero==0) return 0;
+    if (id!=NULL) memcpy(id,out,sizeof(out));
+    return 1;
+}
+/* Already loaded, BOUND-checked config uses exactly the emitted lower-case name;
+ * no unfiltered export in Samba's config-based browse list. */
+int zxs_smb_direct_service(const char *name,int browseable,int native_pipes, int host_dfs)
+{
+    size_t i;
+    if (browseable || native_pipes || host_dfs || name==NULL || strnlen(name,37)!=36) return 0;
+    for (i=0;i<36;i++) if (name[i]>='A' && name[i]<='Z') return 0;
+    return zxs_smb_service_id((const uint8_t *)name,36,NULL);
+}
+
 /* Exact UAPI of our pinned Debian amd64 / Linux 6.12. */
 #ifndef SO_PASSPIDFD
 #define SO_PASSPIDFD 76

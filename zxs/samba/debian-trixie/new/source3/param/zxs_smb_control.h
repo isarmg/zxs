@@ -6,6 +6,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
+/* Stable public service component, not a hostname, FILE path or grant. */
+int zxs_smb_service_id(const uint8_t *s, size_t n, uint8_t id[16]);
+int zxs_smb_direct_service(const char *name, int browseable, int native_pipes, int host_dfs);
 #define ZXS_SMB_BIND_LEN 128
 #define ZXS_SMB_READY_LEN 212
 int zxs_smb_ctl_claim(int fd);

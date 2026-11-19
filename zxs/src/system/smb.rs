@@ -31,10 +31,17 @@ impl<'r> SmbSession<'r>{
         let original=source.at(|db,c|Credential::current(db,&c))?;
         if original.login!=login.as_bytes(){return Err(denied());}Ok(Self{source,original})
     }
+    #[cfg(test)]
     pub(crate) fn connect(&self,share:ShareId)->io::Result<Tree<'_,'r>>{
+        self.connect_service(share.smb_service().as_bytes())
+    }
+    /// Only the service portion already separated by SMB, never an entire
+    /// UNC, display label or host path. Resolving an ID isn't authentication.
+    pub(crate) fn connect_service(&self,name:&[u8])->io::Result<Tree<'_,'r>>{
+        let share=ShareId::from_smb_service(name).ok_or_else(denied)?;
         self.source.at(|db,c|{
             if Credential::current(db,&c)?!=self.original{return Err(denied());}
-            let setting=share_mode::current(db,&c,share)?;
+            let setting=share_mode::find(db,&c,share)?.ok_or_else(denied)?;
             if setting.mode==Mode::Disabled{return Err(denied());}Ok(Tree{session:self,setting})
         })
     }
