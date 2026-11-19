@@ -1,24 +1,32 @@
-// This shim needs only the target Linux C ABI. Internal password verification
-// separately links the upstream target libargon2 from Rust. Let Linux headers
-// supply flags and dirent layout rather than embedding architecture constants.
-use std::{env, path::PathBuf, process::Command};
+// Build the Linux ABI and exactly the vendored upstream SQLite core. No
+// download, sqlite shell, system sqlite pkg-config lookup or loadable module.
+use std::{env, path::{Path,PathBuf}, process::Command};
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/linux.c");
-    println!("cargo:rerun-if-env-changed=CC");
-    println!("cargo:rerun-if-env-changed=AR");
     assert_eq!(env::var("CARGO_CFG_TARGET_OS").unwrap(), "linux", "ZXS requires Linux");
-    let cross = env::var_os("HOST") != env::var_os("TARGET");
-    let tool = |key, default: &str| env::var_os(key).unwrap_or_else(|| {
-        assert!(!cross, "set {key} to the target toolchain when cross-compiling");
-        default.into()
+    for p in ["src/linux.c","src/sqlite_read.c","vendor/sqlite/sqlite3.c","vendor/sqlite/sqlite3.h"]{
+        println!("cargo:rerun-if-changed={p}");
+    }
+    for k in ["CC","AR"]{println!("cargo:rerun-if-env-changed={k}");}
+    let cross=env::var_os("HOST")!=env::var_os("TARGET");
+    let tool=|key,default:&str|env::var_os(key).unwrap_or_else(||{
+        assert!(!cross,"set {key} to the target toolchain when cross-compiling");default.into()
     });
-    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let object = out.join("linux.o");
-    assert!(Command::new(tool("CC","cc")).args(["-std=c11","-fPIC","-Wall","-Wextra","-Werror","-c","src/linux.c","-o"])
-        .arg(&object).status().expect("start target C compiler").success(), "compile Linux ABI shim");
-    assert!(Command::new(tool("AR","ar")).arg("crs").arg(out.join("libzxs_linux.a")).arg(object)
-        .status().expect("start target archiver").success(), "archive Linux ABI shim");
-    println!("cargo:rustc-link-search=native={}", out.display());
+    let out=PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let objects=[out.join("linux.o"),out.join("sqlite-read.o"),out.join("sqlite3.o")];
+    let cc=tool("CC","cc");
+    let compile=|source:&str,object:&Path,flags:&[&str]|{
+        assert!(Command::new(&cc).args(["-std=c11","-fPIC","-Ivendor/sqlite"]).args(flags)
+            .arg("-c").arg(source).arg("-o").arg(object).status().expect("start target C compiler").success(),
+            "compile {source}");
+    };
+    compile("src/linux.c",&objects[0], &["-Wall","-Wextra","-Werror"]);
+    compile("src/sqlite_read.c",&objects[1], &["-Wall","-Wextra","-Werror"]);
+    compile("vendor/sqlite/sqlite3.c",&objects[2], &["-O2","-D_GNU_SOURCE","-DSQLITE_THREADSAFE=1",
+        "-DSQLITE_OMIT_LOAD_EXTENSION","-DSQLITE_OMIT_WAL","-DSQLITE_OMIT_SHARED_CACHE","-DSQLITE_DQS=0","-DSQLITE_USE_URI=0"]);
+    assert!(Command::new(tool("AR","ar")).arg("crs").arg(out.join("libzxs_linux.a")).args(&objects)
+        .status().expect("start target archiver").success(),"archive Linux/SQLite core");
+    println!("cargo:rustc-link-search=native={}",out.display());
     println!("cargo:rustc-link-lib=static=zxs_linux");
+    println!("cargo:rustc-link-lib=pthread");
 }

@@ -148,6 +148,33 @@ impl HeldDir {
         Ok(Self { file, path: path.to_owned(), entity })
     }
 
+    /// Stock SQLite uses a canonical pathname. Each component in this walk
+    /// must therefore resist untrusted rename, not just the last directory.
+    /// A trusted-owned sticky ancestor (e.g. /tmp) protects its existing,
+    /// trusted-owned child. Symlink traversal is never allowed.
+    pub(crate) fn trusted_system(path: &Path) -> io::Result<Self> {
+        check_path(path)?;
+        let uid = local_uid();
+        if uid == 0 || uid == u32::MAX || path.to_str().is_none() {
+            return Err(invalid("SYSTEM requires a non-root storage account and an exact UTF-8 VFS path"));
+        }
+        let mut file = File::open("/")?;
+        for component in path.components() {
+            if let Component::Normal(name) = component {
+                let p = file.metadata()?;
+                if !(p.uid() == 0 || p.uid() == uid) || (p.mode() & 0o022 != 0 && p.mode() & 0o1000 == 0) {
+                    return Err(invalid("untrusted SYSTEM ancestor"));
+                }
+                file = child(&file, &CString::new(name.as_bytes()).map_err(|_| invalid("invalid SYSTEM component"))?)?;
+            }
+        }
+        let m = file.metadata()?;
+        if m.uid() != uid || m.mode() & 0o7777 != 0o700 {
+            return Err(invalid("SYSTEM requires its exact private storage directory"));
+        }
+        Ok(Self {entity:entity(&file)?, file, path:path.to_owned()})
+    }
+
     pub(crate) fn require_named(&self) -> io::Result<()> {
         let current = Self::open(&self.path)?;
         if current.entity != self.entity || mounts::id(&current.file)? != mounts::id(&self.file)? {

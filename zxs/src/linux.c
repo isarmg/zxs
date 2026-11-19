@@ -248,3 +248,20 @@ int zxs_allocate_stream(int fd,uint64_t total) {
     if (!S_ISREG(st.st_mode)||st.st_nlink!=0||st.st_size!=0||size<=0||(uint64_t)size!=total) {errno=EINVAL;return -1;}
     return fallocate(fd,0,0,size); /* no sparse/truncate fallback */
 }
+
+/* Metadata only. Never open, then close, a SQLite DB inode for identity:
+ * POSIX record locks on that inode would be lost by this entire process.
+ * Only static, internally selected DB/control names are passed. */
+int zxs_sql_private_name(int parent,const char *name,uint64_t *ino) {
+    struct statx s;
+    const unsigned int mask=STATX_TYPE|STATX_MODE|STATX_NLINK|STATX_UID|STATX_INO|STATX_MNT_ID;
+    if (statx(parent,name,AT_SYMLINK_NOFOLLOW|AT_NO_AUTOMOUNT,mask,&s)<0) return -1;
+    uint64_t mount=0;
+    if (zxs_mount_id(parent,&mount)<0) return -1;
+    if ((s.stx_mask&mask)!=mask || !S_ISREG(s.stx_mode) || (s.stx_mode&07777)!=0600 ||
+        s.stx_uid!=geteuid() || s.stx_nlink!=1 || s.stx_ino==0 || s.stx_mnt_id!=mount) {
+        errno=EINVAL; return -1;
+    }
+    *ino=s.stx_ino;
+    return 0;
+}

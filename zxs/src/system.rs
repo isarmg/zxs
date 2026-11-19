@@ -4,6 +4,9 @@
 use crate::{OperationId,PoolId,Role,VolumeId,fs::{self,invalid,ComponentLimit,NameBudget},hash::Sha256};
 use std::{collections::BTreeSet,ffi::CStr,io,os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
 
+mod lease;
+pub(crate) mod reader;
+
 pub(crate) const SCHEMA:&str=include_str!("system/schema.sql");
 pub(crate) const CATALOG:&str=include_str!("system/initial-catalog.sql");
 pub(crate) const ORIGINAL_RESULT:&str=include_str!("system/original-init.sql");
