@@ -152,3 +152,6 @@ mod first_account;
 
 #[path="sqlite_publication.rs"]
 mod publication;
+
+#[path="sqlite_create_file.rs"]
+mod create_file;

@@ -19,7 +19,7 @@ pub(crate) struct Setting{
     pub(crate) revision:i64,pub(crate) mode:Mode,
 }
 
-fn current(db:&Connection,c:&Catalog,share:ShareId)->io::Result<Setting>{
+pub(in crate::system::reader) fn current(db:&Connection,c:&Catalog,share:ShareId)->io::Result<Setting>{
     if share.0==[0;16]{return Err(invalid("missing share identity"));}
     let s=db.prepare(c"SELECT r.volume_id,r.publish_op,p.kind,p.state,m.change_op,m.revision,m.mode,o.kind,o.state FROM main.root_share r JOIN main.operation p ON p.op_id=r.publish_op LEFT JOIN main.share_mode m ON m.share_id=r.share_id AND m.revision=(SELECT max(h.revision) FROM main.share_mode h WHERE h.share_id=r.share_id) LEFT JOIN main.operation o ON o.op_id=m.change_op WHERE r.share_id=?1")?;
     s.bind_bytes(1,&share.0)?;

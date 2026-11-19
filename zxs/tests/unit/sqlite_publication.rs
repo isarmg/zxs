@@ -3,7 +3,7 @@
 use super::*;
 use crate::VolumeId;
 
-fn first(t:&PrivateTemp)->(PathBuf,PoolId){
+pub(super) fn first(t:&PrivateTemp)->(PathBuf,PoolId){
     let (s,p)=record(t,InitState::Committed,"");
     let selected=HeldDir::trusted_system(&s).unwrap();selected.exclusive().unwrap();
     let writer=Builder::existing(&s.join("SYSTEM.sqlite3"));

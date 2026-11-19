@@ -1,7 +1,7 @@
 //! Scope a real, ordinary FILE member to a selected portable account and
 //! share. Listing is per logical root, never per publisher or creator.
 use super::{Selected,ShareUse,decision,marker,row_at,denied};
-use crate::{FileId,FileInfo,Role,VolumeId,fs::{HeldDir,invalid},ordinary::portable_birth::Birth,pool::portable_claim::ROOT_NAME};
+use crate::{FileId,FileInfo,Role,VolumeId,fs::{HeldDir,invalid},pool::portable_claim::ROOT_NAME};
 use std::{collections::BTreeSet,io};
 
 impl Selected<'_,'_>{
@@ -69,7 +69,7 @@ impl Selected<'_,'_>{
         })
     }
 }
-fn info(e:&Birth)->FileInfo{
+fn info(e:&super::super::files::ArchivedBirth)->FileInfo{
     FileInfo{entry:e.entry,file:e.file,history:e.history,volume:e.volume,parent:crate::DirectoryParent::Root(e.volume),
         name:e.name.clone(),created_by:e.operation,decision_sequence:Some(e.sequence)}
 }

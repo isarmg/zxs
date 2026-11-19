@@ -131,7 +131,7 @@ fn issued_birth_can_fit_its_fixed_inner_roles_in_the_longest_transfer_enclosure(
     }
     let b=Birth{pool:crate::PoolId([1;16]),volume:VolumeId([2;16]),operation:OperationId([3;16]),
         entry:crate::EntryId([4;16]),file:crate::FileId([5;16]),history:crate::HistoryId([6;16]),branch:crate::BranchId([7;16]),
-        ticket:OperationId([8;16]),slot:0,name:"a".into(),decision:[0x42;32],sequence:6};
+        ticket:OperationId([8;16]),slot:0,name:"a".into()};
     let limit=ComponentLimit::from_original(255).unwrap();let good=long(3989);let bad=long(3990);let short=Path::new("/role");
     let check=|f:&Path,r:&Path|b.validate_geometry((f,limit),(r,limit),crate::pool::portable_claim::ROOT_NAME);
     assert!(check(&good,short).is_ok());assert!(check(short,&good).is_ok());

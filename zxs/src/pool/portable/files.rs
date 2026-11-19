@@ -20,7 +20,10 @@ impl Usage{
         Ok(Self{names,bytes})
     }
 }
-struct Root{members:BTreeMap<String,Arc<Birth>>,required:Usage}
+#[derive(Debug,Eq,PartialEq)]
+pub(super) struct ArchivedBirth{birth:Birth,pub(super) sequence:u64,decision:[u8;32]}
+impl std::ops::Deref for ArchivedBirth{type Target=Birth;fn deref(&self)->&Birth{&self.birth}}
+struct Root{members:BTreeMap<String,Arc<ArchivedBirth>>,required:Usage}
 impl Default for Root{
     fn default()->Self{Self{members:BTreeMap::new(),required:Usage{names:1,bytes:1+ROOT_NAME.to_bytes().len()}}}
 }
@@ -30,10 +33,10 @@ pub(super) struct Files{
     entries:BTreeSet<EntryId>,files:BTreeSet<FileId>,histories:BTreeSet<HistoryId>,branches:BTreeSet<BranchId>,
 }
 impl Files{
-    pub(super) fn at(&self,volume:VolumeId)->impl Iterator<Item=&Arc<Birth>>{
+    pub(super) fn at(&self,volume:VolumeId)->impl Iterator<Item=&Arc<ArchivedBirth>>{
         self.roots.get(&volume).into_iter().flat_map(|r|r.members.values())
     }
-    pub(super) fn get(&self,volume:VolumeId,name:&str)->Option<&Arc<Birth>>{self.roots.get(&volume)?.members.get(name)}
+    pub(super) fn get(&self,volume:VolumeId,name:&str)->Option<&Arc<ArchivedBirth>>{self.roots.get(&volume)?.members.get(name)}
     pub(super) fn apply(&mut self,g:&Genesis,accounts:&Accounts,shares:&Shares,op:OperationId,original:[u8;32],
         bytes:&[u8],d:[u8;32],seq:u64,used:&mut BTreeSet<OperationId>)->io::Result<()>{
         let mut b=bytes;
@@ -49,7 +52,7 @@ impl Files{
         if !scope.matches(vol,publication,grant){return Err(invalid("FILE creation does not match its then-current direct grant"));}
         let e=Birth{pool:g.pool,volume:vol,operation:op,entry:EntryId(id(&mut b)?),file:FileId(id(&mut b)?),
             history:HistoryId(id(&mut b)?),branch:BranchId(id(&mut b)?),ticket:OperationId(id(&mut b)?),
-            slot:fixed::<1>(&mut b)?[0],name,decision:d,sequence:seq};
+            slot:fixed::<1>(&mut b)?[0],name};
         if !b.is_empty(){return Err(invalid("trailing FILE birth fields"));}
         let ordinary=g.rows.iter().find(|r|r.volume==vol&&r.role==Role::File).ok_or_else(||invalid("not an original ordinary root"))?;
         let recycle=&g.rows[1];e.validate_geometry((&ordinary.path,ordinary.limit),(&recycle.path,recycle.limit),ROOT_NAME)?;
@@ -66,6 +69,6 @@ impl Files{
             let n=e.lower(i)?;
             if n.as_c_str()!=ROOT_NAME{peak=peak.plus(&n)?;}
         }
-        root.required=required;root.members.insert(e.name.clone(),Arc::new(e));Ok(())
+        root.required=required;root.members.insert(e.name.clone(),Arc::new(ArchivedBirth{birth:e,sequence:seq,decision:d}));Ok(())
     }
 }

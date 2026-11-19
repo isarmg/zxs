@@ -6,14 +6,18 @@ use crate::{BranchId,EntryId,FileId,HistoryId,OperationId,PoolId,VolumeId,
     fs::{ComponentLimit,HeldBytes,HeldDir,NameBudget,WitnessRead,invalid,path_budget}};
 use std::{collections::BTreeSet,ffi::{CStr,CString},io,os::unix::fs::FileExt,path::Path};
 
-#[derive(Debug,Eq,PartialEq)]
+#[derive(Clone,Debug,Eq,PartialEq)]
 pub(crate) struct Birth {
     pub(crate) pool:PoolId,pub(crate) volume:VolumeId,pub(crate) operation:OperationId,
     pub(crate) entry:EntryId,pub(crate) file:FileId,pub(crate) history:HistoryId,pub(crate) branch:BranchId,
-    pub(crate) name:String,pub(crate) decision:[u8;32],pub(crate) sequence:u64,
+    pub(crate) name:String,
     pub(crate) ticket:OperationId,pub(crate) slot:u8,
 }
 impl Birth{
+    pub(crate) fn reserved_spelling(name:&[u8])->bool{TicketLeaf::parse(name).is_some()}
+    pub(crate) fn reservation_leaves(op:OperationId,ticket:OperationId)->io::Result<(CString,CString)>{
+        Ok((TicketLeaf::stage(op,7)?.name(),TicketLeaf::stage(ticket,0)?.name()))
+    }
     pub(crate) fn validate_geometry(&self,ordinary:(&Path,ComponentLimit),recycle:(&Path,ComponentLimit),mark:&CStr)->io::Result<()>{
         let words=ResidentNames::for_file(FileName::parse(self.name.as_bytes())?,self.file,self.ticket)?;
         if self.operation==self.ticket||TicketLeaf::stage(self.ticket,self.slot)?.name().as_c_str()==mark{
@@ -41,7 +45,10 @@ impl Birth{
         b.push(self.name.len() as u8);b.extend(self.name.as_bytes());b
     }
     pub(crate) fn installed(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>)->io::Result<Installed>{
-        let dir=parent.directory_in_sample(&self.container()?,sample)?.ok_or_else(||invalid("confirmed FILE container not installed"))?;
+        self.newborn_at(parent,sample,&self.container()?)
+    }
+    fn newborn_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,leaf:&CStr)->io::Result<Installed>{
+        let dir=parent.directory_in_sample(leaf,sample)?.ok_or_else(||invalid("original FILE container not installed"))?;
         dir.share()?;let scope=WitnessRead::at(&dir)?;
         // Future SAVE contributes its exact own named role set, not a
         // blanket allowance for unfamiliar files under a familiar header.
@@ -56,8 +63,12 @@ impl Birth{
 }
 pub(crate) struct Installed{dir:HeldDir,header:HeldBytes,witness:CString}
 impl Installed{
+    pub(crate) fn require_newborn(&self,parent:&HeldDir)->io::Result<()>{self.dir.only(Some(c"FILE"))?;self.require(parent)}
     pub(crate) fn require(&self,parent:&HeldDir)->io::Result<()>{
         if self.dir.path.parent()!=Some(parent.path.as_path())||!parent.same_mount(&self.dir)?{return Err(invalid("different containing FILE parent"));}
         WitnessRead::require_parent(&self.dir)?;self.header.require_name(&self.dir,c"FILE")?;self.header.require_name(parent,&self.witness)
     }
 }
+
+#[path="sql_install.rs"]
+mod sql_install;

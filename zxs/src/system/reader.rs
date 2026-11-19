@@ -220,3 +220,6 @@ pub(crate) mod volume;
 
 #[path="account.rs"]
 pub(crate) mod account;
+
+#[path="smb.rs"]
+pub(crate) mod smb;
