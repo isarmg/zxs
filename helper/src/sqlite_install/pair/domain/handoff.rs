@@ -4,6 +4,7 @@ use super::LocalDomain;
 use crate::{pinned::{Entity,Mount},sqlite_install::bad};
 use rustix::{fd::OwnedFd,fs::{Mode,OFlags,fcntl_getfl,openat},net::{AddressFamily,RecvAncillaryBuffer,
     RecvAncillaryMessage,RecvFlags,ReturnFlags,SocketFlags,SocketType,UCred,recvmsg,socketpair,sockopt}};
+use sha2::{Digest,Sha256};
 use std::{fs::File,io::{self,IoSliceMut},mem::MaybeUninit,os::unix::fs::MetadataExt};
 
 pub(super) struct OriginChannel { rx:OwnedFd }
@@ -23,12 +24,14 @@ fn entry(fd:&File,dev:u64,uid:u32)->io::Result<Entity>{
 fn fixed_name(parent:&File)->io::Result<File>{
     Ok(File::from(openat(parent,c"secrets.tdb",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?))
 }
+// Both private protocol legs are one bounded record plus true EOF. Only the
+// first leg contains the Samba guest's one O_PATH; the second transfers two
+// already-held lease OFDs and a host O_PATH to the original supervisor.
 #[derive(Default)]
-struct Ancillary {fd:Option<OwnedFd>, credentials:Option<UCred>}
-fn packet(socket:&OwnedFd)->io::Result<([u8;64],usize,Ancillary)>{
-    let mut data=[0;64];
-    // Extra room lets us diagnose duplicate descriptors; truncation always fails.
-    let mut space=[MaybeUninit::uninit();rustix::cmsg_space!(ScmRights(2),ScmCredentials(1))];
+struct Ancillary {fds:Vec<OwnedFd>, credentials:Option<UCred>}
+fn packet<const N:usize>(socket:&OwnedFd)->io::Result<([u8;N],usize,Ancillary)>{
+    let mut data=[0;N];
+    let mut space=[MaybeUninit::uninit();rustix::cmsg_space!(ScmRights(4),ScmCredentials(1))];
     let mut control=RecvAncillaryBuffer::new(&mut space);
     let msg=recvmsg(socket,&mut [IoSliceMut::new(&mut data)],&mut control,
         RecvFlags::CMSG_CLOEXEC|RecvFlags::DONTWAIT)?;
@@ -36,9 +39,9 @@ fn packet(socket:&OwnedFd)->io::Result<([u8;64],usize,Ancillary)>{
         return Err(bad("oversize dedicated SAM result"));}
     let mut c=Ancillary::default();
     for item in control.drain(){match item{
-        RecvAncillaryMessage::ScmRights(mut fds)=>{
-            let fd=fds.next().ok_or_else(||bad("no original handle"))?;
-            if c.fd.replace(fd).is_some()||fds.next().is_some(){return Err(bad("unexpected extra SAM handles"));}
+        RecvAncillaryMessage::ScmRights(fds)=>{
+            if !c.fds.is_empty(){return Err(bad("repeated dedicated descriptors"));}
+            c.fds.extend(fds);
         }
         RecvAncillaryMessage::ScmCredentials(who)=>{
             if c.credentials.replace(who).is_some(){return Err(bad("repeated sender credentials"));}
@@ -56,19 +59,22 @@ impl OriginChannel {
         if !sockopt::socket_passcred(&rx)?{return Err(bad("cannot attribute the dedicated handoff"));}
         Ok((Self{rx},File::from(tx)))
     }
-    /// No blocking read. A still open channel, missing credential, second
-    /// record, wrong origin or incomplete child output cannot mint even this
-    /// limited held-object evidence. EOF is NOT proof of process termination.
-    // guest_pid is the original PAYLOAD in the receiver's PID namespace,
-    // supplied only by its independent process supervisor (not the monitor,
-    // a wire field, a user-supplied PID, or a subsequent process lookup).
+    // N and K are fixed by each private direction, never supplied by a packet.
+    pub(super) fn exact<const N:usize,const K:usize>(self,expected:UCred)->io::Result<([u8;N],[File;K])>{
+        let (data,n,c)=packet::<N>(&self.rx)?;
+        if n!=N||!c.credentials.is_some_and(|w|w.pid==expected.pid&&w.uid==expected.uid&&w.gid==expected.gid){
+            return Err(bad("incomplete packet or wrong local handoff subject"));}
+        let fds:[OwnedFd;K]=c.fds.try_into().map_err(|_|bad("wrong number of original handles"))?;
+        let (_,tail,end)=packet::<1>(&self.rx)?;
+        if tail!=0||!end.fds.is_empty()||end.credentials.is_some(){return Err(bad("extra or unfinished SAM handoff"));}
+        Ok((data,fds.map(File::from)))
+    }
+    /// The original PAYLOAD PID comes only from its independent supervisor,
+    /// never the monitor, a PID from the wire or a subsequent process lookup.
+    /// EOF is NOT a process-exit notification.
     pub(super) fn receive(self,parent:&File,uid:u32,gid:u32,guest_pid:rustix::process::Pid)->io::Result<HeldOrigin>{
-        let (data,n,c)=packet(&self.rx)?;
-        if !c.credentials.is_some_and(|w|w.pid==guest_pid&&w.uid.as_raw()==uid&&w.gid.as_raw()==gid){return Err(bad("missing or wrong local handoff subject"));}
-        let guest=File::from(c.fd.ok_or_else(||bad("guest did not transfer the original handle"))?);
-        let domain=LocalDomain::guest_bytes(&data[..n])?;
-        let (_,tail,end)=packet(&self.rx)?;
-        if tail!=0||end.fd.is_some()||end.credentials.is_some(){return Err(bad("more than one guest handoff record"));}
+        let (data,[guest])=self.exact::<46,1>(UCred{pid:guest_pid,uid:rustix::process::Uid::from_raw(uid),gid:rustix::process::Gid::from_raw(gid)})?;
+        let domain=LocalDomain::guest_bytes(&data)?;
         let original=HeldOrigin{domain,guest,local:fixed_name(parent)?,parent:Entity::of(&parent.metadata()?)?,
                                 mount:held_mount(parent)?,uid,payload:guest_pid};
         original.recheck(parent)?;Ok(original)
@@ -83,8 +89,32 @@ impl SyncStamp{
     fn on(f:&File)->io::Result<Self>{let m=f.metadata()?;Ok(Self{entity:Entity::of(&m)?,mount:held_mount(f)?,
         links:m.nlink(),len:m.len(),mode:m.mode(),uid:m.uid(),mtime:(m.mtime(),m.mtime_nsec()),ctime:(m.ctime(),m.ctime_nsec())})}
 }
+// Ephemeral, nonsecret IPC comparison only. It is never a persistent
+// original ID, a substitute for the simultaneously held files, or authority.
+fn stamp_pair(file:SyncStamp,dir:SyncStamp)->[u8;32]{
+    let mut h=Sha256::new();h.update(b"helper: original SAM file and parent at sync\0");
+    for s in [file,dir] {
+        for n in [s.entity.dev,s.entity.ino,s.mount,s.links,s.len]{h.update(n.to_be_bytes());}
+        h.update(s.mode.to_be_bytes());h.update(s.uid.to_be_bytes());
+        for n in [s.mtime.0,s.mtime.1,s.ctime.0,s.ctime.1]{h.update(n.to_be_bytes());}
+    }h.finalize().into()
+}
 pub(super) struct SyncedStore{original:HeldOrigin,file:SyncStamp,parent:SyncStamp}
 impl SyncedStore{
+    /// The second local handoff passes only an O_PATH, never a readable TDB.
+    pub(super) fn feedback(&self,dir:&File)->io::Result<(&File,[u8;32])>{
+        self.require(dir)?;Ok((&self.original.local,stamp_pair(self.file,self.parent)))
+    }
+    pub(super) fn verify_feedback(pin:&File,dir:&File,uid:u32,expected:&[u8;32])->io::Result<()>{
+        let p=dir.metadata()?;let m=held_mount(dir)?;
+        if !p.is_dir()||p.uid()!=uid||p.mode()&0o7777!=0o700||p.nlink()==0||held_mount(pin)?!=m{
+            return Err(bad("wrong original private mount or directory"));}
+        let named=fixed_name(dir)?;
+        if entry(pin,p.dev(),uid)?!=entry(&named,p.dev(),uid)?||held_mount(&named)?!=m
+            ||stamp_pair(SyncStamp::on(pin)?,SyncStamp::on(dir)?)!=*expected {
+            return Err(bad("returned private inode or original sync evidence changed"));}
+        Ok(())
+    }
     pub(super) fn require(&self,dir:&File)->io::Result<&HeldOrigin>{
         self.original.recheck(dir)?;
         if SyncStamp::on(&self.original.local)?!=self.file||SyncStamp::on(dir)?!=self.parent{

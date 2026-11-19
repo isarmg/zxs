@@ -27,6 +27,10 @@
 - bwrap 0.12 从已核 ELF 的 FD 执行，强制独立用户、PID、网络、IPC 及 UTS 命名空间。只映射固定私有发行树、可写原 private、只读原 state 和两份封印的引导材料；不映射宿主的 /etc、/var、/dev 或已有 Samba 实例。guest 不能分叉/脱离进程组。固定选用 `--as-pid-1`，只从 bwrap 专属状态管道的真实 child-pid 与最终正常状态，加上原 supervisor 的 wait/进程组收尾，确定此次客体。单个 PID、EOF 或 SIGKILL 都不算成功；异常保留已经产生的材料。宿主自身崩溃/被强杀不能作为全域已经退出的证据。
 - 正常结束才核客体经内核传来的同一 inode，从原 private 的准确名字核对，实同步原 secrets.tdb 和原父、末端重查身份/属性及 private/state 清单。宿主不读取/转述秘密库内容。至此仍是**未发布**的原实例证据，尚不能签出 `domain.bound`、建立账号或证明登录。
 
+**两个进程交接，不换锁。** 启动客体前，降权 worker 在原 SYSTEM 的 EX 下，用 SQLite 只读核本池确切且已提交的 INIT 及原 S 卷标；关库后才进入 Samba。实例父原目录必须恰有准确拼写的 `smb.conf`、`private`、`state`。若已有 `domain.bound`、临时记录、其他项或不能完整读取，不会为了探测而让 Samba 新建秘密库。
+
+宿主内部另用本次进程独占的匿名 socketpair，不是给用户或上线 smbd 的接口。完成的 worker 一次交接 128 字节公开候选、原 INIT、同步时私库及其父的属性比较值，以及原 S 和实例两个已持 EX 的目录描述符与原库的只指路径描述符。内核持有在途的这两份原锁，不因 worker 退出而改锁或先放再取；接收方按同次子进程的实际未回收正常退出和内核 PID/UID/GID 核唯一消息，从受核当前线程的 fdinfo 确认这两个具体的 open description 各自拥有整文件独占 flock，并以另开原目录的共享锁争用佐证；不能把同 inode 上别人的独占锁算到收到的描述符名下。再对照独立预选的原目录、正式配置及原私库。没有复制或读出秘密内容。只有这份手递结果不授权写宿主安装父；正式发行包、被确认的本机发布步骤和磁盘正本仍未交付。
+
 [固定版本 bubblewrap 的状态与启动实现](https://github.com/containers/bubblewrap/blob/v0.12.0/bubblewrap.c#L2909-L2925)将 child-pid 写到专属通道；不用它代替自己的进程组退出核对。
 
 ## 精确来源与尚未交付的门

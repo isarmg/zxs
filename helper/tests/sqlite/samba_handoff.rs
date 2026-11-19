@@ -74,3 +74,17 @@ fn unchanged_original_and_same_inode_changed_after_a_stamp_are_distinct(){
     same.set_times(FileTimes::new().set_modified(UNIX_EPOCH+Duration::from_secs(1))).unwrap();
     assert!(s.original.recheck(&p).is_ok());assert!(s.require(&p).is_err());
 }
+
+#[test]
+fn the_parent_checks_the_file_and_directory_sample_sent_by_the_worker_not_new_post_hoc_stamps(){
+    use std::fs::FileTimes;use std::time::{Duration,UNIX_EPOCH};
+    let (d,dir,uid,gid,b)=fixture();let (rx,tx)=OriginChannel::open().unwrap();let pin=fixed_name(&dir).unwrap();
+    send(&tx,&b,&[&pin]);drop(tx);let h=rx.receive(&dir,uid,gid,rustix::process::getpid()).unwrap();
+    let file=SyncStamp::on(&h.local).unwrap();let parent=SyncStamp::on(&dir).unwrap();
+    let s=SyncedStore{original:h,file,parent};let (pass,token)=s.feedback(&dir).unwrap();
+    SyncedStore::verify_feedback(pass,&dir,uid,&token).unwrap();
+    let mut bad=token;bad[31]^=1;assert!(SyncedStore::verify_feedback(pass,&dir,uid,&bad).is_err());
+    let same=File::options().write(true).open(d.path().join("secrets.tdb")).unwrap();
+    same.set_times(FileTimes::new().set_modified(UNIX_EPOCH+Duration::from_secs(2))).unwrap();
+    assert!(SyncedStore::verify_feedback(pass,&dir,uid,&token).is_err());
+}

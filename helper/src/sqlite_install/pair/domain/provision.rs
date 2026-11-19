@@ -2,6 +2,7 @@
 //! neither a path, an approval string, nor classifying an empty directory
 //! supplies the host authorization and authenticated capsule required below.
 mod monitor;
+mod return_to_host;
 mod live;
 use super::handoff::{HeldOrigin,OriginChannel,SyncedStore};
 use crate::{fs_tools::RuntimeFile,isolated_group::Group,pinned::{Entity,Mount,Pinned},
@@ -24,7 +25,7 @@ const ENTRY:&str="import runpy; runpy.run_path('/provision.py',run_name='_local_
 // constructor. Merely receiving arguments, a uid or a packaging profile is NOT
 // enough. The executable actually consumed is the specific digest-verified ELF.
 pub(super) struct FreshApproval<'a>{
-    system:&'a LockedSystem, pool:Id,instance_id:Id,op:Id,live_config:[u8;32],
+    system:&'a LockedSystem, pool:Id,init:Id,instance_id:Id,op:Id,live_config:[u8;32],
     site:&'a Pinned, usr:&'a Pinned, expected_bwrap:[u8;32], uid:u32,gid:u32,
 }
 // Only the real monitor/reaper creates this proof for its original payload.
@@ -48,15 +49,22 @@ fn named(pin:&Pinned,fd:&File)->io::Result<()>{
 struct Times{links:u64,len:u64,mtime:(i64,i64),ctime:(i64,i64)}
 impl Times{fn on(f:&File)->io::Result<Self>{let m=f.metadata()?;Ok(Self{links:m.nlink(),len:m.len(),
     mtime:(m.mtime(),m.mtime_nsec()),ctime:(m.ctime(),m.ctime_nsec())})}}
-fn contents(dir:&File,single:Option<&[u8]>)->io::Result<()>{
+const FRESH_SITE:&[&[u8]]=&[b"private",b"state",b"smb.conf"];
+const PRIVATE_STORE:&[&[u8]]=&[b"secrets.tdb"];
+fn contents(dir:&File,expected:&[&[u8]])->io::Result<()>{
+    // All lists are small fixed constants. A raw, complete inventory rejects
+    // case-folded aliases and previously allocated partial or final outputs.
+    if expected.len()>8 {return Err(bad("invalid dedicated directory inventory"));}
     let before=Times::on(dir)?;let other=child(dir,c".")?;
     if before.links==0||mark(&other)?!=mark(dir)?{return Err(bad("cannot attribute the original directory"));}
-    let mut buf=[MaybeUninit::uninit();4096];let mut it=RawDir::new(&other,&mut buf);let mut expected=single;
+    let mut buf=[MaybeUninit::uninit();4096];let mut it=RawDir::new(&other,&mut buf);let mut seen=0u16;
     while let Some(row)=it.next(){let row=row?;let bytes=row.file_name().to_bytes();
         if matches!(bytes,b"."|b".."){continue;}
-        if expected.take()!=Some(bytes){return Err(bad("unexpected entry in the selected Samba directory; not taking it over"));}
+        let n=expected.iter().position(|&name|name==bytes).ok_or_else(||bad("unexpected entry in the selected Samba directory; not taking it over"))?;
+        if seen&(1u16<<n)!=0{return Err(bad("duplicate entry in the dedicated instance inventory"));}
+        seen|=1u16<<n;
     }
-    if expected.is_some()||Times::on(&other)?!=before||Times::on(dir)?!=before{return Err(bad("incomplete or changed selected Samba directory"));}
+    if seen!=(1u16<<expected.len())-1||Times::on(&other)?!=before||Times::on(dir)?!=before{return Err(bad("incomplete or changed selected Samba directory"));}
     Ok(())
 }
 struct Instance{base:File,private:File,state:File}
@@ -81,8 +89,13 @@ impl Instance{
                 mark(f)?.1!=mount||mark(&child(&self.base,n)?)?!=mark(f)?{
                 return Err(bad("changed or separately mounted private/state directory; not supported"));}
         }
-        contents(&self.state,None)?;
-        contents(&self.private,store.map(|_|b"secrets.tdb".as_slice()))?;
+        // Open and enumerate the actual root before any native provisioning,
+        // again immediately before launch and at all subsequent cuts. Existing
+        // BOUND (even if the TDB vanished), an abandoned stage, or an alias is
+        // an occupied/unknown order, not a new origin.
+        contents(&self.base,FRESH_SITE)?;
+        contents(&self.state,&[])?;
+        contents(&self.private,if store.is_some(){PRIVATE_STORE}else{&[]})?;
         if let Some(h)=store{h.recheck(&self.private)?;}
         named(a.site,&self.base)?;Ok(())
     }
@@ -131,7 +144,7 @@ impl<'a> FreshApproval<'a>{
         rustix::thread::set_no_new_privs(true)?;
         crate::maintenance::diagnostic_worker(self.uid,self.gid)?;
         if self.system.source().uid()!=self.uid||self.uid==0||self.gid==0||
-            [self.pool,self.instance_id,self.op].contains(&[0;16])||self.usr.path()!=Path::new(CAPSULE_USR){
+            [self.pool,self.init,self.instance_id,self.op].contains(&[0;16])||self.usr.path()!=Path::new(CAPSULE_USR){
             return Err(bad("not the selected dedicated instance operation"));}
         let instance_name=format!("/var/lib/local-ops-helper/samba-instances/{}",self.instance_id.iter().map(|n|format!("{n:02x}")).collect::<String>());
         let s=self.system.source();let real_s=Pinned::open(s.path(),crate::pinned::Kind::StorageRoot)?;
@@ -147,6 +160,10 @@ impl<'a> FreshApproval<'a>{
             return Err(bad("not the approved dedicated installation release"));}
         let mut elf=[0;20];bwrap.file.read_exact_at(&mut elf,0)?;
         if &elf[..7]!=b"\x7fELF\x02\x01\x01"||elf[18..20]!=[62,0]{return Err(bad("not the selected x86-64 launcher"));}
+        // Before exposing a writable empty private directory to Samba, query only the
+        // explicitly selected original S under its EX; no SQL connection survives
+        // the native process. A pool ID supplied by the caller alone is not enough.
+        super::super::observed::original_pool(&self.pool,&self.init,self.system)?;
         let site=Instance::lock(&self)?;
         let live=live::Live::select(&site.base,&self.live_config)?;
         let (origin,tx)=OriginChannel::open()?;let (rstatus,wstatus)=pipe_with(PipeFlags::CLOEXEC)?;
@@ -213,10 +230,22 @@ mod tests{
     #[test]
     fn actual_private_directory_accepts_only_the_one_exact_raw_name(){
         let d=tempfile::tempdir().unwrap();let f=File::open(d.path()).unwrap();
-        contents(&f,None).unwrap();assert!(contents(&f,Some(b"secrets.tdb")).is_err());
+        contents(&f,&[]).unwrap();assert!(contents(&f,PRIVATE_STORE).is_err());
         let alt=d.path().join(std::ffi::OsStr::from_bytes(b"secrets.tdb\xff"));File::create_new(&alt).unwrap();
-        assert!(contents(&f,None).is_err());assert!(contents(&f,Some(b"secrets.tdb")).is_err());
-        std::fs::rename(&alt,d.path().join("secrets.tdb")).unwrap();contents(&f,Some(b"secrets.tdb")).unwrap();
-        File::create_new(&alt).unwrap();assert!(contents(&f,Some(b"secrets.tdb")).is_err());
+        assert!(contents(&f,&[]).is_err());assert!(contents(&f,PRIVATE_STORE).is_err());
+        std::fs::rename(&alt,d.path().join("secrets.tdb")).unwrap();contents(&f,PRIVATE_STORE).unwrap();
+        File::create_new(&alt).unwrap();assert!(contents(&f,PRIVATE_STORE).is_err());
+    }
+    #[test]
+    fn existing_bound_or_unfinished_staging_refuses_a_fresh_selection_even_with_empty_private(){
+        let d=tempfile::tempdir().unwrap();let root=File::open(d.path()).unwrap();
+        for n in ["private","state"]{std::fs::create_dir(d.path().join(n)).unwrap();}
+        File::create_new(d.path().join("smb.conf")).unwrap(); contents(&root,FRESH_SITE).unwrap();
+        for name in ["domain.bound","DOMAIN.BOUND",".domain.bound.new","other"]{
+            let p=d.path().join(name);std::fs::write(&p,b"preserve me").unwrap();
+            assert!(contents(&root,FRESH_SITE).is_err());assert_eq!(std::fs::read(&p).unwrap(),b"preserve me");
+            assert!(!d.path().join("private/secrets.tdb").exists());std::fs::remove_file(&p).unwrap();
+        }
+        contents(&root,FRESH_SITE).unwrap();
     }
 }
