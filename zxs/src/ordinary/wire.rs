@@ -1,4 +1,5 @@
 use crate::{EntryId,FileId,HistoryId,OperationId,PoolId,VolumeId,Entity,fs::{self,Birth,invalid}};
+use super::file_parent::{self,BirthParent};
 use std::io;
 
 pub(super) struct In<'a>(pub(super) &'a[u8]);
@@ -39,7 +40,7 @@ impl NativeObject{
 
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(crate) struct Creation {
-    pub op:OperationId,pub uid:u32,pub volume:VolumeId,pub entry:EntryId,pub file:FileId,pub history:HistoryId,
+    pub(super) parent:BirthParent,pub op:OperationId,pub uid:u32,pub volume:VolumeId,pub entry:EntryId,pub file:FileId,pub history:HistoryId,
     pub name:String,pub attempt:OperationId,pub slot:u8,pub allocation:[u8;32],pub directory:NativeObject,pub local:NativeObject,pub local_digest:[u8;32],
 }
 pub(super) const MAX_HUMAN:usize=120;
@@ -74,9 +75,9 @@ impl Creation{
         out.extend_from_slice(&self.op.0);out.extend_from_slice(&self.uid.to_be_bytes());
         for id in [&self.volume.0,&self.entry.0,&self.file.0,&self.history.0,&self.attempt.0]{out.extend_from_slice(id);}
         out.push(self.name.len() as u8);out.extend_from_slice(self.name.as_bytes());
-        out.push(self.slot);out.extend_from_slice(&self.allocation);self.directory.put(out);self.local.put(out);out.extend_from_slice(&self.local_digest);
+        out.push(self.slot);out.extend_from_slice(&self.allocation);self.directory.put(out);self.local.put(out);out.extend_from_slice(&self.local_digest);self.parent.put(out);
     }
-    fn get(input:&mut In<'_>)->io::Result<Self>{
+    fn get(kind:u8,input:&mut In<'_>)->io::Result<Self>{
         let op=OperationId(input.id()?);let uid=input.u32()?;let volume=VolumeId(input.id()?);
         let entry=EntryId(input.id()?);let file=FileId(input.id()?);let history=HistoryId(input.id()?);
         let attempt=OperationId(input.id()?);let name=human_name(input.short_buf()?)?.to_owned();
@@ -88,16 +89,21 @@ impl Creation{
             crate::hash::digest(&empty_material(file,history,op,&name))?!=local_digest{
             return Err(invalid("inconsistent original empty FILE material"));
         }
-        Ok(Self{op,uid,volume,entry,file,history,name,attempt,slot,allocation,directory,local,local_digest})
+        let parent=BirthParent::get(kind,input)?;parent.check_object(&directory,&local)?;
+        Ok(Self{parent,op,uid,volume,entry,file,history,name,attempt,slot,allocation,directory,local,local_digest})
     }
 }
 const MAGIC:&[u8]=b"ZXS/FILE-DECISION\0";
 pub(super) const MAX_FRAME:usize=4096;
 pub(super) const ENVELOPE_BYTES:usize=MAGIC.len()+4+16+8+32+1+32+32;
+const NATIVE:usize=16+1+fs::MAX_BIRTH;
+const MAX_CREATE_BODY:usize=16+4+5*16+1+MAX_HUMAN+1+32+2*NATIVE+32;
+const MAX_CHILD_BIRTH:usize=ENVELOPE_BYTES+MAX_CREATE_BODY+16+32+NATIVE;
+const _:()=assert!(MAX_CHILD_BIRTH<=MAX_FRAME);
 
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(super) struct Frame{
-    pub seq:u64,pub previous:[u8;32],pub create:Creation,pub request:[u8;32],pub digest:[u8;32],pub bytes:Vec<u8>,
+    pool:PoolId,pub seq:u64,pub previous:[u8;32],pub create:Creation,pub request:[u8;32],pub digest:[u8;32],pub bytes:Vec<u8>,
 }
 pub(super) struct Envelope<'a>{
     pub seq:u64,pub previous:[u8;32],pub kind:u8,pub request:[u8;32],pub body:&'a[u8],pub digest:[u8;32],
@@ -120,6 +126,7 @@ pub(super) fn envelope(pool:PoolId,bytes:&[u8])->io::Result<Envelope<'_>>{
     Ok(Envelope{seq,previous,kind,request,body:input.0,digest})
 }
 impl Frame{
+    pub(super) fn belongs_to(&self,pool:PoolId)->bool{self.pool==pool}
     pub(super) fn size(bytes:&[u8])->io::Result<Option<usize>>{
         if !MAGIC.starts_with(&bytes[..bytes.len().min(MAGIC.len())]){return Err(invalid("unknown SYSTEM frame prefix"));}
         if bytes.len()<MAGIC.len()+4{return Ok(None);}
@@ -128,21 +135,22 @@ impl Frame{
         Ok(Some(n))
     }
     pub(super) fn new(pool:PoolId,seq:u64,previous:[u8;32],c:Creation)->io::Result<Self>{
-        let request=request_digest(pool,c.op,c.uid,c.volume,&c.name)?;
+        c.parent.check_object(&c.directory,&c.local)?;
+        let request=file_parent::request(pool,c.op,c.uid,c.parent.address(c.volume),&c.name)?;
         let mut body=Vec::new();c.put(&mut body);
-        let (bytes,digest)=encode(pool,seq,previous,1,request,&body)?;
-        Ok(Self{seq,previous,create:c,request,digest,bytes})
+        let (bytes,digest)=encode(pool,seq,previous,c.parent.kind(),request,&body)?;
+        Ok(Self{pool,seq,previous,create:c,request,digest,bytes})
     }
     pub(super) fn read(pool:PoolId,bytes:&[u8])->io::Result<Self>{
         Self::from_envelope(pool,bytes,envelope(pool,bytes)?)
     }
     pub(super) fn from_envelope(pool:PoolId,bytes:&[u8],e:Envelope<'_>)->io::Result<Self>{
-        if e.kind!=1{return Err(invalid("not an original empty FILE creation"));}
+        if !matches!(e.kind,file_parent::ROOT|file_parent::CHILD)||bytes.len()>MAX_CHILD_BIRTH{return Err(invalid("not a bounded FILE creation"));}
         let (seq,previous,request,digest)=(e.seq,e.previous,e.request,e.digest);
-        let mut input=In(e.body);let create=Creation::get(&mut input)?;input.end()?;
-        if request_digest(pool,create.op,create.uid,create.volume,&create.name)?!=request {
+        let mut input=In(e.body);let create=Creation::get(e.kind,&mut input)?;input.end()?;
+        if file_parent::request(pool,create.op,create.uid,create.parent.address(create.volume),&create.name)?!=request {
             return Err(invalid("FILE decision does not match original request"));
         }
-        Ok(Self{seq,previous,create,request,digest,bytes:bytes.to_vec()})
+        Ok(Self{pool,seq,previous,create,request,digest,bytes:bytes.to_vec()})
     }
 }

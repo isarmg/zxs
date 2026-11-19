@@ -10,7 +10,7 @@ pub(in crate::ordinary) const KIND:u8=7;
 pub enum Parent{Root(VolumeId),Child(VolumeId,DirectoryId)}
 impl Parent{
     pub(in crate::ordinary) fn volume(self)->VolumeId{match self{Self::Root(v)|Self::Child(v,_)=>v}}
-    fn put(self,b:&mut Vec<u8>){
+    pub(in crate::ordinary) fn put(self,b:&mut Vec<u8>){
         b.extend_from_slice(&self.volume().0);
         match self{Self::Root(_)=>b.push(0),Self::Child(_,id)=>{b.push(1);b.extend_from_slice(&id.0);}}
     }

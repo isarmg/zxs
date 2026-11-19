@@ -35,7 +35,10 @@ impl Decision{
     pub(super) fn read(pool:PoolId,bytes:&[u8])->io::Result<Self>{
         let e=wire::envelope(pool,bytes)?;
         match e.kind{
-            1=>Ok(Self::Create(Frame::from_envelope(pool,bytes,e)?)),
+            // The pure FILE codec also describes a child-parent frame.
+            // Do not accept it in any original journal or sealed intent
+            // before ALL of its material, read/write and custody paths exist.
+            super::file_parent::ROOT=>Ok(Self::Create(Frame::from_envelope(pool,bytes,e)?)),
             2=>Ok(Self::Save(SaveFrame::from_envelope(pool,bytes,e)?)),
             3=>Ok(Self::Formal(Commit::from_envelope(pool,bytes,e)?)),
             4=>Ok(Self::Span(Saved::from_envelope(pool,bytes,e)?)),
@@ -174,6 +177,7 @@ impl OriginalIndex{
                 }
             }
             Decision::Create(f)=>{let c=&f.create;
+                if c.parent!=super::file_parent::BirthParent::Root{return Err(invalid("child FILE business admission is closed"));}
                 if !allow.file(c.volume,c.uid,c.directory.entity,&c.directory.birth,false)
                     ||self.files.contains_key(&c.file)||self.names.occupied_root(c.volume,&c.name)||self.entries.contains(&c.entry)
                     ||self.histories.contains(&c.history)||self.tickets.contains(&c.attempt)||self.directory_tokens.contains(&c.attempt)||self.native.contains(&c.local.birth)
@@ -327,6 +331,9 @@ impl Journal{
                 }
                 saving=Some(a);
             }else{
+                // A bounded nested operand can be examined by the private
+                // codec, but is not yet an admissible pool reservation.
+                if !allocation::root_image(&bytes){return Err(invalid("unsupported original FILE allocation kind"));}
                 let a=Allocation::from_bytes(system,pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Create(f) if a.matches(f)));
                 if !allowed.file(a.volume,a.uid,a.root.entity,&a.root.birth,true)||

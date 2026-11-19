@@ -54,6 +54,35 @@ impl Journal{
             return Err(invalid("a different original command occupies this SYSTEM slot"));}
         self.new_directory_origin(o,reg)?;self.room_for(MAX_FRAME)
     }
+    /// Project the original ordinary parent from THIS registration and
+    /// confirmed prefix, never from a physical path or a supplied mkdir
+    /// row. This is not an installation witness or an authorization to write.
+    pub(in crate::ordinary) fn file_parent_at(&self,address:DirParent,uid:u32,r:&Allowed<'_>)->io::Result<super::super::file_parent::BirthParent>{
+        use super::super::{directory::types::Basis,file_parent::BirthParent};
+        if self.genesis!=r.basis().2{return Err(invalid("not this SYSTEM original for FILE parent selection"));}
+        r.ordinary_path_budget(address.volume(),uid)?;
+        let Some(d)=parent_row(&self.directory_rows,&self.decisions,address)? else{return Ok(BirthParent::Root)};
+        let o=&d.origin;
+        if self.making.as_ref().is_some_and(|a|a.origin.id==o.id)||
+            self.names.get(o.parent.address,&o.name)!=Some(Member::Directory{entry:o.entry,directory:o.id}){
+            return Err(invalid("ordinary FILE parent is uninstalled or not its exact directory entry"));}
+        let b=Basis{address,anchor:d.digest,object:d.object.clone()};b.require(r,uid,Some(d))?;
+        Ok(BirthParent::Child{directory:o.id,decision:d.digest,object:d.object.clone()})
+    }
+    /// Only the parent part of prospective FILE birth admission. Proves
+    /// exact pool, parent, next sequence and worst reachable parent paths;
+    /// no FILE allocation, current physical grant or business decision.
+    pub(in crate::ordinary) fn check_next_file_parent(&self,r:&Allowed<'_>,f:&Frame)->io::Result<()>{
+        let(prev,head)=self.frontier();let c=&f.create;let address=c.parent.address(c.volume);
+        if Frame::read(r.basis().0,&f.bytes)?!=*f||prev.checked_add(1)!=Some(f.seq)||head!=f.previous||
+            c.parent!=self.file_parent_at(address,c.uid,r)?{
+            return Err(invalid("prospective FILE does not bind this confirmed parent and original prefix"));}
+        let budget=match address{
+            DirParent::Root(v)=>r.ordinary_path_budget(v,c.uid)?,
+            DirParent::Child(_,id)=>self.directory_rows.get(&id).ok_or_else(||invalid("lost confirmed FILE parent path"))?.1,
+        };
+        super::super::material::ticket_budget(budget,&c.name,c.attempt)?;Ok(())
+    }
     /// Root to selected child, bounded before touching any physical child.
     /// An arbitrary decoded Created is not an argument. A still-unconfirmed
     /// final frame was removed from these very indexes before Journal exists.

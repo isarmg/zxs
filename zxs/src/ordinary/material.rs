@@ -84,9 +84,8 @@ pub(super) fn select_ticket(volume:&FileVolume<'_>,name:&str)->io::Result<(Opera
 }
 
 pub(super) fn bind_fresh_stage(volume:&FileVolume<'_>,a:&Allocation,after_mkdir:impl FnOnce()->io::Result<()>)->io::Result<()>{
-    volume.require_current()?;check_name(volume,&a.name,false)?;
-    let root=NativeObject{entity:volume.root.entity,birth:Birth::read(&volume.root.file)?};
-    if a.root!=root || a.volume!=volume.id() || a.stage.is_some(){return Err(invalid("not the unbound original root and ticket"));}
+    a.require_root_writer(volume)?;check_name(volume,&a.name,false)?;
+    if a.stage.is_some(){return Err(invalid("original root FILE ticket is already bound"));}
     let mut next=None;
     for slot in 0..SLOTS{
         match volume.root.child_directory(&staging(a.attempt,slot))?{
@@ -107,14 +106,14 @@ pub(super) fn bind_fresh_stage(volume:&FileVolume<'_>,a:&Allocation,after_mkdir:
     after_mkdir()?;
     dir.require_named()?;volume.require_current()?;dir.only(None)?;
     let original=NativeObject{entity:dir.entity,birth:Birth::read(&dir.file)?};
-    a.bind(&volume.pool.system,&Stage{slot,object:original})
+    a.bind(volume,&Stage{slot,object:original})
 }
 fn local_token(allocation:[u8;32],local:&NativeObject)->io::Result<[u8;32]>{
     let mut b=b"ZXS/INITIAL-LOCAL-MATERIAL\0".to_vec();b.extend_from_slice(&allocation);local.put(&mut b);
     crate::hash::digest(&b)
 }
 pub(super) fn prepare(volume:&FileVolume<'_>,a:&super::allocation::Allocation)->io::Result<Creation>{
-    volume.require_current()?;check_name(volume,&a.name,false)?;
+    a.require_root_writer(volume)?;check_name(volume,&a.name,false)?;
     let s=a.bound()?;
     let dir=volume.root.child_directory(&staging(a.attempt,s.slot))?.ok_or_else(||invalid("reserved physical FILE stage disappeared"))?;
     let directory=NativeObject{entity:dir.entity,birth:Birth::read(&dir.file)?};
@@ -136,7 +135,7 @@ pub(super) fn prepare(volume:&FileVolume<'_>,a:&super::allocation::Allocation)->
         obj
     };
     dir.file.sync_all()?;volume.root.file.sync_all()?;
-    let c=Creation{op:a.op,uid:a.uid,volume:volume.id(),entry:a.entry,file:a.file,history:a.history,
+    let c=Creation{parent:super::file_parent::BirthParent::Root,op:a.op,uid:a.uid,volume:volume.id(),entry:a.entry,file:a.file,history:a.history,
         name:a.name.clone(),attempt:a.attempt,slot:s.slot,allocation:a.digest,directory,local,local_digest:crate::hash::digest(&bytes)?};
     require_staged(volume,&c)?;Ok(c)
 }
@@ -235,8 +234,13 @@ pub(super) fn verify_named(volume:&FileVolume<'_>,c:&Creation)->io::Result<()>{
     Ok(())
 }
 pub(super) fn install_decided(volume:&FileVolume<'_>,c:&Creation)->io::Result<()>{
-    volume.require_current()?;check_name(volume,&c.name,true)?;
-    let dst=destination(&c.name)?;
+    if c.parent!=super::file_parent::BirthParent::Root||c.volume!=volume.id()||!matches!(volume.pool.access,crate::pool::lease::Access::Write){
+        return Err(invalid("not an original FILE root installation on this writer"));}
+    volume.require_current()?;
+    let(_,s)=volume.pool.snapshot()?;let original=s.operation(c.op).ok_or_else(||invalid("no confirmed original root FILE creation"))?;
+    if &original.create!=c||!s.allocated.as_ref().is_some_and(|a|a.matches(original)){
+        return Err(invalid("no matching root creation and current installation reservation"));}
+    check_name(volume,&c.name,true)?;let dst=destination(&c.name)?;
     if volume.root.child_directory(&dst)?.is_none(){
         require_staged(volume,c)?;
         volume.root.install_child(&staging(c.attempt,c.slot),&dst,&c.directory.birth)?;
