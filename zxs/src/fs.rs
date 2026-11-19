@@ -12,6 +12,8 @@ mod mounts;
 mod relative;
 mod control;
 pub(crate) use control::ControlRead;
+mod scratch;
+pub(crate) use scratch::{FreshJob,CopiedRaw};
 mod witnessed;
 pub(crate) use witnessed::{HeldBytes,LiveStamp,WitnessRead};
 mod name_budget;

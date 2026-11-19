@@ -27,7 +27,10 @@ fn material(parent:&Path,slot:u32,data:&[u8],full:bool)->MaterialRef{
     witness(parent,&a,&ar);witness(parent,&b,&br);r
 }
 fn index(parent:&Path,i:&Index)->Descriptor{
-    let(d,b)=stored::encode(key(),i).unwrap();let(a,w)=index_names(d.key);
+    index_for(parent,key(),i)
+}
+fn index_for(parent:&Path,k:VersionKey,i:&Index)->Descriptor{
+    let(d,b)=stored::encode(k,i).unwrap();let(a,w)=index_names(d.key);
     drop(create(&path(parent,&a),&b));witness(parent,&a,&w);d
 }
 fn private(parent:&Path){fs::create_dir(parent).unwrap();fs::set_permissions(parent,fs::Permissions::from_mode(0o700)).unwrap();}
@@ -195,4 +198,81 @@ fn exact_block_eof_and_tail_are_independent_of_write_segmentation(){
     let mut too_short=Whole::new(2).unwrap();too_short.write_all(b"x").unwrap();assert!(too_short.finish().is_err());
     let mut too_long=Whole::new(1).unwrap();assert!(too_long.write_all(b"xx").is_err());too_long.write_all(&[0]).unwrap();
     assert_eq!(too_long.finish().unwrap(),logical(1,"3c59a7155d48f0a51f49d3807825db76506352d0a5485823bfaa7eabe295bd89"));
+}
+
+
+#[test]
+fn full_copy_writes_new_real_bytes_and_rereads_the_named_target_with_one_source_pair(){
+    let t=PrivateTemp::under(&std::env::temp_dir());let folder=t.child("source");let space=t.child("owned-jobs");
+    let (a,b,c)=(material(&folder,1,b"ab",false),material(&folder,2,b"b",false),material(&folder,3,b"c",false));
+    let mut map=Build::new(F).unwrap();
+    for m in [a,b,c]{map.add(Leaf::Data(m.material),0,1).unwrap();}
+    map.add(Leaf::Zero,0,3).unwrap();
+    let d=index(&folder,&map.finish(6).unwrap());let parent=HeldDir::open(&folder).unwrap();
+    let v=LocalVersion::open(&parent,d,|m|Ok(located(*[a,b,c].iter().find(|s|s.material==m).unwrap(),false))).unwrap();
+    let expected=logical(6,"54fdd8139fe8941a8f920419142cc26930a59adfccc76695b3ddb8c2941d103d");
+    let limit=ReadBudget{file_descriptors:4,buffer_bytes:128}; // one pair + lookup headroom
+    let mut client=Vec::new();assert!(v.range_to(0,6,limit,&mut client).is_err());assert!(client.is_empty());
+    let jobs=HeldDir::open(&space).unwrap();
+    assert!(CopyJob::create(&jobs,c"unfunded",&v,expected,5).is_err());assert!(!space.join("unfunded").exists());
+    let first=CopyJob::create(&jobs,c"from-confirmed-C",&v,expected,6).unwrap();
+    let next=CopyJob::create(&jobs,c"other-task",&v,expected,20).unwrap();
+    let raw=space.join("from-confirmed-C/RAW");
+    // Two other genuinely opened versions, one of the same size but
+    // different bytes. Neither can consume even the first byte of C's job.
+    for (name,id,data) in [("same-length",90,b"ABCDEF".as_slice()),("too-large",91,b"abcdefgh".as_slice())]{
+        let other=t.child(name);let m=material(&other,17,data,false);
+        let k=VersionKey{node:NodeId([id;16]),version:VersionId([id+2;16]),..d.key};
+        let b=index_for(&other,k,&Index::full(m.material).unwrap());let dir=HeldDir::open(&other).unwrap();
+        let foreign=LocalVersion::open(&dir,b,|_|Ok(located(m,false))).unwrap();
+        assert!(foreign.materialize_in(&first,limit).is_err());assert!(!raw.exists());
+    }
+    let small=ReadBudget{file_descriptors:3,buffer_bytes:128};
+    assert!(v.materialize_in(&first,small).is_err());assert!(!raw.exists());
+    let wrong=logical(6,"d29bab7cd23c8381a5ebfc91ab5f112eee616a8b2f7148804320e46522ae9d18");
+    let proof=v.materialize_in(&first,limit).unwrap();
+    assert_eq!(fs::read(&raw).unwrap(),b"abc\0\0\0");
+    proof.require(&first,d,expected).unwrap();
+    assert!(proof.require(&next,d,expected).is_err());assert!(proof.require(&first,d,wrong).is_err());
+    assert!(proof.require(&first,Descriptor{key:VersionKey{node:NodeId([91;16]),..d.key},..d},expected).is_err());
+    // Same logical content in a replacement inode does not continue the
+    // original copy. We do not modify/remove the shadow or regenerate it.
+    fs::rename(&raw,space.join("saved-original")).unwrap();drop(create(&raw,b"abc\0\0\0"));
+    assert!(proof.require(&first,d,expected).is_err());
+    assert_eq!(fs::read(space.join("saved-original")).unwrap(),b"abc\0\0\0");
+    assert!(v.materialize_in(&first,limit).is_err());
+    for x in [a,b,c]{let(path0,_,_,_)=located(x,false).names();
+        assert!(path(&folder,&path0).is_file());}
+    assert!(!space.join("other-task/RAW").exists());
+}
+
+#[test]
+fn corrupt_same_held_raw_before_sync_is_not_promoted_by_its_own_new_stamp_and_no_source_is_retired(){
+    let t=PrivateTemp::under(&std::env::temp_dir());let folder=t.child("source");let space=t.child("jobs");
+    let m=material(&folder,8,b"abc",false);let d=index(&folder,&Index::full(m.material).unwrap());
+    let parent=HeldDir::open(&folder).unwrap();let v=LocalVersion::open(&parent,d,|_|Ok(located(m,false))).unwrap();
+    let want=logical(3,"a9f09c67fde300c38b8a22f833a1cbe149cebaef8634d94ab81e0eb4e0037b39");
+    let jobs=HeldDir::open(&space).unwrap();let stage=CopyJob::create(&jobs,c"damaged",&v,want,3).unwrap();
+    let target=space.join("damaged/RAW");
+    assert!(v.materialize_after(&stage,BUDGET,||{
+        assert_eq!(fs::read(&target)?,b"abc");fs::write(&target,b"abX")
+    }).is_err());assert_eq!(fs::read(&target).unwrap(),b"abX");
+    let mut source=Vec::new();v.range_to(0,3,BUDGET,&mut source).unwrap();assert_eq!(source,b"abc");
+    assert!(CopyJob::create(&jobs,c"damaged",&v,want,3).is_err()); // never adopt the old candidate
+    let retry=CopyJob::create(&jobs,c"another-new-job",&v,want,3).unwrap();
+    let later=v.materialize_in(&retry,BUDGET).unwrap();
+    assert_eq!(fs::read(space.join("another-new-job/RAW")).unwrap(),b"abc");
+    assert!(later.require(&stage,d,want).is_err()); // one result says nothing about retiring either original
+}
+
+#[test]
+fn empty_node_still_needs_a_distinct_named_synced_file_and_readback(){
+    let t=PrivateTemp::under(&std::env::temp_dir());let folder=t.child("source");let space=t.child("jobs");
+    let d=index(&folder,&Build::new(F).unwrap().finish(0).unwrap());let parent=HeldDir::open(&folder).unwrap();
+    let v=LocalVersion::open(&parent,d,|_|panic!("no source BODY in empty index")).unwrap();
+    let jobs=HeldDir::open(&space).unwrap();
+    let want=logical(0,"d68d1d5d43fb2740cba3b9e0ab1b519ee92339315e576758c7847c7153147f20");
+    let job=CopyJob::create(&jobs,c"empty",&v,want,0).unwrap();
+    let proof=v.materialize_in(&job,ReadBudget{file_descriptors:0,buffer_bytes:0}).unwrap();
+    proof.require(&job,d,want).unwrap();assert!(fs::read(space.join("empty/RAW")).unwrap().is_empty());
 }

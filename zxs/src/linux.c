@@ -74,6 +74,10 @@ int zxs_random(unsigned char *buffer, size_t length) {
 int zxs_pin_record(int fd, const char *name) {
     return openat(fd, name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
 }
+/* No brand-specific feature: create a new ordinary private candidate. Never reopen or truncate a preexisting name. */
+int zxs_create_new_regular(int parent, const char *name) {
+    return openat(parent, name, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+}
 int zxs_anonymous_file(int fd) {
     return openat(fd, ".", O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
 }
