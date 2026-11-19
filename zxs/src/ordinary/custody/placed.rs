@@ -101,8 +101,21 @@ impl Reopened{
         if self.decision!=*m||self.name.as_c_str()!=name||v.id()!=m.original.to{return Err(invalid("cannot offer a different handoff original or target"));}
         self.verified.require_at(v,name,&m.original.dst_root,&m.target)
     }
+    /// Read-only: the original confirmed writer performed the rename and
+    /// synced the parent. An independently verified predecision target can
+    /// never perform that namespace change merely by holding this proof.
+    pub(super) fn after_transfer_rename(mut self,v:&FileVolume<'_>,m:&Moved,private:&CStr,final_name:CString)->io::Result<Self>{
+        if self.decision!=*m||self.name.as_c_str()!=private||m.original.mode!=Method::Transfer||
+            m.original.purpose!=super::purpose::Purpose::Ordinary||
+            m.stage.map(|slot|material::staging(m.original.ticket,slot)).as_deref()!=Some(private)||
+            final_name!=crate::ordinary::storage_name::file_leaf(&m.original.name,m.original.file)?||v.root.entry_present(private)?{
+            return Err(invalid("not the same original private-to-installed transfer"));}
+        self.verified.follow_transfer_rename(v,m,private,&final_name)?;self.name=final_name;Ok(self)
+    }
     pub(super) fn verify_installed(&self,v:&FileVolume<'_>,m:&Moved)->io::Result<()>{
         let name=crate::ordinary::storage_name::file_leaf(&m.original.name,m.original.file)?;
+        if let Some(slot)=m.stage{if v.root.entry_present(&material::staging(m.original.ticket,slot))?{
+            return Err(invalid("original target private name occupied after installation"));}}
         self.require(v,&name,m)
     }
     pub(super) fn files(&self)->&[super::source::Bytes]{self.verified.objects()}

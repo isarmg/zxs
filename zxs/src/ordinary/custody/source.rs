@@ -229,6 +229,22 @@ impl Verified{
             return Err(invalid("not this exact originally named MOVE operand"));}
         v.require_current()?;self.source.exact_names()?;v.require_current()
     }
+    /// Only the parent entry changed. The directory FD, original held regular
+    /// files, their full stamps, and their applicable read leases did not.
+    /// A new process has no such Verified and must do a fresh complete scan.
+    pub(super) fn follow_transfer_rename(&mut self,v:&FileVolume<'_>,m:&super::transfer::Moved,old:&CStr,new:&CStr)->io::Result<()>{
+        if self.source.dir.path!=v.root.checked_child_path(old)?||v.id()!=m.original.to||
+            self.volume()!=v.id()||self.file()!=m.original.file{return Err(invalid("different verified transfer target at rename"));}
+        self.source.dir.path=v.root.checked_child_path(new)?;
+        // Resolves the exact final spelling and matches directory birth/mount,
+        // all frozen roles, every reopened child against its retained pin, and
+        // the actual member set. It does not take a fresh stamp as its proof.
+        self.require_at(v,new,&m.original.dst_root,&m.target)?;
+        self.source.each(|kind,_,pin|{
+            let original=NativeObject::stamp(&pin.stamp);
+            fs::require_material_token(&pin.file,&super::placed::token(m.allocation,kind,&original)?)
+        })
+    }
     pub(super) fn require_at_lifecycle(&self,end:&CustodyEnd<'_,'_>,goal:&super::target::Goal)->io::Result<()>{
         let m=&goal.frame;let sites=&m.target;
         if self.volume()!=end.id()||self.source.root!=m.original.dst_root||self.file()!=m.original.file||

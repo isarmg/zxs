@@ -63,13 +63,15 @@ fn sync_rename(system:&Path,r:Request,m:&Moved,v:&Verified,hook:&mut impl FnMut(
     placed::root(&dst,&m.original.dst_root)?;material::vacant_for_move(&dst,&m.original.name,m.original.file)?;
     src.root.handoff_directory(&n,&dst.root,&n,sites.directory.entity,&sites.directory.birth,||hook(Cut::MoveInstalled))
 }
-fn install_transfer(system:&Path,r:Request,m:&Moved,stage:&CStr,v:&Reopened,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{
+fn install_transfer(system:&Path,r:Request,m:&Moved,stage:&CStr,v:Reopened,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<Reopened>{
     let(p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;
     let(now,a)=s.confirmed_handoff(r.op)?;if now!=m||a.opened()||m.request!=r.digest(&p)?{return Err(invalid("original transfer changed"));}
     let dst=p.ordinary(m.original.to)?;let st=a.stage().ok_or_else(||invalid("no original transfer directory"))?;
     if material::staging(m.original.ticket,st.slot).as_c_str()!=stage{return Err(invalid("different original private target"));}
     v.require(&dst,stage,now)?;material::vacant_for_move(&dst,&m.original.name,m.original.file)?;
-    let target=name(m)?;dst.root.handoff_directory(stage,&dst.root,&target,m.target.directory.entity,&m.target.directory.birth,||hook(Cut::MoveInstalled))
+    let target=name(m)?;
+    dst.root.handoff_directory(stage,&dst.root,&target,m.target.directory.entity,&m.target.directory.birth,||hook(Cut::MoveInstalled))?;
+    v.after_transfer_rename(&dst,now,stage,target)
 }
 pub(super) fn complete(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{
     // At most two states: the still-private original followed by the final
@@ -78,7 +80,7 @@ pub(super) fn complete(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Res
         Scan::Source{input,frame}=>{let v=input.verify()?;sync_rename(system,r,&frame,&v,hook)?;}
         Scan::Target{input,fresh,name,frame}=>{
             let checked=Reopened::verify(input)?;
-            if fresh{install_transfer(system,r,&frame,&name,&checked,hook)?;continue;}
+            let checked=if fresh{install_transfer(system,r,&frame,&name,checked,hook)?}else{checked};
             {
                 let(p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;let(now,a)=s.confirmed_handoff(r.op)?;
                 if now!=&frame||r.digest(&p)?!=now.request{return Err(invalid("different original installed target"));}

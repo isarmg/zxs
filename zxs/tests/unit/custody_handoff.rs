@@ -163,6 +163,54 @@ fn decided_transfer_does_not_serve_or_reconstruct_from_an_equal_byte_replacement
     assert!(z::read_node_to(&f.sys,r.id,f.first.node,&mut got).is_err());assert!(got.is_empty());
 }
 #[test]
+#[ignore="three private registered filesystems; exact hot target rename and cold reopen"]
+fn transfer_keeps_pre_rename_target_pins_and_never_retires_source_on_a_late_target_change(){
+    use std::os::unix::fs::{FileExt,PermissionsExt};
+    use crate::pool::lease::{Access,LocalPool};
+    for change in ["old-full-bytes","equal-bytes-new-object","same-bytes-new-stamp","reuse-private"]{
+        let f=Fixture::build(true,false);let r=f.cmd();stop_at(&f,r,Cut::Decision);
+        let staged=fs::read_dir(&f.new).unwrap().map(|e|e.unwrap().path())
+            .find(|p|p.file_name().unwrap().to_string_lossy().starts_with(".zxs-new-")).unwrap();
+        let source=f.old.join(native_leaf("name",r.id));let old_members=inventory_ids(&source);
+        let final_dir=f.new.join(native_leaf("name",r.id));let raw_name=actual_raw(&staged).file_name().unwrap().to_owned();
+        let raw=final_dir.join(raw_name);let saved=f.new.with_file_name("exact-target-stashed-by-fixture");
+        let mut changed=false;let mut opened=false;let mut retired=false;
+        assert!(perform(&f.sys,r,&mut |cut|{
+            if cut==Cut::MoveInstalled{
+                assert!(!staged.exists());assert_eq!(fs::read(&raw)?,BEFORE);
+                match change{
+                    "old-full-bytes"=>{let p=fs::OpenOptions::new().write(true).open(&raw)?;
+                        p.write_all_at(b"X",0)?;p.sync_all()?;},
+                    "equal-bytes-new-object"=>{fs::rename(&raw,&saved)?;fs::copy(&saved,&raw)?;
+                        fs::set_permissions(&raw,fs::Permissions::from_mode(0o600))?;
+                        assert_ne!(fs::metadata(&saved)?.ino(),fs::metadata(&raw)?.ino());},
+                    "same-bytes-new-stamp"=>{let p=fs::OpenOptions::new().write(true).open(&raw)?;
+                        let t=std::time::UNIX_EPOCH+std::time::Duration::from_secs(60);
+                        assert_ne!(p.metadata()?.modified()?,t);p.set_modified(t)?;p.sync_all()?;},
+                    _=>{fs::create_dir(&staged)?;fs::write(staged.join("foreign"),b"unissued")?;}
+                }changed=true;
+            }
+            if cut==Cut::MoveTargetFlagBeforeSync{opened=true;}
+            if cut==Cut::MoveSourceAdmitted{retired=true;}Ok(())
+        }).is_err());
+        assert!(changed&&!opened&&!retired);assert_eq!(f.receipt(r).status,MoveStatus::DecidedTargetPending);
+        assert_eq!(inventory_ids(&source),old_members);assert_eq!(fs::read(actual_raw(&source)).unwrap(),BEFORE);
+        {let(_,_,j)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+         let(_,a)=j.confirmed_handoff(r.op).unwrap();assert!(!a.opened()&&!a.retiring());}
+        match change{
+            "old-full-bytes"=>{assert_eq!(fs::read(&raw).unwrap()[0],b'X');assert!(f.call(r).is_err());
+                let p=fs::OpenOptions::new().write(true).open(&raw).unwrap();p.write_all_at(&BEFORE[..1],0).unwrap();p.sync_all().unwrap();},
+            "equal-bytes-new-object"=>{assert_eq!(fs::read(&raw).unwrap(),BEFORE);assert!(f.call(r).is_err());
+                fs::rename(&raw,f.new.with_file_name("fixture-kept-impostor")).unwrap();fs::rename(&saved,&raw).unwrap();},
+            "reuse-private"=>{assert_eq!(fs::read(staged.join("foreign")).unwrap(),b"unissued");assert!(f.call(r).is_err());
+                fs::rename(&staged,f.new.with_file_name("fixture-kept-occupant")).unwrap();},
+            _=>{assert_eq!(fs::read(&raw).unwrap(),BEFORE);} // Same bytes, different stamp: only a full cold read may accept.
+        }
+        assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);assert!(!source.exists());f.all_history();
+    }
+}
+
+#[test]
 #[ignore="three private registered filesystems"]
 fn occupied_final_target_is_not_overwritten_and_missing_or_substituted_old_roles_are_never_implicitly_retired(){
     let f=Fixture::build(true,false);let r=f.cmd();stop_at(&f,r,Cut::Decision);
