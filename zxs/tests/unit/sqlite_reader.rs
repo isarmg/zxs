@@ -1,7 +1,7 @@
 //! Real SQLite file and Linux directory OFDs; no mock connection, legacy
-//! REGISTRATION, F/R directory or product CLI. Never run on existing media.
+//! REGISTRATION or product CLI. Never run on existing media.
 use super::*;
-use crate::{Role,fs::HeldDir,system::init_request,test_support::PrivateTemp};
+use crate::{Role,fs::HeldDir,system::{ROOT_MARK,init_request},test_support::PrivateTemp};
 use std::{ffi::c_void,fs::{File,OpenOptions},io::Write,os::unix::{ffi::OsStrExt,fs::OpenOptionsExt},ptr};
 
 unsafe extern "C" {
@@ -27,7 +27,7 @@ fn hex(b:&[u8])->String{b.iter().map(|v|format!("{v:02x}")).collect()}
 fn record(parent:&PrivateTemp,state:InitState,extra:&str)->(PathBuf,PoolId){
     assert_ne!(fs::local_uid(),0,"run this fixture only as the ordinary unprivileged storage principal");
     let s=parent.child("S");let dir=HeldDir::open(&s).unwrap();dir.exclusive().unwrap();
-    let r=parent.0.join("unmounted-r");let f=parent.0.join("unmounted-f");
+    let r=parent.0.join("unmounted-r");let f=parent.0.join(OsStr::from_bytes(b"unmounted-f-\xff"));
     let paths=[s.as_path(),r.as_path(),f.as_path()];let op=OperationId([1;16]);let pool=PoolId([4;16]);
     let uid=fs::local_uid();let actor=[2;16];let approve=[3;16];
     let sha=init_request(op,actor,approve,uid,&paths).unwrap();let n=ComponentLimit::held(&dir).unwrap().encoded();
@@ -108,4 +108,40 @@ fn current_database_is_not_authorized_by_an_old_schema_match(){
     assert!(online.snapshot().is_err());
     other.exec("DROP TABLE unforeseen;");
     assert_eq!(online.snapshot().unwrap().state(),InitState::Committed);
+}
+
+#[test]
+#[ignore="actual ordinary non-root SQLite/media observation, not a health or disk test"]
+fn just_the_declared_ordinary_root_is_observed_with_opaque_linux_path_and_without_recycle(){
+    use std::os::unix::fs::DirBuilderExt;
+    let t=PrivateTemp::under(&std::env::temp_dir());let(s,p)=record(&t,InitState::Committed,"");
+    let online=InitialReader::open(&s,p).unwrap();
+    let rows=online.snapshot().unwrap();let f=&rows.rows()[2];let r=&rows.rows()[1];
+    assert!(f.path.to_str().is_none());assert!(!r.path.exists());
+    assert!(online.ordinary_space(r.volume).is_err());assert!(online.ordinary_space(rows.rows()[0].volume).is_err());
+    assert!(online.ordinary_space(VolumeId([0x55;16])).is_err());
+    assert!(online.ordinary_space(f.volume).is_err()); // missing registered F is not empty/available
+    std::fs::DirBuilder::new().mode(0o700).create(&f.path).unwrap();
+    let name=f.path.join(OsStr::from_bytes(ROOT_MARK.to_bytes()));
+    let mut mf=OpenOptions::new().write(true).mode(0o600).create_new(true).open(&name).unwrap();
+    let mut bytes=rows.expected_marker(2).unwrap();bytes[69]^=1;mf.write_all(&bytes).unwrap();drop(mf);
+    assert!(online.ordinary_space(f.volume).is_err());std::fs::write(&name,rows.expected_marker(2).unwrap()).unwrap();
+    let observed=online.ordinary_space(f.volume).unwrap();
+    assert_eq!(observed.volume,f.volume);assert!(observed.available_bytes<=observed.filesystem_bytes);
+    assert!(!r.path.exists());
+    let other=Builder::existing(&s.join("SYSTEM.sqlite3"));
+    other.exec("CREATE TABLE unforeseen(x);");
+    assert!(online.ordinary_space(f.volume).is_err()); // a new sample never reuses an earlier schema/row selection
+    other.exec("DROP TABLE unforeseen;");
+    assert_eq!(online.ordinary_space(f.volume).unwrap().volume,f.volume);
+    let moved=t.0.join("displaced-F");
+    let changed=online.ordinary_space_after(f.volume,||{
+        std::fs::rename(&f.path,&moved)?;
+        std::fs::DirBuilder::new().mode(0o700).create(&f.path)?;
+        std::fs::copy(moved.join(OsStr::from_bytes(ROOT_MARK.to_bytes())),&name)?;
+        Ok(())
+    });
+    assert!(changed.is_err()); // exact bytes in a new root do not revive the still-held root
+    assert_eq!(std::fs::read(&name).unwrap(),rows.expected_marker(2).unwrap());
+    assert_eq!(online.ordinary_space(f.volume).unwrap().volume,f.volume); // fresh claim/host path, not durable physical identity
 }

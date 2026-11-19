@@ -1,7 +1,7 @@
 //! Initial-pool observer through the actual pinned SQLite engine. No SQL
 //! statement, pathname from a DB, connection or FILE authority escapes.
 //! The directory OFD remains held across idle time; no SQL transaction does.
-use super::{BirthRow,CATALOG,Catalog,ClaimRow,InitState,ROOT_MARK,SCHEMA,lease::SystemDir,role_at};
+use super::{BirthRow,CATALOG,Catalog,ClaimRow,InitState,SCHEMA,lease::SystemDir,role_at};
 use crate::{OperationId,PoolId,VolumeId,fs::{self,ComponentLimit,ControlRead,invalid}};
 use std::{ffi::{CStr,CString,OsStr,c_char,c_int,c_void},io,os::unix::ffi::OsStrExt,path::{Path,PathBuf},ptr};
 
@@ -142,7 +142,7 @@ impl InitialReader{
         // Root and marker identifiers were inspected with statx (no open)
         // and shown distinct, single-link and protected before borrowing this
         // non-DB control file. Only SQLite ever opens the DB or its journal.
-        let marker=ControlRead::open(&dir.root,ROOT_MARK,101)?;dir.require()?;
+        let marker=dir.hold_marker(&dir.root)?;dir.require()?;
         let conn=Connection::read(dir.path())?;
         let expected_schema=Connection::expected_schema()?;
         let s=Self{conn,marker,dir,pool:expected,expected_schema};
@@ -190,3 +190,6 @@ impl InitialReader{
 #[cfg(test)]
 #[path="../../tests/unit/sqlite_reader.rs"]
 mod tests;
+
+#[path="volume.rs"]
+pub(crate) mod volume;

@@ -81,11 +81,14 @@ impl Catalog {
     pub(crate) fn rows(&self)->&[ClaimRow]{&self.rows}
     /// Compare one ordinary marker with the expected SQL row. No marker can
     /// select a pool, substitute for a missing DB or move PendingIo to Committed.
+    fn expected_marker(&self,ordinal:usize)->Option<[u8;101]>{
+        let r=self.rows.get(ordinal)?;let mut b=[0;101];
+        b[..20].copy_from_slice(MARK_DOMAIN);b[20]=role_tag(r.role);b[21..37].copy_from_slice(&self.birth.pool.0);
+        b[37..53].copy_from_slice(&r.volume.0);b[53..69].copy_from_slice(&self.birth.op.0);b[69..].copy_from_slice(&r.token);
+        Some(b)
+    }
     pub(crate) fn marker_matches(&self,ordinal:usize,bytes:&[u8])->bool{
-        let Some(r)=self.rows.get(ordinal)else{return false};
-        bytes.len()==101&&bytes.starts_with(MARK_DOMAIN)&&bytes[20]==role_tag(r.role)&&
-            bytes[21..37]==self.birth.pool.0&&bytes[37..53]==r.volume.0&&
-            bytes[53..69]==self.birth.op.0&&bytes[69..101]==r.token
+        self.expected_marker(ordinal).is_some_and(|mark|mark.as_slice()==bytes)
     }
 }
 

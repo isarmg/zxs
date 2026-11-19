@@ -2,7 +2,7 @@
 //! independently opened S-directory OFD. Never use a raw DB FD for locking,
 //! sampling or reconnect; only the fixed SQLite VFS is allowed to open it.
 use super::{DB,JOURNAL,ROOT_MARK};
-use crate::fs::{ComponentLimit,HeldDir,NameBudget,invalid};
+use crate::fs::{ComponentLimit,ControlRead,HeldDir,NameBudget,invalid};
 use std::{ffi::{CStr,CString},io,os::{fd::AsRawFd,raw::{c_char,c_int},unix::ffi::OsStrExt},path::Path};
 
 unsafe extern "C"{
@@ -31,6 +31,16 @@ impl SystemDir{
         let ino=private_name(&root,DB)?;let marker_ino=private_name(&root,ROOT_MARK)?;
         if ino==marker_ino{return Err(invalid("DB and root marker are not distinct regular files"));}
         let result=Self{root,db,ino,marker_ino};result.require()?;Ok(result)
+    }
+    /// Stat first: a root marker is an ordinary control file, never an
+    /// alias through which to open/close the active SQLite DB inode.
+    pub(super) fn hold_marker(&self, selected:&HeldDir)->io::Result<ControlRead>{
+        let i=private_name(selected,ROOT_MARK)?;
+        if private_name(&self.root,DB)?!=self.ino ||
+            (selected.entity.device==self.root.entity.device && i==self.ino){
+            return Err(invalid("a volume marker cannot open a database alias"));
+        }
+        ControlRead::open(selected,ROOT_MARK,101)
     }
     pub(super) fn path(&self)->&CStr{&self.db}
     pub(super) fn component_limit(&self)->io::Result<ComponentLimit>{ComponentLimit::held(&self.root)}

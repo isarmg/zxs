@@ -265,3 +265,13 @@ int zxs_sql_private_name(int parent,const char *name,uint64_t *ino) {
     *ino=s.stx_ino;
     return 0;
 }
+
+#include <sys/statvfs.h>
+/* Capacity of this currently mounted FS, not a per-folder quota or promise. */
+int zxs_storage_capacity(int fd,uint64_t *total,uint64_t *available) {
+    struct statvfs v;
+    if (fstatvfs(fd,&v)<0) return -1;
+    uint64_t unit=(uint64_t)v.f_frsize,blocks=(uint64_t)v.f_blocks,avail=(uint64_t)v.f_bavail;
+    if (unit==0 || avail>blocks || blocks>UINT64_MAX/unit) { errno=EOVERFLOW; return -1; }
+    *total=unit*blocks;*available=unit*avail;return 0;
+}
