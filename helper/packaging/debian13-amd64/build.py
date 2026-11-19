@@ -14,6 +14,7 @@ import tempfile
 import tomllib
 sys.dont_write_bytecode = True  # do not dirty the independently verified source checkout
 from archive_inputs import ENV, collect, copy_checked, digest, relative, require, run
+import samba_capsule
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent.parent
@@ -188,14 +189,20 @@ def build(args):
     # Invalid release history cannot create even an incomplete candidate.
     out.mkdir(mode=0o700); (out/"INCOMPLETE").write_text("not an installable or signed release\n")
     rev=project_sources(args,out)
-    debs=collect(args.inputs,out/"origin",lock)
+    sam=json.loads((HERE/"samba-packages.json").read_text("ascii"))
+    require(0<len(sam)<=96 and sam["python3-samba"][1]==sam["samba-libs"][1]=="2:4.22.11+dfsg-0+deb13u1",
+            "unexpected distribution for standalone SAM provision")
+    pkgs=lock["packages"] | sam
+    require(all(pkgs[k]==v for k,v in lock["packages"].items()),"two pins disagree on a shared package")
+    debs=collect(args.inputs,out/"origin",{**lock,"packages":pkgs})
     with tempfile.TemporaryDirectory(prefix="helper-package-") as scratch:
         root=Path(scratch)/"data"; home=mkdir(root/PRIVATE_NAME)
         docs=mkdir(root/"usr/share/doc/local-ops-helper")
         shutil.copyfile(PROJECT/"LICENSE",docs/"copyright")
         rust_notices(out,docs)
         copy_checked(args.stdlib_notices,docs/"rust-stdlib-notices",args.stdlib_notices_sha256,cap=32<<20)
-        for name,deb in debs.items():
+        for name in lock["packages"]:
+            deb=debs[name]
             selected={k:home/relative(v) for k,v in lock["payload"].get(name,{}).items()}
             # Debian libgcc-s1 refers to the gcc-14-base copyright. Do not
             # follow that archive symlink or install the gcc-14-base package.
@@ -206,6 +213,12 @@ def build(args):
                     selected[f"usr/share/common-licenses/{lic}"]=docs/"common-licenses"/lic
             unpack_selected(deb,selected)
         shutil.copyfile(docs/"copyrights/gcc-14-base",docs/"copyrights/libgcc-s1")
+        cap=root/samba_capsule.ROOT
+        recipe=samba_capsule.assemble({k:debs[k] for k in sam},cap,docs/"samba-copyrights",mkdir(Path(scratch)/"sam-input"))
+        # Outside the guest /usr: a manifest in this candidate is evidence, not
+        # authority to exec. Release owner must qualify, sign and pin it separately.
+        cap_manifest=cap/"CAPSULE"
+        with cap_manifest.open("xb") as mf: mf.write(samba_capsule.manifest_bytes(recipe))
         binary=copy_checked(args.helper,root/"usr/bin/helper",args.helper_sha256,cap=64<<20)
         programs=[binary,home/"bin/bwrap",home/"bin/fsck.fat",home/"bin/fsck.exfat"]
         libs=sorted((home/"lib").iterdir())
@@ -223,10 +236,12 @@ def build(args):
         info={"debian_version":version,"abi":"debian13-amd64-gnu","source_commit":rev,"helper_input_sha256":args.helper_sha256,
               "helper_distributed_sha256":digest(binary),"stdlib_notices_sha256":args.stdlib_notices_sha256,"packages":lock["packages"],"needed":requires,
               "files":{str(p.relative_to(home)):digest(p) for p in sorted(home.rglob("*")) if p.is_file()},
+              "scope_sam":"offline dedicated fresh instance only; no public command or daemon",
+              "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
               "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"packaged-not-yet-enabled"}}
         (docs/"BUNDLE.json").write_text(json.dumps(info,sort_keys=True,indent=2)+"\n")
         control=mkdir(root/"DEBIAN")/"control"
-        control.write_text("Package: local-ops-helper\nVersion: "+version+"\nArchitecture: amd64\nSection: admin\nPriority: optional\nMaintainer: local-ops-helper release team <noreply@users.noreply.github.com>\nDescription: Local diagnostics with private read-only disk checkers\n")
+        control.write_text("Package: local-ops-helper\nVersion: "+version+"\nArchitecture: amd64\nSection: admin\nPriority: optional\nMaintainer: local-ops-helper release team <noreply@users.noreply.github.com>\nDescription: Local diagnostics and isolated dedicated storage installation tools\n")
         artifact=out/f"local-ops-helper_{version}_amd64.deb"
         run(["/usr/bin/dpkg-deb","--root-owner-group","--build",str(root),str(artifact)],stdin=subprocess.DEVNULL)
     with (out/"SHA256SUMS").open("x",encoding="ascii") as sums:
