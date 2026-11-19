@@ -190,7 +190,9 @@ dependencies = [
  "libsqlite3-sys",
  "libc",
  "linux-raw-sys",
+ "rusqlite",
  "rustix",
+ "zeroize",
 ]
 
 [[package]]

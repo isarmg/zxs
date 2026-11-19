@@ -1,14 +1,14 @@
 //! No public command. Discover the original receipt first; for a fresh pair,
 //! require a separate local confirmation, two protocol-specific results and a
 //! short SQL transaction. No generic credential setter or update/reset path.
-use super::{domain::{InstalledSetup,SelectedSetup},observed,terminal::{PublicConfirmation,SelectedInput},
+use super::{domain::{InstalledSetup,SelectedSetup},observed,terminal::{InputBudget,PublicConfirmation,SelectedInput},smb_policy::Permit,
     web_secret::PreparedWeb, History,Id,PairRequest};
 use crate::sqlite_install::{approval,bad,catalog::Canonical,engine,markers::SystemMark,
     reservation::Existing,stage::random,DATABASE,MARKER};
 use rusqlite::{params,Transaction,TransactionBehavior};
 use rustix::fs::{StatVfsMountFlags,fstatvfs};
 use std::{io,path::Path,time::{Duration,Instant}};
-use zeroize::Zeroizing;
+use helper_linux_evidence::first_smb::FirstSlot;
 
 pub(super) struct Session {
     installed:InstalledSetup,terminal:PublicConfirmation,input:Option<io::Result<SelectedInput>>,
@@ -69,26 +69,39 @@ impl ReadyPair<'_>{
     pub(in crate::sqlite_install) fn writable_database(&self)->io::Result<&Existing<'_>>{
         self.require()?;self.db.sidecars_absent()?;Ok(&self.db)
     }
-    // This consumes a finished, operation-bound result, never passwords or
-    // generic blobs from the operator. Its SMB provider is not connected yet.
-    fn publish(self,material:Material)->io::Result<History>{
+    /// Only the actually confirmed, absent original request can reach this
+    /// path. No caller-supplied key bytes, policy location or backend selection.
+    pub(super) fn complete(self)->io::Result<History>{
+        self.writable_database()?;
+        let permit=Permit::open(self.installed,self.r.pool)?;
+        let(uid,gid)=self.installed.storage_identity();
+        let budget=InputBudget::reserve(&self.input,uid,gid)?;
+        permit.require()?;let provider=permit.qualify()?;
+        self.require()?;permit.require()?;let values=budget.read(&provider)?;
+        self.require()?;permit.require()?;
+        let(web,smb)=values.prepare_web()?;
+        let value=provider.prepare(&smb)?;drop(smb);
+        let material=Material::fresh(&self.r,web,PreparedSmb::Native(value))?;
+        self.publish(material,&permit)
+    }
+    fn publish(self,mut material:Material,permit:&Permit)->io::Result<History>{
         if material.request!=self.r.sha(){return Err(bad("credential preparation belongs to another original request"));}
         let root=self.installed.system().source();let r=&self.r;
         self.writable_database()?;
-        let mut c=engine::new_pair(&self)?;
+        permit.require()?;let mut c=engine::new_pair(&self)?;
         let tx=c.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db_error)?;
         self.t.require(&tx)?;
         if observed::first_marker(&r.pool,&r.init,&tx,root)?!=self.wanted||r.original_after_init(&tx)?!=History::Absent{
             return Err(bad("initial enrollment or original setup history changed; query the original operation"));
         }
         self.writable_database()?;engine::original_name(&tx)?;
-        let expected=insert_new(&tx,r,&material)?;
+        let expected=insert_new(&tx,r,&mut material)?;
         if r.original_after_init(&tx)?!=expected{return Err(bad("incomplete original setup result; transaction not confirmed"));}
         drop(material); // SQLite transient parameters stay within this protected short-lived process.
         self.require()?;engine::original_name(&tx)?;
         let seen=root.controls(&[DATABASE.as_bytes(),MARKER,b"SYSTEM.sqlite3-journal"])?;
         if !seen[0]||!seen[1]{return Err(bad("original SYSTEM controls missing before account commit"));}
-        tx.commit().map_err(|_|uncertain())?;c.close().map_err(|_|uncertain())?;
+        permit.require()?;tx.commit().map_err(|_|uncertain())?;c.close().map_err(|_|uncertain())?;
         // A late failure is not evidence of rollback. Never try a fresh Op,
         // password, ID or salt here. Only the exact existing request is queried.
         let after=(||->io::Result<History>{
@@ -109,10 +122,16 @@ fn uncertain()->io::Error{bad("setup final outcome not confirmed; retain media a
 fn db_error(_:rusqlite::Error)->io::Error{bad("fixed account transaction did not complete; no automatic retry")}
 fn once(n:usize)->io::Result<()>{if n==1{Ok(())}else{Err(bad("fixed account transaction affected an unexpected row count"))}}
 
-// No constructor for an arbitrary supplied verifier, no serde/Debug, no export.
-// The SMB producer must be the actually policy-permitted, qualified NTLMv2
-// provider. This slice intentionally has no production producer for that type.
-struct PreparedSmb(Zeroizing<[u8;16]>);
+// No production constructor for supplied verifier bytes. The live secure
+// native object can only insert the fixed initial slot; it cannot export it.
+enum PreparedSmb{Native(FirstSlot),#[cfg(test)] Synthetic([u8;16])}
+impl PreparedSmb{
+    fn insert(&mut self,tx:&Transaction<'_>,op:&Id)->io::Result<usize>{match self{
+        Self::Native(slot)=>slot.insert(tx,op),
+        #[cfg(test)] Self::Synthetic(v)=>tx.execute("INSERT INTO main.smb_password(slot,credential_op,generation,nt_owf) VALUES(1,?1,1,?2)",
+            params![&op[..],&v[..]]).map_err(db_error),
+    }}
+}
 struct Material{request:[u8;32],web_id:Id,smb_id:Id,web:PreparedWeb,smb:PreparedSmb}
 impl Material{
     fn fresh(r:&PairRequest,web:PreparedWeb,smb:PreparedSmb)->io::Result<Self>{
@@ -121,13 +140,12 @@ impl Material{
         Ok(Self{request:r.sha(),web_id,smb_id,web,smb})
     }
 }
-fn insert_new(tx:&Transaction<'_>,r:&PairRequest,m:&Material)->io::Result<History>{
+fn insert_new(tx:&Transaction<'_>,r:&PairRequest,m:&mut Material)->io::Result<History>{
     if m.request!=r.sha()||m.web_id==m.smb_id||m.web_id==[0;16]||m.smb_id==[0;16]{return Err(bad("invalid original pair preparation"));}
     once(tx.execute("INSERT INTO main.account_pair(singleton,birth_op,approval_ref,web_id,web_login,smb_id,smb_login,smb_sid)
         VALUES(1,?1,?2,?3,?4,?5,?6,?7)",params![&r.op[..],&r.approval[..],&m.web_id[..],&r.web[..],&m.smb_id[..],&r.smb[..],&r.sid[..]]).map_err(db_error)?)?;
     once(m.web.insert(tx,&r.op).map_err(db_error)?)?;
-    once(tx.execute("INSERT INTO main.smb_password(slot,credential_op,generation,nt_owf) VALUES(1,?1,1,?2)",
-        params![&r.op[..],&m.smb.0[..]]).map_err(db_error)?)?;
+    once(m.smb.insert(tx,&r.op)?)?;
     once(tx.execute("INSERT INTO main.operation(op_id,kind,actor_id,request_sha,state) VALUES(?1,2,?2,?3,1)",
         params![&r.op[..],&r.actor[..],&m.request[..]]).map_err(db_error)?)?;
     Ok(History::Committed{web:m.web_id,smb:m.smb_id})
@@ -140,7 +158,7 @@ mod tests{
     fn sample(r:&PairRequest,owf:[u8;16])->Material{
         Material{request:r.sha(),web_id:hex("result_web_id").try_into().unwrap(),smb_id:hex("result_smb_id").try_into().unwrap(),
             web:PreparedWeb::synthetic(hex("web_salt").try_into().unwrap(),hex("web_verifier").try_into().unwrap()),
-            smb:PreparedSmb(Zeroizing::new(owf))}
+            smb:PreparedSmb::Synthetic(owf)}
     }
     #[test]fn readonly_vfs_anchor_has_no_active_transaction_and_rejects_a_byteidentical_name_replacement(){
         use rusqlite::{Connection,OpenFlags};
@@ -160,14 +178,14 @@ mod tests{
         {let tx=db.transaction_with_behavior(TransactionBehavior::Immediate).unwrap();
          assert!(r.original(&tx,&shape).unwrap()==History::Absent);
          // Last credential insert (after prepared pair and Web insert) fails.
-         assert!(insert_new(&tx,&r,&sample(&r,[0;16])).is_err());tx.rollback().unwrap();}
+         assert!(insert_new(&tx,&r,&mut sample(&r,[0;16])).is_err());tx.rollback().unwrap();}
         {let tx=db.transaction().unwrap();assert_eq!(r.original(&tx,&shape).unwrap(),History::Absent);
          for sql in ["SELECT count(*) FROM account_pair","SELECT count(*) FROM web_password","SELECT count(*) FROM smb_password"]{
              assert_eq!(tx.query_row(sql,[],|row|row.get::<_,i64>(0)).unwrap(),0);
          }tx.commit().unwrap();}
-        let material=sample(&r,hex("synthetic_smb_field").try_into().unwrap());
+        let mut material=sample(&r,hex("synthetic_smb_field").try_into().unwrap());
         let tx=db.transaction_with_behavior(TransactionBehavior::Immediate).unwrap();
-        let expected=insert_new(&tx,&r,&material).unwrap();tx.commit().unwrap();
+        let expected=insert_new(&tx,&r,&mut material).unwrap();tx.commit().unwrap();
         db.execute_batch("PRAGMA query_only=ON").unwrap();let tx=db.transaction().unwrap();
         let before=tx.total_changes();assert_eq!(r.original(&tx,&shape).unwrap(),expected);
         let mut other=fixed();other.approval[2]^=1;assert!(other.original(&tx,&shape).is_err());

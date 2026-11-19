@@ -2,6 +2,7 @@
 //! structurally valid SID or an SQL match is not a Samba domain proof, a
 //! maintenance approval, a password check, or a privilege to create credentials.
 mod web_secret;
+mod smb_policy;
 mod terminal;
 mod observed;
 mod publish;

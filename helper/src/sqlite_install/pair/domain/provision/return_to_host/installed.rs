@@ -112,6 +112,8 @@ impl InstalledSetup{
         self.names.require()
     }
     pub(in crate::sqlite_install::pair) fn system(&self)->&LockedSystem{&self.system}
+    pub(in crate::sqlite_install::pair) fn storage_identity(&self)->(u32,u32){(self.names.uid,self.names.gid)}
+    pub(in crate::sqlite_install::pair) fn live_digest(&self)->[u8;32]{Sha256::digest(PROFILE).into()}
     pub(in crate::sqlite_install::pair) fn installation(&self)->(Id,Id){(self.names.instance,self.names.provision)}
     pub(in crate::sqlite_install::pair) fn request(&self,op:Id,approval:Id,web:&[u8],smb:&[u8])->io::Result<PairRequest>{
         self.require()?;let n=&self.names;

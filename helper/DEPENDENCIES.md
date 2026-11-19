@@ -69,3 +69,7 @@
 新增 10 个准确注册表归档均按 rusqlite 上游锁/发行摘录逐个与完整 SHA-256、清单和包内许可材料静态对读；只取实际选择的绑定/构建依赖，不取上游的测试、缓存、WAL、扩展加载或 SQLCipher 功能。绑定源包内的 sqlite3.c 和 sqlite3.h 是 [SQLite 3.54.1](https://sqlite.org/releaselog/3_54_1.html) 的发布材料。sqlite3.c 的 SHA3-256 为 `e2b869d3003b33c942b7dd7063604fbc53553e1b66609570df39b9b7b558ee81`，与官方 [amalgamation](https://sqlite.org/amalgamation.html) 原文件相同。MIT 针对 Rust 绑定；引擎本体的[公有领域声明](https://sqlite.org/copyright.html)及原源内声明另行保留。打包保留整个绑定归档，不将一份 MIT 文件当作引擎许可。
 
 正式构建必须在 helper 目录使用本工程的 [.cargo/config.toml](.cargo/config.toml)，没有动态系统 SQLite 回退；实际链接、链接符号、OMIT_WAL / OMIT_LOAD_EXTENSION、连接选项、精确 ABI、归档与许可随附均待发行验收。本阶段没有运行解析器/引擎、编译 Cargo 或创建数据库。
+
+## 可选专实例首设提供者
+
+本机首次帐号发行选择 Debian 13 amd64 **Libgcrypt 1.11.0-7+deb13u1** 和 **libgpg-error 1.51-4**，只使用固定动态 ABI 与已记录的两份 ELF，不供应自研密码算法。它们不是 Cargo 依赖或只读命令的启动依赖；[组包锁](packaging/debian13-amd64/lock.json)固定原 .deb，[配方](packaging/debian13-amd64/README.md)保留对应来源、补丁、版权和发行签名输入。原生小叶复用已经锁定的 rusqlite 与 zeroize，不引入新的 crate 版本。真实装载、加密提供者许可、锁页和跨组件行为尚未构建或运行验收。

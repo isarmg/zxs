@@ -177,21 +177,27 @@ impl PairInputs {
     pub(super) fn prepare_web(self)->io::Result<(PreparedWeb,Secret)>{
         Ok((PreparedWeb::fresh(self.web,self.workspace)?,self.smb))
     }
-    pub(super) fn foreground(selected:SelectedInput,uid:u32,gid:u32)->io::Result<Self> {
-        selected.audit.require_current()?; protected_process(uid,gid)?;selected.channel.require()?;
-        // MCL_FUTURE alone reserves no KDF budget. Allocate and initialise the
-        // exact blocks before switching terminal mode or showing the first prompt.
-        let workspace=WebWorkspace::reserve()?;
+}
+// First establish process restrictions and the complete Web workspace. The
+// separate SMB provider must also have qualified before opening the hidden prompts.
+pub(super) struct InputBudget<'a>{selected:&'a SelectedInput,workspace:WebWorkspace}
+impl<'a> InputBudget<'a>{
+    pub(super) fn reserve(selected:&'a SelectedInput,uid:u32,gid:u32)->io::Result<Self>{
+        selected.audit.require_current()?;protected_process(uid,gid)?;selected.channel.require()?;
+        let workspace=WebWorkspace::reserve()?;Ok(Self{selected,workspace})
+    }
+    pub(super) fn read(self, _smb:&helper_linux_evidence::first_smb::Enrollment)->io::Result<PairInputs>{
+        let Self{selected,workspace}=self;
         selected.audit.require_current()?;selected.channel.require()?;
         let mut entries:[Entry;4]=std::array::from_fn(|_|Entry::new());
         let stdin=io::stdin(); let signals=PromptSignals::begin()?;
         let mut tty=Quiet::begin(stdin.as_fd())?;
-        let captured=capture(&mut entries,&selected,&tty,&signals);
+        let captured=capture(&mut entries,selected,&tty,&signals);
         let restored=tty.restore();drop(tty);
         let pending=signals.check();let mask=signals.finish();
         restored?;mask?;pending?;captured?;
         let [web,_,smb,_]=entries;
-        Ok(Self{web:web.take(),smb:smb.take(),workspace})
+        Ok(PairInputs{web:web.take(),smb:smb.take(),workspace})
     }
 }
 
