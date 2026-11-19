@@ -19,6 +19,25 @@ class Inputs(unittest.TestCase):
         for first,previous in [(False,None),(False,""),(False,"nightly"),(True,prev),(True,"")]:
             with self.assertRaises(ValueError): release_history(cur,first,previous)
 
+    def test_single_bsd_notice_requires_the_named_file_not_a_dual_license_substitute(self):
+        from build import rust_notices
+        from unittest.mock import patch
+        for member, accepted in (("LICENSE", True), ("LICENSE-MIT", False)):
+            with self.subTest(member=member), tempfile.TemporaryDirectory() as d:
+                root=Path(d); crate="subtle-2.6.1"; archive=root/"source/rust"/(crate+".crate")
+                archive.parent.mkdir(parents=True)
+                (root/"Cargo.lock").write_text('[[package]]\nname="subtle"\nversion="2.6.1"\nsource="registry+fixture"\n')
+                fixture=b"synthetic notice; not upstream license text\n"
+                with tarfile.open(archive,"w:gz") as tar:
+                    entry=tarfile.TarInfo(crate+"/"+member);entry.size=len(fixture)
+                    tar.addfile(entry,io.BytesIO(fixture))
+                with patch("build.PROJECT",root):
+                    if accepted:
+                        rust_notices(root,root/"docs")
+                        self.assertEqual((root/"docs/rust-notices"/crate/"LICENSE").read_bytes(),fixture)
+                    else:
+                        with self.assertRaises(ValueError): rust_notices(root,root/"docs")
+
     def test_source_archive_exact_for_repo_root_or_nested_helper(self):
         from build import archive_project
         for nested in (False,True):

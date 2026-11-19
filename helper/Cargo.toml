@@ -16,6 +16,8 @@ name = "helper"
 path = "src/main.rs"
 
 [dependencies]
+argon2 = { version = "=0.5.3", default-features = false, features = ["zeroize"] }
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled", "limits"] }
 httparse = "=1.10.1"
 helper-linux-evidence = { path = "linux-evidence" }

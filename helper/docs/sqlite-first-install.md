@@ -21,3 +21,5 @@ helper install-pool resume --op ID --approval ID --system DIR --recycle DIR --da
 | 全部标可见，最后 SQL 未提交或回执丢失 | 原 INIT 仍待决则全组重同步/复读才完成。若原 SQL 已提交，仅返回历史，不补标、不启动服务。 |
 
 两个真实登录需要独立授权的 Web 管理员/专用 SMB 账户首设和各自网络适配；这两个动作均不属于本命令。
+
+Web 侧另有内部凭据准备源码：仅接受 1–1024 个有效 UTF-8 字节，调用 [RustCrypto Argon2](https://docs.rs/argon2/0.5.3/argon2/) 按 Argon2id v19、64 MiB、3 次、4 lanes、16 字节新随机盐生成 32 字节验证值。它不处理 SMB 口令、不写账号，也不是会话证明。已知输入、显式工作区和结果按作用期清除；尚无真实口令输入入口，必须另核终端/宿主、转储与交换区防护以及受管 Samba 原域。没有在本次编写中调用算法或采集密码。

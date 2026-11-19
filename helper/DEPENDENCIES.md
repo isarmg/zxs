@@ -1,8 +1,9 @@
 # 依赖与固定版本
 
-[Cargo.toml](Cargo.toml) 在主程序中声明四个非开发的直接注册表依赖，另有一个本项目内部小库：
+[Cargo.toml](Cargo.toml) 在主程序中声明六个非开发的直接注册表依赖，另有一个本项目内部小库：
 
-- `rusqlite = 0.43.0`（关闭默认功能，仅 `bundled`）：用上游的 SQLite 连接、参数绑定和事务，不调用外部 shell/数据库服务。小型 native 边界与它共享锁定的同一个 `libsqlite3-sys 0.40.0` 引擎，只读取源码 ID、编译选项与原 Unix VFS 路径上限。
+- `rusqlite = 0.43.0`（关闭默认功能，`bundled`、`limits`）：用上游的 SQLite 连接、参数绑定和事务，不调用外部 shell/数据库服务。小型 native 边界与它共享锁定的同一个 `libsqlite3-sys 0.40.0` 引擎，只读取源码 ID、编译选项与原 Unix VFS 路径上限。
+- `argon2 = 0.5.3`（只开 `zeroize`）、`zeroize = 1.9.1`（只开 `alloc`）：内部准备 Web 初设的固定格式慢验证值，使用 RustCrypto 上游算法及有界、显式擦除的工作区；不导入 PHC 文本、外部参数或口令生成器，不用于 SMB。
 - `httparse = 1.10.1`：只用成熟的 HTTP/1.1 请求头解析器；Web 自己限制方法、来源、请求长度、时限、操作和会话。没有新增传递普通依赖。
 - `rustix = 1.1.5`（默认 `std`，显式 `fs`、`rand`、`pipe`、`process`、`termios`、`thread`）：安全的 Linux 文件描述符和文件系统观察；新池/卷 ID 只使用内核非阻塞 getrandom。本次仅启用同一锁定包的现有功能，没有增加依赖或改锁。
 - `sha2 = 0.10.9`（不启用默认功能）：在内存中以 RustCrypto SHA-256 核验候选新登记完整前缀；不用于认证操作者或保护口令。
@@ -15,11 +16,11 @@
 
 在独立目录使用标准 crates.io 源，或使用已备齐精确版本的本机可信缓存；不从父目录导入清单、源码、锁文件或构建产物。缓存不全时显式报告缺件，不替换包名或校验值。本次未捆绑或安装第三方二进制。已有[离线工具包配方](packaging/debian13-amd64/README.md)分别核上游工具、库、准确原包和对应源码；这些不是 Cargo 依赖。
 
-## 已核对的 32 份发行源码包
+## 已核对的 37 份发行源码包
 
 `httparse` 的完整锁记录由 [crates.io 登记](https://github.com/rust-lang/crates.io-index/blob/master/ht/tp/httparse)及上游 axum 的 Cargo.lock 对读；原始发行包 SHA-256 为 `6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87`，静态核对了包内许可；未执行其 build.rs、解析器或 Cargo。
 
-本表对应本项目 [Cargo.lock](Cargo.lock)（文件 SHA-256：`beb3e6601f321fe68c34ec0535d1821ade078ca252cd6686fc0d62ff369dfbbd`）。逐个从 crates.io 取了锁定版本的 `.crate`，先核整个归档 SHA-256 与锁里该包的 `checksum` 相同，再静态读取归档中的 `Cargo.toml`、许可及署名材料。没有安装、执行或重新解析这些包。表内链接指向各版本的注册表页面；[Cargo 注册表规范](https://doc.rust-lang.org/cargo/reference/registry-index.html#download-endpoint)给出原始包的下载方式。
+本表对应本项目 [Cargo.lock](Cargo.lock)（文件 SHA-256：`c314579ff6ab77743c195c05edd95738e4f64a0c0f2037657478527f4e459b44`）。逐个从 crates.io 取了锁定版本的 `.crate`，先核整个归档 SHA-256 与锁里该包的 `checksum` 相同，再静态读取归档中的 `Cargo.toml`、许可及署名材料。没有安装、执行或重新解析这些包。表内链接指向各版本的注册表页面；[Cargo 注册表规范](https://doc.rust-lang.org/cargo/reference/registry-index.html#download-endpoint)给出原始包的下载方式。
 
 | 精确发行包 | 谁在锁里引用它 | 包声明的许可表达式 | 包内已核材料 |
 | --- | --- | --- | --- |
@@ -33,6 +34,11 @@
 | [shlex 2.0.1](https://crates.io/crates/shlex/2.0.1) | cc | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
 | [smallvec 1.16.5](https://crates.io/crates/smallvec/1.16.5) | rusqlite | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
 | [vcpkg 0.2.15](https://crates.io/crates/vcpkg/0.2.15) | libsqlite3-sys 构建依赖；不代表支持 Windows | `MIT/Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
+| [argon2 0.5.3](https://crates.io/crates/argon2/0.5.3) | 主程序；固定 Argon2id v19 | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
+| [base64ct 1.8.3](https://crates.io/crates/base64ct/1.8.3) | argon2；本项目不让操作者提供 PHC 参数串 | `Apache-2.0 OR MIT` | `LICENSE-APACHE`、`LICENSE-MIT` |
+| [blake2 0.10.6](https://crates.io/crates/blake2/0.10.6) | argon2 | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
+| [subtle 2.6.1](https://crates.io/crates/subtle/2.6.1) | blake2 所用 digest 的 mac 特性 | `BSD-3-Clause` | `LICENSE` |
+| [zeroize 1.9.1](https://crates.io/crates/zeroize/1.9.1) | 主程序及 argon2 的指定特性 | `Apache-2.0 OR MIT` | `LICENSE-APACHE`、`LICENSE-MIT` |
 | [httparse 1.10.1](https://crates.io/crates/httparse/1.10.1) | 主程序直接依赖；上游测试依赖不引入 | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |
 | [bitflags 2.13.2](https://crates.io/crates/bitflags/2.13.2) | rustix | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |
 | [cfg-if 1.0.5](https://crates.io/crates/cfg-if/1.0.5) | getrandom、sha2 | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |

@@ -143,7 +143,7 @@ def rust_notices(out, docs):
     # Use the already hash-verified .crate copies. No foreign path, link or mode
     # is materialized. Include dev/other-target notices too; this is not a link map.
     common = {"LICENSE-MIT","LICENSE-APACHE"}
-    overrides = {"rusqlite":{"LICENSE"},"libsqlite3-sys":{"LICENSE"},
+    overrides = {"rusqlite":{"LICENSE"},"libsqlite3-sys":{"LICENSE"},"subtle":{"LICENSE"},
                  "r-efi":{"AUTHORS","README.md"}, "generic-array":{"LICENSE"},
                  "typenum":common|{"LICENSE"}, "windows-sys":{"license-mit","license-apache-2.0"},
                  "windows-link":{"license-mit","license-apache-2.0"}}

@@ -1,6 +1,8 @@
 //! Nonsecret SETUP_PAIR request and read-only historical receipt only. A
 //! structurally valid SID or an SQL match is not a Samba domain proof, a
 //! maintenance approval, a password check, or a privilege to create credentials.
+mod web_secret;
+
 use super::{bad, catalog::Canonical, request::Id};
 use rusqlite::{params, Transaction};
 use sha2::{Digest, Sha256};
