@@ -22,7 +22,7 @@ impl Material {
     pub(super) fn size(self) -> u64 { self.size }
     #[cfg(test)]
     pub(super) fn slot(self) -> u32 { self.slot }
-    fn key(self) -> (OperationId, u32) { (self.issuer, self.slot) }
+    pub(in crate::ordinary) fn key(self) -> (OperationId, u32) { (self.issuer, self.slot) }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,3 +168,6 @@ impl Index {
 #[path="../../tests/unit/flat_index.rs"]
 mod tests;
 pub(in crate::ordinary) mod stored;
+mod blocks;
+pub(in crate::ordinary) use blocks::{Ref as MaterialRef,write_candidate as write_candidate_checksums};
+pub(in crate::ordinary) mod body;
