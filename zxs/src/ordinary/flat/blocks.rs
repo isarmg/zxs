@@ -8,7 +8,7 @@ use crate::fs::{HeldBytes,LiveStamp as Stamp};
 use std::{fs::File, io::{self,Write}, os::unix::fs::FileExt};
 
 const MAGIC: &[u8] = b"ZXS-PORTABLE-1/BLOCK-TABLE\0";
-const PER_PAGE: u64 = 1024;
+pub(super) const PER_PAGE: u64 = 1024;
 const HEADER: usize = MAGIC.len()+3*16+4+8+4+4;
 const MAX_DIRECTORY: usize = 8*1024*1024;
 const _: () = assert!(BLOCK == 4*1024*1024);
@@ -119,6 +119,13 @@ impl Reader{
         table.file().read_exact_at(&mut directory,g.dir_at)?;
         if dir_hash(&header,&directory)?!=original.directory_sha{return Err(invalid("wrong original portable checksum directory"));}
         raw.unchanged()?;table.unchanged()?;Ok(Self{original,raw,table,g,directory})
+    }
+    /// Only the COMPLETE material, never a subrange/offset. Uses the actual
+    /// authenticated directory held by this Reader. No payload is read here.
+    pub(super) fn material_commitment(&self)->io::Result<super::logical::LogicalV1>{
+        self.unchanged()?;
+        let result=super::logical::LogicalV1::from_pages(self.original.material.size,&self.directory)?;
+        self.unchanged()?;Ok(result)
     }
     #[cfg(test)]
     pub(super) fn from_test_files(original:Ref,raw:File,table:File)->io::Result<Self>{

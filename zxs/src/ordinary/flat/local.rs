@@ -54,6 +54,35 @@ impl<'d> LocalVersion<'d>{
         let contents=Contents::bind(descriptor,table,origins)?;WitnessRead::require_parent(parent)?;
         Ok(Self{parent,contents})
     }
+    /// Equality of content commitments derived from the complete RAW's
+    /// authenticated checksum metadata, not verification of every body byte.
+    /// A partial RAW, RAW plus zeros, changes or an empty map never use this
+    /// shortcut. The metadata I/O and FD budget still have to fit.
+    pub(in crate::ordinary) fn whole_raw_commitment(&self,budget:ReadBudget)->io::Result<Option<super::logical::LogicalV1>>{
+        WitnessRead::require_parent(self.parent)?;
+        let Some(located)=self.contents.sole_whole_material()?.filter(|l|l.raw_name.is_some()) else{return Ok(None)};
+        let original=located.reference();
+        if budget.file_descriptors<2+WitnessRead::OPEN_HEADROOM || budget.buffer_bytes<original.read_bytes(0)?.0 {
+            return Err(invalid("insufficient budget to verify the original complete RAW directory"));}
+        let scope=WitnessRead::at(self.parent)?;let(raw,table)=located.open_pair(&scope)?;
+        let reader=super::blocks::Reader::open(original,raw,table)?;
+        let result=reader.material_commitment()?;self.contents.unchanged()?;WitnessRead::require_parent(self.parent)?;
+        Ok(Some(result))
+    }
+
+    /// Explicit full logical read. Compare to the originating node's distinct
+    /// LogicalV1, after every intersecting real block has passed verification
+    /// and the complete sink has flushed. Not called by ordinary range reads
+    /// or per-SAVE; this does NOT itself publish an automatically copied RAW.
+    pub(in crate::ordinary) fn verify_complete(&self,expected:super::logical::LogicalV1,budget:ReadBudget)->io::Result<()>{
+        let length=self.contents.len();
+        if length!=expected.length(){return Err(invalid("logical verification length differs from confirmed node"));}
+        let mut whole=super::logical::Whole::new(length)?;
+        self.range_to(0,length,budget,&mut whole)?;
+        if whole.finish()?!=expected{return Err(invalid("complete logical content differs from confirmed node"));}
+        Ok(())
+    }
+
     pub(in crate::ordinary) fn range_to(&self,at:u64,n:u64,budget:ReadBudget,out:impl Write)->io::Result<()>{
         let mut scope=None;
         self.contents.read_with(at,n,budget,WitnessRead::OPEN_HEADROOM,|located|{

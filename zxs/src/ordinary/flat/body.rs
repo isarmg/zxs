@@ -38,6 +38,20 @@ impl Contents {
         table.unchanged()?;Ok(Self{table,index,sources})
     }
 
+    pub(super) fn len(&self)->u64{self.index.len()}
+    pub(super) fn unchanged(&self)->io::Result<()>{self.table.unchanged()}
+    /// A single canonical segment must cover exactly the entire original
+    /// extent at physical offset zero. An empty index has NO source; do not
+    /// treat it as evidence that any particular empty RAW exists.
+    pub(super) fn sole_whole_material(&self)->io::Result<Option<&Located>>{
+        self.unchanged()?;
+        let [r]=self.index.rows.as_slice() else{return Ok(None)};
+        let Some(i)=r.terminal else{return Ok(None)};
+        let m=self.index.materials[i as usize];
+        if r.offset!=0||r.end!=m.size{return Ok(None);}
+        self.sources.get(&m.key()).map(Some).ok_or_else(||invalid("missing original of the complete logical material"))
+    }
+
     /// Select and pin every material this request intersects before emitting
     /// any data, including leading zeroes. Release them after the final flush
     /// and checks (or any error). Another request can reopen only the *same*
