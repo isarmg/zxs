@@ -12,7 +12,7 @@ from .freeze import frozen_tree, pack
 from .model import Commit, Rejected, check_id, new_id
 from .private_candidates import held_candidates
 from .private_freeze import anonymous_capture
-from .publish import confirm_final, digest_file, publish, rename_new, rename_new_at, require_native_writer, sync_dir
+from .publish import _publish, confirm_final, digest_file, publish, rename_new, rename_new_at, require_native_writer, sync_dir
 
 
 def paths(work, store, state):
@@ -84,16 +84,19 @@ def create_catalog(work, store, state, base, instance_id, *, checked_root=None, 
 
 
 @contextmanager
-def locked(state, *, read_only=False):
+def locked(state, *, read_only=False, live=None):
     """Open the existing catalog with either a read snapshot or a reserved writer."""
     state = Path(state).absolute()
+    db = state / "worktree.sqlite"
+    if live is not None: live.check_catalog(db)
     if not state.is_dir() or state.is_symlink() or (state.stat().st_mode & 0o077):
         raise Rejected("use the existing private worktree state directory")
     mode = "ro" if read_only else "rw"  # Neither may create a missing catalog.
-    con = sqlite3.connect((state / "worktree.sqlite").as_uri() + "?mode=" + mode,
+    con = sqlite3.connect(db.as_uri() + "?mode=" + mode,
                           uri=True, isolation_level=None)
     con.row_factory = sqlite3.Row
     try:
+        if live is not None: live.check_catalog(db)
         if read_only:
             con.execute("BEGIN")  # Both checkout and instance reads see the same committed state.
         else:
@@ -102,6 +105,7 @@ def locked(state, *, read_only=False):
         row = con.execute("SELECT * FROM checkout WHERE singleton=1").fetchone()
         if row is None: raise Rejected("worktree record missing")
         yield con, row, state
+        if live is not None: live.check_catalog(db)
         con.commit()
     except BaseException:
         con.rollback()
@@ -122,14 +126,21 @@ def checkout(archive, dest, store, state, *, expected=None, private_stage=False)
     return marker
 
 
-def finish(state, operation):
+def finish(state, operation, *, selected=None):
     operation = check_id(operation)
-    with locked(state) as (con, row, state):
+    live = None if selected is None else selected.live
+    if selected is not None and operation != selected.operation: raise Rejected("not the reviewed original operation")
+    with locked(state, live=live) as (con, row, state):
+        if live is not None: live.check_instance(row, lifecycle.instance(con))
         done = con.execute("SELECT marker,digest FROM completed WHERE operation=?", (operation,)).fetchone()
         if done is not None:
             marker = Commit.decode(done["marker"])
             target = Path(row["store"]) / marker.filename
-            if marker.operation != operation or not confirm_final(target, marker, done["digest"]):
+            if marker.operation != operation: raise Rejected("completed record does not name the original operation")
+            if selected is not None: selected.check_marker(marker, done["digest"])
+            matched = (confirm_final(target, marker, done["digest"]) if selected is None else
+                       selected.store.confirm(marker, done["digest"]))
+            if not matched:
                 raise Rejected("completed original archive is unavailable; no replacement was published")
             return target, marker
         superseded = con.execute("SELECT successor FROM forked_original WHERE operation=?", (operation,)).fetchone()
@@ -138,7 +149,13 @@ def finish(state, operation):
         marker = Commit.decode(row["pending"])
         if marker.operation != operation: raise Rejected("another operation is pending; no worktree was recaptured")
         local = state / (marker.operation + ".zxs")
-        target = publish(local, Path(row["store"]), marker, row["pending_sha"])
+        if selected is None:
+            target = publish(local, Path(row["store"]), marker, row["pending_sha"])
+        else:
+            selected.check_row(con, row)
+            selected.check_marker(marker, row["pending_sha"])
+            target = _publish(local, selected.store, marker, row["pending_sha"], private_fd=live.state_fd)
+            selected.check_row(con, row)
         con.execute("INSERT INTO completed(operation,marker,digest) VALUES(?,?,?)", (operation, marker.encode(), row["pending_sha"]))
         con.execute("""UPDATE checkout SET branch=?,generation=?,parent=?,base_sha=?,pending=NULL,pending_sha=NULL
                        WHERE singleton=1""", (marker.branch, marker.generation, marker.operation, row["pending_sha"]))
@@ -146,45 +163,52 @@ def finish(state, operation):
     return target, marker
 
 
-def commit(state, *, fork=False):
+def commit(state, *, fork=False, selected=None):
     require_native_writer()
+    live = None if selected is None else selected.live
+    if selected is not None:
+        if fork or Path(state).absolute() != live.state: raise Rejected("not the reviewed ordinary commit")
+        selected.check_base()
     # Unsupported STATE volumes refuse before SQLite can open/recover the catalog.
-    with anonymous_capture(state) as capture, locked(state) as (con, row, state):
+    with anonymous_capture(state, held=None if selected is None else selected.area) as capture, locked(state, live=live) as (con, row, state):
         capture.check_state()
         if row["pending"] is not None:
             raise Rejected("an original operation is pending; resume it rather than recapturing")
         lifecycle.require_visible(con, row)
         work, store, state = paths(Path(row["location"]), Path(row["store"]), state)
         gen, branch, repo = row["generation"], row["branch"], row["repo"]
-        if gen:
+        if selected is not None:
+            selected.check_row(con, row)  # Baseline CAS under the actual SQLite writer; never reselect HEAD.
+        elif gen:
             base_path = store / f"{repo}.{branch}.{gen:016x}.zxs"
             saved, _ = read_archive(base_path)
             if (saved.repo, saved.branch, saved.generation, saved.operation) != (repo, branch, gen, row["parent"]) or digest_file(base_path) != row["base_sha"]:
                 raise Rejected("exact original branch base is not available in the selected store")
-        operation = new_id()
+        operation = new_id() if selected is None else selected.operation
         registered = lifecycle.instance(con)
         expected = (int(registered["device"]),int(registered["inode"]))
-        with frozen_tree(work, capture, expected, store) as (frozen, manifest):
+        with frozen_tree(work, capture, expected, store, selected=live) as (frozen, manifest):
             marker = Commit(repo, new_id() if fork else branch, 1 if fork else gen + 1,
                             operation, row["parent"], manifest.digest())
             with capture.candidate(operation) as (name, original, stream):
                 pack(frozen, manifest, marker, stream)
                 stream.close()
                 digest = capture.verify_candidate(name, original, marker)
+        if selected is not None:
+            selected.check_row(con, row)
+            selected.marker, selected.digest = marker, digest
         con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1", (marker.encode(), digest))
     # Durable client intent precedes any remote bytes. A retry uses this exact
     # candidate, regardless of later writes to the local working directory.
+    if selected is not None: return finish(state, marker.operation, selected=selected)
     return finish(state, marker.operation)
 
 
 def status(state, *, live=None):
-    name = Path(state).absolute() / "worktree.sqlite"
-    if live is not None: live.check_catalog(name)
-    with locked(state, read_only=True) as (con, row, _):
+    with locked(state, read_only=True, live=live) as (con, row, _):
         rec = lifecycle.instance(con)
         if live is not None:
             live.check_instance(row, rec)
-            live.check_catalog(name)
         return {"visibility":rec["phase"], "pending_visibility_operation":rec["active"], "worktree": row["worktree"], "repo": row["repo"], "branch": row["branch"],
                 "base_generation": row["generation"], "base_operation": row["parent"],
                 "pending_operation": Commit.decode(row["pending"]).operation if row["pending"] is not None else None}

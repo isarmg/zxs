@@ -131,15 +131,15 @@ def _distinct_roots(fds):
 
 
 @contextlib.contextmanager
-def frozen_tree(source, capture, expected, store):
+def frozen_tree(source, capture, expected, store, *, selected=None):
     _native()
-    fd = os.open(source, _dir_flags())
+    fd = os.open(source, _dir_flags()) if selected is None else os.dup(selected.work_fd)
     try:
         root_sig = _sig(os.fstat(fd))
         if native_identity(os.fstat(fd),stat.S_IFDIR)!=expected:
             raise Rejected("registered worktree was replaced before capture")
         source_mount = local_mount(fd)
-        store_fd = os.open(store,_dir_flags())
+        store_fd = os.open(store,_dir_flags()) if selected is None else os.dup(selected.store_fd)
         try:
             _distinct_roots((fd,capture.parent,store_fd))
             store_id = native_identity(os.fstat(store_fd),stat.S_IFDIR)

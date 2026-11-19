@@ -433,7 +433,7 @@ class OriginalDesktopCheckout(unittest.TestCase):
         live = plan.take_session(); self.addCleanup(live.close)
         db, original = self.state/"worktree.sqlite", self.state/"original-catalog"
         db.rename(original); db.write_bytes(original.read_bytes()); db.chmod(0o600)
-        with patch.object(worktree, "locked", side_effect=AssertionError("no SQLite on the new inode")):
+        with patch.object(worktree.sqlite3, "connect", side_effect=AssertionError("no SQLite on the new inode")):
             with self.assertRaises(Rejected): live.status()
         self.assertEqual(db.read_bytes(), original.read_bytes())
         db.unlink(); original.rename(db)

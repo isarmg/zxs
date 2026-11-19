@@ -65,7 +65,7 @@ class Table(QTableView):
         return self.rows.rows[indices[0].row()][1] if indices else None
 
 
-def confirm(parent, title, detail, *, attestation):
+def confirm(parent, title, detail, *, attestation, action_text="确认并创建"):
     dialog = QDialog(parent)
     dialog.setWindowTitle(title)
     layout = QVBoxLayout(dialog)
@@ -75,7 +75,7 @@ def confirm(parent, title, detail, *, attestation):
     gate = QCheckBox(attestation)
     layout.addWidget(gate)
     ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
-    ok.setText("确认并创建")
+    ok.setText(action_text)
     ok.setEnabled(False)
     gate.toggled.connect(ok.setEnabled)
     layout.addWidget(buttons)

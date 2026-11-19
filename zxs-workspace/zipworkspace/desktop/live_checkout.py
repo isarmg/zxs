@@ -1,5 +1,6 @@
 """A live checkout receipt, not a path-based opener or a durable desktop registry."""
 from contextlib import ExitStack
+from copy import copy
 import os
 import stat
 
@@ -23,6 +24,20 @@ class LiveCheckout:
             self.check_dirs()
         except BaseException:
             self.close()
+            raise
+
+    def borrow(self):
+        """One in-flight job owns independent references, even if a stale UI drops its selection."""
+        if self.closed or self.db is None: raise Rejected("没有可交接的本窗口原会话")
+        other = copy(self)
+        other.stack = ExitStack()
+        try:
+            for attr in ("work_fd", "state_fd", "store_fd", "db"):
+                setattr(other, attr, other.keep(getattr(self, attr)))
+            if self.closed: raise Rejected("原工作树会话已关闭")
+            return other  # The background reader qualifies original names, mounts and SQLite before use.
+        except BaseException:
+            other.close()
             raise
 
     def keep(self, original):

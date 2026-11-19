@@ -66,7 +66,7 @@ class StoreAcknowledgement(unittest.TestCase):
             self.target.rename(self.root / "preserved")
             return result
         with patch.object(media, "hash_document", side_effect=disappear), \
-             patch.object(media.tempfile, "mkstemp", side_effect=AssertionError("must not upload")), \
+             patch.object(media, "_new_upload", side_effect=AssertionError("must not upload")), \
              self.assertRaises(media.Uncertain):
             self.resume()
         self.assertEqual((self.root / "preserved").read_bytes(), self.raw)
@@ -84,7 +84,7 @@ class StoreAcknowledgement(unittest.TestCase):
                 with patch.object(os, "fsync", side_effect=fail), self.assertRaisesRegex(OSError, "unconfirmed sync"):
                     self.resume()
                 self.assert_pending()
-        with patch.object(media, "rename_new", side_effect=AssertionError("already present")):
+        with patch.object(media, "rename_new_at", side_effect=AssertionError("already present")):
             self.assertEqual(self.resume(), (self.target, self.marker))
 
     def test_equal_bytes_different_inode_during_real_directory_sync_is_not_acknowledged(self):
@@ -119,27 +119,28 @@ class StoreAcknowledgement(unittest.TestCase):
         self.assertEqual(self.target.read_bytes(), (original / self.marker.filename).read_bytes())
         self.store.rename(alternate)
         original.rename(self.store)
-        with patch.object(media, "rename_new", side_effect=AssertionError("already present")):
+        with patch.object(media, "rename_new_at", side_effect=AssertionError("already present")):
             self.assertEqual(self.resume(), (self.target, self.marker))
 
     def test_successful_rename_must_ack_its_uploaded_inode_but_cold_receipt_proves_bytes(self):
         retained = self.root / "uploaded-original"
-        primitive = media.rename_new
-        def after_rename(src, dst):
-            primitive(src, dst)
-            dst.rename(retained)
-            dst.write_bytes(self.raw)
-        with patch.object(media, "rename_new", side_effect=after_rename), self.assertRaises(media.Uncertain):
+        primitive = media.rename_new_at
+        def after_rename(fd, src, dst):
+            primitive(fd, src, dst)
+            self.assertTrue(os.path.samestat(os.fstat(fd), self.store.stat()))
+            (self.store/dst).rename(retained)
+            (self.store/dst).write_bytes(self.raw)
+        with patch.object(media, "rename_new_at", side_effect=after_rename), self.assertRaises(media.Uncertain):
             self.resume()
         self.assert_pending()
         self.assertFalse(os.path.samestat(retained.stat(), self.target.stat()))
         # The durable receipt records a marker and byte digest, not a past inode.
-        with patch.object(media, "rename_new", side_effect=AssertionError("must not republish")):
+        with patch.object(media, "rename_new_at", side_effect=AssertionError("must not republish")):
             self.assertEqual(self.resume(), (self.target, self.marker))
             self.assertEqual(self.resume(), (self.target, self.marker))
 
     def test_original_writer_and_read_verifier_overlap_only_for_identity_handoff(self):
-        handoff, parse, rename = media._pin_upload, media.read_managed_document, media.rename_new
+        handoff, parse, rename = media._pin_upload, media.read_managed_document, media.rename_new_at
         observations = []
         @contextmanager
         def pin(scope, name, writer):
@@ -161,16 +162,16 @@ class StoreAcknowledgement(unittest.TestCase):
         def inspect(doc, **kw):
             # Only where the original FD number has not already been reused
             # for the later separate final-slot FD. The stage check is the first.
-            if not checked:
+            if observations and not checked:
                 self.assertEqual(doc.fileno(), writer_is_closed())
                 checked.append("closed-before-zip")
             return parse(doc, **kw)
-        def move(src, dst):
-            self.assertTrue(os.path.samestat(os.fstat(writer_is_closed()), src.stat()))
+        def move(fd, src, dst):
+            self.assertTrue(os.path.samestat(os.fstat(writer_is_closed()), os.stat(src, dir_fd=fd)))
             checked.append("closed-before-rename")
-            return rename(src, dst)
+            return rename(fd, src, dst)
         with patch.object(media, "_pin_upload", pin), patch.object(media, "read_managed_document", inspect), \
-             patch.object(media, "rename_new", move):
+             patch.object(media, "rename_new_at", move):
             self.assertEqual(self.resume(), (self.target, self.marker))
         self.assertEqual(checked, ["closed-before-zip", "closed-before-rename"])
 
@@ -185,7 +186,7 @@ class StoreAcknowledgement(unittest.TestCase):
             self.assertTrue(os.path.samestat(os.fstat(writer.fileno()), original.stat()))
             with handoff(scope, name, writer) as held: yield held
         with patch.object(media, "_pin_upload", before_pin), \
-             patch.object(media, "rename_new", side_effect=AssertionError("must not promote")), \
+             patch.object(media, "rename_new_at", side_effect=AssertionError("must not promote")), \
              self.assertRaises(media.Uncertain):
             self.resume()
         self.assertEqual(original.read_bytes(), self.raw)

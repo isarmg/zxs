@@ -46,3 +46,26 @@ def archive_sha(doc):
         left -= len(data)
     if doc.read(1): raise Rejected("selected archive grew")
     return digest.hexdigest()
+
+
+def check_relative(parent, name, doc, observed, *, single=False):
+    held, named = os.fstat(doc.fileno()), os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if (native_identity(held, stat.S_IFREG) != native_identity(named, stat.S_IFREG) or
+            stamp(doc) != observed or (named.st_size,named.st_mtime_ns,named.st_ctime_ns) != observed[2:] or
+            single and (held.st_nlink != 1 or named.st_nlink != 1)):
+        raise Rejected("the original archive leaf was replaced or modified")
+
+
+@contextmanager
+def relative_document(parent, name, *, single=False):
+    """Read one existing ordinary archive below a caller-held directory; never follow a link."""
+    if not name or name in (".", "..") or Path(name).name != name: raise Rejected("expected one archive name")
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+    try:
+        with os.fdopen(fd, "rb", closefd=False) as doc:
+            observed = stamp(doc)
+            if observed[2] > MAX_TOTAL + 2*MAX_CD + (1<<20): raise Rejected("archive exceeds the byte budget")
+            check_relative(parent, name, doc, observed, single=single)
+            yield doc
+            check_relative(parent, name, doc, observed, single=single)
+    finally: os.close(fd)

@@ -1,6 +1,7 @@
 """Volatile, non-linkable Linux capture. Never remove a filesystem name on cleanup."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import os
+from pathlib import Path
 import stat
 import sys
 
@@ -73,10 +74,12 @@ class Capture(CandidateDirectory):
 
 
 @contextmanager
-def anonymous_capture(state):
+def anonymous_capture(state, *, held=None):
     if not sys.platform.startswith("linux") or not getattr(os,"O_TMPFILE",0) or not hasattr(os,"pread"):
         raise Rejected("fresh commit needs native anonymous file support; no named scratch fallback")
-    with held_candidates(state) as area:
+    with (held_candidates(state) if held is None else nullcontext(held)) as area:
+        if area.path != Path(state).absolute(): raise Rejected("not the selected private STATE")
+        area.check_state()
         parent, ident = area.parent, area.identity
         selected_mount = local_mount(parent)
         body = os.open(".", os.O_TMPFILE|os.O_EXCL|os.O_RDWR|os.O_CLOEXEC, 0o600, dir_fd=parent)

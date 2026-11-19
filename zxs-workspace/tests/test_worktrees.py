@@ -90,13 +90,13 @@ class LocalWorktree(unittest.TestCase):
         (x / "story").write_bytes(b"other")
         (self.work / "story").write_bytes(b"mine")
         barrier = Barrier(2)
-        primitive = media.rename_new
-        def race(src, dst):
-            barrier.wait(timeout=10); primitive(src, dst)
+        primitive = media.rename_new_at
+        def race(fd, src, dst):
+            barrier.wait(timeout=10); primitive(fd, src, dst)
         def one(state):
             try: return w.commit(state)[1], None
             except Conflict: return None, w.status(state)["pending_operation"]
-        with patch.object(media, "rename_new", side_effect=race), ThreadPoolExecutor(2) as pool:
+        with patch.object(media, "rename_new_at", side_effect=race), ThreadPoolExecutor(2) as pool:
             results = list(pool.map(one, [self.state, xs]))
         self.assertEqual(sum(node is not None for node, _ in results), 1)
         self.assertEqual(sum(conflict is not None for _, conflict in results), 1)

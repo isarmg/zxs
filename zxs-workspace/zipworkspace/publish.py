@@ -8,10 +8,9 @@ import os
 from pathlib import Path
 import stat
 import sys
-import tempfile
-from .archive import read_archive, read_managed_document, stamp
-from .document import archive_sha as hash_document, native_identity
-from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected
+from .archive import read_managed_document, stamp
+from .document import archive_sha as hash_document, named_document, native_identity, relative_document
+from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected, new_id
 
 
 class Conflict(Rejected): pass
@@ -187,25 +186,41 @@ def _pin_upload(scope, name, writer):
         os.close(fd)
 
 
-def _publish(local, scope, marker, archive_sha):
+def _new_upload(scope):
+    """One unpredictable, exclusively created sibling on the originally held STORE."""
+    scope.check_store()
+    name = ".zip-workspace-" + new_id() + ".partial"
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                 0o600, dir_fd=scope.fd)
+    return fd, name
+
+
+def _publish(local, scope, marker, archive_sha, *, private_fd=None):
     store = scope.path
     target = store / marker.filename
     if scope.confirm(marker, archive_sha): return target
-    if digest_file(local) != archive_sha or read_archive(local, internal=True)[0] != marker:
-        raise Rejected("saved local candidate no longer matches the original operation")
     # No path deletion or replacement if a temporary entry is lost. Pin the
     # independent read FD while the actual writer is still alive, then close
     # ALL writable handles before checking even the first ZIP byte for publication.
     with ExitStack() as reader:
         with ExitStack() as writer:
-            fd, name = tempfile.mkstemp(prefix=".zip-workspace-", suffix=".partial", dir=store)
-            writer.callback(os.close, fd)
-            stage = Path(name)
-            out = writer.enter_context(os.fdopen(fd, "wb", closefd=False))
-            with local.open("rb") as src:
-                while block := src.read(CHUNK): out.write(block)
-            out.flush(); os.fsync(fd)
-            heldfd = reader.enter_context(_pin_upload(scope, stage.name, out))
+            source = (named_document(local) if private_fd is None else
+                      relative_document(private_fd, marker.operation+".zxs", single=True))
+            with source as src:
+                if hash_document(src) != archive_sha or read_managed_document(src, display_name=marker.filename)[0] != marker:
+                    raise Rejected("saved local candidate does not match the original operation")
+                size = stamp(src)[2]
+                fd, stage = _new_upload(scope)
+                writer.callback(os.close, fd)
+                out = writer.enter_context(os.fdopen(fd, "wb", closefd=False))
+                src.seek(0)
+                while size:
+                    block = src.read(min(size, CHUNK))
+                    if not block or out.write(block) != len(block): raise Rejected("incomplete upload")
+                    size -= len(block)
+                if src.read(1): raise Rejected("original candidate grew during upload")
+                out.flush(); os.fsync(fd)
+                heldfd = reader.enter_context(_pin_upload(scope, stage, out))
         with os.fdopen(heldfd, "rb", closefd=False) as uploaded:
             observed = stamp(uploaded)
             if (hash_document(uploaded) != archive_sha
@@ -215,12 +230,13 @@ def _publish(local, scope, marker, archive_sha):
         scope.check_store()
         os.fsync(scope.fd)
         scope.check_store()
-        named = os.stat(stage.name, dir_fd=scope.fd, follow_symlinks=False)
+        named = os.stat(stage, dir_fd=scope.fd, follow_symlinks=False)
         if (native_identity(named, stat.S_IFREG) + (named.st_size, named.st_mtime_ns, named.st_ctime_ns)
                 != observed):
             raise Rejected("temporary name no longer identifies the uploaded file")
         try:
-            rename_new(stage, target)
+            # The cooperating STORE must not move or modify another writer's temporary entry.
+            rename_new_at(scope.fd, stage, target.name)
         except OSError as err:
             # A lost reply is not evidence of failure. Durable logical identity
             # is the original operation/marker and the exact entire ZIP digest.

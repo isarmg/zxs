@@ -2,6 +2,7 @@
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QVBoxLayout, QWidget
 
 from .checkout_action import CheckoutChoice, available
+from .commit_controls import CommitControls
 from .widgets import button, confirm, label
 
 
@@ -24,6 +25,8 @@ class CheckoutPane(QWidget):
         layout.addWidget(self.refresh)
         self.details = label()
         layout.addWidget(self.details)
+        self.commits = CommitControls(owner, self.refresh_live)
+        layout.addWidget(self.commits)
         self.close_session()
         layout.addStretch()
         self.set_snapshot(None)
@@ -125,6 +128,7 @@ class CheckoutPane(QWidget):
             self.close_session()
             self.owner.inform("新的 CLI 工作树已创建；不会因为切换页面或关闭窗口而再次签出。")
             self.refresh.setEnabled(incoming is not None)
+            self.commits.set_session(incoming)
             self.live, incoming = incoming, None
         finally:
             if incoming is not None: incoming.close()
@@ -132,6 +136,7 @@ class CheckoutPane(QWidget):
         if self.live is not None: self.refresh_live()
 
     def close_session(self):
+        self.commits.set_session(None)
         if self.live is not None: self.live.close()
         self.live = None
         self.refresh.setEnabled(False)

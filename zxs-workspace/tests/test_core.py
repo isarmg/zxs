@@ -67,7 +67,7 @@ class Repo(unittest.TestCase):
     def test_interruption_retains_original_and_subsequent_edits_are_not_implicitly_packed(self):
         orig, marker = w.commit(self.state)
         (self.work / "plain.txt").write_text("expected")
-        with mock.patch("zipworkspace.publish.rename_new", side_effect=OSError("response lost before publish")):
+        with mock.patch("zipworkspace.publish.rename_new_at", side_effect=OSError("response lost before publish")):
             with self.assertRaises(media.Uncertain): w.commit(self.state)
         op = w.status(self.state)["pending_operation"]
         self.assertIsNotNone(op)
@@ -79,11 +79,11 @@ class Repo(unittest.TestCase):
         self.assertEqual(len(list(self.store.glob("*.zxs"))), 2)
 
     def test_lost_reply_after_rename_is_resolved_by_original_not_replaced(self):
-        original = media.rename_new
-        def lost(src, dst):
-            original(src, dst)
+        original = media.rename_new_at
+        def lost(fd, src, dst):
+            original(fd, src, dst)
             raise OSError("link lost after publication")
-        with mock.patch("zipworkspace.publish.rename_new", side_effect=lost):
+        with mock.patch("zipworkspace.publish.rename_new_at", side_effect=lost):
             path, committed = w.commit(self.state)
         self.assertEqual(read_archive(path)[0], committed)
         self.assertIsNone(w.status(self.state)["pending_operation"])
