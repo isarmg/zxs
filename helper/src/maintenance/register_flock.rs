@@ -1,28 +1,12 @@
 //! First-inode portion of an offline initialization, not a pool-level writer permit.
 //! No constructor adopts an externally opened file. Nothing here links a name or claims a volume.
 use super::genesis::FreshGenesis;
-use helper_linux_evidence::{Birth, read_birth};
-use crate::pinned::{Entity, Mount, invalid, local_data_filesystem};
+use super::identity::{Here, ObservedOriginal, check_root, mount_id};
+use helper_linux_evidence::read_birth;
+use crate::pinned::{Entity, invalid};
 use rustix::fs::{FlockOperation, Mode, OFlags, fcntl_getfl, flock, openat};
 use rustix::io::{FdFlags, fcntl_getfd};
 use std::{fs::File, io, os::unix::fs::MetadataExt};
-
-#[derive(PartialEq, Eq)]
-struct Here { entity: Entity, mount: u64 }
-
-fn mount_id(file: &File) -> io::Result<u64> {
-    Mount::on(file)?.map(|m| m.id).ok_or_else(|| io::Error::new(
-        io::ErrorKind::Unsupported, "original descriptor has no reported mount identity"))
-}
-
-fn check_root(system: &File, storage_uid: u32) -> io::Result<Here> {
-    let m = system.metadata()?;
-    if !m.is_dir() || m.uid() != storage_uid || m.nlink() == 0 || m.mode() & 0o022 != 0 {
-        return Err(invalid("expected a protected directory owned by the selected storage service"));
-    }
-    local_data_filesystem(system)?;
-    Ok(Here { entity: Entity::of(&m)?, mount: mount_id(system)? })
-}
 
 fn check_new(file: &File, root: &Here, storage_uid: u32) -> io::Result<Here> {
     let flags = fcntl_getfl(file)?;
@@ -67,7 +51,7 @@ impl<'s> UnpublishedRegisterFlock<'s> {
     /// Take both births from the live original descriptors under our own EX,
     /// never by reopening a path. The registration must still be unnamed and empty;
     /// this method does not inspect the contents of any directory.
-    fn fresh_origins(&self) -> io::Result<(ObservedOriginal, ObservedOriginal)> {
+    pub(super) fn fresh_origins(&self) -> io::Result<(ObservedOriginal, ObservedOriginal)> {
         let s = check_root(self.system, self.storage_uid)?;
         let r = check_new(&self.held, &s, self.storage_uid)?;
         let system = ObservedOriginal { birth: read_birth(self.system, s.mount)?, at: s };
@@ -90,13 +74,6 @@ impl<'s> UnpublishedRegisterFlock<'s> {
             return Err(invalid("fresh image does not name the two observed original objects"));
         }
         Ok(())
-    }
-}
-
-struct ObservedOriginal { at: Here, birth: Birth }
-impl ObservedOriginal {
-    fn fields(&self) -> (u64, u64, &[u8]) {
-        (self.at.entity.dev, self.at.entity.ino, self.birth.payload())
     }
 }
 

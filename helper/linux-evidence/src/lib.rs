@@ -5,7 +5,7 @@ compile_error!("helper-linux-evidence supports x86_64 Linux LP64 only");
 
 use linux_raw_sys::general as uapi;
 use rustix::fs::{OFlags, fcntl_getfl, fstatfs};
-use std::{fs::File, io, mem::{align_of, offset_of, size_of}, os::fd::AsRawFd};
+use std::{fs::{File, Metadata}, io, mem::{align_of, offset_of, size_of}, os::fd::AsRawFd};
 
 const CAPACITY: usize = 128;
 // Linux include/uapi/linux/fs.h: FS_IOC_GETFSUUID = _IOR(0x15, 0, struct fsuuid2).
@@ -60,18 +60,41 @@ fn collect(uuid: [u8; 16], h: &HandleBuffer, mount: libc::c_int, expected_mount:
     Ok(Birth(b))
 }
 
+fn local_object(file: &File) -> io::Result<Metadata> {
+    let m = file.metadata()?;
+    if (!m.is_dir() && !m.is_file()) || fcntl_getfl(file)?.contains(OFlags::PATH) {
+        return Err(unsupported("expected a real open local directory or regular file"));
+    }
+    if !u32::try_from(fstatfs(file)?.f_type).ok().is_some_and(supported_local_magic) {
+        return Err(unsupported("object filesystem is not an admitted local data filesystem"));
+    }
+    Ok(m)
+}
+
+fn encoded_name_max(value: libc::c_long) -> io::Result<u8> {
+    if value <= 0 { return Err(unsupported("native directory component limit is unavailable or indeterminate")); }
+    Ok(value.min(255) as u8)
+}
+
+/// Component budget of this exact open directory, not a path-based guess.
+/// POSIX permits -1 without setting errno. Both indeterminate and error refuse
+/// the observation; never report an unrelated stale errno, zero, or default 255.
+#[allow(unsafe_code)]
+pub fn component_limit(dir: &File) -> io::Result<u8> {
+    if !local_object(dir)?.is_dir() { return Err(unsupported("NAME_MAX requires a held local directory")); }
+    // SAFETY: the borrowed real directory FD stays open. This fixed POSIX
+    // query takes no pointer and changes neither directory nor filesystem.
+    let raw = unsafe { libc::fpathconf(dir.as_raw_fd(), libc::_PC_NAME_MAX) };
+    encoded_name_max(raw)
+}
+
 /// Read ONLY from the supplied live descriptor. The caller has separately
 /// selected its path and obtained existing_mount from statx on this same FD.
 /// No guess, path reopening, retry with a bigger buffer, or partial result.
 #[allow(unsafe_code)]
 pub fn read_birth(file: &File, existing_mount: u64) -> io::Result<Birth> {
-    let m = file.metadata()?;
-    if existing_mount == 0 || (!m.is_dir() && !m.is_file()) || fcntl_getfl(file)?.contains(OFlags::PATH) {
-        return Err(unsupported("expected a real open local directory or regular file and its mount"));
-    }
-    if !u32::try_from(fstatfs(file)?.f_type).ok().is_some_and(supported_local_magic) {
-        return Err(unsupported("object filesystem is not an admitted local data filesystem"));
-    }
+    if existing_mount == 0 { return Err(unsupported("original mount is unknown")); }
+    local_object(file)?;
     let mut uuid = uapi::fsuuid2 { len: 0, uuid: [0; 16] };
     let request = libc::_IOR::<uapi::fsuuid2>(0x15, 0);
     // SAFETY: one fixed Linux generic filesystem output ioctl, never a user request.
@@ -99,6 +122,14 @@ pub fn read_birth(file: &File, existing_mount: u64) -> io::Result<Birth> {
 mod tests {
     use super::*;
     fn uuid() -> uapi::fsuuid2 { uapi::fsuuid2 { len: 16, uuid: [0xA4; 16] } }
+    #[test]
+    fn component_budget_uses_the_actual_positive_result_and_only_caps_over_255() {
+        for (raw, wire) in [(1, 1), (37, 37), (254, 254), (255, 255), (300, 255), (libc::c_long::MAX, 255)] {
+            assert_eq!(encoded_name_max(raw).unwrap(), wire);
+        }
+        assert!(encoded_name_max(-1).is_err());
+        assert!(encoded_name_max(0).is_err());
+    }
     #[test]
     fn encoding_keeps_all_handle_type_bits_and_only_the_reported_payload() {
         let mut h = HandleBuffer { len: 3, kind: i32::MIN + 1, opaque: [0xDE; 128] };

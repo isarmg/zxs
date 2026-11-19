@@ -82,6 +82,26 @@ impl Pinned {
     }
     pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.fd.metadata() }
 
+    pub(crate) fn path(&self) -> &Path { &self.path }
+
+    /// Return an independent, real open description for this selected storage
+    /// directory. Never lock a duplicate of somebody else's open description.
+    pub(crate) fn storage_directory(&self) -> io::Result<File> {
+        if !matches!(self.kind, Kind::StorageRoot) { return Err(invalid("expected a selected storage root")); }
+        let now = Self::open(&self.path, self.kind)?;
+        let original_mount = Mount::on(&self.fd)?.ok_or_else(|| invalid("original mount is unavailable"))?;
+        if self.chain != now.chain || Mount::on(&now.fd)?.is_none_or(|m| m.id != original_mount.id) {
+            return Err(invalid("original storage path, visible ancestry or mount changed"));
+        }
+        let f = File::from(openat(&now.fd, c".", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW
+            | OFlags::NOATIME | OFlags::CLOEXEC, Mode::empty())?);
+        if self.entity() != Entity::of(&f.metadata()?)?
+            || Mount::on(&f)?.is_none_or(|m| m.id != original_mount.id) {
+            return Err(invalid("opened description does not designate the selected storage directory"));
+        }
+        Ok(f)
+    }
+
     pub(crate) fn require_same_path(&self) -> io::Result<()> {
         let now = Self::open(&self.path, self.kind)?;
         if now.chain != self.chain { return Err(invalid("selected path or parent changed during observation")); }

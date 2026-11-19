@@ -4,8 +4,18 @@ use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 use tempfile::{Builder, TempDir};
 
 pub fn data_directory() -> TempDir {
+    private_directory(std::env::var_os("HELPER_TEST_DATA_PARENT").map(PathBuf::from).unwrap_or_else(std::env::temp_dir))
+}
+
+#[allow(dead_code)] // some standalone test targets use only the data directory
+pub fn recycle_directory() -> TempDir {
+    let parent = std::env::var_os("HELPER_TEST_RECYCLE_PARENT")
+        .expect("supply a dedicated private test parent on a different supported dev AND filesystem UUID");
+    private_directory(PathBuf::from(parent))
+}
+
+fn private_directory(parent: PathBuf) -> TempDir {
     use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
-    let parent = std::env::var_os("HELPER_TEST_DATA_PARENT").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     assert!(parent.is_absolute(), "data test area must be absolute");
     let dir = open(parent.as_path(), OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                    Mode::empty()).expect("data test parent must already be a real directory");

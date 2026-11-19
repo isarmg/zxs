@@ -143,6 +143,16 @@ impl<'a> FreshGenesis<'a> {
             && system == (s.device, s.inode, s.birth)
     }
 
+    pub(super) fn has_root_count(&self, uid: u32, count: usize) -> bool {
+        self.storage_uid == uid && self.volumes.len() == count
+    }
+
+    /// Both the wire decoder and caller use S, R, then sorted data rows.
+    pub(super) fn matches_root_origin(&self, index: usize, path: &[u8], name_max: u8, observed: (u64, u64, &[u8])) -> bool {
+        self.volumes.get(index).is_some_and(|row| row.path == path && row.name_max == name_max
+            && observed == (row.object.device, row.object.inode, row.object.birth))
+    }
+
     /// All labels must appear once, in original registration order. Only the
     /// SYSTEM volume binds the genesis digest; data/recycle labels do not.
     pub(super) fn check_labels(&self, labels: &[&[u8]]) -> Result<(), Invalid> {

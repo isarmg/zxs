@@ -25,12 +25,14 @@ impl Selection {
                   recycle: recycle.ok_or("missing --recycle directory")?, data })
     }
 
+    pub(crate) fn paths(&self) -> impl Iterator<Item = (Role, &Path)> {
+        [(Role::System, self.system.as_path()), (Role::Recycle, self.recycle.as_path())].into_iter()
+            .chain(self.data.iter().enumerate().map(|(i, p)| (Role::Data(i + 1), p.as_path())))
+    }
+
     pub(crate) fn observe(&self) -> Report {
         let started = timestamp();
-        let mut rows = Vec::with_capacity(2 + self.data.len());
-        rows.push((Role::System, observe(&self.system)));
-        rows.push((Role::Recycle, observe(&self.recycle)));
-        for (i, p) in self.data.iter().enumerate() { rows.push((Role::Data(i + 1), observe(p))); }
+        let rows = self.paths().map(|(role, p)| (role, observe(p))).collect();
         Report { started, ended: timestamp(), rows }
     }
 }
