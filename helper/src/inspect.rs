@@ -36,11 +36,11 @@ pub(crate) fn directories(paths: &[PathBuf]) -> io::Result<String> {
 }
 
 #[derive(PartialEq, Eq)]
-struct Stamp { entity: Entity, size: u64, mode: u32, links: u64, modified: (i64,i64), changed: (i64,i64) }
+struct Stamp { entity: Entity, size: u64, mode: u32, modified: (i64,i64), changed: (i64,i64) }
 impl Stamp {
     fn of(meta: Metadata) -> io::Result<Self> {
         if !meta.is_file() || meta.nlink() != 1 || meta.len() > MAX_COMPARE { return Err(invalid("expected a single-linked regular file of at most 256 MiB")); }
-        Ok(Self { entity: Entity::of(&meta)?, size: meta.len(), mode: meta.mode(), links: meta.nlink(),
+        Ok(Self { entity: Entity::of(&meta)?, size: meta.len(), mode: meta.mode(),
             modified: (meta.mtime(), meta.mtime_nsec()), changed: (meta.ctime(), meta.ctime_nsec()) })
     }
 }

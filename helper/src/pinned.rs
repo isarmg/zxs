@@ -86,7 +86,8 @@ pub(crate) struct LocalDataFile { pin: Pinned, magic: u32 }
 impl LocalDataFile {
     pub(crate) fn select(path: &Path) -> io::Result<Self> {
         let pin = Pinned::open(path, Kind::Regular)?;
-        local_data(filesystem(&pin.fd)?, |magic| Self { pin, magic })
+        let magic = require_local_data_fs(filesystem(&pin.fd)?)?;
+        Ok(Self { pin, magic })
     }
 
     pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.pin.metadata() }
@@ -143,10 +144,10 @@ impl LocalDataFile {
 
 // S_IFREG on its own does not make a kernel/remote control endpoint a data file.
 // These are Linux UAPI values, not distro/mount-point names. Unknown means no reader.
-fn local_data<T>(magic: Option<u32>, admit: impl FnOnce(u32) -> T) -> io::Result<T> {
+fn require_local_data_fs(magic: Option<u32>) -> io::Result<u32> {
     use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
     match magic {
-        Some(kind @ (EXT4_SUPER_MAGIC | XFS_SUPER_MAGIC | BTRFS_SUPER_MAGIC | F2FS_SUPER_MAGIC)) => Ok(admit(kind)),
+        Some(kind @ (EXT4_SUPER_MAGIC | XFS_SUPER_MAGIC | BTRFS_SUPER_MAGIC | F2FS_SUPER_MAGIC)) => Ok(kind),
         _ => Err(invalid("comparison requires ext2/3/4, XFS, Btrfs or F2FS; unsupported filesystem")),
     }
 }
@@ -157,7 +158,7 @@ fn filesystem(file: &File) -> io::Result<Option<u32>> {
 
 #[cfg(test)]
 mod tests {
-    use super::local_data;
+    use super::require_local_data_fs;
     use linux_raw_sys::general as fs;
     #[test]
     fn new_directory_at_the_same_spelling_cannot_replace_a_held_observation() {
@@ -191,16 +192,16 @@ mod tests {
         assert!(current.require_same_path().is_ok());
     }
     #[test]
-    fn only_known_disk_filesystems_can_issue_a_reader_even_for_a_zero_length_regular_operand() {
+    fn filesystem_allowlist_returns_the_admitted_type_or_rejects_it() {
         for v in [fs::EXT2_SUPER_MAGIC, fs::EXT3_SUPER_MAGIC, fs::EXT4_SUPER_MAGIC,
                   fs::XFS_SUPER_MAGIC, fs::BTRFS_SUPER_MAGIC, fs::F2FS_SUPER_MAGIC] {
-            assert_eq!(local_data(Some(v), |kind| kind).unwrap(), v);
+            assert_eq!(require_local_data_fs(Some(v)).unwrap(), v);
         }
         for rejected in [None, Some(0), Some(u32::MAX), Some(fs::PROC_SUPER_MAGIC), Some(fs::SYSFS_MAGIC),
                          Some(fs::DEBUGFS_MAGIC), Some(fs::TRACEFS_MAGIC), Some(fs::TMPFS_MAGIC),
                          Some(fs::NFS_SUPER_MAGIC), Some(fs::CIFS_SUPER_MAGIC), Some(fs::FUSE_SUPER_MAGIC),
                          Some(fs::OVERLAYFS_SUPER_MAGIC)] {
-            assert!(local_data(rejected, |_| -> () { panic!("rejected input was admitted") }).is_err());
+            assert!(require_local_data_fs(rejected).is_err());
         }
     }
 }
