@@ -17,9 +17,10 @@ from .snapshot_view import ROOT, SnapshotView
 
 class _ReadCursor(io.RawIOBase):
     """Own position, not the archive FD: dup() shares the display's kernel file offset."""
-    def __init__(self, fd, end):
+    def __init__(self, fd, end, checkpoint=None):
         super().__init__()
         self.fd, self.end, self.pos = fd, end, 0
+        self.checkpoint = checkpoint
 
     def fileno(self): return self.fd
     def readable(self): return True
@@ -35,6 +36,7 @@ class _ReadCursor(io.RawIOBase):
         return offset
 
     def readinto(self, buf):
+        if self.checkpoint is not None: self.checkpoint()
         while True:
             try:
                 part = os.pread(self.fd, len(buf), self.pos)
@@ -184,7 +186,7 @@ class _Callbacks:
 
 
 @contextmanager
-def selected_callbacks(selection):
+def selected_callbacks(selection, *, checkpoint=None):
     """Borrow a live Selection made with retain=True; never discover a source by its pathname."""
     if sys.platform != "darwin": raise Rejected("this read adapter requires macOS")
     import fcntl
@@ -195,7 +197,7 @@ def selected_callbacks(selection):
     try: fd = original.duplicate()  # atomic with display release; this duplicate then owns the actual inode
     except ValueError as err: raise Rejected("the selected original was already released") from err
     try:
-        with io.BufferedReader(_ReadCursor(fd, selection.observed[2])) as doc:
+        with io.BufferedReader(_ReadCursor(fd, selection.observed[2], checkpoint)) as doc:
             with macos_read.no_materialization():
                 if fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY:
                     raise Rejected("the retained original must be read-only")

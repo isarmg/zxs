@@ -18,3 +18,11 @@ Apple 原生 [FSKit](https://developer.apple.com/documentation/fskit) 使用带 
 `tests/test_macos_snapshot.py` 内单独选择的 ABI 夹具才加载绑定，用匹配的 C 函数签名传入读缓冲和目录 filler，**不构造 FUSE 会话、不创建卷**。环境须已由操作者独立验证官方 libfuse2、正确版本的 Python 包和解释器；路径和版本字符串不是签名证明。当前未执行夹具、构建或安装软件。
 
 将来开放挂载入口前，需在获准的普通用户环境固定并验证 `backend=fskit`，禁止[自动退到 VFS 内核后端](https://github.com/macfuse/macfuse/wiki/FUSE-Backends)。厂商 5.5.0 在 macOS 26.4+ 增加 FSKit 只读挂载；[macOS 27 才转发调用者有效 UID/GID](https://github.com/macfuse/macfuse/releases/tag/macfuse-5.4.0)，这不是访问资格已证。还需在真实卷核对实际调用者的访问范围、隔离/不可执行、Finder 拼写与分页、空文件及末尾读（5.5.0 后端可能将空读回执改为 EIO）、缓存/映射、取消和正常卸载。绑定的 `FUSE()` 会触发厂商挂载与收尾；进程退出不能证明原卷已经卸载。缺这些证据时不开放桌面或 CLI 挂载入口。
+
+## 一次真实 SDK 会话，不创建卷
+
+另一份可选资格源码 `tests/qualification/macos_libfuse_session.c` 走 [5.5.0 发布所用的 libfuse2 会话接口](https://github.com/macfuse/library/blob/e9c0433a0ef4694802474c82f47ca024a572153b/lib/fuse_session.c)。它建一个没有设备 FD 的进程内通道和一个原生会话，将初始化、查找 `probe.txt`、以只读方式打开、按偏移读取、释放这五个固定请求，交给上一节的已验快照回调。它核同一会话的每次返回及最终通道释放，而不是用伪造返回值或进程退出代表成功。它没有事件循环，不接外部请求、不创建卷，**不能用于 Finder**。
+
+必须另行明确选择这个合成资格步骤。操作者须使用已独立验证的官方 macFUSE 5.5.0、匹配的 Darwin libfuse2 SDK、该[固定版本源码中的协议头 `fuse_kernel.h`](https://github.com/macfuse/library/blob/e9c0433a0ef4694802474c82f47ca024a572153b/include/fuse_kernel.h)（不随普通 SDK 头安装）和可信 CPython 3.12+ 扩展；普通安装不构建、不加载这个扩展。只接受固定的合成快照及当时选定的、属于本人且无扩展 ACL 的本机 APFS 空目录。源 FD 和目录都保留到会话销毁；空目录路径/FD 均不传入 SDK。归档核验、建会话前及后续查找、打开或读取前可取消。已创建的实例先完成初始化；已打开的原件会在退出前收到一次释放，不因取消而重读。没有按名称另选或自动挂载。厂商库在初始化时可能读取其已安装的系统卷图标，该图标不是归档成员。此资格源码**未经编译或执行**，不是系统用户身份、读缓存、设备、挂载或卸载验收。
+
+为什么还没有挂载命令：5.5.0 发布所用的 [FSKit 启动路径](https://github.com/macfuse/mount/blob/395aa1b3bb90e907c10d1cae03dcee314a2d2a8a/Mount/Mounter.swift#L249-L271) 会先尝试安装或更新服务，`quiet` 不是禁安装开关。厂商的[卸载实现](https://github.com/macfuse/library/blob/e9c0433a0ef4694802474c82f47ca024a572153b/lib/fuse_darwin_chan.c#L622-L710)有强制收尾分支；返回不等于已有原卷正常消失。现有资格步骤不调用这些入口、不传设备句柄，也不调整主机权限。
