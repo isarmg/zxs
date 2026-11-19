@@ -1,0 +1,210 @@
+//! One fresh, fixed Samba bootstrap. No CLI and no public grant constructor:
+//! neither a path, an approval string, nor classifying an empty directory
+//! supplies the host authorization and authenticated capsule required below.
+mod monitor;
+use super::handoff::{HeldOrigin,OriginChannel};
+use crate::{fs_tools::RuntimeFile,isolated_group::Group,pinned::{Entity,Mount,Pinned},
+    sqlite_install::{bad,originals::LockedSystem,request::Id}};
+use rustix::{fd::{AsFd,AsRawFd,OwnedFd},fs::{FlockOperation,Mode,OFlags,RawDir,flock,openat},
+    io::{FdFlags,fcntl_dupfd_cloexec,fcntl_setfd},pipe::{PipeFlags,pipe_with},
+    process::{Resource,Rlimit,getrlimit,setrlimit}};
+use std::{fs::File,io::{self,Seek,Write},mem::MaybeUninit,os::unix::fs::MetadataExt,
+    path::Path,process::{Command,Stdio}};
+
+const CAPSULE_USR:&str="/usr/lib/local-ops-helper/samba-4.22.11-deb13u1-v1/usr";
+const LAUNCHER:&[&str]=&["usr","lib","local-ops-helper","disk-tools-v1","bin","bwrap"];
+const BOOT:&[u8]=include_bytes!("../../../../resources/samba-domain/domain-bootstrap.conf");
+const SCRIPT:&[u8]=include_bytes!("../../../../resources/samba-domain/fresh_guest.py");
+const ENTRY:&str="import runpy; runpy.run_path('/provision.py',run_name='_local_ops_sam')['_provision_original']()";
+
+// The sole future issuer must verify the original pool, explicit local approval,
+// private immutable release closure/protected installation, exact live config
+// and fixed instance origins before constructing this. No public or fallback
+// constructor. Merely receiving arguments, a uid or a packaging profile is NOT
+// enough. The executable actually consumed is the specific digest-verified ELF.
+pub(super) struct FreshApproval<'a>{
+    system:&'a LockedSystem, pool:Id,instance_id:Id,op:Id,live_config:[u8;32],
+    site:&'a Pinned, usr:&'a Pinned, expected_bwrap:[u8;32], uid:u32,gid:u32,
+}
+// Only the real monitor/reaper creates this proof for its original payload.
+pub(super) struct Finished(rustix::process::Pid);
+impl Finished{pub(super) fn pid(&self)->rustix::process::Pid{self.0}}
+pub(super) struct Unpublished<'a>{
+    _approval:FreshApproval<'a>,_site:Instance,_original:HeldOrigin,
+}
+fn mark(fd:&File)->io::Result<(Entity,u64)>{
+    Ok((Entity::of(&fd.metadata()?)?,Mount::on(fd)?.ok_or_else(||bad("missing original mount identity"))?.id))
+}
+fn child(parent:&File,name:&std::ffi::CStr)->io::Result<File>{
+    Ok(File::from(openat(parent,name,OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NONBLOCK|OFlags::CLOEXEC|OFlags::NOFOLLOW,Mode::empty())?))
+}
+fn named(pin:&Pinned,fd:&File)->io::Result<()>{
+    // Rewalk the visible chain but always keep and operate on the original.
+    let again=pin.relative_directory()?;
+    if mark(&again)?!=mark(fd)?{return Err(bad("selected protected directory was replaced"));}Ok(())
+}
+#[derive(Clone,Copy,Eq,PartialEq)]
+struct Times{links:u64,len:u64,mtime:(i64,i64),ctime:(i64,i64)}
+impl Times{fn on(f:&File)->io::Result<Self>{let m=f.metadata()?;Ok(Self{links:m.nlink(),len:m.len(),
+    mtime:(m.mtime(),m.mtime_nsec()),ctime:(m.ctime(),m.ctime_nsec())})}}
+fn contents(dir:&File,single:Option<&[u8]>)->io::Result<()>{
+    let before=Times::on(dir)?;let other=child(dir,c".")?;
+    if before.links==0||mark(&other)?!=mark(dir)?{return Err(bad("cannot attribute the original directory"));}
+    let mut buf=[MaybeUninit::uninit();4096];let mut it=RawDir::new(&other,&mut buf);let mut expected=single;
+    while let Some(row)=it.next(){let row=row?;let bytes=row.file_name().to_bytes();
+        if matches!(bytes,b"."|b".."){continue;}
+        if expected.take()!=Some(bytes){return Err(bad("unexpected entry in the selected Samba directory; not taking it over"));}
+    }
+    if expected.is_some()||Times::on(&other)?!=before||Times::on(dir)?!=before{return Err(bad("incomplete or changed selected Samba directory"));}
+    Ok(())
+}
+struct Instance{base:File,private:File,state:File}
+impl Instance{
+    fn lock(approval:&FreshApproval<'_>)->io::Result<Self>{
+        let base=approval.site.relative_directory()?;let md=base.metadata()?;
+        if md.uid()!=0||!md.is_dir()||md.mode()&0o022!=0||md.nlink()==0||mark(&base)?==mark(approval.system.source().dir())?{
+            return Err(bad("dedicated instance must be separate, protected and root-owned"));}
+        flock(&base,FlockOperation::NonBlockingLockExclusive)?;
+        let private=child(&base,c"private")?;let state=child(&base,c"state")?;
+        let s=Self{base,private,state};s.require(approval,None)?;Ok(s)
+    }
+    fn require(&self,a:&FreshApproval<'_>,store:Option<&HeldOrigin>)->io::Result<()>{
+        a.system.require()?;named(a.site,&self.base)?;
+        let m=self.base.metadata()?;if !m.is_dir()||m.uid()!=0||m.mode()&0o022!=0||m.nlink()==0{return Err(bad("unprotected installation directory"));}
+        let (base,mount)=mark(&self.base)?;let system=mark(a.system.source().dir())?.0;
+        let p=mark(&self.private)?.0;let s=mark(&self.state)?.0;
+        if p==s||[base,system].contains(&p)||[base,system].contains(&s){return Err(bad("aliased dedicated Samba directories"));}
+        for (f,n) in [(&self.private,c"private"),(&self.state,c"state")]{
+            let md=f.metadata()?;
+            if !md.is_dir()||md.uid()!=a.uid||md.mode()&0o7777!=0o700||md.nlink()==0||
+                mark(f)?.1!=mount||mark(&child(&self.base,n)?)?!=mark(f)?{
+                return Err(bad("changed or separately mounted private/state directory; not supported"));}
+        }
+        contents(&self.state,None)?;
+        contents(&self.private,store.map(|_|b"secrets.tdb".as_slice()))?;
+        if let Some(h)=store{h.recheck(&self.private)?;}
+        named(a.site,&self.base)?;Ok(())
+    }
+}
+fn cancelled()->io::Result<()>{
+    if helper_linux_evidence::diagnostic_process::cancelled(){Err(io::Error::new(io::ErrorKind::Interrupted,"Samba operation interrupted; preserve original state"))}
+    else{Ok(())}
+}
+fn limits()->io::Result<()>{
+    for (r,n) in [(Resource::Cpu,20),(Resource::As,512<<20),(Resource::Fsize,16<<20),
+                  (Resource::Core,0),(Resource::Nofile,128),(Resource::Nproc,64)]{
+        let old=getrlimit(r);let hard=old.maximum.map_or(n,|h|h.min(n));
+        let soft=old.current.map_or(hard,|s|s.min(hard));setrlimit(r,Rlimit{current:Some(soft),maximum:Some(hard)})?;
+    }Ok(())
+}
+fn sealed(bytes:&[u8])->io::Result<File>{
+    use rustix::fs::{MemfdFlags,SealFlags,fcntl_add_seals,fcntl_get_seals,memfd_create};
+    let mut f=File::from(memfd_create(c"helper-sam-fixed",MemfdFlags::CLOEXEC|MemfdFlags::ALLOW_SEALING|MemfdFlags::NOEXEC_SEAL)?);
+    f.write_all(bytes)?;let seals=SealFlags::WRITE|SealFlags::GROW|SealFlags::SHRINK|SealFlags::SEAL;
+    fcntl_add_seals(&f,seals)?;
+    if !fcntl_get_seals(&f)?.contains(seals|SealFlags::EXEC)||f.metadata()?.len()!=bytes.len() as u64{return Err(bad("incomplete fixed bootstrap artifact"));}
+    f.rewind()?;Ok(f)
+}
+fn give(fd:&impl AsFd)->io::Result<OwnedFd>{
+    let n=fcntl_dupfd_cloexec(fd,10)?;fcntl_setfd(&n,FdFlags::empty())?;Ok(n)
+}
+// --ro-bind-data unlinks its backing temporary: it is appropriate for the
+// script but WOULD give the configuration st_nlink==0. Write the latter once
+// to the private new root, then remount that root readonly before any payload.
+fn fixed_args(cmd:&mut Command,uid:u32,gid:u32,ns:&[String;7]){
+    cmd.args(["--unshare-user","--unshare-pid","--as-pid-1","--unshare-net","--unshare-ipc","--unshare-uts",
+            "--disable-userns","--die-with-parent","--cap-drop","ALL","--clearenv","--setenv","LC_ALL","C",
+            "--uid",&uid.to_string(),"--gid",&gid.to_string(),"--chdir","/",
+            "--ro-bind-fd",&ns[0],"/usr","--symlink","usr/lib","/lib","--symlink","usr/lib64","/lib64",
+            "--bind-fd",&ns[1],"/instance/private","--ro-bind-fd",&ns[2],"/instance/state",
+            "--perms","0444","--ro-bind-data",&ns[3],"/provision.py",
+            "--perms","0444","--file",&ns[4],"/instance/domain-bootstrap.conf",
+            "--seccomp",&ns[5],"--json-status-fd",&ns[6],"--remount-ro","/","--",
+            "/usr/bin/python3.13","-I","-S","-B","-c",ENTRY]);
+}
+impl<'a> FreshApproval<'a>{
+    /// One-use in a dedicated just-dropped single-threaded CLI worker, NOT a web
+    /// process. Host account/instance release authority is deliberately not yet issued.
+    pub(super) fn provision(self)->io::Result<Unpublished<'a>>{
+        use std::os::unix::fs::FileExt;
+        rustix::thread::set_no_new_privs(true)?;
+        crate::maintenance::diagnostic_worker(self.uid,self.gid)?;
+        if self.system.source().uid()!=self.uid||self.uid==0||self.gid==0||
+            [self.pool,self.instance_id,self.op].contains(&[0;16])||self.usr.path()!=Path::new(CAPSULE_USR){
+            return Err(bad("not the selected dedicated instance operation"));}
+        let instance_name=format!("/var/lib/local-ops-helper/samba-instances/{}",self.instance_id.iter().map(|n|format!("{n:02x}")).collect::<String>());
+        let s=self.system.source();let real_s=Pinned::open(s.path(),crate::pinned::Kind::StorageRoot)?;
+        if self.site.path()!=Path::new(&instance_name)||mark(s.dir())? != (real_s.entity(),real_s.mount()?.id)
+            ||self.site.entity()==real_s.entity()||self.site.entity_is_visible_ancestor_of(&real_s)||real_s.entity_is_visible_ancestor_of(self.site)
+            ||self.site.entity()==self.usr.entity()||self.site.entity_is_visible_ancestor_of(self.usr)||self.usr.entity_is_visible_ancestor_of(self.site){
+            return Err(bad("dedicated instance, selected release and original SYSTEM must be independent origins"));}
+        helper_linux_evidence::isolate_check_descriptors()?;
+        crate::isolated_group::prepare()?;limits()?;
+        let mut bwrap=RuntimeFile::open(LAUNCHER,true,32<<20)?;
+        let usr=self.usr.relative_directory()?;let m=usr.metadata()?;
+        if m.uid()!=0||m.mode()&0o022!=0||m.nlink()==0||!m.is_dir()||bwrap.digest()?!=self.expected_bwrap{
+            return Err(bad("not the approved dedicated installation release"));}
+        let mut elf=[0;20];bwrap.file.read_exact_at(&mut elf,0)?;
+        if &elf[..7]!=b"\x7fELF\x02\x01\x01"||elf[18..20]!=[62,0]{return Err(bad("not the selected x86-64 launcher"));}
+        let site=Instance::lock(&self)?;
+        let (origin,tx)=OriginChannel::open()?;let (rstatus,wstatus)=pipe_with(PipeFlags::CLOEXEC)?;
+        let (stdin,fin)=pipe_with(PipeFlags::CLOEXEC)?;drop(fin);
+        let (script,boot,bpf)=(sealed(SCRIPT)?,sealed(BOOT)?,sealed(&helper_linux_evidence::diagnostic_process::diagnostic_group_filter())?);
+        let fds=[give(&usr)?,give(&site.private)?,give(&site.state)?,give(&script)?,give(&boot)?,give(&bpf)?,give(&wstatus)?];
+        let ns=fds.each_ref().map(|f|f.as_raw_fd().to_string());
+        let mut cmd=Command::new("/no-path-execution-for-helper-sam");
+        cmd.env_clear().current_dir("/").stdin(Stdio::from(File::from(stdin))).stdout(Stdio::from(tx)).stderr(Stdio::piped());
+        fixed_args(&mut cmd,self.uid,self.gid,&ns);
+        named(self.usr,&usr)?;bwrap.recheck()?;site.require(&self,None)?;cancelled()?;
+        helper_linux_evidence::diagnostic_process::prepare_diagnostic_exec(&mut cmd,&bwrap.file)?;
+        let group=Group::new(cmd.spawn()?);
+        drop(cmd);drop(fds);drop(wstatus);
+        let finished=monitor::reap(group,File::from(rstatus))?;
+        cancelled()?;named(self.usr,&usr)?;bwrap.recheck()?;
+        let h=origin.receive(&site.private,self.uid,self.gid,finished.pid())?;
+        site.require(&self,Some(&h))?;
+        h.sync_finished(&site.private,&finished)?;
+        site.require(&self,Some(&h))?;cancelled()?;
+        Ok(Unpublished{_approval:self,_site:site,_original:h})
+    }
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use rustix::fs::{SealFlags,fcntl_get_seals};
+    use std::{io::Read,os::unix::ffi::OsStrExt};
+    #[test]
+    fn fixed_guest_and_configuration_are_sealed_non_executable_and_rewound(){
+        for bytes in [BOOT,SCRIPT]{
+            let mut f=sealed(bytes).unwrap();
+            assert!(fcntl_get_seals(&f).unwrap().contains(SealFlags::EXEC|SealFlags::WRITE|SealFlags::GROW|SealFlags::SHRINK|SealFlags::SEAL));
+            let mut observed=Vec::new();f.read_to_end(&mut observed).unwrap();assert_eq!(observed,bytes);
+            assert!(f.write_all(b"x").is_err());
+        }
+    }
+    #[test]
+    fn config_is_a_linked_mode_0444_file_on_the_new_root_made_readonly_before_exec(){
+        let ids=[10,11,12,13,14,15,16].map(|n|n.to_string());
+        let mut c=Command::new("/unused");fixed_args(&mut c,1001,1002,&ids);
+        let a:Vec<&str>=c.get_args().map(|s|s.to_str().unwrap()).collect();
+        let pos=|q:&[&str]|a.windows(q.len()).position(|v|v==q).unwrap();
+        let write=pos(&["--perms","0444","--file","14","/instance/domain-bootstrap.conf"]);
+        assert!(write<pos(&["--remount-ro","/"]));
+        assert!(pos(&["--remount-ro","/"])<pos(&["--","/usr/bin/python3.13"]));
+        assert!(pos(&["--perms","0444","--ro-bind-data","13","/provision.py"])<write);
+        assert!(pos(&["--bind-fd","11","/instance/private"])<write);
+        assert!(pos(&["--ro-bind-fd","12","/instance/state"])<write);
+        assert!(a.contains(&"--as-pid-1")&&!a.contains(&"--new-session")&&a.len()<=62);
+        assert_eq!(a.iter().filter(|&&x|x=="--bind-fd").count(),1);
+    }
+    #[test]
+    fn actual_private_directory_accepts_only_the_one_exact_raw_name(){
+        let d=tempfile::tempdir().unwrap();let f=File::open(d.path()).unwrap();
+        contents(&f,None).unwrap();assert!(contents(&f,Some(b"secrets.tdb")).is_err());
+        let alt=d.path().join(std::ffi::OsStr::from_bytes(b"secrets.tdb\xff"));File::create_new(&alt).unwrap();
+        assert!(contents(&f,None).is_err());assert!(contents(&f,Some(b"secrets.tdb")).is_err());
+        std::fs::rename(&alt,d.path().join("secrets.tdb")).unwrap();contents(&f,Some(b"secrets.tdb")).unwrap();
+        File::create_new(&alt).unwrap();assert!(contents(&f,Some(b"secrets.tdb")).is_err());
+    }
+}

@@ -11,7 +11,7 @@ pub(super) struct HeldOrigin {
     pub(super) domain:LocalDomain,
     guest:File, // remains O_PATH; never read, upgraded or used to enumerate the private store
     local:File, // same inode independently named on the HOST-selected mount
-    parent:Entity, mount:u64, uid:u32,
+    parent:Entity, mount:u64, uid:u32, payload:rustix::process::Pid,
 }
 fn held_mount(fd:&File)->io::Result<u64>{Mount::on(fd)?.map(|m|m.id).ok_or_else(||bad("unavailable original mount"))}
 fn entry(fd:&File,dev:u64,uid:u32)->io::Result<Entity>{
@@ -70,11 +70,25 @@ impl OriginChannel {
         let (_,tail,end)=packet(&self.rx)?;
         if tail!=0||end.fd.is_some()||end.credentials.is_some(){return Err(bad("more than one guest handoff record"));}
         let original=HeldOrigin{domain,guest,local:fixed_name(parent)?,parent:Entity::of(&parent.metadata()?)?,
-                                mount:held_mount(parent)?,uid};
+                                mount:held_mount(parent)?,uid,payload:guest_pid};
         original.recheck(parent)?;Ok(original)
     }
 }
 impl HeldOrigin {
+    /// The private store is touched only AFTER the real payload and its
+    /// entire original process group have been successfully collected.
+    pub(super) fn sync_finished(&self,parent:&File,ended:&super::provision::Finished)->io::Result<()>{
+        if ended.pid()!=self.payload{return Err(bad("different original provisioning payload"));}
+        self.recheck(parent)?;
+        let stamp=|f:&File|->io::Result<_>{let m=f.metadata()?;Ok((Entity::of(&m)?,m.nlink(),m.len(),
+            m.uid(),m.mode(),m.mtime(),m.mtime_nsec(),m.ctime(),m.ctime_nsec(),held_mount(f)?))};
+        let (file_before,dir_before)=(stamp(&self.local)?,stamp(parent)?);
+        crate::pinned::sync_sam_store(&self.local,self.uid,self.mount)?;
+        parent.sync_all()?;
+        self.recheck(parent)?;
+        if stamp(&self.local)?!=file_before||stamp(parent)?!=dir_before{return Err(bad("original private store or directory changed across synchronization"));}
+        Ok(())
+    }
     pub(super) fn recheck(&self,parent:&File)->io::Result<()>{
         let p=parent.metadata()?;
         if !p.is_dir()||p.mode()&0o7777!=0o700||p.uid()!=self.uid||p.nlink()==0

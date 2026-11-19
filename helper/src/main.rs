@@ -9,6 +9,7 @@ mod disk_web;
 mod fs_tools;
 mod fat32_check;
 mod inspect;
+mod isolated_group;
 mod maintenance;
 mod path_rules;
 mod portable_claim;

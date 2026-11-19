@@ -87,6 +87,19 @@ impl Pinned {
     pub(crate) fn path(&self) -> &Path { &self.path }
     pub(crate) fn mount(&self) -> io::Result<Mount> { Mount::on(&self.fd)?.ok_or_else(||invalid("live mount identity unavailable")) }
 
+    /// Only a directory pin, not a general access lift. Its mount and entity
+    /// must still match when opened relative to the original descriptor.
+    pub(crate) fn relative_directory(&self)->io::Result<File>{
+        if !matches!(self.kind,Kind::StorageRoot){return Err(invalid("expected an original directory pin"));}
+        self.require_same_path()?;
+        let out=File::from(openat(&self.fd,c".",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::NONBLOCK|OFlags::CLOEXEC,Mode::empty())?);
+        let now=Self::open(&self.path,self.kind)?;
+        if self.chain!=now.chain||self.mount()?!=now.mount()?||Some(now.mount()?)!=Mount::on(&out)?||now.entity()!=Entity::of(&out.metadata()?)?{
+            return Err(invalid("directory name or mount changed"));
+        }
+        Ok(out)
+    }
+
     /// Return an independent, real open description for this selected storage
     /// directory. Never lock a duplicate of somebody else's open description.
     pub(crate) fn storage_directory(&self) -> io::Result<File> {
@@ -142,6 +155,18 @@ pub(crate) fn sqlite_claim_reader(pin:&File,entity:Entity,mount:u64)->io::Result
         return Err(invalid("not an original SQLite enrollment marker"));
     }
     reopen_admitted_reader(pin,entity,ReaderBoundary::SelectedControlMount(mount))
+}
+
+/// After Samba has exited: synchronize the original O_PATH-selected store on
+/// the separately approved private mount. No content is read or returned.
+pub(crate) fn sync_sam_store(pin:&File,uid:u32,mount:u64)->io::Result<()>{
+    let m=pin.metadata()?;
+    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)||!m.is_file()||m.uid()!=uid||m.mode()&0o7777!=0o600||m.nlink()!=1
+        ||!(1..=16<<20).contains(&m.len())||Mount::on(pin)?.is_none_or(|v|v.id!=mount){
+        return Err(invalid("expected the original bounded private SAM store"));
+    }
+    let file=reopen_admitted_reader(pin,Entity::of(&m)?,ReaderBoundary::SelectedControlMount(mount))?;
+    file.sync_all()
 }
 
 /// Upgrade an original O_PATH private regular inode only; never use its mutable pathname.
