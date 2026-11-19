@@ -73,6 +73,9 @@ class SnapshotView:
         if i < len(node.children) and node.children[i][0] == name: return node.children[i][1]
         raise OSError(errno.ENOENT, "no such snapshot member")
 
+    def _read_at(self, length, offset):
+        return os.pread(self.document.fileno(), length, offset)
+
     def read(self, ino, offset, size):
         node = self.node(ino)
         if node.children is not None: raise OSError(errno.EISDIR, "not a regular file")
@@ -89,8 +92,7 @@ class SnapshotView:
                 block = bytearray()
                 while len(block) < length:
                     try:
-                        part = os.pread(self.document.fileno(), length - len(block),
-                                        node.start + start + len(block))
+                        part = self._read_at(length - len(block), node.start + start + len(block))
                     except InterruptedError:
                         continue
                     if not 0 < len(part) <= length-len(block):
