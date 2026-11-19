@@ -224,23 +224,28 @@ impl Current<'_,'_,'_>{
     pub(crate) fn file(&self)->FileId{self.birth.file}
     pub(crate) fn size(&self)->u64{self.live.map_or(0,|s|s.bytes)}
     pub(crate) fn working_revision(&self)->u64{if self.live.is_some(){1}else{0}}
-    fn require(&self)->io::Result<()>{
-        let src=self.tree.session.source;
-        src.at(|db,c|{
-            self.tree.current_birth(db,&c,&self.birth,false)?;
-            let state=by_file(db,&self.birth)?;let kept=retained(db,&self.birth)?;
-            // A genuinely opened revision zero stays empty after revision
-            // one commits; it does not upgrade to the newly published
-            // bytes. This schema has only one immutable manual revision.
-            if self.live.is_some_and(|s|state.filter(|x|x.done).map(|x|x.spec)!=Some(s)){
-                return Err(invalid("selected confirmed working original changed"));
-            }
-            file_create::display_free(db,&c,&self.root.root,&self.birth)?;
-            match state{Some(x)=>x.spec.members(&crate::fs::WitnessRead::at(self.container.directory())?,x.done,&kept)?,
-                None=>self.container.require_newborn(&self.root.root)?,}
-            self.root.require()?;self.container.require(&self.root.root)?;
-            if let Some(h)=&self.body{h.require(self.container.directory())?;}Ok(())
-        })
+    /// Stable across aliases/working revisions, but never a standalone
+    /// pathname, permission or OS file identifier. Do not bind SMB by
+    /// truncated IDs when this lookup fails.
+    pub(crate) fn native_key(&self)->io::Result<super::file_number::NativeKey>{
+        self.tree.session.source.at(|db,c|{self.require_at(db,&c)?;
+            super::file_number::original(db,self.birth.pool,self.birth.file)})
+    }
+    fn require(&self)->io::Result<()>{self.tree.session.source.at(|db,c|self.require_at(db,&c))}
+    fn require_at(&self,db:&Connection,c:&Catalog)->io::Result<()>{
+        self.tree.current_birth(db,c,&self.birth,false)?;
+        let state=by_file(db,&self.birth)?;let kept=retained(db,&self.birth)?;
+        // A genuinely opened revision zero stays empty after revision
+        // one commits; it does not upgrade to the newly published
+        // bytes. This schema has only one immutable manual revision.
+        if self.live.is_some_and(|s|state.filter(|x|x.done).map(|x|x.spec)!=Some(s)){
+            return Err(invalid("selected confirmed working original changed"));
+        }
+        file_create::display_free(db,c,&self.root.root,&self.birth)?;
+        match state{Some(x)=>x.spec.members(&crate::fs::WitnessRead::at(self.container.directory())?,x.done,&kept)?,
+            None=>self.container.require_newborn(&self.root.root)?,}
+        self.root.require()?;self.container.require(&self.root.root)?;
+        if let Some(h)=&self.body{h.require(self.container.directory())?;}Ok(())
     }
     /// Same read-only connection throughout one delivery. All ZXS changes
     /// commit on separate write connections. A change indicator can only

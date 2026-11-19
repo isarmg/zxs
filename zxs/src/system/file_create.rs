@@ -125,12 +125,14 @@ impl Tree<'_,'_>{
         if let Some(ref x)=seen{if x.committed{return Ok(NewFile::from(&x.birth));}} // receipt, not a live file check
         let root=OrdinaryRoot::at(src,&catalog,setting.volume,true)?;
         let initial=if let Some(x)=seen{x.birth}else{
-            let fresh=Birth{pool:src.pool,volume:setting.volume,operation:op,entry:EntryId::new()?,file:FileId::new()?,
-                history:HistoryId::new()?,branch:BranchId::new()?,ticket:OperationId::new()?,slot:0,name:name.to_owned()};
-            geometry(&catalog,&fresh)?;
+            let candidates=FileId::birth_candidates()?;let entry=EntryId::new()?;
+            let history=HistoryId::new()?;let branch=BranchId::new()?;let ticket=OperationId::new()?;
             let w=Connection::open(&src.dir,true)?;
             let attempt=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
                 self.require(db,&c,true)?;if let Some(x)=self.origin(db,&c,op,name)?{return Ok(x.birth);}
+                let file=super::file_number::choose(db,&candidates)?;
+                let fresh=Birth{pool:src.pool,volume:setting.volume,operation:op,entry,file,history,branch,ticket,slot:0,name:name.to_owned()};
+                geometry(&c,&fresh)?;
                 display_free(db,&c,&root.root,&fresh)?;let live=root.root.names()?;fresh.new_root_vacancy(&root.root,&live)?;budget(db,&fresh,&live)?;root.require()?;
                 let s=db.prepare(c"INSERT INTO main.root_entry(create_op,share_id,setting_op,auth_op,volume_id,display,terminal,entry_id,file_id,history_id,branch_id,ticket) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)")?;
                 let end=fresh.container()?;

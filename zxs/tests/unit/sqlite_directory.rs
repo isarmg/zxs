@@ -81,3 +81,30 @@ fn failed_disclosure_never_moves_the_cursor_or_refreshes_the_grant(){
     assert_eq!(remaining.iter().map(|e|e.name.as_str()).collect::<Vec<_>>(),["a","b","c"]);
     assert_eq!(remaining[2].file,c.file);
 }
+
+
+#[test]
+#[ignore="source-only; two business trees and independent cold SQLite/ordinary FILE opens, not SMB locks"]
+fn original_number_survives_alias_share_revision_and_reopen(){
+    let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,_,rw,ro)=enrollment(&t);
+    let op=OperationId([0xeb;16]);
+    let (id,key)={
+        let src=InitialReader::open(&s,p).unwrap();let sess=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+        let a=sess.connect(rw).unwrap();let b=sess.connect(ro).unwrap();
+        let first=a.create_file(op,"invoices").unwrap();let other=a.create_file(OperationId([0xec;16]),"another").unwrap();
+        let old=b.open_current("invoices").unwrap();let key=old.native_key().unwrap();
+        assert_ne!(key.words().1,b.open_current("another").unwrap().native_key().unwrap().words().1);
+        assert_ne!(first.file,other.file);
+        let incoming=input(&t,"received-edits",b"same member, new revision");
+        a.save_first(OperationId([0xed;16]),"invoices",first.file,&incoming).unwrap();
+        assert_eq!(old.working_revision(),0);assert_eq!(old.native_key().unwrap(),key);
+        let picked=a.open_current("invoices").unwrap();assert_eq!(picked.working_revision(),1);assert_eq!(picked.native_key().unwrap(),key);
+        assert_eq!(a.create_file(op,"invoices").unwrap(),first);(first.file,key)
+    };
+    let cold=InitialReader::open(&s,p).unwrap();let sess=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let tree=sess.connect(ro).unwrap();let got=tree.open_current("invoices").unwrap();
+    assert_eq!((got.file(),got.native_key().unwrap()),(id,key));
+    let web=cold.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    let was=web.share_setting(ro).unwrap();web.set_share_mode(OperationId([0xee;16]),ro,was.op,Mode::Disabled).unwrap();
+    assert!(got.native_key().is_err());
+}

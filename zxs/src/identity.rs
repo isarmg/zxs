@@ -1,10 +1,13 @@
 use std::{fmt, io, str::FromStr};
 unsafe extern "C" { fn zxs_random(bytes:*mut u8, len:usize) -> std::os::raw::c_int; }
 
-fn random() -> io::Result<[u8;16]> {
-    let mut value=[0u8;16];
+fn random_bytes(value:&mut [u8])->io::Result<()> {
     // SAFETY: this writable array lives throughout the blocking getrandom call.
     if unsafe { zxs_random(value.as_mut_ptr(),value.len()) } != 0 {return Err(io::Error::last_os_error());}
+    Ok(())
+}
+fn random() -> io::Result<[u8;16]> {
+    let mut value=[0u8;16];random_bytes(&mut value)?;
     if value==[0;16] { return Err(io::Error::other("random source returned an all-zero ID")); }
     Ok(value)
 }
@@ -32,6 +35,15 @@ macro_rules! id {
 id!(OperationId); id!(PoolId); id!(VolumeId); id!(AccountId); id!(ShareId);
 id!(FileId); id!(EntryId); id!(HistoryId); id!(DirectoryId);
 id!(BranchId); id!(NodeId); id!(VersionId);
+
+impl FileId{
+    /// One bounded entropy draw before the SQLite writer transaction. Only
+    /// the selected original is persisted, and only after its number is free.
+    pub(crate) fn birth_candidates()->io::Result<[Self;8]>{
+        let mut bytes=[0u8;128];random_bytes(&mut bytes)?;
+        Ok(std::array::from_fn(|i|{let mut id=[0;16];id.copy_from_slice(&bytes[16*i..16*i+16]);Self(id)}))
+    }
+}
 
 /// Native FULL basename prefix. This is a distinct storage ID, not the
 /// business VersionId, NodeId, a path component chosen by a client, or a hash.
