@@ -14,6 +14,18 @@ int zxs_smb_ctl_live(int fd);
 int zxs_smb_ctl_hello(int fd,const uint8_t *bound);
 int zxs_smb_ctl_bound(int fd,uint8_t *bound);
 int zxs_smb_ctl_life(int pipe_reader,int timeout);
+#define ZXS_SMB_MAX_ATTEMPTS 32
+/* No network event-loop call waits for storage. Submission and receive
+ * both use MSG_DONTWAIT. Only the original readiness callback receives. */
+int zxs_smb_try_open(int original_control,int64_t *started_msec);
+int zxs_smb_try_read(int attempt,int64_t started_msec,uint8_t challenge[8]);
+int zxs_smb_try_current(int attempt,int64_t started_msec);
+/* -2: exact BEGIN consumed; its offered descriptor is unavailable or invalid. */
+int zxs_smb_try_accept(int original_control);
+int zxs_smb_try_issue(int attempt,const uint8_t challenge[8]);
+/* events: bit 1 readable, bit 2 terminal. Index 0 control, 1 lifetime,
+ * then the same bounded list of independent attempt sockets. */
+int zxs_smb_try_wait(int ctl,int lifetime,const int *attempt,size_t n,uint8_t *events);
 int zxs_smb_ctl_drain(int fd);
 int zxs_smb_bound_fd(int fd);
 #endif

@@ -582,16 +582,28 @@
  	status = smbXsrv_version_global_init(&server_id);
 --- a/source3/smbd/smb2_sesssetup.c
 +++ b/source3/smbd/smb2_sesssetup.c
-@@ -30,6 +30,8 @@
+@@ -30,6 +30,10 @@
  #include "../libcli/security/security.h"
  #include "../lib/util/tevent_ntstatus.h"
  #include "source3/lib/substitute.h"
 +#include "passdb/machine_sid.h"
 +#include "param/zxs_runtime.h"
++#include "param/zxs_smb_control.h"
++#include "../lib/async_req/async_sock.h"
  
  #include "lib/crypto/gnutls_helpers.h"
  #include <gnutls/gnutls.h>
-@@ -713,6 +715,14 @@
+@@ -691,7 +695,8 @@
+ 					uint8_t in_flags,
+ 					uint8_t in_security_mode,
+ 					uint64_t in_previous_session_id,
+-					DATA_BLOB in_security_buffer)
++					DATA_BLOB in_security_buffer,
++				    struct zxs_smb2_attempt **attempt)
+ {
+ 	struct tevent_req *req;
+ 	struct smbd_smb2_session_setup_state *state;
+@@ -713,6 +718,14 @@
  	state->in_security_mode = in_security_mode;
  	state->in_previous_session_id = in_previous_session_id;
  	state->in_security_buffer = in_security_buffer;
@@ -606,10 +618,24 @@
  
  	if (in_flags & SMB2_SESSION_FLAG_BINDING) {
  		if (in_session_id == 0) {
-@@ -912,6 +922,23 @@
- 	return req;
- }
+@@ -874,10 +887,9 @@
+ 	}
  
+ 	if (state->auth->gensec == NULL) {
+-		status = auth_generic_prepare(state->auth,
++		status = zxs_auth_prepare_smb2(state->auth,attempt,
+ 					      state->smb2req->xconn->remote_address,
+ 					      state->smb2req->xconn->local_address,
+-					      "SMB2",
+ 					      &state->auth->gensec);
+ 		if (tevent_req_nterror(req, status)) {
+ 			return tevent_req_post(req, ev);
+@@ -910,6 +922,23 @@
+ 	tevent_req_set_callback(subreq, smbd_smb2_session_setup_gensec_done, req);
+ 
+ 	return req;
++}
++
 +/* Reject-only: a normal primary SID in our domain does not establish
 + * the credential generation used by this particular password check. */
 +static bool zxs_normal_token(const struct auth_session_info *info)
@@ -625,12 +651,10 @@
 +		security_session_user_level(info, NULL) == SECURITY_USER &&
 +		sid_peek_check_rid(domain, &info->security_token->sids[0], &rid) &&
 +		rid == 1000;
-+}
-+
+ }
+ 
  static void smbd_smb2_session_setup_gensec_done(struct tevent_req *subreq)
- {
- 	struct tevent_req *req =
-@@ -944,6 +971,11 @@
+@@ -944,6 +973,11 @@
  				     state,
  				     &state->session_info);
  	if (tevent_req_nterror(req, status)) {
@@ -642,6 +666,135 @@
  		return;
  	}
  
+@@ -1065,6 +1099,7 @@
+ 
+ struct smbd_smb2_session_setup_wrap_state {
+ 	struct tevent_context *ev;
++	struct zxs_smb2_attempt *attempt;
+ 	struct smbd_smb2_request *smb2req;
+ 	uint64_t in_session_id;
+ 	uint8_t in_flags;
+@@ -1080,6 +1115,61 @@
+ static void smbd_smb2_session_setup_wrap_setup_done(struct tevent_req *subreq);
+ static void smbd_smb2_session_setup_wrap_shutdown_done(struct tevent_req *subreq);
+ 
++static int zxs_attempt_destroy(struct zxs_smb2_attempt *a)
++{
++	/* Also on disconnect/cancel: never leave a watcher on a reused fd. */
++	TALLOC_FREE(a->wait);
++	if (a->fd>=0) { close(a->fd); a->fd=-1; }
++	return 0;
++}
++
++static bool zxs_setup_dispatch(struct tevent_req *req)
++{
++	struct smbd_smb2_session_setup_wrap_state *s=
++		tevent_req_data(req,struct smbd_smb2_session_setup_wrap_state);
++	struct tevent_req *subreq=smbd_smb2_session_setup_send(s,s->ev,s->smb2req,
++		s->in_session_id,s->in_flags,s->in_security_mode,s->in_previous_session_id,
++		s->in_security_buffer,s->attempt!=NULL ? &s->attempt : NULL);
++	if (tevent_req_nomem(subreq,req)) { return false; }
++	tevent_req_set_callback(subreq,smbd_smb2_session_setup_wrap_setup_done,req);
++	return true;
++}
++
++static bool zxs_setup_cancel(struct tevent_req *req)
++{
++	struct smbd_smb2_session_setup_wrap_state *s=
++		tevent_req_data(req,struct smbd_smb2_session_setup_wrap_state);
++	if (s->attempt==NULL || s->attempt->wait==NULL) { return false; }
++	TALLOC_FREE(s->attempt);
++	tevent_req_nterror(req,NT_STATUS_CANCELLED);
++	return true;
++}
++
++static void zxs_setup_challenge_ready(struct tevent_req *subreq)
++{
++	struct tevent_req *req=tevent_req_callback_data(subreq,struct tevent_req);
++	struct smbd_smb2_session_setup_wrap_state *s=
++		tevent_req_data(req,struct smbd_smb2_session_setup_wrap_state);
++	struct zxs_smb2_attempt *a=s->attempt;
++	int err=0;
++	bool ok=wait_for_read_recv(subreq,&err);
++	a->wait=NULL;
++	TALLOC_FREE(subreq);
++	if (!ok || s->smb2req->session!=NULL || !zxs_runtime_storage_live() ||
++	    zxs_smb_try_read(a->fd,a->started_msec,a->challenge)!=0 ||
++	    zxs_smb_try_current(a->fd,a->started_msec)!=0) {
++		TALLOC_FREE(s->attempt);
++		tevent_req_nterror(req,NT_STATUS_LOGON_FAILURE);
++		return;
++	}
++	a->ready=true;
++	/* The original SESSION_SETUP dispatcher runs as_root. Re-enter only
++	 * for its synchronous native setup, never across an async wait. */
++	become_root();
++	(void)zxs_setup_dispatch(req);
++	unbecome_root();
++}
++
+ static struct tevent_req *smbd_smb2_session_setup_wrap_send(TALLOC_CTX *mem_ctx,
+ 					struct tevent_context *ev,
+ 					struct smbd_smb2_request *smb2req,
+@@ -1091,7 +1181,7 @@
+ {
+ 	struct tevent_req *req;
+ 	struct smbd_smb2_session_setup_wrap_state *state;
+-	struct tevent_req *subreq;
++	struct zxs_smb2_attempt *a;
+ 
+ 	req = tevent_req_create(mem_ctx, &state,
+ 				struct smbd_smb2_session_setup_wrap_state);
+@@ -1106,18 +1196,37 @@
+ 	state->in_previous_session_id = in_previous_session_id;
+ 	state->in_security_buffer = in_security_buffer;
+ 
+-	subreq = smbd_smb2_session_setup_send(state, state->ev,
+-					      state->smb2req,
+-					      state->in_session_id,
+-					      state->in_flags,
+-					      state->in_security_mode,
+-					      state->in_previous_session_id,
+-					      state->in_security_buffer);
+-	if (tevent_req_nomem(subreq, req)) {
+-		return tevent_req_post(req, ev);
+-	}
+-	tevent_req_set_callback(subreq,
+-				smbd_smb2_session_setup_wrap_setup_done, req);
++	if (in_session_id!=0 || (in_flags & SMB2_SESSION_FLAG_BINDING)!=0 ||
++	    in_previous_session_id!=0 || smb2req->session!=NULL) {
++		/* Continuation uses its original GENSEC. An unsupported bind/
++		 * reauth/previous-session request fails without a new attempt. */
++		if (!zxs_setup_dispatch(req)) { return tevent_req_post(req,ev); }
++		return req;
++	}
++	a=talloc_zero(state,struct zxs_smb2_attempt);
++	if (tevent_req_nomem(a,req)) { return tevent_req_post(req,ev); }
++	state->attempt=a;
++	a->fd=-1;
++	talloc_set_destructor(a,zxs_attempt_destroy);
++	/* Try one atomic registration now; never wait in smbd for queue space. */
++	a->fd=zxs_runtime_attempt(&a->started_msec);
++	if (a->fd<0) {
++		TALLOC_FREE(state->attempt);
++		tevent_req_nterror(req,NT_STATUS_LOGON_FAILURE);
++		return tevent_req_post(req,ev);
++	}
++	a->wait=wait_for_read_send(a,ev,a->fd,false);
++	if (tevent_req_nomem(a->wait,req)) {
++		TALLOC_FREE(state->attempt);
++		return tevent_req_post(req,ev);
++	}
++	if (!tevent_req_set_endtime(a->wait,ev,timeval_current_ofs(10,0))) {
++		TALLOC_FREE(state->attempt);
++		tevent_req_nterror(req,NT_STATUS_NO_MEMORY);
++		return tevent_req_post(req,ev);
++	}
++	tevent_req_set_cancel_fn(req,zxs_setup_cancel);
++	tevent_req_set_callback(a->wait,zxs_setup_challenge_ready,req);
+ 
+ 	return req;
+ }
 --- a/source3/smbd/server_reload.c
 +++ b/source3/smbd/server_reload.c
 @@ -29,6 +29,7 @@
@@ -701,6 +854,18 @@
                          PARAM_UTIL
                          ldap
                          lber
+@@ -594,6 +599,11 @@
+                    public_headers='../lib/smbconf/smbconf.h',
+                    pc_files=[],
+                    vnum='0.0.1')
++
++bld.SAMBA3_BINARY('test_zxs_challenge_events',
++                   source='torture/test_zxs_challenge_events.c',
++                   deps='LIBASYNC_REQ smbconf',
++                   for_selftest=True)
+ 
+ bld.SAMBA3_SUBSYSTEM('sysquotas',
+                      source='''
 --- a/source3/passdb/machine_sid.h
 +++ b/source3/passdb/machine_sid.h
 @@ -25,6 +25,7 @@
@@ -711,3 +876,178 @@
  struct dom_sid  *get_global_sam_sid(void);
  void reset_global_sam_sid(void) ;
  bool sid_check_is_our_sam(const struct dom_sid  *sid);
+--- a/source3/include/auth.h
++++ b/source3/include/auth.h
+@@ -81,7 +81,18 @@
+ 					  TALLOC_CTX *mem_ctx,
+ 					  struct auth4_context **auth4_context);
+ 
++/* The nullable object is installed only by the new SMB2 session setup
++ * constructor. Its private descriptor dies with this exact auth_context. */
++struct zxs_smb2_attempt {
++	int fd;
++	int64_t started_msec;
++	uint8_t challenge[8];
++	struct tevent_req *wait;
++	bool ready;
++};
++
+ struct auth_context {
++	struct zxs_smb2_attempt *zxs_attempt;
+ 	DATA_BLOB challenge; 
+ 
+ 	/* What time did this start */
+--- a/source3/auth/proto.h
++++ b/source3/auth/proto.h
+@@ -100,6 +100,11 @@
+ /* The following definitions come from auth/auth_generic.c  */
+ 
+ NTSTATUS make_auth4_context(TALLOC_CTX *mem_ctx, struct auth4_context **auth4_context_out);
++struct zxs_smb2_attempt;
++NTSTATUS zxs_auth_prepare_smb2(TALLOC_CTX *mem_ctx, struct zxs_smb2_attempt **attempt,
++			       const struct tsocket_address *remote_address,
++			       const struct tsocket_address *local_address,
++			       struct gensec_security **gensec_security_out);
+ NTSTATUS auth_generic_prepare(TALLOC_CTX *mem_ctx,
+ 			      const struct tsocket_address *remote_address,
+ 			      const struct tsocket_address *local_address,
+--- a/source3/auth/auth_generic.c
++++ b/source3/auth/auth_generic.c
+@@ -398,10 +398,10 @@
+ 	}
+ }
+ 
+-NTSTATUS auth_generic_prepare(TALLOC_CTX *mem_ctx,
++static NTSTATUS auth_generic_prepare_internal(TALLOC_CTX *mem_ctx,
+ 			      const struct tsocket_address *remote_address,
+ 			      const struct tsocket_address *local_address,
+-			      const char *service_description,
++			      const char *service_description, struct zxs_smb2_attempt **attempt,
+ 			      struct gensec_security **gensec_security_out)
+ {
+ 	struct gensec_security *gensec_security;
+@@ -414,6 +414,15 @@
+ 	nt_status = make_auth3_context_for_ntlm(tmp_ctx, &auth_context);
+ 	if (!NT_STATUS_IS_OK(nt_status)) {
+ 		goto done;
++	}
++
++	if (attempt!=NULL) {
++		if (*attempt==NULL || !(*attempt)->ready || (*attempt)->wait!=NULL ||
++		    auth_context->prepare_gensec!=NULL || auth_context->zxs_attempt!=NULL) {
++			nt_status=NT_STATUS_ACCESS_DENIED;
++			goto done;
++		}
++		auth_context->zxs_attempt=talloc_move(auth_context,attempt);
+ 	}
+ 
+ 	if (auth_context->prepare_gensec) {
+@@ -567,6 +576,20 @@
+ done:
+ 	TALLOC_FREE(tmp_ctx);
+ 	return nt_status;
++}
++
++NTSTATUS auth_generic_prepare(TALLOC_CTX *ctx,const struct tsocket_address *remote,
++			      const struct tsocket_address *local,const char *description,
++			      struct gensec_security **out)
++{
++	return auth_generic_prepare_internal(ctx,remote,local,description,NULL,out);
++}
++NTSTATUS zxs_auth_prepare_smb2(TALLOC_CTX *ctx,struct zxs_smb2_attempt **attempt,
++			       const struct tsocket_address *remote,
++			       const struct tsocket_address *local,struct gensec_security **out)
++{
++	if (attempt==NULL || *attempt==NULL) { return NT_STATUS_LOGON_FAILURE; }
++	return auth_generic_prepare_internal(ctx,remote,local,"SMB2",attempt,out);
+ }
+ 
+ /*
+--- a/source3/auth/auth_ntlmssp.c
++++ b/source3/auth/auth_ntlmssp.c
+@@ -23,6 +23,8 @@
+ 
+ #include "includes.h"
+ #include "auth.h"
++#include "param/zxs_runtime.h"
++#include "param/zxs_smb_control.h"
+ #include "libcli/security/security.h"
+ #include "lib/util/tevent_ntstatus.h"
+ #include "source3/lib/substitute.h"
+@@ -99,7 +101,23 @@
+ {
+ 	struct auth_context *auth_context = talloc_get_type_abort(auth4_context->private_data,
+ 								  struct auth_context);
+-	auth_get_ntlm_challenge(auth_context, chal);
++	struct zxs_smb2_attempt *a=auth_context->zxs_attempt;
++	/* No wait or fresh challenge here: the outer SESSION_SETUP has
++	 * already polled the original private endpoint through tevent. */
++	if (a==NULL || !a->ready || !zxs_runtime_storage_live() ||
++	    zxs_smb_try_current(a->fd,a->started_msec)!=0) {
++		return NT_STATUS_LOGON_FAILURE;
++	}
++	if (auth_context->challenge.length==0) {
++		auth_context->challenge=data_blob_talloc(auth_context,a->challenge,8);
++		if (auth_context->challenge.data==NULL) { return NT_STATUS_NO_MEMORY; }
++		auth_context->challenge_set_by="dedicated ZXS storage";
++	} else if (auth_context->challenge.length!=8 ||
++		   auth_context->challenge.data==NULL ||
++		   memcmp(auth_context->challenge.data,a->challenge,8)!=0) {
++		return NT_STATUS_ACCESS_DENIED;
++	}
++	memcpy(chal,a->challenge,8);
+ 	return NT_STATUS_OK;
+ }
+ 
+@@ -110,22 +128,10 @@
+ NTSTATUS auth3_set_challenge(struct auth4_context *auth4_context, const uint8_t *chal,
+ 			     const char *challenge_set_by)
+ {
+-	struct auth_context *auth_context = talloc_get_type_abort(auth4_context->private_data,
+-								  struct auth_context);
+-	bool ok;
+-
+-	ok = auth3_context_set_challenge(auth_context, chal, challenge_set_by);
+-	if (!ok) {
+-		/*
+-		 * This can only fail for ENOMEM
+-		 */
+-		return NT_STATUS_NO_MEMORY;
+-	}
+-
+-	DEBUG(5, ("auth_context challenge set by %s\n", auth_context->challenge_set_by));
+-	DEBUG(5, ("challenge is: \n"));
+-	dump_data(5, auth_context->challenge.data, auth_context->challenge.length);
+-	return NT_STATUS_OK;
++	/* Only the server's own NTLMv2 challenge belongs to a new SMB2
++	 * attempt. Do not retrofit NTLM2-session or a client-derived value. */
++	(void)auth4_context; (void)chal; (void)challenge_set_by;
++	return NT_STATUS_NOT_SUPPORTED;
+ }
+ 
+ /**
+@@ -167,6 +173,13 @@
+ 	 * Be authoritative by default.
+ 	 */
+ 	state->authoritative = 1;
++	if (auth_context->zxs_attempt!=NULL) {
++		/* Negotiating a server challenge cannot authorize a password,
++		 * a guest mapping, or a FILE session. Until the source-bound
++		 * checker exists, stop before reading or forwarding responses. */
++		tevent_req_nterror(req,NT_STATUS_LOGON_FAILURE);
++		return tevent_req_post(req,ev);
++	}
+ 
+ 	/* The client has given us its machine name (which we only get over NBT transport).
+ 	   We need to possibly reload smb.conf if smb.conf includes depend on the machine name. */
+--- a/source3/auth/wscript_build
++++ b/source3/auth/wscript_build
+@@ -21,7 +21,7 @@
+                    user_krb5.c
+                    auth_ntlmssp.c
+                    auth_generic.c''',
+-                   deps='''PLAINTEXT_AUTH SLCACHE DCUTIL TOKEN_UTIL AUTH_COMMON libcli_netlogon3 samba-hostconfig MESSAGING''',
++                   deps='''PLAINTEXT_AUTH SLCACHE DCUTIL TOKEN_UTIL AUTH_COMMON libcli_netlogon3 samba-hostconfig MESSAGING smbconf''',
+                    private_library=True)
+ 
+ bld.SAMBA3_MODULE('auth_sam',

@@ -57,20 +57,21 @@ static bool life_reader(int fd)
            fstat(fd,&st)==0 && S_ISFIFO(st.st_mode) && fstatfs(fd,&fs)==0 &&
            (unsigned long)fs.f_type==PIPEFS_MAGIC;
 }
-static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take)
+enum inbound { ZXS_NO_FD, ZXS_LIFE_FD, ZXS_ATTEMPT_FD };
+static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take,enum inbound kind,bool nowait)
 {
     int64_t now,stop;bool sending=sendbuf!=NULL;
-    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN)return bad();
+    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=16 && len!=24)return bad();
     if(millis(&now)<0)return -1;
     stop=now+10000;
     for(;;) {
         struct pollfd pollfd={.fd=fd,.events=sending?POLLOUT:POLLIN};
         if(millis(&now)<0)return -1;
         if(now>=stop){errno=ETIMEDOUT;return -1;}
-        int r=poll(&pollfd,1,(int)(stop-now));
-        if(r<0 && errno==EINTR)continue;
+        int r=poll(&pollfd,1,nowait?0:(int)(stop-now));
+        if(r<0 && errno==EINTR && !nowait)continue;
         if(r<0)return -1;
-        if(r==0){errno=ETIMEDOUT;return -1;}
+        if(r==0){errno=nowait?EAGAIN:ETIMEDOUT;return -1;}
         if((pollfd.revents&pollfd.events)==0)return bad();
         ssize_t got;int received=-1;
         if(sending && offer>=0){
@@ -100,42 +101,116 @@ static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,in
                         if(received<0){received=v;}else{close(v);extra=true;}
                     }
                 }
-                if(extra || (take!=NULL && (received<0 || !life_reader(received))) ||
+                if(extra || (take!=NULL && (received<0 ||
+                   (kind==ZXS_LIFE_FD ? !life_reader(received) : zxs_smb_ctl_claim(received)!=0))) ||
                    (size_t)got!=len){
                     if(received>=0)close(received);
+                    /* The complete registration was consumed, but the one
+                     * local attempt fd could not be accepted (including
+                     * kernel MSG_CTRUNC at the worker's fd limit). The
+                     * caller still checks the tag; no fd is adopted. */
+                    if(kind==ZXS_ATTEMPT_FD && got==(ssize_t)len &&
+                       !(msg.msg_flags&MSG_TRUNC)){errno=EBADMSG;return -2;}
                     return bad();
                 }
             }
         }
-        if(got<0 && (errno==EINTR || errno==EAGAIN))continue;
+        if(got<0 && (errno==EINTR || errno==EAGAIN) && !nowait)continue;
         if(got<0)return -1;
         if(take!=NULL)*take=received;
         return (size_t)got==len?0:bad(); /* no fragment joining, oversize, empty or reflected ack */
     }
 }
-int zxs_smb_ctl_read(int fd,uint8_t *p,size_t n){return transfer(fd,NULL,p,n,-1,NULL);}
-int zxs_smb_ctl_write(int fd,const uint8_t *p,size_t n){return transfer(fd,p,NULL,n,-1,NULL);}
+int zxs_smb_ctl_read(int fd,uint8_t *p,size_t n){return transfer(fd,NULL,p,n,-1,NULL,ZXS_NO_FD,false);}
+int zxs_smb_ctl_write(int fd,const uint8_t *p,size_t n){return transfer(fd,p,NULL,n,-1,NULL,ZXS_NO_FD,false);}
 /* Return only the write end locally; it stays open through every participating
  * smbd fork. The stdin/stdout of a client and the main SQLite directory are
  * never handed over. Loss of a socket direction is not end of this lease. */
 int zxs_smb_ctl_hello(int fd,const uint8_t *bound)
 {
     int p[2];if(pipe2(p,O_NONBLOCK|O_CLOEXEC)<0)return -1;
-    int rc=transfer(fd,bound,NULL,ZXS_SMB_BIND_LEN,p[0],NULL),err=errno;close(p[0]);
+    int rc=transfer(fd,bound,NULL,ZXS_SMB_BIND_LEN,p[0],NULL,ZXS_NO_FD,false),err=errno;close(p[0]);
     if(rc!=0){close(p[1]);errno=err;return -1;}
     return p[1];
 }
 int zxs_smb_ctl_bound(int fd,uint8_t *bound)
 {
-    int rd=-1;if(transfer(fd,NULL,bound,ZXS_SMB_BIND_LEN,-1,&rd)!=0)return -1;
+    int rd=-1;if(transfer(fd,NULL,bound,ZXS_SMB_BIND_LEN,-1,&rd,ZXS_LIFE_FD,false)!=0)return -1;
     return rd;
+}
+static const uint8_t begin_tag[16]="ZXS-SAM/BEGIN-1";
+static const uint8_t challenge_tag[16]="ZXS-SAM/CHLNG-1";
+/* Only the native new SMB2 GENSEC instance calls this. The shared master
+ * control send is a single atomic seqpacket + one endpoint; *no* reply or
+ * challenge is ever read from that shared socket by competing children. */
+int zxs_smb_try_open(int control,int64_t *started)
+{
+    int p[2];if(millis(started)<0)return -1;
+    if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,p)<0)return -1;
+    int rc=transfer(control,begin_tag,NULL,sizeof(begin_tag),p[1],NULL,ZXS_NO_FD,true),err=errno;
+    close(p[1]);
+    if(rc!=0){close(p[0]);errno=err;return -1;}
+    return p[0];
+}
+static bool within(int64_t start,int64_t limit)
+{
+    int64_t now;return start>=0 && millis(&now)==0 && now>=start && now-start<limit;
+}
+int zxs_smb_try_read(int fd,int64_t start,uint8_t out[8])
+{
+    if(!within(start,10000)){errno=ETIMEDOUT;return -1;}
+    uint8_t reply[24],nz=0;
+    if(transfer(fd,NULL,reply,sizeof(reply),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
+    if(memcmp(reply,challenge_tag,16)!=0)return bad();
+    for(size_t i=16;i<sizeof(reply);i++)nz|=reply[i];
+    if(nz==0)return bad();
+    memcpy(out,reply+16,8);return 0;
+}
+int zxs_smb_try_current(int fd,int64_t start)
+{
+    if(!within(start,30000))return bad();
+    return zxs_smb_ctl_live(fd);
+}
+int zxs_smb_try_accept(int control)
+{
+    int newfd=-1;uint8_t tag[16]={0};
+    int rc=transfer(control,NULL,tag,sizeof(tag),-1,&newfd,ZXS_ATTEMPT_FD,true);
+    if(rc==-1)return -1;
+    if(memcmp(tag,begin_tag,sizeof(tag))!=0){if(newfd>=0)close(newfd);return bad();}
+    return rc==-2?-2:newfd;
+}
+int zxs_smb_try_issue(int fd,const uint8_t challenge[8])
+{
+    uint8_t reply[24];memcpy(reply,challenge_tag,16);memcpy(reply+16,challenge,8);
+    return transfer(fd,reply,NULL,sizeof(reply),-1,NULL,ZXS_NO_FD,true);
+}
+int zxs_smb_try_wait(int ctl,int life,const int *attempt,size_t n,uint8_t *events)
+{
+    if(n>ZXS_SMB_MAX_ATTEMPTS)return bad();
+    struct pollfd p[2+ZXS_SMB_MAX_ATTEMPTS]={0};
+    p[0]=(struct pollfd){.fd=ctl,.events=POLLIN|POLLRDHUP};
+    p[1]=(struct pollfd){.fd=life,.events=0}; /* ONLY pipe last-write loss */
+    for(size_t i=0;i<n;i++)p[i+2]=(struct pollfd){.fd=attempt[i],.events=POLLIN|POLLRDHUP};
+    memset(events,0,n+2);
+    int r=poll(p,n+2,500);
+    if(r<0 && errno==EINTR)return 0;
+    if(r<0)return -1;
+    for(size_t i=0;i<n+2;i++){
+        if(p[i].revents&(POLLNVAL|POLLERR)){
+            if(i==1)return bad(); /* an invalid anchor is not normal drain */
+            events[i]|=2;
+        }
+        if(p[i].revents&(POLLHUP|POLLRDHUP))events[i]|=2;
+        if(p[i].revents&POLLIN)events[i]|=1;
+    }
+    return 0;
 }
 int zxs_smb_ctl_live(int fd)
 {
     struct pollfd p={.fd=fd,.events=POLLIN|POLLRDHUP};
     int n;do {n=poll(&p,1,0);}while(n<0 && errno==EINTR);
-    /* Once qualified the startup stream carries no further messages.
-     * Readable data, EOF, half-close and descriptor errors all revoke it. */
+    /* Called only on the smbd receiving side after its expected reply.
+     * The worker sends nothing more here; any data, EOF or error revokes. */
     return n==0?0:bad();
 }
 int zxs_smb_ctl_drain(int fd){return shutdown(fd,SHUT_WR);}

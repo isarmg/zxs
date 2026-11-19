@@ -5,6 +5,9 @@ use super::{Credential,InitialReader,denied};
 use crate::{OperationId,PoolId,fs::invalid};
 use std::{fs::File,io,os::{fd::{AsRawFd,FromRawFd,OwnedFd},unix::fs::{FileExt,MetadataExt}},path::Path};
 
+#[path="smb_attempt.rs"]
+mod attempts;
+
 const BIND:&[u8;16]=b"ZXS-SAM/BOUND-1\0";
 const READY:&[u8;16]=b"ZXS-SAM/READY-1\0";
 const DOMAIN:[u8;12]=[1,4,0,0,0,0,0,5,21,0,0,0];
@@ -16,7 +19,7 @@ unsafe extern "C"{
     #[cfg(test)] fn zxs_smb_ctl_hello(fd:i32,p:*const u8)->i32;
     fn zxs_smb_ctl_bound(fd:i32,p:*mut u8)->i32;
     fn zxs_smb_ctl_write(fd:i32,p:*const u8,n:usize)->i32;
-    fn zxs_smb_ctl_live(fd:i32)->i32;
+    #[cfg(test)] fn zxs_smb_ctl_live(fd:i32)->i32;
     fn zxs_smb_ctl_life(fd:i32,timeout:i32)->i32;
     fn zxs_smb_ctl_drain(fd:i32)->i32;
 }
@@ -91,19 +94,7 @@ pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config
         let life=exchange(fd,&src,&e,&host,||{
             if original(&binding)?!=(host,stamp)||stopping(){return Err(denied());}Ok(())
         })?; // never an NT secret or password response
-        let mut draining=false;
-        loop{
-            if !draining&&(stopping()||unsafe{zxs_smb_ctl_live(fd)}!=0){
-                // All smbd peers see revocation; its idle parent's tevent
-                // watcher follows the normal clean exit. A half-close can
-                // never stand in for release of every inherited writer.
-                let _=unsafe{zxs_smb_ctl_drain(fd)};draining=true;
-            }
-            match unsafe{zxs_smb_ctl_life(life.as_raw_fd(),500)}{
-                1=>break,0=>(),_=>return Err(io::Error::last_os_error())
-            }
-        }
-        Ok(())
+        attempts::serve(fd,&life,stopping)
     })();
     drop(endpoint); // revoke the smbd end before releasing the original S, on errors too
     drop(src);result

@@ -260,3 +260,12 @@ bool zxs_runtime_connect_storage(void)
 	qualified=true;
 	return true;
 }
+
+/* This does not let a caller submit its own challenge or read a stored
+ * verifier. Only the exact, newly armed native SMB2 GENSEC context keeps
+ * the returned private descriptor. */
+int zxs_runtime_attempt(int64_t *started_msec)
+{
+	if (!zxs_runtime_storage_live()) { return -1; }
+	return zxs_smb_try_open(control_fd,started_msec);
+}

@@ -31,9 +31,15 @@ helper 供给的 `/instance/domain.bound` 正好 128 字节：`ZXS-SAM/BOUND-1\0
 
 只有在 smbd 已用同一配置字节并从真实专用 SAM 复验时，才向原通道发其 128B BOUND，并用同一消息只交接一件内核原物：专 smbd 刚建的匿名 Linux pipe 的只读端。写端不携数据，留在 smbd 及其 fork 的参与进程，禁止转交给第三方。存储进程独立持原 SYSTEM 目录 SH，用同一 SQLite 短读切面核 INIT/原卷标、唯一配对及其当前 SMB AccountId/凭据单和代次，域须为原本地域＋RID1000。受管 BOUND 在整个核对中保持原 FD、戳与相同字节。答复固定 212B：16B `ZXS-SAM/READY-1\0`、所核同一 BOUND、16B SMB AccountId、16B 凭据原单、8B 大端代次、28B 账户 SID。先完成字节数和原件核对才回复；不会选取或发送口令、NT 验证材料或 Web 凭据。成功仅描述启动瞬间证实的这份账户；不是 NTLM 验证、正面登录票、共享授权或目录就绪。
 
-握手有截止时间，只在第一条 BOUND 接收精确一个 kernel pipefs 的只读、非阻塞读端，拒普通文件、目录、可写/具名 FIFO、额外或截短的辅助数据；READY 不收 FD。以后不能经此通道查询账户或 FILE。存储停止先半关控制 socket，连空闲的专 smbd 父进程也由真实 tevent 读事件触发正常退出，子进程沿 Samba 原本的父死亡管道收尾。无论控制端仅半关还是整个 socket 已关，皆不证明所有参与者已关闭。非 root 存储进程不跨空闲持 SQL 事务，直到内核报告这根匿名 pipe **全部写端已经关闭**才正常释放本次原 S SH。宿主监督者另负责停止并回收整套受管进程（异常/卡住的不宣称已经排空）；未来各实际读写任务还必须持自己的原 S 租约到同步/flush/关闭，不能拿管道 EOF 当作其他服务已完成 FILE 的证据。私端断开、额外输入、换配置/实例，不能用另找的服务代替。一次握手不会让未来文件 I/O 绕过当时的账户和共享权限。
+握手有截止时间，只在第一条 BOUND 接收精确一个 kernel pipefs 的只读、非阻塞读端，拒普通文件、目录、可写/具名 FIFO、额外或截短的辅助数据；READY 不收 FD。以后不能经此通道查询账户或 FILE。存储停止先半关控制 socket，连空闲的专 smbd 父进程也由真实 tevent 读事件触发正常退出，子进程沿 Samba 原本的父死亡管道收尾。无论控制端仅半关还是整个 socket 已关，皆不证明所有参与者已关闭。非 root 存储进程不跨空闲持 SQL 事务，直到内核报告这根匿名 pipe **全部写端已经关闭**才正常释放本次原 S SH。宿主监督者另负责停止并回收整套受管进程（异常/卡住的不宣称已经排空）；未来各实际读写任务还必须持自己的原 S 租约到同步/flush/关闭，不能拿管道 EOF 当作其他服务已完成 FILE 的证据。私端断开、非预期的控制消息、换配置/实例，不能用另找的服务代替。一次握手不会让未来文件 I/O 绕过当时的账户和共享权限。
 
 待联调：由受信 supervisor 只交上述两端及原 BOUND；无账户、他池/实例、同形异域、错误控制地址、可写 BOUND、smbd/存储端异常关闭均不取得操作许可，双方关完真 FD 后 helper 才可取同一 S EX。当前只编写了真实 Linux 消息与 SQLite 行选择的源码用例；没有部署、运行或验过 Windows 登录。
+
+### 每次新 SMB2 握手的服务端挑战（仍无成功登录）
+
+真实的全新 SMB2 SESSION_SETUP 尚未建立会话时，只能为本次请求预取一次挑战。主通道拥塞立即拒本次登记；等待私端答复使用 Samba 原 tevent，十秒超时或取消即关本次等待和端点，不占用事件循环、未创建可访问的会话。其他连接/请求可先得到自己的答复。通用认证/RPC 调用、重认证、通道绑定、客户端改挑战或超时后在原上下文换挑战均被拒。专用 smbd 在这个上下文新建匿名 socketpair，向原已配对的 fd 3 发送 16B `ZXS-SAM/BEGIN-1\0` 和单独的对端 FD；多个 smbd 子进程在共用 fd 3 上**只发注册、不收挑战**。存储进程从系统随机源取 8B 非零值，仅向此次单独端点回复 16B `ZXS-SAM/CHLNG-1\0` 加原 8B。原 GENSEC 接手已就绪的这一个端点和挑战，正常对象销毁即关闭；以后查询不等待，按本机单调时钟和原私端复核，30 秒外即使远端还未关闭也拒。资格失败不改用 Samba 的其他随机源。
+
+每次受管进程配对最多同时保留 32 个待处理挑战，按各自的 30 秒期限清退；满时只拒新的一次；原 BEGIN 完整但内核未能交出一件正确的 FD 时也只拒本次。坏控制帧/关闭仍撤销整次运行配对。超时、对端结束或私端额外输入即放弃原尝试。内核 poll 最长每 500ms 清理，不能据仍有一个 FD 声称已经验证。停止时全撤，仍等原生命周期 pipe 的最后写端真正关闭。此处不查密码、不接收客户端证明、不计算会话密钥或写 SQL；挑战是非秘密数值。本阶段原生密码回调对这种上下文明确失败，不能回落到 SAM/guest 或拿挑战换会话。未运行的源码用例覆盖独立的本机端点、队列、缺 FD 和过期；专用源码构建的 tevent 小夹具让第二个真实可读回调先于仍无答复的第一个执行。未实测系统 FD 枯竭，也不是 Windows 登录验收。
 
 ## 文件并发要求（未接 VFS）
 
@@ -50,6 +56,6 @@ SQLite 首份手动 SAVE 的真实库路径已分开准备写者与读者：容�
 
 ## 来源与验收
 
-- 正式输入是 [Debian trixie 的 samba 源包](https://packages.debian.org/source/trixie/samba) `2:4.22.11+dfsg-0+deb13u1`。按 [Debian .dsc](https://deb.debian.org/debian/pool/main/s/samba/samba_4.22.11+dfsg-0+deb13u1.dsc) 核对 orig 25,620,416 B 的 SHA-256 `4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a`，Debian 源补丁 189,836 B 的 SHA-256 `0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03`。[九个原文件摘要](debian-trixie/inputs.sha256)绑定本补丁输入；其中 `source3/param/loadparm.c` 的输入已含 Debian `usershare.patch`（默认 0→100）；ZXS 仍要求有效值为 0。其他列出的 Debian 原文件未被该补丁集更改。当前仅来源字节与补丁静审，**没有**替代 Debian 信任链验签；最终发行应验镜像/包签名及修补支持。源版本或补丁改变，必须重新独立适配，不换回任意同名 smbd。
+- 正式输入是 [Debian trixie 的 samba 源包](https://packages.debian.org/source/trixie/samba) `2:4.22.11+dfsg-0+deb13u1`。按 [Debian .dsc](https://deb.debian.org/debian/pool/main/s/samba/samba_4.22.11+dfsg-0+deb13u1.dsc) 核对 orig 25,620,416 B 的 SHA-256 `4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a`，Debian 源补丁 189,836 B 的 SHA-256 `0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03`。[十四个原文件摘要](debian-trixie/inputs.sha256)绑定本补丁输入；其中 `source3/param/loadparm.c` 的输入已含 Debian `usershare.patch`（默认 0→100）；ZXS 仍要求有效值为 0。其他列出的 Debian 原文件未被该补丁集更改。当前仅来源字节与补丁静审，**没有**替代 Debian 信任链验签；最终发行应验镜像/包签名及修补支持。源版本或补丁改变，必须重新独立适配，不换回任意同名 smbd。
 - 此补丁只针对隔离的专用构建及其私有 Samba 库，**不得替换**宿主发行版的 smbd 或共享库；helper 首次供给使用它自己核定的正常 Samba 供给接口。补丁按原文件的 GPL-3.0-or-later 条款，见 [COPYING](debian-trixie/COPYING)。无包安装/编译/运行。
 - 待验：截短/多字节/错误域/用户 SID 的 BOUND、错/可写配置，带 include 或重定向的配置，以及相同文本换新 inode、父进程/子进程重新检查时换 secrets.tdb（保留原文件），均拒。没有真实预配时须先拒，未读任何真实密钥；坏配置首次启动及热重载；空私目录不得产域、正确原域启动、同名其他实例不可替代；错误密码与**完全无凭据**的 IPC$/枚举分别拒，Web 用户跨入拒，唯一 SMB 用户从冷 Windows 连接在 RO/RW 上读/写符合 SQL；两独立打开与断线见上。每一项都要在完整受管发行及真实 handler 上取得证据，不能以配置文本、STATUS_OK 或源码审阅冒充通过。
