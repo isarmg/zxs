@@ -25,7 +25,7 @@ pub(in crate::ordinary) use windows::WorkWindow;
 use credits::{Credits,Effect};
 
 pub(crate) const MAX_JOURNAL:usize=8*1024*1024;
-pub(in crate::ordinary) const MAX_DECISIONS:usize=8192;
+pub(crate) const MAX_DECISIONS:usize=8192;
 pub(super) const INTENT:&CStr=c"FILE-INTENT";
 const INTENT_MAGIC:&[u8]=b"ZXS/ORIGINAL-FILE-INTENT\0";
 const MAX_INTENT:usize=MAX_FRAME+256;

@@ -22,15 +22,23 @@ impl First{
             return Err(invalid("not the confirmed first-account cut of this original pool"));}
         let mut r=In(e.body.strip_prefix(DOMAIN).ok_or_else(||invalid("unknown account decision domain"))?);
         if r.byte()?!=1{return Err(invalid("unsupported original account action"));}
-        let operation=OperationId(r.id()?);let account=AccountId(r.id()?);let operator_ref=r.id()?;
+        let operation=OperationId(r.id()?);
+        Self::original_terms(pool,init,operation,e.request,e.digest,r.0)
+    }
+
+    /// The same account birth terms in both positively selected register
+    /// families. This parses original fields, not storage authorization:
+    /// the caller must prove sequence one, exact original/pool and floor.
+    pub(crate) fn original_terms(pool:PoolId,init:OperationId,operation:OperationId,request:[u8;32],decision:[u8;32],terms:&[u8])->io::Result<Self>{
+        let mut r=In(terms);let account=AccountId(r.id()?);let operator_ref=r.id()?;
         let name=r.short_buf()?;
-        if operation==init||!(1..=64).contains(&name.len())||!name[0].is_ascii_alphanumeric()||
+        if operation.0==[0;16]||operation==init||!(1..=64).contains(&name.len())||!name[0].is_ascii_alphanumeric()||
             !name.iter().all(|c|c.is_ascii_lowercase()||c.is_ascii_digit()||b"._-".contains(c)){
             return Err(invalid("invalid first-account operation or exact login name"));}
         let salt=r.fixed()?;let tag=r.fixed()?;r.end()?;
-        if original_request(pool,operation,account,operator_ref,name)?!=e.request{
+        if original_request(pool,operation,account,operator_ref,name)?!=request{
             return Err(invalid("altered original first-account request"));}
-        Ok(Self{account,operation,decision:e.digest,login:std::str::from_utf8(name).expect("checked ASCII login").into(),salt,tag})
+        Ok(Self{account,operation,decision,login:std::str::from_utf8(name).expect("checked ASCII login").into(),salt,tag})
     }
     /// Actual upstream KDF verification, *not* a bearer grant. A named native
     /// prefix must still be checked after this slower, short-lock-free step.
