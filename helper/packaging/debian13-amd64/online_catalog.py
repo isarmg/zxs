@@ -13,6 +13,7 @@ from archive_inputs import (KEYRING, copy_checked, hashes, one, paragraphs, rela
                             release_time, require)
 from samba_capsule import COMP, DOC, LIB, LIBNAME, PKG, cleaned, resolve
 from online_sources import command
+from online_dynamic import MEMBERS, libc_identity
 
 BIN="main/binary-amd64/Packages.xz"
 SRC="main/source/Sources.xz"
@@ -135,7 +136,9 @@ class Catalog:
                     parent,_,leaf=name.rpartition("/")
                     lib=parent==LIB and LIBNAME.fullmatch(leaf)
                     license_=pkg=="base-files" and parent==COMMON.rstrip("/") and COMP.fullmatch(leaf)
-                    if not lib and not license_ and name not in (doc,doc+"/copyright"):continue
+                    gconv=pkg=="libc6" and name in MEMBERS
+                    if not lib and not license_ and not gconv and name not in (doc,doc+"/copyright"):continue
+                    if gconv:require(m.isfile() and not m.islnk(),"gconv requires an original regular member")
                     require(name not in table and len(table)<1024,"duplicate or excessive selected package files")
                     if m.issym():
                         t=m.linkname
@@ -163,6 +166,18 @@ class Catalog:
             require(p.wait()==0,"invalid Debian data archive")
         self.tables[pkg]=table
         return table
+
+    def check_libc(self):
+        require("libc6" in self.rows,"qualified signed libc6 not present")
+        row=self.rows["libc6"][1];libc_identity(row,source_key(row))
+
+    def libc_member(self,name):
+        require(name in MEMBERS,"not a selected glibc conversion resource")
+        self.check_libc()
+        table=self.table("libc6")
+        require(name in table and table[name][0]=="libc6" and table[name][1] is not None
+                and table[name][2] is None,"missing exact regular gconv member in signed libc6")
+        return table[name][1],{"binary_package":"libc6","member":name}
 
     def external(self,leaf):
         pkg=self.provider(leaf)

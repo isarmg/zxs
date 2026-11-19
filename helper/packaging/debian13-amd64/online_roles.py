@@ -1,9 +1,10 @@
-"""Construct separate unsigned, ELF-only role views in the private build tree. Not a launcher."""
+"""Construct separate unsigned, per-role runtime materials in the private build tree. Not a launcher."""
 import os
 import shutil
 
 from archive_inputs import copy_checked, digest, require
 from online_catalog import COMMON
+from online_dynamic import CODECS, data_files, has_gconv_export, verify_view
 from online_objects import PREFIX, ROLES
 from samba_capsule import DIRECTORIES, LIB, LIBNAME, LOADER, elf_profile, inspected, resolve
 
@@ -33,12 +34,18 @@ def select(name,search,rebuilt):
 
 def role(root,program,objects,catalog,built):
     expected=built["objects"];seen={};provided={};total=0
-    queue=[program,RAW_LOADER]
+    smbd=program==PREFIX+"/"+ROLES[0]
+    require(smbd or program==PREFIX+"/"+ROLES[1],"unrecognized program role")
+    codecs=CODECS if smbd else ()
+    queue=[program,RAW_LOADER,*codecs]
     while queue:
         name=queue.pop()
         if name in seen:continue
         is_prog=name==program
-        if name in expected:
+        if name in codecs:
+            file,origin=catalog.libc_member(name);size=file.stat().st_size;sha=digest(file)
+            origin=dict(origin,requested_by="glibc fixed gconv table")
+        elif name in expected:
             record=expected[name];size=record["size"];sha=record["sha256"];file=objects/name
             origin={"rebuilt":record["source"]}
         else:
@@ -52,7 +59,13 @@ def role(root,program,objects,catalog,built):
         mode=0o755 if is_prog or name==RAW_LOADER else 0o644;dest.chmod(mode)
         # Reparse the selected bytes in this role, not a manifest's NEEDED claims.
         deps,search,soname=release_profile(dest,is_prog)
-        if not is_prog:
+        if name in codecs:
+            # The loader requests an exact /gconv/<leaf>, not its SONAME. The
+            # two shipped converter files must actually export the native entry.
+            require(soname in {None,name.rsplit("/",1)[1]} and
+                    has_gconv_export(inspected(["-W","--dyn-syms","--",str(dest)])),
+                    "gconv module lacks a defined callable gconv entry or names another provider")
+        elif not is_prog:
             require(soname==name.rsplit("/",1)[1] and soname not in provided,
                     "wrong or competing provider of SONAME within the role")
             provided[soname]=name
@@ -70,6 +83,11 @@ def role(root,program,objects,catalog,built):
                   "mode":seen[RAW_LOADER]["mode"],"size":seen[RAW_LOADER]["size"]}
     require(all(n in seen for r in seen.values() for _,n in r.get("needed",[])) and
             sum(n.startswith(PREFIX+"/") for n in seen)==1,"unresolved role or second program")
+    if smbd:
+        data=data_files(root,catalog)
+        require(seen.keys().isdisjoint(data),"generated files collide with ELF inputs")
+        seen.update(data)
+    verify_view(root,seen,RAW_LOADER,INTERP)
     return dict(sorted(seen.items()))
 
 def assemble(roots,objects,materials,catalog,built):
@@ -97,6 +115,6 @@ def assemble(roots,objects,materials,catalog,built):
     source=catalog.corresponding_sources()
     # Bind the actual notice texts too, not just an upstream source URL.
     notice_hashes={p.relative_to(notices).as_posix():digest(p) for p in sorted(notices.rglob("*")) if p.is_file()}
-    return {"scope":"unsigned ELF link inputs, not install or start authorization",
+    return {"scope":"unsigned per-role ELF and limited smbd initialization inputs; not authorization",
             "roles":results,"binary_packages":dict(sorted(catalog.archives.items())),
             "source_packages":source,"notices_sha256":notice_hashes}

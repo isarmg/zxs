@@ -21,7 +21,7 @@ BUILD=Path("/build/zxs-smb-v1")
 RUST=Path("/opt/zxs-rust-1.100.0/bin")
 LOCK="online-sources.json"
 RECIPE=("online_smb_build.py","online_sources.py","online_objects.py","samba_capsule.py",
-        "archive_inputs.py","online_catalog.py","online_roles.py",LOCK,"online-smb.md")
+        "archive_inputs.py","online_catalog.py","online_roles.py","online_dynamic.py",LOCK,"online-smb.md")
 FORMAT=r"[a-f0-9]{64}"
 TARGET="x86_64-unknown-linux-gnu"
 
@@ -89,6 +89,7 @@ def main():
     materials=srcs/"external";materials.mkdir(); members=work/"package-members";members.mkdir()
     catalog=Catalog({"trixie":a.debian_mirror,"trixie-security":a.debian_security_mirror},
                     materials,members,pin["runtime_debian"],inventory,env)
+    catalog.check_libc()  # dynamic resource profile must match before compilation
     copy_checked(a.toolchain_materials,srcs/"toolchain-source-and-notices.archive",a.materials_sha256,cap=1<<30)
     recipes=srcs/"recipe";recipes.mkdir()
     for name in RECIPE:shutil.copyfile(HERE/name,recipes/name)
@@ -124,7 +125,7 @@ def main():
     catalog.current()  # A long build can cross the signed Valid-Until.
     as_json(BUILD/"UNSIGNED-ELF-ROLES.json",linked)
     flag.unlink()
-    print("Created separate unsigned ELF role materials; not deployable, no service or trust record.")
+    print("Created unsigned role-specific ELF and initialization materials; not deployable, no service or trust record.")
 
 if __name__=="__main__":
     main()
