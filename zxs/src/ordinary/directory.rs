@@ -2,7 +2,7 @@
 //! prefix. An ordinary directory contains no private FILE metadata.
 pub(in crate::ordinary) mod types;
 pub(in crate::ordinary) mod operand;
-mod path;
+pub(in crate::ordinary) mod path;
 pub(in crate::ordinary) mod inventory;
 pub(in crate::ordinary) mod file_start;
 pub(in crate::ordinary) mod file_home;

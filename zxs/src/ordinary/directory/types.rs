@@ -18,7 +18,7 @@ impl Parent{
         b.extend_from_slice(&self.volume().0);
         match self{Self::Root(_)=>b.push(0),Self::Child(_,id)=>{b.push(1);b.extend_from_slice(&id.0);}}
     }
-    fn get(r:&mut In<'_>)->io::Result<Self>{
+    pub(in crate::ordinary) fn get(r:&mut In<'_>)->io::Result<Self>{
         let v=VolumeId(r.id()?);match r.byte()?{0=>Ok(Self::Root(v)),1=>Ok(Self::Child(v,DirectoryId(r.id()?))),
             _=>Err(invalid("unknown ordinary parent address"))}
     }

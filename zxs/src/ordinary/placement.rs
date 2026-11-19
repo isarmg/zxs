@@ -22,13 +22,15 @@ impl<'a> Placement<'a>{
     pub(super) fn birth(self)->&'a Frame{self.birth}
     pub(super) fn transfer(self)->Option<&'a Moved>{self.applied}
     pub(super) fn volume(self)->VolumeId{self.applied.map_or(self.birth.create.volume,|m|m.original.to)}
-    /// Only ordinary endpoints participate in a parent namespace. Today's
-    /// admitted custody frames name registered roots; a DELETE ends at R,
-    /// not at a synthetic ordinary root on the recycle filesystem.
-    pub(in crate::ordinary) fn ordinary_parent(self)->Option<super::DirectoryParent>{
-        if self.retained().is_some(){return None;}
-        Some(self.applied.map_or_else(||self.birth.create.parent.address(self.birth.create.volume),
-            |m|super::DirectoryParent::Root(m.original.to)))
+    /// A retained FILE has no ordinary name, and an old birth is not an
+    /// address for a later MOVE/restore. Both facts come from real decisions.
+    pub(in crate::ordinary) fn ordinary_parent(self)->io::Result<Option<super::DirectoryParent>>{
+        match self.applied{None=>Ok(Some(self.birth.create.parent.address(self.birth.create.volume))),
+            Some(m)=>Ok(m.original.ends()?.1.ordinary())}
+    }
+    pub(in crate::ordinary) fn retained_from(self)->io::Result<Option<super::DirectoryParent>>{
+        match self.applied{Some(m) if matches!(m.original.purpose,Purpose::Delete{..})=>Ok(m.original.ends()?.0.ordinary()),
+            _=>Ok(None)}
     }
     pub(super) fn epoch(self)->u64{self.applied.map_or(0,|m|m.original.epoch+1)}
     pub(super) fn key(self)->[u8;32]{self.applied.map_or(self.birth.digest,|m|m.digest)}
@@ -43,6 +45,7 @@ impl<'a> Placement<'a>{
         let c=&self.birth.create;
         if o.file!=c.file||o.entry!=c.entry||o.history!=c.history||o.creation!=self.birth.digest||
             o.uid!=c.uid||o.name!=c.name||o.from!=self.volume()||o.epoch!=self.epoch()||o.from==o.to||
+            o.ends()?.0.ordinary()!=self.ordinary_parent()?||
             self.applied.is_some_and(|m|m.original.dst_root!=o.src_root){
             return Err(invalid("custody handoff does not start at this FILE's exact prior placement"));
         }

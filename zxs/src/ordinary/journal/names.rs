@@ -1,7 +1,8 @@
 //! In-memory projection of confirmed SYSTEM names. There is no store or
 //! independent selector here. An occupied destination is enough to refuse;
 //! withdrawing an ordinary source requires its exact confirmed FILE identity.
-use super::{MoveOrigin,active_names};
+use super::MoveOrigin;
+use crate::ordinary::custody::transfer::ParentEnd as End;
 use crate::{EntryId,FileId,VolumeId,identity::DirectoryId,fs::invalid};
 use std::{collections::BTreeMap,io};
 
@@ -58,26 +59,37 @@ impl Names{
     pub(super) fn hide_created(&mut self,parent:Parent,name:&str,entry:EntryId,file:FileId)->io::Result<()>{
         self.withdraw(parent,name,Member::File{entry,file})
     }
-    fn endpoints(&self,from:VolumeId,to:VolumeId,name:&str,expected:Option<Member>)->io::Result<()>{
-        if from==to||self.root(from,name)!=expected||self.occupied_root(to,name){
-            return Err(invalid("ordinary source is not this registered FILE entry or destination name is occupied"));
-        }Ok(())
+    fn endpoints(&self,from:End,to:End,name:&str,file:Member)->io::Result<()>{
+        if from.volume()==to.volume()||!matches!(file,Member::File{..}){return Err(invalid("different registered custody volumes and an original FILE required"));}
+        let leaf=file.leaf(name)?;
+        let member_at=|p|self.leaves.get(&p).and_then(|s|s.get(&leaf)).copied();
+        // Both the business spelling and the native container leaf must
+        // name this exact FILE. A recycle root never acquires an ordinary row.
+        match from{
+            End::Ordinary(p) if self.get(p,name)==Some(file)&&member_at(p)==Some(file)=>{},
+            End::Recycle(v) if !self.occupied_root(v,name)&&member_at(Parent::Root(v)).is_none()=>{},
+            _=>return Err(invalid("source does not own this exact original FILE entry and native leaf")),
+        }
+        match to{
+            End::Ordinary(p)=>self.vacancy(p,name,file)?,
+            End::Recycle(v) if !self.occupied_root(v,name)&&member_at(Parent::Root(v)).is_none()=>{},
+            _=>return Err(invalid("dedicated recycle endpoint acquired an ordinary entry")),
+        }
+        Ok(())
     }
     pub(super) fn require_handoff(&self,o:&MoveOrigin)->io::Result<()>{
-        let(src,dst)=active_names(o);
-        if dst{self.vacancy(Parent::Root(o.to),&o.name,Member::File{entry:o.entry,file:o.file})?;}
-        self.endpoints(o.from,o.to,&o.name,src.then_some(Member::File{entry:o.entry,file:o.file}))
+        let(from,to)=o.ends()?;self.endpoints(from,to,&o.name,Member::File{entry:o.entry,file:o.file})
     }
-    /// A dedicated endpoint never contributes an ordinary entry. Undo is
-    /// confined to the one exact complete-but-unconfirmed candidate already
-    /// authenticated by the preceding floor, intent and original reservation.
+    /// Undo just the exact complete-but-unconfirmed candidate. R is never
+    /// inserted. Parent-local names and private tickets stay where issued.
     pub(super) fn apply_handoff(&mut self,o:&MoveOrigin,undo:bool)->io::Result<()>{
-        let(src,dst)=active_names(o);
-        let(from,to,remove,add)=if undo{(o.to,o.from,dst,src)}else{(o.from,o.to,src,dst)};
-        let file=Member::File{entry:o.entry,file:o.file};
-        self.endpoints(from,to,&o.name,remove.then_some(file))?;
-        if remove{self.withdraw(Parent::Root(from),&o.name,file)?;}
-        if add{self.enter(Parent::Root(to),&o.name,file)?;}
+        let(src,dst)=o.ends()?;let(from,to)=if undo{(dst,src)}else{(src,dst)};
+        self.apply_pair(from,to,&o.name,Member::File{entry:o.entry,file:o.file})
+    }
+    fn apply_pair(&mut self,from:End,to:End,name:&str,file:Member)->io::Result<()>{
+        self.endpoints(from,to,name,file)?;
+        if let End::Ordinary(p)=from{self.withdraw(p,name,file)?;}
+        if let End::Ordinary(p)=to{self.enter(p,name,file)?;}
         Ok(())
     }
 }
@@ -90,8 +102,9 @@ mod tests{
         let a=VolumeId([1;16]);let b=VolumeId([2;16]);let e=EntryId([3;16]);let f=FileId([4;16]);
         let g=DirectoryId([5;16]);let h=DirectoryId([6;16]);let other=EntryId([7;16]);
         let file=Member::File{entry:e,file:f};let dir=Member::Directory{entry:other,directory:g};
+        let(ea,eb)=(End::Ordinary(Parent::Root(a)),End::Ordinary(Parent::Root(b)));
         let mut n=Names::default();n.enter(Parent::Root(a),"report",dir).unwrap();
-        assert!(n.occupied_root(a,"report"));assert!(n.endpoints(a,b,"report",Some(file)).is_err());
+        assert!(n.occupied_root(a,"report"));assert!(n.endpoints(ea,eb,"report",file).is_err());
         assert!(n.create_file(Parent::Root(a),"report",e,f).is_err());assert!(n.hide_created(Parent::Root(a),"report",e,f).is_err());
         n.create_file(Parent::Child(a,g),"report",e,f).unwrap();n.enter(Parent::Child(a,h),"report",dir).unwrap();
         assert_eq!(n.get(Parent::Child(a,g),"report"),Some(file));assert_eq!(n.get(Parent::Child(a,h),"report"),Some(dir));
@@ -101,10 +114,43 @@ mod tests{
         assert_eq!(n.get(Parent::Child(a,g),"report"),None);
         assert_eq!(n.get(Parent::Child(a,h),"report"),Some(dir));assert_eq!(n.root(a,"report"),Some(dir));
         n.withdraw(Parent::Root(a),"report",dir).unwrap();n.create_file(Parent::Root(a),"report",e,f).unwrap();
-        assert!(n.endpoints(a,b,"report",Some(Member::File{entry:other,file:f})).is_err());
-        assert!(n.endpoints(a,b,"report",Some(Member::File{entry:e,file:FileId([8;16])})).is_err());
-        n.endpoints(a,b,"report",Some(file)).unwrap();n.enter(Parent::Root(b),"report",dir).unwrap();
-        assert!(n.endpoints(a,b,"report",Some(file)).is_err());assert_eq!(n.root(b,"report"),Some(dir));
+        assert!(n.endpoints(ea,eb,"report",Member::File{entry:other,file:f}).is_err());
+        assert!(n.endpoints(ea,eb,"report",Member::File{entry:e,file:FileId([8;16])}).is_err());
+        n.endpoints(ea,eb,"report",file).unwrap();n.enter(Parent::Root(b),"report",dir).unwrap();
+        assert!(n.endpoints(ea,eb,"report",file).is_err());assert_eq!(n.root(b,"report"),Some(dir));
+    }
+    #[test]
+    fn both_directions_change_only_the_exact_direct_parents_never_an_ordinary_recycle_row(){
+        let a=VolumeId([1;16]);let b=VolumeId([2;16]);let r=VolumeId([3;16]);
+        let left=Parent::Child(b,DirectoryId([4;16]));let right=Parent::Child(b,DirectoryId([5;16]));
+        let here=Parent::Root(a);let root=End::Ordinary(here);let to_left=End::Ordinary(left);let to_right=End::Ordinary(right);let bin=End::Recycle(r);
+        let f=Member::File{entry:EntryId([6;16]),file:FileId([7;16])};
+        let sibling=Member::File{entry:EntryId([8;16]),file:FileId([9;16])};
+        let mut names=Names::default();names.enter(here,"report",f).unwrap();names.enter(right,"report",sibling).unwrap();
+        names.apply_pair(root,to_left,"report",f).unwrap();assert_eq!(names.get(left,"report"),Some(f));
+        names.apply_pair(to_left,root,"report",f).unwrap();assert_eq!(names.get(here,"report"),Some(f));
+        names.apply_pair(root,to_left,"report",f).unwrap();names.apply_pair(to_left,bin,"report",f).unwrap();
+        assert_eq!(names.get(left,"report"),None);assert!(!names.occupied_root(r,"report"));
+        assert!(names.apply_pair(bin,to_right,"report",f).is_err());assert_eq!(names.get(right,"report"),Some(sibling));
+        names.apply_pair(bin,root,"report",f).unwrap();assert!(!names.occupied_root(r,"report"));
+        names.apply_pair(root,bin,"report",f).unwrap();names.apply_pair(bin,to_left,"report",f).unwrap();
+        assert_eq!(names.get(left,"report"),Some(f));assert_eq!(names.get(right,"report"),Some(sibling));
+        assert_eq!(names.get(Parent::Root(b),"report"),None);assert!(!names.occupied_root(r,"report"));
+    }
+    #[test]
+    fn native_collision_in_one_child_cannot_withdraw_from_a_different_parent_on_failed_handoff_or_undo(){
+        let a=VolumeId([1;16]);let b=VolumeId([2;16]);let id=FileId([3;16]);
+        let file=Member::File{entry:EntryId([4;16]),file:id};
+        let blocker=Member::Directory{entry:EntryId([5;16]),directory:DirectoryId([6;16])};
+        let src=Parent::Child(a,DirectoryId([7;16]));let dst=Parent::Child(b,DirectoryId([8;16]));
+        let display="Report.xlsx";let key=String::from_utf8(file.leaf(display).unwrap()).unwrap();
+        let mut n=Names::default();n.enter(src,display,file).unwrap();n.enter(dst,&key,blocker).unwrap();
+        assert_eq!(n.get(dst,display),None);assert!(n.apply_pair(End::Ordinary(src),End::Ordinary(dst),display,file).is_err());
+        assert_eq!(n.get(src,display),Some(file));assert_eq!(n.get(dst,&key),Some(blocker));
+        n.withdraw(dst,&key,blocker).unwrap();n.apply_pair(End::Ordinary(src),End::Ordinary(dst),display,file).unwrap();
+        n.enter(src,&key,blocker).unwrap();
+        assert!(n.apply_pair(End::Ordinary(dst),End::Ordinary(src),display,file).is_err());
+        assert_eq!(n.get(dst,display),Some(file));assert_eq!(n.get(src,&key),Some(blocker));
     }
     #[test]
     fn exact_display_names_share_one_typed_namespace_without_case_or_unicode_aliases(){

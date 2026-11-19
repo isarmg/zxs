@@ -8,7 +8,7 @@ pub(super) const SLOTS:u8=8;
 const MAGIC:&[u8]=b"ZXS/ORIGINAL-ALLOCATE-EMPTY\0";
 pub(super) const MAX:usize=1024;
 // Distinct commands, never an omitted parent field or two representations of
-// a root birth. Child images remain ineligible for the serving journal.
+// a root birth. A child reservation alone is not a serving FILE decision.
 const CHILD_MAGIC:&[u8]=b"ZXS/ORIGINAL-ALLOCATE-IN-DIRECTORY/1\0";
 const NATIVE:usize=16+1+fs::MAX_BIRTH;
 const MAX_CHILD_IMAGE:usize=CHILD_MAGIC.len()+2*NATIVE+7*16+4+8+32+1+super::wire::MAX_HUMAN+16+32+NATIVE+32+32;
@@ -114,24 +114,38 @@ impl Allocation{
         if let Some(s)=&stage{require_stage(&parent,&root,&issuer,s)?;}
         Ok(Self{pool,parent,op,volume,entry,file,history,uid,seq,previous,name,request,attempt,root,stage,digest,stamp,bytes})
     }
-    /// A decoded operand alone (including a child operand) may not mutate a
-    /// volume root. Re-open the issuing SYSTEM prefix on the same writer and
-    /// require the exact live slot, native root, contents and binding.
-    pub(super) fn require_root_writer(&self,v:&crate::pool::lease::FileVolume<'_>)->io::Result<()>{
-        if self.parent!=BirthParent::Root||self.pool!=v.pool.id()||self.volume!=v.id()
-            ||!matches!(v.pool.access,crate::pool::lease::Access::Write){return Err(invalid("not a root FILE allocation on this issuing writer"));}
-        v.require_current()?;
-        if self.root.entity!=v.root.entity||self.root.birth!=fs::Birth::read(&v.root.file)?
-            ||v.pool.snapshot()?.1.allocated.as_ref()!=Some(self){return Err(invalid("root FILE allocation is not the admitted original slot"));}
-        Ok(())
+    pub(super) fn require_writer(&self,h:&super::directory::path::HeldParent<'_,'_>)->io::Result<()>{
+        let v=h.volume();if self.pool!=v.pool.id()||self.volume!=v.id()||
+            !matches!(v.pool.access,crate::pool::lease::Access::Write)||!self.parent.identifies(v.id(),h.basis()){
+            return Err(invalid("not the original FILE creation parent on this writer"));}
+        let(_,s)=v.pool.snapshot()?;h.require_at(&s)?;
+        if self.root.entity!=v.root.entity||self.root.birth!=fs::Birth::read(&v.root.file)?||s.allocated.as_ref()!=Some(self){
+            return Err(invalid("FILE birth is not the admitted original slot and registered ordinary root"));}Ok(())
     }
-    pub(super) fn bind(&self,v:&crate::pool::lease::FileVolume<'_>,stage:&Stage)->io::Result<()>{
-        // after_mkdir may have interrupted or changed an operand. The write
-        // itself requires the issuing root, not a caller-supplied parent tag.
-        self.require_root_writer(v)?;
-        if self.stage.is_some(){return Err(invalid("not an unbound root FILE directory"));}
-        require_stage(&self.parent,&self.root,&NativeObject::stamp(&self.stamp),stage)?;
-        v.pool.system.bind_attempt(NAME,&self.stamp,MAX,&binding(self.digest,None)?,&binding(self.digest,Some(stage))?)
+    /// No detached Stage can reach the phase write. Allocate on the held
+    /// parent, retain the newly-created native object across the callback,
+    /// and recheck the same request, parent, namespace and object before
+    /// binding. An unbound earlier empty slot is never adopted or deleted.
+    pub(super) fn bind_fresh(&self,h:&super::directory::path::HeldParent<'_,'_>,after_mkdir:impl FnOnce()->io::Result<()>)->io::Result<()>{
+        use super::material;
+        self.require_writer(h)?;if self.stage.is_some(){return Err(invalid("original FILE ticket is already bound"));}
+        // Each census already proved exactly one continuous prefix of real
+        // unlabelled, empty, same-mount slots. Consume its observed names; do
+        // not reopen the same private directories just to count that prefix.
+        let used=|names:&[Vec<u8>]|(0..SLOTS).take_while(|&i|{let n=material::staging(self.attempt,i);
+            names.iter().any(|x|x.as_slice()==n.to_bytes())}).count();
+        let p=h.directory();let before=material::check_birth_name(h,&self.name,self.file,false)?;
+        let slot=used(&before) as u8;if slot>=SLOTS{return Err(invalid("original ticket exhausted; preserve unbound private entries"));}
+        let leaf=material::staging(self.attempt,slot);let dir=p.new_child_directory(&leaf)?;
+        dir.only(None)?;dir.file.sync_all()?;p.file.sync_all()?;after_mkdir()?;
+        self.require_writer(h)?;let after=material::check_birth_name(h,&self.name,self.file,false)?;
+        if used(&after)!=usize::from(slot)+1{return Err(invalid("original private prefix changed before binding its new last object"));}
+        let same=p.exact_directory(&leaf)?.ok_or_else(||invalid("new private FILE stage disappeared"))?;
+        let object=NativeObject{entity:dir.entity,birth:fs::Birth::read(&dir.file)?};
+        if same.entity!=object.entity||fs::Birth::read(&same.file)?!=object.birth||!same.same_mount(&dir)?||same.label()?.is_some(){
+            return Err(invalid("new private FILE stage was replaced"));}dir.only(None)?;dir.require_named()?;
+        let stage=Stage{slot,object};require_stage(&self.parent,&self.root,&NativeObject::stamp(&self.stamp),&stage)?;
+        h.volume().pool.system.bind_attempt(NAME,&self.stamp,MAX,&binding(self.digest,None)?,&binding(self.digest,Some(&stage))?)
     }
     pub(super) fn bound(&self)->io::Result<&Stage>{self.stage.as_ref().ok_or_else(||invalid("original FILE directory not yet bound"))}
     pub(super) fn matches(&self,f:&Frame)->bool{

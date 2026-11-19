@@ -132,3 +132,25 @@ fn same_spelled_substitute_cannot_supply_the_original_parent_for_public_list_or_
     assert_eq!(host::read(stranger.join("inner/sentinel")).unwrap(),b"not the original parent");
     assert_eq!(host::read_dir(stranger.join("inner")).unwrap().count(),1);
 }
+
+#[test]
+#[ignore="two original private filesystems; real same-parent read sample and strict membership"]
+fn one_direct_parent_sample_never_serves_a_sibling_or_a_second_directory_view(){
+    let f=F::new();let top=f.top();
+    let root_file=crate::create_empty(&f.sys,op(),f.aid,"report").unwrap();
+    let l=make_directory(&f.sys,op(),top,"left").unwrap();let r=make_directory(&f.sys,op(),top,"right").unwrap();
+    let left=Parent::Child(f.aid,l.directory);let right=Parent::Child(f.aid,r.directory);
+    let a=make_directory(&f.sys,op(),left,"inside").unwrap();let b=make_directory(&f.sys,op(),right,"inside").unwrap();
+    assert_ne!(a.directory,b.directory);assert_ne!(a.entry,b.entry);
+    assert_eq!(list_directory(&f.sys,left).unwrap().entries,[DirectoryEntry::Directory(a)]);
+    assert_eq!(list_directory(&f.sys,right).unwrap().entries,[DirectoryEntry::Directory(b)]);
+    assert!(ordinary::lookup_file_at(&f.sys,left,"report").unwrap().is_none());
+    assert_eq!(ordinary::lookup_file_at(&f.sys,top,"report").unwrap().unwrap(),root_file);
+    let(pool,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let v=pool.ordinary(f.aid).unwrap();
+    let h=HeldParent::at_cut(&v,left,&s).unwrap();let sample=h.begin_listing(&s).unwrap();
+    assert!(sample.names().contains(&b"inside"[..]));
+    assert!(crate::ordinary::directory::path::read_parent(&v,&s,right,|_,_,_|Ok(())).is_err());
+    let foreign=f.a.join("left").join("unknown");host::write(&foreign,b"not a FILE or directory decision").unwrap();
+    assert!(h.finish_listing(&s).is_err());assert_eq!(host::read(&foreign).unwrap(),b"not a FILE or directory decision");
+    drop(h);drop(v);drop(pool);assert!(list_directory(&f.sys,left).is_err());assert!(list_directory(&f.sys,right).is_ok());
+}

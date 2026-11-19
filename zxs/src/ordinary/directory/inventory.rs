@@ -8,7 +8,7 @@ use std::{collections::{BTreeMap,BTreeSet},ffi::{CStr,CString},io};
 pub(super) fn human(name:&str)->io::Result<CString>{
     Ok(crate::ordinary::storage_name::DirectoryName::parse(name.as_bytes())?.leaf())
 }
-pub(super) fn same_child(dir:&HeldDir,original:&NativeObject)->io::Result<()>{
+pub(in crate::ordinary) fn same_child(dir:&HeldDir,original:&NativeObject)->io::Result<()>{
     if dir.entity!=original.entity||fs::Birth::read(&dir.file)?!=original.birth||dir.label()?.is_some(){
         return Err(invalid("ordinary directory is not its original unlabelled native child"));}
     dir.require_named()
@@ -78,15 +78,16 @@ pub(super) fn census(parent:&HeldParent<'_,'_>,s:&Journal)->io::Result<BTreeSet<
     let mut known=observe(s,address,dir,&raw)?.consumed;
     let mut file_tickets=BTreeMap::new();
     for f in s.on_all().filter(|f|f.create.parent.address(f.create.volume)==address){file_tickets.insert(f.create.attempt,f.create.slot);}
-    // Current handoffs issue ordinary destination private names only at a
-    // registered root. R and a same-volume child do not inherit the ticket.
-    for m in s.moves().filter(|m|Parent::Root(m.original.to)==address&&
-        !matches!(m.original.purpose,crate::ordinary::custody::purpose::Purpose::Delete{..})){
-        if let Some(i)=m.stage{file_tickets.insert(m.original.ticket,i);}
+    // A private ticket is issued at one exact ordinary destination. A
+    // sibling parent or the dedicated recycler cannot inherit its slots.
+    for m in s.moves(){
+        if m.original.ends()?.1.ordinary()==Some(address){
+            if let Some(i)=m.stage{file_tickets.insert(m.original.ticket,i);}
+        }
     }
     for f in s.at_parent(address){
         let c=&f.create;let place=s.placement(c.file)?;let n=crate::ordinary::storage_name::file_leaf(&c.name,c.file)?;
-        if place.ordinary_parent()!=Some(address){return Err(invalid("different ordinary FILE owner or parent in inventory"));}
+        if place.ordinary_parent()?!=Some(address){return Err(invalid("different ordinary FILE owner or parent in inventory"));}
         let h=dir.child_directory(&n)?.ok_or_else(||invalid("missing current FILE sibling of ordinary directory"))?;
         material::verify_header_at(&h,c,place.directory(),place.local())?;
         if !known.insert(n.into_bytes()){return Err(invalid("one physical name used by both FILE and directory"));}

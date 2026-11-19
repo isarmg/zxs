@@ -5,8 +5,8 @@
 pub(super) mod dedicated;
 use super::{allocation::Progress,command::Request,destination::Method,finish::history,placed::{self,Reopened},
     source::{self,Leaf},transfer::{Children,Moved,Sites}};
-use crate::{fs::{self,HeldDir,invalid,stream::PinnedRegular},ordinary::{self,Cut,formal::types::Commit,wire::{Frame,NativeObject}},
-    pool::lease::{Access,FileVolume,LocalPool}};
+use crate::{fs::{self,HeldDir,invalid,stream::PinnedRegular},ordinary::{self,OrdinaryParentLease as HeldParent,Cut,formal::types::Commit,wire::{Frame,NativeObject}},
+    pool::lease::{Access,LocalPool}};
 use std::{collections::BTreeSet,ffi::CString,io,path::Path};
 
 #[derive(Clone,Copy,Eq,PartialEq)]enum Address{Business,Isolated,EmptyGone}
@@ -16,8 +16,8 @@ struct SourceRetirement{frame:Moved,initial:Progress,addr:Address,exclusive:bool
 pub(super) struct VerifiedSource{group:SourceRetirement}
 impl VerifiedSource{
     pub(super) fn whole_at_start(&self)->bool{self.group.addr==Address::Business&&self.group.remaining.len()==self.group.frame.original.role_count()}
-    pub(super) fn require(&self,v:&FileVolume<'_>,m:&Moved)->io::Result<()>{self.group.require(v,m)}
-    pub(super) fn require_next(&self,v:&FileVolume<'_>,m:&Moved,next:Progress)->io::Result<()>{
+    pub(super) fn require(&self,v:&HeldParent<'_,'_>,m:&Moved)->io::Result<()>{self.group.require(v,m)}
+    pub(super) fn require_next(&self,v:&HeldParent<'_,'_>,m:&Moved,next:Progress)->io::Result<()>{
         let g=&self.group;
         let count=m.original.role_count();let first=if next==Progress::EMPTY{count}else{next.authorized().ok_or_else(||invalid("not an isolated source release"))?};
         if g.addr!=Address::Isolated||!g.exclusive||g.remaining.iter().map(|r|r.index).ne(first..count){
@@ -27,18 +27,18 @@ impl VerifiedSource{
         // must be durable before progressing; Empty requires the real live,
         // physically empty original directory, not merely lack of a path.
         if next==Progress::EMPTY{dir.only(None)?;}
-        dir.file.sync_all()?;v.root.confirm_absence(&g.business)?;v.root.file.sync_all()?;g.require(v,m)
+        dir.file.sync_all()?;v.directory().confirm_absence(&g.business)?;v.directory().file.sync_all()?;g.require(v,m)
     }
 }
 fn business(m:&Moved)->io::Result<CString>{m.original.purpose.leaves(m.original.file,m.original.op,&m.original.name).map(|(from,_)|from)}
 impl SourceRetirement{
-    fn capture(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Children<'_>,exclusive:bool)->io::Result<Self>{
-        placed::root(v,&m.original.src_root)?;
-        if v.id()!=m.original.from||m.original.mode!=Method::Transfer{return Err(invalid("not this original transfer source"));}
+    fn capture(v:&HeldParent<'_,'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Children<'_>,exclusive:bool)->io::Result<Self>{
+        m.original.check_ordinary(v,true)?;
+        if v.volume().id()!=m.original.from||m.original.mode!=Method::Transfer{return Err(invalid("not this original transfer source"));}
         let business=business(m)?;let quarantine=m.original.quarantine_name();
-        let(_,s)=v.pool.snapshot()?;let prior=s.before_handoff(m)?;
+        let(_,s)=v.volume().pool.snapshot()?;let prior=s.before_handoff(m)?;
         let sites=m.require_at(prior,f,d)?;let previous=prior.transfer();
-        let g=Self::capture_selected(m,step,c,f,d,exclusive,sites,previous,v.root.exact_directory(&business)?,v.root.exact_directory(&quarantine)?)?;
+        let g=Self::capture_selected(m,step,c,f,d,exclusive,sites,previous,v.directory().exact_directory(&business)?,v.directory().exact_directory(&quarantine)?)?;
         g.require(v,m)?;Ok(g)
     }
     fn capture_selected(m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Children<'_>,exclusive:bool,sites:Sites,previous:Option<&Moved>,
@@ -81,12 +81,12 @@ impl SourceRetirement{
                 return Err(invalid("original source bytes differ from checked target; nothing new may be retired"));}
         }Ok(VerifiedSource{group:self})
     }
-    fn require(&self,v:&FileVolume<'_>,m:&Moved)->io::Result<()>{
-        if &self.frame!=m||v.id()!=m.original.from{return Err(invalid("different original custody retirement"));}
-        placed::root(v,&m.original.src_root)?;
+    fn require(&self,v:&HeldParent<'_,'_>,m:&Moved)->io::Result<()>{
+        if &self.frame!=m||v.volume().id()!=m.original.from{return Err(invalid("different original custody retirement"));}
+        m.original.check_ordinary(v,true)?;
         let (n,other)=if self.addr==Address::Business{(&self.business,&self.quarantine)}else{(&self.quarantine,&self.business)};
-        if v.root.entry_present(other)?{return Err(invalid("other source name occupied; do not alter either name"));}
-        self.require_named_dir(v.root.exact_directory(n)?)?;v.require_current()
+        if v.directory().entry_present(other)?{return Err(invalid("other source name occupied; do not alter either name"));}
+        self.require_named_dir(v.directory().exact_directory(n)?)?;v.require()
     }
     fn require_named_dir(&self,named:Option<HeldDir>)->io::Result<()>{
         match(&self.dir,named){
@@ -97,6 +97,7 @@ impl SourceRetirement{
                 let want:BTreeSet<_>=self.remaining.iter().map(|r|r.name.to_bytes().to_vec()).collect();
                 let names=dir.names()?;if names.len()!=want.len()||names.iter().any(|n|!want.contains(n)){return Err(invalid("unknown or changed source contents"));}
                 for r in &self.remaining{r.pin.named(dir,&r.name)?;}dir.require_named()?;
+                if dir.label()?.is_some(){return Err(invalid("a labelled original directory is not a FILE source to retire"));}
             },
             (None,None) if self.addr==Address::EmptyGone&&self.initial==Progress::EMPTY=>{},
             _=>return Err(invalid("original source address changed")),
@@ -108,14 +109,14 @@ fn exact_progress(p:&LocalPool,m:&Moved)->io::Result<Progress>{
     if now!=m||!a.opened(){return Err(invalid("different original target at retirement"));}
     a.confirm_phase(p)?;Ok(a.progress())
 }
-fn advance(p:&LocalPool,old:&FileVolume<'_>,new:&FileVolume<'_>,m:&Moved,g:&VerifiedSource,dst:&Reopened,next:Progress,
+fn advance(p:&LocalPool,old:&HeldParent<'_,'_>,new:&HeldParent<'_,'_>,m:&Moved,g:&VerifiedSource,dst:&Reopened,next:Progress,
     hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{
     let(_,s)=p.snapshot()?;let(now,a)=s.confirmed_handoff(m.original.op)?;
     if now!=m{return Err(invalid("different original MOVE at retirement advance"));}
     a.advance_isolated(p,old,new,g,dst,next,||hook(if next==Progress::EMPTY{Cut::MoveEmptyFlagBeforeSync}else{Cut::MoveEraseFlagBeforeSync}))?;
     if exact_progress(p,m)?!=next{return Err(invalid("original retirement advance not confirmed"));}Ok(())
 }
-fn empty_source(p:&LocalPool,old:&FileVolume<'_>,new:&FileVolume<'_>,m:&Moved,g:&mut VerifiedSource,dst:&Reopened,
+fn empty_source(p:&LocalPool,old:&HeldParent<'_,'_>,new:&HeldParent<'_,'_>,m:&Moved,g:&mut VerifiedSource,dst:&Reopened,
     hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{
     let mut cur=exact_progress(p,m)?;if cur!=g.group.initial||!cur.retiring(){return Err(invalid("original isolated source cut changed"));}
     for i in 0..m.original.role_count(){
@@ -134,22 +135,22 @@ fn empty_source(p:&LocalPool,old:&FileVolume<'_>,new:&FileVolume<'_>,m:&Moved,g:
     hook(Cut::MoveEmptyConfirmed)?;g.require(old,m)?;dst.verify_installed(new,m)?;
     let gr=&mut g.group;
     if let Some(dir)=gr.dir.take(){
-        old.root.retire_empty_original(&gr.quarantine,&dir,&gr.original.birth,||hook(Cut::MoveDirectoryUnlinked))?;
+        old.directory().retire_empty_original(&gr.quarantine,&dir,&gr.original.birth,||hook(Cut::MoveDirectoryUnlinked))?;
     }
-    old.root.confirm_absence(&gr.quarantine)?;old.root.confirm_absence(&gr.business)?;old.require_current()?;dst.verify_installed(new,m)
+    old.directory().confirm_absence(&gr.quarantine)?;old.directory().confirm_absence(&gr.business)?;old.require()?;dst.verify_installed(new,m)
 }
 pub(super) fn complete(system:&Path,r:Request,m:&Moved,dst:&Reopened,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{
     let mut cut=if m.original.mode==Method::Transfer{
         let g={let(p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;let(now,a)=s.confirmed_handoff(r.op)?;
             if now!=m||a.request!=r.digest(&p)?||!a.opened(){return Err(invalid("no genuine applied target for original source retirement"));}
-            a.confirm_phase(&p)?;let new=p.ordinary(m.original.to)?;dst.verify_installed(&new,now)?;let old=p.ordinary(m.original.from)?;
+            a.confirm_phase(&p)?;let new=m.original.ordinary_at(&p,&s,false)?;dst.verify_installed(&new,now)?;let old=m.original.ordinary_at(&p,&s,true)?;
             let(c,f,d)=history(&s,now)?;SourceRetirement::capture(&old,now,a.progress(),&c,&f,d.as_refs(),true)?};
         Some(g.verify(dst)?)
     }else{None};
     let(p,_,s)=LocalPool::with_snapshot(system,Access::Write)?;let(now,a)=s.confirmed_handoff(r.op)?;
     if now!=m||a.request!=r.digest(&p)?||!a.opened(){return Err(invalid("missing original reopened target at exact cleanup cut"));}
-    let old=p.ordinary(m.original.from)?;let new=p.ordinary(m.original.to)?;
-    placed::root(&old,&m.original.src_root)?;dst.verify_installed(&new,now)?;
+    let old=m.original.ordinary_at(&p,&s,true)?;let new=m.original.ordinary_at(&p,&s,false)?;
+    m.original.check_ordinary(&old,true)?;dst.verify_installed(&new,now)?;
     if let Some(ref mut g)=cut{
         g.require(&old,now)?;if g.group.initial!=a.progress(){return Err(invalid("source cleanup advanced during independent verification"));}
         if g.group.addr==Address::Business{
@@ -157,22 +158,22 @@ pub(super) fn complete(system:&Path,r:Request,m:&Moved,dst:&Reopened,hook:&mut i
             let armed=exact_progress(&p,now)?;if armed!=Progress::ARMED{return Err(invalid("wrong original isolation phase"));}
             hook(Cut::MoveSourceAdmitted)?;
             g.require(&old,now)?;dst.verify_installed(&new,now)?;
-            let gr=&mut g.group;old.root.handoff_directory(&gr.business,&old.root,&gr.quarantine,
+            let gr=&mut g.group;old.directory().handoff_directory(&gr.business,old.directory(),&gr.quarantine,
                 gr.original.entity,&gr.original.birth,||hook(Cut::MoveSourceIsolated))?;
             // The private name now addresses the same locked directory. Do not
             // drop its FD or the verified leaf FDs and read the payloads again.
             // require() resolves the new exact name and checks native birth,
             // mount, membership and every unchanged leaf pin before any unlink.
             let dir=gr.dir.as_mut().ok_or_else(||invalid("no held business source after isolation"))?;
-            dir.path=old.root.checked_child_path(&gr.quarantine)?;
+            dir.path=old.directory().checked_child_path(&gr.quarantine)?;
             gr.addr=Address::Isolated;gr.initial=armed;g.require(&old,now)?;
         }
         empty_source(&p,&old,&new,now,g,dst,hook)?;
     }else{
-        if !old.root.same_mount(&new.root)?{return Err(invalid("original rename mount changed; no transfer fallback"));}
-        old.root.confirm_absence(&business(now)?)?;new.root.file.sync_all()?;
+        if !old.directory().same_mount(new.directory())?{return Err(invalid("original rename mount changed; no transfer fallback"));}
+        old.directory().confirm_absence(&business(now)?)?;new.directory().file.sync_all()?;
     }
-    old.require_current()?;dst.verify_installed(&new,now)?;
+    old.require()?;dst.verify_installed(&new,now)?;
     let(_,latest)=p.snapshot()?;let(cur,active)=latest.confirmed_handoff(r.op)?;
     if cur!=m||!active.opened()||(m.original.mode==Method::Transfer&&active.progress()!=Progress::EMPTY){
         return Err(invalid("different source retirement at completion"));}
@@ -185,13 +186,13 @@ pub(super) fn complete(system:&Path,r:Request,m:&Moved,dst:&Reopened,hook:&mut i
 /// An unresolved original source address is not a business FILE. The
 /// returned spelling identifies only the physically verified occurrence on
 /// this exact source root. It grants neither read nor retirement authority.
-pub(super) fn observe_source(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Children<'_>)->io::Result<Option<Vec<u8>>>{
+pub(super) fn observe_source(v:&HeldParent<'_,'_>,m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Children<'_>)->io::Result<Option<Vec<u8>>>{
     if m.original.mode==Method::Transfer{
         let g=SourceRetirement::capture(v,m,step,c,f,d,false)?;
         return Ok(match g.addr{Address::EmptyGone=>None,Address::Business=>Some(g.business.into_bytes()),Address::Isolated=>Some(g.quarantine.into_bytes())})
     }
-    let n=business(m)?;placed::root(v,&m.original.src_root)?;
-    let Some(dir)=v.root.exact_directory(&n)? else{return Ok(None)};
+    let n=business(m)?;m.original.check_ordinary(v,true)?;
+    let Some(dir)=v.directory().exact_directory(&n)? else{return Ok(None)};
     let sites=Sites::birthplace(c,f,d);if dir.entity!=sites.directory.entity||fs::Birth::read(&dir.file)?!=sites.directory.birth{
         return Err(invalid("unknown same-named occupant on original rename source"));}
     let mut names:BTreeSet<Vec<u8>>=dir.names()?.into_iter().collect();

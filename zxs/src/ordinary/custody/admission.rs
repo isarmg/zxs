@@ -21,21 +21,16 @@ impl Stage{
     }
 }
 pub(crate) struct LifecycleGrant<'p>{
-    pool:&'p LocalPool,request:Request,direction:Direction,prior:[u8;32],stage:Stage,
+    pool:&'p LocalPool,request:Request,parents:super::transfer::Parents,direction:Direction,prior:[u8;32],stage:Stage,
     names:(CString,CString),prior_stage:Option<CString>,source:NativeObject,target:NativeObject,source_sites:Sites,
 }
 impl LifecycleGrant<'_>{
-    // Only called by the physical lease owner; a valid grant cannot be
-    // detached from its exact held SYSTEM register, even for the same pool.
-    pub(crate) fn roles(&self,p:&LocalPool)->io::Result<(Direction,VolumeId,VolumeId)>{
-        let _=self.live_cut(p)?;Ok((self.direction,self.request.from,self.request.to))
-    }
     /// The exact journal returned is the same one checked here. The caller
     /// cannot combine its older undecided snapshot with a later live grant.
-    pub(super) fn live_cut(&self,p:&LocalPool)->io::Result<Journal>{
+    pub(crate) fn live_cut(&self,p:&LocalPool)->io::Result<Journal>{
         if !std::ptr::eq(p,self.pool){return Err(invalid("lifecycle operand belongs to a different SYSTEM cut"));}
         let(_,s)=p.snapshot()?;let now=LifecycleGrant::from_same_cut(p,&s,self.request)?;
-        if now.stage!=self.stage||now.prior!=self.prior||now.source!=self.source||now.target!=self.target||
+        if now.stage!=self.stage||now.parents!=self.parents||now.prior!=self.prior||now.source!=self.source||now.target!=self.target||
             now.names!=self.names||now.prior_stage!=self.prior_stage||now.source_sites!=self.source_sites{
             return Err(invalid("lifecycle operand no longer has the same original cut"));
         }Ok(s)
@@ -44,12 +39,26 @@ impl LifecycleGrant<'_>{
         let s=self.live_cut(p)?;
         if s.decided(self.request.op).is_some(){return Err(invalid("decided custody cannot prepare its old source again"));}Ok(s)
     }
-    pub(crate) fn check_ordinary_target(&self,p:&LocalPool,volume:VolumeId,root:&fs::HeldDir,names:&[Vec<u8>])->io::Result<()>{
-        let s=self.live_cut(p)?;
-        if !matches!(self.request.call,Call::Restore{..})||volume!=self.request.to{
+    /// Only the ordinary endpoint's own registered volume/confirmed lineage
+    /// can furnish this lease. The historical ordinary deletion site during
+    /// restore is matched against its decision, but is never opened.
+    pub(crate) fn physical_end<'a>(&self,p:&'a LocalPool,side:Side)->io::Result<(Direction,VolumeId,VolumeId,Option<crate::ordinary::OrdinaryParentLease<'a,'a>>)> {
+        let s=self.live_cut(p)?;let (l,r)=self.request.parents.ends(self.request.call,self.request.from,self.request.to)?;
+        let selected=match side{Side::Source=>l,Side::Target=>r};
+        let route=(self.direction,self.request.from,self.request.to);
+        let Some(address)=selected.ordinary()else{return Ok((route.0,route.1,route.2,None));};
+        let h=crate::ordinary::OrdinaryParentLease::owned(p,address,&s)?;
+        // live_cut matched the grant's original parent observations; owned
+        // selected those very confirmed directory rows and original objects.
+        Ok((route.0,route.1,route.2,Some(h)))
+    }
+    pub(super) fn parent_evidence(&self)->&super::transfer::Parents{&self.parents}
+    pub(crate) fn check_ordinary_target(&self,p:&LocalPool,held:&crate::ordinary::OrdinaryParentLease<'_,'_>,names:&[Vec<u8>])->io::Result<()>{
+        let s=self.live_cut(p)?;let(_,r)=self.request.parents.ends(self.request.call,self.request.from,self.request.to)?;
+        if !matches!(self.request.call,Call::Restore{..})||r.ordinary()!=Some(held.basis().address)||!std::ptr::eq(p,held.volume().pool){
             return Err(invalid("not the ordinary end of the actual restore request"));}
         let c=s.file(self.request.id).ok_or_else(||invalid("missing original FILE for ordinary target namespace"))?;
-        crate::ordinary::ordinary_target_domain(p,&s,volume,root,&c.create.name,self.request.id,names)
+        crate::ordinary::target_domain::ordinary_parent_target(held,&s,&c.create.name,self.request.id,names)
     }
     pub(crate) fn live_geometry(&self,p:&LocalPool,src:fs::NameBudget,dst:fs::NameBudget,ticket:OperationId)->io::Result<()>{
         let s=self.predecision(p)?;let c=s.file(self.request.id).ok_or_else(||invalid("no original FILE spelling"))?;
@@ -78,7 +87,7 @@ impl<'p> LifecycleGrant<'p>{
     fn from_same_cut(p:&'p LocalPool,s:&Journal,r:Request)->io::Result<Self>{
         let direction=match r.call{Call::Delete=>Direction::ToRecycle,Call::Restore{..}=>Direction::FromRecycle,
             Call::Move=>return Err(invalid("ordinary MOVE cannot acquire recycle access"))};
-        let digest=r.digest(p)?;
+        let digest=r.digest(p)?;let(source_end,target_end)=r.parents.ends(r.call,r.from,r.to)?;
         let route=p.registered_dedicated(direction,r.from,r.to)?;
         let(f,t)=route.originals();
         let source=NativeObject{entity:f.1,birth:f.2.clone()};let target=NativeObject{entity:t.1,birth:t.2.clone()};
@@ -110,12 +119,10 @@ impl<'p> LifecycleGrant<'p>{
             // In particular, do not precharge an Ordinary frame to a matching
             // RESTORE that needs its own final reserved position or bytes.
             s.room_for_effect(MAX_FRAME,r.call.effect(r.id,r.op))?;
-            if matches!(r.call,Call::Restore{..}){s.require_new_file_name(crate::ordinary::DirectoryParent::Root(r.to),&c.create.name,c.create.entry,r.id)?;}
-            if matches!(r.call,Call::Restore{..})&&s.occupied_root(r.to,&c.create.name){
-                return Err(invalid("a current FILE or ordinary directory occupies the restore destination name"));}
+            if let Some(target)=target_end.ordinary(){s.require_new_file_name(target,&c.create.name,c.create.entry,r.id)?;}
             (prior,child,original)
         };
-        if prior.volume()!=r.from||prior.epoch()!=r.epoch{return Err(invalid("lifecycle no longer selects this original FILE placement"));}
+        if prior.volume()!=r.from||prior.epoch()!=r.epoch||prior.ordinary_parent()?!=source_end.ordinary(){return Err(invalid("lifecycle no longer selects this original FILE placement"));}
         if let Some(m)=prior.transfer(){if m.original.dst_root!=source{return Err(invalid("current owner no longer matches registered source"));}}
         let key=prior.key();
         match r.call{
@@ -123,18 +130,20 @@ impl<'p> LifecycleGrant<'p>{
             Call::Restore{deleted_by,decision} if prior.retained()==Some(Deletion{file:r.id,operation:deleted_by,decision})=>{},
             _=>return Err(invalid("not the selected active FILE or exact still-retained original deletion")),
         }
+        let reg=p.journal_registration();let uid=c.create.uid;
+        let parents=r.parents.bind(r.call,r.from,r.to,prior.retained_from()?,|a|s.file_parent_at(a,uid,&reg))?;
+        if original.is_some_and(|o|o.parents!=parents){return Err(invalid("different original ordinary parent evidence"));}
         if let Some(o)=original{require_original(r,&digest,p.id(),o,&source,&target)?;prior.require_next(o)?;o.require_history(c,full,child)?;}
         let sites=prior.sites(full,child)?;sites.check(&source)?;
         let names=r.call.leaves(r.id,r.op,&c.create.name)?;
         // Every new/resumed operation remains addressable under both ORIGINAL
         // endpoint geometries. No R I/O or alternate path needed for this check.
-        let reg=p.journal_registration();let uid=c.create.uid;
-        let ordinary=match direction{Direction::ToRecycle=>r.from,Direction::FromRecycle=>r.to};
+        let ordinary=source_end.ordinary().or(target_end.ordinary()).ok_or_else(||invalid("dedicated transfer has no ordinary end"))?;
         let private=crate::ordinary::material::resident(&c.create.name,r.id,original.map_or(r.op,|o|o.ticket))?;
-        private.at(reg.ordinary_names(ordinary,uid,reg.ordinary_path_budget(ordinary,uid)?)?)?;
+        private.at(s.ordinary_parent_names(&reg,ordinary,uid)?)?;
         private.at(reg.recycle_names(uid)?)?;
         let prior_stage=prior.transfer().and_then(|m|m.stage.map(|slot|crate::ordinary::material::staging(m.original.ticket,slot)));
-        Ok(Self{pool:p,request:r,direction,prior:key,stage:Stage::of(s)?,names,prior_stage,source,target,source_sites:sites})
+        Ok(Self{pool:p,request:r,parents,direction,prior:key,stage:Stage::of(s)?,names,prior_stage,source,target,source_sites:sites})
     }
 }
 fn require_original(r:Request,digest:&[u8;32],pool:crate::PoolId,o:&Origin,source:&NativeObject,target:&NativeObject)->io::Result<()>{

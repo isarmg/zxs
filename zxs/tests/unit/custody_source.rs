@@ -103,11 +103,11 @@ fn verified_older_inventory_cannot_lend_an_extra_child_or_repeat_a_real_pack_at_
     let t=Original::new(b"baseline");let id=t.first.file;t.write(1,b"X");t.second();
     let live=Clean::capture(&t.system,id).unwrap().verify().unwrap();
     let(p,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();let(c,f,ds)=live.originals();
-    let v=p.ordinary(live.volume()).unwrap();let native=Sites::birthplace(c,f,ds);
-    live.require_at(&v,&std::ffi::CString::new(native_leaf("normal",id)).unwrap(),live.source_root(),&native).unwrap();
+    let v=p.ordinary(live.volume()).unwrap();let h=crate::ordinary::OrdinaryParentLease::at_cut(&v,crate::DirectoryParent::Root(v.id()),&s).unwrap();let native=Sites::birthplace(c,f,ds);
+    live.require_at(&h,&std::ffi::CString::new(native_leaf("normal",id)).unwrap(),live.source_root(),&native).unwrap();
     let one=*ds.first().unwrap();let object=native.children.first().unwrap().clone();
     let mut wrong=native.clone();wrong.children=ChildRoles::Two(object.clone(),object);
-    assert!(live.require_at(&v,&std::ffi::CString::new(native_leaf("normal",id)).unwrap(),live.source_root(),&wrong).is_err());
+    assert!(live.require_at(&h,&std::ffi::CString::new(native_leaf("normal",id)).unwrap(),live.source_root(),&wrong).is_err());
     let dir=v.root.child_directory(&std::ffi::CString::new(native_leaf("normal",id)).unwrap()).unwrap().unwrap();
     assert!(Clean::at_original_sites(&v,dir,c,f,ChildRoles::Two(one,one),&wrong).is_err());
     assert_eq!(s.actual_graph(id).unwrap().hashes(),ds.map(|d|d.digest));

@@ -1,5 +1,6 @@
 //! Opt-in local native source scenarios, not results. Never mount, reformat
 //! or fill a filesystem as part of these tests.
+use crate::ordinary::custody::transfer::ParentChoice;
 use crate::test_support::physical as native_leaf;
 use super::*;
 use crate::{DeletionKey,RecycleAction as Action,RecycleFilter,RecycleKind,RestoreTarget};
@@ -158,7 +159,7 @@ fn a_resolved_public_action_cannot_be_replayed_on_another_new_system_before_the_
     use crate::ordinary::custody::{lifecycle,purpose::Call};
     let f=Fixture::build(false,false);let other=Fixture::build(false,false);let issued=op();
     let call={let(p,_,_)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
-        let r=Request{op:issued,call:Call::Delete,id:f.file.file,from:f.from,to:p.recycle_for(f.from).unwrap(),epoch:0};
+        let r=Request{parents:ParentChoice::Roots,op:issued,call:Call::Delete,id:f.file.file,from:f.from,to:p.recycle_for(f.from).unwrap(),epoch:0};
         lifecycle::Invocation::new(&p,r).unwrap()};
     let(_,_,before)=LocalPool::with_snapshot(&other.sys,Access::Read).unwrap();
     assert!(lifecycle::perform_for(&other.sys,&call,&mut |_|panic!("wrong SYSTEM reached original operation")).is_err());
@@ -284,5 +285,45 @@ fn a_too_long_restoration_leaf_never_consumes_the_retained_file_or_its_original_
         }
         assert!(!kept.exists());let mut bytes=Vec::new();assert_eq!(z::read_node_to(&f.sys,file.file,node.node,&mut bytes).unwrap(),node);
         assert_eq!(bytes,b"retained original");
+    }
+}
+
+#[test]
+#[ignore="original child on ordinary volume, dedicated recycle, two registered ordinary filesystems; cold source code scenarios"]
+fn child_delete_and_original_restore_reject_a_sibling_parent_at_each_durable_boundary(){
+    use z::DirectoryParent as P;
+    for cut in [Cut::Reservation,Cut::MoveLeafLinked,Cut::Intent,Cut::FrameSynced,Cut::Decision,Cut::MoveInstalled,
+        Cut::MoveTargetChecked,Cut::MoveSourceIsolated,Cut::MoveEmptyConfirmed,Cut::IntentReleased]{
+        for restoring in [false,true]{
+            let f=Fixture::build(true,false);let a=P::Root(f.from);let b=P::Root(f.to);
+            let left=P::Child(f.to,z::make_directory(&f.sys,op(),b,"left").unwrap().directory);
+            let right=P::Child(f.to,z::make_directory(&f.sys,op(),b,"right").unwrap().directory);
+            let other=z::create_empty_at(&f.sys,op(),right,"name").unwrap();
+            z::save_first(&f.sys,op(),other.file,claim(b"sibling"),Cursor::new(b"sibling")).unwrap();
+            let sibling=f.new.join("right").join(native_leaf("name",other.file));let ino=fs::metadata(&sibling).unwrap().ino();
+            z::move_file_at(&f.sys,op(),f.file.file,a,left,0).unwrap();
+            fs::rename(&f.old,f._s.0.join("original-A-offline")).unwrap();
+            let delete=Action::DeleteAt{file:f.file.file,source:left};
+            let id=op();let (command,wrong,epoch)=if restoring{
+                let key=z::apply_recycle(&f.sys,op(),1,delete).unwrap().deletion.unwrap();
+                (reclaim(key,RestoreTarget::OriginalParent),reclaim(key,RestoreTarget::At(right)),2)
+            }else{(delete,Action::DeleteAt{file:f.file.file,source:right},1)};
+            let before=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap().2.frontier().0;
+            let mut hit=false;assert!(recycle::apply(&f.sys,id,epoch,command,&mut |now|{if now==cut&&!hit{
+                hit=true;return Err(io::Error::other("stop on exact original boundary"));}Ok(())}).is_err());assert!(hit);
+            let rec=receipt(&f,id,epoch,command);assert_eq!(rec.deleted_from,left);
+            assert_eq!((rec.source_parent,rec.destination_parent),if restoring{(None,Some(left))}else{(Some(left),None)});
+            assert!(z::apply_recycle(&f.sys,id,epoch,wrong).is_err());assert!(z::recycle_receipt(&f.sys,id,epoch,wrong).is_err());
+            let pre=matches!(cut,Cut::Reservation|Cut::MoveLeafLinked|Cut::Intent|Cut::FrameSynced);
+            assert_eq!(rec.decision_sequence,if pre{None}else{Some(before+1)});
+            if pre&&!restoring{f.all_history();}if pre&&restoring{assert!(z::current_info(&f.sys,f.file.file).is_err());}
+            read(&f,other.file,b"sibling");assert_eq!(z::lookup_file_at(&f.sys,right,"name").unwrap().unwrap().file,other.file);
+            let finished=z::apply_recycle(&f.sys,id,epoch,command).unwrap();assert_eq!(finished.decision_sequence,Some(before+1));
+            assert_eq!(finished.deleted_from,left);assert_eq!(receipt(&f,id,epoch,command).status,MoveStatus::OriginalPublished);
+            assert_eq!(fs::metadata(&sibling).unwrap().ino(),ino);read(&f,other.file,b"sibling");
+            if restoring{f.all_history();assert_eq!(z::lookup_file_at(&f.sys,left,"name").unwrap().unwrap().file,f.file.file);}
+            else{let page=z::list_retained(&f.sys,RecycleFilter::default(),8,None).unwrap();assert_eq!(page.entries.len(),1);
+                assert_eq!(page.entries[0].original.deleted_from,left);assert!(z::current_info(&f.sys,f.file.file).is_err());}
+        }
     }
 }

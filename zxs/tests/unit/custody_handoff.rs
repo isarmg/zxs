@@ -1,3 +1,4 @@
+use crate::ordinary::custody::transfer::ParentChoice;
 use crate::test_support::physical as native_leaf;
 use super::command::{Request,perform};
 use crate::{self as z,FileInfo,FormalNode,MoveStatus,OperationId,VolumeId,ordinary::Cut,test_support::PrivateTemp};
@@ -26,7 +27,7 @@ impl Fixture{
         let last=z::commit_working(&sys,op(),file.file,2).unwrap();
         Self{_s:s,_d:d,_r:r,sys,old,new,from,to,file,first,last}
     }
-    fn cmd(&self)->Request{Request{call:crate::ordinary::custody::purpose::Call::Move,op:op(),id:self.file.file,from:self.from,to:self.to,epoch:0}}
+    fn cmd(&self)->Request{Request{parents:ParentChoice::Roots,call:crate::ordinary::custody::purpose::Call::Move,op:op(),id:self.file.file,from:self.from,to:self.to,epoch:0}}
     fn call(&self,r:Request)->io::Result<z::MoveReceipt>{z::move_file(&self.sys,r.op,r.id,r.from,r.to,r.epoch)}
     fn receipt(&self,r:Request)->z::MoveReceipt{z::move_receipt(&self.sys,r.op,r.id,r.from,r.to,r.epoch).unwrap().unwrap()}
     fn all_history(&self){let id=self.file.file;
@@ -162,54 +163,6 @@ fn decided_transfer_does_not_serve_or_reconstruct_from_an_equal_byte_replacement
     let mut got=Vec::new();assert!(z::read_current_to(&f.sys,r.id,&mut got).is_err());assert!(got.is_empty());
     assert!(z::read_node_to(&f.sys,r.id,f.first.node,&mut got).is_err());assert!(got.is_empty());
 }
-#[test]
-#[ignore="three private registered filesystems; exact hot target rename and cold reopen"]
-fn transfer_keeps_pre_rename_target_pins_and_never_retires_source_on_a_late_target_change(){
-    use std::os::unix::fs::{FileExt,PermissionsExt};
-    use crate::pool::lease::{Access,LocalPool};
-    for change in ["old-full-bytes","equal-bytes-new-object","same-bytes-new-stamp","reuse-private"]{
-        let f=Fixture::build(true,false);let r=f.cmd();stop_at(&f,r,Cut::Decision);
-        let staged=fs::read_dir(&f.new).unwrap().map(|e|e.unwrap().path())
-            .find(|p|p.file_name().unwrap().to_string_lossy().starts_with(".zxs-new-")).unwrap();
-        let source=f.old.join(native_leaf("name",r.id));let old_members=inventory_ids(&source);
-        let final_dir=f.new.join(native_leaf("name",r.id));let raw_name=actual_raw(&staged).file_name().unwrap().to_owned();
-        let raw=final_dir.join(raw_name);let saved=f.new.with_file_name("exact-target-stashed-by-fixture");
-        let mut changed=false;let mut opened=false;let mut retired=false;
-        assert!(perform(&f.sys,r,&mut |cut|{
-            if cut==Cut::MoveInstalled{
-                assert!(!staged.exists());assert_eq!(fs::read(&raw)?,BEFORE);
-                match change{
-                    "old-full-bytes"=>{let p=fs::OpenOptions::new().write(true).open(&raw)?;
-                        p.write_all_at(b"X",0)?;p.sync_all()?;},
-                    "equal-bytes-new-object"=>{fs::rename(&raw,&saved)?;fs::copy(&saved,&raw)?;
-                        fs::set_permissions(&raw,fs::Permissions::from_mode(0o600))?;
-                        assert_ne!(fs::metadata(&saved)?.ino(),fs::metadata(&raw)?.ino());},
-                    "same-bytes-new-stamp"=>{let p=fs::OpenOptions::new().write(true).open(&raw)?;
-                        let t=std::time::UNIX_EPOCH+std::time::Duration::from_secs(60);
-                        assert_ne!(p.metadata()?.modified()?,t);p.set_modified(t)?;p.sync_all()?;},
-                    _=>{fs::create_dir(&staged)?;fs::write(staged.join("foreign"),b"unissued")?;}
-                }changed=true;
-            }
-            if cut==Cut::MoveTargetFlagBeforeSync{opened=true;}
-            if cut==Cut::MoveSourceAdmitted{retired=true;}Ok(())
-        }).is_err());
-        assert!(changed&&!opened&&!retired);assert_eq!(f.receipt(r).status,MoveStatus::DecidedTargetPending);
-        assert_eq!(inventory_ids(&source),old_members);assert_eq!(fs::read(actual_raw(&source)).unwrap(),BEFORE);
-        {let(_,_,j)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
-         let(_,a)=j.confirmed_handoff(r.op).unwrap();assert!(!a.opened()&&!a.retiring());}
-        match change{
-            "old-full-bytes"=>{assert_eq!(fs::read(&raw).unwrap()[0],b'X');assert!(f.call(r).is_err());
-                let p=fs::OpenOptions::new().write(true).open(&raw).unwrap();p.write_all_at(&BEFORE[..1],0).unwrap();p.sync_all().unwrap();},
-            "equal-bytes-new-object"=>{assert_eq!(fs::read(&raw).unwrap(),BEFORE);assert!(f.call(r).is_err());
-                fs::rename(&raw,f.new.with_file_name("fixture-kept-impostor")).unwrap();fs::rename(&saved,&raw).unwrap();},
-            "reuse-private"=>{assert_eq!(fs::read(staged.join("foreign")).unwrap(),b"unissued");assert!(f.call(r).is_err());
-                fs::rename(&staged,f.new.with_file_name("fixture-kept-occupant")).unwrap();},
-            _=>{assert_eq!(fs::read(&raw).unwrap(),BEFORE);} // Same bytes, different stamp: only a full cold read may accept.
-        }
-        assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);assert!(!source.exists());f.all_history();
-    }
-}
-
 #[test]
 #[ignore="three private registered filesystems"]
 fn occupied_final_target_is_not_overwritten_and_missing_or_substituted_old_roles_are_never_implicitly_retired(){
@@ -451,5 +404,173 @@ fn a_conflict_introduced_after_the_confirmed_move_keeps_the_original_target_pend
     let mut bytes=Vec::new();assert!(z::read_node_to(&f.sys,r.id,f.first.node,&mut bytes).is_err());assert!(bytes.is_empty());
     assert_eq!(fs::read(&foreign).unwrap(),b"late after original decision");assert!(f.call(r).is_err());
     fs::rename(&foreign,f.new.with_file_name("external-owner-kept")).unwrap();assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);
+    f.all_history();
+}
+
+#[cfg(test)]
+#[path="custody_parent_prefix.rs"]
+mod parent_prefix;
+
+// Fixture-only changes to the volume marker on a held original, including
+// an actually present zero-length xattr. Product never clears an unknown label.
+fn labelled_original(path:&Path)->crate::fs::HeldDir{
+    let dir=crate::fs::HeldDir::open(path).unwrap();
+    dir.claim(&[]).unwrap();assert_eq!(dir.label().unwrap().as_deref(),Some(&[][..]));dir
+}
+fn clear_fixture_marker(dir:&crate::fs::HeldDir){
+    use std::os::{fd::AsRawFd,raw::{c_char,c_int}};
+    unsafe extern "C"{fn fremovexattr(fd:c_int,name:*const c_char)->c_int;}
+    assert_eq!(unsafe{fremovexattr(dir.file.as_raw_fd(),c"user.zxs.volume".as_ptr())},0);
+    dir.file.sync_all().unwrap();
+}
+fn only_private(parent:&Path,prefix:&str)->PathBuf{
+    let mut paths=fs::read_dir(parent).unwrap().map(|v|v.unwrap().path())
+        .filter(|p|p.file_name().unwrap().to_string_lossy().starts_with(prefix));
+    let path=paths.next().unwrap();assert!(paths.next().is_none());path
+}
+#[test]
+#[ignore="three private registered filesystems; late native label on either actual FILE container"]
+fn a_new_volume_label_before_move_confirmation_never_promotes_the_synced_original_frame(){
+    for source in [true,false]{
+        let f=Fixture::build(true,false);let r=f.cmd();let leaf=native_leaf("name",r.id);let old=f.old.join(&leaf);
+        let original=inventory_ids(&old);let mut marked=None;let mut copied=None;
+        let before=crate::pool::lease::LocalPool::with_snapshot(&f.sys,crate::pool::lease::Access::Read).unwrap().2.frontier();
+        assert!(perform(&f.sys,r,&mut |c|{if c==Cut::FrameSynced{
+            let stage=only_private(&f.new,".zxs-new-");copied=Some((stage.clone(),inventory_ids(&stage)));
+            marked=Some(labelled_original(if source{&old}else{&stage}));
+        }Ok(())}).is_err());
+        let marked=marked.unwrap();let(stage,after_copy)=copied.unwrap();assert_eq!(after_copy.len(),4);
+        assert_eq!(f.receipt(r).status,MoveStatus::AwaitingDecisionConfirmation);
+        assert!(f.call(r).is_err());assert_eq!(f.receipt(r).decision_sequence,None);
+        let(_,_,j)=crate::pool::lease::LocalPool::with_snapshot(&f.sys,crate::pool::lease::Access::Read).unwrap();
+        assert_eq!(j.frontier(),before);assert_eq!(j.placement(r.id).unwrap().volume(),f.from);
+        assert_eq!(inventory_ids(&old),original);assert_eq!(inventory_ids(&stage),after_copy);assert!(!f.new.join(leaf).exists());
+        if !source{f.all_history();}clear_fixture_marker(&marked);
+        assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);f.all_history();
+    }
+}
+#[test]
+#[ignore="three private registered filesystems; a labelled isolated source is never cleared"]
+fn marking_the_exact_quarantine_directory_after_rename_never_grants_even_the_first_unlink(){
+    let f=Fixture::build(true,false);let r=f.cmd();let old=f.old.join(native_leaf("name",r.id));let ids=inventory_ids(&old);
+    let mut marked=None;let mut erase=false;
+    assert!(perform(&f.sys,r,&mut |c|{
+        if c==Cut::MoveSourceIsolated{marked=Some(labelled_original(&only_private(&f.old,".zxs-moveout-")));}
+        if c==Cut::MoveEraseFlagBeforeSync{erase=true;}Ok(())
+    }).is_err());
+    let dir=marked.unwrap();assert!(!erase);assert_eq!(ids.len(),4);assert_eq!(inventory_ids(&dir.path),ids);
+    assert!(!old.exists());assert_eq!(f.receipt(r).status,MoveStatus::TargetReopenedSourcePending);
+    assert!(perform(&f.sys,r,&mut |c|{assert_ne!(c,Cut::MoveEraseFlagBeforeSync);Ok(())}).is_err());
+    assert_eq!(inventory_ids(&dir.path),ids);f.all_history();clear_fixture_marker(&dir);
+    assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);f.all_history();
+}
+
+#[test]
+#[ignore="three private registered filesystems; exact hot target rename and cold reopen"]
+fn transfer_keeps_pre_rename_target_pins_and_never_retires_source_on_a_late_target_change(){
+    use std::os::unix::fs::{FileExt,PermissionsExt};
+    use crate::pool::lease::{Access,LocalPool};
+    for change in ["old-full-bytes","equal-bytes-new-object","same-bytes-new-stamp","reuse-private"]{
+        let f=Fixture::build(true,false);let r=f.cmd();stop_at(&f,r,Cut::Decision);
+        let staged=fs::read_dir(&f.new).unwrap().map(|e|e.unwrap().path())
+            .find(|p|p.file_name().unwrap().to_string_lossy().starts_with(".zxs-new-")).unwrap();
+        let source=f.old.join(native_leaf("name",r.id));let old_members=inventory_ids(&source);
+        let final_dir=f.new.join(native_leaf("name",r.id));let raw_name=actual_raw(&staged).file_name().unwrap().to_owned();
+        let raw=final_dir.join(raw_name);let saved=f.new.with_file_name("exact-target-stashed-by-fixture");
+        let mut changed=false;let mut opened=false;let mut retired=false;
+        assert!(perform(&f.sys,r,&mut |cut|{
+            if cut==Cut::MoveInstalled{
+                assert!(!staged.exists());assert_eq!(fs::read(&raw)?,BEFORE);
+                match change{
+                    "old-full-bytes"=>{let p=fs::OpenOptions::new().write(true).open(&raw)?;
+                        p.write_all_at(b"X",0)?;p.sync_all()?;},
+                    "equal-bytes-new-object"=>{fs::rename(&raw,&saved)?;fs::copy(&saved,&raw)?;
+                        fs::set_permissions(&raw,fs::Permissions::from_mode(0o600))?;
+                        assert_ne!(fs::metadata(&saved)?.ino(),fs::metadata(&raw)?.ino());},
+                    "same-bytes-new-stamp"=>{let p=fs::OpenOptions::new().write(true).open(&raw)?;
+                        let t=std::time::UNIX_EPOCH+std::time::Duration::from_secs(60);
+                        assert_ne!(p.metadata()?.modified()?,t);p.set_modified(t)?;p.sync_all()?;},
+                    _=>{fs::create_dir(&staged)?;fs::write(staged.join("foreign"),b"unissued")?;}
+                }changed=true;
+            }
+            if cut==Cut::MoveTargetFlagBeforeSync{opened=true;}
+            if cut==Cut::MoveSourceAdmitted{retired=true;}Ok(())
+        }).is_err());
+        assert!(changed&&!opened&&!retired);assert_eq!(f.receipt(r).status,MoveStatus::DecidedTargetPending);
+        assert_eq!(inventory_ids(&source),old_members);assert_eq!(fs::read(actual_raw(&source)).unwrap(),BEFORE);
+        {let(_,_,j)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+         let(_,a)=j.confirmed_handoff(r.op).unwrap();assert!(!a.opened()&&!a.retiring());}
+        match change{
+            "old-full-bytes"=>{assert_eq!(fs::read(&raw).unwrap()[0],b'X');assert!(f.call(r).is_err());
+                let p=fs::OpenOptions::new().write(true).open(&raw).unwrap();p.write_all_at(&BEFORE[..1],0).unwrap();p.sync_all().unwrap();},
+            "equal-bytes-new-object"=>{assert_eq!(fs::read(&raw).unwrap(),BEFORE);assert!(f.call(r).is_err());
+                fs::rename(&raw,f.new.with_file_name("fixture-kept-impostor")).unwrap();fs::rename(&saved,&raw).unwrap();},
+            "reuse-private"=>{assert_eq!(fs::read(staged.join("foreign")).unwrap(),b"unissued");assert!(f.call(r).is_err());
+                fs::rename(&staged,f.new.with_file_name("fixture-kept-occupant")).unwrap();},
+            _=>{assert_eq!(fs::read(&raw).unwrap(),BEFORE);} // Same bytes, different stamp: only a full cold read may accept.
+        }
+        assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);assert!(!source.exists());f.all_history();
+    }
+}
+
+#[test]
+#[ignore="a real same-filesystem rename with child/root parent replacement between rename and double directory sync"]
+fn same_mount_root_child_and_child_root_do_not_open_before_both_original_parents_return(){
+    use z::DirectoryParent as P;
+    use crate::pool::lease::{Access,LocalPool};
+    use crate::ordinary::custody::purpose::Call;
+    for source_is_child in [false,true]{
+        let f=Fixture::build(false,false);
+        let src=P::Root(f.from);let dst=P::Root(f.to);
+        let left=P::Child(f.from,z::make_directory(&f.sys,op(),src,"source-parent").unwrap().directory);
+        let right=P::Child(f.to,z::make_directory(&f.sys,op(),dst,"dest-parent").unwrap().directory);
+        let(from,to,file,node,old_parent)=if source_is_child{
+            let file=z::create_empty_at(&f.sys,op(),left,"other").unwrap();
+            z::save_first(&f.sys,op(),file.file,claim(BEFORE),Cursor::new(BEFORE)).unwrap();
+            let head=z::commit_working(&f.sys,op(),file.file,1).unwrap();
+            (left,dst,file.file,head.node,f.old.join("source-parent"))
+        }else{(src,right,f.file.file,f.first.node,f.old.clone())};
+        let r=Request{parents:ParentChoice::Move{source:from,target:to},call:Call::Move,op:op(),id:file,from:f.from,to:f.to,epoch:0};
+        let mut renamed=false;assert!(perform(&f.sys,r,&mut |cut|{
+            if cut==Cut::MoveInstalled{renamed=true;return Err(io::Error::other("rename visible, parent sync not yet confirmed"));}Ok(())
+        }).is_err());assert!(renamed);
+        let kept=f._s.0.join("registered-parent-away");fs::rename(&old_parent,&kept).unwrap();
+        assert!(z::move_file_at(&f.sys,r.op,file,from,to,0).is_err());
+        {let(p,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let(m,a)=s.confirmed_handoff(r.op).unwrap();
+         assert!(!a.opened());assert_eq!(m.original.ends().unwrap().1.ordinary(),Some(to));
+         assert_eq!(r.observe(&p,&s).unwrap().unwrap().status,MoveStatus::DecidedTargetPending);}
+        let mut out=vec![];assert!(z::read_node_to(&f.sys,file,node,&mut out).is_err()&&out.is_empty());
+        fs::rename(&kept,&old_parent).unwrap();assert_eq!(z::move_file_at(&f.sys,r.op,file,from,to,0).unwrap().status,MoveStatus::CompleteCheckedNow);
+        z::read_node_to(&f.sys,file,node,&mut out).unwrap();assert_eq!(out,BEFORE);
+    }
+}
+
+#[test]
+#[ignore="separate registered ordinary and dedicated filesystems; real child paths of length 4049/4050"]
+fn actual_child_admission_preserves_a_deletion_and_its_restoration_room_at_the_46_byte_edge(){
+    use z::{DirectoryParent as P,RecycleAction as A,RestoreTarget as T};
+    use crate::pool::lease::{Access,LocalPool};
+    use std::os::unix::ffi::OsStrExt;
+    let f=Fixture::planned(true,false,None,Some(4000));let src=P::Root(f.from);let b=P::Root(f.to);
+    let n49="b".repeat(48);let n50="c".repeat(49);
+    let edge=P::Child(f.to,z::make_directory(&f.sys,op(),b,&n49).unwrap().directory);
+    let over=P::Child(f.to,z::make_directory(&f.sys,op(),b,&n50).unwrap().directory);
+    for (n,len) in [(&n49,4049usize),(&n50,4050)]{assert_eq!(f.new.join(n).as_os_str().as_bytes().len(),len);}
+    let cut=||{let(_,_,j)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();assert!(j.pending.is_none()&&j.moving.is_none()&&j.allocated.is_none());j.frontier()};
+    let birth=op();let before=cut();assert!(z::create_empty_at(&f.sys,birth,over,"x").is_err());assert_eq!(cut(),before);
+    assert!(z::creation_receipt(&f.sys,birth).unwrap().is_none());
+    let x=z::create_empty_at(&f.sys,birth,edge,"x").unwrap();assert_eq!(z::lookup_file_at(&f.sys,edge,"x").unwrap().unwrap(),x);
+    let mv=op();let before=cut();assert!(z::move_file_at(&f.sys,mv,f.file.file,src,over,0).is_err());assert_eq!(cut(),before);
+    assert!(z::move_receipt_at(&f.sys,mv,f.file.file,src,over,0).unwrap().is_none());f.all_history();
+    z::move_file_at(&f.sys,mv,f.file.file,src,edge,0).unwrap();
+    let delete=op();let d=z::apply_recycle(&f.sys,delete,1,A::DeleteAt{file:f.file.file,source:edge}).unwrap();
+    let key=d.deletion.unwrap();let restore=op();let bad=A::Restore{deleted:key,target:T::At(over)};
+    let native=f._r.0.join("recycle").join(native_leaf("name",f.file.file));let before=cut();let rows=inventory_ids(&native);
+    assert!(z::apply_recycle(&f.sys,restore,2,bad).is_err());assert_eq!(cut(),before);assert!(z::recycle_receipt(&f.sys,restore,2,bad).unwrap().is_none());
+    let(_,_,j)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let retained=j.placement(f.file.file).unwrap().retained().unwrap();
+    assert_eq!((retained.operation,retained.decision),(delete,key.decision));assert_eq!(inventory_ids(&native),rows);
+    assert!(fs::read_dir(f.new.join(&n50)).unwrap().next().is_none());
+    let done=z::apply_recycle(&f.sys,restore,2,A::Restore{deleted:key,target:T::OriginalParent}).unwrap();
+    assert_eq!(done.destination_parent,Some(edge));assert_eq!(done.deleted_from,edge);assert!(!native.exists());
     f.all_history();
 }

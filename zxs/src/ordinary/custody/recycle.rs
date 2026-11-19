@@ -1,8 +1,9 @@
 //! The local owner's dedicated lifecycle commands. The caller selects an
 //! original FILE, never an arbitrary recycle root, path or physical inode.
 //! Looking up an original outcome only opens SYSTEM, even after a later cycle.
+use crate::ordinary::custody::transfer::ParentChoice;
 use super::{command::{MoveReceipt,MoveStatus,Request},lifecycle,purpose::{Call,Purpose},transfer::Moved};
-use crate::{EntryId,FileId,HistoryId,OperationId,VolumeId,fs::{self,invalid},ordinary::journal::Journal,
+use crate::{DirectoryParent as Parent,EntryId,FileId,HistoryId,OperationId,VolumeId,fs::{self,invalid},ordinary::journal::Journal,
     pool::lease::{Access,LocalPool}};
 use std::{io,path::Path};
 mod page;
@@ -23,9 +24,15 @@ impl DeletionKey{
     }
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum RestoreTarget{Original,Volume(VolumeId)}
+pub enum RestoreTarget{
+    /// The established root-only commands never alias an original child address.
+    Original,Volume(VolumeId),
+    /// Resolve an address from the exact original deletion, or ask for a
+    /// specific ordinary parent. Equal complete addresses have one request.
+    OriginalParent,At(Parent),
+}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum RecycleAction{Delete{file:FileId,from:VolumeId},Restore{deleted:DeletionKey,target:RestoreTarget}}
+pub enum RecycleAction{Delete{file:FileId,from:VolumeId},DeleteAt{file:FileId,source:Parent},Restore{deleted:DeletionKey,target:RestoreTarget}}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum RecycleKind{Delete,Restore}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -33,7 +40,7 @@ pub struct DeletionTime{pub unix_seconds:u64,pub nanos:u32}
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub struct RecycleReceipt{
     pub kind:RecycleKind,pub operation:OperationId,pub file:FileId,pub entry:EntryId,pub history:HistoryId,pub name:String,
-    pub from:VolumeId,pub to:VolumeId,pub source_epoch:u64,pub destination_epoch:u64,
+    pub from:VolumeId,pub to:VolumeId,pub source_parent:Option<Parent>,pub destination_parent:Option<Parent>,pub deleted_from:Parent,pub source_epoch:u64,pub destination_epoch:u64,
     pub delete_operation:OperationId,pub deleted_at:DeletionTime,pub deletion:Option<DeletionKey>,
     pub decision_sequence:Option<u64>,pub decision:Option<[u8;32]>,pub status:MoveStatus,
 }
@@ -48,14 +55,26 @@ impl RecycleAction{
     fn resolve(self,p:&LocalPool,s:&Journal,op:OperationId,epoch:u64)->io::Result<Request>{
         p.require_business_op(op)?;
         let r=match self{
-            Self::Delete{file,from}=>Request{op,id:file,from,to:p.recycle_for(from)?,epoch,call:Call::Delete},
+            Self::Delete{file,from}|Self::DeleteAt{file,source:Parent::Root(from)}=>
+                Request{parents:ParentChoice::Roots,op,id:file,from,to:p.recycle_for(from)?,epoch,call:Call::Delete},
+            Self::DeleteAt{file,source}=>{let from=source.volume();Request{parents:ParentChoice::Delete{source},
+                op,id:file,from,to:p.recycle_for(from)?,epoch,call:Call::Delete}}
             Self::Restore{deleted:key,target}=>{
                 let m=deleted(s,key)?;
-                let to=match target{RestoreTarget::Original=>m.original.from,RestoreTarget::Volume(id)=>id};
-                let from=p.recycle_for(to)?;
+                let deleted_from=m.original.ends()?.0.ordinary().ok_or_else(||invalid("deletion has no original ordinary source"))?;
+                let current=match target{
+                    RestoreTarget::Original|RestoreTarget::Volume(_) if !matches!(deleted_from,Parent::Root(_))=>
+                        return Err(invalid("a root-only restore does not identify this child deletion")),
+                    RestoreTarget::Original|RestoreTarget::OriginalParent=>deleted_from,
+                    RestoreTarget::Volume(v)=>Parent::Root(v),RestoreTarget::At(p)=>p,
+                };
+                let to=current.volume();let from=p.recycle_for(to)?;
                 if m.original.to!=from{return Err(invalid("original deletion belongs to another recycle registration"));}
-                Request{op,id:key.file,from,to,epoch,call:Call::Restore{deleted_by:key.operation,decision:key.decision}}
+                let parents=match(deleted_from,current){(Parent::Root(_),Parent::Root(_))=>ParentChoice::Roots,
+                    _=>ParentChoice::Restore{deleted_from,target:current}};
+                Request{parents,op,id:key.file,from,to,epoch,call:Call::Restore{deleted_by:key.operation,decision:key.decision}}
             }
+
         };let _=r.digest(p)?;Ok(r)
     }
 }
@@ -76,14 +95,16 @@ pub(super) fn receipt(p:&LocalPool,s:&Journal,r:Request)->io::Result<Option<Recy
         .ok_or_else(||invalid("missing original custody receipt"))?;
     if o.uid!=fs::local_uid()||o.purpose.call()!=r.call||o.request_digest(p.id())?!=r.digest(p)?{
         return Err(invalid("different original recycle command"));}
-    let (kind,delete_operation,deleted_at,deletion)=match r.call{
-        Call::Delete=>(RecycleKind::Delete,r.op,absolute_time(o.purpose)?,done.map(|m|DeletionKey{file:r.id,operation:r.op,decision:m.digest})),
+    let(kind,delete_op,delete_row,deletion)=match r.call{
+        Call::Delete=>(RecycleKind::Delete,r.op,o,done.map(|m|DeletionKey{file:r.id,operation:r.op,decision:m.digest})),
         Call::Restore{deleted_by,decision}=>{let key=DeletionKey{file:r.id,operation:deleted_by,decision};
-            (RecycleKind::Restore,deleted_by,absolute_time(deleted(s,key)?.original.purpose)?,Some(key))},
+            (RecycleKind::Restore,deleted_by,&deleted(s,key)?.original,Some(key))},
         Call::Move=>return Err(invalid("not a dedicated lifecycle receipt")),
     };
-    let MoveReceipt{operation,file,entry,history,name,from,to,source_epoch,destination_epoch,decision_sequence,status}=base;
-    Ok(Some(RecycleReceipt{kind,operation,file,entry,history,name,from,to,source_epoch,destination_epoch,delete_operation,
+    let deleted_at=absolute_time(delete_row.purpose)?;
+    let deleted_from=delete_row.ends()?.0.ordinary().ok_or_else(||invalid("original deletion does not name an ordinary parent"))?;
+    let MoveReceipt{operation,file,entry,history,name,from,to,source_parent,destination_parent,source_epoch,destination_epoch,decision_sequence,status}=base;
+    Ok(Some(RecycleReceipt{kind,operation,file,entry,history,name,from,to,source_parent,destination_parent,deleted_from,source_epoch,destination_epoch,delete_operation:delete_op,
         deleted_at,deletion,decision_sequence,decision:done.map(|m|m.digest),status}))
 }
 /// Report the exact command and original phase. Never inspect online data or

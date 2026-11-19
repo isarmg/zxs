@@ -1,9 +1,11 @@
 //! Prospective FILE creation under one installed directory. This observes a
-//! new operation against the live SYSTEM and prepares an anonymous SYSTEM
-//! operand only. There is deliberately no public, cold or naming route here.
+//! new operation against the live SYSTEM. The optional private issuer can
+//! publish only its one original unbound reservation, never a FILE decision
+//! or data-volume name. A completed original request must be handled before
+//! this new-operation path; there is no public child FILE creator here.
 use super::{inventory,path::HeldParent,types::{Basis,Parent}};
 use crate::{DirectoryId,EntryId,FileId,HistoryId,OperationId,fs::{self,invalid},
-    ordinary::{allocation::Terms,file_parent::BirthParent,material,wire::NativeObject},pool::lease::{Access,FileVolume,LocalPool}};
+    ordinary::{allocation::{self,Allocation,Terms},file_parent::BirthParent,material,wire::NativeObject},pool::lease::{Access,FileVolume,LocalPool}};
 use std::{fs::File,io,os::unix::fs::MetadataExt};
 
 struct Claim{
@@ -50,10 +52,27 @@ impl<'v,'p> Unissued<'v,'p>{
         let(inode,entity)=p.system.anonymous_record()?;let issuer=NativeObject{entity,birth:fs::Birth::read(&inode)?};
         let(bytes,digest)=claim.terms(p,v.id()).image(&issuer)?;
         // No name, xattr, reservation, stage or persisted business state.
-        let result=Self{parent,claim,inode,issuer,bytes,digest};result.require()?;Ok(result)
+        let result=Self{parent,claim,inode,issuer,bytes,digest};result.require_anonymous()?;Ok(result)
+    }
+    /// Consume the selected proposal, including the very same held anonymous
+    /// inode and installed directory. No serialized bytes supplied by the
+    /// caller can become a SYSTEM allocation. A lost response leaves one
+    /// original discoverable by operation; it is not a FILE publication.
+    pub(in crate::ordinary) fn issue(self)->io::Result<Allocation>{
+        self.require()?;
+        let Self{parent,claim,inode,issuer,bytes,digest}=self;let p=parent.volume().pool;
+        fs::initial_attempt_binding(&inode,&allocation::binding(digest,None)?)?;
+        p.system.add_record(inode,allocation::NAME,&bytes)?;
+        let(_,cut)=p.snapshot()?;
+        let a=cut.allocated.ok_or_else(||invalid("original child FILE reservation did not reopen"))?;
+        if a.op!=claim.op||a.parent!=claim.parent||a.bytes!=bytes||a.digest!=digest||a.stage.is_some()||
+            NativeObject::stamp(&a.stamp)!=issuer{return Err(invalid("not the original unbound child FILE operand after issuance"));}
+        Ok(a)
     }
     pub(in crate::ordinary) fn require(&self)->io::Result<()>{
-        self.claim.require(&self.parent)?;
+        self.claim.require(&self.parent)?;self.require_anonymous()
+    }
+    fn require_anonymous(&self)->io::Result<()>{
         let v=self.parent.volume();let p=v.pool;let m=self.inode.metadata()?;
         if !m.is_file()||m.nlink()!=0||m.len()!=0||m.uid()!=self.claim.uid||m.mode()&0o7777!=0o600||
             m.dev()!=self.issuer.entity.device||m.ino()!=self.issuer.entity.inode||fs::Birth::read(&self.inode)?!=self.issuer.birth||

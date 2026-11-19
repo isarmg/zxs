@@ -62,7 +62,7 @@ impl LocalPool {
     pub(crate) fn ordinary(&self, id: VolumeId) -> io::Result<FileVolume<'_>> {
         let index = self.index_for(id,Role::File)?;
         let root = self.open_root(index,Role::File)?;
-        let volume=FileVolume{pool:self,index,root,listing:None};
+        let volume=FileVolume{pool:self,index,root,listing:std::sync::OnceLock::new()};
         volume.require_current()?;
         Ok(volume)
     }
@@ -100,26 +100,11 @@ pub(crate) struct FileVolume<'a> {
     pub(crate) pool: &'a LocalPool,
     index: usize,
     pub(crate) root: HeldDir,
-    listing:Option<std::collections::BTreeSet<Vec<u8>>>,
+    // One read lease samples at most one originally identified directory.
+    // A writer and a standalone FILE read never reuse a listing.
+    pub(crate) listing:std::sync::OnceLock<crate::ordinary::OrdinaryNameSample>,
 }
 impl FileVolume<'_> {
-    /// Scoped to this one ordinary read lease. Writes and standalone reads
-    /// never borrow a previous enumeration as a grant.
-    pub(crate) fn begin_listing(&mut self)->io::Result<()>{
-        if !matches!(self.pool.access,Access::Read)||self.listing.is_some(){return Err(invalid("not a fresh read-only root listing"));}
-        self.require_current()?;self.listing=Some(self.root.names()?.into_iter().collect());self.require_current()
-    }
-    pub(crate) fn listed_names(&self)->io::Result<&std::collections::BTreeSet<Vec<u8>>>{
-        self.listing.as_ref().ok_or_else(||invalid("ordinary root names have not been sampled"))
-    }
-    pub(crate) fn exact_directory(&self,name:&std::ffi::CStr)->io::Result<Option<HeldDir>>{
-        match &self.listing{Some(n)=>self.root.directory_in_sample(name,n),None=>self.root.exact_directory(name)}
-    }
-    pub(crate) fn finish_listing(&self)->io::Result<()>{
-        let current:std::collections::BTreeSet<_>=self.root.names()?.into_iter().collect();
-        if self.listed_names()?!=&current{return Err(invalid("ordinary volume changed during exact name enumeration"));}
-        self.require_current()
-    }
     pub(crate) fn id(&self) -> VolumeId { self.pool.registration.info.volumes[self.index].id }
     pub(crate) fn require_current(&self) -> io::Result<()> {
         self.pool.check_root(self.index,Role::File,&self.root)

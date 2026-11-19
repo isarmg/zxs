@@ -73,7 +73,7 @@ pub(super) fn capture_current(system:&Path,id:FileId)->io::Result<(CurrentFile,O
     let c=state.file(id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no published original FILE"))?;
     let volume=pool.ordinary(state.volume_of(c))?;let body=admit_current_held(&cut,&volume,c)?;
     volume.root.file.sync_all()?;volume.require_current()?;
-    Ok((CurrentFile{file:FileInfo::at(c,state.volume_of(c)),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.delta(id).map(super::delta::types::Delta::receipt).or_else(||state.head(id).map(super::formal::types::Commit::receipt)),edit:if state.head(id).is_some(){state.active_work(id)?.last().map(super::interval::types::Saved::receipt)}else{None}},body))
+    Ok((CurrentFile{file:FileInfo::at(c,state.placement(id)?.ordinary_parent()?.ok_or_else(||invalid("retained FILE has no current ordinary parent"))?),working:if state.head(id).is_some(){None}else{state.saved(id).map(SaveFrame::receipt)},head:state.delta(id).map(super::delta::types::Delta::receipt).or_else(||state.head(id).map(super::formal::types::Commit::receipt)),edit:if state.head(id).is_some(){state.active_work(id)?.last().map(super::interval::types::Saved::receipt)}else{None}},body))
 }
 /// Inspect actual original FILE and (if present) its named working record and
 /// authenticated chunk head. This is not a whole-content verification scan.

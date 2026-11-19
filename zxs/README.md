@@ -130,7 +130,19 @@
 ## 普通目录：本机创建和逐层列举
 
 - `zxs dir-mkdir OP SYSTEM VOLUME root NAME` 在已登记普通卷根创建一个真实空目录；把 `root` 换成上一层返回的 DirectoryId，就在该目录中新建子目录。返回原创建的 DirectoryId、EntryId 与决定序号。名称是区分大小写的 UTF-8 单组件，保留原拼写；须符合真实父目录的组件限额，不能使用两种精确的内部私名。
-- `zxs dir-list SYSTEM VOLUME root` 列根下的 FILE 和普通目录。换成 DirectoryId 则只列该层。输出区分 `file` / `directory`；原 `file-list` 仍只列真实 FILE，既不把合法目录误判成陌生项，也不对未知物给出完整列表。N1 没有在子目录创建 FILE 的入口。
+- `zxs dir-list SYSTEM VOLUME root` 列根下的 FILE 和普通目录。换成 DirectoryId 则只列该层。输出区分 `file` / `directory`；原 `file-list` 仍只列真实 FILE，既不把合法目录误判成陌生项，也不对未知物给出完整列表。子目录 FILE 的命令见下一节。
 - 目录的身份和父子关系取自同一 SYSTEM 原记录；目录自身不含元数据文件。新建先验证该卷、父链、全部可能私名、当前同层名录及原票，再创建并绑定新的原生空目录。确认后只把该原件无覆盖地安装到终名并同步父目录。已决定、未收尾的本层可能返回“待安装/无法完整列举”，不能从一个看似存在或为空的路径创建孙目录。
 - 同一 OP、同一原请求重试。已收尾的旧决定即使现在有孩子或原卷离线也能返回；这不是当前可用性声明。FILE 和目录在同一父中互斥：删入专盘的 FILE 也不能还原覆盖一个同名普通目录。不同父允许同名。
-- 边界仍为本机维护主体和明确选择的原卷。本批不提供目录改名、递归搬移/删除、目录分页、网络授权或对子目录的 FILE 写入。原生故障和混合列举只写有源码用例，未构建或运行。
+- 边界仍为本机维护主体和明确选择的原卷。本批不提供目录改名、递归搬移/删除、目录分页或网络授权。原生故障和混合列举只写有源码用例，未构建或运行。
+
+
+### 普通目录里的 FILE
+
+本机命令用普通 `VolumeId` 加 `root` 或准确 `DirectoryId` 选择父目录，不接收宿主目录字符串。旧 `file-create`、`file-lookup`、`file-move`、`file-delete`、`file-restore` 仍只指卷根，不会把根当作子目录的简写。
+
+- `file-create-at OP SYSTEM VOLUME root|DIR NAME` 和 `file-lookup-at SYSTEM VOLUME root|DIR NAME` 创建或定位直属 FILE；`dir-list` 列这一层。不同父可以有两个完全同名的 FILE，同父同名的 FILE 与普通目录不能共存。读、保存和正式提交仍使用返回的稳定 FileId；历史读取使用 FileId 与 NodeId。
+- `file-move-at OP SYSTEM FILE FROM_VOLUME root|DIR TO_VOLUME root|DIR EPOCH` 在两个不同登记普通卷的指定父之间搬移，仍是初始放置的干净 F0，可带 I1、I2；不做改名或目录移动。同一挂载真实改名后要同步两个原父，跨挂载确认后只从独立重开的目标服务。
+- `file-delete-at OP SYSTEM FILE VOLUME root|DIR EPOCH` 把同一个完整容器转到专用回收卷。`file-restore-at OP SYSTEM FILE DELETE_OP DELETE_SHA256 EPOCH original` 还原到原删除的准确父；用 `VOLUME root|DIR` 替代 `original` 可明确指定另一父。原父离线、被替代或有同名项，不借旁边的同名目录回填。不可接受的目的在发票前拒绝，原删除及其还原名额保留；决定已确认则只续原单，绝不覆盖。
+- 为以上三个搬运命令加 `-receipt` 可查完全相同的原请求。冻结的回收行显示删除时的父；不以当天看到的路径推断历史。完成的原操作回执不证明材料此刻在线。
+
+没有目录整组搬移、原地业务改名、任意多代 INCR 或实际 SMB 服务。`tests/two_increments_cli.rs` 和原生边界夹具只是未执行的源码，不是设备、崩溃或性能证据。

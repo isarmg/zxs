@@ -1,7 +1,7 @@
 use super::{inventory,operand::Operand,path::HeldParent,prepare,types::{self,Created,Parent}};
 use crate::{fs::{self,invalid},ordinary::{self,allocation,Cut,FileInfo,journal::{self,Decision,Journal},material},
     pool::lease::{Access,LocalPool},DirectoryId,EntryId,OperationId};
-use std::{collections::BTreeSet,io,path::Path};
+use std::{io,path::Path};
 
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub struct DirectoryInfo{pub directory:DirectoryId,pub entry:EntryId,pub parent:Parent,pub name:String,
@@ -98,25 +98,11 @@ fn finish(parent:&HeldParent<'_,'_>,a:&Operand,d:&Created,intent:Option<&journal
     Ok(DirectoryInfo::original(d))
 }
 pub fn list_directory(system:&Path,address:Parent)->io::Result<DirectoryListing>{
-    let cut=ordinary::formal::ParentCut::open(system,Access::Read)?;let(p,s)=cut.originals();
-    let mut listing=match address{
-        Parent::Root(v)=>{let(r,folders)=ordinary::root_listing(&cut,v)?;
-            let entries=r.files.into_iter().map(DirectoryEntry::File).chain(folders.into_iter().map(DirectoryEntry::Directory)).collect();
-            DirectoryListing{entries,reserved_private_entries:r.reserved_private_entries,pending_moves:r.pending_moves,pending_lifecycle:r.pending_lifecycle}
-        }
-        Parent::Child(v,_)=>{
-            let volume=p.ordinary(v)?;let parent=HeldParent::open(&volume,address)?;let dir=parent.directory();
-            let raw=dir.names()?.into_iter().collect::<BTreeSet<_>>();
-            let scan=||->io::Result<_>{let obs=inventory::observe(s,address,dir,&raw)?;
-                if obs.pending_install||obs.consumed!=raw{return Err(invalid("ordinary child namespace is pending installation, missing or contains an unknown name"));}
-                Ok(obs)};
-            scan()?;parent.require()?;dir.file.sync_all()?;
-            let obs=scan()?;parent.require()?;if dir.names()?.into_iter().collect::<BTreeSet<_>>()!=raw{return Err(invalid("ordinary child namespace changed"));}
-            DirectoryListing{entries:obs.rows.into_iter().map(|d|DirectoryEntry::Directory(DirectoryInfo::original(d))).collect(),
-                reserved_private_entries:obs.private_count,pending_moves:Vec::new(),pending_lifecycle:Vec::new()}
-        }
-    };
-    listing.entries.sort_by(|l,r|l.name().cmp(r.name()));Ok(listing)
+    let cut=ordinary::formal::ParentCut::open(system,Access::Read)?;
+    let(r,folders)=ordinary::parent_listing(&cut,address)?;
+    let mut entries:Vec<_>=r.files.into_iter().map(DirectoryEntry::File).chain(folders.into_iter().map(DirectoryEntry::Directory)).collect();
+    entries.sort_by(|l,r|l.name().cmp(r.name()));
+    Ok(DirectoryListing{entries,reserved_private_entries:r.reserved_private_entries,pending_moves:r.pending_moves,pending_lifecycle:r.pending_lifecycle})
 }
 
 #[cfg(test)]

@@ -163,3 +163,97 @@ fn exact_display_lookup_two_equal_spelling_histories_and_one_unchanged_name_per_
     let decomposed=at(&vc,"e\u{301}.txt",b"abc",ABC_SHA);assert_ne!(composed.0,decomposed.0);
     assert_eq!(token(&text(lookup(&vc,"é.txt")),"file"),composed.0);
 }
+
+#[test]
+#[ignore="native private ordinary roots on separate filesystems and an independent recycle filesystem; CLI source, no automatic run"]
+fn three_scoped_parents_keep_separate_file_identities_through_history_move_and_recycle(){
+    let a=support::PrivateTemp::under(&std::env::temp_dir());
+    let b=support::PrivateTemp::under(Path::new(&std::env::var_os("ZXS_MOVE_FILE_TMPDIR").unwrap()));
+    let rr=support::PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
+    let sys=a.child("system");let old=a.child("A");let new=b.child("B");let bin=rr.child("R");
+    assert_ne!(fs::metadata(&old).unwrap().dev(),fs::metadata(&new).unwrap().dev());
+    bytes(Command::new(env!("CARGO_BIN_EXE_zxs")).arg("init").arg(op().to_string()).arg(&sys).args([&bin,&old,&new]).output().unwrap());
+    let pool=zxs::inspect(&sys).unwrap();let vol=|p:&Path|pool.volumes.iter().find(|v|v.volume.role==Role::File&&v.volume.path==p).unwrap().id.to_string();
+    let va=vol(&old);let vb=vol(&new);let name="方案.xlsx";
+    let md=|v:&str,p:&str,n:&str|{
+        let s=text(cli(&sys,"dir-mkdir",Some(op()),&[v,p,n],None));
+        token(s.lines().find(|l|l.starts_with("directory ")).unwrap(),"directory").to_owned()
+    };
+    let al=md(&va,"root","left");let ar=md(&va,"root","right");
+    let bl=md(&vb,"root","left");let br=md(&vb,"root","right");
+    let get=|v:&str,p:&str|cli(&sys,"file-lookup-at",None,&[v,p,name],None);
+    let make=|v:&str,p:&str,create|{let s=text(cli(&sys,"file-create-at",Some(create),&[v,p,name],None));
+        (token(&s,"file").to_owned(),token(&s,"entry").to_owned(),token(&s,"history").to_owned())};
+    let id_op=op();let(file,entry,history)=make(&va,&al,id_op);
+    let root_file=make(&va,"root",op()).0;let sibling=make(&va,&ar,op()).0;let other=make(&vb,&br,op()).0;
+    let unique=[&file,&root_file,&sibling,&other].into_iter().collect::<std::collections::BTreeSet<_>>();assert_eq!(unique.len(),4);
+    assert_eq!(token(&text(get(&va,&al)),"file"),file);assert_eq!(token(&text(get(&va,&ar)),"file"),sibling);
+    assert_eq!(token(&text(cli(&sys,"file-lookup",None,&[&va,name],None)),"file"),root_file);
+    let root_list=text(cli(&sys,"file-list",None,&[&va],None));assert!(root_list.contains(&root_file)&&!root_list.contains(&file)&&!root_list.contains(&sibling));
+    let child_list=text(cli(&sys,"dir-list",None,&[&va,&al],None));assert!(child_list.contains(&file)&&!child_list.contains(&root_file)&&!child_list.contains(&sibling));
+    refused(cli(&sys,"file-create",Some(id_op),&[&va,name],None));
+    refused(cli(&sys,"dir-mkdir",Some(op()),&[&va,&al,name],None));
+    bytes(cli(&sys,"file-save",Some(op()),&[&other,"5",HELLO_SHA],Some(b"hello")));
+    let bn=text(cli(&sys,"file-commit",Some(op()),&[&other,"1"],None));let other_node=token(&bn,"node");
+    let sibling_path=new.join("right").join(format!("方案-{other}.xlsx"));
+    let observed=(fs::metadata(&sibling_path).unwrap().dev(),fs::metadata(&sibling_path).unwrap().ino());
+    let saved=op();bytes(cli(&sys,"file-save",Some(saved),&[&file,"43",F0_SHA],Some(F0)));
+    let c0=op();let f=text(cli(&sys,"file-commit",Some(c0),&[&file,"1"],None));let f0=token(&f,"node");
+    bytes(cli(&sys,"file-write-range",Some(op()),&[&file,"1","4","5",HELLO_SHA,"12"],Some(b"hello")));
+    let f=text(cli(&sys,"file-commit",Some(op()),&[&file,"2"],None));let i1=token(&f,"node");
+    assert_eq!(token(&f,"parent"),f0);
+    let mv=op();let args=[&file[..],&va,&al,&vb,&bl,"0"];
+    refused(cli(&sys,"file-move-at",Some(mv),&[&file,&va,&ar,&vb,&bl,"0"],None));
+    refused(cli(&sys,"file-move-at",Some(mv),&[&file,&va,&al,&vb,&br,"0"],None));
+    assert!(!sys.join("FILE-ALLOCATION").exists());let out=text(cli(&sys,"file-move-at",Some(mv),&args,None));
+    assert!(out.contains("CompleteCheckedNow")&&out.contains(&al)&&out.contains(&bl));refused(get(&va,&al));
+    let after=text(get(&vb,&bl));assert_eq!((token(&after,"file"),token(&after,"entry"),token(&after,"history")),(&file[..],&entry[..],&history[..]));
+    // Reuse the old name for a new and entirely unrelated FILE, then lose the old volume.
+    let reuse=make(&va,&al,op()).0;assert_ne!(reuse,file);
+    fs::rename(&old,a.0.join("unavailable-A")).unwrap();
+    assert!(text(cli(&sys,"file-move-at-receipt",Some(mv),&args,None)).contains("OriginalPublished"));
+    refused(cli(&sys,"file-move-at-receipt",Some(mv),&[&file,&va,&ar,&vb,&bl,"0"],None));
+    refused(cli(&sys,"file-move-receipt",Some(mv),&[&file,&va,&vb,"0"],None));
+    bytes(cli(&sys,"file-write-range",Some(op()),&[&file,"2","6","3",ABC_SHA,"20"],Some(b"abc")));
+    let f=text(cli(&sys,"file-commit",Some(op()),&[&file,"3"],None));let i2=token(&f,"node");
+    assert_eq!(token(&f,"parent"),i1);assert_eq!(token(&f,"packed-bytes"),"3");
+    let mut latest=b"The heabc br".to_vec();latest.resize(20,0);
+    let verify=||{
+        for(n,want)in[(f0,F0),(i1,&b"The hello br"[..]),(i2,latest.as_slice())]{
+            assert_eq!(bytes(cli(&sys,"file-node-read",None,&[&file,n],None)),want);}
+        assert_eq!(bytes(cli(&sys,"file-read",None,&[&file],None)),latest);
+        assert_eq!(bytes(cli(&sys,"file-read-range",None,&[&file,"12","8"],None)),vec![0;8]);
+    };
+    verify();let native=format!("方案-{file}.xlsx");assert_eq!(new.join("left").join(&native).read_dir().unwrap().count(),5);
+    let del=op();let reply=text(cli(&sys,"file-delete-at",Some(del),&[&file,&vb,&bl,"1"],None));
+    let digest=token(&reply,"delete-decision");let d=del.to_string();assert!(reply.contains(&format!("deletion-source {vb}:{bl}")));
+    assert!(bin.join(&native).is_dir());refused(get(&vb,&bl));refused(cli(&sys,"file-node-read",None,&[&file,f0],None));
+    let page=text(cli(&sys,"recycle-list",None,&["16",&vb,"-","-"],None));assert!(page.contains(&file)&&page.contains(&bl)&&!page.contains(&br));
+    assert!(text(cli(&sys,"file-delete-at-receipt",Some(del),&[&file,&vb,&bl,"1"],None)).contains("OriginalPublished"));
+    refused(cli(&sys,"file-delete-receipt",Some(del),&[&file,&vb,"1"],None));
+    let restore=op();
+    refused(cli(&sys,"file-restore",Some(restore),&[&file,&d,digest,"2","original"],None));
+    refused(cli(&sys,"file-restore-at",Some(restore),&[&file,&d,digest,"2",&vb,&br],None));
+    // An installed exact display-name directory in the real deletion parent
+    // blocks its original site. An identically spelled sibling is not that parent.
+    let blocker=md(&vb,&bl,name);let s_before=fs::read(sys.join("REGISTRATION")).unwrap();
+    refused(cli(&sys,"file-restore-at",Some(restore),&[&file,&d,digest,"2","original"],None));
+    assert!(!sys.join("FILE-ALLOCATION").exists()&&!sys.join("FILE-INTENT").exists());
+    assert_eq!(fs::read(sys.join("REGISTRATION")).unwrap(),s_before);
+    assert!(bin.join(&native).is_dir());let listing=text(cli(&sys,"dir-list",None,&[&vb,&bl],None));assert!(listing.contains(&blocker));
+    let sub=md(&vb,"root","recovered");let dest=[&file[..],&d,digest,"2",&vb,&sub];
+    let rec=text(cli(&sys,"file-restore-at",Some(restore),&dest,None));assert!(rec.contains("CompleteCheckedNow"));
+    assert_eq!(token(&text(get(&vb,&sub)),"history"),history);assert!(new.join("recovered").join(&native).is_dir());assert!(!bin.join(&native).exists());
+    verify();assert_eq!(bytes(cli(&sys,"file-node-read",None,&[&other,other_node],None)),b"hello");
+    assert_eq!((fs::metadata(&sibling_path).unwrap().dev(),fs::metadata(&sibling_path).unwrap().ino()),observed);
+    let del2=op();let reply=text(cli(&sys,"file-delete-at",Some(del2),&[&file,&vb,&sub,"3"],None));let digest2=token(&reply,"delete-decision");
+    assert_ne!(digest,digest2);refused(cli(&sys,"file-restore-at",Some(op()),&[&file,&d,digest,"4","original"],None));
+    assert!(text(cli(&sys,"file-restore-at",Some(restore),&dest,None)).contains("OriginalPublished"));assert!(bin.join(&native).is_dir());
+    let reopen=op();let d2=del2.to_string();bytes(cli(&sys,"file-restore-at",Some(reopen),&[&file,&d2,digest2,"4","original"],None));
+    // Explicitly selecting the same original parent is the very same request.
+    assert!(text(cli(&sys,"file-restore-at-receipt",Some(reopen),&[&file,&d2,digest2,"4",&vb,&sub],None)).contains("OriginalPublished"));
+    refused(cli(&sys,"file-restore-at-receipt",Some(reopen),&[&file,&d2,digest2,"4",&vb,&bl],None));
+    verify();assert_eq!(token(&text(cli(&sys,"file-create-at",Some(id_op),&[&va,&al,name],None)),"file"),file);
+    fs::rename(a.0.join("unavailable-A"),&old).unwrap();assert_eq!(token(&text(get(&va,&al)),"file"),reuse);
+    assert_eq!(token(&text(get(&va,&ar)),"file"),sibling);
+}

@@ -16,6 +16,11 @@ impl BirthParent{
     pub(super) fn address(&self,volume:VolumeId)->Parent{match self{
         Self::Root=>Parent::Root(volume),Self::Child{directory,..}=>Parent::Child(volume,*directory),
     }}
+    pub(super) fn identifies(&self,volume:VolumeId,b:&super::directory::types::Basis)->bool{
+        self.address(volume)==b.address&&match self{
+            Self::Root=>true,Self::Child{decision,object,..}=>*decision==b.anchor&&object==&b.object,
+        }
+    }
     pub(super) fn kind(&self)->u8{match self{Self::Root=>ROOT,Self::Child{..}=>CHILD}}
     pub(super) fn put(&self,b:&mut Vec<u8>){
         if let Self::Child{directory,decision,object}=self{b.extend_from_slice(&directory.0);b.extend_from_slice(decision);object.put(b);}

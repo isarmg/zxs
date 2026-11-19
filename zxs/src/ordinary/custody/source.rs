@@ -150,25 +150,31 @@ impl Clean{
         let listing=self.dir.names()?;let n=listing.len();
         let actual:BTreeSet<_>=listing.into_iter().collect();
         if actual.len()!=n||actual!=expected{return Err(invalid("unsupported, missing or extra original transfer material"));}
-        self.dir.require_named()
+        self.dir.require_named()?;
+        if self.dir.label()?.is_some(){return Err(invalid("a FILE transfer container cannot be a labelled volume root"));}Ok(())
     }
     /// Immediately before using a frozen source, compare to its *same* FILE
     /// original. Unrelated later FILE operations do not substitute a new cut.
     pub(super) fn require(&self,p:&LocalPool,s:&Journal,v:&FileVolume<'_>)->io::Result<()>{
-        if !std::ptr::eq(p,v.pool){return Err(invalid("not the selected original SYSTEM lease"));}
+        let h=crate::ordinary::OrdinaryParentLease::at_cut(v,self.c.create.parent.address(self.c.create.volume),s)?;
+        self.require_parent(p,s,&h)
+    }
+    fn require_parent(&self,p:&LocalPool,s:&Journal,h:&crate::ordinary::OrdinaryParentLease<'_,'_>)->io::Result<()>{
+        let v=h.volume();
+        if !self.c.create.parent.identifies(v.id(),h.basis())||!std::ptr::eq(p,v.pool){return Err(invalid("not the selected original SYSTEM lease"));}
         if self.lifecycle.is_some(){return Err(invalid("a lifecycle source requires its scoped original endpoint"));}
         let(c,f,d)=selection(s,self.c.create.file)?;
         if p.id()!=self.pool||v.id()!=self.c.create.volume||c.digest!=self.c.digest||f.digest!=self.parent.digest||
             d.map(|v|v.digest)!=self.children.as_refs().map(|v|v.digest)||v.root.entity!=self.root.entity||
             fs::Birth::read(&v.root.file)?!=self.root.birth||self.dir.entity!=c.create.directory.entity||
-            fs::Birth::read(&self.dir.file)?!=c.create.directory.birth||self.dir.path!=v.root.checked_child_path(&crate::ordinary::storage_name::file_leaf(&c.create.name,c.create.file)?)?{
+            fs::Birth::read(&self.dir.file)?!=c.create.directory.birth||self.dir.path!=h.directory().checked_child_path(&crate::ordinary::storage_name::file_leaf(&c.create.name,c.create.file)?)?{
             return Err(invalid("handoff source no longer belongs to its original FILE/root/frontier"));
         }
         let n=crate::ordinary::storage_name::file_leaf(&c.create.name,c.create.file)?;
-        let original=v.exact_directory(&n)?.ok_or_else(||invalid("original source spelling is not present"))?;
+        let original=h.exact_child(&n)?.ok_or_else(||invalid("original source spelling is not present"))?;
         if original.entity!=self.dir.entity||!original.same_mount(&self.dir)?||fs::Birth::read(&original.file)?!=c.create.directory.birth{
             return Err(invalid("original FILE source was renamed or replaced"));}
-        v.require_current()?;self.exact_names()?;v.require_current()
+        h.require_at(s)?;self.exact_names()?;h.require_at(s)
     }
     fn require_lifecycle(&self,p:&LocalPool,g:&LifecycleGrant<'_>,v:&CustodyEnd<'_, '_>)->io::Result<()>{
         let Some((r,prior,sites))=&self.lifecycle else{return Err(invalid("not a frozen lifecycle source"));};
@@ -216,26 +222,26 @@ impl Clean{
 pub(in crate::ordinary::custody) struct Verified{source:Clean,bytes:Vec<Bytes>,total:u64}
 impl Verified{
     pub(super) fn originals(&self)->(&Frame,&Commit,Children<'_>){(&self.source.c,&self.source.parent,self.source.children.as_refs())}
-    pub(super) fn require_at(&self,v:&FileVolume<'_>,name:&CStr,root:&NativeObject,sites:&Sites)->io::Result<()>{
-        use std::os::unix::ffi::OsStrExt;
+    pub(super) fn require_at(&self,h:&crate::ordinary::OrdinaryParentLease<'_,'_>,name:&CStr,root:&NativeObject,sites:&Sites)->io::Result<()>{
+        let v=h.volume();use std::os::unix::ffi::OsStrExt;
         if v.pool.id()!=self.pool()||self.source.root!=*root||v.root.entity!=root.entity||
-            fs::Birth::read(&v.root.file)?!=root.birth||self.source.dir.path!=v.root.path.join(std::ffi::OsStr::from_bytes(name.to_bytes()))||
+            fs::Birth::read(&v.root.file)?!=root.birth||self.source.dir.path!=h.directory().path.join(std::ffi::OsStr::from_bytes(name.to_bytes()))||
             self.source.dir.entity!=sites.directory.entity||fs::Birth::read(&self.source.dir.file)?!=sites.directory.birth||
             self.objects().len()!=3+sites.children.len()||self.objects().iter().any(|b|sites.at(b.kind)!=Some(&b.original)){
                 return Err(invalid("reopened material is not the original MOVE role, directory and exact named content"));
         }
-        let actual=v.exact_directory(name)?.ok_or_else(||invalid("original MOVE operand no longer has its exact spelling"))?;
+        let actual=h.exact_child(name)?.ok_or_else(||invalid("original MOVE operand no longer has its exact spelling"))?;
         if actual.entity!=self.source.dir.entity||!actual.same_mount(&self.source.dir)?||fs::Birth::read(&actual.file)?!=sites.directory.birth{
             return Err(invalid("not this exact originally named MOVE operand"));}
-        v.require_current()?;self.source.exact_names()?;v.require_current()
+        h.require()?;self.source.exact_names()?;h.require()
     }
     /// Only the parent entry changed. The directory FD, original held regular
     /// files, their full stamps, and their applicable read leases did not.
     /// A new process has no such Verified and must do a fresh complete scan.
-    pub(super) fn follow_transfer_rename(&mut self,v:&FileVolume<'_>,m:&super::transfer::Moved,old:&CStr,new:&CStr)->io::Result<()>{
-        if self.source.dir.path!=v.root.checked_child_path(old)?||v.id()!=m.original.to||
-            self.volume()!=v.id()||self.file()!=m.original.file{return Err(invalid("different verified transfer target at rename"));}
-        self.source.dir.path=v.root.checked_child_path(new)?;
+    pub(super) fn follow_transfer_rename(&mut self,v:&crate::ordinary::OrdinaryParentLease<'_,'_>,m:&super::transfer::Moved,old:&CStr,new:&CStr)->io::Result<()>{
+        if self.source.dir.path!=v.directory().checked_child_path(old)?||v.volume().id()!=m.original.to||
+            self.volume()!=v.volume().id()||self.file()!=m.original.file{return Err(invalid("different verified transfer target at rename"));}
+        self.source.dir.path=v.directory().checked_child_path(new)?;
         // Resolves the exact final spelling and matches directory birth/mount,
         // all frozen roles, every reopened child against its retained pin, and
         // the actual member set. It does not take a fresh stamp as its proof.
@@ -284,6 +290,7 @@ impl Verified{
     }
     pub(super) fn physical_bytes(&self)->u64{self.total}
     pub(super) fn require(&self,pool:&LocalPool,s:&Journal,volume:&FileVolume<'_>)->io::Result<()>{self.source.require(pool,s,volume)}
+    pub(super) fn require_parent(&self,p:&LocalPool,s:&Journal,h:&crate::ordinary::OrdinaryParentLease<'_,'_>)->io::Result<()>{self.source.require_parent(p,s,h)}
     pub(super) fn require_lifecycle(&self,p:&LocalPool,g:&LifecycleGrant<'_>,v:&CustodyEnd<'_, '_>)->io::Result<()>{
         self.source.require_lifecycle(p,g,v)
     }

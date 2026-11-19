@@ -1,9 +1,9 @@
 //! No named material, overwrite, operation decision or source retirement at
 //! this stage. Same-mount rename has no copy fallback; different mounts
 //! prepare independently verified unnamed originals on the selected target.
-use super::{source::{Bytes,Leaf,Verified},staging::Existing};
-use crate::{OperationId,PoolId,VolumeId,fs::{self,HeldDir,invalid,stream},ordinary::{material,wire::NativeObject},
-    pool::lease::{Access,FileVolume,LocalPool}};
+use super::{source::{Bytes,Leaf,Verified},staging::Existing,transfer::{ParentChoice,Parents},purpose::Call};
+use crate::{OperationId,PoolId,VolumeId,fs::{self,HeldDir,invalid,stream},ordinary::{OrdinaryParentLease as HeldParent,material,wire::NativeObject},
+    pool::lease::{Access,LocalPool}};
 use crate::ordinary::journal::Journal;
 use std::{fs::File,io,path::{Path,PathBuf}};
 
@@ -11,49 +11,58 @@ use std::{fs::File,io,path::{Path,PathBuf}};
 pub(in crate::ordinary) enum Method{Rename,Transfer}
 /// This identity must still match a real authenticated registration before a
 /// name can be reserved. In particular the recycle role never passes ordinary().
-fn vacant(s:&Journal,v:&FileVolume<'_>,name:&str,file:crate::FileId)->io::Result<()>{
-    if s.occupied_root(v.id(),name)||s.allocated.as_ref().is_some_and(|a|a.volume==v.id()&&a.name==name){
-        return Err(invalid("the selected target name is already decided or reserved by an original CREATE"));
+fn vacant(s:&Journal,v:&HeldParent<'_,'_>,name:&str,file:crate::FileId)->io::Result<()>{
+    let parent=v.address();
+    if s.occupied(parent,name)||s.allocated.as_ref().is_some_and(|a|a.parent.address(a.volume)==parent&&a.name==name){
+        return Err(invalid("this exact target parent and name is decided or reserved by an original CREATE"));
     }
     material::vacant_for_move(v,name,file)
 }
-pub(super) struct Destination<'s>{source:&'s Verified,system:PathBuf,system_origin:NativeObject,pub pool:PoolId,pub volume:VolumeId,pub root:NativeObject,pub mode:Method,held:HeldDir}
+pub(super) struct Destination<'s>{source:&'s Verified,system:PathBuf,system_origin:NativeObject,pub pool:PoolId,pub volume:VolumeId,
+    pub root:NativeObject,pub mode:Method,pub(super) parents:Parents,choice:ParentChoice,held:HeldDir}
 impl<'s> Destination<'s>{
-    pub(super) fn select(system:&Path,src:&'s Verified,to:VolumeId)->io::Result<Self>{
+    #[cfg(test)]
+    pub(super) fn select(system:&Path,src:&'s Verified,to:VolumeId)->io::Result<Self>{Self::select_at(system,src,to,ParentChoice::Roots)}
+    pub(super) fn select_at(system:&Path,src:&'s Verified,to:VolumeId,choice:ParentChoice)->io::Result<Self>{
         let(p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;
         if p.id()!=src.pool()||to==src.volume(){return Err(invalid("MOVE requires two distinct original ordinary volume registrations"));}
         if !s.clean_initial_handoff(src.file()){return Err(invalid("initial clean formal FILE required for transfer"));}
-        let old=p.ordinary(src.volume())?;src.require(&p,&s,&old)?;
-        let new=p.ordinary(to)?;vacant(&s,&new,src.name(),src.file())?;
-        let root=NativeObject{entity:new.root.entity,birth:fs::Birth::read(&new.root.file)?};
+        let(from,to_parent)=choice.ordinary_move(src.volume(),to)?;
+        if s.placement(src.file())?.ordinary_parent()?!=Some(from){return Err(invalid("not the current ordinary source parent"));}
+        let reg=p.journal_registration();let parents=choice.bind(Call::Move,src.volume(),to,None,|a|s.file_parent_at(a,fs::local_uid(),&reg))?;
+        let old=HeldParent::owned(&p,from,&s)?;src.require_parent(&p,&s,&old)?;
+        let new=HeldParent::owned(&p,to_parent,&s)?;vacant(&s,&new,src.name(),src.file())?;
+        let registered=&new.volume().root;let root=NativeObject{entity:registered.entity,birth:fs::Birth::read(&registered.file)?};
         if &root==src.source_root(){return Err(invalid("different volume IDs cannot select the same native root"));}
-        let mode=if src.same_mount(&new.root)?{
+        let mode=if src.same_mount(new.directory())?{
             if root.entity.device!=src.source_root().entity.device||root.birth.filesystem()!=src.source_root().birth.filesystem(){
                 return Err(invalid("one mount cannot have incompatible original filesystem identities"));
             }
             Method::Rename
         }else{Method::Transfer};
-        // A new open, not dup of the flocked registration FD: long copy holds
-        // no SYSTEM or volume-wide lease. Its real incarnation is checked now
-        // and again whenever the caller re-enters the original publication.
-        let held=HeldDir::open(&new.root.path)?;
+        // Independent of both flocked parent leases during long copy. The
+        // source and the target original parent are always reacquired by ID.
+        let held=HeldDir::open(&new.directory().path)?;
         let system_origin=NativeObject{entity:p.system.entity,birth:fs::Birth::read(&p.system.file)?};
-        let result=Self{source:src,system:p.system.path.clone(),system_origin,pool:p.id(),volume:to,root,mode,held};result.require(&p,&new)?;
-        src.require(&p,&s,&old)?;Ok(result)
+        let result=Self{source:src,system:p.system.path.clone(),system_origin,pool:p.id(),volume:to,parents,choice,root,mode,held};
+        result.require(&p,&new)?;src.require_parent(&p,&s,&old)?;Ok(result)
     }
-    pub(super) fn require(&self,p:&LocalPool,actual:&FileVolume<'_>)->io::Result<()>{
-        if p.id()!=self.pool||p.system.entity!=self.system_origin.entity||fs::Birth::read(&p.system.file)?!=self.system_origin.birth||actual.id()!=self.volume||self.held.entity!=self.root.entity||actual.root.entity!=self.root.entity||
-            self.held.path!=actual.root.path||!self.held.same_mount(&actual.root)?||
-            fs::Birth::read(&self.held.file)?!=self.root.birth||fs::Birth::read(&actual.root.file)?!=self.root.birth{
-            return Err(invalid("not the same registered handoff target"));
+    pub(super) fn require(&self,p:&LocalPool,h:&HeldParent<'_,'_>)->io::Result<()>{
+        let v=h.volume();let d=h.directory();
+        if !std::ptr::eq(p,v.pool)||p.id()!=self.pool||p.system.entity!=self.system_origin.entity||fs::Birth::read(&p.system.file)?!=self.system_origin.birth||
+            v.id()!=self.volume||!self.parents.identifies(false,v.id(),h.basis())||v.root.entity!=self.root.entity||fs::Birth::read(&v.root.file)?!=self.root.birth||
+            self.held.path!=d.path||self.held.entity!=d.entity||!self.held.same_mount(d)?||fs::Birth::read(&self.held.file)?!=h.basis().object.birth{
+            return Err(invalid("not the same registered ordinary volume and original destination directory"));
         }
-        self.held.require_named()?;actual.require_current()
+        self.held.require_named()?;h.require()
     }
-    fn at_vacant<T>(&self,access:Access,use_cut:impl FnOnce(&LocalPool,&Journal,&FileVolume<'_>,&FileVolume<'_>)->io::Result<T>)->io::Result<T>{
+    fn at_vacant<T>(&self,access:Access,use_cut:impl FnOnce(&LocalPool,&Journal,&HeldParent<'_,'_>,&HeldParent<'_,'_>)->io::Result<T>)->io::Result<T>{
         let(p,_,s)=LocalPool::with_snapshot(&self.system,access)?;let src=self.source;
-        let old=p.ordinary(src.volume())?;let new=p.ordinary(self.volume)?;
-        src.require(&p,&s,&old)?;self.require(&p,&new)?;vacant(&s,&new,src.name(),src.file())?;
-        src.require(&p,&s,&old)?;self.require(&p,&new)?;use_cut(&p,&s,&old,&new)
+        let(a,b)=self.choice.ordinary_move(src.volume(),self.volume)?;
+        let old=HeldParent::owned(&p,a,&s)?;let new=HeldParent::owned(&p,b,&s)?;
+        if !self.parents.identifies(true,src.volume(),old.basis()){return Err(invalid("different original MOVE source parent"));}
+        src.require_parent(&p,&s,&old)?;self.require(&p,&new)?;vacant(&s,&new,src.name(),src.file())?;
+        src.require_parent(&p,&s,&old)?;self.require(&p,&new)?;use_cut(&p,&s,&old,&new)
     }
     pub(super) fn prepare(self)->io::Result<Prepared<'s>>{self.prepare_after(||Ok(()))}
     pub(super) fn for_operation(self,op:OperationId)->io::Result<Prepared<'s>>{self.prepare_original(Some(op),||Ok(()))}
@@ -63,15 +72,16 @@ impl<'s> Destination<'s>{
         // current source, target vacancy/role and SYSTEM again before allocating.
         let existing=self.at_vacant(Access::Incoming,|p,s,old,new|{
             if let Some(a)=&s.moving{
-                if Some(a.original.op)!=op||a.original.uid!=fs::local_uid()||s.decided(a.original.op).is_some(){return Err(invalid("another original movement already occupies this source or frontier"));}
+                if a.original.parents!=self.parents||Some(a.original.op)!=op||a.original.uid!=fs::local_uid()||s.decided(a.original.op).is_some(){return Err(invalid("another original movement already occupies this source or frontier"));}
                 if a.original.mode==Method::Transfer{
-                    super::transfer::check_private_paths(&old.root,&new.root,a.original.ticket)?;
-                    if old.root.entry_present(&a.original.quarantine_name())?{return Err(invalid("source isolation name occupied before transfer"));}
+                    super::transfer::check_private_paths(old.directory(),new.directory(),a.original.ticket)?;
+                    if old.directory().entry_present(&a.original.quarantine_name())?{return Err(invalid("source isolation name occupied before transfer"));}
                 }
                 let sealed=s.pending.as_ref().map(|i|i.frame.moved()).transpose()?;
                 Existing::capture(self.source,&self,new,a,sealed)
             }else{
-                if let Some(op)=op{s.admit_new_handoff(p,op,self.source.file(),self.source.volume(),new.id())?;}
+                if let Some(op)=op{s.admit_handoff_at(p,op,self.source.file(),old.address(),new.address())?;}
+                for h in [old,new]{material::held_residence(h.volume(),h.directory(),self.source.name(),self.source.file(),op.unwrap_or_else(||self.source.originals().0.create.op))?;}
                 Ok(None)
             }
         })?;
@@ -111,12 +121,15 @@ impl<'s> Destination<'s>{
 pub(super) struct Anonymous{pub part:Bytes,pub file:File,pub stamp:fs::OriginalStamp}
 pub(super) struct Prepared<'s>{dest:Destination<'s>,files:Vec<Anonymous>,existing:Option<Existing>}
 impl Prepared<'_>{
+    pub(super) fn move_request(&self,op:OperationId)->super::command::Request{super::command::Request{
+        parents:self.dest.choice,call:Call::Move,op,id:self.source().file(),from:self.source().volume(),to:self.volume(),epoch:0}}
     pub(super) fn dest_pool(&self)->PoolId{self.dest.pool}
     pub(super) fn source(&self)->&Verified{self.dest.source}
     pub(super) fn volume(&self)->VolumeId{self.dest.volume}
     pub(super) fn root(&self)->&NativeObject{&self.dest.root}
+    pub(super) fn parents(&self)->&Parents{&self.dest.parents}
     pub(super) fn method(&self)->Method{self.dest.mode}
-    pub(super) fn under_original_writer<T>(&self,use_cut:impl FnOnce(&LocalPool,&Journal,&FileVolume<'_>,&FileVolume<'_>)->io::Result<T>)->io::Result<T>{
+    pub(super) fn under_original_writer<T>(&self,use_cut:impl FnOnce(&LocalPool,&Journal,&HeldParent<'_,'_>,&HeldParent<'_,'_>)->io::Result<T>)->io::Result<T>{
         self.at_vacant_cut(Access::Write,use_cut)
     }
     pub(super) fn part(&self,which:Leaf)->io::Result<&Anonymous>{
@@ -124,7 +137,7 @@ impl Prepared<'_>{
     }
     /// Reacquire SYSTEM and BOTH concrete roots from a single fresh snapshot.
     /// The closure cannot supply another FILE or mix older captured catalogs.
-    pub(super) fn at_vacant_cut<T>(&self,access:Access,use_cut:impl FnOnce(&LocalPool,&Journal,&FileVolume<'_>,&FileVolume<'_>)->io::Result<T>)->io::Result<T>{
+    pub(super) fn at_vacant_cut<T>(&self,access:Access,use_cut:impl FnOnce(&LocalPool,&Journal,&HeldParent<'_,'_>,&HeldParent<'_,'_>)->io::Result<T>)->io::Result<T>{
         self.dest.at_vacant(access,|p,s,old,new|{
             self.require_material(new)?;
             if let Some(existing)=&self.existing{existing.require(new,s.moving.as_ref().ok_or_else(||invalid("original staged MOVE reservation disappeared"))?)?;}
@@ -141,7 +154,7 @@ impl Prepared<'_>{
             let a=s.moving.as_ref().ok_or_else(||invalid("original MOVE reservation absent"))?;
             if a.original.op!=op||a.opened()||s.decided(op).is_some(){return Err(invalid("different MOVE or already decided"));}
             a.original.require(self.source(),self)?;
-            if a.original.mode==Method::Transfer&&old.root.entry_present(&a.original.quarantine_name())?{
+            if a.original.mode==Method::Transfer&&old.directory().entry_present(&a.original.quarantine_name())?{
                 return Err(invalid("source private name now occupied; no further target staging"));}
             p.system.confirm_record_sync(crate::ordinary::allocation::NAME,&a.stamp,a.bytes.len())?;p.system.file.sync_all()?;
             let(c,f,d)=self.source().originals();
@@ -167,11 +180,11 @@ impl Prepared<'_>{
                     if stream::anonymous_stamp(&a0.file)?!=a0.stamp{return Err(invalid("anonymous target changed before name"));}
                     let n=NativeObject::stamp(&a0.stamp);fs::set_preparation_token(&a0.file,&placed::token(a.digest,role.kind,&n)?)?;
                     dir.link_stream(&role.name,&a0.file,&a0.stamp,role.len)?;
-                    hook(crate::ordinary::Cut::MoveLeafLinked)?;n
+                    hook(crate::ordinary::Cut::MoveLeafLinked)?;if dir.label()?.is_some(){return Err(invalid("MOVE stage became a registered volume"));}n
                 };
                 if selected.insert(role.kind,actual).is_some(){return Err(invalid("repeated MOVE role"));}
             }
-            dir.file.sync_all()?;new.root.file.sync_all()?;
+            dir.file.sync_all()?;new.directory().file.sync_all()?;
             let sites=staging::sites(&dir,&selected,&a.original)?;
             let m=Moved::seal(p.id(),a.seq,a.previous,a.original.clone(),a.digest,Some(st.slot),sites)?;
             m.require_history(c,f,d)?;if !a.matches(&m)||now.pending.as_ref().is_some_and(|i|i.frame.bytes()!=m.bytes){
@@ -183,12 +196,12 @@ impl Prepared<'_>{
     /// Naming consumes each previously anonymous stamp. On the later decision
     /// pass use the independently read-back *new named* holder and all live
     /// source pins, not the pre-link anonymous ctime or untrusted path.
-    pub(super) fn original_writer_after_naming<T>(&self,apply:impl FnOnce(&LocalPool,&Journal,&FileVolume<'_>,&FileVolume<'_>)->io::Result<T>)->io::Result<T>{
+    pub(super) fn original_writer_after_naming<T>(&self,apply:impl FnOnce(&LocalPool,&Journal,&HeldParent<'_,'_>,&HeldParent<'_,'_>)->io::Result<T>)->io::Result<T>{
         self.dest.at_vacant(Access::Write,apply)
     }
-    fn require_material(&self,v:&FileVolume<'_>)->io::Result<()>{
-        let src=self.source();let p=v.pool;
-        if src.pool()!=p.id()||src.volume()==v.id()||src.same_mount(&v.root)?!=(self.dest.mode==Method::Rename){
+    fn require_material(&self,v:&HeldParent<'_,'_>)->io::Result<()>{
+        let src=self.source();let p=v.volume().pool;
+        if src.pool()!=p.id()||src.volume()==v.volume().id()||src.same_mount(v.directory())?!=(self.dest.mode==Method::Rename){
             return Err(invalid("original transfer method or source changed"));
         }
         if self.dest.mode==Method::Rename{
@@ -197,7 +210,7 @@ impl Prepared<'_>{
             if self.files.len()+self.existing.as_ref().map_or(0,Existing::len)!=src.objects().len(){return Err(invalid("incomplete original target transfer set"));}
             for s in src.objects(){
                 if let Some(p)=self.existing.as_ref().and_then(|e|e.pin(s.kind)){p.unchanged()?;continue;}
-                let n=self.part(s.kind)?;if &n.part!=s||stream::anonymous_stamp(&n.file)?!=n.stamp{
+                let n=self.part(s.kind)?;if &n.part!=s||!v.directory().shares_file_mount(&n.file)?||stream::anonymous_stamp(&n.file)?!=n.stamp{
                 return Err(invalid("prepared target file not the frozen source's verified corresponding role"));}}
         }
         Ok(())

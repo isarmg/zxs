@@ -19,7 +19,7 @@ pub use recycle::{apply_recycle,recycle_receipt,list_retained,DeletionKey,Deleti
 mod retire;
 pub(crate) use retire::dedicated::{Previous as LifecyclePrevious,Originals as LifecycleOriginals,Retiring as LifecycleRetiring};
 pub(super) mod inventory;
-pub use command::{move_file,move_receipt,MoveReceipt,MoveStatus};
+pub use command::{move_file,move_file_at,move_receipt,move_receipt_at,MoveReceipt,MoveStatus};
 mod staging;
 pub(super) mod placed;
 mod destination;

@@ -35,10 +35,9 @@ impl Decision{
     pub(super) fn read(pool:PoolId,bytes:&[u8])->io::Result<Self>{
         let e=wire::envelope(pool,bytes)?;
         match e.kind{
-            // The pure FILE codec also describes a child-parent frame.
-            // Do not accept it in any original journal or sealed intent
-            // before ALL of its material, read/write and custody paths exist.
-            super::file_parent::ROOT=>Ok(Self::Create(Frame::from_envelope(pool,bytes,e)?)),
+            // The envelope identifies root vs child. Its exact parent and
+            // name/identity are admitted by the ordered original prefix.
+            super::file_parent::ROOT|super::file_parent::CHILD=>Ok(Self::Create(Frame::from_envelope(pool,bytes,e)?)),
             2=>Ok(Self::Save(SaveFrame::from_envelope(pool,bytes,e)?)),
             3=>Ok(Self::Formal(Commit::from_envelope(pool,bytes,e)?)),
             4=>Ok(Self::Span(Saved::from_envelope(pool,bytes,e)?)),
@@ -156,7 +155,7 @@ impl OriginalIndex{
         if self.work(o.file,ds)?.last().is_some(){return Err(invalid("cannot hand off a dirty working chain"));}
         if self.tickets.contains(&o.ticket)||self.ops.contains(&o.ticket)||self.tickets.contains(&o.op)||self.ops.contains(&o.op){
             return Err(invalid("an original operation or custody ticket has already been used"));}
-        registered_handoff(o,allow,before,graph,&self.names)?;
+        registered_handoff(o,allow,before,graph,&self.names,&self.directory_rows,ds)?;
         Ok(graph)
     }
     fn admit(&self,f:&Decision,frames:&[Decision],used:usize,prev:[u8;32],allow:&Allowed<'_>)->io::Result<()>{
@@ -176,15 +175,7 @@ impl OriginalIndex{
                     return Err(invalid("transferred material cannot reuse any admitted native owner"));
                 }
             }
-            Decision::Create(f)=>{let c=&f.create;
-                if c.parent!=super::file_parent::BirthParent::Root{return Err(invalid("child FILE business admission is closed"));}
-                self.names.vacancy(DirParent::Root(c.volume),&c.name,Member::File{entry:c.entry,file:c.file})?;
-                super::material::birth_geometry(allow,c.volume,c.uid,allow.ordinary_path_budget(c.volume,c.uid)?,&c.name,c.file,c.attempt)?;
-                if !allow.file(c.volume,c.uid,c.directory.entity,&c.directory.birth,false)
-                    ||self.files.contains_key(&c.file)||self.names.occupied_root(c.volume,&c.name)||self.entries.contains(&c.entry)
-                    ||self.histories.contains(&c.history)||self.tickets.contains(&c.attempt)||self.directory_tokens.contains(&c.attempt)||self.native.contains(&c.local.birth)
-                    ||self.native.contains(&c.directory.birth){return Err(invalid("conflicting original FILE creation"));}
-            }
+            Decision::Create(f)=>self.birth_at_parent(f,frames,allow)?,
             Decision::Save(f)=>{let c=self.original_save(&f.original,frames,allow)?;let n=&f.material.object;
                 if self.saved.contains_key(&f.original.file)||self.native.contains(&n.birth)||n.entity.device!=c.create.directory.entity.device
                     ||n.birth.filesystem()!=c.create.directory.birth.filesystem()||n.entity==c.create.local.entity||n.entity==c.create.directory.entity{
@@ -237,13 +228,15 @@ impl OriginalIndex{
     }
 }
 
-fn active_names(o:&MoveOrigin)->(bool,bool){
-    use super::custody::purpose::Purpose;
-    match o.purpose{Purpose::Ordinary=>(true,true),Purpose::Delete{..}=>(true,false),Purpose::Restore{..}=>(false,true)}
-}
 /// A logical precondition, not a warrant to install/delete material. The two
 /// endpoints are admitted as a pair by the *same* immutable original record.
-fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,graph:Graph<'a>,names:&Names)->io::Result<()>{
+fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,graph:Graph<'a>,names:&Names,rows:&directories::DirectoryRows,ds:&[Decision])->io::Result<()>{
+    parent_projection(o,reg,before,names,rows,ds)?;o.require_graph(before.birth(),graph)?;
+    before.graph_sites(graph)?.check(&o.src_root)
+}
+/// The role pair, exact previous custody, original ordinary directory anchors
+/// and name ownership at this particular prefix; not a physical operation.
+fn parent_projection(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'_>,names:&Names,rows:&directories::DirectoryRows,ds:&[Decision])->io::Result<()>{
     use crate::pool::lease::recycle::Direction;use super::custody::purpose::Purpose;
     let src=(o.from,o.src_root.entity,&o.src_root.birth);let dst=(o.to,o.dst_root.entity,&o.dst_root.birth);
     let eligible=match o.purpose{
@@ -252,16 +245,8 @@ fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,gr
         Purpose::Restore{..}=>reg.dedicated(o.uid,Direction::FromRecycle,src,dst),
     };
     if !eligible{return Err(invalid("wrong registered custody endpoints"));}
-    let private=super::material::resident(&o.name,o.file,o.ticket)?;
-    let ordinary=|v|reg.ordinary_names(v,o.uid,reg.ordinary_path_budget(v,o.uid)?);
-    for b in match o.purpose{
-        Purpose::Ordinary=>[ordinary(o.from)?,ordinary(o.to)?],
-        Purpose::Delete{..}=>[ordinary(o.from)?,reg.recycle_names(o.uid)?],
-        Purpose::Restore{..}=>[reg.recycle_names(o.uid)?,ordinary(o.to)?],
-    }{private.at(b)?;}
-    names.require_handoff(o)?;
-    o.purpose.check_transfer(o.mode,&o.src_root,&o.dst_root)?;before.require_next(o)?;o.require_graph(before.birth(),graph)?;
-    before.graph_sites(graph)?.check(&o.src_root)
+    directories::handoff_parents(rows,ds,names,reg,before,o)?;names.require_handoff(o)?;
+    o.purpose.check_transfer(o.mode,&o.src_root,&o.dst_root)?;before.require_next(o)
 }
 
 pub(crate) struct Journal{
@@ -340,20 +325,14 @@ impl Journal{
                 }
                 saving=Some(a);
             }else{
-                // A bounded nested operand can be examined by the private
-                // codec, but is not yet an admissible pool reservation.
-                if !allocation::root_image(&bytes){return Err(invalid("unsupported original FILE allocation kind"));}
                 let a=Allocation::from_bytes(system,pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Create(f) if a.matches(f)));
-                super::material::birth_geometry(&allowed,a.volume,a.uid,allowed.ordinary_path_budget(a.volume,a.uid)?,&a.name,a.file,a.attempt)?;
-                if !last{idx.names.vacancy(DirParent::Root(a.volume),&a.name,Member::File{entry:a.entry,file:a.file})?;}
                 if !allowed.file(a.volume,a.uid,a.root.entity,&a.root.birth,true)||
-                    (!last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.file_op_used(a.op)
-                    ||idx.files.contains_key(&a.file)||idx.entries.contains(&a.entry)||idx.histories.contains(&a.history)
-                    ||idx.names.occupied_root(a.volume,&a.name)||idx.tickets.contains(&a.attempt)||idx.directory_tokens.contains(&a.attempt)
-                    ||a.stage.as_ref().is_some_and(|s|idx.native.contains(&s.object.birth)))){
-                    return Err(invalid("original FILE allocation no longer matches its registered root or frontier"));
-                }
+                    (!last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev)){
+                    return Err(invalid("original FILE allocation no longer matches its registered root or frontier"));}
+                // A complete matching last frame was already admitted with
+                // its predecessor, before its own name and IDs were inserted.
+                if !last{idx.birth_reservation(&a,&ds,&allowed)?;}
                 allocated=Some(a);
             }
         }
@@ -469,7 +448,8 @@ impl Journal{
     pub(in crate::ordinary) fn require_new_file_name(&self,address:DirParent,name:&str,entry:EntryId,file:FileId)->io::Result<()>{
         self.names.vacancy(address,name,Member::File{entry,file})
     }
-    pub(super) fn occupied_root(&self,v:VolumeId,name:&str)->bool{self.names.occupied_root(v,name)}
+    pub(super) fn occupied(&self,p:DirParent,name:&str)->bool{self.names.get(p,name).is_some()}
+    pub(super) fn occupied_root(&self,v:VolumeId,name:&str)->bool{self.occupied(DirParent::Root(v),name)}
     pub(super) fn on_all(&self)->impl Iterator<Item=&Frame>{self.decisions.iter().filter_map(|d|d.creation().ok())}
     pub(in crate::ordinary) fn confirmed_handoff(&self,op:OperationId)->io::Result<(&Moved,&MoveAllocation)>{
         let m=self.decided(op).ok_or_else(||invalid("no confirmed handoff at the original SYSTEM lower bound"))?.moved()?;
@@ -499,12 +479,14 @@ impl Journal{
     pub(in crate::ordinary) fn at_parent(&self,p:DirParent)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|{
         let c=&f.create;self.names.get(p,&c.name)==Some(Member::File{entry:c.entry,file:c.file})
     })}
-    /// An exact ordinary-root business lookup. A physical spelling is not
-    /// parsed as an identity, and a directory is not a FILE.
-    pub(super) fn lookup_root(&self,v:VolumeId,name:&str)->io::Result<Option<&Frame>>{
-        let Some(Member::File{entry,file})=self.names.root(v,name)else{return Ok(None)};
-        let f=self.file(file).filter(|f|f.create.entry==entry&&f.create.name==name&&self.volume_of(f)==v)
-            .ok_or_else(||invalid("logical FILE entry and confirmed original placement differ"))?;Ok(Some(f))
+    /// Look up an exact display spelling in one typed ordinary parent. Neither
+    /// a same-spelled FILE elsewhere nor a directory identifies this FILE.
+    pub(super) fn lookup_at(&self,p:DirParent,name:&str)->io::Result<Option<&Frame>>{
+        let Some(Member::File{entry,file})=self.names.get(p,name)else{return Ok(None)};
+        let f=self.file(file).filter(|f|f.create.entry==entry&&f.create.name==name)
+            .ok_or_else(||invalid("logical FILE entry and original birth differ"))?;
+        if self.placement(file)?.ordinary_parent()?!=Some(p){return Err(invalid("logical FILE entry and current parent differ"));}
+        Ok(Some(f))
     }
     pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.at_parent(DirParent::Root(v))}
     /// The physical birthplace is a current location only if no confirmed
@@ -532,18 +514,26 @@ impl Journal{
         self.room_for_effect(MAX_FRAME,o.effect())?;
         let current=self.confirmed_file_cycle(o.file)?;
         let graph=current.clean_transportable()?; // all actual formal children; never an active dirty window
-        registered_handoff(o,reg,current.placement(),graph,&self.names)
+        registered_handoff(o,reg,current.placement(),graph,&self.names,&self.directory_rows,&self.decisions)
+    }
+    /// Compare a prospective pair against the original register under this
+    /// held cut. It is not an issued request: no payload, phase, free writer
+    /// slot, credit or physical destination can be obtained from this check.
+    pub(in crate::ordinary) fn custody_parent_projection(&self,p:&crate::pool::lease::LocalPool,o:&MoveOrigin)->io::Result<()>{
+        if self.making.is_some(){return Err(invalid("ordinary mkdir has not finished installing its parent"));}
+        p.require_namespace_floor(&self.admitted_register,self.frame_bytes,self.confirmed_floor())?;
+        parent_projection(o,&p.journal_registration(),self.placement(o.file)?,&self.names,&self.directory_rows,&self.decisions)
     }
     /// Preflight is not an I/O permit. This is repeated from the very same
     /// writer snapshot immediately before naming the original reservation.
-    pub(in crate::ordinary) fn admit_new_handoff(&self,p:&crate::pool::lease::LocalPool,op:OperationId,id:FileId,from:VolumeId,to:VolumeId)->io::Result<()>{
+    pub(in crate::ordinary) fn admit_handoff_at(&self,p:&crate::pool::lease::LocalPool,op:OperationId,id:FileId,from:DirParent,to:DirParent)->io::Result<()>{
         p.require_business_op(op)?;self.room_for(MAX_FRAME)?;
         let c=self.file(id).ok_or_else(||invalid("no original FILE for handoff"))?;
-        self.require_new_file_name(DirParent::Root(to),&c.create.name,c.create.entry,id)?;
+        self.require_new_file_name(to,&c.create.name,c.create.entry,id)?;
         if self.making.is_some()||self.pending.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||self.editing.is_some()||
-            self.incrementing.is_some()||self.moving.is_some()||self.ticket_used(op)||from==to||c.create.volume!=from||
-            !self.clean_initial_handoff(id)||self.names.root(from,&c.create.name)!=Some(Member::File{entry:c.create.entry,file:id})||
-            self.occupied_root(to,&c.create.name){
+            self.incrementing.is_some()||self.moving.is_some()||self.ticket_used(op)||from.volume()==to.volume()||c.create.parent.address(c.create.volume)!=from||
+            !self.clean_initial_handoff(id)||self.names.get(from,&c.create.name)!=Some(Member::File{entry:c.create.entry,file:id})||
+            self.occupied(to,&c.create.name){
             return Err(invalid("handoff needs a free original slot and operation, the complete clean initial FILE history and unoccupied registered target"));
         }Ok(())
     }

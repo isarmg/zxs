@@ -208,7 +208,7 @@ pub(super) fn proposed(turn:&crate::pool::lease::recycle::incoming::ReservationT
         Call::Restore{deleted_by,decision}=>Purpose::Restore{deleted_by,previous:decision},
         Call::Move=>return Err(invalid("ordinary MOVE cannot use a dedicated original writer"))};
     let o=Origin{op:r.op,uid:fs::local_uid(),file:r.id,entry:c.create.entry,history:c.create.history,from:r.from,to:r.to,epoch:r.epoch,
-        name:c.create.name.clone(),ticket:selection.ticket,mode:Method::Transfer,purpose,src_root:selection.source.source_root().clone(),
+        name:c.create.name.clone(),ticket:selection.ticket,mode:Method::Transfer,purpose,parents:g.parent_evidence().clone(),src_root:selection.source.source_root().clone(),
         dst_root:selection.target.clone(),creation:c.digest,parent:full.digest,children:d.map(|d|d.digest),
         source_bytes:selection.source.physical_bytes(),source_material:selection.source.digest()?};
     if r.digest(p)?!=o.request_digest(p.id())?{return Err(invalid("different original request at the reservation writer"));}

@@ -77,16 +77,19 @@ impl MoveAllocation{
     /// No caller supplies a frontier, allocated ticket, origin, root or syscall
     /// handle. Mint and persist under the *same* real SYSTEM + both writer
     /// leases after the independently checked anonymous transfer.
-    pub(super) fn reserve(prepared:&Prepared<'_>,op:OperationId)->io::Result<Origin>{
+    pub(super) fn reserve(prepared:&Prepared<'_>,requested:super::command::Request)->io::Result<Origin>{
+        let op=requested.op;if prepared.move_request(op)!=requested{return Err(invalid("prepared FILE or ordinary parent differs from this MOVE request"));}
         prepared.under_original_writer(|p,s,old,new|{
-            let src=prepared.source();s.admit_new_handoff(p,op,src.file(),src.volume(),new.id())?;
-            let(ticket,root)=crate::ordinary::material::select_ticket(new,src.name(),src.file())?;
+            let src=prepared.source();s.admit_handoff_at(p,op,src.file(),old.address(),new.address())?;
+            let(ticket,root)=crate::ordinary::material::select_at(new,src.name(),src.file())?;
             if root!=*prepared.root()||ticket==op||s.ticket_used(ticket){return Err(invalid("MOVE ticket or original target conflict"));}
             p.require_business_op(ticket)?;
             let original=Origin::select(op,prepared,ticket)?;
+            if original.request_digest(p.id())?!=requested.digest(p)?{return Err(invalid("different original parent-bound MOVE before reservation"));}
+            s.custody_parent_projection(p,&original)?;
             if original.mode==Method::Transfer{
-                transfer::check_private_paths(&old.root,&new.root,ticket)?;
-                if old.root.entry_present(&original.quarantine_name())?{return Err(invalid("original source-private isolation name already occupied"));}
+                transfer::check_private_paths(old.directory(),new.directory(),ticket)?;
+                if old.directory().entry_present(&original.quarantine_name())?{return Err(invalid("original source-private isolation name already occupied"));}
             }
             let(seq,previous)=s.frontier();
             Self::write_original(&p.system,p.id(),&original,seq+1,previous)?;Ok(original)
@@ -138,8 +141,8 @@ impl MoveAllocation{
         let phase=Phase::read(&original,digest,&sys.read_attempt_binding(NAME,&stamp,MAX)?)?;
         Ok(Self{original,seq,previous,request,digest,bytes,stamp,phase})
     }
-    pub(super) fn bind_fresh(&self,p:&crate::pool::lease::LocalPool,v:&crate::pool::lease::FileVolume<'_>,fresh:super::staging::Fresh)->io::Result<()>{
-        if !matches!(p.access,crate::pool::lease::Access::Write)||!std::ptr::eq(p,v.pool)||self.phase!=Phase::default(){return Err(invalid("not an original unbound handoff writer"));}
+    pub(super) fn bind_fresh(&self,p:&crate::pool::lease::LocalPool,v:&crate::ordinary::OrdinaryParentLease<'_,'_>,fresh:super::staging::Fresh)->io::Result<()>{
+        if !matches!(p.access,crate::pool::lease::Access::Write)||!std::ptr::eq(p,v.volume().pool)||self.phase!=Phase::default(){return Err(invalid("not an original unbound handoff writer"));}
         let(_,s)=p.snapshot()?;
         if s.decided(self.original.op).is_some()||s.pending.is_some()||!s.moving.as_ref().is_some_and(|a|a.digest==self.digest&&a.stamp==self.stamp){
             return Err(invalid("cannot bind a different or already decided handoff"));}
@@ -160,20 +163,20 @@ impl MoveAllocation{
             .ok_or_else(||invalid("private directory binding does not reopen on the original reservation"))?;
         if now.decided(self.original.op).is_some()||now.pending.is_some(){return Err(invalid("unexpected decision during target binding"));}a.confirm_phase(p)
     }
-    pub(super) fn confirm_opened(&self,p:&crate::pool::lease::LocalPool,v:&crate::pool::lease::FileVolume<'_>,verified:&super::placed::Reopened,
+    pub(super) fn confirm_opened(&self,p:&crate::pool::lease::LocalPool,v:&crate::ordinary::OrdinaryParentLease<'_,'_>,verified:&super::placed::Reopened,
         after_set:impl FnOnce()->io::Result<()>)->io::Result<()>{
-        if !matches!(p.access,crate::pool::lease::Access::Write)||!std::ptr::eq(v.pool,p){return Err(invalid("not the selected target writer"));}
+        if !matches!(p.access,crate::pool::lease::Access::Write)||!std::ptr::eq(v.volume().pool,p){return Err(invalid("not the selected target writer"));}
         let(_,s)=p.snapshot()?;let(m,a)=s.confirmed_handoff(self.original.op)?;
         if a.digest!=self.digest||a.stamp!=self.stamp||a.opened(){return Err(invalid("different or already applied original handoff"));}
-        verified.verify_installed(v,m)?;v.root.file.sync_all()?;v.require_current()?;
+        verified.verify_installed(v,m)?;v.directory().file.sync_all()?;v.require_at(&s)?;
         // Cross-parent RENAME can be visible after a failure before either
         // parent sync. A transferred independently copied target needs no
         // source to establish its availability; a rename needs BOTH parents.
         if m.original.mode==Method::Rename{
-            let old=p.ordinary(m.original.from)?;super::placed::root(&old,&m.original.src_root)?;
-            if !old.root.same_mount(&v.root)?{return Err(invalid("original rename mount differs at completion"));}
+            let old=m.original.ordinary_at(p,&s,true)?;
+            if !old.directory().same_mount(v.directory())?{return Err(invalid("original rename mount differs at completion"));}
             let name=crate::ordinary::storage_name::file_leaf(&m.original.name,m.original.file)?;
-            old.root.confirm_absence(&name)?;v.root.file.sync_all()?;old.require_current()?;verified.verify_installed(v,m)?;
+            old.directory().confirm_absence(&name)?;v.directory().file.sync_all()?;old.require()?;verified.verify_installed(v,m)?;
         }
         let next=Phase{stage:a.phase.stage.clone(),step:Progress::OPEN};next.check(&a.original)?;
         p.system.bind_attempt_at(NAME,&a.stamp,MAX,&a.phase.bytes(a.digest)?,&next.bytes(a.digest)?,after_set)
@@ -197,10 +200,10 @@ impl MoveAllocation{
         let next=Phase{stage:a.phase.stage.clone(),step:wanted};next.check(&a.original)?;
         p.system.bind_attempt_at(NAME,&a.stamp,MAX,&a.phase.bytes(a.digest)?,&next.bytes(a.digest)?,after)
     }
-    pub(super) fn begin_verified_retirement(&self,p:&crate::pool::lease::LocalPool,old:&crate::pool::lease::FileVolume<'_>,
-        new:&crate::pool::lease::FileVolume<'_>,source:&super::retire::VerifiedSource,dest:&super::placed::Reopened,
+    pub(super) fn begin_verified_retirement(&self,p:&crate::pool::lease::LocalPool,old:&crate::ordinary::OrdinaryParentLease<'_,'_>,
+        new:&crate::ordinary::OrdinaryParentLease<'_,'_>,source:&super::retire::VerifiedSource,dest:&super::placed::Reopened,
         after_set:impl FnOnce()->io::Result<()>)->io::Result<()>{
-        if !matches!(p.access,crate::pool::lease::Access::Write)||!std::ptr::eq(p,old.pool)||!std::ptr::eq(p,new.pool){
+        if !matches!(p.access,crate::pool::lease::Access::Write)||!std::ptr::eq(p,old.volume().pool)||!std::ptr::eq(p,new.volume().pool){
             return Err(invalid("not one actual original retirement writer"));}
         let(_,s)=p.snapshot()?;let(m,a)=s.confirmed_handoff(self.original.op)?;
         if a.stamp!=self.stamp||a.digest!=self.digest||!a.opened()||a.retiring()||m.original.mode!=Method::Transfer||!source.whole_at_start(){
@@ -209,10 +212,10 @@ impl MoveAllocation{
         let next=Phase{stage:a.phase.stage.clone(),step:Progress::ARMED};next.check(&a.original)?;
         p.system.bind_attempt_at(NAME,&a.stamp,MAX,&a.phase.bytes(a.digest)?,&next.bytes(a.digest)?,after_set)
     }
-    pub(super) fn advance_isolated(&self,p:&crate::pool::lease::LocalPool,old:&crate::pool::lease::FileVolume<'_>,
-        new:&crate::pool::lease::FileVolume<'_>,g:&super::retire::VerifiedSource,dst:&super::placed::Reopened,
+    pub(super) fn advance_isolated(&self,p:&crate::pool::lease::LocalPool,old:&crate::ordinary::OrdinaryParentLease<'_,'_>,
+        new:&crate::ordinary::OrdinaryParentLease<'_,'_>,g:&super::retire::VerifiedSource,dst:&super::placed::Reopened,
         step:Progress,after_set:impl FnOnce()->io::Result<()>)->io::Result<()>{
-        if !matches!(p.access,crate::pool::lease::Access::Write)||!std::ptr::eq(p,old.pool)||!std::ptr::eq(p,new.pool){
+        if !matches!(p.access,crate::pool::lease::Access::Write)||!std::ptr::eq(p,old.volume().pool)||!std::ptr::eq(p,new.volume().pool){
             return Err(invalid("not one original isolated retirement writer"));}
         let(_,s)=p.snapshot()?;let(m,a)=s.confirmed_handoff(self.original.op)?;
         if a.digest!=self.digest||a.stamp!=self.stamp||m.original.mode!=Method::Transfer||

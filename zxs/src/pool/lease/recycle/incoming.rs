@@ -13,15 +13,15 @@ impl CustodyEnd<'_,'_>{
         if !self.belongs(from.grant,Side::Target)||!from.belongs(self.grant,Side::Source)||!std::ptr::eq(self.pool,from.pool)||
             !matches!(self.pool.access,Access::Incoming|Access::Write){return Err(invalid("a fresh transfer requires the same two incoming endpoint leases"));}
         self.require_current()?;from.require_current()?;o.require(self.pool,self.grant,from,self)?;
-        if self.root.same_mount(&from.root)?||self.root.entity.device==from.root.entity.device||
-            Birth::read(&self.root.file)?.filesystem()==Birth::read(&from.root.file)?.filesystem(){
+        if self.directory().same_mount(from.directory())?||self.directory().entity.device==from.directory().entity.device||
+            Birth::read(&self.directory().file)?.filesystem()==Birth::read(&from.directory().file)?.filesystem(){
             return Err(invalid("lifecycle transfers require two distinct original filesystems"));}
-        self.grant.live_geometry(self.pool,fs::NameBudget::held(&from.root)?,fs::NameBudget::held(&self.root)?,o.ticket())?;
-        let iso=o.source_isolation();if from.root.entry_present(&iso)?{return Err(invalid("original source quarantine already occupied"));}
-        let dest=self.grant.name(Side::Target);let listed=self.root.names()?;
-        if self.root.exact_presence(&listed,dest)?{return Err(invalid("original FILE terminal is occupied at this endpoint"));}
-        for n in o.stage_names(){self.root.exact_presence(&listed,&n)?;}
-        if self.role==crate::Role::File{self.grant.check_ordinary_target(self.pool,self.id(),&self.root,&listed)?;}
+        self.grant.live_geometry(self.pool,fs::NameBudget::held(from.directory())?,fs::NameBudget::held(self.directory())?,o.ticket())?;
+        let iso=o.source_isolation();if from.directory().entry_present(&iso)?{return Err(invalid("original source quarantine already occupied"));}
+        let dest=self.grant.name(Side::Target);let listed=self.directory().names()?;
+        if self.directory().exact_presence(&listed,dest)?{return Err(invalid("original FILE terminal is occupied at this endpoint"));}
+        for n in o.stage_names(){self.directory().exact_presence(&listed,&n)?;}
+        self.target_namespace(&listed)?;
         o.check_occupancy(self.pool,self.grant,self.role,dest,&listed)?;
         from.require_current()?;self.require_current()
     }
@@ -29,10 +29,11 @@ impl CustodyEnd<'_,'_>{
     // endpoint. Empty unbound names are spent slots, not adoptable objects.
     fn window(&self,o:&IncomingSelection<'_>)->io::Result<(Option<fs::HeldDir>,Option<u8>)>{
         let(issued,bound)=o.stage_state(self.pool,self.grant)?;let mut selected=None;let mut free=None;
-        let sampled=self.root.names()?.into_iter().collect::<std::collections::BTreeSet<_>>();
-        let empty=|d:&fs::HeldDir|->io::Result<()>{if d.label()?.is_some(){return Err(invalid("a registered root is not a used empty transfer slot"));}d.only(None)?;d.require_named()};
+        let sampled=self.directory().names()?.into_iter().collect::<std::collections::BTreeSet<_>>();
+        let empty=|d:&fs::HeldDir|->io::Result<()>{d.only(None)?;d.require_named()};
         for(idx,n) in o.stage_names().enumerate(){let i=u8::try_from(idx).map_err(|_|invalid("invalid private slot"))?;
-            let current=self.root.directory_in_sample(&n,&sampled)?;
+            let current=self.directory().directory_in_sample(&n,&sampled)?;
+            if let Some(d)=&current{if d.label()?.is_some(){return Err(invalid("a volume-labelled directory cannot be an original private transfer slot"));}}
             if let Some((b,expected))=&bound{
                 if i==*b{let d=current.ok_or_else(||invalid("bound original private target vanished"))?;
                     if d.entity!=expected.entity||Birth::read(&d.file)?!=expected.birth{return Err(invalid("substituted bound private target"));}
@@ -45,7 +46,7 @@ impl CustodyEnd<'_,'_>{
                 empty(&d)?;
             }else if free.is_none(){free=Some(i);}
         }
-        if self.root.names()?.into_iter().collect::<std::collections::BTreeSet<_>>()!=sampled{return Err(invalid("original transfer window changed during admission"));}
+        if self.directory().names()?.into_iter().collect::<std::collections::BTreeSet<_>>()!=sampled{return Err(invalid("original transfer window changed during admission"));}
         self.require_current()?;Ok((selected,free))
     }
     pub(crate) fn claim_anonymous<'v>(&self,from:&CustodyEnd<'_,'_>,o:IncomingSelection<'v>)->io::Result<Unlinked<'v>>{
@@ -56,8 +57,8 @@ impl CustodyEnd<'_,'_>{
         let target=self.identity()?;let mut files=Vec::with_capacity(n);
         let(dir,free)=self.window(&o)?;if dir.is_none()&&free.is_none(){return Err(invalid("original private ticket exhausted"));}
         let known=o.capture_known(self.pool,self.grant,dir)?;
-        for i in 0..n{if known.as_ref().is_some_and(|k|k.has(i)){continue;}let(file,_)=self.root.anonymous_record()?;let st=stream::anonymous_stamp(&file)?;
-            if !self.root.shares_file_mount(&file)?||st.stat.size()!=0||st.stat.entity().device!=target.0.device||st.birth.filesystem()!=target.1.filesystem(){
+        for i in 0..n{if known.as_ref().is_some_and(|k|k.has(i)){continue;}let(file,_)=self.directory().anonymous_record()?;let st=stream::anonymous_stamp(&file)?;
+            if !self.directory().shares_file_mount(&file)?||st.stat.size()!=0||st.stat.entity().device!=target.0.device||st.birth.filesystem()!=target.1.filesystem(){
                 return Err(invalid("anonymous role is not new on the exact selected target filesystem"));}
             files.push((i,file));
         }
@@ -109,27 +110,28 @@ impl<'v> FreshStageTurn<'_,'v>{
 impl<'v> PreparedIncoming<'v>{
     pub(crate) fn with_writer<T>(&self,system:&Path,inspect:impl FnOnce(ReservationTurn<'_,'v>)->io::Result<T>)->io::Result<T>{
         self.selection.with_ends(system,Access::Write,|p,old,new|{
-            let check=||self.check_for_reservation(p,old,new);check()?;
+            let check=||self.check_for_reservation(p,old,new).map(|_|());check()?;
             inspect(ReservationTurn{pool:p,selection:&self.selection,check:&check})
         })
     }
 
     pub(crate) fn ensure_private_stage(&self,system:&Path,after_mkdir:impl FnOnce()->io::Result<()>)->io::Result<u8>{
         self.selection.with_ends(system,Access::Write,|p,old,new|{
-            self.check_for_reservation(p,old,new)?;
+            let(dir,free)=self.check_for_reservation(p,old,new)?;
             let(issued,st)=self.selection.stage_state(p,new.grant)?;
             if !issued{return Err(invalid("no durable original authorizes private target naming"));}
-            let(dir,free)=new.window(&self.selection)?;
             if let Some((i,_))=st{if dir.is_none(){return Err(invalid("cannot recreate a bound private directory"));}
                 self.selection.confirm_issued(p,new.grant)?;return Ok(i);}
             let slot=free.ok_or_else(||invalid("all original target slots occupied; never adopt earlier directories"))?;
             let name=self.selection.stage_names().nth(usize::from(slot)).ok_or_else(||invalid("unissued private slot"))?;
-            let dir=new.root.new_child_directory(&name)?;
-            dir.only(None)?;dir.file.sync_all()?;new.root.file.sync_all()?;after_mkdir()?;
+            let dir=new.directory().new_child_directory(&name)?;
+            dir.only(None)?;dir.file.sync_all()?;new.directory().file.sync_all()?;after_mkdir()?;
             let check=||{
-                self.check_for_reservation(p,old,new)?;
+                let(_,next)=self.check_for_reservation(p,old,new)?;
+                let expected=slot.checked_add(1).filter(|i|usize::from(*i)<self.selection.stage_names().count());
+                if next!=expected{return Err(invalid("the new directory is no longer the last empty slot in this original ticket"));}
                 if self.selection.stage_state(p,new.grant)?!=(true,None){return Err(invalid("directory binding is no longer fresh"));}
-                let reopened=new.root.child_directory(&name)?.ok_or_else(||invalid("newly created private stage vanished"))?;
+                let reopened=new.directory().child_directory(&name)?.ok_or_else(||invalid("newly created private stage vanished"))?;
                 if reopened.entity!=dir.entity||Birth::read(&reopened.file)?!=Birth::read(&dir.file)?||!reopened.same_mount(&dir)?{
                     return Err(invalid("private name is not this call's newly created native directory"));}
                 reopened.only(None)?;dir.only(None)?;dir.require_named()?;new.require_current()
@@ -143,9 +145,9 @@ impl<'v> PreparedIncoming<'v>{
     /// decision: the returned input must be verified outside both root locks.
     pub(crate) fn name_and_reopen(&self,system:&Path,mut after_link:impl FnMut()->io::Result<()>)->io::Result<crate::ordinary::LifecycleScan>{
         self.selection.with_ends(system,Access::Write,|p,old,new|{
-            self.check_for_reservation(p,old,new)?;
+            let(dir,_)=self.check_for_reservation(p,old,new)?;
             self.selection.confirm_issued(p,new.grant)?;
-            let(dir,_)=new.window(&self.selection)?;let dir=dir.ok_or_else(||invalid("no real bound target for naming original FILE roles"))?;
+            let dir=dir.ok_or_else(||invalid("no real bound target for naming original FILE roles"))?;
             let mut complete=Vec::with_capacity(self.selection.count());
             for i in 0..self.selection.count(){
                 // No substitution of an already-named role. Any fresh file is
@@ -153,17 +155,18 @@ impl<'v> PreparedIncoming<'v>{
                 let exists=self.known.as_ref().map(|k|k.recognized(i,&dir,&self.selection)).transpose()?.flatten();
                 let stamp=if let Some(known)=exists{known}else{
                     let(_,f,st)=self.files.iter().find(|(j,_,_)|*j==i).ok_or_else(||invalid("no original anonymous target for this role"))?;
-                    if !new.root.shares_file_mount(f)?||!dir.shares_file_mount(f)?||stream::anonymous_stamp(f)?!=*st{
+                    if !new.directory().shares_file_mount(f)?||!dir.shares_file_mount(f)?||stream::anonymous_stamp(f)?!=*st{
                         return Err(invalid("anonymous role no longer at the original checked target"));}
                     let(name,token)=self.selection.new_role(p,new.grant,i,st)?;
                     fs::set_preparation_token(f,&token)?;dir.link_stream(&name,f,st,st.stat.size())?;after_link()?;
+                    if dir.label()?.is_some(){return Err(invalid("the original target became a registered root after linking a role"));}
                     let actual=dir.pin_stream(&name,st.stat.size())?.ok_or_else(||invalid("newly named material disappeared"))?;
                     if actual.stamp.birth!=st.birth||actual.stamp.stat.entity()!=st.stat.entity(){return Err(invalid("replaced just-linked role"));}
                     fs::require_material_token(&actual.file,&token)?;actual.named(&dir,&name)?;actual.stamp
                 };
                 complete.push(stamp);
             }
-            dir.file.sync_all()?;new.root.file.sync_all()?;new.check_new_target(old,&self.selection)?;
+            dir.file.sync_all()?;new.directory().file.sync_all()?;new.check_new_target(old,&self.selection)?;
             let goal=self.selection.goal(p,new.grant,&dir,&complete)?;new.read_target(&goal)
         })
     }
@@ -175,34 +178,34 @@ impl<'v> PreparedIncoming<'v>{
         let g=self.selection.grant(p)?;let old=p.custody_end(&g,Side::Source)?;let new=p.custody_end(&g,Side::Target)?;
         let bound=||->io::Result<()>{if new.window(&self.selection)?.0.is_none(){return Err(invalid("no exact bound private lifecycle target before acknowledgement"));}Ok(())};
         new.check_new_target(&old,&self.selection)?;bound()?;target.require(p,&g,&new)?;
-        old.root.file.sync_all()?;new.root.file.sync_all()?;old.require_current()?;new.require_current()?;bound()?;target.require(p,&g,&new)
+        old.directory().file.sync_all()?;new.directory().file.sync_all()?;old.require_current()?;new.require_current()?;bound()?;target.require(p,&g,&new)
     }
     /// Reopen both original roles and the same still-current FILE and reserve
     /// candidate, not the unrelated latest actor/name. No namespace or durable
     /// operation is created, even after all these checks succeed.
     pub(crate) fn recheck(&self,system:&Path)->io::Result<()>{
-        self.selection.with_ends(system,Access::Incoming,|_,old,new|self.check_material(old,new))
+        self.selection.with_ends(system,Access::Incoming,|_,old,new|self.check_material(old,new).map(|_|()))
     }
     /// The later issuer must call this under its very own SYSTEM/volume
     /// writer, before creating a durable reservation. An earlier recheck
     /// under Incoming is intentionally not such authority.
-    pub(crate) fn check_for_reservation(&self,p:&crate::pool::lease::LocalPool,
-        old:&CustodyEnd<'_,'_>,new:&CustodyEnd<'_,'_>)->io::Result<()>{
+    fn check_for_reservation(&self,p:&crate::pool::lease::LocalPool,
+        old:&CustodyEnd<'_,'_>,new:&CustodyEnd<'_,'_>)->io::Result<(Option<fs::HeldDir>,Option<u8>)>{
         if !matches!(p.access,Access::Write)||!std::ptr::eq(new.pool,p)||!std::ptr::eq(old.pool,p){
             return Err(invalid("anonymous originals require this exact reservation writer"));}
         self.check_material(old,new)
     }
-    fn check_material(&self,old:&CustodyEnd<'_,'_>,new:&CustodyEnd<'_,'_>)->io::Result<()>{
+    fn check_material(&self,old:&CustodyEnd<'_,'_>,new:&CustodyEnd<'_,'_>)->io::Result<(Option<fs::HeldDir>,Option<u8>)>{
         new.check_new_target(old,&self.selection)?;
-        let(dir,_)=new.window(&self.selection)?;
+        let(dir,free)=new.window(&self.selection)?;
         self.selection.require_known(new.pool,new.grant,self.known.as_ref(),dir.as_ref())?;
         if self.target!=new.identity()?{return Err(invalid("different transfer target"));}
         for i in 0..self.selection.count(){if self.files.iter().filter(|(j,_,_)|*j==i).count()+usize::from(self.known.as_ref().is_some_and(|k|k.has(i)))!=1{
             return Err(invalid("missing or repeated selected material role"));}}
         for(i,f,st)in &self.files{
-            if !new.root.shares_file_mount(f)?||st.stat.size()!=self.selection.claim(*i)?.0||stream::anonymous_stamp(f)?!=*st{
+            if !new.directory().shares_file_mount(f)?||st.stat.size()!=self.selection.claim(*i)?.0||stream::anonymous_stamp(f)?!=*st{
                 return Err(invalid("prepared original is not linkable on this exact current target mount"));}
-        }new.check_new_target(old,&self.selection)
+        }new.check_new_target(old,&self.selection)?;Ok((dir,free))
     }
     #[cfg(test)]
     pub(crate) fn inspection(&self)->io::Result<Vec<(Entity,Birth,u64,[u8;32])>>{

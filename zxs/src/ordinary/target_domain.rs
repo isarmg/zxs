@@ -11,15 +11,23 @@ pub(super) fn ordinary_target_domain(p:&LocalPool,s:&Journal,id:VolumeId,root:&H
     let address=Parent::Root(id);let birth=fs::Birth::read(&root.file)?;
     if !p.journal_registration().file(id,fs::local_uid(),root.entity,&birth,true){
         return Err(invalid("target census is not its registered ordinary parent"));}
-    root.require_named()?;
+    root.require_named()?;at(s,address,root,display,subject,raw)
+}
+/// A child never passes as its volume root. Start from the installed
+/// lineage and freshly admitted SYSTEM names, then reuse the same direct
+/// sibling census as the ordinary root.
+pub(super) fn ordinary_parent_target(parent:&directory::path::HeldParent<'_,'_>,s:&Journal,display:&str,subject:FileId,raw:&[Vec<u8>])->io::Result<()>{
+    parent.require_at(s)?;at(s,parent.basis().address,parent.directory(),display,subject,raw)?;parent.require_at(s)
+}
+fn at(s:&Journal,address:Parent,root:&HeldDir,display:&str,subject:FileId,raw:&[Vec<u8>])->io::Result<()>{
     let listed:BTreeSet<_>=raw.iter().cloned().collect();
     let mut known=directory::inventory::observe(s,address,root,&listed)?.consumed;
     let mut lower=BTreeMap::new();
     for f in s.on_all().filter(|f|f.create.parent.address(f.create.volume)==address){lower.insert(f.create.attempt,f.create.slot);}
-    for m in s.moves().filter(|m|m.original.to==id){if let Some(i)=m.stage{lower.insert(m.original.ticket,i);}}
+    for m in s.moves(){if m.original.ends()?.1.ordinary()==Some(address){if let Some(i)=m.stage{lower.insert(m.original.ticket,i);}}}
     for f in s.at_parent(address).filter(|f|f.create.file!=subject){
         let c=&f.create;let place=s.placement(c.file)?;let n=file_leaf(&c.name,c.file)?;
-        if place.ordinary_parent()!=Some(address)||!known.insert(n.to_bytes().to_vec()){
+        if place.ordinary_parent()?!=Some(address)||!known.insert(n.to_bytes().to_vec()){
             return Err(invalid("missing or multiply-used original ordinary sibling"));}
         let d=root.directory_in_sample(&n,&listed)?.ok_or_else(||invalid("ordinary FILE sibling disappeared"))?;
         material::verify_header_at(&d,c,place.directory(),place.local())?;
@@ -29,7 +37,8 @@ pub(super) fn ordinary_target_domain(p:&LocalPool,s:&Journal,id:VolumeId,root:&H
     // original with this cut; no special file or alias is opened by census.
     let own=file_leaf(display,subject)?;
     let create=s.allocated.as_ref().filter(|a|a.parent.address(a.volume)==address&&a.file==subject);
-    let moving=s.moving.as_ref().filter(|a|a.original.to==id&&a.original.file==subject&&a.original.mode==super::custody::Method::Transfer);
+    let moving=match s.moving.as_ref(){Some(a) if a.original.ends()?.1.ordinary()==Some(address)&&a.original.file==subject&&
+        a.original.mode==super::custody::Method::Transfer=>Some(a),_=>None};
     let current=create.map(|a|(a.attempt,a.stage.as_ref().map(|x|x.slot)))
         .or_else(||moving.map(|a|(a.original.ticket,a.stage().map(|x|x.slot))));
     let empty_private=|leaf:&std::ffi::CStr|->io::Result<()>{

@@ -41,10 +41,10 @@ fn actual_cross_filesystem_target_is_complete_preallocated_unnamed_independent_a
         let copy=prepared.part(original.kind).unwrap();let m=copy.file.metadata().unwrap();
         assert_eq!(m.nlink(),0);assert_eq!(m.len(),original.len);
         assert_ne!(original.original.birth.filesystem(),copy.stamp.birth.filesystem());assert_eq!(copy.stamp.birth.filesystem(),prepared.dest.root.birth.filesystem());
-        assert_eq!(hash_unnamed(&copy.file,&copy.stamp).unwrap(),original.digest);
+        assert_eq!(stream::hash_unnamed(&copy.file,&copy.stamp).unwrap(),original.digest);
     }
     prepared.at_vacant_cut(Access::Read,|_,s,old,new|{
-        assert_eq!(old.id(),t.src.volume());assert_eq!(new.id(),t.dest);assert!(!s.occupied_root(t.dest,t.src.name()));Ok(())
+        assert_eq!(old.volume().id(),t.src.volume());assert_eq!(new.volume().id(),t.dest);assert!(!s.occupied_root(t.dest,t.src.name()));Ok(())
     }).unwrap();
     assert_eq!(fs::read_dir(&t.b).unwrap().count(),0);assert_eq!(fs::read(t.system.join("REGISTRATION")).unwrap(),before);
     drop(prepared);assert_eq!(fs::read_dir(&t.b).unwrap().count(),0);
@@ -115,7 +115,7 @@ fn original_move_reservation_cold_reopens_one_pending_slot_never_grants_serving_
     use super::super::{allocation::MoveAllocation,transfer::{Sites,Moved}};
     let t=make(false);let op=OperationId::new().unwrap();
     let p=Destination::select(&t.system,&t.src,t.dest).unwrap().prepare().unwrap();
-    let o=MoveAllocation::reserve(&p,op).unwrap();drop(p);
+    let o=MoveAllocation::reserve(&p,p.move_request(op)).unwrap();drop(p);
     let (pool,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();
     let a=s.moving.as_ref().unwrap();assert_eq!(a.original,o);
     assert!(!a.opened());assert!(!a.retiring());assert!(a.stage().is_none());
@@ -145,7 +145,7 @@ fn dirty_first_full_or_used_operation_never_reserves_handoff_or_blocks_sibling()
     assert!(crate::move_receipt(&t.system,rejected,f.file,t.src.volume(),t.dest,0).unwrap().is_none());
     assert!(Clean::capture(&t.system,f.file).is_err());
     let p=Destination::select(&t.system,&t.src,t.dest).unwrap().prepare().unwrap();
-    assert!(MoveAllocation::reserve(&p,r.operation).is_err());
+    assert!(MoveAllocation::reserve(&p,p.move_request(r.operation)).is_err());
     assert!(!t.system.join("FILE-ALLOCATION").exists());assert!(!t.system.join("FILE-INTENT").exists());
     assert!(t.b.read_dir().unwrap().next().is_none());drop(p);
     create_empty(&t.system,OperationId::new().unwrap(),t.dest,"sibling").unwrap();
@@ -157,7 +157,7 @@ fn unfinished_cross_mount_stage_reopens_only_issued_roles_and_does_not_allocate_
     use super::super::{allocation::MoveAllocation,placed::Reopened};
     let t=make(true);let op=OperationId::new().unwrap();
     let p=Destination::select(&t.system,&t.src,t.dest).unwrap().for_operation(op).unwrap();
-    let original=MoveAllocation::reserve(&p,op).unwrap();
+    let original=MoveAllocation::reserve(&p,p.move_request(op)).unwrap();
     assert!(p.staged_decision(op,&mut |c|if c==crate::ordinary::Cut::MoveLeafLinked{Err(io::Error::other("after first private leaf"))}else{Ok(())}).is_err());
     drop(p);assert!(!t.b.join(native_leaf("name",t.src.file())).exists());
     let p=Destination::select(&t.system,&t.src,t.dest).unwrap().for_operation(op).unwrap();
@@ -177,7 +177,7 @@ fn a_missing_earlier_synced_private_role_never_becomes_a_fresh_unlinked_replacem
     use super::super::allocation::MoveAllocation;
     let t=make(true);let op=OperationId::new().unwrap();
     let p=Destination::select(&t.system,&t.src,t.dest).unwrap().for_operation(op).unwrap();
-    let o=MoveAllocation::reserve(&p,op).unwrap();let mut count=0;
+    let o=MoveAllocation::reserve(&p,p.move_request(op)).unwrap();let mut count=0;
     assert!(p.staged_decision(op,&mut |cut|{
         if cut==crate::ordinary::Cut::MoveLeafLinked{count+=1;if count==2{return Err(io::Error::other("two roles named"));}}Ok(())
     }).is_err());drop(p);
@@ -187,4 +187,45 @@ fn a_missing_earlier_synced_private_role_never_becomes_a_fresh_unlinked_replacem
     assert!(Destination::select(&t.system,&t.src,t.dest).unwrap().for_operation(op).is_err());
     assert!(!earlier.exists());assert_eq!(fs::metadata(&remaining).unwrap().ino(),inode);assert_eq!(fs::read(&remaining).unwrap(),bytes);
     assert!(crate::current_info(&t.system,t.src.file()).is_ok());assert!(!t.b.join(native_leaf("name",t.src.file())).exists());
+}
+
+#[test]
+#[ignore="two or three private registered filesystems; selected actual directory, no scoped issuance"]
+fn ordinary_preparation_freezes_both_real_parents_and_never_spills_into_the_volume_root(){
+    use crate::{DirectoryParent as Parent,make_directory};
+    use super::super::allocation::MoveAllocation;
+    for cross in [false,true]{
+        let t=make(cross);let sys=&t.system;let old=Parent::Root(t.src.volume());let root=Parent::Root(t.dest);
+        let make=|p,n:&str|make_directory(sys,OperationId::new().unwrap(),p,n).unwrap();
+        let left=Parent::Child(t.dest,make(root,"left").directory);let right=Parent::Child(t.dest,make(root,"right").directory);
+        let wrong_source=Parent::Child(t.src.volume(),make(old,"other").directory);
+        make(root,t.src.name());make(left,t.src.name()); // both ordinary directories, neither is the source FILE
+        let choice=|source,target|ParentChoice::Move{source,target};
+        assert!(Destination::select(sys,&t.src,t.dest).is_err());
+        assert!(Destination::select_at(sys,&t.src,t.dest,choice(old,left)).is_err());
+        assert!(Destination::select_at(sys,&t.src,t.dest,choice(wrong_source,right)).is_err());
+        let op=OperationId::new().unwrap();let prepared=Destination::select_at(sys,&t.src,t.dest,choice(old,right))
+            .unwrap().for_operation(op).unwrap();
+        assert_eq!(prepared.method(),if cross{Method::Transfer}else{Method::Rename});
+        assert_eq!(prepared.files.len(),if cross{t.src.objects().len()}else{0});
+        prepared.at_vacant_cut(Access::Read,|_,_,a,b|{assert_eq!(a.address(),old);assert_eq!(b.address(),right);
+            assert_eq!(b.directory().path,t.b.join("right"));for object in &prepared.files{
+                assert_eq!(object.file.metadata()?.nlink(),0);assert!(b.directory().shares_file_mount(&object.file)?);}Ok(())
+        }).unwrap();
+        let right_path=t.b.join("right");let kept=t.b.with_file_name("original-right");
+        fs::rename(&right_path,&kept).unwrap();
+        use std::os::unix::fs::DirBuilderExt;fs::DirBuilder::new().mode(0o700).create(&right_path).unwrap();
+        assert!(prepared.under_original_writer(|_,_,_,_|Ok(())).is_err());
+        fs::rename(&right_path,t.b.with_file_name("unclaimed-right-lookalike")).unwrap();fs::rename(kept,&right_path).unwrap();
+        prepared.under_original_writer(|_,_,a,b|{assert_eq!(a.address(),old);assert_eq!(b.address(),right);Ok(())}).unwrap();
+        // Reusing right's genuine held operand for left must not create a
+        // root or child reservation, even with the same operation and volume.
+        let mut wrong=prepared.move_request(op);wrong.parents=choice(old,left);
+        assert!(MoveAllocation::reserve(&prepared,wrong).is_err());
+        assert!(!sys.join("FILE-ALLOCATION").exists());assert!(!sys.join("FILE-INTENT").exists());
+        assert!(right_path.read_dir().unwrap().next().is_none());
+        assert_eq!(t.b.read_dir().unwrap().count(),3);assert!(t.b.join("left").join(t.src.name()).is_dir());
+        let(_,_,s)=LocalPool::with_snapshot(sys,Access::Read).unwrap();assert!(s.decided(op).is_none());
+        assert_eq!(s.placement(t.src.file()).unwrap().ordinary_parent().unwrap(),Some(old));
+    }
 }

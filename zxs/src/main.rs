@@ -1,5 +1,5 @@
 use std::{env, ffi::OsStr, io, path::PathBuf, process::ExitCode};
-const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | dir-mkdir OP SYSTEM VOLUME root|DIR NAME | dir-list SYSTEM VOLUME root|DIR | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-lookup SYSTEM VOLUME NAME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH | file-move OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-move-receipt OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-delete[-receipt] OP SYSTEM FILE FROM EPOCH | file-restore[-receipt] OP SYSTEM FILE DELETE_OP DELETE_SHA256 RETAINED_EPOCH original|VOLUME | recycle-list SYSTEM LIMIT SOURCE_OR_ALL SINCE_OR_DASH THROUGH_OR_DASH [CURSOR]";
+const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | dir-mkdir OP SYSTEM VOLUME root|DIR NAME | dir-list SYSTEM VOLUME root|DIR | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-lookup SYSTEM VOLUME NAME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH | file-move OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-move-receipt OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-delete[-receipt] OP SYSTEM FILE FROM EPOCH | file-restore[-receipt] OP SYSTEM FILE DELETE_OP DELETE_SHA256 RETAINED_EPOCH original|VOLUME | file-create-at OP SYSTEM VOLUME root|DIR NAME | file-lookup-at SYSTEM VOLUME root|DIR NAME | file-move-at[-receipt] OP SYSTEM FILE FROM root|DIR TO root|DIR EPOCH | file-delete-at[-receipt] OP SYSTEM FILE FROM root|DIR EPOCH | file-restore-at[-receipt] OP SYSTEM FILE DELETE_OP DELETE_SHA256 EPOCH original|VOLUME root|DIR | recycle-list SYSTEM LIMIT SOURCE_OR_ALL SINCE_OR_DASH THROUGH_OR_DASH [CURSOR]";
 fn bad(message:&'static str)->io::Error {io::Error::new(io::ErrorKind::InvalidInput,message)}
 fn show(scope:&str,info:zxs::PoolInfo) {
     println!("{scope}");
@@ -21,11 +21,19 @@ fn end(args:&mut impl Iterator<Item=std::ffi::OsString>)->io::Result<()>{
 fn show_file(f:&zxs::FileInfo){
     println!("file {}  entry {}  history {}  volume {}  name {}  original {}  published-sequence {:?}",
         f.file,f.entry,f.history,f.volume,f.name,f.created_by,f.decision_sequence);
+    if let zxs::DirectoryParent::Child(_,d)=f.parent{println!("ordinary directory {}",d);}
 }
 fn parent(args:&mut impl Iterator<Item=std::ffi::OsString>)->io::Result<zxs::DirectoryParent>{
     let v=word(args)?.parse()?;let address=word(args)?;
-    Ok(if address=="root"{zxs::DirectoryParent::Root(v)}else{zxs::DirectoryParent::Child(v,address.parse()?)})
+    selected(v,&address)
 }
+fn selected(v:zxs::VolumeId,leaf:&str)->io::Result<zxs::DirectoryParent>{
+    if leaf=="root"{Ok(zxs::DirectoryParent::Root(v))}else{Ok(zxs::DirectoryParent::Child(v,leaf.parse()?))}
+}
+fn parent_text(parent:Option<zxs::DirectoryParent>)->String{match parent{
+    Some(zxs::DirectoryParent::Root(v))=>format!("{v}:root"),
+    Some(zxs::DirectoryParent::Child(v,id))=>format!("{v}:{id}"),None=>"dedicated-recycle".to_owned(),
+}}
 fn show_directory(d:&zxs::DirectoryInfo){
     println!("directory {}  entry {}  name {}  original {}  published-sequence {}",d.directory,d.entry,d.name,d.created_by,d.sequence);
 }
@@ -42,15 +50,24 @@ fn run() -> io::Result<()> {
         Some("dir-list")=>{
             let system=path(&mut args)?;let address=parent(&mut args)?;end(&mut args)?;let list=zxs::list_directory(&system,address)?;
             for e in &list.entries{match e{zxs::DirectoryEntry::File(f)=>show_file(f),zxs::DirectoryEntry::Directory(d)=>show_directory(d)}}
-            for m in &list.pending_moves{eprintln!("Original MOVE {}: {:?}; use file-move-receipt.",m.operation,m.status);}
+            for m in &list.pending_moves{
+                let args=|p|match p{
+                    Some(zxs::DirectoryParent::Root(v))=>Ok(format!("{v} root")),
+                    Some(zxs::DirectoryParent::Child(v,d))=>Ok(format!("{v} {d}")),
+                    None=>Err(io::Error::other("ordinary MOVE has no exact ordinary endpoint")),
+                };
+                eprintln!("Original MOVE {:?}; receipt: file-move-at-receipt {} SYSTEM {} {} {} {}",
+                    m.status,m.operation,m.file,args(m.source_parent)?,args(m.destination_parent)?,m.source_epoch);
+            }
             for m in &list.pending_lifecycle{eprintln!("Original {:?} {}: {:?}; query its original receipt.",m.kind,m.operation,m.status);}
             if list.reserved_private_entries!=0{eprintln!("{} issued private entries; not business directories or FILEs.",list.reserved_private_entries);}
             Ok(())
         }
-        Some("file-create")=>{
-            let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let volume=word(&mut args)?.parse()?;
+        Some("file-create"|"file-create-at")=>{
+            let op=word(&mut args)?.parse()?;let system=path(&mut args)?;
+            let address=if action==OsStr::new("file-create-at"){parent(&mut args)?}else{zxs::DirectoryParent::Root(word(&mut args)?.parse()?)};
             let name=word(&mut args)?;end(&mut args)?;
-            let f=zxs::create_empty(&system,op,volume,&name)?;
+            let f=zxs::create_empty_at(&system,op,address,&name)?;
             println!("Original FILE creation published (not current availability):");show_file(&f);Ok(())
         }
         Some("file-receipt")=>{
@@ -58,9 +75,11 @@ fn run() -> io::Result<()> {
             let r=zxs::creation_receipt(&system,op)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE creation"))?;
             println!("Original FILE creation: {:?}",r.status);show_file(&r.file);Ok(())
         }
-        Some("file-lookup")=>{
-            let system=path(&mut args)?;let volume=word(&mut args)?.parse()?;let name=word(&mut args)?;end(&mut args)?;
-            let f=zxs::lookup_file(&system,volume,&name)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no FILE at this exact display name"))?;
+        Some("file-lookup"|"file-lookup-at")=>{
+            let system=path(&mut args)?;
+            let address=if action==OsStr::new("file-lookup-at"){parent(&mut args)?}else{zxs::DirectoryParent::Root(word(&mut args)?.parse()?)};
+            let name=word(&mut args)?;end(&mut args)?;
+            let f=zxs::lookup_file_at(&system,address,&name)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no FILE at this exact display name"))?;
             show_file(&f);Ok(())
         }
         Some("file-list")=>{
@@ -90,28 +109,36 @@ fn run() -> io::Result<()> {
             }
             Ok(())
         }
-        Some("file-move"|"file-move-receipt")=>{
+        Some(cmd@("file-move"|"file-move-receipt"|"file-move-at"|"file-move-at-receipt"))=>{
             let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let id=word(&mut args)?.parse()?;
-            let from=word(&mut args)?.parse()?;let to=word(&mut args)?.parse()?;
-            let epoch=word(&mut args)?.parse().map_err(|_|bad("invalid original FILE placement epoch"))?;end(&mut args)?;
-            let r=if action==OsStr::new("file-move"){zxs::move_file(&system,op,id,from,to,epoch)?}
-                else{zxs::move_receipt(&system,op,id,from,to,epoch)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such original MOVE"))?};
+            let(from,to)=if matches!(cmd,"file-move-at"|"file-move-at-receipt"){(parent(&mut args)?,parent(&mut args)?)}
+                else{(zxs::DirectoryParent::Root(word(&mut args)?.parse()?),zxs::DirectoryParent::Root(word(&mut args)?.parse()?))};
+            let epoch=number(&word(&mut args)?)?;end(&mut args)?;
+            let r=if cmd.ends_with("-receipt"){zxs::move_receipt_at(&system,op,id,from,to,epoch)?
+                .ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such original MOVE"))?}
+                else{zxs::move_file_at(&system,op,id,from,to,epoch)?};
             println!("Original MOVE {:?}: {} FILE {} entry {} history {} {}@{} -> {}@{} name {} decision {:?}",
-                r.status,r.operation,r.file,r.entry,r.history,r.from,r.source_epoch,r.to,r.destination_epoch,r.name,r.decision_sequence);Ok(())
+                r.status,r.operation,r.file,r.entry,r.history,r.from,r.source_epoch,r.to,r.destination_epoch,r.name,r.decision_sequence);
+            println!("  ordinary parents {} -> {}",parent_text(r.source_parent),parent_text(r.destination_parent));Ok(())
         }
-        Some("file-delete"|"file-delete-receipt"|"file-restore"|"file-restore-receipt")=>{
+        Some(cmd@("file-delete"|"file-delete-receipt"|"file-delete-at"|"file-delete-at-receipt"|
+             "file-restore"|"file-restore-receipt"|"file-restore-at"|"file-restore-at-receipt"))=>{
             let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let file=word(&mut args)?.parse()?;
-            let (what,epoch)=if matches!(action.to_str(),Some("file-delete"|"file-delete-receipt")){
-                let from=word(&mut args)?.parse()?;let epoch=number(&word(&mut args)?)?;
-                (zxs::RecycleAction::Delete{file,from},epoch)
+            let(what,epoch)=if cmd.starts_with("file-delete"){
+                let what=if cmd.contains("-at"){zxs::RecycleAction::DeleteAt{file,source:parent(&mut args)?}}
+                    else{zxs::RecycleAction::Delete{file,from:word(&mut args)?.parse()?}};
+                (what,number(&word(&mut args)?)?)
             }else{
                 let operation=word(&mut args)?.parse()?;let deleted=zxs::DeletionKey::from_hex(file,operation,&word(&mut args)?)?;
                 let epoch=number(&word(&mut args)?)?;let dest=word(&mut args)?;
-                let target=if dest=="original"{zxs::RestoreTarget::Original}else{zxs::RestoreTarget::Volume(dest.parse()?)};
+                let target=match (cmd.contains("-at"),dest.as_str()){
+                    (false,"original")=>zxs::RestoreTarget::Original,(false,v)=>zxs::RestoreTarget::Volume(v.parse()?),
+                    (true,"original")=>zxs::RestoreTarget::OriginalParent,(true,v)=>zxs::RestoreTarget::At(selected(v.parse()?,&word(&mut args)?)?),
+                };
                 (zxs::RecycleAction::Restore{deleted,target},epoch)
             };
             end(&mut args)?;
-            let r=if matches!(action.to_str(),Some("file-delete-receipt"|"file-restore-receipt")){
+            let r=if cmd.ends_with("-receipt"){
                 zxs::recycle_receipt(&system,op,epoch,what)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no such original dedicated FILE operation"))?
             }else{zxs::apply_recycle(&system,op,epoch,what)?};
             show_recycle(&r);Ok(())
@@ -228,6 +255,7 @@ fn show_recycle(r:&zxs::RecycleReceipt){
     println!("Original {:?} {:?}: {} FILE {} entry {} history {} {}@{} -> {}@{} name {:?} decision-sequence {:?} decision {}",
         r.kind,r.status,r.operation,r.file,r.entry,r.history,r.from,r.source_epoch,r.to,r.destination_epoch,r.name,r.decision_sequence,
         r.decision.as_ref().map(hex_digest).unwrap_or_else(||"unconfirmed".to_owned()));
+    println!("  parents {} -> {}; deletion-source {}",parent_text(r.source_parent),parent_text(r.destination_parent),parent_text(Some(r.deleted_from)));
     println!("  deletion {} issued-utc-unix {}.{:09} delete-decision {} (original outcome, not an online health check)",
         r.delete_operation,r.deleted_at.unix_seconds,r.deleted_at.nanos,
         r.deletion.map(|key|hex_digest(&key.decision)).unwrap_or_else(||"unconfirmed".to_owned()));

@@ -1,5 +1,5 @@
-//! A real confirmed parent and real native children, but NOT a published
-//! nested FILE. The active SYSTEM/intent parser must still reject that kind.
+//! Actual confirmed parent and native children. Bounded frame decoding alone
+//! is not an admitted intent and does not publish a nested FILE.
 use super::*;
 use crate::{EntryId,FileId,HistoryId,Role,fs,ordinary::{allocation,journal::{self,Decision},wire::{Creation,Frame}},pool::lease::{Access,LocalPool},test_support::PrivateTemp};
 use std::path::Path;
@@ -44,7 +44,7 @@ fn child_birth_bytes_bind_a_real_parent_at_one_prefix_without_publishing_a_neste
         local:obj,local_digest:crate::hash::digest(&bytes).unwrap()};
     let frame=Frame::new(p.id(),seq+1,head,c.clone()).unwrap();
     assert_eq!(Frame::read(p.id(),&frame.bytes).unwrap(),frame);s.check_next_file_parent(&reg,&frame).unwrap();
-    assert!(Decision::read(p.id(),&frame.bytes).is_err());assert!(s.decided(op1).is_none());
+    assert_eq!(Decision::read(p.id(),&frame.bytes).unwrap().creation().unwrap(),&frame);assert!(s.decided(op1).is_none());
     assert_eq!(frame.request,request(p.id(),op1,uid,left_at,"report").unwrap());
     for where_ in [Parent::Root(av),right_at,Parent::Child(bv,left.directory)]{
         assert_ne!(frame.request,request(p.id(),op1,uid,where_,"report").unwrap());

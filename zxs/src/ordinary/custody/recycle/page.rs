@@ -93,14 +93,14 @@ pub fn list_retained(system:&Path,filter:RecycleFilter,limit:u16,cursor:Option<&
     let mut entries=Vec::with_capacity(end-start);
     for &m in &rows[start..end]{
         let o=&m.original;
-        let r=Request{op:o.op,id:o.file,epoch:o.epoch,call:Call::Delete,from:o.from,to:o.to};
+        let r=Request{parents:o.parent_choice(),op:o.op,id:o.file,epoch:o.epoch,call:Call::Delete,from:o.from,to:o.to};
         let original=receipt(&p,&s,r)?.ok_or_else(||invalid("missing original deletion receipt"))?;
         let key=DeletionKey{file:o.file,operation:o.op,decision:m.digest};if original.deletion!=Some(key){
             return Err(invalid("different original on frozen recycle page"));}
         let retained_by_this_deletion_now=s.placement(o.file)?.retained().is_some_and(|now|now.operation==o.op&&now.decision==m.digest);
         let pending_restore=if let Some(a)=s.moving.as_ref().filter(|a|a.original.file==o.file&&
             matches!(a.original.purpose,Purpose::Restore{deleted_by,previous} if deleted_by==o.op&&previous==m.digest)){
-            let v=&a.original;let r=Request{op:v.op,id:v.file,epoch:v.epoch,call:v.purpose.call(),from:v.from,to:v.to};
+            let v=&a.original;let r=Request{parents:v.parent_choice(),op:v.op,id:v.file,epoch:v.epoch,call:v.purpose.call(),from:v.from,to:v.to};
             Some(receipt(&p,&s,r)?.ok_or_else(||invalid("missing original pending restoration"))?)
         }else{None};
         entries.push(RetainedEntry{original,retained_by_this_deletion_now,pending_restore});
