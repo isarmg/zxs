@@ -1,6 +1,6 @@
 """Durable local checkout creation from one archived original. No server locks."""
 from __future__ import annotations
-from contextlib import ExitStack, closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager, nullcontext
 import hashlib
 import os
 from pathlib import Path
@@ -69,13 +69,16 @@ def _save_original(inp, size, area, expected):
 
 
 @contextmanager
-def _source(source, seed_parent, expected, *, exclusive=None, mount=None):
+def _source(source, seed_parent, expected, *, exclusive=None, mount=None, selected=None):
     source = Path(source).absolute()  # A different spelling isn't the selected catalog slot.
     if source.suffix.lower() != ".zxs": raise Rejected("repository checkout requires the .zxs extension")
     seed = None
     try:
         with ExitStack() as held:
-            with named_document(source) as inp:
+            with (named_document(source) if selected is None else nullcontext(selected.document)) as inp:
+                if selected is not None:
+                    selected.check_source()
+                    inp.seek(0)
                 observed = stamp(inp)
                 if expected is not None and (str(source) != str(expected.path) or observed != expected.observed):
                     raise Rejected("checkout source is not the selected catalog entry")
@@ -88,6 +91,10 @@ def _source(source, seed_parent, expected, *, exclusive=None, mount=None):
                     seed = exclusive.path / (".zip-opening-" + new_id())
                     area = held.enter_context(staging.new_child(exclusive, seed.name, mount))
                 marker, digest, copy = held.enter_context(_save_original(inp, observed[2], area, expected))
+                if selected is not None:
+                    selected.check_source()
+                    if marker != selected.snapshot.browser.commit:
+                        raise Rejected("copied archive is not the reviewed snapshot node")
             yield area, marker, digest, copy
     except Exception as error:
         if seed is not None:
@@ -96,17 +103,25 @@ def _source(source, seed_parent, expected, *, exclusive=None, mount=None):
 
 
 @contextmanager
-def _record(state, *, write):
+def _record(state, *, write, selected=None):
     state = Path(state).absolute()
+    if selected is not None: selected.check_registered(state)
     if state.is_symlink() or state.stat().st_mode & 0o077: raise Rejected("checkout state is not private")
     con = sqlite3.connect((state/"opening.sqlite").as_uri()+("?mode=rw" if write else "?mode=ro"), uri=True, isolation_level=None)
     con.row_factory = sqlite3.Row
     try:
+        if selected is not None: selected.check_registered(state)
         if write:
             con.execute("PRAGMA synchronous=FULL"); con.execute("BEGIN IMMEDIATE")
         row = con.execute("SELECT * FROM opening WHERE singleton=1").fetchone()
         if row is None: raise Rejected("original checkout operation not available")
+        if selected is not None:
+            if (row["operation"] != selected.operation or
+                    Commit.decode(row["marker"]) != selected.snapshot.browser.commit):
+                raise Rejected("CLI STATE does not contain the reviewed operation and node")
+            selected.initial_opened = True
         yield con,row,state
+        if selected is not None: selected.check_registered(state)
         if write: con.commit()
     except BaseException:
         if write: con.rollback()
@@ -114,8 +129,8 @@ def _record(state, *, write):
     finally: con.close()
 
 
-def status(state):
-    with _record(state,write=False) as (_,row,_):
+def status(state, *, selected=None):
+    with _record(state, write=False, selected=selected) as (_,row,_):
         marker = Commit.decode(row["marker"])
         _private_origin(row)
         return {"operation":row["operation"], "worktree":row["worktree"], "source_node":marker.operation,
@@ -177,7 +192,7 @@ def _seed_names(area, *names):
     if missing: raise Rejected("incomplete private checkout seed")
 
 
-def _install_initial(area, copy, image, state, *, base=None, stage=None):
+def _install_initial(area, copy, image, state, *, base=None, stage=None, selected=None):
     if base is not None:
         staging.check_private(base)
         staging.check_private(area)
@@ -223,6 +238,7 @@ def _install_initial(area, copy, image, state, *, base=None, stage=None):
         rename_new(area.path, state)  # Legacy CLI requires a stable private STATE parent.
     else:
         staging.check_private(base)
+        if selected is not None: selected.installing(area, observed)
         rename_new_at(base.parent, area.path.name, state.name, expected_source=os.fstat(area.parent))
     installed = CandidateDirectory(state, area.parent, area.identity)
     check_pair(installed)
@@ -233,7 +249,7 @@ def _install_initial(area, copy, image, state, *, base=None, stage=None):
     check_pair(installed)
 
 
-def begin(source, parent, stem, store, state, *, automatic, expected=None, private_stage=False):
+def begin(source, parent, stem, store, state, *, automatic, expected=None, private_stage=False, selected=None):
     from .worktree import paths
     require_native_writer()
     if not callable(getattr(sqlite3.Connection, "serialize", None)) or os.scandir not in os.supports_fd:
@@ -245,17 +261,30 @@ def begin(source, parent, stem, store, state, *, automatic, expected=None, priva
     if os.path.lexists(state) or not automatic and os.path.lexists(dest):
         raise Rejected("checkout state or requested destination is occupied")
     owner = _parent(parent)
-    operation, worktree = new_id(), new_id()
+    if selected is not None:
+        if (not private_stage or automatic or Path(source).absolute() != selected.snapshot.path or
+                dest != selected.destination or store != selected.store.path or state != selected.state or
+                expected != selected.snapshot.exact):
+            raise Rejected("checkout command differs from the reviewed original selection")
+        selected.check_new()
+    operation = new_id() if selected is None else check_id(selected.operation)
+    worktree = new_id()
     with ExitStack() as held:
         base = mount = None
-        if private_stage:
+        if selected is not None:
+            # Borrow the actual three picker FDs; do not select a new directory by its display path.
+            base, target, store_root = selected.base, selected.target.check(), selected.store
+            mount = selected.check_roots()
+            m = os.fstat(target)
+            if owner != (str(m.st_dev), str(m.st_ino), stat.S_IFDIR): raise Rejected("selected target changed")
+        elif private_stage:
             base = held.enter_context(held_candidates(state.parent))
             target, _ = held.enter_context(_held_directory(parent, owner))
             mount = staging.same_mount(base.parent, target)
             store_root = held.enter_context(held_store(store))
             staging.separate_roots(base.parent, target, store_root, mount)
             if _parent(parent) != owner: raise Rejected("chosen target parent changed")
-        area, marker, sha, copy = held.enter_context(_source(source, state.parent, expected, exclusive=base, mount=mount))
+        area, marker, sha, copy = held.enter_context(_source(source, state.parent, expected, exclusive=base, mount=mount, selected=selected))
         fields = (operation, worktree, marker.encode(), sha, str(parent), owner[0], owner[1],
                   str(store), stem, int(automatic))
         if base is None:
@@ -265,7 +294,8 @@ def begin(source, parent, stem, store, state, *, automatic, expected=None, priva
             image = _initial_image(fields, prepared=(*stage.identity, *area.identity, base.identity[1]))
             if _parent(parent) != owner: raise Rejected("chosen target parent changed")
             staging.separate_roots(base.parent, target, store_root, mount)
-            _install_initial(area, copy, image, state, base=base, stage=stage)
+            _install_initial(area, copy, image, state, base=base, stage=stage, selected=selected)
+    if selected is not None: return finish(state, operation, selected=selected)
     return finish(state,operation)
 
 
@@ -305,10 +335,10 @@ def _held_directory(name, expected, *, parent_fd=None):
         os.close(fd)
 
 
-def finish(state, operation):
+def finish(state, operation, *, selected=None):
     from .worktree import create_catalog, paths
     require_native_writer()
-    with _record(state,write=True) as (con,row,state):
+    with _record(state, write=True, selected=selected) as (con,row,state):
         parent, marker = _verify_record(row,operation)
         _private_origin(row)  # A damaged private record cannot fall through to the legacy extractor.
         dest = _target(row)
@@ -332,7 +362,7 @@ def finish(state, operation):
     # The original stage decision is durable before any visible rename.
     while True:
         with ExitStack() as held:
-            with _record(state, write=True) as (con, row, state):
+            with _record(state, write=True, selected=selected) as (con, row, state):
                 parent, marker = _verify_record(row, operation)
                 dest = _target(row)
                 paths(dest, Path(row["store"]), state)
@@ -361,8 +391,10 @@ def finish(state, operation):
                         raise Rejected("installed private STATE is on a different mount")
                     source_fd = private.parent
                     current_store = held.enter_context(held_store(Path(row["store"])))
+                    if selected is not None: selected.check_reopened(base.parent, pfd, current_store.fd)
 
                 def check_parent():
+                    if selected is not None: selected.check_registered(state)
                     if private_id is not None:
                         staging.check_private(base)
                         staging.check_named(base.parent, state.name, private.parent)

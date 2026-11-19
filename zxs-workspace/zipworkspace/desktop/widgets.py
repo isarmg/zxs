@@ -65,19 +65,19 @@ class Table(QTableView):
         return self.rows.rows[indices[0].row()][1] if indices else None
 
 
-def confirm(parent, title, detail, *, writers=False):
+def confirm(parent, title, detail, *, attestation):
     dialog = QDialog(parent)
     dialog.setWindowTitle(title)
     layout = QVBoxLayout(dialog)
     layout.addWidget(label(detail))
     buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
     buttons.button(QDialogButtonBox.StandardButton.Cancel).setDefault(True)
-    if writers:
-        gate = QCheckBox("已停止所有可能写入该工作目录的程序，本次操作可以继续。")
-        layout.addWidget(gate)
-        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
-        ok.setEnabled(False)
-        gate.toggled.connect(ok.setEnabled)
+    gate = QCheckBox(attestation)
+    layout.addWidget(gate)
+    ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+    ok.setText("确认并创建")
+    ok.setEnabled(False)
+    gate.toggled.connect(ok.setEnabled)
     layout.addWidget(buttons)
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)

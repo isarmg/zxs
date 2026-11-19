@@ -4,6 +4,7 @@ from importlib.util import find_spec
 import os
 from pathlib import Path
 import tempfile
+import sys
 from unittest.mock import patch
 import unittest
 import zipfile
@@ -236,3 +237,177 @@ class DesktopArchiveWidgets(unittest.TestCase):
                 self.assertEqual(pane.branches.rows.rows, ())
             finally:
                 win.close()
+
+@unittest.skipUnless(os.name == "posix" and sys.platform.startswith("linux"),
+                     "operator-controlled private staging is Linux-only")
+class OriginalDesktopCheckout(unittest.TestCase):
+    """The positive path uses an admitted real temporary mount, never a fake ext4 success."""
+    def setUp(self):
+        from zipworkspace import private_stage
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.private, self.parent, self.store = (self.root / n for n in ("states", "work", "archives"))
+        for path in (self.private, self.parent, self.store): path.mkdir(mode=0o700)
+        a = os.open(self.private, os.O_DIRECTORY); b = os.open(self.parent, os.O_DIRECTORY)
+        try:
+            try: private_stage.same_mount(a, b)
+            except (OSError, Rejected) as exc: self.skipTest("requires a genuine admitted mount: " + str(exc))
+        finally: os.close(b); os.close(a)
+        self.loose = self.root / "arbitrary-name.zxs"
+        self.marker = write_snapshot(self.loose)
+        self.target, self.state = self.parent / "Design", self.private / "Design"
+
+    def choice(self, snapshot=None, *, review=True):
+        from zipworkspace.desktop.checkout_action import CheckoutChoice
+        plan = CheckoutChoice(snapshot or Selection.open(self.loose))
+        self.addCleanup(plan.close)
+        plan.pick_store(self.store); plan.pick_target(self.parent); plan.pick_private(self.private)
+        if review:
+            msg = plan.review("Design")
+            for item in (self.target, self.state, self.store, self.marker.operation, plan.operation):
+                self.assertIn(str(item), msg)
+        return plan
+
+    def test_loose_selected_original_creates_an_actual_cli_checkout_without_reopening_source(self):
+        from zipworkspace import opening, worktree
+        plan = self.choice()
+        self.assertFalse(self.target.exists()); self.assertFalse(any(self.private.iterdir()))
+        with patch.object(opening, "named_document", side_effect=AssertionError("must borrow original file")):
+            self.assertEqual(plan.run(), (self.target, self.marker))
+        self.assertEqual((self.target / "design/notes").read_bytes(), b"desktop selection")
+        self.assertTrue((self.target / "empty").is_dir())
+        self.assertEqual((self.state / "original.zxs").read_bytes(), self.loose.read_bytes())
+        self.assertEqual(worktree.status(self.state)["base_operation"], self.marker.operation)
+        self.assertEqual(opening.status(self.state)["operation"], plan.operation)
+        self.assertFalse(any(self.store.iterdir()))
+        with self.assertRaises(Rejected): plan.run()
+
+    def test_head_advancing_after_selection_does_not_change_which_historical_node_is_written(self):
+        from zipworkspace import opening
+        original = self.store / self.marker.filename
+        self.loose.rename(original)
+        current = Selection.open(original)
+        exact = current.catalog(StoreSelection.open(self.store)).select_branch(self.marker.branch)
+        plan = self.choice(Selection.open(exact.path, expected=exact))
+        newer = replace(self.marker, generation=2, operation="4"*32, parent=self.marker.operation)
+        write_snapshot(self.store / newer.filename, marker=newer)
+        with patch.object(Selection, "catalog", side_effect=AssertionError("not another head selection")):
+            self.assertEqual(plan.run(), (self.target, self.marker))
+        self.assertEqual(opening.status(self.state)["source_node"], exact.marker.operation)
+        self.assertEqual(hashlib.sha256((self.state/"original.zxs").read_bytes()).hexdigest(), exact.sha256)
+
+    def test_path_replacement_after_review_cannot_redirect_any_of_the_four_selections(self):
+        from zipworkspace import opening
+        for original in (self.loose, self.store, self.parent, self.private):
+            with self.subTest(original=original):
+                plan = self.choice()
+                backup = self.root / "held-original"
+                original.rename(backup)
+                if backup.is_dir(): original.mkdir(mode=0o700)
+                else: original.write_bytes(backup.read_bytes())  # Equal bytes, distinct original.
+                try:
+                    with patch.object(opening, "_source", side_effect=AssertionError("no source capture")):
+                        with self.assertRaisesRegex(Rejected, "尚未安装原登记"): plan.run()
+                    self.assertFalse(any(self.private.iterdir())); self.assertFalse(any(self.parent.iterdir()))
+                finally:
+                    if original.is_dir(): original.rmdir()
+                    else: original.unlink()
+                    backup.rename(original)
+
+    def test_new_collision_and_later_mount_change_are_refused_before_any_preparation(self):
+        from zipworkspace import opening, private_stage
+        plan = self.choice()
+        self.target.mkdir(); (self.target / "mine").write_bytes(b"untouched")
+        with self.assertRaisesRegex(Rejected, "占用"): plan.run()
+        self.assertEqual((self.target / "mine").read_bytes(), b"untouched")
+        other = self.choice(review=False)
+        native_id = private_stage.mount_id
+        def distinct(fd):
+            return b"different-actual-mount" if os.path.samestat(os.fstat(fd), self.parent.stat()) else native_id(fd)
+        with patch.object(private_stage, "mount_id", side_effect=distinct), \
+             patch.object(opening, "_source", side_effect=AssertionError("no ZIP copy or private preparation")):
+            with self.assertRaisesRegex(Rejected, "same original mount"): other.review("Other")
+        self.assertFalse(any(self.private.iterdir()))
+
+    def test_failed_materialization_is_not_a_durable_receipt_or_resume_instruction(self):
+        from zipworkspace import private_stage
+        plan = self.choice()
+        with patch.object(private_stage, "materialize", side_effect=OSError("stop during private preparation")):
+            with self.assertRaises(Rejected) as fail: plan.run()
+        self.assertIn("没有可续作的回执", str(fail.exception))
+        self.assertNotIn("resume-checkout", str(fail.exception))
+        self.assertFalse(self.state.exists()); self.assertFalse(self.target.exists())
+        seed, = self.private.iterdir()
+        self.assertEqual((seed / "original.zxs").read_bytes(), self.loose.read_bytes())
+
+    def test_lost_reply_after_real_cross_parent_move_names_only_original_durable_operation(self):
+        from zipworkspace import opening, private_stage
+        plan = self.choice(); native = opening.rename_new_at
+        def lose_reply(fd, src, dst, **kwargs):
+            native(fd, src, dst, **kwargs)
+            if src == private_stage.LEAF and kwargs.get("target_fd") is not None:
+                raise InterruptedError("lost move response")
+        with patch.object(opening, "rename_new_at", side_effect=lose_reply):
+            with self.assertRaises(Rejected) as fail: plan.run()
+        self.assertIn("已读到本次原登记", str(fail.exception)); self.assertIn(plan.operation, str(fail.exception))
+        self.assertIn("resume-checkout", str(fail.exception))
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "verified_stage")
+        inode = self.target.stat().st_ino
+        self.assertEqual(opening.finish(self.state, plan.operation), (self.target, self.marker))
+        self.assertEqual(self.target.stat().st_ino, inode)
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "attached")
+
+    def test_substituted_state_after_initial_install_never_opens_or_resumes_the_replacement(self):
+        from zipworkspace import opening
+        plan = self.choice(); native = opening.finish
+        saved = self.private / "retained-original"
+        def exchange(state, operation, **kwargs):
+            state.rename(saved); state.mkdir(mode=0o700)
+            (state / "opening.sqlite").write_bytes(b"not the original database")
+            with patch.object(opening.sqlite3, "connect", side_effect=AssertionError("no replacement SQLite open")):
+                return native(state, operation, **kwargs)
+        with patch.object(opening, "finish", side_effect=exchange):
+            with self.assertRaises(Rejected) as fail: plan.run()
+        self.assertIn("签出结果未知", str(fail.exception)); self.assertNotIn("resume-checkout", str(fail.exception))
+        self.assertEqual((self.state / "opening.sqlite").read_bytes(), b"not the original database")
+        self.assertTrue((saved / "prepared-worktree/design/notes").is_file())
+        self.assertFalse(self.target.exists())
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra not installed")
+    def test_widget_cancellation_stale_confirmation_and_reentry_do_not_create_a_second_operation(self):
+        from concurrent.futures import Future
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import checkout_pane as ui
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        self.addCleanup(win.close)
+        pane = win.archive.checkout
+        def dispatch(title, work, apply, *, failed=None):
+            future = Future()
+            try: result = work()
+            except Exception as error:
+                future.set_exception(error); failed(error)
+            else:
+                future.set_result(result); apply(result)
+            return future
+        for mode in ("cancel", "selection_changed", "accept"):
+            with self.subTest(mode=mode):
+                win.archive.show_selection(Selection.open(self.loose))
+                def decide(_parent, _title, detail, *, attestation):
+                    self.assertIn(str(self.target), detail); self.assertIn("独占", attestation)
+                    pane.pick()  # The confirmation is already active; must not open another picker.
+                    if mode == "selection_changed": pane.set_snapshot(None)
+                    return mode != "cancel"
+                with patch.object(win, "job", side_effect=dispatch), \
+                     patch.object(ui.QFileDialog, "getExistingDirectory",
+                                  side_effect=list(map(str, (self.store,self.parent,self.private)))) as picks, \
+                     patch.object(ui.QInputDialog, "getText", return_value=("Design", True)), \
+                     patch.object(ui, "confirm", side_effect=decide):
+                    pane.pick()
+                self.assertEqual(picks.call_count, 3)
+                self.assertFalse(pane.active)
+                self.assertEqual(self.target.is_dir(), mode == "accept")
+                self.assertEqual(self.state.is_dir(), mode == "accept")
+        self.assertIn(self.marker.operation, pane.result.text())
+        self.assertEqual((self.target/"design/notes").read_bytes(), b"desktop selection")
