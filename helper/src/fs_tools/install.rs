@@ -157,6 +157,40 @@ impl RuntimeFile {
         };
         if ok{Ok(())}else{Err(io::Error::other("protected diagnostic installation changed"))}
     }
+// The fixed release slot must still contain this running helper. Do not resolve
+// current_exe() as a command name, search PATH or accept an alternate executable.
+    pub(crate) fn require_running_helper(&self)->io::Result<()>{
+    if self.parts!=["usr","bin","helper"]||!self.executable{return Err(io::Error::other("not the fixed installed helper ELF"));}
+    self.recheck()?;let installed=&self.file;
+    use rustix::fs::{PROC_SUPER_MAGIC,ResolveFlags,fstatfs,openat2,readlinkat};
+    let bad=||io::Error::other("installed helper does not match this running executable");
+    let dir=OFlags::PATH|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC;
+    let p=open(c"/proc",dir,Mode::empty())?;
+    let pid=std::process::id().to_string();
+    if fstatfs(&p)?.f_type!=PROC_SUPER_MAGIC || readlinkat(&p,c"self",Vec::new())?.as_bytes()!=pid.as_bytes(){return Err(bad());}
+    let safe=ResolveFlags::BENEATH|ResolveFlags::NO_MAGICLINKS|ResolveFlags::NO_XDEV;
+    let me=openat2(&p,pid.as_str(),dir,Mode::empty(),safe)?;
+    let link=File::from(openat2(&me,c"exe",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),safe)?);
+    if !link.metadata()?.file_type().is_symlink()||fstatfs(&link)?.f_type!=PROC_SUPER_MAGIC{return Err(bad());}
+    let current=File::from(openat(&me,c"exe",OFlags::PATH|OFlags::CLOEXEC,Mode::empty())?);
+    if !current.metadata()?.is_file() || Entity::of(&current.metadata()?)?!=Entity::of(&installed.metadata()?)?
+        || Mount::on(installed)?.is_none_or(|m|Mount::on(&current).ok().flatten().is_none_or(|n|m.id!=n.id)){
+        return Err(bad());
+    }
+    self.recheck()
+    }
+    /// Only compares an already-held directory with the single "usr" sibling
+    /// of a protected installed manifest. This does not export a parent FD.
+    pub(crate) fn require_samba_usr(&self,usr:&File)->io::Result<()>{
+        self.recheck()?;
+        let parent=self.chain.fds.iter().rev().nth(1).ok_or_else(||io::Error::other("missing original package directory"))?;
+        let pin=File::from(openat(parent,c"usr",path_flags()|OFlags::DIRECTORY,Mode::empty())?);
+        let a=Mark::on(&pin).map_err(|_|io::Error::other("could not identify package directory"))?;
+        let parent_mark=Mark::on(parent).map_err(|_|io::Error::other("could not identify the protected package parent"))?;
+        if self.parts.last()!=Some(&"CAPSULE")||a.mount!=parent_mark.mount||a.entity.dev!=parent_mark.entity.dev
+            ||!a.accepts(true)||Mark::on(usr).ok()!=Some(a){return Err(io::Error::other("not the installed manifest's original usr"));}
+        self.recheck()
+    }
     pub(crate) fn digest(&mut self)->io::Result<[u8;32]> {
         use std::io::Seek;
         self.file.rewind()?;

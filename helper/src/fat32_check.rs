@@ -7,6 +7,17 @@ mod runtime;
 use crate::fs_tools::hex;
 use std::{ffi::OsString,fmt,io,path::{Path,PathBuf}};
 
+/// The same held eight-file host installation as the offline checker; this
+/// wrapper cannot start it or expose a checker, library or arbitrary action.
+pub(crate) struct SamLauncher(runtime::Runtime,[u8;32]);
+impl SamLauncher{
+    pub(crate) fn for_release(expected:&[u8;32])->io::Result<Self>{
+        let (r,b)=runtime::Runtime::open_for(Some(expected))?;Ok(Self(r,b))
+    }
+    pub(crate) fn sha(&self)->[u8;32]{self.1}
+    pub(crate) fn require(&self)->io::Result<()>{self.0.recheck()}
+}
+
 #[derive(Debug)]
 pub(crate) struct Request { image:PathBuf, digest:[u8;32] }
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]

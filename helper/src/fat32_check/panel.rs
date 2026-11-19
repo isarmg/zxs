@@ -1,8 +1,8 @@
 //! A single terminal-selected operand. The HTTP process has no command builder
 //! with user options, and never installs the checker's process-wide limits.
 use super::{Outcome,Report,Request,image::Sealed,runner,runtime::Runtime};
-use crate::{fs_tools::RuntimeFile,pinned::{Entity,Mount,invalid}};
-use rustix::{fs::{Mode,OFlags,PROC_SUPER_MAGIC,ResolveFlags,fstatfs,open,openat,openat2,readlinkat},
+use crate::{fs_tools::RuntimeFile,pinned::invalid};
+use rustix::{
     io::fcntl_dupfd_cloexec,pipe::{PipeFlags,pipe_with},
     process::{Pid,Signal,kill_process,parent_process_death_signal}};
 use std::{fs::File,io::{self,Read,Write},process::{Child,Command,Stdio}};
@@ -11,29 +11,10 @@ use std::{fs::File,io::{self,Read,Write},process::{Child,Command,Stdio}};
 pub(crate) struct Info {pub bytes:u64,pub sector:u16,pub clusters:u32,pub digest:[u8;32]}
 pub(crate) struct Operand {image:Sealed,expected:[u8;32],installation:RuntimeFile}
 
-// The fixed release slot must still contain this running helper. Do not resolve
-// current_exe() as a command name, search PATH or accept an alternate executable.
-fn same_running_helper(installed:&File)->io::Result<()>{
-    let bad=||invalid("installed helper does not match this running executable");
-    let dir=OFlags::PATH|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC;
-    let p=open(c"/proc",dir,Mode::empty())?;
-    let pid=std::process::id().to_string();
-    if fstatfs(&p)?.f_type!=PROC_SUPER_MAGIC || readlinkat(&p,c"self",Vec::new())?.as_bytes()!=pid.as_bytes(){return Err(bad());}
-    let safe=ResolveFlags::BENEATH|ResolveFlags::NO_MAGICLINKS|ResolveFlags::NO_XDEV;
-    let me=openat2(&p,pid.as_str(),dir,Mode::empty(),safe)?;
-    let link=File::from(openat2(&me,c"exe",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),safe)?);
-    if !link.metadata()?.file_type().is_symlink()||fstatfs(&link)?.f_type!=PROC_SUPER_MAGIC{return Err(bad());}
-    let current=File::from(openat(&me,c"exe",OFlags::PATH|OFlags::CLOEXEC,Mode::empty())?);
-    if !current.metadata()?.is_file() || Entity::of(&current.metadata()?)?!=Entity::of(&installed.metadata()?)?
-        || Mount::on(installed)?.is_none_or(|m|Mount::on(&current).ok().flatten().is_none_or(|n|m.id!=n.id)){
-        return Err(bad());
-    }
-    Ok(())
-}
 impl Operand {
     pub(crate) fn capture(job:Request)->io::Result<Self>{
         let installation=RuntimeFile::open(&["usr","bin","helper"],true,64<<20)?;
-        same_running_helper(&installation.file)?;
+        installation.require_running_helper()?;
         let image=Sealed::capture(&job.image,&job.digest)?;
         installation.recheck()?;
         Ok(Self{image,expected:job.digest,installation})
@@ -48,7 +29,7 @@ impl Operand {
         cmd.env_clear().current_dir("/").stdin(Stdio::from(self.image.file().try_clone()?))
             .stdout(Stdio::from(File::from(write))).stderr(Stdio::piped());
         helper_linux_evidence::diagnostic_process::require_waitable_children()?;
-        self.installation.recheck()?;same_running_helper(&self.installation.file)?;
+        self.installation.recheck()?;self.installation.require_running_helper()?;
         helper_linux_evidence::diagnostic_process::prepare_panel_worker_exec(&mut cmd,&self.installation.file,&self.expected)?;
         let child=cmd.spawn()?;
         Ok(Running{child,read:File::from(read),clusters:self.image.geometry().data_clusters})

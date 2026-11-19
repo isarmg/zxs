@@ -1,5 +1,5 @@
 {
-  "debian_version": "1.0.0+diskpack20261119.2",
+  "debian_version": "1.0.0+diskpack20261119.3",
   "releases": {
     "debian": {"suite":"trixie","inrelease":"0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675"},
     "debian-security": {"suite":"trixie-security","inrelease":"4bcc789fc8cf9d937b6d721b04f3687984e282ea848c8ecbdb234ebe851e748c"}

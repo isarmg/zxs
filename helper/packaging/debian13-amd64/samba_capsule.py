@@ -220,16 +220,19 @@ def manifest_bytes(recipe):
     """
     rows=recipe["files"]
     require(0<len(rows)<=2048,"private runtime manifest entry limit")
-    out=bytearray(MANIFEST);size=0
+    out=bytearray(MANIFEST);size=0;dirs={"usr"}
     for name,rec in sorted(rows.items()):
         member=rec["source_package_member"];pkg=rec["binary_package"]
         for path in (name,member):
-            require(path.startswith("usr/") and len(path)<=512 and all(COMP.fullmatch(c) and c not in {".",".."}
+            require(path.startswith("usr/") and len(path)<=512 and len(path.split("/"))<=33 and all(COMP.fullmatch(c) and c not in {".",".."}
                     for c in path.split("/")),"not a canonical bounded guest/archived name")
+        parts=name.split("/")
+        dirs.update("/".join(parts[:i]) for i in range(1,len(parts)))
+        require(len(dirs)<=2048 and not dirs.intersection(rows),"invalid or oversized implicit guest directory set")
         need=rec["needed"]; n=rec["size"]; size+=n
         require(rec["mode"] in {"0644","0755"} and 0<=n<=64<<20 and size<=900<<20 and
-                re.fullmatch("[0-9a-f]{64}",rec["sha256"]) and PKG.fullmatch(pkg) and
-                len(need)<=256 and len(set(need))==len(need) and all(LIBNAME.fullmatch(k) for k in need),
+                re.fullmatch("[0-9a-f]{64}",rec["sha256"]) and len(pkg)<=150 and PKG.fullmatch(pkg) and
+                len(need)<=256 and len(set(need))==len(need) and all(len(k)<=150 and LIBNAME.fullmatch(k) for k in need),
                 "invalid runtime manifest metadata")
         line="\t".join((name,rec["mode"],str(n),rec["sha256"],pkg,member,",".join(need) or "-"))+"\n"
         require(len(line)<=8192 and len(out)+len(line)<=2<<20,"release manifest size limit")

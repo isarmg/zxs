@@ -27,9 +27,16 @@ fn pins(bytes:&[u8])->io::Result<[[u8;32];8]> {
     Ok(digests)
 }
 impl Runtime {
-    pub(super) fn open()->io::Result<Self>{
+    pub(super) fn open()->io::Result<Self>{ Ok(Self::open_for(None)?.0) }
+    // Normal diagnostics still trust their protected distribution slot. The
+    // host SAM issuer additionally pins this profile from its separate release.
+    pub(super) fn open_for(release:Option<&[u8;32]>)->io::Result<(Self,[u8;32])>{
+        use sha2::{Digest,Sha256};
         let mut policy=RuntimeFile::open(POLICY,false,1024)?;
         let mut bytes=Vec::new();(&mut policy.file).take(1025).read_to_end(&mut bytes)?;
+        if release.is_some_and(|approved|<[u8;32]>::from(Sha256::digest(&bytes))!=*approved){
+            return Err(invalid("not the independently enrolled host launcher profile"));
+        }
         let expected=pins(&bytes)?;policy.recheck()?;
         let mut files=Vec::new();
         for (i,&slot) in SLOTS.iter().enumerate() {
@@ -42,7 +49,7 @@ impl Runtime {
             files.push(f);
         }
         let runtime=Self{policy,files:files.try_into().map_err(|_|invalid("incomplete checker runtime"))?};
-        runtime.recheck()?;Ok(runtime)
+        runtime.recheck()?;Ok((runtime,expected[0]))
     }
     pub(super) fn launcher(&self)->&std::fs::File { &self.files[0].file }
     pub(super) fn sandbox_files(&self)->impl Iterator<Item=(&std::fs::File,&'static str)>{

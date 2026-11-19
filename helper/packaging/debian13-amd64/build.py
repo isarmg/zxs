@@ -239,6 +239,12 @@ def build(args):
               "scope_sam":"offline dedicated fresh instance only; no public command or daemon",
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
               "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"packaged-not-yet-enabled"}}
+        # Candidate NON-privileged material for the release signer. Do not
+        # install it as its own authorization: the package owner is not the site's
+        # authority. It and the exact .deb are covered by the external signed sums.
+        with (out/"SAM-RELEASE").open("x",encoding="ascii") as r:
+            r.write("HOST-SAM-RELEASE-1 "+info["samba_manifest_sha256"]+" "+info["helper_distributed_sha256"]
+                    +" "+digest(home/"fat32-check-v1")+"\n")
         (docs/"BUNDLE.json").write_text(json.dumps(info,sort_keys=True,indent=2)+"\n")
         control=mkdir(root/"DEBIAN")/"control"
         control.write_text("Package: local-ops-helper\nVersion: "+version+"\nArchitecture: amd64\nSection: admin\nPriority: optional\nMaintainer: local-ops-helper release team <noreply@users.noreply.github.com>\nDescription: Local diagnostics and isolated dedicated storage installation tools\n")

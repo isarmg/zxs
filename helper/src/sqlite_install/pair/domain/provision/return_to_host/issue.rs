@@ -39,7 +39,7 @@ impl<'a> Grant<'a>{
     /// In the dedicated foreground host CLI, before starting its worker. A
     /// granted reference is consumed once, not stored as a reusable capability.
     fn foreground(originals:&'a HostOrigins,reference:Id)->io::Result<Self>{
-        originals.fresh()?;
+        originals.fresh()?;originals.release.require()?;
         let scope=originals.scope(&reference)?;
         let terminal=PublicConfirmation::select()?;let stderr=io::stderr();
         let mut out=stderr.lock();
@@ -47,9 +47,9 @@ impl<'a> Grant<'a>{
         writeln!(out,"SYSTEM {}；池 {}；预期原 INIT {}（此时尚未查询；降权后仅当原 SYSTEM 确认同一 INIT 已提交才生成域）。",escaped(originals.system.path().as_os_str().as_bytes()),hex(&originals.pool),hex(&originals.init))?;
         writeln!(out,"专用实例 {}；原操作 {}；维护主体 {}；审批参考 {}；存储 UID/GID {}/{}。",
             hex(&originals.instance),hex(&originals.op),hex(&originals.actor),hex(&reference),originals.uid,originals.gid)?;
-        writeln!(out,"正式配置 SHA-256 {}；本次完整范围 {}。",hex(&originals.config),hex(&scope))?;out.flush()?;drop(out);
+        writeln!(out,"正式配置 SHA-256 {}；核准的软件发行材料 {}；本次完整范围 {}。",hex(&originals.config),hex(&originals.release.key()),hex(&scope))?;out.flush()?;drop(out);
         terminal.confirm()?;
-        terminal.check()?;originals.fresh()?;
+        terminal.check()?;originals.fresh()?;originals.release.require()?;
         if originals.scope(&reference)?!=scope{return Err(bad("approved originals changed; do not start provisioning"));}
         Ok(Self{originals,reference,scope,terminal})
     }
@@ -65,6 +65,7 @@ impl<'a> Grant<'a>{
         let check=|names:&[&[u8]]|->io::Result<()>{
             super::super::cancelled()?;self.accept(&r)?;r.require_names(names)
         };
+        self.originals.release.require()?; // do not sign after an observed change of the authorized installation
         check(FRESH_SITE)?;
         let original=fresh(&r.base).map_err(|_|unconfirmed())?;
         // After allocation there is no unlink/repair/retry. That includes a

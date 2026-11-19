@@ -1,6 +1,7 @@
 //! One fresh, fixed Samba bootstrap. No CLI and no public grant constructor:
 //! neither a path, an approval string, nor classifying an empty directory
 //! supplies the host authorization and authenticated capsule required below.
+mod capsule;
 mod monitor;
 mod return_to_host;
 mod live;
@@ -26,7 +27,7 @@ const ENTRY:&str="import runpy; runpy.run_path('/provision.py',run_name='_local_
 // enough. The executable actually consumed is the specific digest-verified ELF.
 pub(super) struct FreshApproval<'a>{
     system:&'a LockedSystem, pool:Id,init:Id,instance_id:Id,op:Id,actor:Id,reference:Id,live_config:[u8;32],host_order:[u8;32],
-    site:&'a Pinned, usr:&'a Pinned, expected_bwrap:[u8;32], uid:u32,gid:u32,
+    site:&'a Pinned, usr:&'a Pinned, expected_bwrap:[u8;32],release:capsule::Keys,uid:u32,gid:u32,
 }
 // Only the real monitor/reaper creates this proof for its original payload.
 pub(super) struct Finished(rustix::process::Pid);
@@ -156,7 +157,8 @@ impl<'a> FreshApproval<'a>{
         crate::isolated_group::prepare()?;limits()?;
         let mut bwrap=RuntimeFile::open(LAUNCHER,true,32<<20)?;
         let usr=self.usr.relative_directory()?;let m=usr.metadata()?;
-        if m.uid()!=0||m.mode()&0o022!=0||m.nlink()==0||!m.is_dir()||bwrap.digest()?!=self.expected_bwrap{
+        let actual_bwrap=bwrap.digest()?;
+        if m.uid()!=0||m.mode()&0o022!=0||m.nlink()==0||!m.is_dir()||actual_bwrap!=self.expected_bwrap{
             return Err(bad("not the approved dedicated installation release"));}
         let mut elf=[0;20];bwrap.file.read_exact_at(&mut elf,0)?;
         if &elf[..7]!=b"\x7fELF\x02\x01\x01"||elf[18..20]!=[62,0]{return Err(bad("not the selected x86-64 launcher"));}
@@ -167,7 +169,8 @@ impl<'a> FreshApproval<'a>{
         let live=live::Live::select(&site.base,&self.live_config)?;
         let check_order=||->io::Result<()>{
             let dig=return_to_host::order([&self.pool,&self.init,&self.instance_id,&self.op,&self.actor,&self.reference],
-                self.uid,self.gid,s.path(),&self.live_config,[mark(s.dir())?,mark(&site.base)?,mark(&site.private)?,mark(&site.state)?,live.origin()])?;
+                self.uid,self.gid,s.path(),&self.live_config,&self.release.bind(&actual_bwrap),
+                [mark(s.dir())?,mark(&site.base)?,mark(&site.private)?,mark(&site.state)?,live.origin(),mark(&usr)?])?;
             if dig!=self.host_order{return Err(bad("foreground host approval referred to different original objects; not provisioning"));}
             Ok(())
         };

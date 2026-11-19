@@ -17,13 +17,13 @@ const PREFIX:[&std::ffi::CStr;4]=[c"var",c"lib",c"local-ops-helper",c"samba-inst
 // their independently selected, simultaneously live original objects; do not
 // persist dev/mount/inode as reboot-stable IDs. Only the parent's explicit
 // terminal confirmation authorizes this single future installation.
-pub(super) fn order(ids:[&Id;6],uid:u32,gid:u32,path:&Path,config:&[u8;32],objs:[(Entity,u64);5])->io::Result<[u8;32]>{
+pub(super) fn order(ids:[&Id;6],uid:u32,gid:u32,path:&Path,config:&[u8;32],release:&[u8;32],objs:[(Entity,u64);6])->io::Result<[u8;32]>{
     use sha2::{Digest,Sha256};use std::os::unix::ffi::OsStrExt;
-    let mut h=Sha256::new();h.update(b"helper: one original host SAM installation v1\0");
+    let mut h=Sha256::new();h.update(b"helper: one original host SAM installation v2\0");
     for id in ids{if *id==[0;16]{return Err(bad("missing host installation identity"));}h.update(id);}
     h.update(uid.to_be_bytes());h.update(gid.to_be_bytes());let p=path.as_os_str().as_bytes();
     h.update(u16::try_from(p.len()).map_err(|_|bad("out-of-range installation root"))?.to_be_bytes());h.update(p);
-    h.update(config);for (e,m) in objs{h.update(e.dev.to_be_bytes());h.update(e.ino.to_be_bytes());h.update(m.to_be_bytes());}
+    h.update(config);h.update(release);for (e,m) in objs{h.update(e.dev.to_be_bytes());h.update(e.ino.to_be_bytes());h.update(m.to_be_bytes());}
     Ok(h.finalize().into())
 }
 fn safe_dir(f:&File)->io::Result<()>{
@@ -58,7 +58,7 @@ impl Site{
 // Object selection is not the operator's authority. A later, dedicated
 // foreground issuer must separately confirm the action and identified pool.
 pub(super) struct HostOrigins{
-    system:Pinned,site:Site,private:File,state:File,live:live::Live,
+    system:Pinned,site:Site,private:File,state:File,live:live::Live,release:super::capsule::Originals,
     uid:u32,gid:u32,pool:Id,init:Id,instance:Id,op:Id,actor:Id,config:[u8;32],
 }
 impl HostOrigins{
@@ -76,11 +76,12 @@ impl HostOrigins{
         };
         let private=selected(c"private")?;let state=selected(c"state")?;
         let live=live::Live::select(site.base(),&config)?;
-        let this=Self{system,site,private,state,live,uid,gid,pool,init,instance,op,actor,config};
+        let release=super::capsule::Originals::open()?;
+        let this=Self{system,site,private,state,live,release,uid,gid,pool,init,instance,op,actor,config};
         this.fresh()?;Ok(this)
     }
     fn common(&self)->io::Result<()>{
-        self.site.check()?;self.system.require_same_path()?;
+        self.site.check()?;self.system.require_same_path()?;self.release.slots()?;
         let (a,u,g)=approval::profile()?;
         let s=self.system.metadata()?;let root=self.site.base();
         if (a,u,g)!=(self.actor,self.uid,self.gid)||!s.is_dir()||s.uid()!=u||s.mode()&0o7777!=0o700||s.nlink()==0{
@@ -102,7 +103,7 @@ impl HostOrigins{
     fn scope(&self,reference:&Id)->io::Result<[u8;32]>{
         let sys=self.system.relative_directory()?;
         order([&self.pool,&self.init,&self.instance,&self.op,&self.actor,reference],self.uid,self.gid,
-              self.system.path(),&self.config,[mark(&sys)?,mark(self.site.base())?,mark(&self.private)?,mark(&self.state)?,self.live.origin()])
+              self.system.path(),&self.config,&self.release.key(),[mark(&sys)?,mark(self.site.base())?,mark(&self.private)?,mark(&self.state)?,self.live.origin(),self.release.original()?])
     }
     pub(super) fn fresh(&self)->io::Result<()>{
         self.common()?;contents(self.site.base(),FRESH_SITE)?;contents(&self.private,&[])?;self.site.check()
@@ -261,9 +262,10 @@ mod tests{
     #[test]
     fn the_foreground_scope_cannot_move_between_actors_roots_or_operations(){
         let a=[[1;16],[2;16],[3;16],[4;16],[5;16],[6;16]];let roots=std::array::from_fn(|i|(Entity{dev:10,ino:20+i as u64},30));
-        let take=|a:&[Id;6],r:[(Entity,u64);5],p:&Path,g|order(a.each_ref(),1001,g,p,&[42;32],r).unwrap();
+        let take=|a:&[Id;6],r:[(Entity,u64);6],p:&Path,g|order(a.each_ref(),1001,g,p,&[42;32],&[21;32],r).unwrap();
         let p=Path::new("/selected");let same=take(&a,roots,p,99);
         assert_eq!(same,take(&a,roots,p,99));
+        assert_ne!(same,order(a.each_ref(),1001,99,p,&[42;32],&[22;32],roots).unwrap());
         for i in 0..a.len(){let mut other=a;other[i][0]^=1;assert_ne!(same,take(&other,roots,p,99));}
         for i in 0..roots.len(){let mut other=roots;other[i].0.ino+=1;assert_ne!(same,take(&a,other,p,99));
             let mut other=roots;other[i].1+=1;assert_ne!(same,take(&a,other,p,99));}

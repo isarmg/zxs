@@ -56,6 +56,8 @@ class Capsule(unittest.TestCase):
         self.assertTrue(result.startswith(sam.MANIFEST+a.encode()+b"\t0755\t16\t"))
         self.assertEqual(result.splitlines()[-1].split(b"\t"),
             [b.encode(),b"0755",b"16",b"04"*32,b"python3.13-minimal",b.encode(),b"libc.so.6"])
-        for wrong in ("bin/python","usr/../etc/x","usr//bin/python","usr/bin/a\tx"):
+        for wrong in ("bin/python","usr/../etc/x","usr//bin/python","usr/bin/a\tx","usr/"+"/".join(["x"]*33)):
             with self.assertRaises(ValueError): sam.manifest_bytes({"files":{wrong:rec(a)}})
-        with self.assertRaises(ValueError): sam.manifest_bytes({"files":{a:{**rec(a),"needed":["libok.so","../lib.so"]}}})
+        for dep in [["libok.so","../lib.so"],["libok.so","libok.so"],["x"*151+".so"]]:
+            with self.assertRaises(ValueError): sam.manifest_bytes({"files":{a:{**rec(a),"needed":dep}}})
+        with self.assertRaises(ValueError):sam.manifest_bytes({"files":{"usr/bin":rec(a),a:rec(a)}})
