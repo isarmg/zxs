@@ -79,13 +79,22 @@ impl Pinned {
         if now.chain != self.chain { return Err(invalid("selected path or parent changed during observation")); }
         Ok(())
     }
+}
 
-    // Only upgrade an O_PATH handle already known to be a regular file. Opening an arbitrary
-    // pathname for reading before checking it could connect to a device or block on a FIFO.
-    fn read_regular_descriptor(&self, magic: u32) -> io::Result<File> {
-        if !matches!(self.kind, Kind::Regular) || !self.fd.metadata()?.is_file() {
-            return Err(invalid("only a held regular file may be read"));
-        }
+/// Only this type can upgrade an O_PATH operand to a data reader.
+pub(crate) struct LocalDataFile { pin: Pinned, magic: u32 }
+impl LocalDataFile {
+    pub(crate) fn select(path: &Path) -> io::Result<Self> {
+        let pin = Pinned::open(path, Kind::Regular)?;
+        local_data(filesystem(&pin.fd)?, |magic| Self { pin, magic })
+    }
+
+    pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.pin.metadata() }
+    pub(crate) fn require_same_path(&self) -> io::Result<()> { self.pin.require_same_path() }
+
+    // Selection keeps the admitted regular-file handle alive. Reopening the operand's
+    // pathname instead could read a different object or open a device or FIFO.
+    pub(crate) fn reader(&self) -> io::Result<File> {
         let proc = open("/proc", dir_flags(), Mode::empty())?;
         if fstatfs(&proc)?.f_type != PROC_SUPER_MAGIC {
             return Err(invalid("a genuine procfs for this process is required"));
@@ -105,7 +114,7 @@ impl Pinned {
         if Entity::of(&again.metadata()?)? != Entity::of(&fds.metadata()?)? {
             return Err(invalid("procfs descriptor directory is not this process's"));
         }
-        let number = self.fd.as_raw_fd().to_string();
+        let number = self.pin.fd.as_raw_fd().to_string();
         let proc_link = File::from(openat(&fds, number.as_str(),
             OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?);
         if !proc_link.metadata()?.file_type().is_symlink() || fstatfs(&proc_link)?.f_type != PROC_SUPER_MAGIC {
@@ -113,14 +122,20 @@ impl Pinned {
         }
         let check = File::from(openat(&fds, number.as_str(), OFlags::PATH | OFlags::CLOEXEC, Mode::empty())?);
         let original = check.metadata()?;
-        if !original.is_file() || Entity::of(&original)? != self.entity() || filesystem(&check)? != Some(magic) {
+        if !original.is_file()
+            || Entity::of(&original)? != self.pin.entity()
+            || filesystem(&check)? != Some(self.magic)
+        {
             return Err(invalid("descriptor no longer selects the original regular file"));
         }
         let result = File::from(openat(&fds, number.as_str(),
             OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::NOATIME | OFlags::CLOEXEC, Mode::empty())?);
         let observed = result.metadata()?;
-        if !observed.is_file() || Entity::of(&observed)? != self.entity() {
+        if !observed.is_file() || Entity::of(&observed)? != self.pin.entity() {
             return Err(invalid("read descriptor did not resolve to the original regular file"));
+        }
+        if filesystem(&result)? != Some(self.magic) {
+            return Err(invalid("read descriptor no longer belongs to the selected data filesystem"));
         }
         Ok(result)
     }
@@ -138,26 +153,6 @@ fn local_data<T>(magic: Option<u32>, admit: impl FnOnce(u32) -> T) -> io::Result
 
 fn filesystem(file: &File) -> io::Result<Option<u32>> {
     Ok(u32::try_from(fstatfs(file)?.f_type).ok())
-}
-
-/// Only this type can upgrade an O_PATH operand to a data reader.
-pub(crate) struct LocalDataFile { pin: Pinned, magic: u32 }
-impl LocalDataFile {
-    pub(crate) fn select(path: &Path) -> io::Result<Self> {
-        let pin = Pinned::open(path, Kind::Regular)?;
-        local_data(filesystem(&pin.fd)?, |magic| Self { pin, magic })
-    }
-
-    pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.pin.metadata() }
-    pub(crate) fn require_same_path(&self) -> io::Result<()> { self.pin.require_same_path() }
-
-    pub(crate) fn reader(&self) -> io::Result<File> {
-        let reader = self.pin.read_regular_descriptor(self.magic)?;
-        if filesystem(&reader)? != Some(self.magic) {
-            return Err(invalid("read descriptor no longer belongs to the selected data filesystem"));
-        }
-        Ok(reader)
-    }
 }
 
 #[cfg(test)]
