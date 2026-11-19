@@ -3,15 +3,19 @@ use crate::identity::ShareId;
 use super::super::shares::ShareUse;
 
 fn action(g:&Genesis,seq:u64,previous:[u8;32],op:u8,kind:u8,body:&[u8])->Vec<u8>{
+    action_for(g,seq,previous,[op;16],kind,body)
+}
+fn action_for(g:&Genesis,seq:u64,previous:[u8;32],op:[u8;16],kind:u8,body:&[u8])->Vec<u8>{
     let(base,sealed)=match kind{
         9=>(b"ZXS-PORTABLE-1/FIRST-ADMIN\0".as_slice(),48),
         10=>(b"ZXS-PORTABLE-1/PUBLISH-ROOT-SHARE\0".as_slice(),0),
         11=>(b"ZXS-PORTABLE-1/ROOT-ACCESS-GRANT\0".as_slice(),0),
-        12=>(b"ZXS-PORTABLE-1/ADD-ACCOUNT\0".as_slice(),48),_=>unreachable!(),
+        12=>(b"ZXS-PORTABLE-1/ADD-ACCOUNT\0".as_slice(),48),
+        13=>(b"ZXS-PORTABLE-1/CREATE-ROOT-FILE\0".as_slice(),5*16+1),_=>unreachable!(),
     };
-    let request=hash::digest(&[base,&g.pool.0,&[op;16],&body[..body.len()-sealed]].concat()).unwrap();
+    let request=hash::digest(&[base,&g.pool.0,&op,&body[..body.len()-sealed]].concat()).unwrap();
     let mut h=ENC.to_vec();h.extend(((165+body.len()) as u32).to_be_bytes());h.extend(g.pool.0);h.extend(seq.to_be_bytes());
-    h.extend(previous);h.push(kind);h.extend([op;16]);h.extend(request);h.extend(body);digest(h)
+    h.extend(previous);h.push(kind);h.extend(op);h.extend(request);h.extend(body);digest(h)
 }
 fn terms(credential:[u8;32],share:u8,volume:VolumeId)->Vec<u8>{
     [[0x55;16].as_slice(),&credential,&[share;16],&[0],&volume.0].concat()
@@ -213,3 +217,6 @@ fn separately_authenticated_users_have_only_their_own_current_share_rights(){
     assert!(original.root().is_err());assert!(reader.select(id,ShareUse::Save).is_err());
     assert_eq!(reader.select(id,ShareUse::List).unwrap().root().unwrap(),vol);assert!(!r.exists()&&!f.exists());
 }
+
+#[path="portable_file_members.rs"]
+mod file_members;

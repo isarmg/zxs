@@ -108,6 +108,7 @@ mod accounts;
 mod credential;
 mod decision;
 mod shares;
+mod files;
 pub(in crate::pool) mod opened;
 #[cfg(test)]
 #[path="../../tests/unit/portable_genesis.rs"]

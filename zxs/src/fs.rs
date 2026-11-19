@@ -36,7 +36,7 @@ unsafe extern "C" {
     fn zxs_remove_name(fd:c_int,name:*const c_char)->c_int;
     fn zxs_put_material_token(fd:c_int,value:*const u8,n:usize)->c_int;
     fn zxs_get_material_token(fd:c_int,value:*mut u8,n:usize)->isize;
-    fn zxs_root_names(fd:c_int,out:*mut u8,cap:usize)->isize;
+    fn zxs_root_names(fd:c_int,out:*mut u8,cap:usize,max_entries:usize)->isize;
     fn zxs_anonymous_file(fd: c_int) -> c_int;
     fn zxs_link_anonymous(file: c_int, dir: c_int, name: *const c_char) -> c_int;
     fn zxs_rename_fresh(from: c_int, old: *const c_char, to: c_int, next: *const c_char) -> c_int;
@@ -71,6 +71,8 @@ pub(crate) fn local_uid()->u32 {
     unsafe { zxs_effective_uid() }
 }
 
+pub(crate) const DIRECTORY_NAMES:usize=8192;
+pub(crate) const DIRECTORY_BYTES:usize=512*1024;
 const MAX_PATH_BYTES:usize=4096;
 pub(crate) const MAX_PATH_DEPTH:usize=256;
 /// Capacity of an already canonical absolute name. It contains no path,

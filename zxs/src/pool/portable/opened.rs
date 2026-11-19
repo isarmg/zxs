@@ -4,6 +4,9 @@
 use super::*;
 use crate::{Entity, fs::{ControlRead, HeldDir}, pool::{READY, portable_claim::ROOT_NAME}};
 use std::ffi::CStr;
+use super::shares::ShareUse;
+#[path="members.rs"]
+mod members;
 
 const CONFIRMED: &CStr = c"CONFIRMED";
 
@@ -143,24 +146,21 @@ impl Recorded {
     }
 }
 impl<'r> Session<'r>{
-    fn at<T>(&self,share:shares::ShareId,action:shares::ShareUse,f:impl FnOnce(shares::Selection)->io::Result<T>)->io::Result<T>{
+    fn at_state<T>(&self,share:shares::ShareId,action:ShareUse,f:impl FnOnce(&decision::Decisions,shares::Selection)->io::Result<T>)->io::Result<T>{
         self.source.at(|state|{
             let a=state.accounts.get(self.account).filter(|a|a.decision==self.credential).ok_or_else(denied)?;
-            f(state.shares.selected(self.source.source.genesis.pool,a,share,action)?)
+            f(state,state.shares.selected(self.source.source.genesis.pool,a,share,action)?)
         })
     }
     pub(in crate::pool) fn select(&self,share:shares::ShareId,action:shares::ShareUse)->io::Result<Selected<'_,'r>>{
-        self.at(share,action,|original|Ok(Selected{session:self,original}))
+        self.at_state(share,action,|_,original|Ok(Selected{session:self,original}))
     }
 }
 impl Selected<'_,'_>{
     /// Non-secret, scoped management observation only. It is not a pathname
     /// or a grant usable by another component to open a FILE later.
     pub(in crate::pool) fn root(&self)->io::Result<VolumeId>{
-        self.session.at(self.original.id(),self.original.action(),|now|{
-            if now!=self.original{return Err(denied());}
-            Ok(now.volume())
-        })
+        self.checked(|_,v|Ok(v))
     }
 }
 impl Empty {

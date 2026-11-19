@@ -29,7 +29,7 @@ pub(in crate::ordinary) fn vacant_for_move(p:&HeldParent<'_,'_>,display:&str,fil
 }
 pub(in crate::ordinary) fn room_for_ticket(names:&[Vec<u8>],name:&str,stage:&CStr)->io::Result<()>{
     let bytes:usize=names.iter().map(|n|1+n.len()).sum();let n=usize::from(SLOTS);
-    if names.len()+n>8192 || bytes+n*(1+name.len().max(stage.to_bytes().len()))>512*1024 {
+    if names.len()+n>fs::DIRECTORY_NAMES || bytes+n*(1+name.len().max(stage.to_bytes().len()))>fs::DIRECTORY_BYTES {
         return Err(invalid("insufficient bounded inventory for the original temporary names"));
     }
     Ok(())

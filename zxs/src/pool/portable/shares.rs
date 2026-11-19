@@ -33,6 +33,7 @@ impl Selection{
     pub(super) fn id(&self)->ShareId{self.share}
     pub(super) fn action(&self)->ShareUse{self.action}
     pub(super) fn volume(&self)->VolumeId{self.volume}
+    pub(super) fn matches(&self,v:VolumeId,p:[u8;32],g:[u8;32])->bool{(self.volume,self.published,self.grant)==(v,p,g)}
 }
 #[derive(Default)]
 pub(super) struct Shares{

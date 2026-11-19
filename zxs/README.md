@@ -21,7 +21,7 @@ ZXS 是独立的 Linux 文件容器存储服务。**面向用户的入口只有 
 
 [Web / SMB 接入与测试迁移](docs/web-and-smb.md)区分计划、源码和真实协议验收。`src/main.rs` 仍是 Cargo 会默认打包、能实际读写的**过渡开发验收驱动**，不是产品 CLI，不再新增命令，也不是 HTTP/SMB 或 helper 的调用协议。旧根式测试只选卷根；库中的有类型父是卷根或确切已安装的 DirectoryId。日常文件操作保留在同一业务内核，不转给 helper。
 
-[账户、共享及分主体授权](docs/portable-decisions-v1.md)仅在明确选定的通用 SYSTEM 上观察已确认的首设范围、普通账户及授权。管理能力不等于本人可读写 FILE；旧 MAINT-1 只识别空池，不提供替代认证。库使用目标系统的 [libargon2](docs/first-account-v1.md)，未对外开放 Web 或 SMB 登录。
+[账户、共享及分主体授权](docs/portable-decisions-v1.md)在明确选定的通用 SYSTEM 上核已确认首设范围、普通账户及授权；普通根 FILE 的列举和指定目标另核原创建记录、实际容器头与父下同一硬链接。不写 FILE 或 SAVE，也不探备用卷。管理能力不等于本人可读写 FILE；旧 MAINT-1 只识别空池，不提供替代认证。库使用目标系统的 [libargon2](docs/first-account-v1.md)，未对外开放 Web 或 SMB 登录。
 
 helper 在离线排他后独立做首次设置、磁盘运维及经准确原操作授权的有限恢复。检查池/容器实物、查原回执和实际续作是三种不同动作，不移植 argv、不调用兄弟可执行程序／源码。ZXS 处理在线业务就绪、卷真实角色与故障/正常下线。`systemctl` 状态、目录空或只看到标签都不是在线安全或原物健康证明。[持久格式与互斥](docs/maintenance-genesis-v1.md) · [架构及职责](ARCHITECTURE.md)
 

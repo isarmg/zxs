@@ -38,7 +38,7 @@ pub(super) struct Head{sequence:u64,bytes:u64,digest:[u8;32]}
 impl Head{pub(super) fn sequence(self)->u64{self.sequence}}
 
 pub(super) struct Decisions{
-    pub(super) accounts:accounts::Accounts,pub(super) shares:super::shares::Shares,pub(super) head:Head,
+    pub(super) accounts:accounts::Accounts,pub(super) shares:super::shares::Shares,pub(super) files:super::files::Files,pub(super) head:Head,
 }
 impl Decisions{
     /// Admit only complete, understood, contiguous decisions at the actual
@@ -58,7 +58,7 @@ impl Decisions{
         let mut rest=tail;let mut prev=g.digest;
         let mut head=Head{sequence:0,bytes:0,digest:g.digest};
         let mut found=prior.is_none_or(|p|p==head);
-        let mut state=Self{accounts:Default::default(),shares:Default::default(),head};
+        let mut state=Self{accounts:Default::default(),shares:Default::default(),files:Default::default(),head};
         let mut used=std::collections::BTreeSet::new();
         used.insert(g.op);
         for expected in 1..=seq{
@@ -70,6 +70,7 @@ impl Decisions{
                 super::shares::PUBLISH|super::shares::GRANT=>{
                     state.shares.apply(g,&state.accounts,e.kind,e.op,e.request,e.body,e.digest)?;
                 }
+                super::files::CREATE=>state.files.apply(g,&state.accounts,&state.shares,e.op,e.request,e.body,e.digest,e.seq,&mut used)?,
                 _=>return Err(invalid("unsupported portable decision or repeated first administrator")),
             }
             prev=e.digest;head=Head{sequence:expected,bytes:(tail.len()-rest.len()) as u64,digest:prev};found|=prior==Some(head);

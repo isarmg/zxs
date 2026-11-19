@@ -34,10 +34,23 @@ impl Located{
     }
 }
 
-fn index_names(key:VersionKey)->(CString,CString){
-    let suffix=format!("{}-{:016x}",key.node,key.representation);
+fn index_names(key:VersionKey)->(CString,CString){index_leaves(key.node,key.representation)}
+fn index_leaves(node:crate::NodeId,generation:u64)->(CString,CString){
+    let suffix=format!("{node}-{generation:016x}");
     (CString::new(format!("index-{suffix}")).expect("encoded index name"),
      CString::new(format!("pin-index-{suffix}")).expect("encoded index witness"))
+}
+
+/// Geometry only. The longest fixed-width native role is the index witness;
+/// the alternative is a RAW's fixed storage prefix plus this exact spelling.
+/// No publication, capacity or permission can be inferred from this check.
+pub(in crate::ordinary) fn require_resident_names(b:crate::fs::NameBudget,display:&str)->io::Result<()>{
+    let(_,longest)=index_leaves(crate::NodeId([0xff;16]),u64::MAX);
+    b.child(&longest)?;
+    let name=FileName::parse(display.as_bytes())?.display();
+    let raw=CString::new(format!("{}-{name}",crate::VersionStorageId::checked([b'f';15])?))
+        .map_err(|_|invalid("invalid complete-version storage component"))?;
+    b.child(&raw)?;Ok(())
 }
 
 /// Physical read only. Whoever makes this selection must keep the original

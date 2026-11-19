@@ -195,7 +195,7 @@ int zxs_remove_name(int fd,const char *name) { return unlinkat(fd,name,0); }
 
 /* Return length-prefixed opaque names, without opening any entry. Refuse the
  * directory rather than supplying an incomplete name scope on budget failure. */
-ssize_t zxs_root_names(int fd,unsigned char *out,size_t cap) {
+ssize_t zxs_root_names(int fd,unsigned char *out,size_t cap,size_t max_entries) {
     int held=zxs_open_directory(fd,".");
     if (held<0) return -1;
     DIR *dir=fdopendir(held);
@@ -206,7 +206,7 @@ ssize_t zxs_root_names(int fd,unsigned char *out,size_t cap) {
         if (!entry) { error=errno; break; }
         if (!strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
         size_t n=strlen(entry->d_name);
-        if (!n || n>255 || ++count>8192 || 1+n>cap-used) { error=EOVERFLOW; break; }
+        if (!n || n>255 || ++count>max_entries || 1+n>cap-used) { error=EOVERFLOW; break; }
         out[used++]=(unsigned char)n; memcpy(out+used,entry->d_name,n); used+=n;
     }
     if (closedir(dir)<0 && !error) error=errno;

@@ -28,6 +28,11 @@ impl HeldBytes{
     pub(crate) fn file(&self)->&File{&self.file}
     pub(crate) fn stamp(&self)->LiveStamp{self.original}
     pub(crate) fn unchanged(&self)->io::Result<()>{self.original.require(&self.file)}
+    pub(crate) fn require_name(&self,parent:&HeldDir,name:&CStr)->io::Result<()>{
+        let p=parent.pin_record(name)?.ok_or_else(||invalid("portable original lost a required name"))?;
+        if !parent.shares_file_mount(&p)?{return Err(invalid("portable original name is on a different mount"));}
+        self.original.require(&p)?;self.unchanged()
+    }
     #[cfg(test)]
     pub(crate) fn separate_format_fixture(file:File)->io::Result<Self>{
         Ok(Self{original:LiveStamp::read(&file)?,file})
@@ -52,15 +57,31 @@ impl<'a> WitnessRead<'a>{
         Ok(Self{dir,names,mount})
     }
 
+    pub(crate) fn only_header(&self)->io::Result<()>{
+        if self.names.len()!=1||!self.names.contains(c"FILE".to_bytes()){return Err(invalid("unissued or missing member in newborn FILE"));}
+        Ok(())
+    }
     /// Only a regular data FD leaves this method. Both it and the witnesses
     /// are resolved relative to the same held parent; symlinks and devices
     /// are checked with O_PATH before any content FD can be opened.
     pub(crate) fn open(&self,main:&CStr,witness:&CStr,size:u64)->io::Result<HeldBytes>{
         if main==witness{return Err(invalid("original data and its witness must use separate names"));}
-        let pin=|name:&CStr|->io::Result<File>{
-            self.dir.checked_child_path(name)?;
-            if !self.names.contains(name.to_bytes()){return Err(invalid("missing exact portable object spelling"));}
-            self.dir.pin_record(name)?.ok_or_else(||invalid("portable material name disappeared"))
+        self.open_pair(main,self.dir,&self.names,witness,size)
+    }
+    /// An installed FILE uses its existing inner header as the primary.
+    /// Its single issued second name sits in the exact immediate parent;
+    /// no directory hardlink, third metadata database or persistent inode ID.
+    pub(crate) fn file_header(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,witness:&CStr,size:u64)->io::Result<HeldBytes>{
+        if self.dir.path.parent()!=Some(parent.path.as_path())||!self.dir.same_mount(parent)?{
+            return Err(invalid("FILE header witness is not in its actual containing parent"));}
+        parent.require_named()?;let held=self.open_pair(c"FILE",parent,sample,witness,size)?;
+        parent.require_named()?;Self::require_parent(self.dir)?;held.unchanged()?;Ok(held)
+    }
+    fn open_pair(&self,main:&CStr,other:&HeldDir,names:&BTreeSet<Vec<u8>>,witness:&CStr,size:u64)->io::Result<HeldBytes>{
+        let pin=|dir:&HeldDir,names:&BTreeSet<Vec<u8>>,name:&CStr|->io::Result<File>{
+            dir.checked_child_path(name)?;
+            if !names.contains(name.to_bytes()){return Err(invalid("missing exact portable object spelling"));}
+            dir.pin_record(name)?.ok_or_else(||invalid("portable material name disappeared"))
         };
         let observe=|file:&File|->io::Result<LiveStamp>{
             let stamp=LiveStamp::read(file)?;
@@ -69,15 +90,15 @@ impl<'a> WitnessRead<'a>{
                 return Err(invalid("wrong witnessed extent or foreign mount"));}
             Ok(stamp)
         };
-        let primary=pin(main)?;let expected=observe(&primary)?;
-        if observe(&pin(witness)?)?!=expected{return Err(invalid("original material and its issued witness are not the same object"));}
+        let primary=pin(self.dir,&self.names,main)?;let expected=observe(&primary)?;
+        if observe(&pin(other,names,witness)?)?!=expected{return Err(invalid("original material and its issued witness are not the same object"));}
         // SAFETY: the pinned FD was checked private, regular and on the
         // selected mount before the syscall. Never reopen an untrusted path.
         let fd=unsafe{zxs_open_pinned_record(primary.as_raw_fd(),0)};
         if fd<0{return Err(io::Error::last_os_error());}
         let held=unsafe{File::from_raw_fd(fd)};drop(primary);
         held.try_lock_shared().map_err(io::Error::from)?;
-        if observe(&held)?!=expected||observe(&pin(main)?)?!=expected||observe(&pin(witness)?)?!=expected{
+        if observe(&held)?!=expected||observe(&pin(self.dir,&self.names,main)?)?!=expected||observe(&pin(other,names,witness)?)?!=expected{
             return Err(invalid("original material changed while acquiring its shared lease"));}
         Ok(HeldBytes{file:held,original:expected})
     }

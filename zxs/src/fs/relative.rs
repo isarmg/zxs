@@ -78,9 +78,9 @@ impl HeldDir {
         self.child_directory(name)?.ok_or_else(||invalid("new FILE directory vanished"))
     }
     pub(crate) fn names(&self)->io::Result<Vec<Vec<u8>>>{
-        let mut buf=vec![0u8;512*1024];
+        let mut buf=vec![0u8;DIRECTORY_BYTES];
         // SAFETY: the live output buffer is cap bytes and the directory is held.
-        let n=unsafe{zxs_root_names(self.file.as_raw_fd(),buf.as_mut_ptr(),buf.len())};
+        let n=unsafe{zxs_root_names(self.file.as_raw_fd(),buf.as_mut_ptr(),buf.len(),DIRECTORY_NAMES)};
         if n<0{return Err(io::Error::last_os_error());}
         let mut input=buf.get(..n as usize).ok_or_else(||invalid("invalid directory listing length"))?;
         let mut result=Vec::new();
