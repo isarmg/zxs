@@ -9,8 +9,8 @@ from .model import Rejected, check_id, new_id
 from .publish import digest_file, rename_new, sync_dir
 
 
-def install(con, root: Path):
-    m = root.stat(follow_symlinks=False)
+def install(con, root: Path, *, original=None):
+    m = root.stat(follow_symlinks=False) if original is None else original
     if not stat.S_ISDIR(m.st_mode): raise Rejected("cannot register a non-directory worktree")
     con.execute("""CREATE TABLE instance(singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                 device TEXT NOT NULL, inode TEXT NOT NULL, phase TEXT NOT NULL, active TEXT)""")
@@ -30,9 +30,9 @@ def locations(row):
     return visible, visible.with_name(".zip-workspace-hidden-" + check_id(row["worktree"]))
 
 
-def who(path: Path):
+def who(path, *, dir_fd=None):
     try:
-        m = path.stat(follow_symlinks=False)
+        m = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
     except FileNotFoundError: return None
     return str(m.st_dev), str(m.st_ino), stat.S_IFMT(m.st_mode)
 

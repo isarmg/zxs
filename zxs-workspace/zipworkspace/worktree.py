@@ -34,7 +34,7 @@ def enroll(work, store, state, base=None):
     sync_dir(state.parent)
 
 
-def create_catalog(work, store, state, base, instance_id):
+def create_catalog(work, store, state, base, instance_id, *, checked_root=None):
     fd, tmp = tempfile.mkstemp(prefix=".catalog-", dir=state)
     os.close(fd)
     temp = Path(tmp)
@@ -46,7 +46,7 @@ def create_catalog(work, store, state, base, instance_id):
           branch TEXT NOT NULL, generation INTEGER NOT NULL, parent TEXT, base_sha TEXT,
           pending BLOB, pending_sha TEXT)""")
         con.execute("CREATE TABLE completed(operation TEXT PRIMARY KEY, marker BLOB NOT NULL, digest TEXT NOT NULL)")
-        lifecycle.install(con, work)
+        lifecycle.install(con, work, original=checked_root() if checked_root is not None else None)
         con.execute("CREATE TABLE forked_original(operation TEXT PRIMARY KEY, successor TEXT NOT NULL)")
         root, source_sha = base if base else (None, None)
         con.execute("INSERT INTO checkout VALUES(1,?,?,?,?,?,?,?,?,NULL,NULL)", (
@@ -56,6 +56,7 @@ def create_catalog(work, store, state, base, instance_id):
         con.commit()
     finally: con.close()
     with temp.open("rb") as f: os.fsync(f.fileno())
+    if checked_root is not None: checked_root()
     rename_new(temp, state / "worktree.sqlite")
     sync_dir(state)
 

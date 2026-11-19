@@ -9,11 +9,11 @@ import stat
 import tempfile
 from .archive import read_archive, read_managed_document, stamp
 from .document import archive_sha, named_document
-from .freeze import observe_tree
+from .freeze import observe_held, observe_tree
 from .lifecycle import instance, locations, who
 from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected, check_id, member_name, new_id
 from .private_candidates import CandidateDirectory, generation, held_candidates
-from .publish import digest_file, rename_new, require_native_writer, sync_dir
+from .publish import digest_file, rename_new, rename_new_at, require_native_writer, sync_dir
 
 MAX_AUTO = 256
 MAX_INITIAL_DB = 64 << 10  # One fresh PREPARED row; never serialize a live catalog.
@@ -221,7 +221,7 @@ def _verify_record(row,operation):
     return parent, Commit.decode(row["marker"])
 
 
-def _catalog_matches(state,row,dest):
+def _catalog_matches(state,row,dest, *, parent_fd=None):
     from .worktree import locked
     with locked(state) as (con,attached,_):
         original = instance(con)
@@ -232,7 +232,21 @@ def _catalog_matches(state,row,dest):
         visible, hidden = locations(attached)
         phase = original["phase"]
         path = visible if phase == "visible" else hidden if phase == "hidden" else None
-        return path is not None and who(path) == (original["device"], original["inode"], stat.S_IFDIR)
+        if path is None or path.parent != dest.parent: return None
+        named = who(path) if parent_fd is None else who(path.name, dir_fd=parent_fd)
+        return path if named == (original["device"], original["inode"], stat.S_IFDIR) else None
+
+
+@contextmanager
+def _held_directory(name, expected, *, parent_fd=None):
+    fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+    try:
+        m = os.fstat(fd)
+        if not m.st_ino or (str(m.st_dev), str(m.st_ino), stat.S_IFMT(m.st_mode)) != expected:
+            raise Rejected("registered checkout directory was replaced")
+        yield fd, m
+    finally:
+        os.close(fd)
 
 
 def finish(state, operation):
@@ -258,47 +272,101 @@ def finish(state, operation):
                 sync_dir(parent)
             finally: os.close(held)
             con.execute("UPDATE opening SET stage=?,stage_dev=?,stage_ino=? WHERE singleton=1", (stage.name,sid[0],sid[1]))
-    # Verified stage identity is durable before ANY attempted visible rename.
+    # The original stage decision is durable before any visible rename.
     while True:
-        with _record(state,write=True) as (con,row,state):
-            parent,marker = _verify_record(row,operation)
-            dest = _target(row)
-            paths(dest,Path(row["store"]),state)
-            stage = parent / row["stage"]
-            if stage.parent != parent or not row["stage"].startswith(".zip-checkout-"):
-                raise Rejected("invalid registered checkout stage")
-            sid = (row["stage_dev"],row["stage_ino"],stat.S_IFDIR)
-            if row["done"] or os.path.lexists(state/"worktree.sqlite"):
-                named = _catalog_matches(state,row,dest)
-                if not row["done"] and not named:
-                    raise Rejected("original checkout registration exists without its exact named worktree; not finalizing")
-                con.execute("UPDATE opening SET done=1 WHERE singleton=1")
-                return dest,marker
-            src, target = who(stage), who(dest)
-            if src == sid and target is not None:
-                if target == sid: raise Rejected("both names refer to the prepared worktree; preserving the ambiguous pair")
-                if not row["allocate"] or row["ordinal"] >= MAX_AUTO:
-                    raise Rejected("requested checkout name or all automatic candidates are occupied; original stage preserved")
-                con.execute("UPDATE opening SET ordinal=ordinal+1 WHERE singleton=1")
-                continue
-            if (src,target) not in ((sid,None),(None,sid)):
-                raise Rejected("neither complete original stage/destination pair is present")
-            current = stage if src == sid else dest
-            if observe_tree(current).digest() != marker.tree:
-                raise Rejected("original prepared checkout contents changed; no existing data was adopted")
-            if src == sid:
-                try: rename_new(stage,dest)
-                except FileExistsError:
-                    # Reobserve both names before selecting another suffix.
-                    if not row["allocate"] or who(stage) != sid or who(dest) in (None,sid):
-                        raise Rejected("checkout name collision has an uncertain original state")
-                    if row["ordinal"] >= MAX_AUTO: raise Rejected("all automatic checkout names are occupied")
+        with ExitStack() as held:
+            with _record(state, write=True) as (con, row, state):
+                parent, marker = _verify_record(row, operation)
+                dest = _target(row)
+                paths(dest, Path(row["store"]), state)
+                stage = row["stage"]
+                if not isinstance(stage, str) or Path(stage).name != stage or not stage.startswith(".zip-checkout-"):
+                    raise Rejected("invalid registered checkout stage")
+                if row["done"]:
+                    _catalog_matches(state, row, dest)
+                    return dest, marker  # A past receipt, not proof the checkout is still visible.
+                sid = row["stage_dev"], row["stage_ino"], stat.S_IFDIR
+                pid = row["device"], row["inode"], stat.S_IFDIR
+                pfd, _ = held.enter_context(_held_directory(parent, pid))
+
+                def check_parent():
+                    if who(parent) != pid: raise Rejected("checkout parent no longer names its original directory")
+
+                def pair(name):
+                    check_parent()
+                    names = who(stage, dir_fd=pfd), who(name, dir_fd=pfd)
+                    check_parent()
+                    return names
+
+                def next_name():
+                    source, occupied = pair(dest.name)
+                    if source != sid or occupied is None or occupied == sid:
+                        raise Rejected("uncertain original stage/target collision")
+                    if not row["allocate"] or row["ordinal"] >= MAX_AUTO:
+                        raise Rejected("requested checkout name or all automatic candidates are occupied")
                     con.execute("UPDATE opening SET ordinal=ordinal+1 WHERE singleton=1")
-                    continue
-            sync_dir(parent)
-            if who(dest) != sid or who(stage) is not None: raise Rejected("checkout rename outcome is unknown")
-            create_catalog(dest,Path(row["store"]),state,(marker,row["sha"]),row["worktree"])
-            if not _catalog_matches(state,row,dest):
-                raise Rejected("original directory absent after new catalog publication")
-            con.execute("UPDATE opening SET done=1 WHERE singleton=1")
-            return dest,marker
+
+                attached = who(state / "worktree.sqlite") is not None
+                if attached:
+                    # Another attempt already created this original instance. It may since have
+                    # been edited or hidden, so don't hash it against the old checkout tree.
+                    private = held.enter_context(held_candidates(state))
+                    def catalog_name():
+                        private.check_state()
+                        m = os.stat("worktree.sqlite", dir_fd=private.parent, follow_symlinks=False)
+                        if not stat.S_ISREG(m.st_mode) or not m.st_ino or m.st_nlink != 1:
+                            raise Rejected("unverifiable installed checkout catalog")
+                        return m.st_dev, m.st_ino
+
+                    catalog_id = catalog_name()
+                    location = _catalog_matches(state, row, dest, parent_fd=pfd)
+                    if location is None or catalog_name() != catalog_id:
+                        raise Rejected("existing registration has no matching original directory")
+                    receipt_name = current = location.name
+                else:
+                    source, target = pair(dest.name)
+                    if source == sid and target is not None:
+                        next_name()
+                        continue
+                    if (source, target) not in ((sid, None), (None, sid)):
+                        raise Rejected("neither complete original stage/destination pair is present")
+                    current = stage if source == sid else dest.name
+                    receipt_name = dest.name
+                child, m = held.enter_context(_held_directory(current, sid, parent_fd=pfd))
+
+                def checked_root():
+                    if pair(receipt_name) != (None, sid):
+                        raise Rejected("original checkout directory is not the only installed name")
+                    return os.fstat(child)  # This is the identity to insert, not a fresh pathname lookup.
+
+                if not attached:
+                    if observe_held(child, (m.st_dev, m.st_ino), require_ids=True).digest() != marker.tree:
+                        raise Rejected("original prepared checkout contents changed; nothing adopted")
+                    if current == stage:
+                        source, target = pair(dest.name)
+                        if source != sid: raise Rejected("original stage disappeared before publication")
+                        if target is not None:
+                            next_name()
+                            continue
+                        try:
+                            rename_new_at(pfd, stage, dest.name, expected_source=m)
+                        except FileExistsError:
+                            next_name()
+                            continue
+                checked_root()
+                os.fsync(pfd)
+                checked_root()
+                if attached:
+                    # A prior attempt may have installed the catalog name, then lost its STATE dirsync.
+                    if catalog_name() != catalog_id: raise Rejected("installed checkout catalog changed")
+                    os.fsync(private.parent)
+                    if catalog_name() != catalog_id: raise Rejected("installed checkout catalog changed")
+                else:
+                    create_catalog(dest, Path(row["store"]), state, (marker, row["sha"]), row["worktree"],
+                                   checked_root=checked_root)
+                    if _catalog_matches(state, row, dest, parent_fd=pfd) != dest:
+                        raise Rejected("original directory absent after new catalog publication")
+                checked_root()
+                con.execute("UPDATE opening SET done=1 WHERE singleton=1")
+            checked_root()  # Original parent and child are still held through the SQLite commit.
+            return dest, marker
