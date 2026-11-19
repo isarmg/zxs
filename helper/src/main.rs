@@ -29,7 +29,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper install-pool new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --instance ID --approval ID\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --approval ID\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only]\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper install-pool new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --instance ID --approval ID\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --approval ID\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only]\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -47,6 +47,7 @@ enum Command {
     SamWorker,
     FsTools(fs_tools::Query),
     Fat32(fat32_check::Request),
+    Exfat(fat32_check::Request),
 }
 
 fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static str> {
@@ -79,6 +80,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if dirs.is_empty() || dirs.len() > inspect::MAX_DIRS { return Err("expected 1–16 directories"); }
         return Ok(Command::Directories(dirs));
     }
+    if op == "check-exfat-copy" {return fat32_check::Request::parse_exfat(args).map(Command::Exfat);}
     if op == "check-fat32-copy" { return fat32_check::Request::parse(args).map(Command::Fat32); }
     if op == "fs-tools" { return fs_tools::Query::parse(args).map(Command::FsTools); }
     if op == "disks" { return block_tools::Query::parse(args).map(Command::Disks); }
@@ -108,6 +110,9 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::Help => line(USAGE)?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
+        Command::Exfat(job) => {
+            let report=job.run_exfat()?;line(&report.to_string())?;return Ok(ExitCode::from(report.exit()));
+        }
         Command::Fat32(job) => {
             let outcome=job.run()?;line(&outcome.to_string())?;return Ok(ExitCode::from(outcome.exit()));
         }

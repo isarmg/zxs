@@ -1,6 +1,6 @@
 # helper
 
-目前的宿主只读诊断包括：目录关系、文件比较、选定存储根的容量/挂载、Linux 块设备清单与被动 I/O 速率，文件系统检查工具清单，以及在隔离副本上调用 FAT32 检查器。目标平台为 Linux x86_64。不接管设备或服务，没有后台服务；只有显式启动 `helper disk-web` 才开临时本机面板。无参数只显示用法。
+目前的宿主只读诊断包括：目录关系、文件比较、选定存储根的容量/挂载、Linux 块设备清单与被动 I/O 速率，文件系统检查工具清单，以及在隔离副本上调用 FAT32 或 exFAT 检查器。目标平台为 Linux x86_64。不接管设备或服务，没有后台服务；只有显式启动 `helper disk-web` 才开临时本机面板。无参数只显示用法。
 
 ZXS 的业务管理网页是另一个服务。可用[非 root 本机 HTTPS 部署模板](docs/management-https.md)准备专用 nginx、命名 Unix 套接字和 ZXS 后端；包本身不启用任何单元，不提供私钥、不改宿主 nginx 或网络。
 
@@ -52,9 +52,11 @@ helper disks --device 259:1 --rates
 
 `helper fs-tools` 显示 ext4、NTFS、ZFS、XFS、Btrfs、exFAT、FAT32 各自的只读检查方案、对象和固定程序位置：FAT32/exFAT 查私有发行工具槽，其他仅观察宿主槽，不能据此调用。可用 `helper fs-tools xfs` 只看一种，或对单个工具加 `--sha256` 与独立发行材料的摘要比较。**不会打开设备、调用检查器或修盘**，版本与签名仍为未核。详情见[七格式能力表、检测限制和返回码](docs/filesystem-tools.md)。
 
-## 检查一份 FAT32 镜像（只读）
+## 检查一份 FAT32 或 exFAT 镜像（只读）
 
 `helper check-fat32-copy /绝对路径/volume.img --sha256 完整镜像的可信SHA256`。只接受已保存、最多 128 MiB 的普通 FAT32 卷镜像，不接受设备、分区表或任意工具参数。检查器只看到已核摘要的独立副本，在独立的 Linux 命名空间中运行 `fsck.fat -n`；不会修复或改写原镜像。[Debian 13 amd64 的发行配方](packaging/debian13-amd64/README.md)将上游工具与其运行库放在 helper 私有目录；不借用宿主同名程序，不自动安装。缺件或隔离不成立就拒绝。详见[配置、结果和限制](docs/fat32-copy-check.md)。本批只写源码，尚无实跑证据。
+
+exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整镜像的可信SHA256`。它只对 1–128 MiB、符合单卷边界的封存副本运行包内 `fsck.exfat -n`。返回 0 只表示此次检查未报告问题；1 表示明确报告问题或卷状态位须注意；2 表示未能确认。不会修盘，也不检查普通文件正文。[范围、结果与上游依据](docs/exfat-copy-check.md)。目前 exFAT 仅有 CLI。
 
 ## 本机部署与离线维护（设计）
 

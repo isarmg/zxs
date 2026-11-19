@@ -1,4 +1,5 @@
-//! One locally requested FAT32 diagnostic. Applies no repair.
+//! Locally selected FAT32/exFAT mirror checks. Neither applies repairs.
+mod exfat;
 mod group;
 mod image;
 pub(crate) mod panel;
@@ -38,12 +39,23 @@ impl fmt::Display for Report {
 }
 impl Request {
     pub(crate) fn parse(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
-        let usage="expected one absolute saved FAT32 volume image and --sha256 HEX; no devices or checker options";
+        Self::parse_image(&mut args,"expected one absolute saved FAT32 volume image and --sha256 HEX; no devices or checker options")
+    }
+    pub(crate) fn parse_exfat(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
+        Self::parse_image(&mut args,"expected one absolute saved exFAT volume image and --sha256 HEX; no devices or checker options")
+    }
+    fn parse_image(args:&mut impl Iterator<Item=OsString>,usage:&'static str)->Result<Self,&'static str>{
         let image=args.next().ok_or(usage)?;
         if !Path::new(&image).is_absolute()||args.next().as_deref()!=Some(std::ffi::OsStr::new("--sha256")){return Err(usage);}
         let digest=args.next().and_then(|s|hex(s.to_str()?)).ok_or(usage)?;
         if args.next().is_some(){return Err(usage);}
         Ok(Self{image:image.into(),digest})
+    }
+    pub(crate) fn run_exfat(self)->io::Result<exfat::Report>{
+        runner::prepare_worker()?;
+        let runtime=runtime::Runtime::exfat()?;
+        let image=image::ExfatSealed::capture(&self.image,&self.digest)?;
+        runner::check_exfat(&runtime,&image)
     }
     pub(crate) fn run(self)->io::Result<Report>{
         runner::prepare_worker()?;

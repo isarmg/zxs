@@ -281,8 +281,14 @@ def build(args):
             require(textout(["/usr/bin/patchelf","--print-interpreter",str(checker)])==SYSTEM_LOADER,"unexpected sandbox loader")
         for path in programs[:2]:
             bind_private_loader(path)
-        lines=[f"{key} {digest(home/leaf)}" for key,leaf in zip(PROFILE,FILES,strict=True)]
-        (home/"fat32-check-v1").write_text("debian13-amd64/private-pack-1/bubblewrap-0.12/dosfstools-4.2\n"+"\n".join(lines)+"\n")
+        # Keep the established FAT32 profile (also independently pinned by the
+        # SAM launcher) byte-identical. exFAT selects its own exact second slot.
+        for policy,version_label,tool in (("fat32-check-v1","dosfstools-4.2","fsck.fat"),
+                                          ("exfat-check-v1","exfatprogs-1.2.9","fsck.exfat")):
+            keys=(PROFILE[0],tool,*PROFILE[2:]);files=(FILES[0],"bin/"+tool,*FILES[2:])
+            lines=[f"{key} {digest(home/leaf)}" for key,leaf in zip(keys,files,strict=True)]
+            with (home/policy).open("x",encoding="ascii",newline="\n") as f:
+                f.write("debian13-amd64/private-pack-1/bubblewrap-0.12/"+version_label+"\n"+"\n".join(lines)+"\n")
         info={"debian_version":version,"abi":"debian13-amd64-gnu","source_commit":rev,"helper_input_sha256":args.helper_sha256,
               "helper_distributed_sha256":digest(binary),"stdlib_notices_sha256":args.stdlib_notices_sha256,"packages":lock["packages"],"needed":requires,
               "files":{str(p.relative_to(home)):digest(p) for p in sorted(home.rglob("*")) if p.is_file()},
@@ -291,7 +297,7 @@ def build(args):
               "inactive_smb_installation_check":smb_host,
               "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
-              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"packaged-not-yet-enabled"}}
+              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly-cli"}}
         # Candidate NON-privileged material for the release signer. Do not
         # install it as its own authorization: the package owner is not the site's
         # authority. It and the exact .deb are covered by the external signed sums.

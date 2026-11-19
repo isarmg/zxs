@@ -16,4 +16,4 @@
 
 子进程启动后 30 秒墙钟、12 秒 CPU、512 MiB 进程地址空间、64 KiB 合并标准输出/错误等上限。中途信号、超时、输出不全或没有 launcher 的终场回执不得报健康。返回 0 只代表受支持工具完成且无其他检查消息（无宿主字符转换插件时，仅允许工具使用内置 CP850 表的完整已知启动提示），绝不是硬盘健康或以后仍未改变；1 表示工具给出与原几何一致的完整终场统计，另有消息或问题（工具自身的 1 也可含内部不一致）；即便工具退出 1，只要缺本镜像的完整统计，仍为 2：没有完整检查结果。给出终场解析下来的文件数、使用簇和总簇，不回显原始报告。不会把镜像中的文件名、卷标或终端转义原文写到报告。
 
-实现依据：[bubblewrap 0.12 参数和隔离](https://github.com/containers/bubblewrap/blob/v0.12.0/bwrap.xml)、[dosfstools 4.2 工具源码和退出处理](https://github.com/dosfstools/dosfstools/blob/v4.2/src/fsck.fat.c)、[Linux memfd 封印](https://man7.org/linux/man-pages/man2/memfd_create.2.html)。实际受控 Debian 环境、坏镜像和隔离失败的运行验收尚未做。没有其他格式的执行器、修复入口或 Web 写操作。
+实现依据：[bubblewrap 0.12 参数和隔离](https://github.com/containers/bubblewrap/blob/v0.12.0/bwrap.xml)、[dosfstools 4.2 工具源码和退出处理](https://github.com/dosfstools/dosfstools/blob/v4.2/src/fsck.fat.c)、[Linux memfd 封印](https://man7.org/linux/man-pages/man2/memfd_create.2.html)。实际受控 Debian 环境、坏镜像和隔离失败的运行验收尚未做。[exFAT](exfat-copy-check.md) 有单独的只读命令；两者都不提供修复入口或 Web 写操作。

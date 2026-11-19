@@ -1,6 +1,6 @@
 //! One isolated invocation. The checker never gets /dev, the caller's
 //! namespace/terminal, a host directory, the source file or a caller-selected option.
-use super::{group::Group,image::Sealed,runtime::Runtime};
+use super::{group::Group,image::{ExfatSealed,Sealed},runtime::{Format,Runtime}};
 use crate::pinned::invalid;
 use rustix::{
     fd::{AsFd,AsRawFd,OwnedFd},
@@ -38,6 +38,17 @@ fn give(fd:&impl AsFd)->io::Result<OwnedFd> {
 }
 
 pub(super) fn check(runtime:&Runtime,image:&Sealed)->io::Result<super::Report> {
+    runtime.require_format(Format::Fat32)?;
+    let (code,out,err,status)=invoke(runtime,image.file())?;
+    classify(code,&out,&err,&status,image.geometry().data_clusters)
+}
+pub(super) fn check_exfat(runtime:&Runtime,image:&ExfatSealed)->io::Result<super::exfat::Report>{
+    runtime.require_format(Format::Exfat)?;
+    let (code,out,err,status)=invoke(runtime,image.file())?;
+    if !delivered(&status,code){return Err(invalid("exFAT checker delivery and actual exit not confirmed"));}
+    super::exfat::classify(code,&out,&err,image.frame())
+}
+fn invoke(runtime:&Runtime,copy:&File)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
     let (stdin,fin)=pipe_with(PipeFlags::CLOEXEC)?;drop(fin); // real EOF, never a terminal
     let (rstatus,wstatus)=pipe_with(PipeFlags::CLOEXEC)?;
     let mut b=Command::new("/no-path-execution-for-helper-checker");
@@ -55,7 +66,7 @@ pub(super) fn check(runtime:&Runtime,image:&Sealed)->io::Result<super::Report> {
     let (filter_read,filter_write)=pipe_with(PipeFlags::CLOEXEC)?;
     {let mut w=File::from(filter_write); w.write_all(&helper_linux_evidence::diagnostic_process::diagnostic_group_filter())?;}
     let filter=give(&filter_read)?;b.args(["--seccomp",&filter.as_raw_fd().to_string()]);
-    let operand=give(image.file())?;let status=give(&wstatus)?;
+    let operand=give(copy)?;let status=give(&wstatus)?;
     b.args(["--perms","0400","--ro-bind-data",&operand.as_raw_fd().to_string(),"/image",
             "--remount-ro","/","--json-status-fd",&status.as_raw_fd().to_string(),
             "--","/checker","-n","/image"]);
@@ -72,7 +83,7 @@ pub(super) fn check(runtime:&Runtime,image:&Sealed)->io::Result<super::Report> {
     not_cancelled()?;
     if reaped.leader_code!=Some(code){return Err(invalid("monitor exit did not match its independently reaped status"));}
     runtime.recheck()?;
-    classify(code,&out,&err,&status,image.geometry().data_clusters)
+    Ok((code,out,err,status))
 }
 
 fn not_cancelled()->io::Result<()> {

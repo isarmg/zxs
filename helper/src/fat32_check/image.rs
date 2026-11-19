@@ -37,51 +37,68 @@ fn seals()->SealFlags { SealFlags::WRITE|SealFlags::GROW|SealFlags::SHRINK|SealF
 impl Sealed {
     pub(super) fn geometry(&self)->Geometry { self.geometry }
     pub(super) fn file(&self)->&File { &self.fd }
+    pub(super) fn capture(path:&Path,expected:&[u8;32])->io::Result<Self>{capture(path,expected,512,Self::from_sealed)}
+    pub(super) fn from_sealed(copy:File,expected:&[u8;32])->io::Result<Self>{
+        let (fd,boot,len)=verify_copy(copy,expected)?;
+        Ok(Self{fd,geometry:geometry(&boot,len)?})
+    }
+}
+pub(super) struct ExfatSealed {fd:File,frame:super::exfat::Framing}
+impl ExfatSealed {
     pub(super) fn capture(path:&Path,expected:&[u8;32])->io::Result<Self>{
-        let source=Input::select_in(path,512..=MAX)?;let length=source.len();
-        let mut original=source.reader()?;
-        let mut copy=File::from(memfd_create(c"helper-fat32-image",
-            MemfdFlags::CLOEXEC|MemfdFlags::ALLOW_SEALING|MemfdFlags::NOEXEC_SEAL)?);
-        let mut buf=[0_u8;32768];
-        let mut remaining=length;
-        while remaining!=0 {
-            let n=remaining.min(buf.len() as u64) as usize;
-            original.read_exact(&mut buf[..n])?;copy.write_all(&buf[..n])?;remaining-=n as u64;
-        }
-        eof(&mut original)?;
-        source.recheck(&original)?;
-        fcntl_add_seals(&copy,seals())?;
-        let result=Self::from_sealed(copy,expected)?;
-        if result.geometry.length!=length{return Err(invalid("sealed copy length mismatch"));}
-        source.recheck(&original)?;
-        Ok(result)
+        capture(path,expected,1<<20,|copy,expected|{
+            let (fd,boot,len)=verify_copy(copy,expected)?;
+            Ok(Self{fd,frame:super::exfat::framing(&boot,len)?})
+        })
     }
+    pub(super) fn file(&self)->&File{&self.fd}
+    pub(super) fn frame(&self)->super::exfat::Framing{self.frame}
+}
+// Both formats share source selection, the independently sealed memfd and a full
+// second hash pass. Neither public operation can supply a raw device/File here.
+fn capture<T>(path:&Path,expected:&[u8;32],minimum:u64,finish:fn(File,&[u8;32])->io::Result<T>)->io::Result<T>{
+    let source=Input::select_in(path,minimum..=MAX)?;let length=source.len();
+    let mut original=source.reader()?;
+    let mut copy=File::from(memfd_create(c"helper-check-image",
+        MemfdFlags::CLOEXEC|MemfdFlags::ALLOW_SEALING|MemfdFlags::NOEXEC_SEAL)?);
+    let mut buf=[0_u8;32768];
+    let mut remaining=length;
+    while remaining!=0 {
+        let n=remaining.min(buf.len() as u64) as usize;
+        original.read_exact(&mut buf[..n])?;copy.write_all(&buf[..n])?;remaining-=n as u64;
+    }
+    eof(&mut original)?;
+    source.recheck(&original)?;
+    fcntl_add_seals(&copy,seals())?;
+    if copy.metadata()?.len()!=length{return Err(invalid("sealed copy length mismatch"));}
+    let result=finish(copy,expected)?;
+    source.recheck(&original)?;
+    Ok(result)
+}
 
-    // Re-exec receives only this anonymous, non-executable tmpfs file as stdin.
-    // Reject regular named files, devices, pipes and incomplete seals before reading.
-    pub(super) fn from_sealed(mut copy:File,expected:&[u8;32])->io::Result<Self>{
-        use std::os::unix::fs::MetadataExt;
-        let meta=copy.metadata()?;
-        let length=meta.len();
-        if !meta.is_file() || meta.nlink()!=0 || meta.mode()&0o111!=0 || !(512..=MAX).contains(&length)
-            || rustix::fs::fstatfs(&copy)?.f_type as u64!=0x0102_1994 // Linux TMPFS_MAGIC (memfd)
-            || !fcntl_get_seals(&copy)?.contains(seals()|SealFlags::EXEC) {
-            return Err(invalid("expected a complete, non-executable, write-sealed anonymous image"));
-        }
-        copy.rewind()?;
-        let mut buf=[0u8;32768];let mut hash=Sha256::new();let mut left=length;
-        while left!=0 {
-            let n=left.min(buf.len() as u64) as usize;
-            copy.read_exact(&mut buf[..n])?;hash.update(&buf[..n]);left-=n as u64;
-        }
-        eof(&mut copy)?;
-        let actual:[u8;32]=hash.finalize().into();
-        if actual!=*expected{return Err(invalid("sealed image differs from the supplied SHA-256"));}
-        let mut boot=[0u8;512];copy.read_exact_at(&mut boot,0)?;
-        let geometry=geometry(&boot,length)?;
-        copy.rewind()?;
-        Ok(Self{fd:copy,geometry})
+// The FAT32 panel worker may also receive this anonymous tmpfs file on stdin.
+// Reject regular named files, devices, pipes and incomplete seals before reading.
+fn verify_copy(mut copy:File,expected:&[u8;32])->io::Result<(File,[u8;512],u64)>{
+    use std::os::unix::fs::MetadataExt;
+    let meta=copy.metadata()?;
+    let length=meta.len();
+    if !meta.is_file() || meta.nlink()!=0 || meta.mode()&0o111!=0 || !(512..=MAX).contains(&length)
+        || rustix::fs::fstatfs(&copy)?.f_type as u64!=0x0102_1994 // Linux TMPFS_MAGIC (memfd)
+        || !fcntl_get_seals(&copy)?.contains(seals()|SealFlags::EXEC) {
+        return Err(invalid("expected a complete, non-executable, write-sealed anonymous image"));
     }
+    copy.rewind()?;
+    let mut buf=[0u8;32768];let mut hash=Sha256::new();let mut left=length;
+    while left!=0 {
+        let n=left.min(buf.len() as u64) as usize;
+        copy.read_exact(&mut buf[..n])?;hash.update(&buf[..n]);left-=n as u64;
+    }
+    eof(&mut copy)?;
+    let actual:[u8;32]=hash.finalize().into();
+    if actual!=*expected{return Err(invalid("sealed image differs from the supplied SHA-256"));}
+    let mut boot=[0u8;512];copy.read_exact_at(&mut boot,0)?;
+    copy.rewind()?;
+    Ok((copy,boot,length))
 }
 fn eof(f:&mut impl Read)->io::Result<()>{
     let mut byte=[0;1];

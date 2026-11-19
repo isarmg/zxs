@@ -1,6 +1,6 @@
 # Debian 13 amd64：helper、私有磁盘工具及首装 Samba 材料的离线发行目录
 
-这是**发行端的组包配置**，不是已经构建、签名、审计通过或发布的安装包。首批打包 bubblewrap 0.12、dosfstools 4.2 的 `fsck.fat`、exfatprogs 1.2.9 的 `fsck.exfat` 以及实际所需的运行库。能调用的是受限 FAT32 副本只读检查；包含 exFAT 程序不代表已经实现或获准调用。没有硬盘/分区修复入口。本配方也为专用 Samba 实例的**离线初次域供给**收集私有运行材料，绝不安装或启动宿主 smbd。
+这是**发行端的组包配置**，不是已经构建、签名、审计通过或发布的安装包。首批打包 bubblewrap 0.12、dosfstools 4.2 的 `fsck.fat`、exfatprogs 1.2.9 的 `fsck.exfat` 以及实际所需的运行库。FAT32 与 exFAT 各有受限的副本只读检查命令。exFAT 仅 CLI，不从网页接收路径或参数。没有硬盘/分区修复入口。本配方也为专用 Samba 实例的**离线初次域供给**收集私有运行材料，绝不安装或启动宿主 smbd。
 
 用于**在线**专用 smbd 和非 root 存储进程的是[另一份离线原生构建配方](online-smb.md)。它不属于下述磁盘工具包或离线建域 Python 胶囊；不会把系统 smbd、普通 Debian 包中的原服务或用户库当作专版。
 
@@ -24,7 +24,7 @@ python3 packaging/debian13-amd64/build.py \
 ## 实际形成的东西
 
 - 一份 `local-ops-helper_*_amd64.deb` 包含 `/usr/bin/helper` 与受保护的磁盘工具前缀 `/usr/lib/local-ops-helper/disk-tools-v1`。用户安装经核发行物后无需另行安装 fsck 工具，也不依赖 PATH。没有运行期下载器或自动安装包管理器。该磁盘工具前缀仅含明确允许的普通文件：三个上游程序、GNU ELF 解释器、libc、libcap、libselinux、PCRE2、libgcc_s，以及仅在新账户首设时按固定路径加载的 Libgcrypt 与 libgpg-error。解包不继承包条目的符号链接、SUID、capabilities、设备文件和脚本；不捆绑 mkfs、smartd、e2scrub、udev/sudo 配置、内核模块或 systemd 单元。
-- 实际检查器与所有库的字节不作改写。仅对发行副本的 helper 和启动器用标准 patchelf 重定位 **ELF 解释器及 DT_RPATH** 到这一受保护的绝对目录，并设置 NODEFLIB。构建经 readelf 检查所有直接/传递 ELF NEEDED 均有对应私有库，检查器只需 libc；不调用 ldd。动态装载仍以受信宿主内核/安装根和启动环境为前提，不能用签名证明整个宿主可信或无同权限篡改。FAT32 执行器在实际开动前重新核其所需的八份固定最终字节及路径；只把工具、解释器和 libc 交给检查器，不交出完整工具包目录。包内 BUNDLE.json 记录源码、版本、输入/输出哈希、重定位和依赖。
+- 实际检查器与所有库的字节不作改写。仅对发行副本的 helper 和启动器用标准 patchelf 重定位 **ELF 解释器及 DT_RPATH** 到这一受保护的绝对目录，并设置 NODEFLIB。构建经 readelf 检查所有直接/传递 ELF NEEDED 均有对应私有库，检查器只需 libc；不调用 ldd。动态装载仍以受信宿主内核/安装根和启动环境为前提，不能用签名证明整个宿主可信或无同权限篡改。两种检查动作在实际开动前各按自己的八槽摘要文件（`fat32-check-v1` 或 `exfat-check-v1`）重新核固定最终字节及路径；只把工具、解释器和 libc 交给检查器，不交出完整工具包目录。包内 BUNDLE.json 记录源码、版本、输入/输出哈希、重定位和依赖。
 - 同一发行目录中提供签名索引、原始二进制包、准确对应源码、原补丁、本项目源归档（含组包脚本）、锁内 Rust 原档与 SHA256SUMS。安装包里随附 Debian 原版权/例外与常用许可全文、锁内每份 Rust 原包的署名/许可，以及根据精确工具链、实际链接输入另行审过并带独立摘要的声明；libgcc-s1 的 Debian 版权取同版 gcc-14-base 的原件。GPL/LGPL 等部件仍有各自义务，不能只交付 .deb、短许可名或仅给上游链接。[Debian 源包规范](https://www.debian.org/doc/debian-policy/ch-source.html) · [GNU 对应源码说明](https://www.gnu.org/licenses/gpl-faq.en.html#GPLInProprietarySystem)。
 - 输出只在一个全新目录产生。有 `INCOMPLETE` 即禁止使用；完成也仅是未签候选。正式发行前须独立核构建过程、ABI、源码/许可证和归档、安装/冲突处理、已签清单及带外可信签名公钥，在干净受控 Debian 13 环境实测再发布；本次均未执行。不给 Web 安装任意系统软件或 root 身份。
 
