@@ -10,6 +10,8 @@ use std::path::{Component, Path, PathBuf};
 
 mod mounts;
 mod relative;
+mod control;
+pub(crate) use control::ControlRead;
 mod witnessed;
 pub(crate) use witnessed::{HeldBytes,LiveStamp,WitnessRead};
 mod name_budget;

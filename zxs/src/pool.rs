@@ -6,6 +6,7 @@ use std::ffi::CStr;
 use std::os::unix::ffi::OsStrExt;
 mod format;
 mod portable_claim;
+mod portable;
 pub(crate) use format::maintenance::native::accounts;
 pub(crate) mod lease;
 use format::{MAX_RECORD, Record};
