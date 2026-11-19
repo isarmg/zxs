@@ -1,11 +1,12 @@
 """Real archive navigation, selected store, branch head and historical node actions."""
 from pathlib import Path
+import sys
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QTabWidget, QVBoxLayout, QWidget
 
 from .comparison_pane import ComparisonPane
 from .checkout_pane import CheckoutPane
 from .selection import Selection, StoreSelection
-from .widgets import Table, button, label
+from .widgets import Table, button, confirm, label
 
 
 class ArchivePane(QWidget):
@@ -20,6 +21,10 @@ class ArchivePane(QWidget):
         actions.addWidget(button("选择归档存储目录…", self.choose_store))
         self.reload = button("读取分支与历史", self.load_catalog)
         actions.addWidget(self.reload)
+        self.save_copy = None
+        if sys.platform == "darwin":
+            self.save_copy = button("另存同名完整归档…", self.choose_copy)
+            actions.addWidget(self.save_copy)
         layout.addLayout(actions)
         self.details = label()
         self.store_label = label("尚未选择归档存储；浏览一个快照不需要存储目录。")
@@ -68,6 +73,7 @@ class ArchivePane(QWidget):
 
     def clear_document(self):
         self.selection = self.next_cursor = None
+        if self.save_copy is not None: self.save_copy.setEnabled(False)
         self.comparison.set_snapshot(None)
         self.checkout.set_snapshot(None)
         self.clear_catalog()
@@ -83,6 +89,42 @@ class ArchivePane(QWidget):
         self.clear_document()
         self.views.setCurrentIndex(0)
         self.owner.job("正在核验所选快照中的全部成员…", lambda: Selection.open(name), self.show_selection)
+
+    def choose_copy(self):
+        selected = self.selection
+        if sys.platform != "darwin" or selected is None or self.owner.pending is not None: return
+        from ..macos_copy import SnapshotCopy
+        opts = QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        directory = QFileDialog.getExistingDirectory(self, "选择同一 APFS 卷上仅本人使用的私有目的目录", "", opts)
+        if not directory or selected is not self.selection: return
+        try: plan = SnapshotCopy(selected, directory)
+        except Exception as error:
+            self.owner.inform(str(error))
+            return
+
+        def submit(title, call, success):
+            try:
+                job = self.owner.job(title, call, success, failed=lambda error: plan.close())
+                if job is None: plan.close()
+                else: job.add_done_callback(lambda f: plan.close() if f.cancelled() else None)
+            except BaseException:
+                plan.close()
+                raise
+
+        def review(detail):
+            try:
+                if selected is self.selection and confirm(self, "另存整个快照，不签出", detail,
+                        attestation="我同意将整个原件和当时的元数据克隆到这个私有目录；原包和目的目录在操作期间无其他写者或同步。",
+                        action_text="按原名另存") and selected is self.selection:
+                    submit("正在复制和读回完整归档，完成前不要移动目录…", lambda: plan.run(confirmed=True), self.owner.inform)
+                else:
+                    plan.close()
+                    self.owner.inform("没有写入副本。")
+            except BaseException:
+                plan.close()
+                raise
+
+        submit("正在只读核验归档来源、目标目录和完整字节…", plan.review, review)
 
     def choose_store(self):
         name = QFileDialog.getExistingDirectory(self, "选择已有的归档存储目录")
@@ -103,6 +145,7 @@ class ArchivePane(QWidget):
 
     def show_selection(self, selected):
         self.selection = selected
+        if self.save_copy is not None: self.save_copy.setEnabled(True)
         self.comparison.set_snapshot(selected)
         self.checkout.set_snapshot(selected)
         marker = selected.browser.commit
