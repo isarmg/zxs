@@ -1,0 +1,473 @@
+--- a/source3/param/loadparm.c
++++ b/source3/param/loadparm.c
+@@ -4225,6 +4225,83 @@
+ 		       true);  /* reinit_globals */
+ }
+ 
++/* ZXS uses this *effective* loadparm, not a second smb.conf parser. This
++ * is an admission guard, never an authenticated ZXS user or a FILE grant. */
++static bool zxs_empty(const char *value)
++{
++	return value != NULL && value[0] == '\0';
++}
++
++static bool zxs_list_empty(const char **values)
++{
++	return values == NULL || values[0] == NULL;
++}
++
++static bool zxs_loaded_profile(TALLOC_CTX *mem_ctx)
++{
++	const struct loadparm_substitution *sub = loadparm_s3_global_substitution();
++	int i, ipc;
++
++	if (lp_server_role() != ROLE_STANDALONE || lp_security() != SEC_USER ||
++	    strcmp(lp_netbios_name(), "ZXSLOCAL") != 0 ||
++	    !zxs_list_empty(lp_netbios_aliases()) || lp_clustering() ||
++	    strcmp(lp_private_dir(), "/instance/private") != 0 ||
++	    strcmp(lp_state_directory(), "/instance/state") != 0 ||
++	    !lp_config_backend_is_file() || lp_registry_shares() ||
++	    lp_kerberos_method() != KERBEROS_VERIFY_SECRETS ||
++	    !lp_encrypt_passwords() || lp_ntlm_auth() != NTLM_AUTH_NTLMV2_ONLY ||
++	    lp_null_passwords() || lp_allow_trusted_domains() ||
++	    lp_map_to_guest() != NEVER_MAP_TO_GUEST || lp_restrict_anonymous() != 2 ||
++	    strcmp(lp_passdb_backend(), "zxs_sqlite") != 0 ||
++	    lp_server_min_protocol() < PROTOCOL_SMB2_02 ||
++	    lp_server_multi_channel_support() || lp_load_printers() || lp_enable_asu_support() ||
++	    lp_server_signing() != SMB_SIGNING_REQUIRED ||
++	    !zxs_empty(lp_usershare_path(mem_ctx, sub)) ||
++	    lp_usershare_max_shares() != 0 ||
++	    !zxs_empty(lp_defaultservice(mem_ctx, sub)) ||
++	    !zxs_empty(lp_auto_services(mem_ctx, sub)) ||
++	    !zxs_empty(lp_username_map(mem_ctx, sub)) ||
++	    !zxs_empty(lp_username_map_script(mem_ctx, sub)) ||
++	    lp_servicenumber(HOMES_NAME) >= 0 ||
++	    lp_servicenumber(PRINTERS_NAME) >= 0) {
++		return false;
++	}
++	ipc = lp_servicenumber("IPC$");
++	if (ipc < 0 || !lp_snum_ok(ipc)) {
++		return false;
++	}
++	for (i = 0; i < lp_numservices(); i++) {
++		const char **vfs = NULL;
++		if (!lp_snum_ok(i)) {
++			continue;
++		}
++		if (lp_guest_ok(i) || lp_guest_only(i) || lp_printable(i) || lp_widelinks(i) ||
++		    !zxs_empty(lp_preexec(mem_ctx, sub, i)) ||
++		    !zxs_empty(lp_postexec(mem_ctx, sub, i)) ||
++		    !zxs_empty(lp_root_preexec(mem_ctx, sub, i)) ||
++		    !zxs_empty(lp_root_postexec(mem_ctx, sub, i)) ||
++		    !zxs_empty(lp_force_user(mem_ctx, sub, i)) ||
++		    !zxs_empty(lp_force_group(mem_ctx, sub, i)) ||
++		    !zxs_list_empty(lp_admin_users(i))) {
++			return false;
++		}
++		if (i == ipc) {
++			if (!lp_administrative_share(i) || !strequal(lp_fstype(i), "IPC") ||
++			    !lp_read_only(i) || !zxs_list_empty(lp_vfs_objects(i))) {
++				return false;
++			}
++			continue;
++		}
++		vfs = lp_vfs_objects(i);
++		if (lp_administrative_share(i) || strequal(lp_fstype(i), "IPC") ||
++		    lp_case_sensitive(i) != true || vfs == NULL || vfs[0] == NULL ||
++		    strcmp(vfs[0], "zxs_file") != 0 || vfs[1] != NULL) {
++			return false;
++		}
++	}
++	return true;
++}
++
+ /**
+  * The typical lp_load wrapper with shares, loads global and
+  * shares, including IPC, but does not force immediate
+@@ -4232,11 +4309,19 @@
+  */
+ bool lp_load_with_shares(const char *file_name)
+ {
+-	return lp_load(file_name,
+-		       false,  /* global_only */
+-		       false,  /* save_defaults */
+-		       true,   /* add_ipc */
+-		       true);  /* reinit_globals */
++	bool ok = lp_load(file_name,
++			  false, /* global_only */
++			  false, /* save_defaults */
++			  true,  /* add_ipc */
++			  true); /* reinit_globals */
++
++	/* Authentication reloads this function directly and ignores failure.
++	 * Do not return to serving a partially accepted configuration. */
++	if (!ok || !zxs_loaded_profile(talloc_tos())) {
++		DBG_ERR("Unsafe effective configuration for the dedicated ZXS instance\n");
++		_exit(1);
++	}
++	return true;
+ }
+ 
+ /**
+--- a/source3/auth/auth.c
++++ b/source3/auth/auth.c
+@@ -540,42 +540,15 @@
+ NTSTATUS make_auth3_context_for_ntlm(TALLOC_CTX *mem_ctx,
+ 				     struct auth_context **auth_context)
+ {
+-	const char *methods = NULL;
+-	const char *role = NULL;
+-
+-	switch (lp_server_role()) {
+-	case ROLE_ACTIVE_DIRECTORY_DC:
+-		role = "'active directory domain controller'";
+-		methods = "samba4";
+-		break;
+-	case ROLE_DOMAIN_MEMBER:
+-		role = "'domain member'";
+-		methods = "anonymous sam winbind sam_ignoredomain";
+-		break;
+-	case ROLE_DOMAIN_BDC:
+-	case ROLE_DOMAIN_PDC:
+-	case ROLE_IPA_DC:
+-		role = "'DC'";
+-		methods = "anonymous sam winbind sam_ignoredomain";
+-		break;
+-	case ROLE_STANDALONE:
+-		if (lp_encrypt_passwords()) {
+-			role = "'standalone server', encrypt passwords = yes";
+-			methods = "anonymous sam_ignoredomain";
+-		} else {
+-			role = "'standalone server', encrypt passwords = no";
+-			methods = "anonymous unix";
+-		}
+-		break;
+-	default:
+-		DEBUG(5,("Unknown auth method!\n"));
+-		return NT_STATUS_UNSUCCESSFUL;
+-	}
+-
+-	DBG_INFO("Making default auth method list for server role = %s\n",
+-		 role);
+-
+-	return make_auth_context_specific(mem_ctx, auth_context, methods);
++	/* Normal local SAM only. Do not let guest, system Unix credentials or
++	 * the ignore-domain backend authenticate this private standalone. */
++	if (lp_server_role() != ROLE_STANDALONE || lp_security() != SEC_USER ||
++	    !lp_encrypt_passwords() || lp_map_to_guest() != NEVER_MAP_TO_GUEST ||
++	    lp_restrict_anonymous() != 2 ||
++	    strcmp(lp_passdb_backend(), "zxs_sqlite") != 0) {
++		return NT_STATUS_INVALID_SERVER_STATE;
++	}
++	return make_auth_context_specific(mem_ctx, auth_context, "sam");
+ }
+ 
+ NTSTATUS make_auth3_context_for_netlogon(TALLOC_CTX *mem_ctx,
+--- a/source3/passdb/secrets.c
++++ b/source3/passdb/secrets.c
+@@ -60,7 +60,7 @@
+ 	}
+ 
+ 	db_ctx = db_open(NULL, fname, 0,
+-			 TDB_DEFAULT, O_RDWR|O_CREAT, 0600,
++			 TDB_DEFAULT, O_RDONLY|O_NOFOLLOW, 0,
+ 			 DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
+ 
+ 	if (db_ctx == NULL) {
+--- a/source3/passdb/machine_sid.c
++++ b/source3/passdb/machine_sid.c
+@@ -34,194 +34,32 @@
+ #undef DBGC_CLASS
+ #define DBGC_CLASS DBGC_PASSDB
+ 
+-/****************************************************************************
+- Read a SID from a file. This is for compatibility with the old MACHINE.SID
+- style of SID storage
+-****************************************************************************/
++/* In the isolated ZXS online build, only helper provisions a domain.
++ * Do not import MACHINE.SID, generate an identifier, start a secrets write
++ * transaction or repair anything. A local SID is public, not a login. */
++struct dom_sid *get_global_sam_sid(void)
++{
++	static const uint8_t nt_authority[6] = { 0, 0, 0, 0, 0, 5 };
++	struct dom_sid existing = { 0 };
+ 
+-static bool read_sid_from_file(const char *fname, struct dom_sid *sid)
+-{
+-	char *line = NULL;
+-	size_t n;
+-	ssize_t len;
+-	bool ret = false;
+-	FILE *f = NULL;
+-
+-	f = fopen(fname, "r");
+-	if (f == NULL) {
+-		return false;
+-	}
+-
+-	len = getline(&line, &n, f);
+-	if (len >= 0) {
+-		ret = string_to_sid(sid, line);
+-		SAFE_FREE(line);
+-	}
+-
+-	fclose(f);
+-	return ret;
+-}
+-
+-/*
+-  generate a random sid - used to build our own sid if we don't have one
+-*/
+-static void generate_random_sid(struct dom_sid *sid)
+-{
+-	int i;
+-	uchar raw_sid_data[12];
+-
+-	*sid = (struct dom_sid) {
+-		.sid_rev_num = 1,
+-		.id_auth[5] = 5,
+-	};
+-
+-	sid->sub_auths[sid->num_auths++] = 21;
+-
+-	generate_random_buffer(raw_sid_data, 12);
+-	for (i = 0; i < 3; i++)
+-		sid->sub_auths[sid->num_auths++] = IVAL(raw_sid_data, i*4);
+-}
+-
+-/****************************************************************************
+- Generate the global machine sid.
+-****************************************************************************/
+-
+-static struct dom_sid *pdb_generate_sam_sid(void)
+-{
+-	struct dom_sid domain_sid;
+-	char *fname = NULL;
+-	struct dom_sid *sam_sid;
+-
+-	if(!(sam_sid=SMB_MALLOC_P(struct dom_sid)))
+-		return NULL;
+-
+-	if ( IS_DC ) {
+-		if (secrets_fetch_domain_sid(lp_workgroup(), &domain_sid)) {
+-			sid_copy(sam_sid, &domain_sid);
+-			return sam_sid;
+-		}
+-	}
+-
+-	if (secrets_fetch_domain_sid(lp_netbios_name(), sam_sid)) {
+-
+-		/* We got our sid. If not a pdc/bdc, we're done. */
+-		if ( !IS_DC )
+-			return sam_sid;
+-
+-		if (!secrets_fetch_domain_sid(lp_workgroup(), &domain_sid)) {
+-
+-			/* No domain sid and we're a pdc/bdc. Store it */
+-
+-			if (!secrets_store_domain_sid(lp_workgroup(), sam_sid)) {
+-				DEBUG(0,("pdb_generate_sam_sid: Can't store domain SID as a pdc/bdc.\n"));
+-				SAFE_FREE(sam_sid);
+-				return NULL;
+-			}
+-			return sam_sid;
+-		}
+-
+-		if (!dom_sid_equal(&domain_sid, sam_sid)) {
+-
+-			/* Domain name sid doesn't match global sam sid. Re-store domain sid as 'local' sid. */
+-
+-			DEBUG(0,("pdb_generate_sam_sid: Mismatched SIDs as a pdc/bdc.\n"));
+-			if (!secrets_store_domain_sid(lp_netbios_name(), &domain_sid)) {
+-				DEBUG(0,("pdb_generate_sam_sid: Can't re-store domain SID for local sid as PDC/BDC.\n"));
+-				SAFE_FREE(sam_sid);
+-				return NULL;
+-			}
+-			return sam_sid;
+-		}
+-
+-		return sam_sid;
+-	}
+-
+-	/* check for an old MACHINE.SID file for backwards compatibility */
+-	if (asprintf(&fname, "%s/MACHINE.SID", lp_private_dir()) == -1) {
+-		SAFE_FREE(sam_sid);
++	if (lp_server_role() != ROLE_STANDALONE ||
++	    strcmp(lp_netbios_name(), "ZXSLOCAL") != 0) {
+ 		return NULL;
+ 	}
+-
+-	if (read_sid_from_file(fname, sam_sid)) {
+-		/* remember it for future reference and unlink the old MACHINE.SID */
+-		if (!secrets_store_domain_sid(lp_netbios_name(), sam_sid)) {
+-			DEBUG(0,("pdb_generate_sam_sid: Failed to store SID from file.\n"));
+-			SAFE_FREE(fname);
+-			SAFE_FREE(sam_sid);
+-			return NULL;
+-		}
+-		unlink(fname);
+-		if ( !IS_DC ) {
+-			if (!secrets_store_domain_sid(lp_workgroup(), sam_sid)) {
+-				DEBUG(0,("pdb_generate_sam_sid: Failed to store domain SID from file.\n"));
+-				SAFE_FREE(fname);
+-				SAFE_FREE(sam_sid);
+-				return NULL;
+-			}
+-		}
+-
+-		/* Stored the old sid from MACHINE.SID successfully.*/
+-		SAFE_FREE(fname);
+-		return sam_sid;
++	if (global_sam_sid != NULL) {
++		return global_sam_sid;
+ 	}
+-
+-	SAFE_FREE(fname);
+-
+-	/* we don't have the SID in secrets.tdb, we will need to
+-           generate one and save it */
+-	generate_random_sid(sam_sid);
+-
+-	if (!secrets_store_domain_sid(lp_netbios_name(), sam_sid)) {
+-		DEBUG(0,("pdb_generate_sam_sid: Failed to store generated machine SID.\n"));
+-		SAFE_FREE(sam_sid);
++	if (!secrets_fetch_domain_sid(lp_netbios_name(), &existing) ||
++	    existing.sid_rev_num != 1 || existing.num_auths != 4 ||
++	    memcmp(existing.id_auth, nt_authority, sizeof(nt_authority)) != 0 ||
++	    existing.sub_auths[0] != 21 ||
++	    (existing.sub_auths[1] | existing.sub_auths[2] | existing.sub_auths[3]) == 0) {
+ 		return NULL;
+ 	}
+-	if ( IS_DC ) {
+-		if (!secrets_store_domain_sid(lp_workgroup(), sam_sid)) {
+-			DEBUG(0,("pdb_generate_sam_sid: Failed to store generated domain SID.\n"));
+-			SAFE_FREE(sam_sid);
+-			return NULL;
+-		}
++	global_sam_sid = SMB_MALLOC_P(struct dom_sid);
++	if (global_sam_sid != NULL) {
++		*global_sam_sid = existing;
+ 	}
+-
+-	return sam_sid;
+-}
+-
+-/* return our global_sam_sid */
+-struct dom_sid *get_global_sam_sid(void)
+-{
+-	struct db_context *db;
+-
+-	if (global_sam_sid != NULL)
+-		return global_sam_sid;
+-
+-	/*
+-	 * memory for global_sam_sid is allocated in
+-	 * pdb_generate_sam_sid() as needed
+-	 *
+-	 * Note: this is guarded by a transaction
+-	 *       to prevent races on startup which
+-	 *       can happen with some dbwrap backends
+-	 */
+-
+-	db = secrets_db_ctx();
+-	if (!db) {
+-		smb_panic("could not open secrets db");
+-	}
+-
+-	if (dbwrap_transaction_start(db) != 0) {
+-		smb_panic("could not start transaction on secrets db");
+-	}
+-
+-	if (!(global_sam_sid = pdb_generate_sam_sid())) {
+-		dbwrap_transaction_cancel(db);
+-		smb_panic("could not generate a machine SID");
+-	}
+-
+-	if (dbwrap_transaction_commit(db) != 0) {
+-		smb_panic("could not start commit secrets db");
+-	}
+-
+ 	return global_sam_sid;
+ }
+ 
+--- a/source3/smbd/server.c
++++ b/source3/smbd/server.c
+@@ -2038,7 +2038,9 @@
+ 
+ 	DEBUG(3,("loaded services\n"));
+ 
+-	init_structs();
++	if (!init_structs() || get_global_sam_sid() == NULL) {
++		exit_daemon("ZXS requires its preprovisioned private SAM domain", EACCES);
++	}
+ 
+ 	if (!profile_setup(msg_ctx, False)) {
+ 		DEBUG(0,("ERROR: failed to setup profiling\n"));
+@@ -2167,7 +2169,7 @@
+ 	}
+ 
+ 	if(!get_global_sam_sid()) {
+-		exit_daemon("Samba cannot create a SAM SID", EACCES);
++		exit_daemon("ZXS cannot read its preprovisioned SAM SID", EACCES);
+ 	}
+ 
+ 	server_id = messaging_server_id(msg_ctx);
+--- a/source3/smbd/smb2_sesssetup.c
++++ b/source3/smbd/smb2_sesssetup.c
+@@ -30,6 +30,7 @@
+ #include "../libcli/security/security.h"
+ #include "../lib/util/tevent_ntstatus.h"
+ #include "source3/lib/substitute.h"
++#include "passdb/machine_sid.h"
+ 
+ #include "lib/crypto/gnutls_helpers.h"
+ #include <gnutls/gnutls.h>
+@@ -713,6 +714,14 @@
+ 	state->in_security_mode = in_security_mode;
+ 	state->in_previous_session_id = in_previous_session_id;
+ 	state->in_security_buffer = in_security_buffer;
++	/* Continue the same unfinished multi-round logon only. A previous
++	 * session or an additional channel requires a fresh ZXS binding. */
++	if ((in_flags & SMB2_SESSION_FLAG_BINDING) != 0 || in_previous_session_id != 0 ||
++	    (smb2req->session != NULL &&
++	     smb2req->session->global->auth_session_info != NULL)) {
++		tevent_req_nterror(req, NT_STATUS_NOT_SUPPORTED);
++		return tevent_req_post(req, ev);
++	}
+ 
+ 	if (in_flags & SMB2_SESSION_FLAG_BINDING) {
+ 		if (in_session_id == 0) {
+@@ -912,6 +921,21 @@
+ 	return req;
+ }
+ 
++/* Reject-only: a normal primary SID in our domain does not establish
++ * the credential generation used by this particular password check. */
++static bool zxs_normal_token(const struct auth_session_info *info)
++{
++	const struct dom_sid *domain = get_global_sam_sid();
++	uint32_t rid = 0;
++
++	return domain != NULL && info != NULL &&
++		info->security_token != NULL && info->security_token->num_sids > 0 &&
++		info->security_token->sids != NULL &&
++		security_session_user_level(info, NULL) == SECURITY_USER &&
++		sid_peek_check_rid(domain, &info->security_token->sids[0], &rid) &&
++		rid == 1000;
++}
++
+ static void smbd_smb2_session_setup_gensec_done(struct tevent_req *subreq)
+ {
+ 	struct tevent_req *req =
+@@ -944,6 +968,11 @@
+ 				     state,
+ 				     &state->session_info);
+ 	if (tevent_req_nterror(req, status)) {
++		return;
++	}
++
++	if (!zxs_normal_token(state->session_info)) {
++		tevent_req_nterror(req, NT_STATUS_ACCESS_DENIED);
+ 		return;
+ 	}
+ 
