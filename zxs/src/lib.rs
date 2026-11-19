@@ -2,6 +2,7 @@
 //! what was observed, not a capability to register, publish or write later.
 mod fs;
 mod hash;
+mod system;
 mod identity;
 mod pool;
 mod ordinary;
