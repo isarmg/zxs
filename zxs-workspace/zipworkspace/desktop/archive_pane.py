@@ -51,7 +51,7 @@ class ArchivePane(QWidget):
         self.history = self.make_table(("节点 ID", "分支", "代", "父节点"), "历史", "查看选中的历史快照")
         self.branches = self.make_table(("分支", "最高观察代", "已核验分支头", "缺失父节点"), "分支", "查看选中的分支头")
         self.comparison = ComparisonPane(owner)
-        self.views.addTab(self.comparison, "与本机文件夹比较")
+        self.views.addTab(self.comparison, "只读对比")
         self.checkout = CheckoutPane(owner, lambda: self.store)
         self.views.addTab(self.checkout, "签出工作树")
         self.mount = None
@@ -66,12 +66,18 @@ class ArchivePane(QWidget):
         layout = QVBoxLayout(pane)
         table = Table(headers, title)
         layout.addWidget(table)
-        layout.addWidget(button(action, lambda: self.open_row(table)))
+        actions = QHBoxLayout()
+        actions.addWidget(button(action, lambda: self.open_row(table)))
+        compare = button("与当前快照比较所选版本", lambda: self.compare_row(table))
+        compare.setObjectName("compare-selected-revision")
+        actions.addWidget(compare)
+        layout.addLayout(actions)
         table.doubleClicked.connect(lambda _index: self.open_row(table))
         self.views.addTab(pane, title)
         return table
 
     def clear_catalog(self):
+        self.comparison.invalidate_versions()
         self.catalog = None
         self.history.rows.replace(())
         self.branches.rows.replace(())
@@ -147,6 +153,7 @@ class ArchivePane(QWidget):
         self.owner.job("正在核验选择的归档存储目录…", lambda: StoreSelection.open(store), self.use_store)
 
     def use_store(self, store):
+        if store is not self.store: self.clear_catalog()
         self.store = store
         self.store_label.setText(f"归档存储：{store.path}")
         self.reload.setEnabled(self.selection is not None)
@@ -174,9 +181,12 @@ class ArchivePane(QWidget):
         if not self.selection or not self.store: return
         chosen, store = self.selection, self.store
         self.clear_catalog()
-        self.owner.job("正在核验存储上的归档和原始父节点…", lambda: chosen.catalog(store), self.show_catalog)
+        def done(catalog):
+            if self.selection is chosen and self.store is store: self.show_catalog(catalog)
+        self.owner.job("正在核验存储上的归档和原始父节点…", lambda: chosen.catalog(store), done)
 
     def show_catalog(self, catalog):
+        if self.catalog is not catalog: self.comparison.invalidate_versions()
         self.catalog = catalog
         self.branches.rows.replace(((r["branch"], str(r["observed_generation"]),
             r["complete_observed_head"] or "不可选择", r["missing_parent"] or "无"),
@@ -208,6 +218,16 @@ class ArchivePane(QWidget):
                 original.release_display()
                 raise
         self.owner.job("正在复核所选原节点的归档字节…", read_original, self.show_selection)
+
+    def compare_row(self, table):
+        node, catalog, store, left = table.item(), self.catalog, self.store, self.selection
+        if (node is None or catalog is None or store is None or left is None or
+                catalog.nodes.get(node.marker.operation) is not node or
+                node.marker.operation == left.browser.commit.operation):
+            self.owner.inform("请选择本次存储中的另一已列版本。当前版本、散包和无已核头的分支不能作此对照。")
+            return
+        if self.comparison.compare_version(node, store, catalog):
+            self.views.setCurrentWidget(self.comparison)
 
     def show_folder(self, directory):
         self.directory, self.pages = directory, [None]

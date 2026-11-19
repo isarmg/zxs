@@ -12,11 +12,11 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace import comparison, freeze
-from zipworkspace.desktop.selection import Selection
+from zipworkspace.desktop.selection import Selection, StoreSelection, compare_version
 from zipworkspace.model import Commit, Manifest, Rejected
 
 
-def snapshot(path, rows, operation="3"*32):
+def snapshot(path, rows, operation="3"*32, *, generation=1, parent=None):
     manifest = Manifest()
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as out:
         for name, data in rows:
@@ -24,8 +24,130 @@ def snapshot(path, rows, operation="3"*32):
             manifest.add(name, is_dir, 0 if is_dir else len(data),
                          None if is_dir else hashlib.sha256(data).hexdigest())
             out.writestr(name + ("/" if is_dir else ""), data or b"")
-        out.comment = Commit("1"*32, "2"*32, 1, operation, None, manifest.digest()).encode()
+        out.comment = Commit("1"*32, "2"*32, generation, operation, parent, manifest.digest()).encode()
     return Selection.open(path)
+
+
+class CompareVersions(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.archive_store = self.root / "store"; self.archive_store.mkdir()
+        self.left = snapshot(self.root / "current.zxs",
+                             [("empty-old", None), ("Foo", b"same"), ("kind", b""), ("note", b"old")])
+        first = self.left.browser.commit
+        (self.archive_store / first.filename).write_bytes(self.left.path.read_bytes())
+        second = snapshot(self.root / "second.zxs",
+            [("empty-new", None), ("foo", b"same"), ("kind", None), ("note", b"new")] +
+            [(f"right-{i:03d}", b"x") for i in range(102)],
+            "4"*32, generation=2, parent=first.operation)
+        second.path.rename(self.archive_store / second.browser.commit.filename)
+        self.store = StoreSelection.open(self.archive_store)
+        self.catalog = self.left.catalog(self.store)
+        self.right = self.catalog.select_branch(first.branch)
+
+    def test_compares_only_the_listed_node_without_reopening_the_displayed_left_or_reselecting_head(self):
+        from zipworkspace.desktop import selection
+        observed = self.left.path.rename(self.root / "left-original.zxs")
+        snapshot(self.left.path, [("not-in-the-displayed-view", b"x")])
+        third = snapshot(self.root / "third.zxs", [("not-compared", b"x")], "5"*32,
+                         generation=3, parent=self.right.marker.operation)
+        third.path.rename(self.archive_store / third.browser.commit.filename)
+        named = selection.named_document
+        def selected_right(path):
+            self.assertEqual(str(path), str(self.right.path))
+            return named(path)
+        with patch.object(selection,"named_document",side_effect=selected_right) as opens, \
+             patch.object(type(self.catalog),"select_branch",side_effect=AssertionError("never reselect HEAD")), \
+             patch.object(sqlite3,"connect",side_effect=AssertionError("not worktree registration")):
+            report = compare_version(self.left, self.store, self.catalog, self.right)
+        self.assertTrue(observed.is_file())
+        self.assertEqual(opens.call_count, 1)
+        self.assertEqual((report.added,report.changed,report.missing), (104,2,2))
+        self.assertEqual(len(report.page(0)), 100)
+        self.assertTrue(report.page(1))
+        self.assertEqual([r.path for r in report.page(0)+report.page(1)], sorted(r.path for r in report.rows))
+        rows = {r.path:r for r in report.rows}
+        self.assertEqual((rows["Foo"].change,rows["foo"].change), ("missing","added"))
+        self.assertEqual((rows["note"].change,rows["note"].before_bytes,rows["note"].after_bytes), ("changed",3,3))
+        self.assertEqual((rows["kind"].before,rows["kind"].after,rows["kind"].before_bytes), ("file","directory",0))
+        self.assertEqual((rows["empty-old"].change,rows["empty-new"].change), ("missing","added"))
+        self.assertNotIn("not-compared",rows)
+
+    def test_rejects_the_same_bytes_in_a_replaced_slot_or_a_loose_catalog_anchor(self):
+        slot = self.right.path
+        loose = self.root / "separate.zxs"
+        loose.write_bytes(slot.read_bytes())
+        different = Selection.open(loose).catalog(self.store)
+        self.assertEqual(different.anchor.marker, self.right.marker)
+        with self.assertRaises(Rejected):
+            compare_version(self.left, self.store, different, different.anchor)
+        slot.rename(self.root / "retained-right.zxs")  # Keep the original inode alive.
+        slot.write_bytes(loose.read_bytes())
+        with self.assertRaises(Rejected):
+            compare_version(self.left, self.store, self.catalog, self.right)
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional desktop")
+    def test_actual_branch_action_and_window_poll_ignore_an_error_from_the_old_store(self):
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from zipworkspace.desktop import comparison_pane as ui
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        try:
+            archive = win.archive
+            archive.show_selection(self.left)
+            archive.use_store(self.store)
+            archive.show_catalog(self.catalog)
+            table = archive.branches
+            action = table.parentWidget().findChild(QPushButton, "compare-selected-revision")
+            self.assertIsNotNone(action)
+
+            def start():
+                archive.views.setCurrentWidget(table.parentWidget())
+                table.selectRow(0)
+                future = Future()
+                with patch.object(win.pool, "submit", return_value=future) as queue:
+                    action.click()
+                self.assertIs(win.pending[0], future)
+                self.assertFalse(win.tabs.isEnabled())
+                return future, queue.call_args.args[0]
+
+            future, run = start()
+            future.set_result(run()); win.poll()
+            pane = archive.comparison
+            self.assertIs(archive.selection, self.left)
+            self.assertIs(archive.views.currentWidget(), pane)
+            self.assertIn(self.right.marker.operation, pane.summary.text())
+            self.assertIn(self.left.browser.commit.operation, pane.summary.text())
+            self.assertEqual(pane.table.rows.rows[0][0], ("Foo","仅当前","文件 · 4 B","无"))
+            self.assertTrue(pane.more.isEnabled())
+            pane.more.click(); self.assertEqual(pane.number, 1)
+
+            future, run = start()
+            with patch.object(ui, "compare_listed_version", side_effect=Rejected("current archive was changed")):
+                future.set_result(run())
+            win.poll()
+            self.assertIsNone(pane.report)
+            self.assertIn("current archive was changed", pane.summary.text())
+            self.assertIn("未完成版本比较", win.note.text())
+
+            future, run = start()
+            directory = self.root / "different-store"; directory.mkdir()
+            archive.use_store(StoreSelection.open(directory))
+            replacement_note = win.note.text()
+            with patch.object(ui, "compare_listed_version", side_effect=Rejected("late old version error")):
+                future.set_result(run())
+            win.poll()
+            self.assertTrue(win.tabs.isEnabled())
+            self.assertIsNone(pane.report)
+            self.assertNotIn(self.right.marker.operation, pane.summary.text())
+            self.assertNotIn("late old version error", pane.summary.text())
+            self.assertEqual(win.note.text(), replacement_note)
+        finally:
+            if win.pending is not None:  # Never leave this fixture's unstarted Future owning a window.
+                win.pending[0].cancel(); win.poll()
+            win.close()
 
 
 @unittest.skipUnless(comparison.available(), "requires verified descriptor-relative folder reads")
@@ -49,7 +171,7 @@ class CompareFolder(unittest.TestCase):
         with patch.object(sqlite3,"connect",side_effect=AssertionError("not a state database")), \
              patch.object(zipfile.ZipFile,"extractall",side_effect=AssertionError("no extraction")):
             report = comparison.compare(chosen, self.chosen)
-        rows = {r.path: (r.change, r.snapshot, r.local) for r in report.page(0)}
+        rows = {r.path: (r.change, r.before, r.after) for r in report.page(0)}
         self.assertEqual((report.added,report.changed,report.missing), (2,3,3))
         self.assertEqual(rows, {"empty-added":("added",None,"directory"), "new":("added",None,"file"),
             "sized":("changed","file","file"), "was-dir":("changed","directory","file"),

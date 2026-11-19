@@ -93,3 +93,19 @@ class Selection:
                 (self.exact is not None and result.anchor != self.exact)):
             raise Rejected("selected original changed before catalog inspection")
         return result
+
+
+def compare_version(left: Selection, store: StoreSelection, catalog: Catalog, node: Node):
+    """Compare the admitted left view to exactly one canonical catalog row, not to a later HEAD."""
+    from ..comparison import compare_snapshots
+
+    current = left.browser.commit
+    if (str(catalog.store) != str(store.path) or catalog.nodes.get(node.marker.operation) is not node or
+            str(node.path) != str(store.path / node.marker.filename) or node.marker.repo != current.repo or
+            node.marker.operation == current.operation):
+        raise Rejected("请选择本次存储中另一条有原始证明的规范版本")
+    store.check()
+    right = Selection.open(node.path, expected=node)  # No retained display FD, no change to the current selection.
+    result = compare_snapshots(left.browser, right.browser)
+    store.check()
+    return result

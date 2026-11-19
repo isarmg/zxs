@@ -1,4 +1,4 @@
-"""A read-only difference between an admitted snapshot and one observed ordinary folder."""
+"""Read-only path differences between verified snapshots or against one observed folder."""
 from dataclasses import dataclass
 from pathlib import Path
 import os
@@ -97,15 +97,15 @@ class Folder:
 @dataclass(frozen=True, slots=True)
 class Difference:
     path: str
-    change: str       # added, changed or missing in the observed local folder
-    snapshot: str | None
-    local: str | None
+    change: str       # added, changed or missing on the comparison side
+    before: str | None
+    after: str | None
+    before_bytes: int | None
+    after_bytes: int | None
 
 
 @dataclass(frozen=True, slots=True)
-class Report:
-    folder: FolderEvidence
-    operation: str
+class Changes:
     added: int
     changed: int
     missing: int
@@ -117,6 +117,48 @@ class Report:
         if type(number) is not int or not 0 <= number < max(1, (len(self.rows) + self.PAGE - 1) // self.PAGE):
             raise Rejected("comparison page outside the observed report")
         return self.rows[number*self.PAGE:(number+1)*self.PAGE]
+
+
+@dataclass(frozen=True, slots=True)
+class Report(Changes):
+    folder: FolderEvidence
+    operation: str
+
+
+def _value(entry):
+    is_dir = entry.kind == "directory"
+    return is_dir, 0 if is_dir else entry.size_bytes, entry.sha256
+
+
+def _changes(before, other):
+    # This mapping belongs to this comparison. Work with exact ZIP paths, not
+    # the host's path spelling rules or a guessed rename/chronological direction.
+    changes = []
+    added = changed = missing = 0
+    for path, row in before.verified_entries():
+        value = other.pop(path, None)
+        if value is None:
+            changes.append(Difference(path, "missing", row.kind, None, row.size_bytes, None))
+            missing += 1
+        elif value != _value(row):
+            changes.append(Difference(path, "changed", row.kind, "directory" if value[0] else "file",
+                                      row.size_bytes, None if value[0] else value[1]))
+            changed += 1
+    for path, (is_dir, size, _) in other.items():
+        changes.append(Difference(path, "added", None, "directory" if is_dir else "file",
+                                  None, None if is_dir else size))
+        added += 1
+    changes.sort(key=lambda item: item.path)
+    return added, changed, missing, tuple(changes)
+
+
+def compare_snapshots(before, other):
+    """Both ArchiveBrowsers already verified; never open live bodies here."""
+    if before.commit.repo != other.commit.repo:
+        raise Rejected("the two snapshots are not from one archive repository")
+    if before.commit.tree == other.commit.tree:
+        return Changes(0, 0, 0, ())
+    return Changes(*_changes(before, {path: _value(entry) for path, entry in other.verified_entries()}))
 
 
 def compare(selected, folder: Folder):
@@ -132,30 +174,14 @@ def compare(selected, folder: Folder):
 
 
 def _compare(selected, folder, darwin=None):
-    changes = []
-    added = changed = missing = 0
     with named_document(selected.path) as doc:
         if stamp(doc) != selected.observed:
             raise Rejected("displayed archive changed; reopen it before comparing")
         if darwin: darwin.local_object(selected.path, doc.fileno())
+        # The scan does not return payload bytes. Its own Manifest rows can be
+        # consumed without making a third copy of the path inventory.
         tree = folder.observe()
-        # This Manifest belongs exclusively to this scan. Consuming its rows
-        # avoids another full set of keys. At most the two admitted row budgets
-        # can differ; no file payloads or live file handles enter the result.
-        local = tree.rows
-        for path, row in selected.browser.verified_entries():
-            value = local.pop(path, None)
-            is_dir = row.kind == "directory"
-            if value is None:
-                changes.append(Difference(path, "missing", row.kind, None))
-                missing += 1
-            elif value != (is_dir, 0 if is_dir else row.size_bytes, row.sha256):
-                changes.append(Difference(path, "changed", row.kind, "directory" if value[0] else "file"))
-                changed += 1
-        for path, (is_dir, _, _) in local.items():
-            changes.append(Difference(path, "added", None, "directory" if is_dir else "file"))
-            added += 1
-        changes.sort(key=lambda item: item.path)
+        delta = _changes(selected.browser, tree.rows)
         folder.check()
         if darwin: darwin.local_object(selected.path, doc.fileno())
-    return Report(folder.evidence, selected.browser.commit.operation, added, changed, missing, tuple(changes))
+    return Report(*delta, folder.evidence, selected.browser.commit.operation)
