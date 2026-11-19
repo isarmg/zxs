@@ -1,5 +1,5 @@
 use std::{env, ffi::OsStr, io, path::PathBuf, process::ExitCode};
-const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | dir-mkdir OP SYSTEM VOLUME root|DIR NAME | dir-list SYSTEM VOLUME root|DIR | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH | file-move OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-move-receipt OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-delete[-receipt] OP SYSTEM FILE FROM EPOCH | file-restore[-receipt] OP SYSTEM FILE DELETE_OP DELETE_SHA256 RETAINED_EPOCH original|VOLUME | recycle-list SYSTEM LIMIT SOURCE_OR_ALL SINCE_OR_DASH THROUGH_OR_DASH [CURSOR]";
+const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | dir-mkdir OP SYSTEM VOLUME root|DIR NAME | dir-list SYSTEM VOLUME root|DIR | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-lookup SYSTEM VOLUME NAME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH | file-move OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-move-receipt OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-delete[-receipt] OP SYSTEM FILE FROM EPOCH | file-restore[-receipt] OP SYSTEM FILE DELETE_OP DELETE_SHA256 RETAINED_EPOCH original|VOLUME | recycle-list SYSTEM LIMIT SOURCE_OR_ALL SINCE_OR_DASH THROUGH_OR_DASH [CURSOR]";
 fn bad(message:&'static str)->io::Error {io::Error::new(io::ErrorKind::InvalidInput,message)}
 fn show(scope:&str,info:zxs::PoolInfo) {
     println!("{scope}");
@@ -57,6 +57,11 @@ fn run() -> io::Result<()> {
             let system=path(&mut args)?;let op=word(&mut args)?.parse()?;end(&mut args)?;
             let r=zxs::creation_receipt(&system,op)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no original FILE creation"))?;
             println!("Original FILE creation: {:?}",r.status);show_file(&r.file);Ok(())
+        }
+        Some("file-lookup")=>{
+            let system=path(&mut args)?;let volume=word(&mut args)?.parse()?;let name=word(&mut args)?;end(&mut args)?;
+            let f=zxs::lookup_file(&system,volume,&name)?.ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"no FILE at this exact display name"))?;
+            show_file(&f);Ok(())
         }
         Some("file-list")=>{
             let system=path(&mut args)?;let volume=word(&mut args)?.parse()?;end(&mut args)?;

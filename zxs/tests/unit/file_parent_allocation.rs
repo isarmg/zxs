@@ -76,7 +76,7 @@ fn genuine_child_operand_is_inode_scoped_and_not_a_pool_reservation(){
     let f=Frame::new(pool,seq+1,prev,c.clone()).unwrap();assert!(!unbound.matches(&f));assert!(bound.matches(&f));
     assert!(material::install_decided(&v,&c).is_err());
     assert!(material::install_decided(&v,&Creation{parent:BirthParent::Root,..c.clone()}).is_err());
-    assert!(!v.root.entry_present(c"report").unwrap());assert_eq!(native(&v.root.child_directory(&name).unwrap().unwrap()),st.object);
+    assert!(!v.root.entry_present(&std::ffi::CString::new(crate::test_support::physical("report",c.file)).unwrap()).unwrap());assert_eq!(native(&v.root.child_directory(&name).unwrap().unwrap()),st.object);
     assert_eq!(same.record(c"FILE",512).unwrap().unwrap().1,origin);
     assert!(!bound.matches(&Frame::new(pool,seq+1,prev,Creation{parent:other,..c.clone()}).unwrap()));
     assert!(!bound.matches(&Frame::new(PoolId::new().unwrap(),seq+1,prev,c).unwrap()));

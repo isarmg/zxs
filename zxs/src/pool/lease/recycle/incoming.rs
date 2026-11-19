@@ -16,31 +16,36 @@ impl CustodyEnd<'_,'_>{
         if self.root.same_mount(&from.root)?||self.root.entity.device==from.root.entity.device||
             Birth::read(&self.root.file)?.filesystem()==Birth::read(&from.root.file)?.filesystem(){
             return Err(invalid("lifecycle transfers require two distinct original filesystems"));}
-        let iso=o.source_isolation();from.root.checked_child_path(&iso)?;
-        if from.root.entry_present(&iso)?{return Err(invalid("original source quarantine already occupied"));}
-        let dest=self.grant.name(Side::Target);self.root.checked_child_path(dest)?;
-        for s in o.stage_names(){self.root.checked_child_path(&s)?;}
-        o.check_occupancy(self.pool,self.grant,self.role,dest,&self.root.names()?)?;
+        self.grant.live_geometry(self.pool,fs::NameBudget::held(&from.root)?,fs::NameBudget::held(&self.root)?,o.ticket())?;
+        let iso=o.source_isolation();if from.root.entry_present(&iso)?{return Err(invalid("original source quarantine already occupied"));}
+        let dest=self.grant.name(Side::Target);let listed=self.root.names()?;
+        if self.root.exact_presence(&listed,dest)?{return Err(invalid("original FILE terminal is occupied at this endpoint"));}
+        for n in o.stage_names(){self.root.exact_presence(&listed,&n)?;}
+        if self.role==crate::Role::File{self.grant.check_ordinary_target(self.pool,self.id(),&self.root,&listed)?;}
+        o.check_occupancy(self.pool,self.grant,self.role,dest,&listed)?;
         from.require_current()?;self.require_current()
     }
     // Inspect only this operation's issued, bounded names on its one physical
     // endpoint. Empty unbound names are spent slots, not adoptable objects.
     fn window(&self,o:&IncomingSelection<'_>)->io::Result<(Option<fs::HeldDir>,Option<u8>)>{
         let(issued,bound)=o.stage_state(self.pool,self.grant)?;let mut selected=None;let mut free=None;
+        let sampled=self.root.names()?.into_iter().collect::<std::collections::BTreeSet<_>>();
+        let empty=|d:&fs::HeldDir|->io::Result<()>{if d.label()?.is_some(){return Err(invalid("a registered root is not a used empty transfer slot"));}d.only(None)?;d.require_named()};
         for(idx,n) in o.stage_names().enumerate(){let i=u8::try_from(idx).map_err(|_|invalid("invalid private slot"))?;
-            let current=self.root.child_directory(&n)?;
+            let current=self.root.directory_in_sample(&n,&sampled)?;
             if let Some((b,expected))=&bound{
                 if i==*b{let d=current.ok_or_else(||invalid("bound original private target vanished"))?;
                     if d.entity!=expected.entity||Birth::read(&d.file)?!=expected.birth{return Err(invalid("substituted bound private target"));}
                     selected=Some(d);
                 }else if let Some(d)=current{
-                    if i>*b{return Err(invalid("extra entry after the original bound slot"));}d.only(None)?;d.require_named()?;
-                }
+                    if i>*b{return Err(invalid("extra entry after the original bound slot"));}empty(&d)?;
+                }else if i<*b{return Err(invalid("earlier issued empty slot disappeared"));}
             }else if let Some(d)=current{
                 if !issued||free.is_some(){return Err(invalid("unknown private slot or a hole in the original unbound prefix"));}
-                d.only(None)?;d.require_named()?;
+                empty(&d)?;
             }else if free.is_none(){free=Some(i);}
         }
+        if self.root.names()?.into_iter().collect::<std::collections::BTreeSet<_>>()!=sampled{return Err(invalid("original transfer window changed during admission"));}
         self.require_current()?;Ok((selected,free))
     }
     pub(crate) fn claim_anonymous<'v>(&self,from:&CustodyEnd<'_,'_>,o:IncomingSelection<'v>)->io::Result<Unlinked<'v>>{
@@ -168,8 +173,9 @@ impl<'v> PreparedIncoming<'v>{
     pub(crate) fn recheck_for_seal(&self,p:&crate::pool::lease::LocalPool,target:&crate::ordinary::LifecycleChecked)->io::Result<()>{
         if !matches!(p.access,Access::Write)||target.installed(){return Err(invalid("an original lifecycle decision requires its private-stage writer"));}
         let g=self.selection.grant(p)?;let old=p.custody_end(&g,Side::Source)?;let new=p.custody_end(&g,Side::Target)?;
-        new.check_new_target(&old,&self.selection)?;target.require(p,&g,&new)?;
-        old.root.file.sync_all()?;new.root.file.sync_all()?;old.require_current()?;new.require_current()?;target.require(p,&g,&new)
+        let bound=||->io::Result<()>{if new.window(&self.selection)?.0.is_none(){return Err(invalid("no exact bound private lifecycle target before acknowledgement"));}Ok(())};
+        new.check_new_target(&old,&self.selection)?;bound()?;target.require(p,&g,&new)?;
+        old.root.file.sync_all()?;new.root.file.sync_all()?;old.require_current()?;new.require_current()?;bound()?;target.require(p,&g,&new)
     }
     /// Reopen both original roles and the same still-current FILE and reserve
     /// candidate, not the unrelated latest actor/name. No namespace or durable

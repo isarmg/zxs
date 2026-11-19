@@ -1,3 +1,4 @@
+use crate::test_support::physical as native_leaf;
 use super::*;
 use crate::{create_empty,initialize,inspect,read_initial_file,test_support::PrivateTemp,Role,VolumeId};
 use std::{fs as osfs,io::Cursor,os::unix::fs::{FileExt,PermissionsExt},path::PathBuf};
@@ -51,7 +52,7 @@ fn one_original_first_save_reopens_at_every_cut_without_reading_the_caller_twice
         assert!(read_initial_file(&t.sys,t.file.file).is_err());
         let mut bytes=Vec::new();let current=read_current_to(&t.sys,t.file.file,&mut bytes).unwrap();
         assert_eq!(current.working.as_ref(),Some(&r));assert_eq!(bytes.as_slice(),data);assert_eq!(current.file,t.file);
-        assert_eq!(osfs::read_dir(t.data.join("first")).unwrap().count(),2);assert_eq!(osfs::read_dir(&t.sys).unwrap().count(),1);
+        assert_eq!(osfs::read_dir(t.data.join(native_leaf("first",t.file.file))).unwrap().count(),2);assert_eq!(osfs::read_dir(&t.sys).unwrap().count(),1);
     }
 }
 
@@ -62,7 +63,7 @@ fn invalid_short_trailing_and_bad_streams_never_leave_named_work_or_an_original_
     for bad in [b"ab".as_slice(),b"abcd".as_slice(),b"abd".as_slice()]{
         let op=OperationId::new().unwrap();assert!(save_first(&t.sys,op,t.file.file,claim,Cursor::new(bad)).is_err());
         assert!(first_save_receipt(&t.sys,op).unwrap().is_none());
-        assert_eq!(osfs::read_dir(t.data.join("first")).unwrap().count(),1);
+        assert_eq!(osfs::read_dir(t.data.join(native_leaf("first",t.file.file))).unwrap().count(),1);
         assert_eq!(osfs::read(t.sys.join("REGISTRATION")).unwrap(),before);
     }
 }
@@ -87,7 +88,7 @@ fn closed_original_chunks_are_pinned_before_output_and_corrupt_later_bytes_are_n
     let claim=claim(&data);let reader=OnePass{once:false,t:&t,inner:Cursor::new(data.clone())};
     let saved=save_first(&t.sys,op,t.file.file,claim,reader).unwrap();assert_eq!(saved.decision_sequence,3);
     let mut got=Vec::new();read_current_to(&t.sys,t.file.file,&mut got).unwrap();assert_eq!(got,data);
-    let leaf=t.data.join("first").join(format!("working-{op}"));let saved_bytes=osfs::read(&leaf).unwrap();
+    let leaf=t.data.join(native_leaf("first",t.file.file)).join(format!("working-{op}"));let saved_bytes=osfs::read(&leaf).unwrap();
     let raw=osfs::OpenOptions::new().write(true).open(&leaf).unwrap();
     raw.write_all_at(&[0],raw.metadata().unwrap().len()-33).unwrap();raw.sync_all().unwrap();drop(raw);
     let mut verified=Vec::new();assert!(read_current_to(&t.sys,t.file.file,&mut verified).is_err());
@@ -109,7 +110,7 @@ fn a_whole_confirmed_save_cannot_be_dropped_back_to_its_still_valid_creation_pre
     let register=t.sys.join("REGISTRATION");let birth=osfs::read(&register).unwrap();
     let bytes=b"keep this working material";let a=claim(bytes);
     save_first(&t.sys,op,t.file.file,a,Cursor::new(bytes)).unwrap();
-    let physical=t.data.join("first").join(format!("working-{op}"));
+    let physical=t.data.join(native_leaf("first",t.file.file)).join(format!("working-{op}"));
     let saved=osfs::read(&physical).unwrap();osfs::write(&register,&birth).unwrap();
     assert!(first_save_receipt(&t.sys,op).is_err());assert!(save_first(&t.sys,op,t.file.file,a,NeverRead).is_err());
     assert!(read_current_to(&t.sys,t.file.file,io::sink()).is_err());
@@ -156,7 +157,7 @@ fn zero_length_confirmed_revision_is_not_a_never_saved_file_or_a_formal_version(
 #[test]
 #[ignore="two explicitly owned private test filesystems"]
 fn replacing_the_selected_container_during_forward_input_cannot_retarget_the_save(){
-    let t=Fixture::new();let existing=t.data.join("first");let old=t._one.0.join("pinned-original");
+    let t=Fixture::new();let existing=t.data.join(native_leaf("first",t.file.file));let old=t._one.0.join("pinned-original");
     let before=osfs::read(t.sys.join("REGISTRATION")).unwrap();
     let op=OperationId::new().unwrap();let contents=b"only for the selected native FILE";
     struct Substitute<'a>{from:&'a Path,to:&'a Path,bytes:Cursor<&'a[u8]>,done:bool}
@@ -225,7 +226,7 @@ fn a_slow_named_save_recovery_verifier_holds_the_same_work_lease_as_an_open_read
     };
     let r=save_first(&t.sys,save,file,expected,NeverRead).unwrap();
     assert_eq!(r.revision,1);
-    let op=OperationId::new().unwrap();let path=t.data.join("first").join(format!("working-{save}"));
+    let op=OperationId::new().unwrap();let path=t.data.join(native_leaf("first",t.file.file)).join(format!("working-{save}"));
     assert!(crate::commit_first(&t.sys,op,file,1).is_err());
     let receipt=crate::first_commit_receipt(&t.sys,op).unwrap().unwrap();
     assert_eq!(receipt.status,CreationStatus::PublishedInstallationUnconfirmed);let formal=receipt.published.unwrap();
@@ -243,7 +244,7 @@ fn late_first_save_admits_the_complete_original_directory_and_same_working_inode
     use std::os::unix::fs::MetadataExt;
     for (foreign,when) in [(false,Cut::FrameSynced),(true,Cut::FrameSynced),(false,Cut::Decision)]{
         let t=Fixture::new();let op=OperationId::new().unwrap();let bytes=b"one original working file";
-        let wanted=claim(bytes);let dir=t.data.join("first");let saved=t._one.0.join("original-working");
+        let wanted=claim(bytes);let dir=t.data.join(native_leaf("first",t.file.file));let saved=t._one.0.join("original-working");
         let named=if foreign{dir.join("never-issued")}else{dir.join(format!("working-{op}"))};
         let mut interfered=None;
         assert!(save_inner(&t.sys,op,t.file.file,wanted,Cursor::new(bytes),|at|{

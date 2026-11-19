@@ -6,8 +6,7 @@ use crate::{fs::{self,HeldDir,invalid},ordinary::{allocation::SLOTS,journal::Jou
 use std::{collections::{BTreeMap,BTreeSet},ffi::{CStr,CString},io};
 
 pub(super) fn human(name:&str)->io::Result<CString>{
-    crate::ordinary::wire::human_name(name.as_bytes())?;
-    CString::new(name.as_bytes()).map_err(|_|invalid("invalid original ordinary name"))
+    Ok(crate::ordinary::storage_name::DirectoryName::parse(name.as_bytes())?.leaf())
 }
 pub(super) fn same_child(dir:&HeldDir,original:&NativeObject)->io::Result<()>{
     if dir.entity!=original.entity||fs::Birth::read(&dir.file)?!=original.birth||dir.label()?.is_some(){
@@ -33,7 +32,7 @@ pub(in crate::ordinary) fn observe<'a>(s:&'a Journal,address:Parent,parent:&Held
     for d in s.directories_at(address){
         if active.is_some_and(|a|a.origin.op==d.origin.op){continue;}
         if !raw.contains(d.origin.name.as_bytes()){return Err(invalid("missing confirmed ordinary directory"));}
-        path::installed(parent,d)?;result.consumed.insert(d.origin.name.as_bytes().to_vec());
+        path::installed_in(parent,d,Some(raw))?;result.consumed.insert(d.origin.name.as_bytes().to_vec());
         result.rows.push(d);spent.insert(d.origin.ticket,d.slot);
     }
     if let Some(a)=active{
@@ -86,7 +85,7 @@ pub(super) fn census(parent:&HeldParent<'_,'_>,s:&Journal)->io::Result<BTreeSet<
         if let Some(i)=m.stage{file_tickets.insert(m.original.ticket,i);}
     }
     for f in s.at_parent(address){
-        let c=&f.create;let place=s.placement(c.file)?;let n=human(&c.name)?;
+        let c=&f.create;let place=s.placement(c.file)?;let n=crate::ordinary::storage_name::file_leaf(&c.name,c.file)?;
         if place.ordinary_parent()!=Some(address){return Err(invalid("different ordinary FILE owner or parent in inventory"));}
         let h=dir.child_directory(&n)?.ok_or_else(||invalid("missing current FILE sibling of ordinary directory"))?;
         material::verify_header_at(&h,c,place.directory(),place.local())?;

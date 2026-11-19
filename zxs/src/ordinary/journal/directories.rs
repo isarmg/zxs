@@ -17,12 +17,13 @@ pub(super) fn child_budget(rows:&DirectoryRows,o:&DirOrigin,reg:&Allowed<'_>)->i
         DirParent::Root(v)=>reg.ordinary_path_budget(v,o.uid)?,
         DirParent::Child(_,id)=>rows.get(&id).ok_or_else(||invalid("no earlier directory path for original ticket"))?.1,
     };
-    super::super::material::ticket_budget(parent,&o.name,o.ticket)
+    super::super::material::directory_budget(reg.ordinary_names(o.parent.address.volume(),o.uid,parent)?,&o.name,o.ticket)
 }
 fn new_origin(rows:&DirectoryRows,entries:&BTreeSet<EntryId>,names:&Names,ds:&[Decision],reg:&Allowed<'_>,o:&DirOrigin,
     used:impl Fn(OperationId)->bool)->io::Result<()>{
     o.parent.require(reg,o.uid,parent_row(rows,ds,o.parent.address)?)?;
     child_budget(rows,o,reg)?;
+    names.vacancy(o.parent.address,&o.name,Member::Directory{entry:o.entry,directory:o.id})?;
     let init=reg.basis().1;
     if rows.contains_key(&o.id)||entries.contains(&o.entry)||names.get(o.parent.address,&o.name).is_some()||
         o.op==o.ticket||[o.op,o.ticket].into_iter().any(|v|v==init||used(v)){
@@ -80,26 +81,25 @@ impl Journal{
         if Frame::read(r.basis().0,&f.bytes)?!=*f||prev.checked_add(1)!=Some(f.seq)||head!=f.previous||
             c.parent!=self.file_parent_at(address,c.uid,r)?{
             return Err(invalid("prospective FILE does not bind this confirmed parent and original prefix"));}
-        match address{
-            DirParent::Root(v)=>{super::super::material::ticket_budget(r.ordinary_path_budget(v,c.uid)?,&c.name,c.attempt)?;},
-            DirParent::Child(_,id)=>{self.child_file_geometry(id,&c.name,c.attempt)?;},
-        }Ok(())
+        self.file_geometry(r,address,c.uid,&c.name,c.file,c.attempt)?;Ok(())
     }
-    fn child_file_geometry(&self,id:DirectoryId,name:&str,ticket:OperationId)->io::Result<()>{
-        let b=self.directory_rows.get(&id).ok_or_else(||invalid("lost confirmed FILE parent path"))?.1;
-        super::super::material::child_residence_budget(b,name,ticket)?;Ok(())
+    fn file_geometry(&self,r:&Allowed<'_>,address:DirParent,uid:u32,name:&str,file:FileId,ticket:OperationId)->io::Result<()>{
+        let b=match address{DirParent::Root(v)=>r.ordinary_path_budget(v,uid)?,
+            DirParent::Child(_,id)=>self.directory_rows.get(&id).ok_or_else(||invalid("lost confirmed FILE parent path"))?.1};
+        super::super::material::birth_geometry(r,address.volume(),uid,b,name,file,ticket)?;Ok(())
     }
     /// This is an original prefix check for a NEW prospective child birth.
     /// Not for resuming an existing operation or issuing physical material.
     pub(in crate::ordinary) fn prospective_child_file(&self,t:&allocation::Terms<'_>,r:&Allowed<'_>)->io::Result<()>{
-        let address=t.parent.address(t.volume);let DirParent::Child(_,id)=address else{return Err(invalid("not a child FILE request"));};
+        let address=t.parent.address(t.volume);let DirParent::Child(_, _)=address else{return Err(invalid("not a child FILE request"));};
         let(n,prev)=self.frontier();let(pool,init,_)=r.basis();self.unoccupied_ordinary_slot()?;
         if t.pool!=pool||n.checked_add(1)!=Some(t.seq)||t.previous!=prev||*t.parent!=self.file_parent_at(address,t.uid,r)?||
             !r.file(t.volume,t.uid,t.root.entity,&t.root.birth,true)||self.names.get(address,t.name).is_some()||
             self.entry_used(t.entry)||self.file(t.file).is_some()||self.on_all().any(|f|f.create.history==t.history)||
             t.op==t.attempt||[t.op,t.attempt].into_iter().any(|v|v==init||self.ticket_used(v)){
             return Err(invalid("different original parent, occupied entry, identity, operation or private ticket"));}
-        self.child_file_geometry(id,t.name,t.attempt)?;self.room_for(MAX_FRAME)
+        self.names.vacancy(address,t.name,Member::File{entry:t.entry,file:t.file})?;
+        self.file_geometry(r,address,t.uid,t.name,t.file,t.attempt)?;self.room_for(MAX_FRAME)
     }
     /// Root to selected child, bounded before touching any physical child.
     /// An arbitrary decoded Created is not an argument. A still-unconfirmed

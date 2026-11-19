@@ -4,6 +4,10 @@ use crate::ordinary::{allocation::SLOTS,wire::{self,In,NativeObject}};
 use std::io;
 
 pub(in crate::ordinary) const KIND:u8=7;
+pub(in crate::ordinary) fn directory_name(raw:&[u8])->io::Result<&str>{
+    crate::ordinary::storage_name::DirectoryName::parse(raw).map(|n|n.display())
+}
+
 /// An address, never a live grant. A child's own birth names the same volume;
 /// no spelling or missing tag turns a child selection into the volume root.
 #[derive(Clone,Copy,Debug,Eq,PartialEq,Ord,PartialOrd)]
@@ -50,14 +54,14 @@ pub(in crate::ordinary) struct Origin{
     pub op:OperationId,pub uid:u32,pub parent:Basis,pub name:String,pub entry:EntryId,pub id:DirectoryId,pub ticket:OperationId,
 }
 pub(in crate::ordinary) fn request(pool:PoolId,op:OperationId,uid:u32,parent:Parent,name:&str)->io::Result<[u8;32]>{
-    wire::human_name(name.as_bytes())?;
+    directory_name(name.as_bytes())?;
     let mut b=b"ZXS/ORDINARY-DIRECTORY-CREATE/1\0".to_vec();
     b.extend_from_slice(&pool.0);b.extend_from_slice(&op.0);b.extend_from_slice(&uid.to_be_bytes());
     parent.put(&mut b);b.push(name.len() as u8);b.extend_from_slice(name.as_bytes());crate::hash::digest(&b)
 }
 impl Origin{
     fn shape(&self)->io::Result<()>{
-        wire::human_name(self.name.as_bytes())?;
+        directory_name(self.name.as_bytes())?;
         if self.op==self.ticket||matches!(self.parent.address,Parent::Child(_,id) if id==self.id){
             return Err(invalid("repeated operation ticket or directory is its own parent"));}Ok(())
     }
@@ -71,7 +75,7 @@ impl Origin{
         let op=OperationId(r.id()?);let uid=r.u32()?;let address=Parent::get(r)?;let anchor=r.fixed()?;
         let object=NativeObject::get(r)?;let parent=Basis{address,anchor,object};
         let entry=EntryId(r.id()?);let id=DirectoryId(r.id()?);let ticket=OperationId(r.id()?);
-        let name=wire::human_name(r.short_buf()?)?.to_owned();let o=Self{op,uid,parent,name,entry,id,ticket};o.shape()?;Ok(o)
+        let name=directory_name(r.short_buf()?)?.to_owned();let o=Self{op,uid,parent,name,entry,id,ticket};o.shape()?;Ok(o)
     }
     pub(in crate::ordinary) fn check_child(&self,slot:u8,n:&NativeObject)->io::Result<()>{
         let p=&self.parent.object;
@@ -80,7 +84,7 @@ impl Origin{
     }
 }
 const NATIVE:usize=16+1+fs::MAX_BIRTH;
-pub(in crate::ordinary) const MAX_ORIGIN:usize=16+4+16+1+16+32+NATIVE+3*16+1+wire::MAX_HUMAN;
+pub(in crate::ordinary) const MAX_ORIGIN:usize=16+4+16+1+16+32+NATIVE+3*16+1+crate::ordinary::storage_name::COMPONENT_MAX;
 const MAX_BIRTH_FRAME:usize=wire::ENVELOPE_BYTES+MAX_ORIGIN+32+1+NATIVE;
 const _:()=assert!(MAX_BIRTH_FRAME<=wire::MAX_FRAME);
 #[derive(Clone,Debug,Eq,PartialEq)]

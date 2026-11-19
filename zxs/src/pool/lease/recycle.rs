@@ -106,14 +106,18 @@ impl CustodyEnd<'_, '_>{
     }
     pub(crate) fn target_present(&self)->io::Result<bool>{
         if self.side!=Side::Target{return Err(invalid("not this operation's target"));}
-        self.require_current()?;let v=self.root.entry_present(self.grant.name(Side::Target))?;self.require_current()?;Ok(v)
+        self.require_current()?;let v=self.root.exact_presence(&self.root.names()?,self.grant.name(Side::Target))?;self.require_current()?;Ok(v)
     }
     // May expose pins for the exact selected FILE only, never its recycle
     // root. Authority and exact frame are re-established for each opening.
     fn target_child(&self,goal:&crate::ordinary::LifecycleTarget)->io::Result<HeldDir>{
         if self.side!=Side::Target||!matches!(self.pool.access,Access::Incoming|Access::Write){return Err(invalid("not a bounded lifecycle target observation"));}
         self.require_current()?;let name=goal.name(self.pool,self.grant)?;
-        goal.namespace(self.pool,self.grant,self.role,&self.root.names()?)?;
+        let listed=self.root.names()?;let(_,other)=goal.addresses(self.pool,self.grant)?;
+        if self.root.exact_presence(&listed,&other)?||!self.root.exact_presence(&listed,&name)?{
+            return Err(invalid("lifecycle needs exactly the observed original private or installed name"));}
+        if self.role==crate::Role::File{self.grant.check_ordinary_target(self.pool,self.id(),&self.root,&listed)?;}
+        goal.namespace(self.pool,self.grant,self.role,&listed)?;
         let d=self.root.child_directory(&name)?.ok_or_else(||invalid("original lifecycle target is unavailable"))?;
         self.require_current()?;Ok(d)
     }
@@ -139,7 +143,7 @@ impl CustodyEnd<'_, '_>{
             return Err(invalid("requires the original incoming FILE source lease"));}
         self.require_current()?;
         if let Some(stage)=self.grant.prior_stage(){if self.root.entry_present(stage)?{return Err(invalid("previous FILE stage remains at the source"));}}
-        let d=self.root.child_directory(self.grant.name(Side::Source))?.ok_or_else(||invalid("selected FILE source is unavailable"))?;
+        let d=self.root.exact_directory(self.grant.name(Side::Source))?.ok_or_else(||invalid("selected FILE source is unavailable"))?;
         let(e,b)=self.grant.source_directory();
         if d.entity!=e||Birth::read(&d.file)?!=*b{return Err(invalid("not the original lifecycle FILE directory"));}
         self.require_current()?;Ok(d)

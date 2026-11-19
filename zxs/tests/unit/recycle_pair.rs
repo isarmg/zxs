@@ -1,5 +1,6 @@
 //! Opt-in local native source scenarios, not results. Never mount, reformat
 //! or fill a filesystem as part of these tests.
+use crate::test_support::physical as native_leaf;
 use super::*;
 use crate::{DeletionKey,RecycleAction as Action,RecycleFilter,RecycleKind,RestoreTarget};
 use crate::ordinary::custody::recycle;
@@ -174,17 +175,17 @@ fn move_and_delete_require_even_the_part_of_i1_completely_overwritten_by_i2(){
     z::save_interval(&f.sys,op(),id,2,z::SpanEdit::new(0,claim(b"X"),z::LengthPolicy::Set(1)).unwrap(),Cursor::new(b"X")).unwrap();
     let i2=z::commit_working(&f.sys,op(),id,3).unwrap();
     let n=match &f.last.kind{z::FormalStorage::Incremental{changed,..}=>changed.bytes,_=>panic!("expected actual INCR")};assert!(n>0&&n<z::DRAFT_CHUNK as u64);
-    let path=f.old.join("name").join(format!("{}-name",f.last.storage));
+    let path=f.old.join(native_leaf("name",f.file.file)).join(format!("{}-name",f.last.storage));
     let pack=fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
     let at=pack.metadata().unwrap().len()-32-n;let mut original=[0];pack.read_exact_at(&mut original,at).unwrap();
     pack.write_all_at(&[original[0]^1],at).unwrap();pack.sync_all().unwrap();
     let mut visible=Vec::new();assert_eq!(z::read_node_to(&f.sys,id,i2.node,&mut visible).unwrap(),i2);assert_eq!(visible,b"X");
     let place=op();let del=op();assert!(z::move_file(&f.sys,place,id,f.from,f.to,0).is_err());assert!(z::apply_recycle(&f.sys,del,0,action(&f)).is_err());
     assert!(z::move_receipt(&f.sys,place,id,f.from,f.to,0).unwrap().is_none());assert!(z::recycle_receipt(&f.sys,del,0,action(&f)).unwrap().is_none());
-    assert!(fs::read_dir(&f.new).unwrap().next().is_none());assert_eq!(fs::read_dir(f.old.join("name")).unwrap().count(),5);
+    assert!(fs::read_dir(&f.new).unwrap().next().is_none());assert_eq!(fs::read_dir(f.old.join(native_leaf("name",f.file.file))).unwrap().count(),5);
     pack.write_all_at(&original,at).unwrap();pack.sync_all().unwrap();drop(pack);
     assert_eq!(z::move_file(&f.sys,place,id,f.from,f.to,0).unwrap().status,MoveStatus::CompleteCheckedNow);
-    assert!(!f.old.join("name").exists()&&fs::read_dir(f.new.join("name")).unwrap().count()==5);
+    assert!(!f.old.join(native_leaf("name",f.file.file)).exists()&&fs::read_dir(f.new.join(native_leaf("name",f.file.file))).unwrap().count()==5);
     for(node,expected)in[(f.first.node,BEFORE),(f.last.node,AFTER),(i2.node,b"X".as_slice())]{
         let mut out=Vec::new();z::read_node_to(&f.sys,id,node,&mut out).unwrap();assert_eq!(out,expected);
     }
@@ -226,5 +227,62 @@ fn five_actual_roles_stop_before_the_last_unlink_and_never_adopt_a_replacement_a
         for(node,expected)in[(f.first.node,BEFORE),(f.last.node,AFTER),(i2.node,wanted.as_slice())]{
             let mut out=Vec::new();z::read_node_to(&f.sys,id,node,&mut out).unwrap();assert_eq!(out,expected);
         }
+    }
+}
+
+#[test]
+#[ignore="actual private ordinary and dedicated roots; a skipped transfer slot is never cleanup authority"]
+fn an_occupied_lower_slot_blocks_the_confirmation_frontier_in_both_recycle_directions(){
+    for restore in [false,true]{
+        let f=Fixture::build(true,false);let r=z::inspect(&f.sys).unwrap().volumes.into_iter().find(|v|v.volume.role==z::Role::Recycle).unwrap();
+        let(call,epoch,target)=if restore{(reclaim(keep(&f,op()),RestoreTarget::Volume(f.to)),1,&f.new)}else{(action(&f),0,&r.volume.path)};
+        let operation=op();let floor=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap().2.frontier();
+        assert!(recycle::apply(&f.sys,operation,epoch,call,&mut|c|if c==Cut::UnboundMkdir{Err(io::Error::other("slot zero still unbound"))}else{Ok(())}).is_err());
+        let slot={let(_,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
+            let a=s.moving.as_ref().unwrap();assert!(a.stage().is_none());target.join(format!(".zxs-new-{}-0",a.original.ticket))};
+        let sentinel=slot.join("outside");let mut inside=false;
+        assert!(recycle::apply(&f.sys,operation,epoch,call,&mut|c|{
+            if c==Cut::FrameSynced{fs::write(&sentinel,b"not mine")?;inside=true;}Ok(())
+        }).is_err());assert!(inside);assert!(z::apply_recycle(&f.sys,operation,epoch,call).is_err());
+        {let(_,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let a=s.moving.as_ref().unwrap();
+            assert_eq!(s.frontier(),floor);assert_eq!(a.stage().unwrap().slot,1);assert!(s.decided(operation).is_none());}
+        let preserved=target.with_file_name("held-unclaimed-sentinel");fs::rename(&sentinel,&preserved).unwrap();
+        assert_eq!(z::apply_recycle(&f.sys,operation,epoch,call).unwrap().status,MoveStatus::CompleteCheckedNow);
+        assert_eq!(fs::read(preserved).unwrap(),b"not mine");assert!(slot.is_dir());
+    }
+}
+
+#[test]
+#[ignore="three private filesystems; exact original return credit and the 4096-byte destination boundary"]
+fn a_too_long_restoration_leaf_never_consumes_the_retained_file_or_its_original_return_credit(){
+    use crate::ordinary::journal::credits::{Deletion,Effect};
+    const NAME:&str="abcdefghijklmnopqrst";
+    for width in [4042,4043]{
+        let f=Fixture::planned(true,false,None,Some(width));let(file,node)=normal(&f,f.from,NAME,b"retained original");
+        let physical=native_leaf(NAME,file.file);assert_eq!(physical.as_bytes().len(),53);
+        let deletion=op();let key=z::apply_recycle(&f.sys,deletion,0,Action::Delete{file:file.file,from:f.from}).unwrap().deletion.unwrap();
+        let bin=z::inspect(&f.sys).unwrap().volumes.into_iter().find(|r|r.volume.role==z::Role::Recycle).unwrap().volume.path;
+        let kept=bin.join(&physical);let original=fs::metadata(&kept).unwrap();
+        let cut=||LocalPool::with_snapshot(&f.sys,Access::Read).unwrap().2;
+        let before=cut().frontier();let issued=op();let requested=reclaim(key,RestoreTarget::Volume(f.to));
+        let actual=z::apply_recycle(&f.sys,issued,1,requested);
+        if width==4042{
+            assert_eq!(width+1+physical.len(),4096);assert_eq!(actual.unwrap().status,MoveStatus::CompleteCheckedNow);
+            assert_eq!(z::current_info(&f.sys,file.file).unwrap().file.volume,f.to);
+        }else{
+            assert_eq!(width+1+physical.len(),4097);assert!(actual.is_err());assert!(z::recycle_receipt(&f.sys,issued,1,requested).unwrap().is_none());
+            let s=cut();assert_eq!(s.frontier(),before);assert!(s.moving.is_none()&&s.pending.is_none()&&s.decided(issued).is_none());
+            let credit=Deletion{file:key.file,operation:key.operation,decision:key.decision};
+            s.room_for_effect(crate::ordinary::wire::MAX_FRAME,Effect::Restore(credit)).unwrap();
+            let page=z::list_retained(&f.sys,RecycleFilter::default(),4,None).unwrap();
+            assert_eq!(page.entries.len(),1);assert!(page.entries[0].retained_by_this_deletion_now);
+            assert_eq!(page.entries[0].original.deletion,Some(key));assert!(page.entries[0].pending_restore.is_none());
+            assert_eq!(fs::metadata(&kept).unwrap().ino(),original.ino());assert!(fs::read_dir(&f.new).unwrap().next().is_none());
+            assert!(!f.sys.join("FILE-ALLOCATION").exists()&&!f.sys.join("FILE-INTENT").exists());drop(s);
+            assert_eq!(z::apply_recycle(&f.sys,op(),1,reclaim(key,RestoreTarget::Original)).unwrap().status,MoveStatus::CompleteCheckedNow);
+            assert_eq!(z::current_info(&f.sys,file.file).unwrap().file.volume,f.from);
+        }
+        assert!(!kept.exists());let mut bytes=Vec::new();assert_eq!(z::read_node_to(&f.sys,file.file,node.node,&mut bytes).unwrap(),node);
+        assert_eq!(bytes,b"retained original");
     }
 }

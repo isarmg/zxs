@@ -1,3 +1,4 @@
+use crate::test_support::physical as native_leaf;
 use super::*;
 use crate::{DraftClaim,FormalNode,LengthPolicy,OperationId,Role,SpanEdit,create_empty,initialize,save_first,save_interval,
     commit_working,read_node_to,test_support::PrivateTemp};
@@ -11,7 +12,7 @@ impl Original{
         let p=initialize(OperationId::new().unwrap(),&system,&r.child("recycle"),std::slice::from_ref(&root)).unwrap();
         let vol=p.volumes.iter().find(|x|x.volume.role==Role::File).unwrap().id;let f=create_empty(&system,OperationId::new().unwrap(),vol,"normal").unwrap();
         save_first(&system,OperationId::new().unwrap(),f.file,claim(bytes),Cursor::new(bytes)).unwrap();
-        let first=commit_working(&system,OperationId::new().unwrap(),f.file,1).unwrap();Self{_top:t,_r:r,system,dir:root.join("normal"),first}
+        let first=commit_working(&system,OperationId::new().unwrap(),f.file,1).unwrap();Self{_top:t,_r:r,system,dir:root.join(native_leaf("normal",f.file)),first}
     }
     fn write(&self,at:u64,bytes:&[u8]){
         save_interval(&self.system,OperationId::new().unwrap(),self.first.file,1,
@@ -103,11 +104,11 @@ fn verified_older_inventory_cannot_lend_an_extra_child_or_repeat_a_real_pack_at_
     let live=Clean::capture(&t.system,id).unwrap().verify().unwrap();
     let(p,_,s)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();let(c,f,ds)=live.originals();
     let v=p.ordinary(live.volume()).unwrap();let native=Sites::birthplace(c,f,ds);
-    live.require_at(&v,c"normal",live.source_root(),&native).unwrap();
+    live.require_at(&v,&std::ffi::CString::new(native_leaf("normal",id)).unwrap(),live.source_root(),&native).unwrap();
     let one=*ds.first().unwrap();let object=native.children.first().unwrap().clone();
     let mut wrong=native.clone();wrong.children=ChildRoles::Two(object.clone(),object);
-    assert!(live.require_at(&v,c"normal",live.source_root(),&wrong).is_err());
-    let dir=v.root.child_directory(c"normal").unwrap().unwrap();
+    assert!(live.require_at(&v,&std::ffi::CString::new(native_leaf("normal",id)).unwrap(),live.source_root(),&wrong).is_err());
+    let dir=v.root.child_directory(&std::ffi::CString::new(native_leaf("normal",id)).unwrap()).unwrap().unwrap();
     assert!(Clean::at_original_sites(&v,dir,c,f,ChildRoles::Two(one,one),&wrong).is_err());
     assert_eq!(s.actual_graph(id).unwrap().hashes(),ds.map(|d|d.digest));
     assert!(live.stream(Leaf::IncrNext,|_,_|panic!("an unissued ordinal furnished bytes")).is_err());

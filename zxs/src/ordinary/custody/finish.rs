@@ -17,12 +17,12 @@ pub(super) fn frozen<'a>(s:&'a crate::ordinary::journal::Journal,m:&Moved)->io::
 pub(super) fn history(s:&crate::ordinary::journal::Journal,m:&Moved)->io::Result<(Frame,Commit,ChildRoles<Delta>)>{
     let(c,f,d)=frozen(s,m)?;Ok((c.clone(),f.clone(),d.map(Clone::clone)))
 }
-fn name(m:&Moved)->io::Result<CString>{CString::new(m.original.name.as_bytes()).map_err(|_|invalid("invalid original FILE target name"))}
+fn name(m:&Moved)->io::Result<CString>{crate::ordinary::storage_name::file_leaf(&m.original.name,m.original.file)}
 /// A pre-rename source may be on a different registered root of the same
 /// mount. Pin/scan all original bytes before the namespace transition.
 fn at_source(v:&FileVolume<'_>,label:&CStr,m:&Moved,c:&Frame,f:&Commit,d:Children<'_>)->io::Result<Clean>{
     placed::root(v,&m.original.src_root)?;
-    let dir=v.root.child_directory(label)?.ok_or_else(||invalid("original source missing before rename"))?;
+    let dir=v.root.exact_directory(label)?.ok_or_else(||invalid("original source missing before rename"))?;
     dir.exclusive()?;
     Clean::at_original_sites(v,dir,c,f,d,&Sites::birthplace(c,f,d))
 }
@@ -32,14 +32,14 @@ fn select(system:&Path,r:Request)->io::Result<Scan>{
     r.observe(&p,&s)?.ok_or_else(||invalid("missing original MOVE"))?;
     let(m,a)=s.confirmed_handoff(r.op)?;let(c,f,d)=history(&s,m)?;let dst=p.ordinary(m.original.to)?;
     placed::root(&dst,&m.original.dst_root)?;let name=name(m)?;
-    if dst.root.child_directory(&name)?.is_some(){
+    if dst.root.exact_directory(&name)?.is_some(){
         if let Some(st)=a.stage(){
-            if dst.root.child_directory(&material::staging(m.original.ticket,st.slot))?.is_some(){return Err(invalid("both original installed and reserved MOVE directories are named"));}
+            if dst.root.exact_directory(&material::staging(m.original.ticket,st.slot))?.is_some(){return Err(invalid("both original installed and reserved MOVE directories are named"));}
         }
         let input=Reopened::input(&dst,&name,m,&c,&f,d.as_refs())?;return Ok(Scan::Target{input,fresh:false,name,frame:m.clone()});
     }
     if a.opened(){return Err(invalid("previously admitted installed target missing; never recreate or revert to source"));}
-    material::vacant_for_move(&dst,&m.original.name)?;
+    material::vacant_for_move(&dst,&m.original.name,m.original.file)?;
     match m.original.mode{
         Method::Rename=>{
             let src=p.ordinary(m.original.from)?;
@@ -60,7 +60,7 @@ fn sync_rename(system:&Path,r:Request,m:&Moved,v:&Verified,hook:&mut impl FnMut(
     let src=p.ordinary(m.original.from)?;let dst=p.ordinary(m.original.to)?;let n=name(m)?;let(c,f,d)=history(&s,m)?;
     let sites=Sites::birthplace(&c,&f,d.as_refs());v.require_at(&src,&n,&m.original.src_root,&sites)?;
     if v.physical_bytes()!=m.original.source_bytes||v.digest()?!=m.original.source_material{return Err(invalid("original rename history changed before application"));}
-    placed::root(&dst,&m.original.dst_root)?;material::vacant_for_move(&dst,&m.original.name)?;
+    placed::root(&dst,&m.original.dst_root)?;material::vacant_for_move(&dst,&m.original.name,m.original.file)?;
     src.root.handoff_directory(&n,&dst.root,&n,sites.directory.entity,&sites.directory.birth,||hook(Cut::MoveInstalled))
 }
 fn install_transfer(system:&Path,r:Request,m:&Moved,stage:&CStr,v:&Reopened,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{
@@ -68,7 +68,7 @@ fn install_transfer(system:&Path,r:Request,m:&Moved,stage:&CStr,v:&Reopened,hook
     let(now,a)=s.confirmed_handoff(r.op)?;if now!=m||a.opened()||m.request!=r.digest(&p)?{return Err(invalid("original transfer changed"));}
     let dst=p.ordinary(m.original.to)?;let st=a.stage().ok_or_else(||invalid("no original transfer directory"))?;
     if material::staging(m.original.ticket,st.slot).as_c_str()!=stage{return Err(invalid("different original private target"));}
-    v.require(&dst,stage,now)?;material::vacant_for_move(&dst,&m.original.name)?;
+    v.require(&dst,stage,now)?;material::vacant_for_move(&dst,&m.original.name,m.original.file)?;
     let target=name(m)?;dst.root.handoff_directory(stage,&dst.root,&target,m.target.directory.entity,&m.target.directory.birth,||hook(Cut::MoveInstalled))
 }
 pub(super) fn complete(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<()>{

@@ -4,7 +4,10 @@ use super::*;
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::collections::BTreeSet;
-const MAGIC:&[u8]=b"ZXS/FILE-POOL\0";
+// Single storage layout. This exact prefix is required before any saved
+// path or business operation is used. No previous-format compatibility.
+pub(super) const MAGIC:&[u8]=b"ZXS/FILE-POOL/ID-LEAF-1\0";
+const LABEL_MAGIC:&[u8]=b"ZXS/VOLUME/ID-LEAF-1\0";
 pub(super) const MAX_RECORD:usize=(MAX_FILE_ROOTS+2)*(4096+64+fs::MAX_BIRTH)+256;
 #[derive(Clone)]
 pub(super) struct Record {
@@ -15,15 +18,20 @@ pub(super) struct Record {
     pub(super) actor_uid:u32,
     pub(super) origin_birth:fs::Birth,
     roots:Vec<fs::Birth>,
+    limits:Vec<fs::ComponentLimit>,
 }
 fn tag(role:Role)->u8 {match role{Role::System=>0,Role::Recycle=>1,Role::File=>2}}
 fn invalid_record()->io::Error {invalid("unsupported, damaged or noncanonical SYSTEM registration")}
 
 impl Record {
-    pub(super) fn observe_roots(selection:&Selection)->io::Result<Vec<fs::Birth>>{
-        let roots=selection.roots.iter().map(|(_,dir)|fs::Birth::read(&dir.file)).collect::<io::Result<Vec<_>>>()?;
+    fn observe_roots(selection:&Selection)->io::Result<(Vec<fs::Birth>,Vec<fs::ComponentLimit>)>{
+        let mut roots=Vec::with_capacity(selection.roots.len());let mut limits=Vec::with_capacity(selection.roots.len());
+        for (_,dir) in &selection.roots{
+            dir.require_named()?;let birth=fs::Birth::read(&dir.file)?;let limit=fs::ComponentLimit::held(dir)?;
+            birth.require(&fs::Birth::read(&dir.file)?)?;dir.require_named()?;roots.push(birth);limits.push(limit);
+        }
         Self::distinct_recycle(&roots)?;
-        Ok(roots)
+        Ok((roots,limits))
     }
     fn distinct_recycle(roots:&[fs::Birth])->io::Result<()>{
         if roots.len()<3 || roots.iter().enumerate().any(|(i,r)|i!=1 && r.filesystem()==roots[1].filesystem()){
@@ -34,7 +42,10 @@ impl Record {
     pub(super) fn require_root(&self,index:usize,dir:&HeldDir)->io::Result<()>{
         self.roots[index].require(&fs::Birth::read(&dir.file)?)
     }
-    pub(super) fn new(selection:&Selection, op:OperationId, origin:Entity, origin_birth:fs::Birth, roots:Vec<fs::Birth>)->io::Result<Self>{
+    pub(super) fn new(selection:&Selection, op:OperationId, origin:Entity, origin_birth:fs::Birth)->io::Result<Self>{
+        // The ordered evidence (including the component byte cap) is read
+        // from these same held, selected originals, not filled in by caller.
+        let(roots,limits)=Self::observe_roots(selection)?;
         let mut volumes=Vec::with_capacity(selection.roots.len());
         let mut taken=BTreeSet::new();
         for volume in selection.view(){
@@ -51,16 +62,16 @@ impl Record {
         let encode_birth=|out:&mut Vec<u8>,b:&fs::Birth|{out.push(b.bytes().len() as u8);out.extend_from_slice(b.bytes());};
         encode_birth(&mut bytes,&origin_birth);
         bytes.extend_from_slice(&(info.volumes.len() as u16).to_be_bytes());
-        for (reg,birth) in info.volumes.iter().zip(&roots) {
+        for ((reg,birth),limit) in info.volumes.iter().zip(&roots).zip(&limits) {
             let v=&reg.volume; bytes.push(tag(v.role)); bytes.extend_from_slice(&reg.id.0);
-            bytes.extend_from_slice(&v.entity.device.to_be_bytes());bytes.extend_from_slice(&v.entity.inode.to_be_bytes());encode_birth(&mut bytes,birth);
+            bytes.extend_from_slice(&v.entity.device.to_be_bytes());bytes.extend_from_slice(&v.entity.inode.to_be_bytes());encode_birth(&mut bytes,birth);bytes.push(limit.encoded());
             let path=v.path.as_os_str().as_bytes();
             let len=u16::try_from(path.len()).map_err(|_|invalid_record())?;
             bytes.extend_from_slice(&len.to_be_bytes()); bytes.extend_from_slice(path);
         }
         let digest=crate::hash::digest(&bytes)?;
         bytes.extend_from_slice(&digest);
-        Ok(Self{info,bytes,digest,origin,actor_uid,origin_birth,roots})
+        Ok(Self{info,bytes,digest,origin,actor_uid,origin_birth,roots,limits})
     }
 
     pub(super) fn read(bytes:Vec<u8>)->io::Result<Self>{
@@ -99,7 +110,7 @@ impl Record {
         let count=short(&mut input)?;
         if !(3..=MAX_FILE_ROOTS+2).contains(&count){return Err(invalid_record());}
         let mut volumes=Vec::with_capacity(count);
-        let mut roots=Vec::with_capacity(count);
+        let mut roots=Vec::with_capacity(count);let mut limits=Vec::with_capacity(count);
         let mut ids=BTreeSet::new();let mut entities=BTreeSet::new();let mut paths=BTreeSet::new();
         let mut last_file:Option<PathBuf>=None;
         for index in 0..count{
@@ -107,7 +118,7 @@ impl Record {
             if take(&mut input,1)?[0]!=tag(role){return Err(invalid_record());}
             let volume_id=VolumeId(id(&mut input)?);
             let entity=Entity {device:num(&mut input)?,inode:num(&mut input)?};
-            roots.push(birth(&mut input)?);
+            roots.push(birth(&mut input)?);limits.push(fs::ComponentLimit::from_original(take(&mut input,1)?[0])?);
             let length=short(&mut input)?;
             if length==0 || length>4096{return Err(invalid_record());}
             let path=PathBuf::from(OsString::from_vec(take(&mut input,length)?.to_vec()));
@@ -132,12 +143,30 @@ impl Record {
         if volumes.iter().any(|v|v.volume.role!=Role::Recycle && v.volume.entity.device==recycle) {
             return Err(invalid_record());
         }
-        Ok((Self{info:PoolInfo{id:pool,initialized_by:op,volumes},bytes,digest,origin,actor_uid,origin_birth,roots},input))
+        Ok((Self{info:PoolInfo{id:pool,initialized_by:op,volumes},bytes,digest,origin,actor_uid,origin_birth,roots,limits},input))
     }
 
     pub(super) fn digest(&self)->[u8;32]{self.digest}
     pub(super) fn original_root(&self,i:usize)->(Entity,&fs::Birth){
         (self.info.volumes[i].volume.entity,&self.roots[i])
+    }
+    pub(super) fn ordinary_limit(&self,volume:VolumeId,uid:u32)->io::Result<fs::ComponentLimit>{
+        if self.actor_uid!=uid{return Err(invalid("different original registration principal"));}
+        let i=self.info.volumes.iter().position(|v|v.id==volume&&v.volume.role==Role::File)
+            .ok_or_else(||invalid("component limit requires an original ordinary volume"))?;
+        Ok(self.limits[i])
+    }
+    /// Pure original R geometry. The caller cannot choose a role, path, or
+    /// replacement volume; an offline R stays offline during ordinary birth.
+    pub(super) fn dedicated_name_budget(&self,uid:u32)->io::Result<fs::NameBudget>{
+        let r=self.info.volumes.get(1).filter(|r|r.volume.role==Role::Recycle&&self.actor_uid==uid)
+            .ok_or_else(||invalid("missing this principal's original dedicated recycle volume"))?;
+        Ok(fs::NameBudget::from_original(fs::path_budget(&r.volume.path)?,self.limits[1]))
+    }
+    pub(super) fn check_registered_limits(&self,selection:&Selection)->io::Result<()>{
+        for ((_,dir),expected) in selection.roots.iter().zip(&self.limits){
+            if fs::ComponentLimit::held(dir)?!=*expected{return Err(invalid("selected root component limit changed during registration"));}
+        }Ok(())
     }
     // A business directory is never the SYSTEM register or any registered
     // root, even when ordinary and SYSTEM roots share a filesystem.
@@ -153,7 +182,7 @@ impl Record {
 
     pub(super) fn label(&self,index:usize)->Vec<u8>{
         let root=&self.info.volumes[index];
-        let mut bytes=Vec::new();bytes.extend_from_slice(b"ZXS/VOLUME\0");
+        let mut bytes=Vec::new();bytes.extend_from_slice(LABEL_MAGIC);
         bytes.push(tag(root.volume.role));bytes.extend_from_slice(&self.info.id.0);
         bytes.extend_from_slice(&root.id.0);bytes.extend_from_slice(&self.info.initialized_by.0);
         // Only the SYSTEM label authenticates which full, immutable original

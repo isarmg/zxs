@@ -41,7 +41,7 @@ pub(super) fn complete(v:&FileVolume<'_>,name:&CStr,m:&Moved,c:&Frame,f:&Commit,
     }
     root(v,&m.original.dst_root)?;
     if v.id()!=m.original.to{return Err(invalid("wrong registered MOVE destination"));}
-    let dir=v.root.child_directory(name)?.ok_or_else(||invalid("decided FILE not yet installed at its original target"))?;
+    let dir=v.exact_directory(name)?.ok_or_else(||invalid("decided FILE not yet installed at its original target"))?;
     material::verify_header_at(&dir,&c.create,&m.target.directory,&m.target.local)?;
     let rows=roles(c,f,d,&m.target)?;
     let want:BTreeSet<_>=rows.iter().map(|r|r.name.to_bytes().to_vec()).collect();
@@ -63,8 +63,8 @@ pub(in crate::ordinary) fn active_dir(s:&Journal,v:&FileVolume<'_>,c:&Frame)->io
         a.confirm_phase(v.pool)?;
     }
     root(v,&m.original.dst_root)?;
-    let name=CString::new(m.original.name.as_bytes()).map_err(|_|invalid("invalid original name"))?;
-    let dir=v.root.child_directory(&name)?.ok_or_else(||invalid("current owner unavailable; never read from the previous location"))?;
+    let name=crate::ordinary::storage_name::file_leaf(&m.original.name,m.original.file)?;
+    let dir=v.exact_directory(&name)?.ok_or_else(||invalid("current owner unavailable; never read from the previous location"))?;
     if let Some(slot)=m.stage{if v.root.entry_present(&material::staging(m.original.ticket,slot))?{
         return Err(invalid("unexpected private stage on an installed owner"));}
     }
@@ -102,7 +102,7 @@ impl Reopened{
         self.verified.require_at(v,name,&m.original.dst_root,&m.target)
     }
     pub(super) fn verify_installed(&self,v:&FileVolume<'_>,m:&Moved)->io::Result<()>{
-        let name=CString::new(m.original.name.as_bytes()).map_err(|_|invalid("invalid original target"))?;
+        let name=crate::ordinary::storage_name::file_leaf(&m.original.name,m.original.file)?;
         self.require(v,&name,m)
     }
     pub(super) fn files(&self)->&[super::source::Bytes]{self.verified.objects()}

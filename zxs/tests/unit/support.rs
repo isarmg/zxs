@@ -44,3 +44,10 @@ pub(crate) fn native_root_length(parent:&Path,n:usize)->PathBuf{
     }
     assert_eq!(p.as_os_str().as_bytes().len(),n);p
 }
+
+/// Expected disk spelling from the public naming rule, independent of the
+/// production name codec. The original ID comes from the fixture's receipt.
+pub(crate) fn physical(display:&str,file:impl std::fmt::Display)->String{
+    let (stem,ext)=display.split_at(display.rfind('.').filter(|&p|p!=0).unwrap_or(display.len()));
+    format!("{stem}-{file}{ext}")
+}

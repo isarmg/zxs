@@ -6,7 +6,7 @@ use std::io;
 impl CustodyEnd<'_,'_>{
     fn old_pair(&self,key:&LifecyclePrevious)->io::Result<(Option<HeldDir>,Option<HeldDir>)>{
         self.require_current()?;let(b,q)=key.names(self.pool,self.grant,self)?;
-        let pair=(self.root.child_directory(&b)?,self.root.child_directory(&q)?);self.require_current()?;Ok(pair)
+        let pair=(self.root.exact_directory(&b)?,self.root.exact_directory(&q)?);self.require_current()?;Ok(pair)
     }
     pub(crate) fn capture_retirement(&self,key:&LifecyclePrevious)->io::Result<LifecycleOriginals>{
         let(b,q)=self.old_pair(key)?;let raw=key.pin(self.pool,self.grant,self,b,q)?;

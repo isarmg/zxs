@@ -51,7 +51,10 @@ pub(super) fn perform(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Resu
                 s.admit_new_handoff(&p,r.op,r.id,r.from,r.to)?;
                 let c=s.file(r.id).ok_or_else(||invalid("missing original FILE"))?;
                 let old=p.ordinary(r.from)?;let target=p.ordinary(r.to)?;
-                old.require_current()?;ordinary::material::vacant_for_move(&target,&c.create.name)?;
+                old.require_current()?;for v in [&old,&target]{
+                    ordinary::material::held_residence(v,&v.root,&c.create.name,c.create.file,r.op)?;
+                }
+                ordinary::material::vacant_for_move(&target,&c.create.name,c.create.file)?;
                 // Request and ticket are equally wide native IDs. Reject an
                 // impossible path before scanning even a large original FILE;
                 // reservation independently checks its actual issued ticket.
@@ -93,7 +96,7 @@ pub(super) fn perform(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Resu
                     if src.same_mount(&new.root)?!=(m.original.mode==super::destination::Method::Rename){
                         return Err(invalid("original MOVE method changed before confirmation"));
                     }
-                    ordinary::material::vacant_for_move(new,&m.original.name)?;
+                    ordinary::material::vacant_for_move(new,&m.original.name,m.original.file)?;
                     current()?;
                 }Ok(())
             })?;

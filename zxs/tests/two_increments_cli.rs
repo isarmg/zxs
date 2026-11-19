@@ -77,7 +77,7 @@ fn two_editors_one_file_three_fixed_histories_and_original_replays_after_custody
     let listed=text(cli(&sys,"recycle-list",None,&["8","all","-","-"],None));assert!(listed.contains(id)&&listed.contains(digest));
     let rest=op();let rargs=[id,&del[..],digest,"2",&to[..]];let restored=text(cli(&sys,"file-restore",Some(rest),&rargs,None));
     assert!(restored.contains("CompleteCheckedNow")&&restored.contains(digest));checked();
-    assert_eq!(fs::read_dir(new.join("shared")).unwrap().count(),5);
+    assert_eq!(fs::read_dir(new.join(support::physical("shared",&id))).unwrap().count(),5);
     // Completed requests do not need the old source, the current FILE or
     // the recycle volume. Retrying a SAVE supplies EOF, never a fresh body.
     fs::rename(&new,b.0.join("unavailable-B")).unwrap();fs::rename(&bin,rr.0.join("unavailable-R")).unwrap();
@@ -93,4 +93,73 @@ fn two_editors_one_file_three_fixed_histories_and_original_replays_after_custody
     assert!(text(cli(&sys,"file-restore",Some(rest),&rargs,None)).contains("OriginalPublished"));
     refused(cli(&sys,"file-write-range",Some(save_a),&[id,"2","4","5",HELLO_SHA,"12"],None));
     let wrong="00".repeat(32);refused(cli(&sys,"file-restore-receipt",Some(rest),&[id,&del,&wrong,"2",&to],None));
+}
+
+#[test]
+#[ignore="source-only end-to-end case-sensitive names; real private registered FILE and separate recycle filesystems required"]
+fn exact_display_lookup_two_equal_spelling_histories_and_one_unchanged_name_per_container(){
+    let h=support::PrivateTemp::under(&std::env::temp_dir());
+    let rh=support::PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
+    let sys=h.child("system");let a=h.child("A");let b=h.child("B");let c=h.child("C");let bin=rh.child("dedicated-R");
+    let registry=zxs::initialize(op(),&sys,&bin,&[a.clone(),b.clone(),c.clone()]).unwrap();
+    let volume=|p:&Path|registry.volumes.iter().find(|r|r.volume.path==p).unwrap().id.to_string();
+    let(va,vb,vc)=(volume(&a),volume(&b),volume(&c));
+    let lookup=|v:&str,name:&str|cli(&sys,"file-lookup",None,&[v,name],None);
+    let at=|v:&str,name:&str,body:&[u8],sha:&str|{
+        let create=op();let receipt=text(cli(&sys,"file-create",Some(create),&[v,name],None));
+        let id=token(&receipt,"file").to_owned();assert_eq!(token(&text(lookup(v,name)),"file"),id);
+        bytes(cli(&sys,"file-save",Some(op()),&[&id,&body.len().to_string(),sha],Some(body)));
+        let first=text(cli(&sys,"file-commit",Some(op()),&[&id,"1"],None));let node=token(&first,"node").to_owned();
+        assert_eq!(bytes(cli(&sys,"file-node-read",None,&[&id,&node],None)),body);(id,node)
+    };
+    let u=at(&va,"Report.xlsx",b"abc",ABC_SHA);let l=at(&va,"report.xlsx",b"hello",HELLO_SHA);
+    let other=at(&vb,"Report.xlsx",b"hello",HELLO_SHA);assert_ne!(u.0,l.0);assert_ne!(u.0,other.0);
+    let upper=format!("Report-{}.xlsx",u.0);let lower=format!("report-{}.xlsx",l.0);let duplicate=format!("Report-{}.xlsx",other.0);
+    let leaves=|p:&Path|fs::read_dir(p).unwrap().map(|e|e.unwrap().file_name().into_string().unwrap()).collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(leaves(&a),[upper.clone(),lower.clone()].into_iter().collect());assert_eq!(leaves(&b),[duplicate.clone()].into_iter().collect());
+    refused(lookup(&va,"REPORT.xlsx"));refused(lookup(&va,&upper)); // administrative leaf is not a second route
+    for verb in ["file-list","dir-list"]{let args=if verb=="dir-list"{vec![va.as_str(),"root"]}else{vec![va.as_str()]};
+        let listing=text(cli(&sys,verb,None,&args,None));assert!(listing.contains("name Report.xlsx")&&listing.contains("name report.xlsx"));
+        assert!(!listing.contains(&upper)&&!listing.contains(&lower));}
+    refused(cli(&sys,"dir-mkdir",Some(op()),&[&va,"root","Report.xlsx"],None)); // exact logical collision
+    refused(cli(&sys,"dir-mkdir",Some(op()),&[&va,"root",&upper],None));       // exact native collision, different logical name
+    bytes(cli(&sys,"dir-mkdir",Some(op()),&[&vc,"root","Report.xlsx"],None));
+    bytes(cli(&sys,"dir-mkdir",Some(op()),&[&vb,"root",&upper],None)); // collides with U only, not with this different FILE
+    let del=|file:&str,v:&str,e:&str|{
+        let op=op();let reply=text(cli(&sys,"file-delete",Some(op),&[file,v,e],None));assert!(reply.contains("CompleteCheckedNow"));
+        (op,token(&reply,"delete-decision").to_owned())
+    };
+    let restore=|op_id,file:&str,d:&(OperationId,String),e:&str,v:&str|{
+        cli(&sys,"file-restore",Some(op_id),&[file,&d.0.to_string(),&d.1,e,v],None)
+    };
+    let du=del(&u.0,&va,"0");let dl=del(&l.0,&va,"0");let db=del(&other.0,&vb,"0");
+    assert_eq!(leaves(&bin),[upper.clone(),lower.clone(),duplicate.clone()].into_iter().collect());
+    refused(lookup(&va,"Report.xlsx"));refused(lookup(&va,"report.xlsx"));
+    let before=fs::read(sys.join("REGISTRATION")).unwrap();let items=leaves(&bin);
+    for target in [&vb,&vc]{ // first conflicts only physically, second only logically
+        let o=op();refused(restore(o,&u.0,&du,"1",target));assert!(zxs::recycle_receipt(&sys,o,1,zxs::RecycleAction::Restore{
+            deleted:zxs::DeletionKey::from_hex(u.0.parse().unwrap(),du.0,&du.1).unwrap(),
+            target:zxs::RestoreTarget::Volume(target.parse().unwrap())}).unwrap().is_none());
+        assert_eq!(fs::read(sys.join("REGISTRATION")).unwrap(),before);
+        assert!(!sys.join("FILE-ALLOCATION").exists()&&!sys.join("FILE-INTENT").exists());assert_eq!(leaves(&bin),items);}
+    // Reverse the three original deletes. A stored spelling is never parsed
+    // into a claimant; the delete Op and its digest remain mandatory.
+    bytes(restore(op(),&other.0,&db,"1","original"));bytes(restore(op(),&l.0,&dl,"1","original"));
+    let old_restore=op();bytes(restore(old_restore,&u.0,&du,"1","original"));assert!(leaves(&bin).is_empty());
+    for (v,name,row,native,payload) in [(&va,"Report.xlsx",&u,&upper,&b"abc"[..]),(&va,"report.xlsx",&l,&lower,&b"hello"[..]),(&vb,"Report.xlsx",&other,&duplicate,&b"hello"[..])]{
+        assert_eq!(token(&text(lookup(v,name)),"file"),row.0);
+        assert_eq!(bytes(cli(&sys,"file-read",None,&[&row.0],None)),payload);
+        assert_eq!(bytes(cli(&sys,"file-node-read",None,&[&row.0,&row.1],None)),payload);
+        let parent=if v==&va{&a}else{&b};assert!(parent.join(native).join("FILE").is_file());
+    }
+    let again=del(&u.0,&va,"2");assert_ne!(du,again);assert_eq!(leaves(&bin),[upper.clone()].into_iter().collect());
+    assert!(text(restore(old_restore,&u.0,&du,"1","original")).contains("OriginalPublished"));
+    refused(restore(op(),&u.0,&du,"3","original"));refused(lookup(&va,"Report.xlsx"));assert_eq!(leaves(&bin),[upper.clone()].into_iter().collect());
+    bytes(restore(op(),&u.0,&again,"3","original"));assert_eq!(bytes(cli(&sys,"file-node-read",None,&[&u.0,&u.1],None)),b"abc");
+    // Exact Unicode business names, without case mapping or NFC/NFD lookup.
+    let cn=at(&va,"方案.xlsx",b"abc",ABC_SHA);assert!(a.join(format!("方案-{}.xlsx",cn.0)).is_dir());
+    let composed=at(&vc,"é.txt",b"hello",HELLO_SHA);
+    refused(lookup(&vc,"e\u{301}.txt"));
+    let decomposed=at(&vc,"e\u{301}.txt",b"abc",ABC_SHA);assert_ne!(composed.0,decomposed.0);
+    assert_eq!(token(&text(lookup(&vc,"é.txt")),"file"),composed.0);
 }

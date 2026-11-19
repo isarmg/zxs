@@ -143,6 +143,7 @@ impl<'v> IncomingSelection<'v>{
     pub(crate) fn stream(&self,i:usize,output:impl FnMut(u64,&[u8])->io::Result<()>)->io::Result<()>{
         let x=self.source.objects().get(i).ok_or_else(||invalid("no such original source role"))?;self.source.stream(x.kind,output)
     }
+    pub(crate) fn ticket(&self)->OperationId{self.ticket}
     pub(crate) fn source_isolation(&self)->CString{transfer::isolation_name(self.ticket)}
     pub(crate) fn stage_names(&self)->impl Iterator<Item=CString>+'_ {(0..SLOTS).map(|i|material::staging(self.ticket,i))}
     pub(crate) fn check_occupancy(&self,p:&LocalPool,g:&LifecycleGrant<'_>,role:Role,leaf:&CStr,names:&[Vec<u8>])->io::Result<()>{
@@ -152,12 +153,12 @@ impl<'v> IncomingSelection<'v>{
             return Err(invalid("not the original, fresh lifecycle target"));}
         let spelling=leaf.to_str().map_err(|_|invalid("noncanonical custody target name"))?;
         let selected=|n:&[u8]|material::private_slot(n).is_some_and(|(op,_)|op==self.ticket);
-        if names.iter().any(|n|n.eq_ignore_ascii_case(leaf.to_bytes())||(s.moving.is_none()&&selected(n))){
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists,"original target, equivalent name or fresh private ticket already occupied"));}
+        if names.iter().any(|n|n.as_slice()==leaf.to_bytes()||(s.moving.is_none()&&selected(n))){
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists,"exact original target or fresh private ticket already occupied"));}
         match role{
-            Role::File=>{if !matches!(self.request.call,super::purpose::Call::Restore{..})||self.source.name()!=spelling{
+            Role::File=>{if !matches!(self.request.call,super::purpose::Call::Restore{..})||crate::ordinary::storage_name::file_leaf(self.source.name(),self.request.id)?.as_c_str()!=leaf{
                 return Err(invalid("not an authorized ordinary restore target"));}
-                material::check_siblings(names,spelling,false)?;}
+}
             Role::Recycle=>{if self.request.call!=super::purpose::Call::Delete{return Err(invalid("not this original dedicated recycle destination"));}
                 // No content scan, no borrowing a directory listing as current
                 // custody. The only allowed occupants are current confirmed R

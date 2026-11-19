@@ -1,5 +1,6 @@
 // Test-source fixtures only. All paths are isolated test roots; no production
 // directory is scanned or borrowed by any of these scenarios.
+use crate::test_support::physical as native_leaf;
 use std::io::Read;
 use crate::pool::lease::{Access,LocalPool};
 
@@ -23,16 +24,16 @@ fn frozen(f:&Fixture,r:Request,first:&FormalNode)->(u64,[u8;32]){
 }
 fn round_trip(cross:bool){
     let f=Fixture::build(cross,false);let(item,first,r)=seed(&f);
-    let original_ids=inventory_ids(&f.old.join("one"));assert_eq!(original_ids.len(),3);
+    let original_ids=inventory_ids(&f.old.join(native_leaf("one",r.id)));assert_eq!(original_ids.len(),3);
     assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);
-    let dest=f.new.join("one");let three=inventory_ids(&dest);assert_eq!(three.len(),3);
+    let dest=f.new.join(native_leaf("one",r.id));let three=inventory_ids(&dest);assert_eq!(three.len(),3);
     let fixed=frozen(&f,r,&first);
     if cross{for(name,id)in &original_ids{assert_ne!(id,&three[name]);}}else{assert_eq!(three,original_ids);}
     // A new object at the original business name must not acquire either
     // the old FILE's history or the right to supply a missing B material.
     let other=z::create_empty(&f.sys,op(),f.from,"one").unwrap();assert_ne!(item.file,other.file);
     assert_ne!(item.entry,other.entry);assert_ne!(item.history,other.history);
-    let other_ids=inventory_ids(&f.old.join("one"));
+    let other_ids=inventory_ids(&f.old.join(native_leaf("one",other.file)));
     let away=f.old.with_file_name("offline-owner");fs::rename(&f.old,&away).unwrap();
     let patch=vec![b'A';4096];let w1=op();let e=edit(0,&patch);
     let a=z::save_interval(&f.sys,w1,r.id,1,e,Cursor::new(&patch)).unwrap();
@@ -65,9 +66,9 @@ fn round_trip(cross:bool){
                 assert_eq!(obs.status,z::CreationStatus::PublishedInstallationUnconfirmed);
                 let child=obs.published.unwrap();assert_eq!(child.working_revision,3);
                 assert_eq!(z::list_initial_files(&self.f.sys,self.f.to)?.files[0].file,self.r.id);
-                assert_eq!(inventory_ids(&self.f.new.join("one")).len(),6);
+                assert_eq!(inventory_ids(&self.f.new.join(native_leaf("one",self.r.id))).len(),6);
                 node(self.f,self.r.id,self.first,BEFORE);frozen(self.f,self.r,self.first);
-                let rogue=self.f.new.join("one/unsigned");fs::write(&rogue,b"not issued")?;
+                let rogue=self.f.new.join(native_leaf("one",self.r.id)).join("unsigned");fs::write(&rogue,b"not issued")?;
                 assert!(z::list_initial_files(&self.f.sys,self.f.to).is_err());
                 assert_eq!(fs::read(&rogue)?,b"not issued");fs::remove_file(rogue)?;
             }
@@ -85,7 +86,7 @@ fn round_trip(cross:bool){
     assert_eq!(z::current_info(&f.sys,r.id).unwrap().head,Some(child.clone()));
     assert_eq!(frozen(&f,r,&first),fixed);assert_eq!(f.receipt(r).decision_sequence,Some(fixed.0));
     assert_eq!(f.call(r).unwrap().status,MoveStatus::OriginalPublished);
-    fs::rename(&away,&f.old).unwrap();assert_eq!(inventory_ids(&f.old.join("one")),other_ids);
+    fs::rename(&away,&f.old).unwrap();assert_eq!(inventory_ids(&f.old.join(native_leaf("one",other.file))),other_ids);
     let wrong=f.new.with_file_name("unavailable-destination");fs::rename(&f.new,&wrong).unwrap();
     let mut empty=Vec::new();assert!(z::read_current_to(&f.sys,r.id,&mut empty).is_err());assert!(empty.is_empty());
     assert!(z::read_node_to(&f.sys,r.id,first.node,&mut empty).is_err());assert!(empty.is_empty());
@@ -112,7 +113,7 @@ fn after_opened_a_single_full_reader_blocks_source_release_and_b_writes_but_not_
         fn write(&mut self,b:&[u8])->io::Result<usize>{
             if !self.hit{self.hit=true;
                 assert!(self.f.call(self.r).is_err());assert_eq!(self.f.receipt(self.r).status,MoveStatus::TargetReopenedSourcePending);
-                assert_eq!(inventory_ids(&self.f.old.join("one")).len(),3);
+                assert_eq!(inventory_ids(&self.f.old.join(native_leaf("one",self.r.id))).len(),3);
                 node(self.f,self.r.id,self.n,BEFORE);
                 assert!(z::save_interval(&self.f.sys,self.w,self.r.id,1,edit(0,b"K"),Cursor::new(b"K")).is_err());
                 assert!(z::interval_receipt(&self.f.sys,self.w)?.is_none());
@@ -124,7 +125,7 @@ fn after_opened_a_single_full_reader_blocks_source_release_and_b_writes_but_not_
     z::read_node_to(&f.sys,r.id,first.node,&mut old).unwrap();assert!(old.hit);
     for left in [2,1,0]{
         stop_at(&f,r,Cut::MoveLeafRetired);
-        let held=fs::read_dir(&f.old).unwrap().map(|e|e.unwrap().path()).find(|n|n.file_name().unwrap().to_string_lossy().starts_with(".zxs-move-out-")).unwrap();
+        let held=fs::read_dir(&f.old).unwrap().map(|e|e.unwrap().path()).find(|n|n.file_name().unwrap().to_string_lossy().starts_with(".zxs-moveout-")).unwrap();
         assert_eq!(inventory_ids(&held).len(),left);
     }
     stop_at(&f,r,Cut::MoveEmptyConfirmed);assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);
@@ -146,7 +147,7 @@ fn an_inflight_original_a_write_cannot_be_redirected_to_its_same_inode_on_b(){
     }
     let mut src=Overlap{f:&f,r,seen:false};let op1=op();
     z::save_interval(&f.sys,op1,r.id,1,edit(0,b"Y"),&mut src).unwrap();assert!(src.seen);
-    assert!(f.call(r).is_err());assert!(!f.new.join("one").exists());
+    assert!(f.call(r).is_err());assert!(!f.new.join(native_leaf("one",r.id)).exists());
     node(&f,r.id,&first,BEFORE);assert_eq!(z::current_info(&f.sys,r.id).unwrap().file.volume,f.from);
 }
 
@@ -182,7 +183,7 @@ fn a_later_handoff_source_uses_the_actual_b_roles_and_never_adds_a_new_b_child_t
     let recycle=z::inspect(&f.sys).unwrap().volumes.into_iter().find(|v|v.volume.role==z::Role::Recycle).unwrap().id;
     let checked=p.observe_dedicated(crate::pool::lease::recycle::Direction::ToRecycle,f.to,recycle).unwrap();
     let (_,to)=checked.registration().originals();let target=crate::ordinary::wire::NativeObject{entity:to.1,birth:to.2.clone()};
-    let volume=p.ordinary(f.to).unwrap();let dir=volume.root.child_directory(c"one").unwrap().unwrap();
+    let volume=p.ordinary(f.to).unwrap();let dir=volume.root.child_directory(&std::ffi::CString::new(native_leaf("one",c.create.file)).unwrap()).unwrap().unwrap();
     let observed=super::super::source::Clean::at_original_sites(&volume,dir,c,full,crate::ordinary::custody::transfer::ChildRoles::One(d),&sites).unwrap().verify().unwrap();
     let mut proposed=m.original.clone();proposed.op=op();proposed.ticket=op();proposed.children=crate::ordinary::custody::transfer::ChildRoles::One(d.digest);
     proposed.source_material=observed.digest().unwrap();proposed.source_bytes=observed.physical_bytes();
@@ -231,8 +232,8 @@ fn only_the_original_local_subject_and_clean_file_can_borrow_the_two_physical_en
     let(p,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();
     let grant=LifecycleGrant::capture(&p,request).unwrap();
     assert_eq!(grant.prior(),s.file(request.id).unwrap().digest);
-    assert_eq!(grant.name(Side::Source).to_bytes(),b"name");
-    assert!(grant.name(Side::Target).to_bytes().starts_with(b".zxs-retained-"));
+    assert_eq!(grant.name(Side::Source).to_bytes(),native_leaf("name",request.id).as_bytes());
+    assert_eq!(grant.name(Side::Target),grant.name(Side::Source));
     let orig=p.custody_end(&grant,Side::Source).unwrap();let bin=p.custody_end(&grant,Side::Target).unwrap();
     assert_eq!((orig.id(),orig.role(),bin.id(),bin.role()),(f.from,crate::Role::File,rr.id,crate::Role::Recycle));
     assert_eq!(bin.identity().unwrap(),(grant.root(Side::Target).entity,grant.root(Side::Target).birth.clone()));
@@ -247,7 +248,7 @@ fn only_the_original_local_subject_and_clean_file_can_borrow_the_two_physical_en
     assert!(other_cut.custody_end(&grant,Side::Target).is_err());assert!(p.ordinary(rr.id).is_err());
     assert!(!bin.target_present().unwrap());assert!(s.decided(request.op).is_none());assert!(s.moving.is_none());
     drop(orig);drop(bin);drop(other_cut);drop(grant);drop(s);drop(p);
-    assert!(f.old.join("name").is_dir());assert!(fs::read_dir(&rr.volume.path).unwrap().next().is_none());
+    assert!(f.old.join(native_leaf("name",f.file.file)).is_dir());assert!(fs::read_dir(&rr.volume.path).unwrap().next().is_none());
     let new=z::create_empty(&f.sys,request.op,f.to,"same-old-op-still-unused").unwrap();assert_ne!(new.file,request.id);
     let(p,_,_)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();assert!(LifecycleGrant::capture(&p,request).is_err());
 }
@@ -268,11 +269,11 @@ fn soft_delete_preparation_reads_the_true_b_container_after_a_disconnect_and_ref
         assert_eq!(held.objects().len(),4);
         let mut raw=Vec::new();held.stream(Leaf::FullRaw,|_,v|{raw.extend_from_slice(v);Ok(())}).unwrap();assert_eq!(raw,BEFORE);
         let pack=held.objects().iter().find(|part|part.kind==Leaf::Incr).unwrap();
-        let bmeta=fs::metadata(f.new.join("one").join(format!("{}-one",second.storage))).unwrap();
+        let bmeta=fs::metadata(f.new.join(native_leaf("one",r.id)).join(format!("{}-one",second.storage))).unwrap();
         assert_eq!((pack.original.entity.device,pack.original.entity.inode),(bmeta.dev(),bmeta.ino()));
     }
     assert!(Clean::capture_lifecycle(&f.sys,Request{from:f.from,..req}).is_err());
-    let parent=f.new.join("one").join(format!("{}-one",first.storage));let mut corrupt=BEFORE.to_vec();corrupt[0]^=31;
+    let parent=f.new.join(native_leaf("one",r.id)).join(format!("{}-one",first.storage));let mut corrupt=BEFORE.to_vec();corrupt[0]^=31;
     fs::write(&parent,&corrupt).unwrap();assert!(Clean::capture_lifecycle(&f.sys,req).unwrap().verify().is_err());
     assert_eq!(fs::read(&parent).unwrap(),corrupt);
     assert!(fs::read_dir(&recycle.volume.path).unwrap().next().is_none());
@@ -482,12 +483,12 @@ fn delete_cold_frontier_hides_only_the_new_decision_and_its_exact_recycle_can_re
     assert_eq!(now.retained().unwrap().decision,m.digest);assert_eq!(s.before_handoff(&m).unwrap().volume(),f.to);
     assert_eq!(r.observe(&p,&s).unwrap().unwrap().status,MoveStatus::DecidedTargetPending);drop(p);
     for n in [&f.first,&f.last]{assert!(z::read_node_to(&f.sys,r.id,n.node,&mut Vec::new()).is_err());}
-    assert!(z::current_info(&f.sys,r.id).is_err());assert!(f.new.join("name").is_dir());
+    assert!(z::current_info(&f.sys,r.id).is_err());assert!(f.new.join(native_leaf("name",f.file.file)).is_dir());
     let listed=z::list_initial_files(&f.sys,f.to).unwrap();assert_eq!(listed.files,[sibling]);assert!(listed.pending_moves.is_empty());
     let offline=f.new.with_file_name("source-disconnected-after-original-decision");fs::rename(&f.new,&offline).unwrap();
     assert!(lifecycle::installed(&f.sys,r,&m,&mut |at|if at==Cut::MoveInstalled{Err(io::Error::other("rename completed before parent sync"))}else{Ok(())}).is_err());
     let checked=lifecycle::installed(&f.sys,r,&m,&mut |_|Ok(())).unwrap();assert!(checked.installed());
-    let old=offline.join("name");assert_eq!(fs::read_dir(old).unwrap().count(),4); // installed is not a completed retirement
+    let old=offline.join(native_leaf("name",f.file.file));assert_eq!(fs::read_dir(old).unwrap().count(),4); // installed is not a completed retirement
     let(p,_,s)=LocalPool::with_snapshot(&f.sys,Access::Read).unwrap();let receipt=r.observe(&p,&s).unwrap().unwrap();
     assert_eq!((receipt.status,receipt.decision_sequence),(MoveStatus::TargetReopenedSourcePending,Some(m.seq)));
     assert!(r.observe(&p,&s).is_ok());assert!(Request{op:r.op,epoch:0,..r}.observe(&p,&s).is_err());
@@ -536,7 +537,7 @@ fn a_warm_complete_but_unconfirmed_delete_refuses_the_same_target_conflict_as_a_
 fn later_b_native_child_goes_to_recycle_by_its_own_original_and_explicit_restore_does_not_open_offline_b(){
     use crate::ordinary::custody::{lifecycle,purpose::Call};use std::os::unix::ffi::OsStrExt;
     let f=Fixture::build(true,false);let(file,parent,moved)=seed(&f);f.call(moved).unwrap();
-    let before_b=inventory_ids(&f.new.join("one"));assert_eq!(before_b.len(),3);
+    let before_b=inventory_ids(&f.new.join(native_leaf("one",file.file)));assert_eq!(before_b.len(),3);
     let bbytes=b"real original later B-native INCR";
     z::save_interval(&f.sys,op(),file.file,1,edit(0,bbytes),Cursor::new(bbytes)).unwrap();
     let child=z::commit_working(&f.sys,op(),file.file,2).unwrap();
@@ -545,7 +546,7 @@ fn later_b_native_child_goes_to_recycle_by_its_own_original_and_explicit_restore
     let kept=rpath(&rr.volume.path,&del,&file.name);
     fn rpath(root:&Path,del:&Request,name:&str)->PathBuf{let n=del.call.leaves(del.id,del.op,name).unwrap().1;
         root.join(std::ffi::OsStr::from_bytes(n.to_bytes()))}
-    let at_b=f.new.join("one");
+    let at_b=f.new.join(native_leaf("one",file.file));
     assert!(lifecycle::perform(&f.sys,del,&mut |c|if c==Cut::MoveSourceIsolated{Err(io::Error::other("source isolated"))}else{Ok(())}).is_err());
     assert!(!at_b.exists());assert_eq!(inventory_ids(&kept).len(),4);
     assert_eq!(z::list_initial_files(&f.sys,f.to).unwrap().files,[outsider.clone()]);

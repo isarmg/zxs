@@ -14,6 +14,21 @@ int zxs_open_directory(int parent, const char *name) {
     return openat(parent, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
 }
 
+/* Per-directory native component limit. POSIX -1 with errno unchanged
+   means indeterminate, not a promise that a 255-byte name is possible. */
+int zxs_component_limit(int fd) {
+    long n;
+    do {
+        errno = 0;
+        n = fpathconf(fd, _PC_NAME_MAX);
+    } while (n == -1 && errno == EINTR);
+    if (n <= 0) {
+        if (errno == 0) errno = EOPNOTSUPP;
+        return -1;
+    }
+    return n > 255 ? 255 : (int)n;
+}
+
 /* Does not consume the caller's directory cursor. Return 1 iff truly empty. */
 int zxs_directory_has_only(int fd, const char *allowed) {
     int held = zxs_open_directory(fd, ".");

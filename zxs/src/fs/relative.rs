@@ -27,6 +27,30 @@ impl HeldDir {
     pub(crate) fn entry_present(&self,name:&CStr)->io::Result<bool>{
         leaf(name)?;self.require_named()?;let present=self.pin_record(name)?.is_some();self.require_named()?;Ok(present)
     }
+    /// The directory API may accept an alias that the business namespace
+    /// does not. Never treat such a lookup as vacancy or the requested name.
+    /// O_PATH occupancy never opens an unknown special file for content.
+    pub(crate) fn exact_presence(&self,listed:&[Vec<u8>],name:&CStr)->io::Result<bool>{
+        let listed=listed.iter().any(|s|s.as_slice()==name.to_bytes());
+        if self.entry_present(name)?!=listed{return Err(invalid("native lookup and exact enumerated spelling disagree"));}
+        Ok(listed)
+    }
+    pub(crate) fn exact_directory(&self,name:&CStr)->io::Result<Option<HeldDir>>{
+        let observed=self.names()?.iter().any(|r|r.as_slice()==name.to_bytes());
+        self.directory_if_exact(name,observed)
+    }
+    /// A bulk reader supplies its same-held-parent name snapshot and must
+    /// compare that parent again before reporting the enumeration. Identity,
+    /// lookup, mount and the actual named object are still checked per entry.
+    pub(crate) fn directory_in_sample(&self,name:&CStr,sample:&std::collections::BTreeSet<Vec<u8>>)->io::Result<Option<HeldDir>>{
+        self.directory_if_exact(name,sample.contains(name.to_bytes()))
+    }
+    fn directory_if_exact(&self,name:&CStr,present:bool)->io::Result<Option<HeldDir>>{
+        if self.entry_present(name)?!=present{return Err(invalid("native lookup and original directory spelling disagree"));}
+        let d=self.child_directory(name)?;
+        if d.is_some()!=present{return Err(invalid("original directory spelling changed during held lookup"));}
+        if let Some(h)=&d{h.require_named()?;}self.require_named()?;Ok(d)
+    }
     pub(crate) fn checked_child_path(&self,name:&CStr)->io::Result<PathBuf>{
         let path=self.path.join(leaf(name)?);check_path(&path)?;Ok(path)
     }

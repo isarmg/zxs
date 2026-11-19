@@ -12,9 +12,8 @@ pub(super) fn issue(parent:&HeldParent<'_,'_>,op:OperationId,name:&str)->io::Res
     let o=Origin{op,uid:fs::local_uid(),parent:parent.basis().clone(),name:name.into(),entry:EntryId::new()?,id:DirectoryId::new()?,ticket:OperationId::new()?};
     s.new_directory_slot(&o,&p.journal_registration())?;
     let actual=inventory::census(parent,&s)?;let all:Vec<_>=actual.into_iter().collect();
-    material::check_siblings(&all,name,false)?;material::check_ticket_paths(parent.directory(),name,o.ticket)?;
-    if all.iter().any(|n|material::private_slot(n).is_some_and(|(ticket,_)|ticket==o.ticket)){
-        return Err(invalid("new mkdir private ticket already names a physical occupant"));}
+    material::check_leaf(parent.directory(),&all,&inventory::human(name)?,false)?;material::check_ticket_paths(parent.directory(),name,o.ticket)?;
+    for i in 0..SLOTS{material::check_leaf(parent.directory(),&all,&material::staging(o.ticket,i),false)?;}
     material::room_for_ticket(&all,name,&material::staging(o.ticket,0))?;
     let(n,previous)=s.frontier();let(inode,entity)=p.system.anonymous_record()?;
     let original=NativeObject{entity,birth:fs::Birth::read(&inode)?};let(bytes,digest)=Operand::image(p.id(),&original,&o,n+1,previous)?;

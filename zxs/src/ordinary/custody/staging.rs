@@ -64,7 +64,7 @@ impl Existing{
 pub(super) fn bound_dir(v:&FileVolume<'_>,a:&MoveAllocation,stage:&Stage)->io::Result<HeldDir>{
     placed::root(v,&a.original.dst_root)?;
     if v.id()!=a.original.to||a.original.mode!=Method::Transfer{return Err(invalid("not original target registration for this stage"));}
-    let dir=v.root.child_directory(&material::staging(a.original.ticket,stage.slot))?.ok_or_else(||invalid("bound target directory absent"))?;
+    let dir=v.root.exact_directory(&material::staging(a.original.ticket,stage.slot))?.ok_or_else(||invalid("bound target directory absent"))?;
     if dir.entity!=stage.directory.entity||fs::Birth::read(&dir.file)?!=stage.directory.birth{return Err(invalid("bound target directory replaced"));}
     Ok(dir)
 }
@@ -76,10 +76,10 @@ impl Fresh{
     pub(super) fn under_writer(p:&LocalPool,v:&FileVolume<'_>,a:&MoveAllocation,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<Self>{
         if !matches!(p.access,Access::Write)||!std::ptr::eq(v.pool,p)||a.stage().is_some()||a.original.mode!=Method::Transfer||
             a.original.to!=v.id(){return Err(invalid("not the unbound original transfer writer and volume"));}
-        placed::root(v,&a.original.dst_root)?;material::vacant_for_move(v,&a.original.name)?;
+        placed::root(v,&a.original.dst_root)?;material::vacant_for_move(v,&a.original.name,a.original.file)?;
         let mut next=None;
         for n in 0..allocation::SLOTS{
-            match v.root.child_directory(&material::staging(a.original.ticket,n))?{
+            match v.root.exact_directory(&material::staging(a.original.ticket,n))?{
                 Some(unknown)=>{if next.is_some(){return Err(invalid("nonconsecutive private ticket occupancy"));}unknown.only(None)?;unknown.require_named()?;},
                 None=>{if next.is_none(){next=Some(n);}}
             }

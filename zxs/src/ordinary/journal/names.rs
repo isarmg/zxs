@@ -10,22 +10,41 @@ use crate::ordinary::directory::types::Parent;
 pub(super) enum Member{File{entry:EntryId,file:FileId},Directory{entry:EntryId,directory:DirectoryId}}
 
 #[derive(Default)]
-pub(super) struct Names{parents:BTreeMap<Parent,BTreeMap<String,Member>>}
+pub(super) struct Names{
+    parents:BTreeMap<Parent,BTreeMap<String,Member>>,
+    // Derived, in-memory only. A FILE displayed like someone else's native
+    // leaf is not itself a collision: compare each side's actual leaf.
+    leaves:BTreeMap<Parent,BTreeMap<Vec<u8>,Member>>,
+}
+impl Member{
+    fn leaf(self,name:&str)->io::Result<Vec<u8>>{
+        use crate::ordinary::storage_name::{DirectoryName,file_leaf};
+        Ok(match self{Self::File{file,..}=>file_leaf(name,file)?.into_bytes(),
+            Self::Directory{..}=>DirectoryName::parse(name.as_bytes())?.leaf().into_bytes()})
+    }
+}
 impl Names{
     pub(super) fn get(&self,p:Parent,name:&str)->Option<Member>{self.parents.get(&p)?.get(name).copied()}
     pub(super) fn root(&self,volume:VolumeId,name:&str)->Option<Member>{self.get(Parent::Root(volume),name)}
     pub(super) fn occupied_root(&self,volume:VolumeId,name:&str)->bool{self.root(volume,name).is_some()}
+    pub(super) fn vacancy(&self,p:Parent,name:&str,member:Member)->io::Result<()>{
+        let leaf=member.leaf(name)?;
+        if self.get(p,name).is_some()||self.leaves.get(&p).is_some_and(|s|s.contains_key(&leaf)){
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists,"original business name or actual derived leaf is occupied"));
+        }Ok(())
+    }
     fn enter(&mut self,p:Parent,name:&str,e:Member)->io::Result<()>{
-        use std::collections::btree_map::Entry;
-        match self.parents.entry(p).or_default().entry(name.to_owned()){
-            Entry::Vacant(v)=>{v.insert(e);Ok(())}
-            Entry::Occupied(_)=>Err(invalid("ordinary parent already has an original entry with this name")),
-        }
+        self.vacancy(p,name,e)?;let leaf=e.leaf(name)?;
+        self.parents.entry(p).or_default().insert(name.to_owned(),e);self.leaves.entry(p).or_default().insert(leaf,e);Ok(())
     }
     fn withdraw(&mut self,p:Parent,name:&str,expected:Member)->io::Result<()>{
-        let siblings=self.parents.get_mut(&p).ok_or_else(||invalid("missing original parent of the confirmed entry"))?;
-        if siblings.get(name)!=Some(&expected){return Err(invalid("source is not the exact original entry of this parent"));}
-        siblings.remove(name);if siblings.is_empty(){self.parents.remove(&p);}Ok(())
+        let leaf=expected.leaf(name)?;
+        if self.get(p,name)!=Some(expected)||self.leaves.get(&p).and_then(|s|s.get(&leaf)).copied()!=Some(expected){
+            return Err(invalid("source is not the exact original business entry and physical leaf of this parent"));}
+        let siblings=self.parents.get_mut(&p).expect("checked parent");siblings.remove(name);
+        if siblings.is_empty(){self.parents.remove(&p);}
+        let physical=self.leaves.get_mut(&p).expect("checked physical parent");physical.remove(&leaf);
+        if physical.is_empty(){self.leaves.remove(&p);}Ok(())
     }
     pub(super) fn add_directory(&mut self,d:&super::DirCreated)->io::Result<()>{
         let o=&d.origin;self.enter(o.parent.address,&o.name,Member::Directory{entry:o.entry,directory:o.id})
@@ -45,7 +64,8 @@ impl Names{
         }Ok(())
     }
     pub(super) fn require_handoff(&self,o:&MoveOrigin)->io::Result<()>{
-        let(src,_)=active_names(o);
+        let(src,dst)=active_names(o);
+        if dst{self.vacancy(Parent::Root(o.to),&o.name,Member::File{entry:o.entry,file:o.file})?;}
         self.endpoints(o.from,o.to,&o.name,src.then_some(Member::File{entry:o.entry,file:o.file}))
     }
     /// A dedicated endpoint never contributes an ordinary entry. Undo is
@@ -98,11 +118,14 @@ mod tests{
         let same=DirectoryName::parse(b"Report.xlsx").unwrap();assert!(n.enter(p,same.display(),dir).is_err());
         let third=DirectoryName::parse(b"REPORT.xlsx").unwrap();n.enter(p,third.display(),dir).unwrap();assert_eq!(n.get(p,third.display()),Some(dir));
         n.hide_created(p,upper.display(),e,f).unwrap();assert_eq!(n.get(p,lower.display()),Some(Member::File{entry:e2,file:f2}));
-        n.enter(p,same.display(),dir).unwrap();assert!(n.create_file(p,upper.display(),e,f).is_err());
-        n.withdraw(p,same.display(),dir).unwrap();n.create_file(p,upper.display(),e,f).unwrap();
+        let same_directory=Member::Directory{entry:EntryId([8;16]),directory:DirectoryId([9;16])};
+        n.enter(p,same.display(),same_directory).unwrap();assert!(n.create_file(p,upper.display(),e,f).is_err());
+        n.withdraw(p,same.display(),same_directory).unwrap();n.create_file(p,upper.display(),e,f).unwrap();
         assert_eq!(n.get(p,upper.display()),Some(Member::File{entry:e,file:f}));
         let composed="Café";let decomposed="Cafe\u{301}";
         n.create_file(p,FileName::parse(composed.as_bytes()).unwrap().display(),EntryId([9;16]),FileId([10;16])).unwrap();
-        assert_eq!(n.get(p,decomposed),None);n.enter(p,DirectoryName::parse(decomposed.as_bytes()).unwrap().display(),dir).unwrap();
+        assert_eq!(n.get(p,decomposed),None);
+        let other_directory=Member::Directory{entry:EntryId([11;16]),directory:DirectoryId([12;16])};
+        n.enter(p,DirectoryName::parse(decomposed.as_bytes()).unwrap().display(),other_directory).unwrap();
     }
 }

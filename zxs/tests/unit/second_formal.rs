@@ -1,3 +1,4 @@
+use crate::test_support::physical as native_leaf;
 use super::*;
 use crate::{DraftClaim,FormalStorage,LengthPolicy,Role,SpanEdit,VolumeId,create_empty,current_info,initialize,
     read_current_to,read_current_range_to,read_node_range_to,read_node_to,save_first,save_interval,test_support::PrivateTemp};
@@ -17,8 +18,8 @@ impl Fixture{
     fn edit(&self,rev:u64,at:u64,data:&[u8],how:LengthPolicy)->OperationId{
         let op=OperationId::new().unwrap();save_interval(&self.system,op,self.base.file,rev,SpanEdit::new(at,claim(data),how).unwrap(),Cursor::new(data)).unwrap();op
     }
-    fn native(&self,n:&FormalNode)->PathBuf{self.data.join("original").join(format!("{}-original",n.storage))}
-    fn work(&self,op:OperationId)->PathBuf{self.data.join("original").join(format!("working-{op}"))}
+    fn native(&self,n:&FormalNode)->PathBuf{self.data.join(native_leaf("original",self.base.file)).join(format!("{}-original",n.storage))}
+    fn work(&self,op:OperationId)->PathBuf{self.data.join(native_leaf("original",self.base.file)).join(format!("working-{op}"))}
 }
 #[test]
 #[ignore="two private registered native filesystems"]
@@ -41,7 +42,7 @@ fn second_node_has_original_parent_and_independent_packed_final_edits_not_all_ra
     let mut old=Vec::new();read_node_to(&t.system,id,t.base.node,&mut old).unwrap();assert_eq!(old,data);
     let other=create_empty(&t.system,OperationId::new().unwrap(),t.vol,"other").unwrap();
     assert!(read_node_range_to(&t.system,other.file,d.node,at,1,io::sink()).is_err());
-    assert_eq!(osfs::read_dir(t.data.join("original")).unwrap().count(),4);
+    assert_eq!(osfs::read_dir(t.data.join(native_leaf("original",t.base.file))).unwrap().count(),4);
     osfs::rename(&t.data,t.top.0.join("held-original-root")).unwrap();t.top.child("data");
     assert_eq!(commit_working(&t.system,op,id,4).unwrap(),d);assert_eq!(formal_receipt(&t.system,op).unwrap().unwrap().published,Some(d.clone()));
     assert!(commit_working(&t.system,op,id,3).is_err());assert!(current_info(&t.system,id).is_err());
@@ -93,11 +94,11 @@ fn old_frozen_reader_blocks_retirement_not_the_published_incr_and_exact_retry_do
 #[ignore="two private native test filesystems"]
 fn corruption_in_unchanged_contributing_parent_denies_formal_decision_before_creating_named_output(){
     let t=Fixture::new(&vec![b'q';2*crate::DRAFT_CHUNK]);let id=t.base.file;let e=t.edit(1,crate::DRAFT_CHUNK as u64,b"k",LengthPolicy::KeepOrGrow);
-    let before=osfs::read_dir(t.data.join("original")).unwrap().count();let reg=osfs::read(t.system.join("REGISTRATION")).unwrap();
+    let before=osfs::read_dir(t.data.join(native_leaf("original",t.base.file))).unwrap().count();let reg=osfs::read(t.system.join("REGISTRATION")).unwrap();
     let f=osfs::OpenOptions::new().write(true).open(t.native(&t.base)).unwrap();f.write_all_at(b"!",9).unwrap();f.sync_all().unwrap();
     let op=OperationId::new().unwrap();assert!(commit_working(&t.system,op,id,2).is_err());
     assert!(formal_receipt(&t.system,op).unwrap().is_none());assert!(t.work(e).exists());
-    assert_eq!(osfs::read_dir(t.data.join("original")).unwrap().count(),before);assert_eq!(osfs::read(t.system.join("REGISTRATION")).unwrap(),reg);
+    assert_eq!(osfs::read_dir(t.data.join(native_leaf("original",t.base.file))).unwrap().count(),before);assert_eq!(osfs::read(t.system.join("REGISTRATION")).unwrap(),reg);
 }
 #[test]
 #[ignore="two private native test filesystems"]
@@ -144,7 +145,7 @@ fn broken_parent_index_with_no_remaining_parent_intervals_cannot_publish_an_unre
     for empty in [false,true]{
         let t=Fixture::new(b"old");let id=t.base.file;
         let e=if empty{t.edit(1,0,b"",LengthPolicy::Set(0))}else{t.edit(1,0,b"new",LengthPolicy::KeepOrGrow)};
-        let folder=t.data.join("original");let before=osfs::read_dir(&folder).unwrap().count();let reg=osfs::read(t.system.join("REGISTRATION")).unwrap();
+        let folder=t.data.join(native_leaf("original",t.base.file));let before=osfs::read_dir(&folder).unwrap().count();let reg=osfs::read(t.system.join("REGISTRATION")).unwrap();
         let f=osfs::OpenOptions::new().read(true).write(true).open(folder.join(format!("node-{}",t.base.node))).unwrap();
         let at=f.metadata().unwrap().len()-1;let mut link=[0];f.read_exact_at(&mut link,at).unwrap();
         link[0]^=1;f.write_all_at(&link,at).unwrap();f.sync_all().unwrap();
@@ -160,7 +161,7 @@ fn broken_parent_index_with_no_remaining_parent_intervals_cannot_publish_an_unre
 #[ignore="two private registered native filesystems"]
 fn a_same_inode_changed_dense_byte_between_link_and_first_named_pin_cannot_certify_or_retire_the_healthy_draft(){
     let t=Fixture::new(b"abcd");let id=t.base.file;let work=t.edit(1,1,b"xyz",LengthPolicy::KeepOrGrow);
-    let folder=t.data.join("original");let before:std::collections::BTreeSet<_>=osfs::read_dir(&folder).unwrap().map(|v|v.unwrap().file_name()).collect();
+    let folder=t.data.join(native_leaf("original",t.base.file));let before:std::collections::BTreeSet<_>=osfs::read_dir(&folder).unwrap().map(|v|v.unwrap().file_name()).collect();
     let original=osfs::read(t.system.join("REGISTRATION")).unwrap();
     let op=OperationId::new().unwrap();let mut hit=0;
     assert!(commit_inner(&t.system,op,id,2,|step|{
@@ -264,7 +265,7 @@ fn equal_working_revision_and_bytes_do_not_turn_an_old_working_edge_into_a_forma
 fn incr_never_raises_the_floor_over_a_late_replaced_source_or_target_and_never_rolls_back_a_confirmed_child(){
     for (point,replace_target) in [(Cut::FrameSynced,true),(Cut::FrameSynced,false),(Cut::Decision,true)]{
         let t=Fixture::new(b"abcde");let file=t.base.file;let work=t.edit(1,1,b"XY",LengthPolicy::KeepOrGrow);
-        let folder=t.data.join("original");let before:std::collections::BTreeSet<_>=osfs::read_dir(&folder).unwrap().map(|v|v.unwrap().file_name()).collect();
+        let folder=t.data.join(native_leaf("original",t.base.file));let before:std::collections::BTreeSet<_>=osfs::read_dir(&folder).unwrap().map(|v|v.unwrap().file_name()).collect();
         let op=OperationId::new().unwrap();let real=t.top.0.join("original-role");let other=t.top.0.join("unrelated-inode");
         let mut changed=None;
         assert!(commit_inner(&t.system,op,file,2,|step|{
@@ -302,7 +303,7 @@ fn incr_never_raises_the_floor_over_a_late_replaced_source_or_target_and_never_r
 #[ignore="two private native filesystems; extra unissued entry between synced frame and acknowledgement"]
 fn an_extra_file_at_the_acknowledgement_boundary_blocks_hot_and_cold_without_consuming_the_draft(){
     let t=Fixture::new(b"abcde");let id=t.base.file;let work=t.edit(1,1,b"XY",LengthPolicy::KeepOrGrow);
-    let foreign=t.data.join("original").join("unissued-user-entry");let op=OperationId::new().unwrap();let mut seen=0;
+    let foreign=t.data.join(native_leaf("original",t.base.file)).join("unissued-user-entry");let op=OperationId::new().unwrap();let mut seen=0;
     assert!(commit_inner(&t.system,op,id,2,|phase|{
         if phase==Cut::FrameSynced{let mut f=osfs::OpenOptions::new().create_new(true).write(true).open(&foreign)?;
             io::Write::write_all(&mut f,b"preserve me")?;f.sync_all()?;seen+=1;}Ok(())
@@ -467,9 +468,9 @@ fn second_increment_rejects_a_damaged_original_i1_index_even_if_its_complete_par
     let pack=osfs::OpenOptions::new().read(true).write(true).open(t.native(&child)).unwrap();
     let pos=pack.metadata().unwrap().len()-1;let mut b=[0];pack.read_exact_at(&mut b,pos).unwrap();
     pack.write_all_at(&[b[0]^1],pos).unwrap();pack.sync_all().unwrap();
-    let before=osfs::read_dir(t.data.join("original")).unwrap().count();
+    let before=osfs::read_dir(t.data.join(native_leaf("original",t.base.file))).unwrap().count();
     assert!(commit_working(&t.system,submit,id,3).is_err());assert!(formal_receipt(&t.system,submit).unwrap().is_none());
-    assert_eq!(osfs::read_dir(t.data.join("original")).unwrap().count(),before);assert!(t.work(w).exists());
+    assert_eq!(osfs::read_dir(t.data.join(native_leaf("original",t.base.file))).unwrap().count(),before);assert!(t.work(w).exists());
     pack.write_all_at(&b,pos).unwrap();pack.sync_all().unwrap();let child2=commit_working(&t.system,submit,id,3).unwrap();
     let mut out=Vec::new();assert_eq!(read_node_to(&t.system,id,child2.node,&mut out).unwrap(),child2);assert!(out.is_empty());
 }

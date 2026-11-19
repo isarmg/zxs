@@ -25,11 +25,11 @@ impl Claim{
         // Census checks the held lineage and all authorized direct names. An
         // occupied name can veto a proposal, never confer parent authority.
         let all:Vec<_>=inventory::census(h,&s)?.into_iter().collect();
-        material::check_siblings(&all,&self.name,false)?;
-        material::check_child_residence(h.directory(),&self.name,self.ticket)?;
-        if all.iter().any(|n|material::private_slot(n).is_some_and(|(t,_)|t==self.ticket)){
-            return Err(invalid("this proposed child FILE ticket has a physical occupant"));}
-        material::room_for_ticket(&all,&self.name,&material::staging(self.ticket,0))
+        let leaf=crate::ordinary::storage_name::file_leaf(&self.name,self.file)?;material::check_leaf(h.directory(),&all,&leaf,false)?;
+        material::held_residence(v,h.directory(),&self.name,self.file,self.ticket)?;
+        for i in 0..crate::ordinary::allocation::SLOTS{material::check_leaf(h.directory(),&all,&material::staging(self.ticket,i),false)?;}
+        material::check_leaf(h.directory(),&all,&crate::ordinary::custody::transfer::isolation_name(self.ticket),false)?;
+        material::room_for_ticket(&all,leaf.to_str().map_err(|_|invalid("invalid physical container name"))?,&material::staging(self.ticket,0))
     }
 }
 /// The FILE ids and bytes are kept with THIS physical anonymous issuer. No

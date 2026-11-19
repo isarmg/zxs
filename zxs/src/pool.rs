@@ -24,6 +24,7 @@ fn canonical_files(files:&[PathBuf])->io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 fn verify_claims(selection:&Selection,record:&Record,allow_missing:bool)->io::Result<()>{
+    record.check_registered_limits(selection)?;
     for (i,(_,dir)) in selection.roots.iter().enumerate(){
         dir.require_named()?;
         record.require_root(i,dir)?;
@@ -50,6 +51,10 @@ impl JournalRegistration<'_>{
             .ok_or_else(||invalid("ordinary path budget requires the original registered FILE root"))?;
         fs::path_budget(&v.volume.path)
     }
+    pub(crate) fn ordinary_names(&self,id:VolumeId,uid:u32,parent:fs::PathBudget)->io::Result<fs::NameBudget>{
+        Ok(fs::NameBudget::from_original(parent,self.0.ordinary_limit(id,uid)?))
+    }
+    pub(crate) fn recycle_names(&self,uid:u32)->io::Result<fs::NameBudget>{self.0.dedicated_name_budget(uid)}
     pub(crate) fn directory_child(&self,id:VolumeId,uid:u32,e:Entity,b:&fs::Birth)->bool{self.0.directory_child(id,uid,e,b)}
     pub(crate) fn dedicated(&self,uid:u32,d:lease::recycle::Direction,f:(VolumeId,Entity,&fs::Birth),t:(VolumeId,Entity,&fs::Birth))->bool{
         self.0.dedicated_route(uid,d,f.0,t.0).is_ok_and(|route|route.matches(f,t))
@@ -133,10 +138,9 @@ fn initialize_inner(op:OperationId, system:&Path, recycle:&Path, files:&[PathBuf
         (stamp,record)
     }else{
         for (_,dir) in &selection.roots{dir.require_fresh()?;}
-        let roots=Record::observe_roots(&selection)?;
         let (original,origin)=sys.anonymous_record()?;
         let own_birth=fs::Birth::read(&original)?;
-        let r=Record::new(&selection,op,origin,own_birth,roots)?;
+        let r=Record::new(&selection,op,origin,own_birth)?;
         fs::initial_frontier(&original,r.digest())?;
         // This is the first visible write and occurs only on selected SYSTEM.
         // Verified complete bytes are published atomically from an unnamed inode.

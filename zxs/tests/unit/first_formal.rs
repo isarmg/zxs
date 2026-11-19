@@ -1,3 +1,4 @@
+use crate::test_support::physical as native_leaf;
 use super::*;
 use crate::{create_empty,current_info,first_save_receipt,initialize,read_current_to,save_first,test_support::PrivateTemp,
     DRAFT_CHUNK,DraftClaim,FileInfo,Role,VolumeId};
@@ -14,7 +15,7 @@ impl Fixture{
         save_first(&system,save,file.file,claim(bytes),Cursor::new(bytes)).unwrap();
         Self{home,_recycle:recycle,system,data,volume,file,save}
     }
-    fn owner(&self)->PathBuf{self.data.join("first.txt")}
+    fn owner(&self)->PathBuf{self.data.join(native_leaf("first.txt",self.file.file))}
     fn work(&self)->PathBuf{self.owner().join(format!("working-{}",self.save))}
     fn body(&self,f:&FormalNode)->PathBuf{self.owner().join(format!("{}-{}",f.storage,f.creation_name))}
     fn graph(&self,f:&FormalNode)->PathBuf{self.owner().join(format!("node-{}",f.node))}
@@ -49,7 +50,7 @@ fn empty_and_nonempty_first_explicit_full_are_independent_raw_files_after_cold_r
         let other=create_empty(&t.system,OperationId::new().unwrap(),t.volume,"sibling").unwrap();
         assert!(read_node_to(&t.system,other.file,f.node,io::sink()).is_err());
         assert!(commit_first(&t.system,op,other.file,1).is_err());assert!(commit_first(&t.system,OperationId::new().unwrap(),other.file,1).is_err());
-        assert_eq!(osfs::read_dir(t.data.join("sibling")).unwrap().count(),1);
+        assert_eq!(osfs::read_dir(t.data.join(native_leaf("sibling",other.file))).unwrap().count(),1);
         osfs::rename(&t.data,t.home.0.join("unavailable")).unwrap();t.home.child("data");
         assert!(read_node_to(&t.system,t.file.file,f.node,io::sink()).is_err());
         assert_eq!(commit_first(&t.system,op,t.file.file,1).unwrap(),f);

@@ -1,6 +1,6 @@
 //! Exact, case-sensitive names for the single-name container layout.
 //! Parsing a spelling never grants access, identifies an object on disk or
-//! selects a service location. No storage format is enabled by this module.
+//! selects a service location. Only the current registered format uses these names.
 use crate::{FileId,OperationId,fs::invalid};
 use std::{ffi::{CStr,CString},io};
 
@@ -57,6 +57,11 @@ impl<'a> DirectoryName<'a>{
 #[derive(Debug,Clone,PartialEq,Eq)]
 pub(super) struct ContainerLeaf(CString);
 impl ContainerLeaf{pub(super) fn name(&self)->&CStr{&self.0}}
+/// Only forward derivation. Supplied FileId always comes from an original
+/// request/FILE identity; no suffix is ever parsed to discover an owner.
+pub(super) fn file_leaf(display:&str,file:FileId)->io::Result<CString>{
+    Ok(FileName::parse(display.as_bytes())?.container(file)?.0)
+}
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 enum Use{Stage(u8),Isolation}
@@ -87,6 +92,9 @@ impl TicketLeaf{
         Use::Stage(i)=>format!("{STAGE_PREFIX}{}-{i}",self.ticket),Use::Isolation=>format!("{ISOLATE_PREFIX}{}_",self.ticket)
     };CString::new(s).expect("fixed ASCII private name has no NUL")}
 }
+
+mod geometry;
+pub(super) use geometry::ResidentNames;
 
 #[cfg(test)]
 #[path="../../tests/unit/storage_names.rs"]

@@ -1,3 +1,4 @@
+use crate::test_support::physical as native_leaf;
 use super::*;
 use super::super::source::Clean;
 use crate::{DraftClaim,LengthPolicy,OperationId,Role,SpanEdit,commit_working,create_empty,initialize,save_first,save_interval,test_support::PrivateTemp};
@@ -27,7 +28,7 @@ fn distinct_ordinary_roots_on_one_held_mount_require_true_rename_no_duplicated_b
     let done=dest.prepare().unwrap();assert!(done.files.is_empty());assert_eq!(fs::read_dir(&t.b).unwrap().count(),0);
     assert_eq!(fs::read(t.system.join("REGISTRATION")).unwrap(),before);
     assert!(Destination::select(&t.system,&t.src,t.src.volume()).is_err());assert!(Destination::select(&t.system,&t.src,t.recycle).is_err());
-    fs::create_dir(t.b.join("name")).unwrap();assert!(Destination::select(&t.system,&t.src,t.dest).is_err());assert!(t.b.join("name").is_dir());
+    fs::create_dir(t.b.join(native_leaf("name",t.src.file()))).unwrap();assert!(Destination::select(&t.system,&t.src,t.dest).is_err());assert!(t.b.join(native_leaf("name",t.src.file())).is_dir());
 }
 #[test]
 #[ignore="requires distinct real source, destination and recycle filesystems; no simulated EXDEV"]
@@ -60,13 +61,13 @@ fn a_target_chosen_for_a_cannot_exchange_its_held_file_for_b_or_accept_a_new_nam
     save_interval(&t.system,OperationId::new().unwrap(),other.file,1,SpanEdit::new(0,x,LengthPolicy::KeepOrGrow).unwrap(),Cursor::new(b"X")).unwrap();
     commit_working(&t.system,OperationId::new().unwrap(),other.file,2).unwrap();
     let b=Clean::capture(&t.system,other.file).unwrap().verify().unwrap();
-    fs::create_dir(t.b.join("other")).unwrap();
+    crate::make_directory(&t.system,OperationId::new().unwrap(),crate::DirectoryParent::Root(t.dest),&native_leaf("other",other.file)).unwrap();
     assert!(Destination::select(&t.system,&b,t.dest).is_err());
     // Neither prepare() nor at_vacant_cut() takes a substitute source argument.
     let a=Destination::select(&t.system,&t.src,t.dest).unwrap().prepare().unwrap();
     assert_eq!(a.source().file(),t.src.file());assert_ne!(a.source().file(),b.file());
     a.at_vacant_cut(Access::Read,|_,_,_,_|Ok(())).unwrap();
-    fs::create_dir(t.b.join(a.source().name())).unwrap();
+    fs::create_dir(t.b.join(native_leaf(a.source().name(),a.source().file()))).unwrap();
     assert!(a.at_vacant_cut(Access::Read,|_,_,_,_|->io::Result<()>{panic!("occupied name used")}).is_err());
 }
 
@@ -78,7 +79,7 @@ fn a_real_reserved_create_with_no_final_name_prevents_initial_and_delayed_transf
     assert!(crate::ordinary::create_inner(&t.system,op,t.dest,t.src.name(),|cut|if cut==crate::ordinary::Cut::Reservation{
         Err(io::Error::other("original name reserved, not yet present"))
     }else{Ok(())}).is_err());
-    assert!(!t.b.join(t.src.name()).exists());
+    assert!(!t.b.join(native_leaf(t.src.name(),t.src.file())).exists());
     assert!(Destination::select(&t.system,&t.src,t.dest).is_err());
     assert!(planned.prepare_after(||panic!("attempted anonymous preparation for an already reserved destination")).is_err());
     assert!(crate::creation_receipt(&t.system,op).unwrap().is_some());assert_eq!(fs::read_dir(&t.b).unwrap().count(),0);
@@ -127,7 +128,7 @@ fn original_move_reservation_cold_reopens_one_pending_slot_never_grants_serving_
     drop(s);drop(pool);
     assert!(create_empty(&t.system,OperationId::new().unwrap(),t.dest,"unrelated").is_err());
     assert_eq!(crate::current_info(&t.system,t.src.file()).unwrap().file.volume,t.src.volume());
-    assert!(!t.b.join("name").exists());
+    assert!(!t.b.join(native_leaf("name",t.src.file())).exists());
 }
 
 #[test]
@@ -158,7 +159,7 @@ fn unfinished_cross_mount_stage_reopens_only_issued_roles_and_does_not_allocate_
     let p=Destination::select(&t.system,&t.src,t.dest).unwrap().for_operation(op).unwrap();
     let original=MoveAllocation::reserve(&p,op).unwrap();
     assert!(p.staged_decision(op,&mut |c|if c==crate::ordinary::Cut::MoveLeafLinked{Err(io::Error::other("after first private leaf"))}else{Ok(())}).is_err());
-    drop(p);assert!(!t.b.join("name").exists());
+    drop(p);assert!(!t.b.join(native_leaf("name",t.src.file())).exists());
     let p=Destination::select(&t.system,&t.src,t.dest).unwrap().for_operation(op).unwrap();
     assert_eq!(p.existing.as_ref().unwrap().len(),1);assert_eq!(p.files.len()+1,t.src.objects().len());
     let(m,stage)=p.staged_decision(op,&mut |_|Ok(())).unwrap();
@@ -167,7 +168,7 @@ fn unfinished_cross_mount_stage_reopens_only_issued_roles_and_does_not_allocate_
         assert!(s.decided(op).is_none());assert_eq!(s.moving.as_ref().unwrap().original,original);
         checked.require(new,&name,&m)?;Ok(())
     }).unwrap();
-    assert!(!t.b.join("name").exists());
+    assert!(!t.b.join(native_leaf("name",t.src.file())).exists());
 }
 
 #[test]
@@ -185,5 +186,5 @@ fn a_missing_earlier_synced_private_role_never_becomes_a_fresh_unlinked_replacem
     let inode=fs::metadata(&remaining).unwrap().ino();let bytes=fs::read(&remaining).unwrap();
     assert!(Destination::select(&t.system,&t.src,t.dest).unwrap().for_operation(op).is_err());
     assert!(!earlier.exists());assert_eq!(fs::metadata(&remaining).unwrap().ino(),inode);assert_eq!(fs::read(&remaining).unwrap(),bytes);
-    assert!(crate::current_info(&t.system,t.src.file()).is_ok());assert!(!t.b.join("name").exists());
+    assert!(crate::current_info(&t.system,t.src.file()).is_ok());assert!(!t.b.join(native_leaf("name",t.src.file())).exists());
 }

@@ -161,9 +161,13 @@ impl Clean{
         if p.id()!=self.pool||v.id()!=self.c.create.volume||c.digest!=self.c.digest||f.digest!=self.parent.digest||
             d.map(|v|v.digest)!=self.children.as_refs().map(|v|v.digest)||v.root.entity!=self.root.entity||
             fs::Birth::read(&v.root.file)?!=self.root.birth||self.dir.entity!=c.create.directory.entity||
-            fs::Birth::read(&self.dir.file)?!=c.create.directory.birth||self.dir.path!=v.root.path.join(&c.create.name){
+            fs::Birth::read(&self.dir.file)?!=c.create.directory.birth||self.dir.path!=v.root.checked_child_path(&crate::ordinary::storage_name::file_leaf(&c.create.name,c.create.file)?)?{
             return Err(invalid("handoff source no longer belongs to its original FILE/root/frontier"));
         }
+        let n=crate::ordinary::storage_name::file_leaf(&c.create.name,c.create.file)?;
+        let original=v.exact_directory(&n)?.ok_or_else(||invalid("original source spelling is not present"))?;
+        if original.entity!=self.dir.entity||!original.same_mount(&self.dir)?||fs::Birth::read(&original.file)?!=c.create.directory.birth{
+            return Err(invalid("original FILE source was renamed or replaced"));}
         v.require_current()?;self.exact_names()?;v.require_current()
     }
     fn require_lifecycle(&self,p:&LocalPool,g:&LifecycleGrant<'_>,v:&CustodyEnd<'_, '_>)->io::Result<()>{
@@ -220,6 +224,9 @@ impl Verified{
             self.objects().len()!=3+sites.children.len()||self.objects().iter().any(|b|sites.at(b.kind)!=Some(&b.original)){
                 return Err(invalid("reopened material is not the original MOVE role, directory and exact named content"));
         }
+        let actual=v.exact_directory(name)?.ok_or_else(||invalid("original MOVE operand no longer has its exact spelling"))?;
+        if actual.entity!=self.source.dir.entity||!actual.same_mount(&self.source.dir)?||fs::Birth::read(&actual.file)?!=sites.directory.birth{
+            return Err(invalid("not this exact originally named MOVE operand"));}
         v.require_current()?;self.source.exact_names()?;v.require_current()
     }
     pub(super) fn require_at_lifecycle(&self,end:&CustodyEnd<'_,'_>,goal:&super::target::Goal)->io::Result<()>{

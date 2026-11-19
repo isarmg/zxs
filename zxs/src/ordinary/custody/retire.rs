@@ -38,7 +38,7 @@ impl SourceRetirement{
         let business=business(m)?;let quarantine=m.original.quarantine_name();
         let(_,s)=v.pool.snapshot()?;let prior=s.before_handoff(m)?;
         let sites=m.require_at(prior,f,d)?;let previous=prior.transfer();
-        let g=Self::capture_selected(m,step,c,f,d,exclusive,sites,previous,v.root.child_directory(&business)?,v.root.child_directory(&quarantine)?)?;
+        let g=Self::capture_selected(m,step,c,f,d,exclusive,sites,previous,v.root.exact_directory(&business)?,v.root.exact_directory(&quarantine)?)?;
         g.require(v,m)?;Ok(g)
     }
     fn capture_selected(m:&Moved,step:Progress,c:&Frame,f:&Commit,d:Children<'_>,exclusive:bool,sites:Sites,previous:Option<&Moved>,
@@ -86,7 +86,7 @@ impl SourceRetirement{
         placed::root(v,&m.original.src_root)?;
         let (n,other)=if self.addr==Address::Business{(&self.business,&self.quarantine)}else{(&self.quarantine,&self.business)};
         if v.root.entry_present(other)?{return Err(invalid("other source name occupied; do not alter either name"));}
-        self.require_named_dir(v.root.child_directory(n)?)?;v.require_current()
+        self.require_named_dir(v.root.exact_directory(n)?)?;v.require_current()
     }
     fn require_named_dir(&self,named:Option<HeldDir>)->io::Result<()>{
         match(&self.dir,named){
@@ -189,7 +189,7 @@ pub(super) fn observe_source(v:&FileVolume<'_>,m:&Moved,step:Progress,c:&Frame,f
         return Ok(match g.addr{Address::EmptyGone=>None,Address::Business=>Some(g.business.into_bytes()),Address::Isolated=>Some(g.quarantine.into_bytes())})
     }
     let n=business(m)?;placed::root(v,&m.original.src_root)?;
-    let Some(dir)=v.root.child_directory(&n)? else{return Ok(None)};
+    let Some(dir)=v.root.exact_directory(&n)? else{return Ok(None)};
     let sites=Sites::birthplace(c,f,d);if dir.entity!=sites.directory.entity||fs::Birth::read(&dir.file)?!=sites.directory.birth{
         return Err(invalid("unknown same-named occupant on original rename source"));}
     let mut names:BTreeSet<Vec<u8>>=dir.names()?.into_iter().collect();

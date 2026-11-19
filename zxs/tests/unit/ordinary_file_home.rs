@@ -1,4 +1,5 @@
 //! Files and system mutations described in these tests are local fixture data.
+use crate::test_support::physical as native_leaf;
 use super::*;
 use crate::{OperationId,ordinary::{Cut,create_inner},pool::lease::{Access,LocalPool},test_support::PrivateTemp};
 use std::{os::unix::fs::MetadataExt,path::Path};
@@ -17,14 +18,14 @@ fn held_root_birth_cannot_be_relabelled_as_a_matching_real_container_under_a_chi
     let right=crate::make_directory(&sys,op(),Parent::Root(id),"right").unwrap();
     let file=crate::create_empty(&sys,op(),id,"report").unwrap();
     let(p,_,s)=LocalPool::with_snapshot(&sys,Access::Read).unwrap();let v=p.ordinary(id).unwrap();
-    let real=s.file(file.file).unwrap();let original=open(&v,&s,real).unwrap();let root=data.join("report");
+    let real=s.file(file.file).unwrap();let original=open(&v,&s,real).unwrap();let root=data.join(native_leaf("report",file.file));
     assert_eq!(original.entity.inode,std::fs::metadata(&root).unwrap().ino());drop(original);
     assert_eq!(s.on(id).map(|f|f.create.file).collect::<Vec<_>>(),[file.file]);
     for directory in [left.directory,right.directory]{
         let child=Parent::Child(id,directory);assert_eq!(s.at_parent(child).count(),0);
         let mut made=real.create.clone();made.parent=s.file_parent_at(child,real.create.uid,&p.journal_registration()).unwrap();
         let detached=Frame::new(p.id(),real.seq,real.previous,made).unwrap();assert_ne!(detached.digest,real.digest);
-        let at=data.join(if directory==left.directory{"left"}else{"right"}).join("report");
+        let at=data.join(if directory==left.directory{"left"}else{"right"}).join(native_leaf("report",file.file));
         std::fs::rename(&root,&at).unwrap();
         // Every FILE byte and both native births still exist; only the occurrence is wrong.
         assert_eq!(std::fs::metadata(&at).unwrap().ino(),real.create.directory.entity.inode);
@@ -91,7 +92,7 @@ fn a_floor_attribute_and_healthy_file_do_not_substitute_for_lost_or_damaged_conf
         assert_eq!(p.system.read_frontier(crate::pool::READY,&now,budget).unwrap(),floor);
         assert!(open(&v,&s,file).is_err());assert!(p.snapshot().is_err());
         // The reader changes neither suspect register nor healthy native FILE.
-        assert_eq!(std::fs::read(&named).unwrap(),changed);assert_eq!(std::fs::metadata(data.join("original")).unwrap().ino(),file.create.directory.entity.inode);
+        assert_eq!(std::fs::read(&named).unwrap(),changed);assert_eq!(std::fs::metadata(data.join(native_leaf("original",f.file))).unwrap().ino(),file.create.directory.entity.inode);
         std::fs::write(&named,&bytes).unwrap();raw.sync_all().unwrap();
         assert!(open(&v,&s,file).is_ok());
     }

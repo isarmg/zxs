@@ -22,15 +22,16 @@ pub(in crate::ordinary) struct Origin{
     pub source_bytes:u64,pub source_material:[u8;32],
 }
 pub(in crate::ordinary) fn isolation_name(ticket:OperationId)->std::ffi::CString{
-    std::ffi::CString::new(format!(".zxs-move-out-{ticket}")).expect("fixed ASCII original MOVE ticket")
+    crate::ordinary::storage_name::TicketLeaf::isolation(ticket).expect("validated original transfer ticket").name()
 }
 /// All actual (root,name) pairs that a transfer will later *have* to
 /// reopen must pass the same full path/leaf/depth gate as child_directory.
 /// This is only a bounded feasibility check, not a named write or authority.
 pub(super) fn check_private_paths(old:&fs::HeldDir,new:&fs::HeldDir,ticket:OperationId)->io::Result<()>{
-    old.checked_child_path(&isolation_name(ticket))?;
+    let a=fs::NameBudget::held(old)?;let b=fs::NameBudget::held(new)?;
+    a.child(&isolation_name(ticket))?;
     for slot in 0..crate::ordinary::allocation::SLOTS{
-        new.checked_child_path(&crate::ordinary::material::staging(ticket,slot))?;
+        b.child(&crate::ordinary::material::staging(ticket,slot))?;
     }Ok(())
 }
 impl Origin{

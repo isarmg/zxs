@@ -1,3 +1,4 @@
+use crate::test_support::physical as native_leaf;
 use super::*;
 use crate::{create_empty,current_info,commit_first,first_commit_receipt,initialize,read_current_to,read_node_to,save_first,
     DraftClaim,FormalNode,LengthPolicy,Role,VolumeId,DRAFT_CHUNK,test_support::PrivateTemp};
@@ -16,7 +17,7 @@ impl Fixtures{
         save_first(&system,OperationId::new().unwrap(),file.file,claim(bytes),Cursor::new(bytes)).unwrap();
         let base=commit_first(&system,OperationId::new().unwrap(),file.file,1).unwrap();Self{root,_recycle:recycle,system,data,volume,base}
     }
-    fn dir(&self)->PathBuf{self.data.join("original")}
+    fn dir(&self)->PathBuf{self.data.join(native_leaf("original",self.base.file))}
     fn raw(&self)->PathBuf{self.dir().join(format!("{}-{}",self.base.storage,self.base.creation_name))}
     fn extent(&self,op:OperationId)->PathBuf{self.dir().join(format!("working-{op}"))}
 }
@@ -143,7 +144,7 @@ fn four_kib_overwrite_on_a_real_hundred_gib_formal_file_uses_only_one_changed_ex
     while left>0{let count=left.min(block.len() as u64) as usize;hash.update(&block[..count]).unwrap();left-=count as u64;}drop(block);
     save_first(&system,OperationId::new().unwrap(),file,DraftClaim::new(total,hash.finish()).unwrap(),Repeated(total)).unwrap();
     let base=commit_first(&system,OperationId::new().unwrap(),file,1).unwrap();
-    let root=data.join("large");let raw=root.join(format!("{}-large",base.storage));let original=osfs::metadata(&raw).unwrap();
+    let root=data.join(native_leaf("large",file));let raw=root.join(format!("{}-large",base.storage));let original=osfs::metadata(&raw).unwrap();
     let at=99u64*1024*1024*1024+19;let change=[0x70;4096];let op=OperationId::new().unwrap();
     save_interval(&system,op,file,1,edit(at,&change,LengthPolicy::KeepOrGrow),Cursor::new(&change[..])).unwrap();
     let now=osfs::metadata(&raw).unwrap();assert_eq!((now.len(),now.ino(),now.blocks()),(total,original.ino(),original.blocks()));

@@ -11,11 +11,11 @@ use std::{fs::File,io,path::{Path,PathBuf}};
 pub(in crate::ordinary) enum Method{Rename,Transfer}
 /// This identity must still match a real authenticated registration before a
 /// name can be reserved. In particular the recycle role never passes ordinary().
-fn vacant(s:&Journal,v:&FileVolume<'_>,name:&str)->io::Result<()>{
+fn vacant(s:&Journal,v:&FileVolume<'_>,name:&str,file:crate::FileId)->io::Result<()>{
     if s.occupied_root(v.id(),name)||s.allocated.as_ref().is_some_and(|a|a.volume==v.id()&&a.name==name){
         return Err(invalid("the selected target name is already decided or reserved by an original CREATE"));
     }
-    material::vacant_for_move(v,name)
+    material::vacant_for_move(v,name,file)
 }
 pub(super) struct Destination<'s>{source:&'s Verified,system:PathBuf,system_origin:NativeObject,pub pool:PoolId,pub volume:VolumeId,pub root:NativeObject,pub mode:Method,held:HeldDir}
 impl<'s> Destination<'s>{
@@ -24,7 +24,7 @@ impl<'s> Destination<'s>{
         if p.id()!=src.pool()||to==src.volume(){return Err(invalid("MOVE requires two distinct original ordinary volume registrations"));}
         if !s.clean_initial_handoff(src.file()){return Err(invalid("initial clean formal FILE required for transfer"));}
         let old=p.ordinary(src.volume())?;src.require(&p,&s,&old)?;
-        let new=p.ordinary(to)?;vacant(&s,&new,src.name())?;
+        let new=p.ordinary(to)?;vacant(&s,&new,src.name(),src.file())?;
         let root=NativeObject{entity:new.root.entity,birth:fs::Birth::read(&new.root.file)?};
         if &root==src.source_root(){return Err(invalid("different volume IDs cannot select the same native root"));}
         let mode=if src.same_mount(&new.root)?{
@@ -52,7 +52,7 @@ impl<'s> Destination<'s>{
     fn at_vacant<T>(&self,access:Access,use_cut:impl FnOnce(&LocalPool,&Journal,&FileVolume<'_>,&FileVolume<'_>)->io::Result<T>)->io::Result<T>{
         let(p,_,s)=LocalPool::with_snapshot(&self.system,access)?;let src=self.source;
         let old=p.ordinary(src.volume())?;let new=p.ordinary(self.volume)?;
-        src.require(&p,&s,&old)?;self.require(&p,&new)?;vacant(&s,&new,src.name())?;
+        src.require(&p,&s,&old)?;self.require(&p,&new)?;vacant(&s,&new,src.name(),src.file())?;
         src.require(&p,&s,&old)?;self.require(&p,&new)?;use_cut(&p,&s,&old,&new)
     }
     pub(super) fn prepare(self)->io::Result<Prepared<'s>>{self.prepare_after(||Ok(()))}

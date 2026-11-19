@@ -1,3 +1,4 @@
+use crate::test_support::physical as native_leaf;
 use super::*;
 use crate::test_support::PrivateTemp;
 use crate::{initialize,inspect,Role,PoolInfo,RegisteredVolume};
@@ -20,8 +21,8 @@ impl Fixture{
 
 #[test]
 fn first_name_domain_never_guesses_unicode_or_portable_aliases(){
-    for bad in ["","..","A","a/b","a.","con.txt","com1","资料","x\\y"]{assert!(wire::human_name(bad.as_bytes()).is_err(),"{bad}");}
-    for good in ["report.txt","0","opaque.zxs","a-b_2.info"]{assert_eq!(wire::human_name(good.as_bytes()).unwrap(),good);}
+    for bad in ["","..","a/b","a.","x\\y","a:b","bad|name"]{assert!(wire::human_name(bad.as_bytes()).is_err(),"{bad}");}
+    for good in ["report.txt","Report.txt","A","资料","con.txt","com1",".env","0","opaque.zxs","a-b_2.info"]{assert_eq!(wire::human_name(good.as_bytes()).unwrap(),good);}
     assert!(wire::Frame::size(b"not-a-frame").is_err());
     assert_eq!(wire::Frame::size(b"ZXS/FILE").unwrap(),None);
 }
@@ -52,14 +53,14 @@ fn registered_empty_file_has_one_identity_at_every_original_cut_and_reopens_with
         assert_eq!(result.decision_sequence,Some(1));
         assert_eq!(list_initial_files(&t.system,t.v).unwrap().files,[result.clone()]);
         assert_eq!(read_initial_file(&t.system,result.file).unwrap(),(result.clone(),Vec::new()));
-        assert_eq!(osfs::read_dir(t.data.join("report.txt")).unwrap().count(),1);
+        assert_eq!(osfs::read_dir(t.data.join(native_leaf("report.txt",result.file))).unwrap().count(),1);
         assert_eq!(osfs::read_dir(&t.data).unwrap().count(),1);
         assert!(create_empty(&t.system,OperationId::new().unwrap(),t.v,"report.txt").is_err());
         let old=t._first.0.join("first-offline");osfs::rename(&t.data,&old).unwrap();
-        t._first.child("one");osfs::write(t.data.join("report.txt"),original).unwrap();
+        t._first.child("one");osfs::write(t.data.join(native_leaf("report.txt",result.file)),original).unwrap();
         assert_eq!(create_empty(&t.system,op,t.v,"report.txt").unwrap(),result);
         assert!(read_initial_file(&t.system,result.file).is_err());
-        assert_eq!(osfs::read(t.data.join("report.txt")).unwrap().as_slice(),original.as_slice());
+        assert_eq!(osfs::read(t.data.join(native_leaf("report.txt",result.file))).unwrap().as_slice(),original.as_slice());
     }
 }
 
@@ -88,7 +89,7 @@ fn a_torn_frame_can_only_be_completed_from_its_same_durable_sealed_bytes(){
             assert!(create_empty(&t.system,op,t.v,"first").is_err());
             assert!(creation_receipt(&t.system,op).is_err());
             assert_eq!(osfs::read(t.system.join("REGISTRATION")).unwrap(),prefix);
-            assert!(!t.data.join("first").exists());
+            assert!(!t.data.join(native_leaf("first",id)).exists());
         }
     }
 }
@@ -109,7 +110,7 @@ fn unsealed_equal_byte_replacement_and_unknown_inventory_remain_untouched(){
     assert_eq!(creation_receipt(&t.system,op).unwrap().unwrap().status,CreationStatus::Reserved);
     let pending=list_initial_files(&t.system,t.v).unwrap();
     assert!(pending.files.is_empty());assert_eq!(pending.reserved_private_entries,1);
-    assert_eq!(osfs::read(&local).unwrap(),bytes);assert!(!t.data.join("report").exists());
+    assert_eq!(osfs::read(&local).unwrap(),bytes);assert!(!t.data.join(native_leaf("report",a.file)).exists());
     osfs::remove_file(&local).unwrap();osfs::rename(&original,&local).unwrap();
     let good=create_empty(&t.system,op,t.v,"report").unwrap();
     osfs::write(t.data.join("unrecognized"),b"keep").unwrap();
@@ -132,7 +133,7 @@ fn full_original_frame_before_sync_is_not_a_confirmed_publication(){
     };
     let error=pool::reject_unconfirmed_for_test(&t.system,|_,_|Err(io::Error::other("original FILE journal sync failed"))).unwrap_err();
     assert_eq!(error.to_string(),"original FILE journal sync failed");
-    assert!(!t.data.join("first").exists());
+    assert!(!t.data.join(native_leaf("first",file)).exists());
     let confirmed=create_empty(&t.system,op,t.v,"first").unwrap(); // real production path repeats the sync
     assert_eq!(confirmed.file,file);assert_eq!(confirmed.decision_sequence,Some(1));
     assert_eq!(list_initial_files(&t.system,t.v).unwrap().files,[confirmed]);
@@ -197,12 +198,13 @@ fn a_full_unacknowledged_frame_needs_its_original_allocation_and_immutable_seal(
     create_inner(&t.system,op,t.v,"first",|c|if c==Cut::FrameSynced{Err(io::Error::other("no acknowledgement"))}else{Ok(())}).unwrap_err();
     let bytes=osfs::read(t.system.join("REGISTRATION")).unwrap();
     assert_eq!(creation_receipt(&t.system,op).unwrap().unwrap().status,CreationStatus::DecisionAwaitingConfirmation);
+    let id=creation_receipt(&t.system,op).unwrap().unwrap().file.file;
     for name in ["FILE-INTENT","FILE-ALLOCATION"]{
         let original=t.system.join(name);let held=t._first.0.join("held-original");
         osfs::rename(&original,&held).unwrap();
         assert!(creation_receipt(&t.system,op).is_err());assert!(create_empty(&t.system,op,t.v,"first").is_err());
         assert_eq!(osfs::read(t.system.join("REGISTRATION")).unwrap(),bytes);
-        assert!(!t.data.join("first").exists());
+        assert!(!t.data.join(native_leaf("first",id)).exists());
         osfs::rename(&held,&original).unwrap();
     }
     let f=create_empty(&t.system,op,t.v,"first").unwrap();
@@ -247,7 +249,7 @@ fn unbound_mkdir_is_neither_adopted_nor_swept_and_does_not_poison_business_listi
             osfs::write(old_slot.join("do-not-adopt"),b"unknown").unwrap();
             assert!(create_empty(&t.system,op,t.v,"new").is_err());
             assert_eq!(osfs::read(old_slot.join("do-not-adopt")).unwrap().as_slice(),b"unknown");
-            assert!(!t.data.join("new").exists());assert_eq!(osfs::read_dir(&t.data).unwrap().count(),2);
+            assert!(!t.data.join(native_leaf("new",before.file.file)).exists());assert_eq!(osfs::read_dir(&t.data).unwrap().count(),2);
             assert_eq!(creation_receipt(&t.system,op).unwrap().unwrap(),before);
         }else{
             let done=create_empty(&t.system,op,t.v,"new").unwrap();
@@ -255,7 +257,7 @@ fn unbound_mkdir_is_neither_adopted_nor_swept_and_does_not_poison_business_listi
             assert_eq!(create_empty(&t.system,op,t.v,"new").unwrap(),done); // no additional physical attempt
             assert_eq!(old_birth,fs::Birth::read(&fs::HeldDir::open(&old_slot).unwrap().file).unwrap());
             assert!(osfs::read_dir(&old_slot).unwrap().next().is_none());
-            let active=fs::HeldDir::open(&t.data.join("new")).unwrap();
+            let active=fs::HeldDir::open(&t.data.join(native_leaf("new",before.file.file))).unwrap();
             assert_ne!(fs::Birth::read(&active.file).unwrap(),old_birth);
             let complete=list_initial_files(&t.system,t.v).unwrap();
             assert_eq!(complete.files,[done.clone(),prior.clone()]);assert_eq!(complete.reserved_private_entries,1);
@@ -291,6 +293,7 @@ fn late_create_occupant_keeps_the_unconfirmed_original_and_never_replaces_an_ins
     // reason to withdraw the already confirmed original CREATE.
     for (replace_local,when) in [(false,Cut::FrameSynced),(true,Cut::FrameSynced),(false,Cut::Decision)]{
         let t=Fixture::new();let op=OperationId::new().unwrap();
+        let pool_id=inspect(&t.system).unwrap().id;
         let saved=t._first.0.join("held-original");let displaced=t._first.0.join("independent-occupant");
         let mut occupied=None;
         assert!(create_inner(&t.system,op,t.v,"new-file",|at|{
@@ -299,7 +302,8 @@ fn late_create_occupant_keeps_the_unconfirmed_original_and_never_replaces_an_ins
                 let mut private=osfs::read_dir(&t.data)?;let dir=private.next().unwrap()?.path();assert!(private.next().is_none());
                 let local=dir.join("FILE");osfs::rename(&local,&saved)?;osfs::copy(&saved,&local)?;local
             }else{
-                let path=t.data.join("NEW-FILE");osfs::write(&path,b"original occupant")?;path
+                let holder=fs::HeldDir::open(&t.system)?;let allocation=allocation::Allocation::read(&holder,pool_id)?.unwrap();
+                let path=t.data.join(native_leaf("new-file",allocation.file));osfs::write(&path,b"original occupant")?;path
             };
             occupied=Some((path.clone(),osfs::metadata(&path)?.ino(),osfs::read(&path)?));Ok(())
         }).is_err());
@@ -344,5 +348,53 @@ fn same_root_name_does_not_gain_a_file_identity_above_the_original_confirmation_
     for(vol,want)in[(t.v,here),(second,other)]{
         assert!(s.occupied_root(vol,"same"));
         assert_eq!(s.on(vol).map(|f|(f.create.entry,f.create.file)).collect::<Vec<_>>(),[(want.entry,want.file)]);
+    }
+}
+
+#[test]
+#[ignore="native registered roots; original passed-over slot is never data or clearing authority"]
+fn a_late_occupant_in_an_earlier_issued_slot_prevents_warm_and_cold_confirmation(){
+    let t=Fixture::new();let op=OperationId::new().unwrap();let name="Report.xlsx";
+    assert!(create_inner(&t.system,op,t.v,name,|c|if c==Cut::UnboundMkdir{Err(io::Error::other("first mkdir not yet bound"))}else{Ok(())}).is_err());
+    let (floor,slot)={let(_,_,j)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();
+        let a=j.allocated.as_ref().unwrap();(j.frontier(),t.data.join(material::staging(a.attempt,0).to_str().unwrap()))};
+    let sentinel=slot.join("foreign");let mut inserted=false;
+    assert!(create_inner(&t.system,op,t.v,name,|c|{
+        if c==Cut::FrameSynced{osfs::write(&sentinel,b"not an issued FILE")?;inserted=true;}Ok(())
+    }).is_err());assert!(inserted);
+    assert!(create_empty(&t.system,op,t.v,name).is_err());
+    {let(_,_,j)=LocalPool::with_snapshot(&t.system,Access::Read).unwrap();
+        assert_eq!(j.frontier(),floor);assert!(j.decided(op).is_none());assert_eq!(j.allocated.as_ref().unwrap().bound().unwrap().slot,1);}
+    assert_eq!(osfs::read(&sentinel).unwrap(),b"not an issued FILE");let kept=t._first.0.join("preserved-unclaimed");
+    osfs::rename(&sentinel,&kept).unwrap();let f=create_empty(&t.system,op,t.v,name).unwrap();
+    assert_eq!(lookup_file(&t.system,t.v,name).unwrap(),Some(f));assert!(slot.is_dir());
+    assert_eq!(osfs::read(kept).unwrap(),b"not an issued FILE");
+}
+
+#[test]
+#[ignore="exact recorded R path budget; real registered roots, R unavailable during ordinary operations"]
+fn a_short_ordinary_birth_uses_the_original_recycle_geometry_without_opening_offline_r(){
+    use crate::test_support::native_root_length;let name="abcdefghijklmnopqrst";
+    assert_eq!(name.len(),20); // the physical leaf is 53 bytes; isolation is only 46
+    for width in [4042usize,4043]{
+        let a=PrivateTemp::under(&std::env::temp_dir());let r=PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
+        let sys=a.child("system");let data=a.child("ordinary");let holder=r.child("R-parent");
+        let bin=native_root_length(&holder,width);let registration=initialize(OperationId::new().unwrap(),&sys,&bin,std::slice::from_ref(&data)).unwrap();
+        let id=registration.volumes.iter().find(|v|v.volume.role==Role::File).unwrap().id;
+        let parked=holder.with_file_name("offline-original-R-parent");osfs::rename(&holder,&parked).unwrap();
+        let op=OperationId::new().unwrap();let original=osfs::read(sys.join("REGISTRATION")).unwrap();
+        let response=create_empty(&sys,op,id,name);
+        if width==4043{
+            assert!(response.is_err());assert!(creation_receipt(&sys,op).unwrap().is_none());assert_eq!(osfs::read(sys.join("REGISTRATION")).unwrap(),original);
+            assert!(!sys.join("FILE-ALLOCATION").exists()&&!sys.join("FILE-INTENT").exists());assert_eq!(osfs::read_dir(&data).unwrap().count(),0);
+            let sibling=create_empty(&sys,OperationId::new().unwrap(),id,"short").unwrap();assert_eq!(lookup_file(&sys,id,"short").unwrap().unwrap(),sibling);
+        }else{
+            let f=response.unwrap();let expected=native_leaf(name,f.file);assert_eq!(expected.len(),53);
+            assert!(data.join(expected).join("FILE").is_file());assert_eq!(lookup_file(&sys,id,name).unwrap(),Some(f.clone()));
+            let body=crate::DraftClaim::new(3,crate::hash::digest(b"abc").unwrap()).unwrap();
+            crate::save_first(&sys,OperationId::new().unwrap(),f.file,body,std::io::Cursor::new(b"abc")).unwrap();
+            let mut received=Vec::new();crate::read_current_to(&sys,f.file,&mut received).unwrap();assert_eq!(received,b"abc");
+        }
+        assert!(!holder.exists());osfs::rename(parked,holder).unwrap();
     }
 }

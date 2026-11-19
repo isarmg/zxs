@@ -1,3 +1,4 @@
+use crate::test_support::physical as native_leaf;
 use super::command::{Request,perform};
 use crate::{self as z,FileInfo,FormalNode,MoveStatus,OperationId,VolumeId,ordinary::Cut,test_support::PrivateTemp};
 use std::{fs,io::{self,Cursor,Write},os::unix::fs::MetadataExt,path::{Path,PathBuf}};
@@ -34,11 +35,11 @@ impl Fixture{
         b.clear();assert_eq!(z::read_current_to(&self.sys,id,&mut b).unwrap().head,Some(self.last.clone()));assert_eq!(b,AFTER);
     }
     fn exercise(&self,cross:bool){
-        let r=self.cmd();let before=fs::metadata(self.old.join("name")).unwrap();
+        let r=self.cmd();let before=fs::metadata(self.old.join(native_leaf("name",self.file.file))).unwrap();
         let moved=self.call(r).unwrap();assert_eq!(moved.status,MoveStatus::CompleteCheckedNow);
         assert_eq!((moved.file,moved.entry,moved.history),(self.file.file,self.file.entry,self.file.history));
         assert_eq!((moved.from,moved.to,moved.source_epoch,moved.destination_epoch),(self.from,self.to,0,1));
-        assert!(!self.old.join("name").exists());let after=fs::metadata(self.new.join("name")).unwrap();
+        assert!(!self.old.join(native_leaf("name",self.file.file)).exists());let after=fs::metadata(self.new.join(native_leaf("name",self.file.file))).unwrap();
         if cross{assert_ne!(before.dev(),after.dev());}else{assert_eq!((before.dev(),before.ino()),(after.dev(),after.ino()));}
         let old_off=self.old.with_file_name("old-offline");fs::rename(&self.old,&old_off).unwrap();
         self.all_history();assert_eq!(z::current_info(&self.sys,r.id).unwrap().file.volume,self.to);
@@ -70,7 +71,7 @@ fn original_historical_full_reader_holds_all_source_retirement_until_it_finishes
         fn write(&mut self,b:&[u8])->io::Result<usize>{if !self.entered{
             self.entered=true;assert!(self.f.call(self.r).is_err());
             assert_eq!(self.f.receipt(self.r).status,MoveStatus::TargetReopenedSourcePending);
-            assert_eq!(fs::read_dir(self.f.old.join("name"))?.count(),4);
+            assert_eq!(fs::read_dir(self.f.old.join(native_leaf("name",self.f.file.file)))?.count(),4);
             assert_eq!(z::list_initial_files(&self.f.sys,self.f.from)?.files.len(),0);
             let listed=z::list_initial_files(&self.f.sys,self.f.to)?;assert_eq!(listed.files[0].file,self.r.id);
             assert_eq!(listed.pending_moves,[self.f.receipt(self.r)]);
@@ -80,7 +81,7 @@ fn original_historical_full_reader_holds_all_source_retirement_until_it_finishes
     }
     let f=Fixture::build(true,false);let r=f.cmd();let mut sink=WhileReading{f:&f,r,entered:false,received:Vec::new()};
     z::read_node_to(&f.sys,r.id,f.first.node,&mut sink).unwrap();assert!(sink.entered);assert_eq!(sink.received,BEFORE);
-    assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);assert!(!f.old.join("name").exists());
+    assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);assert!(!f.old.join(native_leaf("name",f.file.file)).exists());
 }
 
 #[test]
@@ -100,7 +101,7 @@ fn original_move_is_not_old_source_fallback_after_decision_and_recovers_only_the
             if step==Cut::MoveTargetChecked{
                 // The old name and original inode still exist on A, but custody belongs to B.
                 let birth=j.file(r.id).unwrap();let old=pool.ordinary(f.from).unwrap();
-                assert_eq!(fs::metadata(f.old.join("name")).unwrap().ino(),birth.create.directory.entity.inode);
+                assert_eq!(fs::metadata(f.old.join(native_leaf("name",f.file.file))).unwrap().ino(),birth.create.directory.entity.inode);
                 assert!(crate::ordinary::directory::file_home::open(&old,&j,birth).is_err());
             }
             let before=matches!(step,Cut::Reservation|Cut::Intent|Cut::FrameSynced);
@@ -117,7 +118,7 @@ fn original_move_is_not_old_source_fallback_after_decision_and_recovers_only_the
             for volume in [f.from,f.to]{let view=z::list_initial_files(&f.sys,volume).unwrap();assert!(view.files.is_empty());assert_eq!(view.pending_moves,[f.receipt(r)]);}
         }else{f.all_history();}
         let finish=f.call(r).unwrap();assert!(matches!(finish.status,MoveStatus::CompleteCheckedNow|MoveStatus::OriginalPublished));
-        assert!(!f.old.join("name").exists());f.all_history();
+        assert!(!f.old.join(native_leaf("name",f.file.file)).exists());f.all_history();
     }
 }
 #[test]
@@ -131,7 +132,7 @@ fn private_tickets_remain_only_on_the_volume_that_issued_them_and_do_not_hide_un
     f.call(r).unwrap();let before=z::list_initial_files(&f.sys,f.to).unwrap();assert_eq!(before.files.len(),2);assert_eq!(before.reserved_private_entries,1);
     assert_eq!(z::list_initial_files(&f.sys,f.from).unwrap().reserved_private_entries,1);
     fs::create_dir(f.new.join(&old_slot)).unwrap();assert!(z::list_initial_files(&f.sys,f.to).is_err());
-    assert!(f.new.join(old_slot).is_dir());assert!(f.new.join("sibling").is_dir());
+    assert!(f.new.join(old_slot).is_dir());assert!(f.new.join(native_leaf("sibling",sibling.file)).is_dir());
 }
 
 fn stop_at(f:&Fixture,r:Request,cut:Cut){
@@ -155,9 +156,9 @@ fn decided_transfer_does_not_serve_or_reconstruct_from_an_equal_byte_replacement
     let stage=fs::read_dir(&f.new).unwrap().map(|p|p.unwrap().path()).find(|p|p.file_name().unwrap().to_string_lossy().starts_with(".zxs-new-")).unwrap();
     let raw=actual_raw(&stage);let saved=f.new.with_file_name("held-original-raw");fs::rename(&raw,&saved).unwrap();
     fs::copy(&saved,&raw).unwrap();assert_ne!(fs::metadata(&saved).unwrap().ino(),fs::metadata(&raw).unwrap().ino());
-    let source=inventory_ids(&f.old.join("name"));
+    let source=inventory_ids(&f.old.join(native_leaf("name",f.file.file)));
     assert!(f.call(r).is_err());assert_eq!(f.receipt(r).status,MoveStatus::DecidedTargetPending);
-    assert_eq!(inventory_ids(&f.old.join("name")),source);assert!(!f.new.join("name").exists());assert_eq!(fs::read(&raw).unwrap(),BEFORE);
+    assert_eq!(inventory_ids(&f.old.join(native_leaf("name",f.file.file))),source);assert!(!f.new.join(native_leaf("name",f.file.file)).exists());assert_eq!(fs::read(&raw).unwrap(),BEFORE);
     let mut got=Vec::new();assert!(z::read_current_to(&f.sys,r.id,&mut got).is_err());assert!(got.is_empty());
     assert!(z::read_node_to(&f.sys,r.id,f.first.node,&mut got).is_err());assert!(got.is_empty());
 }
@@ -165,10 +166,10 @@ fn decided_transfer_does_not_serve_or_reconstruct_from_an_equal_byte_replacement
 #[ignore="three private registered filesystems"]
 fn occupied_final_target_is_not_overwritten_and_missing_or_substituted_old_roles_are_never_implicitly_retired(){
     let f=Fixture::build(true,false);let r=f.cmd();stop_at(&f,r,Cut::Decision);
-    let original=inventory_ids(&f.old.join("name"));let n=f.new.join("name");fs::create_dir(&n).unwrap();fs::write(n.join("foreign"),b"not the FILE").unwrap();
-    assert!(f.call(r).is_err());assert_eq!(inventory_ids(&f.old.join("name")),original);assert_eq!(fs::read(n.join("foreign")).unwrap(),b"not the FILE");
+    let original=inventory_ids(&f.old.join(native_leaf("name",f.file.file)));let n=f.new.join(native_leaf("name",f.file.file));fs::create_dir(&n).unwrap();fs::write(n.join("foreign"),b"not the FILE").unwrap();
+    assert!(f.call(r).is_err());assert_eq!(inventory_ids(&f.old.join(native_leaf("name",f.file.file))),original);assert_eq!(fs::read(n.join("foreign")).unwrap(),b"not the FILE");
     fs::rename(n,f.new.with_file_name("foreign-occupied")).unwrap();stop_at(&f,r,Cut::MoveTargetChecked);
-    let live=f.old.join("name");let raw=actual_raw(&live);let moved=f.old.with_file_name("still-original-leaf");fs::rename(&raw,&moved).unwrap();
+    let live=f.old.join(native_leaf("name",f.file.file));let raw=actual_raw(&live);let moved=f.old.with_file_name("still-original-leaf");fs::rename(&raw,&moved).unwrap();
     // New target is already the only readable custodian; the source must not
     // be repaired, treated as already retired, or touched in some other order.
     let absent=inventory_ids(&live);assert!(f.call(r).is_err());assert_eq!(inventory_ids(&live),absent);f.all_history();
@@ -182,7 +183,7 @@ fn occupied_final_target_is_not_overwritten_and_missing_or_substituted_old_roles
 #[ignore="three private registered filesystems"]
 fn old_role_changed_after_the_whole_retirement_admission_stops_before_any_unlink(){
     use std::os::unix::fs::FileExt;
-    let f=Fixture::build(true,false);let r=f.cmd();let dir=f.old.join("name");let raw=actual_raw(&dir);
+    let f=Fixture::build(true,false);let r=f.cmd();let dir=f.old.join(native_leaf("name",f.file.file));let raw=actual_raw(&dir);
     let ids=inventory_ids(&dir);let mut hit=false;
     assert!(perform(&f.sys,r,&mut |step|{
         if step==Cut::MoveSourceAdmitted&&!hit{hit=true;let out=fs::OpenOptions::new().write(true).open(&raw)?;
@@ -197,8 +198,8 @@ fn old_role_changed_after_the_whole_retirement_admission_stops_before_any_unlink
 fn a_missing_whole_original_is_never_discharged_as_an_empty_directory(){
     for cut in [Cut::MoveSourceAdmitted,Cut::MoveSourceIsolated,Cut::MoveEraseFlagBeforeSync]{
         let f=Fixture::build(true,false);let r=f.cmd();stop_at(&f,r,cut);
-        let original=if cut==Cut::MoveSourceAdmitted{f.old.join("name")}else{
-            fs::read_dir(&f.old).unwrap().map(|p|p.unwrap().path()).find(|p|p.file_name().unwrap().to_string_lossy().starts_with(".zxs-move-out-")).unwrap()
+        let original=if cut==Cut::MoveSourceAdmitted{f.old.join(native_leaf("name",f.file.file))}else{
+            fs::read_dir(&f.old).unwrap().map(|p|p.unwrap().path()).find(|p|p.file_name().unwrap().to_string_lossy().starts_with(".zxs-moveout-")).unwrap()
         };
         let ids=inventory_ids(&original);assert_eq!(ids.len(),4);
         let away=f.old.with_file_name("whole-renamed-away");fs::rename(&original,&away).unwrap();
@@ -217,7 +218,7 @@ fn a_missing_whole_original_is_never_discharged_as_an_empty_directory(){
 #[ignore="three private registered filesystems"]
 fn a_quarantine_never_accepts_a_missing_role_beyond_its_one_authorized_unlink(){
     let f=Fixture::build(true,false);let r=f.cmd();stop_at(&f,r,Cut::MoveEraseFlagBeforeSync);
-    let q=fs::read_dir(&f.old).unwrap().map(|p|p.unwrap().path()).find(|p|p.file_name().unwrap().to_string_lossy().starts_with(".zxs-move-out-")).unwrap();
+    let q=fs::read_dir(&f.old).unwrap().map(|p|p.unwrap().path()).find(|p|p.file_name().unwrap().to_string_lossy().starts_with(".zxs-moveout-")).unwrap();
     let raw=actual_raw(&q);let stash=f.old.with_file_name("unapproved-raw");fs::rename(&raw,&stash).unwrap();
     let ids=inventory_ids(&q);assert_eq!(ids.len(),3);
     assert!(f.call(r).is_err());assert_eq!(inventory_ids(&q),ids);assert_eq!(fs::read(&stash).unwrap(),BEFORE);
@@ -228,7 +229,7 @@ fn a_quarantine_never_accepts_a_missing_role_beyond_its_one_authorized_unlink(){
 #[ignore="two private registered filesystems"]
 fn original_cross_parent_rename_cannot_open_target_until_both_held_parents_are_resynced(){
     let f=Fixture::build(false,false);let r=f.cmd();stop_at(&f,r,Cut::MoveInstalled);
-    assert!(f.new.join("name").is_dir());assert!(!f.old.join("name").exists());
+    assert!(f.new.join(native_leaf("name",f.file.file)).is_dir());assert!(!f.old.join(native_leaf("name",f.file.file)).exists());
     let offline=f.old.with_file_name("offline-before-old-parent-fsync");fs::rename(&f.old,&offline).unwrap();
     assert!(f.call(r).is_err());assert_eq!(f.receipt(r).status,MoveStatus::DecidedTargetPending);
     let mut bytes=Vec::new();assert!(z::read_current_to(&f.sys,r.id,&mut bytes).is_err());assert!(bytes.is_empty());
@@ -245,13 +246,13 @@ fn empty_file_budgets_all_private_names_before_reserving_the_shared_system_slot(
     let t=PrivateTemp::under(&std::env::temp_dir());
     let r=PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
     let sys=t.child("system");let recycle=r.child("recycle");let short=t.child("short");
-    let bad=native_root_length(&t.child("bad"),4053);let edge=native_root_length(&t.child("edge"),4052);
+    let bad=native_root_length(&t.child("bad"),4050);let edge=native_root_length(&t.child("edge"),4049);
     let reg=z::initialize(op(),&sys,&recycle,&[short.clone(),bad.clone(),edge.clone()]).unwrap();
     let volume=|p:&Path|reg.volumes.iter().find(|row|row.volume.path==p).unwrap().id;
     let frontier=||LocalPool::with_snapshot(&sys,Access::Read).unwrap().2.frontier();
     let before=frontier();let denied=op();
-    // The destination /x fits; every issued 43-byte private leaf would give
-    // 4097 including the slash. Refuse without leaving a named ticket or frame.
+    // The 34-byte final and eight 43-byte stages fit, but the 46-byte isolation leaf
+    // would require 4097 including the slash. Refuse without leaving a named ticket or frame.
     assert!(z::create_empty(&sys,denied,volume(&bad),"x").is_err());
     assert_eq!(frontier(),before);assert_eq!(z::creation_receipt(&sys,denied).unwrap(),None);
     for n in ["FILE-ALLOCATION","FILE-INTENT"]{assert!(!sys.join(n).exists());}
@@ -267,19 +268,18 @@ fn empty_file_budgets_all_private_names_before_reserving_the_shared_system_slot(
 #[test]
 #[ignore="three private native filesystems; exact registered boundary paths"]
 fn actual_move_never_reserves_if_its_source_isolation_or_destination_slots_cannot_subsequently_be_opened(){
-    // max 4096 UTF-8 bytes. An issued '.zxs-new-{id}-0' uses 43 bytes;
-    // '.zxs-move-out-{id}' uses 46, each also needs its separating slash.
-    for (bad_source,bad_target) in [(Some(4051),None),(None,Some(4054))]{
-        let f=Fixture::planned(true,false,bad_source,bad_target);let r=f.cmd();
+    // Even the source birth now preflights its own future isolation. Here
+    // each formerly unseen destination fails first on the 46 or 43 byte leaf.
+    for bad_target in [4050,4054]{
+        let f=Fixture::planned(true,false,None,Some(bad_target));let r=f.cmd();
         assert!(f.call(r).is_err());
         assert!(z::move_receipt(&f.sys,r.op,r.id,r.from,r.to,0).unwrap().is_none());
         for n in ["FILE-ALLOCATION","FILE-INTENT"]{assert!(!f.sys.join(n).exists());}
         let expected=z::current_info(&f.sys,r.id).unwrap();assert_eq!(expected.head,Some(f.last.clone()));
         // A failed request did not consume the frontier or create any named task.
-        if bad_source.is_some(){assert!(fs::read_dir(&f.new).unwrap().next().is_none());z::create_empty(&f.sys,op(),f.to,"sibling").unwrap();}
-        else{z::create_empty(&f.sys,op(),f.from,"sibling").unwrap();}
+        assert!(fs::read_dir(&f.new).unwrap().next().is_none());z::create_empty(&f.sys,op(),f.from,"sibling").unwrap();
     }
-    let f=Fixture::planned(true,false,Some(4049),Some(4052));let r=f.cmd();
+    let f=Fixture::planned(true,false,Some(4049),Some(4049));let r=f.cmd();
     assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);f.all_history();
 }
 
@@ -307,7 +307,7 @@ fn a_move_waiting_for_its_source_keeps_unrelated_reads_but_not_new_writes_until_
         assert!(z::create_empty(&f.sys,create,f.to,"wait-for-move").is_err());
         assert!(z::save_interval(&f.sys,save,x.file,1,edit,Cursor::new(b"X")).is_err());
         assert!(z::creation_receipt(&f.sys,create)?.is_none());assert!(z::interval_receipt(&f.sys,save)?.is_none());
-        assert!(!f.new.join("wait-for-move").exists());Ok(())
+        assert!(!fs::read_dir(&f.new)?.any(|e|e.unwrap().file_name().to_string_lossy().starts_with("wait-for-move-")));Ok(())
     };
     struct Inspect<F>{once:Option<F>,bytes:Vec<u8>}
     impl<F:FnOnce()->io::Result<()>> Write for Inspect<F>{
@@ -337,8 +337,8 @@ mod recycle_pair;
 #[ignore="private registered roots on two or three filesystems; hot and cold late conflict for both custody methods"]
 fn a_complete_unconfirmed_move_does_not_override_a_late_competing_final_name_in_either_method(){
     for cross in [false,true]{
-        let f=Fixture::build(cross,false);let r=f.cmd();let foreign=f.new.join(if cross{"name"}else{"NaMe"});
-        let original=inventory_ids(&f.old.join("name"));let mut hit=false;
+        let f=Fixture::build(cross,false);let r=f.cmd();let foreign=f.new.join(native_leaf("name",f.file.file));
+        let original=inventory_ids(&f.old.join(native_leaf("name",f.file.file)));let mut hit=false;
         let before=crate::pool::lease::LocalPool::with_snapshot(&f.sys,crate::pool::lease::Access::Read).unwrap().2.frontier();
         assert!(perform(&f.sys,r,&mut |cut|{if cut==Cut::FrameSynced{
             let mut claimant=fs::OpenOptions::new().write(true).create_new(true).open(&foreign)?;
@@ -349,23 +349,23 @@ fn a_complete_unconfirmed_move_does_not_override_a_late_competing_final_name_in_
         assert_eq!(f.receipt(r).decision_sequence,None);assert!(f.call(r).is_err());
         let(_,_,s)=crate::pool::lease::LocalPool::with_snapshot(&f.sys,crate::pool::lease::Access::Read).unwrap();
         assert_eq!(s.frontier(),before);assert!(s.decided(r.op).is_none());assert_eq!(s.placement(r.id).unwrap().volume(),f.from);
-        assert_eq!(fs::read(&foreign).unwrap(),b"independent late occupant");assert_eq!(inventory_ids(&f.old.join("name")),original);f.all_history();
+        assert_eq!(fs::read(&foreign).unwrap(),b"independent late occupant");assert_eq!(inventory_ids(&f.old.join(native_leaf("name",f.file.file))),original);f.all_history();
         let away=f.new.with_file_name("own-fixture-occupant-relocated");fs::rename(&foreign,&away).unwrap();
         assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);assert_eq!(f.receipt(r).decision_sequence,Some(before.0+1));
         let moved=fs::metadata(&away).unwrap();assert_eq!((moved.dev(),moved.ino()),identity);
-        assert_eq!(fs::read(&away).unwrap(),b"independent late occupant");assert!(!f.old.join("name").exists());f.all_history();
+        assert_eq!(fs::read(&away).unwrap(),b"independent late occupant");assert!(!f.old.join(native_leaf("name",f.file.file)).exists());f.all_history();
     }
 }
 
 #[test]
 #[ignore="private native roots; a conflict after confirmation cannot undo the sole original placement"]
 fn a_conflict_introduced_after_the_confirmed_move_keeps_the_original_target_pending_instead_of_reactivating_the_source(){
-    let f=Fixture::build(true,false);let r=f.cmd();let foreign=f.new.join("name");let mut hit=false;
+    let f=Fixture::build(true,false);let r=f.cmd();let foreign=f.new.join(native_leaf("name",f.file.file));let mut hit=false;
     assert!(perform(&f.sys,r,&mut |c|{if c==Cut::Decision{
         let mut other=fs::OpenOptions::new().write(true).create_new(true).open(&foreign)?;
         other.write_all(b"late after original decision")?;other.sync_all()?;hit=true;
     }Ok(())}).is_err());assert!(hit);
-    assert_eq!(f.receipt(r).status,MoveStatus::DecidedTargetPending);assert!(f.old.join("name").is_dir());
+    assert_eq!(f.receipt(r).status,MoveStatus::DecidedTargetPending);assert!(f.old.join(native_leaf("name",f.file.file)).is_dir());
     let mut bytes=Vec::new();assert!(z::read_node_to(&f.sys,r.id,f.first.node,&mut bytes).is_err());assert!(bytes.is_empty());
     assert_eq!(fs::read(&foreign).unwrap(),b"late after original decision");assert!(f.call(r).is_err());
     fs::rename(&foreign,f.new.with_file_name("external-owner-kept")).unwrap();assert_eq!(f.call(r).unwrap().status,MoveStatus::CompleteCheckedNow);

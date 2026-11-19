@@ -178,6 +178,8 @@ impl OriginalIndex{
             }
             Decision::Create(f)=>{let c=&f.create;
                 if c.parent!=super::file_parent::BirthParent::Root{return Err(invalid("child FILE business admission is closed"));}
+                self.names.vacancy(DirParent::Root(c.volume),&c.name,Member::File{entry:c.entry,file:c.file})?;
+                super::material::birth_geometry(allow,c.volume,c.uid,allow.ordinary_path_budget(c.volume,c.uid)?,&c.name,c.file,c.attempt)?;
                 if !allow.file(c.volume,c.uid,c.directory.entity,&c.directory.birth,false)
                     ||self.files.contains_key(&c.file)||self.names.occupied_root(c.volume,&c.name)||self.entries.contains(&c.entry)
                     ||self.histories.contains(&c.history)||self.tickets.contains(&c.attempt)||self.directory_tokens.contains(&c.attempt)||self.native.contains(&c.local.birth)
@@ -250,6 +252,13 @@ fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,gr
         Purpose::Restore{..}=>reg.dedicated(o.uid,Direction::FromRecycle,src,dst),
     };
     if !eligible{return Err(invalid("wrong registered custody endpoints"));}
+    let private=super::material::resident(&o.name,o.file,o.ticket)?;
+    let ordinary=|v|reg.ordinary_names(v,o.uid,reg.ordinary_path_budget(v,o.uid)?);
+    for b in match o.purpose{
+        Purpose::Ordinary=>[ordinary(o.from)?,ordinary(o.to)?],
+        Purpose::Delete{..}=>[ordinary(o.from)?,reg.recycle_names(o.uid)?],
+        Purpose::Restore{..}=>[reg.recycle_names(o.uid)?,ordinary(o.to)?],
+    }{private.at(b)?;}
     names.require_handoff(o)?;
     o.purpose.check_transfer(o.mode,&o.src_root,&o.dst_root)?;before.require_next(o)?;o.require_graph(before.birth(),graph)?;
     before.graph_sites(graph)?.check(&o.src_root)
@@ -336,6 +345,8 @@ impl Journal{
                 if !allocation::root_image(&bytes){return Err(invalid("unsupported original FILE allocation kind"));}
                 let a=Allocation::from_bytes(system,pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Create(f) if a.matches(f)));
+                super::material::birth_geometry(&allowed,a.volume,a.uid,allowed.ordinary_path_budget(a.volume,a.uid)?,&a.name,a.file,a.attempt)?;
+                if !last{idx.names.vacancy(DirParent::Root(a.volume),&a.name,Member::File{entry:a.entry,file:a.file})?;}
                 if !allowed.file(a.volume,a.uid,a.root.entity,&a.root.birth,true)||
                     (!last&&(ds.len()>=MAX_DECISIONS||a.seq!=ds.len() as u64+1||a.previous!=prev||idx.file_op_used(a.op)
                     ||idx.files.contains_key(&a.file)||idx.entries.contains(&a.entry)||idx.histories.contains(&a.history)
@@ -455,6 +466,9 @@ impl Journal{
     pub(super) fn file(&self,id:FileId)->Option<&Frame>{self.decisions.get(*self.originals.get(&id)?)?.creation().ok()}
     /// Confirmed ordinary name occupancy only. Still-unconfirmed reservations are
     /// checked separately. Neither a name nor a nonempty result is a source permit.
+    pub(in crate::ordinary) fn require_new_file_name(&self,address:DirParent,name:&str,entry:EntryId,file:FileId)->io::Result<()>{
+        self.names.vacancy(address,name,Member::File{entry,file})
+    }
     pub(super) fn occupied_root(&self,v:VolumeId,name:&str)->bool{self.names.occupied_root(v,name)}
     pub(super) fn on_all(&self)->impl Iterator<Item=&Frame>{self.decisions.iter().filter_map(|d|d.creation().ok())}
     pub(in crate::ordinary) fn confirmed_handoff(&self,op:OperationId)->io::Result<(&Moved,&MoveAllocation)>{
@@ -485,6 +499,13 @@ impl Journal{
     pub(in crate::ordinary) fn at_parent(&self,p:DirParent)->impl Iterator<Item=&Frame>{self.on_all().filter(move |f|{
         let c=&f.create;self.names.get(p,&c.name)==Some(Member::File{entry:c.entry,file:c.file})
     })}
+    /// An exact ordinary-root business lookup. A physical spelling is not
+    /// parsed as an identity, and a directory is not a FILE.
+    pub(super) fn lookup_root(&self,v:VolumeId,name:&str)->io::Result<Option<&Frame>>{
+        let Some(Member::File{entry,file})=self.names.root(v,name)else{return Ok(None)};
+        let f=self.file(file).filter(|f|f.create.entry==entry&&f.create.name==name&&self.volume_of(f)==v)
+            .ok_or_else(||invalid("logical FILE entry and confirmed original placement differ"))?;Ok(Some(f))
+    }
     pub(super) fn on(&self,v:VolumeId)->impl Iterator<Item=&Frame>{self.at_parent(DirParent::Root(v))}
     /// The physical birthplace is a current location only if no confirmed
     /// handoff supersedes it. Compare the complete original entry, including
@@ -518,6 +539,7 @@ impl Journal{
     pub(in crate::ordinary) fn admit_new_handoff(&self,p:&crate::pool::lease::LocalPool,op:OperationId,id:FileId,from:VolumeId,to:VolumeId)->io::Result<()>{
         p.require_business_op(op)?;self.room_for(MAX_FRAME)?;
         let c=self.file(id).ok_or_else(||invalid("no original FILE for handoff"))?;
+        self.require_new_file_name(DirParent::Root(to),&c.create.name,c.create.entry,id)?;
         if self.making.is_some()||self.pending.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||self.editing.is_some()||
             self.incrementing.is_some()||self.moving.is_some()||self.ticket_used(op)||from==to||c.create.volume!=from||
             !self.clean_initial_handoff(id)||self.names.root(from,&c.create.name)!=Some(Member::File{entry:c.create.entry,file:id})||

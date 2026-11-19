@@ -62,7 +62,7 @@ fn before_floor(parent:&HeldParent<'_,'_>,s:&Journal,a:&Operand,d:&Created)->io:
         return Err(invalid("different mkdir reservation, frame or source frontier before confirmation"));}
     s.new_directory_origin(&d.origin,&p.journal_registration())?;
     if parent.basis()!=&d.origin.parent{return Err(invalid("mkdir moved between parent selections"));}
-    let raw=inventory::census(parent,s)?;material::check_siblings(&raw.into_iter().collect::<Vec<_>>(),&d.origin.name,false)?;
+    let raw=inventory::census(parent,s)?;material::check_leaf(parent.directory(),&raw.into_iter().collect::<Vec<_>>(),&inventory::human(&d.origin.name)?,false)?;
     let h=parent.directory().child_directory(&material::staging(d.origin.ticket,d.slot))?.ok_or_else(||invalid("original empty directory not staged"))?;
     inventory::same_child(&h,&d.object)?;h.only(None)?;parent.require()
 }
@@ -78,7 +78,7 @@ fn ready(parent:&HeldParent<'_,'_>,a:&Operand,d:&Created,intent:Option<&journal:
         parent.basis()!=&d.origin.parent||s.pending.as_ref().is_some_and(|i|i.frame.bytes()!=d.bytes){
         return Err(invalid("not this exact published directory, parent or installation ticket"));}
     let raw=inventory::census(parent,&s)?;
-    material::check_siblings(&raw.iter().cloned().collect::<Vec<_>>(),&d.origin.name,true)?;
+    material::check_leaf(parent.directory(),&raw.iter().cloned().collect::<Vec<_>>(),&inventory::human(&d.origin.name)?,true)?;
     Ok(raw.contains(d.origin.name.as_bytes()))
 }
 fn finish(parent:&HeldParent<'_,'_>,a:&Operand,d:&Created,intent:Option<&journal::Intent>,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<DirectoryInfo>{

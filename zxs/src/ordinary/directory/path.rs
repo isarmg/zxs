@@ -51,10 +51,13 @@ impl<'v,'p> HeldParent<'v,'p>{
 /// Checks a settled child, not its contents or the right to make a new
 /// change. This directory may have had real authorized children since birth.
 pub(super) fn installed(parent:&HeldDir,row:&Created)->io::Result<HeldDir>{
+    installed_in(parent,row,None)
+}
+pub(super) fn installed_in(parent:&HeldDir,row:&Created,sample:Option<&std::collections::BTreeSet<Vec<u8>>>)->io::Result<HeldDir>{
     let o=&row.origin;
     if parent.entry_present(&material::staging(o.ticket,row.slot))?{return Err(invalid("original directory private slot is still occupied"));}
     let leaf=CString::new(o.name.as_bytes()).map_err(|_|invalid("invalid original directory name"))?;
-    let child=parent.child_directory(&leaf)?.ok_or_else(||invalid("confirmed directory is not installed at its original name"))?;
+    let child=match sample{Some(n)=>parent.directory_in_sample(&leaf,n)?,None=>parent.exact_directory(&leaf)?}.ok_or_else(||invalid("confirmed directory is not installed at its original name"))?;
     if child.entity!=row.object.entity||fs::Birth::read(&child.file)?!=row.object.birth||child.label()?.is_some(){
         return Err(invalid("not this original, unlabelled ordinary directory"));}
     child.require_named()?;Ok(child)

@@ -81,7 +81,7 @@ fn child_residence_must_fit_the_future_isolation_leaf_even_when_every_creation_s
             assert_eq!(h.path.as_os_str().as_bytes().len(),expected);
             material::check_ticket_paths(&h,"x",ticket).unwrap();
             assert_eq!(expected+1+q.to_bytes().len(),if expected==4049{4096}else{4097});
-            assert_eq!(material::check_child_residence(&h,"x",ticket).is_ok(),expected==4049);
+            assert_eq!(material::held_residence(&v,&h,"x",crate::FileId([17;16]),ticket).is_ok(),expected==4049);
             h.only(None).unwrap();
         }
         assert!(Unissued::select(&v,no.directory,proposed,"x").is_err());untouched(&p,before,proposed);

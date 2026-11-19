@@ -43,20 +43,8 @@ pub(crate) struct Creation {
     pub(super) parent:BirthParent,pub op:OperationId,pub uid:u32,pub volume:VolumeId,pub entry:EntryId,pub file:FileId,pub history:HistoryId,
     pub name:String,pub attempt:OperationId,pub slot:u8,pub allocation:[u8;32],pub directory:NativeObject,pub local:NativeObject,pub local_digest:[u8;32],
 }
-pub(super) const MAX_HUMAN:usize=120;
-pub(super) fn human_name(bytes:&[u8])->io::Result<&str>{
-    if bytes.is_empty()||bytes.len()>MAX_HUMAN||!bytes[0].is_ascii_alphanumeric()||bytes.ends_with(b".")||
-        !bytes.iter().all(|&b|b.is_ascii_lowercase()||b.is_ascii_digit()||matches!(b,b'.'|b'-'|b'_')){
-        return Err(invalid("this first ordinary path accepts one lowercase ASCII filename, 1 to 120 bytes"));
-    }
-    let name=std::str::from_utf8(bytes).expect("every accepted filename byte is ASCII");
-    let stem=name.split('.').next().expect("nonempty name");
-    if matches!(stem,"con"|"nul"|"prn"|"aux")||
-        (stem.len()==4 && (stem.starts_with("com")||stem.starts_with("lpt")) && (b'1'..=b'9').contains(&stem.as_bytes()[3])){
-        return Err(invalid("reserved portable FILE name"));
-    }
-    Ok(name)
-}
+pub(super) const MAX_HUMAN:usize=super::storage_name::FILE_NAME_MAX;
+pub(super) fn human_name(bytes:&[u8])->io::Result<&str>{super::storage_name::FileName::parse(bytes).map(|n|n.display())}
 pub(super) fn request_digest(pool:PoolId,op:OperationId,uid:u32,volume:VolumeId,name:&str)->io::Result<[u8;32]>{
     human_name(name.as_bytes())?;
     let mut b=b"ZXS/CREATE-EMPTY-REQUEST\0".to_vec();

@@ -10,6 +10,8 @@ use std::path::{Component, Path, PathBuf};
 
 mod mounts;
 mod relative;
+mod name_budget;
+pub(crate) use name_budget::{ComponentLimit,NameBudget};
 mod frontier;
 pub(crate) mod stream;
 pub(crate) use frontier::{frontier,initial_frontier,initial_attempt_binding,Frontier};

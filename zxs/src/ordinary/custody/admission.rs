@@ -4,7 +4,7 @@
 //! edge and both endpoints. No installation, lifecycle decision or retirement
 //! is made in this module.
 use super::{allocation::{Progress,Stage as DirectoryStage},command::Request,purpose::Call,transfer::{Origin,Sites}};
-use crate::{VolumeId,fs::{self,invalid},ordinary::{journal::{Journal,credits::Deletion},wire::{MAX_FRAME,NativeObject}},pool::lease::{LocalPool,recycle::Direction}};
+use crate::{OperationId,VolumeId,fs::{self,invalid},ordinary::{journal::{Journal,credits::Deletion},wire::{MAX_FRAME,NativeObject}},pool::lease::{LocalPool,recycle::Direction}};
 use std::{ffi::CString,io};
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -43,6 +43,18 @@ impl LifecycleGrant<'_>{
     pub(super) fn predecision(&self,p:&LocalPool)->io::Result<Journal>{
         let s=self.live_cut(p)?;
         if s.decided(self.request.op).is_some(){return Err(invalid("decided custody cannot prepare its old source again"));}Ok(s)
+    }
+    pub(crate) fn check_ordinary_target(&self,p:&LocalPool,volume:VolumeId,root:&fs::HeldDir,names:&[Vec<u8>])->io::Result<()>{
+        let s=self.live_cut(p)?;
+        if !matches!(self.request.call,Call::Restore{..})||volume!=self.request.to{
+            return Err(invalid("not the ordinary end of the actual restore request"));}
+        let c=s.file(self.request.id).ok_or_else(||invalid("missing original FILE for ordinary target namespace"))?;
+        crate::ordinary::ordinary_target_domain(p,&s,volume,root,&c.create.name,self.request.id,names)
+    }
+    pub(crate) fn live_geometry(&self,p:&LocalPool,src:fs::NameBudget,dst:fs::NameBudget,ticket:OperationId)->io::Result<()>{
+        let s=self.predecision(p)?;let c=s.file(self.request.id).ok_or_else(||invalid("no original FILE spelling"))?;
+        let all=crate::ordinary::material::resident(&c.create.name,self.request.id,ticket)?;
+        all.at(src)?;all.at(dst)?;Ok(())
     }
     pub(crate) fn name(&self,side:Side)->&std::ffi::CStr{match side{Side::Source=>&self.names.0,Side::Target=>&self.names.1}}
     pub(super) fn request(&self)->Request{self.request}
@@ -98,6 +110,7 @@ impl<'p> LifecycleGrant<'p>{
             // In particular, do not precharge an Ordinary frame to a matching
             // RESTORE that needs its own final reserved position or bytes.
             s.room_for_effect(MAX_FRAME,r.call.effect(r.id,r.op))?;
+            if matches!(r.call,Call::Restore{..}){s.require_new_file_name(crate::ordinary::DirectoryParent::Root(r.to),&c.create.name,c.create.entry,r.id)?;}
             if matches!(r.call,Call::Restore{..})&&s.occupied_root(r.to,&c.create.name){
                 return Err(invalid("a current FILE or ordinary directory occupies the restore destination name"));}
             (prior,child,original)
@@ -113,6 +126,13 @@ impl<'p> LifecycleGrant<'p>{
         if let Some(o)=original{require_original(r,&digest,p.id(),o,&source,&target)?;prior.require_next(o)?;o.require_history(c,full,child)?;}
         let sites=prior.sites(full,child)?;sites.check(&source)?;
         let names=r.call.leaves(r.id,r.op,&c.create.name)?;
+        // Every new/resumed operation remains addressable under both ORIGINAL
+        // endpoint geometries. No R I/O or alternate path needed for this check.
+        let reg=p.journal_registration();let uid=c.create.uid;
+        let ordinary=match direction{Direction::ToRecycle=>r.from,Direction::FromRecycle=>r.to};
+        let private=crate::ordinary::material::resident(&c.create.name,r.id,original.map_or(r.op,|o|o.ticket))?;
+        private.at(reg.ordinary_names(ordinary,uid,reg.ordinary_path_budget(ordinary,uid)?)?)?;
+        private.at(reg.recycle_names(uid)?)?;
         let prior_stage=prior.transfer().and_then(|m|m.stage.map(|slot|crate::ordinary::material::staging(m.original.ticket,slot)));
         Ok(Self{pool:p,request:r,direction,prior:key,stage:Stage::of(s)?,names,prior_stage,source,target,source_sites:sites})
     }

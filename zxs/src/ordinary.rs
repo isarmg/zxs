@@ -24,6 +24,8 @@ pub use draft::types::{DraftClaim,DraftReceipt,DRAFT_CHUNK};
 mod directory;
 pub use directory::{DirectoryParent,DirectoryEntry,DirectoryInfo,DirectoryListing,make_directory,list_directory};
 mod material;
+mod target_domain;
+use target_domain::ordinary_target_domain;
 mod placement;
 mod allocation;
 pub(crate) mod journal;
@@ -95,8 +97,9 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
         if state.file(file).is_some() || state.entry_used(entry) || state.on_all().any(|f|f.create.history==history){
             return Err(invalid("new FILE identity collides with an original decision"));
         }
+        state.require_new_file_name(DirectoryParent::Root(id),name,entry,file)?;
         let (seq,previous)=state.frontier();
-        let (attempt,root)=material::select_ticket(&volume,name)?;
+        let (attempt,root)=material::select_ticket(&volume,name,file)?;
         pool.require_business_op(attempt)?;
         if state.ticket_used(attempt)||op==attempt{return Err(invalid("new private ticket collides with earlier operation"));}
         allocation::Allocation::reserve(&pool.system,pool.id(),op,id,name,seq+1,previous,entry,file,history,attempt,root)?;
@@ -137,7 +140,7 @@ fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,mut cut:impl F
         if active.stamp!=a.stamp||active.bytes!=a.bytes||!a.matches(f)||!active.matches(f){
             return Err(invalid("CREATE reservation, bound private slot or directory changed before confirmation"));}
         // Check the original private directory, its only FILE record, and the
-        // actual, ASCII-equivalent human name before making CREATE visible.
+        // actual derived name at the held ordinary parent before making CREATE visible.
         material::require_staged(&volume,&f.create)
     };
     let p=publish_sealed_checked(&pool,op,request,|decision|{
@@ -218,6 +221,16 @@ pub fn read_initial_file(system:&Path,id:FileId)->io::Result<(FileInfo,Vec<u8>)>
     Ok((info.file,Vec::new()))
 }
 
+/// Look up this exact display spelling under a registered ordinary root.
+/// No case or normalization fallback and no inference from a physical leaf.
+pub fn lookup_file(system:&Path,id:VolumeId,display:&str)->io::Result<Option<FileInfo>>{
+    storage_name::FileName::parse(display.as_bytes())?;
+    let cut=formal::ParentCut::open(system,Access::Read)?;let(p,s)=cut.originals();let v=p.ordinary(id)?;
+    let Some(f)=s.lookup_root(id,display)? else {v.require_current()?;return Ok(None)};
+    let _body=draft::admit_current_held(&cut,&v,f)?;
+    v.root.file.sync_all()?;v.require_current()?;Ok(Some(FileInfo::at(f,id)))
+}
+
 /// Every current business name must match its material; an unknown normal
 /// name is never skipped. Only original issued private slots can be separated
 /// from that namespace, and observed residues are explicitly counted.
@@ -225,7 +238,7 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
     let cut=formal::ParentCut::open(system,Access::Read)?;root_listing(&cut,id).map(|(files,_)|files)
 }
 fn root_listing(cut:&formal::ParentCut,id:VolumeId)->io::Result<(RootFiles,Vec<DirectoryInfo>)>{
-    let(pool,state)=cut.originals();let volume=pool.ordinary(id)?;
+    let(pool,state)=cut.originals();let mut volume=pool.ordinary(id)?;volume.begin_listing()?;
     let mut names=BTreeSet::new();let mut tickets=BTreeMap::new();let mut files=Vec::new();
     for f in state.on_all().filter(|f|f.create.parent.address(f.create.volume)==DirectoryParent::Root(id)){
         // A CREATE-private ticket was issued forever on that original root,
@@ -239,13 +252,14 @@ fn root_listing(cut:&formal::ParentCut,id:VolumeId)->io::Result<(RootFiles,Vec<D
     }
     let handoff=custody::inventory::view(&state,&volume,&mut tickets)?;
     for f in state.on(id).filter(|f|handoff.deferred!=Some(f.create.file)){
-        names.insert(f.create.name.as_bytes().to_vec());files.push(FileInfo::at(f,id));
+        if !names.insert(storage_name::file_leaf(&f.create.name,f.create.file)?.into_bytes()){return Err(invalid("duplicate physical FILE name"));}
+        files.push(FileInfo::at(f,id));
     }
-    let actual:BTreeSet<_>=volume.root.names()?.into_iter().collect();
-    let dirs=directory::inventory::observe(state,directory::types::Parent::Root(id),&volume.root,&actual)?;
+    let actual=volume.listed_names()?;
+    let dirs=directory::inventory::observe(state,directory::types::Parent::Root(id),&volume.root,actual)?;
     if dirs.pending_install{return Err(invalid("published ordinary directory still needs its original installation to finish"));}
     let mut observed=BTreeSet::new();let mut reserved_private_entries=dirs.private_count;
-    for raw in &actual{
+    for raw in actual{
         if handoff.hidden.contains(raw)||dirs.consumed.contains(raw){continue;}
         if handoff.named_stage.as_ref()==Some(raw)||material::private_slot(raw).is_some_and(|(ticket,slot)|tickets.get(&ticket).is_some_and(|&limit|slot<limit)){
             reserved_private_entries+=1;
@@ -266,9 +280,11 @@ fn root_listing(cut:&formal::ParentCut,id:VolumeId)->io::Result<(RootFiles,Vec<D
         }
     }
     volume.root.file.sync_all()?;volume.require_current()?;
-    if volume.root.names()?.into_iter().collect::<BTreeSet<_>>()!=actual{return Err(invalid("root changed during FILE enumeration"));}
-    let again=directory::inventory::observe(state,DirectoryParent::Root(id),&volume.root,&actual)?;
+    // Check the actual directory entities again, then make one final parent
+    // census. The initial held sample is shared by FILEs and directories.
+    let again=directory::inventory::observe(state,DirectoryParent::Root(id),&volume.root,actual)?;
     if again.pending_install||again.consumed!=dirs.consumed{return Err(invalid("ordinary directories changed during enumeration"));}
+    volume.finish_listing()?;
     let folders=again.rows.into_iter().map(DirectoryInfo::original).collect();
     files.sort_by(|a,b|a.name.cmp(&b.name));Ok((RootFiles{files,reserved_private_entries,pending_moves:handoff.pending,pending_lifecycle:handoff.lifecycle},folders))
 }

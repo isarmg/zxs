@@ -108,7 +108,7 @@ fn same_registration_alone_recovers_all_real_boundaries_and_cold_reopens_without
         stdfs::remove_file(&named).unwrap();stdfs::rename(&old,&named).unwrap();
         assert_eq!(initialize(op,&sys,&bin,files).unwrap(),info);
         let mut replaced=original.clone();
-        let pos=b"ZXS/FILE-POOL\0".len(); replaced[pos]^=1;
+        let pos=super::format::MAGIC.len(); replaced[pos]^=1;
         let end=replaced.len()-32;let new=crate::hash::digest(&replaced[..end]).unwrap();
         replaced[end..].copy_from_slice(&new);stdfs::write(sys.join("REGISTRATION"),&replaced).unwrap();
         assert!(inspect(&sys).is_err(),"self-consistent changed catalog lacks original SYSTEM label");
@@ -132,4 +132,36 @@ fn private_record_probe_rejects_fifo_directory_and_symlink_before_content_open()
     assert_eq!(unsafe{mkfifo(named.as_ptr(),0o600)},0);
     for name in [c"pipe",c"link",c"dir"]{assert!(held.record(name,MAX_RECORD).is_err());}
     assert_eq!(stdfs::read(&sentinel).unwrap(),b"leave this alone");
+}
+
+#[test]
+#[ignore="native private FILE and dedicated volumes: source-only new genesis and old mark refusal"]
+fn old_raw_name_genesis_and_volume_labels_cannot_authorize_the_new_leaf_layout(){
+    use std::os::unix::ffi::OsStrExt;
+    let t=PrivateTemp::under(&std::env::temp_dir());let r=PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
+    let sys=t.child("system");let a=t.child("ordinary");let bin=r.child("recycle");let op=OperationId::new().unwrap();
+    let f=initialize(op,&sys,&bin,std::slice::from_ref(&a)).unwrap();let path=sys.join("REGISTRATION");
+    let bytes=stdfs::read(&path).unwrap();let rec=Record::read(bytes.clone()).unwrap();
+    let emit=|out:&mut Vec<u8>,birth:&fs::Birth|{out.push(birth.bytes().len()as u8);out.extend_from_slice(birth.bytes());};
+    // Reconstruct the prior single genesis with these actual identity bytes,
+    // without a prior-format reader or writer in the product.
+    let mut old=b"ZXS/FILE-POOL\0".to_vec();old.extend_from_slice(&f.id.0);old.extend_from_slice(&op.0);
+    old.extend_from_slice(&rec.actor_uid.to_be_bytes());old.extend_from_slice(&rec.origin.device.to_be_bytes());old.extend_from_slice(&rec.origin.inode.to_be_bytes());
+    emit(&mut old,&rec.origin_birth);old.extend_from_slice(&(f.volumes.len()as u16).to_be_bytes());
+    for(i,v)in f.volumes.iter().enumerate(){
+        old.push(match v.volume.role{Role::System=>0,Role::Recycle=>1,Role::File=>2});old.extend_from_slice(&v.id.0);
+        let(e,b)=rec.original_root(i);old.extend_from_slice(&e.device.to_be_bytes());old.extend_from_slice(&e.inode.to_be_bytes());emit(&mut old,b);
+        let name=v.volume.path.as_os_str().as_bytes();old.extend_from_slice(&(name.len()as u16).to_be_bytes());old.extend_from_slice(name);
+        assert_eq!(HeldDir::open(&v.volume.path).unwrap().label().unwrap().unwrap(),rec.label(i));
+    }
+    let digest=crate::hash::digest(&old).unwrap();old.extend_from_slice(&digest);
+    assert!(Record::read(old.clone()).is_err());stdfs::write(&path,&old).unwrap();
+    assert!(inspect(&sys).is_err());assert!(initialize(op,&sys,&bin,std::slice::from_ref(&a)).is_err());
+    assert_eq!(stdfs::read(&path).unwrap(),old);assert!(stdfs::read_dir(&a).unwrap().next().is_none());
+    // An old, otherwise empty labelled volume must not bootstrap or migrate.
+    let sys2=t.child("other-system");let a2=t.child("other-file");let bin2=r.child("other-recycle");
+    let old_r=HeldDir::open(&bin2).unwrap();let mut label=b"ZXS/VOLUME\0".to_vec();label.push(1);
+    label.extend_from_slice(&f.id.0);label.extend_from_slice(&f.volumes[1].id.0);label.extend_from_slice(&op.0);old_r.claim(&label).unwrap();
+    assert!(initialize(OperationId::new().unwrap(),&sys2,&bin2,&[a2]).is_err());assert_eq!(old_r.label().unwrap(),Some(label));
+    assert!(stdfs::read_dir(&sys2).unwrap().next().is_none());
 }

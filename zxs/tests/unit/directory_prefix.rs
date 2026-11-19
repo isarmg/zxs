@@ -22,7 +22,7 @@ fn previous_original_directories_are_typed_scoped_and_cannot_take_a_real_file_en
     let(p,_,mut j)=LocalPool::with_snapshot(&sys,Access::Write).unwrap();let original=j.frontier();let volume=p.ordinary(v).unwrap();
     let auth=p.journal_registration();let root=Basis::registered(&volume).unwrap();
     let h=volume.root.new_child_directory(c"outer").unwrap();let child=h.new_child_directory(c"report").unwrap();
-    let f=volume.root.child_directory(c"report").unwrap().unwrap();
+    let f=volume.root.child_directory(&std::ffi::CString::new(crate::test_support::physical("report",file.file)).unwrap()).unwrap().unwrap();
     let mut idx=OriginalIndex::default();idx.ops.insert(auth.basis().1);
     for(n,d)in j.decisions.iter().enumerate(){idx.remember(d,n,&auth).unwrap();}
     let rejects=|o|idx.admit(&decide(&j,p.id(),o,&h),&j.decisions,j.frame_bytes,original.1,&auth).is_err();

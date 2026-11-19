@@ -43,12 +43,11 @@ impl Goal{
     }
     pub(crate) fn namespace(&self,p:&LocalPool,g:&LifecycleGrant<'_>,role:crate::Role,names:&[Vec<u8>])->io::Result<()>{
         let s=g.live_cut(p)?;let(selected,other)=self.addresses(p,g)?;
-        if names.iter().any(|n|n.eq_ignore_ascii_case(other.to_bytes())||
-            (n.eq_ignore_ascii_case(selected.to_bytes())&&n!=selected.to_bytes())){
+        if names.iter().any(|n|n.as_slice()==other.to_bytes()){
             return Err(invalid("competing name at the original lifecycle destination"));}
         let o=&self.frame.original;
         match role{
-            crate::Role::File=>crate::ordinary::material::check_siblings(names,&o.name,self.site==Site::Installed)?,
+            crate::Role::File=>{},
             crate::Role::Recycle=>{
                 let mut accepted=std::collections::BTreeSet::new();let mut gaps=std::collections::BTreeMap::new();
                 for old in s.moves().filter(|m|m.original.to==o.to){

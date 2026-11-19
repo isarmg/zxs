@@ -20,11 +20,10 @@ impl Call{
         if let Self::Restore{deleted_by,decision}=self{b.extend_from_slice(&deleted_by.0);b.extend_from_slice(&decision);}
         crate::hash::digest(&b)
     }
-    pub(super) fn leaves(self,file:FileId,op:OperationId,human:&str)->io::Result<(CString,CString)>{
-        wire::human_name(human.as_bytes())?;
-        let h=CString::new(human.as_bytes()).map_err(|_|invalid("invalid original FILE leaf"))?;
-        let kept=|by:OperationId|CString::new(format!(".zxs-retained-{file}-{by}")).expect("two fixed hex IDs, no NUL");
-        Ok(match self{Self::Move=>(h.clone(),h),Self::Delete=>(h,kept(op)),Self::Restore{deleted_by,..}=>(kept(deleted_by),h)})
+    pub(super) fn leaves(self,file:FileId,_op:OperationId,human:&str)->io::Result<(CString,CString)>{
+        // A delete changes custody, not the final native spelling. Its Op,
+        // epoch and exact frame remain required proof in the original request.
+        let n=crate::ordinary::storage_name::file_leaf(human,file)?;Ok((n.clone(),n))
     }
     pub(in crate::ordinary) fn effect(self,file:FileId,op:OperationId)->Effect{
         match self{Self::Move=>Effect::Ordinary,Self::Delete=>Effect::Retain{file,operation:op},

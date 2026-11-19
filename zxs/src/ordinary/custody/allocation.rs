@@ -80,7 +80,7 @@ impl MoveAllocation{
     pub(super) fn reserve(prepared:&Prepared<'_>,op:OperationId)->io::Result<Origin>{
         prepared.under_original_writer(|p,s,old,new|{
             let src=prepared.source();s.admit_new_handoff(p,op,src.file(),src.volume(),new.id())?;
-            let(ticket,root)=crate::ordinary::material::select_ticket(new,src.name())?;
+            let(ticket,root)=crate::ordinary::material::select_ticket(new,src.name(),src.file())?;
             if root!=*prepared.root()||ticket==op||s.ticket_used(ticket){return Err(invalid("MOVE ticket or original target conflict"));}
             p.require_business_op(ticket)?;
             let original=Origin::select(op,prepared,ticket)?;
@@ -172,7 +172,7 @@ impl MoveAllocation{
         if m.original.mode==Method::Rename{
             let old=p.ordinary(m.original.from)?;super::placed::root(&old,&m.original.src_root)?;
             if !old.root.same_mount(&v.root)?{return Err(invalid("original rename mount differs at completion"));}
-            let name=std::ffi::CString::new(m.original.name.as_bytes()).map_err(|_|invalid("invalid original name"))?;
+            let name=crate::ordinary::storage_name::file_leaf(&m.original.name,m.original.file)?;
             old.root.confirm_absence(&name)?;v.root.file.sync_all()?;old.require_current()?;verified.verify_installed(v,m)?;
         }
         let next=Phase{stage:a.phase.stage.clone(),step:Progress::OPEN};next.check(&a.original)?;
