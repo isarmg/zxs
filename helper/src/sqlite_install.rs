@@ -8,6 +8,7 @@ mod stage;
 mod catalog;
 mod markers;
 mod complete;
+mod pair;
 
 const DATABASE:&str="SYSTEM.sqlite3";
 const MARKER:&[u8]=b".zxs-new-ffffffffffffffffffffffffffffffff-0";

@@ -38,12 +38,16 @@ impl Canonical{
         db.execute_batch(SCHEMA).map_err(sql)?;
         let s=shape(&db)?;db.close().map_err(|_|bad("schema template close failed"))?;Ok(Self(s))
     }
+    pub(super) fn require(&self,tx:&rusqlite::Transaction<'_>)->io::Result<()>{
+        let app:i64=tx.query_row("PRAGMA main.application_id",[],|row|row.get(0)).map_err(sql)?;
+        let v:i64=tx.query_row("PRAGMA main.user_version",[],|row|row.get(0)).map_err(sql)?;
+        if (app,v)!=(0x5a585331,SCHEMA_VERSION)||shape(tx)?!=self.0{return Err(bad("not the exact released database schema"));}
+        Ok(())
+    }
 }
 pub(super) fn read(tx:&rusqlite::Transaction<'_>,template:&Canonical,group:&Group,r:&Request)->io::Result<Catalog>{
     if group.uid()!=r.uid()||!group.matches(r){return Err(bad("different approved group"));}
-    let app:i64=tx.query_row("PRAGMA main.application_id",[],|row|row.get(0)).map_err(sql)?;
-    let v:i64=tx.query_row("PRAGMA main.user_version",[],|row|row.get(0)).map_err(sql)?;
-    if (app,v)!=(0x5a585331,SCHEMA_VERSION)||shape(tx)?!=template.0{return Err(bad("not the exact released database schema"));}
+    template.require(tx)?;
     let (pool,state)=tx.query_row(include_str!("original-init.sql"),params![&r.op()[..],&r.actor()[..],&r.sha()[..]],|row|
         Ok((row.get::<_,Vec<u8>>(0)?,row.get::<_,i64>(1)?))).map_err(sql)?;
     let pool:Id=pool.try_into().map_err(|_|bad("invalid pool id"))?;

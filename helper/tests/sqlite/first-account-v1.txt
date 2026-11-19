@@ -1,0 +1,19 @@
+# Sole fixed-pair request, non-secret fields. The 16-byte SMB format sample
+# below is an opaque synthetic pattern, not a sampled account/working password.
+pool=04040404040404040404040404040404
+init_op=01010101010101010101010101010101
+setup_op=44444444444444444444444444444444
+offline_actor=66666666666666666666666666666666
+approval_ref=77777777777777777777777777777777
+web_login_hex=66697273742e61646d696e
+smb_login_hex=66696c65732e736d62
+smb_sid=010500000000000515000000010000000200000003000000e8030000
+preimage_bytes=154
+request_sha=810b20fdcd27fa5c2a18943c465fdb8cfa698e74000306c7157aaf7b4ef4b2d0
+result_web_id=55555555555555555555555555555555
+result_smb_id=56565656565656565656565656565656
+# Only the Web KDF vector is from a public working example: argon2-cffi 25.1.0,
+# https://argon2-cffi.readthedocs.io/en/stable/howto.html (correct horse battery staple).
+web_salt=308211aa0be041b823db6d237e9d0c3c
+web_verifier=61fc094958ed8d2534cf357f3f74bd9e743f512adedb0bc93237c2223ad341b8
+synthetic_smb_field=0123456789abcdeffedcba9876543210
