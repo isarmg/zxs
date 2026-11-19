@@ -82,8 +82,11 @@ impl Record {
     // REGISTRATION begins with exactly the same self-delimiting immutable
     // genesis as INITIALIZING. Business frames follow its original checksum;
     // they are never part of the root label and never replace the genesis.
-    pub(super) fn prefix(image:&[u8])->io::Result<(Self,&[u8])>{
-        let mut input=image.strip_prefix(MAGIC).ok_or_else(invalid_record)?;
+    pub(super) fn prefix(image:&[u8])->io::Result<(Self,&[u8])>{Self::decode_prefix(image,MAGIC)}
+    // The active business entry above selects ONLY its own exact format.
+    // The quarantined empty-pool decoder cannot choose a caller-supplied magic.
+    fn decode_prefix<'a>(image:&'a [u8],format:&[u8])->io::Result<(Self,&'a [u8])>{
+        let mut input=image.strip_prefix(format).ok_or_else(invalid_record)?;
         fn take<'a>(input:&mut &'a [u8],len:usize)->io::Result<&'a [u8]> {
             let all=*input;
             let (part,rest)=all.split_at_checked(len).ok_or_else(invalid_record)?;
@@ -180,9 +183,10 @@ impl Record {
                 && self.roots[i].filesystem()==birth.filesystem() && (!root || (r.volume.entity==entity && &self.roots[i]==birth)))
     }
 
-    pub(super) fn label(&self,index:usize)->Vec<u8>{
+    pub(super) fn label(&self,index:usize)->Vec<u8>{self.label_in_domain(index,LABEL_MAGIC)}
+    fn label_in_domain(&self,index:usize,format:&[u8])->Vec<u8>{
         let root=&self.info.volumes[index];
-        let mut bytes=Vec::new();bytes.extend_from_slice(LABEL_MAGIC);
+        let mut bytes=Vec::new();bytes.extend_from_slice(format);
         bytes.push(tag(root.volume.role));bytes.extend_from_slice(&self.info.id.0);
         bytes.extend_from_slice(&root.id.0);bytes.extend_from_slice(&self.info.initialized_by.0);
         // Only the SYSTEM label authenticates which full, immutable original
@@ -208,3 +212,7 @@ impl Record {
         Ok(())
     }
 }
+
+
+#[path="maintenance.rs"]
+pub(super) mod maintenance;

@@ -5,6 +5,7 @@
 compile_error!("helper currently supports Linux x86_64 (LP64) only");
 
 mod inspect;
+mod maintenance;
 mod pinned;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
