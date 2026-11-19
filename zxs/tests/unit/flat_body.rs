@@ -36,10 +36,10 @@ fn one_known_payload_has_an_independent_exact_header_directory_and_original_refe
     let table=fs::read(&x.table).unwrap();assert_eq!(table.len(),159);
     assert_eq!(hex(&table[95..127]),"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     assert_eq!(hex(&table[127..]),"4f8b42c22dd3729b519ba6f68d2da7cc5b2d606d05daed5ad5128cc03e6c6358");
-    let(a,b)=x.pair().unwrap();let ro=Reader::open(x.r,a,b).unwrap();let mut out=Vec::new();let mut buffers=Buffers::new(32,3).unwrap();
+    let(a,b)=x.pair().unwrap();let ro=Reader::from_test_files(x.r,a,b).unwrap();let mut out=Vec::new();let mut buffers=Buffers::new(32,3).unwrap();
     ro.range(2,1,&mut buffers,&mut out).unwrap();assert_eq!(out,b"c");assert!(ro.range(3,1,&mut buffers,&mut out).is_err());
     let empty=Parts::stage(&t,"empty",material(99,0),b"");assert_eq!(fs::metadata(&empty.table).unwrap().len(),95);
-    let(a,b)=empty.pair().unwrap();Reader::open(empty.r,a,b).unwrap().range(0,0,&mut Buffers::new(0,0).unwrap(),&mut Vec::new()).unwrap();
+    let(a,b)=empty.pair().unwrap();Reader::from_test_files(empty.r,a,b).unwrap().range(0,0,&mut Buffers::new(0,0).unwrap(),&mut Vec::new()).unwrap();
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn short_last_page_and_a_nonselected_corrupt_checksum_page_are_distinguishable()
     let expected=MaterialRef::declared(P,m,hash::digest(&meta).unwrap()).unwrap();
     first[0]^=1;let mut actual=hdr;actual.extend_from_slice(&first);actual.extend_from_slice(&tail);actual.extend_from_slice(&directory);
     let index_path=t.0.join("large-checks");drop(create(&index_path,&actual));
-    let reader=Reader::open(expected,File::open(&raw).unwrap(),File::open(index_path).unwrap()).unwrap();
+    let reader=Reader::from_test_files(expected,File::open(&raw).unwrap(),File::open(index_path).unwrap()).unwrap();
     let mut out=Vec::new();reader.range(size-1,1,&mut Buffers::new(32,1).unwrap(),&mut out).unwrap();assert_eq!(out,[0]);
     out.clear();assert!(reader.range(0,1,&mut Buffers::new(1024*32,BLOCK as usize).unwrap(),&mut out).is_err());assert!(out.is_empty());
 }

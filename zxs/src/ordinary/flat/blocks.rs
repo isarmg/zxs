@@ -4,7 +4,8 @@
 use super::Material;
 use crate::{PoolId, fs::invalid, hash::{self,Sha256}};
 use crate::ordinary::{content::BLOCK, output::CheckedOutput};
-use std::{fs::File, io::{self,Write}, os::unix::fs::{FileExt,MetadataExt}};
+use crate::fs::{HeldBytes,LiveStamp as Stamp};
+use std::{fs::File, io::{self,Write}, os::unix::fs::FileExt};
 
 const MAGIC: &[u8] = b"ZXS-PORTABLE-1/BLOCK-TABLE\0";
 const PER_PAGE: u64 = 1024;
@@ -20,6 +21,7 @@ impl Ref {
     pub(in crate::ordinary) fn declared(pool:PoolId, material:Material, directory_sha:[u8;32])->io::Result<Self> {
         Geometry::new(pool,material)?;Ok(Self{pool,material,directory_sha})
     }
+    pub(super) fn table_len(self)->io::Result<u64>{Ok(Geometry::new(self.pool,self.material)?.table_bytes)}
     pub(in crate::ordinary) fn directory_sha(self)->[u8;32]{self.directory_sha}
     /// The checksum page and block containing the first physical byte are the
     /// largest needed by this contiguous range; only the last can be shorter.
@@ -52,19 +54,6 @@ impl Geometry{
     fn page_bytes(self,p:u64)->usize{(self.blocks-p*PER_PAGE).min(PER_PAGE) as usize*32}
 }
 
-// Only volatility evidence for these live FDs; not an on-disk identity.
-#[derive(Clone,Copy,Eq,PartialEq)]
-pub(super) struct Stamp { dev:u64, ino:u64, len:u64, mtime:(i64,i64), ctime:(i64,i64) }
-impl Stamp{
-    pub(super) fn read(f:&File)->io::Result<Self>{
-        let s=f.metadata()?;if !s.is_file(){return Err(invalid("portable bytes require a regular file"));}
-        Ok(Self{dev:s.dev(),ino:s.ino(),len:s.len(),mtime:(s.mtime(),s.mtime_nsec()),ctime:(s.ctime(),s.ctime_nsec())})
-    }
-    pub(super) fn require(self,f:&File)->io::Result<()>{
-        if Self::read(f)?!=self{return Err(invalid("portable ordinary file changed while held"));}Ok(())
-    }
-    fn same(self,o:Self)->bool{(self.dev,self.ino)==(o.dev,o.ino)}
-}
 fn dir_hash(header:&[u8],directory:&[u8])->io::Result<[u8;32]>{
     let mut h=Sha256::new();h.update(header)?;h.update(directory)?;Ok(h.finish())
 }
@@ -112,33 +101,36 @@ impl Buffers{
 }
 
 pub(super) struct Reader{
-    original:Ref,raw:File,table:File,raw_stamp:Stamp,table_stamp:Stamp,g:Geometry,directory:Vec<u8>,
+    original:Ref,raw:HeldBytes,table:HeldBytes,g:Geometry,directory:Vec<u8>,
 }
 impl Reader{
     /// Enclosing FILE/name/permission selection belongs to the caller.
     /// This method checks the actual byte-index against its external original
     /// reference. It never treats this reference or an identical clone as
     /// independent evidence that a particular physical name is authorized.
-    pub(super) fn open(original:Ref,raw:File,table:File)->io::Result<Self>{
+    pub(super) fn open(original:Ref,raw:HeldBytes,table:HeldBytes)->io::Result<Self>{
         let m=original.material;let g=Geometry::new(original.pool,m)?;
-        let raw_stamp=Stamp::read(&raw)?;let table_stamp=Stamp::read(&table)?;
+        raw.unchanged()?;table.unchanged()?;let raw_stamp=raw.stamp();let table_stamp=table.stamp();
         if raw_stamp.same(table_stamp)||raw_stamp.len!=m.size||table_stamp.len!=g.table_bytes{
             return Err(invalid("portable payload and index are not the expected two regular extents"));}
-        let mut header=[0;HEADER];table.read_exact_at(&mut header,0)?;
+        let mut header=[0;HEADER];table.file().read_exact_at(&mut header,0)?;
         if header.as_slice()!=Geometry::header(original.pool,m).as_slice(){return Err(invalid("wrong portable material header"));}
         let mut directory=scratch(g.pages*32)?;directory.resize(g.pages*32,0);
-        table.read_exact_at(&mut directory,g.dir_at)?;
+        table.file().read_exact_at(&mut directory,g.dir_at)?;
         if dir_hash(&header,&directory)?!=original.directory_sha{return Err(invalid("wrong original portable checksum directory"));}
-        raw_stamp.require(&raw)?;table_stamp.require(&table)?;
-        Ok(Self{original,raw,table,raw_stamp,table_stamp,g,directory})
+        raw.unchanged()?;table.unchanged()?;Ok(Self{original,raw,table,g,directory})
     }
-    pub(super) fn unchanged(&self)->io::Result<()>{self.raw_stamp.require(&self.raw)?;self.table_stamp.require(&self.table)}
+    #[cfg(test)]
+    pub(super) fn from_test_files(original:Ref,raw:File,table:File)->io::Result<Self>{
+        Self::open(original,HeldBytes::separate_format_fixture(raw)?,HeldBytes::separate_format_fixture(table)?)
+    }
+    pub(super) fn unchanged(&self)->io::Result<()>{self.raw.unchanged()?;self.table.unchanged()}
     fn block_hash(&self,i:u64,buffers:&mut Buffers)->io::Result<[u8;32]>{
-        let p=i/PER_PAGE;let key=(self.original,self.table_stamp,p);
+        let p=i/PER_PAGE;let key=(self.original,self.table.stamp(),p);
         let n=self.g.page_bytes(p);let bytes=buffers.page.get_mut(..n)
             .ok_or_else(||invalid("portable checksum page exceeds the request budget"))?;
         if buffers.page_key!=Some(key){
-            buffers.page_key=None;self.table.read_exact_at(bytes,HEADER as u64+p*PER_PAGE*32)?;
+            buffers.page_key=None;self.table.file().read_exact_at(bytes,HEADER as u64+p*PER_PAGE*32)?;
             let start=p as usize*32;
             if hash::digest(bytes)?.as_slice()!=&self.directory[start..start+32]{return Err(invalid("changed portable checksum page"));}
             buffers.page_key=Some(key);
@@ -153,7 +145,7 @@ impl Reader{
             let expected=self.block_hash(i,buffers)?;
             let start=i*BLOCK;let count=(size-start).min(BLOCK) as usize;
             let bytes=buffers.block.get_mut(..count).ok_or_else(||invalid("portable block exceeds the request budget"))?;
-            self.raw.read_exact_at(bytes,start)?;
+            self.raw.file().read_exact_at(bytes,start)?;
             if hash::digest(bytes)?!=expected{return Err(invalid("portable payload block differs from original"));}
             let lo=at.saturating_sub(start) as usize;let hi=(end-start).min(count as u64) as usize;
             CheckedOutput{out:&mut *out,check:||self.unchanged()}.write_all(&bytes[lo..hi])?;

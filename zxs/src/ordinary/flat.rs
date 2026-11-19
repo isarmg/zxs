@@ -171,3 +171,4 @@ pub(in crate::ordinary) mod stored;
 mod blocks;
 pub(in crate::ordinary) use blocks::{Ref as MaterialRef,write_candidate as write_candidate_checksums};
 pub(in crate::ordinary) mod body;
+pub(in crate::ordinary) mod local;
