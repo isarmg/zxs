@@ -103,7 +103,7 @@ enum inbound { ZXS_NO_FD, ZXS_LIFE_FD };
 static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take,enum inbound kind,bool nowait)
 {
     int64_t now,stop;bool sending=sendbuf!=NULL;
-    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=16 && len!=24 && len!=32)return bad();
+    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES)return bad();
     if(millis(&now)<0)return -1;
     stop=now+10000;
     for(;;) {
@@ -269,4 +269,59 @@ int zxs_smb_bound_fd(int fd)
        (st.st_mode&0022)!=0 || st.st_nlink!=1 || st.st_size!=ZXS_SMB_BIND_LEN ||
        fstatvfs(fd,&vs)<0 || (vs.f_flag&ST_RDONLY)==0){return bad();}
     return fcntl(fd,F_SETFD,f|FD_CLOEXEC);
+}
+
+/* These two fixed messages carry neither client proof nor signing material.
+ * The caller does not supply a pool, user, desired operation or generation. */
+static const uint8_t cut_request[16]="ZXS-SAM/GNCUT-1";
+static const uint8_t cut_answer[16]="ZXS-SAM/GEN-1";
+int zxs_smb_cut_ask(int fd,int64_t started,const uint8_t challenge[8])
+{
+    uint8_t b[24];
+    if(zxs_smb_try_current(fd,started)!=0)return -1;
+    memcpy(b,cut_request,16);memcpy(b+16,challenge,8);
+    return transfer(fd,b,NULL,sizeof(b),-1,NULL,ZXS_NO_FD,true);
+}
+int zxs_smb_cut_take(int fd,const uint8_t challenge[8])
+{
+    uint8_t b[24];
+    if(transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
+    return memcmp(b,cut_request,16)==0 && memcmp(b+16,challenge,8)==0 ? 0 : bad();
+}
+int zxs_smb_cut_reply(int fd,const uint8_t challenge[8],const uint8_t id[ZXS_SMB_CUT_BYTES])
+{
+    uint8_t b[24+ZXS_SMB_CUT_BYTES];
+    memcpy(b,cut_answer,16);memcpy(b+16,challenge,8);memcpy(b+24,id,ZXS_SMB_CUT_BYTES);
+    return transfer(fd,b,NULL,sizeof(b),-1,NULL,ZXS_NO_FD,true);
+}
+static bool cut_id(const uint8_t id[16])
+{
+    uint8_t n=0;for(size_t i=0;i<16;i++)n|=id[i];return n!=0;
+}
+int zxs_smb_cut_read(int fd,int64_t started,const uint8_t challenge[8],struct zxs_smb_generation *out)
+{
+    uint8_t b[24+ZXS_SMB_CUT_BYTES];const uint8_t *id=b+24;
+    static const uint8_t sid_header[]={1,5,0,0,0,0,0,5,21,0,0,0};
+    struct zxs_smb_generation tmp={0};
+    if(out==NULL || !within(started,30000))return bad();
+    if(transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
+    if(memcmp(b,cut_answer,16)!=0 || memcmp(b+16,challenge,8)!=0 ||
+       !cut_id(id) || !cut_id(id+16) || !cut_id(id+32) ||
+       memcmp(id+56,sid_header,sizeof(sid_header))!=0 || memcmp(id+80,"\xe8\x03\0\0",4)!=0 ||
+       id[84]==0 || id[84]>64)return bad();
+    uint8_t domain=0;for(size_t i=68;i<80;i++)domain|=id[i];
+    if(domain==0)return bad();
+    for(size_t i=48;i<56;i++)tmp.generation=(tmp.generation<<8)|id[i];
+    if(tmp.generation==0 || tmp.generation>INT64_MAX)return bad();
+    for(size_t i=0;i<64;i++){
+        uint8_t c=id[85+i];
+        if(i>=id[84]){if(c!=0)return bad();continue;}
+        if(!((c>='a'&&c<='z')||(c>='0'&&c<='9')||
+             (i!=0 && (c=='.'||c=='-'||c=='_'))))return bad();
+        tmp.login[i]=(char)c;
+    }
+    memcpy(tmp.pool,id,16);memcpy(tmp.account,id+16,16);memcpy(tmp.credential_op,id+32,16);
+    memcpy(tmp.sid,id+56,28);
+    if(zxs_smb_try_current(fd,started)!=0)return -1;
+    *out=tmp;return 0;
 }

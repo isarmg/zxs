@@ -49,5 +49,21 @@ int main(void)
 	 * must stop reuse even if the worker itself has not been scheduled. */
 	if (!older.ok || zxs_smb_ctl_live(a[0])!=0 ||
 	    zxs_smb_try_current(a[0],start-30000)==0) {return 1;}
+	/* The last public generation cut uses only this original endpoint.
+	 * No real credential is computed and none of these values logs in. */
+	uint8_t id[ZXS_SMB_CUT_BYTES]={0};
+	struct zxs_smb_generation seen={0};
+	id[0]=1;id[16]=2;id[32]=3;id[55]=1;
+	id[56]=1;id[57]=5;id[63]=5;id[64]=21;id[68]=1;id[80]=0xe8;id[81]=3;
+	id[84]=4;memcpy(id+85,"user",4);
+	if (zxs_smb_cut_ask(b[0],start,y)!=0 || zxs_smb_cut_take(b[1],y)!=0 ||
+	    zxs_smb_cut_reply(b[1],y,id)!=0 || zxs_smb_cut_read(b[0],start,y,&seen)!=0 ||
+	    seen.pool[0]!=1 || seen.account[0]!=2 || seen.credential_op[0]!=3 ||
+	    seen.generation!=1 || strcmp(seen.login,"user")!=0) {return 1;}
+	id[148]=1; /* noncanonical trailing byte */
+	if (zxs_smb_cut_reply(a[1],x,id)!=0 || zxs_smb_cut_read(a[0],start,x,&seen)==0 ||
+	    seen.account[0]!=2) {return 1;}
+	id[148]=0;
+	if (zxs_smb_cut_reply(a[1],x,id)!=0 || zxs_smb_cut_read(a[0],start,y,&seen)==0) {return 1;}
 	TALLOC_FREE(ev);close(a[0]);close(a[1]);close(b[0]);close(b[1]);return 0;
 }

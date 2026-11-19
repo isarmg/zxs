@@ -79,6 +79,12 @@ int main(void)
 	struct zxs_client_role r={.parent=getpid()};
 	struct zxs_client_offer o={0},unused={0};
 	pid_t p;
+	/* Equal numeric IDs do not permit a protocol name to reach NSS/homes. */
+	struct passwd fixed={.pw_name="zxs-smb-client",.pw_uid=1234,.pw_gid=1235};
+	if (!zxs_fixed_unix_mapping(&fixed,"zxs-smb-client",1234,1235) ||
+	    zxs_fixed_unix_mapping(&fixed,"ZXSLOCAL\\user",1234,1235) ||
+	    zxs_fixed_unix_mapping(&fixed,"zxs-smb-client",1234,1236) ||
+	    zxs_fixed_unix_mapping(&fixed,NULL,1234,1235)) { return 1; }
 	if (!rejected_before_reinit() || !no_inherited_receiver()) { return 1; }
 	a.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
 	l=socket(AF_INET,SOCK_STREAM|SOCK_CLOEXEC,IPPROTO_TCP);

@@ -34,6 +34,18 @@ int zxs_smb_origin_enable(int control);
 int zxs_smb_dispatch(int control,pid_t direct_child,uint64_t net,uint64_t sk);
 int zxs_smb_origin_recv(int control,uint64_t tcp[2],int *sender,int *right);
 int zxs_smb_try_issue(int attempt,const uint8_t challenge[8]);
+/* Nonsecret last-generation cut on the one original attempt. It is not
+ * password authentication, and is never accepted on the master socket. */
+#define ZXS_SMB_CUT_BYTES 149
+struct zxs_smb_generation {
+    uint8_t pool[16],account[16],credential_op[16],sid[28];
+    uint64_t generation;
+    char login[65];
+};
+int zxs_smb_cut_ask(int fd,int64_t started,const uint8_t challenge[8]);
+int zxs_smb_cut_take(int fd,const uint8_t challenge[8]);
+int zxs_smb_cut_reply(int fd,const uint8_t challenge[8],const uint8_t identity[ZXS_SMB_CUT_BYTES]);
+int zxs_smb_cut_read(int fd,int64_t started,const uint8_t challenge[8],struct zxs_smb_generation *out);
 /* events: bit 1 readable, bit 2 terminal. Index 0 control, 1 lifetime,
  * then the same bounded list of independent attempt sockets. */
 int zxs_smb_try_wait(int ctl,int lifetime,const int *attempt,size_t n,uint8_t *events);

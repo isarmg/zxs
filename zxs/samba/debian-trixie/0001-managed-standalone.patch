@@ -623,18 +623,99 @@
  	status = smbXsrv_version_global_init(&server_id);
 --- a/source3/smbd/smb2_sesssetup.c
 +++ b/source3/smbd/smb2_sesssetup.c
-@@ -30,6 +30,10 @@
+@@ -30,6 +30,12 @@
  #include "../libcli/security/security.h"
  #include "../lib/util/tevent_ntstatus.h"
  #include "source3/lib/substitute.h"
 +#include "passdb/machine_sid.h"
 +#include "param/zxs_runtime.h"
 +#include "param/zxs_smb_control.h"
++#include <fcntl.h>
++#include <pwd.h>
 +#include "../lib/async_req/async_sock.h"
  
  #include "lib/crypto/gnutls_helpers.h"
  #include <gnutls/gnutls.h>
-@@ -691,7 +695,8 @@
+@@ -190,11 +196,17 @@
+ 	}
+ }
+ 
++struct zxs_smb_local_origin {
++	struct zxs_smb_generation identity; /* no proof or key */
++	uint32_t native_seq;
++};
++
+ static NTSTATUS smbd_smb2_auth_generic_return(struct smbXsrv_session *session,
+ 					struct smbXsrv_session_auth0 **_auth,
+ 					struct smbd_smb2_request *smb2req,
+ 					uint8_t in_security_mode,
+ 					struct auth_session_info *session_info,
++					struct zxs_smb_local_origin **staged,
+ 					uint16_t *out_session_flags,
+ 					uint64_t *out_session_id)
+ {
+@@ -209,6 +221,10 @@
+ 	};
+ 	DATA_BLOB preauth_hash = data_blob_null;
+ 
++	if (staged==NULL || *staged==NULL || session->zxs_origin!=NULL ||
++	    session->global->auth_session_info!=NULL) {
++		return NT_STATUS_LOGON_FAILURE;
++	}
+ 	*_auth = NULL;
+ 
+ 	if (xconn->protocol >= PROTOCOL_SMB3_11) {
+@@ -431,10 +447,9 @@
+ 
+ 	smb2req->sconn->num_users++;
+ 
+-	if (security_session_user_level(session_info, NULL) >= SECURITY_USER) {
+-		session->homes_snum =
+-			register_homes_share(session_info->unix_info->unix_name);
+-	}
++	/* No dynamic homes authorities in this dedicated service. Preserve
++	 * the original session_create value (-1), never look up a business
++	 * account as an operating-system user or share. */
+ 
+ 	set_current_user_info(session_info->unix_info->sanitized_username,
+ 			      session_info->unix_info->unix_name,
+@@ -471,6 +486,12 @@
+ 			  nt_errstr(status)));
+ 		return NT_STATUS_LOGON_FAILURE;
+ 	}
++
++	/* Only the successful NEW session update above, after claim. Neither
++	 * preauth's earlier update nor the global record owns this object.
++	 * talloc_move does not allocate after the native update. */
++	(*staged)->native_seq=session->global->auth_session_info_seqnum;
++	session->zxs_origin=talloc_move(session,staged);
+ 
+ 	/*
+ 	 * we attach the session to the request
+@@ -664,7 +685,14 @@
+ 	return NT_STATUS_OK;
+ }
+ 
++struct zxs_cut_wait {
++	uint64_t wire_id;
++	int fd;
++	struct tevent_req *wait;
++};
+ struct smbd_smb2_session_setup_state {
++	struct zxs_cut_wait *cut;
++	struct zxs_smb_local_origin *staged;
+ 	struct tevent_context *ev;
+ 	struct smbd_smb2_request *smb2req;
+ 	uint64_t in_session_id;
+@@ -681,7 +709,6 @@
+ };
+ 
+ static void smbd_smb2_session_setup_gensec_done(struct tevent_req *subreq);
+-static void smbd_smb2_session_setup_previous_done(struct tevent_req *subreq);
+ static void smbd_smb2_session_setup_auth_return(struct tevent_req *req);
+ 
+ static struct tevent_req *smbd_smb2_session_setup_send(TALLOC_CTX *mem_ctx,
+@@ -691,7 +718,8 @@
  					uint8_t in_flags,
  					uint8_t in_security_mode,
  					uint64_t in_previous_session_id,
@@ -644,7 +725,7 @@
  {
  	struct tevent_req *req;
  	struct smbd_smb2_session_setup_state *state;
-@@ -713,6 +718,14 @@
+@@ -713,6 +741,14 @@
  	state->in_security_mode = in_security_mode;
  	state->in_previous_session_id = in_previous_session_id;
  	state->in_security_buffer = in_security_buffer;
@@ -659,7 +740,7 @@
  
  	if (in_flags & SMB2_SESSION_FLAG_BINDING) {
  		if (in_session_id == 0) {
-@@ -874,10 +887,9 @@
+@@ -874,10 +910,9 @@
  	}
  
  	if (state->auth->gensec == NULL) {
@@ -671,7 +752,7 @@
  					      &state->auth->gensec);
  		if (tevent_req_nterror(req, status)) {
  			return tevent_req_post(req, ev);
-@@ -910,6 +922,23 @@
+@@ -910,6 +945,132 @@
  	tevent_req_set_callback(subreq, smbd_smb2_session_setup_gensec_done, req);
  
  	return req;
@@ -692,31 +773,189 @@
 +		security_session_user_level(info, NULL) == SECURITY_USER &&
 +		sid_peek_check_rid(domain, &info->security_token->sids[0], &rid) &&
 +		rid == 1000;
++}
++
++static int zxs_cut_destroy(struct zxs_cut_wait *q)
++{
++	TALLOC_FREE(q->wait);
++	if (q->fd>=0) { close(q->fd); q->fd=-1; }
++	return 0;
++}
++
++/* Resolve only the installation's locked UNIX execution principal. It
++ * neither authenticates a user nor looks up the client's network name. */
++static bool zxs_same_identity(const struct zxs_smb_generation *cut,
++			      const struct auth_session_info *info)
++{
++	const struct dom_sid *s;
++	const struct security_unix_token *u;
++	struct passwd rec, *pw=NULL;
++	char buf[16384];
++	if (info==NULL || info->info==NULL || info->info->domain_name==NULL ||
++	    !strequal(info->info->domain_name,"ZXSLOCAL") ||
++	    info->info->account_name==NULL || strcmp(cut->login,info->info->account_name)!=0 ||
++	    !zxs_normal_token(info)) { return false; }
++	u=info->unix_token;
++	if (u==NULL || getpwnam_r("zxs-smb-client",&rec,buf,sizeof(buf),&pw)!=0 ||
++	    info->unix_info==NULL ||
++	    !zxs_fixed_unix_mapping(pw,info->unix_info->unix_name,u->uid,u->gid) ||
++	    (u->ngroups!=0 && u->groups==NULL)) { return false; }
++	for (uint32_t i=0;i<u->ngroups;i++) {
++		if (u->groups[i]!=pw->pw_gid) { return false; }
++	}
++	s=&info->security_token->sids[0];
++	if (s->sid_rev_num!=cut->sid[0] || s->num_auths!=5 || cut->sid[1]!=5 ||
++	    memcmp(s->id_auth,cut->sid+2,6)!=0) { return false; }
++	for (size_t i=0;i<5;i++) {
++		if (s->sub_auths[i]!=IVAL(cut->sid,8+4*i)) { return false; }
++	}
++	return true;
++}
++
++static bool zxs_final_same_pending(struct smbd_smb2_session_setup_state *s)
++{
++	struct smbXsrv_session *session=NULL;
++	struct smbXsrv_session_auth0 *auth=NULL;
++	NTSTATUS status=smb2srv_session_lookup_conn(s->smb2req->xconn,
++			s->cut->wire_id,timeval_to_nttime(&s->smb2req->request_time),&session);
++	if (!NT_STATUS_EQUAL(status,NT_STATUS_MORE_PROCESSING_REQUIRED) ||
++	    session!=s->session || s->smb2req->session!=session ||
++	    session->global->auth_session_info!=NULL || session->zxs_origin!=NULL) { return false; }
++	status=smbXsrv_session_find_auth(session,s->smb2req->xconn,0,&auth);
++	return NT_STATUS_IS_OK(status) && auth==s->auth;
++}
++
++static void zxs_final_current_done(struct tevent_req *subreq)
++{
++	struct tevent_req *req=tevent_req_callback_data(subreq,struct tevent_req);
++	struct smbd_smb2_session_setup_state *s=tevent_req_data(req,struct smbd_smb2_session_setup_state);
++	struct zxs_smb2_attempt *a;
++	int err=0;
++	bool ok=wait_for_read_recv(subreq,&err);
++	s->cut->wait=NULL;
++	TALLOC_FREE(subreq);
++	if (!ok) { tevent_req_nterror(req,NT_STATUS_LOGON_FAILURE); return; }
++	/* SESSION_SETUP is as_root. Restore it only for this synchronous
++	 * native completion, never while storage or the socket is awaited. */
++	become_root();
++	a=zxs_auth_original_token(s->auth->gensec,s->session_info);
++	ok=a!=NULL && a->cut_requested && zxs_final_same_pending(s) &&
++		zxs_runtime_child_on(s->smb2req->xconn->transport.sock) &&
++		zxs_smb_cut_read(s->cut->fd,a->started_msec,a->challenge,&s->staged->identity)==0 &&
++		zxs_same_identity(&s->staged->identity,s->session_info);
++	TALLOC_FREE(s->cut);
++	if (ok) { smbd_smb2_session_setup_auth_return(req); }
++	unbecome_root();
++	if (!ok) { tevent_req_nterror(req,NT_STATUS_LOGON_FAILURE); }
++}
++
++static bool zxs_final_cancel(struct tevent_req *req)
++{
++	struct smbd_smb2_session_setup_state *s=tevent_req_data(req,struct smbd_smb2_session_setup_state);
++	if (s->cut==NULL || s->cut->wait==NULL) { return false; }
++	TALLOC_FREE(s->cut); /* unregister before closing the duplicate */
++	tevent_req_nterror(req,NT_STATUS_CANCELLED);
++	return true;
++}
++
++static bool zxs_final_current_start(struct tevent_req *req)
++{
++	struct smbd_smb2_session_setup_state *s=tevent_req_data(req,struct smbd_smb2_session_setup_state);
++	struct zxs_smb2_attempt *a=zxs_auth_original_token(s->auth->gensec,s->session_info);
++	if (a==NULL || a->cut_requested || s->cut!=NULL || s->staged!=NULL) { return false; }
++	a->cut_requested=true;
++	s->staged=talloc_zero(s,struct zxs_smb_local_origin);
++	s->cut=talloc_zero(s,struct zxs_cut_wait);
++	if (s->staged==NULL || s->cut==NULL) { return false; }
++	s->cut->wire_id=s->session->global->session_wire_id;
++	s->cut->fd=fcntl(a->fd,F_DUPFD_CLOEXEC,3);
++	talloc_set_destructor(s->cut,zxs_cut_destroy);
++	/* A separate logoff or failed concurrent session setup cannot free
++	 * and reuse these objects during the async generation read. A live
++	 * reference is not membership: look up both again on completion. */
++	if (s->cut->fd<0 || talloc_reference(s->cut,s->session)==NULL ||
++	    talloc_reference(s->cut,s->auth)==NULL ||
++	    zxs_smb_cut_ask(s->cut->fd,a->started_msec,a->challenge)!=0) { return false; }
++	s->cut->wait=wait_for_read_send(s->cut,s->ev,s->cut->fd,false);
++	if (s->cut->wait==NULL ||
++	    !tevent_req_set_endtime(s->cut->wait,s->ev,tevent_timeval_current_ofs(10,0))) { return false; }
++	tevent_req_set_cancel_fn(req,zxs_final_cancel);
++	tevent_req_set_callback(s->cut->wait,zxs_final_current_done,req);
++	return true;
  }
  
  static void smbd_smb2_session_setup_gensec_done(struct tevent_req *subreq)
-@@ -944,6 +973,12 @@
- 				     state,
- 				     &state->session_info);
- 	if (tevent_req_nterror(req, status)) {
-+		return;
-+	}
-+
-+	if (!zxs_runtime_child_on(state->smb2req->xconn->transport.sock) ||
-+	    !zxs_normal_token(state->session_info)) {
-+		tevent_req_nterror(req, NT_STATUS_ACCESS_DENIED);
+@@ -947,41 +1108,17 @@
  		return;
  	}
  
-@@ -1065,6 +1100,7 @@
+-	if ((state->in_previous_session_id != 0) &&
+-	     (state->session->global->session_wire_id !=
+-	      state->in_previous_session_id))
+-	{
+-		subreq = smb2srv_session_close_previous_send(state, state->ev,
+-						state->smb2req->xconn,
+-						state->session_info,
+-						state->in_previous_session_id,
+-						state->session->global->session_wire_id);
+-		if (tevent_req_nomem(subreq, req)) {
+-			return;
+-		}
+-		tevent_req_set_callback(subreq,
+-					smbd_smb2_session_setup_previous_done,
+-					req);
+-		return;
+-	}
+-
+-	smbd_smb2_session_setup_auth_return(req);
+-}
+-
+-static void smbd_smb2_session_setup_previous_done(struct tevent_req *subreq)
+-{
+-	struct tevent_req *req =
+-		tevent_req_callback_data(subreq,
+-		struct tevent_req);
+-	NTSTATUS status;
+-
+-	status = smb2srv_session_close_previous_recv(subreq);
+-	TALLOC_FREE(subreq);
+-	if (tevent_req_nterror(req, status)) {
+-		return;
+-	}
+-
+-	smbd_smb2_session_setup_auth_return(req);
++	if (!zxs_runtime_child_on(state->smb2req->xconn->transport.sock) ||
++	    !zxs_normal_token(state->session_info)) {
++		tevent_req_nterror(req, NT_STATUS_ACCESS_DENIED);
++		return;
++	}
++
++	if (state->in_previous_session_id!=0 || (state->in_flags & SMB2_SESSION_FLAG_BINDING)!=0 ||
++	    state->session->global->auth_session_info!=NULL || !zxs_final_current_start(req)) {
++		TALLOC_FREE(state->cut);
++		tevent_req_nterror(req,NT_STATUS_LOGON_FAILURE);
++	}
+ }
+ 
+ static void smbd_smb2_session_setup_auth_return(struct tevent_req *req)
+@@ -1024,6 +1161,7 @@
+ 					       state->smb2req,
+ 					       state->in_security_mode,
+ 					       state->session_info,
++					       &state->staged,
+ 					       &state->out_session_flags,
+ 					       &state->out_session_id);
+ 	if (tevent_req_nterror(req, status)) {
+@@ -1065,6 +1203,8 @@
  
  struct smbd_smb2_session_setup_wrap_state {
  	struct tevent_context *ev;
++	struct tevent_req *setup;
 +	struct zxs_smb2_attempt *attempt;
  	struct smbd_smb2_request *smb2req;
  	uint64_t in_session_id;
  	uint8_t in_flags;
-@@ -1080,6 +1116,62 @@
+@@ -1080,6 +1220,67 @@
  static void smbd_smb2_session_setup_wrap_setup_done(struct tevent_req *subreq);
  static void smbd_smb2_session_setup_wrap_shutdown_done(struct tevent_req *subreq);
  
@@ -728,6 +967,8 @@
 +	return 0;
 +}
 +
++static bool zxs_setup_cancel(struct tevent_req *req);
++
 +static bool zxs_setup_dispatch(struct tevent_req *req)
 +{
 +	struct smbd_smb2_session_setup_wrap_state *s=
@@ -736,6 +977,8 @@
 +		s->in_session_id,s->in_flags,s->in_security_mode,s->in_previous_session_id,
 +		s->in_security_buffer,s->attempt!=NULL ? &s->attempt : NULL);
 +	if (tevent_req_nomem(subreq,req)) { return false; }
++	s->setup=subreq;
++	tevent_req_set_cancel_fn(req,zxs_setup_cancel);
 +	tevent_req_set_callback(subreq,smbd_smb2_session_setup_wrap_setup_done,req);
 +	return true;
 +}
@@ -744,6 +987,7 @@
 +{
 +	struct smbd_smb2_session_setup_wrap_state *s=
 +		tevent_req_data(req,struct smbd_smb2_session_setup_wrap_state);
++	if (s->setup!=NULL) { return tevent_req_cancel(s->setup); }
 +	if (s->attempt==NULL || s->attempt->wait==NULL) { return false; }
 +	TALLOC_FREE(s->attempt);
 +	tevent_req_nterror(req,NT_STATUS_CANCELLED);
@@ -779,7 +1023,7 @@
  static struct tevent_req *smbd_smb2_session_setup_wrap_send(TALLOC_CTX *mem_ctx,
  					struct tevent_context *ev,
  					struct smbd_smb2_request *smb2req,
-@@ -1091,7 +1183,7 @@
+@@ -1091,7 +1292,7 @@
  {
  	struct tevent_req *req;
  	struct smbd_smb2_session_setup_wrap_state *state;
@@ -788,7 +1032,7 @@
  
  	req = tevent_req_create(mem_ctx, &state,
  				struct smbd_smb2_session_setup_wrap_state);
-@@ -1106,18 +1198,41 @@
+@@ -1106,18 +1307,41 @@
  	state->in_previous_session_id = in_previous_session_id;
  	state->in_security_buffer = in_security_buffer;
  
@@ -842,6 +1086,14 @@
  
  	return req;
  }
+@@ -1132,6 +1356,7 @@
+ 		struct smbd_smb2_session_setup_wrap_state);
+ 	NTSTATUS status;
+ 
++	state->setup=NULL;
+ 	status = smbd_smb2_session_setup_recv(subreq,
+ 					      &state->out_session_flags,
+ 					      state,
 --- a/source3/smbd/server_reload.c
 +++ b/source3/smbd/server_reload.c
 @@ -29,6 +29,7 @@
@@ -961,7 +1213,7 @@
  bool sid_check_is_our_sam(const struct dom_sid  *sid);
 --- a/source3/include/auth.h
 +++ b/source3/include/auth.h
-@@ -81,7 +81,18 @@
+@@ -81,7 +81,22 @@
  					  TALLOC_CTX *mem_ctx,
  					  struct auth4_context **auth4_context);
  
@@ -973,6 +1225,10 @@
 +	uint8_t challenge[8];
 +	struct tevent_req *wait;
 +	bool ready;
++	/* Both are borrowed from this one real native authentication. */
++	const struct auth_serversupplied_info *returned;
++	const struct auth_session_info *token;
++	bool cut_requested;
 +};
 +
  struct auth_context {
@@ -982,11 +1238,12 @@
  	/* What time did this start */
 --- a/source3/auth/proto.h
 +++ b/source3/auth/proto.h
-@@ -100,6 +100,11 @@
+@@ -100,6 +100,12 @@
  /* The following definitions come from auth/auth_generic.c  */
  
  NTSTATUS make_auth4_context(TALLOC_CTX *mem_ctx, struct auth4_context **auth4_context_out);
 +struct zxs_smb2_attempt;
++struct zxs_smb2_attempt *zxs_auth_original_token(struct gensec_security *,const struct auth_session_info *);
 +NTSTATUS zxs_auth_prepare_smb2(TALLOC_CTX *mem_ctx, struct zxs_smb2_attempt **attempt,
 +			       const struct tsocket_address *remote_address,
 +			       const struct tsocket_address *local_address,
@@ -996,7 +1253,15 @@
  			      const struct tsocket_address *local_address,
 --- a/source3/auth/auth_generic.c
 +++ b/source3/auth/auth_generic.c
-@@ -398,10 +398,10 @@
+@@ -27,6 +27,7 @@
+ #include "auth.h"
+ #include "../lib/tsocket/tsocket.h"
+ #include "auth/gensec/gensec.h"
++#include "auth/gensec/gensec_internal.h"
+ #include "lib/param/param.h"
+ #ifdef HAVE_KRB5
+ #include "librpc/gen_ndr/ndr_krb5pac.h"
+@@ -398,10 +399,10 @@
  	}
  }
  
@@ -1009,7 +1274,7 @@
  			      struct gensec_security **gensec_security_out)
  {
  	struct gensec_security *gensec_security;
-@@ -414,6 +414,15 @@
+@@ -414,6 +415,15 @@
  	nt_status = make_auth3_context_for_ntlm(tmp_ctx, &auth_context);
  	if (!NT_STATUS_IS_OK(nt_status)) {
  		goto done;
@@ -1025,7 +1290,7 @@
  	}
  
  	if (auth_context->prepare_gensec) {
-@@ -567,6 +576,20 @@
+@@ -567,6 +577,30 @@
  done:
  	TALLOC_FREE(tmp_ctx);
  	return nt_status;
@@ -1036,6 +1301,16 @@
 +			      struct gensec_security **out)
 +{
 +	return auth_generic_prepare_internal(ctx,remote,local,description,NULL,out);
++}
++struct zxs_smb2_attempt *zxs_auth_original_token(struct gensec_security *g,
++						 const struct auth_session_info *token)
++{
++	struct auth_context *c;
++	/* SPNEGO and the negotiated NTLM child share the original auth4 context. */
++	if (g==NULL || g->auth_context==NULL || token==NULL) { return NULL; }
++	c=talloc_get_type(g->auth_context->private_data,struct auth_context);
++	if (c==NULL || c->zxs_attempt==NULL || c->zxs_attempt->token!=token) { return NULL; }
++	return c->zxs_attempt;
 +}
 +NTSTATUS zxs_auth_prepare_smb2(TALLOC_CTX *ctx,struct zxs_smb2_attempt **attempt,
 +			       const struct tsocket_address *remote,
@@ -1057,7 +1332,32 @@
  #include "libcli/security/security.h"
  #include "lib/util/tevent_ntstatus.h"
  #include "source3/lib/substitute.h"
-@@ -99,7 +101,23 @@
+@@ -37,6 +39,13 @@
+ 	struct auth_user_info_dc *user_info = NULL;
+ 	struct auth_serversupplied_info *server_info = NULL;
+ 	NTSTATUS nt_status;
++	struct auth_context *ctx=talloc_get_type(auth_context->private_data,struct auth_context);
++	struct zxs_smb2_attempt *a=ctx!=NULL ? ctx->zxs_attempt : NULL;
++
++	if (a!=NULL && (a->returned==NULL || a->returned!=server_returned_info ||
++	    a->token!=NULL || !a->ready || zxs_smb_try_current(a->fd,a->started_msec)!=0)) {
++		return NT_STATUS_LOGON_FAILURE;
++	}
+ 
+ 	/*
+ 	 * This is a hack, some callers...
+@@ -86,6 +95,10 @@
+ 		return nt_status;
+ 	}
+ 
++	if (a!=NULL) {
++		a->returned=NULL;
++		a->token=*session_info;
++	}
+ 	return NT_STATUS_OK;
+ }
+ 
+@@ -99,7 +112,23 @@
  {
  	struct auth_context *auth_context = talloc_get_type_abort(auth4_context->private_data,
  								  struct auth_context);
@@ -1082,7 +1382,7 @@
  	return NT_STATUS_OK;
  }
  
-@@ -110,22 +128,10 @@
+@@ -110,22 +139,10 @@
  NTSTATUS auth3_set_challenge(struct auth4_context *auth4_context, const uint8_t *chal,
  			     const char *challenge_set_by)
  {
@@ -1109,11 +1409,20 @@
  }
  
  /**
-@@ -167,6 +173,13 @@
+@@ -135,6 +152,7 @@
+  */
+ 
+ struct auth3_check_password_state {
++	struct zxs_smb2_attempt *attempt; /* original auth4_context */
+ 	uint8_t authoritative;
+ 	void *server_info;
+ 	DATA_BLOB nt_session_key;
+@@ -167,6 +185,14 @@
  	 * Be authoritative by default.
  	 */
  	state->authoritative = 1;
-+	if (auth_context->zxs_attempt!=NULL) {
++	state->attempt=auth_context->zxs_attempt;
++	if (state->attempt!=NULL) {
 +		/* Negotiating a server challenge cannot authorize a password,
 +		 * a guest mapping, or a FILE session. Until the source-bound
 +		 * checker exists, stop before reading or forwarding responses. */
@@ -1123,6 +1432,30 @@
  
  	/* The client has given us its machine name (which we only get over NBT transport).
  	   We need to possibly reload smb.conf if smb.conf includes depend on the machine name. */
+@@ -303,6 +329,23 @@
+ 		return status;
+ 	}
+ 
++	if (state->attempt!=NULL) {
++		struct zxs_smb2_attempt *a=state->attempt;
++		struct auth_serversupplied_info *si=talloc_get_type(state->server_info,
++							       struct auth_serversupplied_info);
++		/* The managed sender cannot succeed until its real storage
++		 * credential supplier is present. Continue only from the
++		 * original authoritative success, never a SID or cached token. */
++		if (si==NULL || si->guest || si->cached_session_info!=NULL ||
++		    !state->authoritative || server_returned_info==NULL ||
++		    nt_session_key==NULL || lm_session_key==NULL ||
++		    state->nt_session_key.length!=16 || state->nt_session_key.data==NULL ||
++		    state->lm_session_key.length!=0 || a->returned!=NULL || a->token!=NULL ||
++		    !a->ready || zxs_smb_try_current(a->fd,a->started_msec)!=0) {
++			return NT_STATUS_LOGON_FAILURE;
++		}
++		a->returned=si;
++	}
+ 	if (server_returned_info != NULL) {
+ 		*server_returned_info = talloc_move(
+ 			mem_ctx, &state->server_info);
 --- a/source3/auth/wscript_build
 +++ b/source3/auth/wscript_build
 @@ -21,7 +21,7 @@
@@ -1872,3 +2205,14 @@
  		ret = SMB_VFS_PREAD(fsp,data,n,pos);
  
  		if (ret == -1) {
+--- a/source3/librpc/idl/smbXsrv.idl
++++ b/source3/librpc/idl/smbXsrv.idl
+@@ -312,6 +312,8 @@
+ 		hyper					nonce_high_max;
+ 		hyper					nonce_high;
+ 		hyper					nonce_low;
++		/* Local only: not serialized, never reconstructed from a TDB copy. */
++		[ignore] struct zxs_smb_local_origin	*zxs_origin;
+ 		[ignore] smbXsrv_tcon_table		*tcon_table;
+ 		[ignore] uint32				homes_snum;
+ 		smbXsrv_session_auth0			*pending_auth;

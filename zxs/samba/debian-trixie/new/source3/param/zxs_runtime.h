@@ -4,6 +4,18 @@
 #define ZXS_SAMBA_RUNTIME_H
 #include "param/zxs_client_role.h"
 #include "param/zxs_smb_control.h"
+#include <pwd.h>
+#include <string.h>
+/* Called after an original network identity has already been checked.
+ * This one host principal supplies execution identity, not authentication. */
+static inline bool zxs_fixed_unix_mapping(const struct passwd *pw,const char *name,
+                                          uid_t uid,gid_t gid)
+{
+    return pw!=NULL && pw->pw_name!=NULL && name!=NULL &&
+           strcmp(pw->pw_name,"zxs-smb-client")==0 && strcmp(name,pw->pw_name)==0 &&
+           uid!=0 && gid!=0 && uid!=(uid_t)-1 && gid!=(gid_t)-1 &&
+           uid==pw->pw_uid && gid==pw->pw_gid;
+}
 struct dom_sid;
 bool zxs_runtime_control_take(void);
 bool zxs_runtime_connect_storage(void);
