@@ -52,13 +52,22 @@ pub(in crate::ordinary) fn room_for_ticket(names:&[Vec<u8>],name:&str,stage:&CSt
     Ok(())
 }
 
+/// Check every name this exact ticket might need, against the same held
+/// parent. Inventory capacity and vacancy are separate checks; this does not
+/// allocate a slot, authorize a parent, or open/claim any existing occupant.
+pub(in crate::ordinary) fn check_ticket_paths(parent:&HeldDir,name:&str,ticket:OperationId)->io::Result<()>{
+    parent.checked_child_path(&destination(name)?)?;
+    for slot in 0..SLOTS{parent.checked_child_path(&staging(ticket,slot))?;}
+    Ok(())
+}
+
 /// No named write here. The actual root, FileId and this one bounded ticket
 /// must be durably reserved in SYSTEM first.
 pub(super) fn select_ticket(volume:&FileVolume<'_>,name:&str)->io::Result<(OperationId,NativeObject)>{
     volume.require_current()?;
     let names=volume.root.names()?;check_siblings(&names,name,false)?;
-    crate::fs::check_path(&volume.root.path.join(name))?;
     let attempt=OperationId::new()?;
+    check_ticket_paths(&volume.root,name,attempt)?;
     if names.iter().any(|raw|private_slot(raw).is_some_and(|(ticket,_)|ticket==attempt)){
         return Err(invalid("new creation ticket collides with an existing private name"));
     }

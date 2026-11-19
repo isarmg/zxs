@@ -240,6 +240,33 @@ fn native_root_length(parent:&Path,n:usize)->PathBuf{
     }
     assert_eq!(p.as_os_str().as_bytes().len(),n);p
 }
+// Exercise CREATE against the same real long-root fixture as MOVE below.
+#[test]
+#[ignore="two private native filesystems; exact registered boundary paths"]
+fn empty_file_budgets_all_private_names_before_reserving_the_shared_system_slot(){
+    use crate::pool::lease::{Access,LocalPool};
+    let t=PrivateTemp::under(&std::env::temp_dir());
+    let r=PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
+    let sys=t.child("system");let recycle=r.child("recycle");let short=t.child("short");
+    let bad=native_root_length(&t.child("bad"),4053);let edge=native_root_length(&t.child("edge"),4052);
+    let reg=z::initialize(op(),&sys,&recycle,&[short.clone(),bad.clone(),edge.clone()]).unwrap();
+    let volume=|p:&Path|reg.volumes.iter().find(|row|row.volume.path==p).unwrap().id;
+    let frontier=||LocalPool::with_snapshot(&sys,Access::Read).unwrap().2.frontier();
+    let before=frontier();let denied=op();
+    // The destination /x fits; every issued 43-byte private leaf would give
+    // 4097 including the slash. Refuse without leaving a named ticket or frame.
+    assert!(z::create_empty(&sys,denied,volume(&bad),"x").is_err());
+    assert_eq!(frontier(),before);assert_eq!(z::creation_receipt(&sys,denied).unwrap(),None);
+    for n in ["FILE-ALLOCATION","FILE-INTENT"]{assert!(!sys.join(n).exists());}
+    assert_eq!(fs::read_dir(&bad).unwrap().count(),0);
+    let sibling=z::create_empty(&sys,op(),volume(&short),"next").unwrap();
+    assert_eq!(z::read_initial_file(&sys,sibling.file).unwrap().0,sibling);
+    // Exactly 4096 is accepted by the component-wise native traversal. The
+    // published result is still the same identified FILE on a fresh reopen.
+    let create=op();let file=z::create_empty(&sys,create,volume(&edge),"x").unwrap();
+    assert_eq!(z::list_initial_files(&sys,volume(&edge)).unwrap().files,[file.clone()]);
+    assert_eq!(z::create_empty(&sys,create,volume(&edge),"x").unwrap(),file);
+}
 #[test]
 #[ignore="three private native filesystems; exact registered boundary paths"]
 fn actual_move_never_reserves_if_its_source_isolation_or_destination_slots_cannot_subsequently_be_opened(){
