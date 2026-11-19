@@ -57,11 +57,13 @@ final class StoredMember {
         byte[] descriptor = new byte[0];
         long end = body + bytes;
         if (streaming) {
-            // A per-file ZIP64 extra, including a central offset-only one, selects wide descriptor sizes.
-            // Require the whole descriptor to meet the next physical header: never accept a narrow prefix.
-            boolean sizes64 = wide || slot.centralZip64;
-            int base = sizes64 ? 20 : 12;
+            // An offset-only ZIP64 central extra says nothing about the two streamed sizes.
+            // Accept the complete physical tuple; never reinterpret just the prefix of a wide one.
             long remaining = slot.limit - end;
+            boolean sizeFields64 = wide || u32(cd, p + 20) == U32 || u32(cd, p + 24) == U32;
+            boolean offsetOnly = slot.centralZip64 && !sizeFields64 && u32(cd, p + 42) == U32;
+            boolean sizes64 = sizeFields64 || (offsetOnly && (remaining == 20 || remaining == 24));
+            int base = sizes64 ? 20 : 12;
             require(remaining == base || remaining == base + 4);
             descriptor = src.read(end, (int)remaining);
             require(descriptorLength(descriptor, sizes64, crc, bytes) == remaining);

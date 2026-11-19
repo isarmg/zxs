@@ -91,31 +91,69 @@ public final class StoredMemberTest {
         wide[30 + NAME.length + 4] ^= 1; // local ZIP64 uncompressed length only
         assertThrows(IOException.class, () -> check(wide));
     }
-    private static byte[] offsetOnly(byte[] body, boolean signed) {
-        // Local ZIP 1.0 header with a descriptor; central ZIP 4.5 stores only local offset in its extra.
+    private static byte[] offsetOnly(byte[] body, boolean signed, boolean wideTuple, long origin) {
         byte[] old = archive(body, false, true, signed);
         int start = 30 + NAME.length + body.length, oldCD = start + (signed ? 16 : 12);
-        int cd = oldCD + 8, clen = 46 + NAME.length + 12;
-        ByteBuffer z = ByteBuffer.allocate(old.length + 20).order(ByteOrder.LITTLE_ENDIAN);
+        int extraSize = wideTuple ? 8 : 0, cd = oldCD + extraSize, clen = 46 + NAME.length + 12;
+        boolean large = origin + cd > ArchiveIndex.U32;
+        ByteBuffer z = ByteBuffer.allocate(old.length + 12 + extraSize + (large ? 76 : 0)).order(ByteOrder.LITTLE_ENDIAN);
         z.put(old, 0, start + (signed ? 8 : 4)); // optional signature and CRC
-        z.putLong(body.length).putLong(body.length);
+        if (wideTuple) {
+            z.putLong(body.length).putLong(body.length);
+        } else {
+            z.putShort(4, (short)20); // ordinary local v2.0 for the small streamed member
+            z.putInt(body.length).putInt(body.length);
+        }
         z.put(old, oldCD, 46 + NAME.length);
         z.putShort(cd + 6, (short)45).putShort(cd + 30, (short)12).putInt(cd + 42, -1);
-        z.putShort((short)1).putShort((short)8).putLong(0);
-        z.put(old, old.length - 22, 22);
-        z.putInt(z.capacity() - 10, clen).putInt(z.capacity() - 6, cd);
+        z.putShort((short)1).putShort((short)8).putLong(origin);
+        if (large) {
+            long zip64 = origin + z.position();
+            z.putInt(0x06064b50).putLong(44).putShort((short)45).putShort((short)45).putLong(0);
+            z.putLong(1).putLong(1).putLong(clen).putLong(origin + cd);
+            z.putInt(0x07064b50).putInt(0).putLong(zip64).putInt(1);
+        }
+        z.putInt(0x06054b50).putInt(0).putShort((short)1).putShort((short)1)
+                .putInt(clen).putInt(large ? -1 : (int)(origin + cd)).putShort((short)0);
         return z.array();
     }
-    @Test public void offsetOnlyCentralZIP64RequiresWideDescriptorAndVersion45ButNotAWideLocalHeader() throws IOException {
+    @Test public void offsetOnlyCentralZIP64AcceptsTheWholeWideDescriptorAndRequiresCentralVersion45() throws IOException {
         for (byte[] body : new byte[][]{new byte[0], new byte[]{1, 2, 3}}) {
             for (boolean signed : new boolean[]{false, true}) {
-                byte[] b = offsetOnly(body, signed);
+                byte[] b = offsetOnly(body, signed, true, 0);
                 assertTrue(check(b).matches());
                 int cd = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN).getInt(b.length - 6);
                 byte[] bad = b.clone(); bad[cd - 1] ^= 1; // upper bytes of wide uncompressed size, even for zero-byte body
                 assertThrows(IOException.class, () -> check(bad));
                 byte[] low = b.clone(); low[cd + 6] = 10;
                 assertThrows(IOException.class, () -> ArchiveIndexTest.read(low));
+            }
+        }
+    }
+    @Test public void narrowDescriptorForSmallStreamedMemberBeyondFourGiB() throws IOException {
+        // CPython can write a signed narrow descriptor before the central directory needs ZIP64 offsets.
+        final long origin = (1L << 32) + 37;
+        for (byte[] body : new byte[][]{new byte[0], new byte[]{1, 2, 3}}) {
+            for (boolean signed : new boolean[]{false, true}) {
+                final byte[] tail = offsetOnly(body, signed, false, origin);
+                final long eof = origin + tail.length;
+                Bytes sparse = new Bytes(tail) {
+                    @Override public byte[] read(long off, int n) throws IOException {
+                        if (n < 0 || n > 65557) throw new IOException("unbounded read");
+                        byte[] out = new byte[n]; fill(off, out, n); return out;
+                    }
+                    @Override public void fill(long off, byte[] out, int n) throws IOException {
+                        check();
+                        if (n < 0 || n > 65557 || off < eof - 65557 || off > eof - n) throw new IOException("not the tail");
+                        int gap = (int)Math.min(n, Math.max(0L, origin - off));
+                        Arrays.fill(out, 0, gap, (byte)0);
+                        if (gap != n) System.arraycopy(tail, (int)(off + gap - origin), out, gap, n - gap);
+                    }
+                };
+                ArchiveIndex index = ArchiveIndex.read(sparse, eof);
+                assertTrue(index.checkMember(sparse, row(index)).matches());
+                tail[30 + NAME.length + body.length + (signed ? 16 : 12) - 1] ^= 1;
+                assertThrows(IOException.class, () -> index.checkMember(sparse, row(index))); // malformed, not CRC mismatch
             }
         }
     }
