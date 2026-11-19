@@ -54,12 +54,12 @@ impl Connection{
     /// user rows. No schema text, SQLite pointer or borrowed row escapes.
     fn shape(&self)->io::Result<[u8;32]>{
         use crate::hash::Sha256;
-        let s=self.prepare(c"SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT 65")?;
+        let s=self.prepare(c"SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT 129")?;
         let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/SCHEMA-ROWS\0")?;
         let mut count=0u16;let mut remaining=256*1024usize;
         loop{match unsafe{sqlite3_step(s.0)}{
             100=>{
-                count+=1;if count>64{return Err(invalid("unexpected schema object count"));}
+                count+=1;if count>128{return Err(invalid("unexpected schema object count"));}
                 for k in 0..4{
                     match unsafe{sqlite3_column_type(s.0,k)}{
                         5=>h.update(&[0])?, // NULL automatic index SQL is not empty text.

@@ -70,23 +70,34 @@ pub(in crate::ordinary) fn write_candidate(pool:PoolId,m:Material,raw:&File,targ
     let g=Geometry::new(pool,m)?;let before=Stamp::read(raw)?;let dest=Stamp::read(target)?;
     if before.len!=m.size||dest.len!=0||before.same(dest){
         return Err(invalid("checksum destination must be a separate empty regular file and RAW must have its original extent"));}
-    let header=Geometry::header(pool,m);let mut dir=scratch(g.pages*32)?;
-    let mut page=scratch(g.page_bytes(0))?;let mut data=scratch(m.size.min(BLOCK) as usize)?;
-    data.resize(m.size.min(BLOCK) as usize,0);
     before.require(raw)?;dest.require(target)?;
-    target.write_all_at(&header,0)?;
+    let result=walk(raw,pool,m,|_,_|Ok(()),|at,bytes|target.write_all_at(bytes,at))?;
+    target.sync_all()?;let after=Stamp::read(target)?;
+    if !after.same(dest)||after.len!=g.table_bytes{return Err(invalid("checksum output changed or has wrong length"));}
+    before.require(raw)?;Ok(result)
+}
+
+/// A single work-input traversal: do not allocate a whole file or a whole
+/// checksum table. The block digests and optional consumers see the exact
+/// same bytes; no consumer selects a path or is an authority to issue them.
+pub(super) fn walk(raw:&File,pool:PoolId,m:Material,mut data_at:impl FnMut(u64,&[u8])->io::Result<()>,
+    mut checks_at:impl FnMut(u64,&[u8])->io::Result<()>)->io::Result<Ref>{
+    let g=Geometry::new(pool,m)?;let before=Stamp::read(raw)?;
+    if before.len!=m.size{return Err(invalid("input changed length before checksum traversal"));}
+    let header=Geometry::header(pool,m);let mut dir=scratch(g.pages*32)?;
+    let mut page=scratch(g.page_bytes(0))?;let mut bytes=scratch(m.size.min(BLOCK) as usize)?;
+    bytes.resize(m.size.min(BLOCK) as usize,0);checks_at(0,&header)?;
     for p in 0..g.pages as u64{
         page.clear();
         for i in p*PER_PAGE..((p+1)*PER_PAGE).min(g.blocks){
             let at=i*BLOCK;let n=(m.size-at).min(BLOCK) as usize;
-            raw.read_exact_at(&mut data[..n],at)?;page.extend_from_slice(&hash::digest(&data[..n])?);
+            raw.read_exact_at(&mut bytes[..n],at)?;
+            page.extend_from_slice(&hash::digest(&bytes[..n])?);data_at(at,&bytes[..n])?;
         }
-        before.require(raw)?;target.write_all_at(&page,HEADER as u64+p*PER_PAGE*32)?;
+        before.require(raw)?;checks_at(HEADER as u64+p*PER_PAGE*32,&page)?;
         dir.extend_from_slice(&hash::digest(&page)?);
     }
-    let directory_sha=dir_hash(&header,&dir)?;target.write_all_at(&dir,g.dir_at)?;
-    target.sync_all()?;let after=Stamp::read(target)?;
-    if !after.same(dest)||after.len!=g.table_bytes{return Err(invalid("checksum output changed or has wrong length"));}
+    let directory_sha=dir_hash(&header,&dir)?;checks_at(g.dir_at,&dir)?;
     before.require(raw)?;Ok(Ref{pool,material:m,directory_sha})
 }
 
@@ -132,6 +143,14 @@ impl Reader{
         Self::open(original,HeldBytes::separate_format_fixture(raw)?,HeldBytes::separate_format_fixture(table)?)
     }
     pub(super) fn unchanged(&self)->io::Result<()>{self.raw.unchanged()?;self.table.unchanged()}
+    pub(super) fn same_issued_pair(&self,raw:Stamp,table:Stamp)->io::Result<()>{
+        if self.raw.stamp()!=raw||self.table.stamp()!=table{return Err(invalid("independent reopen did not retain the actual issued working pair"));}
+        self.unchanged()
+    }
+    pub(super) fn require_names(&self,dir:&crate::fs::HeldDir,roles:&[std::ffi::CString;4])->io::Result<()>{
+        self.raw.require_name(dir,&roles[0])?;self.raw.require_name(dir,&roles[1])?;
+        self.table.require_name(dir,&roles[2])?;self.table.require_name(dir,&roles[3])
+    }
     fn block_hash(&self,i:u64,buffers:&mut Buffers)->io::Result<[u8;32]>{
         let p=i/PER_PAGE;let key=(self.original,self.table.stamp(),p);
         let n=self.g.page_bytes(p);let bytes=buffers.page.get_mut(..n)

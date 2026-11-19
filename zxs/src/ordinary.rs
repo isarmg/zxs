@@ -11,6 +11,7 @@ mod file_parent;
 mod content;
 mod indexed;
 mod flat;
+pub(crate) use flat::work as working_sql;
 mod output;
 mod interval;
 pub use interval::{save_interval,interval_receipt,read_current_range_to,SpanObservation};

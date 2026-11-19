@@ -57,6 +57,18 @@ impl<'a> WitnessRead<'a>{
         Ok(Self{dir,names,mount})
     }
 
+    pub(crate) fn matching_presence(&self,primary:&CStr,second:&CStr)->io::Result<()>{
+        if self.names.contains(primary.to_bytes())!=self.names.contains(second.to_bytes()){
+            return Err(invalid("unproven single working role name; do not create or adopt its companion"));}
+        Ok(())
+    }
+    pub(crate) fn present_work_roles(&self,roles:&[CString;4])->u8{
+        roles.iter().enumerate().fold(0,|mask,(i,n)|if self.names.contains(n.to_bytes()){mask|(1u8<<i)}else{mask})
+    }
+    pub(crate) fn work_members(&self,roles:&[CString;4],complete:bool,retained:&BTreeSet<Vec<u8>>)->io::Result<()>{
+        if !self.names.contains(c"FILE".to_bytes())||self.names.iter().any(|n|n.as_slice()!=c"FILE".to_bytes()&&!retained.contains(n)&&!roles.iter().any(|r|r.to_bytes()==n.as_slice()))||
+            (complete&&self.present_work_roles(roles)!=15){return Err(invalid("unexpected or incomplete member set of the working FILE"));}Ok(())
+    }
     pub(crate) fn only_header(&self)->io::Result<()>{
         if self.names.len()!=1||!self.names.contains(c"FILE".to_bytes()){return Err(invalid("unissued or missing member in newborn FILE"));}
         Ok(())

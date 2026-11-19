@@ -48,11 +48,21 @@ impl Birth{
         self.newborn_at(parent,sample,&self.container()?)
     }
     fn newborn_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,leaf:&CStr)->io::Result<Installed>{
+        self.physical_at(parent,sample,leaf,false,|scope|scope.only_header())
+    }
+    pub(crate) fn working_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,write:bool,
+        spec:Option<(crate::ordinary::working_sql::Spec,bool)>,kept:&crate::ordinary::working_sql::Retained)->io::Result<Installed>{
+        self.physical_at(parent,sample,&self.container()?,write,|scope|match spec {
+            None=>scope.only_header(),
+            Some((s,all)) if s.pool==self.pool && s.file==self.file=>s.members(scope,all,kept),
+            _=>Err(invalid("working materials belong to a different FILE")),
+        })
+    }
+    fn physical_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,leaf:&CStr,write:bool,
+        members:impl FnOnce(&WitnessRead<'_>)->io::Result<()>)->io::Result<Installed>{
         let dir=parent.directory_in_sample(leaf,sample)?.ok_or_else(||invalid("original FILE container not installed"))?;
-        dir.share()?;let scope=WitnessRead::at(&dir)?;
-        // Future SAVE contributes its exact own named role set, not a
-        // blanket allowance for unfamiliar files under a familiar header.
-        scope.only_header()?;
+        if write{dir.exclusive()?;}else{dir.share()?;}
+        let scope=WitnessRead::at(&dir)?;members(&scope)?;
         let expected=self.header();
         let witness=self.witness()?;
         let header=scope.file_header(parent,sample,&witness,expected.len() as u64)?;
@@ -63,6 +73,7 @@ impl Birth{
 }
 pub(crate) struct Installed{dir:HeldDir,header:HeldBytes,witness:CString}
 impl Installed{
+    pub(crate) fn directory(&self)->&HeldDir{&self.dir}
     pub(crate) fn require_newborn(&self,parent:&HeldDir)->io::Result<()>{self.dir.only(Some(c"FILE"))?;self.require(parent)}
     pub(crate) fn require(&self,parent:&HeldDir)->io::Result<()>{
         if self.dir.path.parent()!=Some(parent.path.as_path())||!parent.same_mount(&self.dir)?{return Err(invalid("different containing FILE parent"));}

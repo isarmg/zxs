@@ -3,16 +3,17 @@
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 
 -- Both INIT (1) and SETUP_PAIR (2) name a separately authenticated offline
 -- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
 -- SET_SHARE_MODE (4) changes one share; no per-user ACL.
 -- CREATE_FILE (5) reserves one ordinary root member before any media write.
+-- FIRST_WORK (6) selects the first manual working revision, never a formal Node.
 -- An operation row alone is not authorization.
 CREATE TABLE operation (
   op_id       BLOB NOT NULL PRIMARY KEY CHECK(length(op_id)=16 AND op_id<>zeroblob(16)),
-  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5)),
+  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5,6)),
   actor_id    BLOB NOT NULL CHECK(length(actor_id)=16 AND actor_id<>zeroblob(16)),
   request_sha BLOB NOT NULL CHECK(length(request_sha)=32),
   state       INTEGER NOT NULL CHECK(state IN (0,1)) -- 0: pending I/O; 1: committed
@@ -155,10 +156,55 @@ BEGIN SELECT RAISE(ABORT,'FILE requires this live read-write share, original SMB
 CREATE TRIGGER keep_entry BEFORE UPDATE ON root_entry BEGIN SELECT RAISE(ABORT,'retain original FILE birth'); END;
 CREATE TRIGGER retain_entry BEFORE DELETE ON root_entry BEGIN SELECT RAISE(ABORT,'retain original FILE reservation'); END;
 
+-- A single manual first working revision (revision=1, predecessor=unborn).
+-- Both digests describe the same sealed input before any named material
+-- is created: exact logical bytes and the original per-block table directory.
+-- state=0 below never changes what a client can read. No version or copy job.
+CREATE TABLE first_work (
+  save_op       BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  file_id       BLOB NOT NULL REFERENCES root_entry(file_id),
+  share_id      BLOB NOT NULL REFERENCES root_share(share_id),
+  setting_op    BLOB NOT NULL REFERENCES share_mode(change_op),
+  auth_op       BLOB NOT NULL REFERENCES smb_password(credential_op),
+  logical_bytes INTEGER NOT NULL CHECK(logical_bytes BETWEEN 0 AND 1125899906842624),
+  content_sha   BLOB NOT NULL CHECK(length(content_sha)=32),
+  directory_sha BLOB NOT NULL CHECK(length(directory_sha)=32),
+  attempt_no    INTEGER NOT NULL CHECK(attempt_no>=1),
+  previous_save BLOB UNIQUE REFERENCES first_work(save_op),
+  retained_mask INTEGER NOT NULL CHECK(retained_mask BETWEEN 0 AND 15),
+  UNIQUE(file_id,attempt_no),
+  CHECK((attempt_no=1 AND previous_save IS NULL AND retained_mask=0) OR (attempt_no>1 AND previous_save IS NOT NULL))
+) STRICT, WITHOUT ROWID;
+-- Only actual names left by revoked attempts are accounted to the private FILE.
+-- This index need not visit empty superseded attempts to build that allowance.
+CREATE INDEX retained_work_names ON first_work(file_id,previous_save,retained_mask) WHERE retained_mask<>0;
+CREATE TRIGGER start_work BEFORE INSERT ON first_work
+WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.save_op)
+ OR EXISTS(SELECT 1 FROM first_work WHERE save_op=NEW.save_op OR (file_id=NEW.file_id AND attempt_no=NEW.attempt_no)
+           OR (NEW.previous_save IS NOT NULL AND previous_save=NEW.previous_save))
+ OR (NEW.previous_save IS NOT NULL AND NOT EXISTS(
+       SELECT 1 FROM first_work old JOIN operation o ON o.op_id=old.save_op
+       JOIN share_mode m ON m.change_op=old.setting_op
+       WHERE old.save_op=NEW.previous_save AND old.file_id=NEW.file_id AND old.attempt_no=NEW.attempt_no-1
+         AND o.kind=6 AND o.state=0 AND m.revision<(SELECT MAX(z.revision) FROM share_mode z WHERE z.share_id=old.share_id)))
+ OR NOT EXISTS(SELECT 1 FROM root_entry e JOIN operation b ON b.op_id=e.create_op
+       JOIN root_share r ON r.volume_id=e.volume_id JOIN share_mode m ON m.share_id=r.share_id
+       JOIN operation p ON p.op_id=m.change_op JOIN smb_password s ON s.credential_op=NEW.auth_op
+       WHERE e.file_id=NEW.file_id AND b.kind=5 AND b.state=1 AND r.share_id=NEW.share_id
+         AND m.change_op=NEW.setting_op AND m.mode=2 AND p.kind=4 AND p.state=1
+         AND m.revision=(SELECT max(h.revision) FROM share_mode h WHERE h.share_id=r.share_id))
+BEGIN SELECT RAISE(ABORT,'first working revision requires the actual born file and current writable ordinary share'); END;
+CREATE TRIGGER keep_work BEFORE UPDATE ON first_work BEGIN SELECT RAISE(ABORT,'immutable first working input'); END;
+CREATE TRIGGER retain_work BEFORE DELETE ON first_work BEGIN SELECT RAISE(ABORT,'retain original working input'); END;
+
 -- SETUP_PAIR prepares both fixed slots in one transaction. Deferred FKs
 -- force their kind-2 receipt before commit; no half-provisioned identity.
 CREATE TRIGGER new_origin BEFORE INSERT ON operation
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR (NEW.kind IN (1,2) AND kind=NEW.kind))
+  OR (NEW.kind<>6 AND EXISTS(SELECT 1 FROM first_work WHERE save_op=NEW.op_id))
+  OR (NEW.kind=6 AND (NEW.state<>0 OR NOT EXISTS(
+    SELECT 1 FROM first_work f JOIN smb_password s ON s.credential_op=f.auth_op JOIN account_pair a ON a.singleton=s.slot
+    WHERE f.save_op=NEW.op_id AND a.smb_id=NEW.actor_id)))
   OR (NEW.kind<>5 AND EXISTS(SELECT 1 FROM root_entry WHERE create_op=NEW.op_id))
   OR (NEW.kind=5 AND (NEW.state<>0 OR NOT EXISTS(
     SELECT 1 FROM root_entry e JOIN smb_password s ON s.credential_op=e.auth_op JOIN account_pair a ON a.singleton=s.slot
@@ -238,6 +284,11 @@ CREATE TRIGGER confirm_origin BEFORE UPDATE OF state ON operation
 WHEN OLD.state<>0 OR NEW.state<>1 OR NOT (
   (OLD.kind=1 AND EXISTS(SELECT 1 FROM pool_birth b WHERE b.init_op=OLD.op_id
     AND b.root_count=(SELECT count(*) FROM volume_claim WHERE claim_op=OLD.op_id))) OR
+  (OLD.kind=6 AND EXISTS(SELECT 1 FROM first_work f JOIN share_mode m ON m.change_op=f.setting_op
+    JOIN smb_password s ON s.credential_op=f.auth_op JOIN account_pair a ON a.singleton=s.slot
+    WHERE f.save_op=OLD.op_id AND NOT EXISTS(SELECT 1 FROM first_work nxt WHERE nxt.previous_save=f.save_op)
+      AND a.smb_id=OLD.actor_id AND m.mode=2
+      AND m.revision=(SELECT max(h.revision) FROM share_mode h WHERE h.share_id=f.share_id))) OR
   (OLD.kind=5 AND EXISTS(SELECT 1 FROM root_entry e JOIN share_mode m ON m.change_op=e.setting_op
     JOIN smb_password s ON s.credential_op=e.auth_op JOIN account_pair a ON a.singleton=s.slot
     WHERE e.create_op=OLD.op_id AND a.smb_id=OLD.actor_id AND m.mode=2

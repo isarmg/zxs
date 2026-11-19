@@ -21,11 +21,14 @@ impl Located{
     }
     pub(super) fn reference(&self)->MaterialRef{self.original}
 
-    fn names(&self)->(CString,CString,CString,CString){
-        let m=self.original.material;let id=format!("{}-{:08x}",m.issuer,m.slot);
+    pub(super) fn names(&self)->(CString,CString,CString,CString){
+        let m=self.original.material;let [data,pin,table,pin_table]=Self::change_names(m.issuer,m.slot);
+        (self.raw_name.clone().unwrap_or(data),pin,table,pin_table)
+    }
+    pub(super) fn change_names(op:crate::OperationId,slot:u32)->[CString;4]{
+        let id=format!("{op}-{slot:08x}");
         let n=|s:String|CString::new(s).expect("only fixed literals and encoded IDs");
-        (self.raw_name.clone().unwrap_or_else(||n(format!("change-{id}"))),n(format!("pin-data-{id}")),
-         n(format!("checks-{id}")),n(format!("pin-checks-{id}")))
+        [n(format!("change-{id}")),n(format!("pin-data-{id}")),n(format!("checks-{id}")),n(format!("pin-checks-{id}"))]
     }
     pub(super) fn open_pair(&self,scope:&WitnessRead<'_>)->io::Result<(HeldBytes,HeldBytes)>{
         let(data,wd,checks,wc)=self.names();

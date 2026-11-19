@@ -84,7 +84,7 @@ fn budget(db:&Connection,b:&Birth,live:&[Vec<u8>])->io::Result<()>{
 /// vacancy check suffices. A native name equal to someone's FILE *terminal*
 /// is not their displayed name. Only in that rare case verify its exact
 /// spelling and real issued container before allowing the business name.
-fn display_free(db:&Connection,c:&Catalog,f:&HeldDir,b:&Birth)->io::Result<()>{
+pub(super) fn display_free(db:&Connection,c:&Catalog,f:&HeldDir,b:&Birth)->io::Result<()>{
     if Birth::reserved_spelling(b.name.as_bytes()){return Ok(());} // never an ordinary-directory spelling
     let leaf=CString::new(b.name.as_str()).map_err(|_|invalid("bad FILE name"))?;
     if !f.entry_present(&leaf)?{return Ok(());}
@@ -95,7 +95,8 @@ fn display_free(db:&Connection,c:&Catalog,f:&HeldDir,b:&Birth)->io::Result<()>{
     let other=by_op(db,c,op)?.filter(|o|o.committed&&o.birth.volume==b.volume&&o.birth.name!=b.name)
         .ok_or_else(||invalid("colliding display spelling is not another confirmed FILE terminal"))?;
     if other.birth.container()?.as_c_str()!=leaf.as_c_str(){return Err(invalid("wrong derived terminal for displayed spelling"));}
-    let sample=f.names()?.into_iter().collect();other.birth.installed(f,&sample)?.require(f)
+    let(members,kept)=super::first_work::membership(db,c,&other.birth)?;
+    let sample=f.names()?.into_iter().collect();other.birth.working_at(f,&sample,false,members,&kept)?.require(f)
 }
 
 #[derive(Clone,Copy,PartialEq,Eq)]
@@ -167,25 +168,26 @@ impl Tree<'_,'_>{
         }}
     }
 
-    /// Independent cold open, not a receipt. Check the current share and its
-    /// real F, not the original creator's share. Nothing here accepts a path
-    /// from the SMB client or follows a recycle/other-volume fallback.
-    pub(crate) fn newborn(&self,name:&str,id:FileId)->io::Result<NewFile>{
-        display::component(name.as_bytes(),222)?;
-        let lookup=|db:&Connection,c:&Catalog|->io::Result<Birth>{
-            self.require(db,c,false)?;
+    pub(super) fn birth(&self,db:&Connection,c:&Catalog,name:&str,id:FileId)->io::Result<Birth>{
             let s=db.prepare(c"SELECT create_op FROM main.root_entry WHERE volume_id=?1 AND display=?2 AND file_id=?3")?;
             s.bind_bytes(1,&self.setting.volume.0)?;s.bind_bytes(2,name.as_bytes())?;s.bind_bytes(3,&id.0)?;
             match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(io::ErrorKind::NotFound.into()),rc=>{check(rc)?;return Err(invalid("FILE lookup failed"));}}
             let op=OperationId(s.array(0)?);s.done()?;
             let x=by_op(db,c,op)?.filter(|x|x.committed&&x.birth.file==id&&x.birth.volume==self.setting.volume&&x.birth.name==name)
                 .ok_or_else(||invalid("original FILE not confirmed"))?;Ok(x.birth)
-        };
+    }
+
+
+    /// Independent cold open, not a receipt. Check the current share and its
+    /// real F, not the original creator's share. Nothing here accepts a path
+    /// from the SMB client or follows a recycle/other-volume fallback.
+    pub(crate) fn newborn(&self,name:&str,id:FileId)->io::Result<NewFile>{
+        display::component(name.as_bytes(),222)?;
         let src=self.session.source;
-        let(c,b)=src.at(|db,c|{let b=lookup(db,&c)?;Ok((c,b))})?;
+        let(c,b)=src.at(|db,c|{self.require(db,&c,false)?;let b=self.birth(db,&c,name,id)?;Ok((c,b))})?;
         let f=OrdinaryRoot::at(src,&c,b.volume,false)?;
         let names=f.root.names()?.into_iter().collect();let real=b.installed(&f.root,&names)?;
-        src.at(|db,c|{if lookup(db,&c)?!=b{return Err(invalid("FILE membership changed during open"));}
+        src.at(|db,c|{self.require(db,&c,false)?;if self.birth(db,&c,name,id)?!=b{return Err(invalid("FILE membership changed during open"));}
             display_free(db,&c,&f.root,&b)?;f.require()?;real.require_newborn(&f.root)?;Ok(NewFile::from(&b))})
     }
 }

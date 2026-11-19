@@ -5,7 +5,7 @@ use super::*;
 use crate::{FileId,VolumeId,identity::ShareId,system::reader::{account::share_mode::Mode,smb::{SmbSession,file_create::Point}}};
 use std::os::unix::fs::{DirBuilderExt,MetadataExt};
 const F:VolumeId=VolumeId([0x13;16]);
-fn open_root(src:&InitialReader)->PathBuf{
+pub(super) fn open_root(src:&InitialReader)->PathBuf{
     let c=src.snapshot().unwrap();let f=&c.rows()[2];
     std::fs::DirBuilder::new().mode(0o700).create(&f.path).unwrap();
     let mut m=OpenOptions::new().write(true).create_new(true).mode(0o600)
@@ -13,7 +13,7 @@ fn open_root(src:&InitialReader)->PathBuf{
     m.write_all(&c.expected_marker(2).unwrap()).unwrap();m.sync_all().unwrap();
     File::open(&f.path).unwrap().sync_all().unwrap();f.path.clone()
 }
-fn configure(src:&InitialReader)->(ShareId,ShareId){
+pub(super) fn configure(src:&InitialReader)->(ShareId,ShareId){
     let web=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
     let a=web.publish_root(OperationId([0x81;16]),F,"writable").unwrap();
     let b=web.publish_root(OperationId([0x82;16]),F,"view").unwrap();

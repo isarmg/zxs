@@ -32,11 +32,19 @@ impl<'a> OrdinaryRoot<'a>{
     // Physical proof only. The caller supplies the catalog from its own
     // authorization cut. A capacity sample cannot be converted into a write.
     pub(super) fn at(source:&'a InitialReader,catalog:&Catalog,id:VolumeId,namespace_write:bool)->io::Result<Self>{
+        Self::selected(source,catalog,id,Some(namespace_write))
+    }
+    /// The body phase takes the actual FILE lock, not a volume-wide lock;
+    /// still retain the actual registered root, marker, same mount and S.
+    pub(super) fn for_body(source:&'a InitialReader,catalog:&Catalog,id:VolumeId)->io::Result<Self>{
+        Self::selected(source,catalog,id,None)
+    }
+    fn selected(source:&'a InitialReader,catalog:&Catalog,id:VolumeId,lock:Option<bool>)->io::Result<Self>{
         let (i,row)=catalog.rows().iter().enumerate().find(|(_,r)|r.volume==id&&r.role==Role::File)
              .ok_or_else(||invalid("not an ordinary VolumeId in this original pool"))?;
         let expected=catalog.expected_marker(i).ok_or_else(||invalid("missing original SQL volume claim"))?;
         let root=HeldDir::trusted_storage(&row.path)?;
-        if namespace_write{root.exclusive()?;}else{root.share()?;} // only this F is opened
+        match lock{Some(true)=>root.exclusive()?,Some(false)=>root.share()?,None=>{}} // only this F is opened
         if root.entity==source.dir.root.entity || ComponentLimit::held(&root)?!=row.limit{
             return Err(invalid("selected original F aliases S or has different native geometry"));
         }
@@ -53,7 +61,16 @@ impl<'a> OrdinaryRoot<'a>{
         }
         Ok(())
     }
-    fn space(&self)->io::Result<DiskSpace>{
+    /// A stream already selected this F from a verified short SQL snapshot.
+    /// Check its held names, both exact private parents and marker stamps
+    /// without re-enumerating S, re-reading its SQL schema or probing R.
+    pub(super) fn require_streaming(&self)->io::Result<()>{
+        crate::fs::WitnessRead::require_parent(&self.source.dir.root)?;
+        check(unsafe{zxs_sql_named(self.source.conn.0)})?;
+        self.source.marker.require(&self.source.dir.root)?;
+        crate::fs::WitnessRead::require_parent(&self.root)?;self.mark.require(&self.root)
+    }
+    pub(super) fn space(&self)->io::Result<DiskSpace>{
         self.require()?;let(mut total,mut available)=(0,0);
         // SAFETY: actual already-held ordinary root FD, two live output integers.
         if unsafe{zxs_storage_capacity(self.root.file.as_raw_fd(),&mut total,&mut available)}<0{

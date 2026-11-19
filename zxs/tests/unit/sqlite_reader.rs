@@ -155,3 +155,6 @@ mod publication;
 
 #[path="sqlite_create_file.rs"]
 mod create_file;
+
+#[path="sqlite_first_work.rs"]
+mod first_work;

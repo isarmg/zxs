@@ -15,6 +15,8 @@ pub(crate) use control::ControlRead;
 mod scratch;
 pub(crate) use scratch::{FreshJob,CopiedRaw};
 mod witnessed;
+mod work_pair;
+pub(crate) use work_pair::WorkPair;
 pub(crate) use witnessed::{HeldBytes,LiveStamp,WitnessRead};
 mod name_budget;
 pub(crate) use name_budget::{ComponentLimit,NameBudget};
