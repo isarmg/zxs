@@ -862,10 +862,15 @@
                          PARAM_UTIL
                          ldap
                          lber
-@@ -594,6 +600,21 @@
+@@ -594,6 +600,26 @@
                     public_headers='../lib/smbconf/smbconf.h',
                     pc_files=[],
                     vnum='0.0.1')
++
++bld.SAMBA3_BINARY('test_zxs_file_vfs',
++                   source='torture/test_zxs_file_vfs.c',
++                   deps='smbd_base vfs_not_implemented',
++                   for_selftest=True)
 +
 +bld.SAMBA3_BINARY('test_zxs_native_auth_policy',
 +                   source='torture/test_zxs_native_auth_policy.c',
@@ -884,6 +889,14 @@
  
  bld.SAMBA3_SUBSYSTEM('sysquotas',
                       source='''
+@@ -740,6 +766,7 @@
+                         msrpc3
+                         vfs
+                         vfs_default
++                        vfs_not_implemented
+                         vfs_posixacl
+                         inotify
+                         samba3core
 --- a/source3/passdb/machine_sid.h
 +++ b/source3/passdb/machine_sid.h
 @@ -25,6 +25,7 @@
@@ -1427,3 +1440,243 @@
  		return;
  	}
  	dump_data_diff_cb(buf1, len1, buf2, len2, true, debugadd_channel_cb, &dcl);
+--- a/source3/modules/vfs_not_implemented.c
++++ b/source3/modules/vfs_not_implemented.c
+@@ -21,6 +21,7 @@
+  */
+ 
+ #include "includes.h"
++#include "smbd/zxs_file_vfs.h"
+ #include "lib/util/tevent_unix.h"
+ #include "lib/util/tevent_ntstatus.h"
+ 
+@@ -1181,6 +1182,8 @@
+ 	.durable_reconnect_fn = vfs_not_implemented_durable_reconnect,
+ };
+ 
++#include "modules/zxs_file_vfs.inc"
++
+ static_decl_vfs;
+ NTSTATUS vfs_not_implemented_init(TALLOC_CTX *ctx)
+ {
+--- a/source3/smbd/vfs.c
++++ b/source3/smbd/vfs.c
+@@ -27,6 +27,7 @@
+ #include "system/filesys.h"
+ #include "smbd/smbd.h"
+ #include "smbd/globals.h"
++#include "smbd/zxs_file_vfs.h"
+ #include "../lib/util/memcache.h"
+ #include "transfer_file.h"
+ #include "ntioctl.h"
+@@ -106,116 +107,37 @@
+ 	return NT_STATUS_OK;
+ }
+ 
+-/****************************************************************************
+-  initialise default vfs hooks
+-****************************************************************************/
+-
+-static void vfs_init_default(connection_struct *conn)
+-{
+-	DEBUG(3, ("Initialising default vfs hooks\n"));
+-	vfs_init_custom(conn, DEFAULT_VFS_MODULE_NAME);
+-}
+-
+-/****************************************************************************
+-  initialise custom vfs hooks
+- ****************************************************************************/
+-
++/* Only the native IPC$ builtin can be selected by name; no run-time
++ * object loading or private POSIX filesystem stack for a data tree. */
+ bool vfs_init_custom(connection_struct *conn, const char *vfs_object)
+ {
+-	char *module_path = NULL;
+-	char *module_name = NULL;
+-	char *module_param = NULL, *p;
++	const struct vfs_init_function_entry *entry;
+ 	vfs_handle_struct *handle;
+-	const struct vfs_init_function_entry *entry;
+-
+-	if (!conn||!vfs_object||!vfs_object[0]) {
+-		DEBUG(0, ("vfs_init_custom() called with NULL pointer or "
+-			  "empty vfs_object!\n"));
+-		return False;
+-	}
+-
+-	if(!backends) {
++
++	if (conn == NULL || conn->params == NULL || conn->vfs_handles != NULL ||
++	    !conn->ipc || conn->printer || SNUM(conn) < 0 ||
++	    SNUM(conn) != lp_servicenumber("IPC$") || vfs_object == NULL ||
++	    strcmp(vfs_object, DEFAULT_VFS_MODULE_NAME) != 0) {
++		errno = EACCES;
++		return false;
++	}
++	if (backends == NULL) {
+ 		static_init_vfs(NULL);
+ 	}
+-
+-	DEBUG(3, ("Initialising custom vfs hooks from [%s]\n", vfs_object));
+-
+-	module_path = smb_xstrdup(vfs_object);
+-
+-	p = strchr_m(module_path, ':');
+-
+-	if (p) {
+-		*p = 0;
+-		module_param = p+1;
+-		trim_char(module_param, ' ', ' ');
+-	}
+-
+-	trim_char(module_path, ' ', ' ');
+-
+-	module_name = smb_xstrdup(module_path);
+-
+-	if ((module_name[0] == '/') &&
+-	    (strcmp(module_path, DEFAULT_VFS_MODULE_NAME) != 0)) {
+-
+-		/*
+-		 * Extract the module name from the path. Just use the base
+-		 * name of the last path component.
+-		 */
+-
+-		SAFE_FREE(module_name);
+-		module_name = smb_xstrdup(strrchr_m(module_path, '/')+1);
+-
+-		p = strchr_m(module_name, '.');
+-
+-		if (p != NULL) {
+-			*p = '\0';
+-		}
+-	}
+-
+-	/* First, try to load the module with the new module system */
+-	entry = vfs_find_backend_entry(module_name);
+-	if (!entry) {
+-		NTSTATUS status;
+-
+-		DEBUG(5, ("vfs module [%s] not loaded - trying to load...\n",
+-			  vfs_object));
+-
+-		status = smb_load_module("vfs", module_path);
+-		if (!NT_STATUS_IS_OK(status)) {
+-			DEBUG(0, ("error probing vfs module '%s': %s\n",
+-				  module_path, nt_errstr(status)));
+-			goto fail;
+-		}
+-
+-		entry = vfs_find_backend_entry(module_name);
+-		if (!entry) {
+-			DEBUG(0,("Can't find a vfs module [%s]\n",vfs_object));
+-			goto fail;
+-		}
+-	}
+-
+-	DEBUGADD(5,("Successfully loaded vfs module [%s] with the new modules system\n", vfs_object));
+-
++	entry = vfs_find_backend_entry(DEFAULT_VFS_MODULE_NAME);
++	if (entry == NULL) {
++		errno = ENOSYS;
++		return false;
++	}
+ 	handle = talloc_zero(conn, vfs_handle_struct);
+-	if (!handle) {
+-		DEBUG(0,("TALLOC_ZERO() failed!\n"));
+-		goto fail;
++	if (handle == NULL) {
++		errno = ENOMEM;
++		return false;
+ 	}
+ 	handle->conn = conn;
+ 	handle->fns = entry->fns;
+-	if (module_param) {
+-		handle->param = talloc_strdup(conn, module_param);
+-	}
+ 	DLIST_ADD(conn->vfs_handles, handle);
+-
+-	SAFE_FREE(module_path);
+-	SAFE_FREE(module_name);
+-	return True;
+-
+- fail:
+-	SAFE_FREE(module_path);
+-	SAFE_FREE(module_name);
+-	return False;
++	return true;
+ }
+ 
+ /*****************************************************************
+@@ -356,51 +278,27 @@
+ 
+ bool smbd_vfs_init(connection_struct *conn)
+ {
+-	const char **vfs_objects;
+-	unsigned int i = 0;
+-	int j = 0;
+-
+-	/* Normal share - initialise with disk access functions */
+-	vfs_init_default(conn);
+-
+-	/* No need to load vfs modules for printer connections */
+-	if (conn->printer) {
+-		return True;
+-	}
+-
+-	if (lp_widelinks(SNUM(conn))) {
+-		/*
+-		 * As the widelinks logic is now moving into a
+-		 * vfs_widelinks module, we need to custom load
+-		 * it after the default module is initialized.
+-		 * That way no changes to smb.conf files are
+-		 * needed.
+-		 */
+-		bool ok = vfs_init_custom(conn, "widelinks");
+-		if (!ok) {
+-			DBG_ERR("widelinks enabled and vfs_init_custom "
+-				"failed for vfs_widelinks module\n");
+-			return false;
+-		}
+-	}
+-
+-	vfs_objects = lp_vfs_objects(SNUM(conn));
+-
+-	/* Override VFS functions if 'vfs object' was not specified*/
+-	if (!vfs_objects || !vfs_objects[0])
+-		return True;
+-
+-	for (i=0; vfs_objects[i] ;) {
+-		i++;
+-	}
+-
+-	for (j=i-1; j >= 0; j--) {
+-		if (!vfs_init_custom(conn, vfs_objects[j])) {
+-			DEBUG(0, ("smbd_vfs_init: vfs_init_custom failed for %s\n", vfs_objects[j]));
+-			return False;
+-		}
+-	}
+-	return True;
++	int snum;
++	if (conn == NULL || conn->params == NULL || conn->vfs_handles != NULL) {
++		errno = EACCES;
++		return false;
++	}
++	snum = SNUM(conn);
++	if (snum < 0 || !lp_snum_ok(snum)) {
++		errno = EACCES;
++		return false;
++	}
++	switch (zxs_file_vfs_route(snum, lp_servicenumber("IPC$"), conn->ipc,
++				   conn->printer, lp_widelinks(snum),
++				   lp_vfs_objects(snum))) {
++	case ZXS_VFS_IPC:
++		return vfs_init_custom(conn, DEFAULT_VFS_MODULE_NAME);
++	case ZXS_VFS_FILE:
++		return zxs_file_vfs_install(conn);
++	default:
++		errno = EACCES;
++		return false;
++	}
+ }
+ 
+ bool vfs_valid_pread_range(off_t offset, size_t length)

@@ -32,12 +32,25 @@ fn original_shared_namespace_page_is_not_a_native_directory_dump_or_body_check()
     let last=list.next(2).unwrap();assert_eq!(last.len(),1);
     assert_eq!((last[0].name.as_str(),last[0].file,last[0].revision,last[0].size),(NAME,n.file,1,7));
     assert!(list.next(2).unwrap().is_empty());assert!(!read.snapshot().unwrap().rows()[1].path.exists());
+    // Listing -> current OPEN -> a verified subrange. The selected member
+    // survives an alias share; the newly opened tree must supply its own
+    // current permission. A name from a different real FILE isn't enough.
+    let mut bytes=Vec::new();
+    let chosen=r.open_listed(&last[0]).unwrap();assert_eq!(chosen.file(),n.file);
+    chosen.range_to(1,4,&mut bytes).unwrap();assert_eq!(bytes,b"even");
+    assert_eq!(w.open_listed(&last[0]).unwrap().file(),n.file);
+    let mut mismatched=w.root_files().unwrap().next(16).unwrap();
+    mismatched[0].name="a".to_owned();assert!(w.open_listed(&mismatched[0]).is_err());
+    // File "a" existed but was unsaved in this listing. A new current OPEN
+    // observes its subsequently confirmed first SAVE; it isn't version 0.
+    w.save_first(OperationId([0xd5;16]),"a",b.file,&saved).unwrap();
+    let opened=r.open_listed(&first[1]).unwrap();assert_eq!((opened.file(),opened.working_revision(),opened.size()),(b.file,1,7));
     // The SQL size describes a confirmed revision, not verified file data.
     let raw=f.join(format!("方案-{}.xlsx/change-{SAVE}-00000000",n.file));
     let swapped=OpenOptions::new().write(true).open(raw).unwrap();
     swapped.write_all_at(b"broken!",0).unwrap();swapped.sync_all().unwrap();drop(swapped);
     let again=w.root_files().unwrap().next(16).unwrap();assert_eq!(again.len(),3);assert_eq!(again[2],last[0]);
-    let mut none=Vec::new();assert!(r.open_current(NAME).unwrap().range_to(0,1,&mut none).is_err());
+    let mut none=Vec::new();assert!(r.open_listed(&last[0]).unwrap().range_to(0,1,&mut none).is_err());
     assert!(none.is_empty());
 }
 
@@ -51,6 +64,7 @@ fn failed_disclosure_never_moves_the_cursor_or_refreshes_the_grant(){
     let web=write.authenticate_web("first.admin","correct horse battery staple").unwrap();
     let a=w.create_file(OperationId([0xe1;16]),"a").unwrap();
     let c=w.create_file(OperationId([0xe2;16]),"c").unwrap();
+    let a_selected=r.root_files().unwrap().next(1).unwrap().remove(0);
     let mut l=r.root_files().unwrap();
     let witness=f.join(format!(".zxs-new-{}-7",a.created));let keep=f.join("held-aside");
     assert!(l.next_after(1,||std::fs::rename(&witness,&keep)).is_err());
@@ -62,7 +76,8 @@ fn failed_disclosure_never_moves_the_cursor_or_refreshes_the_grant(){
         let off=web.set_share_mode(OperationId([0xe4;16]),ro,was.op,Mode::Disabled)?;
         web.set_share_mode(OperationId([0xe5;16]),ro,off.op,Mode::ReadOnly)?;Ok(())
     }).is_err());assert!(l.next(1).is_err());
-    let new=rs.connect(ro).unwrap();let remaining=new.root_files().unwrap().next(16).unwrap();
+    assert!(r.open_listed(&a_selected).is_err());
+    let new=rs.connect(ro).unwrap();assert_eq!(new.open_listed(&a_selected).unwrap().file(),a.file);let remaining=new.root_files().unwrap().next(16).unwrap();
     assert_eq!(remaining.iter().map(|e|e.name.as_str()).collect::<Vec<_>>(),["a","b","c"]);
     assert_eq!(remaining[2].file,c.file);
 }

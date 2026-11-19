@@ -3,7 +3,7 @@
 //! between pages. The handle does retain the selected root, marker and S.
 use super::{Catalog,Connection,Tree,check,file_create,first_work,sqlite3_step};
 use super::super::volume::OrdinaryRoot;
-use crate::{EntryId,FileId,OperationId,display,fs::{WitnessRead,invalid},
+use crate::{EntryId,FileId,OperationId,PoolId,VolumeId,display,fs::{WitnessRead,invalid},
     ordinary::{portable_birth::Birth,working_sql::{Retained,Spec}}};
 use std::{collections::BTreeSet,io};
 
@@ -12,6 +12,14 @@ const MAX_PAGE:u8=16;
 pub(crate) struct Entry{
     pub(crate) name:String,pub(crate) file:FileId,pub(crate) entry:EntryId,
     pub(crate) revision:u64,pub(crate) size:u64,
+    // Proven selection from the SQL cut and the actual F/FILE. A listing
+    // is not a capability: a new OPEN must prove its own Tree and member.
+    pool:PoolId,volume:VolumeId,
+}
+impl Entry{
+    pub(super) fn matches(&self,b:&Birth)->bool{
+        self.pool==b.pool&&self.volume==b.volume&&self.entry==b.entry&&self.file==b.file&&self.name==b.name
+    }
 }
 #[derive(Eq,PartialEq)]
 struct Plan{birth:Birth,working:Option<(Spec,bool)>,kept:Retained}
@@ -98,7 +106,7 @@ impl RootFiles<'_,'_,'_>{
         // error above. Only verified business metadata escapes, not paths.
         let rows:Vec<_>=selected.into_iter().map(|p|{
             let visible=p.working.filter(|(_,done)|*done).map(|(s,_)|s);
-            Entry{name:p.birth.name,file:p.birth.file,entry:p.birth.entry,
+            Entry{pool:p.birth.pool,volume:p.birth.volume,name:p.birth.name,file:p.birth.file,entry:p.birth.entry,
                 revision:u64::from(visible.is_some()),size:visible.map_or(0,|s|s.bytes)}
         }).collect();
         if let Some(tail)=rows.last(){self.after=tail.name.as_bytes().to_vec();}

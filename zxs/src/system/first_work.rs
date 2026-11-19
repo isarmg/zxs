@@ -183,13 +183,26 @@ pub(crate) struct Current<'t,'s,'r>{body:Option<HeldWork>,container:Installed,ro
     tree:&'t Tree<'s,'r>,birth:Birth,live:Option<Spec>}
 impl<'s,'r> Tree<'s,'r>{
     pub(crate) fn open_current<'t>(&'t self,name:&str)->io::Result<Current<'t,'s,'r>>{
+        self.open_member(name,None)
+    }
+    /// Open the same listed business member, using this tree's current
+    /// authority. Unlike an explicitly selected historical version, this
+    /// OPEN pins the revision confirmed at open, not the size in a listing.
+    pub(crate) fn open_listed<'t>(&'t self,entry:&super::directory::Entry)->io::Result<Current<'t,'s,'r>>{
+        self.open_member(&entry.name,Some(entry))
+    }
+    fn open_member<'t>(&'t self,name:&str,expected:Option<&super::directory::Entry>)->io::Result<Current<'t,'s,'r>>{
         display::component(name.as_bytes(),222)?;let src=self.session.source;
         let(c,b)=src.at(|db,c|{
             self.require(db,&c,false)?;
             let s=db.prepare(c"SELECT file_id FROM main.root_entry WHERE volume_id=?1 AND display=?2")?;
             s.bind_bytes(1,&self.setting.volume.0)?;s.bind_bytes(2,name.as_bytes())?;
             match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(io::ErrorKind::NotFound.into()),rc=>{check(rc)?;return Err(invalid("cannot select SMB member"));}}
-            let file=FileId(s.array(0)?);s.done()?;let b=self.birth(db,&c,name,file)?;Ok((c,b))
+            let file=FileId(s.array(0)?);s.done()?;let b=self.birth(db,&c,name,file)?;
+            if expected.is_some_and(|entry|!entry.matches(&b)){
+                return Err(invalid("listed FILE no longer names this original pool member"));
+            }
+            Ok((c,b))
         })?;
         let root=OrdinaryRoot::for_body(src,&c,b.volume)?;let sample=root.root.names()?.into_iter().collect();
         // Revalidate the precise FILE/authority after opening the volume.
