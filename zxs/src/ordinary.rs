@@ -16,7 +16,7 @@ pub use interval::types::{SpanEdit,LengthPolicy,SpanReceipt};
 mod formal;
 mod delta;
 pub use delta::{commit_working,formal_receipt};
-pub use formal::{commit_first,first_commit_receipt,read_node_to,read_node_range_to,FormalObservation};
+pub use formal::{PublishedVersion,commit_first,first_commit_receipt,read_node_to,read_node_range_to,FormalObservation};
 pub use formal::types::{FormalNode,FormalStorage};
 mod draft;
 pub use draft::{save_first,first_save_receipt,read_current_to,current_info,CurrentFile,FirstSaveObservation};

@@ -117,7 +117,9 @@ impl PinnedParent{
         Material::Full(b)=>b.write_range(at,n,out),Material::Incr(b)=>b.range(at,n,out)
     }}
     pub(in crate::ordinary) fn write_to(&self,out:impl Write)->io::Result<()>{match &self.body{Material::Full(b)=>b.write_to(out),Material::Incr(b)=>b.whole(out)}}
-    pub(super) fn finish_output(self,out:&mut impl Write)->io::Result<FormalNode>{
-        crate::ordinary::output::CheckedOutput{out,check:||self.unchanged()}.flush()?;Ok(self.receipt)
+    pub(super) fn receipt(&self)->&FormalNode{&self.receipt}
+    pub(super) fn into_receipt(self)->FormalNode{self.receipt}
+    pub(super) fn finish_output(&self,out:&mut impl Write)->io::Result<()>{
+        crate::ordinary::output::CheckedOutput{out,check:||self.unchanged()}.flush()
     }
 }

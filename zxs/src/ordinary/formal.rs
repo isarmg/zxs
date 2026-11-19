@@ -6,6 +6,8 @@ pub(super) mod allocation;
 pub(super) mod physical;
 mod indexed;
 mod baseline;
+mod opened;
+pub use opened::PublishedVersion;
 pub(in crate::ordinary) use baseline::{ParentCut,PinnedParent,PlacedSecond,for_retirement};
 use super::{allocation as ordinary_allocation,draft::{material::Reader,types::SaveFrame},journal::{self,Decision,Journal},
     material as container,wire::Frame,Cut,CreationStatus,publish_sealed_checked};
@@ -97,14 +99,11 @@ pub(in crate::ordinary) fn directory(v:&FileVolume<'_>,s:&Journal,c:&Frame,w:&Sa
     }
     Ok(dir)
 }
-fn open_node(system:&Path,file:FileId,node:NodeId)->io::Result<crate::pool::lease::RegisteredRead<PinnedParent>>{
-    ParentCut::capture(system,|cut|cut.historical(file,node))
+pub fn read_node_to(system:&Path,file:FileId,node:NodeId,out:impl Write)->io::Result<FormalNode>{
+    let opened=PublishedVersion::by_id(system,file,node)?;opened.read_to(out)?;opened.into_receipt()
 }
-pub fn read_node_to(system:&Path,file:FileId,node:NodeId,mut out:impl Write)->io::Result<FormalNode>{
-    open_node(system,file,node)?.deliver(|body|{body.write_to(&mut out)?;body.finish_output(&mut out)})
-}
-pub fn read_node_range_to(system:&Path,file:FileId,node:NodeId,offset:u64,length:u64,mut out:impl Write)->io::Result<FormalNode>{
-    open_node(system,file,node)?.deliver(|body|{body.write_range(offset,length,&mut out)?;body.finish_output(&mut out)})
+pub fn read_node_range_to(system:&Path,file:FileId,node:NodeId,offset:u64,length:u64,out:impl Write)->io::Result<FormalNode>{
+    let opened=PublishedVersion::by_id(system,file,node)?;opened.read_range_to(offset,length,out)?;opened.into_receipt()
 }
 enum Source{Done(FormalNode),Input(Input)}
 fn source(system:&Path,op:OperationId,file:FileId,revision:u64)->io::Result<Source>{

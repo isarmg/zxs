@@ -9,7 +9,6 @@ pub(crate) enum Access { Read, Incoming, Write }
 /// The selected BODY and its native FDs drop before the original-register SH.
 pub(crate) struct RegisteredRead<T>{value:T,register:std::fs::File}
 impl<T> RegisteredRead<T>{
-    #[cfg(test)]
     pub(crate) fn get(&self)->&T{&self.value}
     pub(crate) fn deliver<R>(self,use_value:impl FnOnce(T)->io::Result<R>)->io::Result<R>{
         let result=use_value(self.value);drop(self.register);result
