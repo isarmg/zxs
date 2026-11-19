@@ -282,6 +282,38 @@ class OriginalDesktopCheckout(unittest.TestCase):
         self.assertFalse(any(self.store.iterdir()))
         with self.assertRaises(Rejected): plan.run()
 
+    def test_checkout_hint_uses_only_the_exact_store_entry_and_never_promotes_its_bytes_to_a_verified_base(self):
+        slot = self.store/self.marker.filename
+        for kind, message in (("missing","未看到原分支基线槽"),("plain","未在这里核验"),
+                              ("directory","非普通文件占用"),("symlink","不跟随链接")):
+            with self.subTest(kind=kind):
+                if kind=="plain": slot.write_bytes(b"not even a valid ZIP")
+                elif kind=="directory": slot.mkdir()
+                elif kind=="symlink": slot.symlink_to(self.root/"absent-target")
+                plan = self.choice(review=False)
+                text = plan.review("Design")
+                self.assertIn(message,text); self.assertIn(self.marker.filename,text)
+                self.assertFalse(self.target.exists()); self.assertFalse(self.state.exists())
+                if kind=="plain":
+                    self.assertEqual(slot.read_bytes(),b"not even a valid ZIP")
+                if kind=="directory": slot.rmdir()
+                elif kind!="missing": slot.unlink()
+
+    def test_unavailable_slot_is_not_reported_absent_and_loose_checkout_never_repairs_it(self):
+        plan = self.choice(review=False)
+        real_stat = os.stat
+        def unavailable(path,*args,**kwargs):
+            if path==self.marker.filename and kwargs.get("dir_fd")==plan.store.fd:
+                raise PermissionError("synthetic metadata lookup unavailable")
+            return real_stat(path,*args,**kwargs)
+        with patch.object(os,"stat",side_effect=unavailable):
+            note = plan.review("Design")
+        self.assertIn("无法核对原分支基线槽的属性",note)
+        self.assertNotIn("未看到原分支基线槽",note)
+        self.assertEqual(plan.run(),(self.target,self.marker))
+        self.assertFalse(any(self.store.iterdir()))
+        self.assertEqual((self.target/"design/notes").read_bytes(),b"desktop selection")
+
     def test_head_advancing_after_selection_does_not_change_which_historical_node_is_written(self):
         from zipworkspace import opening
         original = self.store / self.marker.filename

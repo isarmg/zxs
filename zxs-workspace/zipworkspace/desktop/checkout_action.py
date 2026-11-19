@@ -95,6 +95,23 @@ class CheckoutChoice:
         self._select(self.base)
         self.base = self.stack.enter_context(held_candidates(path))
 
+    def _base_hint(self, marker):
+        # Advisory only: neither read a ZIP nor change the named loose snapshot into a branch head.
+        _named_mount(self.store.path, self.store.fd)
+        try:
+            meta = os.stat(marker.filename, dir_fd=self.store.fd, follow_symlinks=False)
+        except FileNotFoundError:
+            result = "未看到原分支基线槽。仍可签出；如要继续提交，所选 STORE 须有这个原节点的精确归档。"
+        except OSError:
+            result = "无法核对原分支基线槽的属性。仍可签出；不能据此判断是否能够继续提交。"
+        else:
+            if stat.S_ISREG(meta.st_mode):
+                result = "看到同名普通文件，但未在这里核验它的内容、节点或整包摘要。"
+            else:
+                result = "该名称被非普通文件占用，不跟随链接。仍可签出，但不能当作可提交的原基线。"
+        _named_mount(self.store.path, self.store.fd)
+        return f"所选 STORE 的基线槽：{marker.filename}\n{result}"
+
     def review(self, leaf):
         self._select(self.state)
         if self.store is None or self.target is None or self.base is None:
@@ -106,9 +123,10 @@ class CheckoutChoice:
         m = self.snapshot.browser.commit
         exact = (f"原 ZIP SHA-256：{self.snapshot.exact.sha256}" if self.snapshot.exact is not None
                  else "原 ZIP 字节将在确认后从这同一个已选文件核对。")
+        hint = self._base_hint(m)
         return (f"归档：{self.snapshot.path}\n仓库：{m.repo}\n分支：{m.branch} · 第 {m.generation} 代\n"
                 f"原节点：{m.operation}\n整树 SHA-256：{m.tree}\n{exact}\n\n新工作目录：{self.destination}\n"
-                f"归档存储：{self.store.path}\n新 CLI 状态目录（STATE）：{self.state}\n本次操作号：{self.operation}\n\n"
+                f"归档存储：{self.store.path}\n{hint}\n新 CLI 状态目录（STATE）：{self.state}\n本次操作号：{self.operation}\n\n"
                 "此操作将写入完整快照，并在所选专用位置创建可由命令行管理的状态；两个新名称都不能已存在。"
                 "请保留 STATE 与操作号。不会覆盖、自动换名或将现有工作树登记为桌面托管实例。")
 
